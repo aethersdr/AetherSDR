@@ -30,9 +30,12 @@ signals:
     void transportClosed();
 
 private:
+    enum class Focus { None, Receive, Transmit };
+
     QByteArray drainCommands();
-    void finishTx(quint64 revision);
-    void observeTx();
+    quint64 beginFocus(Focus focus, const QByteArray& command, SliceModel* target, int number);
+    void finishFocus(quint64 revision);
+    void observeFocus();
     void cancelPending();
     QByteArray processCommand(const QByteArray& command);
     SliceModel* radioSlice(int number) const;
@@ -45,12 +48,13 @@ private:
     QByteArray m_buffer;
     QQueue<QByteArray> m_commands;
     qsizetype m_queuedBytes{0};
-    QTimer m_txDeadline;
-    QPointer<SliceModel> m_txTarget;
-    QList<QMetaObject::Connection> m_txConnections;
-    quint64 m_txRevision{0};
-    int m_txNumber{0};
-    bool m_waitingForTx{false};
+    QTimer m_focusDeadline;
+    QPointer<SliceModel> m_focusTarget;
+    QList<QMetaObject::Connection> m_focusConnections;
+    quint64 m_focusRevision{0};
+    int m_focusNumber{0};
+    Focus m_waitingFor{Focus::None};
+    QByteArray m_expectedFocus;
     bool m_processing{false};
     bool m_discarding{false};
     bool m_closed{false};

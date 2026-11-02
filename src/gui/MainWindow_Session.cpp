@@ -2537,7 +2537,8 @@ void MainWindow::applyCatPortCount()
             catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
             catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
             catPort(i)->start(static_cast<quint16>(portNum));
-        } else if (!shouldRun && catPort(i)->isRunning()) {
+        } else if (!shouldRun
+                   && (catPort(i)->isRunning() || !catPort(i)->errorString().isEmpty())) {
             catPort(i)->stop();
         }
     }

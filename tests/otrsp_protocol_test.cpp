@@ -243,6 +243,61 @@ void orderedTransmitQueries()
           "synchronous dispatch refusal does not leave queries pending");
 }
 
+void orderedReceiveQueries()
+{
+    for (const QByteArray& command : {QByteArray("RX1S"), QByteArray("RX2S"),
+                                    QByteArray("RX1R"), QByteArray("RX2R")}) {
+        Fixture f;
+        const int focus = command.at(2) == '1' ? 2 : 5;
+        const int other = focus == 2 ? 5 : 2;
+        const bool reverse = command.at(3) == 'R';
+        f.observeRx(other, false, false);
+        f.commands.clear();
+        OtrspProtocol protocol(&f.radio, 2, 5);
+        QSignalSpy replies(&protocol, &OtrspProtocol::responseReady);
+        check(protocol.processData(command + "\r?RX\r?NAME\r").isEmpty(),
+              "stereo RX queries wait for exclusive observed active focus");
+        check(f.radio.slice(focus)->isActive() && f.radio.slice(other)->isActive(),
+              "fixture holds the previous slice active during optimistic selection");
+        check(replies.isEmpty(), "two active slices cannot produce an early RX reply");
+        check(protocol.processData("TX2\r?TX\r").isEmpty(),
+              "later commands stay behind pending RX focus");
+        check(!f.commands.contains("slice set 5 tx=1"), "RX wait also serializes later TX setters");
+        f.observeRx(focus, true, reverse);
+        check(replies.size() == 1
+                  && replies.first().first().toByteArray() == command + "\rNAMEAetherSDR\r",
+              "confirmed stereo focus releases RX queries before the following TX wait");
+        f.observeTx(5);
+        check(replies.size() == 2 && replies.last().first().toByteArray() == "TX2\r",
+              "RX and TX confirmations preserve connection ordering");
+        check(!f.radio.transmitModel().isTransmitting(), "ordered RX queries never key RF");
+    }
+
+    Fixture timeout;
+    timeout.observeRx(5, false, false);
+    OtrspProtocol expires(&timeout.radio, 2, 5);
+    QSignalSpy expired(&expires, &OtrspProtocol::responseReady);
+    check(expires.processData("RX1S\r?RX\r?NAME\r").isEmpty(),
+          "unconfirmed stereo focus does not reply immediately");
+    check(expired.wait(1000), "RX focus confirmation has a bounded deadline");
+    check(expired.size() == 1 && expired.first().first().toByteArray() == "?RX\rNAMEAetherSDR\r",
+          "RX timeout reports actual unrepresentable focus, never the requested mode");
+
+    Fixture cancelled;
+    cancelled.observeRx(5, false, false);
+    OtrspProtocol protocol(&cancelled.radio, 2, 5);
+    QSignalSpy closed(&protocol, &OtrspProtocol::transportClosed);
+    QSignalSpy replies(&protocol, &OtrspProtocol::responseReady);
+    protocol.processData("RX1R\r?RX\rTX2\r");
+    cancelled.commands.clear();
+    cancelled.backend->connected = false;
+    emit cancelled.radio.connectionStateChanged(false);
+    cancelled.observeRx(2, true, true);
+    QTest::qWait(300);
+    check(closed.size() == 1 && replies.isEmpty() && cancelled.commands.isEmpty(),
+          "disconnect cancels the RX wait and all later commands");
+}
+
 void cancelledTransmitQueries()
 {
     for (int cause = 0; cause < 5; ++cause) {
@@ -270,6 +325,46 @@ void cancelledTransmitQueries()
         check(f.commands == QStringList{"slice set 5 tx=1"},
               "cancelled queues never send remaining TX setters");
         check(closed.size() == (cause == 0 ? 0 : 1), "transport is notified when pending work is cancelled");
+    }
+}
+
+void cancelledIncompleteCommands()
+{
+    for (bool partialFrame : {false, true}) {
+        for (int cause = 0; cause < 3; ++cause) {
+            Fixture f;
+            OtrspProtocol protocol(&f.radio, 2, 5);
+            QSignalSpy closed(&protocol, &OtrspProtocol::transportClosed);
+            QSignalSpy replies(&protocol, &OtrspProtocol::responseReady);
+            if (partialFrame) {
+                check(protocol.processData("TX").isEmpty(), "partial TX waits for its terminator");
+            }
+            if (cause == 0) {
+                emit f.backend->sliceRemoved(5);
+            } else if (cause == 1) {
+                f.backend->connected = false;
+                emit f.radio.connectionStateChanged(false);
+                f.backend->connected = true;
+                emit f.radio.connectionStateChanged(true);
+            } else {
+                emit f.radio.backendRebuilt();
+            }
+            if (!partialFrame) {
+                check(closed.isEmpty(), "idle sessions stay available after radio/slice changes");
+                check(protocol.processData("?NAME\r") == "NAMEAetherSDR\r",
+                      "idle connections can process fresh input after invalidation");
+                check(f.commands.isEmpty(), "idle invalidation sends no radio requests");
+                continue;
+            }
+            check(closed.size() == 1, "partial-frame session invalidation closes the transport");
+            emit f.radio.backendRebuilt();
+            check(closed.size() == 1, "repeated session invalidation does not close twice");
+            const QByteArray input = partialFrame ? "2\rTX1\r?NAME\r" : "TX2\r?NAME\r";
+            check(protocol.processData(input).isEmpty() && replies.isEmpty(),
+                  "invalidated sessions discard partial frames and subsequent commands");
+            check(f.commands.isEmpty(), "pre-invalidation input cannot control a later session");
+            check(!f.radio.transmitModel().isTransmitting(), "cancellation never keys RF");
+        }
     }
 }
 
@@ -313,9 +408,12 @@ void sliceRemovedDuringDispatch()
     OtrspProtocol protocol(&f.radio, 2, 5);
     QObject::connect(f.radio.slice(2), &SliceModel::audioPanChanged, &f.radio,
                      [&](int) { emit f.backend->sliceRemoved(5); });
-    protocol.processData("RX1S\r");
+    QSignalSpy transportClosed(&protocol, &OtrspProtocol::transportClosed);
+    check(protocol.processData("RX1S\rTX1\r?NAME\r").isEmpty(),
+          "RX burst produces no response after losing a mapped slice");
     check(f.commands == QStringList{"slice set 2 audio_pan=0"},
-          "RX stops if a synchronous notification removes a mapped slice");
+          "mapped-slice removal cancels the current RX operation and the remaining burst");
+    check(transportClosed.size() == 1, "mapped-slice removal closes during RX dispatch");
 
     Fixture closing;
     OtrspProtocol closed(&closing.radio, 2, 5);
@@ -340,7 +438,9 @@ int main(int argc, char** argv)
     transmitSelection();
     framingAndQueries();
     orderedTransmitQueries();
+    orderedReceiveQueries();
     cancelledTransmitQueries();
+    cancelledIncompleteCommands();
     invalidInput();
     sliceRemovedDuringDispatch();
     std::printf("OTRSP protocol: %d failures\n", failures);

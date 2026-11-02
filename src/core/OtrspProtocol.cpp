@@ -14,12 +14,12 @@ OtrspProtocol::OtrspProtocol(RadioModel* model, int radio1Slice, int radio2Slice
     , m_radio1Slice(radio1Slice)
     , m_radio2Slice(radio2Slice)
 {
-    m_txDeadline.setSingleShot(true);
-    m_txDeadline.setTimerType(Qt::PreciseTimer);
-    m_txDeadline.setInterval(250);
-    connect(&m_txDeadline, &QTimer::timeout, this, [this] {
-        qCWarning(lcCat) << "OTRSP: TX focus confirmation timed out";
-        finishTx(m_txRevision);
+    m_focusDeadline.setSingleShot(true);
+    m_focusDeadline.setTimerType(Qt::PreciseTimer);
+    m_focusDeadline.setInterval(250);
+    connect(&m_focusDeadline, &QTimer::timeout, this, [this] {
+        qCWarning(lcCat) << "OTRSP: focus confirmation timed out" << m_expectedFocus;
+        finishFocus(m_focusRevision);
     });
     if (model) {
         connect(model, &RadioModel::connectionStateChanged, this, [this](bool connected) {
@@ -77,12 +77,13 @@ void OtrspProtocol::close()
     m_buffer.clear();
     m_commands.clear();
     m_queuedBytes = 0;
-    m_waitingForTx = false;
-    m_txDeadline.stop();
-    for (const auto& connection : std::exchange(m_txConnections, {})) {
+    m_waitingFor = Focus::None;
+    m_expectedFocus.clear();
+    m_focusDeadline.stop();
+    for (const auto& connection : std::exchange(m_focusConnections, {})) {
         disconnect(connection);
     }
-    m_txTarget.clear();
+    m_focusTarget.clear();
 }
 
 QByteArray OtrspProtocol::drainCommands()
@@ -90,7 +91,7 @@ QByteArray OtrspProtocol::drainCommands()
     if (m_processing) { return {}; }
     m_processing = true;
     QByteArray response;
-    while (!m_closed && !m_waitingForTx && !m_commands.isEmpty()) {
+    while (!m_closed && m_waitingFor == Focus::None && !m_commands.isEmpty()) {
         const QByteArray command = m_commands.dequeue();
         m_queuedBytes -= command.size();
         response += processCommand(command);
@@ -99,34 +100,70 @@ QByteArray OtrspProtocol::drainCommands()
     return response;
 }
 
-void OtrspProtocol::finishTx(quint64 revision)
+void OtrspProtocol::finishFocus(quint64 revision)
 {
     // Queued setters may stop the transport and release its last protocol owner.
     const auto keepAlive = weak_from_this().lock();
-    if (!m_waitingForTx || revision != m_txRevision) { return; }
-    m_waitingForTx = false;
-    m_txDeadline.stop();
-    for (const auto& connection : std::exchange(m_txConnections, {})) {
+    if (m_waitingFor == Focus::None || revision != m_focusRevision) { return; }
+    m_waitingFor = Focus::None;
+    m_expectedFocus.clear();
+    m_focusDeadline.stop();
+    for (const auto& connection : std::exchange(m_focusConnections, {})) {
         disconnect(connection);
     }
-    m_txTarget.clear();
+    m_focusTarget.clear();
     if (!m_processing) {
         const QByteArray response = drainCommands();
         if (!response.isEmpty()) { emit responseReady(response); }
     }
 }
 
-void OtrspProtocol::observeTx()
+quint64 OtrspProtocol::beginFocus(Focus focus, const QByteArray& command,
+                                  SliceModel* target, int number)
 {
-    if (m_waitingForTx && m_txTarget && m_txTarget == radioSlice(m_txNumber)
-        && transmitFocus() == QByteArray("TX") + char('0' + m_txNumber) + '\r') {
-        finishTx(m_txRevision);
+    m_waitingFor = focus;
+    m_expectedFocus = command + '\r';
+    m_focusTarget = target;
+    m_focusNumber = number;
+    const quint64 revision = ++m_focusRevision;
+    for (int radio : {1, 2}) {
+        if (SliceModel* slice = radioSlice(radio)) {
+            if (focus == Focus::Transmit) {
+                m_focusConnections.append(connect(slice, &SliceModel::txSliceChanged,
+                                                  this, &OtrspProtocol::observeFocus));
+            } else {
+                m_focusConnections.append(connect(slice, &SliceModel::activeChanged,
+                                                  this, &OtrspProtocol::observeFocus));
+                m_focusConnections.append(connect(slice, &SliceModel::audioMuteChanged,
+                                                  this, &OtrspProtocol::observeFocus));
+                m_focusConnections.append(connect(slice, &SliceModel::audioPanChanged,
+                                                  this, &OtrspProtocol::observeFocus));
+            }
+            m_focusConnections.append(connect(slice, &QObject::destroyed,
+                                              this, &OtrspProtocol::cancelPending));
+        }
+    }
+    m_focusDeadline.start();
+    return revision;
+}
+
+void OtrspProtocol::observeFocus()
+{
+    if (m_waitingFor == Focus::None || !m_focusTarget
+        || m_focusTarget != radioSlice(m_focusNumber)) {
+        return;
+    }
+    const QByteArray actual = m_waitingFor == Focus::Transmit ? transmitFocus() : receiveFocus();
+    if (actual == m_expectedFocus) {
+        finishFocus(m_focusRevision);
     }
 }
 
 void OtrspProtocol::cancelPending()
 {
-    if (!m_waitingForTx) { return; }
+    const bool hasPendingInput = !m_buffer.isEmpty() || m_discarding
+        || m_processing || !m_commands.isEmpty();
+    if (m_closed || (m_waitingFor == Focus::None && !hasPendingInput)) { return; }
     qCWarning(lcCat) << "OTRSP: cancelling pending commands after radio/slice change";
     close();
     emit transportClosed();
@@ -225,37 +262,25 @@ QByteArray OtrspProtocol::processCommand(const QByteArray& command)
             qCWarning(lcCat) << "OTRSP: refusing TX focus change while transmitting";
             return {};
         }
-        m_txTarget = target;
-        m_txNumber = number;
-        m_waitingForTx = true;
-        const quint64 revision = ++m_txRevision;
-        for (int radio : {1, 2}) {
-            if (SliceModel* slice = radioSlice(radio)) {
-                m_txConnections.append(connect(slice, &SliceModel::txSliceChanged,
-                                               this, &OtrspProtocol::observeTx));
-                m_txConnections.append(connect(slice, &QObject::destroyed,
-                                               this, &OtrspProtocol::cancelPending));
-            }
-        }
-        m_txDeadline.start();
+        const quint64 revision = beginFocus(Focus::Transmit, command, target, number);
         // Use the typed request's dispatch/reply result; never claim the requested
         // focus before the radio reports it. Later commands remain in wire order.
         const ReceiveDispatch result = m_model->requestTxSlice(target, true, this,
             [this, revision](const RadioControlReply& reply) {
-                if (revision != m_txRevision || !m_waitingForTx) { return; }
+                if (revision != m_focusRevision || m_waitingFor != Focus::Transmit) { return; }
                 if (reply.kind == RadioControlReply::Kind::Cancelled) {
                     cancelPending();
                 } else if (reply.kind != RadioControlReply::Kind::Accepted) {
                     qCWarning(lcCat) << "OTRSP: TX focus request failed:" << reply.message;
-                    finishTx(revision);
+                    finishFocus(revision);
                 } else {
-                    observeTx();
+                    observeFocus();
                 }
             });
         if (result == ReceiveDispatch::Unsupported) {
-            finishTx(revision);
+            finishFocus(revision);
         } else {
-            observeTx();
+            observeFocus();
         }
         return {};
     }
@@ -271,6 +296,7 @@ QByteArray OtrspProtocol::processCommand(const QByteArray& command)
     };
     const bool stereo = command.size() == 4;
     if (stereo) {
+        beginFocus(Focus::Receive, command, target, number);
         const bool reverse = command.at(3) == 'R';
         const QPointer<SliceModel> first = number == 1 ? target : other;
         const QPointer<SliceModel> second = number == 2 ? target : other;
@@ -290,6 +316,7 @@ QByteArray OtrspProtocol::processCommand(const QByteArray& command)
     }
     if (!stillMapped()) { return {}; }
     target->setActive(true);
+    if (stereo) { observeFocus(); }
     return {};
 }
 

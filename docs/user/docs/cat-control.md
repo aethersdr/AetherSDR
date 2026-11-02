@@ -30,7 +30,7 @@ CAT has its own **CAT Control** applet (applet-tray button **CAT**, Integration 
 
 While a port is running, its port number, dialect and VFO selectors are locked. Untick the port to change them.
 
-If **Clients** shows **Error**, untick the row, correct its assignments or choose a TCP port that is not already in use, then tick it again. A ticked row does not guarantee that its listener started successfully.
+If **Clients** shows **Error**, untick the row, correct its assignments or choose a TCP port that is not already in use, then tick it again. Unticking the row clears its startup error. A ticked row does not guarantee that its listener started successfully.
 
 The VFO selectors list one letter per receiver the connected radio offers, up to **A–H**. Saved VFO A and VFO B assignments are restored after restarting AetherSDR and connecting to a radio. If you connect to a smaller radio, a slice choice it cannot show is kept and comes back when that slice exists again.
 
@@ -81,7 +81,7 @@ The slice assignments are configurable: Radio 1 does not have to be slice A, and
 
 `?NAME` returns `NAMEAetherSDR`, `?RX` reads the current audio/focus mode, and `?TX` reads the current TX focus. Every response ends with `\r`. Queries use live model state, including changes made outside OTRSP, rather than the last command a client sent. If the mapped slices are unavailable or the live state cannot be represented by OTRSP, the query is echoed rather than reporting a fabricated focus.
 
-Commands remain in order on each connection. After a TX-focus request, subsequent commands and queries wait for the radio to confirm that focus, for a refusal, or for a 250 ms confirmation timeout. A `TX2\r?TX\r` burst therefore waits for confirmation before replying; on refusal or timeout the reply describes the observed focus, not the requested one. Closing the connection or losing a mapped slice or radio session cancels pending work. Excessive queued input closes the connection rather than growing memory without bound.
+Commands remain in order on each connection. After a TX-focus request or a stereo/reverse-stereo RX-focus request, subsequent commands and queries wait for matching focus, for a refusal, or for a 250 ms confirmation timeout. Stereo RX waits until exactly one mapped slice is active, so an immediate `?RX` does not treat the temporary two-active-slice state as an unsupported query. A `TX2\r?TX\r` burst therefore waits for confirmation before replying; on refusal or timeout the reply describes the observed focus, not the requested one. Closing the connection or losing a mapped slice or radio session cancels pending work, including incomplete commands and the rest of a command burst. A connection with work in flight closes when its mapping or session is lost; reconnect the contest program after restoring the radio and slices. An idle connection can accept fresh commands after reconnection. Excessive queued input closes the connection rather than growing memory without bound.
 
 If a virtual serial connection exceeds its output-queue limit, the whole CAT port stops instead of leaving TCP active with a missing PTY. Untick and re-enable that row after fixing the client that stopped reading.
 

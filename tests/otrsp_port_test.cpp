@@ -182,6 +182,12 @@ private slots:
         client.connectToHost(QHostAddress::LocalHost, port.port());
         QTRY_COMPARE_WITH_TIMEOUT(port.clientCount(), 1, 2000);
         client.write("RX2R\rTX1\r?TX\r?NAME\r");
+        QTRY_VERIFY_WITH_TIMEOUT(commands.contains("slice set 3 active=1"), 2000);
+        QVERIFY(!commands.contains("slice set 6 tx=1"));
+        QCOMPARE(client.bytesAvailable(), 0);
+        SliceDelta oldActive;
+        oldActive.active = false;
+        emit backend->sliceChanged(6, oldActive);
         QTRY_VERIFY_WITH_TIMEOUT(commands.contains("slice set 6 tx=1"), 2000);
         QVERIFY(commands.contains("slice set 6 audio_pan=100"));
         QVERIFY(commands.contains("slice set 3 audio_pan=0"));
