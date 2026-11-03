@@ -156,6 +156,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
 - **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
 - **TX drive and LNA gain** are remembered per band.
+- **MON** and its volume slider, and **VOX** and its level slider, are disabled because these controls are unavailable on the HL2. Their tooltips and accessible descriptions explain why.
 
 > **Upgrading from an older version:** CW keys at the same carrier level as TUNE, about 6 dB (four times the power) above earlier versions at the same RF power setting. Check your RF power before you key CW into an amplifier or a low-power load.
 
