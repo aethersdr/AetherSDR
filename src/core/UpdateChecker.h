@@ -73,6 +73,8 @@ public:
     // Skip This Version: stores the parsed release, never the raw text.
     static void skipVersion(const QString& version);
     static bool isSkipped(const QString& version);
+    // Install update on a skipped release: the operator wants it after all.
+    static void unskipVersion(const QString& version);
 
     // Whether parsed version `a` is newer than `b`; false if `a` is unusable.
     static bool isNewer(const QString& a, const QString& b);

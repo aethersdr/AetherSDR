@@ -81,15 +81,18 @@ Each spot is placed on the band of the WSJT-X instance that reported it, so seve
 
 The **SpotCollector** tab explains how to see DXLab **SpotCollector** spots in AetherSDR. It has no settings and nothing to start. This works with FlexRadio radios only.
 
-SpotCollector doesn't send spots to other programs directly. Its companion program, DXLab **Commander**, adds SpotCollector's spots to the radio, and AetherSDR shows the radio's spots automatically.
+SpotCollector doesn't provide a UDP spot broadcast for AetherSDR to receive. For FlexRadio radios, its companion program, DXLab **Commander**, adds SpotCollector's spots to the radio, and AetherSDR shows the radio's spots automatically.
 
 1. In Commander, select your FlexRadio Signature radio and connect Commander to it over the network. Commander must be able to reach the radio on TCP port 4992.
 2. In Commander's **Configuration** window, on the **Bandspread** tab, check **Display calls on panadaptor**.
-3. Keep SpotCollector running and connected to its spot sources.
+3. Click **Bandspread** in Commander's main window once to open its Bandspread window. You can then minimize or close that window.
+4. Keep SpotCollector running and connected to its spot sources.
 
 To see Commander's colors, turn **Override Colors** and **Override Background** off on the **Display** tab. A red callsign is one you need for an award you track, and the background shows LoTW and eQSL participation.
 
 Clicking one of these spots sends it to the radio as a spot trigger, the same as clicking it in SmartSDR, so the click settings on Commander's **Bandspread** tab apply. DXLab's own guide is [Displaying Active Callsigns on SmartSDR's Panadaptor](https://dxlabsuite.com/dxlabwiki/FlexSignatureDisplayCallsigns).
+
+Commander's spots appear on the panadapter. They do not populate SpotHub's **Spot List**, which lists spots received from AetherSDR's own feed clients.
 
 ### POTA (Parks on the Air)
 
@@ -149,7 +152,7 @@ A sortable table of every spot from every source.
 | Comment | Mode, park reference, decoded message, … |
 | Spotter | Who spotted it |
 | Band | Band |
-| Source | Cluster, RBN, WSJT-X, POTA, N1MM, FreeDV, or the name another program gave a spot it added to the radio |
+| Source | Cluster, RBN, WSJT-X, POTA, N1MM or FreeDV |
 
 - **Bands:** checkboxes filter the list by band; they are saved.
 - **Sorting:** click any column header. Click **Time** to go back to time order.
@@ -310,8 +313,9 @@ Commander isn't adding spots to the radio.
 
 1. In Commander, check that it is set up for your FlexRadio Signature radio and connected to it over the network. Set up as a generic radio, Commander can't put spots on the panadapter.
 2. In Commander's **Configuration** window, on the **Bandspread** tab, check **Display calls on panadaptor**.
-3. In SpotCollector, check that it is connected to its spot sources.
-4. On SpotHub's **Display** tab, turn on **Spots**.
+3. Click **Bandspread** in Commander's main window once to open its Bandspread window. You can then minimize or close that window.
+4. In SpotCollector, check that it is connected to its spot sources.
+5. On SpotHub's **Display** tab, turn on **Spots**.
 
 ### Kiwi DX markers don't appear
 

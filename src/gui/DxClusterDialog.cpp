@@ -556,7 +556,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     root->setContentsMargins(14, 12, 14, 14);
     root->addWidget(makeCanonHeader(QStringLiteral("SpotHub")));
 
-    auto* tabs = new QTabWidget;
+    auto* tabs = new QTabWidget(bodyWidget());
 
     buildClusterTab(tabs);
     buildRbnTab(tabs);
@@ -1598,27 +1598,25 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
 void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
 {
-    // DXLab SpotCollector has no interface of its own for other programs: its
-    // spots reach a FlexRadio panadapter through DXLab Commander, which adds
-    // them to the radio with the API's `spot add`. AetherSDR subscribes to the
-    // radio's spots (`sub spot all`), so Commander's spots appear with nothing
-    // to start here, and a click goes back to the radio as `spot trigger`,
-    // where Commander acts on it. This tab explains that setup (#5131).
-    auto* page = new QWidget;
+    // Commander adds SpotCollector's spots through the FlexRadio spot API.
+    // This tab documents that route instead of offering a nonexistent UDP feed.
+    auto* page = new QWidget(tabs);
     auto* layout = new QVBoxLayout(page);
     layout->setSpacing(8);
 
-    auto* group = new QGroupBox("DXLab SpotCollector");
+    auto* group = new QGroupBox("DXLab SpotCollector", page);
     auto* groupLayout = new QVBoxLayout(group);
     groupLayout->setSpacing(6);
 
     // Rich-text link colors are baked into the HTML, so the text is rebuilt
     // when the theme changes while SpotHub is open.
-    auto* guide = new QLabel;
+    auto* guide = new QLabel(group);
+    guide->setObjectName(QStringLiteral("spotCollectorGuide"));
     auto setGuideText = [guide] {
         auto& tm = AetherSDR::ThemeManager::instance();
         guide->setText(QStringLiteral(
-            "<p>SpotCollector doesn't send spots to other programs directly. Its companion "
+            "<p>SpotCollector doesn't provide a UDP spot broadcast for AetherSDR to receive. "
+            "For FlexRadio radios, its companion "
             "program, <b>DXLab Commander</b>, puts SpotCollector's spots on the radio's "
             "panadapter, and AetherSDR shows them automatically. There's nothing to start "
             "on this tab.</p>"
@@ -1628,6 +1626,8 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
             "it over the network. Commander must be able to reach the radio on TCP port 4992.</li>"
             "<li>In Commander's <b>Configuration</b> window, on the <b>Bandspread</b> tab, check "
             "<b>Display calls on panadaptor</b>.</li>"
+            "<li>Click <b>Bandspread</b> in Commander's main window once to open its "
+            "Bandspread window. You can then minimize or close that window.</li>"
             "<li>Keep SpotCollector running and connected to its spot sources.</li>"
             "</ol>"
             "<p>To see Commander's colors, turn <b>Override Colors</b> and "

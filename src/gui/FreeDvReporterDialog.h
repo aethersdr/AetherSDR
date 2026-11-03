@@ -2,7 +2,7 @@
 
 #ifdef HAVE_WEBSOCKETS
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include "FreeDvReporterModel.h"
 #include "core/FreeDvClient.h"
 
@@ -22,7 +22,10 @@ namespace AetherSDR {
 
 class SliceModel;
 
-class FreeDvReporterDialog : public PersistentDialog {
+// The FreeDV Reporter's station list: a CanonWindow workspace (style guide,
+// RFC #6226), like AetherRX and AetherTX. Closing it hides it; MainWindow
+// keeps feeding it stations while it is closed.
+class FreeDvReporterDialog : public CanonWindow {
     Q_OBJECT
 
 public:

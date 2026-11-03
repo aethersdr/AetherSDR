@@ -376,10 +376,13 @@ Pre-built binaries at third_party/fftw3/ (Windows only; Linux uses system pkg)
 13. TCI Protocol Specification — Transceiver Control Interface
 ---------------------------------------------------------------
 The TCI server (src/core/TciProtocol.cpp, TciServer.cpp) implements the
-TCI v2.0 protocol specification published by Expert Electronics. The binary
+TCI 2.1 protocol specification published by Expert Electronics. The binary
 audio frame header follows the spec's Stream struct definition. No code was
 copied from ExpertSDR3; this is an independent implementation of the published
-protocol.
+protocol. An unmodified copy of the specification, "TCI Protocol 2.1.pdf"
+(sha256 e60833985619ca6a1c7b5c4c48bdbff59e694924589c238d06557e011e18c074,
+upstream commit 6cbccdd7004858152b4b5b463f9b087432d81a21), is kept with its
+MIT license at docs/specs/tci/.
 
   Copyright (c) 2021 Expert Electronics (EE)
   License: MIT
@@ -810,3 +813,27 @@ The native helpers' separate historical MIT notice above remains in effect.
   License:   https://raw.githubusercontent.com/n9bc/DeepFist/930bd3cea7d9bf19fd45413acc9064b54c722871/LICENSE
   LICENSE:   35927 bytes; SHA-256
              d8dcabd2c59c9e96be89f094a94474685e3fcd5ee8c4304ae7fbbf6c722df6ab
+
+
+34. QR Code generator library (C++) — Remote Access sign-in QR code
+-------------------------------------------------------------------------------
+Bundled at third_party/qrcodegen/ (v1.8.0: cpp/qrcodegen.hpp and
+cpp/qrcodegen.cpp, unmodified; hashes in VERSION.txt). Draws the Remote
+Access window's Tailscale sign-in link as a QR code. The full license text is
+in third_party/qrcodegen/LICENSE.
+
+  Copyright: Copyright (c) Project Nayuki
+  License:   MIT
+  Source:    https://github.com/nayuki/QR-Code-generator/tree/v1.8.0
+
+35. musl libc — linked into the radio health tools
+-------------------------------------------------------------------------------
+Statically linked into the AetherHealth agent binaries
+(resources/waveforms/AetherHealth.ssdr_waveform, built from tools/radio-health
+by zig 0.17, which bundles musl). AetherSDR installs that package on a radio
+when "Install radio health tools" is ticked. The full license text ships in
+the package as LICENSES.
+
+  Copyright: Copyright (c) 2005-2020 Rich Felker, et al.
+  License:   MIT
+  Source:    https://musl.libc.org/

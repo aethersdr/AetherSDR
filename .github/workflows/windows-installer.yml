@@ -109,7 +109,7 @@ jobs:
         run: New-Item -ItemType Directory -Force -Path "$env:RUNNER_WORKSPACE\Qt\6.12.0\msvc2022_64" | Out-Null
 
       - name: Install Qt6
-        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06
         with:
           # Exact, not a wildcard. ci.yml's check-windows leg spells 6.12.0
           # exactly; with both exact, the per-PR build and the release build

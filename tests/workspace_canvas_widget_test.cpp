@@ -13,18 +13,21 @@
 //     of a window drag.
 
 #include "gui/workspace/WorkspaceCanvas.h"
+#include "gui/workspace/CanvasItemFrame.h"
 
 #include <QApplication>
 #include <QEvent>
 #include <QPointer>
 #include <QHash>
 #include <QKeyEvent>
+#include <QMargins>
 #include <QMouseEvent>
 #include <QShortcut>
 #include <QTest>
 #include <QRect>
 #include <QSignalSpy>
 #include <QStringList>
+#include <QVBoxLayout>
 #include <QWidget>
 #include <QWindow>
 
@@ -770,6 +773,103 @@ int main(int argc, char** argv)
         QTest::keyClick(handle, Qt::Key_Left, Qt::NoModifier);
         report("deselecting returns the keys to the app",
                nudges == 2 && plain == 1);
+    }
+
+    // ── Grip inset over a native child view ──────────────────────────────
+    //
+    // A native child (the macOS Metal spectrum) takes every press under it,
+    // so grips drawn over it are dead.  Selecting such an item insets its
+    // contents by the grip band; deselecting restores the margins.  An item
+    // with no native child is left exactly as it was.
+    {
+        WorkspaceCanvas canvas;
+        canvas.resize(1000, 800);
+        canvas.show();
+
+        auto* pan = new QWidget;
+        auto* panLayout = new QVBoxLayout(pan);
+        panLayout->setContentsMargins(0, 0, 0, 0);
+        auto* nativeChild = new QWidget(pan);
+        nativeChild->setAttribute(Qt::WA_DontCreateNativeAncestors);
+        nativeChild->setAttribute(Qt::WA_NativeWindow);
+        panLayout->addWidget(nativeChild);
+        pan->setContentsMargins(1, 1, 1, 1);
+        canvas.addItem("pan:0", pan, NormRect{0.0, 0.0, 0.5, 0.5},
+                       QStringLiteral("panadapter"));
+
+        auto* applet = new QWidget;
+        auto* appletLayout = new QVBoxLayout(applet);
+        appletLayout->addWidget(new QWidget(applet));
+        canvas.addItem("applet:A", applet, NormRect{0.5, 0.0, 0.3, 0.3});
+        QCoreApplication::processEvents();
+
+        const int g = AetherSDR::CanvasItemFrame::kGripPx;
+        const QRect before = nativeChild->geometry();
+        canvas.selectItem("pan:0");
+        QCoreApplication::processEvents();
+        report("selecting an item with a native child insets it by the band",
+               pan->contentsMargins() == QMargins(1 + g, 1 + g, 1 + g, 1 + g));
+        report("...so the native child clears the grip band",
+               nativeChild->geometry() == before.adjusted(g, g, -g, -g));
+
+        canvas.selectItem("applet:A");
+        report("selecting another item restores the first",
+               pan->contentsMargins() == QMargins(1, 1, 1, 1));
+        report("an item with no native child is not inset",
+               applet->contentsMargins() == QMargins());
+
+        canvas.selectItem("pan:0");
+        canvas.setEditMode(false);
+        report("leaving edit mode restores the margins",
+               pan->contentsMargins() == QMargins(1, 1, 1, 1));
+
+        canvas.setEditMode(true);
+        canvas.selectItem("pan:0");
+        QWidget* taken = canvas.takeItem("pan:0");
+        report("an item taken while selected leaves with its own margins",
+               taken == pan && pan->contentsMargins() == QMargins(1, 1, 1, 1));
+        delete taken;
+
+        // A resize gesture moves the selected item on every motion; the inset
+        // must hold through it and still come off afterwards.
+        auto* pan2 = new QWidget;
+        auto* pan2Layout = new QVBoxLayout(pan2);
+        auto* native2 = new QWidget(pan2);
+        native2->setAttribute(Qt::WA_DontCreateNativeAncestors);
+        native2->setAttribute(Qt::WA_NativeWindow);
+        pan2Layout->addWidget(native2);
+        canvas.addItem("pan:1", pan2, NormRect{0.0, 0.5, 0.4, 0.4},
+                       QStringLiteral("panadapter"));
+        canvas.selectItem("pan:1");
+        const QPoint origin = canvas.mapToGlobal(QPoint(10, 10));
+        canvas.beginFrameGesture(AetherSDR::HitZone::E, origin);
+        canvas.moveGesture(origin + QPoint(40, 0));
+        canvas.moveGesture(origin + QPoint(80, 0));
+        canvas.endGesture(origin + QPoint(80, 0));
+        report("the inset holds through a resize gesture",
+               pan2->contentsMargins() == QMargins(g, g, g, g));
+        canvas.clearSelection();
+        report("...and comes off after it",
+               pan2->contentsMargins() == QMargins());
+
+        // An inset item destroyed outside the take path leaves nothing stale:
+        // the next native item selected is inset normally.
+        canvas.selectItem("pan:1");
+        delete pan2;
+        QCoreApplication::processEvents();
+        report("destroying the inset item clears the selection",
+               canvas.selectedItem().isEmpty() && !canvas.contains("pan:1"));
+        auto* pan3 = new QWidget;
+        auto* pan3Layout = new QVBoxLayout(pan3);
+        auto* native3 = new QWidget(pan3);
+        native3->setAttribute(Qt::WA_DontCreateNativeAncestors);
+        native3->setAttribute(Qt::WA_NativeWindow);
+        pan3Layout->addWidget(native3);
+        canvas.addItem("pan:2", pan3, NormRect{0.0, 0.5, 0.4, 0.4},
+                       QStringLiteral("panadapter"));
+        canvas.selectItem("pan:2");
+        report("...and the next native item is inset normally",
+               pan3->contentsMargins() == QMargins(g, g, g, g));
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");

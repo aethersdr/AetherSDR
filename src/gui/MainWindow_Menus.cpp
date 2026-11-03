@@ -55,6 +55,7 @@
 #include "WhatsNewDialog.h"
 #include "WindowShowState.h"
 #include "core/UpdateChecker.h"
+#include "core/UpdateController.h"
 #include "core/AppSettings.h"
 #include "core/SpotModeResolver.h"
 #include "core/ThemeManager.h"
@@ -627,8 +628,17 @@ void MainWindow::buildMenuBar()
 #else
         MidiControlManager* midi = nullptr;
 #endif
-        showOrRaisePersistent(m_ulanziMapperDialog, m_dialBackend,
-                              &m_shortcutManager, midi);
+        // A canon dialog, so not showOrRaisePersistent(): that applies View →
+        // Frameless Window, which a CanonWindow does not follow.
+        if (!m_ulanziMapperDialog) {
+            auto* dlg = new UlanziDialMapperDialog(m_dialBackend, &m_shortcutManager,
+                                                   midi, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_ulanziMapperDialog = dlg;
+        }
+        m_ulanziMapperDialog->show();
+        m_ulanziMapperDialog->raise();
+        m_ulanziMapperDialog->activateWindow();
     });
     settingsMenu->addSeparator();
     auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
@@ -660,23 +670,15 @@ void MainWindow::buildMenuBar()
 
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
-        // A canon workspace window: created directly rather than through
-        // showOrRaisePersistent(), which would apply View → Frameless Window.
-        const bool wasFresh = !m_spotHubDialog;
-        if (wasFresh) {
-            auto* hub = new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
-                                            m_potaClient, m_eibiClient,
-                                            m_n1mmSpotClient,
+        const bool wasFresh = showOrRaiseCanon(m_spotHubDialog, [this] {
+            return new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
+                                       m_potaClient, m_eibiClient,
+                                       m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
-                                            m_freedvClient,
+                                       m_freedvClient,
 #endif
-                                            &m_radioModel, &m_dxccProvider, this);
-            hub->setAttribute(Qt::WA_DeleteOnClose);
-            m_spotHubDialog = hub;
-        }
-        m_spotHubDialog->show();
-        m_spotHubDialog->raise();
-        m_spotHubDialog->activateWindow();
+                                       &m_radioModel, &m_dxccProvider, this);
+        });
 #ifdef HAVE_WEBSOCKETS
         // Every open, not just the first: this dialog is a persistent
         // singleton, so without this the field would only ever show
@@ -854,16 +856,7 @@ void MainWindow::buildMenuBar()
             statusBar()->showMessage("Not connected to radio", 3000);
             return;
         }
-        // A canon workspace window: created directly rather than through
-        // showOrRaisePersistent(), which would apply View → Frameless Window.
-        if (!m_txBandDialog) {
-            auto* dialog = new TxBandDialog(&m_radioModel, this);
-            dialog->setAttribute(Qt::WA_DeleteOnClose);
-            m_txBandDialog = dialog;
-        }
-        m_txBandDialog->show();
-        m_txBandDialog->raise();
-        m_txBandDialog->activateWindow();
+        showOrRaiseCanon(m_txBandDialog, [this] { return new TxBandDialog(&m_radioModel, this); });
     });
 
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.
@@ -1636,6 +1629,11 @@ void MainWindow::buildMenuBar()
     });
 
     toolsMenu->addSeparator();
+    auto* labAction = toolsMenu->addAction(tr("AetherLab…"));
+    labAction->setObjectName(QStringLiteral("aetherLabAction"));
+    labAction->setStatusTip(tr("Open the Stick Pro analyzer workspace; RF isolation is required"));
+    connect(labAction, &QAction::triggered, this, &MainWindow::showAetherLab);
+
     auto* swrScanAction = toolsMenu->addAction("Start SWR Scan...");
     m_swrScanAction = swrScanAction;
     swrScanAction->setEnabled(false);
@@ -2299,19 +2297,55 @@ constexpr int kAutomaticUpdateCheckDelayMs = 15000;
 void MainWindow::wireUpdateChecker()
 {
     m_updateChecker = new UpdateChecker(this);
+    m_updateController = new UpdateController(UpdateController::forThisApp(), this);
+    // A release staged by an earlier run, before any check (GitHub's latest
+    // is not known yet); each answer re-checks it against the new latest.
+    m_updateController->refreshStaged(QString());
+    connect(m_updateController, &UpdateController::stateChanged, this, [this] {
+        if (m_titleBar) {
+            const UpdateController::State s = m_updateController->state();
+            const bool ready = s == UpdateController::State::Staged || s == UpdateController::State::Installing
+                               || s == UpdateController::State::Handed;
+            m_titleBar->setUpdateStaged(ready ? m_updateController->version() : QString());
+        }
+    });
+    // Restart to update, once the release is handed over: quit, the normal
+    // way, prompts and all.
+    connect(m_updateController, &UpdateController::restartReady, this,
+            [this](bool handed, const QString& problem, const QString& version) {
+                if (handed) {
+                    close();
+                } else if (m_updatesWindow) {
+                    m_updatesWindow->showInstallProblem(problem, version);
+                }
+            });
+    // Install for updates: installed, and it starts once this copy quits.
+    connect(m_updateController, &UpdateController::appImageInstalled, this,
+            [this](bool restart, const QString&) {
+                if (restart) {
+                    close();
+                }
+            });
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
             [this](const QString& ver) {
+        m_updateController->refreshStaged(ver);
         if (m_titleBar) {
+            // A release rolled back here is never announced again.
             m_titleBar->setUpdateAvailable(
-                UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
+                m_updateController->isRolledBack(ver)
+                    ? QString()
+                    : UpdateChecker::badgeVersion(ver, QCoreApplication::applicationVersion()));
         }
     });
     connect(m_updateChecker, &UpdateChecker::upToDate, this,
             [this] {
+        m_updateController->refreshStaged(m_updateChecker->latestRelease().version);
         if (m_titleBar) {
             m_titleBar->setUpdateAvailable({});
         }
     });
+    // After the window is up, so the status bar is there to say it.
+    QTimer::singleShot(0, this, &MainWindow::reportLastUpdate);
     // Results and failures are shown in the Updates window, not in prompts.
 
     QTimer::singleShot(kAutomaticUpdateCheckDelayMs, m_updateChecker, [checker = m_updateChecker] {
@@ -2321,10 +2355,14 @@ void MainWindow::wireUpdateChecker()
 
 void MainWindow::restoreKnownUpdate()
 {
+    if (m_titleBar && m_updateController
+        && m_updateController->state() == UpdateController::State::Staged) {
+        m_titleBar->setUpdateStaged(m_updateController->version());
+    }
     // The daily throttle may skip this launch's check, so the badge comes back
     // from the release the last answer recorded, under the same rules.
     const QString known = UpdateChecker::knownBadgeVersion();
-    if (known.isEmpty() || !m_titleBar) {
+    if (known.isEmpty() || !m_titleBar || (m_updateController && m_updateController->isRolledBack(known))) {
         return;
     }
     m_titleBar->setUpdateAvailable(known);
@@ -2342,6 +2380,8 @@ void MainWindow::showUpdatesWindow(bool checkNow)
             }
         });
         connect(w, &UpdatesWindow::automaticCheckToggled, this, &MainWindow::setAutomaticUpdateCheck);
+        connect(w, &UpdatesWindow::restartRequested, this, &MainWindow::restartToUpdate);
+        w->setController(m_updateController);
         m_updatesWindow = w;
     }
     if (checkNow) {
@@ -2351,6 +2391,39 @@ void MainWindow::showUpdatesWindow(bool checkNow)
     m_updatesWindow->show();
     m_updatesWindow->raise();
     m_updatesWindow->activateWindow();
+}
+
+void MainWindow::restartToUpdate()
+{
+    // The helper waits for this process to exit, then swaps the release in
+    // and starts it; restartReady closes the window once it has it.
+    QString problem;
+    const QString version = m_updateController->version();
+    if (!m_updateController->restartToUpdate(&problem) && m_updatesWindow) {
+        m_updatesWindow->showInstallProblem(problem, version);
+    }
+}
+
+void MainWindow::reportLastUpdate()
+{
+    // What AetherSDRUpdater did after the last run, read at start (main.cpp).
+    const UpdateController::LastUpdate r = UpdateController::lastUpdate();
+    QString text;
+    if (r.outcome == QLatin1String("Updated")) {
+        text = tr("Updated to AetherSDR %1.").arg(r.version);
+    } else if (r.outcome == QLatin1String("RolledBack")) {
+        text = tr("The update to %1 didn't start, so %2 was restored. It won't be offered again.")
+                   .arg(r.version, QCoreApplication::applicationVersion());
+    } else if (r.outcome == QLatin1String("SwapUndone") || r.outcome == QLatin1String("NotPossible")) {
+        text = tr("The update to %1 couldn't be put in place, so nothing changed.").arg(r.version);
+    } else if (r.outcome == QLatin1String("OldStillRunning")) {
+        text = tr("The update to %1 installs the next time you quit.").arg(r.version);
+    } else if (r.outcome == QLatin1String("Installed")) {
+        text = tr("AetherSDR %1 is installed for updates. It updates itself from File > Update.").arg(r.version);
+    }
+    if (!text.isEmpty()) {
+        statusBar()->showMessage(text, 10000);
+    }
 }
 
 void MainWindow::setAutomaticUpdateCheck(bool on)

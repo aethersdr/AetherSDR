@@ -99,6 +99,7 @@ QString TciProtocol::smartsdrToTci(const QString& mode)
         {"USB",  "usb"},   {"LSB",  "lsb"},
         {"CW",   "cw"},    {"CWL",  "cwr"},
         {"AM",   "am"},    {"SAM",  "sam"},
+        {"DSB",  "dsb"},
         {"FM",   "fm"},    {"NFM",  "nfm"},
         {"DFM",  "fm"},    {"FDM",  "fm"},
         {"DIGU", "digu"},  {"DIGL", "digl"},
@@ -114,6 +115,7 @@ QString TciProtocol::tciToSmartSDR(const QString& mode, bool* ok)
         {"usb",  "USB"},   {"lsb",  "LSB"},
         {"cw",   "CW"},    {"cwr",  "CWL"},
         {"am",   "AM"},    {"sam",  "SAM"},
+        {"dsb",  "DSB"},
         {"fm",   "FM"},    {"nfm",  "NFM"},
         {"digu", "DIGU"},  {"digl", "DIGL"},
         {"rtty", "RTTY"},
@@ -179,6 +181,58 @@ static bool argToDouble(const QStringList& args, int idx, double& out)
     if (!ok || !std::isfinite(parsed)) return false;
     out = parsed;
     return true;
+}
+
+// SQL_LEVEL is a threshold in dB, -140..0 (TCI 2.1 p.31). A slice stores a
+// 0..100 level; the backend's published squelch scale converts between the
+// two. Where the backend publishes no dB place for the slice's mode (HL2 FM,
+// RTL, a Kiwi source), Flex's -160 + level map stands in as a nominal scale.
+static constexpr double kSqlMinDb = -140.0;
+
+static SquelchLevelScale sqlScaleFor(RadioModel* model, SliceModel* s)
+{
+    if (model && s) {
+        if (auto scale = squelchScaleForMode(
+                model->backendCapabilities().squelchLevelScale, s->mode())) {
+            return *scale;
+        }
+    }
+    return legacyDbmSquelchScale();
+}
+
+static int sqlLevelDb(RadioModel* model, SliceModel* s, int level)
+{
+    const double db = sqlScaleFor(model, s).thresholdDb(level);
+    return static_cast<int>(std::lround(std::clamp(db, kSqlMinDb, 0.0)));
+}
+
+int TciProtocol::squelchLevelDb(RadioModel* model, SliceModel* s, int level)
+{
+    return sqlLevelDb(model, s, level);
+}
+
+static constexpr double kAgcGainMinDb = -20.0;
+static constexpr double kAgcGainMaxDb = 120.0;
+static constexpr double kAgcGainDbPerStep = (kAgcGainMaxDb - kAgcGainMinDb) / 100.0;
+
+int TciProtocol::agcGainDbForLevel(int level)
+{
+    return static_cast<int>(std::lround(
+        kAgcGainMinDb + kAgcGainDbPerStep * std::clamp(level, 0, 100)));
+}
+
+int TciProtocol::agcLevelForGainDb(double db)
+{
+    return static_cast<int>(std::lround(
+        (std::clamp(db, kAgcGainMinDb, kAgcGainMaxDb) - kAgcGainMinDb) / kAgcGainDbPerStep));
+}
+
+int TciProtocol::agcGainDb(SliceModel* s)
+{
+    if (s->externalReceiveReplacementActive()) {
+        return s->receiveAgcThreshold();
+    }
+    return agcGainDbForLevel(s->receiveAgcThreshold());
 }
 
 SliceModel* TciProtocol::sliceForTrx(int trx) const
@@ -250,6 +304,12 @@ int TciProtocol::txSliceTrxOrNone(RadioModel* model)
     return -1;
 }
 
+bool TciProtocol::txOnOtherSlice(const RadioModel* model, const SliceModel* rx)
+{
+    const SliceModel* tx = model ? model->txSlice() : nullptr;
+    return rx && tx && tx != rx;
+}
+
 int TciProtocol::txTrx() const
 {
     const int trx = m_trxMap ? m_trxMap->txSliceTrxOrNone(m_model)
@@ -310,13 +370,14 @@ QString TciProtocol::generateInitBurst()
     // Identity chosen so WSJT-X's TCITransceiver keeps full TX amplitude: it
     // halves samples (K2 = 0.499/0x7FFF vs K1 = 0.999/0x7FFF) only when device is
     // "SunSDR2DX"/"SunSDR2PRO" AND protocol doesn't start with "ExpertSDR3"; we fail
-    // both. "ExpertSDR3,1.5" also selects WSJT-X's ESDR3 command formats. The
+    // both. Any "ExpertSDR3" protocol selects WSJT-X's ESDR3 command formats;
+    // WSJT-X, JTDX and eesdr-tci read the name, not the version. The
     // RF2K-S whitelist (SunSDR2DX + ExpertSDR2) is not matched; a configurable
     // identity is #2806.
     burst += QStringLiteral("device:AetherSDR;");
     burst += QStringLiteral("receive_only:false;");
-    burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,fm,nfm,digu,digl,rtty;");
-    burst += QStringLiteral("protocol:ExpertSDR3,1.5;");
+    burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,dsb,fm,nfm,digu,digl,rtty;");
+    burst += QStringLiteral("protocol:ExpertSDR3,2.1;");
 
     // ── Phase 2: Current state notifications ──────────────────────────
     // Identical in syntax to the events fired by a live tuning
@@ -331,6 +392,10 @@ QString TciProtocol::generateInitBurst()
             const long long hz = mhzToHz(s->frequency());
             burst += QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);
             SliceModel* txVfo = sliceForVfo(trx, 1);
+            // GUI split: the TX slice is trx 0's VFO B (see TciServer::publishMainSplit).
+            if (trx == 0 && (!txVfo || txVfo == s) && txOnOtherSlice(m_model, s)) {
+                txVfo = m_model->txSlice();
+            }
             const long long txHz = mhzToHz(txVfo ? txVfo->frequency() : s->frequency());
             burst += QStringLiteral("vfo:%1,1,%2;").arg(trx).arg(txHz);
             // dds: = IQ-stream center (panadapter center). Skimmers learn the
@@ -365,7 +430,8 @@ QString TciProtocol::generateInitBurst()
             // tciSupport.py, SplitThreadSafeValue.get() + extract_current_vfo.)
             burst += QStringLiteral("split_enable:%1,%2;")
                          .arg(trx)
-                         .arg(m_routingState && m_routingState->splitRequested()
+                         .arg((m_routingState && m_routingState->splitRequested())
+                                      || (trx == 0 && txOnOtherSlice(m_model, s))
                                  ? QStringLiteral("true")
                                  : QStringLiteral("false"));
 
@@ -378,11 +444,13 @@ QString TciProtocol::generateInitBurst()
                          .arg(trx)
                          .arg(s->receiveSquelchOn() ? "true" : "false");
             burst += QStringLiteral("sql_level:%1,%2;")
-                         .arg(trx).arg(s->receiveSquelchLevel());
+                         .arg(trx).arg(sqlLevelDb(m_model, s, s->receiveSquelchLevel()));
 
             // AGC
             burst += QStringLiteral("agc_mode:%1,%2;")
                          .arg(trx).arg(s->receiveAgcMode().toLower());
+            burst += QStringLiteral("agc_gain:%1,%2;")
+                         .arg(trx).arg(agcGainDb(s));
 
             // DSP
             burst += QStringLiteral("rx_nb_enable:%1,%2;")
@@ -476,6 +544,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     m_pendingNotification.clear();
     m_pendingMasterVolume = -1;
     m_pendingTxGain = -1;
+    m_centerLockRequest.reset();
     m_vfoRequest.reset();
     m_splitRequest.reset();
     m_trxRequest.reset();
@@ -579,6 +648,9 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "tx_gain")          return cmdTxGain(args, isSet);
     if (name == "active_slice")     return cmdActiveSlice(args);
 
+    // Thetis extension, see cmdRxCtunEx
+    if (name == "rx_ctun_ex")       return cmdRxCtunEx(args, isSet);
+
     // Unknown command — ignore silently per TCI spec
     return {};
 }
@@ -588,6 +660,13 @@ QString TciProtocol::pendingNotification()
     QString n = m_pendingNotification;
     m_pendingNotification.clear();
     return n;
+}
+
+std::optional<TciProtocol::CenterLockRequest> TciProtocol::takeCenterLockRequest()
+{
+    std::optional<CenterLockRequest> request = std::move(m_centerLockRequest);
+    m_centerLockRequest.reset();
+    return request;
 }
 
 std::optional<TciProtocol::VfoRequest> TciProtocol::takeVfoRequest()
@@ -1007,13 +1086,10 @@ QString TciProtocol::cmdSplitEnable(const QStringList& args, bool isSet)
     if (!isSet) {
         bool split = m_routingState && m_routingState->splitRequested();
 
-        if (!m_routingState && s && m_model) {
-            for (auto* sl : m_model->slices()) {
-                if (sl->isTxSlice() && sl != s) {
-                    split = true;
-                    break;
-                }
-            }
+        // A split made in the GUI is just as real; without a routing state
+        // every receiver reports it, as before.
+        if ((trx == 0 || !m_routingState) && txOnOtherSlice(m_model, s)) {
+            split = true;
         }
         return QStringLiteral("split_enable:%1,%2;").arg(trx).arg(split ? "true" : "false");
     }
@@ -1135,6 +1211,42 @@ QString TciProtocol::cmdLock(const QStringList& args, bool isSet)
     return {};
 }
 
+// ── RX_CTUN_EX (Thetis extension) ──────────────────────────────────────────
+//
+// `rx_ctun_ex:<trx>,<bool>;` is Thetis's click-tune switch: true lets the VFO
+// move inside a fixed panadapter, false keeps the VFO centred and drags the
+// pan along. AetherSDR's equivalent is the inverse, center lock: ctun true =
+// center lock off. Additive; TCI 2.1 has no command for it. Clients that
+// draw their own spectrum (TCI Remote) send `rx_ctun_ex:0,true;` on connect
+// because a locked pan moves under them on every tune.
+//
+// Center lock is MainWindow state, so a SET is stashed for TciServer and a
+// GET is answered through the injected query, if any.
+
+QString TciProtocol::cmdRxCtunEx(const QStringList& args, bool isSet)
+{
+    if (args.isEmpty()) return {};
+    int trx = 0;
+    if (!argToInt(args, 0, trx)) return {};
+    auto* s = sliceForTrx(trx);
+    if (!s) return {};
+
+    if (!isSet) {
+        if (!m_centerLockQuery) return {};
+        return QStringLiteral("rx_ctun_ex:%1,%2;")
+                   .arg(trx).arg(m_centerLockQuery(s->sliceId()) ? "false" : "true");
+    }
+
+    if (args.size() < 2) return {};
+    bool ctun = false;
+    if (!argToBool(args, 1, ctun)) return {};
+    m_centerLockRequest = CenterLockRequest{trx, s->sliceId(), !ctun};
+
+    m_pendingNotification = QStringLiteral("rx_ctun_ex:%1,%2;")
+                                .arg(trx).arg(ctun ? "true" : "false");
+    return {};
+}
+
 // ── Squelch ────────────────────────────────────────────────────────────────
 
 QString TciProtocol::cmdSqlEnable(const QStringList& args, bool isSet)
@@ -1173,18 +1285,28 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
 
     if (!isSet) {
         return QStringLiteral("sql_level:%1,%2;")
-                   .arg(trx).arg(s->receiveSquelchLevel());
+                   .arg(trx).arg(sqlLevelDb(m_model, s, s->receiveSquelchLevel()));
     }
 
     if (args.size() < 2) return {};
-    int level = 0;
-    if (!argToInt(args, 1, level)) return {};
+    double value = 0.0;
+    if (!argToDouble(args, 1, value)) return {};
+    // The spec defines dB only. A positive value is outside its range, and is
+    // most likely an older client's 0..100 level; read as dB it would close
+    // the squelch, so it is ignored (TCI 2.1 p.6). At or below what level 0
+    // is reported as (-140 dB, or a higher floor the scale publishes), the
+    // squelch opens fully, so level 0 stays reachable and its own echo, sent
+    // back, does not move it.
+    if (value > 0.0) return {};
+    const int level = (value <= sqlLevelDb(m_model, s, 0))
+        ? 0
+        : sqlScaleFor(m_model, s).levelForThresholdDb(value);
     auto& pending = (*m_pendingSquelch)[trx];
     pending.level = level;
     queueSquelch(s, trx, pending.on.value_or(s->receiveSquelchOn()), level);
 
     m_pendingNotification = QStringLiteral("sql_level:%1,%2;")
-                                .arg(trx).arg(level);
+                                .arg(trx).arg(sqlLevelDb(m_model, s, level));
     return {};
 }
 
@@ -1318,17 +1440,31 @@ QString TciProtocol::cmdAgcGain(const QStringList& args, bool isSet)
 
     if (!isSet) {
         return QStringLiteral("agc_gain:%1,%2;")
-                   .arg(trx).arg(s->receiveAgcThreshold());
+                   .arg(trx).arg(agcGainDb(s));
     }
 
     if (args.size() < 2) return {};
-    int gain = 0;
-    if (!argToInt(args, 1, gain)) return {};
-    QMetaObject::invokeMethod(s, [s, gain]() { s->setAgcThreshold(gain); },
-                              Qt::QueuedConnection);
+    double db = 0.0;
+    if (!argToDouble(args, 1, db)) return {};
+    const bool external = s->externalReceiveReplacementActive();
+    // Bound in floating point first: a huge value must not wrap in the
+    // conversion to int and land on the opposite end of the range.
+    const int value = external
+        ? static_cast<int>(std::lround(std::clamp(
+              db, static_cast<double>(s->receiveAgcThresholdMinimum()),
+              static_cast<double>(s->receiveAgcThresholdMaximum()))))
+        : agcLevelForGainDb(db);
+    // The value is in the unit of the receive path chosen here. If a KiwiSDR
+    // replacement starts or stops before the queued call runs, the request is
+    // dropped rather than read in the other path's unit.
+    QMetaObject::invokeMethod(s, [s, value, external]() {
+        if (s->externalReceiveReplacementActive() == external) {
+            s->setAgcThreshold(value);
+        }
+    }, Qt::QueuedConnection);
 
-    m_pendingNotification = QStringLiteral("agc_gain:%1,%2;")
-                                .arg(trx).arg(gain);
+    // The observed threshold relay announces changes, including backend
+    // confirmation. A discarded queued request must announce nothing.
     return {};
 }
 
@@ -1751,28 +1887,53 @@ QString TciProtocol::cmdRxChannelEnable(const QStringList& args, bool isSet)
     return {};
 }
 
-QString TciProtocol::cmdRxVolume(const QStringList& args, bool isSet)
+// RX_VOLUME is per receiver and per channel per TCI v2.0, on the same dB scale
+// as `volume:` (-60..0; -60 = silence).
+//   GET = `rx_volume:trx,channel;`   SET = `rx_volume:trx,channel,dB;`
+// Channel 0 is the receiver's slice; channel 1 is the route's TX slice
+// (tci-receivers.md rule 5), resolved by sliceForVfo() as `vfo:` does.
+// Before this, the channel was read as the gain, so every spec SET muted the
+// slice. Older builds took `rx_volume:trx,N;` with N as percent; a second
+// argument that cannot be a channel (>= 2) is still read that way.
+QString TciProtocol::cmdRxVolume(const QStringList& args, bool /*isSet*/)
 {
-    // Per-receiver volume — maps to slice audioGain
     if (args.isEmpty()) return {};
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
     auto* s = sliceForTrx(trx);
     if (!s) return {};
 
-    if (!isSet) {
-        return QStringLiteral("rx_volume:%1,%2;")
-                   .arg(trx).arg(static_cast<int>(s->audioGain()));
+    int channel = 0;
+    int pct = -1;   // -1 = GET
+    if (args.size() >= 3) {
+        if (!argToInt(args, 1, channel) || channel < 0 || channel > 1) return {};
+        double db = 0.0;
+        if (!argToDouble(args, 2, db)) return {};
+        pct = volumePercentFromDb(db);
+    } else if (args.size() == 2) {
+        int second = 0;
+        if (!argToInt(args, 1, second) || second < 0) return {};
+        if (second >= 2) {
+            pct = std::min(second, 100);   // legacy percent
+        } else {
+            channel = second;
+        }
     }
 
-    if (args.size() < 2) return {};
-    int gainPct = 0;
-    if (!argToInt(args, 1, gainPct)) return {};
-    const float gain = static_cast<float>(gainPct);
-    QMetaObject::invokeMethod(s, [s, gain]() { s->setAudioGain(gain); },
+    SliceModel* target = sliceForVfo(trx, channel);
+    if (!target) return {};
+
+    if (pct < 0) {
+        return QStringLiteral("rx_volume:%1,%2,%3;")
+                   .arg(trx).arg(channel)
+                   .arg(volumeDbFromPercent(qRound(target->audioGain())));
+    }
+
+    const float gain = static_cast<float>(pct);
+    QMetaObject::invokeMethod(target, [target, gain]() { target->setAudioGain(gain); },
                               Qt::QueuedConnection);
-    m_pendingNotification = QStringLiteral("rx_volume:%1,%2;")
-                                .arg(trx).arg(static_cast<int>(gain));
+    m_pendingNotification = QStringLiteral("rx_volume:%1,%2,%3;")
+                                .arg(trx).arg(channel).arg(volumeDbFromPercent(pct));
     return {};
 }
 

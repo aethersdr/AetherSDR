@@ -100,6 +100,15 @@ bool UpdateChecker::isSkipped(const QString& version)
     return UpdateSettings::isSkipped(version);
 }
 
+void UpdateChecker::unskipVersion(const QString& version)
+{
+    if (!isSkipped(version)) {
+        return;
+    }
+    UpdateSettings::setSkippedVersion(QString());
+    qCInfo(lcUpdater).noquote() << "operator installed skipped v" + version + "; no longer skipped";
+}
+
 bool UpdateChecker::isNewer(const QString& a, const QString& b)
 {
     const VersionNumber va = VersionNumber::parse(a);

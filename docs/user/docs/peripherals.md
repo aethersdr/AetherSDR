@@ -164,6 +164,10 @@ port showing its band, bias profile and the radio feeding it, **STBY** and
 transmit is outlined. In standby a single banner replaces both strips. A port with no band
 reads `N/A`, meaning nothing is driving it.
 
+The **SWR** meter has the same flat dark track as **PWR** and **DRV**.
+With no forward power, the SWR track stays empty; color in the bar shows
+the measured SWR while power is flowing.
+
 The fan control, MEffA, port detail and the voltages need the **direct**
 connection. Over the radio relay the applet still shows power, SWR, Id and the
 operate state. Meters update at about 60 Hz while transmitting and 4 Hz while
