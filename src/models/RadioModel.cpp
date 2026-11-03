@@ -6507,10 +6507,11 @@ bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
     const QPointer<PanadapterModel> pan(panadapter(panId));
     if (!pan || (!hasCenter && !hasBandwidth)) { return false; }
     if (hasCenter) {
-        // A declared centre range bounds the request as the backend does, so the
-        // optimistic value below is the centre the radio runs, not the one asked.
+        // Bound optimistic geometry to the declared range. Confirmed backends
+        // retain their own request validation and report the accepted geometry.
         if (const auto range = backendCapabilities().receivePanCenterControl;
-            range && range->authority != SliceFrequencyControl::Authority::Unknown
+            !confirmsReceiveControls() && range
+            && range->authority != SliceFrequencyControl::Authority::Unknown
             && range->maximumHz >= range->minimumHz) {
             centerMhz = std::clamp(centerMhz, range->minimumHz / 1.0e6, range->maximumHz / 1.0e6);
         }

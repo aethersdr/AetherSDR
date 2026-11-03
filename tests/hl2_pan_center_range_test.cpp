@@ -7,8 +7,16 @@
 // chain and no radio. Nothing is keyed.
 
 #include "TestSettingsProfile.h"
+#include "SeamThreadAffinityProbe.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/anan/AnanBackend.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/sim/SimBackend.h"
+#ifdef AETHER_BACKEND_RTL
+#include "core/backends/rtl/RtlSdrBackend.h"
+#endif
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 
@@ -19,6 +27,7 @@
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 
 using namespace AetherSDR;
@@ -63,6 +72,8 @@ public:
 void testBackendClampsToTheDeclaration()
 {
     hl2::Hl2Backend backend;
+    test::SeamThreadAffinityProbe probe(&backend);
+    test::attachAllSeamSignals(probe);
     const auto range = backend.capabilities().receivePanCenterControl;
     check(range.has_value(), "the HL2 declares a pan centre range");
     if (!range) {
@@ -98,6 +109,59 @@ void testBackendClampsToTheDeclaration()
     centre(std::numeric_limits<double>::quiet_NaN());
     check(Access::ncoHz(backend) == 14'000'000.0 && echoed == 0.0,
           "a NaN centre is refused and the DDC stays put");
+    centre(std::numeric_limits<double>::infinity());
+    check(Access::ncoHz(backend) == 14'000'000.0 && echoed == 0.0,
+          "an infinite centre is refused and the DDC stays put");
+    check(probe.count(QStringLiteral("panCenterBandwidthChanged")) > 0
+              && probe.violations().isEmpty(),
+          "pan geometry echoes are observed on the backend owner thread");
+}
+
+// Exercise the shared model's request and optimistic paths with each family's
+// production declarations. The recorder has no transport and emits no reply.
+class RecordingRangeBackend final : public hl2::Hl2Backend
+{
+public:
+    explicit RecordingRangeBackend(const IRadioBackend& source)
+        : m_caps(source.capabilities()), m_policy(source.receiveControlPolicy()) {}
+    RadioCapabilities capabilities() const override { return m_caps; }
+    ReceiveControlPolicy receiveControlPolicy() const override { return m_policy; }
+    bool isConnected() const override { return true; }
+    void setPanCenter(const QString&, double hz, PanCenterIntent) override { requestedHz = hz; }
+    std::optional<double> requestedHz;
+
+private:
+    RadioCapabilities m_caps;
+    ReceiveControlPolicy m_policy;
+};
+
+void testOtherFamilyRequestsAreUnchanged(const IRadioBackend& source)
+{
+    const RadioCapabilities caps = source.capabilities();
+    std::printf("-- unchanged model routing: %s\n", qPrintable(caps.family));
+    check(!caps.receivePanCenterControl
+              || source.receiveControlPolicy() == ReceiveControlPolicy::Confirmed,
+          "other family either declares no range or confirms receive controls");
+    RadioModel radio;
+    auto owned = std::make_unique<RecordingRangeBackend>(source);
+    RecordingRangeBackend* backend = owned.get();
+    radio.setBackendForTest(std::move(owned), caps.family);
+    Access::receiver(*backend);
+    Access::publishPan(*backend);
+    const QString panId = RadioModel::neutralPanIdStringForTest(0);
+    PanadapterModel* pan = radio.panadapter(panId);
+    check(pan != nullptr, "fixture: recording backend publishes a pan");
+    if (!pan) { return; }
+    for (const double mhz : {0.05, 38.5, 1800.0}) {
+        const double before = pan->centerMhz();
+        backend->requestedHz.reset();
+        radio.requestPanCenter(panId, mhz);
+        check(backend->requestedHz && std::abs(*backend->requestedHz - mhz * 1e6) < 0.5,
+              "centre reaches the backend unchanged, including outside HL2/RTL limits");
+        check(pan->centerMhz() == (source.receiveControlPolicy() == ReceiveControlPolicy::Confirmed
+                  ? before : mhz),
+              "confirmed geometry waits for status; optimistic geometry retains the requested centre");
+    }
 }
 
 void testModelShowsTheCentreTheRadioRuns()
@@ -152,6 +216,13 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     testBackendClampsToTheDeclaration();
     testModelShowsTheCentreTheRadioRuns();
+    testOtherFamilyRequestsAreUnchanged(FlexBackend{});
+    testOtherFamilyRequestsAreUnchanged(icom::IcomCivBackend{});
+    testOtherFamilyRequestsAreUnchanged(anan::AnanBackend{});
+    testOtherFamilyRequestsAreUnchanged(SimBackend{});
+#ifdef AETHER_BACKEND_RTL
+    testOtherFamilyRequestsAreUnchanged(rtl::RtlSdrBackend{});
+#endif
     std::printf("%s: %d failure(s)\n", argv[0], g_failed);
     return g_failed == 0 ? 0 : 1;
 }

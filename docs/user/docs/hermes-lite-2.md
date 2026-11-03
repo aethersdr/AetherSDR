@@ -89,6 +89,7 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 
 ## Receive
 
+- **Panadapter centre:** panning stops at the supported centre range, 100 kHz to 38.4 MHz. At wide spans, the lower edge of the display stays at or above 0 Hz. Panning moves the receive window independently of the slice frequency.
 - **Latency:** outside CW the receive filter runs at minimum phase, so audio returns 44 ms after an unmute. In CW, onset is 85 ms; a notch or a passband under 100 Hz lengthens the filter.
 - After you unkey, receive stays muted through the transmit/receive turnaround, so you don't hear the PA's own carrier.
 - **S-meter** reads WDSP's average level. It holds steady across key-down and unkey.
