@@ -113,8 +113,8 @@ LpMeterConnection::LpMeterConnection(QObject* parent)
         //
         // Says how long ago our last poll went out. The watchdog outlasts the
         // poll gate's longest ride-along, so by now we should be polling: a
-        // last poll under kSoloPollIntervalMs ago means the meter is silent,
-        // a long one means we stopped asking (e.g. the main thread stalled).
+        // recent accepted poll helps distinguish a silent meter from a poll
+        // loop that stopped writing (e.g. the main thread stalled).
         // A support bundle cannot otherwise tell those apart.
         const qint64 now = nowMs();
         if (m_silenceSinceMs < 0) {
@@ -189,9 +189,7 @@ void LpMeterConnection::connectSerial(const QString& portName)
     // Retire the old session before changing its mode or reconnect target.
     // QSerialPort::close() does not emit disconnected(), so teardownDevice()
     // alone leaves m_connected and the reconnect lifecycle stale.
-    disconnect();
-    m_mode = Mode::Serial;
-    m_lastSerialPort = portName;
+    prepareConnection(Mode::Serial, portName);
     m_deliberateDisconnect = false;
 
     if (!m_serialPort) {
@@ -237,16 +235,32 @@ void LpMeterConnection::connectNetwork(const QString& host, quint16 port)
 {
     // Also aborts an in-flight previous TCP attempt under the deliberate-
     // disconnect guard, so its teardown cannot arm a retry for the old host.
-    disconnect();
-    m_mode = Mode::Network;
-    m_lastHost = host;
-    m_lastPort = port;
+    prepareConnection(Mode::Network, host, port);
     m_deliberateDisconnect = false;
 
     m_device = &m_socket;
     qCDebug(lcTuner) << "LpMeterConnection: connecting to" << host << ":" << port;
     m_socket.connectToHost(host, port);
     // onTransportUp() fires from the connected() signal (async).
+}
+
+void LpMeterConnection::prepareConnection(Mode mode, const QString& endpoint, quint16 port)
+{
+    const bool sameTarget = m_mode == mode
+        && (mode == Mode::Network
+                ? m_lastHost == endpoint && m_lastPort == port
+                : m_lastSerialPort == endpoint);
+    disconnect();
+    if (!sameTarget) {
+        m_silenceSinceMs = -1;
+    }
+    m_mode = mode;
+    if (mode == Mode::Network) {
+        m_lastHost = endpoint;
+        m_lastPort = port;
+    } else {
+        m_lastSerialPort = endpoint;
+    }
 }
 
 void LpMeterConnection::disconnect()
@@ -394,8 +408,9 @@ void LpMeterConnection::pollTick()
     }
 
     if (!poll) { return; }
-    m_lastPollMs = now;
-    m_device->write(QByteArray(1, LpMeter::kPollCommand));
+    if (m_device->write(QByteArray(1, LpMeter::kPollCommand)) == 1) {
+        m_lastPollMs = now;
+    }
 }
 
 void LpMeterConnection::onReading(const LpMeter::Reading& reading)

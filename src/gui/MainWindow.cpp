@@ -2200,41 +2200,16 @@ MainWindow::MainWindow(QWidget* parent)
     // Quality-level colors come from networkQualityColor() (MainWindowHelpers)
     // so the footer label and the diagnostics tooltip share one mapping and
     // never diverge (e.g. "Off" is neutral grey in both, not green here).
-    // Map an fps cap to the matching quality-level color for the throttle indicator.
-    auto fpsCapColor = [](int fpsCap) -> QString {
-        if (fpsCap <= 4) return QStringLiteral("#cc3333"); // Poor
-        if (fpsCap <= 8) return QStringLiteral("#cc9900"); // Fair
-        return QStringLiteral("#00b4d8");                  // Good
-    };
-
     connect(&m_radioModel, &RadioModel::networkQualityChanged,
-            this, [this](const QString& quality, int pingMs) {
-        const QString color = networkQualityColor(quality);
-        // Append fps cap so users understand why moving the fps slider has no effect.
-        // Show "(restoring)" during the min-dwell hold so testers can distinguish
-        // stuck throttle from a deliberate stability wait.
-        const bool dwellPending = m_adaptiveFpsCap > 0 && m_radioModel.pendingThrottleLift();
-        const QString capSuffix = m_adaptiveFpsCap > 0
-            ? (dwellPending
-               ? QStringLiteral(" · %1 fps cap (restoring)").arg(m_adaptiveFpsCap)
-               : QStringLiteral(" · %1 fps cap").arg(m_adaptiveFpsCap))
-            : QString();
-        m_networkLabel->setText(QString("[<span style='color:%1'>%2</span>]")
-            .arg(color, quality + capSuffix));
-        Q_UNUSED(pingMs);
-        const QString tooltip = buildNetworkTooltip(m_radioModel,
-                                                     m_adaptiveFpsCap,
-                                                     dwellPending);
-        m_networkLabel->setToolTip(tooltip);
-        m_networkStatusBlock->setToolTip(tooltip);
-    });
+            this, &MainWindow::refreshNetworkQualityIndicators);
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &MainWindow::refreshNetworkQualityIndicators);
 
     connect(&m_radioModel, &RadioModel::adaptiveThrottleChanged,
-            this, [this, fpsCapColor](bool active, int fpsCap) {
+            this, [this](bool active, int fpsCap) {
         m_adaptiveThrottleActive = active;
         m_adaptiveFpsCap = active ? fpsCap : 0;
-        if (m_titleBar)
-            m_titleBar->setThrottleFlashColor(active ? fpsCapColor(fpsCap) : QString{});
+        refreshAdaptiveThrottleChip();
         if (active) {
             m_adaptiveFpsCapsSent.insert(fpsCap);
             m_adaptiveWfRatesSent.insert(m_radioModel.adaptiveWfRateForCap(fpsCap));
@@ -2273,6 +2248,11 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_adaptiveThrottleActive)
             restorePreCapPanRates(panId);
     });
+
+    // The AT chip follows the connect panel's checkbox, not just an engaged cap.
+    connect(m_connPanel, &ConnectionPanel::adaptiveThrottleEnabledChanged,
+            this, [this](bool) { refreshAdaptiveThrottleChip(); });
+    refreshNetworkQualityIndicators();
 
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyVolts) {
@@ -4448,7 +4428,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             DxClusterClient* dxCluster = m_dxCluster;
             DxClusterClient* rbnClient = m_rbnClient;
             WsjtxClient* wsjtxClient = m_wsjtxClient;
-            SpotCollectorClient* spotCollectorClient = m_spotCollectorClient;
             PotaClient* potaClient = m_potaClient;
             EibiClient* eibiClient = m_eibiClient;
             N1MMSpotClient* n1mmSpotClient = m_n1mmSpotClient;
@@ -4476,15 +4455,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
                 QMetaObject::invokeMethod(wsjtxClient, [wsjtxClient] {
                     ShutdownTrace workerTrace("spots.wsjtx.stop.worker");
                     wsjtxClient->stopListening();
-                },
-                                          Qt::BlockingQueuedConnection);
-            }
-            {
-                ShutdownTrace trace("spots.collector.stop");
-                QMetaObject::invokeMethod(spotCollectorClient,
-                                          [spotCollectorClient] {
-                    ShutdownTrace workerTrace("spots.collector.stop.worker");
-                    spotCollectorClient->stopListening();
                 },
                                           Qt::BlockingQueuedConnection);
             }
@@ -4527,7 +4497,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             dxCluster->deleteLater();
             rbnClient->deleteLater();
             wsjtxClient->deleteLater();
-            spotCollectorClient->deleteLater();
             potaClient->deleteLater();
             eibiClient->deleteLater();
             n1mmSpotClient->deleteLater();
@@ -4544,7 +4513,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             delete m_dxCluster;
             delete m_rbnClient;
             delete m_wsjtxClient;
-            delete m_spotCollectorClient;
             delete m_potaClient;
             delete m_eibiClient;
             delete m_n1mmSpotClient;
@@ -4555,7 +4523,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
         m_dxCluster = nullptr;
         m_rbnClient = nullptr;
         m_wsjtxClient = nullptr;
-        m_spotCollectorClient = nullptr;
         m_potaClient = nullptr;
         m_eibiClient = nullptr;
         m_n1mmSpotClient = nullptr;
@@ -6668,48 +6635,6 @@ int MainWindow::catPortTargetCount() const
     return ReceiverSlotCount::forCeiling(m_radioModel.maxSlices(), m_radioModel.slices());
 }
 
-void MainWindow::applyCatPortCount()
-{
-    auto& s = AppSettings::instance();
-    const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
-
-    for (int i = 0; i < kCatPorts; ++i) {
-        if (!catPort(i)) continue;
-
-        const QString prefix = QString("CatPort_%1_").arg(i);
-        const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
-        const int  portNum     = s.value(prefix + "Port", "").toInt();
-        // A CAT port is a control channel, not a 1:1 mapping to a slice — don't
-        // cap how many configured ports start by the radio's receiver count
-        // (#3693). Receiver capacity bounds the VFO-letter choices per port
-        // (ReceiverSlotCount::catLetters() feeds the applet), not whether a
-        // port runs.
-        const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024);
-
-        if (shouldRun && !catPort(i)->isRunning()) {
-            // Re-apply config in case dialect/VFO was changed while stopped
-            QString d = s.value(prefix + "Dialect", "Rigctld").toString();
-            CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
-                            : (d == "TS2000")  ? CatDialect::TS2000
-                            : CatDialect::Rigctld;
-            catPort(i)->setDialect(dial);
-            catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
-            catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
-            catPort(i)->start(static_cast<quint16>(portNum));
-        } else if (!shouldRun && catPort(i)->isRunning()) {
-            catPort(i)->stop();
-        }
-    }
-
-    auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
-    if (applet) {
-        applet->setCatEnabled(masterOn);
-        // The radio's own count while connected (one letter on a one-receiver
-        // radio), every letter when none is (#5776).
-        applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
-    }
-}
-
 void MainWindow::migrateCatSettings()
 {
     auto& s = AppSettings::instance();
@@ -7032,12 +6957,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!m_wsjtxClient->isListening())
                     QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(wAddr, wPort); });
             }
-            // Auto-start SpotCollector listener if enabled
-            if (cs.value("SpotCollectorAutoStart", "False").toString() == "True") {
-                quint16 scPort = static_cast<quint16>(cs.value("SpotCollectorPort", 9999).toInt());
-                if (!m_spotCollectorClient->isListening())
-                    QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->startListening(scPort); });
-            }
             // Auto-start POTA polling if enabled
             if (cs.value("PotaAutoStart", "False").toString() == "True") {
                 int pInterval = cs.value("PotaPollInterval", 60).toInt();
@@ -7176,7 +7095,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
         QMetaObject::invokeMethod(m_dxCluster, [=, this] { m_dxCluster->disconnect(); });
         QMetaObject::invokeMethod(m_rbnClient, [=, this] { m_rbnClient->disconnect(); });
         QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->stopListening(); });
-        QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->stopListening(); });
         QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->stopPolling(); });
 #ifdef HAVE_WEBSOCKETS
         QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->stopConnection(); });
@@ -7251,6 +7169,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
         m_adaptiveFpsCapsSent.clear();
         m_adaptiveWfRatesSent.clear();
+        refreshAdaptiveThrottleChip();  // or the bar keeps the dead cap until the next connect
 
         // Clear spectrum/waterfall so the display doesn't look frozen
         if (m_panStack) {
@@ -9574,12 +9493,18 @@ void MainWindow::routeCwDecoderOutput()
                    m_cwDecoderApplet, &PanadapterApplet::appendCwTextTx);
         disconnect(&m_cwDecoder, &CwRxModel::statsUpdated,
                    m_cwDecoderApplet, &PanadapterApplet::setCwStats);
-        if (auto* pb = m_cwDecoderApplet->lockPitchButton())
+        // Unchecked after the disconnect, so returning to this pan shows no
+        // stale lock and the decoder is not toggled from here.
+        if (auto* pb = m_cwDecoderApplet->lockPitchButton()) {
             disconnect(pb, &QPushButton::toggled,
                        &m_cwDecoder, &CwRxModel::lockPitch);
-        if (auto* sb = m_cwDecoderApplet->lockSpeedButton())
+            pb->setChecked(false);
+        }
+        if (auto* sb = m_cwDecoderApplet->lockSpeedButton()) {
             disconnect(sb, &QPushButton::toggled,
                        &m_cwDecoder, &CwRxModel::lockSpeed);
+            sb->setChecked(false);
+        }
         disconnect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
                    &m_cwDecoder, &CwRxModel::setPitchRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
@@ -9619,10 +9544,17 @@ void MainWindow::routeCwDecoderOutput()
             m_cwLastSpeedWpm  = speedWpm;
         });
 #endif
+        // A lock holds the signal heard on the old pan, and a retarget is a
+        // station boundary: the target's buttons and the decoder start
+        // unlocked. Unchecked before the connect so only the explicit
+        // unlock below reaches the decoder.
+        m_cwDecoderApplet->lockPitchButton()->setChecked(false);
+        m_cwDecoderApplet->lockSpeedButton()->setChecked(false);
         connect(m_cwDecoderApplet->lockPitchButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwRxModel::lockPitch);
         connect(m_cwDecoderApplet->lockSpeedButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwRxModel::lockSpeed);
+        m_cwDecoder.releaseLocks();
         connect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
                 &m_cwDecoder, &CwRxModel::setPitchRange);
         m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(),

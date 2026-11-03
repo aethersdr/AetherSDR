@@ -513,7 +513,7 @@
       "source": [
         {
           "file": "src/core/CatPort.cpp",
-          "line": 71,
+          "line": 86,
           "text": "CatPort: failed to bind port"
         }
       ]

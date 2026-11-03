@@ -251,6 +251,14 @@ public:
     // sql_level GET and SET use. TciServer relays GUI changes with it.
     static int squelchLevelDb(RadioModel* model, SliceModel* s, int level);
 
+    // TCI 2.1 §AGC_GAIN: the gain in dB over -20..120. The AGC-T knob (0..100)
+    // maps onto that range linearly, the same for every backend. A KiwiSDR
+    // receive replacement already holds its AGC threshold in dB and passes
+    // through unchanged. TciServer relays GUI changes with it.
+    static int agcGainDb(SliceModel* s);
+    static int agcGainDbForLevel(int level);
+    static int agcLevelForGainDb(double db);
+
     // IQ center (DDS) for a slice = its populated panadapter center in Hz.
     // Falls back to the slice frequency while the pan is absent or its center
     // still holds the model placeholder (#3910, #3913 review).

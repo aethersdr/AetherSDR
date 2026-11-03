@@ -81,7 +81,7 @@ The decoder processes the received audio on a separate worker thread. It detects
 - **Auto speed detection** within the speed search range
 - **Cost function**: measures how well the detected on/off timing matches ideal Morse ratios; this drives the confidence colors
 
-Retuning resets the decoder state; pitch and speed locks survive a retune.
+Retuning resets the decoder state; pitch and speed locks survive a retune. Selecting a slice on another panadapter releases both locks.
 
 ### Which audio is decoded
 

@@ -107,7 +107,7 @@ public:
     void setMinimalMode(bool on);
     bool isMinimalMode() const { return m_minimalMode; }
     void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
-    // Set the flash color used while adaptive throttle is active (empty = restore green).
+    // Set the cap's heartbeat tint; empty uses the dot's own colour.
     // Ignored while the disconnected-alarm blink is running.
     void setThrottleFlashColor(const QString& hexColor);
 
@@ -250,7 +250,7 @@ private:
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
     QList<QString> m_connectedRadioIds;
     bool         m_discovering{false};  // solid amber while waiting for connection
-    QString      m_throttleFlashColor; // empty = default green; set while adaptive throttle is active
+    QString      m_throttleFlashColor; // empty = glow in the dot's own colour; set while adaptive throttle is active
     QString      m_pcAudioInputDevice;
     QString      m_pcAudioOutputDevice;
 

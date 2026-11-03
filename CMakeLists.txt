@@ -1057,6 +1057,7 @@ set(CORE_SOURCES
     src/core/Ctr2UsbRelay.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
+    src/core/OtrspProtocol.cpp
     src/core/CatPort.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
@@ -1069,7 +1070,6 @@ set(CORE_SOURCES
     src/core/DxSpotLineParser.cpp
     src/core/GoClusterSettings.cpp
     src/core/WsjtxClient.cpp
-    src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
     src/core/EibiClient.cpp
     src/core/EibiCodeMaps.cpp

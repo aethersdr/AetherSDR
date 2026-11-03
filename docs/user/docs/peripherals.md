@@ -164,6 +164,10 @@ port showing its band, bias profile and the radio feeding it, **STBY** and
 transmit is outlined. In standby a single banner replaces both strips. A port with no band
 reads `N/A`, meaning nothing is driving it.
 
+The **SWR** meter has the same flat dark track as **PWR** and **DRV**.
+With no forward power, the SWR track stays empty; color in the bar shows
+the measured SWR while power is flowing.
+
 The fan control, MEffA, port detail and the voltages need the **direct**
 connection. Over the radio relay the applet still shows power, SWR, Id and the
 operate state. Meters update at about 60 Hz while transmitting and 4 Hz while
@@ -230,6 +234,17 @@ live only in the OS keychain. See [Settings and Backups](./settings-and-backups.
 - The Antenna Genius applet can show a band on Port A that the device did not report, taken from the active slice ([#6151](https://github.com/aethersdr/AetherSDR/issues/6151)).
 
 ## Troubleshooting
+
+### The LP-100A shows NO DATA
+
+Check the LP-100A warnings in **Help → Support & Diagnostics...**. The
+no-data warning includes the age of the last poll accepted by the transport,
+or says that no poll has been sent since connecting. Acceptance means the
+transport queued the byte; it does not confirm delivery to the meter.
+
+When valid records resume, a warning reports how long the silence lasted.
+The warning pair survives reconnects to the same endpoint. Changing the host,
+port, serial device or connection mode starts a new diagnostic session.
 
 ### A device shows "Authorization blocked"
 
