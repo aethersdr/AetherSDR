@@ -446,7 +446,7 @@ int main()
     {
         // One jittery gap past the 2x threshold but inside the ceiling: we
         // supplement for that gap, then resume riding on the poller's next
-        // record WITHOUT re-confirming (the SHARED pill must not flicker).
+        // record without re-confirming. Our reply during the gap may show LIVE.
         PollGate g;
         for (qint64 t = 0; t <= 400; t += 100) { g.onRecord(t); }
         const bool confirmed = g.foreignConfirmed() && !g.shouldPoll(450);
