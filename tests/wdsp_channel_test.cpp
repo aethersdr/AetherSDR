@@ -1604,12 +1604,16 @@ bool runFilterTapsGroupDelayTest()
     // at all, so create() and reconfigure() reached every corruption above
     // while the setter refused it. One predicate now guards both.
     for (const int bad : {3072, 6144, 1536, 128, 0, -8192}) {
-        WdspChannel::Config badConfig;
-        badConfig.filterTaps = bad;
-        std::string badError;
-        result = require(WdspChannel::create(badConfig, &badError) == nullptr,
-                         "create() accepted a filter length fircore cannot "
-                         "partition") && result;
+        for (const WdspChannel::Direction direction : {
+                 WdspChannel::Direction::Receive, WdspChannel::Direction::Transmit}) {
+            WdspChannel::Config badConfig;
+            badConfig.direction = direction;
+            badConfig.filterTaps = bad;
+            std::string badError;
+            result = require(WdspChannel::create(badConfig, &badError) == nullptr,
+                             "create() accepted a filter length fircore cannot "
+                             "partition") && result;
+        }
     }
     // ... and the sound ones still open, across four tap/block pairings. 2048
     // at dspBlockSize 2048 and 256 at 256 are both nfor == 1, the tightest case

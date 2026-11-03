@@ -127,6 +127,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 ## Transmit
 
 - **SSB voice** uses WDSP's TXA modulator. The EQ, PROC, TX low/high cut, eSSB, ALC and compression gauges act on the HL2.
+- **Transmit timing:** voice and data audio wait for a three-block IQ queue at the start of an over. Its two-block margin absorbs up to about 43 ms of accumulated delivery lateness; larger delays can still cause gaps. USB and LSB use a minimum-phase transmit filter; data modes keep linear phase. CW and TUNE bypass the queue hold.
 - **The Mic Level slider is the transmit level.** The ALC only ever reduces. The Phone panel shows the **ALC Gain** the radio reports.
 - **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
@@ -141,6 +142,8 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **TX drive and LNA gain** are remembered per band.
 
 > **Upgrading from an older version:** CW keys at the same carrier level as TUNE, about 6 dB (four times the power) above earlier versions at the same RF power setting. Check your RF power before you key CW into an amplifier or a low-power load.
+
+> **Upgrading from an older version:** the transmit queue adds about 43 ms of audio delay and can discard about 43 ms more audio when you release PTT. The shorter voice filter partly offsets the start delay: one HL2 tone measurement showed about 12 ms more leading silence overall. Allow the audio to finish before releasing PTT; external digital-mode timing must accommodate the queue delay.
 
 ## Other Features
 
