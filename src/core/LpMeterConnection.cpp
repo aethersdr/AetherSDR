@@ -1,8 +1,6 @@
 #include "LpMeterConnection.h"
 #include "LogManager.h"
 
-#include <QDateTime>
-
 #include <cmath>
 
 namespace AetherSDR {
@@ -23,14 +21,15 @@ constexpr int kReconnectMs = 5000;
 constexpr int kGateSettleMs = 1500;
 }  // namespace
 
-qint64 LpMeterConnection::nowMs()
+qint64 LpMeterConnection::nowMs() const
 {
-    return QDateTime::currentMSecsSinceEpoch();
+    return m_clock.elapsed();
 }
 
 LpMeterConnection::LpMeterConnection(QObject* parent)
     : QObject(parent)
 {
+    m_clock.start();
     connect(&m_socket, &QTcpSocket::connected, this, &LpMeterConnection::onTransportUp);
     connect(&m_socket, &QTcpSocket::disconnected, this, &LpMeterConnection::onTransportDown);
     connect(&m_socket, &QTcpSocket::readyRead, this, &LpMeterConnection::onReadyRead);
@@ -118,7 +117,7 @@ LpMeterConnection::LpMeterConnection(QObject* parent)
         // A support bundle cannot otherwise tell those apart.
         const qint64 now = nowMs();
         if (m_silenceSinceMs < 0) {
-            m_silenceSinceMs = (m_lastRecordMs >= 0) ? m_lastRecordMs : now - kDataTimeoutMs;
+            m_silenceSinceMs = (m_lastRecordMs >= 0) ? m_lastRecordMs : m_transportUpMs;
         }
         qCWarning(lcTuner).noquote()
             << QStringLiteral("LpMeterConnection: link up but no valid record in %1 s"
@@ -313,6 +312,7 @@ void LpMeterConnection::onTransportUp()
     m_ridingAlongReported = false;
     m_gateStateReported = false;
     m_lastRecordMs = -1;
+    m_transportUpMs = nowMs();
     m_lastPollMs = -1;
     m_firstBytesMs = -1;
     m_dataFlowing = false;

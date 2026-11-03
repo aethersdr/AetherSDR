@@ -3,13 +3,13 @@
 #include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
-#include <QDateTime>
 #include <QIODevice>
 #include <QList>
 #include <QLoggingCategory>
 #include <QMetaObject>
 #include <QRegularExpression>
 #include <QStringList>
+#include <QThread>
 
 #include <algorithm>
 #include <cstdio>
@@ -52,7 +52,7 @@ bool containsWarning(const QString& text)
     });
 }
 
-bool hasRecoveryDuration(double minimumSeconds = 4.2)
+bool hasRecoveryDuration(double minimumSeconds = 0.0)
 {
     const QRegularExpression pattern(QStringLiteral("records flowing again after ([0-9]+[.][0-9]) s"));
     return std::any_of(warnings.cbegin(), warnings.cend(), [&pattern, minimumSeconds](const QString& warning) {
@@ -118,8 +118,8 @@ public:
             warnings.clear();
             QMetaObject::invokeMethod(&connection.m_dataWatchdog, "timeout", Qt::DirectConnection);
             record(connection);
-            check("startup silence pairs with the first valid record",
-                  warnings.size() == 2 && hasRecoveryDuration(3.0));
+            check("startup silence at the clock origin pairs with the first record",
+                  warnings.size() == 2 && hasRecoveryDuration());
         }
         for (const qint64 result : {qint64{-1}, qint64{0}}) {
             PollSink sink;
@@ -141,8 +141,8 @@ public:
             start(connection, sink);
             connection.pollTick();
             check("accepted write records exactly the poll byte", sink.accepted == QByteArray(1, LpMeter::kPollCommand));
-            connection.m_lastPollMs -= 2000;
             const qint64 acceptedAt = connection.m_lastPollMs;
+            QThread::msleep(2);
             sink.result = -1;
             connection.pollTick();
             warnings.clear();
@@ -214,7 +214,7 @@ private:
 
     static void dim(LpMeterConnection& connection)
     {
-        connection.m_lastRecordMs = QDateTime::currentMSecsSinceEpoch() - 4200;
+        connection.m_lastRecordMs = connection.nowMs();
         QMetaObject::invokeMethod(&connection.m_dataWatchdog, "timeout", Qt::DirectConnection);
     }
 };

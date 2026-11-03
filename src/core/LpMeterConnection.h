@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QString>
 #include <QTcpSocket>
@@ -111,6 +112,7 @@ private slots:
 
 private:
     friend class LpMeterConnectionTest;
+    friend class LpMeterConnectionClockTest;
 
     enum class Mode { None, Serial, Network };
 
@@ -123,7 +125,9 @@ private:
     void armReconnect();
     void pollTick();
     void setDataFlowing(bool flowing);
-    static qint64 nowMs();
+    // Monotonic: every PollGate and RangeTracker decision is a difference of
+    // two of these, and a wall-clock step backward would freeze them (#6803).
+    qint64 nowMs() const;
 
     QIODevice*    m_device{nullptr};
     QTcpSocket    m_socket;
@@ -148,6 +152,7 @@ private:
     bool m_dataFlowing{false};
     bool m_dataFlowStateKnown{false};
 
+    QElapsedTimer m_clock;
     QTimer m_pollTimer;
     QTimer m_reconnectTimer;
     // Link-alive-but-meter-quiet watchdog. Restarted by every valid record.
@@ -166,6 +171,7 @@ private:
     // operator will ever get that the bytes are arriving but unusable.
     bool m_bytesWithoutRecords{false};
     qint64 m_lastRecordMs{-1};
+    qint64 m_transportUpMs{-1};
     // When bytes first arrived after this connect. Needed because "no record
     // yet" is normal for the first moments of a link — the ser2net banner
     // arrives before any record — so the warning must be about a DURATION of

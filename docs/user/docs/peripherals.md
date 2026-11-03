@@ -224,6 +224,9 @@ transport queued the byte; it does not confirm delivery to the meter.
 When valid records resume, a warning reports how long the silence lasted.
 The warning pair survives reconnects to the same endpoint. Changing the host,
 port, serial device or connection mode starts a new diagnostic session.
+Changing the computer's clock does not delay LP-100A polling, gauge-range
+changes or no-data warnings. These timers follow elapsed time, so a clock
+correction does not require reconnecting the meter.
 
 ### Settings
 
