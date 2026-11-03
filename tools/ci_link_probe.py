@@ -31,7 +31,7 @@ report = {'baseline': BASE, 'compiler': capture(['c++', '--version']).splitlines
           'ccache_config': capture(['ccache', '--show-config'])}
 Path('probe-cache-before.txt').write_text(capture(['du', '-sh', '/ccache']))
 try:
-    for mode in ['pr', 'baseline']:
+    for mode in ['pr', 'baseline', 'shell_locale']:
         Path('tests/tests.cmake').write_text(original if mode == 'pr' else baseline)
         call(FLAGS + ['-DAETHER_CI_STRIP_TEST_DEBUG=' + ('ON' if mode == 'pr' else 'OFF'),
                       '-DCMAKE_EXE_LINKER_FLAGS=' +
@@ -46,6 +46,8 @@ try:
         env = dict(os.environ, CCACHE_DEBUG='1', CCACHE_DEBUGDIR=str(debug),
                    CCACHE_LOGFILE=str(ROOT / ('probe-cache-' + mode + '.log')),
                    CCACHE_READONLY='1')
+        if mode == 'shell_locale':
+            env.pop('LC_CTYPE', None)
         started = time.monotonic()
         call(['cmake', '--build', 'build', '--target', TARGET, '--parallel', '4'], env=env)
         stats = capture(['ccache', '--show-stats'])
