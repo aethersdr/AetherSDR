@@ -36,6 +36,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QColor>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QImage>
@@ -1010,6 +1011,155 @@ int main(int argc, char** argv)
         bar->clearLinkAlarm();
         check(!tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
               "an operator disconnect clears the link alarm");
+
+        // Link quality colours the session's dot, and the AT chip marks an
+        // armed adaptive throttle — both on that tab only, both in words.
+        {
+            RadioTabEntry session;
+            session.id = QStringLiteral("QUALITY-SESSION");
+            session.name = QStringLiteral("NW8S-Bam");
+            session.status = RadioTabStatus::Connected;
+            RadioTabEntry idle;
+            idle.id = QStringLiteral("QUALITY-IDLE");
+            idle.name = QStringLiteral("FLEX-8600");
+            idle.status = RadioTabStatus::Available;
+            bar->setRadioTabs({session, idle});
+            bar->setActiveRadio(session.id);
+            app.processEvents();
+            RadioTab* sessionTab = tabWithId(*bar, session.id);
+            RadioTab* idleTab = tabWithId(*bar, idle.id);
+            check(sessionTab && idleTab, "quality test radios have tabs");
+            if (sessionTab && idleTab) {
+                // The dot is a solid-filled ellipse at kTabPadX (14) with
+                // kDotDiameter 7, so its centre pixel is font-independent.
+                const auto dotPixel = [](RadioTab* tab) {
+                    const QImage img = tab->grab().toImage();
+                    const qreal dpr = img.devicePixelRatio();
+                    return img.pixelColor(int(17.5 * dpr), int(tab->height() / 2.0 * dpr)).rgb();
+                };
+                const QRgb fair = QColor(QStringLiteral("#cc9900")).rgb();
+                const QRgb plainDot = dotPixel(sessionTab);
+                const int plainWidth = sessionTab->sizeHint().width();
+                tabs->setLinkQuality(QColor(QStringLiteral("#cc9900")), QStringLiteral("Fair"));
+                check(tabs->state().value(QStringLiteral("linkQuality")).toString()
+                          == QLatin1String("Fair"),
+                      "link quality is published to the bridge");
+                // Without AT the dot stays plain "connected": a colour change
+                // must always come with the AT chip that explains it.
+                check(!sessionTab->toolTip().contains(QLatin1String("Network")),
+                      "without AT the tab does not take the quality");
+                check(plainDot != fair && dotPixel(sessionTab) == plainDot,
+                      "without AT the dot keeps its plain connected colour");
+
+                tabs->setAdaptiveThrottle(true, 0, QColor());
+                check(sessionTab->toolTip().contains(QLatin1String("Network Fair")),
+                      "with AT the quality is shown, spelled out not colour-only");
+                check(dotPixel(sessionTab) == fair, "with AT the dot takes the quality colour");
+                // Link state still speaks first (dotColor()): an override such
+                // as the amber discovery pulse wins over the quality colour,
+                // and a lost link stops announcing the old grade.
+                tabs->setLinkIndicator(QColor(QStringLiteral("#e0a020")), /*alarm=*/false);
+                check(dotPixel(sessionTab) == QColor(QStringLiteral("#e0a020")).rgb(),
+                      "a link override still speaks over the quality colour");
+                tabs->setLinkIndicator(QColor(QStringLiteral("#cc3333")), /*alarm=*/true);
+                check(!sessionTab->toolTip().contains(QLatin1String("Network Fair")),
+                      "a lost link does not keep announcing the old quality");
+                tabs->setLinkIndicator(QColor(), /*alarm=*/false);
+                check(dotPixel(sessionTab) == fair, "the quality colour returns once the link state clears");
+                check(!idleTab->toolTip().contains(QLatin1String("Network")),
+                      "another radio's tab does not claim this session's quality");
+                check(sessionTab->isThrottleChipShown(), "an armed throttle shows the AT chip");
+                check(!idleTab->isThrottleChipShown(), "the AT chip rides the session's tab only");
+                check(sessionTab->sizeHint().width() > plainWidth,
+                      "the tab widens to fit the AT chip");
+                check(sessionTab->toolTip().contains(QLatin1String("Adaptive throttle on")),
+                      "the AT chip is spelled out");
+                const QImage armedChip = sessionTab->grab().toImage();
+                tabs->setAdaptiveThrottle(true, 8, QColor(QStringLiteral("#cc9900")));
+                check(sessionTab->toolTip().contains(QLatin1String("8 fps cap")),
+                      "an engaged cap names its frame rate");
+                checkEqual(tabs->state().value(QStringLiteral("adaptiveFpsCap")).toInt(), 8,
+                           "the cap is published to the bridge");
+
+                check(sessionTab->grab().toImage() != armedChip,
+                      "engaging a cap changes the painted chip");
+
+                // With no session (disconnected), no tab may keep the chip or
+                // the quality, even while the throttle is still armed.
+                bar->setActiveRadio(QString());
+                app.processEvents();
+                check(!sessionTab->isThrottleChipShown(), "no session, no AT chip");
+                check(!sessionTab->toolTip().contains(QLatin1String("Network")),
+                      "no session, no quality on the tab");
+                bar->setActiveRadio(session.id);
+                app.processEvents();
+                check(sessionTab->isThrottleChipShown(), "the chip returns with the session");
+
+                tabs->setAdaptiveThrottle(false, 0, QColor());
+                check(!sessionTab->isThrottleChipShown(), "disabling the throttle removes the chip");
+                check(!sessionTab->toolTip().contains(QLatin1String("Network")),
+                      "disabling the throttle returns the dot to plain connected");
+                check(dotPixel(sessionTab) == plainDot,
+                      "disabling the throttle repaints the plain connected dot");
+                tabs->setLinkQuality(QColor(), QStringLiteral("Off"));
+                checkEqual(sessionTab->sizeHint().width(), plainWidth,
+                           "the tab returns to its plain width");
+            }
+        }
+
+        // The scroll host has a fixed width; chip changes must resize the
+        // actual widgets, not only their preferred sizes.
+        {
+            RadioTabBar strip;
+            RadioTabEntry session;
+            session.id = QStringLiteral("CHIP-GEOMETRY");
+            session.name = QStringLiteral("Review radio with a deliberately long name");
+            session.status = RadioTabStatus::Connected;
+            strip.setRadios({session});
+            strip.setActiveRadio(session.id);
+            strip.resize(1000, 36);
+            strip.show();
+            app.processEvents();
+            RadioTab* tab = strip.findChild<RadioTab*>();
+            QWidget* tabHost = strip.findChild<QWidget*>(QStringLiteral("radioTabHost"));
+            check(tab && tabHost, "chip geometry has a tab and scroll host");
+            if (tab && tabHost) {
+                const int plainWidth = tab->sizeHint().width();
+                const auto checkWidth = [&](const char* message) {
+                    app.processEvents();
+                    checkEqual(tab->width(), tab->sizeHint().width(), message);
+                    checkEqual(tabHost->width(), tab->sizeHint().width(),
+                               "the scroll host fits its one tab");
+                };
+                strip.setAdaptiveThrottle(true, 0, QColor());
+                checkWidth("arming AT expands the actual tab");
+                check(tab->width() > plainWidth, "AT gets room without eliding the name");
+                strip.setAdaptiveThrottle(false, 0, QColor());
+                checkWidth("disabling AT shrinks the actual tab");
+                checkEqual(tab->width(), plainWidth, "AT off restores the plain width");
+                strip.setAdaptiveThrottle(true, 0, QColor());
+                checkWidth("arming AT again expands the actual tab");
+                strip.setActiveRadio(QString());
+                checkWidth("disconnect removes the chip's actual width");
+                strip.setActiveRadio(session.id);
+                checkWidth("reconnect restores the chip's actual width");
+                strip.resize(150, 36);
+                checkWidth("a narrow viewport preserves the tab's full width");
+                check(strip.state().value(QStringLiteral("overflowing")).toBool(),
+                      "a narrow strip scrolls rather than squeezing the chip");
+
+                strip.setAdaptiveThrottle(false, 0, QColor());
+                session.name = QStringLiteral("Rig");
+                session.model = QStringLiteral("AetherSDR Demo");
+                strip.setRadios({session});
+                checkWidth("a short name lets the status line determine width");
+                strip.setLinkIndicator(ThemeManager::instance().color(
+                    QStringLiteral("color.accent.danger")), true);
+                checkWidth("the link-loss status resizes the actual tab");
+                strip.setLinkIndicator(QColor(), false);
+                checkWidth("clearing the link alarm restores the actual width");
+            }
+        }
 
         // After an unexpected drop the alarm stays on the radio that dropped,
         // not on whichever tab comes first (LAN radios are listed first, so on

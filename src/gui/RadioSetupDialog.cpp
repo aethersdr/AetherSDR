@@ -6,6 +6,7 @@
 // header rather than from the wire code.
 #include "core/backends/anan/AnanSettings.h"
 #include "RadioSetupDialog.h"
+#include "NtpSourcesPage.h"
 #include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
@@ -1307,6 +1308,11 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(radioCategory, QStringLiteral("GPS"),
         QStringLiteral("gpsdo satellite location oscillator time"), [this] { return buildGpsTab(); });
     m_gpsPageIndex = m_pageIndexes.value(QStringLiteral("GPS"));
+    // Shown on every radio; dimmed with the reason where the radio keeps no NTP
+    // sources of its own (#6953).
+    addPage(radioCategory, QStringLiteral("Time"),
+        QStringLiteral("ntp time server clock pool chrony sync"),
+        [this] { return new NtpSourcesPage(*m_model); });
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),

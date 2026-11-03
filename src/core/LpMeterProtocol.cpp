@@ -445,10 +445,24 @@ double reflectedWattsFromSwr(double forwardW, double swr)
 
 void PollGate::reset()
 {
-    m_ownReplyPending = false;
+    m_outstandingPolls.clear();
+    forgetForeign();
+    m_ridingAlong = false;
+}
+
+void PollGate::forgetForeign()
+{
     m_lastForeignMs = -1;
     m_foreignIntervalMs = -1;
-    m_ridingAlong = false;
+    m_foreignRun = 0;
+}
+
+void PollGate::expireOutstanding(qint64 nowMs)
+{
+    while (!m_outstandingPolls.empty()
+           && nowMs - m_outstandingPolls.front() > kReplyExpiryMs) {
+        m_outstandingPolls.pop_front();
+    }
 }
 
 qint64 PollGate::quietThresholdMs() const
@@ -469,36 +483,49 @@ qint64 PollGate::quietThresholdMs() const
 
 void PollGate::onRecord(qint64 nowMs)
 {
-    // At most ONE reply per poll, with no wall-clock cutoff. Remote/VPN
-    // ser2net latency is not bounded by the local reference measurement.
-    if (m_ownReplyPending) {
-        m_ownReplyPending = false;
+    // One record per outstanding poll, oldest first: when the meter stalls and
+    // then answers two queued polls back to back, both replies are ours.
+    expireOutstanding(nowMs);
+    if (!m_outstandingPolls.empty()) {
+        m_outstandingPolls.pop_front();
         return;
     }
 
-    // Estimate the foreign cadence only from CONSECUTIVE foreign records. If
-    // a foreign record consumed our pending slot, the delayed own reply is the
-    // first sample and cannot establish a cadence by itself.
-    if (m_lastForeignMs >= 0) {
-        const qint64 gap = nowMs - m_lastForeignMs;
-        if (gap > 0 && gap <= kMaxQuietMs * 4) {
-            m_foreignIntervalMs = (m_foreignIntervalMs < 0)
-                                      ? gap
-                                      : (m_foreignIntervalMs * 3 + gap) / 4;
-        }
+    // Estimate the cadence and count the confirmation run only across
+    // CONSECUTIVE foreign records close enough to ride along with; a longer
+    // gap starts a new run rather than averaging a stray into the cadence.
+    const qint64 gap = (m_lastForeignMs >= 0) ? nowMs - m_lastForeignMs : -1;
+    if (gap > 0 && gap <= kMaxQuietMs) {
+        m_foreignIntervalMs = (m_foreignIntervalMs < 0)
+                                  ? gap
+                                  : (m_foreignIntervalMs * 3 + gap) / 4;
+        m_foreignRun = std::min(m_foreignRun + 1, kConfirmRecords);
+    } else if (gap != 0) {
+        m_foreignIntervalMs = -1;
+        m_foreignRun = 1;
     }
     m_lastForeignMs = nowMs;   // read above before being overwritten here
 }
 
 bool PollGate::shouldPoll(qint64 nowMs)
 {
-    if (m_lastForeignMs >= 0
-        && (nowMs - m_lastForeignMs) < quietThresholdMs()) {
+    // A foreign poller silent past the ceiling is gone: forget its cadence so
+    // a stale one can never suppress us later. Within the ceiling it is kept,
+    // so ordinary jitter past the 2x threshold resumes riding along on the
+    // poller's next record without re-confirming.
+    if (m_lastForeignMs >= 0 && nowMs - m_lastForeignMs > kMaxQuietMs) {
+        forgetForeign();
+    }
+    if (foreignConfirmed() && nowMs - m_lastForeignMs < quietThresholdMs()) {
         m_ridingAlong = true;
         return false;
     }
     m_ridingAlong = false;
-    m_ownReplyPending = true;
+    expireOutstanding(nowMs);
+    if (static_cast<int>(m_outstandingPolls.size()) >= kMaxOutstandingPolls) {
+        m_outstandingPolls.pop_front();
+    }
+    m_outstandingPolls.push_back(nowMs);
     return true;
 }
 
