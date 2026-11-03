@@ -15,6 +15,7 @@
 #include <QtEndian>
 #include <QSet>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <utility>
@@ -616,6 +617,7 @@ void PanadapterStream::restartStreamSequence(quint32 streamId)
 {
     QMutexLocker statsLock(&m_statsMutex);
     m_audioStreamStats.remove(streamId);
+    m_pendingRxStreams.remove(streamId);
     const auto it = m_streamStats.find(streamId);
     if (it != m_streamStats.end()) {
         m_queuedAudioBytes -= it->reorder.queuedBytes();
@@ -629,6 +631,7 @@ void PanadapterStream::restartStreamSequence(quint32 streamId)
 void PanadapterStream::restartAllStreamSequences()
 {
     QMutexLocker statsLock(&m_statsMutex);
+    m_pendingRxStreams.clear();
     for (auto it = m_streamStats.begin(); it != m_streamStats.end(); ++it) {
         m_queuedAudioBytes -= it->reorder.queuedBytes();
         it->reorder.reset();
@@ -925,7 +928,6 @@ void PanadapterStream::processDatagram(const QByteArray& data)
 
     // Per-category byte/packet/sequence tracking.
     // Only track owned/routed streams — skip uncategorized packets. (#455)
-    bool sequenceError = false;
     VitaRxReorder::Result reordered;
     quint64 audioGeneration = 0;
     QStringList sequenceWarnings;
@@ -941,15 +943,13 @@ void PanadapterStream::processDatagram(const QByteArray& data)
     }
     if (cat != CatCount) {
         QMutexLocker statsLock(&m_statsMutex);
-        if (cat == CatAudio && m_queuedAudioBytes + data.size() > kMaxQueuedAudioBytes) {
-            return;
-        }
         m_catStats[cat].bytes += data.size();
         m_catStats[cat].packets++;
         auto& stats = m_streamStats[streamId];
         if (stats.packetClassCode != 0
             && (stats.packetClassCode != pcc || stats.category != cat)) {
             m_audioStreamStats.remove(streamId);
+            m_pendingRxStreams.remove(streamId);
             m_queuedAudioBytes -= stats.reorder.queuedBytes();
             stats.reorder.reset();
             ++stats.generation;
@@ -998,13 +998,18 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         } else {
             const qsizetype queuedBefore = stats.reorder.queuedBytes();
             reordered = stats.reorder.add(vitaSeq, rxPacketKey(data, pcc), rxReorderNowMs(),
-                                         cat == CatAudio ? data : QByteArray{});
+                cat == CatAudio ? data : QByteArray{},
+                std::max(qsizetype{0}, kMaxQueuedAudioBytes - m_queuedAudioBytes + queuedBefore));
+            if (stats.reorder.deadlineMs() >= 0) {
+                m_pendingRxStreams.insert(streamId);
+            } else {
+                m_pendingRxStreams.remove(streamId);
+            }
             m_queuedAudioBytes += stats.reorder.queuedBytes() - queuedBefore;
             m_catStats[cat].reordered += reordered.reordered ? 1 : 0;
             m_catStats[cat].duplicates += reordered.duplicate ? 1 : 0;
         }
         audioGeneration = stats.generation;
-        sequenceError = reordered.lost > 0;
         recordRxLossLocked(stats, streamId, reordered.lost, reordered.breaks,
                            m_seqLossClock.elapsed(), sequenceWarnings);
     }
@@ -1023,7 +1028,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         PerfTelemetry::instance().recordStreamPacket(
             cat == CatWaterfall ? PerfTelemetry::FrameKind::Waterfall
                                 : PerfTelemetry::FrameKind::Panadapter,
-            sequenceError);
+            reordered.lost);
     }
 
     if (daxChannel >= 0) {
@@ -1210,8 +1215,12 @@ void PanadapterStream::scheduleRxReorderFlush()
     qint64 next = -1;
     {
         QMutexLocker lock(&m_statsMutex);
-        for (const StreamStats& stats : std::as_const(m_streamStats)) {
-            const qint64 deadline = stats.reorder.deadlineMs();
+        for (quint32 streamId : std::as_const(m_pendingRxStreams)) {
+            const auto stats = m_streamStats.constFind(streamId);
+            if (stats == m_streamStats.cend()) {
+                continue;
+            }
+            const qint64 deadline = stats->reorder.deadlineMs();
             if (deadline >= 0 && (next < 0 || deadline < next)) {
                 next = deadline;
             }
@@ -1236,12 +1245,23 @@ void PanadapterStream::flushRxReorder()
     };
     QVector<ReadyAudio> audio;
     QStringList warnings;
+    std::array<int, 2> displayLosses{};
     {
         QMutexLocker lock(&m_statsMutex);
-        for (auto it = m_streamStats.begin(); it != m_streamStats.end(); ++it) {
+        for (auto pending = m_pendingRxStreams.begin(); pending != m_pendingRxStreams.end();) {
+            const auto it = m_streamStats.find(*pending);
+            if (it == m_streamStats.end()) {
+                pending = m_pendingRxStreams.erase(pending);
+                continue;
+            }
             const qsizetype queuedBefore = it->reorder.queuedBytes();
             VitaRxReorder::Result result = it->reorder.expire(rxReorderNowMs());
             m_queuedAudioBytes += it->reorder.queuedBytes() - queuedBefore;
+            if (it->reorder.deadlineMs() < 0) {
+                pending = m_pendingRxStreams.erase(pending);
+            } else {
+                ++pending;
+            }
             if (result.count == 0) {
                 continue;
             }
@@ -1249,9 +1269,13 @@ void PanadapterStream::flushRxReorder()
                                m_seqLossClock.elapsed(), warnings);
             if (it->category == CatAudio) {
                 audio.append({it.key(), it->generation, std::move(result)});
+            } else if (it->category == CatFFT || it->category == CatWaterfall) {
+                displayLosses[it->category == CatWaterfall ? 1 : 0] += result.lost;
             }
         }
     }
+    PerfTelemetry::instance().recordStreamLoss(PerfTelemetry::FrameKind::Panadapter, displayLosses[0]);
+    PerfTelemetry::instance().recordStreamLoss(PerfTelemetry::FrameKind::Waterfall, displayLosses[1]);
     for (const QString& warning : warnings) {
         qCWarning(lcVita49).noquote() << warning;
     }

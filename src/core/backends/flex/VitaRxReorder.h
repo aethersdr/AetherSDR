@@ -64,7 +64,8 @@ public:
         return earliest->receivedMs + kWaitMs;
     }
 
-    Result add(int sequence, Key key, qint64 nowMs, QByteArray packet = {})
+    Result add(int sequence, Key key, qint64 nowMs, QByteArray packet = {},
+               qsizetype maxQueuedBytes = kMaxPacketBytes * (kSequenceCount - 1))
     {
         Result result = expire(nowMs);
         if (sequence < 0 || sequence >= kSequenceCount || packet.size() > kMaxPacketBytes) {
@@ -91,6 +92,7 @@ public:
                 return result;
             }
         }
+        bool withinWindow = false;
         if (!m_pending.empty()) {
             const auto newest = std::max_element(m_pending.begin(), m_pending.end(),
                 [this](const Pending& a, const Pending& b) {
@@ -102,15 +104,18 @@ public:
             const int advance = (sequence - newest->sequence) & 0x0F;
             const bool crossedCycle = key.valid && newest->key.valid
                 && key.after(newest->key) && distance <= newestDistance;
+            withinWindow = distance <= newestDistance || (advance > 0 && advance < 8);
+            // A keyless window can hold the entire count cycle. Half a cycle
+            // is only a stale-packet heuristic when no forward window exists.
             const bool filledWindow = !(key.valid && m_lastKey.valid)
-                && advance > 0 && advance < 8
-                && (distance >= 8 || (newestDistance >= 8 && distance <= newestDistance));
+                && newestDistance == kSequenceCount - 1 && advance > 0 && advance < 8;
             if (crossedCycle || filledWindow) {
                 drain(nowMs, DrainMode::All, result);
+                withinWindow = false;
             }
         }
         const int distance = (sequence - m_lastSequence - 1) & 0x0F;
-        if (!(key.valid && m_lastKey.valid) && distance >= 8
+        if (!(key.valid && m_lastKey.valid) && !withinWindow && distance >= 8
             && nowMs - m_lastReleaseMs < kWaitMs) {
             result.duplicate = sequence == m_lastSequence;
             result.reordered = !result.duplicate;
@@ -130,6 +135,10 @@ public:
             release({sequence, key, std::move(packet), nowMs}, 0, nowMs, result);
             drain(nowMs, DrainMode::Contiguous, result);
         } else {
+            if (packet.size() > std::max(qsizetype{0}, maxQueuedBytes - m_queuedBytes)) {
+                result.rejected = true;
+                return result;
+            }
             m_queuedBytes += packet.size();
             m_pending.push_back({sequence, key, std::move(packet), nowMs});
         }

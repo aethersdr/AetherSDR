@@ -95,6 +95,58 @@ void checkOverlappingGaps(bool timestamps)
 }
 int main()
 {
+    for (int offset = 0; offset < 16; ++offset) {
+        for (int last = 9; last <= 16; ++last) {
+            VitaRxReorder buffer;
+            int lost = 0;
+            std::vector<int> delivered;
+            const auto feed = [&](int index, qint64 now) {
+                const auto result = buffer.add((index + offset) & 15, {}, now,
+                                               QByteArray::number(index));
+                lost += result.lost;
+                for (int i = 0; i < result.count; ++i) {
+                    delivered.push_back(result.ready[i].packet.toInt());
+                }
+            };
+            feed(0, 0);
+            for (int i = 2; i < last; ++i) {
+                feed(i, i - 1);
+                check(lost == 0 && delivered.size() == 1,
+                      "a keyless burst stays queued before its deadline and full-cycle bound");
+            }
+            feed(1, last - 1);
+            std::vector<int> expected;
+            for (int i = 0; i < last; ++i) {
+                expected.push_back(i);
+            }
+            check(lost == 0 && delivered == expected && buffer.deadlineMs() < 0,
+                  "delayed keyless PCM recovers the complete burst across every count wrap");
+        }
+    }
+    {
+        VitaRxReorder buffer;
+        int lost = 0;
+        int delivered = 0;
+        for (int i = 0; i < 500; ++i) {
+            if (i == 1) {
+                continue;
+            }
+            const auto result = buffer.add(i & 15, {}, i / 4);
+            lost += result.lost;
+            delivered += result.count;
+        }
+        const auto tail = buffer.expire(1000);
+        check(lost + tail.lost == 1 && delivered + tail.count == 499,
+              "a full keyless count cycle stays bounded and resolves real loss");
+        buffer.reset();
+        check(buffer.add(0, {}, 0, QByteArray("a"), 0).count == 1,
+              "an immediate packet needs no retained-byte budget");
+        const auto refused = buffer.add(2, {}, 1, QByteArray("held"), 0);
+        check(refused.rejected && refused.count == 0 && buffer.queuedBytes() == 0,
+              "only packets needing retention are refused at the byte budget");
+        check(buffer.add(1, {}, 2, QByteArray("b"), 0).count == 1,
+              "budget refusal leaves the next in-order packet immediately deliverable");
+    }
     for (bool timestamps : {false, true}) {
         checkOverlappingGaps(timestamps);
         for (int missing = 1; missing <= 15; ++missing) {

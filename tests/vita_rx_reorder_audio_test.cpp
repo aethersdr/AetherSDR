@@ -1,6 +1,10 @@
 // Feed production VITA ingest directly. No init/start, socket, device peer or TX.
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/OpusCodec.h"
+#include "core/PerfTelemetry.h"
+
+#include <QLoggingCategory>
+#include <QStringList>
 
 #include <QCoreApplication>
 #include <QtEndian>
@@ -27,6 +31,14 @@ public:
     }
     static bool socketFree(const PanadapterStream& stream) { return stream.m_socket == nullptr; }
     static qsizetype queuedBytes(const PanadapterStream& stream) { return stream.m_queuedAudioBytes; }
+    static qsizetype pendingStreams(const PanadapterStream& stream)
+    {
+        return stream.m_pendingRxStreams.size();
+    }
+    static qsizetype historicalStreams(const PanadapterStream& stream)
+    {
+        return stream.m_streamStats.size();
+    }
 };
 }
 using namespace AetherSDR;
@@ -123,6 +135,10 @@ int main(int argc, char** argv)
         std::vector<QByteArray> input;
         OpusCodec encoder;
         if (pcc == 0x8005) {
+#ifndef HAVE_OPUS
+            std::printf("Opus cases skipped: optional codec support is not compiled in\n");
+            continue;
+#endif
             check(encoder.isValid(), "real Opus encoder/decoder support is enabled");
             if (!encoder.isValid()) {
                 continue;
@@ -150,6 +166,16 @@ int main(int argc, char** argv)
         check(reordered.samples == clean.samples, "reordered audio is bit-identical to ordered decode, including Opus");
         check(reordered.losses == 0 && reordered.breaks == 0 && reordered.reordered == 4,
               "reorders do not create diagnostic loss or throttle gaps");
+        std::vector<std::pair<int, qint64>> dense{{0, 0}};
+        for (int i = 2; i <= 9; ++i) {
+            dense.emplace_back(i, i - 1);
+        }
+        dense.emplace_back(1, 9);
+        const Run recoveredBurst = runAt(input, dense);
+        const Run cleanBurst = run(input, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+        check(recoveredBurst.losses == 0 && recoveredBurst.breaks == 0
+                  && recoveredBurst.samples == cleanBurst.samples,
+              "a dense reorder burst preserves all PCM without premature concealment");
         std::vector<int> duplicate = ordered;
         duplicate.insert(duplicate.begin() + 42, 41);
         const Run repeated = run(input, duplicate);
@@ -270,6 +296,106 @@ int main(int argc, char** argv)
               && VitaSequenceLossLogTestAccess::queuedBytes(stream) == 0
               && stream.packetErrorCount() == 0,
               "late DAX registration retires queued speaker audio before changing its route");
+    }
+    {
+        PanadapterStream stream;
+        const QByteArray payload(65472, '\0');
+        int frames = 0;
+        QObject::connect(&stream, &PanadapterStream::pcmFrameReady,
+            [&frames](const PcmFrame& frame) { frames += frame.frameCount(); });
+        VitaSequenceLossLogTestAccess::feed(stream, packet(0, 0x03e3, payload), 0);
+        const QByteArray retained(60000, '\0');
+        for (quint32 id = 0; id < 6; ++id) {
+            for (int index = 0; index <= 16; ++index) {
+                if (index == 1) {
+                    continue;
+                }
+                QByteArray incoming = packet(index, 0x8005, retained);
+                qToBigEndian<quint32>(0x08000000u + id,
+                    reinterpret_cast<uchar*>(incoming.data()) + 4);
+                VitaSequenceLossLogTestAccess::feed(stream, incoming, 1);
+            }
+        }
+        constexpr qsizetype kBudget = 4 * 1024 * 1024;
+        check(VitaSequenceLossLogTestAccess::queuedBytes(stream) <= kBudget
+                  && VitaSequenceLossLogTestAccess::queuedBytes(stream) > kBudget - 60028,
+              "unrelated gapped payloads reach but never exceed the global queue budget");
+        const int before = frames;
+        VitaSequenceLossLogTestAccess::feed(stream, packet(1, 0x03e3, payload), 2);
+        check(frames == before + payload.size() / 8,
+              "a full reorder budget cannot reject in-order speaker audio");
+        stream.clearRegisteredStreams();
+        check(VitaSequenceLossLogTestAccess::queuedBytes(stream) == 0,
+              "retirement releases all globally budgeted payloads");
+    }
+    {
+        PanadapterStream stream;
+        for (quint32 id = 0; id < 4096; ++id) {
+            QByteArray incoming = packet(0, 0x8002, QByteArray(4, '\0'));
+            qToBigEndian<quint32>(id, reinterpret_cast<uchar*>(incoming.data()) + 4);
+            VitaSequenceLossLogTestAccess::feed(stream, incoming, 0);
+        }
+        check(VitaSequenceLossLogTestAccess::historicalStreams(stream) == 4096
+                  && VitaSequenceLossLogTestAccess::pendingStreams(stream) == 0,
+              "historical in-order streams never enter the reorder timer work set");
+        VitaSequenceLossLogTestAccess::feed(stream, packet(0, 0x0123, pcm(0, false)), 0);
+        VitaSequenceLossLogTestAccess::feed(stream, packet(2, 0x0123, pcm(2, false)), 1);
+        check(VitaSequenceLossLogTestAccess::pendingStreams(stream) == 1,
+              "only the one unresolved window needs timer work");
+        VitaSequenceLossLogTestAccess::flush(stream, 31);
+        check(VitaSequenceLossLogTestAccess::pendingStreams(stream) == 0
+                  && stream.categoryStats(PanadapterStream::CatAudio).errors == 1,
+              "expiry removes pending membership while resolving the real gap");
+        VitaSequenceLossLogTestAccess::feed(stream, packet(4, 0x0123, pcm(4, false)), 32);
+        stream.restartStreamSequence(kStream);
+        check(VitaSequenceLossLogTestAccess::pendingStreams(stream) == 0,
+              "stream restart removes pending timer membership");
+    }
+    for (quint16 pcc : {quint16{0x8003}, quint16{0x8004}}) {
+        for (int scenario = 0; scenario < 3; ++scenario) {
+            QStringList summaries;
+            static QStringList* capture = nullptr;
+            capture = &summaries;
+            const QtMessageHandler previous = qInstallMessageHandler(
+                [](QtMsgType, const QMessageLogContext&, const QString& text) {
+                    if (text.startsWith(QStringLiteral("PerfSummary"))) {
+                        capture->append(text);
+                    }
+                });
+            QLoggingCategory::setFilterRules(QStringLiteral("aether.perf.debug=true"));
+            PerfTelemetry::setClockOverrideForTest(5'000'000'000LL);
+            PerfTelemetry::instance().resetForTest();
+            PanadapterStream stream;
+            const auto display = [&](int index, qint64 now) {
+                QByteArray payload(pcc == 0x8003 ? 12 : 36, '\0');
+                qToBigEndian<quint32>(index,
+                    reinterpret_cast<uchar*>(payload.data()) + (pcc == 0x8003 ? 8 : 24));
+                VitaSequenceLossLogTestAccess::feed(stream, packet(index, pcc, payload), now);
+            };
+            display(0, 0);
+            if (scenario == 2) {
+                display(2, 1);
+                display(1, 2);
+            } else {
+                display(3, 1);
+                if (scenario == 0) {
+                    VitaSequenceLossLogTestAccess::flush(stream, 31);
+                }
+                display(4, 31);
+            }
+            PerfTelemetry::setClockOverrideForTest(6'100'000'000LL);
+            PerfTelemetry::instance().recordPanFrame();
+            const QString field = pcc == 0x8003 ? QStringLiteral("fftLossPct=")
+                                               : QStringLiteral("wfLossPct=");
+            check(summaries.size() == 1 && summaries[0].contains(
+                      field + (scenario == 2 ? QStringLiteral("0.00") : QStringLiteral("40.00"))),
+                  "resolved display loss reaches telemetry once without inventing arrivals");
+            qInstallMessageHandler(previous);
+            capture = nullptr;
+            QLoggingCategory::setFilterRules(QStringLiteral("aether.perf.debug=false"));
+            PerfTelemetry::setClockOverrideForTest(0);
+            PerfTelemetry::instance().resetForTest();
+        }
     }
     std::printf("vita_rx_reorder_audio: %d failures\n", failures);
     return failures == 0 ? 0 : 1;

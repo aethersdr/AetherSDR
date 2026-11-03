@@ -422,6 +422,7 @@ private:
     RadioConnection* m_conn{nullptr};
     QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly; m_frameMutex
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
+    QSet<quint32> m_pendingRxStreams; // non-empty reorder windows; m_statsMutex
     mutable QMutex m_statsMutex;
     QElapsedTimer m_seqLossClock;  // time base for StreamStats::lossLog; read only on new streams and errors
     VitaSequenceLossBudget m_seqLossBudget;  // all streams' lines together; under m_statsMutex
