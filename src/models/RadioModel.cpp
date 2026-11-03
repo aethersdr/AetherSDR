@@ -4647,6 +4647,22 @@ bool RadioModel::hasDaxStreams() const
     return backendCapabilities().hasDaxStreams;
 }
 
+bool RadioModel::transmitMonitorAvailable() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached: unchanged, as hasDaxStreams()
+    }
+    return backendCapabilities().txMonitorControl.has_value();
+}
+
+bool RadioModel::voxAvailable() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;
+    }
+    return backendCapabilities().voxControl.has_value();
+}
+
 // The single fan-out point for "what this radio says it can do".
 //
 // Everything capability-driven — model-side flags pushed into TransmitModel, and

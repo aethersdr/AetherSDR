@@ -4476,6 +4476,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                           "without AETHER_AUTOMATION_ALLOW_TX";
         return;
     }
+    // A key with no running session is refused here too, so this backend never
+    // records or publishes a key that MetisClient::setMoxImpl() refuses at the
+    // wire. An unkey always goes through.
+    if (key && (!m_metis || !m_metis->isRunning())) {
+        qWarning() << "Hl2Backend: key refused — the radio session is not running";
+        return;
+    }
     // A manual PTT/MOX asserted while Break-In owns the current key transfers
     // that ownership to the operator. The backend is already keyed, so without
     // this explicit handoff the pending CW hang timer would later unkey a PTT
@@ -5331,6 +5338,15 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     // The RF power restore lives in setKeying(false), where all unkey paths
     // converge, so m_tuning is set here only on the way up and setKeying()
     // clears it.
+    if (on && (!m_txAllowed || !m_metis || !m_metis->isRunning())) {
+        // Refused before any tune state is set, so nothing is left behind for
+        // an unkey that will never come. Not routed through setKeying(): a
+        // session that starts in between would key without the tune carrier.
+        qWarning() << "Hl2Backend: tune refused —"
+                   << (m_txAllowed ? "the radio session is not running"
+                                   : "transmit is not allowed");
+        return;
+    }
     if (on) {
         m_tuning = true;
         m_tuneOperation = operation;

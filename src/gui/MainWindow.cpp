@@ -8173,7 +8173,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // occupy the same row. Radios that report a temperature, or that have made
     // no such claim, are untouched by construction.
     if (m_appletPanel) {
-        m_appletPanel->meterApplet()->setSupplyVoltageTelemetryState(connected);
+        m_appletPanel->meterApplet()->setSupplyVoltageTelemetryState(
+            connected, caps.hasSupplyVoltageTelemetry);
     }
     // A readout the radio can never produce, as distinct from one that has not
     // arrived yet. The two capability flags are re-checked so a real reading

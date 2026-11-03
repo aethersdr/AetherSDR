@@ -7192,6 +7192,14 @@ target_link_libraries(rigctl_rf_gain_pan_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME rigctl_rf_gain_pan_test COMMAND rigctl_rf_gain_pan_test)
 
+# MON and VOX on the rigctl and TCI roads refuse where the radio declares no
+# txMonitorControl / voxControl. Injected backend, no socket, nothing keyed.
+add_executable(mon_vox_roads_test tests/mon_vox_roads_test.cpp)
+target_include_directories(mon_vox_roads_test PRIVATE src tests)
+target_link_libraries(mon_vox_roads_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME mon_vox_roads_test COMMAND mon_vox_roads_test)
+
 # #5775 / #5776: the receiver letters (slice tabs, CAT VFO targets) follow a
 # backend's capacity declared after connect. Injected backend, no socket.
 add_executable(receiver_slot_count_test tests/receiver_slot_count_test.cpp)
@@ -7266,6 +7274,8 @@ if(UNIX)
     target_link_libraries(meter_applet_voltage_state_test PRIVATE pthread)
 endif()
 set_target_properties(meter_applet_voltage_state_test PROPERTIES AUTOMOC ON)
+target_compile_definitions(meter_applet_voltage_state_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME meter_applet_voltage_state_test COMMAND meter_applet_voltage_state_test)
 set_tests_properties(meter_applet_voltage_state_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -7452,6 +7462,16 @@ target_link_libraries(hl2_tx_passband_onset_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_tx_passband_onset_test COMMAND hl2_tx_passband_onset_test)
 set_tests_properties(hl2_tx_passband_onset_test PROPERTIES SKIP_RETURN_CODE 77)
 
+# Transmit latency of the HL2's WDSP TXA channel, offline (#6052): tone onset
+# and impulse delay read off emitted IQ, plus the sideband suppression the
+# latency choices must not cost. TXA-only -- the phasing build has no channel.
+if(AETHER_HL2_TX_TXA)
+    add_executable(hl2_tx_latency_test tests/hl2_tx_latency_test.cpp)
+    target_include_directories(hl2_tx_latency_test PRIVATE src)
+    target_link_libraries(hl2_tx_latency_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME hl2_tx_latency_test COMMAND hl2_tx_latency_test)
+endif()
+
 # radiocert's measurement primitives. Header-only by design so this needs no
 # Qt and no link against aethercore — see the test's header comment for why it
 # exists at all (both shipped bugs in the diagnostic were in this arithmetic).
@@ -7539,6 +7559,13 @@ add_executable(slice_rit_xit_seam_test tests/slice_rit_xit_seam_test.cpp)
 target_include_directories(slice_rit_xit_seam_test PRIVATE src tests)
 target_link_libraries(slice_rit_xit_seam_test PRIVATE aethercore Qt6::Core)
 add_test(NAME slice_rit_xit_seam_test COMMAND slice_rit_xit_seam_test)
+
+# #6052: a late transmit block must not become keyed zeros in mid-over. Drives
+# MetisClient's TX IQ queue in virtual time (EP2 samples) — no socket, no clock.
+add_executable(hl2_tx_queue_jitter_test tests/hl2_tx_queue_jitter_test.cpp)
+target_include_directories(hl2_tx_queue_jitter_test PRIVATE src tests)
+target_link_libraries(hl2_tx_queue_jitter_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_queue_jitter_test COMMAND hl2_tx_queue_jitter_test)
 
 # #5497: the unkey unmute waits for the radio's T/R, and the MOX-off is queued
 # ahead of it. An ordering test with a clock in it — no WDSP, no socket.
@@ -7717,6 +7744,21 @@ endif()
 # The registry is src/gui/ code — it uses QWidget, so it cannot live in
 # aethercore without breaking the engine boundary. Compiled directly into the
 # test, the way every other gui-widget test in this file does it.
+add_executable(meter_applet_supply_availability_test
+    tests/meter_applet_supply_availability_test.cpp
+    src/gui/MeterApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    ${THEME_TEST_RESOURCES})
+target_include_directories(meter_applet_supply_availability_test PRIVATE src)
+target_link_libraries(meter_applet_supply_availability_test PRIVATE aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(meter_applet_supply_availability_test PROPERTIES AUTOMOC ON)
+target_compile_definitions(meter_applet_supply_availability_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME meter_applet_supply_availability_test COMMAND meter_applet_supply_availability_test)
+set_tests_properties(meter_applet_supply_availability_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(control_availability_registry_test
     tests/control_availability_registry_test.cpp
     src/gui/ControlAvailabilityRegistry.cpp
@@ -10621,6 +10663,7 @@ set(AETHER_SETTINGS_CONSUMERS
     health_applet_test
     meter_applet_capability_test
     meter_applet_voltage_state_test
+    meter_applet_supply_availability_test
     perf_telemetry_test
     local_memory_bank_test
     memory_import_test

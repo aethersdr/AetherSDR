@@ -9,7 +9,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7598,
+          "line": 7626,
           "text": "else if (key == \"model\")"
         }
       ]
@@ -21,7 +21,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7607,
+          "line": 7635,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7560,
+          "line": 7588,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7490,
+          "line": 7518,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7534,
+          "line": 7562,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7400,
+          "line": 7428,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8740,
+          "line": 8768,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -193,7 +193,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7607,
+          "line": 7635,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7801,
+          "line": 7829,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,7 +227,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7779,
+          "line": 7807,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
@@ -237,7 +237,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7855,
+          "line": 7883,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -354,12 +354,12 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4274,
+          "line": 4279,
           "text": "AudioEngine: failed to open RX audio sink on any negotiated format"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4310,
+          "line": 4315,
           "text": "AudioEngine: QAudioSink stopped with error, not auto-restarting RX"
         }
       ]
@@ -376,17 +376,17 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 8910,
+          "line": 8917,
           "text": "AudioEngine: no audio input device available"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9141,
+          "line": 9148,
           "text": "AudioEngine: failed to open audio source at"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9193,
+          "line": 9200,
           "text": "AudioEngine: all TX source formats failed"
         }
       ]
@@ -452,7 +452,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1385,
+          "line": 1387,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13341,
+          "line": 13374,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 13259,
+          "line": 13298,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {
@@ -713,7 +713,7 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 7746,
+          "line": 7753,
           "text": "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2906,
+          "line": 2924,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -961,7 +961,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/MetisClient.cpp",
-          "line": 523,
+          "line": 524,
           "text": "MetisClient: no EP6 for"
         }
       ]
