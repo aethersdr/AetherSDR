@@ -778,6 +778,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // SmartSDR+ entitlement gate.
     caps.hasRadioSideCwKeyer = true;
     caps.cwTextKeyerName = QStringLiteral("CWX");
+    using CwField = CwTextRequest::Field;
+    caps.cwTextControl = CwTextControl{{CwField::Send, CwField::SendMacro,
+        CwField::SaveMacro, CwField::Speed, CwField::Delay, CwField::Qsk,
+        CwField::Erase, CwField::Clear}, CwTextControl::Completion::RadioCharacterIndex};
     caps.cwTextMinWpm = 5;
     caps.cwTextMaxWpm = 100;
     caps.cwTextMaxMessageChars = 0;
