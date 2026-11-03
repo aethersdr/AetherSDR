@@ -209,18 +209,10 @@ def main():
             print("::error::aetherd touchpoints require a valid semantic tag: "
                   + ", ".join(invalid_tags))
             return 1
-        # Decode explicitly as utf-8 — the file is written as utf-8 below, and
-        # the locale codec must not get a say on either side.
-        #
-        # Newlines, though, are deliberately NOT read verbatim. git may
-        # materialize the committed LF as CRLF in the working tree (a
-        # core.autocrlf=true checkout on Windows, which .gitattributes does not
-        # override for this path), and that file is pristine as far as git is
-        # concerned. render() always emits LF, so comparing raw bytes would
-        # call a clean checkout stale and fail --check with nothing to fix.
-        # Universal-newline decoding (the default newline=None) folds CRLF to
-        # LF, so this compares content and ignores the checkout's line-ending
-        # convention. The writer below still pins LF, so what we commit is LF.
+        # Explicit utf-8 so the locale codec gets no say, but default
+        # (universal) newline handling: a core.autocrlf=true checkout
+        # materializes the committed LF as CRLF, and that file is pristine.
+        # Compare content, not line endings.
         if MANIFEST_MD.is_file():
             current = MANIFEST_MD.read_text(encoding="utf-8")
         else:
@@ -233,16 +225,14 @@ def main():
         return 0
 
     MANIFEST_MD.parent.mkdir(parents=True, exist_ok=True)
-    # encoding= and newline= are both load-bearing here.
+    # encoding= and newline= are both load-bearing.
     #
-    # Without encoding=, the text is written in the locale codec. On a Windows
-    # console that is cp1252, which cannot represent the "gui->engine" arrow in
-    # the heading this script generates, so the write raises UnicodeEncodeError
-    # *after* truncating the file — leaving the manifest empty (#6818).
+    # Without encoding=, the write uses the locale codec — cp1252 on a Windows
+    # console, which cannot represent the "gui->engine" arrow this script
+    # generates. The write truncates first and raises second, leaving the
+    # manifest empty (#6818).
     #
-    # Without newline="", Python translates LF to CRLF on Windows, so a
-    # regenerated manifest would differ from the committed one on every line
-    # and --check would report it stale.
+    # newline="" pins LF, so the committed file is LF on every platform.
     MANIFEST_MD.write_text(out, encoding="utf-8", newline="")
     print(f"wrote {MANIFEST_MD.relative_to(REPO)}: "
           f"{len(touchpoints)} touchpoint headers")
