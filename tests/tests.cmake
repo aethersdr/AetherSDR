@@ -7167,6 +7167,14 @@ add_executable(tci_sql_level_test tests/tci_sql_level_test.cpp)
 target_include_directories(tci_sql_level_test PRIVATE src tests)
 target_link_libraries(tci_sql_level_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
+# An HL2 pan centre outside receivePanCenterControl stops at the edge, in the
+# backend and in the pan model. A real, unconnected Hl2Backend behind
+# RadioModel. Socket-free.
+add_executable(hl2_pan_center_range_test tests/hl2_pan_center_range_test.cpp)
+target_include_directories(hl2_pan_center_range_test PRIVATE src tests)
+target_link_libraries(hl2_pan_center_range_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_pan_center_range_test COMMAND hl2_pan_center_range_test)
 
 # TCI agc_gain in dB (TCI 2.1 §AGC_GAIN): socket-free stub backend and
 # TciProtocol driven by command text. Nothing is bound, opened or keyed.
@@ -10428,6 +10436,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_volume_test
     hl2_bandstack_digital_agc_test
     tci_sql_level_test
+    hl2_pan_center_range_test
     tci_agc_gain_test
     radio_model_client_state_test
     pan_control_routing_test

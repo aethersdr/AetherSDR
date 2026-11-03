@@ -256,6 +256,12 @@ constexpr double kTuningMaxHz = 38'400'000.0;
     return hz >= kTuningMinHz && hz <= kTuningMaxHz;
 }
 
+// Where a pan centre request lands: inside that range, at its nearest edge.
+[[nodiscard]] double tunablePanCenterHz(double hz) noexcept
+{
+    return std::clamp(hz, kTuningMinHz, kTuningMaxHz);
+}
+
 // A remembered passband is kept only as a sane pair inside the 12 kHz audio
 // ceiling; a CW pair must also contain the carrier (pre-#4914 pairs do not).
 [[nodiscard]] bool restorablePassband(double lowHz, double highHz, bool cw) noexcept
@@ -1997,7 +2003,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
-                                                      100'000, 38'400'000};
+        static_cast<qint64>(kTuningMinHz), static_cast<qint64>(kTuningMaxHz)};
     c.receivePanBandwidthControl = std::nullopt; // radio-wide rate can retire other receivers
     // Power class for every forward-power gauge, via the band-table seam
     // (RadioModel::refreshTxPowerLimit; TxApplet scales from a non-empty
@@ -3880,8 +3886,11 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     // Moving the window means moving the DDC. The slice does NOT move with it —
     // that is the point of keeping the two separate — so its offset from the new
     // centre is recomputed and re-applied as a shift.
-    if (hz <= 0.0)
+    if (!std::isfinite(hz) || hz <= 0.0)
         return;
+    // Outside receivePanCenterControl the window stops at the edge, as an Icom
+    // pan drag does (nearestSupportedFrequency); the echo below reports it.
+    hz = tunablePanCenterHz(hz);
     const int ddc = ddcForPan(panId);
     Receiver* r = rx(ddc);
     if (!r)
