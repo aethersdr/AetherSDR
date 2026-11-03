@@ -234,11 +234,13 @@ QString buildNetworkTooltip(const RadioModel& model,
 
     html += networkTooltipSection(QStringLiteral("PACKET INTEGRITY"));
     html += networkTooltipRow(
-        QStringLiteral("Recent loss (%1 s)").arg(model.packetLossWindowSeconds()),
+        (model.hasStreamCategoryStats() ? QStringLiteral("Recent gap events (%1 s)")
+                                       : QStringLiteral("Recent loss (%1 s)"))
+            .arg(model.packetLossWindowSeconds()),
         formatNetworkSeqErrors(model.packetLossWindowDrops(),
                                model.packetLossWindowPackets()));
     html += networkTooltipRow(
-        QStringLiteral("Session sequence gaps"),
+        QStringLiteral("Session missing packets / DAX breaks"),
         formatNetworkSeqErrors(model.packetDropCount(), model.packetTotalCount()));
 
     // Per-category counters are a property of the VITA-49 multiplex, where each
@@ -247,7 +249,7 @@ QString buildNetworkTooltip(const RadioModel& model,
     // rows of "0 / 0 packets" would read as five dead streams rather than as a
     // distinction that does not apply.
     if (model.hasStreamCategoryStats()) {
-        html += networkTooltipSection(QStringLiteral("STREAM SEQUENCE GAPS"));
+        html += networkTooltipSection(QStringLiteral("MISSING PACKETS / DAX BREAKS"));
         html += networkTooltipRow(QStringLiteral("Audio"), formatCategorySeqErrors(audioStats));
         html += networkTooltipRow(QStringLiteral("FFT"), formatCategorySeqErrors(fftStats));
         html += networkTooltipRow(QStringLiteral("Waterfall"),

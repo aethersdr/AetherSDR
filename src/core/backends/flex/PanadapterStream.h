@@ -3,13 +3,16 @@
 #include "core/PcmFrame.h"
 #include "core/SpectrumDecodeScale.h"
 #include <map>
+#include <memory>
 
 #include "core/PacketLossConcealment.h"
 #include "core/VitaBinCoverage.h"
 #include "core/backends/flex/VitaSequenceLossReport.h"
+#include "VitaRxReorder.h"
 #include "VitaDscpMarker.h"
 
 #include <QObject>
+#include <QStringList>
 #include <QUdpSocket>
 #include <QHostAddress>
 #include <QVector>
@@ -53,6 +56,7 @@ public:
     static constexpr int VITA49_HEADER_BYTES = 28;
 
     explicit PanadapterStream(QObject* parent = nullptr);
+    ~PanadapterStream() override;
 
     // Initialize socket and timer connections on the network thread.
     // Call after moveToThread() via QThread::started signal. (#561)
@@ -341,6 +345,11 @@ private:
     struct StreamStats {
         int  lastSeq{-1};
         int  errorCount{0};
+        int  breakCount{0};
+        int  category{-1};
+        quint16 packetClassCode{0};
+        quint64 generation{1};
+        VitaRxReorder reorder;
         int  totalCount{0};
         bool started{false};       // this instance has seen its first packet
         int  startErrorCount{0};   // errorCount when this instance started
@@ -356,6 +365,8 @@ public:
         int    packets{0};
         int    errors{0};
         int    late{0};    // FFT/waterfall packets discarded as late (#6883)
+        int    reordered{0};
+        int    duplicates{0};
     };
     struct AudioStreamDiagnostics {
         quint32 streamId{0};
@@ -444,6 +455,9 @@ private:
 public:
     // Packet error/total counts across all owned streams (for network quality monitor).
     int packetErrorCount() const;
+    // Preserve the network scorer's per-gap thresholds independently of the
+    // diagnostic count of individual missing packets.
+    int packetSequenceBreakCount() const;
     int packetTotalCount() const;
     qint64 totalRxBytes() const { return m_totalRxBytes.load(); }
     qint64 totalTxBytes() const { return m_totalTxBytes.load(); }
@@ -463,7 +477,7 @@ private:
     double m_audioPacketJitterEstimateMs{0.0};
 
     // Opus audio decoder (lazy-initialized on first Opus packet)
-    OpusCodec* m_opusCodec{nullptr};
+    std::unique_ptr<OpusCodec> m_opusCodec;
 
     // DAX stream routing: stream ID → DAX channel (1-8)
     QMap<quint32, int> m_daxStreamIds;
@@ -514,6 +528,21 @@ private:
     bool     m_wanRegistered{false};
     quint32  m_wanClientHandle{0};
     QElapsedTimer m_routedPrimeElapsed;
+    QTimer* m_rxReorderTimer{nullptr};
+    QElapsedTimer m_rxReorderClock;
+    qint64 m_rxReorderNowForTest{-1};
+    qsizetype m_queuedAudioBytes{0}; // m_statsMutex
+    QHash<quint32, quint64> m_audioPlcGenerations; // worker only
+    static constexpr qsizetype kMaxQueuedAudioBytes = 4 * 1024 * 1024;
+
+    qint64 rxReorderNowMs() const;
+    static VitaRxReorder::Key rxPacketKey(const QByteArray& data, quint16 pcc);
+    void recordRxLossLocked(StreamStats& stats, quint32 streamId, int lost,
+                            int breaks, qint64 nowMs, QStringList& warnings);
+    void deliverRxAudio(quint32 streamId, quint64 generation,
+                        const VitaRxReorder::Result& result);
+    void scheduleRxReorderFlush();
+    void flushRxReorder();
 };
 
 } // namespace AetherSDR

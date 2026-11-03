@@ -9,7 +9,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7598,
+          "line": 7602,
           "text": "else if (key == \"model\")"
         }
       ]
@@ -21,7 +21,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7607,
+          "line": 7611,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7560,
+          "line": 7564,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7490,
+          "line": 7494,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7534,
+          "line": 7538,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7400,
+          "line": 7404,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8740,
+          "line": 8744,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -193,7 +193,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7607,
+          "line": 7611,
           "text": "else if (key == \"software_ver\")"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7801,
+          "line": 7805,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,17 +227,17 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7779,
+          "line": 7783,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 239,
+          "line": 250,
           "text": "PanadapterStream: failed to bind UDP socket:"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7855,
+          "line": 7859,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -254,7 +254,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 177,
+          "line": 188,
           "text": "capped by net.core.rmem_max"
         }
       ]
@@ -262,8 +262,8 @@
     {
       "id": "vita-sequence-errors",
       "severity": "warning",
-      "title": "Packets from the radio were lost or arrived out of order",
-      "explanation": "AetherSDR counted gaps in the VITA-49 packet sequence of a stream from the radio (audio, FFT, waterfall, meter or DAX). Lost or reordered packets cause audio dropouts and gaps in the waterfall. Wi-Fi, a busy switch or a VPN between the radio and the computer are the usual causes.",
+      "title": "A radio stream has missing packets or DAX order breaks",
+      "explanation": "Audio, FFT, waterfall and meter packets still missing after the short reorder wait are counted here. Reordered arrivals are reported separately in Network Diagnostics. DAX remains in arrival order and counts sequence breaks. Wi-Fi, a busy switch or a VPN can disrupt delivery.",
       "match": {
         "substring": "PanadapterStream: VITA-49 sequence errors on"
       },
@@ -271,7 +271,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/VitaSequenceLossReport.h",
-          "line": 125,
+          "line": 124,
           "text": "PanadapterStream: VITA-49 sequence errors on %1 stream 0x%2: "
         }
       ]
@@ -452,12 +452,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1385,
+          "line": 1387,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1950,
+          "line": 2122,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13341,
+          "line": 13352,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 13259,
+          "line": 13298,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2906,
+          "line": 2918,
           "text": "HL2: could not open the UDP socket"
         }
       ]

@@ -19,6 +19,11 @@
 namespace AetherSDR {
 class VitaSequenceLossLogTestAccess {
 public:
+    static void flush(PanadapterStream& stream)
+    {
+        stream.m_rxReorderNowForTest = stream.rxReorderNowMs() + VitaRxReorder::kWaitMs;
+        stream.flushRxReorder();
+    }
     // A meter packet: header word0 carries the 4-bit sequence count, word3's
     // low 16 bits the packet class code; one meter id/value pair as payload.
     static void feedMeter(PanadapterStream& stream, quint32 streamId, int seq)
@@ -186,13 +191,16 @@ int main(int argc, char** argv)
         }
         report("in-order packets log nothing", g_warnings.isEmpty());
         VitaSequenceLossLogTestAccess::feedMeter(stream, id, 7);  // 4..6 missing
+        report("a gap waits for reordering", g_warnings.isEmpty());
+        VitaSequenceLossLogTestAccess::flush(stream);
         report("a gap logs one warning", g_warnings.size() == 1);
         report("on aether.vita49 with the stream, category and counts",
                g_warnings.value(0) == QStringLiteral(
                    "aether.vita49: PanadapterStream: VITA-49 sequence errors on meter stream "
-                   "0x7000000a: 1 in the last 0 s, 1 since the stream started (5 packets received)"));
+                   "0x7000000a: 3 in the last 0 s, 3 since the stream started (5 packets received)"));
         for (int i = 0; i < 50; ++i) {
             VitaSequenceLossLogTestAccess::feedMeter(stream, id, i * 3);
+            VitaSequenceLossLogTestAccess::flush(stream);
         }
         report("a burst of gaps inside 10 s adds no line", g_warnings.size() == 1);
         report("the live counter still has every error",
@@ -224,11 +232,12 @@ int main(int argc, char** argv)
                stream.packetTotalCount() == totalBefore + 1);
         VitaSequenceLossLogTestAccess::feedMeter(stream, id, 1);
         VitaSequenceLossLogTestAccess::feedMeter(stream, id, 5);  // 2..4 missing
-        report("reconnect: a real gap still logs at once",
+        VitaSequenceLossLogTestAccess::flush(stream);
+        report("reconnect: an expired real gap logs",
                g_warnings.size() == 1
                    && g_warnings.value(0) == QStringLiteral(
                           "aether.vita49: PanadapterStream: VITA-49 sequence errors on meter stream "
-                          "0x7000000b: 1 in the last 0 s, 1 since the stream started (3 packets received)"));
+                          "0x7000000b: 3 in the last 0 s, 3 since the stream started (3 packets received)"));
 
         // A pan or waterfall closed and re-created with the same id restarts too.
         // The limiter reported just above, so it would hold a line back: the
@@ -263,10 +272,11 @@ int main(int argc, char** argv)
         for (quint32 i = 0; i < 20; ++i) {
             VitaSequenceLossLogTestAccess::feedMeter(stream, 0x71000000u + i, 0);
             VitaSequenceLossLogTestAccess::feedMeter(stream, 0x71000000u + i, 5);
+            VitaSequenceLossLogTestAccess::flush(stream);
         }
         report("burst of new ids: lines stop at the shared budget",
                g_warnings.size() == VitaSequenceLossBudget::kLinesPerInterval);
-        report("burst of new ids: every error is still counted", stream.packetErrorCount() == 20);
+        report("burst of new ids: every error is still counted", stream.packetErrorCount() == 80);
         qInstallMessageHandler(nullptr);
     }
 

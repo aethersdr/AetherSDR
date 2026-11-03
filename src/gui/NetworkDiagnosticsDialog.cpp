@@ -637,9 +637,9 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
 
     row = 0;
     dropGrid->addWidget(makeNote(
-        "Inferred packet loss from missing VITA sequence numbers. Zero loss here does "
-        "not rule out jitter or late bursts. Late counts FFT and waterfall packets "
-        "that arrived after their frame was replaced and were discarded."), row++, 0, 1, 2);
+        "Audio, FFT, waterfall and meter loss is resolved after a short reorder wait. "
+        "Reordered counts late arrivals separately. DAX still counts arrival-order "
+        "breaks. Late counts display fragments discarded after their frame was replaced."), row++, 0, 1, 2);
     dropGrid->addWidget(new QLabel("Audio:"), row, 0);
     m_audioDropLabel = makeDim();
     dropGrid->addWidget(m_audioDropLabel, row++, 1);
@@ -3052,6 +3052,7 @@ void NetworkDiagnosticsDialog::refresh()
         }
         rateLabels[i]->setText(QString("%1 kbps").arg(static_cast<int>(rateKbps)));
         QString drop = formatDrop(cs);
+        drop += QStringLiteral(" · %1 reordered").arg(cs.reordered);
         if (cats[i] == PanadapterStream::CatFFT
             || cats[i] == PanadapterStream::CatWaterfall) {
             drop += QStringLiteral(" \u00b7 %1 late").arg(cs.late);
@@ -3083,7 +3084,7 @@ void NetworkDiagnosticsDialog::refresh()
         const double windowPct = m_model->packetLossPercent();
         m_overviewLossValue->setText(QString("%1%").arg(windowPct, 0, 'f', 2));
         m_droppedLabel->setText(
-            QString("Last %1s: %2 / %3 dropped (%4%)   Total: %5 / %6 dropped (%7%)")
+            QString("Last %1s gap events: %2 / %3 (%4%)   Total missing: %5 / %6 (%7%)")
                 .arg(m_model->packetLossWindowSeconds())
                 .arg(windowDrops)
                 .arg(windowPackets)
