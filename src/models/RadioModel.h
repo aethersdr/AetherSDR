@@ -493,6 +493,13 @@ public:
     // nothing to be honest about, and blanking the controls on unplug would look
     // like a fault rather than a fact about the radio.
     bool hasDaxStreams() const;
+    // Whether the connected radio declares a transmit monitor (MON on/volume)
+    // or voice-operated transmit (VOX on/level/delay): RadioCapabilities::
+    // txMonitorControl / voxControl. Same permissive disconnected rule as
+    // hasDaxStreams(). Where false, the TCI, CAT, shortcut and MIDI roads to
+    // those controls refuse instead of flipping a model value nothing consumes.
+    bool transmitMonitorAvailable() const;
+    bool voxAvailable() const;
 
     // True for 2-SCU radios that support diversity RX, from the FlexLib-sourced
     // ModelCapabilities table (Principle I).  Replaces the hand-maintained

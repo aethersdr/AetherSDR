@@ -7969,6 +7969,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
+        m_appletPanel->phoneCwApplet()->setMonitorAvailable(
+            !connected || caps.txMonitorControl.has_value());
         m_appletPanel->meterApplet()->setPaInstrumentTelemetryState(
             connected, caps.hasPaTemperatureTelemetry,
             caps.hasPaCurrentTelemetry);
@@ -7990,6 +7992,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
+            phone->setVoxAvailable(!connected || caps.voxControl.has_value());
             phone->setVoxDelayAvailable(
                 !connected || (caps.voxControl && caps.voxControl->hasDelay));
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
@@ -8179,7 +8182,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // occupy the same row. Radios that report a temperature, or that have made
     // no such claim, are untouched by construction.
     if (m_appletPanel) {
-        m_appletPanel->meterApplet()->setSupplyVoltageTelemetryState(connected);
+        m_appletPanel->meterApplet()->setSupplyVoltageTelemetryState(
+            connected, caps.hasSupplyVoltageTelemetry);
     }
     // A readout the radio can never produce, as distinct from one that has not
     // arrived yet. The two capability flags are re-checked so a real reading

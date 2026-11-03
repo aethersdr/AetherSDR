@@ -80,6 +80,11 @@ original receiver during setup cancels the pending route, including while TX
 selection is awaiting a reply; cleanup only removes the receiver created for it.
 Radios with paired receiver/panadapter topology keep that native topology.
 
+On a radio without transmit-monitor control, `mon_enable` ON and
+`mon_volume` leave the model unchanged and notify clients of its current value.
+`mon_enable` OFF remains accepted, including to clear a monitor state left by a
+previous radio. Radios that expose monitor control keep their normal behavior.
+
 ### WSJT-X
 
 Use a WSJT-X build with TCI support (WSJT-X Improved, or WSJT-X 3.x).
@@ -106,6 +111,12 @@ stream already exists but is not selected, select it with **TX stream** in
 ### Log4OM v2
 
 **Settings → Radio**, choose **TCI** and enter `localhost:50001`. Log4OM receives spots, and clicking a spot in AetherSDR sends `clicked_on_spot` back to it.
+
+For spots supplied by a FlexRadio, AetherSDR forwards the radio's click
+notification to TCI clients as `rx_clicked_on_spot`, including clicks made in
+SmartSDR or Maestro. The radio's panadapter handle identifies the receiver.
+If that handle is zero or cannot be matched, the notification uses the first
+slice.
 
 ### CW Skimmer and SDC
 

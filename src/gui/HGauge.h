@@ -341,6 +341,15 @@ public:
     }
 
 protected:
+    static constexpr qreal kUnavailableOpacity = 0.4;
+
+    void changeEvent(QEvent* ev) override {
+        QWidget::changeEvent(ev);
+        if (ev->type() == QEvent::EnabledChange) {
+            update();
+        }
+    }
+
     void enterEvent(QEnterEvent* ev) override {
         QWidget::enterEvent(ev);
         m_hovered = true;
@@ -388,6 +397,10 @@ protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
+        // A disabled gauge (radio lacks the reading) is drawn dimmed, not hidden.
+        if (!isEnabled()) {
+            p.setOpacity(kUnavailableOpacity);
+        }
 
         const int w = width();
         const int h = height();
