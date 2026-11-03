@@ -5724,15 +5724,16 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
 
     // Pre-DSP receive-presentation feed: nothing below has touched `pcm` yet,
     // so this is the one place every source's audio exists without client DSP.
-    // It carries the same open-sink and transmit-gate conditions as the
-    // post-DSP emit in writeAudio(), so both feeds go quiet together. It does
-    // NOT wait on an enabled NR processor that is still preparing (the early
-    // returns below) — nothing in this block depends on one.
+    // It carries the same sink-or-Line-Out-capture and transmit-gate conditions
+    // as the post-DSP emit in writeAudio(), so both feeds go quiet together.
+    // It does NOT wait on an enabled NR processor that is still preparing (the
+    // early returns below) — nothing in this block depends on one.
     //
     // Channels is 2 because every caller hands this function whole interleaved
     // stereo frames at the producer rate; see the drain loops in
     // drainRxAudio() and the frame alignment in the feed paths.
-    if (m_audioDevice && m_audioDevice->isOpen() && !txPresentationGated) {
+    if (((m_audioDevice && m_audioDevice->isOpen()) || m_lineOutCaptureEnabled)
+        && !txPresentationGated) {
         emit receivePresentationPreDspAudioReady(
             source == RxDspSource::KiwiSdr ? QStringLiteral("kiwi")
                                            : QStringLiteral("flex"),

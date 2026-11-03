@@ -160,6 +160,12 @@ audio_stream_channels:1;
 
 ### Receive gain and level metering
 
+Each **RX** slider attenuates the audio sent to every TCI client receiving that channel. **0%** mutes the stream; **100%** is unity gain and preserves the source audio level. The slider does not amplify audio above unity. Dragging shows the gain as a percentage; arrow keys adjust it by five percentage points. Gains are saved independently for each channel.
+
+The RX meter shows the **post-gain output** on a logarithmic **-60 to 0 dBFS RMS** scale. Half the bar is -30 dBFS RMS. The thumb indicates gain, not measured audio level. Moving the slider updates the meter immediately using the most recent source level. Speaker volume, speaker mute and DAX applet gain do not adjust TCI receive audio.
+
+The meter measures RMS, not peaks, so leave headroom for speech transients when adjusting recording levels in an external application. A larger logarithmic meter indication does not mean the stream has been amplified.
+
 ### Line Out recording
 
 Clients start and stop a separate stereo mix with `line_out_start:<receiver>;`
@@ -168,15 +174,16 @@ and `line_out_stop:<receiver>;`. It uses TCI stream type **4**, fixed at
 The receiver number labels the subscription; its content is the same complete
 playback mix, not that receiver alone. RX and Line Out can run together.
 
-**PC Audio is optional.** While PC Audio is off, Line Out sends silence and
-releases its radio audio demand by default. Enable **Line Out with PC Audio off**
-to explicitly allow the radio audio stream to stay open; while a TCI client
-records, this mutes the radio speaker, headphone and line-out outputs. With PC Audio on, Line Out keeps the incoming radio
-audio and software mixer running without opening an additional playback device. It records
-the final shared stereo mix,
-including the open slices' existing volume, pan and mute, client-side RX DSP,
-and other sources in that mix. PC playback master volume and mute do not affect
-the recording, including when PC Audio is off.
+**PC Audio is optional.** When PC Audio is off and the separate default-off
+**Line Out with PC Audio off** consent is disabled, the subscription remains
+active but no Line Out type-4 frames are sent; it does not transmit encoded
+silence. Enable the consent setting to allow the radio audio stream to stay
+open; while a TCI client records, this mutes the radio speaker, headphone and
+line-out outputs. With PC Audio on, Line Out keeps the incoming radio audio and
+software mixer running without opening an additional playback device. It records
+the final shared stereo mix, including the open slices' existing volume, pan and
+mute, client-side RX DSP, and other sources in that mix. PC playback master
+volume and mute do not affect the recording, including when PC Audio is off.
 The TCI RX, TX and MIC faders do not add another recording gain to Line Out.
 It does not record other applications or separate local cue/sidetone devices.
 
@@ -189,18 +196,12 @@ input routing or transmitter state.
 
 Switching PC Audio on or off does not stop an active Line Out subscription.
 When PC Audio is turned off without consent, the subscription remains active
-but Line Out is silent until PC Audio is restored or consent is enabled. The
-radio audio stream is released after the last Line Out listener stops unless
+but sends no type-4 frames until PC Audio is restored or consent is enabled.
+The radio audio stream is released after the last Line Out listener stops unless
 PC playback still needs it or the consent setting is enabled.
 Server-side `line_out_recorder_*` file recording is not implemented.
 Live TX, MON and multi-client recording qualification remain outstanding
 ([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
-
-Each **RX** slider attenuates the audio sent to every TCI client receiving that channel. **0%** mutes the stream; **100%** is unity gain and preserves the source audio level. The slider does not amplify audio above unity. Dragging shows the gain as a percentage; arrow keys adjust it by five percentage points. Gains are saved independently for each channel.
-
-The RX meter shows the **post-gain output** on a logarithmic **-60 to 0 dBFS RMS** scale. Half the bar is -30 dBFS RMS. The thumb indicates gain, not measured audio level. Moving the slider updates the meter immediately using the most recent source level. Speaker volume, speaker mute and DAX applet gain do not adjust TCI receive audio.
-
-The meter measures RMS, not peaks, so leave headroom for speech transients when adjusting recording levels in an external application. A larger logarithmic meter indication does not mean the stream has been amplified.
 
 ### TX overflow handling
 

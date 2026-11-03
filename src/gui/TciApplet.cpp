@@ -231,9 +231,11 @@ void TciApplet::buildUI()
     });
     auto* lineOutConsentRow = new QHBoxLayout;
     lineOutConsentRow->setContentsMargins(4, 1, 4, 2);
-    m_lineOutPcAudioOffConsent = new QCheckBox(tr("Line Out with PC Audio off"), this);
+    m_lineOutPcAudioOffConsent = new QCheckBox(
+        tr("Line Out with PC Audio off (mutes radio outputs)"), this);
     m_lineOutPcAudioOffConsent->setObjectName(QStringLiteral("tciLineOutPcAudioOffConsent"));
-    m_lineOutPcAudioOffConsent->setAccessibleName(tr("Allow Line Out with PC Audio off"));
+    m_lineOutPcAudioOffConsent->setAccessibleName(
+        tr("Allow Line Out with PC Audio off; mutes radio outputs"));
     m_lineOutPcAudioOffConsent->setAccessibleDescription(tr(
         "When PC Audio is off, Line Out is silent by default. When enabled, Line Out keeps "
         "the radio audio stream open and mutes the radio speaker, headphone and line-out "

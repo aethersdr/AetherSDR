@@ -265,6 +265,42 @@ public:
         check(fixture.packets[listener].isEmpty(), "stopped Line Out emits no further packets");
     }
 
+    static void lineOutDemandLifecycle()
+    {
+        {
+            AudioEngine audio;
+            Fixture fixture;
+            fixture.server.setAudioEngine(&audio);
+            fixture.server.m_running.store(true);
+            fixture.backend->connected = true;
+            fixture.backend->add(0);
+            TciClient* listener = fixture.client(48000, 0);
+            fixture.command(listener, QStringLiteral("line_out_start:0;"));
+            check(fixture.model.lineOutAudioRequested(),
+                  "Line Out subscription requests radio audio before client disconnect");
+
+            emit listener->disconnected();
+            check(!fixture.model.lineOutAudioRequested(),
+                  "disconnecting without line_out_stop releases Line Out radio audio demand");
+        }
+        {
+            AudioEngine audio;
+            Fixture fixture;
+            fixture.server.setAudioEngine(&audio);
+            fixture.server.m_running.store(true);
+            fixture.backend->connected = true;
+            fixture.backend->add(0);
+            TciClient* listener = fixture.client(48000, 0);
+            fixture.command(listener, QStringLiteral("line_out_start:0;"));
+            check(fixture.model.lineOutAudioRequested(),
+                  "Line Out subscription requests radio audio before server stop");
+
+            fixture.server.stop();
+            check(!fixture.model.lineOutAudioRequested(),
+                  "stopping TCI server releases Line Out radio audio demand");
+        }
+    }
+
     static void lineOutDelivery()
     {
         Fixture fixture;
@@ -1282,7 +1318,7 @@ public:
     {
         serverConstructedAfterReceiverRestore();
         simultaneousEightReceiverHandshakes();
-        lineOutFailureIsolation(); lineOutProtocol(); lineOutDelivery(); eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
+        lineOutFailureIsolation(); lineOutProtocol(); lineOutDemandLifecycle(); lineOutDelivery(); eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence(); receiveAttenuationAndMeter();
         replayAndEpochs(); resetIsolation(); sampleTypeIsNamed(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();

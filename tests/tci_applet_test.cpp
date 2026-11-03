@@ -43,8 +43,10 @@ int main(int argc, char** argv)
     check(lineOut && !lineOut->isChecked(), "Line Out TX inclusion defaults off");
     check(lineOut && !lineOut->isEnabled() && !lineOut->accessibleDescription().isEmpty(),
           "Line Out TX control is unavailable with an accessible reason when disconnected");
-    check(lineOutConsent && lineOutConsent->text() == QStringLiteral("Line Out with PC Audio off"),
-          "PC Audio-off Line Out consent is distinct from TX inclusion");
+    check(lineOutConsent
+          && lineOutConsent->text().contains(QStringLiteral("Line Out with PC Audio off"))
+          && lineOutConsent->text().contains(QStringLiteral("mutes radio outputs")),
+          "PC Audio-off Line Out consent is distinct from TX inclusion and names its radio-output effect");
     check(lineOutConsent && !lineOutConsent->isChecked()
           && consentWarning.contains(QStringLiteral("mutes"))
           && consentWarning.contains(QStringLiteral("speaker"))

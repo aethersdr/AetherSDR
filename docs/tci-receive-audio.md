@@ -26,7 +26,8 @@ device close/rate change and TX-state transitions. The existing bounded mailbox
 and per-client 256 KiB output limit also apply to Line Out. A Line Out subscriber
 retains the radio speaker stream while PC Audio is enabled, or when the separate
 default-off **Line Out with PC Audio off** consent is enabled. Without consent,
-PC Audio off releases the radio stream and Line Out is silent. Without a playback device, the
+PC Audio off releases the radio stream and Line Out sends no type-4 frames.
+Without a playback device, the
 existing 10 ms timer drains the same mixer at 48 kHz; no audio sink is opened.
 Turning PC Audio off closes only playback and does not stop recording. The last
 Line Out subscriber releases its demand without removing a stream needed by PC Audio.

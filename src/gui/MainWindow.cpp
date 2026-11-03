@@ -3788,10 +3788,7 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         if (newComp != prevComp && m_radioModel.isConnected()) {
             qDebug() << "MainWindow: audio compression changed from" << prevComp
                      << "to" << newComp << "— recreating audio stream";
-            m_radioModel.removeRxAudioStream();
-            QTimer::singleShot(500, this, [this]() {
-                m_radioModel.createRxAudioStream();
-            });
+            m_radioModel.createAudioStream();
             updateNr2Availability();  // Disable NR2 if switching to Opus (#1597)
         }
     });

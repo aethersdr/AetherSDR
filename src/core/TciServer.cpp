@@ -760,6 +760,7 @@ void TciServer::stop()
     teardownTciRoute();
     releaseAllIqStreams();
     stopIo();
+    updateLineOutCapture();
     if (hadResources) { releaseDaxForTci(); }
 }
 
@@ -1087,9 +1088,11 @@ void TciServer::onClientDisconnected()
             for (int trx : iqReceivers) {
                 releaseIqStreamIfUnused(trx);
             }
+            m_clients[i].lineOutReceivers.clear();
             delete m_clients[i].protocol;
             resetClientRx(m_clients[i]);
             m_clients.removeAt(i);
+            updateLineOutCapture();
 
             // Release DAX if no remaining clients want audio (#1331)
             bool anyAudio = false;
@@ -1661,10 +1664,18 @@ void TciServer::onTextMessage(const QString& msg)
             const bool changed = starting ? !client.lineOutReceivers.contains(receiver)
                                           : client.lineOutReceivers.contains(receiver);
             if (changed) {
+                const bool noAudioWithoutConsent = starting
+                    && client.lineOutReceivers.isEmpty()
+                    && AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True"
+                    && !m_lineOutPcAudioOffConsent;
                 if (starting) { client.lineOutReceivers.insert(receiver); }
                 else { client.lineOutReceivers.remove(receiver); }
                 ++client.lineOutGeneration;
                 syncLineOutClient(client);
+                if (noAudioWithoutConsent) {
+                    qCInfo(lcCat) << "TCI: Line Out subscription accepted without audio frames;"
+                                     " PC Audio is disabled and PC Audio-off Line Out consent is off";
+                }
             }
             replyText(socket, cmd.trimmed() + ";");
             if (!self || !socket || !socket->live()) { return; }
