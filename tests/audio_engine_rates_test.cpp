@@ -1,6 +1,7 @@
 // RFC #5468 A2: drive the production RX queue/DSP/mixer with a memory-backed
 // output device. No QAudioSink, socket peer, radio connection, or RF is used.
 #include "TestSettingsProfile.h"
+#include "RxOverflowCapture.h"
 #include "core/AudioEngine.h"
 #include "core/AudioFormatNegotiator.h"
 #include "core/ClientComp.h"
@@ -13,6 +14,7 @@
 #include "core/Resampler.h"
 
 #include <QBuffer>
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEvent>
@@ -60,6 +62,15 @@ public:
             result += packet.size();
         }
         return result;
+    }
+    static void appendOutput(AudioEngine& engine, const QByteArray& pcm)
+    {
+        engine.m_rxOutputBuffer.append(pcm);
+    }
+    static QByteArray outputPcm(const AudioEngine& engine) { return engine.m_rxOutputBuffer; }
+    static void trimMain(AudioEngine& engine, qsizetype rawBytes)
+    {
+        engine.trimMainRxBuffers(rawBytes);
     }
     static qsizetype outputBytes(const AudioEngine& engine)
     {
@@ -679,11 +690,20 @@ void queueBudgetsAndDeviceTransitions()
         producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo});
         feed(fixture.engine, producer, tone(producerRate, producerRate / 4));
         AudioEngineRatesTestAccess::drain(fixture.engine, 0);
-        check(AudioEngineRatesTestAccess::rawBytes(fixture.engine)
-                  == producerRate / 10 * kFrameBytes,
-              "raw queue cap uses producer duration at either producer rate");
-        check(fixture.engine.receivePresentationAudioQueues().flexRawBufferMs == 100,
-              "raw queue diagnostics report producer milliseconds");
+        const qsizetype rawFrames =
+            AudioEngineRatesTestAccess::rawBytes(fixture.engine) / kFrameBytes;
+        const qsizetype outputFrames =
+            AudioEngineRatesTestAccess::outputBytes(fixture.engine) / kFrameBytes;
+        const qsizetype queuedProducerFrames = rawFrames
+            + (outputFrames * producerRate + fixture.deviceRate - 1) / fixture.deviceRate;
+        check(queuedProducerFrames <= producerRate / 10
+                  && queuedProducerFrames >= producerRate * 94 / 1000,
+              "combined queue cap uses producer duration and retains the bounded tail");
+        const AudioEngine::ReceivePresentationAudioQueues queues =
+            fixture.engine.receivePresentationAudioQueues();
+        check(std::abs(queues.flexRawBufferMs + queues.flexOutputBufferMs
+                  - queuedProducerFrames * 1000 / producerRate) <= 1,
+              "combined queue diagnostics report each rate domain in milliseconds");
         fixture.engine.setRxBufferCapMs(1000);
         fixture.engine.setReceivePresentationDelays(100, 0);
         feed(fixture.engine, producer, tone(producerRate, producerRate / 5, producerRate / 4));
@@ -713,6 +733,46 @@ void queueBudgetsAndDeviceTransitions()
         check(std::abs(changed.size() / kFrameBytes - 24000) <= 512
               && amplitude(changed, 24000, 0, 1000) > 0.27,
               "remaining producer continues at the new device rate without retiming");
+    }
+}
+
+void revokedDelayReduction()
+{
+    for (bool nr2 : {false, true}) {
+        Fixture fixture(48000);
+        fixture.engine.setNr2Enabled(nr2);
+        check(fixture.engine.nr2Enabled() == nr2, "retirement processing mode applies");
+        fixture.engine.setReceivePresentationDelays(100, 0);
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+        feed(fixture.engine, producer, tone(24000, 2400));
+        fixture.capture();
+        producer.invalidate();
+        fixture.engine.setReceivePresentationDelays(0, 0);
+        check(fixture.captured(QStringLiteral("post")).isEmpty(),
+              "delay reduction cannot process or publish a revoked PCM lease");
+        check(AudioEngineRatesTestAccess::rawBytes(fixture.engine) == 0
+                  && AudioEngineRatesTestAccess::outputBytes(fixture.engine) == 0,
+              "delay reduction retires revoked source queues");
+        fixture.finish();
+        check(fixture.output.data().isEmpty(), "retired audio cannot reach the speaker");
+
+        PcmProducer replacement;
+        replacement.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+        feed(fixture.engine, replacement, QVector<float>(4800, 0.0f));
+        fixture.finish();
+        const QByteArray output = fixture.output.data();
+        const auto* samples = reinterpret_cast<const float*>(output.constData());
+        double maxSample = 0.0;
+        for (qsizetype sample = 0; sample < output.size() / sizeof(float); ++sample) {
+            maxSample = std::max(maxSample, std::fabs(static_cast<double>(samples[sample])));
+        }
+        std::printf("revoked replacement bytes=%lld raw=%lld outputQueue=%lld maxSample=%g\n",
+            static_cast<long long>(output.size()),
+            static_cast<long long>(AudioEngineRatesTestAccess::rawBytes(fixture.engine)),
+            static_cast<long long>(AudioEngineRatesTestAccess::outputBytes(fixture.engine)), maxSample);
+        check(!output.isEmpty() && finite(output) && maxSample == 0.0,
+              "replacement silence cannot carry the revoked source's converter history");
     }
 }
 
@@ -770,6 +830,271 @@ bool enableEffect(AudioEngine& engine, Effect effect)
 #endif
     }
     return false;
+}
+
+void rawOverflowFade()
+{
+    for (int producerRate : {24000, 48000}) {
+        for (int deviceRate : {24000, 44100, 48000}) {
+            for (int overflowFrames : {128, producerRate / 50 - 1, producerRate / 50 + 1}) {
+                Fixture fixture(deviceRate);
+                PcmProducer producer;
+                producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo});
+                for (int packet = 0; packet < 20; ++packet) {
+                    feed(fixture.engine, producer, QVector<float>(producerRate / 100 * 2, 0.25f));
+                    fixture.tick();
+                }
+                fixture.finish();
+                fixture.output.buffer().clear();
+                fixture.output.seek(0);
+                fixture.engine.setRxBufferCapMs(100);
+                check(AudioEngineRatesTestAccess::outputBytes(fixture.engine) == 0,
+                      "raw-only overflow begins without processed output");
+                feed(fixture.engine, producer,
+                     QVector<float>((producerRate / 10 + overflowFrames) * 2, 0.25f));
+                fixture.finish();
+                const QByteArray output = fixture.output.data();
+                check(!output.isEmpty() && finite(output), "raw overflow retains finite speaker audio");
+                const auto* samples = reinterpret_cast<const float*>(output.constData());
+                const double first = output.isEmpty() ? 0.0 : samples[0];
+                const double expected = 0.25 / (deviceRate * 2 / 1000);
+                const double peak = output.isEmpty() ? 0.0
+                    : *std::max_element(samples, samples + output.size() / sizeof(float));
+                std::printf("raw fade producer=%d device=%d overflow=%d frames=%lld first=%g expected=%g peak=%g\n",
+                    producerRate, deviceRate, overflowFrames, static_cast<long long>(output.size() / kFrameBytes),
+                    first, expected, peak);
+                check(first > 0.0 && first <= expected * 1.05 && peak > 0.24,
+                      "the retained raw-only speaker tail receives the existing fade");
+                check(output.size() / kFrameBytes <= deviceRate / 10,
+                      "raw-only overflow retains at most the configured 100 ms");
+            }
+        }
+    }
+}
+
+void boundedNrTrim()
+{
+    for (Effect effect : {Effect::Rn2, Effect::Dfnr}) {
+        for (int producerRate : {24000, 48000}) {
+            for (bool presentation : {true, false}) {
+                bool supported = true;
+                const auto render = [&](bool stalled) {
+                    Fixture fixture(producerRate);
+                    PcmProducer producer;
+                    producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo});
+                    feed(fixture.engine, producer, QVector<float>(256, 0.0f));
+                    fixture.finish();
+                    if (!enableEffect(fixture.engine, effect)) {
+                        supported = false;
+                        return QByteArray{};
+                    }
+#ifdef HAVE_DFNR
+                    if (effect == Effect::Dfnr) {
+                        fixture.engine.setDfnrAttenLimit(0.0f);
+                    }
+#endif
+                    if (stalled && presentation) {
+                        fixture.engine.setReceivePresentationDelays(5000, 0, {});
+                    }
+                    const int frames = producerRate * (presentation ? 4 : 9) / (presentation ? 1 : 10) + 128;
+                    for (int offset = 0; offset < frames;) {
+                        const int count = std::min(producerRate / 50, frames - offset);
+                        feed(fixture.engine, producer, QVector<float>(count * 2, 0.0f));
+                        offset += count;
+                        if (!stalled) {
+                            AudioEngineRatesTestAccess::drain(fixture.engine,
+                                producerRate / 50 * kFrameBytes);
+                        }
+                    }
+                    if (stalled) {
+                        check(AudioEngineRatesTestAccess::rawBytes(fixture.engine)
+                                  == frames * kFrameBytes,
+                              "stalled NR trim starts with the intended queued raw backlog");
+                        if (presentation) {
+                            fixture.engine.setReceivePresentationDelays(0, 0, {});
+                        } else {
+                            fixture.engine.setRxBufferCapMs(50);
+                            AudioEngineRatesTestAccess::drain(fixture.engine, 0);
+                        }
+                        const qsizetype visible = AudioEngineRatesTestAccess::rawBytes(fixture.engine)
+                            + AudioEngineRatesTestAccess::outputBytes(fixture.engine);
+                        check(visible <= (presentation ? 0 : producerRate / 20 * kFrameBytes),
+                              "the requested visible queue reduction is actually complete");
+                    }
+                    fixture.output.buffer().clear();
+                    fixture.output.seek(0);
+                    for (int packet = 0; packet < 40; ++packet) {
+                        feed(fixture.engine, producer, tone(producerRate, producerRate / 100,
+                            packet * (producerRate / 100), 1700, 2300));
+                        fixture.tick();
+                    }
+                    fixture.finish();
+                    return fixture.output.data();
+                };
+                const QByteArray expected = render(false);
+                const QByteArray trimmed = supported ? render(true) : QByteArray{};
+                if (!supported) {
+                    std::printf("bounded NR %s producer=%d unavailable; case skipped\n",
+                        effectName(effect), producerRate);
+                    continue;
+                }
+                const double reference = amplitude(expected, producerRate, 0, 1700);
+                const double actual = amplitude(trimmed, producerRate, 0, 1700);
+                std::printf("bounded NR %s producer=%d presentation=%d reference=%g actual=%g frames=%lld\n",
+                    effectName(effect), producerRate, presentation, reference, actual,
+                    static_cast<long long>(trimmed.size() / kFrameBytes));
+                check(finite(trimmed) && reference > 0.01 && actual >= reference * 0.9,
+                      "fresh speaker audio cannot remain behind an NR-owned old backlog");
+            }
+        }
+    }
+}
+
+void steadyOutputOverflowFade()
+{
+    const auto maxDelta = [](const QByteArray& pcm) {
+        const auto* samples = reinterpret_cast<const float*>(pcm.constData());
+        double maximum = 0.0;
+        for (qsizetype index = 2; index < pcm.size() / sizeof(float); index += 2) {
+            maximum = std::max(maximum,
+                std::fabs(static_cast<double>(samples[index]) - samples[index - 2]));
+        }
+        return maximum;
+    };
+    for (int deviceRate : {24000, 48000, 192000}) {
+        Fixture fixture(deviceRate);
+        const qsizetype capFrames = deviceRate / 10;
+        const qsizetype burstFrames = deviceRate * 128 / 24000;
+        const QByteArray burst = bytes(QVector<float>(burstFrames * 2, 0.25f));
+        AudioEngineRatesTestAccess::appendOutput(fixture.engine,
+            bytes(QVector<float>((capFrames + burstFrames) * 2, 0.25f)));
+        AudioEngineRatesTestAccess::trimMain(fixture.engine, 2400 * kFrameBytes);
+        const QByteArray first = AudioEngineRatesTestAccess::outputPcm(fixture.engine);
+        AudioEngineRatesTestAccess::appendOutput(fixture.engine, burst);
+        AudioEngineRatesTestAccess::trimMain(fixture.engine, 2400 * kFrameBytes);
+        const QByteArray second = AudioEngineRatesTestAccess::outputPcm(fixture.engine);
+        check(first.size() == capFrames * kFrameBytes
+                  && second.size() == first.size(),
+              "repeated steady overflow retains the same bounded speaker tail");
+        check(finite(first) && finite(second), "overflow fade stays finite");
+        check(!first.isEmpty() && reinterpret_cast<const float*>(first.constData())[0] < 0.25f,
+              "overflow still applies the existing playback fade");
+        const double firstStep = maxDelta(first);
+        const double secondStep = maxDelta(second);
+        std::printf("steady overflow device=%d firstStep=%g secondStep=%g\n",
+            deviceRate, firstStep, secondStep);
+        check(first == second && secondStep <= firstStep + 1.0e-7,
+              "one overflow cannot compound the fade into a sharper transition");
+    }
+}
+
+// Replay genuine contiguous input with and without delayed device draining.
+// Post-DSP samples must match even when the speaker backlog has to be dropped.
+void overflowPreservesDspHistory()
+{
+    const QByteArray capturedPcm = qUncompress(QByteArray::fromBase64(kRxOverflowCapture));
+    check(capturedPcm.size() == 24 * 128 * kFrameBytes, "captured packet fixture decodes");
+    for (Effect effect : {Effect::None, Effect::Eq, Effect::Nr2}) {
+        for (int deviceRate : {24000, 44100, 48000}) {
+            const auto render = [&](bool burst) {
+                Fixture fixture(deviceRate);
+                fixture.engine.setRxBufferCapMs(100);
+                PcmProducer producer;
+                producer.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+                // Establish the typed producer before enabling its processing state.
+                feed(fixture.engine, producer, QVector<float>(256, 0.0f));
+                fixture.finish();
+                check(enableEffect(fixture.engine, effect), "overflow effect enables");
+                // Let the EQ's intentional per-block parameter ramp settle before
+                // comparing histories under different drain block partitions.
+                for (int packet = 0; packet < 64; ++packet) {
+                    feed(fixture.engine, producer, QVector<float>(256, 0.0f));
+                    fixture.finish();
+                }
+                const qsizetype beforePlayback = fixture.output.size();
+                fixture.capture();
+                for (int repeat = 0; repeat < 4; ++repeat) {
+                    for (int packet = 0; packet < 24; ++packet) {
+                        QVector<float> samples(256);
+                        std::memcpy(samples.data(), capturedPcm.constData()
+                            + packet * 128 * kFrameBytes, 128 * kFrameBytes);
+                        feed(fixture.engine, producer, std::move(samples));
+                        if (!burst) {
+                            fixture.finish();
+                        }
+                        const qsizetype queued = AudioEngineRatesTestAccess::rawBytes(fixture.engine)
+                            + AudioEngineRatesTestAccess::outputBytes(fixture.engine) * 24000 / deviceRate;
+                        check(queued <= 2400 * kFrameBytes,
+                              "combined raw and speaker-ready backlog stays within 100 ms");
+                    }
+                    if (burst) {
+                        fixture.finish();
+                    }
+                }
+                fixture.finish();
+                const QByteArray processed = fixture.captured(QStringLiteral("post"));
+                check(finite(fixture.output.data()), "overflow speaker output is finite stereo");
+                if (burst) {
+                    check(fixture.output.size() - beforePlayback
+                              < 4 * capturedPcm.size() * deviceRate / 24000,
+                          "overflow discards speaker backlog instead of growing latency");
+                }
+                return processed;
+            };
+            const QByteArray contiguous = render(false);
+            const QByteArray burst = render(true);
+            double maxDifference = 0.0;
+            if (burst.size() == contiguous.size()) {
+                const auto* expected = reinterpret_cast<const float*>(contiguous.constData());
+                const auto* actual = reinterpret_cast<const float*>(burst.constData());
+                for (qsizetype sample = 0; sample < burst.size() / sizeof(float); ++sample) {
+                    maxDifference = std::max(maxDifference,
+                        std::fabs(static_cast<double>(expected[sample]) - actual[sample]));
+                }
+            }
+            std::printf("overflow effect=%s device=%d expectedBytes=%lld actualBytes=%lld maxDifference=%g\n",
+                effectName(effect), deviceRate, static_cast<long long>(contiguous.size()),
+                static_cast<long long>(burst.size()), maxDifference);
+            // FFTW/SRC block partitions can differ by a few float rounding bits.
+            check(!contiguous.isEmpty() && burst.size() == contiguous.size()
+                      && maxDifference <= 1.0e-7,
+                  "overflow advances every captured sample through unchanged DSP history");
+        }
+    }
+    Fixture stalled(48000);
+    stalled.engine.setRxBufferCapMs(100);
+    PcmProducer producer;
+    producer.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+    feed(stalled.engine, producer, QVector<float>(256, 0.0f));
+    stalled.finish();
+    check(enableEffect(stalled.engine, Effect::Nr2), "stalled-sink NR2 enables");
+    stalled.capture();
+    constexpr int kPackets = 4096;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    qint64 maxFeedNs = 0;
+    for (int packet = 0; packet < kPackets; ++packet) {
+        QVector<float> samples(256);
+        std::memcpy(samples.data(), capturedPcm.constData()
+            + packet % 24 * 128 * kFrameBytes, 128 * kFrameBytes);
+        const qint64 before = elapsed.nsecsElapsed();
+        feed(stalled.engine, producer, std::move(samples));
+        maxFeedNs = std::max(maxFeedNs, elapsed.nsecsElapsed() - before);
+        if (packet % 100 == 0) {
+            AudioEngineRatesTestAccess::drain(stalled.engine, 0);
+        }
+        check(AudioEngineRatesTestAccess::rawBytes(stalled.engine)
+                  + AudioEngineRatesTestAccess::outputBytes(stalled.engine) / 2
+                      <= 2400 * kFrameBytes,
+              "long stalled sink cannot accumulate an unbounded raw or output backlog");
+    }
+    std::printf("overflow stalled_packets=%d virtual_ms=%g elapsed_ms=%lld max_feed_us=%g\n",
+        kPackets, kPackets * 128.0 / 24.0, static_cast<long long>(elapsed.elapsed()),
+        maxFeedNs / 1000.0);
+    stalled.finish();
+    check(stalled.captured(QStringLiteral("post")).size() == kPackets * 256 * kFrameBytes,
+          "long stalled sink processes each received sample once without losing DSP history");
+
 }
 
 struct Rendered {
@@ -1108,7 +1433,7 @@ void printUsage(const char* program)
         "transitionsAndRejection|queueBudgetsAndDeviceTransitions|concurrentSourcesAndEffects|"
         "effects-bypass|effects-EQ|effects-NR2|effects-RN2|effects-NR4|"
         "effects-DFNR|effects-MNR|kiwiDeviceRateMatrix|processingStateReset|"
-        "legacyReplacementAndKiwiReset|fixedProcessingDomains]\n", program);
+        "legacyReplacementAndKiwiReset|fixedProcessingDomains|overflowPreservesDspHistory|revokedDelayReduction|steadyOutputOverflowFade|rawOverflowFade|boundedNrTrim]\n", program);
 }
 
 std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
@@ -1143,6 +1468,11 @@ std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
              AudioCase{"processingStateReset", std::nullopt},
              AudioCase{"legacyReplacementAndKiwiReset", std::nullopt},
              AudioCase{"fixedProcessingDomains", std::nullopt},
+             AudioCase{"overflowPreservesDspHistory", std::nullopt},
+             AudioCase{"revokedDelayReduction", std::nullopt},
+             AudioCase{"steadyOutputOverflowFade", std::nullopt},
+             AudioCase{"rawOverflowFade", std::nullopt},
+             AudioCase{"boundedNrTrim", std::nullopt},
          }) {
         if (std::strcmp(name, candidate.name) == 0) {
             return candidate;
@@ -1213,6 +1543,21 @@ int main(int argc, char** argv)
         runStage("legacyReplacementAndKiwiReset", legacyReplacementAndKiwiReset);
     }
     if (selected("fixedProcessingDomains")) { runStage("fixedProcessingDomains", fixedProcessingDomains); }
+    if (selected("revokedDelayReduction")) {
+        runStage("revokedDelayReduction", revokedDelayReduction);
+    }
+    if (selected("steadyOutputOverflowFade")) {
+        runStage("steadyOutputOverflowFade", steadyOutputOverflowFade);
+    }
+    if (selected("rawOverflowFade")) {
+        runStage("rawOverflowFade", rawOverflowFade);
+    }
+    if (selected("boundedNrTrim")) {
+        runStage("boundedNrTrim", boundedNrTrim);
+    }
+    if (selected("overflowPreservesDspHistory")) {
+        runStage("overflowPreservesDspHistory", overflowPreservesDspHistory);
+    }
     std::printf("AudioEngine rates: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
