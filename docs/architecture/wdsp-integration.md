@@ -1,4 +1,4 @@
-# WDSP 2.10 integration boundary
+# WDSP 2.11 integration boundary
 
 **Status:** Foundation implemented; Hermes-Lite 2 backend integration remains a
 separate phase. This boundary is engine-only and introduces no radio behavior.
@@ -29,8 +29,8 @@ header. `src/core/dsp/WdspChannel` is the only C++ entry point, and the C API in
 ## Reproducible source and build
 
 The snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
-`b02d5bac675dd2f33ec2bab2b339f79a597c47dd`, whose subject is
-`Release Version 2.10`. `third_party/wdsp/COMMIT` is the machine-readable pin.
+`e69de50d1d702216098019013899ad87534c64e0`, whose subject is
+`Release Version 2.11 (NNR model 1)`. `third_party/wdsp/COMMIT` is the machine-readable pin.
 The upstream PDF and binary calculus lookup table are not vendored. The latter
 is optional in WDSP and its source fallback remains active.
 
@@ -47,7 +47,7 @@ reports exactly this snapshot's version. A refresh therefore fails loudly at the
 first channel open rather than drifting, and updating that constant is part of
 the refresh.
 
-The source snapshot has ten documented changes. See
+The source snapshot's local changes are documented in
 `third_party/wdsp/AETHERSDR-PATCHES.md`; refreshes must either find the
 changes upstream or reapply and retest them explicitly.
 

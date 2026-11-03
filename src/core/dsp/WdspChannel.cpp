@@ -313,8 +313,8 @@ std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
     if (!validateConfig(config, error)) {
         return nullptr;
     }
-    if (GetWDSPVersion() != 210) {
-        setError(error, "The linked WDSP library is not version 2.10");
+    if (GetWDSPVersion() != 211) {
+        setError(error, "The linked WDSP library is not version 2.11");
         return nullptr;
     }
     std::optional<Reservation> reservation = reserveChannels(1);
@@ -331,8 +331,8 @@ std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
     if (!validateConfig(config, error)) {
         return nullptr;
     }
-    if (GetWDSPVersion() != 210) {
-        setError(error, "The linked WDSP library is not version 2.10");
+    if (GetWDSPVersion() != 211) {
+        setError(error, "The linked WDSP library is not version 2.11");
         return nullptr;
     }
     if (reservation.m_count == 0) {

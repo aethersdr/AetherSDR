@@ -113,7 +113,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/NetworkDiagnostics.h` | 3 | ui-support — Logs failed external-service requests (update check, QRZ, map/radar, propagation) to aether.network with their TLS errors and the TLS backend. Diagnostic plumbing, not radio state; the map/radar manager, title-bar update check and propagation dashboard watch their replies with it. | unconverted |
 | `core/NetworkPathResolver.h` | 1 | ui-support — Local NIC/IPv4 enumeration + interface-pick helper for connection setup; host networking plumbing, not radio state | unconverted |
 | `core/NetworkSettings.h` | 1 | ui-support — AppSettings JSON wrapper persisting VITA-49 SO_RCVBUF tuning; settings storage, not radio state — engine config knob, no protocol msg | unconverted |
-| `core/NnrControls.h` | 1 | ui-support — Compile-time NNR control ranges and default-marker positions read out of WDSP 2.10; no state and no WDSP include, shared by the ADSP tab and the filter | unconverted |
+| `core/NnrControls.h` | 1 | ui-support — Compile-time NNR control ranges and default-marker positions read out of WDSP 2.11; no state and no WDSP include, shared by the ADSP tab and the filter | unconverted |
 | `core/NnrSettings.h` | 3 | ui-support — AppSettings-backed JSON store for NNR strength, model and the six WDSP tuning controls; persistence, not radio state | unconverted |
 | `core/NvidiaAfxPack.h` | 1 | ui-support — Download/install manager for NVIDIA AFX BNR runtime pack (CUDA/TensorRT); deployment plumbing, no radio state | unconverted |
 | `core/NvidiaBnrSettings.h` | 1 | ui-support — AppSettings-backed JSON store for Maxine BNR intensity + licence acceptance; persistence, not radio state | unconverted |
