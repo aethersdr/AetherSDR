@@ -93,6 +93,20 @@ race:QHttpThreadDelegate::~QHttpThreadDelegate
 # CAVEAT: hides any race whose stack contains QFileSystemModel's set-up.
 race:QFileSystemModelPrivate::init
 
+# Qt's lazy gesture-manager creation (#6967; waveform_env_control_test). The
+# first gesture-grabbing widget (any QAbstractScrollArea) makes
+# QGestureManager::instance (qapplication.cpp:3958) write the application's
+# gesture-manager pointer on the main thread, while QApplication::notify
+# (qapplication.cpp:2581) reads that pointer for every event, on whatever
+# thread sends it: here the ChildAdded event a QTimer's parenting sends on a
+# stream thread. Both accesses are inside Qt; no AetherSDR datum is in either.
+#
+# ANCHORED ON QGestureManager::instance, which runs only Qt code. NOT on
+# QApplication::notify or QObject::setParent: every event and every parented
+# object of ours passes through those.
+# CAVEAT: hides any race whose stack contains the gesture manager's creation.
+race:QGestureManager::instance
+
 # ── DO NOT ADD — rejected in #5275 and #5411 review, each would blind the lane ─
 # Every entry below matches a frame that OUR code executes inside, so a real
 # race whose access sits in a queued slot body — the sendCmd and audio-atomics

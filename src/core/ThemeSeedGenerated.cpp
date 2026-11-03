@@ -41,16 +41,6 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accessory.key.meffa.standby.foreground", QString("#008040"));
     m_tokens.insert("color.accessory.key.standby.background", QString("#5a3a0a"));
     m_tokens.insert("color.accessory.key.standby.foreground", QString("#ffb84d"));
-    {
-        ThemeGradient g;
-        g.type = ThemeGradient::Linear;
-        g.angle = 90.0;
-        g.stops.append({0.0, QColor("#1a5c30")});
-        g.stops.append({0.35, QColor("#4a5520")});
-        g.stops.append({0.65, QColor("#6a4520")});
-        g.stops.append({1.0, QColor("#6e1f1f")});
-        m_tokens.insert("color.accessory.swrScale", QVariant::fromValue(g));
-    }
     m_tokens.insert("color.background.0", QString("#0f0f1a"));
     m_tokens.insert("color.background.1", QString("#1a2a3a"));
     m_tokens.insert("color.background.2", QString("#304050"));
@@ -145,6 +135,11 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.meter.pivot.rim", QString("#3a3e48"));
     m_tokens.insert("color.meter.rms", QString("#00b4d8"));
     m_tokens.insert("color.meter.thresh", QString("#ffb84d"));
+    m_tokens.insert("color.networkQuality.excellent", QString("#00cc66"));
+    m_tokens.insert("color.networkQuality.fair", QString("#cc9900"));
+    m_tokens.insert("color.networkQuality.good", QString("#00b4d8"));
+    m_tokens.insert("color.networkQuality.off", QString("#8aa8c0"));
+    m_tokens.insert("color.networkQuality.poor", QString("#cc3333"));
     m_tokens.insert("color.qr.dark", QString("#000000"));
     m_tokens.insert("color.qr.light", QString("#ffffff"));
     m_tokens.insert("color.slice.a", QString("#00d4ff"));
