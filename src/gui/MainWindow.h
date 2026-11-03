@@ -59,7 +59,6 @@
 #include "core/MqttClient.h"
 #endif
 #include "core/WsjtxClient.h"
-#include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
 #include "core/EibiClient.h"
 #include "core/N1MMSpotClient.h"
@@ -1193,6 +1192,9 @@ private:
     // pre-cap FPS and waterfall rate. Used on throttle lift, and before a
     // disconnect, app close, band change or pan close while capped.
     void restorePreCapPanRates(const QString& onlyPanId = {});
+    // Push the throttle's enabled flag and current cap to the radio tab's AT chip.
+    void refreshAdaptiveThrottleChip();
+    void refreshNetworkQualityIndicators();
     void startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots = true);
     void requestWanReconnect();
     void showForcedDisconnectDialog(bool wasWan, const RadioInfo& radioInfo, const WanRadioInfo& wanInfo);
@@ -1423,7 +1425,6 @@ private:
     QTimer            m_cwxTxEndTimer;
 #endif
     WsjtxClient*       m_wsjtxClient{nullptr};
-    SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
     EibiClient*          m_eibiClient{nullptr};
     QHash<QString, int>  m_eibiSpotKeyToId;

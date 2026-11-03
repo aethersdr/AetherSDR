@@ -164,6 +164,10 @@ port showing its band, bias profile and the radio feeding it, **STBY** and
 transmit is outlined. In standby a single banner replaces both strips. A port with no band
 reads `N/A`, meaning nothing is driving it.
 
+The **SWR** meter has the same flat dark track as **PWR** and **DRV**.
+With no forward power, the SWR track stays empty; color in the bar shows
+the measured SWR while power is flowing.
+
 The fan control, MEffA, port detail and the voltages need the **direct**
 connection. Over the radio relay the applet still shows power, SWR, Id and the
 operate state. Meters update at about 60 Hz while transmitting and 4 Hz while
@@ -209,6 +213,10 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 | Elecraft KPA1500 | TCP | 1500 |
 | RF-KIT Amplifier | HTTP (REST/JSON) | 8080 |
 | LP-100A Meter | Serial (115200 8N1) or a ser2net host in raw mode | 2000 |
+
+Changing the computer's clock does not delay LP-100A polling, gauge-range
+changes or no-data warnings. These timers follow elapsed time, so a clock
+correction does not require reconnecting the meter.
 
 ### Settings
 

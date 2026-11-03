@@ -83,6 +83,10 @@ strip for each RF port showing what is feeding it and where it is tuned, the
 C1/L/C2 relay positions as dials, and separate **STBY**, **BYP** and **TUNE**
 keys. A port shows its source only while it has a live reading.
 
+The **SWR** meter has the same flat dark track as **PWR**. With no forward
+power, the SWR track stays empty; color in the bar shows the measured SWR
+while power is flowing.
+
 ## Using manual relay control
 
 With the direct connection active, the C1, L and C2 bars (and the dials in the
