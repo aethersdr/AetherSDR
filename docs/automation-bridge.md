@@ -5005,7 +5005,7 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 81 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 82 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
