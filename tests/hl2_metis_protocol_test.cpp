@@ -279,7 +279,7 @@ int main()
         // (usopenhpsdr1.v:286, offset = 0x3B - 0x26). Neighbors carry other
         // values so a read one byte off is caught. SQUARE SDR 2 reports 52 (#6806).
         reply[2] = 0x02;
-        reply[0x14] = 0x7F;                                        // cw_hang_time byte
+        reply[0x14] = 0x7F;                                        // BANDSCOPE_BITS and BOARD
         reply[0x15] = 52;                                          // VERSION_MINOR
         reply[0x16] = 0x11;                                        // unused/zero upstream
         const auto sq = parseDiscoveryReply(reply);
