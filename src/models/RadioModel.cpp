@@ -2081,6 +2081,7 @@ void reconcileInterlockTx(TransmitModel& transmit, bool& audioGate, bool& cwxAct
 {
     if (!keepLocalTx) {
         transmit.setTransmitting(false);
+        transmit.expireTxOffDelayNow();
         if (audioGate) {
             audioGate = false;
             publishAudioGate(false);
@@ -2096,6 +2097,7 @@ void reconcileInterlockTx(TransmitModel& transmit, bool& audioGate, bool& cwxAct
             state.contains(QStringLiteral("REQUESTED")) || state.contains(QStringLiteral("DELAY"));
         if (!transitioningToTx) {
             transmit.setTransmitting(false);
+            transmit.expireTxOffDelayNow();
             cwxActive = false;
         }
         if (!transitioningToTx && audioGate) {
