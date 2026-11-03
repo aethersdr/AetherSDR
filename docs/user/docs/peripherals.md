@@ -214,6 +214,17 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 | RF-KIT Amplifier | HTTP (REST/JSON) | 8080 |
 | LP-100A Meter | Serial (115200 8N1) or a ser2net host in raw mode | 2000 |
 
+### LP-100A diagnostics
+
+Check the LP-100A warnings in **Help → Support & Diagnostics...**. The
+no-data warning includes the age of the last poll accepted by the transport,
+or says that no poll has been sent since connecting. Acceptance means the
+transport queued the byte; it does not confirm delivery to the meter.
+
+When valid records resume, a warning reports how long the silence lasted.
+The warning pair survives reconnects to the same endpoint. Changing the host,
+port, serial device or connection mode starts a new diagnostic session.
+
 ### Settings
 
 The TGXL, PGXL, Antenna Genius and ShackSwitch addresses keep their own keys
@@ -234,17 +245,6 @@ live only in the OS keychain. See [Settings and Backups](./settings-and-backups.
 - The Antenna Genius applet can show a band on Port A that the device did not report, taken from the active slice ([#6151](https://github.com/aethersdr/AetherSDR/issues/6151)).
 
 ## Troubleshooting
-
-### The LP-100A shows NO DATA
-
-Check the LP-100A warnings in **Help → Support & Diagnostics...**. The
-no-data warning includes the age of the last poll accepted by the transport,
-or says that no poll has been sent since connecting. Acceptance means the
-transport queued the byte; it does not confirm delivery to the meter.
-
-When valid records resume, a warning reports how long the silence lasted.
-The warning pair survives reconnects to the same endpoint. Changing the host,
-port, serial device or connection mode starts a new diagnostic session.
 
 ### A device shows "Authorization blocked"
 
