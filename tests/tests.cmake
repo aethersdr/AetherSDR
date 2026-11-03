@@ -8221,6 +8221,29 @@ set_target_properties(help_dialog_test PROPERTIES AUTOMOC ON)
 add_test(NAME help_dialog_test COMMAND help_dialog_test)
 set_tests_properties(help_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# SwrSweepLicenseDialog::confirm() — remembered-answer short-circuit and
+# force-override paths.  No MainWindow required; confirm() only needs
+# AppSettings and QDialog::exec() (offscreen → Rejected when no one clicks).
+add_executable(swr_sweep_license_dialog_test
+    tests/swr_sweep_license_dialog_test.cpp
+    src/gui/SwrSweepLicenseDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+target_include_directories(swr_sweep_license_dialog_test PRIVATE src)
+target_link_libraries(swr_sweep_license_dialog_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(swr_sweep_license_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME swr_sweep_license_dialog_test COMMAND swr_sweep_license_dialog_test)
+set_tests_properties(swr_sweep_license_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 # In-app links to docs.aethersdr.com (src/gui/DocsLinks.h, header-only): the
 # Help menu's documentation block, the docs pages the app links to, and the
 # "Full documentation:" line in each bundled resources/help page. Reads
@@ -10109,6 +10132,7 @@ set(AETHER_SETTINGS_CONSUMERS
     memory_import_test
     transmit_model_apd_test
     help_dialog_test
+    swr_sweep_license_dialog_test
     flex_control_dialog_size_test
     aethercontrol_window_test
     multiflex_dashboard_window_test
