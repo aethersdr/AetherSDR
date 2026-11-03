@@ -7,6 +7,7 @@
 #include <QList>
 #include <QObject>
 
+#include <atomic>
 #include <complex>
 #include <span>
 #include <cstdint>
@@ -184,7 +185,8 @@ public:
     // and marshals these across; they are Q_INVOKABLE so it can.
     Q_INVOKABLE bool start(const Params& params);   // bind, send start + priming C&C, begin ingest
     Q_INVOKABLE void stop();                        // send stop, close socket
-    [[nodiscard]] bool isRunning() const noexcept { return m_running; }
+    // Safe from any thread: Hl2Backend reads it to refuse a key while stopped.
+    [[nodiscard]] bool isRunning() const noexcept { return m_running.load(); }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
     [[nodiscard]] const Hl2Telemetry& telemetry() const noexcept { return m_telemetry; }
 
@@ -341,15 +343,22 @@ public:
     static int effectiveNumRx(const Params& p);
     int effectiveNumRx() const { return effectiveNumRx(m_params); }
 
-    // Transmit gate. setMox() does nothing until enableTransmit(true); with the gate
-    // closed setMox(true) is a silent no-op, so a refused key fails safe. Policy lives
-    // in Hl2Backend (interactive enables; automation defers to
+    // Transmit gate. setMox() does nothing until enableTransmit(true), and closing the
+    // gate drops the key; with it closed setMox(true) is a silent no-op, so a refused key
+    // fails safe. Policy lives in Hl2Backend (interactive enables; automation defers to
     // AETHER_AUTOMATION_ALLOW_TX). hl2_tx_gate_test asserts that no EP2 frame carries
     // C0 bit 0 while the gate is closed.
-    void enableTransmit(bool allowed) noexcept { m_txAllowed = allowed; }
+    void enableTransmit(bool allowed) noexcept
+    {
+        m_txAllowed = allowed;
+        if (!allowed) {
+            m_mox = false;
+        }
+    }
     [[nodiscard]] bool transmitEnabled() const noexcept { return m_txAllowed; }
 
-    // Key / unkey. Ignored unless enableTransmit(true) was called.
+    // Key / unkey. A key is refused unless enableTransmit(true) was called and the
+    // session is streaming (start() until stop()); stop() drops a held key.
     void setMox(bool keyed, const TxCoordinator::Operation& operation);
     // Only the backend's explicit CW break-in path uses CW holds to sustain
     // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.
@@ -936,7 +945,9 @@ private:
     int m_bsConsecutiveTimeouts = 0;
     // Since the MOX falling edge; invalid until the first unkey of the session.
     QElapsedTimer m_sinceUnkey;
-    bool m_running = false;
+    // Written on the I/O thread (start(), stop()); atomic so isRunning() can be
+    // read from the backend's thread.
+    std::atomic<bool> m_running{false};
     bool m_linkUp = false;
     // Reused per-packet decode buffers, one vector per running receiver. Sized
     // from m_ccRxFreq and reused rather than reallocated: at four receivers and

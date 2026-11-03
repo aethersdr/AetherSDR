@@ -152,6 +152,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **CW** is keyed with host-timed edges, with sidetone, at the same carrier level as TUNE. CW settings are restored after a restart.
 - **A key or PTT on the radio's own jack** shows as transmit and mutes the receiver for as long as the radio reports it. AetherSDR does not key or modulate because of it.
 - **TUNE** keys at **Tune Power**, and moving Tune Power during a tune changes the carrier. Tune Power is remembered per band.
+- **Session safety:** MOX, CW PTT and TUNE requests are refused while the radio session is stopped. Stopping the session clears a held software key; reconnecting requires a fresh transmit request.
 - **Show TX in Waterfall:** **Settings → Radio Setup... → Transmit → Show TX in Waterfall** lets the waterfall draw spectrum rows over the TX passband while transmitting. It starts off, and AetherSDR remembers your choice separately for each HL2 across reconnects and restarts. The control does not key the radio.
 - **Max Power:** **Settings → Radio Setup... → Transmit → Max Power** shows the HL2's rated watts, read-only. The power gauge uses a 5 W scale, and forward power reads near PEP on speech.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.

@@ -24,11 +24,13 @@
 #include <QLoggingCategory>
 #include <QString>
 #include <QStringList>
+#include <QThread>
 
 #include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace AetherSDR::hl2 {
@@ -42,6 +44,16 @@ struct MetisClientTestAccess {
         client.m_packetSinkForTest = std::move(sink);
     }
     static void send(MetisClient& client) { client.sendControlPacket(); }
+    // The silence watchdog, driven by hand. No socket exists, so stage 1 (the
+    // run-command resend) is skipped and a stale stream goes straight to stage 2.
+    static void markLinkUp(MetisClient& client)
+    {
+        client.m_linkUp = true;
+        client.m_sinceLastEp6.restart();
+    }
+    static void watchdogTick(MetisClient& client) { client.onWatchdogTick(); }
+    static bool linkUp(const MetisClient& client) { return client.m_linkUp; }
+    static int silenceTimeoutMs() { return MetisClient::kSilenceTimeoutMs; }
     // The TX NCO register (C&C addr 0x01) as last commanded.
     static std::uint32_t txRegisterHz(const MetisClient& client)
     {
@@ -74,6 +86,13 @@ struct Hl2TxGateTestAccess {
         Hl2HardwareOptions hw = backend.m_hw;
         hw.atuGateware = true;
         backend.m_hw = hw;
+    }
+    // Through the production option path, so its mid-tune re-derivation runs.
+    static void toggleGatewareAtu(Hl2Backend& backend, bool on)
+    {
+        Hl2HardwareOptions hw = backend.m_hw;
+        hw.atuGateware = on;
+        backend.applyHardwareOptions(hw, /*persist=*/false);
     }
     static bool txAllowed(const Hl2Backend& backend) { return backend.m_txAllowed; }
     // Set it explicitly rather than relying on the default. m_txAllowed is
@@ -119,6 +138,11 @@ struct Hl2TxGateTestAccess {
     // The radio's transmit tail, driven by hand: a zero-length hold would finish
     // it inside the unkey, so tests park it and expire it explicitly.
     static void setTxTailHoldMs(Hl2Backend& backend, int ms) { backend.m_txTailHoldMs = ms; }
+    static bool backendKeyed(const Hl2Backend& backend) { return backend.m_keyed; }
+    static bool backendTuning(const Hl2Backend& backend)
+    {
+        return backend.m_tuning || backend.m_toneFromTune || backend.m_rfDriveOwed;
+    }
     static bool txTailPending(const Hl2Backend& backend) { return backend.m_txTailPending; }
     static bool txTailArmed(const Hl2Backend& backend)
     {
@@ -341,6 +365,33 @@ static void testAtuTuneHonoursTheTransmitGate(TxTestAuthority& authority)
         check(sawTuneRequest(backend),
               "gate OPEN with the gateware ATU declared: the tune request does reach "
               "the wire — the gate narrows this feature, it does not disable it");
+        backend.setTune(false, 10, authority.operation, {});
+    }
+
+    {   // The gate closes MID-TUNE, then the ATU option is declared: the option
+        // path re-derives the bit, and the gate term must still hold it down.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(true, 10, authority.operation, {});
+        check(!sawTuneRequest(backend), "control: no ATU declared, no tune request");
+        Hl2TxGateTestAccess::setTxAllowed(backend, false);
+        Hl2TxGateTestAccess::toggleGatewareAtu(backend, true);
+        check(!sawTuneRequest(backend),
+              "gate closed mid-tune, then the gateware ATU declared: the re-derived "
+              "tune request stays down");
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(false, 10, authority.operation, {});
+    }
+    {   // Control for the case above: the same toggle with the gate OPEN does
+        // raise the re-derived request, so the case above tests the gate term.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(true, 10, authority.operation, {});
+        Hl2TxGateTestAccess::toggleGatewareAtu(backend, true);
+        check(sawTuneRequest(backend),
+              "control: gate open, gateware ATU declared mid-tune: the request goes up");
         backend.setTune(false, 10, authority.operation, {});
     }
 
@@ -716,6 +767,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     TxTestAuthority authority;
     MetisClient client;
+    MetisClientTestAccess::setStreaming(client);
 
     testAtuTuneHonoursTheTransmitGate(authority);
     testTunePowerAppliesLiveWhileTuning(authority);
@@ -863,6 +915,7 @@ int main(int argc, char** argv)
     // from doing so with whatever happens to be in the buffer.
     {
         MetisClient c2;
+        MetisClientTestAccess::setStreaming(c2);
         std::vector<std::complex<float>> tone(512, std::complex<float>(0.5f, -0.5f));
 
         // Gate closed, unkeyed: queued samples must not go out.
@@ -915,6 +968,7 @@ int main(int argc, char** argv)
     // ---- PC/MIDI CW is a shaped, packet-paced carrier under MOX ----
     {
         MetisClient cw;
+        MetisClientTestAccess::setStreaming(cw);
         cw.setCwKeyDown(true, authority.operation);
         check(!cw.cwModeActive(),
               "CW down is not latched while the transmit gate is closed");
@@ -943,6 +997,7 @@ int main(int argc, char** argv)
         // floating-point rounding details.
         TxTestAuthority tuneAuthority;
         MetisClient tune;
+        MetisClientTestAccess::setStreaming(tune);
         tune.enableTransmit(true);
         tune.setMox(true, tuneAuthority.operation);
         tune.setTxTestTone(0.0, kHl2CarrierAmplitude, tuneAuthority.operation);
@@ -973,6 +1028,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority media;
         MetisClient queued;
+        MetisClientTestAccess::setStreaming(queued);
         queued.enableTransmit(true);
         queued.setMox(true, media.operation);
         const std::vector<std::complex<float>> voice(252, {0.25f, 0.25f});
@@ -993,6 +1049,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority tx;
         MetisClient fenced;
+        MetisClientTestAccess::setStreaming(fenced);
         fenced.enableTransmit(true);
         fenced.setMox(true, {});
         check(!anyFrameKeyed(fenced.buildNextControlPacket()),
@@ -1020,6 +1077,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority tx;
         MetisClient held;
+        MetisClientTestAccess::setStreaming(held);
         held.enableTransmit(true);
         const auto first = tx.coordinator.registerProducer();
         const auto second = tx.coordinator.registerProducer();
@@ -1122,6 +1180,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority tx;
         MetisClient independent;
+        MetisClientTestAccess::setStreaming(independent);
         independent.enableTransmit(true);
         const auto manual = tx.coordinator.registerProducer();
         const auto keyer = tx.coordinator.registerProducer();
@@ -1147,6 +1206,7 @@ int main(int argc, char** argv)
     {
         TxTestAuthority tx;
         MetisClient entered;
+        MetisClientTestAccess::setStreaming(entered);
         entered.enableTransmit(true);
         entered.setMox(true, tx.operation);
         bool written = false;
@@ -1228,6 +1288,7 @@ int main(int argc, char** argv)
         // most 125 samples against the 126-per-packet a real starvation adds.
         TxTestAuthority tx;
         MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
         over.enableTransmit(true);
         over.setMox(true, tx.operation);
         constexpr std::size_t kOverSamples = 500;   // 3 * 126 + 122
@@ -1313,6 +1374,7 @@ int main(int argc, char** argv)
         TxTestAuthority tx;
         ScopedTxFifoLog log;
         MetisClient keydown;
+        MetisClientTestAccess::setStreaming(keydown);
         keydown.enableTransmit(true);
         keydown.setMox(true, tx.operation);
         check(keydown.txQueueDepth() == 0,
@@ -1395,6 +1457,7 @@ int main(int argc, char** argv)
         TxTestAuthority tx;
         ScopedTxFifoLog log;
         MetisClient drift;
+        MetisClientTestAccess::setStreaming(drift);
         drift.enableTransmit(true);
         drift.setMox(true, tx.operation);
         constexpr int kPairs = 10;
@@ -1442,6 +1505,7 @@ int main(int argc, char** argv)
             TxTestAuthority tx;
             ScopedTxFifoLog log;
             MetisClient tune;
+            MetisClientTestAccess::setStreaming(tune);
             tune.enableTransmit(true);
             tune.setMox(true, tx.operation);
             const std::vector<std::complex<float>> ragged(kShort,
@@ -1459,6 +1523,7 @@ int main(int argc, char** argv)
             TxTestAuthority tx;
             ScopedTxFifoLog log;
             MetisClient unkey;
+            MetisClientTestAccess::setStreaming(unkey);
             unkey.enableTransmit(true);
             unkey.setMox(true, tx.operation);
             const std::vector<std::complex<float>> ragged(kShort,
@@ -1490,6 +1555,7 @@ int main(int argc, char** argv)
         // consume every keyed input with CW or a positive tone amplitude.
         TxTestAuthority tx;
         MetisClient nan;
+        MetisClientTestAccess::setStreaming(nan);
         nan.enableTransmit(true);
         nan.setMox(true, tx.operation);
         nan.setTxTestTone(0.0, std::numeric_limits<double>::quiet_NaN(), tx.operation);
@@ -1520,6 +1586,7 @@ int main(int argc, char** argv)
         // as well as short ones" (n <= where the code has n <).
         TxTestAuthority tx;
         MetisClient clean;
+        MetisClientTestAccess::setStreaming(clean);
         clean.enableTransmit(true);
         clean.setMox(true, tx.operation);
         const std::vector<std::complex<float>> exact(
@@ -1571,6 +1638,7 @@ int main(int argc, char** argv)
         // counters.
         TxTestAuthority tx;
         MetisClient partial;
+        MetisClientTestAccess::setStreaming(partial);
         partial.enableTransmit(true);
         partial.setMox(true, tx.operation);
         constexpr std::size_t kShort = 40;
@@ -1614,6 +1682,7 @@ int main(int argc, char** argv)
         // they must not alter a single byte of what the radio receives.
         TxTestAuthority tx;
         MetisClient starved;
+        MetisClientTestAccess::setStreaming(starved);
         starved.enableTransmit(true);
         starved.setMox(true, tx.operation);
         check(starved.txQueueDepth() == 0, "nothing queued");
@@ -1643,6 +1712,211 @@ int main(int argc, char** argv)
               "overflow counts exactly the samples dropped past the bound");
         check(over.txUnderflowPackets() == 0,
               "NEGATIVE CONTROL: overflowing the queue is not also an underflow");
+    }
+
+    // ---- A key must not survive a stop() and a restart of the stream ----
+    //
+    // stop() drops the latched key, so the next session streams unkeyed until a
+    // fresh setMox(true). start() is stood in for by marking the client
+    // streaming again: it binds a socket, and its body never writes m_mox.
+    {
+        TxTestAuthority tx;
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+        std::vector<bool> wire;   // C0 bit 0 of each EP2 frame the sender wrote
+        MetisClientTestAccess::writer(c, [&](const auto& packet) -> qint64 {
+            wire.push_back(anyFrameKeyed(packet));
+            return static_cast<qint64>(packet.size());
+        });
+        c.setMox(true, tx.operation);
+        MetisClientTestAccess::send(c);
+        check(!wire.empty() && wire.back(), "control: a live operation keys the EP2 stream");
+        c.stop();
+        MetisClientTestAccess::setStreaming(c);
+        wire.clear();
+        MetisClientTestAccess::send(c);
+        MetisClientTestAccess::send(c);
+        check(wire.size() == 2 && !wire[0] && !wire[1],
+              "no EP2 frame is keyed after stop() and a restart until a fresh operation keys");
+        (void)tx.coordinator.finishLocalIntent(tx.operation);
+        const auto fresh = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        c.setMox(true, fresh);
+        wire.clear();
+        MetisClientTestAccess::send(c);
+        check(wire.size() == 1 && wire[0], "a fresh operation keys again after the restart");
+    }
+
+    // ---- Silence: the link goes down, then the operation is reset ----
+    //
+    // Stage 2 of the silence watchdog reports linkDown and does not stop the EP2
+    // timer or clear the latched key, so EP2 frames keep carrying C0 bit 0 until
+    // the coordinator is reset. The reset below ends it at the very next packet.
+    {
+        TxTestAuthority tx;
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+        MetisClientTestAccess::markLinkUp(c);
+        std::vector<bool> wire;
+        MetisClientTestAccess::writer(c, [&](const auto& packet) -> qint64 {
+            wire.push_back(anyFrameKeyed(packet));
+            return static_cast<qint64>(packet.size());
+        });
+        c.setMox(true, tx.operation);
+        MetisClientTestAccess::send(c);
+        check(!wire.empty() && wire.back(), "control: keyed before the silence");
+        QThread::msleep(static_cast<unsigned long>(MetisClientTestAccess::silenceTimeoutMs() + 100));
+        MetisClientTestAccess::watchdogTick(c);
+        check(!MetisClientTestAccess::linkUp(c), "control: stage 2 declared the link down");
+        tx.coordinator.reset();
+        wire.clear();
+        MetisClientTestAccess::send(c);
+        check(wire.size() == 1 && !wire[0],
+              "after the silence path and a coordinator reset the next EP2 frame is unkeyed");
+    }
+
+    // ---- Refusal table: one row per state, each must leave no keyed frame ----
+    //
+    // Reachable at the client or the backend only. There is no receive-only mode,
+    // first-EP6 requirement or band/filter-validity check in either keying path
+    // (setMoxImpl tests the operation fence, the gate and a running session;
+    // Hl2Backend::applyKeying the fence and the gate), so those rows have nothing
+    // to refuse and are not written.
+    {
+        struct Row {
+            const char* name;
+            bool keyedFrame = false;
+            bool leftover = false;   // transmit state a refused key left behind
+        };
+        std::vector<Row> rows;
+
+        {   // transmit gate closed: key, CW key and CW PTT all refused
+            TxTestAuthority tx;
+            MetisClient c;
+            MetisClientTestAccess::setStreaming(c);
+            c.enableTransmit(false);
+            c.setMox(true, tx.operation);
+            c.setCwMox(true, tx.operation);
+            c.setCwKeyDown(true, tx.operation);
+            Row r{"gate closed"};
+            r.keyedFrame = anyFrameKeyed(c.buildNextControlPacket());
+            r.leftover = c.isKeyed() || c.cwModeActive() || c.cwKeyDown();
+            rows.push_back(r);
+        }
+        {   // gate closed AFTER a key, then reopened: the old request must be gone
+            TxTestAuthority tx;
+            MetisClient c;
+            MetisClientTestAccess::setStreaming(c);
+            c.enableTransmit(true);
+            c.setMox(true, tx.operation);
+            c.enableTransmit(false);
+            Row r{"gate closed while keyed, then reopened"};
+            const bool closedKeyed = anyFrameKeyed(c.buildNextControlPacket());
+            c.enableTransmit(true);
+            r.keyedFrame = closedKeyed || anyFrameKeyed(c.buildNextControlPacket());
+            r.leftover = c.isKeyed();
+            rows.push_back(r);
+        }
+        {   // session stopped: a key requested while not streaming, then streaming
+            TxTestAuthority tx;
+            MetisClient c;
+            c.enableTransmit(true);
+            c.setMox(true, tx.operation);
+            MetisClientTestAccess::setStreaming(c);
+            Row r{"key requested while the session is stopped"};
+            r.keyedFrame = anyFrameKeyed(c.buildNextControlPacket());
+            r.leftover = c.isKeyed();
+            rows.push_back(r);
+        }
+        {   // no operation at all, and a cancelled one
+            TxTestAuthority tx;
+            MetisClient c;
+            MetisClientTestAccess::setStreaming(c);
+            c.enableTransmit(true);
+            c.setMox(true, {});
+            (void)tx.coordinator.cancel(tx.actor, tx.operation);
+            c.setMox(true, tx.operation);
+            Row r{"no operation / cancelled operation"};
+            r.keyedFrame = anyFrameKeyed(c.buildNextControlPacket());
+            r.leftover = c.isKeyed();
+            rows.push_back(r);
+        }
+        {   // the backend's own gate, independent of the client's
+            TxTestAuthority tx;
+            Hl2Backend backend;
+            Hl2TxGateTestAccess::prepare(backend);
+            Hl2TxGateTestAccess::setTxAllowed(backend, false);
+            backend.setKeying(true, tx.operation, {});
+            Row r{"backend gate closed"};
+            r.keyedFrame = anyFrameKeyed(Hl2TxGateTestAccess::packet(backend));
+            bool keyed = false;
+            QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+                keyed = Hl2TxGateTestAccess::metis(backend)->isKeyed();
+            }, Qt::BlockingQueuedConnection);
+            r.leftover = keyed;
+            rows.push_back(r);
+        }
+
+        {   // the backend, with its gate open but no running session
+            TxTestAuthority tx;
+            Hl2Backend backend;
+            Hl2TxGateTestAccess::setTxAllowed(backend, true);
+            QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+                Hl2TxGateTestAccess::metis(backend)->enableTransmit(true);
+            }, Qt::BlockingQueuedConnection);
+            backend.setKeying(true, tx.operation, {});
+            Row r{"backend key while the session is stopped"};
+            r.keyedFrame = anyFrameKeyed(Hl2TxGateTestAccess::packet(backend));
+            bool keyed = false;
+            QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+                keyed = Hl2TxGateTestAccess::metis(backend)->isKeyed();
+            }, Qt::BlockingQueuedConnection);
+            r.leftover = keyed || Hl2TxGateTestAccess::backendKeyed(backend);
+            rows.push_back(r);
+        }
+
+        {   // TUNE on the backend with no running session: no tune state either
+            TxTestAuthority tx;
+            Hl2Backend backend;
+            Hl2TxGateTestAccess::setTxAllowed(backend, true);
+            QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+                Hl2TxGateTestAccess::metis(backend)->enableTransmit(true);
+            }, Qt::BlockingQueuedConnection);
+            backend.setTune(true, 10, tx.operation);
+            Row r{"backend TUNE while the session is stopped"};
+            r.keyedFrame = anyFrameKeyed(Hl2TxGateTestAccess::packet(backend));
+            r.leftover = Hl2TxGateTestAccess::backendKeyed(backend)
+                || Hl2TxGateTestAccess::backendTuning(backend);
+            rows.push_back(r);
+        }
+
+        for (const Row& r : rows) {
+            std::string what = std::string("refusal: ") + r.name + " -> no keyed EP2 frame";
+            check(!r.keyedFrame, what.c_str());
+            what = std::string("refusal: ") + r.name + " -> no transmit state left behind";
+            check(!r.leftover, what.c_str());
+        }
+    }
+
+    // ---- A held key is bounded by its actor's maximum operation time ----
+    //
+    // The bound lives in the actor's policy (maximumOperationMs, copied into the
+    // operation at acquire); the desktop actor registers 0 (unbounded), a
+    // granted client registers a positive one. MetisClient honours it through
+    // the same permitsDispatch() fence, so a held MOX ends by itself.
+    {
+        AetherSDR::TxCoordinator coordinator{[](const auto&, auto) {}};
+        const auto actor = coordinator.registerActor({true, 150});
+        const auto operation = coordinator.acquire(actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+        c.setMox(true, operation);
+        check(anyFrameKeyed(c.buildNextControlPacket()), "control: a bounded operation keys inside its bound");
+        QThread::msleep(400);
+        check(!anyFrameKeyed(c.buildNextControlPacket()),
+              "a held MOX stops keying once the actor's maximum operation time has passed");
     }
 
     if (g_failures == 0)
