@@ -36,6 +36,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -55,6 +56,15 @@ static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
 // shared object is better than two with separate enabled flags.
 
 namespace AetherSDR::hl2 {
+
+namespace {
+std::atomic<bool> g_hostOffersTransmit{true};
+}
+
+void Hl2Backend::setHostOffersTransmit(bool offers)
+{
+    g_hostOffersTransmit.store(offers);
+}
 
 // Declared incomplete in the header so it keeps its forward declarations of
 // MetisClient/Hl2RxDsp/Hl2TxDsp; the async connect is the only thing that needs
@@ -335,11 +345,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     const bool automationAllowsTx =
         qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
         || AutomationBridgeSettings::txAllowed();
-    m_txAllowed = !automation || automationAllowsTx;
+    m_txAllowed = g_hostOffersTransmit.load() && (!automation || automationAllowsTx);
     if (m_txAllowed) {
         m_metis->enableTransmit(true);
         qInfo() << "Hl2Backend: transmit available"
                 << (automation ? "(automation, ALLOW_TX)" : "(interactive)");
+    } else if (!g_hostOffersTransmit.load()) {
+        qInfo() << "Hl2Backend: receive only — this host has no HL2 transmit path";
     } else {
         qInfo() << "Hl2Backend: transmit BLOCKED — automation bridge active "
                    "without AETHER_AUTOMATION_ALLOW_TX";
@@ -565,6 +577,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_txDsp, &Hl2TxDsp::alcPeak, this, [this](float dbfs) {
         m_alcPeakDbfs = dbfs;
         emit meterUpdate(QStringLiteral("TX:ALC"), dbfs);
+    });
+    // Both sides of the TX passband, for the TX-filter-loss check (#6605).
+    // SC_FILT_2 last: MeterModel evaluates the pair when it arrives.
+    connect(m_txDsp, &Hl2TxDsp::filterLevels, this, [this](float in, float out) {
+        emit meterUpdate(QStringLiteral("TX:SC_FILT_1"), in);
+        emit meterUpdate(QStringLiteral("TX:SC_FILT_2"), out);
     });
         // The gain the ALC applies, a separate meter from TX:ALC (a level):
         // they move in opposite directions. Mirrored into m_alcGainDb for
@@ -8225,6 +8243,12 @@ void Hl2Backend::defineMeters()
     // on a full-scale block). sourceIndex 0 as for COMPPEAK: one transmitter.
     def(9, QStringLiteral("TX"),  QStringLiteral("ALCGAIN"), QStringLiteral("dB"),
         -20.0, 0.0,    QStringLiteral("Gain the ALC is applying"));
+    // Peaks either side of the TX passband (Hl2TxDsp::filterLevels): the names
+    // RadioModel's TX-filter-loss check reads (#4651). sourceIndex 0 as above.
+    def(10, QStringLiteral("TX"), QStringLiteral("SC_FILT_1"), QStringLiteral("dBFS"),
+        -140.0, 0.0,   QStringLiteral("Transmit audio after the ALC, into the modulator"));
+    def(11, QStringLiteral("TX"), QStringLiteral("SC_FILT_2"), QStringLiteral("dBFS"),
+        -140.0, 0.0,   QStringLiteral("Modulated transmit IQ, the modulator's output"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)

@@ -1142,6 +1142,45 @@ public:
     // A container's environment as the radio last reported it, or nullopt when no
     // container of that name is installed. Values may be secrets.
     std::optional<QMap<QString, QString>> waveformContainerEnvironment(const QString& name) const;
+    // The radio's NTP time sources as it last reported them, in arrival order
+    // (SmartSDR 4.3.16, capabilities().ntpSourceControl). Nothing is kept locally.
+    const QList<NtpSourceState>& ntpSources() const { return m_ntpSources; }
+    // Refused while an edit of the same id is in flight. With expectedSession,
+    // a different session answers Cancelled and sends nothing.
+    ReceiveDispatch requestNtpSource(const NtpSourceRequest& request,
+                                     QObject* replyContext = nullptr,
+                                     const RadioControlCompletion& completion = {},
+                                     std::optional<RadioControlSession> expectedSession = {});
+    // Edit a source. The radio has no update verb, so this removes it and creates
+    // it again with the same id (FlexLib Radio.cs ReplaceNtpSource): a disabled
+    // source is disabled again, and a refused create restores the original. The
+    // row stays in ntpSources() throughout and shows its pre-edit Enabled state.
+    // false = refused before anything was sent (invalid definition, unknown id,
+    // another session, or a replace of that id already in flight). The
+    // completion runs once unless replyContext is destroyed first.
+    struct NtpSourceReplaceResult {
+        enum class Outcome {
+            Replaced,    // the new definition is on the radio
+            Unchanged,   // the remove was refused; nothing changed
+            Restored,    // the new definition was refused; the original was re-created
+            Lost,        // removed, and neither definition could be created again
+            Cancelled,   // the session ended mid-replace; the radio's list is the truth
+            NoAnswer,    // a step timed out; the radio's list is the truth
+        };
+        Outcome outcome{Outcome::Unchanged};
+        QString message;
+    };
+    bool replaceNtpSource(const NtpSourceDefinition& definition, QObject* replyContext,
+                          std::function<void(const NtpSourceReplaceResult&)> completion,
+                          std::optional<RadioControlSession> expectedSession = {});
+    bool ntpSourceReplaceActive(const QString& id) const { return m_ntpReplacing.contains(id); }
+    // Enabled as the Time page shows it: the pre-edit state while an edit is in
+    // flight (FlexLib's enabled pin), otherwise what the radio reports.
+    bool ntpSourceEnabledShown(const NtpSourceState& source) const
+    {
+        const auto guard = m_ntpReplacing.constFind(source.id);
+        return guard != m_ntpReplacing.cend() ? guard->wasEnabled : source.enabled;
+    }
     void createMemory(const MemoryEntry& entry, QObject* replyContext,
                       const MemoryCreateCompletion& completion,
                       std::optional<RadioControlSession> expectedSession = {});
@@ -1250,6 +1289,8 @@ signals:
     void waveformContainersChanged(const QString& name);
     // waveformEnvironmentApplyActive() or waveformEnvironmentStagingUncertain() changed.
     void waveformEnvironmentStagingChanged();
+    // ntpSources() or a replace in flight changed.
+    void ntpSourcesChanged();
     void transmitFrequencyCheckChanged(bool on);
     // Straight-key-shaped local CW edges (serial key line, TCI `keyer:trx`,
     // MIDI/keyboard/HID), all via sendCwKey; drives the local sidetone
@@ -1970,6 +2011,7 @@ private:
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
     friend class WaveformEnvTestAccess;
+    friend class NtpSourcesTestAccess;
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
     friend class TransmitDaxHoldTestAccess;
@@ -2149,6 +2191,24 @@ private:
     void setWaveformEnvironmentStagingState(bool active, bool uncertain, const QString& serial);
     void autoClearWaveformEnvironmentStaging(bool connected, const RadioCapabilities& caps);
     int  m_waveformEnvConfirmTimeoutMs{60000};
+    QList<NtpSourceState> m_ntpSources;
+    // An edit in flight, by id. The row is kept through the radio's `removed`
+    // (removedSeen) until its re-create status arrives, as FlexLib does; the
+    // guard outlives the operation only while that status is still due.
+    struct NtpReplaceGuard {
+        bool wasEnabled{true};
+        bool operating{true};
+        bool removedSeen{false};
+    };
+    QHash<QString, NtpReplaceGuard> m_ntpReplacing;
+    std::optional<RadioControlSession> m_ntpSubscribedSession;
+    void applyNtpSourceChanges(const NtpSourceDelta& delta);
+    ReceiveDispatch dispatchNtpSource(const NtpSourceRequest& request, QObject* replyContext,
+                                      const RadioControlCompletion& completion,
+                                      std::optional<RadioControlSession> expectedSession);
+    void endNtpSourceReplace(const QString& id, NtpSourceReplaceResult::Outcome outcome);
+    // Subscribe once per session where the radio has NTP sources; clear otherwise.
+    void syncNtpSources(bool connected, const RadioCapabilities& caps);
     DStarModel          m_dstarModel{nullptr, true};
 
     // NetCW stream — VITA-49 UDP delivery for low-latency CW keying
