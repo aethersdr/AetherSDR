@@ -725,19 +725,6 @@ bool MainWindow::sendWanRadioClientDisconnects(const QString& serial,
     return true;
 }
 
-void MainWindow::refreshAdaptiveThrottleChip()
-{
-    if (!m_titleBar) return;
-    const bool enabled = AppSettings::instance()
-        .value("AdaptiveThrottleEnabled", "False").toString() == "True";
-    // Unticking the box doesn't lift a cap already in force:
-    // RadioModel::applyAdaptiveFrameRate() stops adjusting, so the cap stays
-    // until disconnect.  The chip stays with it, so the cap is never hidden.
-    m_titleBar->radioTabBar()->setAdaptiveThrottle(
-        enabled || m_adaptiveFpsCap > 0, m_adaptiveFpsCap,
-        m_adaptiveFpsCap > 0 ? QColor(adaptiveFpsCapColor(m_adaptiveFpsCap)) : QColor());
-}
-
 // Send each pan the FPS and waterfall rate captured in its SpectrumWidget
 // before the adaptive cap arrived. Live fps/line-duration status is held out
 // of the widgets while throttled, so these are the operator's values and the
@@ -2214,39 +2201,14 @@ MainWindow::MainWindow(QWidget* parent)
     // so the footer label and the diagnostics tooltip share one mapping and
     // never diverge (e.g. "Off" is neutral grey in both, not green here).
     connect(&m_radioModel, &RadioModel::networkQualityChanged,
-            this, [this](const QString& quality, int pingMs) {
-        const QString color = networkQualityColor(quality);
-        // The active radio tab's dot carries the same grade beside its AT chip
-        // ("Off" clears it).
-        if (m_titleBar) {
-            m_titleBar->radioTabBar()->setLinkQuality(
-                quality == QStringLiteral("Off") ? QColor() : QColor(color), quality);
-        }
-        // Append fps cap so users understand why moving the fps slider has no effect.
-        // Show "(restoring)" during the min-dwell hold so testers can distinguish
-        // stuck throttle from a deliberate stability wait.
-        const bool dwellPending = m_adaptiveFpsCap > 0 && m_radioModel.pendingThrottleLift();
-        const QString capSuffix = m_adaptiveFpsCap > 0
-            ? (dwellPending
-               ? QStringLiteral(" · %1 fps cap (restoring)").arg(m_adaptiveFpsCap)
-               : QStringLiteral(" · %1 fps cap").arg(m_adaptiveFpsCap))
-            : QString();
-        m_networkLabel->setText(QString("[<span style='color:%1'>%2</span>]")
-            .arg(color, quality + capSuffix));
-        Q_UNUSED(pingMs);
-        const QString tooltip = buildNetworkTooltip(m_radioModel,
-                                                     m_adaptiveFpsCap,
-                                                     dwellPending);
-        m_networkLabel->setToolTip(tooltip);
-        m_networkStatusBlock->setToolTip(tooltip);
-    });
+            this, &MainWindow::refreshNetworkQualityIndicators);
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &MainWindow::refreshNetworkQualityIndicators);
 
     connect(&m_radioModel, &RadioModel::adaptiveThrottleChanged,
             this, [this](bool active, int fpsCap) {
         m_adaptiveThrottleActive = active;
         m_adaptiveFpsCap = active ? fpsCap : 0;
-        if (m_titleBar)
-            m_titleBar->setThrottleFlashColor(active ? adaptiveFpsCapColor(fpsCap) : QString{});
         refreshAdaptiveThrottleChip();
         if (active) {
             m_adaptiveFpsCapsSent.insert(fpsCap);
@@ -2290,7 +2252,7 @@ MainWindow::MainWindow(QWidget* parent)
     // The AT chip follows the connect panel's checkbox, not just an engaged cap.
     connect(m_connPanel, &ConnectionPanel::adaptiveThrottleEnabledChanged,
             this, [this](bool) { refreshAdaptiveThrottleChip(); });
-    refreshAdaptiveThrottleChip();
+    refreshNetworkQualityIndicators();
 
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyVolts) {

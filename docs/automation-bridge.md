@@ -3244,7 +3244,7 @@ missed beats) and `radios.linkOverrideColor` (the colour speaking over the
 active tab's status dot: amber while discovering, red on loss, empty when the
 link is healthy) are the heartbeat as data — assert on these rather than on
 the dot's pixels. `radios.linkQuality` / `radios.linkQualityColor` are the
-network grade (empty when off or disconnected), which the session's dot shows
+network grade and resolved theme color (empty when off or disconnected), which the session's dot shows
 only while the AT chip does;
 `radios.adaptiveThrottle` (the throttle is armed for this client: ticked, or a
 cap still in force after it was unticked, which lasts until disconnect; it

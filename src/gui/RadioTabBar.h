@@ -87,9 +87,9 @@ public:
     void setBeatColor(const QColor& color); // throttle tint; invalid = dot colour
 
     // Network link quality, as the status bar grades it.  While the AT chip
-    // shows, a connected radio's dot takes the quality colour (the old lamp's
-    // cue); the label goes into the tooltip and accessible name so the colour
-    // is never the only carrier.  Invalid colour = plain status colour.
+    // shows, a connected radio's dot takes the quality colour. The tooltip
+    // and accessible description spell out the grade, so colour is never
+    // the only carrier. Invalid colour = plain status colour.
     void setLinkQuality(const QColor& color, const QString& label);
 
     // "AT" chip after the name while the adaptive frame-rate throttle is

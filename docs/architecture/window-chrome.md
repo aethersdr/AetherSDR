@@ -158,7 +158,8 @@ a different session starts. While the adaptive frame-rate throttle is
 enabled, an "AT" chip follows the session's connected tab name: it is outlined
 while armed and filled in `adaptiveFpsCapColor()` while a cap is in force.
 Only then, with the link healthy, does that tab colour its dot by network
-quality (`networkQualityColor()`, the status bar's mapping) and name the grade
+quality (`networkQualityColor()`, shared with the status bar through
+`color.networkQuality.*` theme tokens) and name the grade
 in its tooltip and accessible description, so a recoloured dot always comes
 with the chip; without AT the dot keeps the plain connected colour. The strip takes the bar's free width and scrolls
 only once that runs out; then a vertical mouse wheel scrolls it, and dragging

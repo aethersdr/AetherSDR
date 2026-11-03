@@ -107,7 +107,7 @@ public:
     void setMinimalMode(bool on);
     bool isMinimalMode() const { return m_minimalMode; }
     void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
-    // Set the flash color used while adaptive throttle is active (empty = restore green).
+    // Set the cap's heartbeat tint; empty uses the dot's own colour.
     // Ignored while the disconnected-alarm blink is running.
     void setThrottleFlashColor(const QString& hexColor);
 

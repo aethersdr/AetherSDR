@@ -320,7 +320,7 @@ QColor RadioTab::dotColor() const
 {
     // Link state speaks over the radio's own status: an operator who has lost
     // the link needs to see that before they need to see "connected".  A
-    // healthy connected link then shows its quality, as the old lamp did.
+    // healthy connected link then shows its quality beside the AT chip.
     if (m_overrideColor.isValid()) {
         return m_overrideColor;
     }
@@ -899,6 +899,12 @@ void RadioTabBar::applyLinkVisuals()
                              ours ? m_throttleCapColor : QColor(),
                              ours ? chipText : QString());
     }
+    // Chip and status text can change the preferred width outside rebuildTabs().
+    // Pulse ticks need no layout work unless that width actually changed.
+    if (m_tabHost && m_tabsLayout
+        && m_tabHost->width() != qMax(0, m_tabsLayout->sizeHint().width())) {
+        updateTabViewport(carrier);
+    }
 }
 
 RadioTab* RadioTabBar::linkCarrierTab() const
@@ -1074,8 +1080,8 @@ void RadioTabBar::applyActiveState()
     if (m_addButton) {
         m_addButton->setVisible(!m_compact);
     }
-    updateTabViewport(shown);
     applyLinkVisuals();
+    updateTabViewport(shown);
 }
 
 void RadioTabBar::setCompactMode(bool on)

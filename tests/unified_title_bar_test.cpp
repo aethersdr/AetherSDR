@@ -1074,11 +1074,15 @@ int main(int argc, char** argv)
                       "the tab widens to fit the AT chip");
                 check(sessionTab->toolTip().contains(QLatin1String("Adaptive throttle on")),
                       "the AT chip is spelled out");
+                const QImage armedChip = sessionTab->grab().toImage();
                 tabs->setAdaptiveThrottle(true, 8, QColor(QStringLiteral("#cc9900")));
                 check(sessionTab->toolTip().contains(QLatin1String("8 fps cap")),
                       "an engaged cap names its frame rate");
                 checkEqual(tabs->state().value(QStringLiteral("adaptiveFpsCap")).toInt(), 8,
                            "the cap is published to the bridge");
+
+                check(sessionTab->grab().toImage() != armedChip,
+                      "engaging a cap changes the painted chip");
 
                 // With no session (disconnected), no tab may keep the chip or
                 // the quality, even while the throttle is still armed.
@@ -1100,6 +1104,60 @@ int main(int argc, char** argv)
                 tabs->setLinkQuality(QColor(), QStringLiteral("Off"));
                 checkEqual(sessionTab->sizeHint().width(), plainWidth,
                            "the tab returns to its plain width");
+            }
+        }
+
+        // The scroll host has a fixed width; chip changes must resize the
+        // actual widgets, not only their preferred sizes.
+        {
+            RadioTabBar strip;
+            RadioTabEntry session;
+            session.id = QStringLiteral("CHIP-GEOMETRY");
+            session.name = QStringLiteral("Review radio with a deliberately long name");
+            session.status = RadioTabStatus::Connected;
+            strip.setRadios({session});
+            strip.setActiveRadio(session.id);
+            strip.resize(1000, 36);
+            strip.show();
+            app.processEvents();
+            RadioTab* tab = strip.findChild<RadioTab*>();
+            QWidget* tabHost = strip.findChild<QWidget*>(QStringLiteral("radioTabHost"));
+            check(tab && tabHost, "chip geometry has a tab and scroll host");
+            if (tab && tabHost) {
+                const int plainWidth = tab->sizeHint().width();
+                const auto checkWidth = [&](const char* message) {
+                    app.processEvents();
+                    checkEqual(tab->width(), tab->sizeHint().width(), message);
+                    checkEqual(tabHost->width(), tab->sizeHint().width(),
+                               "the scroll host fits its one tab");
+                };
+                strip.setAdaptiveThrottle(true, 0, QColor());
+                checkWidth("arming AT expands the actual tab");
+                check(tab->width() > plainWidth, "AT gets room without eliding the name");
+                strip.setAdaptiveThrottle(false, 0, QColor());
+                checkWidth("disabling AT shrinks the actual tab");
+                checkEqual(tab->width(), plainWidth, "AT off restores the plain width");
+                strip.setAdaptiveThrottle(true, 0, QColor());
+                checkWidth("arming AT again expands the actual tab");
+                strip.setActiveRadio(QString());
+                checkWidth("disconnect removes the chip's actual width");
+                strip.setActiveRadio(session.id);
+                checkWidth("reconnect restores the chip's actual width");
+                strip.resize(150, 36);
+                checkWidth("a narrow viewport preserves the tab's full width");
+                check(strip.state().value(QStringLiteral("overflowing")).toBool(),
+                      "a narrow strip scrolls rather than squeezing the chip");
+
+                strip.setAdaptiveThrottle(false, 0, QColor());
+                session.name = QStringLiteral("Rig");
+                session.model = QStringLiteral("AetherSDR Demo");
+                strip.setRadios({session});
+                checkWidth("a short name lets the status line determine width");
+                strip.setLinkIndicator(ThemeManager::instance().color(
+                    QStringLiteral("color.accent.danger")), true);
+                checkWidth("the link-loss status resizes the actual tab");
+                strip.setLinkIndicator(QColor(), false);
+                checkWidth("clearing the link alarm restores the actual width");
             }
         }
 
