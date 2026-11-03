@@ -22,6 +22,7 @@
 #include "PersistentDialog.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
+#include "RadioTabBar.h"
 #include "RfGainRestore.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with ConnectionPanel
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
@@ -86,6 +87,7 @@
 #include <QMessageBox>
 #include <QAbstractButton>
 #include <QCheckBox>
+#include <QColor>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QPointer>
@@ -96,6 +98,49 @@
 #include <cmath>
 
 namespace AetherSDR {
+
+void MainWindow::refreshAdaptiveThrottleChip()
+{
+    if (!m_titleBar) {
+        return;
+    }
+    const bool enabled = AppSettings::instance()
+        .value("AdaptiveThrottleEnabled", "False").toString() == "True";
+    // Unticking the box doesn't lift a cap already in force:
+    // RadioModel::applyAdaptiveFrameRate() stops adjusting, so the cap stays
+    // until disconnect.  The chip stays with it, so the cap is never hidden.
+    const QString capColor = m_adaptiveFpsCap > 0
+        ? adaptiveFpsCapColor(m_adaptiveFpsCap) : QString();
+    m_titleBar->radioTabBar()->setAdaptiveThrottle(
+        enabled || m_adaptiveFpsCap > 0, m_adaptiveFpsCap,
+        capColor.isEmpty() ? QColor() : QColor(capColor));
+    m_titleBar->setThrottleFlashColor(capColor);
+}
+
+void MainWindow::refreshNetworkQualityIndicators()
+{
+    if (!m_networkLabel || !m_networkStatusBlock) {
+        return;
+    }
+    const QString quality = m_radioModel.networkQuality();
+    const QString color = networkQualityColor(quality);
+    if (m_titleBar) {
+        m_titleBar->radioTabBar()->setLinkQuality(
+            quality == QStringLiteral("Off") ? QColor() : QColor(color), quality);
+    }
+    const bool dwellPending = m_adaptiveFpsCap > 0 && m_radioModel.pendingThrottleLift();
+    const QString capSuffix = m_adaptiveFpsCap > 0
+        ? (dwellPending
+           ? QStringLiteral(" · %1 fps cap (restoring)").arg(m_adaptiveFpsCap)
+           : QStringLiteral(" · %1 fps cap").arg(m_adaptiveFpsCap))
+        : QString();
+    m_networkLabel->setText(QString("[<span style='color:%1'>%2</span>]")
+        .arg(color, quality + capSuffix));
+    const QString tooltip = buildNetworkTooltip(m_radioModel, m_adaptiveFpsCap, dwellPending);
+    m_networkLabel->setToolTip(tooltip);
+    m_networkStatusBlock->setToolTip(tooltip);
+    refreshAdaptiveThrottleChip();
+}
 
 namespace {
 QString defaultPanLayoutForCount(int panCount)
