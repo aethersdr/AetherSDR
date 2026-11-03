@@ -617,6 +617,9 @@ void MetisClient::stop()
         m_socket = nullptr;
     }
     m_running = false;
+    // The key ends with the session: the next start() streams unkeyed until a
+    // fresh setMox(true).
+    m_mox = false;
     // Any silence recovery in flight ends with the session. The COUNTERS do
     // not: they live on m_link, which start() replaces and stop() leaves
     // standing, because a stop is not a reason to forget that a recovery
@@ -1279,9 +1282,11 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
         return;
     }
     const bool was = m_mox;
-    if (keyed && !m_txAllowed) {
+    if (keyed && (!m_txAllowed || !m_running)) {
         // Fail SAFE and stay refused. Not an error return: a caller that could
         // retry past a refusal is exactly what this gate exists to prevent.
+        // A stopped session refuses too: a key latched while not streaming
+        // would reach the wire with the first frame of the next start().
         keyed = false;
     }
     m_mox = keyed;
