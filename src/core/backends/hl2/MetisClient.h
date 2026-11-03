@@ -351,8 +351,9 @@ public:
     void enableTransmit(bool allowed) noexcept
     {
         m_txAllowed = allowed;
-        if (!allowed)
+        if (!allowed) {
             m_mox = false;
+        }
     }
     [[nodiscard]] bool transmitEnabled() const noexcept { return m_txAllowed; }
 
