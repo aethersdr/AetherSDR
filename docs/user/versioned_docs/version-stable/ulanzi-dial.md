@@ -46,6 +46,8 @@ Open **Settings → Controllers → Ulanzi Dial Mapping...** ("Ulanzi Dial — C
 - a **Last event** readout that names the last key or rotation the dial sent and the action it ran;
 - **Reset to Defaults**.
 
+Close it with **Close**, the corner ✕, Esc or Ctrl+W (⌘W on macOS).
+
 Mappings are saved with your settings and survive a restart; a mapping you clear stays cleared.
 
 ### Keys and knob press

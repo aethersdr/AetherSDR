@@ -18,6 +18,17 @@ namespace AetherSDR {
 // dialog offers "Configure…" only for a Docker waveform with this name.
 inline constexpr const char* kTailnetShimContainerName = "flex-tailnet-shim";
 
+// The same shim installed as a legacy waveform on a radio with no Waveform
+// Processor (tools/flex-tailnet-shim/native/AetherTailnet.cfg: Name).
+inline constexpr const char* kTailnetShimNativeName = "AetherTailnet";
+
+// True for an installed waveform that is the shim, in either package.
+inline bool isTailnetShimWaveform(const QString& name, bool isContainer)
+{
+    return isContainer ? name == QLatin1String(kTailnetShimContainerName)
+                       : name == QLatin1String(kTailnetShimNativeName);
+}
+
 // TCP port of the shim's provisioning API on the radio's LAN address
 // (tools/flex-tailnet-shim/api.go: ProvisionPort).
 inline constexpr quint16 kTailnetShimApiPort = 48992;
@@ -82,6 +93,15 @@ std::optional<TailnetShimLogin> parseLoginReply(const QByteArray& json);
 QString checkedAuthUrl(const QString& url);
 // Whether a container version signs in by QR code (0.5.0 and later).
 bool supportsQrSignIn(const QString& version);
+
+// The version this AetherSDR installs: the container's pin, or the legacy
+// waveform's on a radio without a Waveform Processor.
+QString pinnedVersion(bool native);
+
+// True when `installed` is an older release than `pinned`, comparing
+// major.minor.patch and ignoring a suffix such as "-native". False when
+// either can't be read, so an unknown version never offers an update.
+bool updateAvailable(const QString& installed, const QString& pinned);
 // Whether the Remote Access window should start the QR sign-in without being
 // asked: the radio belongs to no tailnet (never provisioned, or a QR sign-in
 // abandoned with its token or failed here), the container can, nothing is in

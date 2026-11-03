@@ -1,17 +1,18 @@
 #include "LpMeterConnection.h"
 #include "LogManager.h"
 
-#include <QDateTime>
-
 #include <cmath>
 
 namespace AetherSDR {
 
 namespace {
-// Link is up but the meter has gone quiet. Generous relative to the 100 ms
-// poll interval so a brief hiccup, or the handover as a foreign poller stops
-// and we take over, never trips it.
-constexpr int kDataTimeoutMs = 2000;
+// Link is up but the meter has gone quiet. Must exceed the longest silence the
+// poll gate itself allows -- riding along stops at kMaxQuietMs, then our own
+// poll needs a reply -- or the handover as a foreign poller stops trips it on
+// every cycle (#6794).
+constexpr int kDataTimeoutMs = static_cast<int>(LpMeter::PollGate::kMaxQuietMs) + 1000;
+static_assert(kDataTimeoutMs > LpMeter::PollGate::kMaxQuietMs + LpMeter::PollGate::kSoloPollIntervalMs,
+              "the data watchdog must outlast the poll gate's own longest silence");
 // Reconnect cadence, matching AcomConnection/SpeConnection: retry forever
 // until the meter returns or the operator disconnects.
 constexpr int kReconnectMs = 5000;
@@ -20,14 +21,15 @@ constexpr int kReconnectMs = 5000;
 constexpr int kGateSettleMs = 1500;
 }  // namespace
 
-qint64 LpMeterConnection::nowMs()
+qint64 LpMeterConnection::nowMs() const
 {
-    return QDateTime::currentMSecsSinceEpoch();
+    return m_clock.elapsed();
 }
 
 LpMeterConnection::LpMeterConnection(QObject* parent)
     : QObject(parent)
 {
+    m_clock.start();
     connect(&m_socket, &QTcpSocket::connected, this, &LpMeterConnection::onTransportUp);
     connect(&m_socket, &QTcpSocket::disconnected, this, &LpMeterConnection::onTransportDown);
     connect(&m_socket, &QTcpSocket::readyRead, this, &LpMeterConnection::onReadyRead);

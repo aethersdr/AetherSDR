@@ -1359,6 +1359,8 @@ void RadioModel::setupBackend(const QString& family)
     });
     connect(m_backend.get(), &IRadioBackend::profileChanged, this,
             [this](const ProfileDelta& delta) { applyProfileChanges(delta); });
+    connect(m_backend.get(), &IRadioBackend::ntpSourceChanged, this,
+            [this](const NtpSourceDelta& delta) { applyNtpSourceChanges(delta); });
 
     // The PanadapterStream connects below exist only on Flex and Sim; a backend
     // carrying its own IQ has no m_panStream. Each is guarded individually, not by an
@@ -2185,6 +2187,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
     qRegisterMetaType<GpsDelta>();
+    qRegisterMetaType<NtpSourceDelta>();
     qRegisterMetaType<MemoryDelta>();
 
     // Watch both sides of the TX filter so a cut that silences the transmit
@@ -2271,6 +2274,14 @@ RadioModel::RadioModel(QObject* parent)
         digitalVoiceDir + QStringLiteral("/dstar-traffic.json"));
     connect(&m_flexWaveformModel, &FlexWaveformModel::genericStatusReceived,
             &m_dstarModel, &DStarModel::handleWaveformStatus);
+    connect(this, &RadioModel::capabilitiesChanged,
+            this, &RadioModel::autoClearWaveformEnvironmentStaging);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::syncNtpSources);
+    connect(&m_flexWaveformModel, &FlexWaveformModel::environmentChanged,
+            this, &RadioModel::waveformContainersChanged);
+    connect(&m_flexWaveformModel, &FlexWaveformModel::waveformsChanged, this, [this] {
+        emit waveformContainersChanged({});
+    });
     connect(&m_dstarModel, &DStarModel::configurationChanged,
             this, &RadioModel::scheduleDStarRuntimeConfiguration);
     // A `transmit dax` release that landed while the carrier was up is
@@ -9714,6 +9725,13 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
         return;
     }
 
+    // Objects the Flex backend reads from the raw line itself (ntp_sources),
+    // from this session only.
+    if (m_flexBackend && gpsSessionGeneration == m_gpsSessionGeneration
+        && m_flexBackend->decodeRawStatus(body)) {
+        return;
+    }
+
     // GPS status: "gps lat=...#lon=...#grid=...#tracked=...#visible=...#status=..."
     if (body.startsWith("gps ")) {
         if (gpsSessionGeneration != m_gpsSessionGeneration) {
@@ -12317,6 +12335,10 @@ void RadioModel::onStatusReceived(const QString& object,
     }
     if (object == QLatin1String("waveform status")) {
         m_flexWaveformModel.handleGenericStatus(kvs);
+        return;
+    }
+    if (object == QLatin1String("waveform restarted")) {
+        m_flexWaveformModel.handleRestarted(kvs);
         return;
     }
 

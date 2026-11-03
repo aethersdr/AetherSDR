@@ -18,6 +18,8 @@ opens a browse panel (see [Memory browse panel](#memory-browse-panel)).
 
 *The Memory Channels window, listing the memories stored in the radio.*
 
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS); while the search box holds text, **Esc** clears it first. **View → Frameless Window** does not apply to it.
+
 ## Using memory channels
 
 ### Finding a memory
@@ -84,7 +86,7 @@ Sortable columns:
 | Owner | Callsign that created the memory |
 | Frequency | Frequency in MHz |
 | Name | User-assigned name (e.g. "K7ID Repeater") |
-| Mode | USB, LSB, CW, FM, etc. |
+| Mode | USB, LSB, CW, FM, etc.; FreeDV uses FDVU or FDVL, with FDV also available for existing memories |
 | Step | Tuning step in Hz |
 | Offset Dir | Up / Down / Simplex |
 | Repeater Offset | MHz |

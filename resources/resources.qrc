@@ -10,6 +10,11 @@
         <file alias="demo_voice.wav">demo_voice.wav</file>
         <file alias="dist.dx_community.json">dist.dx_community.json</file>
     </qresource>
+    <!-- The radio health agent (tools/radio-health), installed from the
+         Waveforms window; RadioHealthPackage pins its SHA-256. ~63 KB. -->
+    <qresource prefix="/waveforms">
+        <file alias="AetherHealth.ssdr_waveform">waveforms/AetherHealth.ssdr_waveform</file>
+    </qresource>
     <!-- CTR2 USB access rule, installed on demand from the CTR2 Proxy applet;
          the same file packaging installs, so the two cannot drift. -->
     <qresource prefix="/udev">

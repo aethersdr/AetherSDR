@@ -448,10 +448,11 @@ void testAutoStart(const QString& product)
     AetherSDR::Ctr2RelaySettings{}.save();
 }
 
-// Lynovation's firmware relays over USB from v1.02.00 on, so a CTR2-Max on
+// Lynovation's firmware relays over USB from v2.00.00 on, so a CTR2-Max on
 // it starts by itself like AetherCTR2; one that never answers the link (an
-// earlier version) gets the hint, which an answer or a stop clears. Other
-// stock CTR2 identities still have no USB mode.
+// earlier version) gets the hint, which an answer or a stop clears. So does
+// a CTR2-MIDI, whose firmware has the same HID reports from the version with
+// USB support. The M5Dial CTR2s have no USB mode yet.
 void testStockFirmwareOverUsb()
 {
     using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
@@ -461,6 +462,10 @@ void testStockFirmwareOverUsb()
                     QStringLiteral("000000000002")};
     check(stock.usbLink(), "a CTR2-Max on Lynovation's firmware relays over USB");
     check(!dial.usbLink(), "a stock M5Dial CTR2 has no USB mode");
+    const Info midi{QStringLiteral("midi"), 0x2886, 0x0056, {}, QStringLiteral("XIAO_ESP32S3"),
+                    QStringLiteral("000000000003")};
+    check(midi.usbLink() && midi.ctr2Model() == QLatin1String("CTR2-MIDI"),
+          "a CTR2-MIDI relays over USB");
 
     AetherSDR::Ctr2RelaySettings settings;
     settings.autoStart = true;
@@ -484,7 +489,7 @@ void testStockFirmwareOverUsb()
     check(model.noAnswerHint().isEmpty(), "no hint while the CTR2 may still answer");
     check(waitUntil([&] { return !model.noAnswerHint().isEmpty(); }, 2000),
           "a CTR2 that never answers gets the hint");
-    check(model.noAnswerHint().contains(QStringLiteral("v1.02.00"))
+    check(model.noAnswerHint().contains(QStringLiteral("v2.00.00"))
               && model.noAnswerHint().contains(QStringLiteral("Wi-Fi")),
           "the hint names the firmware needed and the Wi-Fi alternative");
     model.stop();

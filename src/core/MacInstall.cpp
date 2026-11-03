@@ -187,9 +187,16 @@ bool MacInstall::selfTest(const QString& tree, const QString& version)
         return false;
     }
     const QString marker = dir.filePath(QStringLiteral("selftest"));
+    // Nothing to start is a failed start, found without spawning: under
+    // ThreadSanitizer, QProcess::start of a missing program never returns.
+    const QString program = QDir(tree).filePath(kBinary);
+    if (!QFileInfo(program).isExecutable()) {
+        qCWarning(lcUpdater).noquote() << "self-test of v" + version + " could not be started";
+        return false;
+    }
     QProcess p;
     p.setProcessChannelMode(QProcess::ForwardedChannels);
-    p.start(QDir(tree).filePath(kBinary), {QStringLiteral("--update-selftest"), marker});
+    p.start(program, {QStringLiteral("--update-selftest"), marker});
     if (!p.waitForStarted(10000)) {
         qCWarning(lcUpdater).noquote() << "self-test of v" + version + " could not be started";
         return false;

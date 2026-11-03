@@ -1,16 +1,18 @@
 ---
 title: "Tailscale Remote Access"
 slug: "/tailscale-remote-access"
-description: "Operate a FLEX-8000 series or Aurora radio from anywhere: a small container installed inside the radio joins your private Tailscale network."
+description: "Operate a FlexRadio from anywhere: a small service installed inside the radio, as a container or a waveform, joins your private Tailscale network."
 ---
 
-Operate a FLEX-8000 series or Aurora radio from anywhere: a small container
-installed **inside the radio** joins your private Tailscale network. It works
+Operate a FlexRadio from anywhere: a small service installed **inside the
+radio** joins your private Tailscale network. FLEX-8000 series and Aurora
+radios run it as a container; FLEX-6000 series radios run it as a legacy
+waveform. It works
 behind carrier-grade NAT (CGNAT), Starlink, cellular home internet or any
 router whose ports you can't forward, and it needs no SmartLink account.
 The radio needs firmware **4.2.18 or later**.
 
-AetherSDR installs and sets up the container for you from the **Waveforms**
+AetherSDR installs and sets it up for you from the **Waveforms**
 window. After that you connect from anywhere with **Connect by IP**, as if the
 radio were on your desk.
 
@@ -31,7 +33,12 @@ radio were on your desk.
 > containers, on firmware **4.2.18 or later** (see
 > [Firmware Update](./firmware-update.md)). It was developed and measured
 > on a FLEX-8600 (firmware 4.2.20); the FLEX-8400 and Aurora have not been
-> tested yet. FLEX-6000 series radios can't run containers.
+> tested yet.
+>
+> **FLEX-6000 series** radios can't run containers, so they get the same
+> service as a legacy waveform instead (see
+> [On a FLEX-6000](#on-a-flex-6000)). It has run on a FLEX-6400; the
+> FLEX-6300 and 6700 passed the compatibility probe but haven't run it yet.
 
 ## What Tailscale is
 
@@ -64,7 +71,7 @@ Some things to know:
 |---|---|---|
 | Port forwarding at the station | Not needed; works behind CGNAT | Required (TCP 4994, UDP 4993) or UPnP |
 | Account | A **free** Tailscale Personal account | A FlexRadio SmartLink account |
-| Radios | FLEX-8000 series, Aurora, firmware 4.2.18 or later | All FlexRadio models with SmartLink |
+| Radios | FLEX-8000 series and Aurora (firmware 4.2.18 or later), FLEX-6000 series | All FlexRadio models with SmartLink |
 | Station accessories (Antenna Genius, PGXL, TGXL) | Reachable remotely | Not reachable |
 | What the remote computer needs | The Tailscale app | Nothing extra |
 
@@ -137,6 +144,28 @@ power-on.
 tagged `flex-tailnet-shim-v<version>`. Then use **Install... → Docker
 Waveform Image...** and pick that file.
 
+### On a FLEX-6000
+
+The same **Install... → Remote Access (Tailscale)** works. On a radio with no
+Waveform Processor, AetherSDR downloads the legacy waveform package instead
+(`AetherTailnet-<version>-native.ssdr_waveform`, about 9 MB), checks it the
+same way, and installs it. It appears in the installed list as
+**AetherTailnet**, marked **Legacy**, with a **Configure…** button.
+Everything after that, signing in, sharing station devices and connecting
+remotely, is the same as on a FLEX-8000.
+
+Things that differ on a FLEX-6000:
+
+- **Space.** The waveform needs about 9 MB on the radio's waveform storage.
+  A FLEX-6400 or 6700 has only 13–17 MB free there, so it may not fit
+  alongside other legacy waveforms. If the install fails for space,
+  uninstall a waveform you don't use and try again.
+- **One CPU core.** The radio's processor is shared with SmartSDR, so the
+  service runs at a lower priority and the radio always comes first.
+- **Without internet on the AetherSDR computer**, download the
+  `.ssdr_waveform` file from the same release and use **Install... → Legacy
+  Waveform (.ssdr_waveform)...**.
+
 The container can run alongside other waveform containers, such as FreeDV.
 AetherSDR has its own RADE digital voice, so it doesn't need the FreeDV
 container (see [RADE Digital Voice](./rade-digital-voice.md)).
@@ -173,7 +202,7 @@ When the status reads **On your tailnet**, the **Tailnet** card shows:
 | **TAILNET NAME** | The radio's name on your tailnet |
 | **TAILNET ADDRESS** | The `100.x.y.z` address to connect to. **Copy** puts it on the clipboard. |
 | **REMOTE SESSIONS** | Clients connected through the tailnet right now |
-| **CONTAINER VERSION** | The container's version |
+| **CONTAINER VERSION** | The container's version (**WAVEFORM VERSION** on a FLEX-6000) |
 | **SIGN-IN EXPIRES** | When the radio's sign-in runs out, or **Never** |
 
 Write the tailnet address down: it's what you connect to when you're away.
@@ -323,12 +352,19 @@ asking computer's own session.
   saved settings, it changes nothing and says so, and AetherSDR keeps the
   token.
 - **Reset** (shown instead of Disconnect when this computer doesn't hold the
-  admin token): removes the container and installs it again, after asking.
+  admin token): removes the container (on a FLEX-6000, uninstalls the
+  waveform) and installs it again, after asking.
   The radio leaves your tailnet; open **Remote Access** again and scan the
   new code. Delete the old entry from **Machines** in the admin console.
-- **Remove the container** from the **Waveforms** list to uninstall it. That
-  also wipes its tailnet state. Then delete the radio from **Machines** in the
+- **Remove the container** (on a FLEX-6000, **Uninstall** the
+  **AetherTailnet** waveform) from the **Waveforms** list. That also wipes
+  its tailnet state. Then delete the radio from **Machines** in the
   admin console.
+
+On a FLEX-6000, Reset and Uninstall rely on the radio deleting the
+waveform's saved state with its files, which hasn't been confirmed on a
+radio yet. If **Remote Access** still shows the radio on your tailnet after
+a Reset, please report it.
 
 Settings can only be changed **from the radio's local network**. The window
 shows **Unavailable** when AetherSDR is connected to the radio over the

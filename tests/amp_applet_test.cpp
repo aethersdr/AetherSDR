@@ -525,6 +525,41 @@ float gaugeValue(const AmpApplet& applet, const QString& accessibleName)
     return std::numeric_limits<float>::quiet_NaN();
 }
 
+// Expanded, the idle SWR bar draws the same flat track as PWR. A track painted
+// with the SWR scale reads as a pegged bar at rest.
+void testExpandedSwrTrackMatchesPower()
+{
+    resetSettings();
+    AmpApplet applet;
+    applet.setFloating(true);
+    HGauge* swr = gaugeNamed(applet, QStringLiteral("SWR"));
+    HGauge* pwr = gaugeNamed(applet, QStringLiteral("Forward power"));
+    if (!swr || !pwr) {
+        report("expanded SWR track matches PWR", false, QStringLiteral("gauge not found"));
+        return;
+    }
+    const QImage swrImg = swr->grab().toImage();
+    const QImage pwrImg = pwr->grab().toImage();
+    // Sample fractions of the laid-out width: QImage::pixel() returns 0 off
+    // the image, so a sample past the edge would match on both gauges.
+    bool same = swrImg.size() == pwrImg.size() && swrImg.width() >= 40;
+    QString detail = same ? QString()
+                          : QStringLiteral("size swr=%1x%2 pwr=%3x%4")
+                                .arg(swrImg.width()).arg(swrImg.height())
+                                .arg(pwrImg.width()).arg(pwrImg.height());
+    for (int x : {swrImg.width() / 10, swrImg.width() / 2, swrImg.width() * 9 / 10}) {
+        if (swrImg.size() != pwrImg.size()) break;
+        const QPoint at(x, swrImg.height() - 6);
+        if (swrImg.pixel(at) != pwrImg.pixel(at)) {
+            same = false;
+            detail += QStringLiteral(" x=%1 swr=%2 pwr=%3").arg(x)
+                          .arg(QColor(swrImg.pixel(at)).name(),
+                               QColor(pwrImg.pixel(at)).name());
+        }
+    }
+    report("expanded SWR track matches PWR", same, detail);
+}
+
 // The drive row shows the amplifier's measured exciter power. It is the other
 // half of the gain reading: PWR alone cannot say whether an amplifier that is
 // making little power is being driven with little power.
@@ -1061,6 +1096,7 @@ int main(int argc, char** argv)
     testPreferenceReload();
     testFanModePulldown();
     testReadoutWidthIsStable();
+    testExpandedSwrTrackMatchesPower();
     testDriveRowShowsMeasuredDrive();
     testRelayedMetersWinOverTheDeviceWhileFresh();
     testRadioVitalsWinOverTheDeviceWhileFresh();
