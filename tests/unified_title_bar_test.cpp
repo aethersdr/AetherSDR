@@ -254,6 +254,42 @@ int main(int argc, char** argv)
               "a point outside the window is not the caption");
     }
 
+    // ── WM_NCHITTEST answers for the point it carries, not the cursor (#6825) ──
+    {
+        // The message's coordinate is physical; isSystemMoveAreaAt() needs Qt's
+        // logical global space. Converting through the window's own two rects
+        // keeps whatever rounding the platform applied.
+        const QRect physical(200, 100, 2000, 1200);   // GetWindowRect
+        const QRect logical(100, 50, 1000, 600);      // QWidget::frameGeometry()
+
+        check(WindowChrome::logicalScreenPoint(physical.topLeft(), physical, logical)
+                  == logical.topLeft(),
+              "the window origin maps to the window origin");
+        check(WindowChrome::logicalScreenPoint(QPoint(1200, 700), physical, logical)
+                  == QPoint(600, 350),
+              "a point at DPR 2 halves its offset from the window origin");
+
+        // A fractional ratio (150% scaling) must not drift: 2000/1333 is not 2.
+        const QRect physical150(0, 0, 1333, 800);
+        const QRect logical150(0, 0, 889, 533);
+        const QPoint mid = WindowChrome::logicalScreenPoint(QPoint(666, 400),
+                                                            physical150, logical150);
+        check(mid.x() >= 443 && mid.x() <= 446 && mid.y() >= 265 && mid.y() <= 268,
+              "a non-integer scale maps the midpoint to the midpoint");
+
+        // Degenerate rects must not divide by zero.
+        check(WindowChrome::logicalScreenPoint(QPoint(7, 9), QRect(), logical) == QPoint(7, 9),
+              "an empty window rect returns the point unchanged");
+
+        // The whole point of the conversion: two different physical points in
+        // the same message stream map to two different logical points, so the
+        // caption test can distinguish them while the cursor sits elsewhere.
+        const QPoint a = WindowChrome::logicalScreenPoint(QPoint(400, 160), physical, logical);
+        const QPoint b = WindowChrome::logicalScreenPoint(QPoint(1800, 160), physical, logical);
+        check(a != b && a.y() == b.y(),
+              "two queried points stay distinct after conversion");
+    }
+
     // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──
     {
         // Rects measured on Windows 10: the expanded frame keeps an 8 px resize

@@ -92,14 +92,37 @@ inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags, const QOperatingSys
 // and top/bottom edges (0 while maximized).
 //
 // `Caption` is the title bar's own draggable background: the answer Windows
-// needs before it will offer drag-to-edge Snap and list the window in the Snap
-// Assist picker (#6825). Only the caller knows which points are the bar's empty
-// background rather than its tabs, menus and buttons, so this reports Caption
-// for the whole `captionHeight` strip and MainWindow::nativeEvent narrows it
-// with TitleBar::isSystemMoveAreaAt() — answering HTCAPTION over an interactive
-// widget is what made menus close as they opened (#6272). A `captionHeight` of
-// 0 disables it, which is how every non-main window keeps the old behaviour.
+// needs before it will offer drag-to-edge Snap (#6825). Only the caller knows
+// which points are the bar's empty background rather than its tabs, menus and
+// buttons, so this reports Caption for the whole `captionHeight` strip and
+// MainWindow::nativeEvent narrows it with TitleBar::isSystemMoveAreaAt() —
+// answering HTCAPTION over an interactive widget is what made menus close as
+// they opened (#6272). A `captionHeight` of 0 disables it, which is how every
+// non-main window keeps the old behaviour.
 enum class FrameHit { Client, Caption, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight };
+
+// WM_NCHITTEST carries the screen point being asked about in physical pixels,
+// while Qt's widget geometry — and so TitleBar::isSystemMoveAreaAt() — is in
+// logical ones. Converting through the window's own two rects keeps the
+// rounding the platform actually applied, rather than re-deriving it from a
+// device pixel ratio that may not divide evenly (#6825).
+//
+// `physical` and `windowPhysical` come from WM_NCHITTEST and GetWindowRect;
+// `windowLogical` is the same window as Qt sees it (QWidget::frameGeometry()).
+// The answer is the matching point in Qt's global logical space, so the
+// caption test asks about the point Windows asked about rather than wherever
+// the pointer happens to be.
+inline QPoint logicalScreenPoint(const QPoint& physical, const QRect& windowPhysical,
+                                 const QRect& windowLogical)
+{
+    if (windowPhysical.width() <= 0 || windowPhysical.height() <= 0) {
+        return physical;
+    }
+    const qreal sx = qreal(windowLogical.width()) / qreal(windowPhysical.width());
+    const qreal sy = qreal(windowLogical.height()) / qreal(windowPhysical.height());
+    return QPoint(windowLogical.left() + qRound((physical.x() - windowPhysical.left()) * sx),
+                  windowLogical.top() + qRound((physical.y() - windowPhysical.top()) * sy));
+}
 
 inline FrameHit expandedFrameHit(const QPoint& point, const QRect& window, int borderX, int borderY,
                                  int captionHeight = 0)

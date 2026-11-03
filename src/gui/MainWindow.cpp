@@ -3910,9 +3910,14 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         // menus and buttons that is what closed menus as they opened (#6272),
         // and isSystemMoveAreaAt() is the same test the bar's own drag uses, so
         // a point either starts a system move or stays client — never both.
+        //
+        // Ask about the point in the message, not QCursor::pos(): WM_NCHITTEST
+        // answers for the coordinate it carries, which WindowFromPoint() and
+        // the shell may query while the pointer is somewhere else entirely.
         int captionHeight = 0;
         if (m_titleBar && m_titleBar->isVisible()
-            && m_titleBar->isSystemMoveAreaAt(QCursor::pos())) {
+            && m_titleBar->isSystemMoveAreaAt(
+                WindowChrome::logicalScreenPoint(point, rect, frameGeometry()))) {
             captionHeight = int(m_titleBar->height() * devicePixelRatioF());
         }
         *result = frameHitCode(
