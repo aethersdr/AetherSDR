@@ -111,6 +111,8 @@ private slots:
     void onReadyRead();
 
 private:
+    friend class LpMeterConnectionClockTest;
+
     enum class Mode { None, Serial, Network };
 
     void onTransportUp();

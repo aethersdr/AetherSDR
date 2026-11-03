@@ -3028,12 +3028,53 @@ public:
         agc.agcThreshold = 72;  // 65 is the default: no change, no signal
         s0->applyChanges(agc);
         if (!sent.contains(QStringLiteral("agc_mode:0,fast;"))
-            || !sent.contains(QStringLiteral("agc_gain:0,72;"))) {
+            || !sent.contains(QStringLiteral("agc_gain:0,81;"))) {
             std::printf("      GUI AGC change was not broadcast\n");
             return false;
         }
-        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,72;"))) {
+        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,81;"))) {
             std::printf("      init burst misses agc_gain\n");
+            return false;
+        }
+
+        s0->setExternalReceiveAudioReplacementMute(true, false);
+        s0->setAgcThreshold(-90);
+        s0->setExternalReceiveAudioReplacementMute(false, false);
+        sent.clear();
+        protocol.handleCommand(QStringLiteral("agc_gain:0,-10"));
+        const bool speculative = !protocol.pendingNotification().isEmpty();
+        s0->setExternalReceiveAudioReplacementMute(true, false);
+        QCoreApplication::processEvents();
+        if (speculative || sent.count(QStringLiteral("agc_gain:0,-90;")) != 1
+            || sent.contains(QStringLiteral("agc_gain:0,-10;"))
+            || protocol.handleCommand(QStringLiteral("agc_gain:0"))
+                != QStringLiteral("agc_gain:0,-90;")) {
+            std::printf("      dropped AGC SET did not preserve observed-state notifications\n");
+            return false;
+        }
+
+        sent.clear();
+        protocol.handleCommand(QStringLiteral("agc_gain:0,-80"));
+        if (!protocol.pendingNotification().isEmpty()) {
+            std::printf("      Kiwi AGC SET announced before delivery\n");
+            return false;
+        }
+        QCoreApplication::processEvents();
+        if (sent.count(QStringLiteral("agc_gain:0,-80;")) != 1) {
+            std::printf("      applied Kiwi AGC SET was not relayed once\n");
+            return false;
+        }
+        sent.clear();
+        protocol.handleCommand(QStringLiteral("agc_gain:0,-80"));
+        QCoreApplication::processEvents();
+        spin(450);
+        if (sent.contains(QStringLiteral("agc_gain:0,-80;"))) {
+            std::printf("      unchanged Kiwi AGC or deferred seed was announced again\n");
+            return false;
+        }
+        s0->setExternalReceiveAudioReplacementMute(false, false);
+        if (sent.count(QStringLiteral("agc_gain:0,81;")) != 1) {
+            std::printf("      native AGC was not restored in the relay\n");
             return false;
         }
         return true;
@@ -3075,7 +3116,7 @@ public:
         server.wireSlice(s0->sliceId(), s0);
         const QStringList expected {
             QStringLiteral("rit_offset:0,120;"), QStringLiteral("xit_offset:0,-50;"),
-            QStringLiteral("agc_mode:0,fast;"), QStringLiteral("agc_gain:0,72;"),
+            QStringLiteral("agc_mode:0,fast;"), QStringLiteral("agc_gain:0,81;"),
         };
         for (const QString& m : expected) {
             if (sent.contains(m)) {

@@ -242,8 +242,10 @@ steady latency of any size classifies correctly. What the gate bounds is a
 number. At most `kMaxOutstandingPolls` (10) polls are held, so a stall followed
 by a burst of more than ten of our own replies is misclassified, and a poll the
 meter ignores (or a failed write) leaves one slot that is carried forward while
-we keep polling and can absorb one later foreign record. Both err toward
-polling more, never less. Once we stop polling, slots older than
+we keep polling and can absorb one later foreign record. An ignored poll or
+failed write delays confirming a foreign poller and causes extra polling; an
+oversized reply burst can briefly create a phantom poller and suppress our
+polls. Once we stop polling, slots older than
 `kReplyExpiryMs` (1 s) are dropped so they cannot hold back confirming a
 poller we are riding along with.
 

@@ -17,6 +17,7 @@
 #include <QMenu>
 #include <QActionGroup>
 #include <algorithm>
+#include <cmath>
 #endif
 
 namespace AetherSDR {
@@ -92,10 +93,13 @@ void TciApplet::buildUI()
 
         m_rxMeter[i] = new MeterSlider;
         m_rxMeter[i]->setAccessibleName(tr("TCI RX %1 gain").arg(i + 1));
+        m_rxMeter[i]->setAccessibleDescription(tr("Receive attenuation from 0 to 100 percent; meter shows output from -60 to 0 dBFS RMS"));
+        m_rxMeter[i]->setToolTip(tr("RX gain: 0-100% (100% is unity)\nMeter: -60 to 0 dBFS RMS"));
+        m_rxMeter[i]->setLogarithmicLevelEnabled(true);
         {
             auto key = QStringLiteral("TciRxGain%1").arg(i + 1);
             float saved = settings.value(key, "0.5").toString().toFloat();
-            m_rxMeter[i]->setGain(std::clamp(saved, 0.0f, 1.0f));
+            m_rxMeter[i]->setGain(std::isfinite(saved) ? std::clamp(saved, 0.0f, 1.0f) : 0.5f);
         }
         connect(m_rxMeter[i], &MeterSlider::gainChanged, this, [this, i](float g) {
             auto& ss = AppSettings::instance();
@@ -437,13 +441,8 @@ void TciApplet::setTciRxLevel(int channel, float rms)
     if (channel < 1 || channel > kChannels) {
         return;
     }
-    // Exponential smoothing: fast attack (α=0.4), slow decay (α=0.08)
-    static float smoothed[kChannels]{};
-    float& s = smoothed[channel - 1];
-    float alpha = (rms > s) ? 0.4f : 0.08f;
-    s = alpha * rms + (1.0f - alpha) * s;
     if (m_rxMeter[channel - 1]) {
-        m_rxMeter[channel - 1]->setLevel(std::clamp(s * 2.0f, 0.0f, 1.0f));
+        m_rxMeter[channel - 1]->setLevel(rms);
     }
 #else
     (void)channel;

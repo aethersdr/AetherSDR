@@ -2360,6 +2360,29 @@ add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
 set_tests_properties(callsign_lookup_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The CTR2 window (FirmwareInstallDialog): with only another kind of
+# controller selected it shows the relay alone, and its height follows the
+# CTR2-Max part as it hides and shows. Socket-free: device lists injected, no
+# HID device opened, catalogs pointed at a missing local file.
+add_executable(firmware_install_dialog_test
+    tests/firmware_install_dialog_test.cpp
+    src/gui/FirmwareInstallDialog.cpp
+    src/gui/Ctr2ProxyPanel.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(firmware_install_dialog_test PRIVATE src tests)
+target_link_libraries(firmware_install_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(firmware_install_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME firmware_install_dialog_test COMMAND firmware_install_dialog_test)
+set_tests_properties(firmware_install_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # MQTT Settings on CanonWindow: the fields' right-click menus keep a canon
 # panel. Socket-free; the dialog is never accepted, so no broker connection.
 add_executable(mqtt_settings_dialog_test
@@ -5297,6 +5320,13 @@ target_include_directories(lp100a_protocol_test PRIVATE src)
 target_link_libraries(lp100a_protocol_test PRIVATE Qt6::Core)
 add_test(NAME lp100a_protocol_test COMMAND lp100a_protocol_test)
 
+# Socket-free connection timing: QBuffer is the only active transport.
+add_executable(lp100a_clock_test tests/lp100a_clock_test.cpp)
+target_include_directories(lp100a_clock_test PRIVATE src tests)
+target_link_libraries(lp100a_clock_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME lp100a_clock_test COMMAND lp100a_clock_test)
+set_tests_properties(lp100a_clock_test PROPERTIES TIMEOUT 15)
+
 add_executable(spe_protocol_test
     tests/spe_protocol_test.cpp
     src/core/SpeProtocol.cpp
@@ -7109,6 +7139,13 @@ target_include_directories(cat_freedv_mode_tokens_test PRIVATE src tests)
 target_link_libraries(cat_freedv_mode_tokens_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME cat_freedv_mode_tokens_test COMMAND cat_freedv_mode_tokens_test)
 
+# TCI rx_volume in the spec form (trx,channel,dB). Injected stub backend,
+# TciProtocol fed command text. Socket-free, nothing keyed.
+add_executable(tci_rx_volume_test tests/tci_rx_volume_test.cpp)
+target_include_directories(tci_rx_volume_test PRIVATE src tests)
+target_link_libraries(tci_rx_volume_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME tci_rx_volume_test COMMAND tci_rx_volume_test)
+
 # #6142: a band-stack recall into DIGU/DIGL leaves the HL2's data-mode AGC
 # alone. A real, unconnected Hl2Backend behind RadioModel. Socket-free.
 add_executable(hl2_bandstack_digital_agc_test tests/hl2_bandstack_digital_agc_test.cpp)
@@ -7123,6 +7160,13 @@ add_executable(tci_sql_level_test tests/tci_sql_level_test.cpp)
 target_include_directories(tci_sql_level_test PRIVATE src tests)
 target_link_libraries(tci_sql_level_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
+
+# TCI agc_gain in dB (TCI 2.1 §AGC_GAIN): socket-free stub backend and
+# TciProtocol driven by command text. Nothing is bound, opened or keyed.
+add_executable(tci_agc_gain_test tests/tci_agc_gain_test.cpp)
+target_include_directories(tci_agc_gain_test PRIVATE src tests)
+target_link_libraries(tci_agc_gain_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME tci_agc_gain_test COMMAND tci_agc_gain_test)
 
 # #5774: socket-free rigctl `L RF` / `l RF`. An injected backend records the pan
 # RF gain it is handed; the pan is materialised through the seam's geometry
@@ -7734,6 +7778,25 @@ add_executable(cat_tune_policy_test tests/cat_tune_policy_test.cpp)
 target_include_directories(cat_tune_policy_test PRIVATE src)
 target_link_libraries(cat_tune_policy_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME cat_tune_policy_test COMMAND cat_tune_policy_test)
+
+add_executable(otrsp_protocol_test tests/otrsp_protocol_test.cpp)
+target_include_directories(otrsp_protocol_test PRIVATE src tests)
+target_link_libraries(otrsp_protocol_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME otrsp_protocol_test COMMAND otrsp_protocol_test)
+
+# Our CAT server is the subject: binds ephemeral TCP ports and, on Unix, a PTY.
+# No external radio or synthetic firmware peer is used.
+add_executable(otrsp_port_test tests/otrsp_port_test.cpp)
+target_include_directories(otrsp_port_test PRIVATE src tests)
+target_link_libraries(otrsp_port_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME otrsp_port_test COMMAND otrsp_port_test)
+set_tests_properties(otrsp_port_test PROPERTIES SKIP_RETURN_CODE 77)
+
+add_executable(otrsp_applet_test tests/otrsp_applet_test.cpp src/gui/CatControlApplet.cpp)
+target_include_directories(otrsp_applet_test PRIVATE src tests)
+target_link_libraries(otrsp_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME otrsp_applet_test COMMAND otrsp_applet_test)
+set_tests_properties(otrsp_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # RadioModel audio-mute model-state contract (#4771).
 add_executable(radiomodel_audio_mute_test tests/radiomodel_audio_mute_test.cpp)
@@ -10279,6 +10342,16 @@ if(NOT WIN32)
     set_tests_properties(dax_receive_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+if(TARGET Qt6::WebSockets)
+    add_executable(tci_rx_applet_test tests/tci_rx_applet_test.cpp
+        src/gui/TciApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
+        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp)
+    target_include_directories(tci_rx_applet_test PRIVATE src tests)
+    target_link_libraries(tci_rx_applet_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+    add_test(NAME tci_rx_applet_test COMMAND tci_rx_applet_test)
+    set_tests_properties(tci_rx_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 set(AETHER_SETTINGS_CONSUMERS
     update_controller_test
     update_installer_test
@@ -10286,6 +10359,9 @@ set(AETHER_SETTINGS_CONSUMERS
     ulanzi_dial_mapper_dialog_test
     mqtt_settings_dialog_test
     flex_readonly_metadata_test
+    otrsp_protocol_test
+    otrsp_port_test
+    otrsp_applet_test
     dsp_parameter_reset_test
     cw_rx_model_test
     asr_native_receiver_test
@@ -10296,8 +10372,10 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_directed_discovery_test
     reroute_dead_controls_test
     cat_freedv_mode_tokens_test
+    tci_rx_volume_test
     hl2_bandstack_digital_agc_test
     tci_sql_level_test
+    tci_agc_gain_test
     radio_model_client_state_test
     pan_control_routing_test
     squelch_level_scale_test
@@ -10308,6 +10386,7 @@ set(AETHER_SETTINGS_CONSUMERS
     noise_blanker_kind_model_test
     automation_nb2_capability_test
     tci_rx_audio_test
+    tci_rx_applet_test
     bandscope_trace_render_test
     decoder_audio_routing_test
     ax25_receive_model_test
