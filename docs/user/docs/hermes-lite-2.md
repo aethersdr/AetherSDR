@@ -78,6 +78,7 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 
 - **RF gain** is the HL2's LNA, −12 to +48 dB. It is remembered per band; a band you have not visited starts at +20 dB.
 - The dBm scale is derived from the LNA setting (full scale is +3 dBm at 0 dB LNA). It is not a calibrated measurement.
+- Dragging the dBm scale or clicking its strip adjusts the display locally without an unsupported-command notice. The automatic noise-floor adjustment remains available.
 - **Auto RF gain** adjusts the LNA from the measured wideband headroom, in 6 dB steps, across the full range. If it cannot arm, the reason appears on the checkbox and in a notice.
 - CAT `L RF` / `l RF` (rigctl) drive the panadapter RF gain across the same range; 0.5 is +18 dB.
 
