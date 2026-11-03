@@ -146,9 +146,10 @@ endif()
 # Build libaethercore as one shared library instead of a static archive. The
 # ~250 test executables that link the core each absorb a full static copy
 # (~200 MB in a Debug ASan build), which exhausts a hosted runner's disk;
-# shared, they average ~13 MB. For the sanitizer lane and local review builds,
-# never for releases: the shipped app links the core statically.
-option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer and review builds only)" OFF)
+# shared, they average ~13 MB. For the sanitizer lanes, the Linux CI and
+# full-suite builds, and local review builds; never for releases: the shipped
+# app links the core statically.
+option(AETHER_SHARED_CORE "Build libaethercore as a shared library (CI, sanitizer and review builds only)" OFF)
 if(AETHER_SHARED_CORE)
     if(WIN32)
         message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
@@ -1059,6 +1060,7 @@ set(CORE_SOURCES
     src/core/Ctr2UsbRelay.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
+    src/core/OtrspProtocol.cpp
     src/core/CatPort.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
@@ -1071,7 +1073,6 @@ set(CORE_SOURCES
     src/core/DxSpotLineParser.cpp
     src/core/GoClusterSettings.cpp
     src/core/WsjtxClient.cpp
-    src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
     src/core/EibiClient.cpp
     src/core/EibiCodeMaps.cpp

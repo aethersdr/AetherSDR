@@ -4635,6 +4635,22 @@ bool RadioModel::hasDaxStreams() const
     return backendCapabilities().hasDaxStreams;
 }
 
+bool RadioModel::transmitMonitorAvailable() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached: unchanged, as hasDaxStreams()
+    }
+    return backendCapabilities().txMonitorControl.has_value();
+}
+
+bool RadioModel::voxAvailable() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;
+    }
+    return backendCapabilities().voxControl.has_value();
+}
+
 // The single fan-out point for "what this radio says it can do".
 //
 // Everything capability-driven — model-side flags pushed into TransmitModel, and
@@ -6495,6 +6511,14 @@ bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
     const QPointer<PanadapterModel> pan(panadapter(panId));
     if (!pan || (!hasCenter && !hasBandwidth)) { return false; }
     if (hasCenter) {
+        // Bound optimistic geometry to the declared range. Confirmed backends
+        // retain their own request validation and report the accepted geometry.
+        if (const auto range = backendCapabilities().receivePanCenterControl;
+            !confirmsReceiveControls() && range
+            && range->authority != SliceFrequencyControl::Authority::Unknown
+            && range->maximumHz >= range->minimumHz) {
+            centerMhz = std::clamp(centerMhz, range->minimumHz / 1.0e6, range->maximumHz / 1.0e6);
+        }
         centerMhz = std::max(centerMhz, (hasBandwidth ? bandwidthMhz : pan->bandwidthMhz()) / 2.0);
     }
     PanGeometryRequest geometry;
@@ -12158,11 +12182,9 @@ void RadioModel::onStatusReceived(const QString& object,
             int idx = sm.captured(1).toInt();
             if (kvs.isEmpty() && object.contains("removed")) {
                 m_spotModel.removeSpot(idx);
-            } else if (kvs.isEmpty() && object.contains("triggered")) {
-                // Parse pan= from the object string if present
-                static const QRegularExpression panRe2(R"(pan=(0x[0-9A-Fa-f]+))");
-                const auto pm = panRe2.match(object);
-                emit m_spotModel.spotTriggered(idx, pm.hasMatch() ? pm.captured(1) : QString());
+            } else if (object.contains("triggered")) {
+                // CommandParser separates pan= from the event's object text.
+                emit m_spotModel.spotTriggered(idx, kvs.value("pan"));
             } else {
                 m_spotModel.applySpotStatus(idx, kvs);
             }

@@ -133,20 +133,28 @@ QString networkTooltipRow(const QString& label, const QString& value)
 
 QString networkQualityColor(const QString& quality)
 {
-    if (quality == QStringLiteral("Excellent")
-            || quality == QStringLiteral("Very Good")) {
-        return QStringLiteral("#00cc66");
+    QString token = QStringLiteral("color.networkQuality.off");
+    if (quality == QStringLiteral("Excellent") || quality == QStringLiteral("Very Good")) {
+        token = QStringLiteral("color.networkQuality.excellent");
+    } else if (quality == QStringLiteral("Good")) {
+        token = QStringLiteral("color.networkQuality.good");
+    } else if (quality == QStringLiteral("Fair")) {
+        token = QStringLiteral("color.networkQuality.fair");
+    } else if (quality == QStringLiteral("Poor")) {
+        token = QStringLiteral("color.networkQuality.poor");
     }
-    if (quality == QStringLiteral("Fair")) {
-        return QStringLiteral("#cc9900");
+    return ThemeManager::instance().color(token).name();
+}
+
+QString adaptiveFpsCapColor(int fpsCap)
+{
+    if (fpsCap <= 4) {
+        return networkQualityColor(QStringLiteral("Poor"));
     }
-    if (quality == QStringLiteral("Poor")) {
-        return QStringLiteral("#cc3333");
+    if (fpsCap <= 8) {
+        return networkQualityColor(QStringLiteral("Fair"));
     }
-    if (quality == QStringLiteral("Good")) {
-        return QStringLiteral("#00b4d8");
-    }
-    return QStringLiteral("#8aa8c0"); // Off / unknown
+    return networkQualityColor(QStringLiteral("Good"));
 }
 
 QString buildNetworkTooltip(const RadioModel& model,

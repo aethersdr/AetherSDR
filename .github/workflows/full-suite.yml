@@ -104,6 +104,7 @@ jobs:
           # -g1 to match ci.yml's build job, whose ccache this restores; the
           # reason is there.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
+            -DAETHER_SHARED_CORE=ON \
             "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
             "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG" \
             -DAETHER_GPU_SPECTRUM=ON \

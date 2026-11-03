@@ -112,7 +112,8 @@ applied without a record because `SliceDelta` carries no field for it.
 
 Flex and ordinary TX-enabled HL2 still lack the normalized idle readback needed
 by this daemon path, so their declarations do **not** make those methods live.
-Explicitly TX-disabled HL2 can qualify. Icom is not offered by the daemon's
+aetherd constructs the HL2 TX-disabled (no HL2 TX grant exists), so in the
+daemon it qualifies. Icom is not offered by the daemon's
 catalogue. Optional RTL builds and hardware paths require their own validation;
 Demo evidence is not RF or hardware certification. Flex filter limits are grounded
 in FlexLib 4.2.18 `Slice.cs` (`FilterLow`/`FilterHigh`); in-process mode/filter
