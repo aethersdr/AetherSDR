@@ -9939,7 +9939,6 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
-    phone_mon_vox_availability_test
     update_controller_test
     update_installer_test
     update_stager_test
@@ -10015,6 +10014,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_capacity_declaration_test
     extension_namespace_gate_test
     control_availability_registry_test
+    phone_mon_vox_availability_test
     dax_iq_rate_limits_test
     offline_health_registry_test
     tx_operation_integration_test
