@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import time
 
@@ -10,6 +11,30 @@ import time
 def available_bytes():
     stats = os.statvfs(".")
     return stats.f_bavail * stats.f_frsize
+
+
+def build_file_sizes():
+    """Final allocated/logical bytes, counting each regular-file inode once."""
+    groups = {}
+    seen = set()
+    for path in Path("build").rglob("*"):
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        inode = (info.st_dev, info.st_ino)
+        if not stat.S_ISREG(info.st_mode) or inode in seen:
+            continue
+        seen.add(inode)
+        category = {".o": "objects", ".a": "static_archives"}.get(path.suffix)
+        if category is None:
+            category = "executables" if info.st_mode & 0o111 else "other"
+        totals = groups.setdefault(category, {"files": 0, "logical_bytes": 0,
+                                              "allocated_bytes": 0})
+        totals["files"] += 1
+        totals["logical_bytes"] += info.st_size
+        totals["allocated_bytes"] += info.st_blocks * 512
+    return groups
 
 
 def main():
@@ -45,6 +70,10 @@ def main():
             print(f"Could not save disk metrics: {error}", flush=True)
         subprocess.run(["df", "-B1", "."], check=False)
         subprocess.run(["du", "-sh", "build", "/ccache"], check=False)
+        try:
+            print("CI_FINAL_BUILD_FILES " + json.dumps(build_file_sizes()), flush=True)
+        except OSError as error:
+            print(f"Could not inventory final build files: {error}", flush=True)
     return status
 
 

@@ -52,10 +52,12 @@ jobs:
         - /usr/share/dotnet:/host-unused/dotnet
         - /opt/ghc:/host-unused/ghc
         - /opt/hostedtoolcache/CodeQL:/host-unused/codeql
-    timeout-minutes: 90
+    # A cold hosted build measured 78 minutes; leave room for the full serial suite.
+    timeout-minutes: 120
     env:
       CCACHE_DIR: /ccache
       CCACHE_MAXSIZE: 2000M
+      CCACHE_LOGFILE: /tmp/aether-ci-ccache.log
 
     steps:
       - name: Free runner disk
@@ -137,6 +139,7 @@ jobs:
             build/ci-disk-metrics.json
             build/.ninja_log
             build/ci-stripped-test-executables.txt
+            /tmp/aether-ci-ccache.log
           if-no-files-found: ignore
 
       - name: Verify test stripping and app debug lines

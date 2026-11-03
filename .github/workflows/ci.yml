@@ -168,6 +168,7 @@ jobs:
       # See "Compiler-cache strategy" at the bottom of this file for why only
       # main writes an entry, and cache-cleanup.yml for what prunes the rest.
       CCACHE_MAXSIZE: 1500M
+      CCACHE_LOGFILE: /tmp/aether-ci-ccache.log
 
     steps:
       - name: Free runner disk
@@ -319,6 +320,7 @@ jobs:
             build/ci-disk-metrics.json
             build/.ninja_log
             build/ci-stripped-test-executables.txt
+            /tmp/aether-ci-ccache.log
           if-no-files-found: ignore
 
       - name: Verify test stripping and app debug lines
