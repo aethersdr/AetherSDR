@@ -36,6 +36,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -55,6 +56,15 @@ static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
 // shared object is better than two with separate enabled flags.
 
 namespace AetherSDR::hl2 {
+
+namespace {
+std::atomic<bool> g_hostOffersTransmit{true};
+}
+
+void Hl2Backend::setHostOffersTransmit(bool offers)
+{
+    g_hostOffersTransmit.store(offers);
+}
 
 // Declared incomplete in the header so it keeps its forward declarations of
 // MetisClient/Hl2RxDsp/Hl2TxDsp; the async connect is the only thing that needs
@@ -329,11 +339,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     const bool automationAllowsTx =
         qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
         || AutomationBridgeSettings::txAllowed();
-    m_txAllowed = !automation || automationAllowsTx;
+    m_txAllowed = g_hostOffersTransmit.load() && (!automation || automationAllowsTx);
     if (m_txAllowed) {
         m_metis->enableTransmit(true);
         qInfo() << "Hl2Backend: transmit available"
                 << (automation ? "(automation, ALLOW_TX)" : "(interactive)");
+    } else if (!g_hostOffersTransmit.load()) {
+        qInfo() << "Hl2Backend: receive only — this host has no HL2 transmit path";
     } else {
         qInfo() << "Hl2Backend: transmit BLOCKED — automation bridge active "
                    "without AETHER_AUTOMATION_ALLOW_TX";
