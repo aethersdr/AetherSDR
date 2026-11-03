@@ -2241,7 +2241,7 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     menu.addSeparator();
     // Name what is stored, in operating terms. A remembered arrangement the
     // operator cannot see is the difference between a feature and a haunting.
-    auto panWord = [this](int pan) {
+    auto panWord = [](int pan) {
         if (pan <= 33) return tr("left");
         if (pan >= 67) return tr("right");
         return tr("centre");

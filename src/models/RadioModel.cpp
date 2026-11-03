@@ -3360,7 +3360,7 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
     }
 
     if (!inhibited) {
-        const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId) > 0;
+        const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId);
         const bool hadRestoreSlice =
             m_panTransmitInhibitedTxSlices.contains(trimmedPanId);
         const InhibitedTxSelection restore = hadRestoreSlice

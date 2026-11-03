@@ -214,7 +214,7 @@ void rightClickMenuIsOpaque()
     Fixture f(QStringLiteral("4.3.16.42034"));
     TxBandDialog dialog(&f.radio);
     dialog.show();
-    QTest::qWaitForWindowExposed(&dialog);
+    check(QTest::qWaitForWindowExposed(&dialog), "the TX band dialog is exposed");
     const QList<QLineEdit*> edits = dialog.findChildren<QLineEdit*>();
     check(!edits.isEmpty(), "the table exposes a power field");
     if (edits.isEmpty()) {

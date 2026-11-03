@@ -33,7 +33,6 @@ void updateNativeTitleVisibility(QWidget* window)
     if (expanded && !native.toolbar) {
         auto* toolbar = [[AetherSDRTitleToolbar alloc] initWithIdentifier:@"AetherSDR.UnifiedTitleBar"];
         toolbar.previousStyle = native.toolbarStyle;
-        toolbar.showsBaselineSeparator = NO;
         toolbar.allowsUserCustomization = NO;
         native.toolbarStyle = NSWindowToolbarStyleUnified;
         native.toolbar = toolbar;

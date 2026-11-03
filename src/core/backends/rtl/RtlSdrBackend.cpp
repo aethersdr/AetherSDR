@@ -2019,7 +2019,7 @@ void RtlSdrBackend::drainAudio()
     const QPointer<RtlSdrWorker> worker(m_worker.get());
     RtlReceivePipeline::RfObservation rf;
     while (worker && worker.data() == m_worker.get() && worker->takeRfObservation(rf)) {
-        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
         if (!m_receiveMetersEnabled || !acceptsFrame(rf.token.session, rf.token.revision) || !rf.producedMs
             || rf.producedMs > now || now - rf.producedMs > 500) { continue; }
         for (int id = 0; id < 8; ++id) {
