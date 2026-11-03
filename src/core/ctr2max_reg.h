@@ -3,7 +3,8 @@
 // The stock firmware keeps its files in a LittleFS volume in the "spiffs"
 // partition (0x310000, 0xE0000 bytes, 4096-byte blocks). Registering writes
 // Reg.txt there; an unregistered unit has none. Since CTR2-Max firmware
-// v1.02.00m it holds a 64-digit hash of the owner's call (65 bytes with its
+// v2.00.00, the first public release to write it (the v1.02.00m test builds
+// did too), it holds a 64-digit hash of the owner's call (65 bytes with its
 // line ending), and the firmware rewrites an earlier plain-text call that way
 // when it starts. Lynovation counts a unit as properly registered when Reg.txt
 // is longer than CTR2MAX_REG_MIN_SIZE bytes, and so do we.
