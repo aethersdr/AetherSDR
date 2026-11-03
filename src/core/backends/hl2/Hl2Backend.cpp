@@ -36,6 +36,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -55,6 +56,15 @@ static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
 // shared object is better than two with separate enabled flags.
 
 namespace AetherSDR::hl2 {
+
+namespace {
+std::atomic<bool> g_hostOffersTransmit{true};
+}
+
+void Hl2Backend::setHostOffersTransmit(bool offers)
+{
+    g_hostOffersTransmit.store(offers);
+}
 
 // Declared incomplete in the header so it keeps its forward declarations of
 // MetisClient/Hl2RxDsp/Hl2TxDsp; the async connect is the only thing that needs
@@ -246,6 +256,12 @@ constexpr double kTuningMaxHz = 38'400'000.0;
     return hz >= kTuningMinHz && hz <= kTuningMaxHz;
 }
 
+// Where a pan centre request lands: inside that range, at its nearest edge.
+[[nodiscard]] double tunablePanCenterHz(double hz) noexcept
+{
+    return std::clamp(hz, kTuningMinHz, kTuningMaxHz);
+}
+
 // A remembered passband is kept only as a sane pair inside the 12 kHz audio
 // ceiling; a CW pair must also contain the carrier (pre-#4914 pairs do not).
 [[nodiscard]] bool restorablePassband(double lowHz, double highHz, bool cw) noexcept
@@ -329,11 +345,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     const bool automationAllowsTx =
         qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
         || AutomationBridgeSettings::txAllowed();
-    m_txAllowed = !automation || automationAllowsTx;
+    m_txAllowed = g_hostOffersTransmit.load() && (!automation || automationAllowsTx);
     if (m_txAllowed) {
         m_metis->enableTransmit(true);
         qInfo() << "Hl2Backend: transmit available"
                 << (automation ? "(automation, ALLOW_TX)" : "(interactive)");
+    } else if (!g_hostOffersTransmit.load()) {
+        qInfo() << "Hl2Backend: receive only — this host has no HL2 transmit path";
     } else {
         qInfo() << "Hl2Backend: transmit BLOCKED — automation bridge active "
                    "without AETHER_AUTOMATION_ALLOW_TX";
@@ -1937,10 +1955,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     amplitude.clientPersistsDbmRange = true;
     c.panAmplitude = amplitude;
 
-    // radioOwnsDbmScale is not declared: this radio cannot be commanded a dBm
-    // range, so it would be false, but declaring that is its own change.
-    // binsAbsolute already keeps noiseFloorAutoAdjustAllowed() open (bench run
-    // d101: the loop settles, 0.307 dB in 74 s quiescent).
+    // No dBm range can be commanded or echoed, so a scale drag stays local
+    // instead of dispatching a request this backend refuses. binsAbsolute keeps
+    // noiseFloorAutoAdjustAllowed() open (bench run d101: the loop settles).
+    c.radioOwnsDbmScale = false;
     // Tuning range: the AD9866 samples at 76.8 MHz, so the first Nyquist zone is
     // DC to 38.4 MHz; below 100 kHz the input transformer rolls off.
     c.tuningMinHz = kTuningMinHz;
@@ -1985,7 +2003,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
-                                                      100'000, 38'400'000};
+        static_cast<qint64>(kTuningMinHz), static_cast<qint64>(kTuningMaxHz)};
     c.receivePanBandwidthControl = std::nullopt; // radio-wide rate can retire other receivers
     // Power class for every forward-power gauge, via the band-table seam
     // (RadioModel::refreshTxPowerLimit; TxApplet scales from a non-empty
@@ -3868,8 +3886,11 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     // Moving the window means moving the DDC. The slice does NOT move with it —
     // that is the point of keeping the two separate — so its offset from the new
     // centre is recomputed and re-applied as a shift.
-    if (hz <= 0.0)
+    if (!std::isfinite(hz) || hz <= 0.0)
         return;
+    // Outside receivePanCenterControl the window stops at the edge, as an Icom
+    // pan drag does (nearestSupportedFrequency); the echo below reports it.
+    hz = tunablePanCenterHz(hz);
     const int ddc = ddcForPan(panId);
     Receiver* r = rx(ddc);
     if (!r)

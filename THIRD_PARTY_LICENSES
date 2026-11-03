@@ -376,10 +376,13 @@ Pre-built binaries at third_party/fftw3/ (Windows only; Linux uses system pkg)
 13. TCI Protocol Specification — Transceiver Control Interface
 ---------------------------------------------------------------
 The TCI server (src/core/TciProtocol.cpp, TciServer.cpp) implements the
-TCI v2.0 protocol specification published by Expert Electronics. The binary
+TCI 2.1 protocol specification published by Expert Electronics. The binary
 audio frame header follows the spec's Stream struct definition. No code was
 copied from ExpertSDR3; this is an independent implementation of the published
-protocol.
+protocol. An unmodified copy of the specification, "TCI Protocol 2.1.pdf"
+(sha256 e60833985619ca6a1c7b5c4c48bdbff59e694924589c238d06557e011e18c074,
+upstream commit 6cbccdd7004858152b4b5b463f9b087432d81a21), is kept with its
+MIT license at docs/specs/tci/.
 
   Copyright (c) 2021 Expert Electronics (EE)
   License: MIT
