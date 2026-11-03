@@ -308,7 +308,8 @@ jobs:
 
       - name: Build
         run: |
-          python3 tools/ci_linux_build.py
+          # Python locale coercion changes ccache keys inherited by the compiler.
+          PYTHONCOERCECLOCALE=0 python3 tools/ci_linux_build.py
 
       - name: Upload Linux disk evidence
         if: always()

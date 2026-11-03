@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Configure real CMake targets to test CI strip scope, defaults and exclusions."""
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -83,6 +84,29 @@ class TestCiDebugPolicy(unittest.TestCase):
 
 
 class TestDiskFailureReporting(unittest.TestCase):
+    def test_workflow_build_invocation_preserves_shell_locale(self):
+        # ccache hashes LC_CTYPE. Exercise the actual workflow invocation in a
+        # clean C environment, including an explicitly selected locale.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tools").mkdir()
+            (root / "tools/ci_linux_build.py").write_text(
+                'import os\nprint(os.environ.get("LC_CTYPE", "UNSET"))\n')
+            for workflow in ("ci.yml", "full-suite.yml"):
+                text = (ROOT / ".github/workflows" / workflow).read_text()
+                command = next(line.strip() for line in text.splitlines()
+                               if line.strip().endswith("python3 tools/ci_linux_build.py"))
+                for selected in (None, "C"):
+                    env = dict(os.environ, LANG="C")
+                    for name in ("LC_ALL", "LC_CTYPE", "LC_MESSAGES", "PYTHONCOERCECLOCALE"):
+                        env.pop(name, None)
+                    if selected is not None:
+                        env["LC_CTYPE"] = selected
+                    with self.subTest(workflow=workflow, locale=selected):
+                        result = subprocess.check_output(["sh", "-c", command],
+                                                         cwd=root, env=env, text=True)
+                        self.assertEqual(result.strip(), selected or "UNSET")
+
     def test_full_disk_still_reports_metrics_and_build_failure(self):
         child = MagicMock()
         child.wait.return_value = 7
