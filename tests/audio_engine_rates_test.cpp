@@ -690,11 +690,20 @@ void queueBudgetsAndDeviceTransitions()
         producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo});
         feed(fixture.engine, producer, tone(producerRate, producerRate / 4));
         AudioEngineRatesTestAccess::drain(fixture.engine, 0);
-        check(AudioEngineRatesTestAccess::rawBytes(fixture.engine)
-                  == producerRate / 10 * kFrameBytes,
-              "raw queue cap uses producer duration at either producer rate");
-        check(fixture.engine.receivePresentationAudioQueues().flexRawBufferMs == 100,
-              "raw queue diagnostics report producer milliseconds");
+        const qsizetype rawFrames =
+            AudioEngineRatesTestAccess::rawBytes(fixture.engine) / kFrameBytes;
+        const qsizetype outputFrames =
+            AudioEngineRatesTestAccess::outputBytes(fixture.engine) / kFrameBytes;
+        const qsizetype queuedProducerFrames = rawFrames
+            + (outputFrames * producerRate + fixture.deviceRate - 1) / fixture.deviceRate;
+        check(queuedProducerFrames <= producerRate / 10
+                  && queuedProducerFrames >= producerRate * 94 / 1000,
+              "combined queue cap uses producer duration and retains the bounded tail");
+        const AudioEngine::ReceivePresentationAudioQueues queues =
+            fixture.engine.receivePresentationAudioQueues();
+        check(std::abs(queues.flexRawBufferMs + queues.flexOutputBufferMs
+                  - queuedProducerFrames * 1000 / producerRate) <= 1,
+              "combined queue diagnostics report each rate domain in milliseconds");
         fixture.engine.setRxBufferCapMs(1000);
         fixture.engine.setReceivePresentationDelays(100, 0);
         feed(fixture.engine, producer, tone(producerRate, producerRate / 5, producerRate / 4));
