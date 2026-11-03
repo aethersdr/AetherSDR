@@ -35,7 +35,12 @@ changes live outside it:
 - `port/` implements the narrow Windows compatibility surface WDSP uses on
   Unix: threads, mutexes, semaphores/events, atomic operations, aligned
   allocation, exports, diagnostics, and flush-to-zero SIMD state.
+  Its private `malloc.h` shim supplies the standard allocation declarations
+  and counted aligned allocator for `nnrbypass.c` on Unix, including macOS,
+  whose SDK does not provide `<malloc.h>`. Windows uses the native CRT header.
 - `include/aether_wdsp.h` is the only C API AetherSDR code may include.
+  `port/wdsp_port.c` checks its NNR declarations against upstream's `nnr.h`
+  during compilation; the constructor takes its geometry from model metadata.
 - `CMakeLists.txt` builds a position-independent static archive, suppresses
   warnings only for vendored code, and force-includes `port/include/wdsp_port.h`
   on non-Windows targets. That last part is load-bearing: `extrapolate.c`,

@@ -47,6 +47,11 @@ reports exactly this snapshot's version. A refresh therefore fails loudly at the
 first channel open rather than drifting, and updating that constant is part of
 the refresh.
 
+Standalone NNR uses 2.11's eight-argument `create_nnr` API: network rate,
+transform size, hop and lookahead come from each model's metadata. The port
+compiles the private facade together with upstream's NNR declarations so an
+incompatible signature fails the build before it can reach `NnrFilter`.
+
 The source snapshot's local changes are documented in
 `third_party/wdsp/AETHERSDR-PATCHES.md`; refreshes must either find the
 changes upstream or reapply and retest them explicitly.
