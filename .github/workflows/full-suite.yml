@@ -60,7 +60,7 @@ jobs:
         run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Compare compiler inputs and representative links
-        run: python3 tools/ci_link_probe.py
+        run: PYTHONCOERCECLOCALE=0 python3 tools/ci_link_probe.py
       - name: Upload probe evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
