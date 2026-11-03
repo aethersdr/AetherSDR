@@ -39,7 +39,9 @@ When the operating system adds or removes an audio device, an **Audio Device Det
 
 ### Audio Buffer
 
-**Audio Buffer** sets how much received audio AetherSDR holds before playing it. The default is **100 ms**, adjustable from 50 to 1000 ms. Increase it if audio stutters over a VPN or SmartLink link with a lot of jitter; lower values reduce latency on a clean LAN. The **Audio Health** page in **Tools → Network Diagnostics...** shows the buffer level live. See [Runtime Monitor](./runtime-monitor.md).
+**Audio Buffer** limits the backlog of received audio waiting for PC playback. It does not make playback wait for the buffer to fill. The default is **100 ms**, adjustable from 50 to 1000 ms. Increase it if audio stutters over a VPN or SmartLink link with a lot of jitter; lower values reduce latency on a clean LAN. The **Audio Health** page in **Tools → Network Diagnostics...** shows the buffer level live. See [Runtime Monitor](./runtime-monitor.md).
+
+When the main RX backlog exceeds the limit, AetherSDR drops the oldest speaker-ready audio while keeping client DSP history continuous. A long interruption can still cause an audible gap; raising the buffer allows more jitter at the cost of additional queued audio.
 
 ## Volume and mute
 

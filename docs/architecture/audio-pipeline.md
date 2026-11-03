@@ -204,8 +204,12 @@ RADE decoded speech is logically mono duplicated to stereo before that point.
   drain-side and enqueue-side bounds.
 - Trimming occurs on both drain and producer paths. `drainRxAudio()` trims
   normal, legacy KiwiSDR, and external Kiwi receive queues, plus RADE speech
-  separately. `processRxAudioData()` trims the NR2 packet queue or the raw
-  main/Kiwi buffer, depending on the path. `queueLegacyKiwiAudioData()` and
+  separately. For the main RX source, `trimMainRxBuffers()` advances overflow
+  input through the existing NR, client strip and output resamplers before
+  dropping oldest speaker-ready output. Received samples are never spliced
+  out ahead of those stateful processors. `processRxAudioData()` uses the same
+  combined raw/output bound on enqueue. Legacy and external Kiwi paths retain
+  their independent queue limits. `queueLegacyKiwiAudioData()` and
   `queueKiwiAudioData()` also enforce producer-side limits, and
   `setReceivePresentationDelays()` trims queued audio when delays decrease.
   Producer-side caps also bound backlog when the speaker drain is stopped.

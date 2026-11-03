@@ -1,6 +1,7 @@
 // RFC #5468 A2: drive the production RX queue/DSP/mixer with a memory-backed
 // output device. No QAudioSink, socket peer, radio connection, or RF is used.
 #include "TestSettingsProfile.h"
+#include "RxOverflowCapture.h"
 #include "core/AudioEngine.h"
 #include "core/AudioFormatNegotiator.h"
 #include "core/ClientComp.h"
@@ -772,6 +773,115 @@ bool enableEffect(AudioEngine& engine, Effect effect)
     return false;
 }
 
+// Replay genuine contiguous input with and without delayed device draining.
+// Post-DSP samples must match even when the speaker backlog has to be dropped.
+void overflowPreservesDspHistory()
+{
+    const QByteArray capturedPcm = qUncompress(QByteArray::fromBase64(kRxOverflowCapture));
+    check(capturedPcm.size() == 24 * 128 * kFrameBytes, "captured packet fixture decodes");
+    for (Effect effect : {Effect::None, Effect::Eq, Effect::Nr2}) {
+        for (int deviceRate : {24000, 44100, 48000}) {
+            const auto render = [&](bool burst) {
+                Fixture fixture(deviceRate);
+                fixture.engine.setRxBufferCapMs(100);
+                PcmProducer producer;
+                producer.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+                // Establish the typed producer before enabling its processing state.
+                feed(fixture.engine, producer, QVector<float>(256, 0.0f));
+                fixture.finish();
+                check(enableEffect(fixture.engine, effect), "overflow effect enables");
+                // Let the EQ's intentional per-block parameter ramp settle before
+                // comparing histories under different drain block partitions.
+                for (int packet = 0; packet < 64; ++packet) {
+                    feed(fixture.engine, producer, QVector<float>(256, 0.0f));
+                    fixture.finish();
+                }
+                const qsizetype beforePlayback = fixture.output.size();
+                fixture.capture();
+                for (int repeat = 0; repeat < 4; ++repeat) {
+                    for (int packet = 0; packet < 24; ++packet) {
+                        QVector<float> samples(256);
+                        std::memcpy(samples.data(), capturedPcm.constData()
+                            + packet * 128 * kFrameBytes, 128 * kFrameBytes);
+                        feed(fixture.engine, producer, std::move(samples));
+                        if (!burst) {
+                            fixture.finish();
+                        }
+                        const qsizetype queued = AudioEngineRatesTestAccess::rawBytes(fixture.engine)
+                            + AudioEngineRatesTestAccess::outputBytes(fixture.engine) * 24000 / deviceRate;
+                        check(queued <= 2400 * kFrameBytes,
+                              "combined raw and speaker-ready backlog stays within 100 ms");
+                    }
+                    if (burst) {
+                        fixture.finish();
+                    }
+                }
+                fixture.finish();
+                const QByteArray processed = fixture.captured(QStringLiteral("post"));
+                check(finite(fixture.output.data()), "overflow speaker output is finite stereo");
+                if (burst) {
+                    check(fixture.output.size() - beforePlayback
+                              < 4 * capturedPcm.size() * deviceRate / 24000,
+                          "overflow discards speaker backlog instead of growing latency");
+                }
+                return processed;
+            };
+            const QByteArray contiguous = render(false);
+            const QByteArray burst = render(true);
+            double maxDifference = 0.0;
+            if (burst.size() == contiguous.size()) {
+                const auto* expected = reinterpret_cast<const float*>(contiguous.constData());
+                const auto* actual = reinterpret_cast<const float*>(burst.constData());
+                for (qsizetype sample = 0; sample < burst.size() / sizeof(float); ++sample) {
+                    maxDifference = std::max(maxDifference,
+                        std::fabs(static_cast<double>(expected[sample]) - actual[sample]));
+                }
+            }
+            std::printf("overflow effect=%s device=%d expectedBytes=%lld actualBytes=%lld maxDifference=%g\n",
+                effectName(effect), deviceRate, static_cast<long long>(contiguous.size()),
+                static_cast<long long>(burst.size()), maxDifference);
+            // FFTW/SRC block partitions can differ by a few float rounding bits.
+            check(!contiguous.isEmpty() && burst.size() == contiguous.size()
+                      && maxDifference <= 1.0e-7,
+                  "overflow advances every captured sample through unchanged DSP history");
+        }
+    }
+    Fixture stalled(48000);
+    stalled.engine.setRxBufferCapMs(100);
+    PcmProducer producer;
+    producer.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+    feed(stalled.engine, producer, QVector<float>(256, 0.0f));
+    stalled.finish();
+    check(enableEffect(stalled.engine, Effect::Nr2), "stalled-sink NR2 enables");
+    stalled.capture();
+    constexpr int kPackets = 4096;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    qint64 maxFeedNs = 0;
+    for (int packet = 0; packet < kPackets; ++packet) {
+        QVector<float> samples(256);
+        std::memcpy(samples.data(), capturedPcm.constData()
+            + packet % 24 * 128 * kFrameBytes, 128 * kFrameBytes);
+        const qint64 before = elapsed.nsecsElapsed();
+        feed(stalled.engine, producer, std::move(samples));
+        maxFeedNs = std::max(maxFeedNs, elapsed.nsecsElapsed() - before);
+        if (packet % 100 == 0) {
+            AudioEngineRatesTestAccess::drain(stalled.engine, 0);
+        }
+        check(AudioEngineRatesTestAccess::rawBytes(stalled.engine)
+                  + AudioEngineRatesTestAccess::outputBytes(stalled.engine) / 2
+                      <= 2400 * kFrameBytes,
+              "long stalled sink cannot accumulate an unbounded raw or output backlog");
+    }
+    std::printf("overflow stalled_packets=%d virtual_ms=%g elapsed_ms=%lld max_feed_us=%g\n",
+        kPackets, kPackets * 128.0 / 24.0, static_cast<long long>(elapsed.elapsed()),
+        maxFeedNs / 1000.0);
+    stalled.finish();
+    check(stalled.captured(QStringLiteral("post")).size() == kPackets * 256 * kFrameBytes,
+          "long stalled sink processes each received sample once without losing DSP history");
+
+}
+
 struct Rendered {
     bool enabled = false;
     QByteArray main;
@@ -1108,7 +1218,7 @@ void printUsage(const char* program)
         "transitionsAndRejection|queueBudgetsAndDeviceTransitions|concurrentSourcesAndEffects|"
         "effects-bypass|effects-EQ|effects-NR2|effects-RN2|effects-NR4|"
         "effects-DFNR|effects-MNR|kiwiDeviceRateMatrix|processingStateReset|"
-        "legacyReplacementAndKiwiReset|fixedProcessingDomains]\n", program);
+        "legacyReplacementAndKiwiReset|fixedProcessingDomains|overflowPreservesDspHistory]\n", program);
 }
 
 std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
@@ -1143,6 +1253,7 @@ std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
              AudioCase{"processingStateReset", std::nullopt},
              AudioCase{"legacyReplacementAndKiwiReset", std::nullopt},
              AudioCase{"fixedProcessingDomains", std::nullopt},
+             AudioCase{"overflowPreservesDspHistory", std::nullopt},
          }) {
         if (std::strcmp(name, candidate.name) == 0) {
             return candidate;
@@ -1213,6 +1324,9 @@ int main(int argc, char** argv)
         runStage("legacyReplacementAndKiwiReset", legacyReplacementAndKiwiReset);
     }
     if (selected("fixedProcessingDomains")) { runStage("fixedProcessingDomains", fixedProcessingDomains); }
+    if (selected("overflowPreservesDspHistory")) {
+        runStage("overflowPreservesDspHistory", overflowPreservesDspHistory);
+    }
     std::printf("AudioEngine rates: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

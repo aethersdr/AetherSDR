@@ -971,6 +971,7 @@ private:
                               ExternalRxAudioSourceState* externalSource = nullptr);
     void processRxAudioData(const QByteArray& pcm, bool emitTncTap,
                             RxAudioBuffer targetBuffer = RxAudioBuffer::Main);
+    void trimMainRxBuffers(qsizetype targetRawBytes);
     void processMixedRxAudioData(const QByteArray& pcm,
                                  RxDspSource source = RxDspSource::Main,
                                  ExternalRxAudioSourceState* externalSource = nullptr);

@@ -910,10 +910,7 @@ void AudioEngine::setReceivePresentationDelays(
                    || !source.outputBuffer.isEmpty();
         };
     if (flexDelay < previousFlex) {
-        trimReceivePresentationBuffers(
-            m_rxBuffer, m_rxPackets, m_rxOutputBuffer, outputRate,
-            audioBytesForMsAtRate(m_rxProducerRate.load(), flexDelay),
-            m_rxProducerRate.load());
+        trimMainRxBuffers(audioBytesForMsAtRate(m_rxProducerRate.load(), flexDelay));
     }
     if (legacyKiwiDelay < previousKiwi) {
         const qsizetype targetBytes =
@@ -2083,10 +2080,7 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
     const qsizetype outputMaxBufBytes =
         sampleRate * 2 * static_cast<qsizetype>(sizeof(float))
         * effectiveBufMs / 1000;
-    trimReceivePresentationBuffers(
-        m_rxBuffer, m_rxPackets, m_rxOutputBuffer, sampleRate,
-        audioBytesForMsAtRate(m_rxProducerRate.load(), effectiveBufMs),
-        m_rxProducerRate.load());
+    trimMainRxBuffers(audioBytesForMsAtRate(m_rxProducerRate.load(), effectiveBufMs));
     trimReceivePresentationBuffers(
         m_kiwiSdrRxBuffer, m_kiwiSdrRxPackets, m_kiwiSdrOutputBuffer,
         sampleRate, sourceMaxBufBytes);
@@ -5581,7 +5575,7 @@ void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
         && m_nr2Enabled.load(std::memory_order_relaxed)) {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
         m_rxPackets.push_back(alignedPcm);
-        trimAudioPacketQueue(m_rxPackets, cap);
+        trimMainRxBuffers(cap);
         updateRxBufferStats();
         return;
     }
@@ -5590,10 +5584,49 @@ void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
         targetBuffer == RxAudioBuffer::KiwiSdr ? m_kiwiSdrRxBuffer
                                                : m_rxBuffer;
     target.append(alignedPcm);
-    if (target.size() > cap) {
+    if (targetBuffer == RxAudioBuffer::Main) {
+        trimMainRxBuffers(cap);
+    } else if (target.size() > cap) {
         dropAudioBufferFront(target, target.size() - cap, producerRate);
     }
     updateRxBufferStats();
+}
+
+void AudioEngine::trimMainRxBuffers(qsizetype targetRawBytes)
+{
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    const int producerRate = m_rxProducerRate.load();
+    const int outputRate = m_rxOutputRate.load();
+    targetRawBytes = alignedStereoFloatBytes(targetRawBytes);
+    constexpr qsizetype kFrameBytes = 2 * static_cast<qsizetype>(sizeof(float));
+    const auto excessBytes = [&]() {
+        const qsizetype outputFrames = m_rxOutputBuffer.size() / kFrameBytes;
+        const qsizetype outputRawFrames =
+            (outputFrames * producerRate + outputRate - 1) / outputRate;
+        return alignedStereoFloatBytes(m_rxBuffer.size())
+            + queuedAudioBytes(m_rxPackets)
+            + outputRawFrames * kFrameBytes - targetRawBytes;
+    };
+    for (qsizetype excess = excessBytes(); excess > 0; excess = excessBytes()) {
+        if (!m_rxOutputBuffer.isEmpty()) {
+            const qsizetype outputFrames =
+                (excess / kFrameBytes * outputRate + producerRate - 1) / producerRate;
+            dropAudioBufferFront(m_rxOutputBuffer, outputFrames * kFrameBytes, outputRate);
+        } else if (!m_rxPackets.empty()) {
+            // Queue overflow is not missing input. Advance NR/strip/SRC history
+            // with the received samples, then trim only speaker-ready output.
+            QByteArray packet = std::move(m_rxPackets.front());
+            m_rxPackets.pop_front();
+            processMixedRxAudioData(packet, RxDspSource::Main);
+        } else if (!m_rxBuffer.isEmpty()) {
+            const qsizetype bytes = std::min(excess, alignedStereoFloatBytes(m_rxBuffer.size()));
+            const QByteArray pcm = m_rxBuffer.left(bytes);
+            m_rxBuffer.remove(0, bytes);
+            processMixedRxAudioData(pcm, RxDspSource::Main);
+        } else {
+            break;
+        }
+    }
 }
 
 void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
