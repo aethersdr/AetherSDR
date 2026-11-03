@@ -1,8 +1,6 @@
 #include "LpMeterConnection.h"
 #include "LogManager.h"
 
-#include <QDateTime>
-
 #include <cmath>
 
 namespace AetherSDR {
@@ -23,14 +21,15 @@ constexpr int kReconnectMs = 5000;
 constexpr int kGateSettleMs = 1500;
 }  // namespace
 
-qint64 LpMeterConnection::nowMs()
+qint64 LpMeterConnection::nowMs() const
 {
-    return QDateTime::currentMSecsSinceEpoch();
+    return m_clock.elapsed();
 }
 
 LpMeterConnection::LpMeterConnection(QObject* parent)
     : QObject(parent)
 {
+    m_clock.start();
     connect(&m_socket, &QTcpSocket::connected, this, &LpMeterConnection::onTransportUp);
     connect(&m_socket, &QTcpSocket::disconnected, this, &LpMeterConnection::onTransportDown);
     connect(&m_socket, &QTcpSocket::readyRead, this, &LpMeterConnection::onReadyRead);

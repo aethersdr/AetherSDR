@@ -214,6 +214,10 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 | RF-KIT Amplifier | HTTP (REST/JSON) | 8080 |
 | LP-100A Meter | Serial (115200 8N1) or a ser2net host in raw mode | 2000 |
 
+Changing the computer's clock does not delay LP-100A polling, gauge-range
+changes or no-data warnings. These timers follow elapsed time, so a clock
+correction does not require reconnecting the meter.
+
 ### Settings
 
 The TGXL, PGXL, Antenna Genius and ShackSwitch addresses keep their own keys
