@@ -9939,6 +9939,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    phone_mon_vox_availability_test
     update_controller_test
     update_installer_test
     update_stager_test

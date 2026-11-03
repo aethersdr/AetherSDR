@@ -114,6 +114,10 @@ void PhoneApplet::setVoxAvailable(bool available)
     const QString reason = tr("Unavailable: this radio has no voice-operated "
                               "transmit that AetherSDR can control.");
     if (available) {
+        if (m_model) {
+            const QSignalBlocker blocker(m_voxBtn);
+            m_voxBtn->setChecked(m_model->voxEnable());
+        }
         m_voxBtn->setToolTip(QString());
         m_voxBtn->setAccessibleDescription(
             QStringLiteral("Toggle voice-activated transmit"));

@@ -137,7 +137,9 @@ confirmation.
 - **+ACC** — accessory input toggle
 - **PROC** — speech processor (NOR/DX/DX+)
 - **DAX** — DAX audio toggle
-- **MON** — monitor + volume slider
+- **MON** — monitor + volume slider. Both are disabled, with an explanation
+  in their tooltips and accessible descriptions, when the connected radio
+  does not expose monitor control.
 
 Hover the Level, Compression or ALC gauge for its exact value. In CW modes the
 applet switches to keyer controls, including the APF toggle and level.
@@ -158,6 +160,10 @@ changes made at the radio or by another client; **Breakin** requests a change.
 
 - **AM Carrier slider** (0–100)
 - **VOX** toggle + level + delay
+
+  The toggle and level slider are disabled, with an explanation in their
+  tooltips and accessible descriptions, when the connected radio does not
+  expose VOX control. Delay is available only when the radio exposes it.
 
   Automation can explicitly disarm VOX with `invoke "VOX voice-operated transmit"
   setChecked false` without TX permission. The `vox_toggle` automation shortcut

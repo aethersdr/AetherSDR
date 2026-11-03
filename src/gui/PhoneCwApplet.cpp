@@ -132,6 +132,10 @@ void PhoneCwApplet::setMonitorAvailable(bool available)
         "Unavailable: this radio has no transmit monitor that AetherSDR can "
         "control.");
     if (available) {
+        if (m_model) {
+            const QSignalBlocker blocker(m_monBtn);
+            m_monBtn->setChecked(m_model->sbMonitor());
+        }
         m_monBtn->setToolTip(QString());
         m_monBtn->setAccessibleDescription(
             QStringLiteral("Toggle sidetone monitor of transmitted audio"));

@@ -12,12 +12,15 @@
 
 #include "TestSettingsProfile.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/TransmitDelta.h"
 #include "gui/PhoneApplet.h"
 #include "gui/PhoneCwApplet.h"
+#include "models/TransmitModel.h"
 
 #include <QApplication>
 #include <QPushButton>
 #include <QSlider>
+#include <QSignalSpy>
 
 #include <cstdio>
 
@@ -27,14 +30,18 @@ static int g_failures = 0;
 static void check(bool ok, const char* what)
 {
     std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", what);
-    if (!ok) ++g_failures;
+    if (!ok) {
+        ++g_failures;
+    }
 }
 
 template <typename W>
 static W* findByName(QWidget& parent, const QString& name)
 {
     for (W* w : parent.findChildren<W*>()) {
-        if (w->accessibleName() == name) return w;
+        if (w->accessibleName() == name) {
+            return w;
+        }
     }
     return nullptr;
 }
@@ -51,14 +58,19 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("phone-mon-vox-availability-test"));
     QApplication app(argc, argv);
 
+    TransmitModel model;
     PhoneApplet phone;
     PhoneCwApplet cw;
+    phone.setTransmitModel(&model);
+    cw.setTransmitModel(&model);
     auto* vox = findByName<QPushButton>(phone, QStringLiteral("VOX voice-operated transmit"));
     auto* voxLevel = findByName<QSlider>(phone, QStringLiteral("VOX level"));
     auto* mon = findByName<QPushButton>(cw, QStringLiteral("TX monitor"));
     auto* monLevel = findByName<QSlider>(cw, QStringLiteral("Monitor volume"));
     check(vox && voxLevel && mon && monLevel, "all four controls are discoverable by accessibleName");
-    if (!(vox && voxLevel && mon && monLevel)) return 1;
+    if (!(vox && voxLevel && mon && monLevel)) {
+        return 1;
+    }
 
     const QString voxDesc = vox->accessibleDescription();
     const QString voxLevelDesc = voxLevel->accessibleDescription();
@@ -75,9 +87,14 @@ int main(int argc, char** argv)
     flex.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
     flex.txMonitorControl = RadioCapabilities::TxMonitorControl{};
 
-    // Light both first, as an operator on another radio would have.
-    vox->setChecked(true);
-    mon->setChecked(true);
+    TransmitDelta status;
+    status.voxEnable = true;
+    status.sbMonitor = true;
+    status.voxLevel = 37;
+    status.monGainSb = 63;
+    model.applyChanges(status);
+    check(vox->isChecked() && mon->isChecked(), "supporting radio: model status lights both controls");
+    QSignalSpy commands(&model, &TransmitModel::controlRequested);
 
     apply(phone, cw, true, hl2);
     check(!vox->isEnabled() && !voxLevel->isEnabled(), "HL2: VOX and VOX level are disabled");
@@ -93,6 +110,14 @@ int main(int argc, char** argv)
               && mon->toolTip() == mon->accessibleDescription(),
           "HL2: tooltip and accessibleDescription carry the same reason");
 
+    status.voxLevel = 38;
+    status.monGainSb = 64;
+    model.applyChanges(status);
+    check(!vox->isChecked() && !mon->isChecked(),
+          "unsupported radio: a model refresh cannot relight either button");
+    check(model.voxEnable() && model.sbMonitor(), "availability does not alter model state");
+    check(commands.isEmpty(), "availability and model refresh send no control requests");
+
     apply(phone, cw, true, flex);
     check(vox->isEnabled() && voxLevel->isEnabled() && mon->isEnabled() && monLevel->isEnabled(),
           "supporting radio: all four are enabled");
@@ -101,11 +126,36 @@ int main(int argc, char** argv)
           "supporting radio: original descriptions restored");
     check(vox->toolTip().isEmpty() && mon->toolTip().isEmpty(),
           "supporting radio: no leftover reason tooltip");
+    check(vox->isChecked() && mon->isChecked(),
+          "supporting radio: restoring availability immediately reflects current model state");
+    check(voxLevel->value() == 38 && monLevel->value() == 64,
+          "supporting radio: current model levels are preserved");
+    check(commands.isEmpty(), "restoring availability sends no control requests");
+
+    RadioCapabilities icom = flex;
+    icom.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ false};
+    apply(phone, cw, true, hl2);
+    apply(phone, cw, true, icom);
+    check(vox->isEnabled() && mon->isEnabled() && vox->isChecked() && mon->isChecked(),
+          "Icom: VOX without delay and MON retain model state after switching radios");
+
+    RadioCapabilities monitorOnly = flex;
+    monitorOnly.voxControl = std::nullopt;
+    apply(phone, cw, true, monitorOnly);
+    check(!vox->isEnabled() && mon->isEnabled() && mon->isChecked(),
+          "independent capabilities: missing VOX does not disable MON");
+    RadioCapabilities voxOnly = flex;
+    voxOnly.txMonitorControl = std::nullopt;
+    apply(phone, cw, true, voxOnly);
+    check(vox->isEnabled() && vox->isChecked() && !mon->isEnabled(),
+          "independent capabilities: missing MON does not disable VOX");
 
     apply(phone, cw, true, hl2);
     apply(phone, cw, false, hl2);
     check(vox->isEnabled() && voxLevel->isEnabled() && mon->isEnabled() && monLevel->isEnabled(),
           "no radio connected: all four are enabled again");
+    check(vox->isChecked() && mon->isChecked(), "disconnect restores the model presentation");
+    check(commands.isEmpty(), "all capability transitions leave the command path untouched");
 
     std::printf("phone_mon_vox_availability_test: %s\n", g_failures == 0 ? "PASS" : "FAIL");
     return g_failures == 0 ? 0 : 1;
