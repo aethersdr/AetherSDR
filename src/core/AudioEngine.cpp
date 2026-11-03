@@ -140,6 +140,8 @@ constexpr qint64 kTxPostChainEmitMinIntervalMs = 8;
 constexpr qint64 kRxPostChainEmitMinIntervalMs = 8;
 constexpr int kAutomationAudioCaptureMaxDurationMs = 15000;
 constexpr qsizetype kAutomationAudioCaptureMaxBytes = 64 * 1024 * 1024;
+constexpr qint64 kLineOutDrainIntervalMs = 10;
+constexpr qint64 kLineOutMaxDrainCatchUpMs = 50;
 // WDSP/Thetis runs EMNR at 4096/4 with 48 kHz DSP audio. Geometry sweeps at
 // AetherSDR's 24 kHz RX DSP rate show that 1024/4 is the better tradeoff for
 // this implementation: 42.7 ms window, 10.7 ms hop, and 23.4 Hz bin spacing.
@@ -2027,12 +2029,17 @@ AudioEngine::AudioEngine(QObject* parent)
     m_rxTimer = new QTimer(this);
     m_rxTimer->setTimerType(Qt::PreciseTimer);
     m_rxTimer->setInterval(10);
+    m_lineOutDrainClock.start();
     connect(m_rxTimer, &QTimer::timeout, this, [this]() {
+        const qint64 elapsedDrainMs = m_lineOutDrainClock.restart();
         retireInvalidPcmSources();
         if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen()
             || m_audioSink->state() == QAudio::StoppedState) {
             if (m_lineOutCaptureEnabled) {
-                drainRxAudio(audioBytesForMsAtRate(m_rxOutputRate.load(), 10));
+                const int drainMs = static_cast<int>(std::clamp(
+                    elapsedDrainMs, kLineOutDrainIntervalMs,
+                    kLineOutMaxDrainCatchUpMs));
+                drainRxAudio(audioBytesForMsAtRate(m_rxOutputRate.load(), drainMs));
             }
             return;
         }

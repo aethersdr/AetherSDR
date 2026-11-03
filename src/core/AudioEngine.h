@@ -1548,6 +1548,7 @@ private:
 
     // RX audio buffer handling
     QTimer*       m_rxTimer{nullptr};
+    QElapsedTimer m_lineOutDrainClock;
     QByteArray    m_rxBuffer;  // normal Flex RX source audio at 24 kHz, pre-DSP
     std::deque<QByteArray> m_rxPackets;  // whole Flex packets for NR2 packet-mode
     QByteArray    m_kiwiSdrRxBuffer;  // decoded Kiwi source audio at 24 kHz, pre-DSP

@@ -18,6 +18,7 @@
 #include <QEvent>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
@@ -54,6 +55,10 @@ public:
     static bool hasSink(const AudioEngine& engine) { return engine.m_audioDevice != nullptr; }
     static void drain(AudioEngine& engine, qsizetype bytes) { engine.drainRxAudio(bytes); }
     static void timerTick(AudioEngine& engine) { QMetaObject::invokeMethod(engine.m_rxTimer, "timeout", Qt::DirectConnection); }
+    static void restartLineOutDrainClock(AudioEngine& engine)
+    {
+        engine.m_lineOutDrainClock.restart();
+    }
     static qsizetype rawBytes(const AudioEngine& engine)
     {
         qsizetype result = engine.m_rxBuffer.size();
@@ -373,6 +378,42 @@ void rateMatrix()
             }
         }
     }
+}
+
+void lineOutDrainCatchUp()
+{
+    Fixture fixture(48000);
+    AudioEngineRatesTestAccess::detach(fixture.engine);
+    fixture.engine.setLineOutCaptureEnabled(true);
+    fixture.engine.setRxVolume(1.0f);
+
+    PcmProducer producer;
+    check(producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo}),
+          "Line Out catch-up producer starts");
+    qsizetype capturedFrames = 0;
+    QObject::connect(&fixture.engine, &AudioEngine::lineOutPcmReady, &fixture.engine,
+        [&capturedFrames](const PcmFrame& frame, bool) {
+            capturedFrames += frame.samples().size() / 2;
+        });
+    for (int tick = 0; tick < 20; ++tick) {
+        feed(fixture.engine, producer, tone(48000, 480, tick * 480));
+    }
+
+    AudioEngineRatesTestAccess::restartLineOutDrainClock(fixture.engine);
+    QThread::msleep(35);
+    AudioEngineRatesTestAccess::timerTick(fixture.engine);
+    check(capturedFrames >= 48000 * 20 / 1000
+              && capturedFrames <= 48000 * 50 / 1000,
+          "late Line Out ticks catch up by elapsed time within the bounded drain");
+
+    const qsizetype beforeBoundedTick = capturedFrames;
+    AudioEngineRatesTestAccess::restartLineOutDrainClock(fixture.engine);
+    QThread::msleep(80);
+    AudioEngineRatesTestAccess::timerTick(fixture.engine);
+    const qsizetype boundedFrames = capturedFrames - beforeBoundedTick;
+    check(boundedFrames > 48000 * 10 / 1000
+              && boundedFrames <= 48000 * 50 / 1000,
+          "Line Out catch-up caps each delayed drain at 50 ms");
 }
 
 void bandwidthAndMono()
@@ -1190,7 +1231,8 @@ void printUsage(const char* program)
     std::fprintf(stderr,
         "usage: %s [--case=rateMatrix|bandwidthAndMono|negotiatedSpeakerOutput|"
         "negotiationOpenFailure|negotiationLifetimeAndCoalescing|auxiliaryAcrossNegotiation|"
-        "transitionsAndRejection|queueBudgetsAndDeviceTransitions|concurrentSourcesAndEffects|"
+        "transitionsAndRejection|queueBudgetsAndDeviceTransitions|lineOutDrainCatchUp|"
+        "concurrentSourcesAndEffects|"
         "effects-bypass|effects-EQ|effects-NR2|effects-RN2|effects-NR4|"
         "effects-DFNR|effects-MNR|kiwiDeviceRateMatrix|processingStateReset|"
         "legacyReplacementAndKiwiReset|fixedProcessingDomains]\n", program);
@@ -1216,6 +1258,7 @@ std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
              AudioCase{"auxiliaryAcrossNegotiation", std::nullopt},
              AudioCase{"transitionsAndRejection", std::nullopt},
              AudioCase{"queueBudgetsAndDeviceTransitions", std::nullopt},
+             AudioCase{"lineOutDrainCatchUp", std::nullopt},
              AudioCase{"concurrentSourcesAndEffects", std::nullopt},
              AudioCase{"effects-bypass", Effect::None},
              AudioCase{"effects-EQ", Effect::Eq},
@@ -1285,6 +1328,9 @@ int main(int argc, char** argv)
     }
     if (selected("queueBudgetsAndDeviceTransitions")) {
         runStage("queueBudgetsAndDeviceTransitions", queueBudgetsAndDeviceTransitions);
+    }
+    if (selected("lineOutDrainCatchUp")) {
+        runStage("lineOutDrainCatchUp", lineOutDrainCatchUp);
     }
     if (selected("concurrentSourcesAndEffects")
         || (selectedCase && selectedCase->effect)) {

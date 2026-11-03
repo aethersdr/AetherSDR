@@ -217,7 +217,8 @@ target_link_libraries(audio_engine_rates_test PRIVATE aethercore Qt6::Core)
 # DSP initialization and effect comparison under one sanitizer timeout.
 foreach(_case IN ITEMS rateMatrix bandwidthAndMono negotiatedSpeakerOutput
         negotiationOpenFailure negotiationLifetimeAndCoalescing auxiliaryAcrossNegotiation
-        transitionsAndRejection queueBudgetsAndDeviceTransitions effects-bypass effects-EQ
+        transitionsAndRejection queueBudgetsAndDeviceTransitions lineOutDrainCatchUp
+        effects-bypass effects-EQ
         effects-NR2 effects-RN2 effects-NR4 effects-DFNR effects-MNR kiwiDeviceRateMatrix
         processingStateReset legacyReplacementAndKiwiReset fixedProcessingDomains)
     add_test(NAME audio_engine_rates_${_case}_test
