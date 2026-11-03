@@ -260,10 +260,12 @@ jobs:
           # AETHER_GPU_SPECTRUM=ON is stated rather than left to the CMake
           # default so the assertion below has a request to check against.
           #
-          # -g1, not RelWithDebInfo's -g: ~250 test executables each link a
-          # static aethercore and carry their own copy of its debug info. At
-          # -g each is ~325 MB and the tree outgrew the runner; at -g1 (line
-          # tables only, so backtraces keep file:line) each is ~120 MB.
+          # AETHER_SHARED_CORE=ON: the ~250 test executables link one
+          # libaethercore.so instead of each carrying a static copy of the
+          # core, which keeps the tree at ~4 GB instead of ~53 GB (#6962).
+          # Release workflows still link the core statically.
+          # -g1, not RelWithDebInfo's -g: line tables only, so backtraces keep
+          # file:line at a fraction of the debug size.
           # full-suite.yml configures identically and restores this job's
           # ccache, so change both together.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
