@@ -7192,6 +7192,14 @@ target_link_libraries(rigctl_rf_gain_pan_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME rigctl_rf_gain_pan_test COMMAND rigctl_rf_gain_pan_test)
 
+# MON and VOX on the rigctl and TCI roads refuse where the radio declares no
+# txMonitorControl / voxControl. Injected backend, no socket, nothing keyed.
+add_executable(mon_vox_roads_test tests/mon_vox_roads_test.cpp)
+target_include_directories(mon_vox_roads_test PRIVATE src tests)
+target_link_libraries(mon_vox_roads_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME mon_vox_roads_test COMMAND mon_vox_roads_test)
+
 # #5775 / #5776: the receiver letters (slice tabs, CAT VFO targets) follow a
 # backend's capacity declared after connect. Injected backend, no socket.
 add_executable(receiver_slot_count_test tests/receiver_slot_count_test.cpp)

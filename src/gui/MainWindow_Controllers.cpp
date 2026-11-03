@@ -2191,7 +2191,14 @@ void MainWindow::registerMidiParams()
         [this]() -> float { return m_radioModel.transmitModel().micLevel(); });
 
     reg("phone.monGain", "Monitor Volume", "Phone/CW", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.transmitModel().setMonGainSb(static_cast<int>(v)); },
+        [this](float v) {
+            if (!m_radioModel.transmitMonitorAvailable()) {
+                qCDebug(lcDevices) << "phone.monGain refused: this radio has no transmit monitor";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setMonGainSb(static_cast<int>(v));
+        },
         [this]() -> float { return m_radioModel.transmitModel().monGainSb(); });
 
     reg("phone.procEnable", "Speech Processor", "Phone/CW", P::Toggle, 0, 1,
@@ -2213,15 +2220,36 @@ void MainWindow::registerMidiParams()
         [this]() -> float { return m_radioModel.transmitModel().daxOn() ? 1 : 0; });
 
     reg("phone.monEnable", "Monitor", "Phone/CW", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.transmitModel().setSbMonitor(v > 0.5f); },
+        [this](float v) {
+            if (!m_radioModel.transmitMonitorAvailable()) {
+                qCWarning(lcDevices) << "phone.monEnable refused: this radio has no transmit monitor";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setSbMonitor(v > 0.5f);
+        },
         [this]() -> float { return m_radioModel.transmitModel().sbMonitor() ? 1 : 0; });
 
     reg("phone.voxEnable", "VOX Enable", "Phone/CW", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.transmitModel().setVoxEnable(v > 0.5f); },
+        [this](float v) {
+            if (!m_radioModel.voxAvailable()) {
+                qCWarning(lcDevices) << "phone.voxEnable refused: this radio has no VOX";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setVoxEnable(v > 0.5f);
+        },
         [this]() -> float { return m_radioModel.transmitModel().voxEnable() ? 1 : 0; });
 
     reg("phone.voxLevel", "VOX Level", "Phone/CW", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.transmitModel().setVoxLevel(static_cast<int>(v)); },
+        [this](float v) {
+            if (!m_radioModel.voxAvailable()) {
+                qCDebug(lcDevices) << "phone.voxLevel refused: this radio has no VOX";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setVoxLevel(static_cast<int>(v));
+        },
         [this]() -> float { return m_radioModel.transmitModel().voxLevel(); });
 
     // Gated on the same capability that dims the Phone applet's AM carrier
