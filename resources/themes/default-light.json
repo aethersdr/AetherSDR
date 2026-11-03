@@ -199,17 +199,7 @@
             "key.meffa.active.border":     "#0e8a4b",
             "key.meffa.active.hover":      "#0e7a44",
             "key.meffa.active.foreground": "#ffffff",
-            "key.meffa.standby.foreground": "#0b6b3a",
-            "swrScale": {
-              "type": "linear-gradient",
-              "angle": 90,
-              "stops": [
-                { "at": 0.00, "color": "#bfe3cb" },
-                { "at": 0.35, "color": "#e4e3b6" },
-                { "at": 0.65, "color": "#f0d5ad" },
-                { "at": 1.00, "color": "#f0bcbc" }
-              ]
-            }
+            "key.meffa.standby.foreground": "#0b6b3a"
           },
           "waterfall.colormap": {
             "default": {
