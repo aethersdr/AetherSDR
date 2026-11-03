@@ -48,7 +48,11 @@ the Tuner Genius XL.
 ### TUNE
 
 - **Right-click TUNE** to choose **Mono Tone** or **Two Tone** for the tune
-  carrier.
+  carrier. **Two Tone** requires a radio with a two-tone generator (FlexRadio).
+  On other connected radios the entry is dimmed with a reason; its keyboard
+  shortcut and MIDI action show the reason without starting TUNE. Use ordinary
+  **TUNE** for a single carrier on transmit-capable radios. Stopping an active
+  tune remains available.
 - Changes to **Tune Power** made while TUNE is keyed take effect immediately,
   including on the Hermes-Lite 2 and networked Icom radios.
 - TUNE and CW keying lock each other out: while TUNE is on, a paddle, straight

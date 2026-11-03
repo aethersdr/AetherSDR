@@ -180,6 +180,22 @@ static void midiCases()
                       && !f.radio.transmitModel().isTuning(),
                   "HL2-like: MIDI Two Tone is consumed, reports, and makes no keying call");
         }
+
+        // Ordinary TUNE must still start on either capability set, and the
+        // two-tone toggle must still stop an owned tune without a refusal.
+        if (!withGenerator) {
+            check(dispatchMidiTxInput("tx.tune", 1.0f, f.radio, captured, cw)
+                      && f.backend->commands == QStringList{"tune:on"}
+                      && f.radio.transmitModel().isTuning(),
+                  "no generator: ordinary MIDI TUNE still starts");
+        }
+        f.backend->commands.clear();
+        shown = 0;
+        check(dispatchMidiTxInput("global.twoToneTune", 1.0f, f.radio, captured, cw,
+                                  [&](const QString&) { ++shown; })
+                  && shown == 0 && f.backend->commands == QStringList{"tune:off"}
+                  && !f.radio.transmitModel().isTuning(),
+              "either capability: two-tone toggle still stops an owned tune");
     }
 }
 

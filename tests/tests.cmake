@@ -10301,6 +10301,7 @@ if(NOT WIN32)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    two_tone_tune_gate_test
     update_controller_test
     update_installer_test
     update_stager_test
