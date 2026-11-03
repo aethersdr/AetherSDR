@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.10.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -146,9 +146,10 @@ endif()
 # Build libaethercore as one shared library instead of a static archive. The
 # ~250 test executables that link the core each absorb a full static copy
 # (~200 MB in a Debug ASan build), which exhausts a hosted runner's disk;
-# shared, they average ~13 MB. For the sanitizer lane and local review builds,
-# never for releases: the shipped app links the core statically.
-option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer and review builds only)" OFF)
+# shared, they average ~13 MB. For the sanitizer lanes, the Linux CI and
+# full-suite builds, and local review builds; never for releases: the shipped
+# app links the core statically.
+option(AETHER_SHARED_CORE "Build libaethercore as a shared library (CI, sanitizer and review builds only)" OFF)
 if(AETHER_SHARED_CORE)
     if(WIN32)
         message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
@@ -243,6 +244,13 @@ option(AETHER_HL2_TX_TXA
 # firmware from aethersdr.com signed by a key built into it.
 option(AETHER_FIRMWARE_DEV_OVERRIDES
        "Honor the AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS environment overrides (testing only)"
+       OFF)
+# Lets AETHER_UPDATE_MANIFEST_URL, AETHER_UPDATE_TRUST_KEYS,
+# AETHER_UPDATE_DOWNLOAD_BASE and AETHER_UPDATE_PRETEND_VERSION point the
+# in-app updater at a test release, for trying an update end to end before
+# there is a release to update to. Off by default and never for release.
+option(AETHER_UPDATE_DEV_OVERRIDES
+       "Honor the AETHER_UPDATE_* environment overrides of the in-app updater (testing only)"
        OFF)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
@@ -900,7 +908,12 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexModelControls.cpp
     src/core/backends/flex/FlexSetupControls.cpp
+    src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexWaveformEnvControls.cpp
+    src/core/backends/flex/FlexNtpSourceControls.cpp
+    src/core/backends/flex/FlexSliceLifecycleControls.cpp
+    src/core/backends/flex/FlexPanControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
     src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
@@ -1027,6 +1040,8 @@ set(CORE_SOURCES
     src/core/RigctlProtocol.cpp
     src/core/ByteRelay.cpp
     src/core/TcpByteProxy.cpp
+    src/core/RigExpertHidTransport.cpp
+    src/models/AntennaAnalyzerModel.cpp
     src/core/Ctr2FirmwareUpdater.cpp
     src/core/Ctr2MaxRegistration.cpp
     src/core/CappedDownload.cpp
@@ -1043,6 +1058,7 @@ set(CORE_SOURCES
     src/core/Ctr2UsbRelay.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
+    src/core/OtrspProtocol.cpp
     src/core/CatPort.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
@@ -1055,7 +1071,6 @@ set(CORE_SOURCES
     src/core/DxSpotLineParser.cpp
     src/core/GoClusterSettings.cpp
     src/core/WsjtxClient.cpp
-    src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
     src/core/EibiClient.cpp
     src/core/EibiCodeMaps.cpp
@@ -1106,6 +1121,8 @@ set(CORE_SOURCES
     src/core/VkampConnection.cpp
     src/core/Kpa1500Protocol.cpp
     src/core/Kpa1500Connection.cpp
+    src/core/RfkitProtocol.cpp
+    src/core/RfkitConnection.cpp
     src/core/LpMeterProtocol.cpp
     src/core/LpMeterConnection.cpp
     src/core/FirmwareUploader.cpp
@@ -1113,6 +1130,7 @@ set(CORE_SOURCES
     src/core/TailnetShimClient.cpp    # in-radio tailnet shim provisioning API (prototype)
     src/core/TailnetShimTokenStore.cpp
     src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
+    src/core/RadioHealthClient.cpp    # radio health agent readout (tools/radio-health)
     src/core/TailnetLinkTelemetry.cpp   # link telemetry from the shim, for Network Diagnostics
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp
@@ -1137,6 +1155,13 @@ set(CORE_SOURCES
     src/core/FirmwareStager.cpp
     src/core/MsiFirmwareMetadata.cpp
     src/core/UpdateChecker.cpp
+    src/core/UpdateSettings.cpp
+    src/core/UpdateReleaseNotes.cpp
+    src/core/UpdateStager.cpp
+    src/core/UpdateInstaller.cpp
+    src/core/UpdateController.cpp
+    src/core/LinuxInstall.cpp
+    src/core/MacInstall.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
@@ -1162,6 +1187,7 @@ set(CORE_SOURCES
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
     src/core/SupportBundle.cpp
+    src/core/ExternalFilePath.cpp
     src/core/IssueReport.cpp
     src/core/SystemInfo.cpp
     src/core/SystemInfoCollector.cpp
@@ -1180,7 +1206,6 @@ set(CORE_SOURCES
     src/core/LocalMemoryStore.cpp
     src/core/MemoryCsvCompat.cpp
     src/core/MemoryFieldValues.cpp
-    src/core/MemoryRecallPolicy.cpp
     src/core/NetRecurrence.cpp
     src/core/NetSchedulePlanner.cpp
     src/core/NetScheduleStore.cpp
@@ -1237,7 +1262,12 @@ set(MODEL_SOURCES
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
     src/models/RadioModel_Setup.cpp
+    src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
+    src/models/RadioModel_WaveformEnv.cpp
+    src/models/RadioModel_NtpSources.cpp
+    src/models/RadioModel_SliceLifecycle.cpp
+    src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
@@ -1347,8 +1377,10 @@ set(GUI_SOURCES
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
-    src/gui/FirmwareReleasesDialog.cpp
+    src/gui/FirmwareUpdateCard.cpp
+    src/gui/CanonPrompt.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
@@ -1378,8 +1410,11 @@ set(GUI_SOURCES
     src/gui/ModeFilterPresets.cpp
     src/gui/ModemChrome.cpp
     src/gui/NrGainStrip.cpp
+    src/gui/UpdatesWindow.cpp
     src/gui/WaveformsDialog.cpp
+    src/gui/WaveformEnvironmentDialog.cpp
     src/gui/TailnetShimDialog.cpp
+    src/gui/QrCodeImage.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/DspParamPopup.cpp
@@ -1406,6 +1441,7 @@ set(GUI_SOURCES
     src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
     src/gui/Kpa1500Applet.cpp
+    src/gui/RfkitApplet.cpp
     src/gui/LpMeterApplet.cpp
     src/gui/Ctr2ProxyPanel.cpp
     src/gui/FirmwareInstallDialog.cpp
@@ -1414,7 +1450,9 @@ set(GUI_SOURCES
     src/gui/RadeApplet.cpp
     src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp
+    src/gui/AetherLabWidget.cpp
     src/gui/CanonWindow.cpp
+    src/gui/CanonMessageBox.cpp
     src/gui/CanonSurface.cpp
     src/gui/PanadapterHeader.cpp
     src/gui/FramelessMessageBox.cpp
@@ -1540,11 +1578,13 @@ set(GUI_SOURCES
     src/gui/RadioTabBar.cpp
     src/gui/WindowCaptionButtons.cpp
     src/gui/SupportDialog.cpp
+    src/gui/ResetSettingsPrompts.cpp
     src/gui/SliceTroubleshootingDialog.cpp
     src/gui/RadioHealthDialog.cpp
     src/gui/KeyboardMapWidget.cpp
     src/gui/ShortcutDialog.cpp
     src/gui/MultiFlexDialog.cpp
+    src/gui/Nr2WisdomDialog.cpp
     src/gui/HelpDialog.cpp
     src/gui/WhatsNewDialog.cpp
     src/gui/ThemeEditorDialog.cpp
@@ -1685,6 +1725,39 @@ else()
     target_compile_options(aether_monocypher PRIVATE -w)
 endif()
 
+# Bundled Nayuki QR Code generator (MIT): draws the Remote Access sign-in
+# link as a QR code to scan with a phone.
+add_library(aether_qrcodegen STATIC
+    ${CMAKE_SOURCE_DIR}/third_party/qrcodegen/qrcodegen.cpp
+)
+target_include_directories(aether_qrcodegen PUBLIC ${CMAKE_SOURCE_DIR}/third_party/qrcodegen)
+set_target_properties(aether_qrcodegen PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(aether_qrcodegen PRIVATE /w)
+else()
+    target_compile_options(aether_qrcodegen PRIVATE -w)
+endif()
+
+# Bundled zstd 1.5.7 (BSD), decompressor only: applies the in-app update's
+# per-file --patch-from deltas (RFC #5304, docs/architecture/update-manifest.md)
+# on every platform alike. Symbols are hidden so this copy can never interpose
+# on the system libzstd the AppImage carries for Qt (AETHER_SHARED_CORE).
+file(GLOB AETHER_ZSTD_SOURCES
+    ${CMAKE_SOURCE_DIR}/third_party/zstd/lib/common/*.c
+    ${CMAKE_SOURCE_DIR}/third_party/zstd/lib/decompress/*.c)
+add_library(aether_zstd STATIC ${AETHER_ZSTD_SOURCES})
+target_include_directories(aether_zstd PUBLIC ${CMAKE_SOURCE_DIR}/third_party/zstd/lib)
+target_compile_definitions(aether_zstd
+    PUBLIC ZSTDLIB_VISIBLE= ZSTDLIB_HIDDEN= ZSTDERRORLIB_VISIBLE= ZSTDERRORLIB_HIDDEN=
+    PRIVATE ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0 ZSTD_TRACE=0 XXH_NAMESPACE=ZSTD_)
+set_target_properties(aether_zstd PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden)
+if(MSVC)
+    target_compile_options(aether_zstd PRIVATE /w)
+else()
+    target_compile_options(aether_zstd PRIVATE -w)
+endif()
+
 # CTR2-Max registration check: the stock firmware's LittleFS volume, read
 # with littlefs (BSD-3-Clause) built read-only (LFS_READONLY: no write path is
 # compiled). src/core/ctr2max_reg.c is shared with the AetherCTR2 firmware.
@@ -1821,9 +1894,11 @@ add_library(aethercore ${_aether_core_library_type}
     ${SPECBLEACH_SOURCES}
 )
 target_link_libraries(aethercore PRIVATE aether::wdsp)
-target_link_libraries(aethercore PRIVATE aether_monocypher)   # core: EspFirmwareCatalog
+target_link_libraries(aethercore PRIVATE aether_monocypher)   # core: EspFirmwareCatalog, UpdateStager
+target_link_libraries(aethercore PRIVATE aether_zstd)         # core: UpdateStager
 target_compile_definitions(aethercore PRIVATE
-    AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>)
+    AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>
+    AETHER_UPDATE_DEV_OVERRIDES=$<BOOL:${AETHER_UPDATE_DEV_OVERRIDES}>)
 target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration
 
 # Desktop-only implementations kept out of libaethercore. Their public headers
@@ -1853,6 +1928,7 @@ add_executable(AetherSDR
 )
 target_link_libraries(AetherSDR PRIVATE
     aetherdesktop_support
+    aether_qrcodegen   # QrCodeImage: the Remote Access sign-in QR code
 )
 
 add_executable(aetherd
@@ -1868,7 +1944,8 @@ target_link_libraries(aetherd PRIVATE
 if(WIN32)
     # ole32/oleaut32: WindowsFirewall reads the firewall policy over COM;
     # shell32: its Fix runs netsh through a UAC prompt.
-    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32)
+    # uuid: ExternalFilePath's Windows known-folder identifiers.
+    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32 uuid)
 endif()
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------
@@ -2360,6 +2437,10 @@ if(DEFINED ENV{SOURCE_DATE_EPOCH})
     message(STATUS "Reproducible build: honoring SOURCE_DATE_EPOCH=$ENV{SOURCE_DATE_EPOCH}")
 endif()
 
+# main.cpp: AETHER_UPDATE_PRETEND_VERSION.
+target_compile_definitions(AetherSDR PRIVATE
+    AETHER_UPDATE_DEV_OVERRIDES=$<BOOL:${AETHER_UPDATE_DEV_OVERRIDES}>)
+
 if((UNIX OR WIN32) AND ENABLE_DSTAR)
     target_compile_definitions(AetherSDR PRIVATE AETHER_ENABLE_DIGITAL_VOICE_HELPER)
 
@@ -2511,6 +2592,28 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
     add_dependencies(AetherSDR aether-dv-waveform)
 endif()
 
+# AetherSDRUpdater.exe (RFC #5304 Phase 3): swaps a staged release into place
+# after AetherSDR exits and rolls back when its self-test fails. It runs while
+# the install folder it came from is being renamed, so it may load nothing
+# from there: no Qt, and the static MSVC runtime (vcruntime140.dll lives in
+# the install). Built with AetherSDR, so every Windows build compiles it.
+if(WIN32)
+    add_executable(AetherSDRUpdater WIN32
+        src/updater/main_win.cpp
+        src/updater/UpdateSwap.cpp
+    )
+    target_include_directories(AetherSDRUpdater PRIVATE src/updater)
+    target_compile_definitions(AetherSDRUpdater PRIVATE UNICODE _UNICODE NOMINMAX)
+    target_link_libraries(AetherSDRUpdater PRIVATE shell32 user32 advapi32)   # advapi32: the RunOnce repair
+    set_target_properties(AetherSDRUpdater PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    if(MSVC)
+        target_compile_options(AetherSDRUpdater PRIVATE /utf-8)   # like the first-party targets
+    endif()
+    add_dependencies(AetherSDR AetherSDRUpdater)
+endif()
+
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
     set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)
@@ -2520,12 +2623,17 @@ endif()
 
 # macOS app bundle
 if(APPLE)
+    set(AETHER_MACOS_BUNDLE_IDENTIFIER "com.aethersdr.AetherSDR" CACHE STRING
+        "macOS app identity; use a distinct reverse-DNS identifier for a local development build")
+    if(NOT AETHER_MACOS_BUNDLE_IDENTIFIER MATCHES "^[A-Za-z0-9][A-Za-z0-9.-]*$")
+        message(FATAL_ERROR "AETHER_MACOS_BUNDLE_IDENTIFIER must contain only letters, digits, periods and hyphens")
+    endif()
     target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
     target_sources(AetherSDR PRIVATE src/gui/mac/NativeWindowTitle.mm)
     target_link_libraries(AetherSDR PRIVATE "-framework AppKit")
     set_target_properties(AetherSDR PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "${AETHER_MACOS_BUNDLE_IDENTIFIER}"
         MACOSX_BUNDLE_BUNDLE_NAME "AetherSDR"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
@@ -3024,6 +3132,8 @@ if(HIDAPI_FOUND)
     # HAVE_HIDAPI directly.
     target_compile_definitions(aethercore PUBLIC HAVE_HIDAPI)
     target_sources(aethercore PRIVATE
+        src/core/HidDiscovery.cpp
+        src/core/HidDiscovery.h
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
@@ -3571,6 +3681,22 @@ foreach(_aether_tgt aethercore aetherdesktop_support AetherSDR aetherd)
         )
     endif()
 endforeach()
+
+# Development-only, opt-in signing runs after all resource/helper copies.
+# Release CI leaves it OFF and retains its Apple signing/notarization workflow.
+include(cmake/MacOSDevelopmentSigning.cmake)
+if(APPLE)
+    set(_aether_development_nested_code)
+    if(TARGET aether-dv-waveform)
+        list(APPEND _aether_development_nested_code "$<TARGET_FILE:aether-dv-waveform>")
+    endif()
+    if(Qt6Keychain_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/qtkeychain/lib/libqt6keychain.1.dylib")
+        list(APPEND _aether_development_nested_code
+            "$<TARGET_BUNDLE_CONTENT_DIR:AetherSDR>/Frameworks/libqt6keychain.1.dylib")
+    endif()
+    aether_sign_macos_development_bundle(AetherSDR ${_aether_development_nested_code})
+    unset(_aether_development_nested_code)
+endif()
 
 # ── Unit test harnesses ──────────────────────────────────────────────────────
 # MOVED: every test target is now declared in tests/tests.cmake, which cut this

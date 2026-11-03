@@ -179,9 +179,20 @@ midi.settings      — device preferences and active bindings
 midi/<name>.xml    — saved profiles
 ```
 
-## Known issues
+Saves to `midi.settings` replace the file atomically. If writing the new
+document fails, the previous file remains intact and AetherSDR logs a warning.
+Changing **Auto-connect on startup** or connecting a device also leaves the
+file untouched and logs a warning if the existing file cannot be read or
+contains malformed XML. Restore read access or a valid backup before changing
+those preferences again.
 
-- A crash or a failed write while bindings are being saved can leave `midi.settings` partly written or empty, losing your live bindings without an error ([#5160](https://github.com/aethersdr/AetherSDR/issues/5160)). Export a profile as a backup.
+If `midi.settings` cannot be read or contains malformed XML when AetherSDR
+starts, AetherSDR loads whatever bindings it could read, leaves the file
+untouched, and saves no MIDI binding or preference changes for the rest of
+the session. The MIDI Controller Mapping window says so when it opens.
+Restore read access or a valid backup, then restart AetherSDR. If you have
+no backup, deleting `midi.settings` lets AetherSDR start over with no bindings.
+Export a profile to keep a separate backup of your bindings.
 
 ## Troubleshooting
 

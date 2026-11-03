@@ -85,6 +85,15 @@ clean report stated plainly and without hedging. Severity stays calibrated
 what you actually observed — file:line, command output, failing scenario.
 Break the code, not the author.
 
+Nor does it mean **asking for defense the code does not need.** Principle VII
+puts validation at the boundary "so the interior can treat parsed values as
+sound": a request to re-check, inside our own code, a value that already
+crossed a boundary or that our own code produced is over-engineering, not
+rigor. So is an abstraction, option or fallback the PR's stated intent does
+not call for. Raise either as a nit at most, never a blocker, unless you can
+name the concrete input that reaches the interior unvalidated. That input is
+the finding; the missing check is not.
+
 ## 0. Test-boundary preflight — before parallel work
 
 Complete this preflight before building or running any test. It overrides the
@@ -178,6 +187,13 @@ the shape the bullet above routes a simulator closed loop to — see
 
 ## 2. Linked issue → does the PR actually solve it?
 
+- **Start with intent.** Read the PR body's `## Intent` section (the PR
+  template asks for it) and state in one line what the PR is for. Check that
+  against the linked issue before reading any hunk: a correct diff for the
+  wrong goal is the most expensive finding a review can miss, and the one
+  line-by-line reading misses most. If the section is absent, reconstruct the
+  intent from the body and issue, say you did, and note the missing section
+  as a nit.
 - Linked issues = `closingIssuesReferences` plus any `#NNNN` referenced in
   the PR title/body as "fixes/closes/resolves". Read each with
   `gh issue view <N> --json title,body,comments` (skim comments for accepted
@@ -711,6 +727,7 @@ round trip even for a nit. One body is read once and answered once.
 ## PR #NNNN — <title> (@author)
 
 **Issue:** #MMMM — one-paragraph summary of the problem as reported.
+**Intent:** the PR's stated goal in one line, and whether it matches the issue.
 **Proposed fix:** one-paragraph summary of the approach the diff takes.
 **Does it solve the issue?** Yes / Partially / No — with the requirement→hunk
 mapping and anything unaddressed.

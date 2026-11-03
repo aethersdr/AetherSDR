@@ -60,7 +60,7 @@ public:
             meters.append(QJsonObject{
                 {QStringLiteral("index"), e.def.index},
                 {QStringLiteral("source"), e.def.source},
-                {QStringLiteral("sourceIndex"), e.def.sourceIndex},
+                {QStringLiteral("sourceIndex"), e.def.publishedSourceIndex()},
                 {QStringLiteral("name"), e.def.name},
                 {QStringLiteral("unit"), e.def.unit},
                 {QStringLiteral("maxAgeMs"), e.maxAgeMs >= 0 ? QJsonValue(e.maxAgeMs) : QJsonValue()},

@@ -87,8 +87,6 @@ private:
     bool m_awaitingFinish{false};
     bool m_restoreAudioDaxMode{false};
     bool m_previousAudioDaxMode{false};
-    bool m_restoreTransmitDax{false};
-    bool m_previousTransmitDax{false};
 
     QElapsedTimer m_paceClock;
     QMetaObject::Connection m_pttConfirm;

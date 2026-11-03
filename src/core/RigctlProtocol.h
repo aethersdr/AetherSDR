@@ -3,9 +3,12 @@
 #include <QString>
 #include <QMap>
 #include <QPointer>
-#include <QElapsedTimer>
 #include <functional>
+#include <memory>
+#include <utility>
+#include <QObject>
 #include "TxCoordinator.h"
+#include "core/backends/SliceLifecycleRequest.h"
 
 namespace AetherSDR {
 
@@ -36,6 +39,9 @@ public:
     // Extended response mode (prepend '+' to enable).
     void setExtendedMode(bool on) { m_extended = on; }
     bool extendedMode() const     { return m_extended; }
+
+    // Filter edges for a rigctld passband width in the slice's mode.
+    static std::pair<int, int> passbandEdges(const QString& mode, int passband);
 
 private:
     QString handleLineImpl(const QString& line);
@@ -153,8 +159,6 @@ private:
     // allows this two-line form and Not1MM contest CW relies on it.
     bool m_pendingMorseLine{false};
     bool m_pendingSplitEnable{false};    // set when split enabled but no second slice existed yet
-    QElapsedTimer m_pendingSplitTimer;   // age of the in-flight create; clears stale pending so a
-                                         // NAK'd/lost create can't wedge split "pending" forever
     bool m_pendingTxSliceChange{false};  // set when setTxSlice(true) was queued for a non-rx slice
     // Slice we intend to be TX — set synchronously when we queue setTxSlice(true)
     // so findTxSlice() returns the right slice before the event loop fires.
@@ -166,10 +170,17 @@ private:
     // existed (single-slice path).  Applied in tryPromoteTxSlice().
     double  m_pendingSplitFreqMHz{0.0};
     QString m_pendingSplitMode;
-    // Id of a TX slice WE created on demand for split (NOT a promoted operator
-    // slice). Removed best-effort on split-disable and on disconnect so it isn't
-    // orphaned. -1 = none. Set in tryPromoteTxSlice (only reached after our create).
-    int     m_createdTxSliceId{-1};
+    struct SplitCreation {
+        quint64 ticket{0};
+        QPointer<SliceModel> originalRx;
+        RadioControlSession session{};
+        CreatedSliceReceipt created;
+        bool completed{false};
+        bool cancelled{false};
+    };
+    std::unique_ptr<QObject> m_splitCreateOwner;
+    std::shared_ptr<SplitCreation> m_splitCreation;
+    CreatedSliceReceipt m_createdTxSlice;
 
     // Tracks the last split state this client reported, so set_split_vfo only
     // reclaims TX on an actual split→non-split *transition* — not on every

@@ -156,6 +156,28 @@ inline int panPointsForPixelWidth(int pixels, bool edgeCropEnabled)
     return n;
 }
 
+// Device pixels for `logicalPixels` at `devicePixelRatio`, clamped to
+// [1, maximumPixels]. A non-finite or non-positive ratio counts as 1.
+inline int panDevicePixels(int logicalPixels, double devicePixelRatio, int maximumPixels)
+{
+    const double dpr = std::isfinite(devicePixelRatio) && devicePixelRatio > 0.0
+        ? devicePixelRatio : 1.0;
+    return std::clamp(static_cast<int>(std::lround(logicalPixels * dpr)), 1, maximumPixels);
+}
+
+// FLEX radios cap panadapter FFT frames at a 4096-bin boundary: at or past it
+// the right edge is malformed on firmware 4.2.18/4.2.20, and on a FLEX-8600
+// running 4.3.16 xpixels of 4093 or more stops FFT and waterfall data for
+// every connected client until the radio reboots (4092 works). 3840 leaves
+// margin for models and firmware not yet measured.
+inline constexpr int kMaxRadioPanXPixels = 3840;
+
+// The xpixels a Flex pan `logicalWidth` points wide asks for at `devicePixelRatio`.
+inline int panRadioXpixels(int logicalWidth, double devicePixelRatio)
+{
+    return panDevicePixels(logicalWidth, devicePixelRatio, kMaxRadioPanXPixels);
+}
+
 // No explicit frame when cropping is off: preserve each existing writer's
 // fallback, especially DSS's preview-base resolution on Flex/Icom.
 inline std::optional<FrequencyFrame> edgeCroppedWaterfallFrame(
@@ -551,6 +573,34 @@ inline float waterfallScrollProgressRows(std::int64_t elapsedMs, float msPerRow,
     }
     return std::clamp(static_cast<float>(elapsedMs) / msPerRow,
                       0.0f, distanceRows);
+}
+
+// Every render of the pan re-reads the waterfall scroll clock, the newest row and
+// the overlay, so while FFT frames are presenting they carry all three. A
+// scroll tick, waterfall row or label change only needs a present of its own
+// when no FFT present is due: each extra one is another whole-window composite
+// on a QRhiWidget window (#6883). A stream counts as live until 1.5 FFT frame
+// periods pass without a frame.
+inline bool presentNeededBesideFft(std::int64_t sinceFftPresentMs, int fftFps)
+{
+    if (sinceFftPresentMs < 0 || fftFps <= 0) {
+        return true;
+    }
+    const std::int64_t framePeriodMs = 1000 / fftFps;
+    return sinceFftPresentMs > framePeriodMs + framePeriodMs / 2;
+}
+
+// Milliseconds until a live FFT stream stops counting as live, so a present
+// deferred to the next FFT frame can be made anyway if that frame never
+// comes. 0 means the stream is not live and the caller should present now.
+inline std::int64_t fftLivenessRemainingMs(std::int64_t sinceFftPresentMs,
+                                           int fftFps)
+{
+    if (presentNeededBesideFft(sinceFftPresentMs, fftFps)) {
+        return 0;
+    }
+    const std::int64_t framePeriodMs = 1000 / fftFps;
+    return framePeriodMs + framePeriodMs / 2 - sinceFftPresentMs + 1;
 }
 
 inline float waterfallScrollSampleOffsetUnit(float progressRows,

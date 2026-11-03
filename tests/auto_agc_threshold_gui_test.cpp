@@ -21,18 +21,28 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QEvent>
 #include <QEventLoop>
 #include <QFile>
+#include <QFont>
+#include <QFontDatabase>
+#include <QFontMetrics>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QComboBox>
 #include <QLabel>
 #include <QPointer>
+#include <QPoint>
 #include <QPalette>
 #include <QPushButton>
+#include <QRect>
+#include <QScopeGuard>
 #include <QSlider>
+#include <QStyle>
+#include <QStyleOptionButton>
 #include <QStringList>
 #include <QVector>
 #include <QtTest>
@@ -79,6 +89,7 @@ public:
     bool connected{true};
     bool supported{true};
     bool refuse{false};
+    std::optional<RadioCapabilities::AgcGainScale> gainScale;
     QVector<ModeRequest> modeRequests;
     QVector<SliceAgcRequest> agcRequests;
     QStringList wireCommands;
@@ -97,6 +108,7 @@ public:
     {
         RadioCapabilities caps;
         caps.hasAgcThreshold = true;
+        caps.agcGainScale = gainScale;
         if (supported) {
             caps.autoAgcThresholdControl = RadioCapabilities::AutoAgcThresholdControl{
                 QStringLiteral("auto_agc")};
@@ -132,6 +144,20 @@ public:
         delta.agcThresholdMode = mode;
         emit sliceChanged(sliceId, delta);
     }
+    void agcStatus(const QString& agcMode, int threshold, int offLevel)
+    {
+        SliceDelta delta;
+        delta.active = true;
+        delta.frequency = 14.25;
+        delta.mode = QStringLiteral("USB");
+        delta.filterLow = 100;
+        delta.filterHigh = 2800;
+        delta.agcMode = agcMode;
+        delta.agcThreshold = threshold;
+        delta.agcOffLevel = offLevel;
+        delta.agcThresholdMode = AgcThresholdMode::Manual;
+        emit sliceChanged(0, delta);
+    }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override {}
@@ -142,6 +168,10 @@ public:
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     void setKeying(bool, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override {}
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+
+    // Test helper: remove a single slice without replacing the whole backend.
+    // Named expelSlice to avoid hiding IRadioBackend::removeSlice (bool return).
+    void expelSlice(int sliceId) { emit sliceRemoved(sliceId); }
 };
 
 void settle()
@@ -150,6 +180,32 @@ void settle()
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
     }
 }
+
+// Every tooltip a widget is given, in order. A confirmed-control slider is
+// re-synced to the radio's value right after a drag step, so the drag's own
+// tooltip is only seen here.
+class ToolTipLog final : public QObject
+{
+public:
+    explicit ToolTipLog(QWidget* widget)
+        : m_widget(widget)
+    {
+        widget->installEventFilter(this);
+    }
+    QStringList seen;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == m_widget && event->type() == QEvent::ToolTipChange) {
+            seen.append(m_widget->toolTip());
+        }
+        return false;
+    }
+
+private:
+    QWidget* m_widget;
+};
 
 QJsonObject namedNode(const QJsonObject& node, const QString& name)
 {
@@ -319,10 +375,153 @@ private slots:
         QVERIFY(result->text().startsWith(QStringLiteral("Recommended AGC-T")));
     }
 
+    void calibrationDialogSliceComboSelectsReceiver()
+    {
+        Fixture fixture;
+        AudioEngine audio;
+        AgcCalibrationDialog dialog(&fixture.radio, &audio, {});
+        dialog.setSlice(fixture.radio.slice(0));
+        dialog.show();
+        settle();
+
+        auto* combo = dialog.findChild<QComboBox*>();
+        QVERIFY(combo);
+
+        // Locate the start/stop button — calibration is blocked when the
+        // targeted slice is in Automatic mode, so its enable state is a
+        // reliable proxy for which slice the dialog is actually monitoring.
+        QPushButton* startStop = nullptr;
+        for (QPushButton* btn : dialog.findChildren<QPushButton*>()) {
+            if (btn->text() == QStringLiteral("Auto Sweep")) {
+                startStop = btn;
+                break;
+            }
+        }
+        QVERIFY(startStop);
+
+        // Single receiver: combo must not be visible — no choice to present.
+        QCOMPARE(combo->count(), 1);
+        QVERIFY(!combo->isVisible());
+        QVERIFY(startStop->isEnabled()); // slice 0 is in Manual — calibration allowed
+
+        // Add a second slice — combo becomes visible with two items,
+        // still targeting slice 0.
+        fixture.backend->status(1, AgcThresholdMode::Manual);
+        settle();
+        QCOMPARE(combo->count(), 2);
+        QVERIFY(combo->isVisible());
+        QCOMPARE(combo->currentData().toInt(), 0);
+
+        // Pick slice 1 in the combo — dialog must retarget to slice 1.
+        const int idx1 = combo->findData(1);
+        QVERIFY(idx1 >= 0);
+        combo->setCurrentIndex(idx1);
+        settle();
+        QCOMPARE(combo->currentData().toInt(), 1);
+
+        // Prove retargeting: flip slice 1 to Automatic — that blocks
+        // calibration, so the button must be disabled.  If the dialog
+        // were still watching slice 0 (which remains Manual) the button
+        // would stay enabled and this assertion would fail.
+        fixture.backend->status(1, AgcThresholdMode::Automatic);
+        settle();
+        QVERIFY(!startStop->isEnabled());
+
+        // Restore slice 1 to Manual before triggering removal.
+        fixture.backend->status(1, AgcThresholdMode::Manual);
+        settle();
+        QVERIFY(startStop->isEnabled());
+
+        // Remove only slice 1 (the targeted slice), leaving slice 0 alive.
+        // The sliceRemoved handler must fall back to slice 0; the combo
+        // must shrink to one item and hide.
+        fixture.backend->expelSlice(1);
+        settle();
+        QCOMPARE(combo->count(), 1);
+        QVERIFY(!combo->isVisible());
+
+        // Prove fallback: slice 0 is in Manual mode so calibration is
+        // allowed — button must be enabled again.
+        QVERIFY(startStop->isEnabled());
+
+        // Stronger fallback proof: the previous assertion passes whether or
+        // not the dialog actually re-targeted A, because A was already in
+        // Manual before B was removed.  Flip A to Automatic — calibration
+        // must block, proving the dialog is monitoring A's signals and not
+        // some stale pre-removal state.
+        fixture.backend->status(0, AgcThresholdMode::Automatic);
+        settle();
+        QVERIFY(!startStop->isEnabled());
+    }
+
     void initTestCase()
     {
         QVERIFY2(QFile::exists(QStringLiteral(":/themes/default-dark.json")),
             "Link THEME_TEST_RESOURCES so screenshots use the production theme resources");
+    }
+
+    void compactLayoutFitsDock_data()
+    {
+        QTest::addColumn<QString>("fontFamily");
+        // DejaVu Sans is the row that needs the compact preset padding (#6641);
+        // a host without it runs only rows that already fit.
+        QTest::newRow("system") << QString();
+        const QStringList families = QFontDatabase::families();
+        for (const QString& family : {QStringLiteral("DejaVu Sans"),
+                                      QStringLiteral("Liberation Sans")}) {
+            if (families.contains(family)) {
+                QTest::newRow(qPrintable(family)) << family;
+            }
+        }
+    }
+
+    void compactLayoutFitsDock()
+    {
+        QFETCH(QString, fontFamily);
+        const QFont defaultFont = QApplication::font();
+        const auto restoreFont = qScopeGuard([defaultFont] {
+            QApplication::setFont(defaultFont);
+        });
+        if (!fontFamily.isEmpty()) {
+            QFont font = defaultFont;
+            font.setFamily(fontFamily);
+            QApplication::setFont(font);
+        }
+
+        Fixture fixture;
+        QVERIFY(fixture.capture(QStringLiteral("compact-layout-")
+            + (fontFamily.isEmpty() ? QStringLiteral("system") : fontFamily)));
+        QCOMPARE(fixture.rx.width(), 248);
+        QVERIFY(fixture.rx.minimumSizeHint().width() <= 248);
+        QVERIFY(fixture.threshold());
+        QVERIFY(fixture.threshold()->width() >= 60);
+        for (QWidget* widget : fixture.rx.findChildren<QWidget*>()) {
+            if (widget->isVisibleTo(&fixture.rx) && !widget->isWindow()) {
+                const QRect bounds(widget->mapTo(&fixture.rx, QPoint()), widget->size());
+                QVERIFY2(fixture.rx.rect().contains(bounds),
+                    qPrintable(widget->accessibleName().isEmpty()
+                        ? QString::fromLatin1(widget->metaObject()->className())
+                        : widget->accessibleName()));
+            }
+        }
+
+        const QStringList presets{QStringLiteral("1.8K"), QStringLiteral("2.1K"),
+            QStringLiteral("2.4K"), QStringLiteral("2.7K"),
+            QStringLiteral("2.9K"), QStringLiteral("3.3K")};
+        int presetCount = 0;
+        for (QPushButton* button : fixture.rx.findChildren<QPushButton*>()) {
+            if (presets.contains(button->text())) {
+                ++presetCount;
+                QVERIFY(button->isVisibleTo(&fixture.rx));
+                QStyleOptionButton option;
+                option.initFrom(button);
+                const QRect contents = button->style()->subElementRect(
+                    QStyle::SE_PushButtonContents, &option, button);
+                QVERIFY(button->fontMetrics().horizontalAdvance(button->text())
+                    <= contents.width());
+            }
+        }
+        QCOMPARE(presetCount, 6);
     }
 
     void bridgeClickWaitsForConfirmedStatus()
@@ -441,6 +640,46 @@ private slots:
         QVERIFY(automatic->isEnabled());
         flag.setSlice(nullptr);
         QVERIFY(!automatic->isEnabled() && !automatic->isChecked());
+    }
+
+    // The AGC-T tooltips print the gain a declared agcGainScale gives the knob,
+    // in the RX applet and on the slice flag, both for the radio's value and
+    // during a drag. Without a scale they print the knob with "dB", as before.
+    void thresholdTooltipsPrintTheDeclaredGain()
+    {
+        Fixture fixture;
+        VfoWidget flag;
+        flag.setRadioModel(&fixture.radio);
+        flag.setSlice(fixture.radio.slice(0));
+        QSlider* rxSlider = fixture.threshold();
+        QSlider* flagSlider = nullptr;
+        for (QSlider* slider : flag.findChildren<QSlider*>()) {
+            if (slider->accessibleName() == QStringLiteral("AGC threshold")) {
+                flagSlider = slider;
+            }
+        }
+        QVERIFY(rxSlider && flagSlider);
+        QVERIFY(rxSlider->toolTip().startsWith(QStringLiteral("AGC Threshold: 65 dB")));
+        QVERIFY(flagSlider->toolTip().startsWith(QStringLiteral("AGC Threshold: 65 dB")));
+
+        fixture.backend->gainScale = RadioCapabilities::AgcGainScale{-20.0, 1.4};
+        fixture.backend->agcStatus(QStringLiteral("med"), 71, 29);
+        QCOMPARE(rxSlider->toolTip(), QStringLiteral("AGC Threshold: 79.4 dB"));
+        QCOMPARE(flagSlider->toolTip(), QStringLiteral("AGC Threshold: 79.4 dB"));
+
+        ToolTipLog rxLog(rxSlider);
+        ToolTipLog flagLog(flagSlider);
+        rxSlider->setValue(70);
+        flagSlider->setValue(69);
+        QVERIFY2(rxLog.seen.contains(QStringLiteral(
+                     "AGC Threshold: 78.0 dB\nRight-click to calibrate against the noise floor")),
+            qPrintable(rxLog.seen.join(QStringLiteral(" | "))));
+        QVERIFY2(flagLog.seen.contains(QStringLiteral("AGC Threshold: 76.6 dB")),
+            qPrintable(flagLog.seen.join(QStringLiteral(" | "))));
+
+        fixture.backend->agcStatus(QStringLiteral("off"), 71, 29);
+        QCOMPARE(rxSlider->toolTip(), QStringLiteral("AGC Off Level: 20.6 dB"));
+        QCOMPARE(flagSlider->toolTip(), QStringLiteral("AGC Off Level: 20.6 dB"));
     }
 
     void refusedDispatchDoesNotEngageAutomaticMode()

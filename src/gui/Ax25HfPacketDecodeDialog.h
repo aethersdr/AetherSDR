@@ -376,9 +376,7 @@ private:
     bool m_txAwaitingAudioFinish{false};
     bool m_txPendingStream{false};
     bool m_txRestoreAudioDaxMode{false};
-    bool m_txRestoreTransmitDax{false};
     bool m_txPreviousAudioDaxMode{false};
-    bool m_txPreviousTransmitDax{false};
     bool m_txFromKiss{false};
     // Identifies the current transmission so deferred work armed on its behalf
     // (the DAX stream-wait timeout) cannot act on a later one.

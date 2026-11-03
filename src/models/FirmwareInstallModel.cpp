@@ -134,7 +134,10 @@ FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* paren
 
     connect(m_job, &EspFirmwareJob::connected, this, &FirmwareInstallModel::connected);
     connect(m_job, &EspFirmwareJob::progress, this, &FirmwareInstallModel::progress);
-    connect(m_job, &EspFirmwareJob::finished, this, &FirmwareInstallModel::onJobFinished);
+    connect(m_job, &EspFirmwareJob::finished, this, [this](bool ok, const QString& message) {
+        m_accessDenied = !ok && m_job->accessDenied();
+        onJobFinished(ok, message);
+    });
     if (m_relay) {
         connect(m_relay, &Ctr2ProxyModel::firmwareUpdateStep, this,
                 &FirmwareInstallModel::stepChanged);
@@ -157,6 +160,7 @@ FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* paren
                     }
                     m_waiting = false;
                     m_waitStart = {};
+                    m_accessDenied = false;   // over the USB link, not a serial port
                     onJobFinished(ok, ok ? QString() : message);
                 });
     }
@@ -184,6 +188,7 @@ void FirmwareInstallModel::setDeviceSources(LoaderSource loaders, HidSource hid)
 {
     m_loaders = std::move(loaders);
     m_hid = std::move(hid);
+    m_maxSeen = false;
     poll();
 }
 
@@ -223,6 +228,24 @@ bool FirmwareInstallModel::working() const
 bool FirmwareInstallModel::busy() const
 {
     return working() || m_waiting;
+}
+
+bool FirmwareInstallModel::otherControllerOnly() const
+{
+    if (m_maxSeen || m_device != Device::None || busy() || !m_relay || !m_hid
+        || m_relay->transport() != Ctr2ProxyModel::Transport::Usb) {
+        return false;
+    }
+    const QString selected = m_relay->usbDevicePath();
+    if (selected.isEmpty()) {
+        return false;
+    }
+    for (const Ctr2HidPort::DeviceInfo& d : m_hid()) {
+        if (d.path == selected) {
+            return !d.ctr2Model().isEmpty();
+        }
+    }
+    return false;
 }
 
 QString FirmwareInstallModel::linkVersion() const
@@ -277,6 +300,7 @@ void FirmwareInstallModel::poll()
         m_mac = mac;
         m_hidPath = hidPath;
         m_loaderCount = loaders;
+        m_maxSeen = m_maxSeen || device != Device::None;
         emit deviceChanged();
     }
     startWhenInDownloadMode();
@@ -799,6 +823,7 @@ void FirmwareInstallModel::startWhenInDownloadMode()
     QString problem;
     if (!start(target(), &problem)) {
         emit busyChanged();
+        m_accessDenied = false;
         emit finished(false, problem);
     }
 }
@@ -881,6 +906,7 @@ void FirmwareInstallModel::cancel()
         m_waiting = false;
         m_waitStart = {};
         emit busyChanged();
+        m_accessDenied = false;
         emit finished(false, tr("Cancelled. Nothing was written."));
         return;
     }

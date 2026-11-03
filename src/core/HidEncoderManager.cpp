@@ -1,5 +1,6 @@
 #ifdef HAVE_HIDAPI
 #include "HidEncoderManager.h"
+#include "HidDiscovery.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 
@@ -398,7 +399,7 @@ void HidEncoderManager::setShuttleMappingField(const QString& field, const QStri
 HidEncoderManager::HidEncoderManager(QObject* parent)
     : QObject(parent)
 {
-    hid_init();
+    HidDiscovery::init();
 
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(POLL_INTERVAL_MS);
@@ -412,7 +413,6 @@ HidEncoderManager::HidEncoderManager(QObject* parent)
 HidEncoderManager::~HidEncoderManager()
 {
     close();
-    hid_exit();
 }
 
 QString HidEncoderManager::detectDevice()
@@ -421,7 +421,7 @@ QString HidEncoderManager::detectDevice()
     int count = HidDeviceParser::supportedDeviceCount();
 
     for (int i = 0; i < count; ++i) {
-        auto* info = hid_enumerate(devices[i].vid, devices[i].pid);
+        auto* info = HidDiscovery::enumerate(devices[i].vid, devices[i].pid);
         if (info) {
             QString name = devices[i].name;
             hid_free_enumeration(info);
@@ -447,7 +447,7 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
         bool multiplePhysical = false;
         QString firstKey;
         bool firstSeen = false;
-        if (auto* info = hid_enumerate(vid, pid)) {
+        if (auto* info = HidDiscovery::enumerate(vid, pid)) {
             for (auto* cur = info; cur; cur = cur->next) {
                 const QString key = (cur->serial_number && cur->serial_number[0] != L'\0')
                     ? QStringLiteral("sn:") + QString::fromWCharArray(cur->serial_number)
@@ -489,7 +489,7 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
         m_multipleDetected.store(false, std::memory_order_release);
     }
 
-    m_device = hid_open(vid, pid, nullptr);
+    m_device = HidDiscovery::open(vid, pid, nullptr);
     if (!m_device) {
         qCDebug(lcDevices) << "HidEncoderManager: failed to open"
                         << QString("0x%1:0x%2").arg(vid, 4, 16, QChar('0')).arg(pid, 4, 16, QChar('0'));
@@ -500,7 +500,7 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
 
     // Capture device info via enumerate — works on all hidapi versions unlike
     // hid_get_device_info() which requires >= 0.13.0.  (#3323)
-    if (auto* info = hid_enumerate(vid, pid)) {
+    if (auto* info = HidDiscovery::enumerate(vid, pid)) {
         m_devicePath   = QString::fromLatin1(info->path ? info->path : "");
         m_serialNumber = info->serial_number
             ? QString::fromWCharArray(info->serial_number) : QString{};

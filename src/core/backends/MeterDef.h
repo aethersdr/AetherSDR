@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMetaType>
+#include <QtGlobal>
 #include <QString>
 
 namespace AetherSDR {
@@ -17,6 +18,8 @@ namespace AetherSDR {
 struct MeterDef {
     int     index{-1};
     QString source;       // "SLC", "RAD", "AMP", "TX", ...
+    // The wire value is a uint32; a Flex amp/tuner handle above INT_MAX is kept
+    // bit for bit, so publish it through publishedSourceIndex().
     int     sourceIndex{0};
     QString name;         // "LEVEL", "FWDPWR", "SWR", "PATEMP", ...
     QString unit;         // "dBm", "dB", "dBFS", "SWR", "Volts", "Amps", "degC", "degF", "Watts", "Percent"
@@ -24,6 +27,11 @@ struct MeterDef {
     double  high{0.0};
     QString description;
     QString unavailableReason; // Empty unless measurement is explicitly unavailable.
+
+    [[nodiscard]] qint64 publishedSourceIndex() const
+    {
+        return static_cast<quint32>(sourceIndex);
+    }
 };
 
 }  // namespace AetherSDR

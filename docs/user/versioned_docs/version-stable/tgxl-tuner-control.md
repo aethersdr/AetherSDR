@@ -51,8 +51,9 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
 
 *The TGXL applet with a Tuner Genius XL connected.*
 
-- **Fwd Power** gauge. It scales for barefoot, Aurora or PGXL power levels,
-  and uses the tuner's own peak reading, so voice peaks read correctly.
+- **Fwd Power** gauge. It scales for barefoot (0–200 W), Aurora or a KPA500 in
+  operate (0–600 W) and PGXL (0–2000 W) power levels, and uses the tuner's own
+  peak reading, so voice peaks read correctly.
 - **SWR** gauge (1.0–3.0).
 - **C1**, **L** and **C2** relay bars.
 - **TUNE**: starts an auto-tune. While a tune runs it reads **STOP**;

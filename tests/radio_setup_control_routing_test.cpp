@@ -57,6 +57,11 @@ void radioEncoding()
         {{Field::SharpnessLevel, SharpnessLevel{SharpnessMode::Cw, 3}}, {"radio filter_sharpness cw level=3"}},
         {{Field::SharpnessAuto, SharpnessAuto{SharpnessMode::Voice, false}}, {"radio filter_sharpness voice auto_level=0"}},
         {{Field::LowLatencyDigital, true}, {"radio set low_latency_digital_modes=1"}},
+        {{Field::LineoutGain, 42}, {"mixer lineout gain 42"}},
+        {{Field::LineoutMute, true}, {"mixer lineout mute 1"}},
+        {{Field::HeadphoneGain, 43}, {"mixer headphone gain 43"}},
+        {{Field::HeadphoneMute, false}, {"mixer headphone mute 0"}},
+        {{Field::FrontSpeakerMute, true}, {"mixer front_speaker mute 1"}},
         {{Field::StartFrequencyCalibration, 10.0}, {"radio set cal_freq=10.000000", "radio set freq_error_ppb=0", "radio pll_start"}},
     };
     RadioSetupTestBackend backend;

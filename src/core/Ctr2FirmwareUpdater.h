@@ -78,6 +78,9 @@ public:
     // was already answered. finished() follows.
     void cancel();
     bool isRunning() const { return m_phase != Phase::Idle; }
+    // The last restart request was written but never answered: the device
+    // may still be leaving the bus, though finished() reported a failure.
+    bool restartUnanswered() const { return m_restartUnanswered; }
 
 signals:
     void progress(qint64 bytesStored, qint64 imageBytes);
@@ -105,11 +108,14 @@ private:
     void onPortFailed(const QString& message);
     void onTimeout();
     void sendHello();
-    void sendExtension(const QByteArray& payload);
+    // False when nothing could be queued (no port, or the payload would not encode).
+    bool sendExtension(const QByteArray& payload);
     void sendChunks();
     void lookForDevice();
     void fail(const QString& message);
     void succeed(const QString& version);
+    // A restart request done: the device is leaving the bus for its target.
+    void restarted();
     void armTimeout(int ms);
 
     DeviceSource m_devices;
@@ -130,6 +136,13 @@ private:
     qint64 m_sent{0};       // image bytes sent
     qint64 m_stored{0};     // image bytes the device has acknowledged
     int m_inFlight{0};
+    // Reports this port has queued and written, and the queued count once the
+    // restart request was queued: it has reached the device's endpoint when
+    // the written count gets there.
+    qint64 m_reportsQueued{0};
+    qint64 m_reportsWritten{0};
+    qint64 m_restartQueuedTo{0};
+    bool m_restartUnanswered{false};
     QString m_previousVersion;
 };
 

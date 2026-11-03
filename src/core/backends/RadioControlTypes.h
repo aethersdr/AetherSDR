@@ -2,6 +2,8 @@
 
 #include <functional>
 #include <QMetaType>
+#include <QPointer>
+#include <QObject>
 #include <QString>
 
 namespace AetherSDR {
@@ -20,6 +22,11 @@ struct RadioControlSession {
     quint64 backendGeneration;
     quint64 connectionGeneration;
     bool operator==(const RadioControlSession&) const = default;
+};
+struct RadioStationOverride {
+    QPointer<QObject> model;
+    RadioControlSession session;
+    quint64 revision;
 };
 
 } // namespace AetherSDR

@@ -12,7 +12,7 @@
 // Present-only, fail-closed decode for the Flex status decoders (#4070): a key
 // is applied ONLY when the wire reported it, and a malformed numeric value is
 // dropped, not applied as 0 (an optional target stays disengaged; a plain field
-// or map entry is not written). Keep the guarded parse in parseInt/parseReal only.
+// or map entry is not written). Keep the guarded parse in parseInt/parseUInt/parseReal only.
 namespace AetherSDR::flexkv {
 
 using Kv = QMap<QString, QString>;
@@ -23,6 +23,15 @@ inline std::optional<int> parseInt(const Kv& kvs, const char* wire, int base = 1
     if (kvs.contains(QLatin1String(wire))) {
         bool ok = false;
         const int v = kvs.value(QLatin1String(wire)).toInt(&ok, base);
+        if (ok) return v;
+    }
+    return std::nullopt;
+}
+inline std::optional<quint32> parseUInt(const Kv& kvs, const char* wire, int base = 10)
+{
+    if (kvs.contains(QLatin1String(wire))) {
+        bool ok = false;
+        const uint v = kvs.value(QLatin1String(wire)).toUInt(&ok, base);
         if (ok) return v;
     }
     return std::nullopt;
@@ -61,9 +70,9 @@ inline void carry(const Kv& kvs, const char* wire, QString& f)
 {
     if (kvs.contains(QLatin1String(wire))) f = kvs.value(QLatin1String(wire));
 }
-inline void carry(const Kv& kvs, const char* wire, int& f, int base = 10)
+inline void carry(const Kv& kvs, const char* wire, int& f)
 {
-    if (auto v = parseInt(kvs, wire, base)) f = *v;
+    if (auto v = parseInt(kvs, wire)) f = *v;
 }
 inline void carry(const Kv& kvs, const char* wire, double& f)
 {

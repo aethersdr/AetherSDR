@@ -55,6 +55,13 @@ int main()
     check(!profileLoadMayRebuildRadioTopology(QStringLiteral("mic")),
           "mic profile load is not topology-changing");
 
+    checkProfileLoad(QStringLiteral("profile cw load \"Default Contest\""),
+                     QStringLiteral("cw"),
+                     QStringLiteral("Default Contest"),
+                     "CW profile load command parses");
+    check(!profileLoadMayRebuildRadioTopology(QStringLiteral("cw")),
+          "CW profile load is not topology-changing");
+
     check(!parseProfileLoadCommand(QStringLiteral("profile global save \"SO2R\"")).valid,
           "non-load profile command is ignored");
     check(kProfileLoadDeferredPanFlushDelayMs > kProfileLoadStateWriteHoldMs,

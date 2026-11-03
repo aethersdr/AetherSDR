@@ -49,7 +49,7 @@ QJsonObject meterToJson(const MeterDef& def, bool hasValue, float value, qint64 
     QJsonObject obj;
     obj["index"] = def.index;
     obj["source"] = def.source;
-    obj["source_index"] = def.sourceIndex;
+    obj["source_index"] = def.publishedSourceIndex();
     obj["name"] = def.name;
     obj["unit"] = def.unit;
     obj["low"] = def.low;

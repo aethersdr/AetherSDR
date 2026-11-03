@@ -5,14 +5,14 @@
   "segments": [
     {"low": 1.810, "high": 1.838, "label": "CW", "license": "", "color": "#3060ff"},
     {"low": 1.838, "high": 1.840, "label": "NB DIGI", "license": "", "color": "#c03030"},
-    {"low": 1.840, "high": 1.843, "label": "DIGI", "license": "", "color": "#c03030"},
+    {"low": 1.840, "high": 1.843, "label": "ALL", "usage": "Digimodes", "license": "", "color": "#ff8000"},
     {"low": 1.843, "high": 2.000, "label": "ALL", "license": "", "color": "#ff8000"},
 
     {"low": 3.500, "high": 3.510, "label": "CW DX", "license": "", "color": "#3060ff"},
     {"low": 3.510, "high": 3.560, "label": "CW", "license": "", "color": "#3060ff"},
     {"low": 3.560, "high": 3.570, "label": "CW", "license": "", "color": "#3060ff"},
     {"low": 3.570, "high": 3.600, "label": "NB DIGI", "license": "", "color": "#c03030"},
-    {"low": 3.600, "high": 3.620, "label": "ALL", "license": "", "color": "#ff8000"},
+    {"low": 3.600, "high": 3.620, "label": "ALL", "usage": "Digimodes, automatically controlled data stations (unattended)", "license": "", "color": "#ff8000"},
     {"low": 3.620, "high": 3.800, "label": "ALL", "license": "", "color": "#ff8000"},
 
     {"low": 5.3515, "high": 5.354, "label": "CW/NB", "license": "", "color": "#3060ff"},
@@ -21,7 +21,8 @@
 
     {"low": 7.000, "high": 7.040, "label": "CW", "license": "", "color": "#3060ff"},
     {"low": 7.040, "high": 7.050, "label": "NB DIGI", "license": "", "color": "#c03030"},
-    {"low": 7.050, "high": 7.060, "label": "DIGI", "license": "", "color": "#c03030"},
+    {"low": 7.050, "high": 7.053, "label": "ALL", "usage": "Digimodes, automatically controlled data stations (unattended)", "license": "", "color": "#ff8000"},
+    {"low": 7.053, "high": 7.060, "label": "ALL", "usage": "Digimodes", "license": "", "color": "#ff8000"},
     {"low": 7.060, "high": 7.200, "label": "ALL", "license": "", "color": "#ff8000"},
 
     {"low": 10.100, "high": 10.130, "label": "CW", "license": "", "color": "#3060ff"},
@@ -31,18 +32,18 @@
     {"low": 14.060, "high": 14.070, "label": "CW QRP", "license": "", "color": "#3060ff"},
     {"low": 14.070, "high": 14.099, "label": "NB DIGI", "license": "", "color": "#c03030"},
     {"low": 14.099, "high": 14.101, "label": "BCN", "license": "", "color": "#00d0d0"},
-    {"low": 14.101, "high": 14.112, "label": "DIGI", "license": "", "color": "#c03030"},
+    {"low": 14.101, "high": 14.112, "label": "ALL", "usage": "Digimodes, automatically controlled data stations (unattended)", "license": "", "color": "#ff8000"},
     {"low": 14.112, "high": 14.350, "label": "ALL", "license": "", "color": "#ff8000"},
 
     {"low": 18.068, "high": 18.095, "label": "CW", "license": "", "color": "#3060ff"},
     {"low": 18.095, "high": 18.109, "label": "NB DIGI", "license": "", "color": "#c03030"},
     {"low": 18.109, "high": 18.111, "label": "BCN", "license": "", "color": "#00d0d0"},
-    {"low": 18.111, "high": 18.120, "label": "DIGI", "license": "", "color": "#c03030"},
+    {"low": 18.111, "high": 18.120, "label": "ALL", "usage": "Digimodes, automatically controlled data stations (unattended)", "license": "", "color": "#ff8000"},
     {"low": 18.120, "high": 18.168, "label": "ALL", "license": "", "color": "#ff8000"},
 
     {"low": 21.000, "high": 21.070, "label": "CW", "license": "", "color": "#3060ff"},
     {"low": 21.070, "high": 21.110, "label": "NB DIGI", "license": "", "color": "#c03030"},
-    {"low": 21.110, "high": 21.120, "label": "DIGI", "license": "", "color": "#c03030"},
+    {"low": 21.110, "high": 21.120, "label": "DIGI", "usage": "All modes except SSB. Digimodes, automatically controlled data stations (unattended)", "license": "", "color": "#c03030"},
     {"low": 21.120, "high": 21.149, "label": "NB", "license": "", "color": "#c03030"},
     {"low": 21.149, "high": 21.151, "label": "BCN", "license": "", "color": "#00d0d0"},
     {"low": 21.151, "high": 21.450, "label": "ALL", "license": "", "color": "#ff8000"},
@@ -50,7 +51,7 @@
     {"low": 24.890, "high": 24.915, "label": "CW", "license": "", "color": "#3060ff"},
     {"low": 24.915, "high": 24.929, "label": "NB DIGI", "license": "", "color": "#c03030"},
     {"low": 24.929, "high": 24.931, "label": "BCN", "license": "", "color": "#00d0d0"},
-    {"low": 24.931, "high": 24.940, "label": "DIGI", "license": "", "color": "#c03030"},
+    {"low": 24.931, "high": 24.940, "label": "ALL", "usage": "Digimodes, automatically controlled data stations (unattended)", "license": "", "color": "#ff8000"},
     {"low": 24.940, "high": 24.990, "label": "ALL", "license": "", "color": "#ff8000"},
 
     {"low": 28.000, "high": 28.070, "label": "CW", "license": "", "color": "#3060ff"},
@@ -59,7 +60,7 @@
     {"low": 28.225, "high": 28.320, "label": "BCN/DIGI", "license": "", "color": "#00d0d0"},
     {"low": 28.320, "high": 29.000, "label": "ALL", "license": "", "color": "#ff8000"},
     {"low": 29.000, "high": 29.200, "label": "ALL/FM", "license": "", "color": "#ffd000"},
-    {"low": 29.200, "high": 29.300, "label": "DIGI", "license": "", "color": "#c03030"},
+    {"low": 29.200, "high": 29.300, "label": "ALL", "usage": "Digimodes, automatically controlled data stations (unattended)", "license": "", "color": "#ff8000"},
     {"low": 29.300, "high": 29.510, "label": "SAT", "license": "", "color": "#9030c0"},
     {"low": 29.520, "high": 29.590, "label": "RPT IN", "license": "", "color": "#ffd000"},
     {"low": 29.600, "high": 29.601, "label": "FM CALL", "license": "", "color": "#ffd000"},

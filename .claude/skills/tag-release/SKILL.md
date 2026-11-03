@@ -1,6 +1,6 @@
 ---
 name: tag-release
-description: 'The AetherSDR cut pass — takes a CalVer version whose prep PR has merged on main and drives it from "the prep is on main" to "the release is published, every asset is signed and verified, the Store draft is staged, the website post is up and the report is written". Finds the squash-merge commit, checks the six release files at that SHA, tags it with a signed annotated tag, creates the release before CI attaches anything, watches the three build workflows and the signing runs, verifies the seventeen-asset set on the files, reads the Store staging step, drafts the website post, and reports the first 48 hours. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/tag-release 26.9.5", "/tag-release v26.9.5", "tag the release", "cut the tag", "publish v26.9.5", "the prep merged, tag it", or otherwise wants a prepped version tagged and published. /release-prep ends where this begins.'
+description: 'The AetherSDR cut pass — takes a CalVer version whose prep PR has merged on main and drives it from "the prep is on main" to "the release is published, every asset is signed and verified, the Store draft is staged, the website post is up and the report is written". Finds the squash-merge commit, checks the six release files at that SHA, tags it with a signed annotated tag, creates the release before CI attaches anything, watches the three build workflows and the signing runs, verifies the twenty-five-asset set on the files, reads the Store staging step, drafts the website post, and reports the first 48 hours. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/tag-release 26.9.5", "/tag-release v26.9.5", "tag the release", "cut the tag", "publish v26.9.5", "the prep merged, tag it", or otherwise wants a prepped version tagged and published. /release-prep ends where this begins.'
 ---
 
 # Tag the release — tag, publish, watch, verify, announce
@@ -15,8 +15,8 @@ which). Nine deliverables, in this order:
    the title that equals the tag's first line and the derived notes.
 4. **The three build workflows and the signing runs watched to conclusion** —
    re-run or dispatched by hand where the record says they stall.
-5. **The asset set verified on the files** — seventeen assets (sixteen for a
-   hotfix), every `.asc` postdating what it signs, `SHA256SUMS.txt`, one
+5. **The asset set verified on the files** — twenty-five assets (twenty-four
+   for a hotfix), every `.asc` postdating what it signs, `SHA256SUMS.txt`, one
    artifact signature and the manual's signature actually checked with `gpg`.
 6. **The Microsoft Store step read** — draft staged, or the reason it failed
    and the recovery, stated.
@@ -116,7 +116,7 @@ The bar is: *would a different answer have changed the work?* If yes, ask.
 The tag message paragraph (written from the CHANGELOG intro, shape fixed);
 creating the release; running the verifications; re-running a failed platform
 job once (`gh run rerun <id> --failed`); dispatching the signing workflow when
-no run has succeeded ten minutes after the four signables are present;
+no run has succeeded ten minutes after the eight signables are present;
 opening the website PR once the title is chosen; committing and pushing the
 website branch (standing authorization). Applying the gate to trivia turns a
 release into an interrogation.
@@ -153,7 +153,7 @@ ask" question, so the questions are batched once.
   component is a **hotfix**: `packaging/windows/get-store-build-plan.ps1`
   returns `storeEligible = false`, so the Windows job attaches the installer
   and the portable ZIP but builds **no `.msixupload`** and stages nothing —
-  sixteen assets, not seventeen, the Store skipped by design, the release body
+  twenty-four assets, not twenty-five, the Store skipped by design, the release body
   in the hotfix shape, and the notes covering one fix.
 - **Refuse a version that already exists.** Both must be empty:
 
@@ -372,14 +372,16 @@ morning. A failed platform job is re-run once without asking (`gh run rerun
 <id> --failed`); a second failure is an "Always ask"; a hand upload goes in
 the report by name and uploader.
 
-**Sign Release Artifacts** runs on `workflow_run` after **AppImage** and
-after **Windows Installer** each conclude — two runs per tag, serialised by
-a concurrency group. Each run is skipped by its own `if` unless the
-triggering build **succeeded** and its head branch starts with `v`. A run
-that passes the `if` waits up to 30 minutes for the four GPG-signable assets
-(both AppImages, the setup.exe, the portable ZIP), checks out the **tag** for
-the source tarball, writes `SHA256SUMS.txt` over exactly five files (the four
-plus the tarball — DMGs and the `.msixupload` are deliberately absent), signs
+**Sign Release Artifacts** runs on `workflow_run` after **AppImage**,
+**Windows Installer** and **macOS DMG** each conclude — up to three runs per
+tag, serialised by a concurrency group (a third trigger cancels the one still
+pending). Each run is skipped by its own `if` unless the triggering build
+**succeeded** and its head branch starts with `v`. A run that passes the `if`
+waits up to 30 minutes for the eight GPG-signable assets (both AppImages,
+both Linux release tarballs, both macOS app tarballs, the setup.exe, the
+portable ZIP), checks out the **tag** for the source tarball, writes
+`SHA256SUMS.txt` over exactly nine files (the eight plus the source tarball —
+DMGs and the `.msixupload` are deliberately absent), signs
 everything and uploads with `--clobber`. Its runs execute on the default
 branch, so `gh run list --branch vX.Y.Z` never shows them:
 
@@ -392,7 +394,7 @@ after AppImage concludes and spends its time in the wait step until the
 Windows assets land; the second starts when Windows concludes and is
 `skipped` when Windows went red (v26.8.4, v26.9.1, v26.9.4 — one success, one
 skipped, the set fully signed). **If no signing run has succeeded within ten
-minutes of the four signables being present, dispatch it** (do not ask):
+minutes of the eight signables being present, dispatch it** (do not ask):
 
 ```sh
 gh workflow run sign-release.yml -f tag=vX.Y.Z
@@ -401,13 +403,29 @@ gh workflow run sign-release.yml -f tag=vX.Y.Z
 A run that exists and is neither concluded nor waiting for a missing asset
 is an "Always ask" before a second dispatch.
 
+**macOS never blocks the others** (a maintainer ruling): signing and Update
+Manifest wait for the macOS app tarballs only while the tag's macOS DMG run
+can still attach them. If it finishes without one (a notarization failure, a
+leg that failed to sign), Linux and Windows are signed and the manifest is
+published without macOS, with a `::warning::` in each run. The asset check
+then reports the missing app tarball and its `.asc`. Recovery: re-run the
+failed `Sign and notarize` leg and its `App update tarball` leg, then dispatch
+`sign-release.yml` (it re-signs the full set) and `update-manifest.yml` with
+`publish=true` (a manifest already published without macOS is otherwise left
+as it is).
+
 **Docs** runs on `release: published`, so creating the release (step 2)
-starts it, not the tag push. Its "Attach PDF manual to release" job checks out
-the tag, typesets `AetherSDR-Manual-vX.Y.Z.pdf` from the tag's
-`docs/user/docs/`, signs it with the release key (the same
-`GPG_PRIVATE_KEY`/`GPG_PASSPHRASE` secrets as `sign-release.yml`), verifies the
-signature and uploads the PDF and its `.asc` together. Its runs execute on the
-tag; read its conclusion with the build workflows. A red run is re-run once
+starts it, not the tag push. "Render PDF manual for release" checks out the
+tag and typesets `AetherSDR-Manual-vX.Y.Z.pdf` from the tag's
+`docs/user/docs/`. "Attach PDF manual to release" runs in the `release`
+environment, so it waits for the same approval as the signing workflows; it
+signs the PDF with the release key (the same `GPG_PRIVATE_KEY`/`GPG_PASSPHRASE`
+secrets as `sign-release.yml`), verifies the signature and uploads the PDF and
+its `.asc` together. Then "Resolve what to deploy", "Build docs site for
+deploy" and "Deploy docs site" publish docs.aethersdr.com from the tag, through
+the `cloudflare-pages` environment, with `/AetherSDR-Manual.pdf` redirected to
+the PDF just attached. A pre-release attaches the PDF but deploys nothing. Its
+runs execute on the tag; read its conclusion with the build workflows. A red run is re-run once
 without asking (`gh run rerun <id> --failed`): it builds nothing the other
 workflows depend on.
 
@@ -451,6 +469,13 @@ report. What it checks, and what you check by hand where it cannot run:
 - **The set** (`references/asset-manifest.md`; v26.9.3 and v26.9.4 have
   the first fifteen, before the manual was attached to releases):
   - `AetherSDR-vX.Y.Z-x86_64.AppImage` and `-aarch64.AppImage`, each with `.asc`
+  - `AetherSDR-vX.Y.Z-x86_64.tar.zst` and `-aarch64.tar.zst`, each with `.asc`
+    (the Linux release tarballs: AppImage builds them from the image, Update
+    Manifest names them as Linux's in-app `full`)
+  - `AetherSDR-vX.Y.Z-macOS-apple-silicon.app.tar.zst` and `-macOS-intel.app.tar.zst`,
+    each with `.asc` (the signed app out of the notarized DMG: the macOS DMG
+    workflow's `app-tarball` job builds them, Update Manifest names them as
+    macOS's in-app payload and `full`)
   - `AetherSDR-vX.Y.Z-macOS-apple-silicon.dmg` and `-macOS-intel.dmg` (Apple-notarized, no `.asc`)
   - `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` and `-Windows-x64-portable.zip`, each with `.asc`
   - `AetherSDR-vX.Y.Z-source.tar.gz` with `.asc`
@@ -459,7 +484,7 @@ report. What it checks, and what you check by hand where it cannot run:
     **Docs**, not Sign Release Artifacts; deliberately not in `SHA256SUMS.txt`)
   - `AetherSDR-X.Y.Z.0-Windows-x64.msixupload` — absent for a hotfix
 
-  Every `.asc` on the four CI-built binaries postdates its binary (a re-run
+  Every `.asc` on the six CI-built binaries postdates its binary (a re-run
   that re-attached a binary after signing breaks this, and the signature is
   then for other bytes); the tarball and `SHA256SUMS.txt` are made by the
   signing job, and the manual by Docs, each uploaded in the same batch as its
@@ -474,7 +499,7 @@ report. What it checks, and what you check by hand where it cannot run:
   `B765 6E6B CB2E 022B 79F0 F97B 5578 D10E 3D59 18F3`), runs `gpg --verify
   SHA256SUMS.txt.asc SHA256SUMS.txt`, recomputes SHA-256 over every
   downloaded file against `SHA256SUMS.txt`, runs `gpg --verify` on one
-  artifact's `.asc` and on the manual's, checks that `SHA256SUMS.txt` names exactly the five
+  artifact's `.asc` and on the manual's, checks that `SHA256SUMS.txt` names exactly the seven
   files, and opens the tarball to read `AetherSDR-vX.Y.Z/CMakeLists.txt`'s
   `project(AetherSDR VERSION …)` — the pre-#5029 tarballs were archived from
   `main`, not the tag. Where `gpg` is absent the signature checks print
@@ -613,11 +638,11 @@ Each decision put through AskUserQuestion and the answer. "None." if so.
 | Docs | <url> | 1 | success | release: published; manual PDF signed and attached |
 Re-run or dispatched by hand: <what, when> / none.
 
-### Assets (17 / 16 for a hotfix)
-- [x] AetherSDR-vX.Y.Z-x86_64.AppImage — .asc +<min> after the binary (tarball and SHA256SUMS: same upload as their .asc)
+### Assets (25 / 24 for a hotfix)
+- [x] AetherSDR-vX.Y.Z-x86_64.AppImage — .asc +<min> after the binary (source tarball and SHA256SUMS: same upload as their .asc)
 - … one line per expected asset, ticked or **missing** …
 - [x] AetherSDR-X.Y.Z.0-Windows-x64.msixupload — version checked / n/a (hotfix)
-SHA256SUMS.txt covers: the five expected files. Verified locally: `gpg --verify SHA256SUMS.txt.asc` OK, sha256 of <files> OK, `gpg --verify <artifact>.asc` OK, `gpg --verify AetherSDR-Manual-vX.Y.Z.pdf.asc` OK, tarball CMakeLists says X.Y.Z / not run: <why>.
+SHA256SUMS.txt covers: the nine expected files. Verified locally: `gpg --verify SHA256SUMS.txt.asc` OK, sha256 of <files> OK, `gpg --verify <artifact>.asc` OK, `gpg --verify AetherSDR-Manual-vX.Y.Z.pdf.asc` OK, tarball CMakeLists says X.Y.Z / not run: <why>.
 
 ### Store
 Draft staged: yes — Submit to Store is the maintainer's click / **no** — step failed: "<quoted reason>". Recovery: <as step 5>. / n/a (hotfix).

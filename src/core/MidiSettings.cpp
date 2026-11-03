@@ -495,34 +495,21 @@ void MidiSettings::load()
              << "device:" << m_lastDevice << "autoConnect:" << m_autoConnect;
 }
 
-void MidiSettings::save()
+bool MidiSettings::save()
 {
-    QString path = settingsFilePath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    auto bindings = loadBindings();
-
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "MidiSettings: failed to save" << path;
-        return;
+    if (m_savesBlocked) {
+        qWarning() << "MidiSettings: refusing preference save; startup could not read"
+                   << settingsFilePath();
+        return false;
     }
-
-    QXmlStreamWriter xml(&file);
-    xml.setAutoFormatting(true);
-    xml.writeStartDocument();
-    xml.writeStartElement("MidiSettings");
-
-    xml.writeTextElement("LastDevice", m_lastDevice);
-    xml.writeTextElement("AutoConnect", m_autoConnect ? "True" : "False");
-
-    // Write bindings inline in the main settings file
-    xml.writeStartElement("Bindings");
-    for (const auto& b : bindings)
-        writeBindingElement(xml, b);
-    xml.writeEndElement(); // Bindings
-
-    xml.writeEndElement(); // MidiSettings
-    xml.writeEndDocument();
+    ReadOutcome outcome = ReadOutcome::Failed;
+    const QVector<MidiBinding> bindings = parseBindingsFromXml(settingsFilePath(), &outcome);
+    if (outcome == ReadOutcome::Failed) {
+        qWarning() << "MidiSettings: refusing preference save after settings read/parse failure"
+                   << settingsFilePath();
+        return false;
+    }
+    return saveBindings(bindings);
 }
 
 // ── Bindings ────────────────────────────────────────────────────────────────
@@ -532,37 +519,98 @@ QVector<MidiBinding> MidiSettings::loadBindings() const
     return parseBindingsFromXml(settingsFilePath());
 }
 
-void MidiSettings::saveBindings(const QVector<MidiBinding>& bindings)
+QVector<MidiBinding> MidiSettings::loadStartupBindings()
 {
-    // Re-save the full file with updated bindings
-    QString path = settingsFilePath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
-
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
-
-    QXmlStreamWriter xml(&file);
-    xml.setAutoFormatting(true);
-    xml.writeStartDocument();
-    xml.writeStartElement("MidiSettings");
-
-    xml.writeTextElement("LastDevice", m_lastDevice);
-    xml.writeTextElement("AutoConnect", m_autoConnect ? "True" : "False");
-
-    xml.writeStartElement("Bindings");
-    for (const auto& b : bindings)
-        writeBindingElement(xml, b);
-    xml.writeEndElement();
-
-    xml.writeEndElement();
-    xml.writeEndDocument();
+    ReadOutcome outcome = ReadOutcome::Failed;
+    QVector<MidiBinding> bindings = parseBindingsFromXml(settingsFilePath(), &outcome);
+    m_savesBlocked = (outcome == ReadOutcome::Failed);
+    if (m_savesBlocked) {
+        qWarning() << "MidiSettings: could not read" << settingsFilePath()
+                   << "- leaving it untouched and refusing MIDI binding saves this session";
+    }
+    return bindings;
 }
 
-QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)
+bool MidiSettings::saveBindings(const QVector<MidiBinding>& bindings)
 {
+    if (m_savesBlocked) {
+        qWarning() << "MidiSettings: refusing binding save; startup could not read"
+                   << settingsFilePath();
+        return false;
+    }
+    return writeSettingsDocument(settingsFilePath(), bindings);
+}
+
+bool MidiSettings::writeSettingsDocument(const QString& filePath,
+                                        const QVector<MidiBinding>& bindings)
+{
+    QDir().mkpath(QFileInfo(filePath).absolutePath());
+
+    // QSaveFile writes beside the target and renames over it on commit(), so
+    // a crash or full disk leaves the previous settings intact instead of a
+    // truncated file. (#5160)
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning() << "MidiSettings: failed to save" << filePath;
+        return false;
+    }
+
+    // Scope writer so document finishes before commit()
+    {
+        QXmlStreamWriter xml(&file);
+        xml.setAutoFormatting(true);
+        xml.writeStartDocument();
+        xml.writeStartElement("MidiSettings");
+
+        xml.writeTextElement("LastDevice", m_lastDevice);
+        xml.writeTextElement("AutoConnect", m_autoConnect ? "True" : "False");
+
+        // Write bindings inline in the main settings file
+        xml.writeStartElement("Bindings");
+        for (const auto& b : bindings) {
+            writeBindingElement(xml, b);
+        }
+        xml.writeEndElement(); // Bindings
+
+        xml.writeEndElement(); // MidiSettings
+        xml.writeEndDocument();
+
+        if (xml.hasError()) {
+            qWarning() << "MidiSettings: XML error writing" << filePath;
+            file.cancelWriting();
+            return false;
+        }
+    }
+
+    if (!file.commit()) {
+        qWarning() << "MidiSettings: failed to commit" << filePath;
+        return false;
+    }
+    return true;
+}
+
+QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath,
+                                                      ReadOutcome* outcome)
+{
+    if (outcome) {
+        *outcome = ReadOutcome::Failed;
+    }
     QVector<MidiBinding> result;
     QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return result;
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QFileInfo info(filePath);
+        bool absent = !info.exists() && !info.isSymLink();
+#ifndef Q_OS_WIN
+        // exists() also reads false when the folder cannot be searched, which
+        // hides a file that is there. Only a searchable folder proves absence.
+        const QFileInfo dir(info.absolutePath());
+        absent = absent && (!dir.exists() || dir.permission(QFileDevice::ExeUser));
+#endif
+        if (outcome && absent) {
+            *outcome = ReadOutcome::Absent;
+        }
+        return result;
+    }
 
     QXmlStreamReader xml(&file);
     while (!xml.atEnd()) {
@@ -579,6 +627,9 @@ QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)
             if (!b.paramId.isEmpty())
                 result.append(b);
         }
+    }
+    if (outcome && !xml.hasError() && file.error() == QFileDevice::NoError) {
+        *outcome = ReadOutcome::Parsed;
     }
     return result;
 }

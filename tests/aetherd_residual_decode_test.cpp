@@ -163,6 +163,44 @@ int main(int argc, char** argv)
         CHECK(!d.list.has_value() && !d.current.has_value());
     }
 
+    // ---- Profile: CW list/current (SmartSDR 4.3.16) ----
+    {
+        const ProfileDelta list = decodeProfile(b, QStringLiteral("cw"),
+            QStringLiteral("list=Default^Contest 30 WPM"));
+        CHECK(list.type == QStringLiteral("cw"));
+        CHECK(list.list.has_value() && list.list->size() == 2);
+        CHECK(list.list->at(1) == QStringLiteral("Contest 30 WPM"));
+        const ProfileDelta current = decodeProfile(b, QStringLiteral("cw"),
+            QStringLiteral("current=Contest 30 WPM"));
+        CHECK(current.type == QStringLiteral("cw"));
+        CHECK(current.current.has_value() && *current.current == QStringLiteral("Contest 30 WPM"));
+    }
+
+    // ---- Profile: unsaved_changes_cw names its own type ----
+    {
+        const ProfileDelta dirty = decodeProfile(b, QStringLiteral("cw"),
+            QStringLiteral("unsaved_changes_cw=1"));
+        CHECK(dirty.type == QStringLiteral("cw"));
+        CHECK(dirty.unsavedChanges.has_value() && *dirty.unsavedChanges);
+        CHECK(!dirty.list.has_value() && !dirty.current.has_value());
+        const ProfileDelta clean = decodeProfile(b, QStringLiteral("global"),
+            QStringLiteral("unsaved_changes_cw=0"));
+        CHECK(clean.type == QStringLiteral("cw"));
+        CHECK(clean.unsavedChanges.has_value() && !*clean.unsavedChanges);
+
+        QSignalSpy spy(&b, &IRadioBackend::profileChanged);
+        b.decodeProfileFlags({{QStringLiteral("unsaved_changes_cw"), QStringLiteral("1")}});
+        CHECK(spy.count() == 1);
+        const ProfileDelta flag = spy.takeFirst().at(0).value<ProfileDelta>();
+        CHECK(flag.type == QStringLiteral("cw"));
+        CHECK(flag.unsavedChanges.has_value() && *flag.unsavedChanges);
+
+        QSignalSpy spy2(&b, &IRadioBackend::profileChanged);
+        b.decodeProfileFlags({{QStringLiteral("unsaved_changes_tx"), QStringLiteral("0")}});
+        CHECK(spy2.count() == 1);
+        CHECK(spy2.takeFirst().at(0).value<ProfileDelta>().type == QStringLiteral("tx"));
+    }
+
     // ---- Profile: unknown key for a type → no emission ----
     {
         QSignalSpy spy(&b, &IRadioBackend::profileChanged);

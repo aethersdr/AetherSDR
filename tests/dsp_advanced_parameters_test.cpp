@@ -7,6 +7,7 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QDate>
 #include <QEvent>
 #include <QMap>
 #include <QPointer>
@@ -52,8 +53,7 @@ public:
     }
     static void expiredSubscription(RadioModel& radio)
     {
-        radio.m_licenseSubscription = QStringLiteral("SmartSDR");
-        radio.m_licenseExpirationDate = QStringLiteral("01/01/2000");
+        radio.m_licenseSubscription = {QStringLiteral("SmartSDR+"), QDate(2000, 1, 1).startOfDay()};
     }
     static void retire(RadioModel& radio)
     {
@@ -754,6 +754,44 @@ void reentrantReadbackLifetime()
     }
 }
 
+void combinedChainAndDspNotifications()
+{
+    SliceDelta delta;
+    delta.mode = QStringLiteral("FDVU");
+    delta.chainMode = QStringLiteral("DIGU");
+    delta.dspParameters.insert(DspParameter::NrDelay, 123);
+    {
+        SliceModel slice(0);
+        int chainNotifications = 0;
+        int dspNotifications = 0;
+        QObject::connect(&slice, &SliceModel::chainModeChanged, &slice, [&] {
+            ++chainNotifications;
+            check(slice.mode() == QStringLiteral("FDVU")
+                      && slice.dspParameter(DspParameter::NrDelay) == 123,
+                  "chain notification sees the complete combined DSP status");
+        });
+        QObject::connect(&slice, &SliceModel::dspParametersChanged, &slice, [&] {
+            ++dspNotifications;
+            check(slice.chainMode() == QStringLiteral("DIGU"),
+                  "DSP notification retains the reported processing chain");
+        });
+        slice.applyChanges(delta);
+        check(chainNotifications == 1 && dspNotifications == 1,
+              "one combined status publishes both chain and advanced DSP observations");
+    }
+    {
+        auto slice = std::make_unique<SliceModel>(0);
+        bool dspNotified = false;
+        QObject::connect(slice.get(), &SliceModel::dspParametersChanged,
+                         [&] { dspNotified = true; });
+        QObject::connect(slice.get(), &SliceModel::chainModeChanged,
+                         [&] { slice.reset(); });
+        slice->applyChanges(delta);
+        check(!slice && !dspNotified,
+              "chain notification can retire the slice before DSP publication");
+    }
+}
+
 void productionProviders()
 {
     RadioModel radio;
@@ -789,6 +827,7 @@ int main(int argc, char** argv)
     firmwareModelAndLicense();
     identitySessionAndMode();
     productionProviders();
+    combinedChainAndDspNotifications();
     observationInvalidationLifetime();
     acknowledgedReadback();
     synchronousReplyDispatch();

@@ -12,7 +12,8 @@ enum class RadioSetupField {
     ShowTxInWaterfall, MeterDuringReceive, SyncCwx, RttyMarkDefaultHz,
     CalibrationFrequencyMhz, FrequencyCorrectionPpb, ReferenceSource,
     MuteLocalWhenRemote, BinauralReceive, SharpnessLevel, SharpnessAuto,
-    LowLatencyDigital, StartFrequencyCalibration, Count
+    LowLatencyDigital, StartFrequencyCalibration, LineoutGain, LineoutMute,
+    HeadphoneGain, HeadphoneMute, FrontSpeakerMute, Count
 };
 
 struct RadioSetupControl {

@@ -20,6 +20,8 @@ static constexpr int kRitMaxHz = 9999;
 // ZZ 2-digit codes from SmartSDR CAT User Guide Rev. v4.1.5:
 //   00=LSB 01=USB 03=CWL 04=CWU(CW) 05=FM 06=AM 07=DIGU 09=DIGL
 //   10=SAM 11=NFM 12=DFM 20=FDV 30=RTTY 40=DSTR
+// SmartSDR 4.3 splits FDV into FDVU/FDVL (FlexLib v4.3.16 Slice.cs:799,825).
+// Both report ZZ 20, and the Kenwood digital code for their sideband.
 
 QString SmartCatProtocol::modeToKenwood(const QString& ssdrMode)
 {
@@ -32,9 +34,11 @@ QString SmartCatProtocol::modeToKenwood(const QString& ssdrMode)
     if (ssdrMode == "AM")   return "5";
     if (ssdrMode == "SAM")  return "5";
     if (ssdrMode == "DIGL") return "6";
+    if (ssdrMode == "FDVL") return "6";
     if (ssdrMode == "RTTY") return "6";
     if (ssdrMode == "DIGU") return "9";
     if (ssdrMode == "FDV")  return "9";
+    if (ssdrMode == "FDVU") return "9";
     return "2";
 }
 
@@ -52,6 +56,8 @@ QString SmartCatProtocol::modeToZZ(const QString& ssdrMode)
     if (ssdrMode == "NFM")  return "11";
     if (ssdrMode == "DFM")  return "12";
     if (ssdrMode == "FDV")  return "20";
+    if (ssdrMode == "FDVU") return "20";
+    if (ssdrMode == "FDVL") return "20";
     if (ssdrMode == "RTTY") return "30";
     if (ssdrMode == "DSTR") return "40";
     return "01";
@@ -88,6 +94,18 @@ QString SmartCatProtocol::zzToSSDR(const QString& two)
     if (two == "30") return "RTTY";
     if (two == "40") return "DSTR";
     return "USB";
+}
+
+QString SmartCatProtocol::freeDvModeFor(const QString& currentMode,
+                                        const QStringList& modeList)
+{
+    // ZZ 20 names FreeDV without a sideband. A slice already in a FreeDV mode
+    // keeps it; otherwise use the token this radio's mode_list offers.
+    if (currentMode == "FDV" || currentMode == "FDVU" || currentMode == "FDVL")
+        return currentMode;
+    if (modeList.contains("FDV"))  return "FDV";
+    if (modeList.contains("FDVU")) return "FDVU";
+    return "FDV";
 }
 
 QString SmartCatProtocol::freqField(double mhz)
@@ -354,7 +372,12 @@ QString SmartCatProtocol::cmdMD(const QString& arg)
     if (arg.isEmpty())
         return "MD" + modeToKenwood(a->mode()) + ";";
     if (arg.size() != 1) return "?;";
-    a->setMode(kenwoodToSSDR(arg[0]));
+    QString mode = kenwoodToSSDR(arg[0]);
+    // A FreeDV slice reports its sideband's digital code; the same code coming
+    // back must not switch the slice out of FreeDV.
+    if (a->mode().startsWith("FDV") && modeToKenwood(a->mode()) == arg)
+        mode = a->mode();
+    a->setMode(mode);
     return {};
 }
 
@@ -367,7 +390,10 @@ QString SmartCatProtocol::cmdZZMD(const QString& arg)
     if (arg.isEmpty())
         return "ZZMD" + modeToZZ(a->mode()) + ";";
     if (arg.size() != 2) return "?;";
-    a->setMode(zzToSSDR(arg));
+    QString mode = zzToSSDR(arg);
+    if (mode == "FDV")
+        mode = freeDvModeFor(a->mode(), a->modeList());
+    a->setMode(mode);
     return {};
 }
 
@@ -380,7 +406,10 @@ QString SmartCatProtocol::cmdZZME(const QString& arg)
     if (arg.isEmpty())
         return "ZZME" + modeToZZ(b->mode()) + ";";
     if (arg.size() != 2) return "?;";
-    b->setMode(zzToSSDR(arg));
+    QString mode = zzToSSDR(arg);
+    if (mode == "FDV")
+        mode = freeDvModeFor(b->mode(), b->modeList());
+    b->setMode(mode);
     return {};
 }
 

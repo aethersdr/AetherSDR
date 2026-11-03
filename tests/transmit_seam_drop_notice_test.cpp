@@ -79,6 +79,8 @@ void lineoutRouting()
 {
     Fixture f;
     f.backend->caps.lineoutControl = RadioCapabilities::LineoutControl{};
+    f.backend->caps.radioSetupControl = RadioSetupControl{
+        {RadioSetupField::LineoutGain, RadioSetupField::LineoutMute}};
     f.radio.setLineoutMute(true);
     f.radio.setLineoutMute(false);
     f.radio.setLineoutGain(30);
@@ -87,13 +89,49 @@ void lineoutRouting()
           "declared line output receives each typed edit without a drop notice");
 
     Fixture unsupported;
+    unsupported.backend->caps.radioSetupControl = RadioSetupControl{
+        {RadioSetupField::LineoutGain, RadioSetupField::LineoutMute}};
     unsupported.radio.setLineoutMute(true);
     unsupported.radio.setLineoutGain(30);
     check(unsupported.backend->lineoutMutes.isEmpty()
               && unsupported.backend->lineoutGains.isEmpty()
-              && unsupported.dropped.contains(QStringLiteral("mixer lineout mute 1"))
-              && unsupported.dropped.contains(QStringLiteral("mixer lineout gain 30")),
+              && unsupported.dropped.contains(QStringLiteral("line output mute 1"))
+              && unsupported.dropped.contains(QStringLiteral("line output gain 30")),
           "absent line output receives no seam call and retains both drop notices");
+}
+void setupRefusalLabels()
+{
+    using Field = RadioSetupField;
+    const struct {
+        RadioSetupRequest request;
+        const char* label;
+    } cases[] = {
+        {{Field::LineoutGain, 0}, "line output gain 0"},
+        {{Field::LineoutGain, 100}, "line output gain 100"},
+        {{Field::LineoutMute, false}, "line output mute 0"},
+        {{Field::LineoutMute, true}, "line output mute 1"},
+        {{Field::HeadphoneGain, 0}, "headphone gain 0"},
+        {{Field::HeadphoneGain, 100}, "headphone gain 100"},
+        {{Field::HeadphoneMute, false}, "headphone mute 0"},
+        {{Field::HeadphoneMute, true}, "headphone mute 1"},
+        {{Field::FrontSpeakerMute, false}, "front speaker mute 0"},
+        {{Field::FrontSpeakerMute, true}, "front speaker mute 1"},
+        {{Field::ShowTxInWaterfall, false}, "show TX in waterfall 0"},
+        {{Field::ShowTxInWaterfall, true}, "show TX in waterfall 1"},
+        {{Field::MeterDuringReceive, true}, "radio setup"},
+    };
+    Fixture f;
+    for (const auto& item : cases) {
+        f.dropped.clear();
+        check(f.radio.requestRadioSetup(item.request) == ReceiveDispatch::Unsupported
+                  && f.dropped == QStringList{QString::fromLatin1(item.label)}, item.label);
+    }
+    f.dropped.clear();
+    check(f.radio.requestRadioSetup({Field::LineoutGain, true}) == ReceiveDispatch::Unsupported
+              && f.radio.requestRadioSetup({Field::HeadphoneMute, 1}) == ReceiveDispatch::Unsupported
+              && f.radio.requestRadioSetup({Field::LineoutGain, 101}) == ReceiveDispatch::Unsupported
+              && f.dropped.isEmpty(),
+          "invalid setup values refuse without formatting or announcing an invalid variant");
 }
 void receipts()
 {
@@ -290,6 +328,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     receipts();
     lineoutRouting();
+    setupRefusalLabels();
     tuneOwnership();
     filterWarningReentrancy();
     cwPitchBackendLifetime();

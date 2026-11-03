@@ -54,6 +54,7 @@ struct FakeDevice {
     std::atomic<int> writeDelayMs{0};
     std::atomic<int> writesBegun{0};
     std::atomic<bool> failWrites{false};
+    std::atomic<int> failWritesAfter{-1}; // not -1: writes after this many fail
     std::atomic<bool> closed{false};
     std::function<void()> onWritten;   // after a write completes, on the I/O thread
     QByteArray featureReply;           // Get Feature 0x02 answer, ID first; empty = stall
@@ -83,6 +84,9 @@ struct FakeDevice {
                 return -1;
             }
             std::lock_guard<std::mutex> g(lock);
+            if (failWritesAfter >= 0 && static_cast<int>(writes.size()) >= failWritesAfter) {
+                return -1;
+            }
             writes.emplace_back(reinterpret_cast<const char*>(buffer), size);
             if (onWritten) {
                 onWritten();
@@ -223,6 +227,23 @@ void testReadsAndFailures()
     check(waitUntil([&] { return !failure2.isEmpty(); }) && failure2.contains("injected failure"),
           "a failed write fails the port with the device's reason");
     port2->shutdown({});
+    waitUntil([] { return false; }, 100);
+
+    // Writes that went out before a failing one in the same tick are counted,
+    // and reported before the failure: the firmware updater relies on it.
+    auto dev3 = std::make_shared<FakeDevice>();
+    dev3->failWritesAfter = 2;
+    auto* port3 = new Ctr2HidThreadPort(dev3->io(), QStringLiteral("fake"));
+    int sent3 = 0;
+    int sentAtFailure = -1;
+    QObject::connect(port3, &Ctr2HidPort::reportsSent, port3, [&](int n) { sent3 += n; });
+    QObject::connect(port3, &Ctr2HidPort::failed, port3,
+                     [&](const QString&) { sentAtFailure = sent3; });
+    port3->send(reports(3, 0x50));
+    check(waitUntil([&] { return sentAtFailure >= 0; }) && dev3->writeCount() == 2
+              && sentAtFailure == 2,
+          "writes before a failing one in the same tick are reported sent, before the failure");
+    port3->shutdown({});
     waitUntil([] { return false; }, 100);
 }
 
@@ -366,6 +387,160 @@ void testNegotiation()
     }
 }
 
+// Wide reports: once accepted, reports go out and come in bundled in report
+// 0x04, up to seven at a time; report 0x01 padded by Windows still reads.
+void testWideReports()
+{
+    auto dev = std::make_shared<FakeDevice>();
+    dev->featureReply = featureReport(capabilities::encode(kWideReportsBit));
+    auto* port = new Ctr2HidThreadPort(dev->io(), QStringLiteral("fake"));
+    QByteArray got;
+    int sent = 0;
+    QString failure;
+    QObject::connect(port, &Ctr2HidPort::reportsReceived, port, [&](const QByteArray& r) { got += r; });
+    QObject::connect(port, &Ctr2HidPort::reportsSent, port, [&](int n) { sent += n; });
+    QObject::connect(port, &Ctr2HidPort::failed, port, [&](const QString& m) { failure = m; });
+    check(waitUntil([&] { return port->extensions() == kWideReportsBit; }),
+          "a device offering wide reports gets them");
+
+    port->send(reports(10, 0x50));
+    check(waitUntil([&] { return sent == 10; }), "every report is acknowledged, bundled or not");
+    {
+        std::lock_guard<std::mutex> g(dev->lock);
+        check(dev->writes.size() == 2, "ten reports go out in two writes");
+        if (dev->writes.size() == 2) {
+            const QByteArray& a = dev->writes[0];
+            const QByteArray& b = dev->writes[1];
+            check(a.size() == 1 + kWideReportBytes && b.size() == 1 + kWideReportBytes,
+                  "each write is report 0x04 with its 63 bytes");
+            check(static_cast<std::uint8_t>(a[0]) == kWideReportId && a[1] == 7
+                      && static_cast<std::uint8_t>(b[0]) == kWideReportId && b[1] == 3,
+                  "seven reports, then the remaining three");
+            const auto at = [&](const QByteArray& w, int i) {
+                return QByteArray(w.constData() + 2 + i * kReportBytes, kReportBytes);
+            };
+            const std::vector<Report> want = reports(10, 0x50);
+            bool same = true;
+            for (int i = 0; i < 10; ++i) {
+                const QByteArray& w = i < 7 ? a : b;
+                same = same && at(w, i % 7) == QByteArray(reinterpret_cast<const char*>(want[i].data()),
+                                                         kReportBytes);
+            }
+            check(same, "the reports are carried whole and in order");
+            check(b.mid(2 + 3 * kReportBytes) == QByteArray(kWideReportBytes - 1 - 3 * kReportBytes, '\0'),
+                  "the rest of a bundle is zero padding");
+        }
+    }
+
+    QByteArray bundle(1 + kWideReportBytes, '\0');
+    bundle[0] = char(kWideReportId);
+    bundle[1] = 2;
+    bundle.replace(2, 16, "ABCDEFGHIJKLMNOP");
+    QByteArray padded(1 + kWideReportBytes, '\0');
+    padded[0] = char(kReportId);
+    padded.replace(1, 8, "QRSTUVWX");
+    {
+        std::lock_guard<std::mutex> g(dev->lock);
+        dev->reads.push_back(bundle);
+        dev->reads.push_back(padded);
+    }
+    check(waitUntil([&] { return got.size() == 24; }) && got == "ABCDEFGHIJKLMNOPQRSTUVWX",
+          "bundled reports, and a report 0x01 padded to 64 bytes, arrive in order");
+    // A short read carrying report 0x04 is not an 8-byte report with its ID
+    // stripped. A DATA message left open mid-way: the read's first byte, 0x04,
+    // is a valid counter for its next report, so only the port can refuse it.
+    {
+        std::vector<Report> open, skipped;
+        FrameEncoder enc;
+        for (int i = 0; i < 3; ++i) {
+            enc.encodeControl(MessageType::Closed, &skipped);   // counters 0..2
+        }
+        enc.encodeControl(MessageType::Ready, &open);           // counter 3
+        check(enc.counter() == 4, "the DATA message gets counter 4, the stray read's first byte");
+        enc.encodeData(QByteArray(7, 'x'), &open);   // header and one data report
+        open.pop_back();                              // the data report never comes
+        QByteArray two(1 + kWideReportBytes, '\0');
+        two[0] = char(kWideReportId);
+        two[1] = 2;
+        for (int i = 0; i < 2; ++i) {
+            two.replace(2 + i * kReportBytes, kReportBytes,
+                        QByteArray(reinterpret_cast<const char*>(open[i].data()), kReportBytes));
+        }
+        got.clear();
+        std::lock_guard<std::mutex> g(dev->lock);
+        dev->reads.push_back(two);
+    }
+    check(waitUntil([&] { return got.size() == 16; }), "READY and a DATA header arrive");
+    {
+        std::lock_guard<std::mutex> g(dev->lock);
+        dev->reads.push_back(QByteArray("\x04\x00\x00\x00\x00\x00\x00\x00", 8));
+    }
+    check(waitUntil([&] { return !failure.isEmpty(); }) && got.size() == 16,
+          "a truncated report 0x04 fails the port instead of passing as data");
+    {
+        FrameReassembler rx;
+        std::vector<Message> msgs;
+        for (int off = 0; off < got.size(); off += kReportBytes) {
+            rx.feed(reinterpret_cast<const std::uint8_t*>(got.constData() + off), kReportBytes, &msgs);
+        }
+        check(msgs.size() == 1 && msgs[0].type == MessageType::Ready && rx.isMidMessage(),
+              "nothing of the DATA message is released");
+    }
+    port->shutdown({});
+    waitUntil([&] { return dev->closed.load(); });
+
+    // A bundle claiming no reports fails the port too.
+    dev = std::make_shared<FakeDevice>();
+    dev->featureReply = featureReport(capabilities::encode(kWideReportsBit));
+    port = new Ctr2HidThreadPort(dev->io(), QStringLiteral("fake"));
+    failure.clear();
+    QObject::connect(port, &Ctr2HidPort::failed, port, [&](const QString& m) { failure = m; });
+    check(waitUntil([&] { return port->extensions() == kWideReportsBit; }), "wide again");
+    QByteArray empty = bundle;
+    empty[1] = 0;
+    {
+        std::lock_guard<std::mutex> g(dev->lock);
+        dev->reads.push_back(empty);
+    }
+    check(waitUntil([&] { return !failure.isEmpty(); }), "a bundle claiming no reports fails the port");
+    port->shutdown({});
+    waitUntil([&] { return dev->closed.load(); });
+
+    // Final reports at shutdown are bundled too.
+    auto dev2 = std::make_shared<FakeDevice>();
+    dev2->featureReply = featureReport(capabilities::encode(kWideReportsBit));
+    QPointer<Ctr2HidThreadPort> port2 = new Ctr2HidThreadPort(dev2->io(), QStringLiteral("fake"));
+    waitUntil([&] { return port2->extensions() == kWideReportsBit; });
+    port2->shutdown(reports(3, 0x60));
+    check(waitUntil([&] { return port2.isNull(); }), "the port closes");
+    {
+        std::lock_guard<std::mutex> g(dev2->lock);
+        check(dev2->writes.size() == 1 && static_cast<std::uint8_t>(dev2->writes[0][0]) == kWideReportId
+                  && dev2->writes[0][1] == 3,
+              "the final reports go in one bundle");
+    }
+
+    // Without wide reports, report 0x04 is not part of the link.
+    auto dev3 = std::make_shared<FakeDevice>();
+    auto* port3 = new Ctr2HidThreadPort(dev3->io(), QStringLiteral("fake"));
+    QString failure3;
+    QByteArray got3;
+    QObject::connect(port3, &Ctr2HidPort::failed, port3, [&](const QString& m) { failure3 = m; });
+    QObject::connect(port3, &Ctr2HidPort::reportsReceived, port3, [&](const QByteArray& r) { got3 += r; });
+    {
+        std::lock_guard<std::mutex> g(dev3->lock);
+        dev3->reads.push_back(padded);     // Windows: a device with report 0x04 declared
+    }
+    check(waitUntil([&] { return got3 == "QRSTUVWX"; }), "a padded report 0x01 reads without wide reports");
+    {
+        std::lock_guard<std::mutex> g(dev3->lock);
+        dev3->reads.push_back(bundle);
+    }
+    check(waitUntil([&] { return !failure3.isEmpty(); }), "without wide reports, report 0x04 fails the port");
+    port3->shutdown({});
+    waitUntil([] { return false; }, 100);
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -375,6 +550,7 @@ int main(int argc, char** argv)
     testIdleDestructorDoesNotHang();
     testReopenWaitsForTheOldPort();
     testNegotiation();
+    testWideReports();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

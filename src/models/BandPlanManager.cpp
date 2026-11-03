@@ -217,6 +217,7 @@ bool BandPlanManager::loadPlanFromJson(const QString& path, PlanData& out)
         seg.lowMhz = obj.value("low").toDouble();
         seg.highMhz = obj.value("high").toDouble();
         seg.label = obj.value("label").toString();
+        seg.usage = obj.value("usage").toString();
         seg.license = obj.value("license").toString();
         seg.color = QColor(obj.value("color").toString());
         if (seg.lowMhz < seg.highMhz && seg.color.isValid())

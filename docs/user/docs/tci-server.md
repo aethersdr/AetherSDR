@@ -34,7 +34,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 
 | Control | Meaning |
 |---|---|
-| **RX1 … RX8** | One row per receive channel: the slice it carries and a combined level meter / gain slider. Rows above the radio's slice capacity are hidden. |
+| **RX1 … RX8** | One row per receive channel: the slice it carries, a logarithmic output level meter and a 0-100% receive gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
@@ -72,6 +72,13 @@ audio_stop:0;            # stop it
 ```
 
 ## Using TCI with other programs
+
+When a VFO-B request needs a new receiver, AetherSDR waits for its acknowledged
+identity and radio status before selecting it for TX. A delayed reply cannot
+adopt another client's receiver. Disconnecting, stopping TCI, or closing the
+original receiver during setup cancels the pending route, including while TX
+selection is awaiting a reply; cleanup only removes the receiver created for it.
+Radios with paired receiver/panadapter topology keep that native topology.
 
 ### WSJT-X
 
@@ -130,6 +137,7 @@ TCI audio is sent and received as binary frames on the same WebSocket.
 - RTL-SDR receive audio follows the stable receiver map and remains independent of speaker gain and mute; receiver squelch still applies. Normal launches offer one RTL receiver. Extra receivers belong to the [process-only evaluation](./rtl-sdr.md#multi-receiver-evaluation), not a higher production limit. RTL has no transmit or IQ export.
 - If a client reconnects more than 10 seconds later, its receive audio is re-bound to the right DAX channels automatically.
 - TX audio from a client is resampled from the rate the client declares, so 8, 12 and 24 kHz programs are not mis-pitched.
+- **DAX goes back the way it was after each transmission.** On a FlexRadio, TCI turns on the radio's DAX transmit input while a client transmits, then restores it once the radio is back in receive, so your next microphone transmission is not silent. Disconnecting or switching radios discards the previous session's DAX hold.
 
 ### Sample rate and format
 
@@ -148,6 +156,14 @@ audio_stream_sample_type:int16;
 audio_stream_channels:1;
 ```
 
+### Receive gain and level metering
+
+Each **RX** slider attenuates the audio sent to every TCI client receiving that channel. **0%** mutes the stream; **100%** is unity gain and preserves the source audio level. The slider does not amplify audio above unity. Dragging shows the gain as a percentage; arrow keys adjust it by five percentage points. Gains are saved independently for each channel.
+
+The RX meter shows the **post-gain output** on a logarithmic **-60 to 0 dBFS RMS** scale. Half the bar is -30 dBFS RMS. The thumb indicates gain, not measured audio level. Moving the slider updates the meter immediately using the most recent source level. Speaker volume, speaker mute and DAX applet gain do not adjust TCI receive audio.
+
+The meter measures RMS, not peaks, so leave headroom for speech transients when adjusting recording levels in an external application. A larger logarithmic meter indication does not mean the stream has been amplified.
+
 ### TX overflow handling
 
 Right-click the **TX** meter in the TCI Server applet to choose how transmit samples beyond ±1.0 are treated:
@@ -164,7 +180,7 @@ FT8/WSJT-X users who want exact tones can choose NaN guard or Measure only.
 
 ### Server identity
 
-The init burst announces `device:AetherSDR;` and `protocol:ExpertSDR3,1.5;`, followed by the full radio state and `ready;`.
+The init burst announces `device:AetherSDR;` and `protocol:ExpertSDR3,2.1;`, followed by the full radio state and `ready;`.
 
 ### Protocol coverage
 
@@ -187,7 +203,10 @@ AetherSDR implements the TCI 2.0 command set, including:
 
 Notes:
 
+- `rx_ctun_ex:<trx>,<bool>;` is accepted as a Thetis extension. It switches center lock on that receiver's slice, inverted: `true` (click-tune on) turns center lock off, `false` turns it on. TCI Remote sends `rx_ctun_ex:0,true;` on connect.
 - `volume` is in dB, as the spec defines it; the older percent form is still accepted. It is the same master level as the title-bar slider: the computer's level with PC Audio on, the radio's Line Out level with it off. `mic_level` is a global 0–100 %.
+- `sql_level` is a threshold in dB, −140 to 0, as the spec defines it. A positive value (the 0–100 level older builds took) is ignored. −140 dB, or any value at or below what the lowest level is reported as, opens the squelch fully. The slice stores a 0–100 level, so the reply states the threshold that level really gives: on a Flex the top of the scale is −60 dB, and any higher value is answered as −60.
+- `agc_gain` is the AGC gain in dB, −20 to 120, as the spec defines it. TCI maps the AGC-T control (0–100) onto that range in 1.4 dB steps on every radio: AGC-T 65 reads as 71 dB; the default AGC-T depends on the radio. A value outside the range is held at its end. Notifications follow observed threshold changes and state the gain the AGC-T step really gives. A request discarded because the receive path changed announces no requested value. With a KiwiSDR replacing the receiver, `agc_gain` carries the KiwiSDR's AGC threshold in dB unchanged.
 - The server also broadcasts which slice has focus in the GUI, plus DSP, squelch, RIT/XIT and TX power when they change.
 - Opening a slice announces `rx_enable:<trx>,true;` and its `tx_enable` permission. Closing a slice sends `tx_enable:<trx>,false;` and `rx_enable:<trx>,false;` after approximately 500 ms. A band-change recreation within that window keeps its receiver number and sends no close notifications; surviving receivers keep their numbers. TX permission still follows ownership, mode, and panadapter inhibits. `trx_count` is not re-sent.
 - Malformed arguments (for example to `volume:` or `modulation:`) are rejected, never applied to slice 0.
@@ -233,7 +252,6 @@ keyer:0,false;                    # key up
 
 - If a client that holds PTT dies without closing its connection (power loss, a pulled cable, a dropped Wi-Fi link), the radio stays keyed until the operating system gives up on the TCP connection ([#5985](https://github.com/aethersdr/AetherSDR/issues/5985)).
 - Transmit audio from a TCI client passes through the Phone/CW microphone chain, so the mic profile, **MIC** level and **PROC** change what a digital-mode client puts on the air ([#5844](https://github.com/aethersdr/AetherSDR/issues/5844)).
-- After a TCI voice keyer (for example OpsLog) transmits, DAX stays on, so the next microphone transmission has no audio until you turn DAX off ([#5524](https://github.com/aethersdr/AetherSDR/issues/5524)).
 - A cross-band tune from a TCI client does not recall the radio's band stack, so the per-band antenna, mode and filters are not restored ([#3543](https://github.com/aethersdr/AetherSDR/issues/3543)).
 - The TCI port listens on every network interface with no password, so any machine that can reach it can tune and key the radio ([#5296](https://github.com/aethersdr/AetherSDR/issues/5296)).
 
@@ -254,6 +272,14 @@ Audio only flows after the client sends `audio_start`.
 
 1. Check that the client has audio streaming turned on. WSJT-X sends `audio_start` automatically.
 2. Test by hand with [wscat](#testing-with-wscat): send `audio_start:0;` and watch for binary frames.
+
+### Recordings are too quiet at 100% receive gain
+
+At 100%, AetherSDR passes the source audio level without amplification.
+
+1. Check that the appropriate **RX** slider in the **TCI Server** applet is at **100%** to remove client-side attenuation.
+2. If the recording remains too quiet, adjust recording gain or normalization in the recording application, if supported. Check strong signals for clipping.
+3. Do not raise speaker volume or the **TX** slider to adjust TCI receive audio; these control different paths.
 
 ### WSJT-X shows "TCI failed to set ptt"
 

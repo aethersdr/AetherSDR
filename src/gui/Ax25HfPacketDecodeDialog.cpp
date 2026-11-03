@@ -19,6 +19,7 @@
 #include "core/aprs/AprsStationList.h"
 #include "gui/AprsMessagesDialog.h"
 #include "gui/CanonIndicators.h"
+#include "gui/CanonScrollBarStyle.h"
 #include "gui/FramelessResizer.h"
 #include "gui/AprsRateGraph.h"
 #include "gui/AprsSymbolIcons.h"
@@ -307,36 +308,6 @@ QTextEdit {
     selection-color: {{color.canon.onAccent}};
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
-}
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
 }
 QLabel#ExperimentalBanner {
     background: {{color.background.warning}};
@@ -957,7 +928,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_txPaceTimer = new QTimer(this);
     m_txPaceTimer->setInterval(kTxChunkMs);
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kAetherModemStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kAetherModemStyle) + canonScrollBarRules() + canonIndicatorRules();
     });
 
     auto* root = new QVBoxLayout(bodyWidget());
@@ -2790,7 +2761,6 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         return;
     }
 
-    auto& txModel = m_radio->transmitModel();
     if (m_attachedSlice && !m_attachedSlice->isTxSlice()) {
         appendSystemLine(QStringLiteral("Selecting attached slice %1 for AX.25 TX.")
             .arg(m_attachedSlice->sliceId()));
@@ -2810,9 +2780,7 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
     // never changed would hand back a stale value on unkey.
     m_audio->setDaxTxMode(true);
     if (!bypassesDax) {
-        m_txPreviousTransmitDax = txModel.daxOn();
-        m_txRestoreTransmitDax = true;
-        txModel.setDax(true);
+        m_radio->acquireTransmitDax(RadioModel::DaxTxFlagHolder::Ax25);
     }
 
     const QString route = bypassesDax
@@ -3110,14 +3078,12 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     m_txPendingStream = false;
 
     if (m_radio) {
-        auto& txModel = m_radio->transmitModel();
         if (aborted) {
             m_radio->abortProducerPtt(m_txRequest, TransmitModel::PttSource::Dax);
         } else {
             m_radio->requestProducerPttOff(m_txRequest, TransmitModel::PttSource::Dax);
         }
-        if (m_txRestoreTransmitDax)
-            txModel.setDax(m_txPreviousTransmitDax);
+        m_radio->releaseTransmitDax(RadioModel::DaxTxFlagHolder::Ax25);
     }
     m_txRequest = {};
     if (m_audio) {
@@ -3146,7 +3112,6 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     m_txChunkIndex = 0;
     m_txChunkCount = 0;
     m_txRestoreAudioDaxMode = false;
-    m_txRestoreTransmitDax = false;
     m_txFromKiss = false;
     m_txFromDigi = false;
     refreshTransmitControls();

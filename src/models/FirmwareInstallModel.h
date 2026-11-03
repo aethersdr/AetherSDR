@@ -70,6 +70,7 @@ public:
     // (it rescans while stopped), so there is one enumeration and one
     // selected device.
     using HidSource = std::function<QList<Ctr2HidPort::DeviceInfo>()>;
+    // Tests: also forgets any CTR2-Max seen through the sources it replaces.
     void setDeviceSources(LoaderSource loaders, HidSource hid);
     void setJobTargetOpener(EspFirmwareJob::TargetOpener opener);
     void setReleaseForTesting(const EspFirmwareManifest& manifest,
@@ -92,6 +93,9 @@ public:
     QString deviceMac() const { return m_mac; }
     int loaderCount() const { return m_loaderCount; }
     QString linkVersion() const;   // LinkFirmware: the version it runs
+    // The last action failed because the OS refused to open the download-mode
+    // port (Linux: the CTR2 access rule is missing or not applied yet).
+    bool lastFailureAccessDenied() const { return m_accessDenied; }
     Target target() const { return {m_device, m_port, m_mac, m_hidPath}; }
     // A unit whose firmware takes the link's FIRMWARE commands
     // (Ctr2ProxyModel::usbFirmwareCommands()): AetherCTR2, or stock firmware
@@ -102,6 +106,15 @@ public:
     // one that takes the commands, except AetherCTR2 before 0.9.2, which
     // has SWITCH only. Any other needs its BOOT and RESET buttons.
     bool restartsIntoDownloadMode(const Target& target) const;
+    // The relay's selected USB device is a controller of another kind
+    // (CTR2-MIDI, AetherKnob, an M5Dial), and no CTR2-Max, running or in
+    // download mode, has been seen since this model was made (the window
+    // makes one each time it opens): nothing in the window's CTR2-Max
+    // sections applies, so it hides them. Once a CTR2-Max has been seen it
+    // stays false, so a CTR2-Max rebooting after an install or a restart,
+    // which the relay answers by selecting the other controller, does not
+    // hide the result. False while an action runs.
+    bool otherControllerOnly() const;
     // Looks for the device again now, rather than at the next poll.
     void lookAgain() { poll(); }
     bool busy() const;
@@ -245,6 +258,7 @@ private:
     QHash<QString, QByteArray> m_files;
 
     Device m_device{Device::None};
+    bool m_maxSeen{false};   // see otherControllerOnly()
     QString m_deviceName;
     QString m_port;
     QString m_mac;
@@ -276,6 +290,7 @@ private:
     int m_waitSeen{0};            // polls in a row it has been found in download mode
     QString m_lastBackup;         // the install's backup, while it runs and after
     bool m_installRunning{false}; // an install made here, with its backup
+    bool m_accessDenied{false};   // lastFailureAccessDenied()
 };
 
 } // namespace AetherSDR

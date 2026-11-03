@@ -40,7 +40,7 @@ The **Radio IP address** group starts with two rows:
 3. Click **Connect by IP**. AetherSDR probes the radio on TCP 4992.
 4. If the probe fails, the panel shows the reason. **Network Diagnostics**, beside the button, helps you check the path.
 
-If your VPN creates more than one active network adapter, open **Advanced: choose the VPN source path** and pick the **Source path:**. Most users can leave this on Auto.
+If your VPN creates more than one active network adapter, open **Advanced: choose the VPN source path** and pick the **Source path:**. Most users can leave this on Auto. The list matches the address you entered: an IPv6 radio address lists this PC's IPv6 addresses, and an IPv4 address or a host name lists its IPv4 addresses. If a host name turns out to have only IPv6 addresses, Connect uses the IPv6 address of the adapter you picked.
 
 ### Port forwarding (FlexRadio remote access)
 

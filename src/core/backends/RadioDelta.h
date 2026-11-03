@@ -19,6 +19,7 @@ struct RadioDelta {
     std::optional<QString> callsign;
     std::optional<QString> nickname;
     std::optional<QString> region;
+    std::optional<int>     iaruRegion;        // 1..3; 0 = unknown; absent = unchanged
     std::optional<QString> radioOptions;
     std::optional<QString> bandsRaw;          // optional "bands=" declaration (validated model-side; see RadioModel::declaredBands())
     std::optional<QString> ip;

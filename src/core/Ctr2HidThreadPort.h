@@ -47,7 +47,7 @@ class Ctr2HidThreadPort final : public Ctr2HidPort {
 public:
     // hostCapabilities: the link extensions to accept from the device's
     // offer. The relay uses kHostCapabilities; the firmware updater uses
-    // Firmware alone.
+    // Firmware and wide reports.
     Ctr2HidThreadPort(Ctr2HidDeviceIo io, const QString& description,
                       const QString& deviceKey = {}, QObject* parent = nullptr,
                       quint32 hostCapabilities = ctr2hid::kHostCapabilities);

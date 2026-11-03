@@ -16,6 +16,11 @@
 #include <QHelpEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QContextMenuEvent>
+#include <QTouchEvent>
+#include <QScroller>
+#include <QAbstractScrollArea>
+#include <QAbstractItemView>
 
 #include "MainWindowHelpers.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
@@ -659,6 +664,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     if (obj == qApp && event->type() == QEvent::ApplicationStateChange) {
         auto* stateEvent = static_cast<QApplicationStateChangeEvent*>(event);
         if (stateEvent->applicationState() != Qt::ApplicationActive) {
+            if (m_touchHoldTimer) { m_touchHoldTimer->stop(); }
+            m_touchHoldSwallowRelease = false;
             failSafeMomentaryKeyingToRx("app-deactivate");
             // A Monitor TX hold whose KeyRelease went to another application
             // would otherwise leave the split's audio rearranged with no key
@@ -666,6 +673,123 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             // A controller toggle has no release to lose and is left alone.
             if (m_splitMonitorKeyHeld)
                 endSplitMonitor();
+        }
+    }
+
+    // Enable kinetic touch-scroll on every scroll area app-wide (band stack,
+    // memory/profile lists, the radio-setup menus, any QScrollArea/item view),
+    // once, the first time each is shown. With QScroller grabbed a touch drag
+    // flick-scrolls instead of rubber-band selecting, while a stationary tap
+    // still falls through as a click. Widgets whose drag means something else
+    // (AppletPanel's applet drag-and-drop) opt out via _aetherNoTouchScroll.
+    if (event->type() == QEvent::Show) {
+        if (auto* area = qobject_cast<QAbstractScrollArea*>(obj)) {
+            if (!area->property("_aetherTouchScroll").toBool()
+                && !area->property("_aetherNoTouchScroll").toBool()) {
+                area->setProperty("_aetherTouchScroll", true);
+                QScroller::grabGesture(area->viewport(), QScroller::TouchGesture);
+                if (auto* view = qobject_cast<QAbstractItemView*>(area)) {
+                    view->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+                    view->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+                }
+            }
+        }
+    }
+
+    // Touch tap-and-hold -> right-click. On a touchscreen Qt synthesizes a LEFT
+    // click from a tap; watch those synthesized mouse events and, when a press is
+    // held in place long enough, turn it into a right-button click (plus a
+    // context-menu event) so press-and-hold acts like the right mouse button with
+    // no physical mouse. The press the touch already armed on the widget is
+    // cancelled and its release swallowed, so a fired hold performs exactly one
+    // action (the context menu), never also the normal click. Real
+    // (non-synthesized) mouse input is untouched.
+    static constexpr int kTouchHoldMs = 600;     // hold this long -> right-click
+    static constexpr int kTouchHoldSlopPx = 12;  // move more than this -> it's a drag
+    if (event->type() == QEvent::MouseButtonPress
+        || event->type() == QEvent::MouseButtonRelease
+        || event->type() == QEvent::MouseMove) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        const bool synthesized =
+            me->source() == Qt::MouseEventSynthesizedByQt
+            || me->source() == Qt::MouseEventSynthesizedBySystem;
+        if (event->type() == QEvent::MouseButtonPress
+            && me->button() == Qt::LeftButton && synthesized) {
+            if (!m_touchHoldTimer) {
+                m_touchHoldTimer = new QTimer(this);
+                m_touchHoldTimer->setSingleShot(true);
+                connect(m_touchHoldTimer, &QTimer::timeout, this, [this]() {
+                    QWidget* w = m_touchHoldWidget
+                        ? m_touchHoldWidget.data()
+                        : QApplication::widgetAt(m_touchHoldGlobalPos);
+                    if (!w) { return; }
+                    const QPointF global(m_touchHoldGlobalPos);
+                    const QPointF local = w->mapFromGlobal(m_touchHoldGlobalPos);
+                    // Cancel the left press the synthesized touch already armed on
+                    // this widget, WITHOUT activating it: a release delivered
+                    // outside the widget un-arms a QAbstractButton (and ends a
+                    // pan-drag) without emitting clicked()/tuning. Then swallow the
+                    // real release on finger-lift (below), so the hold never also
+                    // performs the click.
+                    QMouseEvent cancel(QEvent::MouseButtonRelease, QPointF(-1, -1),
+                                       w->mapToGlobal(QPoint(-1, -1)),
+                                       Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                    QApplication::sendEvent(w, &cancel);
+                    m_touchHoldSwallowRelease = true;
+                    // Right-button click: SpectrumWidget and other inline handlers
+                    // open their menu straight from mousePressEvent().
+                    QMouseEvent press(QEvent::MouseButtonPress, local, global,
+                                      Qt::RightButton, Qt::RightButton,
+                                      Qt::NoModifier);
+                    QApplication::sendEvent(w, &press);
+                    QMouseEvent release(QEvent::MouseButtonRelease, local, global,
+                                        Qt::RightButton, Qt::NoButton,
+                                        Qt::NoModifier);
+                    QApplication::sendEvent(w, &release);
+                    // Widgets that use contextMenuEvent() instead of an inline
+                    // right-button check get their menu this way -- but only if the
+                    // press was not already consumed, so a widget that opened its
+                    // menu from the press does not get a second, propagated one.
+                    if (!press.isAccepted()) {
+                        QContextMenuEvent cme(QContextMenuEvent::Mouse, local.toPoint(),
+                                              m_touchHoldGlobalPos);
+                        QApplication::sendEvent(w, &cme);
+                    }
+                });
+            }
+            m_touchHoldGlobalPos = me->globalPosition().toPoint();
+            m_touchHoldWidget = QApplication::widgetAt(m_touchHoldGlobalPos);
+            m_touchHoldSwallowRelease = false;
+            m_touchHoldTimer->start(kTouchHoldMs);
+        } else if (event->type() == QEvent::MouseMove && m_touchHoldTimer
+                   && m_touchHoldTimer->isActive()) {
+            if ((me->globalPosition().toPoint() - m_touchHoldGlobalPos)
+                    .manhattanLength() > kTouchHoldSlopPx) {
+                m_touchHoldTimer->stop();  // moved -> it's a drag/scroll, not a hold
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease
+                   && me->button() == Qt::LeftButton) {
+            if (m_touchHoldTimer) { m_touchHoldTimer->stop(); }
+            if (m_touchHoldSwallowRelease) {
+                m_touchHoldSwallowRelease = false;
+                return true;   // the hold acted; drop the click this release would do
+            }
+        }
+    }
+    // A touch flick inside a QScroller-grabbed viewport is owned by the scroller,
+    // so the synthesized MouseMove/Release above may never arrive. Cancel a
+    // pending hold on touch movement past the slop or a touch cancel too.
+    if (m_touchHoldTimer && m_touchHoldTimer->isActive()) {
+        if (event->type() == QEvent::TouchCancel) {
+            m_touchHoldTimer->stop();
+        } else if (event->type() == QEvent::TouchUpdate) {
+            for (const QEventPoint& pt : static_cast<QTouchEvent*>(event)->points()) {
+                if ((pt.globalPosition().toPoint() - m_touchHoldGlobalPos)
+                        .manhattanLength() > kTouchHoldSlopPx) {
+                    m_touchHoldTimer->stop();
+                    break;
+                }
+            }
         }
     }
 
@@ -929,7 +1053,7 @@ void MainWindow::activateStatusIndicator(QObject* obj)
     }
 #endif
     if (obj == m_radioVersionLabel) {
-        openFirmwareReleaseNotes();   // no-op unless the row shows out-of-date firmware
+        openFirmwareUpdate();   // no-op unless the row shows out-of-date firmware
         return;
     }
     if (obj == m_cwxIndicator) {
@@ -943,17 +1067,14 @@ void MainWindow::activateStatusIndicator(QObject* obj)
     }
     if (obj == m_fdxIndicator) {
         bool on = !m_radioModel.fullDuplexEnabled();
-        m_radioModel.sendCmdPublic(
-            QString("radio set full_duplex_enabled=%1").arg(on ? 1 : 0),
-            [this, on](int code, const QString& body) {
-                if (code != 0) {
+        m_radioModel.requestFullDuplex(on, this,
+            [this](const RadioControlReply& result) {
+                if (result.kind != RadioControlReply::Kind::Accepted
+                    && result.kind != RadioControlReply::Kind::Cancelled) {
                     showPanadapterInterlockNotification(
-                        QString("FDX not available: %1").arg(body.trimmed()),
+                        QString("FDX not available: %1").arg(result.message.trimmed()),
                         QStringLiteral("fdx-unavailable"));
-                    return;
                 }
-                // Radio accepted; no status echo follows, so apply manually.
-                m_radioModel.setFullDuplex(on);
             });
         return;
     }
@@ -1305,7 +1426,7 @@ void MainWindow::registerShortcutActions()
             if (!m_radioModel.isConnected()) return;
             auto& tx = m_radioModel.transmitModel();
             tx.setVoxEnable(!tx.voxEnable());
-        });
+        }, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction("speech_proc_toggle", "Speech Processor Toggle", "TX",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
@@ -1409,32 +1530,7 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("split_toggle", "Split Toggle", "Slice",
         QKeySequence(), [this]() {
             if (!m_splitActive) {
-                // Same gate, same reasons, as the VfoWidget::splitToggled
-                // lambda in MainWindow_Wiring.cpp — see the comment there for
-                // why this returns ahead of the m_splitActive write rather
-                // than only skipping the send (issue 5277) — and for why it
-                // is deliberately not permissive on disconnect, and which
-                // families the predicate refuses.
-                if (!m_radioModel.hasCommandPlane()) {
-                    qCWarning(lcDevices)
-                        << "split_toggle ignored: this backend takes no Flex"
-                        << "slice-create command";
-                    showUnsupportedControlNotice();
-                    return;
-                }
-                if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
-                auto* s = activeSlice();
-                if (!s) return;
-                QString panId = s->panId();
-                if (panId.isEmpty())
-                    panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-                bool isCw = isCwMode(s->mode());
-                double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
-                m_splitActive = true;
-                m_splitRxSliceId = s->sliceId();
-                m_splitRxFrequencyMhz = s->reportedFrequency();
-                m_radioModel.sendCommand(
-                    QString("slice create pan=%1 freq=%2").arg(panId).arg(txFreq, 0, 'f', 6));
+                if (SliceModel* source = activeSlice()) { enterSplit(source->sliceId()); }
             } else {
                 disableSplit();
             }
@@ -1796,19 +1892,24 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx,
     if (a->keysTx && !allowTx) {
         return ShortcutFireTxBlocked;
     }
-    if (!a->handler) {
+    if (!a->handler && !a->txHandler) {
         return ShortcutFireNoDirectHandler;
     }
     if (a->keysTx) {
-        if (!controller || !controller->valid() || !controller->belongsTo(&m_radioModel)
-            || !a->txHandler) {
-            return ShortcutFireTxBlocked;
-        }
-        if (m_radioModel.isConnected()) {
-            // Copy before invoking: nested configuration may rebuild actions.
-            const auto handler = a->txHandler;
-            const TxController::Input input = controller->capture(a->txActivity);
-            handler(input);
+        if (a->txHandler) {
+            if (!controller || !controller->valid() || !controller->belongsTo(&m_radioModel)) {
+                return ShortcutFireTxBlocked;
+            }
+            if (m_radioModel.isConnected()) {
+                // Copy before invoking: nested configuration may rebuild actions.
+                const auto handler = a->txHandler;
+                const TxController::Input input = controller->capture(a->txActivity);
+                handler(input);
+            }
+        } else if (a->handler) {
+            if (m_radioModel.isConnected()) {
+                a->handler();
+            }
         }
         return ShortcutFireTxOk;
     }
@@ -1907,11 +2008,8 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
         return;
     }
     const bool on = segmentZoom ? !pan->segmentZoomOn() : !pan->bandZoomOn();
-    m_radioModel.sendCommand(QString("display pan set %1 %2=%3")
-        .arg(panId,
-             segmentZoom ? QStringLiteral("segment_zoom")
-                         : QStringLiteral("band_zoom"))
-        .arg(on ? 1 : 0));
+    m_radioModel.requestPanControl(pan, {
+        segmentZoom ? PanControlField::SegmentZoom : PanControlField::BandZoom, on});
 }
 
 void MainWindow::zoomActivePanadapter(double factor)
@@ -1927,6 +2025,11 @@ void MainWindow::zoomActivePanadapter(double factor)
 
     auto* sw = spectrumForSlice(s);
     if (!sw) {
+        return;
+    }
+    // A fixed span cannot zoom; skip the local preview too. A Kiwi pane's
+    // zoom is that local view change, so it keeps working.
+    if (panSpanFixedByBackend() && !kiwiSdrPanDisplaysKiwi(s->panId())) {
         return;
     }
 
@@ -1993,11 +2096,8 @@ void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
     }
     const bool current = segmentZoom ? pan->segmentZoomOn() : pan->bandZoomOn();
     if (current != enable) {
-        m_radioModel.sendCommand(QString("display pan set %1 %2=%3")
-            .arg(panId,
-                 segmentZoom ? QStringLiteral("segment_zoom")
-                             : QStringLiteral("band_zoom"))
-            .arg(enable ? 1 : 0));
+        m_radioModel.requestPanControl(pan, {
+            segmentZoom ? PanControlField::SegmentZoom : PanControlField::BandZoom, enable});
     }
 }
 

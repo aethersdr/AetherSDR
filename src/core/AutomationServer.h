@@ -23,6 +23,8 @@ class QWebSocket;
 #include "MemoryTelemetry.h"
 #include "MeterObservationWindow.h"
 #include "TxCoordinator.h"
+#include "core/backends/RadioControlTypes.h"
+#include <optional>
 #include "models/TxController.h"
 
 class QLocalServer;
@@ -295,6 +297,10 @@ public:
     {
         m_tciRouteSnapshotHandler = std::move(handler);
     }
+    void setLabHandler(std::function<QJsonObject(const QString&, const QString&)> handler)
+    {
+        m_labHandler = std::move(handler);
+    }
     void setDeviceDiagnosticsHandler(
         std::function<QJsonObject(const QString&)> handler)
     {
@@ -360,6 +366,7 @@ private:
     static QString verbNamesJoined();
 
     QJsonObject doDumpTree() const;
+    QJsonObject doLab(const QString& action, const QString& value) const;
     QJsonObject doDeviceDiagnostics(const QString& action) const;
     QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
@@ -659,7 +666,8 @@ private:
     // <name>` so other MultiFlex clients see the agent's name; NEVER the radio
     // callsign. Auto-applied on connect, restored on stop. No keying.
     QJsonObject doStation(const QString& name);
-    void applyAgentStation(const QString& name);  // capture prior + send
+    bool applyAgentStation(const QString& name);
+    void onStationConnectionState(bool connected);
     void restoreStation();                        // re-send the user's real name
     // QRZ callsign lookup (status | cached <call> | lookup <call> |
     // spottext <text>).  spottext feeds the CW callsign spotter the given
@@ -785,6 +793,7 @@ private:
     std::function<bool(const QString&, const QString&, QString*, DeferredUiAction*)>
         m_appletPanelActionHandler;
     std::function<QJsonObject()> m_tciRouteSnapshotHandler;
+    std::function<QJsonObject(const QString&, const QString&)> m_labHandler;
     std::function<QJsonObject(const QString&)> m_deviceDiagnosticsHandler;
     QJsonObject m_lastWaveformCommand;
 
@@ -792,8 +801,9 @@ private:
     // name to the agent's name on connect and restores the user's real name on
     // stop, so other MultiFlex clients can see an agent is driving.
     QString m_agentStation;          // applied name (AETHER_AUTOMATION_STATION)
-    QString m_priorStationName;      // user's real station name, captured to restore
-    bool    m_stationApplied{false};
+    std::optional<RadioStationOverride> m_stationOverride;
+    QMetaObject::Connection m_stationConnection;
+    quint64 m_stationScheduleRevision{0};
 
 #ifdef HAVE_WEBSOCKETS
     // In-process TCI client simulator (`tci start|status|stop`, #3305/#4009).

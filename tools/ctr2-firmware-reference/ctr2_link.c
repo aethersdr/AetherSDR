@@ -202,6 +202,15 @@ uint16_t ctr2_ext_max_length(uint8_t type)
     }
 }
 
+size_t ctr2_wide_count(const uint8_t *in, size_t len)
+{
+    if (!in || len < 1 || in[0] < 1 || in[0] > CTR2_WIDE_REPORTS
+        || len < 1 + (size_t)in[0] * CTR2_REPORT_BYTES) {
+        return 0;
+    }
+    return in[0];
+}
+
 void ctr2_rx_set_extensions(ctr2_rx *rx, uint32_t caps)
 {
     uint32_t defined = 0;

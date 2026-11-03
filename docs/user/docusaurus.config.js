@@ -125,9 +125,10 @@ const config = {
           },
           {to: '/log-analyzer', label: 'Log Analyzer', position: 'left'},
           {
-            // Built by tools/docs/build_pdf.py and deployed with the site
-            // (docs.yml). pathname:// keeps the link checker off it: it is a
-            // file, not a page.
+            // Built by tools/docs/build_pdf.py and attached to each release;
+            // the deploy (docs.yml) redirects this URL to the release's copy.
+            // pathname:// keeps the link checker off it: it is a file, not a
+            // page.
             href: 'pathname:///AetherSDR-Manual.pdf',
             label: 'PDF manual',
             position: 'left',

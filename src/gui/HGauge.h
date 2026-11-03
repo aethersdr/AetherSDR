@@ -13,7 +13,6 @@
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
-#include <QGradient>
 #include <QPainter>
 #include <QPoint>
 #include <QStringList>
@@ -253,17 +252,9 @@ public:
     // in the natural direction.
     void setFillFromRight(bool on) { m_fillFromRight = on; update(); }
 
-    // Paint the empty track as a left-to-right gradient instead of a flat
-    // ground, so the bar carries its own scale colouring even at rest — how
-    // the Tuner Genius XL's front panel draws its SWR scale, which
-    // TunerApplet reproduces in its expanded presentation.
-    //
-    // Stops are passed in rather than resolved here: this header is included
-    // by ~20 applets, and a themed default would couple every one of them to
-    // ThemeManager for a mode only one of them turns on. Empty restores the
-    // flat track.
-    void setTrackGradient(const QGradientStops& stops) {
-        m_trackStops = stops;
+    // Colour of the middle (caution) zone and its tick labels; default olive.
+    void setCautionColor(const QColor& color) {
+        m_cautionColor = color;
         update();
     }
 
@@ -307,6 +298,18 @@ public:
         // callback would stop the timer on its own next tick. Stopping here
         // just saves that tick and its repaint — no case depends on it.
         if (m_animTimer.isActive()) m_animTimer.stop();
+        publishAutomationState();
+        update();
+    }
+
+    // Move only the yellow/red zone starts on an unchanged axis. Unlike
+    // setRange() this leaves the smoother alone, so a caller that tracks the
+    // zones to a live reading (RF-KIT's SWR zones follow forward power) does
+    // not snap the bar several times a second.
+    void setZones(float redStart, float yellowStart) {
+        if (redStart == m_redStart && yellowStart == m_yellowStart) return;
+        m_redStart = redStart;
+        m_yellowStart = yellowStart;
         publishAutomationState();
         update();
     }
@@ -394,13 +397,7 @@ protected:
         const int barW = w;
 
         // Background
-        if (m_trackStops.isEmpty()) {
-            p.fillRect(barX, barY, barW, barH, QColor(0x0a, 0x0a, 0x18));
-        } else {
-            QLinearGradient track(barX, 0, barX + barW, 0);
-            track.setStops(m_trackStops);
-            p.fillRect(barX, barY, barW, barH, track);
-        }
+        p.fillRect(barX, barY, barW, barH, QColor(0x0a, 0x0a, 0x18));
         p.setPen(QColor(0x20, 0x30, 0x40));
         p.drawRect(barX, barY, barW - 1, barH - 1);
 
@@ -436,7 +433,7 @@ protected:
                 if (fillW > yellowX && yellowX < redX) {
                     int yw = qMin(fillW, redX) - yellowX;
                     if (yw > 0)
-                        p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, QColor(0x99, 0x88, 0x00));
+                        p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, m_cautionColor);
                 }
 
                 // Red portion (above red zone)
@@ -470,7 +467,7 @@ protected:
             float tf = (tick.value - m_min) / (m_max - m_min);
             int tx = barX + static_cast<int>(tf * barW);
             QColor tickColor = (tick.value >= m_redStart) ? QColor(0xcc, 0x33, 0x33)
-                             : (tick.value >= m_yellowStart) ? QColor(0x99, 0x88, 0x00)
+                             : (tick.value >= m_yellowStart) ? m_cautionColor
                              : QColor(0xc8, 0xd8, 0xe8);
             p.setPen(tickColor);
             const QFontMetrics fm(tickFont);
@@ -719,11 +716,11 @@ private:
     bool  m_peakEnabled{false};
     bool  m_reversed{false};
     bool  m_fillFromRight{false};
-    QGradientStops m_trackStops;   // empty = flat track (the default)
     qreal m_metricScale{1.0};      // 1.0 = the original fixed metrics
     QString m_label, m_unit;
     QVector<Tick> m_ticks;
     QColor m_tickMarkColor;
+    QColor m_cautionColor{0x99, 0x88, 0x00};
 
     // Hover value readout state (see setHoverValuePopupEnabled).
     //

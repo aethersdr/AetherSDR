@@ -189,7 +189,7 @@ void RadioTelemetryAdapter::define(int index)
         return;
     }
     const QJsonObject definition{{QStringLiteral("source"), def->source},
-        {QStringLiteral("sourceIndex"), def->sourceIndex}, {QStringLiteral("name"), def->name},
+        {QStringLiteral("sourceIndex"), def->publishedSourceIndex()}, {QStringLiteral("name"), def->name},
         {QStringLiteral("unit"), def->unit}, {QStringLiteral("minimum"), def->low},
         {QStringLiteral("maximum"), def->high}, {QStringLiteral("description"), def->description}};
     auto existing = m_meters.find(index);

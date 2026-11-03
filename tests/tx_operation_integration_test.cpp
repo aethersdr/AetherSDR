@@ -27,8 +27,11 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QScopeGuard>
 #include <QTimer>
+#include <QThread>
+#include <QtEndian>
 #include <cstdio>
 #include <memory>
 #include <limits>
@@ -101,14 +104,6 @@ public:
                                   std::function<void(bool)> continuation)
     {
         server.promoteTxSliceAndContinue(sliceId, std::move(continuation));
-    }
-    static void completePromotionReply(RadioModel& radio, quint32 sequence)
-    {
-        RadioModel::ResponseCallback callback = radio.m_pendingCallbacks.take(sequence);
-        if (!callback) {
-            qFatal("TCI promotion test lost its outstanding reply");
-        }
-        callback(0, QString());
     }
     static void discardTciInputs(TciServer& server, TciClient& socket)
     {
@@ -241,6 +236,13 @@ public:
     }
     static bool intentionalDisconnect(const RadioModel& radio) { return radio.m_intentionalDisconnect; }
     static bool reconnectArmed(const RadioModel& radio) { return radio.m_reconnectTimer.isActive(); }
+    static void setNetCwIdentity(RadioModel& radio, RadioConnection& connection, quint32 handle)
+    {
+        connection.m_handle = handle;
+        radio.m_netCwIndex = 37;
+        radio.m_netCwClock.invalidate();
+    }
+    static void resetNetCwClock(RadioModel& radio) { radio.m_netCwClock.invalidate(); }
     static void injectNetCwTransport(RadioModel& radio, PanadapterStream& stream,
                                     std::function<void(const QByteArray&)> sink)
     {
@@ -274,6 +276,14 @@ public:
     std::function<void(const TxCoordinator::Operation&, const TxCoordinator::StopRequest&)> stopWriter;
     std::function<void(const TxCoordinator::Operation&)> cwTextWriter;
     Writer cwTextQueueWriter;
+    std::vector<RadioControlCompletion> selectionReplies;
+    ReceiveDispatch requestTxSlice(int, bool, const RadioControlCompletion& completion,
+                                   const RadioControlFence& current) override
+    {
+        if (current && !current()) { return ReceiveDispatch::Unsupported; }
+        selectionReplies.push_back(completion);
+        return ReceiveDispatch::Dispatched;
+    }
     QStringList* commands;
     explicit RecordingBackend(QStringList& record) : commands(&record)
     {
@@ -1853,6 +1863,98 @@ void queuedNetCwEdges()
     check(packets.isEmpty(), "disconnect cancels even the first queued NetCW copy before transport dispatch");
 }
 
+// Official published FlexLib 4.3.16 ClientHandleHelper.cs:32-34 and
+// Radio.cs:9907-9909,9938-9940: uint32 client handles use 0x + uppercase X8.
+void netCwClientHandleEncoding()
+{
+    struct HandleCase { quint32 value; const char* encoded; };
+    const HandleCase cases[] = {
+        {0x00000000u, "0x00000000"},
+        {0x0000000Au, "0x0000000A"},
+        {0x0012ABCDu, "0x0012ABCD"},
+        {0x1234ABCDu, "0x1234ABCD"},
+        {0x80000001u, "0x80000001"},
+        {0xFFFFFFFFu, "0xFFFFFFFF"},
+    };
+    for (const HandleCase& handle : cases) {
+        for (const bool ptt : {false, true}) {
+            QStringList tcp;
+            QList<QByteArray> udp;
+            RadioConnection connection;
+            PanadapterStream stream;
+            Fixture f;
+            TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+            TxOperationIntegrationTestAccess::injectNetCwTransport(f.radio, stream,
+                [&](const QByteArray& packet) { udp << packet; });
+            TxOperationIntegrationTestAccess::setNetCwIdentity(f.radio, connection, handle.value);
+            if (ptt) {
+                f.radio.sendCwPtt(true);
+            } else {
+                f.radio.sendCwKeyEdge(true);
+            }
+            // Both edges start a fresh relative-time burst, giving a stable
+            // timestamp without replacing the production command constructor.
+            TxOperationIntegrationTestAccess::resetNetCwClock(f.radio);
+            if (ptt) {
+                f.radio.sendCwPtt(false);
+            } else {
+                f.radio.sendCwKeyEdge(false);
+            }
+            // Timer callbacks queue transport writes; wait for those writes,
+            // rather than assuming an event-loop delay implies delivery.
+            QElapsedTimer wait;
+            wait.start();
+            while ((tcp.size() < 2 || udp.size() < 8) && wait.elapsed() < 1000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                QThread::msleep(1);
+            }
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+            const QByteArray verb = ptt ? "cw ptt " : "cw key ";
+            const QByteArray suffix = QByteArray(" client_handle=") + handle.encoded;
+            const QByteArray down = verb + "1 time=0x0000 index=37" + suffix;
+            const QByteArray up = verb + "0 time=0x0000 index=38" + suffix;
+            check(tcp == QStringList{QString::fromLatin1(down), QString::fromLatin1(up)},
+                  "NetCW TCP backstop preserves verb, edge, timestamp, index and full X8 handle");
+            int downs = 0;
+            int ups = 0;
+            int previousCount = -1;
+            for (const QByteArray& packet : udp) {
+                const auto* raw = reinterpret_cast<const uchar*>(packet.constData());
+                check(packet.size() >= 28 && packet.size() % 4 == 0,
+                      "NetCW datagram retains its word-aligned VITA framing");
+                if (packet.size() < 28) {
+                    continue;
+                }
+                const quint32 header = qFromBigEndian<quint32>(raw);
+                const int count = (header >> 16) & 0xFu;
+                check((header & 0xFFF00000u) == 0x38D00000u
+                          && (header & 0xFFFFu) * 4u == quint32(packet.size())
+                          && qFromBigEndian<quint32>(raw + 4) == 0x12345678u
+                          && qFromBigEndian<quint32>(raw + 8) == 0x00001C2Du
+                          && qFromBigEndian<quint32>(raw + 12) == 0x534C03E3u
+                          && packet.mid(16, 12) == QByteArray(12, '\0'),
+                      "NetCW VITA header, stream id, class, size and timestamps remain unchanged");
+                check(previousCount < 0 || count != previousCount,
+                      "adjacent redundant NetCW copies retain distinct packet counts");
+                previousCount = count;
+                QByteArray payload = packet.mid(28);
+                while (payload.endsWith('\0')) {
+                    payload.chop(1);
+                }
+                check(payload == down || payload == up,
+                      "production UDP payload preserves the complete command with X8 client handle");
+                check(packet.size() == 28 + ((payload.size() + 3) & ~3),
+                      "NetCW padding adds only the required null bytes");
+                downs += payload == down;
+                ups += payload == up;
+            }
+            check(downs == 4 && ups == 4 && udp.size() == 8,
+                  "all four redundant copies of both edges match the TCP backstop");
+            std::printf("NetCW capture: %s | %s\n", down.constData(), up.constData());
+        }
+    }
+}
+
 void queuedCwSessionAndTcpFences()
 {
     {
@@ -2723,31 +2825,31 @@ void tciPromotionRechecksPermissionAfterReply()
             replied = true;
             permitted = accepted;
         });
-        check(!replied && TxOperationIntegrationTestAccess::pendingReplyCount(f.radio) == 1,
+        check(!replied && !f.backend->selectionReplies.empty(),
               "owned receiver promotion waits for the injected command reply");
-        return TxOperationIntegrationTestAccess::firstPendingReplySequence(f.radio);
+        return f.backend->selectionReplies.back();
     };
     f.radio.handleSliceStatusForTest(0, ours);
-    quint32 sequence = begin();
+    RadioControlCompletion reply = begin();
     f.radio.handleSliceStatusForTest(0, {
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}});
-    TxOperationIntegrationTestAccess::completePromotionReply(f.radio, sequence);
+    reply({RadioControlReply::Kind::Accepted, 0, {}});
     check(replied && !permitted,
           "a successful promotion reply cannot key a receiver whose ownership changed");
 
     f.radio.handleSliceStatusForTest(0, ours);
-    sequence = begin();
+    reply = begin();
     SliceDelta mode;
     mode.mode = QStringLiteral("WFM");
     f.radio.emitBackendSliceChangedForTest(0, mode);
-    TxOperationIntegrationTestAccess::completePromotionReply(f.radio, sequence);
+    reply({RadioControlReply::Kind::Accepted, 0, {}});
     check(replied && !permitted,
           "a successful promotion reply cannot key a newly receive-only mode");
 
     mode.mode = QStringLiteral("USB");
     f.radio.emitBackendSliceChangedForTest(0, mode);
-    sequence = begin();
-    TxOperationIntegrationTestAccess::completePromotionReply(f.radio, sequence);
+    reply = begin();
+    reply({RadioControlReply::Kind::Accepted, 0, {}});
     check(replied && permitted,
           "a successful promotion reply still accepts an owned transmit-capable receiver");
 }
@@ -2785,6 +2887,7 @@ int main(int argc, char** argv)
     cwxFailureAndSpeedRestore();
     flexCwxLifecycle();
     queuedNetCwEdges();
+    netCwClientHandleEncoding();
     queuedCwSessionAndTcpFences();
     scopedCompatibilityStop();
     operatorCancelsCapturedInputs();

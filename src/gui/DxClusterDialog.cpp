@@ -1,5 +1,7 @@
 #include "DxClusterDialog.h"
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
+#include "CanonTableStyle.h"
 #include "FramelessResizer.h"
 #include "ScopedChildWidget.h"
 #include "DxClusterStartupCommandsDialog.h"
@@ -475,66 +477,31 @@ QPlainTextEdit {
     selection-background-color: {{color.canon.control}};
     selection-color: {{color.canon.ink}};
 }
+)";
+
+// SpotHub's sizes and selection ink, after the shared canon table rules.
+static constexpr const char* kSpotHubTableStyle = R"(
 QTableView {
-    color: {{color.canon.ink}};
-    background: {{color.canon.nested}};
-    alternate-background-color: {{color.canon.raised}};
-    border: 1px solid {{color.canon.line}};
-    border-radius: 6px;
-    gridline-color: {{color.canon.line}};
     font-size: 11px;
 }
 QTableView::item:selected {
     color: {{color.canon.ink}};
-    background: {{color.canon.control}};
 }
 QHeaderView::section {
-    color: {{color.canon.cyan}};
-    background: {{color.canon.raised}};
-    border: none;
-    border-bottom: 1px solid {{color.canon.line}};
     padding: 3px 6px;
-    font-weight: 700;
     font-size: 11px;
 }
+)";
+
+static constexpr const char* kSpotHubTailStyle = R"(
 QScrollArea {
     background: transparent;
     border: none;
 }
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
 )";
 
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
-                                   WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
+                                   WsjtxClient* wsjtxClient,
                                    PotaClient* potaClient, EibiClient* eibiClient,
                                    N1MMSpotClient* n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
@@ -545,7 +512,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
                                    QWidget* parent)
     : CanonWindow(QStringLiteral("SpotHub"), parent, Kind::Workspace),
       m_client(clusterClient), m_rbnClient(rbnClient),
-      m_wsjtxClient(wsjtxClient), m_spotCollectorClient(spotCollectorClient),
+      m_wsjtxClient(wsjtxClient),
       m_potaClient(potaClient), m_eibiClient(eibiClient),
       m_n1mmSpotClient(n1mmSpotClient),
 #ifdef HAVE_WEBSOCKETS
@@ -568,7 +535,9 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     resize(760, 680);
     FramelessResizer::install(this);
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kSpotHubStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kSpotHubStyle) + canonTableRules()
+             + QString::fromLatin1(kSpotHubTableStyle)
+             + QString::fromLatin1(kSpotHubTailStyle) + canonScrollBarRules() + canonIndicatorRules();
     });
 
     // Capture source log paths up front so the per-tab Clear handlers (built
@@ -577,7 +546,6 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     m_rbnLogPath     = rbnClient->logFilePath();
     m_wsjtxLogPath   = wsjtxClient->logFilePath();
     m_potaLogPath    = potaClient->logFilePath();
-    m_scLogPath      = spotCollectorClient->logFilePath();
     m_n1mmLogPath    = n1mmSpotClient->logFilePath();
 #ifdef HAVE_WEBSOCKETS
     m_freedvLogPath  = freedvClient->logFilePath();
@@ -588,7 +556,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     root->setContentsMargins(14, 12, 14, 14);
     root->addWidget(makeCanonHeader(QStringLiteral("SpotHub")));
 
-    auto* tabs = new QTabWidget;
+    auto* tabs = new QTabWidget(bodyWidget());
 
     buildClusterTab(tabs);
     buildRbnTab(tabs);
@@ -774,34 +742,6 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
 
     // WSJT-X log loaded in deferred loadLogFiles() (#748)
-
-    // ── Live updates from SpotCollector client ───────────────────────
-    connect(spotCollectorClient, &SpotCollectorClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
-        bool follow = isAtBottom(m_scConsole);
-        m_scConsole->appendPlainText(line);
-        if (follow) {
-            auto* sb = m_scConsole->verticalScrollBar();
-            sb->setValue(sb->maximum());
-        }
-    });
-
-    connect(spotCollectorClient, &SpotCollectorClient::spotReceived, this, [this](DxSpot spot) {
-        spot.source = "SpotCollector";
-        m_spotBatch.append(spot);
-    });
-
-    connect(spotCollectorClient, &SpotCollectorClient::listening, this, [this] {
-        m_scStatusLabel->setText(QString("Listening on port %1").arg(m_scPortSpin->value()));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
-        m_scStartBtn->setText("Stop");
-        m_scConsole->appendPlainText("--- Listening ---");
-    });
-    connect(spotCollectorClient, &SpotCollectorClient::stopped, this, [this] {
-        m_scStatusLabel->setText("Stopped");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-        m_scStartBtn->setText("Start");
-        m_scConsole->appendPlainText("--- Stopped ---");
-    });
 
     // ── Live updates from POTA client ─────────────────────────────────
     connect(potaClient, &PotaClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
@@ -1658,96 +1598,62 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
 void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
 {
-    auto* page = new QWidget;
+    // Commander adds SpotCollector's spots through the FlexRadio spot API.
+    // This tab documents that route instead of offering a nonexistent UDP feed.
+    auto* page = new QWidget(tabs);
     auto* layout = new QVBoxLayout(page);
     layout->setSpacing(8);
 
-    auto& s = AppSettings::instance();
+    auto* group = new QGroupBox("DXLab SpotCollector", page);
+    auto* groupLayout = new QVBoxLayout(group);
+    groupLayout->setSpacing(6);
 
-    // ── Connection settings ─────────────────────────────────────────────
-    auto* connGroup = new QGroupBox("SpotCollector UDP Listener");
-    auto* connLayout = new QVBoxLayout(connGroup);
-    connLayout->setSpacing(4);
+    // Rich-text link colors are baked into the HTML, so the text is rebuilt
+    // when the theme changes while SpotHub is open.
+    auto* guide = new QLabel(group);
+    guide->setObjectName(QStringLiteral("spotCollectorGuide"));
+    auto setGuideText = [guide] {
+        auto& tm = AetherSDR::ThemeManager::instance();
+        guide->setText(QStringLiteral(
+            "<p>SpotCollector doesn't provide a UDP spot broadcast for AetherSDR to receive. "
+            "For FlexRadio radios, its companion "
+            "program, <b>DXLab Commander</b>, puts SpotCollector's spots on the radio's "
+            "panadapter, and AetherSDR shows them automatically. There's nothing to start "
+            "on this tab.</p>"
+            "<p><b>Set up Commander</b></p>"
+            "<ol>"
+            "<li>In Commander, select your FlexRadio Signature radio and connect Commander to "
+            "it over the network. Commander must be able to reach the radio on TCP port 4992.</li>"
+            "<li>In Commander's <b>Configuration</b> window, on the <b>Bandspread</b> tab, check "
+            "<b>Display calls on panadaptor</b>.</li>"
+            "<li>Click <b>Bandspread</b> in Commander's main window once to open its "
+            "Bandspread window. You can then minimize or close that window.</li>"
+            "<li>Keep SpotCollector running and connected to its spot sources.</li>"
+            "</ol>"
+            "<p>To see Commander's colors, turn <b>Override Colors</b> and "
+            "<b>Override Background</b> off on this window's <b>Display</b> tab. A red callsign "
+            "is one you need for an award you track, and the background shows LoTW and eQSL "
+            "participation.</p>"
+            "<p>Clicking a spot sends it to the radio as a spot trigger, the same as clicking "
+            "it in SmartSDR, so the click settings on Commander's <b>Bandspread</b> tab "
+            "apply.</p>"
+            "<p><a href='https://dxlabsuite.com/dxlabwiki/FlexSignatureDisplayCallsigns' "
+            "style='color:%1;'>DXLab's guide to showing callsigns on the panadaptor</a></p>")
+            .arg(tm.color(guide, QStringLiteral("color.accent")).name()));
+    };
+    setGuideText();
+    connect(&AetherSDR::ThemeManager::instance(), &AetherSDR::ThemeManager::themeChanged,
+            guide, setGuideText);
+    guide->setTextFormat(Qt::RichText);
+    guide->setWordWrap(true);
+    guide->setOpenExternalLinks(true);
+    guide->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    guide->setAccessibleName(QStringLiteral("DXLab SpotCollector setup"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(guide, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    groupLayout->addWidget(guide);
 
-    auto* grid = new QGridLayout;
-    grid->setColumnStretch(1, 1);
-
-    grid->addWidget(new QLabel("UDP Port:"), 0, 0);
-    m_scPortSpin = new QSpinBox;
-    m_scPortSpin->setRange(1, 65535);
-    m_scPortSpin->setValue(s.value("SpotCollectorPort", 9999).toInt());
-    grid->addWidget(m_scPortSpin, 0, 1);
-
-    connLayout->addLayout(grid);
-
-    auto* helpLabel = new QLabel(
-        "Receives DX spots from DXLab SpotCollector via UDP push.\n"
-        "In SpotCollector, enable UDP broadcast to this port (default 9999).\n"
-        "Alternatively, use the DX Cluster tab to connect to SpotCollector's telnet interface.");
-    helpLabel->setWordWrap(true);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(helpLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-    connLayout->addWidget(helpLabel);
-
-    // Button row
-    auto* btnRow = new QHBoxLayout;
-    m_scAutoStartBtn = new QPushButton(
-        s.value("SpotCollectorAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
-    m_scAutoStartBtn->setCheckable(true);
-    m_scAutoStartBtn->setChecked(s.value("SpotCollectorAutoStart", "False").toString() == "True");
-    connect(m_scAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
-        m_scAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
-        auto& s = AppSettings::instance();
-        s.setValue("SpotCollectorAutoStart", on ? "True" : "False");
-        s.save();
-    });
-    btnRow->addWidget(m_scAutoStartBtn);
-    btnRow->addStretch();
-
-    m_scStatusLabel = new QLabel("Stopped");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-    btnRow->addWidget(m_scStatusLabel);
-    btnRow->addStretch();
-
-    m_scStartBtn = new QPushButton(m_spotCollectorClient->isListening() ? "Stop" : "Start");
-    m_scStartBtn->setFixedWidth(100);
-    m_scStartBtn->setProperty("spotHubPrimary", true);
-    connect(m_scStartBtn, &QPushButton::clicked, this, [this] {
-        if (m_spotCollectorClient->isListening()) {
-            emit spotCollectorStopRequested();
-            return;
-        }
-        quint16 port = static_cast<quint16>(m_scPortSpin->value());
-        auto& s = AppSettings::instance();
-        s.setValue("SpotCollectorPort", port);
-        s.save();
-        emit spotCollectorStartRequested(port);
-    });
-    btnRow->addWidget(m_scStartBtn);
-    connLayout->addLayout(btnRow);
-
-    layout->addWidget(connGroup);
-
-    // ── Console output ──────────────────────────────────────────────────
-    auto* consoleLabel = new QLabel("SpotCollector Spots");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
-    layout->addWidget(consoleLabel);
-
-    m_scConsole = new QPlainTextEdit;
-    m_scConsole->setReadOnly(true);
-    m_scConsole->setMaximumBlockCount(2000);
-    layout->addWidget(m_scConsole, 1);
-
-    auto* scBtnRow = new QHBoxLayout;
-    scBtnRow->addStretch();
-    scBtnRow->addWidget(makeConsoleClearButton(m_scConsole, &m_scLogPath, "scClearBtn"));
-    layout->addLayout(scBtnRow);
-
-    // Update status if already listening
-    if (m_spotCollectorClient->isListening()) {
-        m_scStatusLabel->setText(QString("Listening on port %1").arg(m_scPortSpin->value()));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
-        m_scStartBtn->setText("Stop");
-    }
+    layout->addWidget(group);
+    layout->addStretch();
 
     tabs->addTab(page, "SpotCollector");
 }
@@ -2836,7 +2742,9 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             "delete the stored source logs, and send a clear command to the\n"
             "radio. The spot list stays empty after you reopen SpotHub.");
         connect(clearAllBtn, &QPushButton::clicked, this, [this] {
-            m_radioModel->sendCommand("spot clear");
+            SpotRequest request;
+            request.action = SpotAction::Clear;
+            m_radioModel->requestSpot(request);
             m_spotModel->clear();  // modelReset → m_spotCountLabel updates itself
             if (m_totalSpotsLabel)
                 m_totalSpotsLabel->setText("0");
@@ -2846,11 +2754,10 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             truncateLogFile(m_rbnLogPath);
             truncateLogFile(m_wsjtxLogPath);
             truncateLogFile(m_potaLogPath);
-            truncateLogFile(m_scLogPath);
             truncateLogFile(m_freedvLogPath);
             truncateLogFile(m_n1mmLogPath);
             for (QPlainTextEdit* console : {m_console, m_rbnConsole, m_wsjtxConsole,
-                                            m_scConsole, m_potaConsole, m_n1mmConsole}) {
+                                            m_potaConsole, m_n1mmConsole}) {
                 if (console)
                     console->clear();
             }

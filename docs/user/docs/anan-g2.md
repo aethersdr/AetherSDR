@@ -27,15 +27,17 @@ The G2 is found automatically on your LAN: open **File → Connect to Radio...**
 
 Discovery also sends a directed broadcast to each attached IPv4 subnet. This can find a G2 on a second NIC with its own subnet. Two NICs sharing a subnet still use the preferred route; VPNs and routers may block broadcast discovery. If the G2 does not appear, use **Connect by IP** with **Radio type:** set to **ANAN-G2** (see [Manual Connection](./manual-connection.md)).
 
-Configure the receive front end under **Settings → Radio Setup... → Radio → ANAN Front End**. The page is available while disconnected, and while connected to a G2. Its options apply on the next connection, whether you use **Available radios** or **Connect by IP**:
+Configure the receive front end under **Settings → Radio Setup... → Radio → ANAN Front End**. The page is available while disconnected, and while connected to a G2. Its options apply on the next connection, whether you use **Available radios** or **Connect by IP**. **Filter bank:** and **Mute the radio's speaker amplifier** also apply at once to a connected G2:
 
 | Option | Default | What it does |
 |--------|---------|--------------|
 | **Sample rate:** | 48 ksps | DDC0 sample rate: 48, 96, 192, 384, 768 or 1536 ksps. It is also the starting width of the panadapter. Higher rates use more of the radio's Ethernet link. |
 | **Feed the receiver from:** | ADC0 — behind the ANT1/2/3 relays | Which receive chain feeds the receiver: **ADC0 — behind the ANT1/2/3 relays**, behind the switched antenna relays, or **ADC1 — the RX2 jack**, wired straight to the RX2 jack. |
 | **Dither** / **Randomization** | On | The ADC's linearization bits. Leave them on unless you are testing. |
-| **Bypass ADC0's bank** / **Bypass ADC1's bank (RX2)** | On | Routes the antenna around the front-end filter bank. **Leave these checked:** no band filter is selected in this version, so unchecked means nothing reaches the ADC. |
+| **Filter bank:** | Bypassed | **Bypassed** keeps both ADCs' band-pass filter banks out of circuit. **Follow the tuned frequency** selects the band-pass filter that covers the receiver's frequency on both ADCs, and changes it as you tune, so strong signals on other bands are rejected before the ADC. A filter that does not cover the tuned frequency leaves no signal at all. After switching it on, check each band you use. Applies at once. |
+| **Bypass ADC0's bank** / **Bypass ADC1's bank (RX2)** | On | With **Filter bank:** set to **Bypassed**, routes the antenna around that ADC's filter bank. **Leave these checked:** unchecked means nothing reaches the ADC. Dimmed while the filter bank follows the tuned frequency, which switches the same relay. |
 | **Send receive audio to the radio** | Off | Also plays receive audio through the G2's own speaker and headphone jack. Takes effect on the next connect. |
+| **Mute the radio's speaker amplifier** | Off | Switches off the amplifier inside the G2. Sending the radio silence leaves the amplifier running and hissing; this stops it. Applies at once. A clean disconnect hands the radio back unmuted. |
 
 ## Receiving with the G2
 
@@ -43,7 +45,7 @@ Configure the receive front end under **Settings → Radio Setup... → Radio �
 - **Panadapter** computed by WDSP's display analyzer: a ≥16384-point windowed FFT at one point per screen pixel. **FFT AVG** and **Wt Avg** drive it, and noise-floor auto-adjust works.
 - **S-meter.**
 - **NB** cycles Off → **NB** → **NB2** → Off: WDSP's two impulse blankers, run on this computer before the demodulator. **NB** silences each impulse; **NB2** reconstructs the blanked window from the samples either side, and shows an **NB2** fill selector (**Zero**, **Sample hold**, **Mean hold**, **Hold sample** or **Interpolate**) while it runs. Neither is offered in FM.
-- **AGC-T** sets the AGC's maximum gain from −20 to 120 dB, 1.4 dB per slider step, starting at 71 (79.4 dB). With AGC off it sets the fixed gain instead, starting at 29 (20.6 dB). AGC-T and the AGC-off level are not remembered across launches; each launch starts at 71 and 29.
+- **AGC-T** sets the AGC's maximum gain from −20 to 120 dB, 1.4 dB per slider step, starting at 71 (79.4 dB). With AGC off it sets the fixed gain instead, starting at 29 (20.6 dB). The slider's tooltip shows the gain in dB.
 - **RF Gain** from −31 to 0 dB drives the G2's ADC step attenuator, and is restored per radio.
 - **AF gain, mute and balance** apply. With **Send receive audio to the radio** on, the receiver's mute and volume apply to both the computer and the radio's speaker, and the title-bar speaker button mutes the radio's speaker too.
 - Manual **Black Level** and waterfall **NB Blank**. See [Panadapter Controls](./panadapter-controls.md).
@@ -70,7 +72,7 @@ To measure your own radio instead, open **Settings → Radio Setup... → Droop 
 
 ### What is remembered
 
-The G2 stores none of its settings, so AetherSDR keeps these per radio: frequency and mode (14.175 MHz USB on a first connect), tuning step, **RF Gain**, the radio's own output level (what the volume slider sets with PC Audio off) and the panadapter dBm range. The span always starts at the connect form's **Sample rate:**. AGC settings and FFT averaging start from their defaults.
+The G2 stores none of its settings, so AetherSDR keeps these per radio: frequency and mode (14.175 MHz USB on a first connect), tuning step, **RF Gain**, the AGC mode, **AGC-T** and AGC-off level, the radio's own output level (what the volume slider sets with PC Audio off) and the panadapter dBm range. The span always starts at the connect form's **Sample rate:**. FFT averaging starts from its defaults.
 
 ### Not available on the G2
 
@@ -89,11 +91,18 @@ Controls the G2 cannot honor are dimmed with a reason, or refuse with a notice; 
 
 ### Nothing is received at all
 
-A **Bypass ADC0's bank** or **Bypass ADC1's bank (RX2)** box is unchecked. No band filter is selected, so an unchecked bypass means nothing reaches the ADC.
+With **Filter bank:** set to **Bypassed**, a **Bypass ADC0's bank** or **Bypass ADC1's bank (RX2)** box is unchecked, so nothing reaches the ADC.
 
 1. Disconnect from the G2.
 2. Open **Settings → Radio Setup... → Radio → ANAN Front End**.
 3. Tick **Bypass ADC0's bank** and **Bypass ADC1's bank (RX2)**, then connect again.
+
+### One band goes quiet with the filter bank on
+
+**Filter bank:** is set to **Follow the tuned frequency**, and the filter selected for that band does not pass it.
+
+1. Open **Settings → Radio Setup... → Radio → ANAN Front End**.
+2. Set **Filter bank:** to **Bypassed**. It applies at once.
 
 ### No audio from the radio's own speaker
 
@@ -102,6 +111,9 @@ A **Bypass ADC0's bank** or **Bypass ADC1's bank (RX2)** box is unchecked. No ba
 1. Open **Settings → Radio Setup... → Radio → ANAN Front End** and tick **Send receive audio to the radio**.
 2. Disconnect and connect again.
 3. Check that the receiver and the title-bar speaker button are not muted; they mute the radio's speaker too.
+4. Check that **Mute the radio's speaker amplifier** is unticked.
+
+If AetherSDR closed without disconnecting, or the network cable was pulled, while the amplifier was muted, the G2 keeps it muted. Connect again with **Mute the radio's speaker amplifier** unticked.
 
 ## See also
 

@@ -311,6 +311,41 @@ public:
         check(s[0] == 0 && s[1] == 0 && s[2] == 0, "non-finite samples encode as int16 silence");
         check(s[3] == 16384, "a finite neighbour is untouched");
     }
+    static void receiveAttenuationAndMeter()
+    {
+        Fixture f;
+        f.server.setRxChannelGain(1, 0.5f);
+        check(f.server.rxChannelGain(1) == 0.5f, "TCI RX retains linear attenuation");
+        {
+            TciServer restored(nullptr);
+            check(restored.rxChannelGain(1) == 0.5f, "saved TCI attenuation survives server reconstruction");
+        }
+        const float otherGain = f.server.rxChannelGain(2);
+        f.server.setRxChannelGain(1, 100.0f);
+        check(f.server.rxChannelGain(1) == 1.0f, "TCI RX gain cannot exceed unity");
+        f.server.setRxChannelGain(1, std::numeric_limits<float>::quiet_NaN());
+        check(f.server.rxChannelGain(1) == 1.0f, "TCI RX rejects non-finite gain");
+        check(f.server.rxChannelGain(2) == otherGain, "TCI RX attenuation leaves other channels unchanged");
+        f.server.setRxChannelGain(1, 0.5f);
+                f.server.m_io->drain();
+                f.backend->add(3);
+                TciClient* client = f.client(24000, 0);
+        float reportedRms = -1.0f;
+        QObject::connect(&f.server, &TciServer::rxLevel, &f.server,
+                         [&](int channel, float rms) { if (channel == 1) { reportedRms = rms; } });
+                PcmProducer producer;
+                producer.start(PcmPurpose::Slice, 3);
+        f.feed(3, frame(producer, 1, 0.25f, -0.5f));
+        check(floats(f.packets[client]) == QVector<float>({0.125f, -0.25f}),
+              "production receive worker attenuates audio exactly once");
+        check(std::fabs(reportedRms - std::sqrt((0.25f * 0.25f + 0.5f * 0.5f) / 2.0f)) < 0.000001f,
+              "TCI meter receives pre-fader RMS for immediate gain feedback");
+        const QByteArray pcm = TciIoWorker::encodeRxAudio(0, 24000, 2, 0, {0.25f, -0.5f}, 0.5f);
+        qint16 samples[2]{};
+        std::memcpy(samples, pcm.constData() + 64, sizeof(samples));
+        check(samples[0] == 4096 && samples[1] == -8192, "PCM16 TCI audio keeps linear attenuation");
+        f.server.setRxChannelGain(1, 0.5f);
+    }
     static void replayAndEpochs()
     {
         Fixture f; f.backend->add(3);
@@ -377,6 +412,31 @@ public:
         f.command(client,QStringLiteral("audio_stream_channels:1;audio_stream_sample_type:0;"));
         f.server.onSlicePcmReady(17,frame(b,128));
         check(!f.packets[other].isEmpty(), "client format changes preserve another client's staging");
+    }
+    static void sampleTypeIsNamed()
+    {
+        // TCI 2.1 replies audio_stream_sample_type with the format's name in
+        // lower case, and an unknown format leaves the current one in place.
+        Fixture f; f.backend->add(3); TciClient* client=f.client(48000,0);
+        QStringList texts;
+        client->textSink=[&texts](const QString& text) { texts.append(text); return qint64(text.size()); };
+        auto reply=[&](const QString& cmd) {
+            texts.clear(); f.command(client,cmd);
+            return texts.filter(QStringLiteral("audio_stream_sample_type")).join(QString());
+        };
+        auto format=[&] { return f.server.clientStateFor(client)->audioFormat; };
+        check(reply(QStringLiteral("audio_stream_sample_type:int16;"))==QStringLiteral("audio_stream_sample_type:int16;")
+              && format()==0, "int16 is set and replied by name");
+        check(reply(QStringLiteral("audio_stream_sample_type:FLOAT32;"))==QStringLiteral("audio_stream_sample_type:float32;")
+              && format()==3, "the case of a set value does not matter, the reply is lower case");
+        check(reply(QStringLiteral("audio_stream_sample_type;"))==QStringLiteral("audio_stream_sample_type:float32;"),
+              "a bare read answers the current format");
+        check(reply(QStringLiteral("audio_stream_sample_type:int24;"))==QStringLiteral("audio_stream_sample_type:float32;")
+              && format()==3, "an unsupported format is ignored and the current one replied");
+        check(reply(QStringLiteral("audio_stream_sample_type:bogus;"))==QStringLiteral("audio_stream_sample_type:float32;")
+              && format()==3, "an unknown format no longer falls back to int16");
+        check(reply(QStringLiteral("audio_stream_sample_type:0;"))==QStringLiteral("audio_stream_sample_type:int16;")
+              && format()==0, "the older numeric form is still taken and answered by name");
     }
     static void subscriptionAndForwardGapStaging()
     {
@@ -1082,8 +1142,8 @@ public:
         serverConstructedAfterReceiverRestore();
         simultaneousEightReceiverHandshakes();
         eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
-        ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence();
-        replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
+        ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence(); receiveAttenuationAndMeter();
+        replayAndEpochs(); resetIsolation(); sampleTypeIsNamed(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();
         std::printf("TCI RX: %d checks, %d failures\n",checks,failures);
         return failures==0 ? 0 : 1;

@@ -1841,6 +1841,10 @@ void SliceModel::emitLetterRefresh()
 void SliceModel::applyChanges(const SliceDelta& d)
 {
     const QPointer<SliceModel> alive(this);
+    const bool chainChanged = d.chainMode && m_chainMode != *d.chainMode;
+    if (chainChanged) {
+        m_chainMode = *d.chainMode;
+    }
     const ReceiveObservation previousObservation = m_receiveObservation;
     bool dspParametersReported = false;
     for (auto it = d.dspParameters.cbegin(); it != d.dspParameters.cend(); ++it) {
@@ -2543,6 +2547,12 @@ void SliceModel::applyChanges(const SliceDelta& d)
     }
     if (d.mode) {
         emit receiveModeReported();
+    }
+    if (!alive) { return; }
+    // Publish after the matching mode/filter state; a newer nested report
+    // supersedes this notification just as it supersedes the observation.
+    if (chainChanged && m_chainMode == *d.chainMode) {
+        emit chainModeChanged(m_chainMode);
     }
     if (alive && dspParametersReported) {
         emit dspParametersChanged();

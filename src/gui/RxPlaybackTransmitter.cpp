@@ -193,14 +193,11 @@ void RxPlaybackTransmitter::beginWhenReady()
     // Local DAX TX mode keeps the microphone off the wire while we modulate;
     // `transmit dax` tells a FLEX to take its modulator input from the DAX
     // stream, and only a radio with a DAX stream has that choice to make.
-    auto& txModel = m_radio->transmitModel();
     m_previousAudioDaxMode = m_audio->isDaxTxMode();
     m_restoreAudioDaxMode = true;
     m_audio->setDaxTxMode(true);
     if (!bypass) {
-        m_previousTransmitDax = txModel.daxOn();
-        m_restoreTransmitDax = true;
-        txModel.setDax(true);
+        m_radio->acquireTransmitDax(RadioModel::DaxTxFlagHolder::RxPlayback);
     }
 
     QTimer::singleShot(kDaxSettleMs, this, [this, request = m_request] {
@@ -334,10 +331,9 @@ void RxPlaybackTransmitter::finish(bool aborted, const QString& reason)
     m_pendingStream = false;
 
     if (m_radio) {
-        auto& txModel = m_radio->transmitModel();
         if (aborted) m_radio->abortProducerPtt(m_request, TransmitModel::PttSource::Dax);
         else         m_radio->requestProducerPttOff(m_request, TransmitModel::PttSource::Dax);
-        if (m_restoreTransmitDax) txModel.setDax(m_previousTransmitDax);
+        m_radio->releaseTransmitDax(RadioModel::DaxTxFlagHolder::RxPlayback);
     }
     m_request = {};
     if (m_audio) {
@@ -348,7 +344,6 @@ void RxPlaybackTransmitter::finish(bool aborted, const QString& reason)
     m_pcm.clear();
     m_offset = 0;
     m_restoreAudioDaxMode = false;
-    m_restoreTransmitDax = false;
 
     if (wasActive) {
         qCInfo(lcAudio).noquote()

@@ -5,6 +5,8 @@
 // is in MainWindow.cpp.
 
 #include "MainWindow.h"
+#include "AetherLabWidget.h"
+#include "models/AntennaAnalyzerModel.h"
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
@@ -21,6 +23,10 @@
 #include "core/UlanziDialBackend.h"
 #include "core/UlanziDialMappings.h"
 #include "AppletPanel.h"
+#include "ConnectionPanel.h"
+#include <QStackedWidget>
+#include <QSplitter>
+#include <QVBoxLayout>
 #include "core/IambicKeyer.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
@@ -266,17 +272,8 @@ QString flexControlButtonAction(int button, int action)
 void MainWindow::showFlexControlDialog()
 {
     // No capability check: the knob is a host serial device (#5778).
-    // A canon workspace window: created directly rather than through
-    // showOrRaisePersistent(), which would apply View → Frameless Window.
-    const bool wasFresh = !m_flexControlDialog;
-    if (wasFresh) {
-        auto* dialog = new FlexControlDialog(this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        m_flexControlDialog = dialog;
-    }
-    m_flexControlDialog->show();
-    m_flexControlDialog->raise();
-    m_flexControlDialog->activateWindow();
+    const bool wasFresh = showOrRaiseCanon(m_flexControlDialog,
+                                           [this] { return new FlexControlDialog(this); });
     if (wasFresh && m_flexControlDialog) {
         connect(m_flexControlDialog, &FlexControlDialog::virtualWheelSteps,
                 this, &MainWindow::handleVirtualFlexControlWheel);
@@ -594,32 +591,7 @@ void MainWindow::handleFlexControlButton(int button, int action,
         else                      beginSplitMonitor();
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
-            // Same gate the CwxF* macros carry below: split creates its TX
-            // slice with Flex wire text, which a backend with no command plane
-            // drops — a hardware button that silently does nothing. Refuse and
-            // log; the binding stays assignable (M0, #5263).
-            if (!m_radioModel.hasCommandPlane()) {
-                qCDebug(lcDevices) << "SplitActiveSlice ignored:"
-                                   << "this backend takes no Flex slice-create command";
-                // A log line alone is a hardware button that silently does
-                // nothing. Say so the way the keyboard split_toggle refusal
-                // does (MainWindow_Shortcuts.cpp); one notice per session.
-                showUnsupportedControlNotice();
-                return;
-            }
-            if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
-            auto* s = activeSlice();
-            if (!s) return;
-            QString panId = s->panId();
-            if (panId.isEmpty())
-                panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-            const bool isCw = isCwMode(s->mode());
-            const double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
-            m_splitActive = true;
-            m_splitRxSliceId = s->sliceId();
-            m_splitRxFrequencyMhz = s->reportedFrequency();
-            m_radioModel.sendCommand(
-                QString("slice create pan=%1 freq=%2").arg(panId).arg(txFreq, 0, 'f', 6));
+            if (SliceModel* source = activeSlice()) { enterSplit(source->sliceId()); }
         } else {
             disableSplit();
         }
@@ -1218,28 +1190,7 @@ void MainWindow::dispatchHidAction(const QString& actionName,
         else                      beginSplitMonitor();
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
-            // Same refusal as the FlexControl split above: no command plane,
-            // no Flex slice-create — refuse loudly instead of a dead hardware
-            // button (M0, #5263).
-            if (!m_radioModel.hasCommandPlane()) {
-                qCDebug(lcDevices) << "SplitActiveSlice (HID) ignored:"
-                                   << "this backend takes no Flex slice-create command";
-                showUnsupportedControlNotice();
-                return;
-            }
-            auto* s = activeSlice();
-            if (s && m_radioModel.slices().size() < m_radioModel.maxSlices()) {
-                QString panId = s->panId().isEmpty()
-                    ? (m_panStack ? m_panStack->activePanId() : m_radioModel.panId())
-                    : s->panId();
-                const bool isCw = isCwMode(s->mode());
-                m_splitActive    = true;
-                m_splitRxSliceId = s->sliceId();
-                m_splitRxFrequencyMhz = s->reportedFrequency();
-                m_radioModel.sendCommand(
-                    QString("slice create pan=%1 freq=%2")
-                    .arg(panId).arg(s->frequency() + (isCw ? 0.001 : 0.005), 0, 'f', 6));
-            }
+            if (SliceModel* source = activeSlice()) { enterSplit(source->sliceId()); }
         } else {
             disableSplit();
         }
@@ -2405,7 +2356,7 @@ void MainWindow::registerMidiParams()
     reg("global.masterVolume", "Master Volume", "Global", P::Slider, 0, 100,
         [this](float v) {
             if (m_radioModel.hasCommandPlane()) {
-                m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v)));
+                m_radioModel.requestRadioSetup({RadioSetupField::LineoutGain, static_cast<int>(v)});
                 return;
             }
             if (!m_radioModel.isConnected()) {
@@ -2448,7 +2399,7 @@ void MainWindow::registerMidiParams()
                                    << "radio mixer verbs need a Flex command plane";
                 return;
             }
-            m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v)));
+            m_radioModel.requestRadioSetup({RadioSetupField::HeadphoneGain, static_cast<int>(v)});
         },
         [this]() -> float { return m_radioModel.headphoneGain(); });
 
@@ -2978,7 +2929,9 @@ void MainWindow::wireExternalControllers()
     });
 
     MidiSettings::instance().load();
-    auto savedBindings = MidiSettings::instance().loadBindings();
+    // A damaged or unreadable midi.settings blocks binding saves for the
+    // session; the MIDI mapping window tells the operator. (#6683)
+    auto savedBindings = MidiSettings::instance().loadStartupBindings();
     for (const auto& b : savedBindings)
         m_midiControl->addBinding(b);
 #endif
@@ -3508,6 +3461,43 @@ void MainWindow::wireExternalControllers()
         });
     }
 #endif
+}
+
+AntennaAnalyzerModel* MainWindow::antennaAnalyzerModel()
+{
+    if (!m_antennaAnalyzer) { m_antennaAnalyzer = new AntennaAnalyzerModel(this); }
+    return m_antennaAnalyzer;
+}
+
+void MainWindow::showAetherLab()
+{
+    if (m_minimalMode) { toggleMinimalMode(false); }
+    if (!m_labWorkspaceStack) {
+        auto* layout = qobject_cast<QVBoxLayout*>(centralWidget()->layout());
+        if (!layout) { return; }
+        m_labWorkspaceStack = new QStackedWidget(centralWidget());
+        m_labWorkspaceStack->setObjectName(QStringLiteral("mainWorkspaceStack"));
+        layout->removeWidget(m_splitter);
+        layout->addWidget(m_labWorkspaceStack, 1);
+        m_labWorkspaceStack->addWidget(m_splitter);
+        m_aetherLabWidget = new AetherLabWidget(antennaAnalyzerModel(), m_labWorkspaceStack);
+        m_labWorkspaceStack->addWidget(m_aetherLabWidget);
+        connect(m_aetherLabWidget, &AetherLabWidget::returnRequested, this, &MainWindow::returnFromAetherLab);
+    }
+    m_aetherLabActive = true;
+    if (m_connPanel) { m_connPanel->hide(); }
+    m_labWorkspaceStack->setCurrentWidget(m_aetherLabWidget);
+    refreshRadioTabs();
+    m_aetherLabWidget->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::returnFromAetherLab()
+{
+    if (!m_aetherLabActive) { return; }
+    if (m_antennaAnalyzer) { m_antennaAnalyzer->stop(); }
+    m_aetherLabActive = false;
+    m_labWorkspaceStack->setCurrentWidget(m_splitter);
+    refreshRadioTabs();
 }
 
 } // namespace AetherSDR

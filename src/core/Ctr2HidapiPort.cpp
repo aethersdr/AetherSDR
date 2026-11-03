@@ -2,6 +2,7 @@
 
 #include "Ctr2DeviceLock.h"
 #include "Ctr2HidThreadPort.h"
+#include "HidDiscovery.h"
 
 #include <hidapi/hidapi.h>
 
@@ -21,11 +22,9 @@ QString fromWide(const wchar_t* s)
     return s ? QString::fromWCharArray(s) : QString();
 }
 
-// hid_init() is idempotent. hid_exit() is never called: it is process-wide
-// and other HID controllers may still be open.
 bool ensureHidInit()
 {
-    return hid_init() == 0;
+    return HidDiscovery::init() == 0;
 }
 
 } // namespace
@@ -47,7 +46,7 @@ QList<Ctr2HidPort::DeviceInfo> Ctr2HidapiPort::enumerate()
         }
     }
     for (const auto& [vendorId, productId] : std::as_const(ids)) {
-        hid_device_info* list = hid_enumerate(vendorId, productId);
+        hid_device_info* list = HidDiscovery::enumerate(vendorId, productId);
         for (hid_device_info* d = list; d; d = d->next) {
             if (d->usage_page != kUsagePage || d->usage != kUsage) {
                 continue;
@@ -92,10 +91,11 @@ Ctr2HidPort* Ctr2HidapiPort::open(const Ctr2HidPort::DeviceInfo& device, QString
         return nullptr;
     }
     errno = 0;
-    hid_device* handle = hid_open_path(device.path.toUtf8().constData());
+    std::wstring openError;
+    hid_device* handle = HidDiscovery::openPath(device.path.toUtf8().constData(), &openError);
     if (!handle) {
         const int openErrno = errno;
-        const QString why = fromWide(hid_error(nullptr));
+        const QString why = fromWide(openError.c_str());
         *error = QStringLiteral("Cannot open %1: %2")
             .arg(device.label(), why.isEmpty() ? QStringLiteral("HID I/O error") : why);
 #ifdef Q_OS_LINUX

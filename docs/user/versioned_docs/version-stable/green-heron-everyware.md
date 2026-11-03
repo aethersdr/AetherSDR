@@ -34,6 +34,11 @@ in the applet itself, not in [Peripherals](./peripherals.md).
 | **Port** | Its TCP port; **10000** unless the installation moved it |
 | **Switch** | Which switch feeds this radio. Filled from the server's roster once connected, and remembered |
 
+Enter the server address in **IP** and its TCP port in **Port**. To replace
+the port, select the existing number and type a value from **1** to **65535**.
+If the applet is connecting, connected, or reconnecting, click **Disconnect**
+first to unlock the address and port fields.
+
 Click **Connect**. The status line reads "Connected — waiting for roster",
 then "Connected — waiting for switch state" until the server reports.
 

@@ -1449,6 +1449,14 @@ bool isTransmitControl(const QWidget* w)
     return match != TransmitControlMatch::None;
 }
 
+bool hasAnalyzerRfInChain(const QWidget* widget)
+{
+    for (const QWidget* current = widget; current; current = current->parentWidget()) {
+        if (current->property("aetherLabRf").toBool()) { return true; }
+    }
+    return false;
+}
+
 bool hasTransmitControlInChain(const QWidget* widget)
 {
     for (const QWidget* current = widget; current;
@@ -1583,6 +1591,8 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
         {QStringLiteral("panId"),      s->panId()},
         {QStringLiteral("frequency"),  s->frequency()},   // MHz
         {QStringLiteral("mode"),       s->mode()},
+        {QStringLiteral("chainMode"), s->chainMode().isEmpty()
+            ? QJsonValue() : QJsonValue(s->chainMode())},
         {QStringLiteral("filterLow"),  s->filterLow()},
         {QStringLiteral("filterHigh"), s->filterHigh()},
         {QStringLiteral("filterPresetId"), filterControl.selectedPresetId},
@@ -1788,6 +1798,7 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("serial"),       r->serial()},
         {QStringLiteral("callsign"),     r->callsign()},
         {QStringLiteral("nickname"),     r->nickname()},
+        {QStringLiteral("iaruRegion"), jsonOrNull(r->iaruRegion())},
         {QStringLiteral("connected"),    r->isConnected()},
         // The third value beside the bool, NOT a replacement for it: "idle",
         // "connecting" or "connected". A caller that issued `connect ip` and
@@ -2460,15 +2471,8 @@ bool AutomationServer::start(const QString& serverName)
                              : QStringLiteral("Automation");
     }
     if (m_radioModel) {
-        connect(m_radioModel, &RadioModel::connectionStateChanged, this,
-                [this](bool connected) {
-                    if (!connected || m_agentStation.isEmpty())
-                        return;
-                    QPointer<AutomationServer> self(this);
-                    QTimer::singleShot(1000, this, [self]() {
-                        if (self) self->applyAgentStation(self->m_agentStation);
-                    });
-                });
+        m_stationConnection = connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+                &AutomationServer::onStationConnectionState);
         if (m_radioModel->isConnected())
             applyAgentStation(m_agentStation);
     }
@@ -2481,6 +2485,8 @@ bool AutomationServer::start(const QString& serverName)
 
 void AutomationServer::stop()
 {
+    ++m_stationScheduleRevision;
+    disconnect(m_stationConnection);
     const QPointer<AutomationServer> self(this);
     forceUnkey("automation bridge stopping");
     if (!self) {
@@ -2784,6 +2790,11 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     }
 
     const QString normalizedAction = action.trimmed().toLower();
+    if (name == QLatin1String("lab")) {
+        // Stop remains available in observe-only mode to cancel analyzer RF.
+        return normalizedAction.isEmpty() || normalizedAction == QLatin1String("status")
+            || normalizedAction == QLatin1String("devices") || normalizedAction == QLatin1String("stop");
+    }
     // The probe constructs only an isolated TransmitModel and touches no session.
     if (name == QLatin1String("interlock") && action == QLatin1String("probe")) {
         return true;
@@ -2865,6 +2876,7 @@ const QStringList& getModelNames()
         QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
         QStringLiteral("display"),
         QStringLiteral("waveforms"),
+        QStringLiteral("ntp"),
         QStringLiteral("kiwi"),
     };
     return kModels;
@@ -3583,6 +3595,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doStreams(a.action);
             });
 
+        add("lab", {},
+            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doLab(a.action, a.value);
+            });
+
         add("devices", {},
             "devices <list|ulanzi|ulanzi-start|ulanzi-stop> — external-device diagnostics and lifecycle control",
             parseActionOnly,
@@ -3653,7 +3672,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                                   || v == QLatin1String("false") || v == QLatin1String("disable"));
                 if (!on && !off)
                     return err(QStringLiteral("txwaterfall requires on|off"));
-                if (s.m_radioModel->requestLocalShowTxInWaterfall(on)) {
+                const ReceiveDispatch dispatch = s.m_radioModel->requestRadioSetup(
+                    {RadioSetupField::ShowTxInWaterfall, on});
+                if (dispatch == ReceiveDispatch::Unsupported) {
+                    return err(QStringLiteral("TX waterfall setting not dispatched"));
+                }
+                if (dispatch == ReceiveDispatch::LocalOnly) {
                     return QJsonObject{
                         {QStringLiteral("ok"), true},
                         {QStringLiteral("txwaterfall"), on},
@@ -3661,8 +3685,6 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                          QStringLiteral("client-side flag on this radio, applied now; "
                                         "get transmit showTxInWaterfall reads it")}};
                 }
-                s.m_radioModel->sendCommand(
-                    QStringLiteral("transmit set show_tx_in_waterfall=%1").arg(on ? 1 : 0));
                 return QJsonObject{
                     {QStringLiteral("ok"), true},
                     {QStringLiteral("txwaterfall"), on},
@@ -4526,10 +4548,14 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                            {QStringLiteral("class"), shortClassName(w)}};
     }
 
+    if (hasAnalyzerRfInChain(w)) {
+        return err(QStringLiteral("Use lab sweep for analyzer RF; generic UI automation cannot confirm physical isolation"));
+    }
+
     // TX-safety guard — never key a live radio from the test bridge unless the
     // operator has explicitly opted in. (#3646 Phase 1 safety requirement.)
     const bool transmitControl = isTransmitControl(w);
-    if (transmitControl && txActionRequiresPermission(w) && !m_txAllowed) {
+    if (transmitControl && txActionRequiresPermission(w, action, value) && !m_txAllowed) {
         qCWarning(lcAutomation).noquote()
             << "BLOCKED transmit-related invoke on" << target
             << "(" << shortClassName(w) << ")";
@@ -4895,9 +4921,14 @@ void AutomationServer::setRadioModel(RadioModel* model)
 {
     const QPointer<AutomationServer> self(this);
     const QPointer<RadioModel> target(model);
-    if (m_radioModel != model) {
+    const bool changed = m_radioModel != model;
+    if (changed) {
+        const quint64 revision = ++m_stationScheduleRevision;
+        disconnect(m_stationConnection);
+        restoreStation();
+        if (!self || m_stationScheduleRevision != revision) { return; }
         forceUnkey("automation radio model changed");
-        if (!self) {
+        if (!self || m_stationScheduleRevision != revision) {
             return;
         }
     }
@@ -4908,6 +4939,11 @@ void AutomationServer::setRadioModel(RadioModel* model)
         disconnect(m_meterWindowSamples);
     }
     m_radioModel = target;
+    if (changed && m_server && target) {
+        m_stationConnection = connect(target, &RadioModel::connectionStateChanged, this,
+                                      &AutomationServer::onStationConnectionState);
+        onStationConnectionState(target->isConnected());
+    }
 }
 
 QJsonObject AutomationServer::doMeterWindow(const QString& action, const QString& value)
@@ -5306,11 +5342,17 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         if (m_radioModel) {
             const FlexWaveformModel& wf = m_radioModel->flexWaveformModel();
             for (const FlexWaveformEntry& entry : wf.waveforms()) {
+                // Environment values may be secrets: the bridge reports keys only.
+                QJsonArray envKeys;
+                for (const QString& key : entry.environment.keys()) {
+                    envKeys.append(key);
+                }
                 installed.append(QJsonObject{
                     {QStringLiteral("name"), entry.name},
                     {QStringLiteral("version"), entry.version},
                     {QStringLiteral("isContainer"), entry.isContainer},
                     {QStringLiteral("displayName"), entry.displayName()},
+                    {QStringLiteral("environmentKeys"), envKeys},
                 });
             }
             wfp = QJsonObject{
@@ -6179,6 +6221,30 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = radioSnapshot(radio);
     } else if (model == QLatin1String("gps")) {
         data = gpsSnapshot(radio);
+    } else if (model == QLatin1String("ntp")) {
+        // The radio's own NTP time sources as it last reported them (#6953).
+        const std::optional<RadioCapabilities::NtpSourceControl> control =
+            radio->backendCapabilities().ntpSourceControl;
+        QJsonArray sources;
+        for (const NtpSourceState& n : radio->ntpSources()) {
+            sources.append(QJsonObject{
+                {QStringLiteral("id"), n.id},
+                {QStringLiteral("address"), n.address},
+                {QStringLiteral("directive"), n.directive},
+                {QStringLiteral("description"), n.description},
+                {QStringLiteral("enabled"), n.enabled},
+                {QStringLiteral("selected"), n.selected},
+                {QStringLiteral("inUse"), n.inUse()},
+                {QStringLiteral("prefer"), n.prefer},
+                {QStringLiteral("state"), n.state},
+                {QStringLiteral("stratum"), n.stratum},
+                {QStringLiteral("reach"), n.reach},
+                {QStringLiteral("updating"), radio->ntpSourceReplaceActive(n.id)},
+            });
+        }
+        data = QJsonObject{{QStringLiteral("available"), control.has_value()},
+                           {QStringLiteral("maxSources"), control ? control->maxSources : 0},
+                           {QStringLiteral("sources"), sources}};
     } else if (model == QLatin1String("transmit")) {
         data = transmitSnapshot(&radio->transmitModel(),
                                 radio->backendCapabilities().hasDownwardExpander,
@@ -6346,13 +6412,9 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
         if (!m_radioModel || !m_radioModel->isConnected()) {
             return err(QStringLiteral("no connected radio available"));
         }
-        // `sub slice all` is Flex wire text; on a backend with no command
-        // plane it is dropped, and an ok for work that never happens is the
-        // same defect as a permanently dim button (M0, #5263).
-        if (!m_radioModel->hasCommandPlane()) {
-            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
+        if (m_radioModel->requestSliceInventoryRefresh() == ReceiveDispatch::Unsupported) {
+            return err(QStringLiteral("slice inventory refresh is not supported on this radio"));
         }
-        m_radioModel->sendCommand(QStringLiteral("sub slice all"));
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("pending"), true}};
     }
@@ -6384,10 +6446,13 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
             {QStringLiteral("timestampMs"), QDateTime::currentMSecsSinceEpoch()}
         };
         QPointer<AutomationServer> self(this);
+        const QPointer<RadioModel> originalRadio(m_radioModel);
+        const RadioControlSession refreshSession = m_radioModel->controlSession();
         m_radioModel->sendCmdPublic(
             QStringLiteral("waveform remove %1").arg(name),
-            [self, name](int code, const QString& body) {
-                if (!self) {
+            [self, name, originalRadio, refreshSession](int code, const QString& body) {
+                if (!self || !originalRadio || self->m_radioModel != originalRadio
+                    || !originalRadio->controlSessionCurrent(refreshSession)) {
                     return;
                 }
                 self->m_lastWaveformCommand = QJsonObject{
@@ -6400,7 +6465,7 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
                 };
                 if (code == 0 && self->m_radioModel
                         && self->m_radioModel->isConnected()) {
-                    self->m_radioModel->sendCommand(QStringLiteral("sub slice all"));
+                    self->m_radioModel->requestSliceInventoryRefresh(refreshSession);
                 }
             });
         return QJsonObject{{QStringLiteral("ok"), true},
@@ -7471,7 +7536,7 @@ QJsonObject AutomationServer::invokeTxAction(QObject* object, const QString& tar
     if (!self || !guardedObject) {
         return err(QStringLiteral("scoped control disappeared during preparation"));
     }
-    const bool requiresTx = txActionRequiresPermission(object) || bool(controller);
+    const bool requiresTx = txActionRequiresPermission(object, action, value) || bool(controller);
     TxKeyingAction::Prepared prepared = prepareTxKeyingAction(object, controller, action, value);
     if (!self) { return err(QStringLiteral("bridge disappeared during preparation")); }
     if (!prepared) {
@@ -9353,35 +9418,46 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
 // session-scoped and the radio drops it when this client disconnects, so it is
 // inherently non-persistent; we additionally restore the user's real name on
 // bridge stop so any live peer reverts immediately.
-void AutomationServer::applyAgentStation(const QString& name)
+void AutomationServer::onStationConnectionState(bool connected)
 {
-    if (!m_radioModel || !m_radioModel->isConnected() || name.isEmpty())
-        return;
-    // Defense in depth behind doStation's refusal: `client station` is Flex
-    // wire text, and this can also run from the reconnect re-apply path
-    // (M0, #5263).
-    if (!m_radioModel->hasCommandPlane())
-        return;
-    if (!m_stationApplied) {
-        // Capture the user's real station name once, to restore it later. Same
-        // fallback the connect handshake uses (AppSettings StationName → host).
-        m_priorStationName = AppSettings::instance().value("StationName", "").toString();
-        if (m_priorStationName.isEmpty())
-            m_priorStationName = QSysInfo::machineHostName();
+    const quint64 schedule = ++m_stationScheduleRevision;
+    if (!connected || !m_radioModel || m_agentStation.isEmpty()) { return; }
+    const RadioControlSession session = m_radioModel->controlSession();
+    const quint64 identityRevision = m_radioModel->stationIdentityRevision();
+    const QPointer<AutomationServer> self(this);
+    QTimer::singleShot(1000, this, [self, session, schedule, identityRevision] {
+        if (self && self->m_server && self->m_radioModel
+            && self->m_stationScheduleRevision == schedule
+            && self->m_radioModel->controlSessionCurrent(session)
+            && self->m_radioModel->stationIdentityRevision() == identityRevision) {
+            self->applyAgentStation(self->m_agentStation);
+        }
+    });
+}
+
+bool AutomationServer::applyAgentStation(const QString& name)
+{
+    const quint64 revision = ++m_stationScheduleRevision;
+    if (!m_radioModel || name.isEmpty()) { return false; }
+    const QPointer<AutomationServer> alive(this);
+    const QPointer<RadioModel> original(m_radioModel);
+    const std::optional<RadioStationOverride> owner = original->requestTemporaryStation(name);
+    if (!alive || m_stationScheduleRevision != revision || m_radioModel != original) {
+        if (owner && original) { original->restoreTemporaryStation(*owner); }
+        return false;
     }
-    m_radioModel->sendCommand(QStringLiteral("client station %1").arg(name));
-    m_stationApplied = true;
+    if (!owner) { return false; }
+    m_stationOverride = owner;
     qCInfo(lcAutomation).noquote() << "station name set to" << name
                                    << "(other MultiFlex clients will see this)";
+    return true;
 }
 
 void AutomationServer::restoreStation()
 {
-    if (!m_stationApplied || m_priorStationName.isEmpty())
-        return;
-    if (m_radioModel && m_radioModel->isConnected() && m_radioModel->hasCommandPlane())
-        m_radioModel->sendCommand(QStringLiteral("client station %1").arg(m_priorStationName));
-    m_stationApplied = false;
+    const std::optional<RadioStationOverride> owner = std::exchange(m_stationOverride, {});
+    RadioModel* original = owner ? qobject_cast<RadioModel*>(owner->model.data()) : nullptr;
+    if (original) { original->restoreTemporaryStation(*owner); }
 }
 
 QJsonObject AutomationServer::doStation(const QString& name)
@@ -9395,12 +9471,8 @@ QJsonObject AutomationServer::doStation(const QString& name)
         return err(QStringLiteral("station name must be a single token (no spaces)"));
     if (!m_radioModel->isConnected())
         return err(QStringLiteral("not connected — connect to a radio before setting the station name"));
-    // `client station` is a Flex multiFLEX identity verb; refuse where the
-    // backend would drop it (M0, #5263).
-    if (!m_radioModel->hasCommandPlane())
-        return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
+    if (!applyAgentStation(n)) { return err(QStringLiteral("station name not dispatched on this radio")); }
     m_agentStation = n;
-    applyAgentStation(n);
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
 }
 
@@ -10010,6 +10082,9 @@ QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
                                                  const QString& target,
                                                  const QString& verb) const
 {
+    if (hasAnalyzerRfInChain(widget)) {
+        return err(QStringLiteral("Use lab sweep for analyzer RF; pointer automation is unavailable on this control"));
+    }
     if (!widget->isVisible()) {
         return err(QStringLiteral("refused: '") + target
                    + QStringLiteral("' is not visible"));
@@ -11160,6 +11235,10 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
                            {QStringLiteral("class"), shortClassName(w)}};
     }
 
+    if (hasAnalyzerRfInChain(w)) {
+        return err(QStringLiteral("Use lab sweep for analyzer RF; coordinate automation is unavailable on this control"));
+    }
+
     // TX-safety guard — a raw coordinate click must honor the same opt-in as
     // invoke(), or it becomes a bypass around the keying gate. Walk the whole
     // ancestor chain (see the function comment): an unaccepted press propagates
@@ -11288,7 +11367,9 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         const int limit = radio->maxPanadapters();
         if (have >= limit)
             return err(QStringLiteral("refused: at panadapter limit (%1)").arg(limit));
-        radio->createPanadapter();
+        if (!radio->createPanadapter()) {
+            return err(QStringLiteral("pan creation was not admitted by this backend"));
+        }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("create")},
                            {QStringLiteral("requested"), true}, {QStringLiteral("priorCount"), have}};
     }
@@ -11519,6 +11600,10 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         if (!all && radio->panadapters().size() <= 1)
             return err(QStringLiteral("refused: cannot close the last panadapter"));
 
+        const RadioControlSession session = radio->controlSession();
+        QMap<QString, QPointer<PanadapterModel>> originals;
+        for (const QString& pid : panIds) { originals.insert(pid, radio->panadapter(pid)); }
+        bool anyRequested = false;
         QJsonArray closed;
         for (const QString& pid : panIds) {
             const PanadapterModel* p = radio->panadapter(pid);
@@ -11527,9 +11612,13 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
             // exercises the exact GUI close path. removePanadapter sends the
             // FlexLib-correct pair "display pan remove" + "display panafall
             // remove" for a panafall, so the waterfall is freed too. (#3843)
-            radio->removePanadapter(pid);
+            const bool requested = radio->controlSessionCurrent(session) && originals.value(pid)
+                && radio->panadapter(pid) == originals.value(pid)
+                && radio->removePanadapter(pid, all ? PanCloseIntent::ExplicitTeardown : PanCloseIntent::Ordinary);
+            anyRequested = anyRequested || requested;
             QJsonObject o{{QStringLiteral("panId"), pid},
-                          {QStringLiteral("resolved"), p != nullptr}};
+                          {QStringLiteral("resolved"), p != nullptr},
+                          {QStringLiteral("requested"), requested}};
             if (!wfId.isEmpty())
                 o[QStringLiteral("waterfallId")] = wfId;
             closed.append(o);
@@ -11537,9 +11626,9 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                                            << (wfId.isEmpty() ? QString() : QStringLiteral("+ wf ") + wfId);
         }
         return QJsonObject{
-            {QStringLiteral("ok"), true},
+            {QStringLiteral("ok"), anyRequested},
             {QStringLiteral("pan"), QStringLiteral("close")},
-            {QStringLiteral("requested"), true},   // radio echoes "… removed"; re-poll get pans
+            {QStringLiteral("requested"), anyRequested},   // radio echoes removal; re-poll get pans
             {QStringLiteral("closed"), closed},
         };
     }
@@ -13097,6 +13186,20 @@ QJsonObject AutomationServer::doWhoami() const
         {QStringLiteral("readOnly"), m_readOnly},
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
     };
+}
+
+QJsonObject AutomationServer::doLab(const QString& action, const QString& value) const
+{
+    const QString normalized = action.trimmed().toLower();
+    if (normalized == QLatin1String("sweep")
+        && qEnvironmentVariable("AETHER_AUTOMATION_ALLOW_LAB_RF") != QLatin1String("1")) {
+        return err(QStringLiteral("Analyzer RF automation requires AETHER_AUTOMATION_ALLOW_LAB_RF=1 and physical RF isolation"));
+    }
+    if (!m_labHandler) { return err(QStringLiteral("AetherLab provider unavailable")); }
+    QJsonObject result = m_labHandler(normalized, value);
+    result.insert(QStringLiteral("automationRfAllowed"),
+                  qEnvironmentVariable("AETHER_AUTOMATION_ALLOW_LAB_RF") == QLatin1String("1"));
+    return result;
 }
 
 QJsonObject AutomationServer::doDeviceDiagnostics(const QString& action) const

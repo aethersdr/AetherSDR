@@ -9,11 +9,18 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QEventLoop>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QPoint>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRect>
 #include <QRegularExpression>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QSplitter>
+#include <QWidget>
 
 #include <cstdio>
 
@@ -116,6 +123,7 @@ int main(int argc, char** argv)
     auto* preview = child<QPushButton>(panel, QStringLiteral("dvkPreview"));
     auto* status = child<QLabel>(panel, QStringLiteral("dvkStatus"));
     auto* dot = child<QLabel>(panel, QStringLiteral("dvkStatusDot"));
+    auto* slotsScroll = child<QScrollArea>(panel, QStringLiteral("dvkSlotsScroll"));
     report(QStringLiteral("panel widgets are reachable by name"),
            slot1 && slot3 && fkey3 && name3 && bar3 && rec && stop && play && preview && status && dot);
     if (!(slot1 && slot3 && fkey3 && name3 && bar3 && rec && stop && play && preview && status && dot)) {
@@ -123,13 +131,92 @@ int main(int argc, char** argv)
     }
 
     QApplication::processEvents();
-    const int slot1YAtStart = slot1->y();
     feed(model, QStringLiteral("S1|dvk status=idle enabled=1"));
     for (int id = 1; id <= 12; ++id) {
         feed(model, QStringLiteral("S1|dvk added id=%1 name=\"Recording %1\" duration=0").arg(id));
     }
     feed(model, QStringLiteral("S1|dvk id=3 name=\"CQ Contest\" duration=4210"));
     grab(panel, QStringLiteral("1-idle"));
+
+    // Mirror the panel's production QSplitter embedding so this is a real
+    // layout squeeze, rather than a standalone widget that can ignore it.
+    QWidget host;
+    auto* splitter = new QSplitter(Qt::Horizontal, &host);
+    panel.setFixedWidth(250);
+    splitter->addWidget(&panel);
+    splitter->addWidget(new QWidget);
+    host.resize(1024, 300);
+    splitter->setGeometry(host.rect());
+    host.show();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    report(QStringLiteral("short host constrains the panel height"),
+           panel.height() <= host.height());
+    bool rowsContainContents = true;
+    bool rowsDoNotOverlap = true;
+    QRect previousRow;
+    for (int id = 1; id <= 12; ++id) {
+        auto* slot = child<QFrame>(panel, QStringLiteral("dvkSlot%1").arg(id));
+        auto* fkey = child<QPushButton>(panel, QStringLiteral("dvkPlaySlot%1").arg(id));
+        auto* name = child<QLabel>(panel, QStringLiteral("dvkSlotName%1").arg(id));
+        rowsContainContents = rowsContainContents && slot && fkey && name
+            && slot->rect().contains(fkey->geometry())
+            && slot->rect().contains(name->geometry());
+        if (slot) {
+            rowsDoNotOverlap = rowsDoNotOverlap
+                && (id == 1 || previousRow.bottom() < slot->geometry().top());
+            previousRow = slot->geometry();
+        }
+    }
+    report(QStringLiteral("short panel keeps every F-key and name inside its row"),
+           rowsContainContents);
+    report(QStringLiteral("short panel keeps slot rows from overlapping"), rowsDoNotOverlap);
+    report(QStringLiteral("short panel keeps transport buttons inside the panel"),
+           panel.rect().contains(rec->geometry()) && panel.rect().contains(stop->geometry())
+               && panel.rect().contains(play->geometry()) && panel.rect().contains(preview->geometry()));
+    report(QStringLiteral("slots have a scroll area"), slotsScroll != nullptr);
+    if (slotsScroll) {
+        const QString longName(DvkModel::kMaxNameBytes, QLatin1Char('W'));
+        feed(model, QStringLiteral("S1|dvk id=3 name=\"%1\" duration=4210").arg(longName));
+        // Include LayoutRequests posted by other LayoutRequests, rather than
+        // inspecting the stale geometry immediately after the name changes.
+        QApplication::processEvents(QEventLoop::AllEvents, 100);
+        auto* length3 = child<QLabel>(panel, QStringLiteral("dvkSlotLength3"));
+        const QRect keyRect(fkey3->mapTo(slotsScroll->viewport(), QPoint()), fkey3->size());
+        const QRect lengthRect = length3
+            ? QRect(length3->mapTo(slotsScroll->viewport(), QPoint()), length3->size()) : QRect();
+        report(QStringLiteral("long slot names keep the F-key and duration in the viewport"),
+               length3 && name3->text() == longName
+                   && slotsScroll->viewport()->rect().contains(keyRect)
+                   && slotsScroll->viewport()->rect().contains(lengthRect));
+        report(QStringLiteral("long slot names create no hidden horizontal scroll range"),
+               slotsScroll->horizontalScrollBar()->maximum() == 0);
+        feed(model, QStringLiteral("S1|dvk id=3 name=\"CQ Contest\" duration=4210"));
+        QApplication::processEvents(QEventLoop::AllEvents, 100);
+        report(QStringLiteral("short panel scrolls slots vertically"),
+               slotsScroll->verticalScrollBar()->maximum() > 0);
+        report(QStringLiteral("slot grid never scrolls horizontally"),
+               slotsScroll->horizontalScrollBar()->maximum() == 0);
+        slotsScroll->verticalScrollBar()->setValue(slotsScroll->verticalScrollBar()->maximum());
+        QApplication::processEvents();
+        auto* slot12 = child<QFrame>(panel, QStringLiteral("dvkSlot12"));
+        const QPoint slot12Top = slot12 ? slot12->mapTo(slotsScroll->viewport(), QPoint(0, 0))
+                                        : QPoint();
+        report(QStringLiteral("slot 12 is fully reachable by scrolling"),
+               slot12 && slotsScroll->viewport()->rect().contains(QRect(slot12Top, slot12->size())));
+    }
+
+    host.resize(1024, 700);
+    splitter->setGeometry(host.rect());
+    QApplication::processEvents();
+    QApplication::processEvents();
+    if (slotsScroll) {
+        report(QStringLiteral("tall panel needs no slot scrollbar"),
+               slotsScroll->verticalScrollBar()->maximum() == 0);
+    }
+    report(QStringLiteral("tall panel restores expanding slot rows"),
+           slot1->height() > slot1->minimumHeight());
+    const int slot1YAtStart = slot1->y();
 
     // ── The row's own sheet must not reach its labels (the old QFrame leak) ──
     report(QStringLiteral("rows carry no per-widget stylesheet"), slot1->styleSheet().isEmpty());
@@ -202,6 +289,8 @@ int main(int argc, char** argv)
     feed(model, QStringLiteral("S1|dvk status=playback id=3 enabled=1"));
     report(QStringLiteral("light theme keeps the on-air state"), prop(fkey3, "live") == QLatin1String("air"));
     grab(panel, QStringLiteral("7-light-playback"));
+
+    panel.setParent(nullptr);
 
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;

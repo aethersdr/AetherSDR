@@ -457,6 +457,19 @@ int main(int argc, char** argv)
         check(radioWideSpanControlPan(false, panes, QStringLiteral("0x40000001"))
                   .isEmpty(),
               "per-pan answers 'every pane', not the TX pane");
+
+        // A span the backend cannot change dims every pane's pair, except a
+        // pane showing KiwiSDR, whose -/+ zoom the Kiwi view.
+        check(spanFixedOnPan(true, true, false, false),
+              "declared display controls without bandwidth: the pair is dimmed");
+        check(!spanFixedOnPan(true, true, true, false),
+              "a declared bandwidth keeps the pair live");
+        check(!spanFixedOnPan(true, false, false, false),
+              "an absent declaration never dims the pair");
+        check(!spanFixedOnPan(false, true, false, false),
+              "disconnected restores the live pair");
+        check(!spanFixedOnPan(true, true, false, true),
+              "a pane showing KiwiSDR keeps its live pair");
     }
 
     // ---- the fallback is a pane in this window, in the order it is shown ----
@@ -528,6 +541,38 @@ int main(int argc, char** argv)
                   && sync.contains("panIdsInSpanFallbackOrder("),
               "the sync orders the fallback by the docked layout, not by "
               "panIds() alone");
+        check(sync.contains("spanFixedOnPan(")
+                  && sync.contains("declaresSpan()")
+                  && sync.contains("kiwiSdrPanDisplaysKiwi(panId)"),
+              "the sync reads the declared span component and the pane's Kiwi display");
+        check(session.contains("&RadioModel::capabilitiesChanged,\n"
+                               "            this, [this](bool, const RadioCapabilities&) "
+                               "{ syncPanSpanControlPlacement(); });"),
+              "a late capability republish re-derives the span pair");
+        const QByteArray kiwiSource = readSource("src/gui/MainWindow_KiwiSdr.cpp");
+        const QByteArray kiwiSync = functionBody(kiwiSource,
+            "void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)");
+        const QByteArray kiwiSyncAll = functionBody(kiwiSource,
+            "void MainWindow::syncKiwiSdrPanadapterUiStates()");
+        check(kiwiSync.contains("syncPanSpanControlPlacement();")
+                  && kiwiSyncAll.contains("m_kiwiSpanSyncDeferred = true;")
+                  && kiwiSyncAll.contains("syncPanSpanControlPlacement();"),
+              "a Kiwi display-source change re-derives the span pair, once per walk");
+
+        // Every zoom route, not only the -/+ pair, leaves a fixed span alone
+        // without announcing a refusal; a center move still goes through.
+        const QByteArray range = functionBody(readSource("src/gui/MainWindow.cpp"),
+            "void MainWindow::applyPanRangeRequest(");
+        check(range.contains("panSpanFixedByBackend()")
+                  && range.contains("spanFixed ? -1.0 : bandwidthMhz"),
+              "wheel, drag and keyboard zoom send the center only on a fixed span");
+        const QByteArray zoom = functionBody(readSource("src/gui/MainWindow_Shortcuts.cpp"),
+            "void MainWindow::zoomActivePanadapter(double factor)");
+        check(zoom.contains("panSpanFixedByBackend() && !kiwiSdrPanDisplaysKiwi("),
+              "shortcut and MIDI zoom skip a fixed span, but still zoom a Kiwi view");
+        check(readSource("src/gui/MainWindow_Wiring.cpp")
+                  .contains("kiwiSdrPanDisplaysKiwi(applet->panId()) || panSpanFixedByBackend()"),
+              "a scale-drag span change skips a fixed span");
         const qsizetype occ = session.indexOf(
             "connect(&m_radioModel, &RadioModel::slotOccupancyChanged,\n"
             "            this, [this](int) { syncPanSpanControlPlacement(); });");
@@ -536,8 +581,10 @@ int main(int argc, char** argv)
 
         const QByteArray header = readSource("src/gui/SpectrumWidget.h");
         const QByteArray setter = functionBody(
-            header, "    void setSpanControlPlacement(bool live, bool radioWide)");
+            header, "    void setSpanControlPlacement(bool live, bool radioWide, bool spanFixed = false)");
         check(!setter.isEmpty(), "found SpectrumWidget::setSpanControlPlacement");
+        check(setter.contains("if (spanFixed)") && setter.contains("live = false;"),
+              "a fixed span dims the pair through the same setEnabled(live) path");
         check(!setter.contains("setVisible") && !setter.contains("hide()"),
               "the span pair is never hidden on a capability (AGENTS.md: dim "
               "it, never hide it)");

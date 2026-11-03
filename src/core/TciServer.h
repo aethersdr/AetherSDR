@@ -11,6 +11,7 @@
 #include "IcomTciUnkeySettle.h"
 #include "PcmFrame.h"
 #include "TxCoordinator.h"
+#include "core/backends/SliceLifecycleRequest.h"
 
 #include <QWebSocketProtocol>  // CloseCode for the m_rxClose test seam
 #include <QObject>
@@ -38,6 +39,7 @@ namespace AetherSDR {
 class RadioModel;
 class AudioEngine;
 class SliceModel;
+class PanadapterModel;
 class Resampler;
 class TciRxConverter;
 
@@ -72,6 +74,7 @@ struct TciClientInfo {
 class TciServer : public QObject {
     Q_OBJECT
     friend class TciServerReviewTest;
+    friend class TciSliceLifecycleTestAccess;
     friend class TciRxAudioTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
@@ -116,6 +119,11 @@ public:
     // re-applying the value they just sent is harmless.
     void broadcastMasterVolume(int pct);
 
+    // Center lock for `rx_ctun_ex` (Thetis extension). It is MainWindow
+    // state, so MainWindow hands in a setter and a query, both by slice id.
+    void setCenterLockHandlers(std::function<void(int sliceId, bool locked)> set,
+                               std::function<bool(int sliceId)> query);
+
     // TCI TX gain (0.0–1.0). Applied to outbound TX audio from WSJT-X/JTDX
     // before the radio.  Decoupled from DaxTxGain (#1627) — the DAX bridge
     // and TCI maintain independent gain settings.  Persists to TciTxGain.
@@ -134,10 +142,8 @@ public:
     void setOverflowMode(int mode);
     int overflowMode() const { return static_cast<int>(m_overflowMode); }
 
-    // Per-channel TCI RX gain (0.0–1.0), applied to outbound DAX audio before
-    // resampling and sending to TCI clients.  Decoupled from DaxRxGain<n> so
-    // DAX bridge and TCI maintain independent per-channel gains.
-    // Channel is 1-based (1–4).  Persists to TciRxGain<channel>.
+    // Per-channel TCI RX attenuation, from silence through unity (0.0-1.0).
+    // Independent of DAX bridge gain; channels 1-8 persist to TciRxGain<channel>.
     void setRxChannelGain(int channel, float gain);
     float rxChannelGain(int channel) const;
 
@@ -178,7 +184,7 @@ signals:
     // emitted but can be muted per-command via the monitor's
     // suppression list to keep the stream readable.
     void tciMessage(const QString& direction, const QString& text);
-    void rxLevel(int channel, float rms);  // 1-based channel, RMS of TCI-gained RX audio
+    void rxLevel(int channel, float rms);  // 1-based channel, pre-fader RMS
     void txLevel(float rms);                // RMS of post-gain TCI TX audio
     // Emitted when a TCI client sends `volume:N;` (master volume SET).
     // MainWindow handles it by calling the same path as the title bar
@@ -212,6 +218,8 @@ private:
     void broadcastSpotClicked(const QString& callsign, long long frequencyHz,
                               int trx, int channel);
     void broadcastSliceFrequencies(SliceModel* slice);
+    // Announce split_enable:0 when TX moves on or off the trx 0 slice in the GUI.
+    void publishMainSplit();
     void broadcastTxPermission(SliceModel* slice);
     void broadcastTxPermissions();
     void publishActiveTrx();
@@ -244,6 +252,7 @@ private:
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
+    void reapCreatedVfoBSlice(int sliceId);
     void createTxSliceForVfoB(TciClient* client,
         const TciProtocol::VfoRequest& request,
         SliceModel* rxSlice,
@@ -401,6 +410,8 @@ private:
     // released 500 ms after a genuine slice close (recreates reclaim their
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
+    std::function<void(int, bool)> m_centerLockSet;
+    std::function<bool(int)> m_centerLockQuery;
     // #6352: the newest removal per slice id. A close timer that finds a newer
     // removal of the same id belongs to an earlier absence and stands down.
     QHash<int, quint64> m_closeGeneration;
@@ -412,8 +423,18 @@ private:
         QString routeConfirmation;
         bool splitOnly { false };
         quint64 transitionGeneration { 0 };
+        quint64 ticket { 0 };
+        QPointer<SliceModel> rxIdentity;
+        RadioControlSession session{};
     };
     std::optional<PendingVfoBCreate> m_pendingVfoBCreate;
+    QHash<int, CreatedSliceReceipt> m_createdVfoBSlices;
+    struct CreatedVfoBPan {
+        QPointer<SliceModel> slice;
+        QPointer<PanadapterModel> pan;
+        RadioControlSession session{};
+    };
+    QHash<int, CreatedVfoBPan> m_createdVfoBPans;
     struct PendingTrxRequest
     {
         QPointer<TciClient> client;
@@ -451,6 +472,8 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
+    int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};
     QPointer<TciClient> m_tciPttClient;
     TxCoordinator::Request m_tciPttRequest;

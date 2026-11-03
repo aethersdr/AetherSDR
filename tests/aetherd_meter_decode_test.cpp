@@ -7,8 +7,11 @@
 #include "models/MeterModel.h"
 
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QString>
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -100,6 +103,51 @@ int main(int argc, char** argv)
             "20.src=TX-#20.num=0#20.nam=ALC#20.unit=dBFS"));
         model.updateValues({20, 40}, {-768, -1536});
         CHECK(model.swAlc() == -12.0f);
+    }
+
+    // ---- num is a uint: decimal for a slice, 0x%08X for an amp/tuner handle.
+    //      A handle above INT_MAX must still parse and route to its amplifier
+    //      (FlexLib Radio.cs:6913, Meter.cs:112). ----
+    {
+        FlexBackend backend;
+        const MeterDef slc = decode1(backend, QStringLiteral(
+            "9.src=SLC#9.num=10#9.nam=LEVEL#9.unit=dBm"));
+        CHECK(slc.sourceIndex == 10);   // decimal, not hex
+
+        const MeterDef amp = decode1(backend, QStringLiteral(
+            "15.src=AMP#15.num=0x80000001#15.nam=ID#15.unit=Amps#15.low=0.0#15.hi=70.0"));
+        CHECK(amp.publishedSourceIndex() == 0x80000001LL);
+
+        const MeterDef tgxl = decode1(backend, QStringLiteral(
+            "16.src=AMP#16.num=0xFFFFFFF0#16.nam=FWD#16.unit=dBm"));
+        CHECK(tgxl.publishedSourceIndex() == 0xFFFFFFF0LL);
+
+        MeterModel model;
+        model.setAmpHandle(0x80000001u);
+        model.setTgxlHandle(0xFFFFFFF0u);
+        model.defineMeter(amp);
+        model.defineMeter(tgxl);
+        float amps = -1.0f;
+        QObject::connect(&model, &MeterModel::ampVitalsChanged,
+                         [&](float a, bool valid, bool, float, bool, bool) {
+                             if (valid) amps = a;
+                         });
+        model.updateValues({15}, {qint16(19.2f * 256.0f)});
+        CHECK(std::fabs(amps - 19.2f) < 0.01f);
+
+        const QJsonArray published = model.metersForSource(QStringLiteral("AMP"));
+        CHECK(published.size() == 2);
+        for (const QJsonValue& v : published)
+            CHECK(v.toObject().value(QStringLiteral("source_index")).toInteger() > 0);
+    }
+
+    // ---- num out of uint32 range or negative is dropped ----
+    {
+        FlexBackend backend;
+        CHECK(decode1(backend, QStringLiteral(
+            "4.src=AMP#4.num=0x100000000#4.nam=ID")).sourceIndex == 0);
+        CHECK(decode1(backend, QStringLiteral(
+            "4.src=AMP#4.num=-1#4.nam=ID")).sourceIndex == 0);
     }
 
     // ---- malformed index token skipped, no emission ----

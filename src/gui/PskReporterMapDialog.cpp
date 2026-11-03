@@ -2,6 +2,7 @@
 #include "GuardedSlider.h"
 #include "PskBeaconLevelPolicy.h"
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
 #include "ComboStyle.h"
 #include "FramelessResizer.h"
 
@@ -307,36 +308,6 @@ QScrollArea {
 QSplitter::handle {
     background: transparent;
 }
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
 )";
 
 // A status token as "#rrggbb" for rich text, through the window's scope.
@@ -468,7 +439,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     setMinimumSize(720, 520);
     FramelessResizer::install(this);
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kAetherMapStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kAetherMapStyle) + canonScrollBarRules() + canonIndicatorRules();
     });
 
     auto* root = new QVBoxLayout(bodyWidget());
@@ -1576,10 +1547,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
             return;
         }
         if (m_radioModel != nullptr && call != m_radioModel->callsign()) {
-            if (m_radioModel->usesFlexCommandPlane()) {
-                m_radioModel->sendCommand("radio callsign " + call);
-            }
-            m_radioModel->setStationCallsign(call);
+            m_radioModel->requestRadioSetup({RadioSetupField::Callsign, call});
         }
     });
     // Selecting a band tunes the dial to that WSPR sub-band, so the operator can

@@ -531,11 +531,18 @@ static void testCapabilityProfiles()
     check(extended705 && extended705->evidence == EvidenceKind::OfficialGuide,
           "IC-705 DTCS and extended readback carry model-specific guide evidence");
 
-    check(p705.scope.center && !p705.scope.fixed,
-          "IC-705 scope profile exposes only its attested center mode");
+    check(p705.scope.center && p705.scope.fixed && p705.scope.scrollFixed
+              && p705.scope.dedicatedEdgeSlot == 4
+              && p705.scope.edgeTable == ScopeEdgeTable::Ic705 && !p705.scope.mainSubSelector,
+          "IC-705 profile records firmware 1.20 SCROLL-F with slot 4 and its 17 ranges");
+    check(p9700.scope.scrollFixed && p9700.scope.dedicatedEdgeSlot == 4
+              && p9700.scope.edgeTable == ScopeEdgeTable::Ic9700 && p9700.scope.mainSubSelector,
+          "IC-9700 profile records SCROLL-F, slot 4, per-band ranges and the MAIN/SUB selector");
     check(pMk2.scope.center && pMk2.scope.fixed && pMk2.scope.scrollCenter
               && pMk2.scope.scrollFixed && pMk2.scope.hasSweepSpeed,
           "IC-7300MK2 profile records all four scope modes and sweep speed");
+    check(pMk2.scope.dedicatedEdgeSlot == 4 && pMk2.scope.edgeTable == ScopeEdgeTable::Hf,
+          "IC-7300MK2 owns slot 4 over the 13 HF ranges");
     check(pMk2.rxAntenna && pMk2.rxAntenna->selectable
               && pMk2.rxAntenna->readbackAvailable,
           "IC-7300MK2 RX-ANT readback is explicitly model gated");

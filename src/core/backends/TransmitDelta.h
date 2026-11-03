@@ -8,6 +8,9 @@
 
 namespace AetherSDR {
 
+// The APD correction lifecycle a radio reports (SmartSDR 4.3+ `apd state=`).
+enum class ApdLifecycleState { Off, Idle, Training, Active, Hold, Fault };
+
 // Normalized transmit-status delta (aetherd RFC 2.3), present-only like SliceDelta.
 // Covers the five Flex transmit status planes (core, interlock, ATU, APD, APD
 // sampler); the FlexBackend decode owns the wire translation. ATU status rides as
@@ -89,6 +92,14 @@ struct TransmitDelta {
     // Bare `equalizer_reset` flag: model clears apdEqActive + emits the reset
     // signal. Engaged (regardless of value) iff the wire carried the flag.
     std::optional<bool>    apdEqualizerReset;
+    // Engaged only for a recognized lifecycle token.
+    std::optional<ApdLifecycleState> apdLifecycle;
+    // The TX antenna, frequency and RF power an equalizer status describes. A
+    // status carrying either of the first two is scoped: the model applies it
+    // only when it matches the transmit slice.
+    std::optional<QString> apdEqAntenna;
+    std::optional<double>  apdEqFrequencyMhz;
+    std::optional<int>     apdEqRfPower;
 
     // ── APD sampler (per-TX-antenna; one antenna per delta) ──
     std::optional<QString>     apdSamplerTxAnt;      // the map key (uppercased)

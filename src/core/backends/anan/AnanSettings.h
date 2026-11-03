@@ -15,7 +15,9 @@ namespace AetherSDR::anan {
 // value() calls ConnectionPanel/RadioModel used before this existed.
 class AnanSettings {
 public:
-    // DDC0 sample rate in ksps -- also the panadapter span. One of the six
+    // RX1's sample rate in ksps -- also the panadapter span. The name and the
+    // stored key say DDC0, where RX1 used to run; they stay so saved settings
+    // still load (RX1's DDC is kRx1Route, AnanReceiverRoutes.h). One of the six
     // rates AnanBackend::capabilities().sampleRatesHz declares. Not
     // validated here; AnanBackend::nearestDdc0RateKsps() is the actual
     // snap-to-valid-rate authority, so an out-of-range or hand-edited value
@@ -31,8 +33,9 @@ public:
     static void setDitherEnabled(bool on);
     static bool randomEnabled();
     static void setRandomEnabled(bool on);
-    // 0 = ADC0, behind the switched Ant1/2/3 relay bank; 1 = ADC1, wired
-    // directly to its own RX2 jack (Appendix D block diagram, spec p.90).
+    // The ADC feeding RX1 (same naming note as ddc0RateKsps()). 0 = ADC0,
+    // behind the switched Ant1/2/3 relay bank; 1 = ADC1, wired directly to its
+    // own RX2 jack (Appendix D block diagram, spec p.90).
     static int ddc0AdcIndex();
     static void setDdc0AdcIndex(int index);
     static bool bypassAdc0Filters();
@@ -46,6 +49,20 @@ public:
     // originate a continuous outbound stream. See P2Client::Params.
     static bool speakerAudioEnabled();
     static void setSpeakerAudioEnabled(bool on);
+
+    // ---- Live options: the High Priority packet carries them every 100 ms ----
+
+    // Select the receive band-pass filter for the tuned frequency (true) or
+    // hold the banks to the bypass flags above (false, the default). Off by
+    // default: the bank is in series ahead of the ADC, so a filter that does
+    // not cover the tuned frequency is silence, and the band edges still need
+    // confirming band by band on a radio.
+    static bool bandFiltersEnabled();
+    static void setBandFiltersEnabled(bool on);
+
+    // Mute the radio's speaker amplifier (High Priority byte 1400 bit 1).
+    static bool speakerAmpMuted();
+    static void setSpeakerAmpMuted(bool on);
 
     // The DDC0 rates a session may start at, for a UI offering the choice.
     //

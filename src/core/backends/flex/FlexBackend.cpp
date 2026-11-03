@@ -8,12 +8,14 @@
 #include <memory>
 
 #include <QDateTime>
+#include <QHash>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QMetaObject>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QThread>
+#include <QStringView>
 #include <QVersionNumber>
 
 #include "core/AppSettings.h"
@@ -273,10 +275,12 @@ int FlexBackend::nrsLevelMaximum() const
 void FlexBackend::refreshFirmwareCapabilities()
 {
     const int maximum = nrsLevelMaximum();
-    if (maximum == m_announcedNrsLevelMaximum) {
+    const bool cwProfiles = firmwareAtLeast(QVersionNumber(4, 3, 16));
+    if (maximum == m_announcedNrsLevelMaximum && cwProfiles == m_announcedCwProfiles) {
         return;
     }
     m_announcedNrsLevelMaximum = maximum;
+    m_announcedCwProfiles = cwProfiles;
     emit capabilitiesChanged();
 }
 
@@ -579,6 +583,16 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = QStringLiteral("flex");
+    using PanField = PanDisplayField;
+    caps.panDisplayControl = PanDisplayControl{{PanField::Geometry, PanField::Band,
+        PanField::LevelRange, PanField::Pixels, PanField::Average, PanField::FrameRate,
+        PanField::WeightedAverage, PanField::RfGain, PanField::Wnb, PanField::WnbLevel, PanField::LoopA, PanField::LoopB,
+        PanField::NoiseFloorPosition, PanField::NoiseFloorEnabled, PanField::WaterfallRate,
+        PanField::WaterfallColorGain, PanField::WaterfallBlackLevel, PanField::WaterfallAutoBlack,
+        PanField::WaterfallDefaults}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
+        {PanLifecycleAction::Create, PanLifecycleAction::Remove,
+         PanLifecycleAction::RefreshInventory, PanLifecycleAction::RfGainInfo}};
     // SmartSDR `transmit set tune_mode=two_tone` is a real on-radio two-tone
     // generator; FlexBackend is the only consumer of that key.
     caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{
@@ -726,6 +740,12 @@ RadioCapabilities FlexBackend::capabilities() const
         setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
     }
     caps.radioSetupControl = setup;
+    caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
+                                    SpotAction::Clear, SpotAction::Trigger}};
+    caps.panControl = PanControl{{PanControlField::BandZoom, PanControlField::SegmentZoom,
+                                  PanControlField::ReceiveAntenna}};
+    caps.slicePresetControl = SlicePresetControl{{SlicePresetField::Step, SlicePresetField::RepeaterOffset,
+                                                  SlicePresetField::ToneMode, SlicePresetField::ToneValue}};
     caps.usesVita49Transport = true;
     caps.hasNetworkConfigurationReadback = true;
     caps.hasPrivateIpConnectionPolicy = true;
@@ -737,6 +757,10 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hostDroopCalibration = false;   // no known DDC edge droop on this radio
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
+    // Published FlexLib 4.3.16 adds the CW profile type (Radio.cs:8780-8919).
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16))) {
+        caps.cwProfileControl = RadioCapabilities::CwProfileControl{};
+    }
     caps.hasSelectableMicInputs = true;
     // SmartSDR's compander command is the authoritative DEXP path used by
     // TransmitModel::setDexp/setDexpLevel.
@@ -749,6 +773,12 @@ RadioCapabilities FlexBackend::capabilities() const
         && firmwareVersion >= QVersionNumber(4, 3, 16)) {
         caps.autoAgcThresholdControl = RadioCapabilities::AutoAgcThresholdControl{
             QStringLiteral("auto_agc_t")};
+        // FLEX-8000 and Aurora only, under the Relative Noise Floor Scaling
+        // license (FlexLib v4.3.16 FeatureLicense.cs:212, Panadapter.cs:549).
+        if (mc.platform == RadioPlatform::BigBend) {
+            caps.noiseFloorRangeControl = RadioCapabilities::NoiseFloorRangeControl{
+                QStringLiteral("noise_floor")};
+        }
     }
     caps.hasAmCarrierLevel = true;
     caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
@@ -800,6 +830,18 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasVoiceKeyer = true;
     caps.hasFullDuplex = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
+    // Container environments (FlexLib 4.3.16 Radio.cs:8841-8861) need firmware
+    // that has them and a platform with a Waveform Processor.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform != RadioPlatform::Unknown
+        && !isKnownNonWfpPlatform(mc.platform)) {
+        caps.waveformEnvControl = RadioCapabilities::WaveformEnvControl{};
+    }
+    // The radio's own NTP time sources (FlexLib 4.3.16 NtpSource.cs; SMART-10565
+    // names FLEX-8000/Aurora). FlexLib subscribes on every radio, so the gate is
+    // the platform those share: BigBend, ML-9600 and CL-9300 included.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform == RadioPlatform::BigBend) {
+        caps.ntpSourceControl = RadioCapabilities::NtpSourceControl{NtpSourceRules::kMaxSources};
+    }
     caps.hasMultiClientSessions = true;  // multiFLEX
     caps.alwaysUseClientSideSpots = false;
     // TNFs. Neither FlexLib nor the `tnf` status declares a ceiling — Radio.cs
@@ -1443,6 +1485,7 @@ void FlexBackend::decodePanState(const QString& panId,
     // uint-parse + >1-invalid semantics (Panadapter.cs 933/1159).
     carry(kvs, "band_zoom", st);
     carry(kvs, "segment_zoom", st);
+    carry(kvs, "noise_floor_range", st);
     if (!st.isEmpty()) {
         st.insert(QStringLiteral("panId"), panId);
         emit extensionStatus(QStringLiteral("flex"),
@@ -1561,7 +1604,10 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
         MeterDef def;
         def.index = index;
         carry(f, "src", def.source);
-        carry(f, "num", def.sourceIndex, /*base=*/0);
+        // num is a uint (FlexLib Meter.SourceIndex): decimal for most meters,
+        // 0x%08X for a handle-owned one, which can exceed INT_MAX.
+        if (const auto num = parseUInt(f, "num", /*base=*/0))
+            def.sourceIndex = static_cast<int>(*num);
         carry(f, "nam", def.name);
         carry(f, "unit", def.unit);
         carry(f, "low", def.low);
@@ -1591,6 +1637,16 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     carry(kvs, "index_letter", d.letter);
     carry(kvs, "RF_frequency", d.frequency);
     carry(kvs, "mode", d.mode);
+    if (kvs.contains(QStringLiteral("chain_mode"))) {
+        const QString value = kvs.value(QStringLiteral("chain_mode"));
+        // FlexLib 4.3.16 Slice.ChainMode is independent of the selected mode.
+        // Keep future chain names, but bound this diagnostic token at ingress.
+        const bool valid = value.size() <= 32
+            && std::all_of(value.cbegin(), value.cend(), [](QChar ch) {
+                return ch.unicode() >= 0x21 && ch.unicode() <= 0x7e;
+            });
+        d.chainMode = valid ? value : QString();
+    }
     carry(kvs, "filter_lo", d.filterLow);
     carry(kvs, "filter_hi", d.filterHigh);
     if (kvs.contains(QStringLiteral("mode_list"))) {
@@ -1987,6 +2043,24 @@ void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)
     // Bare flag (no `=`): the model clears apdEqActive + emits the reset signal.
     if (kvs.contains(QStringLiteral("equalizer_reset")))
         d.apdEqualizerReset = true;
+    // Matched by name, as FlexLib APD.cs does: an unrecognized token stays
+    // disengaged rather than guessing a state.
+    static const QHash<QString, ApdLifecycleState> kLifecycle{
+        {QStringLiteral("OFF"), ApdLifecycleState::Off},
+        {QStringLiteral("IDLE"), ApdLifecycleState::Idle},
+        {QStringLiteral("TRAINING"), ApdLifecycleState::Training},
+        {QStringLiteral("ACTIVE"), ApdLifecycleState::Active},
+        {QStringLiteral("HOLD"), ApdLifecycleState::Hold},
+        {QStringLiteral("FAULT"), ApdLifecycleState::Fault},
+    };
+    const auto state = kLifecycle.constFind(kvs.value(QStringLiteral("state")).toUpper());
+    if (state != kLifecycle.constEnd())
+        d.apdLifecycle = state.value();
+    const QString ant = kvs.value(QStringLiteral("ant"));
+    if (!ant.isEmpty())
+        d.apdEqAntenna = ant;
+    carry(kvs, "freq", d.apdEqFrequencyMhz);
+    carry(kvs, "rfpower", d.apdEqRfPower);
     emit transmitChanged(d);
 }
 
@@ -2010,6 +2084,32 @@ void FlexBackend::decodeApdSamplerStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains(QStringLiteral("selected_sampler")))
         d.apdSamplerSelected = kvs.value(QStringLiteral("selected_sampler")).toUpper();
     emit transmitChanged(d);
+}
+
+void FlexBackend::decodeRadioInfoMetadata(const QString& body)
+{
+    // FlexLib 4.3.16 Radio.UpdateInfo: this belongs to the comma-separated
+    // info reply, not radio status. A reply is a snapshot, unlike slice deltas.
+    RadioDelta delta;
+    delta.iaruRegion = 0;
+    for (QStringView field : QStringView(body).split(QLatin1Char(','))) {
+        const qsizetype eq = field.indexOf(QLatin1Char('='));
+        if (eq < 0 || field.left(eq).trimmed() != QLatin1String("iaru_region")) {
+            continue;
+        }
+        QStringView value = field.mid(eq + 1).trimmed();
+        delta.iaruRegion = 0;
+        if (value.size() > 16) { continue; }
+        const auto wrapper = [](QChar ch) {
+            return ch == QLatin1Char('\\') || ch == QLatin1Char('"');
+        };
+        while (!value.isEmpty() && wrapper(value.front())) { value = value.mid(1); }
+        while (!value.isEmpty() && wrapper(value.back())) { value = value.left(value.size() - 1); }
+        bool ok = false;
+        const int region = value.size() <= 8 ? value.toInt(&ok) : 0;
+        delta.iaruRegion = ok && region >= 1 && region <= 3 ? region : 0;
+    }
+    emit radioChanged(delta);
 }
 
 void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
@@ -2161,6 +2261,16 @@ void FlexBackend::decodeProfileStatus(const QString& profileType, const QString&
         return;
     }
 
+    // FlexLib 4.3.16 reports the CW profile's dirty flag as
+    // unsaved_changes_cw (Radio.cs:12002); the suffix names the profile type.
+    static const QLatin1String unsavedPrefix("unsaved_changes_");
+    if (key.startsWith(unsavedPrefix) && key.size() > unsavedPrefix.size()) {
+        d.type = key.mid(unsavedPrefix.size());
+        d.unsavedChanges = val == QLatin1String("1");
+        emit profileChanged(d);
+        return;
+    }
+
     d.type = profileType;
     if (key == QLatin1String("list"))
         d.list = val.split('^', Qt::SkipEmptyParts);
@@ -2182,6 +2292,16 @@ void FlexBackend::decodeProfileFlags(const QMap<QString, QString>& kvs)
     carry(kvs, "exporting", d.exporting);
     if (d.importing || d.exporting)
         emit profileChanged(d);
+    // Same unsaved_changes_<type> rule as decodeProfileStatus.
+    static const QLatin1String unsavedPrefix("unsaved_changes_");
+    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
+        if (it.key().startsWith(unsavedPrefix) && it.key().size() > unsavedPrefix.size()) {
+            ProfileDelta unsaved;
+            unsaved.type = it.key().mid(unsavedPrefix.size());
+            unsaved.unsavedChanges = it.value() == QLatin1String("1");
+            emit profileChanged(unsaved);
+        }
+    }
 }
 
 void FlexBackend::send(const QString& cmd)

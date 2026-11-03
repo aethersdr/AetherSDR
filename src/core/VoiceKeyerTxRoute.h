@@ -59,8 +59,6 @@ private:
     TxCoordinator::Request m_request;
     TxCoordinator::Context m_context;
     bool m_prevAudioDax{false};
-    bool m_prevTransmitDax{false};
-    bool m_restoreTransmitDax{false};
     // PTT was asked for against m_request; keyOff() hands back only what it took.
     bool m_pttRequested{false};
 };

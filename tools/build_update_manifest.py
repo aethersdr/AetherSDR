@@ -1,0 +1,822 @@
+#!/usr/bin/env python3
+"""
+Build the in-app update manifest and its patch bundles for one release
+(RFC #5304 Phase 2).
+
+The update unit is the payload tree, not the shipped container: the files
+inside the Windows portable zip (the same deploy\\ tree setup.exe installs) and
+inside each AppImage's squashfs (the tree the Linux tarball channel will ship).
+Between two releases only a handful of those files change, so each release
+carries, per payload and per earlier release, one bundle of per-file
+`zstd --patch-from` deltas.
+
+Outputs, in --out:
+
+  manifest.json                 schema 1, described in
+                                docs/architecture/update-manifest.md
+  <payload>-from-<tag>.update.tar   one bundle per (payload, earlier release)
+
+Each Linux payload's `full` is the release tarball, AetherSDR-<tag>-<arch>.tar.zst,
+which the AppImage build writes from the AppImage it just made (--tarball, below).
+Here it is read back and must hold exactly the manifest's `files`, or the build
+fails.
+
+Each macOS payload (RFC #5304 Phase 4) is the signed AetherSDR.app, published as
+AetherSDR-<tag>-macOS-<label>.app.tar.zst by the macOS DMG workflow
+(--app-tarball, below). That tarball is both the payload and its `full`. With
+--dax-driver-source, each macOS entry also names the DAX driver's source (the
+git tree hash of hal-plugin/ at the tag), which the app compares with its own.
+
+The manifest is NOT signed here. The publish job signs it with the Ed25519
+update key and verifies the signature against packaging/update-signing.pub
+before anything is uploaded.
+
+Usage (CI):
+    python3 tools/build_update_manifest.py --tag v26.10.4 --out out \\
+        --fetch-from-github --depth 4 --public-key packaging/update-signing.pub
+
+Usage (local, assets already downloaded per release):
+    python3 tools/build_update_manifest.py --tag v26.10.4 --out out \\
+        --assets v26.10.4=dl/v26.10.4 --assets v26.10.3=dl/v26.10.3
+
+Usage (the AppImage build, the release tarball of one AppImage):
+    python3 tools/build_update_manifest.py --tarball AetherSDR-v26.10.4-x86_64.AppImage \\
+        AetherSDR-v26.10.4-x86_64.tar.zst
+
+Usage (the macOS DMG workflow, the update tarball of one signed app):
+    python3 tools/build_update_manifest.py --app-tarball AetherSDR.app \\
+        AetherSDR-v26.10.4-macOS-apple-silicon.app.tar.zst
+
+Needs python3 >= 3.10 (>= 3.12 to read a macOS payload), zstd >= 1.5 (>= 1.4.8
+for --tarball or --app-tarball alone) and (for AppImages) unsquashfs. Nothing
+here executes a downloaded file: an AppImage's squashfs is located from its
+ELF header and read with unsquashfs, so an aarch64 image is handled on an
+x86_64 runner.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import json
+import math
+import os
+import re
+import shutil
+import stat
+import struct
+import subprocess
+import sys
+import tarfile
+import tempfile
+import zipfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+
+SCHEMA = 1
+# The repository whose releases are read and named (a fork's dry run reads
+# its own); the app's allowlist accepts only aethersdr/AetherSDR's.
+REPO = os.environ.get("GITHUB_REPOSITORY", "aethersdr/AetherSDR")
+DOWNLOAD_BASE = f"https://github.com/{REPO}/releases/download/"
+# A stable release: vYY.M.patch, with an optional hotfix (v26.7.4.1).
+TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
+
+# zstd's --patch-from needs a window that covers the reference file. Recorded
+# per patch so the applier can raise ZSTD_d_windowLogMax to exactly that.
+MIN_WINDOW_LOG = 10
+MAX_WINDOW_LOG = 31
+ZSTD_LEVEL = 19
+# The release tarball's zstd window is at most 2^27, the most the app's
+# decoder accepts for it (UpdateStager kMaxFullWindowLog); level 19 alone
+# uses 2^23.
+TARBALL_MAX_WINDOW = "128MB"
+
+
+@dataclass(frozen=True)
+class PayloadKind:
+    """One updatable payload: which asset carries it and how to open it."""
+
+    platform: str   # "windows", "linux", "macos"
+    arch: str       # as QSysInfo::buildCpuArchitecture() names it
+    asset_suffix: str
+    container: str  # "zip", "appimage", or "tarzst" (the asset is the payload's release tarball)
+    label: str      # used in bundle names
+    tarball_suffix: str = ""   # the release tarball that is `full`, when not the asset
+
+    def asset_name(self, tag: str) -> str:
+        return f"AetherSDR-{tag}-{self.asset_suffix}"
+
+    def tarball_name(self, tag: str) -> str:
+        return f"AetherSDR-{tag}-{self.tarball_suffix}" if self.tarball_suffix else ""
+
+
+PAYLOADS = (
+    PayloadKind("windows", "x86_64", "Windows-x64-portable.zip", "zip", "Windows-x64"),
+    PayloadKind("linux", "x86_64", "x86_64.AppImage", "appimage", "x86_64", "x86_64.tar.zst"),
+    PayloadKind("linux", "arm64", "aarch64.AppImage", "appimage", "aarch64", "aarch64.tar.zst"),
+    PayloadKind("macos", "arm64", "macOS-apple-silicon.app.tar.zst", "tarzst", "macOS-apple-silicon"),
+    PayloadKind("macos", "x86_64", "macOS-intel.app.tar.zst", "tarzst", "macOS-intel"),
+)
+
+
+def version_key(tag: str) -> tuple[int, int, int, int]:
+    """Comparable parts of a release tag; an absent hotfix counts as 0."""
+    m = TAG_RE.match(tag)
+    if not m:
+        raise ValueError(f"not a release tag: {tag!r}")
+    return tuple(int(g or 0) for g in m.groups())  # type: ignore[return-value]
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def window_log_for(size: int) -> int:
+    """The smallest zstd window log that covers `size` bytes, clamped."""
+    if size <= 1:
+        return MIN_WINDOW_LOG
+    return max(MIN_WINDOW_LOG, min(MAX_WINDOW_LOG, math.ceil(math.log2(size))))
+
+
+# ── Payload trees ────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class Entry:
+    type: str            # "file" or "symlink"
+    size: int = 0
+    sha256: str = ""
+    executable: bool = False
+    target: str = ""     # symlink target, as stored
+
+
+def scan_tree(root: Path) -> dict[str, Entry]:
+    """Every file and symlink under root, keyed by forward-slash path.
+
+    Directories are implied by their contents; anything that is neither a
+    regular file nor a symlink (a device, a FIFO) is refused rather than
+    silently dropped."""
+    out: dict[str, Entry] = {}
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames.sort()
+        here = Path(dirpath)
+        names = sorted(filenames) + sorted(d for d in dirnames if (here / d).is_symlink())
+        for name in names:
+            p = here / name
+            rel = p.relative_to(root).as_posix()
+            st = p.lstat()
+            if stat.S_ISLNK(st.st_mode):
+                target = os.readlink(p)
+                if not symlink_stays_inside(rel, target):
+                    raise ValueError(f"{rel}: symlink target {target!r} leaves the payload")
+                out[rel] = Entry("symlink", target=target)
+            elif stat.S_ISREG(st.st_mode):
+                out[rel] = Entry("file", st.st_size, sha256_file(p),
+                                 bool(st.st_mode & 0o111))
+            else:
+                raise ValueError(f"{rel}: not a regular file or symlink")
+    return out
+
+
+def symlink_stays_inside(rel: str, target: str) -> bool:
+    """A link the manifest may carry: relative, and resolving (lexically,
+    from the link's own directory) to a path inside the payload."""
+    if not target or PurePosixPath(target).is_absolute() or "\\" in target:
+        return False
+    depth = len(PurePosixPath(rel).parts) - 1
+    for part in PurePosixPath(target).parts:
+        depth += -1 if part == ".." else (0 if part == "." else 1)
+        if depth < 0:
+            return False
+    return True
+
+
+def appimage_squashfs_offset(path: Path) -> int:
+    """Where the squashfs starts in a type-2 AppImage: the end of its ELF
+    runtime, computed from the section header table as the runtime itself
+    does, so the image is never executed."""
+    with path.open("rb") as f:
+        ident = f.read(16)
+        if ident[:4] != b"\x7fELF":
+            raise ValueError(f"{path.name}: not an ELF file")
+        is64 = ident[4] == 2
+        endian = "<" if ident[5] == 1 else ">"
+        if is64:
+            f.seek(0x28)
+            shoff = struct.unpack(endian + "Q", f.read(8))[0]
+            f.seek(0x3A)
+        else:
+            f.seek(0x20)
+            shoff = struct.unpack(endian + "I", f.read(4))[0]
+            f.seek(0x2E)
+        shentsize, shnum = struct.unpack(endian + "HH", f.read(4))
+        offset = shoff + shentsize * shnum
+        f.seek(offset)
+        if f.read(4) != b"hsqs":
+            raise ValueError(f"{path.name}: no squashfs at offset {offset}")
+        return offset
+
+
+def extract_payload(asset: Path, container: str, dest: Path) -> Path:
+    """Unpack a payload into dest and return the tree's root."""
+    dest.mkdir(parents=True, exist_ok=True)
+    if container == "zip":
+        with zipfile.ZipFile(asset) as z:
+            for info in z.infolist():
+                name = PurePosixPath(info.filename.replace("\\", "/"))
+                if name.is_absolute() or ".." in name.parts:
+                    raise ValueError(f"{asset.name}: unsafe path {info.filename!r}")
+            z.extractall(dest)
+        return dest
+    if container == "tarzst":
+        # A release tarball: zstd, then a tar Python's "data" filter reads
+        # (no absolute or escaping paths, no links out of the tree).
+        plain = dest.parent / (dest.name + ".tar")
+        with plain.open("wb") as out:
+            subprocess.run(["zstd", "-dc", "--memory=128MB", str(asset)], check=True, stdout=out)
+        root = dest / "payload"
+        root.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(plain) as tar:
+            tar.extractall(root, filter="data")
+        plain.unlink()
+        return root
+    if container == "appimage":
+        root = dest / "squashfs-root"
+        subprocess.run(["unsquashfs", "-q", "-n", "-no-xattrs", "-o",
+                        str(appimage_squashfs_offset(asset)), "-d", str(root), str(asset)],
+                       check=True, stdout=subprocess.DEVNULL)
+        return root
+    raise ValueError(f"unknown container {container!r}")
+
+
+# ── Patches ─────────────────────────────────────────────────────────────────
+
+def zstd_patch(old: Path, new: Path, out: Path, window_log: int) -> None:
+    subprocess.run(["zstd", "-q", "-f", f"-{ZSTD_LEVEL}", f"--long={window_log}",
+                    f"--patch-from={old}", str(new), "-o", str(out)], check=True)
+
+
+def zstd_whole(new: Path, out: Path, window_log: int) -> None:
+    subprocess.run(["zstd", "-q", "-f", f"-{ZSTD_LEVEL}", f"--long={window_log}",
+                    str(new), "-o", str(out)], check=True)
+
+
+def _tar_info(name: str, kind: bytes = tarfile.REGTYPE, mode: int = 0o644, size: int = 0) -> tarfile.TarInfo:
+    """A header that depends only on what is passed: no time, owner or group."""
+    info = tarfile.TarInfo(name)
+    info.type = kind
+    info.mode = mode
+    info.size = size
+    info.mtime = 0
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    return info
+
+
+def _folders_of(paths) -> set[str]:
+    """Every folder that holds one of paths: the only folder entries a
+    release tarball may carry."""
+    return {str(a) for path in paths for a in PurePosixPath(path).parents} - {"."}
+
+
+def deterministic_tar(members: list[tuple[str, Path]], out: Path) -> None:
+    """A tar whose bytes depend only on its members' names and contents."""
+    with tarfile.open(out, "w", format=tarfile.USTAR_FORMAT) as tar:
+        for name, path in members:
+            with path.open("rb") as f:
+                tar.addfile(_tar_info(name, size=path.stat().st_size), f)
+
+
+# ── The release tarball (Linux's `full`) ───────────────────────────────────
+
+def write_release_tarball(root: Path, tree: dict[str, Entry], out: Path) -> None:
+    """The payload tree as a POSIX ustar archive in zstd, by the contract in
+    docs/architecture/update-manifest.md: exactly the entries of `tree`, each
+    folder that holds one of them, nothing else, and bytes that depend only
+    on the tree. A name ustar cannot hold (even with its prefix field) fails
+    here rather than turning into a pax or GNU header the app refuses."""
+    tar_path = out.with_name(out.name + ".tar-tmp")
+    try:
+        with tarfile.open(tar_path, "w", format=tarfile.USTAR_FORMAT) as tar:
+            for name in sorted(_folders_of(tree) | set(tree)):
+                if name not in tree:
+                    tar.addfile(_tar_info(name, tarfile.DIRTYPE, 0o755))
+                    continue
+                e = tree[name]
+                if e.type == "symlink":
+                    i = _tar_info(name, tarfile.SYMTYPE, 0o777)
+                    i.linkname = e.target
+                    tar.addfile(i)
+                else:
+                    with (root / name).open("rb") as f:
+                        tar.addfile(_tar_info(name, tarfile.REGTYPE, 0o755 if e.executable else 0o644,
+                                              e.size), f)
+        subprocess.run(["zstd", "-q", "-f", f"-{ZSTD_LEVEL}", "-T0", str(tar_path), "-o", str(out)],
+                       check=True)
+    finally:
+        tar_path.unlink(missing_ok=True)
+
+
+def _octal(field: bytes) -> int:
+    text = field.rstrip(b"\0 ").lstrip(b" ")
+    if not text or any(c not in b"01234567" for c in text):
+        raise ValueError(f"not an octal number: {field!r}")
+    return int(text, 8)
+
+
+def check_release_tarball(tarball: Path, files: list[dict]) -> None:
+    """Read the tarball as the app does, from the contract alone (not with
+    tarfile, which accepts pax and GNU headers): a zstd window of at most
+    2^27, ustar headers with valid checksums, types 0, 2 and 5 only, each of
+    `files` once with its size, hash and link target, folders only where
+    they hold an entry, the end-of-archive blocks and only zeros after. Raises
+    ValueError on the first difference."""
+    want = {f["path"]: f for f in files}
+    folders = _folders_of(want)
+    seen: set[str] = set()
+    undecodable = ValueError(f"{tarball.name}: not a zstd stream the app can decode "
+                             f"(a window above {TARBALL_MAX_WINDOW}?)")
+    # zstd -d also decodes gzip, xz and lz4, alone or after a zstd frame;
+    # the app decodes zstd frames only. -l walks every frame and refuses
+    # anything else.
+    listed = subprocess.run(["zstd", "-q", "-l", str(tarball)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if listed.returncode != 0:
+        raise ValueError(f"{tarball.name}: not zstd frames throughout, which is all the app decodes")
+    with tarball.open("rb") as src:
+        proc = subprocess.Popen(["zstd", "-q", "-d", "-c", f"--memory={TARBALL_MAX_WINDOW}"],
+                                stdin=src, stdout=subprocess.PIPE)
+    assert proc.stdout is not None
+    stream = proc.stdout
+
+    def block() -> bytes:
+        b = stream.read(512)
+        if len(b) != 512:
+            raise undecodable if proc.wait() != 0 else ValueError(f"{tarball.name}: cut short")
+        return b
+
+    try:
+        while True:
+            h = block()
+            if h == b"\0" * 512:
+                if block() != b"\0" * 512:
+                    raise ValueError(f"{tarball.name}: one zero block, not the end")
+                while (rest := stream.read(1 << 16)):
+                    if rest.strip(b"\0"):
+                        raise ValueError(f"{tarball.name}: data after the end of the archive")
+                break
+            if h[257:263] != b"ustar\0" or h[263:265] != b"00":
+                raise ValueError(f"{tarball.name}: not a POSIX ustar header")
+            if _octal(h[148:156]) != sum(h[:148]) + 8 * 32 + sum(h[156:]):
+                raise ValueError(f"{tarball.name}: bad header checksum")
+            name = h[0:100].split(b"\0", 1)[0].decode()
+            prefix = h[345:500].split(b"\0", 1)[0].decode()
+            name = f"{prefix}/{name}" if prefix else name
+            kind, size = h[156:157], _octal(h[124:136])
+            if name in seen:
+                raise ValueError(f"{name}: twice in {tarball.name}")
+            seen.add(name)
+            if kind == b"5":
+                if name.rstrip("/") not in folders or size:
+                    raise ValueError(f"{name}: a folder that holds nothing in the manifest")
+                continue
+            f = want.get(name)
+            if kind == b"2":
+                target = h[157:257].split(b"\0", 1)[0].decode()
+                if not f or f["type"] != "symlink" or f["target"] != target or size:
+                    raise ValueError(f"{name}: not this link in the manifest")
+                continue
+            if kind != b"0" or not f or f["type"] != "file" or f["size"] != size:
+                raise ValueError(f"{name}: type {kind!r}, size {size}: not this file in the manifest")
+            # The app takes the exec bit from `files`, but a user's tar takes
+            # it from here.
+            if bool(_octal(h[100:108]) & 0o111) != f["executable"]:
+                raise ValueError(f"{name}: exec bit differs from the manifest")
+            digest, left = hashlib.sha256(), size
+            while left:
+                b = block()
+                digest.update(b[:min(512, left)])
+                left -= min(512, left)
+            if digest.hexdigest() != f["sha256"]:
+                raise ValueError(f"{name}: content differs from the manifest")
+    finally:
+        stream.close()
+        proc.wait()
+    if proc.returncode != 0:
+        raise undecodable
+    missing = sorted(set(want) - seen)
+    if missing:
+        raise ValueError(f"{tarball.name}: missing {len(missing)} entries, first {missing[0]}")
+
+
+def make_release_tarball(appimage: Path, out: Path, work: Path) -> int:
+    """--tarball: the AppImage's payload as its release tarball, read back
+    against its own file list before it is kept."""
+    root = extract_payload(appimage, "appimage", work)
+    tree = scan_tree(root)
+    write_release_tarball(root, tree, out)
+    check_release_tarball(out, files_list(tree))
+    print(f"{out.name}: {out.stat().st_size} bytes, {len(tree)} entries", file=sys.stderr)
+    return 0
+
+
+def make_app_tarball(app: Path, out: Path) -> int:
+    """--app-tarball: a signed AetherSDR.app as its macOS update tarball, its
+    paths starting at Contents/, read back against its own file list."""
+    if not (app / "Contents" / "MacOS" / "AetherSDR").is_file():
+        raise ValueError(f"{app}: not an AetherSDR app bundle")
+    tree = scan_tree(app)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    write_release_tarball(app, tree, out)
+    check_release_tarball(out, files_list(tree))
+    print(f"{out.name}: {out.stat().st_size} bytes, {len(tree)} entries", file=sys.stderr)
+    return 0
+
+
+def build_patch_set(old_root: Path, old: dict[str, Entry], new_root: Path,
+                    new: dict[str, Entry], bundle: Path, work: Path) -> dict | None:
+    """The ops that turn the `old` tree into the `new` one, packed into
+    `bundle`. None when the trees are identical (no bundle is written).
+
+    Removals come first, so a path that changes between file, directory and
+    symlink is cleared before its replacement is written (the applier prunes
+    directories the removals leave empty)."""
+    ops: list[dict] = [{"op": "remove", "path": path} for path in sorted(set(old) - set(new))]
+    members: list[tuple[str, Path]] = []
+    work.mkdir(parents=True, exist_ok=True)
+    unchanged = 0
+
+    for path in sorted(new):
+        n = new[path]
+        o = old.get(path)
+        if o == n:
+            unchanged += 1
+            continue
+        if n.type == "symlink":
+            ops.append({"op": "symlink", "path": path, "target": n.target})
+            continue
+        member = f"{len(members):06d}.zst"
+        tmp = work / member
+        window = window_log_for(n.size)
+        if o is not None and o.type == "file":
+            window = window_log_for(max(o.size, n.size))
+            zstd_patch(old_root / path, new_root / path, tmp, window)
+            whole = work / (member + ".whole")
+            zstd_whole(new_root / path, whole, window_log_for(n.size))
+            if whole.stat().st_size < tmp.stat().st_size:
+                whole.replace(tmp)
+                window = window_log_for(n.size)
+                op = {"op": "add", "path": path}
+            else:
+                whole.unlink()
+                op = {"op": "patch", "path": path, "from_sha256": o.sha256}
+        else:
+            zstd_whole(new_root / path, tmp, window)
+            op = {"op": "add", "path": path}
+        op.update({"member": member, "window_log": window, "sha256": n.sha256,
+                   "size": n.size, "executable": n.executable})
+        ops.append(op)
+        members.append((member, tmp))
+
+    if not ops:
+        return None
+    deterministic_tar(members, bundle)
+    for _, p in members:
+        p.unlink()
+    return {"ops": ops, "unchanged": unchanged}
+
+
+def verify_patch_set(old_root: Path, bundle: Path, patch: dict, files: list[dict],
+                     work: Path) -> None:
+    """Apply `bundle` to a copy of the old tree, by the documented contract,
+    and check every file of the new one. Run on the real release pair before
+    anything is published; raises on any mismatch."""
+    dest = work / "applied"
+    members = work / "members"
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.copytree(old_root, dest, symlinks=True)
+    members.mkdir(parents=True)
+    with tarfile.open(bundle) as tar:
+        tar.extractall(members, filter="data")
+    pruned = False
+    for op in patch["ops"]:
+        target = dest / op["path"]
+        if op["op"] == "remove":
+            target.unlink()
+            continue
+        if not pruned:
+            # After the removals, drop every directory left empty. Bottom-up,
+            # so a parent emptied by pruning its children goes too
+            # (plugins/sub/x.dll removed before plugins becomes a file).
+            for dp, _, _ in os.walk(dest, topdown=False):
+                d = Path(dp)
+                if d != dest and not any(d.iterdir()):
+                    d.rmdir()
+            pruned = True
+        if op["op"] == "symlink":
+            if target.is_symlink() or target.exists():
+                target.unlink()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(op["target"], target)
+            continue
+        out = members / (op["member"] + ".out")
+        cmd = ["zstd", "-q", "-d", "-f", f"--long={op['window_log']}"]
+        if op["op"] == "patch":
+            if sha256_file(target) != op["from_sha256"]:
+                raise ValueError(f"{op['path']}: source does not match from_sha256")
+            cmd.append(f"--patch-from={target}")
+        subprocess.run(cmd + [str(members / op["member"]), "-o", str(out)], check=True)
+        if sha256_file(out) != op["sha256"] or out.stat().st_size != op["size"]:
+            raise ValueError(f"{op['path']}: result does not match its sha256/size")
+        if target.is_symlink():
+            target.unlink()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        out.replace(target)
+    applied = scan_tree(dest)
+    want = {f["path"]: f for f in files}
+    if set(applied) != set(want):
+        raise ValueError(f"applied tree differs in paths: {sorted(set(applied) ^ set(want))[:5]}")
+    for path, e in applied.items():
+        f = want[path]
+        same = (e.type == f["type"] and (e.target == f["target"] if e.type == "symlink"
+                                         else e.sha256 == f["sha256"]))
+        if not same:
+            raise ValueError(f"{path}: applied file does not match the manifest")
+    shutil.rmtree(work, ignore_errors=True)
+
+
+# ── Releases ────────────────────────────────────────────────────────────────
+
+def gh(*args: str) -> str:
+    return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
+
+
+def earlier_releases(tag: str, depth: int) -> list[str]:
+    """The `depth` newest published releases before `tag`: release-shaped
+    tags only, no drafts or pre-releases (test builds share the release
+    list), newest first."""
+    lines = gh("api", "--paginate", f"repos/{REPO}/releases?per_page=100",
+               "--jq", ".[] | {tag: .tag_name, draft, prerelease}").splitlines()
+    data = [json.loads(l) for l in lines if l.strip()]
+    target = version_key(tag)
+    tags = [r["tag"] for r in data
+            if not r["draft"] and not r["prerelease"] and TAG_RE.match(r["tag"])
+            and version_key(r["tag"]) < target]
+    return sorted(set(tags), key=version_key, reverse=True)[:depth]
+
+
+def fetch_asset(tag: str, name: str, dest: Path, attempts: int = 3) -> Path | None:
+    """Download one release asset, retrying a failed transfer. None when it
+    still fails; the caller decides whether that is fatal."""
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / name
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(["gh", "release", "download", tag, "--repo", REPO,
+                                 "--pattern", name, "--dir", str(dest), "--clobber"],
+                                capture_output=True, text=True)
+        if result.returncode == 0 and path.exists():
+            return path
+        print(f"{tag}/{name}: download attempt {attempt} failed: {result.stderr.strip()}",
+              file=sys.stderr)
+    return None
+
+
+def local_asset(dirs: dict[str, Path], tag: str, name: str) -> Path | None:
+    d = dirs.get(tag)
+    if d is None:
+        return None
+    p = d / name
+    return p if p.exists() else None
+
+
+# ── Manifest ────────────────────────────────────────────────────────────────
+
+def key_id(public_key: Path | None) -> str:
+    """The first 16 hex digits of the SHA-256 of the raw 32-byte Ed25519
+    public key, so a rotated key is told apart from the one it replaced."""
+    if public_key is None:
+        return ""
+    lines = [l for l in public_key.read_text().splitlines() if l and not l.startswith("-----")]
+    der = base64.b64decode("".join(lines))
+    return hashlib.sha256(der[-32:]).hexdigest()[:16]
+
+
+def files_list(tree: dict[str, Entry]) -> list[dict]:
+    out = []
+    for path in sorted(tree):
+        e = tree[path]
+        if e.type == "symlink":
+            out.append({"path": path, "type": "symlink", "target": e.target})
+        else:
+            out.append({"path": path, "type": "file", "size": e.size, "sha256": e.sha256,
+                        "executable": e.executable})
+    return out
+
+
+class MissingPayload(RuntimeError):
+    """A payload the release must carry could not be had."""
+
+
+def build(tag: str, out: Path, depth: int, get_asset, earlier: list[str],
+          public_key: Path | None, work_root: Path, discard_assets: bool = False,
+          require_all: bool = False, release_tarballs: bool = True,
+          macos_payloads: bool = True, dax_driver_source: str | None = None) -> dict:
+    """discard_assets: delete each downloaded asset once used (CI disk);
+    never set for assets the caller supplied.
+
+    require_all: every payload in PAYLOADS must be present in `tag`, or the
+    build fails (MissingPayload) instead of writing a manifest that silently
+    leaves a platform out. A missing EARLIER release only loses that patch.
+
+    release_tarballs: Linux's full is the release tarball, required with
+    require_all. False for a release cut before the AppImage build made them:
+    full is then the AppImage, as it was.
+
+    macos_payloads: False for a release cut before the macOS DMG workflow made
+    app tarballs: macOS is then left out, as it was.
+
+    dax_driver_source: the git tree hash of hal-plugin/ at the tag, named in
+    each macOS entry so the app can tell a release changes the DAX driver."""
+    out.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "schema": SCHEMA,
+        "product": "AetherSDR",
+        "tag": tag,
+        "version": tag[1:],
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "key_id": key_id(public_key),
+        "payloads": [],
+    }
+    for kind in PAYLOADS:
+        if kind.platform == "macos" and not macos_payloads:
+            continue
+        asset = get_asset(tag, kind.asset_name(tag))
+        if asset is None:
+            if require_all:
+                raise MissingPayload(f"{kind.asset_name(tag)}: could not be fetched from {tag}")
+            print(f"{kind.asset_name(tag)}: missing from {tag}; payload left out", file=sys.stderr)
+            continue
+        work = work_root / kind.label
+        shutil.rmtree(work, ignore_errors=True)
+        new_root = extract_payload(asset, kind.container, work / "new")
+        new_tree = scan_tree(new_root)
+        files = files_list(new_tree)
+        # Linux's full download is the release tarball, the tree the app
+        # stages in-app, once it is shown to hold exactly these files.
+        full = asset
+        # A macOS app tarball is the payload and its full: the app's strict
+        # reader must accept it too, not only Python's tarfile.
+        if kind.container == "tarzst":
+            check_release_tarball(asset, files)
+        if kind.tarball_suffix and release_tarballs:
+            tarball = get_asset(tag, kind.tarball_name(tag))
+            if tarball is not None:
+                check_release_tarball(tarball, files)
+                full = tarball
+            elif require_all:
+                raise MissingPayload(f"{kind.tarball_name(tag)}: could not be fetched from {tag}")
+            else:
+                print(f"{kind.tarball_name(tag)}: missing from {tag}; full is the AppImage", file=sys.stderr)
+        entry = {
+            "platform": kind.platform,
+            "arch": kind.arch,
+            "full": {"asset": full.name, "url": DOWNLOAD_BASE + f"{tag}/{full.name}",
+                     "sha256": sha256_file(full), "size": full.stat().st_size},
+            "files": files,
+            "patches": [],
+        }
+        if kind.platform == "macos" and dax_driver_source:
+            entry["dax_driver"] = {"source": dax_driver_source}
+        if discard_assets and full is not asset:
+            full.unlink(missing_ok=True)
+        for old_tag in earlier[:depth]:
+            old_asset = get_asset(old_tag, kind.asset_name(old_tag))
+            if old_asset is None:
+                print(f"{kind.asset_name(old_tag)}: missing; no patch from {old_tag}", file=sys.stderr)
+                continue
+            old_root = extract_payload(old_asset, kind.container, work / "old")
+            bundle_name = f"AetherSDR-{tag}-{kind.label}-from-{old_tag}.update.tar"
+            ops = build_patch_set(old_root, scan_tree(old_root), new_root, new_tree,
+                                  out / bundle_name, work / "patches")
+            if ops is not None:
+                # The real pair, by the documented contract, before anything
+                # is signed: a bundle that does not rebuild the release fails
+                # the build here.
+                verify_patch_set(old_root, out / bundle_name, ops, entry["files"], work / "verify")
+            shutil.rmtree(work / "old", ignore_errors=True)
+            if discard_assets:
+                old_asset.unlink(missing_ok=True)
+            if ops is None:
+                continue
+            bundle = out / bundle_name
+            entry["patches"].append({
+                "from": old_tag[1:],
+                "bundle": {"asset": bundle_name, "url": DOWNLOAD_BASE + f"{tag}/{bundle_name}",
+                           "sha256": sha256_file(bundle), "size": bundle.stat().st_size},
+                **ops,
+            })
+            print(f"{bundle_name}: {bundle.stat().st_size} bytes, "
+                  f"{len(ops['ops'])} ops, {ops['unchanged']} unchanged", file=sys.stderr)
+        shutil.rmtree(work, ignore_errors=True)
+        if discard_assets:
+            asset.unlink(missing_ok=True)
+        manifest["payloads"].append(entry)
+
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=False) + "\n")
+    return manifest
+
+
+def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if "--app-tarball" in argv:
+        ap_ = argparse.ArgumentParser(description="The macOS update tarball of one signed app.")
+        ap_.add_argument("--app-tarball", required=True, type=Path, metavar="APP")
+        ap_.add_argument("out", type=Path)
+        aargs = ap_.parse_args(argv)
+        try:
+            return make_app_tarball(aargs.app_tarball, aargs.out)
+        except (ValueError, subprocess.CalledProcessError) as e:
+            aargs.out.unlink(missing_ok=True)
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+
+    if "--tarball" in argv:
+        tp = argparse.ArgumentParser(description="The release tarball of one AppImage.")
+        tp.add_argument("--tarball", required=True, type=Path, metavar="APPIMAGE")
+        tp.add_argument("out", type=Path)
+        tp.add_argument("--work", type=Path, help="scratch directory (default: a temp dir)")
+        targs = tp.parse_args(argv)
+        work = targs.work or Path(tempfile.mkdtemp(prefix="update-tarball-"))
+        try:
+            return make_release_tarball(targs.tarball, targs.out, work)
+        except (ValueError, subprocess.CalledProcessError) as e:
+            targs.out.unlink(missing_ok=True)
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--tag", required=True)
+    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--depth", type=int, default=4)
+    ap.add_argument("--public-key", type=Path)
+    ap.add_argument("--fetch-from-github", action="store_true")
+    ap.add_argument("--assets", action="append", default=[], metavar="TAG=DIR",
+                    help="a directory already holding a release's assets")
+    ap.add_argument("--work", type=Path, help="scratch directory (default: a temp dir)")
+    ap.add_argument("--no-release-tarballs", action="store_true",
+                    help="a release cut before the AppImage build made tarballs: Linux's full is the AppImage")
+    ap.add_argument("--no-macos-payloads", action="store_true",
+                    help="a release cut before the macOS DMG workflow made app tarballs: macOS is left out")
+    ap.add_argument("--dax-driver-source", metavar="HASH",
+                    help="the git tree hash of hal-plugin/ at the tag, for the macOS entries")
+    ap.add_argument("--require-all", action="store_true",
+                    help="fail unless every payload is present (implied by --fetch-from-github)")
+    args = ap.parse_args(argv)
+
+    version_key(args.tag)
+    if args.dax_driver_source is not None and not re.fullmatch(r"[0-9a-f]{40}", args.dax_driver_source):
+        ap.error("--dax-driver-source must be a 40-digit git tree hash")
+    if args.public_key is not None and not args.public_key.exists():
+        args.public_key = None
+
+    if args.fetch_from_github:
+        earlier = earlier_releases(args.tag, args.depth)
+        dl_root = Path(tempfile.mkdtemp(prefix="update-dl-"))
+        get_asset = lambda t, n: fetch_asset(t, n, dl_root / t)  # noqa: E731
+    else:
+        dirs = {}
+        for spec in args.assets:
+            t, _, d = spec.partition("=")
+            version_key(t)
+            dirs[t] = Path(d)
+        earlier = sorted((t for t in dirs if version_key(t) < version_key(args.tag)),
+                         key=version_key, reverse=True)
+        get_asset = lambda t, n: local_asset(dirs, t, n)  # noqa: E731
+
+    work = args.work or Path(tempfile.mkdtemp(prefix="update-work-"))
+    try:
+        manifest = build(args.tag, args.out, args.depth, get_asset, earlier, args.public_key, work,
+                         discard_assets=args.fetch_from_github,
+                         require_all=args.require_all or args.fetch_from_github,
+                         release_tarballs=not args.no_release_tarballs,
+                         macos_payloads=not args.no_macos_payloads,
+                         dax_driver_source=args.dax_driver_source)
+    except MissingPayload as e:
+        print(f"error: {e}; no manifest written", file=sys.stderr)
+        return 1
+    if not manifest["payloads"]:
+        print("no payloads found", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

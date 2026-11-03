@@ -1,5 +1,10 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "SpotRequest.h"
+#include "PanControlRequest.h"
+#include "SlicePresetRequest.h"
+#include "PanDisplayRequest.h"
+#include "PanLifecycleRequest.h"
 
 #include <QFlags>
 #include <QList>
@@ -352,14 +357,16 @@ struct RadioCapabilities {
     QString manufacturer;
 
     // Receive
-    // Independent slice creation on an existing pan through the neutral backend
-    // hook. RadioModel consults this only without a command plane; Flex and Sim
-    // retain their command adapters regardless of this value. Do not use this
-    // field alone to gate +RX in the UI. Separate from maxSlices: a paired
-    // receiver/pan topology can support several slices but not this operation.
+    // Independent creation on an existing pan through the typed backend route.
+    // Separate from maxSlices: a paired receiver/pan topology can support several
+    // receivers but not independent slice creation. Transient split creation also
+    // needs TX support and an answered identity, not merely this declaration.
     bool canCreateSlices = false;
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
+    // Desktop requests only; these do not widen the daemon capability catalogue.
+    std::optional<PanDisplayControl> panDisplayControl;
+    std::optional<PanLifecycleControl> panLifecycleControl;
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
 
     // What this radio's panadapter span and vertical axis are made of, as two
@@ -663,6 +670,16 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    // Desktop utility verbs only; neither record adds daemon permissions.
+    std::optional<SpotControl> spotControl;
+    std::optional<PanControl> panControl;
+    // PanControlField::NoiseFloorRange, separate from panControl because it
+    // needs a license the radio reports. Absent refuses the field.
+    struct NoiseFloorRangeControl {
+        QString requiredLicenseFeature;
+    };
+    std::optional<NoiseFloorRangeControl> noiseFloorRangeControl;
+    std::optional<SlicePresetControl> slicePresetControl;
     // The radio's streaming data plane uses VITA-49. This currently gates the
     // receive-socket buffer and network MTU controls; it describes the transport,
     // not the vendor or only one stream direction.
@@ -813,6 +830,15 @@ struct RadioCapabilities {
         QString requiredLicenseFeature;
     };
     std::optional<AutoAgcThresholdControl> autoAgcThresholdControl;
+    // The gain the AGC-T knob (0..100) sets: offsetDb + dbPerStep * knob, both
+    // as the AGC's maximum gain and, with AGC off, as its fixed gain. The AGC-T
+    // tooltips show it. Absent: no mapping declared, and the tooltips show the
+    // knob position as before.
+    struct AgcGainScale {
+        double offsetDb = 0.0;
+        double dbPerStep = 1.0;
+    };
+    std::optional<AgcGainScale> agcGainScale;
     // Modes the implemented selector can honor. A native OFF time-constant
     // editor is a different contract from selecting a fast/medium/slow bank.
     QStringList agcModes{QStringLiteral("off"), QStringLiteral("slow"),
@@ -892,6 +918,12 @@ struct RadioCapabilities {
     // applet, the Profile Manager, import/export, the Profiles menu — goes away,
     // rather than offering an empty list the operator cannot populate.
     bool hasProfiles = false;
+    // The radio also stores named CW profiles (Flex `profile cw …`, SmartSDR
+    // 4.3.16+) that a client can list, load, create, delete and reset. Engaged
+    // gates ProfileRequest::Kind::Cw and the Profile Manager CW tab; meaningless
+    // unless hasProfiles is also true.
+    struct CwProfileControl {};
+    std::optional<CwProfileControl> cwProfileControl;
 
     // Per-slice RX audio and per-pan IQ as separate streams routed to virtual audio
     // devices for external decoders (Flex DAX). UI visibility only; the crash guard
@@ -970,6 +1002,19 @@ struct RadioCapabilities {
     // tab: that page drives the local ThumbDV helper against a SmartSDR D-STAR
     // waveform, which is empty on every family that cannot load waveforms.
     bool hasWaveforms = false;
+    // The radio keeps an environment per Docker waveform container and can
+    // recreate a container with a new one (Flex `waveform env …` / `waveform
+    // recreate`, SmartSDR 4.3.16+, on a platform with a Waveform Processor).
+    // Engaged gates WaveformEnvRequest and the Waveforms dialog's Environment…
+    // action; meaningless unless hasWaveforms is also true.
+    struct WaveformEnvControl {};
+    std::optional<WaveformEnvControl> waveformEnvControl;
+    // The radio keeps its own list of NTP time sources that a client can list,
+    // add, remove, enable and disable (Flex `ntp_sources …`, SmartSDR 4.3.16+ on
+    // the BigBend platform: FLEX-8000, Aurora, ML-9600, CL-9300). Engaged gates NtpSourceRequest and the Radio Setup Time
+    // page; maxSources is the radio's ceiling.
+    struct NtpSourceControl { int maxSources{10}; };
+    std::optional<NtpSourceControl> ntpSourceControl;
 
     // Several GUI clients can hold independent sessions on the radio at once,
     // each with its own slices and audio streams (SmartSDR multiFLEX). A backend

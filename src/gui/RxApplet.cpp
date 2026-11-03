@@ -4,6 +4,7 @@
 #include "AntennaChoiceGate.h"
 #include "SplitAudioProfile.h"
 #include "AgcModeAvailability.h"
+#include "AgcGainText.h"
 #include "ControlAvailabilityRegistry.h"
 #include "ModeFilterPresets.h"
 #include "ScopedChildWidget.h"
@@ -1168,13 +1169,18 @@ void RxApplet::buildUI()
 
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
             if (m_slice && m_agcTSlider->isEnabled()) {
+                // As syncAgcSliderFromSlice() reads the capabilities.
+                const bool scaled = m_radioModel && m_radioModel->isConnected()
+                    && !m_slice->externalReceiveReplacementActive();
+                const QString gain = agcKnobText(v, scaled
+                    ? m_radioModel->backendCapabilities().agcGainScale : std::nullopt);
                 if (m_slice->receiveAgcMode() == "off") {
                     m_agcTSlider->setToolTip(
-                        QString("AGC Off Level: %1 dB\nRight-click to calibrate against the noise floor").arg(v));
+                        QString("AGC Off Level: %1\nRight-click to calibrate against the noise floor").arg(gain));
                     m_slice->setAgcOffLevel(v);
                 } else {
                     m_agcTSlider->setToolTip(
-                        QString("AGC Threshold: %1 dB\nRight-click to calibrate against the noise floor").arg(v));
+                        QString("AGC Threshold: %1\nRight-click to calibrate against the noise floor").arg(gain));
                     m_slice->setAgcThreshold(v);
                 }
             }
@@ -3548,7 +3554,10 @@ void RxApplet::rebuildFilterButtons()
             btn->setAccessibleName(QStringLiteral("Receive filter %1")
                                        .arg(preset.label));
         }
-        btn->setStyleSheet(kButtonBase() + kBlueActive());
+        // Three preset columns must leave room for the 60 px AGC slider
+        // and Auto button within the dock's 248 px viewport.
+        btn->setStyleSheet(kButtonBase() + kBlueActive()
+            + QStringLiteral("QPushButton { padding: 1px; }"));
         connect(btn, &QPushButton::clicked, this,
                 [this, i, customisable, stablePresets, preset](bool) {
             if (!m_slice) {
@@ -3806,8 +3815,8 @@ void RxApplet::syncAgcSliderFromSlice()
     m_agcTSlider->setValue(value);
     m_agcTSlider->setToolTip(!available
         ? tr("AGC threshold and off level are unavailable on this radio")
-        : agcOff ? QStringLiteral("AGC Off Level: %1 dB").arg(value)
-        : QStringLiteral("AGC Threshold: %1 dB").arg(value));
+        : agcOff ? QStringLiteral("AGC Off Level: %1").arg(agcKnobText(value, caps.agcGainScale))
+        : QStringLiteral("AGC Threshold: %1").arg(agcKnobText(value, caps.agcGainScale)));
 }
 
 void RxApplet::syncAutoAgcThreshold()

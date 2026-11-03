@@ -53,7 +53,14 @@ public:
     QString lastRfGainPanId;
     int rfGainWrites{0};
 
-    RadioCapabilities capabilities() const override { return {}; }
+    // Declares the one pan display control it implements, as a real backend
+    // must for RadioModel to route RF gain to it.
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps;
+        caps.panDisplayControl = PanDisplayControl{{PanDisplayField::RfGain}, {}};
+        return caps;
+    }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override { connected = false; }

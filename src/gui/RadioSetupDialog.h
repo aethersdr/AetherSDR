@@ -31,8 +31,6 @@ namespace AetherSDR {
 
 class RadioModel;
 class AudioEngine;
-class FirmwareUploader;
-class FirmwareStager;
 class TgxlConnection;
 class PgxlConnection;
 class AntennaGeniusModel;
@@ -41,6 +39,7 @@ class AcomConnection;
 class SpeConnection;
 class VkampConnection;
 class Kpa1500Connection;
+class RfkitConnection;
 class Kpa500Connection;
 class Kat500Model;
 class Kxpa100Model;
@@ -66,7 +65,8 @@ public:
                               Kpa500Connection* kpa500 = nullptr,
                               QWidget* parent = nullptr,
                               Kat500Model* kat500 = nullptr,
-                              Kxpa100Model* kxpa100 = nullptr);
+                              Kxpa100Model* kxpa100 = nullptr,
+                              RfkitConnection* rfkit = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
     // Like selectTab("Serial & Controllers"), but also scrolls the page so
@@ -152,10 +152,6 @@ private:
     // "Check for Update" button. Lazy-constructed and non-modal per
     // docs/style/dialog-patterns.md, so the operator can keep it open while
     // staging an installer.
-    void showFirmwareReleases(const QStringList& releases);
-    QPointer<class FirmwareReleasesDialog> m_firmwareReleasesDialog;
-    bool confirmFirmwareClose();
-    bool m_firmwareClosePromptOpen{false};
     bool isFlexOnlyPage(const QTreeWidgetItem* item) const;
     bool isCapabilityPageAvailable(const QTreeWidgetItem* item) const;
     bool isGpsSetupAvailable() const;
@@ -225,6 +221,8 @@ private:
                            const std::shared_ptr<QVector<std::function<void()>>>& pageReseeds);
     void buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
                             const std::function<void()>& refresh);
+    void buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
+                          const std::function<void()>& refresh);
     PeripheralDeviceUi* peripheralDevice(const QString& id) const;
     QWidget* buildUiEnhancementsTab();
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951) — Pinned Certificates list
@@ -265,6 +263,7 @@ private:
     VkampConnection* m_vkamp{nullptr};
     LpMeterConnection* m_lpMeter{nullptr};
     Kpa1500Connection* m_kpa1500{nullptr};
+    RfkitConnection* m_rfkit{nullptr};
     Kpa500Connection* m_kpa500{nullptr};
     Kat500Model* m_kat500{nullptr};
     Kxpa100Model* m_kxpa100{nullptr};
@@ -285,8 +284,6 @@ private:
     QWidget* m_remoteOnInfoField{nullptr};
     QWidget* m_rebootInfoField{nullptr};
     QGroupBox* m_licenseInfoGroup{nullptr};
-    QGroupBox* m_firmwareUpdateGroup{nullptr};
-    QLabel* m_firmwareDisclaimer{nullptr};
     QGroupBox* m_networkIdentityGroup{nullptr};
     QWidget* m_vitaReceiveBufferLabel{nullptr};
     QWidget* m_vitaReceiveBufferControls{nullptr};
@@ -345,14 +342,6 @@ private:
     QLabel* m_licExpirationLabel{nullptr};
     QLabel* m_licRadioIdLabel{nullptr};
     QLabel* m_licMaxVersionLabel{nullptr};
-
-    // Firmware update
-    QLabel*       m_fwStatusLabel{nullptr};
-    QProgressBar* m_fwProgress{nullptr};
-    QPushButton*  m_fwUploadBtn{nullptr};
-    QString       m_fwFilePath;
-    FirmwareUploader* m_uploader{nullptr};
-    FirmwareStager*   m_stager{nullptr};
 
     // Lazy page construction — deferred builders keyed by page index (#1776)
     QHash<int, std::function<QWidget*()>> m_deferredBuilders;
