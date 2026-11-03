@@ -10495,6 +10495,7 @@ set(AETHER_SETTINGS_CONSUMERS
     health_applet_test
     meter_applet_capability_test
     meter_applet_voltage_state_test
+    meter_applet_supply_availability_test
     perf_telemetry_test
     local_memory_bank_test
     memory_import_test
