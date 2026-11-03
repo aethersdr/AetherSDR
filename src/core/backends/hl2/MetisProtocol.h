@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 // HPSDR Protocol 1 ("Metis") wire primitives for the Hermes-Lite 2 backend.
@@ -650,7 +651,11 @@ std::array<std::uint8_t, 63> discoveryRequest() noexcept;
 
 struct DiscoveryReply {
     std::array<std::uint8_t, 6> mac{};
-    std::uint8_t gatewareVersion = 0;   // raw byte; HL2 gateware e.g. 0x4A -> 7.4
+    std::uint8_t gatewareVersion = 0;   // VERSION_MAJOR, decimal: stock HL2 0x4A = 74
+    // VERSION_MINOR from offset 0x15 (usopenhpsdr1.v:286); stock HL2 sends 3
+    // (hermeslite_core.v:143), and derived boards use it to identify
+    // themselves (SQUARE SDR 2 = 52, #6806). nullopt on a short reply.
+    std::optional<std::uint8_t> gatewareMinor;
     std::uint8_t boardId = 0;           // 0x06 = Hermes-Lite / Hermes-Lite 2
     bool streaming = false;             // discovery status byte 0x03 = already sending IQ
     // Receiver count the board reports, from discovery offset 0x13. Only present
@@ -689,6 +694,10 @@ struct DiscoveryReply {
 };
 // Parse a >=60-byte Metis discovery reply (EF FE <st> MAC[6] gwver board ...).
 std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> pkt) noexcept;
+
+// The gateware version as the operator reads it: "74.3", or "74" when the
+// reply carried no minor version. Both decimal, as upstream writes them.
+std::string gatewareVersionText(const DiscoveryReply& reply);
 
 // Build a 1032-byte EP2 packet carrying two C&C registers (one per frame). The
 // 504-byte payload is zero-filled, which is transmit SILENCE — ep2WriteTxIq()
