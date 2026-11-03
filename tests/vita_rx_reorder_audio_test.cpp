@@ -177,6 +177,8 @@ int main(int argc, char** argv)
         check(frames == 240 && VitaSequenceLossLogTestAccess::queuedBytes(stream) > 0,
               "a gap retains its successor before the deadline");
         stream.restartStreamSequence(kStream);
+        check(stream.audioStreamDiagnostics().isEmpty(),
+              "retired RX streams do not remain as ever-slower delivery rows");
         VitaSequenceLossLogTestAccess::flush(stream, 100);
         check(frames == 240 && stream.packetErrorCount() == 0,
               "retired queued audio is neither delivered nor charged to a reused stream");
@@ -194,7 +196,12 @@ int main(int argc, char** argv)
             [&daxFrames](int, const PcmFrame& frame) { daxFrames += frame.frameCount(); });
         VitaSequenceLossLogTestAccess::feed(stream, packet(0, 0x03e3, pcm(0, true)), 0);
         VitaSequenceLossLogTestAccess::feed(stream, packet(2, 0x03e3, pcm(2, true)), 1);
+        check(stream.audioStreamDiagnostics().size() == 1,
+              "unclassified PCM initially contributes a speaker-audio timing row");
         stream.registerDaxStream(kStream, 1);
+        check(stream.audioStreamDiagnostics().isEmpty()
+              && VitaSequenceLossLogTestAccess::queuedBytes(stream) == 0,
+              "DAX adoption immediately retires stale speaker timing and queued packets");
         VitaSequenceLossLogTestAccess::feed(stream, packet(3, 0x03e3, pcm(3, true)), 2);
         VitaSequenceLossLogTestAccess::flush(stream, 100);
         check(speakerFrames == 240 && daxFrames == 240

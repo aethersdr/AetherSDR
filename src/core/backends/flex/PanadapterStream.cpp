@@ -615,6 +615,7 @@ void PanadapterStream::unregisterWfStream(quint32 streamId)
 void PanadapterStream::restartStreamSequence(quint32 streamId)
 {
     QMutexLocker statsLock(&m_statsMutex);
+    m_audioStreamStats.remove(streamId);
     const auto it = m_streamStats.find(streamId);
     if (it != m_streamStats.end()) {
         m_queuedAudioBytes -= it->reorder.queuedBytes();
@@ -948,6 +949,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         auto& stats = m_streamStats[streamId];
         if (stats.packetClassCode != 0
             && (stats.packetClassCode != pcc || stats.category != cat)) {
+            m_audioStreamStats.remove(streamId);
             m_queuedAudioBytes -= stats.reorder.queuedBytes();
             stats.reorder.reset();
             ++stats.generation;
@@ -1936,7 +1938,11 @@ void PanadapterStream::registerDaxStream(quint32 streamId, int channel)
     if (m_daxStreamIds.value(streamId, -1) != channel) {
         m_daxPcm.erase(streamId);
     }
+    const bool changesRoute = !m_daxStreamIds.contains(streamId);
     m_daxStreamIds[streamId] = channel;
+    if (changesRoute) {
+        restartStreamSequence(streamId);
+    }
     m_loggedDaxPacketStreams.remove(streamId);
     // Ownership table (#3305): the create we requested has materialized (or a
     // leftover stream from a previous arm was adopted). If nobody holds the
