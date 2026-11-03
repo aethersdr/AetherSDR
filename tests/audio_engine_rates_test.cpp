@@ -823,6 +823,124 @@ bool enableEffect(AudioEngine& engine, Effect effect)
     return false;
 }
 
+void rawOverflowFade()
+{
+    for (int producerRate : {24000, 48000}) {
+        for (int deviceRate : {24000, 44100, 48000}) {
+            for (int overflowFrames : {128, producerRate / 50 - 1, producerRate / 50 + 1}) {
+                Fixture fixture(deviceRate);
+                PcmProducer producer;
+                producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo});
+                for (int packet = 0; packet < 20; ++packet) {
+                    feed(fixture.engine, producer, QVector<float>(producerRate / 100 * 2, 0.25f));
+                    fixture.tick();
+                }
+                fixture.finish();
+                fixture.output.buffer().clear();
+                fixture.output.seek(0);
+                fixture.engine.setRxBufferCapMs(100);
+                check(AudioEngineRatesTestAccess::outputBytes(fixture.engine) == 0,
+                      "raw-only overflow begins without processed output");
+                feed(fixture.engine, producer,
+                     QVector<float>((producerRate / 10 + overflowFrames) * 2, 0.25f));
+                fixture.finish();
+                const QByteArray output = fixture.output.data();
+                check(!output.isEmpty() && finite(output), "raw overflow retains finite speaker audio");
+                const auto* samples = reinterpret_cast<const float*>(output.constData());
+                const double first = output.isEmpty() ? 0.0 : samples[0];
+                const double expected = 0.25 / (deviceRate * 2 / 1000);
+                const double peak = output.isEmpty() ? 0.0
+                    : *std::max_element(samples, samples + output.size() / sizeof(float));
+                std::printf("raw fade producer=%d device=%d overflow=%d frames=%lld first=%g expected=%g peak=%g\n",
+                    producerRate, deviceRate, overflowFrames, static_cast<long long>(output.size() / kFrameBytes),
+                    first, expected, peak);
+                check(first > 0.0 && first <= expected * 1.05 && peak > 0.24,
+                      "the retained raw-only speaker tail receives the existing fade");
+                check(output.size() / kFrameBytes <= deviceRate / 10,
+                      "raw-only overflow retains at most the configured 100 ms");
+            }
+        }
+    }
+}
+
+void boundedNrTrim()
+{
+    for (Effect effect : {Effect::Rn2, Effect::Dfnr}) {
+        for (int producerRate : {24000, 48000}) {
+            for (bool presentation : {true, false}) {
+                bool supported = true;
+                const auto render = [&](bool stalled) {
+                    Fixture fixture(producerRate);
+                    PcmProducer producer;
+                    producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo});
+                    feed(fixture.engine, producer, QVector<float>(256, 0.0f));
+                    fixture.finish();
+                    if (!enableEffect(fixture.engine, effect)) {
+                        supported = false;
+                        return QByteArray{};
+                    }
+#ifdef HAVE_DFNR
+                    if (effect == Effect::Dfnr) {
+                        fixture.engine.setDfnrAttenLimit(0.0f);
+                    }
+#endif
+                    if (stalled && presentation) {
+                        fixture.engine.setReceivePresentationDelays(5000, 0, {});
+                    }
+                    const int frames = producerRate * (presentation ? 4 : 9) / (presentation ? 1 : 10) + 128;
+                    for (int offset = 0; offset < frames;) {
+                        const int count = std::min(producerRate / 50, frames - offset);
+                        feed(fixture.engine, producer, QVector<float>(count * 2, 0.0f));
+                        offset += count;
+                        if (!stalled) {
+                            AudioEngineRatesTestAccess::drain(fixture.engine,
+                                producerRate / 50 * kFrameBytes);
+                        }
+                    }
+                    if (stalled) {
+                        check(AudioEngineRatesTestAccess::rawBytes(fixture.engine)
+                                  == frames * kFrameBytes,
+                              "stalled NR trim starts with the intended queued raw backlog");
+                        if (presentation) {
+                            fixture.engine.setReceivePresentationDelays(0, 0, {});
+                        } else {
+                            fixture.engine.setRxBufferCapMs(50);
+                            AudioEngineRatesTestAccess::drain(fixture.engine, 0);
+                        }
+                        const qsizetype visible = AudioEngineRatesTestAccess::rawBytes(fixture.engine)
+                            + AudioEngineRatesTestAccess::outputBytes(fixture.engine);
+                        check(visible <= (presentation ? 0 : producerRate / 20 * kFrameBytes),
+                              "the requested visible queue reduction is actually complete");
+                    }
+                    fixture.output.buffer().clear();
+                    fixture.output.seek(0);
+                    for (int packet = 0; packet < 40; ++packet) {
+                        feed(fixture.engine, producer, tone(producerRate, producerRate / 100,
+                            packet * (producerRate / 100), 1700, 2300));
+                        fixture.tick();
+                    }
+                    fixture.finish();
+                    return fixture.output.data();
+                };
+                const QByteArray expected = render(false);
+                const QByteArray trimmed = supported ? render(true) : QByteArray{};
+                if (!supported) {
+                    std::printf("bounded NR %s producer=%d unavailable; case skipped\n",
+                        effectName(effect), producerRate);
+                    continue;
+                }
+                const double reference = amplitude(expected, producerRate, 0, 1700);
+                const double actual = amplitude(trimmed, producerRate, 0, 1700);
+                std::printf("bounded NR %s producer=%d presentation=%d reference=%g actual=%g frames=%lld\n",
+                    effectName(effect), producerRate, presentation, reference, actual,
+                    static_cast<long long>(trimmed.size() / kFrameBytes));
+                check(finite(trimmed) && reference > 0.01 && actual >= reference * 0.9,
+                      "fresh speaker audio cannot remain behind an NR-owned old backlog");
+            }
+        }
+    }
+}
+
 void steadyOutputOverflowFade()
 {
     const auto maxDelta = [](const QByteArray& pcm) {
@@ -1306,7 +1424,7 @@ void printUsage(const char* program)
         "transitionsAndRejection|queueBudgetsAndDeviceTransitions|concurrentSourcesAndEffects|"
         "effects-bypass|effects-EQ|effects-NR2|effects-RN2|effects-NR4|"
         "effects-DFNR|effects-MNR|kiwiDeviceRateMatrix|processingStateReset|"
-        "legacyReplacementAndKiwiReset|fixedProcessingDomains|overflowPreservesDspHistory|revokedDelayReduction|steadyOutputOverflowFade]\n", program);
+        "legacyReplacementAndKiwiReset|fixedProcessingDomains|overflowPreservesDspHistory|revokedDelayReduction|steadyOutputOverflowFade|rawOverflowFade|boundedNrTrim]\n", program);
 }
 
 std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
@@ -1344,6 +1462,8 @@ std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
              AudioCase{"overflowPreservesDspHistory", std::nullopt},
              AudioCase{"revokedDelayReduction", std::nullopt},
              AudioCase{"steadyOutputOverflowFade", std::nullopt},
+             AudioCase{"rawOverflowFade", std::nullopt},
+             AudioCase{"boundedNrTrim", std::nullopt},
          }) {
         if (std::strcmp(name, candidate.name) == 0) {
             return candidate;
@@ -1419,6 +1539,12 @@ int main(int argc, char** argv)
     }
     if (selected("steadyOutputOverflowFade")) {
         runStage("steadyOutputOverflowFade", steadyOutputOverflowFade);
+    }
+    if (selected("rawOverflowFade")) {
+        runStage("rawOverflowFade", rawOverflowFade);
+    }
+    if (selected("boundedNrTrim")) {
+        runStage("boundedNrTrim", boundedNrTrim);
     }
     if (selected("overflowPreservesDspHistory")) {
         runStage("overflowPreservesDspHistory", overflowPreservesDspHistory);

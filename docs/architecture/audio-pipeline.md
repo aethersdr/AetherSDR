@@ -206,7 +206,8 @@ RADE decoded speech is logically mono duplicated to stereo before that point.
   normal, legacy KiwiSDR, and external Kiwi receive queues, plus RADE speech
   separately. For the main RX source, `trimMainRxBuffers()` advances overflow
   input through the existing NR, client strip and output resamplers before
-  dropping oldest speaker-ready output. Received samples are never spliced
+  dropping oldest speaker-ready output. Byte input uses blocks of at most
+  20 ms; the retained output tail exists before the quiet-point cut and fade. Received samples are never spliced
   out ahead of those stateful processors. `processRxAudioData()` uses the same
   combined raw/output bound on enqueue. Legacy and external Kiwi paths retain
   their independent queue limits. `queueLegacyKiwiAudioData()` and

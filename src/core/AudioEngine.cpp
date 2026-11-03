@@ -5613,8 +5613,20 @@ void AudioEngine::trimMainRxBuffers(qsizetype targetRawBytes)
             + queuedAudioBytes(m_rxPackets)
             + outputRawFrames * kFrameBytes - targetRawBytes;
     };
+    constexpr int kMaxTrimBlockMs = 20;
+    const qsizetype maxBlockBytes = std::max(
+        kFrameBytes, audioBytesForMsAtRate(producerRate, kMaxTrimBlockMs));
     for (qsizetype excess = excessBytes(); excess > 0; excess = excessBytes()) {
-        if (!m_rxOutputBuffer.isEmpty()) {
+        const qsizetype rawBytes = alignedStereoFloatBytes(m_rxBuffer.size());
+        if (rawBytes > 0 && m_rxPackets.empty()) {
+            // Build the retained tail before the quiet-point cut and fade.
+            // Bounded blocks also prevent NR wrappers from retaining seconds
+            // of output behind an input-sized startup-silence response.
+            const qsizetype bytes = std::min(maxBlockBytes, rawBytes);
+            const QByteArray pcm = m_rxBuffer.left(bytes);
+            m_rxBuffer.remove(0, bytes);
+            processMixedRxAudioData(pcm, RxDspSource::Main);
+        } else if (!m_rxOutputBuffer.isEmpty()) {
             const qsizetype outputFrames =
                 (excess / kFrameBytes * outputRate + producerRate - 1) / producerRate;
             // A cut before the required bound would reapply the fade on the next pass.
@@ -5626,11 +5638,6 @@ void AudioEngine::trimMainRxBuffers(qsizetype targetRawBytes)
             QByteArray packet = std::move(m_rxPackets.front());
             m_rxPackets.pop_front();
             processMixedRxAudioData(packet, RxDspSource::Main);
-        } else if (!m_rxBuffer.isEmpty()) {
-            const qsizetype bytes = std::min(excess, alignedStereoFloatBytes(m_rxBuffer.size()));
-            const QByteArray pcm = m_rxBuffer.left(bytes);
-            m_rxBuffer.remove(0, bytes);
-            processMixedRxAudioData(pcm, RxDspSource::Main);
         } else {
             break;
         }

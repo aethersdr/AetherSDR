@@ -219,7 +219,7 @@ foreach(_case IN ITEMS rateMatrix bandwidthAndMono negotiatedSpeakerOutput
         negotiationOpenFailure negotiationLifetimeAndCoalescing auxiliaryAcrossNegotiation
         transitionsAndRejection queueBudgetsAndDeviceTransitions effects-bypass effects-EQ
         effects-NR2 effects-RN2 effects-NR4 effects-DFNR effects-MNR kiwiDeviceRateMatrix
-        processingStateReset legacyReplacementAndKiwiReset fixedProcessingDomains overflowPreservesDspHistory revokedDelayReduction steadyOutputOverflowFade)
+        processingStateReset legacyReplacementAndKiwiReset fixedProcessingDomains overflowPreservesDspHistory revokedDelayReduction steadyOutputOverflowFade rawOverflowFade boundedNrTrim)
     add_test(NAME audio_engine_rates_${_case}_test
         COMMAND audio_engine_rates_test --case=${_case})
     set_tests_properties(audio_engine_rates_${_case}_test PROPERTIES TIMEOUT 120)
