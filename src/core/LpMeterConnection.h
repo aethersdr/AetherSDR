@@ -111,10 +111,12 @@ private slots:
     void onReadyRead();
 
 private:
+    friend class LpMeterConnectionTest;
     friend class LpMeterConnectionClockTest;
 
     enum class Mode { None, Serial, Network };
 
+    void prepareConnection(Mode mode, const QString& endpoint, quint16 port = 0);
     void onTransportUp();
     void onTransportDown();
     void onTransportError(const QString& errorString);
@@ -169,11 +171,17 @@ private:
     // operator will ever get that the bytes are arriving but unusable.
     bool m_bytesWithoutRecords{false};
     qint64 m_lastRecordMs{-1};
+    qint64 m_transportUpMs{-1};
     // When bytes first arrived after this connect. Needed because "no record
     // yet" is normal for the first moments of a link — the ser2net banner
     // arrives before any record — so the warning must be about a DURATION of
     // fruitless bytes, not about the first chunk.
     qint64 m_firstBytesMs{-1};
+    // When the transport last accepted a poll byte, for the dim warning.
+    qint64 m_lastPollMs{-1};
+    // Start of the silence a logged dim reported, or -1 when none is open.
+    // Survives reconnects to the same endpoint; changing the target clears it.
+    qint64 m_silenceSinceMs{-1};
     // "Seen" is the gate's current state; "reported" is the last state
     // actually logged. Keeping them apart is what makes a flap that returns
     // to where it started produce no log at all.
