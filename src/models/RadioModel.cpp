@@ -1136,6 +1136,7 @@ void RadioModel::setupBackend(const QString& family)
             m_backendWfLastRowNs.remove(idx);
         }
         m_panadapters.remove(modelPanId);
+        m_panBandTransitions.forget(modelPanId);
         if (m_panStream) {
             m_panStream->unregisterPanStream(pan->panStreamId());
             m_panStream->unregisterWfStream(pan->wfStreamId());
@@ -1358,6 +1359,8 @@ void RadioModel::setupBackend(const QString& family)
     });
     connect(m_backend.get(), &IRadioBackend::profileChanged, this,
             [this](const ProfileDelta& delta) { applyProfileChanges(delta); });
+    connect(m_backend.get(), &IRadioBackend::ntpSourceChanged, this,
+            [this](const NtpSourceDelta& delta) { applyNtpSourceChanges(delta); });
 
     // The PanadapterStream connects below exist only on Flex and Sim; a backend
     // carrying its own IQ has no m_panStream. Each is guarded individually, not by an
@@ -2184,6 +2187,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
     qRegisterMetaType<GpsDelta>();
+    qRegisterMetaType<NtpSourceDelta>();
     qRegisterMetaType<MemoryDelta>();
 
     // Watch both sides of the TX filter so a cut that silences the transmit
@@ -2270,6 +2274,14 @@ RadioModel::RadioModel(QObject* parent)
         digitalVoiceDir + QStringLiteral("/dstar-traffic.json"));
     connect(&m_flexWaveformModel, &FlexWaveformModel::genericStatusReceived,
             &m_dstarModel, &DStarModel::handleWaveformStatus);
+    connect(this, &RadioModel::capabilitiesChanged,
+            this, &RadioModel::autoClearWaveformEnvironmentStaging);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::syncNtpSources);
+    connect(&m_flexWaveformModel, &FlexWaveformModel::environmentChanged,
+            this, &RadioModel::waveformContainersChanged);
+    connect(&m_flexWaveformModel, &FlexWaveformModel::waveformsChanged, this, [this] {
+        emit waveformContainersChanged({});
+    });
     connect(&m_dstarModel, &DStarModel::configurationChanged,
             this, &RadioModel::scheduleDStarRuntimeConfiguration);
     // A `transmit dax` release that landed while the carrier was up is
@@ -4635,6 +4647,22 @@ bool RadioModel::hasDaxStreams() const
     return backendCapabilities().hasDaxStreams;
 }
 
+bool RadioModel::transmitMonitorAvailable() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached: unchanged, as hasDaxStreams()
+    }
+    return backendCapabilities().txMonitorControl.has_value();
+}
+
+bool RadioModel::voxAvailable() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;
+    }
+    return backendCapabilities().voxControl.has_value();
+}
+
 // The single fan-out point for "what this radio says it can do".
 //
 // Everything capability-driven — model-side flags pushed into TransmitModel, and
@@ -5911,6 +5939,14 @@ bool RadioModel::removePanadapter(const QString& panId, PanCloseIntent intent)
         || !control->supports(PanLifecycleAction::Remove)
         || !original->ownedByClient(clientHandle())
         || (intent == PanCloseIntent::Ordinary && m_panadapters.size() <= 1)) { return false; }
+    // Before the fence below snapshots the pan's revision: a listener may
+    // still write to this pan (the adaptive-throttle restore does, so the
+    // radio doesn't keep the cap for the next pan it opens in this slot).
+    {
+        const QPointer<RadioModel> guard(this);
+        emit panAboutToRemove(panId);
+        if (!guard || !original || !controlSessionCurrent(session)) { return false; }
+    }
     const QString waterfallId = original->waterfallId();
     const quint64 revision = original->controlRevision();
     const quint64 retired = m_displayRetirements.value(panId);
@@ -6487,6 +6523,14 @@ bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
     const QPointer<PanadapterModel> pan(panadapter(panId));
     if (!pan || (!hasCenter && !hasBandwidth)) { return false; }
     if (hasCenter) {
+        // Bound optimistic geometry to the declared range. Confirmed backends
+        // retain their own request validation and report the accepted geometry.
+        if (const auto range = backendCapabilities().receivePanCenterControl;
+            !confirmsReceiveControls() && range
+            && range->authority != SliceFrequencyControl::Authority::Unknown
+            && range->maximumHz >= range->minimumHz) {
+            centerMhz = std::clamp(centerMhz, range->minimumHz / 1.0e6, range->maximumHz / 1.0e6);
+        }
         centerMhz = std::max(centerMhz, (hasBandwidth ? bandwidthMhz : pan->bandwidthMhz()) / 2.0);
     }
     PanGeometryRequest geometry;
@@ -6519,10 +6563,23 @@ bool RadioModel::dispatchPanBand(const QString& panId, const QString& bandKey)
     const RadioControlSession session = controlSession();
     emit panBandAboutToDispatch(panId);
     if (!alive) { return false; }
+    // In flight until the reply, which follows the new band's own pan and
+    // waterfall status. Any reply settles it, Cancelled included (a newer
+    // band request retires this one's fence): the status arrived either way.
+    const quint64 transition = m_panBandTransitions.begin(panId);
+    const RadioControlCompletion settled = [alive, panId, transition](const RadioControlReply&) {
+        if (alive && alive->m_panBandTransitions.settle(panId, transition)) {
+            emit alive->panBandSettled(panId);
+        }
+    };
     const ReceiveDispatch result = controlSessionCurrent(session)
-        ? requestPanDisplay(original, {PanDisplayField::Band, bandKey}) : ReceiveDispatch::Unsupported;
+        ? requestPanDisplay(original, {PanDisplayField::Band, bandKey}, settled)
+        : ReceiveDispatch::Unsupported;
     if (!alive) { return false; }
     if (result == ReceiveDispatch::Unsupported) {
+        if (m_panBandTransitions.settle(panId, transition)) {
+            emit panBandSettled(panId);
+        }
         emit panBandDispatchFailed(panId);
         return false;
     }
@@ -7104,6 +7161,7 @@ void RadioModel::stageSessionModelsForReconnect()
         }
     }
     m_panadapters.clear();
+    m_panBandTransitions.clear();
 
     m_ownedSliceIds.clear();
     if (!m_rawSliceModeLists.isEmpty()) {
@@ -7191,6 +7249,7 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     }
     const QMap<QString, PanadapterModel*> livePans = m_panadapters;
     m_panadapters.clear();
+    m_panBandTransitions.clear();
     for (auto it = livePans.cbegin(); it != livePans.cend(); ++it) {
         if (!it.value()) continue;
         emit panadapterRemoved(it.key());
@@ -8968,6 +9027,9 @@ void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
 {
     if (panId.isEmpty() || fpsCap <= 0) return;
     if (profileLoadRadioStateWritesHeld()) return;
+    // The radio would save the cap as the new band's rates. MainWindow caps
+    // the pan once the band change settles (#6791).
+    if (m_panBandTransitions.inFlight(panId)) return;
     auto* pan = m_panadapters.value(panId, nullptr);
     if (!pan) return;
     // A backend that shapes its own display rate has no Flex command sink, so the
@@ -9684,6 +9746,13 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
     }
     if (body.startsWith("profile cw ")) {
         handleProfileStatusRaw("cw", body.mid(11));  // skip "profile cw "
+        return;
+    }
+
+    // Objects the Flex backend reads from the raw line itself (ntp_sources),
+    // from this session only.
+    if (m_flexBackend && gpsSessionGeneration == m_gpsSessionGeneration
+        && m_flexBackend->decodeRawStatus(body)) {
         return;
     }
 
@@ -11672,6 +11741,7 @@ void RadioModel::onStatusReceived(const QString& object,
                 m_panTransmitInhibitReasons.remove(panId);
                 m_panTransmitInhibitedTxSlices.remove(panId);
                 auto* pan = m_panadapters.take(panId);
+                m_panBandTransitions.forget(panId);
                 if (!pan) {
                     pan = m_stalePanadapters.take(panId);
                 }
@@ -12099,11 +12169,9 @@ void RadioModel::onStatusReceived(const QString& object,
             int idx = sm.captured(1).toInt();
             if (kvs.isEmpty() && object.contains("removed")) {
                 m_spotModel.removeSpot(idx);
-            } else if (kvs.isEmpty() && object.contains("triggered")) {
-                // Parse pan= from the object string if present
-                static const QRegularExpression panRe2(R"(pan=(0x[0-9A-Fa-f]+))");
-                const auto pm = panRe2.match(object);
-                emit m_spotModel.spotTriggered(idx, pm.hasMatch() ? pm.captured(1) : QString());
+            } else if (object.contains("triggered")) {
+                // CommandParser separates pan= from the event's object text.
+                emit m_spotModel.spotTriggered(idx, kvs.value("pan"));
             } else {
                 m_spotModel.applySpotStatus(idx, kvs);
             }
@@ -12289,6 +12357,10 @@ void RadioModel::onStatusReceived(const QString& object,
     }
     if (object == QLatin1String("waveform status")) {
         m_flexWaveformModel.handleGenericStatus(kvs);
+        return;
+    }
+    if (object == QLatin1String("waveform restarted")) {
+        m_flexWaveformModel.handleRestarted(kvs);
         return;
     }
 

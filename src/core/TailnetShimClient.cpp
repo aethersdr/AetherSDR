@@ -1,5 +1,7 @@
 #include "TailnetShimClient.h"
 
+#include "TailnetShimRelease.h"
+
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -164,6 +166,30 @@ bool supportsQrSignIn(const QString& version)
     return major > 0 || minor >= 5;
 }
 
+QString pinnedVersion(bool native)
+{
+    return QString::fromLatin1(native ? TailnetShimNativeRelease::kVersion
+                                      : TailnetShimRelease::kVersion);
+}
+
+bool updateAvailable(const QString& installed, const QString& pinned)
+{
+    static const QRegularExpression re(QStringLiteral("^(\\d{1,6})\\.(\\d{1,6})\\.(\\d{1,6})"));
+    const QRegularExpressionMatch a = re.match(installed);
+    const QRegularExpressionMatch b = re.match(pinned);
+    if (!a.hasMatch() || !b.hasMatch()) {
+        return false;
+    }
+    for (int i = 1; i <= 3; ++i) {
+        const int x = a.captured(i).toInt();
+        const int y = b.captured(i).toInt();
+        if (x != y) {
+            return x < y;
+        }
+    }
+    return false;
+}
+
 bool shouldSignInUnasked(const TailnetShimStatus& st, bool tokenLoaded, bool haveToken,
                          bool busy, bool lanReachable, bool alreadyTried)
 {
@@ -296,8 +322,8 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
         const QByteArray body = reply->readAll();
         if (code == 0) {
             emit requestFailed(operation,
-                               tr("The remote-access container did not answer on the radio "
-                                  "(%1). It may still be starting.")
+                               tr("Remote access did not answer on the radio (%1). It may "
+                                  "still be starting.")
                                    .arg(reply->errorString()),
                                false);
             return;
@@ -305,7 +331,7 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
         if (code < 200 || code >= 300) {
             QString message = tailnetshim::parseError(body);
             if (message.isEmpty()) {
-                message = tr("The remote-access container returned HTTP %1.").arg(code);
+                message = tr("Remote access on the radio returned HTTP %1.").arg(code);
             }
             emit requestFailed(operation, message, code == 401);
             return;
@@ -313,7 +339,7 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
         if (operation == QLatin1String("provision")) {
             const auto parsed = tailnetshim::parseProvisionReply(body);
             if (!parsed) {
-                emit requestFailed(operation, tr("The container sent an unreadable reply."), false);
+                emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false);
                 return;
             }
             emit provisioned(*parsed);
@@ -322,7 +348,7 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
         if (operation == QLatin1String("login")) {
             const auto login = tailnetshim::parseLoginReply(body);
             if (!login) {
-                emit requestFailed(operation, tr("The container sent an unreadable reply."), false);
+                emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false);
                 return;
             }
             emit loginReceived(*login);
@@ -330,7 +356,7 @@ void TailnetShimClient::handle(QNetworkReply* reply, const QString& operation)
         }
         const auto st = tailnetshim::parseStatus(body);
         if (!st) {
-            emit requestFailed(operation, tr("The container sent an unreadable reply."), false);
+            emit requestFailed(operation, tr("Remote access on the radio sent an unreadable reply."), false);
             return;
         }
         emit statusReceived(*st);

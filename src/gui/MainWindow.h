@@ -59,7 +59,6 @@
 #include "core/MqttClient.h"
 #endif
 #include "core/WsjtxClient.h"
-#include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
 #include "core/EibiClient.h"
 #include "core/N1MMSpotClient.h"
@@ -133,6 +132,8 @@ class QSystemTrayIcon;
 #include "gui/PersistentDialog.h" // showOrRaisePersistent template needs
                                    // PersistentDialog visible at point of use.
 
+class QStackedWidget;
+
 namespace AetherSDR {
 
 enum class RadioSliceSelectionSource;
@@ -140,6 +141,8 @@ enum class RadioSliceSelectionSource;
 class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
+class AntennaAnalyzerModel;
+class AetherLabWidget;
 class AutomationServer;
 class CanonWindow;
 class ConnectionPanel;
@@ -1151,6 +1154,9 @@ private:
     void stopDigitalVoiceService(bool waitForExit);
     void showPskReporterMapDialog();
     void startKissTncOnStartupIfConfigured();
+    AntennaAnalyzerModel* antennaAnalyzerModel();
+    void showAetherLab();
+    void returnFromAetherLab();
     void showFlexControlDialog();
     void handleFlexControlTuneSteps(int steps);
     void handleFlexControlButton(int button, int action);
@@ -1182,6 +1188,13 @@ private:
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
     bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
+    // Lift the adaptive cap on one pan (or every pan) by sending its
+    // pre-cap FPS and waterfall rate. Used on throttle lift, and before a
+    // disconnect, app close, band change or pan close while capped.
+    void restorePreCapPanRates(const QString& onlyPanId = {});
+    // Push the throttle's enabled flag and current cap to the radio tab's AT chip.
+    void refreshAdaptiveThrottleChip();
+    void refreshNetworkQualityIndicators();
     void startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots = true);
     void requestWanReconnect();
     void showForcedDisconnectDialog(bool wasWan, const RadioInfo& radioInfo, const WanRadioInfo& wanInfo);
@@ -1412,7 +1425,6 @@ private:
     QTimer            m_cwxTxEndTimer;
 #endif
     WsjtxClient*       m_wsjtxClient{nullptr};
-    SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
     EibiClient*          m_eibiClient{nullptr};
     QHash<QString, int>  m_eibiSpotKeyToId;
@@ -1637,6 +1649,10 @@ private:
 #endif
 
     // GUI — left sidebar
+    AntennaAnalyzerModel* m_antennaAnalyzer{nullptr};
+    AetherLabWidget* m_aetherLabWidget{nullptr};
+    QStackedWidget* m_labWorkspaceStack{nullptr};
+    bool m_aetherLabActive{false};
     ConnectionPanel* m_connPanel{nullptr};
 
     // GUI — main area
@@ -2087,6 +2103,10 @@ private:
     QHash<QString, QVector<QMetaObject::Connection>> m_panDisplayStatusConnections;
     bool m_adaptiveThrottleActive{false}; // fps/wf status held as restore targets while true
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
+    // Every cap (fps, and its waterfall rate) sent since the throttle engaged.
+    // A status echo of any of them is ours, not the operator's setting.
+    QSet<int> m_adaptiveFpsCapsSent;
+    QSet<int> m_adaptiveWfRatesSent;
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
     // WheelApf-while-off hint: wall-clock until which the notice is already
@@ -2281,6 +2301,10 @@ private:
         qint64 untilMs{0};
     };
     QHash<int, CenterLockTuneHold> m_centerLockTuneHoldBySlice;
+    // Pans whose live Center Lock was set by a TCI client (`rx_ctun_ex`), not
+    // the operator. The saved letter map is neither written nor cleared on
+    // their behalf; any other set or clear of the pan's lock drops the mark.
+    QSet<QString> m_centerLockSessionOnlyPans;
     // While a slice is being dragged (in-window tune OR edge auto-pan) Center Lock
     // stands down so it doesn't fight the drag with per-tick recenters. The
     // drag-end handler recenters once so the locked pan re-asserts.
@@ -2303,6 +2327,7 @@ private:
     void setCenterLockForSlice(SliceModel* slice, bool on);
     void setCenterLockForPan(const QString& panId, int sliceId, bool on,
                              bool persist = true);
+    void setSessionCenterLockForSlice(int sliceId, bool on);
     void clearCenterLockForPan(const QString& panId, bool clearPersistedIntent = false);
     void clearCenterLockForSlice(int sliceId, bool clearPersistedIntent = false);
     // serial + "/" + station: per-client persistence identity so co-located

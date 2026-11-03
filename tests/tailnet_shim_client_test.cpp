@@ -14,6 +14,9 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 #include <QJsonArray>
@@ -276,6 +279,115 @@ int main(int argc, char** argv)
                                                         image.size()).isEmpty(),
                      "missing file refused");
     }
+
+    // The two packages each check against their own pin, and the native one
+    // keeps the .ssdr_waveform name WaveformInstaller requires.
+    {
+        using P = TailnetShimPackage;
+        const auto container = TailnetShimDownloader::pin(P::Container);
+        const auto native = TailnetShimDownloader::pin(P::Native);
+        ok &= expect(container.sha256 == QByteArray(TailnetShimRelease::kSha256)
+                         && container.size == TailnetShimRelease::kSize
+                         && container.url == QLatin1String(TailnetShimRelease::kUrl),
+                     "container pin is TailnetShimRelease");
+        ok &= expect(native.sha256 == QByteArray(TailnetShimNativeRelease::kSha256)
+                         && native.size == TailnetShimNativeRelease::kSize
+                         && native.url == QLatin1String(TailnetShimNativeRelease::kUrl)
+                         && native.version == QLatin1String(TailnetShimNativeRelease::kVersion),
+                     "native pin is TailnetShimNativeRelease");
+        ok &= expect(native.sha256.size() == 64 && native.sha256 == native.sha256.toLower()
+                         && native.sha256 != container.sha256,
+                     "native pin is its own lower-case SHA-256");
+        ok &= expect(native.url.startsWith(QLatin1String("https://"))
+                         && native.url.endsWith(QLatin1String(".ssdr_waveform")),
+                     "native package downloads over HTTPS as a .ssdr_waveform");
+        ok &= expect(native.version.endsWith(QLatin1String("-native")),
+                     "native pin names the version the waveform reports");
+        const QString nativeCache = TailnetShimDownloader::cachePath(P::Native);
+        ok &= expect(QFileInfo(nativeCache).fileName() == QLatin1String("AetherTailnet.ssdr_waveform")
+                         && nativeCache.contains(native.version),
+                     "native cache is AetherTailnet.ssdr_waveform, per version");
+        ok &= expect(TailnetShimDownloader::cachePath() == TailnetShimDownloader::cachePath(P::Container)
+                         && TailnetShimDownloader::cachePath(P::Container) != nativeCache,
+                     "container cache is the default and separate from the native one");
+        TailnetShimDownloader nativeDownloader(P::Native);
+        ok &= expect(nativeDownloader.package() == P::Native
+                         && TailnetShimDownloader().package() == P::Container,
+                     "a downloader keeps the package it was made for");
+    }
+
+    // Update: offered only for an older release than the pin, by number.
+    {
+        using tailnetshim::updateAvailable;
+        ok &= expect(updateAvailable(QStringLiteral("0.5.0"), QStringLiteral("0.5.1")),
+                     "0.5.0 -> 0.5.1 is an update");
+        ok &= expect(!updateAvailable(QStringLiteral("0.5.1"), QStringLiteral("0.5.1"))
+                         && !updateAvailable(QStringLiteral("0.6.0"), QStringLiteral("0.5.1")),
+                     "the same or a newer release is not");
+        ok &= expect(updateAvailable(QStringLiteral("0.4.10"), QStringLiteral("0.5.0"))
+                         && !updateAvailable(QStringLiteral("0.5.10"), QStringLiteral("0.5.9")),
+                     "compared as numbers, not text");
+        ok &= expect(updateAvailable(QStringLiteral("0.5.0-native"), QStringLiteral("0.5.1-native"))
+                         && !updateAvailable(QStringLiteral("0.5.1-native"),
+                                             QStringLiteral("0.5.1-native")),
+                     "a -native suffix is ignored");
+        ok &= expect(!updateAvailable(QString(), QStringLiteral("0.5.1"))
+                         && !updateAvailable(QStringLiteral("dev"), QStringLiteral("0.5.1")),
+                     "an unreadable version never offers an update");
+        ok &= expect(tailnetshim::pinnedVersion(false) == QLatin1String(TailnetShimRelease::kVersion)
+                         && tailnetshim::pinnedVersion(true)
+                                == QLatin1String(TailnetShimNativeRelease::kVersion),
+                     "each package is compared with its own pin");
+    }
+
+    // Earlier releases' verified copies are removed; the current ones and
+    // anything else in the folder stay.
+    {
+        QTemporaryDir cache;
+        const QDir dir(cache.path());
+        const QString container = QFileInfo(TailnetShimDownloader::cachePath()).fileName();
+        const QString nativeDir = QFileInfo(QFileInfo(TailnetShimDownloader::cachePath(
+            TailnetShimPackage::Native)).absolutePath()).fileName();
+        auto touch = [&](const QString& rel) {
+            dir.mkpath(QFileInfo(dir.filePath(rel)).path());
+            QFile f(dir.filePath(rel));
+            return f.open(QIODevice::WriteOnly) && f.write("x") == 1;
+        };
+        ok &= expect(touch(QStringLiteral("flex-tailnet-shim-0.4.1.tar.gz"))
+                         && touch(QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz"))
+                         && touch(container)
+                         && touch(QStringLiteral("aether-tailnet-0.5.0-native/AetherTailnet.ssdr_waveform"))
+                         && touch(nativeDir + QStringLiteral("/AetherTailnet.ssdr_waveform"))
+                         && touch(QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz.part"))
+                         && touch(QStringLiteral("aether-health-0.1.0/AetherHealth.ssdr_waveform"))
+                         && touch(QStringLiteral("notes.txt")),
+                     "cache fixture written");
+        QStringList removed = TailnetShimDownloader::removeStaleCopies(cache.path());
+        removed.sort();
+        ok &= expect(removed == QStringList({QStringLiteral("aether-tailnet-0.5.0-native"),
+                                             QStringLiteral("flex-tailnet-shim-0.4.1.tar.gz"),
+                                             QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz")}),
+                     "earlier releases removed");
+        ok &= expect(dir.exists(container) && dir.exists(nativeDir)
+                         && dir.exists(QStringLiteral("flex-tailnet-shim-0.5.0.tar.gz.part"))
+                         && dir.exists(QStringLiteral("aether-health-0.1.0"))
+                         && dir.exists(QStringLiteral("notes.txt")),
+                     "current pins, partial downloads and other files kept");
+        ok &= expect(TailnetShimDownloader::removeStaleCopies(cache.path()).isEmpty(),
+                     "nothing left to remove the second time");
+    }
+
+    // Configure… and Reset find the shim in either package, and nothing else.
+    ok &= expect(isTailnetShimWaveform(QStringLiteral("flex-tailnet-shim"), true),
+                 "container shim recognized");
+    ok &= expect(isTailnetShimWaveform(QStringLiteral("AetherTailnet"), false),
+                 "native shim recognized");
+    ok &= expect(!isTailnetShimWaveform(QStringLiteral("AetherTailnet"), true)
+                     && !isTailnetShimWaveform(QStringLiteral("flex-tailnet-shim"), false),
+                 "a name in the other package's slot is not the shim");
+    ok &= expect(!isTailnetShimWaveform(QStringLiteral("AetherRadioProbe"), false)
+                     && !isTailnetShimWaveform(QString(), false),
+                 "other waveforms are not the shim");
 
     // Link telemetry (/v1/session): the shape tools/flex-tailnet-shim
     // telemetry.go encodes, summed over this client's sessions and streams.

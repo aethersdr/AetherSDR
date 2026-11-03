@@ -25,6 +25,7 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store"
 	"tailscale.com/tsnet"
 )
 
@@ -66,7 +67,12 @@ func (c provisionConfig) shareDiscovered() bool {
 // swapped in-process: nothing is known to restart a container whose process
 // exits, so the shim never relies on exiting to reconfigure itself.
 type Node struct {
-	StateDir  string
+	StateDir string
+	// RunDir, when set, holds tsnet's logs and caches on volatile storage,
+	// leaving only the node's identity in StateDir. A legacy waveform on a
+	// FLEX-6000 persists to a small flash partition that continuous log
+	// writes would wear and fill.
+	RunDir    string
 	RadioAddr string
 	MaxMTU    int
 	Discovery *Discovery
@@ -132,8 +138,43 @@ type Node struct {
 	splices liveSplices // station-device splices in progress, for revocation
 }
 
-func (n *Node) cfgPath() string   { return filepath.Join(n.StateDir, "provision.json") }
-func (n *Node) tsnetDir() string  { return filepath.Join(n.StateDir, "tsnet") }
+func (n *Node) cfgPath() string  { return filepath.Join(n.StateDir, "provision.json") }
+func (n *Node) tsnetDir() string { return filepath.Join(n.StateDir, "tsnet") }
+
+// tsnetRunDir is where tsnet keeps everything but the node's identity.
+func (n *Node) tsnetRunDir() string {
+	if n.RunDir == "" {
+		return n.tsnetDir()
+	}
+	return filepath.Join(n.RunDir, "tsnet")
+}
+
+// newTsnetServer configures tsnet. With a RunDir, the identity goes to a
+// file store at the path tsnet would itself use in StateDir, so moving
+// between the two layouts keeps the node.
+func (n *Node) newTsnetServer(hostname, authKey string) (*tsnet.Server, error) {
+	srv := &tsnet.Server{
+		Hostname: hostname,
+		Dir:      n.tsnetDir(),
+		AuthKey:  authKey,
+		Logf:     func(string, ...any) {},
+		UserLogf: withoutURLs(log.Printf),
+	}
+	if n.RunDir == "" {
+		return srv, nil
+	}
+	for _, d := range []string{n.tsnetDir(), n.tsnetRunDir()} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return nil, err
+		}
+	}
+	st, err := store.New(func(string, ...any) {}, filepath.Join(n.tsnetDir(), "tailscaled.state"))
+	if err != nil {
+		return nil, err
+	}
+	srv.Dir, srv.Store = n.tsnetRunDir(), st
+	return srv, nil
+}
 func (n *Node) provisioned() bool { return n.cfg.TokenSHA256 != "" }
 
 func (n *Node) load() error {
@@ -315,12 +356,10 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	n.mu.Unlock()
 	n.setState(stateStarting, "")
 
-	srv := &tsnet.Server{
-		Hostname: cfg.Hostname,
-		Dir:      n.tsnetDir(),
-		AuthKey:  authKey,
-		Logf:     func(string, ...any) {},
-		UserLogf: withoutURLs(log.Printf),
+	srv, err := n.newTsnetServer(cfg.Hostname, authKey)
+	if err != nil {
+		n.setState(stateError, err.Error())
+		return err
 	}
 	// The local client starts tsnet, so the sign-in state can be watched
 	// while Up waits; without an auth key the timeout stops counting once
@@ -669,8 +708,10 @@ func (n *Node) stop(logout bool) error {
 		srv.Close()
 	}
 	if logout {
-		if err := os.RemoveAll(n.tsnetDir()); err != nil {
-			errs = append(errs, fmt.Errorf("could not delete the tailnet state: %w", err))
+		for _, d := range []string{n.tsnetDir(), n.tsnetRunDir()} {
+			if err := os.RemoveAll(d); err != nil {
+				errs = append(errs, fmt.Errorf("could not delete the tailnet state: %w", err))
+			}
 		}
 	}
 	return errors.Join(errs...)
@@ -990,7 +1031,7 @@ func (n *Node) statusLocked() Status {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	st := Status{
-		Version: shimVersion, Provisioned: n.provisioned(), State: n.state,
+		Version: version(), Provisioned: n.provisioned(), State: n.state,
 		Hostname: n.cfg.Hostname, DNSName: n.dnsName, Allow: n.cfg.Allow,
 		LastError: n.lastError,
 		Claimable: !n.provisioned() || n.cfg.PendingSignIn,

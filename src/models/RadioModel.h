@@ -34,6 +34,7 @@
 #include "SliceModel.h"
 #include "MeterModel.h"
 #include "PanadapterModel.h"
+#include "PanBandTransitions.h"
 #include "ProfileLoadPanWriteQueue.h"
 #include "TunerModel.h"
 #include "AmpModel.h"
@@ -490,6 +491,13 @@ public:
     // nothing to be honest about, and blanking the controls on unplug would look
     // like a fault rather than a fact about the radio.
     bool hasDaxStreams() const;
+    // Whether the connected radio declares a transmit monitor (MON on/volume)
+    // or voice-operated transmit (VOX on/level/delay): RadioCapabilities::
+    // txMonitorControl / voxControl. Same permissive disconnected rule as
+    // hasDaxStreams(). Where false, the TCI, CAT, shortcut and MIDI roads to
+    // those controls refuse instead of flipping a model value nothing consumes.
+    bool transmitMonitorAvailable() const;
+    bool voxAvailable() const;
 
     // True for 2-SCU radios that support diversity RX, from the FlexLib-sourced
     // ModelCapabilities table (Principle I).  Replaces the hand-maintained
@@ -1115,6 +1123,71 @@ public:
                                   QObject* replyContext = nullptr,
                                   const RadioControlCompletion& completion = {},
                                   std::optional<RadioControlSession> expectedSession = {});
+    ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest& request,
+                                       QObject* replyContext = nullptr,
+                                       const RadioControlCompletion& completion = {});
+    // Replace a container's environment and recreate it: clear the staged
+    // environment, stage each variable, recreate, wait for the radio's `waveform
+    // restarted` status and for a container status carrying the new environment,
+    // and clear the stage again (acknowledged) so it cannot leak into a later
+    // deploy. Staging is radio-wide, so the first clear also drops anything
+    // another client staged. One apply at a time; an empty environment is refused
+    // because the radio keeps the old one when nothing is staged. false = refused
+    // before anything was sent. The completion runs exactly once unless
+    // replyContext is destroyed first.
+    bool applyWaveformEnvironment(const QString& name, const WaveformEnvironment& environment,
+                                  QObject* replyContext,
+                                  std::function<void(const WaveformEnvApplyResult&)> completion);
+    bool waveformEnvironmentApplyActive() const { return m_waveformEnvApplyActive; }
+    // This client staged variables on the connected radio and has not seen an
+    // acknowledged clear since, so that radio may still hold them for its next
+    // deploy. Tied to the radio's serial: another radio is never affected. A new
+    // session to the same radio sends one clear automatically.
+    bool waveformEnvironmentStagingUncertain() const;
+    // An acknowledged `waveform env clear`; on success the staging is known clear.
+    bool clearWaveformEnvironmentStaging(QObject* replyContext, const RadioControlCompletion& completion);
+    // A container's environment as the radio last reported it, or nullopt when no
+    // container of that name is installed. Values may be secrets.
+    std::optional<QMap<QString, QString>> waveformContainerEnvironment(const QString& name) const;
+    // The radio's NTP time sources as it last reported them, in arrival order
+    // (SmartSDR 4.3.16, capabilities().ntpSourceControl). Nothing is kept locally.
+    const QList<NtpSourceState>& ntpSources() const { return m_ntpSources; }
+    // Refused while an edit of the same id is in flight. With expectedSession,
+    // a different session answers Cancelled and sends nothing.
+    ReceiveDispatch requestNtpSource(const NtpSourceRequest& request,
+                                     QObject* replyContext = nullptr,
+                                     const RadioControlCompletion& completion = {},
+                                     std::optional<RadioControlSession> expectedSession = {});
+    // Edit a source. The radio has no update verb, so this removes it and creates
+    // it again with the same id (FlexLib Radio.cs ReplaceNtpSource): a disabled
+    // source is disabled again, and a refused create restores the original. The
+    // row stays in ntpSources() throughout and shows its pre-edit Enabled state.
+    // false = refused before anything was sent (invalid definition, unknown id,
+    // another session, or a replace of that id already in flight). The
+    // completion runs once unless replyContext is destroyed first.
+    struct NtpSourceReplaceResult {
+        enum class Outcome {
+            Replaced,    // the new definition is on the radio
+            Unchanged,   // the remove was refused; nothing changed
+            Restored,    // the new definition was refused; the original was re-created
+            Lost,        // removed, and neither definition could be created again
+            Cancelled,   // the session ended mid-replace; the radio's list is the truth
+            NoAnswer,    // a step timed out; the radio's list is the truth
+        };
+        Outcome outcome{Outcome::Unchanged};
+        QString message;
+    };
+    bool replaceNtpSource(const NtpSourceDefinition& definition, QObject* replyContext,
+                          std::function<void(const NtpSourceReplaceResult&)> completion,
+                          std::optional<RadioControlSession> expectedSession = {});
+    bool ntpSourceReplaceActive(const QString& id) const { return m_ntpReplacing.contains(id); }
+    // Enabled as the Time page shows it: the pre-edit state while an edit is in
+    // flight (FlexLib's enabled pin), otherwise what the radio reports.
+    bool ntpSourceEnabledShown(const NtpSourceState& source) const
+    {
+        const auto guard = m_ntpReplacing.constFind(source.id);
+        return guard != m_ntpReplacing.cend() ? guard->wasEnabled : source.enabled;
+    }
     void createMemory(const MemoryEntry& entry, QObject* replyContext,
                       const MemoryCreateCompletion& completion,
                       std::optional<RadioControlSession> expectedSession = {});
@@ -1218,6 +1291,13 @@ signals:
     // lets surfaces tell "radio lacks this" from "no radio", which restores the
     // permissive value (MainWindow::applyCapabilitiesToUi).
     void capabilitiesChanged(bool connected, const RadioCapabilities& caps);
+    // An installed container's environment changed (name), or the list of
+    // installed waveforms did (empty name).
+    void waveformContainersChanged(const QString& name);
+    // waveformEnvironmentApplyActive() or waveformEnvironmentStagingUncertain() changed.
+    void waveformEnvironmentStagingChanged();
+    // ntpSources() or a replace in flight changed.
+    void ntpSourcesChanged();
     void transmitFrequencyCheckChanged(bool on);
     // Straight-key-shaped local CW edges (serial key line, TCI `keyer:trx`,
     // MIDI/keyboard/HID), all via sendCwKey; drives the local sidetone
@@ -1314,7 +1394,13 @@ signals:
     // load deferral, so clients can order dependent radio commands around the
     // real `display pan set ... band=...` write.
     void panBandAboutToDispatch(const QString& panId);
+    // Emitted synchronously by removePanadapter() just before the remove
+    // command, while the pan can still be written to.
+    void panAboutToRemove(const QString& panId);
     void panBandDispatchFailed(const QString& panId);
+    // The pan's last outstanding band change has settled: its reply (or a
+    // dispatch failure) arrived, after the new band's own rates (#6791).
+    void panBandSettled(const QString& panId);
     // Emitted when createPanadapter() is blocked because the radio's pan limit is reached.
     void panadapterLimitReached(int limit, const QString& model);
     // Emitted when the radio rejects a slice create command (e.g. limit reached across
@@ -1931,6 +2017,8 @@ private:
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
+    friend class WaveformEnvTestAccess;
+    friend class NtpSourcesTestAccess;
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
     friend class TransmitDaxHoldTestAccess;
@@ -2103,6 +2191,31 @@ private:
     UsbCableModel       m_usbCableModel;
     DaxIqModel          m_daxIqModel;
     FlexWaveformModel   m_flexWaveformModel;
+    bool m_waveformEnvApplyActive{false};
+    bool m_waveformEnvStagingUncertain{false};
+    QString m_waveformEnvStagingSerial;
+    std::optional<RadioControlSession> m_waveformEnvAutoClearSession;
+    void setWaveformEnvironmentStagingState(bool active, bool uncertain, const QString& serial);
+    void autoClearWaveformEnvironmentStaging(bool connected, const RadioCapabilities& caps);
+    int  m_waveformEnvConfirmTimeoutMs{60000};
+    QList<NtpSourceState> m_ntpSources;
+    // An edit in flight, by id. The row is kept through the radio's `removed`
+    // (removedSeen) until its re-create status arrives, as FlexLib does; the
+    // guard outlives the operation only while that status is still due.
+    struct NtpReplaceGuard {
+        bool wasEnabled{true};
+        bool operating{true};
+        bool removedSeen{false};
+    };
+    QHash<QString, NtpReplaceGuard> m_ntpReplacing;
+    std::optional<RadioControlSession> m_ntpSubscribedSession;
+    void applyNtpSourceChanges(const NtpSourceDelta& delta);
+    ReceiveDispatch dispatchNtpSource(const NtpSourceRequest& request, QObject* replyContext,
+                                      const RadioControlCompletion& completion,
+                                      std::optional<RadioControlSession> expectedSession);
+    void endNtpSourceReplace(const QString& id, NtpSourceReplaceResult::Outcome outcome);
+    // Subscribe once per session where the radio has NTP sources; clear otherwise.
+    void syncNtpSources(bool connected, const RadioCapabilities& caps);
     DStarModel          m_dstarModel{nullptr, true};
 
     // NetCW stream — VITA-49 UDP delivery for low-latency CW keying
@@ -2611,8 +2724,8 @@ private:
     enum class NetState { Off, Excellent, VeryGood, Good, Fair, Poor };
     void applyAdaptiveFrameRate(NetState newState, NetState oldState);
     static int fpsCapForState(NetState s);  // single source of truth; see obs. 1 in PR review
-    // adaptiveWfRateForCap() moved to the public network-diagnostics section (#4261).
-    void sendAdaptiveCapToPan(const QString& panId, int fpsCap);
+    // adaptiveWfRateForCap() and sendAdaptiveCapToPan() are in the public
+    // network-diagnostics section (#4261).
     double networkQualityTargetScore(int pingMs) const;
     NetState networkStateForScore(double score, NetState currentState) const;
     bool usesRemoteNetworkThresholds() const;
@@ -2657,6 +2770,7 @@ private:
     static constexpr qint64 THROTTLE_MIN_DWELL_MS = 5000;
     qint64 m_lastThrottleEngageMs{0};   // QDateTime::currentMSecsSinceEpoch() at last engage
     bool   m_pendingThrottleLift{false}; // lift deferred by min-dwell; fired in evaluateNetworkQuality()
+    PanBandTransitions m_panBandTransitions;
 
     // Backend-reported transport stats for non-Flex families, which have no
     // m_connection/m_panStream. Populated only from
@@ -2727,6 +2841,14 @@ public:
     // cap's own status echo while distinguishing it from a real radio/profile
     // update (#4261).
     int     adaptiveWfRateForCap(int fpsCap) const;
+    // Send one pan the adaptive cap's FPS and waterfall rate. Public so
+    // MainWindow can put the cap back on after a band change while capped.
+    // Does nothing while the pan has a band change in flight.
+    void    sendAdaptiveCapToPan(const QString& panId, int fpsCap);
+    // True while a band change sent to this pan awaits its reply: the client
+    // does not hold the new band's rates yet (see PanBandTransitions).
+    bool    panBandInFlight(const QString& panId) const
+    { return m_panBandTransitions.inFlight(panId); }
     QString networkQuality()   const;
     int     packetLossWindowSeconds() const { return NETWORK_LOSS_WINDOW_SAMPLES; }
     int     packetLossWindowDrops() const { return m_packetLossWindowErrors; }

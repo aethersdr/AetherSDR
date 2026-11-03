@@ -27,6 +27,7 @@ adding a field is one row there plus one case in `tests/async_log_writer_test.cp
 | `grid` / `grid_square` / `locator` / `maidenhead`, keyword or whitespace form | fully redacted |
 | Hostname after `connecting to`, `connected to`, `reconnecting to`, `disconnected from`, `connect to`, `disconnecting from`, `pin for` — **only when the token looks like a host** (dotted name, or label followed by `:port`) | fully redacted, `:port` preserved |
 | URL authority (`scheme://user:pass@host`) | fully redacted, path preserved |
+| Flex waveform container environment: a staged `waveform env KEY=value` and a reported `waveform container … env=<base64>` | value fully redacted to the end of the line / the token; the key and container name stay readable |
 
 Each of these is matched in bare, single-quoted, double-quoted, JSON and
 Qt-escaped (`\"value\"`) spellings, because they all share one value grammar.
@@ -83,8 +84,7 @@ It cannot help with:
    pass through `formatLine()`.
 4. **Files that are not the timestamped app log.** The SpotHub feed logs
    (`<config>/AetherSDR/spothub/…`) are written directly by
-   `DxClusterClient`, `N1MMSpotClient`, `SpotCollectorClient`, `WsjtxClient`
-   and `FreeDvClient`, and never pass through `AsyncLogWriter`. They are not
+   `DxClusterClient`, `N1MMSpotClient`, `WsjtxClient` and `FreeDvClient`, and never pass through `AsyncLogWriter`. They are not
    collected into a support bundle, which is why they are a documented
    limitation here rather than a redactor change.
 5. **Third-party library logging** that writes to stderr on its own.

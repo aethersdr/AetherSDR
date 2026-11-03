@@ -255,6 +255,8 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
             m_alert = text;
             emit alertChanged(m_alert);
         });
+        connect(m_directConn, &TgxlConnection::antennaNamesChanged,
+                this, &TunerModel::antennaNamesChanged);
         // Clear a stale alert on disconnect — it describes a tuner we can no
         // longer see, and the tuner's own clear can never reach us now.
         connect(m_directConn, &TgxlConnection::disconnected, this, [this]() {
