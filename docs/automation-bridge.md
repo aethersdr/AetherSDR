@@ -2614,7 +2614,7 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 | `action` | `value` | effect |
 |---|---|---|
 | `create` (alias `add`) | — | request a new panadapter through the backend's declared lifecycle control. |
-| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. It matters more on this verb — `setPanCenter()` clamps only the low edge, so an unguarded out-of-range centre is stored and advertised over TCI (`dds:`) even though the radio rejects it. |
+| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. Optimistic receive controls also clamp to a declared pan-centre range, where present; confirmed receive controls retain backend validation. The low edge of the display stays at or above 0 Hz. Without a declared range, an unguarded out-of-range centre can still be stored and advertised over TCI (`dds:`) even though the radio rejects it. |
 | `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | request removal of owned pan(s). Flex requests cleanup of the original paired waterfall too. A single target preserves the last pan; `all` allows requesting its removal but never overrides a native refusal or foreign ownership. |
 
 Replies describe request admission, not observed completion — re-poll `get pans`.

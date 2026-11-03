@@ -214,6 +214,16 @@ The **AG** applet (Antennas & Switching) controls a 4O3A Antenna Genius.
 | RF-KIT Amplifier | HTTP (REST/JSON) | 8080 |
 | LP-100A Meter | Serial (115200 8N1) or a ser2net host in raw mode | 2000 |
 
+### LP-100A diagnostics
+
+Check the LP-100A warnings in **Help → Support & Diagnostics...**. The
+no-data warning includes the age of the last poll accepted by the transport,
+or says that no poll has been sent since connecting. Acceptance means the
+transport queued the byte; it does not confirm delivery to the meter.
+
+When valid records resume, a warning reports how long the silence lasted.
+The warning pair survives reconnects to the same endpoint. Changing the host,
+port, serial device or connection mode starts a new diagnostic session.
 Changing the computer's clock does not delay LP-100A polling, gauge-range
 changes or no-data warnings. These timers follow elapsed time, so a clock
 correction does not require reconnecting the meter.

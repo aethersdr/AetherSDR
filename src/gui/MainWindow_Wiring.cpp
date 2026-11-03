@@ -4,6 +4,8 @@
 // panFollowVfo()/revealFrequencyIfNeeded().
 
 #include "MainWindow.h"
+#include "ControlAvailabilityRegistry.h"
+#include "HGauge.h"
 #include "StatusIndicator.h"
 #include "models/CwDecodeSettings.h"
 #include "PeripheralAuthStore.h"
@@ -7892,6 +7894,12 @@ void MainWindow::wireMeters()
 
     // ── Meter applet: all meters consolidated ──────────────────────────────
     m_appletPanel->meterApplet()->setMeterModel(&m_radioModel.meterModel());
+    {
+        auto* supplyAvailability = new ControlAvailabilityRegistry(m_radioModel, this);
+        supplyAvailability->registerWidget(m_appletPanel->meterApplet()->supplyGauge(),
+            MeterApplet::supplyVoltageUnavailableReason(),
+            &MeterApplet::supplyVoltageAvailable);
+    }
 
     // ── PROF applet: Global / TX / Mic profile switcher (#3376) ─────────────
     m_appletPanel->profileSwitcherApplet()->setRadioModel(&m_radioModel);
