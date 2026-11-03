@@ -946,7 +946,8 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         m_catStats[cat].bytes += data.size();
         m_catStats[cat].packets++;
         auto& stats = m_streamStats[streamId];
-        if (stats.packetClassCode != 0 && stats.packetClassCode != pcc) {
+        if (stats.packetClassCode != 0
+            && (stats.packetClassCode != pcc || stats.category != cat)) {
             m_queuedAudioBytes -= stats.reorder.queuedBytes();
             stats.reorder.reset();
             ++stats.generation;

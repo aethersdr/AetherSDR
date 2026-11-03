@@ -184,6 +184,24 @@ int main(int argc, char** argv)
         check(frames == 480 && stream.packetErrorCount() == 0,
               "reused stream starts without concealment from its old instance");
     }
+    {
+        PanadapterStream stream;
+        int speakerFrames = 0;
+        int daxFrames = 0;
+        QObject::connect(&stream, &PanadapterStream::pcmFrameReady,
+            [&speakerFrames](const PcmFrame& frame) { speakerFrames += frame.frameCount(); });
+        QObject::connect(&stream, &PanadapterStream::daxPcmReady,
+            [&daxFrames](int, const PcmFrame& frame) { daxFrames += frame.frameCount(); });
+        VitaSequenceLossLogTestAccess::feed(stream, packet(0, 0x03e3, pcm(0, true)), 0);
+        VitaSequenceLossLogTestAccess::feed(stream, packet(2, 0x03e3, pcm(2, true)), 1);
+        stream.registerDaxStream(kStream, 1);
+        VitaSequenceLossLogTestAccess::feed(stream, packet(3, 0x03e3, pcm(3, true)), 2);
+        VitaSequenceLossLogTestAccess::flush(stream, 100);
+        check(speakerFrames == 240 && daxFrames == 240
+              && VitaSequenceLossLogTestAccess::queuedBytes(stream) == 0
+              && stream.packetErrorCount() == 0,
+              "late DAX registration retires queued speaker audio before changing its route");
+    }
     std::printf("vita_rx_reorder_audio: %d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }
