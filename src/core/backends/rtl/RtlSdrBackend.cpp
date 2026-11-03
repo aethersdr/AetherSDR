@@ -215,6 +215,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // Receiver admission is an explicitly qualified profile. Settings-domain
     // ownership changes only after a successful accepted-state migration.
     RadioCapabilities c;
+    c.cwTextControl = std::nullopt;
     // THE dBm AXIS IS UNCALIBRATED, and on this backend that is not a nuance:
     // RtlSdrDdc's FFT path computes `20 * log10(mag / kFftSize)` on raw ADC
     // magnitudes and emits that straight out as the spectrum frame. There is no

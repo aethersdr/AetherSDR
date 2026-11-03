@@ -910,6 +910,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexSetupControls.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexCwxControls.cpp
     src/core/backends/flex/FlexWaveformEnvControls.cpp
     src/core/backends/flex/FlexNtpSourceControls.cpp
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
