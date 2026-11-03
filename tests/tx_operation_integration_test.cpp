@@ -2363,6 +2363,31 @@ void serialInputQueueLifetimes()
     check(f.commands.isEmpty(), "serial press captured before reconnect cannot acquire in replacement session");
 }
 
+void serialFootswitchUsesProducerPttPaths()
+{
+    Fixture f;
+    SerialPortController source;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer(&source);
+    source.setTxProducer(producer);
+    // Mirrors MainWindow_Controllers' serial wiring: both edges go through
+    // the normal PTT-on / PTT-off paths (Quindar, RADE end-of-over).
+    QObject::connect(&source, &SerialPortController::externalPttChanged, &f.radio,
+        [&](bool down, const TxCoordinator::Request& input) {
+            if (down) {
+                (void)f.radio.requestProducerPttOn(input, TransmitModel::PttSource::Mox);
+            } else {
+                f.radio.requestProducerPttOff(input, TransmitModel::PttSource::Mox);
+            }
+        }, Qt::QueuedConnection);
+    const auto drain = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall); };
+    TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
+    drain();
+    check(f.commands == QStringList({"mox:on"}), "serial footswitch press keys");
+    TxOperationIntegrationTestAccess::serialPtt(source, false);
+    drain();
+    check(f.commands == QStringList({"mox:on", "mox:off"}), "serial footswitch release unkeys once");
+}
+
 // Both test-injection entry points tear the old backend down, which closes
 // admission for the dying session. Neither is followed by an onConnected()
 // edge, so each has to drain the latch itself or every later TX intent in that
@@ -3050,6 +3075,7 @@ int main(int argc, char** argv)
     scopedWsprRoutes();
     cwxCallbackLifetimes();
     serialInputQueueLifetimes();
+    serialFootswitchUsesProducerPttPaths();
     testInjectionReopensAdmission();
     grantedModelBindingAndHandoff();
     grantedModelWireStopIdentity();

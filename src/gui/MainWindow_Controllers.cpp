@@ -2794,7 +2794,13 @@ void MainWindow::wireExternalControllers()
     });
     connect(m_serialPort, &SerialPortController::externalPttChanged,
             this, [this](bool active, const TxCoordinator::Request& input) {
-        (void)m_radioModel.setProducerTransmit(input, active, TransmitModel::PttSource::Mox);
+        // Both edges go through the normal PTT paths so the footswitch gets the
+        // same tails as MOX: Quindar intro/outro and RADE end-of-over.
+        if (active) {
+            (void)m_radioModel.requestProducerPttOn(input, TransmitModel::PttSource::Mox);
+        } else {
+            m_radioModel.requestProducerPttOff(input, TransmitModel::PttSource::Mox);
+        }
     });
     connect(m_serialPort, &SerialPortController::cwKeyChanged,
             this, [this](bool down, const TxCoordinator::Request& input) {
