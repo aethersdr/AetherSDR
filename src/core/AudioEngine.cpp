@@ -223,9 +223,12 @@ qsizetype rawEquivalentAudioBytes(qsizetype bytes, int sampleRate,
         bytes * producerRate / sampleRate);
 }
 
+enum class TrimSearch { AroundRequested, AtOrAfterRequested };
+
 qsizetype quietStereoFloatTrimPoint(const QByteArray& buffer,
                                     qsizetype requestedBytes,
-                                    int sampleRate)
+                                    int sampleRate,
+                                    TrimSearch search)
 {
     constexpr qsizetype kFrameBytes = 2 * static_cast<qsizetype>(sizeof(float));
     constexpr int kTrimSearchMs = 6;
@@ -243,8 +246,8 @@ qsizetype quietStereoFloatTrimPoint(const QByteArray& buffer,
 
     const qsizetype searchFrames =
         std::max<qsizetype>(1, sampleRate * kTrimSearchMs / 1000);
-    const qsizetype begin =
-        std::max<qsizetype>(1, requestedFrame - searchFrames);
+    const qsizetype begin = search == TrimSearch::AtOrAfterRequested
+        ? requestedFrame : std::max<qsizetype>(1, requestedFrame - searchFrames);
     const qsizetype end =
         std::min<qsizetype>(frames - 1, requestedFrame + searchFrames);
     const auto* samples = reinterpret_cast<const float*>(buffer.constData());
@@ -290,10 +293,11 @@ void fadeInStereoFloatFront(QByteArray& buffer, int sampleRate)
     }
 }
 
-void dropAudioBufferFront(QByteArray& buffer, qsizetype bytes, int sampleRate)
+void dropAudioBufferFront(QByteArray& buffer, qsizetype bytes, int sampleRate,
+                          TrimSearch search = TrimSearch::AroundRequested)
 {
     const qsizetype dropBytes =
-        std::min(quietStereoFloatTrimPoint(buffer, bytes, sampleRate),
+        std::min(quietStereoFloatTrimPoint(buffer, bytes, sampleRate, search),
                  alignedStereoFloatBytes(buffer.size()));
     if (dropBytes > 0) {
         buffer.remove(0, dropBytes);
@@ -5612,7 +5616,9 @@ void AudioEngine::trimMainRxBuffers(qsizetype targetRawBytes)
         if (!m_rxOutputBuffer.isEmpty()) {
             const qsizetype outputFrames =
                 (excess / kFrameBytes * outputRate + producerRate - 1) / producerRate;
-            dropAudioBufferFront(m_rxOutputBuffer, outputFrames * kFrameBytes, outputRate);
+            // A cut before the required bound would reapply the fade on the next pass.
+            dropAudioBufferFront(m_rxOutputBuffer, outputFrames * kFrameBytes, outputRate,
+                                 TrimSearch::AtOrAfterRequested);
         } else if (!m_rxPackets.empty()) {
             // Queue overflow is not missing input. Advance NR/strip/SRC history
             // with the received samples, then trim only speaker-ready output.

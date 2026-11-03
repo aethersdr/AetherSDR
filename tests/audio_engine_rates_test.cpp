@@ -63,6 +63,15 @@ public:
         }
         return result;
     }
+    static void appendOutput(AudioEngine& engine, const QByteArray& pcm)
+    {
+        engine.m_rxOutputBuffer.append(pcm);
+    }
+    static QByteArray outputPcm(const AudioEngine& engine) { return engine.m_rxOutputBuffer; }
+    static void trimMain(AudioEngine& engine, qsizetype rawBytes)
+    {
+        engine.trimMainRxBuffers(rawBytes);
+    }
     static qsizetype outputBytes(const AudioEngine& engine)
     {
         return engine.m_rxOutputBuffer.size();
@@ -814,6 +823,44 @@ bool enableEffect(AudioEngine& engine, Effect effect)
     return false;
 }
 
+void steadyOutputOverflowFade()
+{
+    const auto maxDelta = [](const QByteArray& pcm) {
+        const auto* samples = reinterpret_cast<const float*>(pcm.constData());
+        double maximum = 0.0;
+        for (qsizetype index = 2; index < pcm.size() / sizeof(float); index += 2) {
+            maximum = std::max(maximum,
+                std::fabs(static_cast<double>(samples[index]) - samples[index - 2]));
+        }
+        return maximum;
+    };
+    for (int deviceRate : {24000, 48000, 192000}) {
+        Fixture fixture(deviceRate);
+        const qsizetype capFrames = deviceRate / 10;
+        const qsizetype burstFrames = deviceRate * 128 / 24000;
+        const QByteArray burst = bytes(QVector<float>(burstFrames * 2, 0.25f));
+        AudioEngineRatesTestAccess::appendOutput(fixture.engine,
+            bytes(QVector<float>((capFrames + burstFrames) * 2, 0.25f)));
+        AudioEngineRatesTestAccess::trimMain(fixture.engine, 2400 * kFrameBytes);
+        const QByteArray first = AudioEngineRatesTestAccess::outputPcm(fixture.engine);
+        AudioEngineRatesTestAccess::appendOutput(fixture.engine, burst);
+        AudioEngineRatesTestAccess::trimMain(fixture.engine, 2400 * kFrameBytes);
+        const QByteArray second = AudioEngineRatesTestAccess::outputPcm(fixture.engine);
+        check(first.size() == capFrames * kFrameBytes
+                  && second.size() == first.size(),
+              "repeated steady overflow retains the same bounded speaker tail");
+        check(finite(first) && finite(second), "overflow fade stays finite");
+        check(!first.isEmpty() && reinterpret_cast<const float*>(first.constData())[0] < 0.25f,
+              "overflow still applies the existing playback fade");
+        const double firstStep = maxDelta(first);
+        const double secondStep = maxDelta(second);
+        std::printf("steady overflow device=%d firstStep=%g secondStep=%g\n",
+            deviceRate, firstStep, secondStep);
+        check(first == second && secondStep <= firstStep + 1.0e-7,
+              "one overflow cannot compound the fade into a sharper transition");
+    }
+}
+
 // Replay genuine contiguous input with and without delayed device draining.
 // Post-DSP samples must match even when the speaker backlog has to be dropped.
 void overflowPreservesDspHistory()
@@ -1259,7 +1306,7 @@ void printUsage(const char* program)
         "transitionsAndRejection|queueBudgetsAndDeviceTransitions|concurrentSourcesAndEffects|"
         "effects-bypass|effects-EQ|effects-NR2|effects-RN2|effects-NR4|"
         "effects-DFNR|effects-MNR|kiwiDeviceRateMatrix|processingStateReset|"
-        "legacyReplacementAndKiwiReset|fixedProcessingDomains|overflowPreservesDspHistory|revokedDelayReduction]\n", program);
+        "legacyReplacementAndKiwiReset|fixedProcessingDomains|overflowPreservesDspHistory|revokedDelayReduction|steadyOutputOverflowFade]\n", program);
 }
 
 std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
@@ -1296,6 +1343,7 @@ std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
              AudioCase{"fixedProcessingDomains", std::nullopt},
              AudioCase{"overflowPreservesDspHistory", std::nullopt},
              AudioCase{"revokedDelayReduction", std::nullopt},
+             AudioCase{"steadyOutputOverflowFade", std::nullopt},
          }) {
         if (std::strcmp(name, candidate.name) == 0) {
             return candidate;
@@ -1368,6 +1416,9 @@ int main(int argc, char** argv)
     if (selected("fixedProcessingDomains")) { runStage("fixedProcessingDomains", fixedProcessingDomains); }
     if (selected("revokedDelayReduction")) {
         runStage("revokedDelayReduction", revokedDelayReduction);
+    }
+    if (selected("steadyOutputOverflowFade")) {
+        runStage("steadyOutputOverflowFade", steadyOutputOverflowFade);
     }
     if (selected("overflowPreservesDspHistory")) {
         runStage("overflowPreservesDspHistory", overflowPreservesDspHistory);
