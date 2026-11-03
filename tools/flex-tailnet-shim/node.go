@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/client/local"
@@ -122,6 +123,8 @@ type Node struct {
 	joinGen uint64
 
 	telemetry linkTelemetry // per-peer path, RTT and throughput (telemetry.go)
+	// telemetryReadAt is when /v1/session was last read (UnixNano, 0 = never).
+	telemetryReadAt atomic.Int64
 
 	// authorize is the allowlist check for station-device flows, set while
 	// the node runs. Nil refuses every flow. check is the same verdict with
@@ -455,6 +458,10 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 			return net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(local, 0)))
 		},
 		ClientTX: tx, ClientPrime: prime, ClientOut: out,
+		// Same source as ClientOut (the node's address, port 4993), so the
+		// client sees no difference between the two paths.
+		Inject:    srv.Sys().Tun.Get().InjectOutbound,
+		InjectSrc: netip.AddrPortFrom(ip4, 4993),
 		Authorize: n.authorizer(lc),
 		MaxMTU:    n.MaxMTU,
 	}
