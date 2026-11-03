@@ -103,25 +103,57 @@ enum class FrameHit { Client, Caption, Left, Right, Top, Bottom, TopLeft, TopRig
 
 // WM_NCHITTEST carries the screen point being asked about in physical pixels,
 // while Qt's widget geometry — and so TitleBar::isSystemMoveAreaAt() — is in
-// logical ones. Converting through the window's own two rects keeps the
-// rounding the platform actually applied, rather than re-deriving it from a
-// device pixel ratio that may not divide evenly (#6825).
+// logical ones.
 //
-// `physical` and `windowPhysical` come from WM_NCHITTEST and GetWindowRect;
-// `windowLogical` is the same window as Qt sees it (QWidget::frameGeometry()).
-// The answer is the matching point in Qt's global logical space, so the
-// caption test asks about the point Windows asked about rather than wherever
-// the pointer happens to be.
-inline QPoint logicalScreenPoint(const QPoint& physical, const QRect& windowPhysical,
-                                 const QRect& windowLogical)
+// The conversion must anchor on the CLIENT area, not the window rect. On
+// Windows 11 GetWindowRect includes the invisible DWM resize border, which
+// Qt's frame geometry does not: measured here, a 1414 px window rect around a
+// 1401 px client, 6 px of it on the left (and the rect overhangs the screen
+// while maximized). Scaling one onto the other skews every mapped point by
+// that inset, which put the right half of the ☰ glyph into HTCAPTION — a
+// press there started a window move instead of opening the menu (#6272's
+// class, found in review on #6830). The client origin and Qt's own widget
+// origin describe the same area, so pairing those two cannot skew.
+//
+// `physical` is the WM_NCHITTEST point; `clientOriginPhysical` is the client
+// area's top-left in screen pixels (GetClientRect + ClientToScreen);
+// `widgetOriginLogical` is that same corner as Qt places it
+// (QWidget::mapToGlobal({0, 0})). `dpr` is devicePixelRatioF().
+inline QPoint logicalScreenPoint(const QPoint& physical, const QPoint& clientOriginPhysical,
+                                 const QPoint& widgetOriginLogical, qreal dpr)
 {
-    if (windowPhysical.width() <= 0 || windowPhysical.height() <= 0) {
+    if (!(dpr > 0)) {
         return physical;
     }
-    const qreal sx = qreal(windowLogical.width()) / qreal(windowPhysical.width());
-    const qreal sy = qreal(windowLogical.height()) / qreal(windowPhysical.height());
-    return QPoint(windowLogical.left() + qRound((physical.x() - windowPhysical.left()) * sx),
-                  windowLogical.top() + qRound((physical.y() - windowPhysical.top()) * sy));
+    return QPoint(widgetOriginLogical.x() + qRound((physical.x() - clientOriginPhysical.x()) / dpr),
+                  widgetOriginLogical.y() + qRound((physical.y() - clientOriginPhysical.y()) / dpr));
+}
+
+// The caption-height half of the main window's WM_NCHITTEST gate, hoisted out
+// of nativeEvent so the wiring itself is testable: `isMoveArea` is asked about
+// the message's own point, converted through the client origin, and the height
+// is measured from the client top rather than from the window rect — which
+// while maximized starts above it. Returns 0 (no caption) when the bar is
+// absent or the point is not a move area. (#6830 review)
+//
+// `windowTop` is GetWindowRect's top; `clientOriginPhysical` the client's
+// top-left in screen pixels; `widgetOriginLogical` the same corner per Qt;
+// `barHeightLogical` the title bar's height; `dpr` devicePixelRatioF().
+template <typename MoveAreaTest>
+inline int captionHeightForHitTest(const QPoint& physical, int windowTop,
+                                   const QPoint& clientOriginPhysical,
+                                   const QPoint& widgetOriginLogical,
+                                   int barHeightLogical, qreal dpr,
+                                   MoveAreaTest&& isMoveArea)
+{
+    if (barHeightLogical <= 0) {
+        return 0;
+    }
+    if (!isMoveArea(logicalScreenPoint(physical, clientOriginPhysical,
+                                       widgetOriginLogical, dpr))) {
+        return 0;
+    }
+    return clientOriginPhysical.y() - windowTop + int(barHeightLogical * dpr);
 }
 
 inline FrameHit expandedFrameHit(const QPoint& point, const QRect& window, int borderX, int borderY,

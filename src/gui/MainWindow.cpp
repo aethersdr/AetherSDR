@@ -3905,6 +3905,11 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
         const QRect rect(window.left, window.top,
                          window.right - window.left, window.bottom - window.top);
+        // The client area's top-left in screen pixels. GetWindowRect includes
+        // the invisible DWM resize border and Qt's geometry does not, so the
+        // caption gate anchors here instead — see logicalScreenPoint().
+        POINT clientOrigin{0, 0};
+        ClientToScreen(msg->hwnd, &clientOrigin);
         // The bar's height is in logical pixels and WM_NCHITTEST is physical.
         // Only the bar's empty background may answer HTCAPTION: over its tabs,
         // menus and buttons that is what closed menus as they opened (#6272),
@@ -3918,12 +3923,12 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         // isCaptionMoveAreaAt() is isSystemMoveAreaAt() minus the drag handles
         // that carry a tooltip: a caption gets WM_NCMOUSEMOVE, which never
         // starts Qt's tooltip timer, so those would lose their hover text.
-        int captionHeight = 0;
-        if (m_titleBar && m_titleBar->isVisible()
-            && m_titleBar->isCaptionMoveAreaAt(
-                WindowChrome::logicalScreenPoint(point, rect, frameGeometry()))) {
-            captionHeight = int(m_titleBar->height() * devicePixelRatioF());
-        }
+        const bool barShown = m_titleBar && m_titleBar->isVisible();
+        const int captionHeight = WindowChrome::captionHeightForHitTest(
+            point, window.top, QPoint(clientOrigin.x, clientOrigin.y),
+            mapToGlobal(QPoint(0, 0)), barShown ? m_titleBar->height() : 0,
+            devicePixelRatioF(),
+            [this](const QPoint& logical) { return m_titleBar->isCaptionMoveAreaAt(logical); });
         *result = frameHitCode(
             WindowChrome::expandedFrameHit(point, rect, borderX, borderY, captionHeight));
         return true;

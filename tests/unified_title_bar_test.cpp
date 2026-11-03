@@ -257,37 +257,106 @@ int main(int argc, char** argv)
     // ── WM_NCHITTEST answers for the point it carries, not the cursor (#6825) ──
     {
         // The message's coordinate is physical; isSystemMoveAreaAt() needs Qt's
-        // logical global space. Converting through the window's own two rects
-        // keeps whatever rounding the platform applied.
-        const QRect physical(200, 100, 2000, 1200);   // GetWindowRect
-        const QRect logical(100, 50, 1000, 600);      // QWidget::frameGeometry()
+        // logical global space. The conversion anchors on the CLIENT origin,
+        // because GetWindowRect carries the invisible DWM resize border that
+        // Qt's frame geometry does not.
+        //
+        // Real Windows 11 geometry measured on this PR, 100% scale: a window
+        // rect of x=253 w=1414 around a client at x=259 w=1401 — 6 px of
+        // border on the left. The widget origin is the same corner as Qt sees
+        // it, so these two describe the same area and cannot skew.
+        const QPoint clientOrigin(259, 300);
+        const QPoint widgetOrigin(259, 300);
 
-        check(WindowChrome::logicalScreenPoint(physical.topLeft(), physical, logical)
-                  == logical.topLeft(),
-              "the window origin maps to the window origin");
-        check(WindowChrome::logicalScreenPoint(QPoint(1200, 700), physical, logical)
-                  == QPoint(600, 350),
-              "a point at DPR 2 halves its offset from the window origin");
+        check(WindowChrome::logicalScreenPoint(clientOrigin, clientOrigin, widgetOrigin, 1.0)
+                  == widgetOrigin,
+              "the client origin maps to the widget origin");
 
-        // A fractional ratio (150% scaling) must not drift: 2000/1333 is not 2.
-        const QRect physical150(0, 0, 1333, 800);
-        const QRect logical150(0, 0, 889, 533);
-        const QPoint mid = WindowChrome::logicalScreenPoint(QPoint(666, 400),
-                                                            physical150, logical150);
-        check(mid.x() >= 443 && mid.x() <= 446 && mid.y() >= 265 && mid.y() <= 268,
-              "a non-integer scale maps the midpoint to the midpoint");
+        // The regression this replaces: scaling GetWindowRect onto Qt's frame
+        // geometry shifted every point by the border inset, so a press on the
+        // right of the ☰ glyph answered HTCAPTION and started a window move.
+        // Anchored on the client, a point 36 px into the client stays 36 px in.
+        check(WindowChrome::logicalScreenPoint(QPoint(259 + 36, 326), clientOrigin,
+                                               widgetOrigin, 1.0)
+                  == QPoint(259 + 36, 326),
+              "a point inside the client keeps its offset, with no border skew");
 
-        // Degenerate rects must not divide by zero.
-        check(WindowChrome::logicalScreenPoint(QPoint(7, 9), QRect(), logical) == QPoint(7, 9),
-              "an empty window rect returns the point unchanged");
+        // The window rect's own left edge is 6 px outside the client, and must
+        // map to a negative offset rather than to the widget origin.
+        check(WindowChrome::logicalScreenPoint(QPoint(253, 300), clientOrigin, widgetOrigin, 1.0)
+                  == QPoint(253, 300),
+              "a point in the resize border maps outside the widget, not onto its origin");
+
+        // DPR 2: offsets halve, and the origin still anchors the result.
+        const QPoint hiClient(400, 200);
+        const QPoint hiWidget(200, 100);
+        check(WindowChrome::logicalScreenPoint(QPoint(400, 200), hiClient, hiWidget, 2.0)
+                  == hiWidget,
+              "at DPR 2 the client origin still maps to the widget origin");
+        check(WindowChrome::logicalScreenPoint(QPoint(600, 400), hiClient, hiWidget, 2.0)
+                  == QPoint(300, 200),
+              "a point at DPR 2 halves its offset from the client origin");
+
+        // A fractional ratio (150% scaling) must not drift.
+        const QPoint p150 = WindowChrome::logicalScreenPoint(QPoint(400 + 150, 200),
+                                                             hiClient, hiWidget, 1.5);
+        check(p150.x() == 300 && p150.y() == 100,
+              "a non-integer scale divides the offset without drifting");
+
+        // A zero or negative ratio must not divide by zero.
+        check(WindowChrome::logicalScreenPoint(QPoint(7, 9), clientOrigin, widgetOrigin, 0.0)
+                  == QPoint(7, 9),
+              "a zero device pixel ratio returns the point unchanged");
 
         // The whole point of the conversion: two different physical points in
         // the same message stream map to two different logical points, so the
         // caption test can distinguish them while the cursor sits elsewhere.
-        const QPoint a = WindowChrome::logicalScreenPoint(QPoint(400, 160), physical, logical);
-        const QPoint b = WindowChrome::logicalScreenPoint(QPoint(1800, 160), physical, logical);
+        const QPoint a = WindowChrome::logicalScreenPoint(QPoint(400, 160), clientOrigin,
+                                                          widgetOrigin, 1.0);
+        const QPoint b = WindowChrome::logicalScreenPoint(QPoint(1800, 160), clientOrigin,
+                                                          widgetOrigin, 1.0);
         check(a != b && a.y() == b.y(),
               "two queried points stay distinct after conversion");
+
+        // ── The gate itself, not just the conversion ───────────────────────
+        // Real Windows 11 maximized geometry: the window rect starts 6 px
+        // above and left of the client and overhangs the screen.
+        const int windowTop = 294;              // GetWindowRect top
+        const QPoint maxClient(259, 300);       // client origin, 6 px inside
+        const QPoint maxWidget(259, 300);
+        const int barHeight = 52;
+
+        // Which point the gate asks about: record it, so a revert to the live
+        // cursor (or to the window rect) is visible as a different answer.
+        QPoint asked(-1, -1);
+        auto recording = [&asked](const QPoint& p) {
+            asked = p;
+            return true;
+        };
+        const int h = WindowChrome::captionHeightForHitTest(
+            QPoint(259 + 36, 326), windowTop, maxClient, maxWidget, barHeight, 1.0, recording);
+        check(asked == QPoint(259 + 36, 326),
+              "the gate asks about the message's own point, client-anchored");
+        checkEqual(h, (300 - 294) + 52,
+                   "the caption spans the frame inset plus the bar, measured from the client top");
+
+        // A point the move-area test rejects yields no caption at all.
+        auto never = [](const QPoint&) { return false; };
+        checkEqual(WindowChrome::captionHeightForHitTest(QPoint(300, 326), windowTop, maxClient,
+                                                         maxWidget, barHeight, 1.0, never),
+                   0, "a point outside the move area gives no caption");
+
+        // No bar (or a hidden one) must never produce a caption, and must not
+        // consult the move-area test at all.
+        bool consulted = false;
+        auto noting = [&consulted](const QPoint&) {
+            consulted = true;
+            return true;
+        };
+        checkEqual(WindowChrome::captionHeightForHitTest(QPoint(300, 326), windowTop, maxClient,
+                                                         maxWidget, 0, 1.0, noting),
+                   0, "a hidden title bar gives no caption");
+        check(!consulted, "a hidden title bar does not consult the move-area test");
     }
 
     // ── A tooltipped drag handle stays client, so its tooltip survives ──────
@@ -310,6 +379,10 @@ int main(int argc, char** argv)
         auto* timer = tipBar->findChild<QLabel*>(QStringLiteral("txTimerLabel"));
         auto* gutter = tipBar->findChild<QWidget*>(QStringLiteral("titleBarDragGutter"));
         check(timer && gutter, "tooltip probe finds the transmit timer and the drag gutter");
+        // Assert visibility rather than folding it into the guard: if the timer
+        // ever stops showing while transmitting, these checks must fail loudly
+        // instead of quietly not running.
+        check(timer && timer->isVisible(), "the transmit timer shows while transmitting");
         if (timer && gutter && timer->isVisible()) {
             check(!timer->toolTip().isEmpty(), "the transmit timer carries a tooltip");
             check(gutter->toolTip().isEmpty(), "the drag gutter carries no tooltip");
