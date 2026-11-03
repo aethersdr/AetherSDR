@@ -127,7 +127,6 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 ## Transmit
 
 - **SSB voice** uses WDSP's TXA modulator. The EQ, PROC, TX low/high cut, eSSB, ALC and compression gauges act on the HL2.
-- **MON** and its volume slider, and **VOX** and its level slider, are disabled because these controls are unavailable on the HL2. Their tooltips and accessible descriptions explain why.
 - **The Mic Level slider is the transmit level.** The ALC only ever reduces. The Phone panel shows the **ALC Gain** the radio reports.
 - **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
@@ -140,6 +139,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
 - **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
 - **TX drive and LNA gain** are remembered per band.
+- **MON** and its volume slider, and **VOX** and its level slider, are disabled because these controls are unavailable on the HL2. Their tooltips and accessible descriptions explain why.
 
 > **Upgrading from an older version:** CW keys at the same carrier level as TUNE, about 6 dB (four times the power) above earlier versions at the same RF power setting. Check your RF power before you key CW into an amplifier or a low-power load.
 
