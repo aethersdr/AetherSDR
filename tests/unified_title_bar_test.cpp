@@ -290,6 +290,48 @@ int main(int argc, char** argv)
               "two queried points stay distinct after conversion");
     }
 
+    // ── A tooltipped drag handle stays client, so its tooltip survives ──────
+    // Over a caption Windows sends WM_NCMOUSEMOVE, which Qt delivers as
+    // NonClientAreaMouseMove; that never starts the tooltip timer. Measured on
+    // Windows 11: every HTCAPTION point suppressed its tooltip, every HTCLIENT
+    // point showed it. So isCaptionMoveAreaAt() excludes the drag handles that
+    // carry one, while isSystemMoveAreaAt() — the bar's own drag, shared with
+    // Linux — still accepts them. (#6830 review)
+    {
+        QWidget tipHost;
+        auto* tipBar = new TitleBar(&tipHost);
+        tipHost.resize(1400, 200);
+        tipHost.show();
+        app.processEvents();
+
+        tipBar->setOperatorTransmitting(true);
+        app.processEvents();
+
+        auto* timer = tipBar->findChild<QLabel*>(QStringLiteral("txTimerLabel"));
+        auto* gutter = tipBar->findChild<QWidget*>(QStringLiteral("titleBarDragGutter"));
+        check(timer && gutter, "tooltip probe finds the transmit timer and the drag gutter");
+        if (timer && gutter && timer->isVisible()) {
+            check(!timer->toolTip().isEmpty(), "the transmit timer carries a tooltip");
+            check(gutter->toolTip().isEmpty(), "the drag gutter carries no tooltip");
+
+            const QPoint onTimer = timer->mapToGlobal(timer->rect().center());
+            const QPoint onGutter = gutter->mapToGlobal(gutter->rect().center());
+
+            // Both are drag handles: the bar's own drag accepts either.
+            check(tipBar->isSystemMoveAreaAt(onTimer),
+                  "the transmit timer is still a drag handle for the bar's own move");
+            check(tipBar->isSystemMoveAreaAt(onGutter),
+                  "the drag gutter is a drag handle");
+
+            // Only the tooltip-free one may answer HTCAPTION.
+            check(!tipBar->isCaptionMoveAreaAt(onTimer),
+                  "a tooltipped drag handle does not become the caption, so its tooltip shows");
+            check(tipBar->isCaptionMoveAreaAt(onGutter),
+                  "the bare drag gutter still becomes the caption, so Snap works");
+        }
+        tipBar->setOperatorTransmitting(false);
+    }
+
     // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──
     {
         // Rects measured on Windows 10: the expanded frame keeps an 8 px resize

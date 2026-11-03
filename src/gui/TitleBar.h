@@ -122,6 +122,14 @@ public:
 
     bool isSystemMoveAreaAt(const QPoint& globalPos) const;
 
+    // Windows only: the subset of isSystemMoveAreaAt() that may answer
+    // HTCAPTION. Over a caption Windows sends WM_NCMOUSEMOVE, which Qt
+    // delivers as NonClientAreaMouseMove and which never starts the tooltip
+    // timer, so a drag handle carrying a tooltip would silently lose its
+    // hover text (#6830 review). Those keep HTCLIENT and still drag through
+    // the bar's own startSystemMove(); they just do not start a Snap drag.
+    bool isCaptionMoveAreaAt(const QPoint& globalPos) const;
+
     // ── Radio tabs ──────────────────────────────────────────────────────────
     // The strip of per-radio tabs plus the "+" discovered-radios popover.
     // MainWindow feeds these from discovery + the active connection.

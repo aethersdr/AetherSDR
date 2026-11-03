@@ -841,6 +841,23 @@ bool TitleBar::isSystemMoveAreaAt(const QPoint& globalPos) const
     return false;
 }
 
+bool TitleBar::isCaptionMoveAreaAt(const QPoint& globalPos) const
+{
+    if (!isSystemMoveAreaAt(globalPos)) {
+        return false;
+    }
+    // A tooltip on the widget under the point (or on the drag handle holding
+    // it) would never appear once Windows treats this as caption, so leave
+    // those points client. The bare background has no child and no tooltip.
+    for (QWidget* widget = childAt(mapFromGlobal(globalPos)); widget && widget != this;
+         widget = widget->parentWidget()) {
+        if (!widget->toolTip().isEmpty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool TitleBar::startWindowMove(QMouseEvent* ev)
 {
     if (!ev || ev->button() != Qt::LeftButton)

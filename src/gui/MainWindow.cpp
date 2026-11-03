@@ -3914,9 +3914,13 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         // Ask about the point in the message, not QCursor::pos(): WM_NCHITTEST
         // answers for the coordinate it carries, which WindowFromPoint() and
         // the shell may query while the pointer is somewhere else entirely.
+        //
+        // isCaptionMoveAreaAt() is isSystemMoveAreaAt() minus the drag handles
+        // that carry a tooltip: a caption gets WM_NCMOUSEMOVE, which never
+        // starts Qt's tooltip timer, so those would lose their hover text.
         int captionHeight = 0;
         if (m_titleBar && m_titleBar->isVisible()
-            && m_titleBar->isSystemMoveAreaAt(
+            && m_titleBar->isCaptionMoveAreaAt(
                 WindowChrome::logicalScreenPoint(point, rect, frameGeometry()))) {
             captionHeight = int(m_titleBar->height() * devicePixelRatioF());
         }
