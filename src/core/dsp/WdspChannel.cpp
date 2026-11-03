@@ -1008,9 +1008,6 @@ bool WdspChannel::setFilterTaps(int taps) noexcept
 
 bool WdspChannel::setMinimumPhase(bool on) noexcept
 {
-    if (m_config.direction != Direction::Receive) {
-        return false;
-    }
     if (on == m_config.minimumPhase) {
         return true;
     }
@@ -1021,8 +1018,15 @@ bool WdspChannel::setMinimumPhase(bool on) noexcept
         // RXASetMP does not stop the channel, but it does run every mask
         // through mp_imp_exec, which plans and executes FFTs at nc * pfactor.
         // Same planner, same lock.
+        // TXASetMP, the transmit counterpart, is the same shape: it re-runs
+        // the transmit bandpasses and FM filters through the same conversion
+        // and does not stop the channel either.
         const std::scoped_lock setupLock(g_setupMutex);
-        RXASetMP(m_channelId, on ? 1 : 0);
+        if (m_config.direction == Direction::Receive) {
+            RXASetMP(m_channelId, on ? 1 : 0);
+        } else {
+            TXASetMP(m_channelId, on ? 1 : 0);
+        }
     }
     m_config.minimumPhase = on;
     endControlOperation();
@@ -1377,17 +1381,14 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
             "WDSP TX FM deviation is outside Config::kMinFmDeviationHz..kMaxFmDeviationHz");
         return false;
     }
-    // Receive only: filterTaps reaches WDSP solely through open()'s RXASetNC
-    // and is read only by minimumNotchWidthHz(), both of which are RX-side. A
-    // transmit channel has none of the six cores RXASetNC addresses, so
-    // constraining it there would refuse geometries nothing can be hurt by.
+    // Both directions: filterTaps reaches WDSP through RXASetNC on receive and
+    // TXASetNC on transmit, and fircore partitions the same way behind both.
     //
     // THIS IS THE SAME CLAUSE setFilterTaps() APPLIES, deliberately. Without it
     // here, create() and reconfigure() were a second door into exactly the
     // corruption the setter refuses -- see filterTapsArePartitionable() above
     // for the measured cost of walking through it.
-    if (config.direction == Direction::Receive &&
-        !filterTapsArePartitionable(config.filterTaps, config.dspBlockSize)) {
+    if (!filterTapsArePartitionable(config.filterTaps, config.dspBlockSize)) {
         setError(error,
                  "WDSP filter taps must be a power of two in [256, 16384] and "
                  "an exact multiple of the DSP block size");
@@ -1687,6 +1688,10 @@ bool WdspChannel::open() noexcept
         // ctcss_run = 1 (100 Hz, level 0.10), and no host-modulated radio here
         // has a tone-encode control to carry a value in Config.
         SetTXACTCSSRun(m_channelId, 0);
+        // The transmit mirror of RXASetNC / RXASetMP above. With the defaults
+        // (2048, linear) this changes nothing: create_txa already builds 2048.
+        TXASetNC(m_channelId, m_config.filterTaps);
+        TXASetMP(m_channelId, m_config.minimumPhase ? 1 : 0);
     }
     // Cache what this open measured, right now, while we still hold the setup
     // lock -- a kill or a crash before exit must not throw the measurement away.

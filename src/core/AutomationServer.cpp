@@ -2868,6 +2868,7 @@ const QStringList& getModelNames()
         QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
         QStringLiteral("display"),
         QStringLiteral("waveforms"),
+        QStringLiteral("ntp"),
         QStringLiteral("kiwi"),
     };
     return kModels;
@@ -6212,6 +6213,30 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = radioSnapshot(radio);
     } else if (model == QLatin1String("gps")) {
         data = gpsSnapshot(radio);
+    } else if (model == QLatin1String("ntp")) {
+        // The radio's own NTP time sources as it last reported them (#6953).
+        const std::optional<RadioCapabilities::NtpSourceControl> control =
+            radio->backendCapabilities().ntpSourceControl;
+        QJsonArray sources;
+        for (const NtpSourceState& n : radio->ntpSources()) {
+            sources.append(QJsonObject{
+                {QStringLiteral("id"), n.id},
+                {QStringLiteral("address"), n.address},
+                {QStringLiteral("directive"), n.directive},
+                {QStringLiteral("description"), n.description},
+                {QStringLiteral("enabled"), n.enabled},
+                {QStringLiteral("selected"), n.selected},
+                {QStringLiteral("inUse"), n.inUse()},
+                {QStringLiteral("prefer"), n.prefer},
+                {QStringLiteral("state"), n.state},
+                {QStringLiteral("stratum"), n.stratum},
+                {QStringLiteral("reach"), n.reach},
+                {QStringLiteral("updating"), radio->ntpSourceReplaceActive(n.id)},
+            });
+        }
+        data = QJsonObject{{QStringLiteral("available"), control.has_value()},
+                           {QStringLiteral("maxSources"), control ? control->maxSources : 0},
+                           {QStringLiteral("sources"), sources}};
     } else if (model == QLatin1String("transmit")) {
         data = transmitSnapshot(&radio->transmitModel(),
                                 radio->backendCapabilities().hasDownwardExpander,
@@ -11343,8 +11368,9 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
 
     if (action == QLatin1String("center")) {
         // Same contract as `tune` — see refuseUntunableMhz(). It matters more
-        // here: RadioModel::setPanCenter() clamps only the LOW edge, so an
-        // out-of-range centre is optimistically stored and advertised over TCI
+        // here: optimistic receive controls clamp the LOW edge and any declared
+        // receivePanCenterControl. Without a declared range, an out-of-range
+        // centre can still be optimistically stored and advertised over TCI
         // (`dds:`) even though the radio rejects it — the same silent no-op as
         // #4550, one verb over.
         double mhz = 0.0;

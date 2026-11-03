@@ -42,6 +42,9 @@ signals:
 struct LocalDiscoveryOptions {
     bool local{false}; // Explicit operator opt-in: LAN broadcasts/listening and USB scans.
     bool simulator{false}; // Demo identity only; never starts an RX/TX backend.
+    // IPv4 addresses probed by unicast for an HL2 a broadcast cannot reach
+    // (another subnet). Only meaningful with `local`; never connects.
+    QStringList hl2Addresses;
 };
 
 // Implementation lives below the vendor seam. Above-seam consumers see only
