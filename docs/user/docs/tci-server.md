@@ -100,6 +100,12 @@ WSJT-X takes CAT, PTT **and audio** over TCI, so there are no sound-card devices
 
 **Settings → Radio**, choose **TCI** and enter `localhost:50001`. Log4OM receives spots, and clicking a spot in AetherSDR sends `clicked_on_spot` back to it.
 
+For spots supplied by a FlexRadio, AetherSDR forwards the radio's click
+notification to TCI clients as `rx_clicked_on_spot`, including clicks made in
+SmartSDR or Maestro. The radio's panadapter handle identifies the receiver.
+If that handle is zero or cannot be matched, the notification uses the first
+slice.
+
 ### CW Skimmer and SDC
 
 Point SDC or CW Skimmer at AetherSDR's TCI port. IQ flows as DAX IQ at 24, 48, 96 or 192 kHz within the connected model’s [DAX IQ limits](./dax-iq-streaming.md#limits) (SDC negotiates 96 kHz), and `dds:` follows the panadapter center. Up to **four** IQ subscriptions can run at once, so several skimmers can share one server. Receivers on the same panadapter share its IQ stream, so four independent bands need four panadapters. IQ is not offered as int16 or over `wss`. Requests outside an identified model’s supported `iq_samplerate` rates leave the rate unchanged and return the current rate. A valid rate negotiated before model identification is remembered without starting IQ streams; it is applied within the model’s limits once the model is known. A retained 192 kHz subscription uses 96 kHz on a model limited to 96 kHz, then returns to 192 kHz when a capable model is connected.
