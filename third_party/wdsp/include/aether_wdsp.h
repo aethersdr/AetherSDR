@@ -369,6 +369,11 @@ void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
 void SetTXAAMCarrierLevel(int channel, double carrierLevel);
 void SetTXAFMDeviation(int channel, double deviationHz);
 void SetTXACTCSSRun(int channel, int run);
+// TXA counterparts of RXASetNC / RXASetMP (TXA.c): bp0/bp1/bp2, the FM filters
+// and (NC only) the CFIR. TXASetNC stops and restores the channel; `nc` is a
+// power of two >= the DSP size. TXASetMP does not stop it.
+void TXASetNC(int channel, int nc);
+void TXASetMP(int channel, int mp);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength
 // meters. RXA_ADC_PK / RXA_ADC_AV measure the POST-DDC slice, which is a
 // different question from the HL2's own pre-DDC full-spectrum clip

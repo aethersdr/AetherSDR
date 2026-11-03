@@ -435,7 +435,9 @@ AetherSDR carries the local changes documented below in the otherwise exact
     `create_minphase()`'s four plans (`FFTW_ESTIMATE` since patch 12). FFTW
     planning is not thread-safe. Both callers of `RXASetMP()` hold the setup
     mutex: `WdspChannel::open()`, and `WdspChannel::setMinimumPhase()`, which
-    `Hl2RxDsp` calls on a mode change into or out of CW (#5498).
+    `Hl2RxDsp` calls on a mode change into or out of CW (#5498). The same two
+    sites call `TXASetMP()` on a transmit channel, under the same mutex
+    (`Hl2TxDsp` switches phase between USB/LSB and the other modes).
     **Anything that toggles minimum phase outside that mutex is the line to
     revisit.** Raised by the reviewer on #5697 and recorded here rather than
     left in a review thread.
