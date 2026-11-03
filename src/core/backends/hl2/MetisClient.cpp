@@ -1,6 +1,7 @@
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2EmergencyStop.h"
 #include "core/LogManager.h"   // lcHl2 — commanded-NCO breadcrumbs
+#include "core/TxChainLatency.h"
 
 #include <QElapsedTimer>
 #include <QThread>
@@ -1298,12 +1299,22 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
     if (m_mox == was)
         return;
 
+    // The key-down report (#6052): armed on the rising edge, disarmed on the
+    // falling one so an over that never carried queued IQ says nothing.
+    m_keyDownReportPending = m_mox;
+    if (m_mox) {
+        m_keyDownUnderflowBase = m_txUnderflowSamples;
+        m_keyDownPrimeHoldBase = m_txPrimeHoldPackets;
+    }
+
     // THE BANDSCOPE'S TRANSMIT INTERLOCK, on the edges of the one member that
     // is the final authority for keying on the wire (buildNextControlPacket
     // reads exactly this, ANDed with the gate). The HL2 receives while it
     // transmits and hears its own PA at enormous strength, so a block taken
     // under MOX is a picture of us, at a level with no relation to the band.
     if (m_mox) {
+        // An over starts here, so the TX IQ queue's prime is armed (#6052).
+        armTxIqPrime();
         // Abandon whatever cycle was in flight rather than let it finish: the
         // packets still to come would be transmit-contaminated, and half a
         // clean block merged with half a keyed one is worse than no block.
@@ -1371,7 +1382,7 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
         // CW owns the IQ stream until PTT drops. Voice already queued behind a
         // manual MOX must not leak into the spaces between elements. Abandoned,
         // not dropped -- uncounted for the same reason as clearCwKeying().
-        m_txIq.clear();
+        abandonTxIq();
         m_cwEnvelope = 0.0;
         // ...but a starvation in progress ended at this instant, not at the
         // unkey that eventually follows.
@@ -1392,7 +1403,7 @@ void MetisClient::clearCwKeying()
     // Audio captured while CW owned the stream is stale; dropping it keeps a CW exit
     // under held PTT from transmitting old mic audio. Not counted as overflow (that
     // counts carry-loss, not a deliberate abandon), but the underflow run ends here.
-    m_txIq.clear();
+    abandonTxIq();
     reportTxUnderflowRun();
 }
 
@@ -1406,7 +1417,7 @@ void MetisClient::queueTxIq(std::span<const std::complex<float>> iq, const TxCoo
         // belong to a transmission that is no longer the current one, so this
         // is an abandon of stale audio rather than a FIFO dropping audio it was
         // asked to carry -- see clearCwKeying() for the same distinction.
-        m_txIq.clear();
+        abandonTxIq();
         m_txIqContext = context;
     }
     for (const auto& s : iq)
@@ -1435,12 +1446,52 @@ void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoord
 
 void MetisClient::flushTxIq()
 {
-    m_txIq.clear();
+    abandonTxIq();
     // A flush is how an over ends, so it is also where a starvation that ran
     // to the end of that over stops. Without this the run would sit unreported
     // until the NEXT transmission happened to emit a full packet, and would
     // then be attributed to it.
     reportTxUnderflowRun();
+}
+
+void MetisClient::armTxIqPrime() noexcept
+{
+    m_txIqPrimeTarget = kTxPrimeTargetSamples;
+    m_txIqPrimeHeldPackets = 0;
+}
+
+void MetisClient::abandonTxIq()
+{
+    m_txIq.clear();
+    armTxIqPrime();
+}
+
+bool MetisClient::txIqPrimeHolds()
+{
+    if (m_txIqPrimeTarget == 0)
+        return false;
+    // An empty queue is not a hold: it is the whole-packet underflow the
+    // queued-IQ arm counts.
+    if (m_txIq.empty())
+        return false;
+    const bool reached = m_txIq.size() >= m_txIqPrimeTarget;
+    const bool expired = m_txIqPrimeHeldPackets >= kTxPrimeMaxHoldPackets;
+    if (!reached && !expired) {
+        ++m_txIqPrimeHeldPackets;
+        ++m_txPrimeHoldPackets;
+        return true;
+    }
+    if (!reached)
+        ++m_txPrimeDeadlineReleases;
+    qCDebug(lcHl2Tx) << "HL2 tx fifo: prime let go at depth" << m_txIq.size()
+                     << "of target" << m_txIqPrimeTarget << "after holding"
+                     << m_txIqPrimeHeldPackets << "keyed EP2 packet(s) of silence"
+                     << "with samples waiting"
+                     << (reached ? "(target reached)."
+                                 : "(DEADLINE: the producer stopped short of the target).");
+    m_txIqPrimeTarget = 0;
+    m_txIqPrimeHeldPackets = 0;
+    return false;
 }
 
 void MetisClient::reportTxUnderflowRun()
@@ -1464,6 +1515,34 @@ void MetisClient::reportTxUnderflowRun()
     m_txUnderflowRunSamples = 0;
 }
 
+void MetisClient::reportKeyDown()
+{
+    m_keyDownReportPending = false;
+    m_lastKeyDownUnderflowSamples = m_txUnderflowSamples - m_keyDownUnderflowBase;
+    m_lastKeyDownPrimeHoldPackets = m_txPrimeHoldPackets - m_keyDownPrimeHoldBase;
+    // Both figures are 48 kHz samples: EP2 is clocked at kEp2AudioRateHz and
+    // latencyFrames() is defined at 48 kHz, so they add without conversion.
+    const auto ms = [](double samples) {
+        return QString::number(1000.0 * samples / kEp2AudioRateHz, 'f', 2);
+    };
+    const int chain = TxChainLatency::voiceProcessorFrames();
+    const QString chainText = chain >= 0
+        ? QStringLiteral("%1 frames (%2 ms)").arg(chain).arg(ms(chain))
+        : QStringLiteral("n/a (the transmit audio is not on the microphone path)");
+    qCDebug(lcHl2Tx).nospace().noquote()
+        << "HL2 tx key-down: first queued IQ after "
+        << m_lastKeyDownUnderflowSamples << " samples ("
+        << ms(static_cast<double>(m_lastKeyDownUnderflowSamples))
+        << " ms) of EMPTY-QUEUE keyed silence (txUnderflowSamples since MOX-on)"
+        << " and " << m_lastKeyDownPrimeHoldPackets << " packet(s) ("
+        << ms(static_cast<double>(m_lastKeyDownPrimeHoldPackets * kTxSamplesPerPacket))
+        << " ms) HELD BY THE PRIME with samples waiting (txPrimeHoldPackets since"
+        << " MOX-on); upstream of the queue, TxVoiceProcessor::latencyFrames() = "
+        << chainText
+        << ". None of these includes the WDSP TXA channel's own delay, which is"
+        << " fixed by its configuration and measured offline (hl2_tx_latency_test).";
+}
+
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
 {
     return buildNextControlPacket(controlNowMs());
@@ -1485,7 +1564,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         m_tonePhase = 0.0;
     }
     if (!m_txIqContext.permitsDispatch(TxCoordinator::monotonicMs())) {
-        m_txIq.clear();
+        abandonTxIq();
     }
     static const Cc kCcAdc = ccAdcAssign();
     // Cleared here rather than only on confirmation: a packet built and then
@@ -1612,6 +1691,11 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         while (m_tonePhase > 2.0 * 3.14159265358979323846)
             m_tonePhase -= 2.0 * 3.14159265358979323846;
         ep2WriteTxIq(pkt, block);
+    } else if (keyed && txIqPrimeHolds()) {
+        // The prime's hold (#6052): samples are waiting but the queue is below
+        // its target, so this packet stays the silence ep2Packet filled in and
+        // the queue deepens. Not an underflow; txPrimeHoldPackets() counts it.
+        // After the CW and tone arms, which never reach it.
     } else if (keyed) {
         // Just `keyed`: the arms above take CW and positive tone amplitude, and a NaN
         // m_toneAmp (setTxTestTone's clamp passes NaN) fails both `> 0.0` and `<= 0.0`,
@@ -1641,6 +1725,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
             if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets)
                 reportTxUnderflowRun();
         }
+        if (n > 0 && m_keyDownReportPending)
+            reportKeyDown();
         if (n > 0)
             ep2WriteTxIq(pkt, block);   // a short block leaves the rest as silence
         // n == 0 needs no write at all: ep2Packet already zero-filled the
@@ -1738,7 +1824,7 @@ void MetisClient::sendControlPacket()
     if (!m_txIq.empty()) {
         audioDispatch = m_txIqContext.beginDispatch(TxCoordinator::monotonicMs());
         if (!audioDispatch) {
-            m_txIq.clear();
+            abandonTxIq();
         }
     }
     const auto packet = buildNextControlPacket();

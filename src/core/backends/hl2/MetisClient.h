@@ -389,7 +389,9 @@ public:
     // repeating stale samples or blocking the pacer. Repeating would put a
     // periodic artefact on the air, and blocking would starve the radio's
     // watchdog. Overflow drops the oldest, because on transmit the freshest
-    // audio is the one that matters.
+    // audio is the one that matters. The queue is primed at the start of each
+    // over and again after every abandon (abandonTxIq()): the first samples
+    // wait until kTxPrimeTargetSamples are queued (#6052).
     void queueTxIq(std::span<const std::complex<float>> iq, const TxCoordinator::Context& context);
     // Discard pending transmit audio. Call on unkey: whatever is still queued
     // belongs to the transmission that just ended.
@@ -408,6 +410,26 @@ public:
     [[nodiscard]] std::uint64_t txUnderflowPackets() const noexcept { return m_txUnderflowPackets; }
     [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
     [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
+    // Empty-queue keyed silence at the head of the most recent over that
+    // carried queued IQ, in EP2 samples: txUnderflowSamples from MOX-on to the
+    // first queued sample. Logged at that moment under lcHl2Tx. Same THREAD
+    // CONTRACT as the three above.
+    [[nodiscard]] std::uint64_t lastKeyDownUnderflowSamples() const noexcept
+    {
+        return m_lastKeyDownUnderflowSamples;
+    }
+    // Packets the prime held from MOX-on to the first queued sample, with samples
+    // waiting. With lastKeyDownUnderflowSamples it is the queue's whole share of
+    // the over's leading silence; neither contains the other.
+    [[nodiscard]] std::uint64_t lastKeyDownPrimeHoldPackets() const noexcept
+    {
+        return m_lastKeyDownPrimeHoldPackets;
+    }
+    // Keyed packets sent as silence by the prime with samples waiting (#6052):
+    // not an underflow. Overs the prime let go at its deadline rather than its
+    // target. Totals since process start, I/O thread only, like the three above.
+    [[nodiscard]] std::uint64_t txPrimeHoldPackets() const noexcept { return m_txPrimeHoldPackets; }
+    [[nodiscard]] std::uint64_t txPrimeDeadlineReleases() const noexcept { return m_txPrimeDeadlineReleases; }
 
     // Baseband test tone, offsetHz from the TX carrier, amplitude 0..1 (<= 0
     // disables); takes precedence over queued IQ. Synthesised per EP2 packet with
@@ -788,6 +810,28 @@ private:
     // Roughly a quarter second at 48 kHz. Past this the operator is hearing
     // latency, so dropping is better than growing the backlog.
     static constexpr std::size_t kTxQueueMax = 12000;
+    // THE PRIME (#6052). Delivery is in whole blocks, so an unprimed queue is
+    // empty when each block is due and any lateness is keyed zeros mid-over.
+    // Armed on the keyed edge and on every abandon; the keyed queued-IQ arm then
+    // sends silence until the target is queued. Margin = target - one block:
+    // two blocks (42.67 ms) cover every over measured; that is also the latency.
+    static constexpr std::size_t kTxPrimeBlockSamples = 1024;   // Hl2TxDsp block at 48 kHz; hl2_tx_gate_test pins it
+    static constexpr std::size_t kTxPrimeMarginBlocks = 2;
+    static constexpr std::size_t kTxPrimeTargetSamples =
+        (kTxPrimeMarginBlocks + 1) * kTxPrimeBlockSamples;
+    // Deadline in packets: twice the margin's arrival time. A stopped producer is let go.
+    static constexpr std::uint64_t kTxPrimeMaxHoldPackets =
+        (2 * kTxPrimeMarginBlocks * kTxPrimeBlockSamples)
+            / static_cast<std::size_t>(kTxSamplesPerPacket);
+    static_assert(kTxPrimeTargetSamples < kTxQueueMax,
+                  "the prime target must fit below the overflow bound");
+    std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally
+    std::uint64_t m_txIqPrimeHeldPackets = 0;   // this hold, for the deadline
+    std::uint64_t m_txPrimeHoldPackets = 0;     // process total
+    std::uint64_t m_txPrimeDeadlineReleases = 0;
+    void armTxIqPrime() noexcept;
+    void abandonTxIq();   // every empty-without-transmit; re-arms the prime
+    [[nodiscard]] bool txIqPrimeHolds();   // true: send silence, leave the queue
     // Monotonic for the life of the PROCESS; see the accessors above. Never
     // reset on key, unkey, link loss or a change of radio -- a per-over counter
     // would answer a different question and would lose the drift that
@@ -814,6 +858,16 @@ private:
             / static_cast<std::uint64_t>(kTxSamplesPerPacket);
     std::uint64_t m_txUnderflowRunQuietPackets = 0;
     void reportTxUnderflowRun();
+    // Key-down report (#6052): armed on MOX's rising edge with the underflow and
+    // prime-hold totals, reported once on the first keyed packet carrying queued
+    // IQ. The differences are the silence this queue put at the head of the over
+    // (empty packets, and packets the prime held). CW and the test tone log nothing.
+    bool m_keyDownReportPending = false;
+    std::uint64_t m_keyDownUnderflowBase = 0;
+    std::uint64_t m_lastKeyDownUnderflowSamples = 0;
+    std::uint64_t m_keyDownPrimeHoldBase = 0;
+    std::uint64_t m_lastKeyDownPrimeHoldPackets = 0;
+    void reportKeyDown();
     double m_toneHz = 0.0;
     double m_toneAmp = 0.0;
     double m_tonePhase = 0.0;   // radians, carried across packets
