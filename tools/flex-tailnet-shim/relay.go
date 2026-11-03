@@ -106,7 +106,7 @@ type Session struct {
 	rxPackets, txPackets atomic.Uint64
 
 	pendingMu sync.Mutex
-	pending   map[string]bool // sequence numbers of file upload/download commands
+	pending   map[string]pendingReply // sequence numbers of commands whose replies the relay acts on
 
 	// UDP diagnostics, reported in /v1/status and the caller's /v1/session.
 	fromRadio, toClientErrs, maxDatagram atomic.Uint64
@@ -274,6 +274,7 @@ func (s *Session) radioToClientTCP() {
 					log.Printf("session %d: forwarding radio side channel on TCP %d", s.id, port)
 				}
 			}
+			line = s.rewriteInfoReply(line)
 			if ours, accepted := s.injectedReply(line); ours {
 				if !accepted {
 					log.Printf("session %d: radio refused the MTU clamp: %s", s.id, bytes.TrimSpace(line))
@@ -294,13 +295,24 @@ func (s *Session) radioToClientTCP() {
 
 var (
 	fileCmdRe  = regexp.MustCompile(`^C[A-Z]*(\d+)\|file (upload|download)\b`)
+	infoCmdRe  = regexp.MustCompile(`^C[A-Z]*(\d+)\|info\s*$`)
 	replyRe    = regexp.MustCompile(`^R(\d+)\|0+\|(\d+)\s*$`)
+	okReplyRe  = regexp.MustCompile(`^R\d+\|0+\|`)
 	anyReplyRe = regexp.MustCompile(`^R(\d+)\|`)
+	infoIPRe   = regexp.MustCompile(`([|,]ip=)[^,\s]*`)
 	verbRe     = regexp.MustCompile(`^C[A-Z]*\d+\|([a-z_]+)(?: ([a-z_]+))?`)
 )
 
-// noteCommand remembers file transfer commands, whose replies name a port,
-// and records the command verb for diagnostics.
+// pendingReply is what the relay does with the reply to a remembered command.
+type pendingReply uint8
+
+const (
+	pendingTransfer pendingReply = iota + 1 // file upload/download: the reply names a side-channel port
+	pendingInfo                             // info: the reply names the radio's LAN address
+)
+
+// noteCommand remembers file transfer and `info` commands, whose replies the
+// relay acts on, and records the command verb for diagnostics.
 func (s *Session) noteCommand(line []byte) {
 	if m := verbRe.FindSubmatch(line); m != nil {
 		v := string(m[1])
@@ -310,36 +322,47 @@ func (s *Session) noteCommand(line []byte) {
 		s.relay.verbs.add(v)
 	}
 	if m := fileCmdRe.FindSubmatch(line); m != nil {
-		s.pendingMu.Lock()
-		if s.pending == nil {
-			s.pending = map[string]bool{}
-		}
-		// Bounded: a client that never reads its replies can't grow it.
-		if len(s.pending) < maxPendingTransfers {
-			s.pending[string(m[1])] = true
-		}
-		s.pendingMu.Unlock()
+		s.expectReply(string(m[1]), pendingTransfer)
+	} else if m := infoCmdRe.FindSubmatch(line); m != nil {
+		s.expectReply(string(m[1]), pendingInfo)
 	}
 }
 
-// maxPendingTransfers bounds file transfer commands awaiting a reply.
-const maxPendingTransfers = 64
+// expectReply remembers that the reply to command seq needs what.
+func (s *Session) expectReply(seq string, what pendingReply) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if s.pending == nil {
+		s.pending = map[string]pendingReply{}
+	}
+	// Bounded: a client that never reads its replies can't grow it.
+	if len(s.pending) < maxPendingReplies {
+		s.pending[seq] = what
+	}
+}
+
+// takeReply reports whether the reply to command seq needs what, and if so
+// ends that wait. Any reply to the sequence number, failed ones included,
+// ends it, so a stale entry can never act on a later reply.
+func (s *Session) takeReply(seq string, what pendingReply) bool {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if s.pending[seq] != what {
+		return false
+	}
+	delete(s.pending, seq)
+	return true
+}
+
+// maxPendingReplies bounds commands awaiting a reply the relay acts on.
+const maxPendingReplies = 64
 
 // sideChannelPort returns the port in a successful reply to a pending file
-// transfer command (`R<seq>|0|<port>`), or 0. Any reply to that sequence
-// number, failed ones included, ends its wait, so a stale entry can never
-// open a port for a later reply.
+// transfer command (`R<seq>|0|<port>`), or 0.
 func (s *Session) sideChannelPort(line []byte) int {
 	body := bytes.TrimRight(line, "\r\n")
 	r := anyReplyRe.FindSubmatch(body)
-	if r == nil {
-		return 0
-	}
-	s.pendingMu.Lock()
-	ok := s.pending[string(r[1])]
-	delete(s.pending, string(r[1]))
-	s.pendingMu.Unlock()
-	if !ok {
+	if r == nil || !s.takeReply(string(r[1]), pendingTransfer) {
 		return 0
 	}
 	m := replyRe.FindSubmatch(body)
@@ -351,6 +374,28 @@ func (s *Session) sideChannelPort(line []byte) int {
 		return 0
 	}
 	return port
+}
+
+// rewriteInfoReply puts the address the client dialled into a successful
+// reply to its `info` command, in place of the radio's own `ip=`. That is the
+// radio's LAN address, which a tailnet client can't reach, and a client that
+// connects to the address `info` names rather than the one it was given (as
+// SmartSDR for Mac does) would otherwise time out. Only that reply changes:
+// `radio static_net_params` status is the radio's own setting, which a client
+// may edit and send back. netmask= and gateway= are left as the radio sent
+// them.
+func (s *Session) rewriteInfoReply(line []byte) []byte {
+	body := bytes.TrimRight(line, "\r\n")
+	r := anyReplyRe.FindSubmatch(body)
+	if r == nil || !s.takeReply(string(r[1]), pendingInfo) || !okReplyRe.Match(body) {
+		return line
+	}
+	local, ok := addrPortOf(s.client.LocalAddr())
+	if !ok {
+		return line
+	}
+	out := infoIPRe.ReplaceAll(body, []byte("${1}"+local.Addr().String()))
+	return append(out, line[len(body):]...)
 }
 
 var (

@@ -585,11 +585,80 @@ func TestFailedTransferReplyClearsItsWait(t *testing.T) {
 	if p := s.sideChannelPort([]byte("R7|0|42607\n")); p != 0 {
 		t.Fatalf("a stale wait opened port %d", p)
 	}
-	for i := 0; i < 2*maxPendingTransfers; i++ {
+	for i := 0; i < 2*maxPendingReplies; i++ {
 		s.noteCommand([]byte(fmt.Sprintf("C%d|file upload x\n", 100+i)))
 	}
-	if len(s.pending) > maxPendingTransfers {
-		t.Fatalf("%d waits pending, want at most %d", len(s.pending), maxPendingTransfers)
+	if len(s.pending) > maxPendingReplies {
+		t.Fatalf("%d waits pending, want at most %d", len(s.pending), maxPendingReplies)
+	}
+}
+
+// The reply to a client's `info` names the address the client dialled, not
+// the radio's LAN address, so a client that reconnects to what `info` says
+// stays on the tailnet. Nothing else that mentions ip= changes: not the
+// radio's static network settings, not a reply to some other command, not a
+// failed `info`.
+func TestInfoReplyNamesTheDialledAddress(t *testing.T) {
+	api, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer api.Close()
+	go func() {
+		c, err := api.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		fmt.Fprint(c, "V1.4.0.0\nH12345678\n")
+		sc := bufio.NewScanner(c)
+		for sc.Scan() {
+			switch sc.Text() {
+			case "C5|info":
+				fmt.Fprint(c, "R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:02:01:06,"+
+					"ip=192.168.8.122,netmask=255.255.255.0,gateway=192.168.8.1,region=\"USA\"\r\n")
+				fmt.Fprint(c, "S0|radio static_net_params ip=192.168.8.122 gateway=192.168.8.1 netmask=255.255.255.0\n")
+			case "C6|radio uptime":
+				fmt.Fprint(c, "R6|0|ip=192.168.8.122\n")
+			case "C7|info":
+				fmt.Fprint(c, "R7|50000015|ip=192.168.8.122\n")
+			}
+		}
+	}()
+	relay := &Relay{
+		RadioAddr: "127.0.0.1",
+		DialRadio: func() (net.Conn, error) { return net.Dial("tcp", api.Addr().String()) },
+		HostUDP: func(netip.Addr) (*net.UDPConn, error) {
+			return net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		},
+		ClientTX: loopUDP(t), ClientPrime: loopUDP(t), ClientOut: loopUDP(t),
+	}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	go relay.Serve(ln)
+
+	ctl, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctl.Close()
+	ctl.SetReadDeadline(time.Now().Add(3 * time.Second))
+	rd := bufio.NewReader(ctl)
+	rd.ReadString('\n') // V
+	rd.ReadString('\n') // H
+	dialled := ctl.RemoteAddr().(*net.TCPAddr).IP.String()
+
+	fmt.Fprint(ctl, "C5|info\nC6|radio uptime\nC7|info\n")
+	for _, want := range []string{
+		"R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:02:01:06," +
+			"ip=" + dialled + ",netmask=255.255.255.0,gateway=192.168.8.1,region=\"USA\"\r\n",
+		"S0|radio static_net_params ip=192.168.8.122 gateway=192.168.8.1 netmask=255.255.255.0\n",
+		"R6|0|ip=192.168.8.122\n",
+		"R7|50000015|ip=192.168.8.122\n",
+	} {
+		if l, err := rd.ReadString('\n'); l != want {
+			t.Fatalf("got %q (%v)\nwant %q", l, err, want)
+		}
 	}
 }
 
