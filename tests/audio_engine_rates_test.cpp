@@ -14,6 +14,7 @@
 #include "core/Resampler.h"
 
 #include <QBuffer>
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEvent>
@@ -717,6 +718,46 @@ void queueBudgetsAndDeviceTransitions()
     }
 }
 
+void revokedDelayReduction()
+{
+    for (bool nr2 : {false, true}) {
+        Fixture fixture(48000);
+        fixture.engine.setNr2Enabled(nr2);
+        check(fixture.engine.nr2Enabled() == nr2, "retirement processing mode applies");
+        fixture.engine.setReceivePresentationDelays(100, 0);
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+        feed(fixture.engine, producer, tone(24000, 2400));
+        fixture.capture();
+        producer.invalidate();
+        fixture.engine.setReceivePresentationDelays(0, 0);
+        check(fixture.captured(QStringLiteral("post")).isEmpty(),
+              "delay reduction cannot process or publish a revoked PCM lease");
+        check(AudioEngineRatesTestAccess::rawBytes(fixture.engine) == 0
+                  && AudioEngineRatesTestAccess::outputBytes(fixture.engine) == 0,
+              "delay reduction retires revoked source queues");
+        fixture.finish();
+        check(fixture.output.data().isEmpty(), "retired audio cannot reach the speaker");
+
+        PcmProducer replacement;
+        replacement.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+        feed(fixture.engine, replacement, QVector<float>(4800, 0.0f));
+        fixture.finish();
+        const QByteArray output = fixture.output.data();
+        const auto* samples = reinterpret_cast<const float*>(output.constData());
+        double maxSample = 0.0;
+        for (qsizetype sample = 0; sample < output.size() / sizeof(float); ++sample) {
+            maxSample = std::max(maxSample, std::fabs(static_cast<double>(samples[sample])));
+        }
+        std::printf("revoked replacement bytes=%lld raw=%lld outputQueue=%lld maxSample=%g\n",
+            static_cast<long long>(output.size()),
+            static_cast<long long>(AudioEngineRatesTestAccess::rawBytes(fixture.engine)),
+            static_cast<long long>(AudioEngineRatesTestAccess::outputBytes(fixture.engine)), maxSample);
+        check(!output.isEmpty() && finite(output) && maxSample == 0.0,
+              "replacement silence cannot carry the revoked source's converter history");
+    }
+}
+
 enum class Effect { None, Eq, Nr2, Rn2, Nr4, Dfnr, Mnr };
 
 const char* effectName(Effect effect)
@@ -1218,7 +1259,7 @@ void printUsage(const char* program)
         "transitionsAndRejection|queueBudgetsAndDeviceTransitions|concurrentSourcesAndEffects|"
         "effects-bypass|effects-EQ|effects-NR2|effects-RN2|effects-NR4|"
         "effects-DFNR|effects-MNR|kiwiDeviceRateMatrix|processingStateReset|"
-        "legacyReplacementAndKiwiReset|fixedProcessingDomains|overflowPreservesDspHistory]\n", program);
+        "legacyReplacementAndKiwiReset|fixedProcessingDomains|overflowPreservesDspHistory|revokedDelayReduction]\n", program);
 }
 
 std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
@@ -1254,6 +1295,7 @@ std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
              AudioCase{"legacyReplacementAndKiwiReset", std::nullopt},
              AudioCase{"fixedProcessingDomains", std::nullopt},
              AudioCase{"overflowPreservesDspHistory", std::nullopt},
+             AudioCase{"revokedDelayReduction", std::nullopt},
          }) {
         if (std::strcmp(name, candidate.name) == 0) {
             return candidate;
@@ -1324,6 +1366,9 @@ int main(int argc, char** argv)
         runStage("legacyReplacementAndKiwiReset", legacyReplacementAndKiwiReset);
     }
     if (selected("fixedProcessingDomains")) { runStage("fixedProcessingDomains", fixedProcessingDomains); }
+    if (selected("revokedDelayReduction")) {
+        runStage("revokedDelayReduction", revokedDelayReduction);
+    }
     if (selected("overflowPreservesDspHistory")) {
         runStage("overflowPreservesDspHistory", overflowPreservesDspHistory);
     }

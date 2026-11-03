@@ -5594,9 +5594,10 @@ void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
 
 void AudioEngine::trimMainRxBuffers(qsizetype targetRawBytes)
 {
+    retireInvalidPcmSources();
     std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     const int producerRate = m_rxProducerRate.load();
-    const int outputRate = m_rxOutputRate.load();
+    const int outputRate = std::max(1, m_rxOutputRate.load());
     targetRawBytes = alignedStereoFloatBytes(targetRawBytes);
     constexpr qsizetype kFrameBytes = 2 * static_cast<qsizetype>(sizeof(float));
     const auto excessBytes = [&]() {
