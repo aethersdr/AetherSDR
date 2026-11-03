@@ -8223,7 +8223,7 @@ set_tests_properties(help_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=of
 
 # SwrSweepLicenseDialog::confirm() — remembered-answer short-circuit and
 # force-override paths.  No MainWindow required; confirm() only needs
-# AppSettings and QDialog::exec() (offscreen → Rejected when no one clicks).
+# AppSettings and QDialog::exec(); the test dismisses the modal from a timer.
 add_executable(swr_sweep_license_dialog_test
     tests/swr_sweep_license_dialog_test.cpp
     src/gui/SwrSweepLicenseDialog.cpp

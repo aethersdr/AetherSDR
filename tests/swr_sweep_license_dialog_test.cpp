@@ -7,7 +7,10 @@
 #include "gui/SwrSweepLicenseDialog.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QTimer>
 #include <cstdio>
+#include <memory>
 #include <string>
 
 using namespace AetherSDR;
@@ -17,6 +20,27 @@ namespace {
 constexpr const char* kSettingsKey = "SwrSweepLicenseConfirmed";
 
 int g_failed = 0;
+
+// Schedule a one-shot that finds the modal SwrSweepLicenseDialog once exec()
+// has shown it and closes it. Returns a flag recording whether it appeared.
+std::shared_ptr<bool> dismissNextDialog(bool accept, bool tickRemember)
+{
+    auto shown = std::make_shared<bool>(false);
+    QTimer::singleShot(0, [=] {
+        for (QWidget* w : QApplication::topLevelWidgets()) {
+            auto* dlg = qobject_cast<SwrSweepLicenseDialog*>(w);
+            if (!dlg || !dlg->isVisible())
+                continue;
+            *shown = true;
+            if (tickRemember)
+                if (auto* cb = dlg->findChild<QCheckBox*>())
+                    cb->setChecked(true);
+            accept ? dlg->accept() : dlg->reject();
+            return;
+        }
+    });
+    return shown;
+}
 
 void report(const char* name, bool ok, const std::string& detail = {})
 {
@@ -45,32 +69,49 @@ void testRememberedAnswerSkipsDialog()
 }
 
 // confirm(nullptr, false) without a saved answer must NOT return true
-// immediately — it would attempt to show the dialog. In an offscreen harness
-// that exec() returns QDialog::Rejected (no user to click), so confirm()
-// returns false. This proves the short-circuit only fires when the key is set.
+// immediately — it must show the dialog. The timer dismisses it and records
+// that it appeared; cancelling returns false.
 void testNoRememberedAnswerDoesNotSkip()
 {
     auto& s = AppSettings::instance();
     s.remove(kSettingsKey);
     s.save();
 
-    // exec() in offscreen mode returns Rejected — confirm returns false.
+    auto shown = dismissNextDialog(/*accept=*/false, /*tick=*/false);
     const bool result = SwrSweepLicenseDialog::confirm(nullptr, /*force=*/false);
-    report("no remembered answer does not auto-confirm", !result);
+    report("no remembered answer shows dialog; cancel returns false", *shown && !result);
 }
 
 // confirm(nullptr, true) must NOT short-circuit even when the key is set.
-// In an offscreen harness exec() returns Rejected, so confirm() returns false.
-// A true return here would mean force was ignored, which is a regression.
+// The timer dismisses the dialog and records that it appeared; cancelling
+// returns false. A true return here would mean force was ignored.
 void testForceOverridesRememberedAnswer()
 {
     auto& s = AppSettings::instance();
     s.setValue(kSettingsKey, "True");
     s.save();
 
+    auto shown = dismissNextDialog(/*accept=*/false, /*tick=*/false);
     const bool result = SwrSweepLicenseDialog::confirm(nullptr, /*force=*/true);
-    // exec() → Rejected in offscreen → false expected.
-    report("force=true overrides remembered answer and shows dialog", !result);
+    report("force=true overrides remembered answer and shows dialog", *shown && !result);
+
+    s.remove(kSettingsKey);
+    s.save();
+}
+
+// Accepting with "Remember my answer" ticked persists the key, so the next
+// non-forced confirm() short-circuits.
+void testAcceptWithRememberPersists()
+{
+    auto& s = AppSettings::instance();
+    s.remove(kSettingsKey);
+    s.save();
+
+    auto shown = dismissNextDialog(/*accept=*/true, /*tick=*/true);
+    const bool result = SwrSweepLicenseDialog::confirm(nullptr, /*force=*/false);
+    const bool persisted = s.value(kSettingsKey, "False").toString() == "True";
+    report("accept with remember ticked persists the answer",
+           *shown && result && persisted);
 
     s.remove(kSettingsKey);
     s.save();
@@ -91,6 +132,7 @@ int main(int argc, char** argv)
     testRememberedAnswerSkipsDialog();
     testNoRememberedAnswerDoesNotSkip();
     testForceOverridesRememberedAnswer();
+    testAcceptWithRememberPersists();
 
     std::printf("\n%s\n",
                 g_failed == 0
@@ -99,4 +141,3 @@ int main(int argc, char** argv)
     return g_failed == 0 ? 0 : 1;
 }
 
-#include "swr_sweep_license_dialog_test.moc"
