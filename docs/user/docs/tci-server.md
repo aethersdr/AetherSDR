@@ -80,6 +80,11 @@ original receiver during setup cancels the pending route, including while TX
 selection is awaiting a reply; cleanup only removes the receiver created for it.
 Radios with paired receiver/panadapter topology keep that native topology.
 
+On a radio without transmit-monitor control, `mon_enable` ON and
+`mon_volume` leave the model unchanged and notify clients of its current value.
+`mon_enable` OFF remains accepted, including to clear a monitor state left by a
+previous radio. Radios that expose monitor control keep their normal behavior.
+
 ### WSJT-X
 
 Use a WSJT-X build with TCI support (WSJT-X Improved, or WSJT-X 3.x).

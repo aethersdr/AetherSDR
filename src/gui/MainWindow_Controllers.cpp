@@ -2193,7 +2193,7 @@ void MainWindow::registerMidiParams()
     reg("phone.monGain", "Monitor Volume", "Phone/CW", P::Slider, 0, 100,
         [this](float v) {
             if (!m_radioModel.transmitMonitorAvailable()) {
-                qCWarning(lcDevices) << "phone.monGain refused: this radio has no transmit monitor";
+                qCDebug(lcDevices) << "phone.monGain refused: this radio has no transmit monitor";
                 showUnsupportedControlNotice();
                 return;
             }
@@ -2244,7 +2244,7 @@ void MainWindow::registerMidiParams()
     reg("phone.voxLevel", "VOX Level", "Phone/CW", P::Slider, 0, 100,
         [this](float v) {
             if (!m_radioModel.voxAvailable()) {
-                qCWarning(lcDevices) << "phone.voxLevel refused: this radio has no VOX";
+                qCDebug(lcDevices) << "phone.voxLevel refused: this radio has no VOX";
                 showUnsupportedControlNotice();
                 return;
             }

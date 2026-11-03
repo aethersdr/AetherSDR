@@ -145,6 +145,10 @@ confirmation.
   in their tooltips and accessible descriptions, when the connected radio
   does not expose monitor control.
 
+MON and VOX shortcuts and MIDI mappings also refuse unsupported controls and
+show an unsupported-control notice instead of changing the model state.
+Radios that expose these controls keep their normal behavior.
+
 Hover the Level, Compression or ALC gauge for its exact value. In CW modes the
 applet switches to keyer controls, including the APF toggle and level.
 **Pitch** sits directly below **Speed**: use its slider or enter a frequency

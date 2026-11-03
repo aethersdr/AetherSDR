@@ -1622,9 +1622,10 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
         return rprt(0);
     }
     if (level == "VOXGAIN") {
-        const int lvl = qBound(0, qRound(val * 100.0), 100);
-        if (m_model && !m_model->voxAvailable())
+        if (!m_model->voxAvailable()) {
             return rprt(-11);   // RIG_ENAVAIL: this radio declares no VOX
+        }
+        const int lvl = qBound(0, qRound(val * 100.0), 100);
         QMetaObject::invokeMethod(m_model, [model = m_model, lvl]() {
             model->transmitModel().setVoxLevel(lvl);
         }, Qt::QueuedConnection);
@@ -1632,8 +1633,9 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
     }
     if (level == "VOXDELAY") {
         // Hamlib seconds → raw 0-100 (1 unit = 20 ms)
-        if (m_model && !m_model->voxAvailable())
+        if (!m_model->voxAvailable()) {
             return rprt(-11);   // RIG_ENAVAIL: this radio declares no VOX
+        }
         const int raw = qBound(0, qRound(val * 50.0), 100);
         QMetaObject::invokeMethod(m_model, [model = m_model, raw]() {
             model->transmitModel().setVoxDelay(raw);
@@ -1641,9 +1643,10 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
         return rprt(0);
     }
     if (level == "MONITOR_GAIN") {
-        const int lvl = qBound(0, qRound(val * 100.0), 100);
-        if (m_model && !m_model->transmitMonitorAvailable())
+        if (!m_model->transmitMonitorAvailable()) {
             return rprt(-11);   // RIG_ENAVAIL: this radio declares no transmit monitor
+        }
+        const int lvl = qBound(0, qRound(val * 100.0), 100);
         QMetaObject::invokeMethod(m_model, [model = m_model, lvl]() {
             model->transmitModel().setMonGainSb(lvl);
         }, Qt::QueuedConnection);
@@ -2021,8 +2024,9 @@ QString RigctlProtocol::cmdSetFunc(const QString& args)
     if (func == "VOX") {
         // OFF is already true where the radio has none, so only ON is refused
         // (as NR/ANF above).
-        if (on && m_model && !m_model->voxAvailable())
+        if (on && m_model && !m_model->voxAvailable()) {
             return rprt(-11);   // RIG_ENAVAIL
+        }
         QMetaObject::invokeMethod(m_model, [model = m_model, on]() {
             model->transmitModel().setVoxEnable(on);
         }, Qt::QueuedConnection);

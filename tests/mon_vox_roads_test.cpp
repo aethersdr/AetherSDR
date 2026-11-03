@@ -19,6 +19,8 @@
 #include <QString>
 
 #include <cstdio>
+#include <cstdlib>
+#include <initializer_list>
 #include <memory>
 
 using namespace AetherSDR;
@@ -40,6 +42,8 @@ public:
     bool connected{false};
     bool declareMon{false};
     bool declareVox{false};
+    bool hasVoxDelay{true};
+    int controlRequests{0};
 
     RadioCapabilities capabilities() const override
     {
@@ -48,9 +52,15 @@ public:
             caps.txMonitorControl = RadioCapabilities::TxMonitorControl{};
         }
         if (declareVox) {
-            caps.voxControl = RadioCapabilities::VoxControl{true};
+            caps.voxControl = RadioCapabilities::VoxControl{hasVoxDelay};
         }
         return caps;
+    }
+    ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
+                                           TunePowerContext) override
+    {
+        ++controlRequests;
+        return ReceiveDispatch::Dispatched;
     }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override {}
@@ -119,6 +129,7 @@ void testRigctlRefusesOnARadioWithNeither()
           cat(port, QStringLiteral("U VOX 1")) == QLatin1String("RPRT -11"));
     check("and the model is untouched",
           tx.voxLevel() == vox0 && tx.monGainSb() == mon0 && !tx.voxEnable());
+    check("refused commands never reach the backend", f.backend->controlRequests == 0);
     check("U VOX 0 is still accepted: off is already true",
           cat(port, QStringLiteral("U VOX 0")) == QLatin1String("RPRT 0"));
 }
@@ -169,6 +180,8 @@ void testTciRefusesAndReportsTheTrueState()
     check("and the peers are told it is still false",
           tci.pendingNotification() == QLatin1String("mon_enable:false;"));
 
+    check("TCI refused ON never reaches the backend", f.backend->controlRequests == 0);
+
     // A previous radio can leave the monitor on; a peer must still be able to clear it.
     tx.setSbMonitor(true);
     QCoreApplication::processEvents();
@@ -209,6 +222,50 @@ void testTciUnchangedWhereDeclaredOrNoRadio()
     }
 }
 
+void testIndependentCapabilitiesAndRadioTransitions()
+{
+    for (const bool mon : {false, true}) {
+        for (const bool vox : {false, true}) {
+            Fixture f(mon, vox);
+            // Icom declares VOX without delay; availability must still follow
+            // the VOX record independently of MON and the delay subfeature.
+            f.backend->hasVoxDelay = false;
+            RigctlProtocol port(&f.radio);
+            port.setSliceIndex(0);
+            TciProtocol tci(&f.radio);
+            check("MON predicate follows only the MON capability",
+                  f.radio.transmitMonitorAvailable() == mon);
+            check("VOX predicate follows its record even without delay",
+                  f.radio.voxAvailable() == vox);
+            check("rigctl MON is independent of VOX",
+                  cat(port, QStringLiteral("L MONITOR_GAIN 0.73"))
+                      == (mon ? QLatin1String("RPRT 0") : QLatin1String("RPRT -11")));
+            check("rigctl VOX is independent of MON",
+                  cat(port, QStringLiteral("L VOXGAIN 0.41"))
+                      == (vox ? QLatin1String("RPRT 0") : QLatin1String("RPRT -11")));
+            const int before = f.backend->controlRequests;
+            tci.handleCommand(QStringLiteral("mon_enable:0,true"));
+            QCoreApplication::processEvents();
+            check("TCI legacy receiver-shaped MON follows only MON capability",
+                  f.radio.transmitModel().sbMonitor() == mon);
+            check("supported TCI MON reaches the backend exactly once",
+                  f.backend->controlRequests == before + (mon ? 1 : 0));
+            tci.handleCommand(QStringLiteral("mon_enable:0,false"));
+            QCoreApplication::processEvents();
+            check("TCI OFF remains accepted for every capability combination",
+                  !f.radio.transmitModel().sbMonitor());
+
+            f.backend->declareMon = !mon;
+            f.backend->declareVox = !vox;
+            check("radio capability changes are not latched from a previous radio",
+                  f.radio.transmitMonitorAvailable() == !mon && f.radio.voxAvailable() == !vox);
+            f.backend->connected = false;
+            check("disconnect restores permissive predicates",
+                  f.radio.transmitMonitorAvailable() && f.radio.voxAvailable());
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -222,6 +279,7 @@ int main(int argc, char** argv)
     testRigctlUnchangedWhereDeclaredOrNoRadio();
     testTciRefusesAndReportsTheTrueState();
     testTciUnchangedWhereDeclaredOrNoRadio();
+    testIndependentCapabilitiesAndRadioTransitions();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
     return g_failed == 0 ? 0 : 1;
 }
