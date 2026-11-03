@@ -39,6 +39,12 @@ Across a VPN or another subnet, use **Connect by IP** with **Radio type:** set t
 - The very first connect on a computer spends a while planning its DSP filters; the app stays responsive while it does. The result is saved, so later connects are quick.
 - The status bar shows the gateware version as major.minor, such as **74.3** for stock Hermes-Lite 2 gateware. Boards built on the HL2 can report their own minor version: a SQUARE SDR 2 reads **xx.52**.
 
+On Linux and macOS, the WDSP filter-planning cache uses `XDG_CACHE_HOME` when
+nonempty, otherwise `$HOME/.cache`. If both variables are unset or empty,
+it uses the system temporary directory. On Windows, it uses `LOCALAPPDATA`,
+with the same temporary-directory fallback. The cache file is
+`aethersdr/wdsp-fftw-wisdom` beneath that directory.
+
 ### Board variant and hardware: HL2 Hardware
 
 **Settings → Radio Setup... → HL2 Hardware** describes the physical radio. It appears while an HL2 is connected, and the settings are stored against that radio.

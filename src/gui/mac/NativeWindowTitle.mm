@@ -33,6 +33,14 @@ void updateNativeTitleVisibility(QWidget* window)
     if (expanded && !native.toolbar) {
         auto* toolbar = [[AetherSDRTitleToolbar alloc] initWithIdentifier:@"AetherSDR.UnifiedTitleBar"];
         toolbar.previousStyle = native.toolbarStyle;
+        if (@available(macOS 15, *)) {
+            // AppKit no longer supports the baseline separator setting.
+        } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            toolbar.showsBaselineSeparator = NO;
+#pragma clang diagnostic pop
+        }
         toolbar.allowsUserCustomization = NO;
         native.toolbarStyle = NSWindowToolbarStyleUnified;
         native.toolbar = toolbar;

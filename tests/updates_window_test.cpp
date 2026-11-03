@@ -502,7 +502,8 @@ int main(int argc, char** argv)
         const bool staged =
             QTest::qWaitFor([&] { return controller.state() == UpdateController::State::Staged; }, 20000);
         app.processEvents();
-        check(staged, "Install update stages the release");
+        check(staged && controller.state() == UpdateController::State::Staged,
+              "Install update stages the release");
         check(primary && primary->isVisible() && primary->text() == QLatin1String("Restart to update"),
               "staged, the primary action is Restart to update");
         check(text(*w, "updatesFootnote").contains(QLatin1String("installs when you quit")),
