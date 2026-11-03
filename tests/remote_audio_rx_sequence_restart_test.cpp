@@ -76,6 +76,11 @@ public:
 
 class VitaSequenceLossLogTestAccess {
 public:
+    static void flush(PanadapterStream& stream)
+    {
+        stream.m_rxReorderNowForTest = stream.rxReorderNowMs() + VitaRxReorder::kWaitMs;
+        stream.flushRxReorder();
+    }
     static void feedMeter(PanadapterStream& stream, quint32 streamId, int seq)
     {
         QByteArray packet(PanadapterStream::VITA49_HEADER_BYTES + 4, '\0');
@@ -193,17 +198,19 @@ int main(int argc, char** argv)
     radio.handleStatusForTest(object, {{QStringLiteral("type"), QStringLiteral("remote_audio_rx")},
                                        {QStringLiteral("compression"), QStringLiteral("none")}});
     VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 5);  // 3..4 missing
-    report("adopted: a gap in a stream still flowing counts", stream->packetErrorCount() == 1);
+    VitaSequenceLossLogTestAccess::flush(*stream);
+    report("adopted: a gap in a stream still flowing counts", stream->packetErrorCount() == 2);
     VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 6);
 
     // The radio removes it; the next stream with this id starts over.
     radio.handleStatusForTest(object + QStringLiteral(" removed"), {});
     VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 0);  // old instance ended at 6
     report("removed: a re-created stream's first packet counts no error",
-           stream->packetErrorCount() == 1);
+           stream->packetErrorCount() == 2);
 
     VitaSequenceLossLogTestAccess::feedMeter(*stream, id, 4);  // 1..3 missing
-    report("a real gap still counts", stream->packetErrorCount() == 2);
+    VitaSequenceLossLogTestAccess::flush(*stream);
+    report("a real gap still counts", stream->packetErrorCount() == 5);
 
     std::printf("%s\n", g_failed ? "FAILED" : "PASSED");
     return g_failed ? 1 : 0;

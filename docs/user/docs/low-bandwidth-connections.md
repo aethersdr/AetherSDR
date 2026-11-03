@@ -159,7 +159,6 @@ EF marking can help on a congested network that honors DSCP. Switches, routers, 
 
 ## Known issues
 
-- On a remote link, receive audio can drop out briefly several times a minute when packets arrive out of order, although none are lost ([#6051](https://github.com/aethersdr/AetherSDR/issues/6051)).
 - The network-quality indicator in the status bar is averaged, so it can stay green while the link is bad; use **Tools → Network Diagnostics...** for live conditions ([#2825](https://github.com/aethersdr/AetherSDR/issues/2825)).
 
 ## Troubleshooting
@@ -189,7 +188,9 @@ Network jitter or lost packets are reaching the audio buffer.
 
 ### Audio drops out or the waterfall has gaps
 
-Packets from the radio are lost, or arrive out of order, on the way to the computer. Wi-Fi, a busy switch or a VPN are the usual causes. The log then shows `PanadapterStream: VITA-49 sequence errors on <stream> stream`, at most once every 10 seconds for each stream.
+Packets from the radio can be lost or arrive out of order on the way to the computer. Receive audio waits up to 30 ms for a missing packet before decoding its queued successors. Packets arriving within that wait are restored to order without packet-loss concealment; a gap that remains triggers concealment when **Smooth packet loss** is enabled. Ordered audio has no added wait. FFT, waterfall and meter accounting also allows this reorder wait.
+
+**Tools → Network Diagnostics...** reports these missing packets separately from reordered arrivals. The **Session missing packets / DAX breaks** total counts individual absent audio, FFT, waterfall and meter packets, plus DAX sequence breaks. Its network-quality score retains one event per resolved gap, so a burst of several missing packets is one scoring event. Performance logs include resolved FFT and waterfall losses after the wait, as a percentage of received plus missing packets. DAX remains in arrival order and reports sequence breaks. The log shows `PanadapterStream: VITA-49 sequence errors on <stream> stream`, at most once every 10 seconds per stream. The 4-bit counter cannot uniquely identify arbitrary long loss or reordering; Opus timestamps and display frame positions provide additional ordering information.
 
 1. Open **Tools → Network Diagnostics...** to see which streams lose packets.
 2. Connect the computer to the network by cable instead of Wi-Fi.

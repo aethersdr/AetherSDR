@@ -703,7 +703,7 @@
  },
  "core/RfkitConnection.h": {
   "tag": "peripheral(rfkit)",
-  "note": "Direct HTTP/JSON REST client (default port 8080) for the RF-KIT amplifier — a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h, core/VkampConnection.h and core/Kpa1500Connection.h. The Flex radio neither discovers it nor proxies its telemetry, so its REST API is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/rfkit-amplifier-design.md.",
+  "note": "Direct HTTP/JSON REST client (default port 8080) for the RF-KIT amplifier \u2014 a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h, core/VkampConnection.h and core/Kpa1500Connection.h. The Flex radio neither discovers it nor proxies its telemetry, so its REST API is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/rfkit-amplifier-design.md.",
   "split": "",
   "confidence": "high"
  },
@@ -1772,6 +1772,12 @@
  "models/Kxpa100RadioAssociation.h": {
   "tag": "peripheral(elecraft)",
   "note": "Explicit per-radio amplifier telemetry association; no radio or tuner commands.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/flex/VitaRxReorder.h": {
+  "tag": "vendor(flex)",
+  "note": "Bounded Flex VITA count/timestamp receive ordering and loss resolution; private to the Flex stream path.",
   "split": "",
   "confidence": "high"
  }

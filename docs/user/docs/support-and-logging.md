@@ -19,6 +19,8 @@ chain is separate from the selected mode; a waveform slice can have mode `FDVU`
 and chain `DIGU`. The reported IARU region does not select your client band plan
 or grant transmit permission. Select your display plan under **View → Band Plan**.
 
+In diagnostic JSON, `network.packet_drop_count` counts individual missing audio, FFT, waterfall and meter packets after the reorder wait, plus DAX sequence breaks. It matches **Session missing packets / DAX breaks** in **Tools → Network Diagnostics...**. A burst of three absent audio packets adds three to this count; the network-quality score still treats the burst as one gap.
+
 Before you file a report, drop your log or support bundle on the [Log Analyzer](/log-analyzer). It checks for known problems and links the fix for each one it finds. It runs in your browser; the file is never uploaded. **Help → Log Analyzer** and the **Log Analyzer** button in **Help → Support & Diagnostics...** open it.
 
 The Help menu starts with **AetherSDR Documentation** (this site), **Printable Manual (PDF)** and **Log Analyzer**, which open in your browser. It also has **Getting Started...**, **AetherSDR Help...**, **What's New...**, three how-to guides (**Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...**), **AetherSDR Website**, **Donate to AetherSDR**, **Contributing to AetherSDR...**, **Check for Updates...**, **Check for Updates Automatically** and **About AetherSDR**. On Windows and Linux the menus are behind the **☰** button at the left of the title bar; on macOS they are in the system menu bar.
@@ -99,7 +101,7 @@ For a crash, also attach the crash report your operating system kept: `coredumpc
 | **Protocol / Status** | `aether.protocol` | Parsed SmartSDR protocol handling and status updates |
 | **Audio** | `aether.audio` | RX/TX audio, device negotiation, volume |
 | **Audio Summary** | `aether.audio.summary` | Audio routing and device summaries for support logs |
-| **VITA-49** | `aether.vita49` | UDP packet routing: FFT, waterfall, meters, DAX. Lost or out-of-order packets are logged as `VITA-49 sequence errors`, at most once every 10 seconds per stream. |
+| **VITA-49** | `aether.vita49` | UDP packet routing: FFT, waterfall, meters, DAX. Missing audio, FFT, waterfall and meter packets are logged as `VITA-49 sequence errors` after the short reorder wait; DAX logs arrival-order breaks. Each stream logs at most once every 10 seconds. |
 | **DSP** | `aether.dsp` | Client noise reduction and CW decoder processing |
 | **RADE** | `aether.rade` | FreeDV RADE digital voice |
 | **SmartLink** | `aether.smartlink` | SmartLink sign-in, TLS tunnel, WAN streaming |

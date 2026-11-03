@@ -3494,6 +3494,17 @@ target_include_directories(vita_sequence_loss_log_test PRIVATE src)
 target_link_libraries(vita_sequence_loss_log_test PRIVATE aethercore Qt6::Core)
 add_test(NAME vita_sequence_loss_log_test COMMAND vita_sequence_loss_log_test)
 
+# Socket-free bounded VITA resequencing and actual PCM/Opus decode/PLC.
+add_executable(vita_rx_reorder_test tests/vita_rx_reorder_test.cpp)
+target_include_directories(vita_rx_reorder_test PRIVATE src)
+target_link_libraries(vita_rx_reorder_test PRIVATE Qt6::Core)
+add_test(NAME vita_rx_reorder_test COMMAND vita_rx_reorder_test)
+
+add_executable(vita_rx_reorder_audio_test tests/vita_rx_reorder_audio_test.cpp)
+target_include_directories(vita_rx_reorder_audio_test PRIVATE src)
+target_link_libraries(vita_rx_reorder_audio_test PRIVATE aethercore Qt6::Core)
+add_test(NAME vita_rx_reorder_audio_test COMMAND vita_rx_reorder_audio_test)
+
 # RadioModel restarts remote_audio_rx's VITA-49 sequence tracking when the radio
 # reports the stream adopted or removed (#6285). Socket-free: status lines go to
 # the model's router and packets straight to processDatagram().
