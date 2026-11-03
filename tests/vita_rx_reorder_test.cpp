@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <cstdio>
 #include <vector>
+#include <utility>
 
 using AetherSDR::VitaRxReorder;
 namespace {
@@ -46,10 +47,56 @@ void checkLoss(int missing, bool timestamps)
     check(lost == missing && breaks == 1 && delivered == 120 - missing,
           "real burst loss is counted exactly once, with every surviving packet delivered");
 }
+void checkOverlappingGaps(bool timestamps)
+{
+    for (bool genuineLoss : {false, true}) {
+        VitaRxReorder buffer;
+        int lost = 0;
+        int breaks = 0;
+        std::vector<int> delivered;
+        const auto collect = [&](const VitaRxReorder::Result& result) {
+            lost += result.lost;
+            breaks += result.breaks;
+            for (int i = 0; i < result.count; ++i) {
+                delivered.push_back(result.ready[i].packet.toInt());
+            }
+        };
+        const auto feed = [&](int index, qint64 nowMs) {
+            collect(buffer.add(index, key(index, timestamps), nowMs, QByteArray::number(index)));
+        };
+        feed(0, 0);
+        feed(2, 20);
+        feed(4, genuineLoss ? 45 : 40);
+        if (!genuineLoss) {
+            feed(1, 49);
+        }
+        collect(buffer.expire(50));
+        check(buffer.deadlineMs() == (genuineLoss ? 75 : 70),
+              "a newer gap keeps the deadline of its own earliest successor");
+        feed(3, 59);
+        collect(buffer.expire(100));
+        const std::vector<int> expected = genuineLoss ? std::vector<int>{0, 2, 3, 4}
+                                                    : std::vector<int>{0, 1, 2, 3, 4};
+        check(lost == (genuineLoss ? 1 : 0) && breaks == (genuineLoss ? 1 : 0)
+              && delivered == expected && buffer.queuedBytes() == 0,
+              "overlapping reorders recover without hiding a genuine earlier loss");
+    }
+    VitaRxReorder buffer;
+    buffer.add(0, key(0, timestamps), 0);
+    buffer.add(4, key(4, timestamps), 10);
+    buffer.add(2, key(2, timestamps), 20);
+    buffer.add(1, key(1, timestamps), 25);
+    check(buffer.deadlineMs() == 40,
+          "resolving a leading gap does not extend an already evidenced later gap");
+    const VitaRxReorder::Result expired = buffer.expire(40);
+    check(expired.lost == 1 && expired.count == 1,
+          "a later gap still expires within 30 ms of its earliest successor");
+}
 }
 int main()
 {
     for (bool timestamps : {false, true}) {
+        checkOverlappingGaps(timestamps);
         for (int missing = 1; missing <= 15; ++missing) {
             checkLoss(missing, timestamps);
         }

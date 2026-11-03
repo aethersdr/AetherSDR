@@ -78,18 +78,16 @@ struct Run {
     int breaks = 0;
     int reordered = 0;
 };
-Run run(const std::vector<QByteArray>& packets, const std::vector<int>& order,
-        bool plc = true, int lossTiming = 0)
+Run runAt(const std::vector<QByteArray>& packets,
+          const std::vector<std::pair<int, qint64>>& arrivals, bool plc = true)
 {
     PanadapterStream stream;
     stream.setPacketLossConcealment(plc);
     Run result;
     QObject::connect(&stream, &PanadapterStream::pcmFrameReady,
         [&result](const PcmFrame& frame) { result.samples += frame.samples(); });
-    int arrival = 0;
-    for (int index : order) {
-        VitaSequenceLossLogTestAccess::feed(stream, packets[index],
-            lossTiming ? index * 10 : arrival++ * 10);
+    for (const auto& [index, nowMs] : arrivals) {
+        VitaSequenceLossLogTestAccess::feed(stream, packets[index], nowMs);
     }
     VitaSequenceLossLogTestAccess::flush(stream, 100000);
     result.losses = stream.packetErrorCount();
@@ -98,6 +96,16 @@ Run run(const std::vector<QByteArray>& packets, const std::vector<int>& order,
     check(VitaSequenceLossLogTestAccess::socketFree(stream), "production ingest never opens a socket");
     check(VitaSequenceLossLogTestAccess::queuedBytes(stream) == 0, "the final deadline releases retained payloads");
     return result;
+}
+Run run(const std::vector<QByteArray>& packets, const std::vector<int>& order,
+        bool plc = true, int lossTiming = 0)
+{
+    std::vector<std::pair<int, qint64>> arrivals;
+    qint64 arrival = 0;
+    for (int index : order) {
+        arrivals.emplace_back(index, lossTiming ? index * 10 : arrival++ * 10);
+    }
+    return runAt(packets, arrivals, plc);
 }
 }
 int main(int argc, char** argv)
@@ -147,6 +155,18 @@ int main(int argc, char** argv)
         const Run repeated = run(input, duplicate);
         check(repeated.samples == clean.samples && repeated.losses == 0,
               "duplicate packets do not replay audio or request PLC");
+        for (bool genuineLoss : {false, true}) {
+            const std::vector<std::pair<int, qint64>> arrivals = genuineLoss
+                ? std::vector<std::pair<int, qint64>>{{0, 0}, {2, 20}, {4, 45}, {3, 59}}
+                : std::vector<std::pair<int, qint64>>{{0, 0}, {2, 20}, {4, 40}, {1, 49}, {3, 59}};
+            const Run overlap = runAt(input, arrivals);
+            const Run expected = run(input, genuineLoss ? std::vector<int>{0, 2, 3, 4}
+                                                       : std::vector<int>{0, 1, 2, 3, 4}, true, 1);
+            check(overlap.losses == (genuineLoss ? 1 : 0)
+                  && overlap.breaks == (genuineLoss ? 1 : 0)
+                  && overlap.samples == expected.samples,
+                  "overlapping gaps preserve actual audio and conceal only genuinely absent packets");
+        }
         for (int missing : {1, 3, 6, 10, 15}) {
             std::vector<int> dropped;
             for (int i : ordered) {
@@ -162,6 +182,48 @@ int main(int argc, char** argv)
             check(loss.samples.size() == expected, "real loss still invokes bounded PLC exactly once");
             check(off.samples.size() == (120 - missing) * 240 * 2 && off.losses == missing,
                   "PLC toggle preserves loss accounting and surviving audio");
+        }
+        if (pcc == 0x8005) {
+            for (quint16 otherPcc : {quint16{0x03e3}, quint16{0x0123}}) {
+                PanadapterStream stream;
+                QVector<float> opusSamples;
+                bool otherStream = false;
+                QObject::connect(&stream, &PanadapterStream::pcmFrameReady,
+                    [&](const PcmFrame& frame) {
+                        if (!otherStream) {
+                            opusSamples += frame.samples();
+                        }
+                    });
+                for (int i = 0; i < 120; ++i) {
+                    if (i == 40) {
+                        QByteArray other = packet(0, otherPcc, pcm(0, otherPcc == 0x03e3));
+                        qToBigEndian<quint32>(kStream + 1,
+                            reinterpret_cast<uchar*>(other.data()) + 4);
+                        otherStream = true;
+                        VitaSequenceLossLogTestAccess::feed(stream, other, 399);
+                        otherStream = false;
+                        stream.registerDaxStream(kStream + 1, 1);
+                    }
+                    VitaSequenceLossLogTestAccess::feed(stream, input[i], i * 10);
+                }
+                check(opusSamples == clean.samples && stream.packetErrorCount() == 0,
+                      "late PCM/DAX adoption on another stream preserves the active Opus decoder");
+            }
+            PanadapterStream stream;
+            QVector<float> samples;
+            QObject::connect(&stream, &PanadapterStream::pcmFrameReady,
+                [&samples](const PcmFrame& frame) { samples += frame.samples(); });
+            for (int i = 0; i < 40; ++i) {
+                VitaSequenceLossLogTestAccess::feed(stream, input[i], i * 10);
+            }
+            stream.restartStreamSequence(kStream);
+            samples.clear();
+            for (int i = 0; i < 40; ++i) {
+                VitaSequenceLossLogTestAccess::feed(stream, input[i], 1000 + i * 10);
+            }
+            check(samples == clean.samples.mid(0, 40 * 240 * 2)
+                  && stream.packetErrorCount() == 0,
+                  "restarting the owning Opus stream retires its decoder history");
         }
         std::printf("pcc=0x%04x ordered_frames=%lld reordered_frames=%lld reorder_losses=%d\n",
                     pcc, static_cast<long long>(clean.samples.size() / 2),

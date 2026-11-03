@@ -54,7 +54,15 @@ public:
 
     void reset() { *this = VitaRxReorder{}; }
     qsizetype queuedBytes() const { return m_queuedBytes; }
-    qint64 deadlineMs() const { return m_pending.empty() ? -1 : m_gapSinceMs + kWaitMs; }
+    qint64 deadlineMs() const
+    {
+        if (m_pending.empty()) {
+            return -1;
+        }
+        const auto earliest = std::min_element(m_pending.begin(), m_pending.end(),
+            [](const Pending& a, const Pending& b) { return a.receivedMs < b.receivedMs; });
+        return earliest->receivedMs + kWaitMs;
+    }
 
     Result add(int sequence, Key key, qint64 nowMs, QByteArray packet = {})
     {
@@ -67,7 +75,7 @@ public:
             key.valid = false;
         }
         if (m_lastSequence < 0) {
-            release({sequence, key, std::move(packet)}, 0, nowMs, result);
+            release({sequence, key, std::move(packet), nowMs}, 0, nowMs, result);
             return result;
         }
         if (key.valid && m_lastKey.valid) {
@@ -98,7 +106,7 @@ public:
                 && advance > 0 && advance < 8
                 && (distance >= 8 || (newestDistance >= 8 && distance <= newestDistance));
             if (crossedCycle || filledWindow) {
-                drain(nowMs, true, result);
+                drain(nowMs, DrainMode::All, result);
             }
         }
         const int distance = (sequence - m_lastSequence - 1) & 0x0F;
@@ -119,14 +127,11 @@ public:
                 return ((pending.sequence - m_lastSequence - 1) & 0x0F) > distance;
             });
         if (distance == 0) {
-            release({sequence, key, std::move(packet)}, 0, nowMs, result);
-            drain(nowMs, false, result);
+            release({sequence, key, std::move(packet), nowMs}, 0, nowMs, result);
+            drain(nowMs, DrainMode::Contiguous, result);
         } else {
-            if (m_pending.empty()) {
-                m_gapSinceMs = nowMs;
-            }
             m_queuedBytes += packet.size();
-            m_pending.push_back({sequence, key, std::move(packet)});
+            m_pending.push_back({sequence, key, std::move(packet), nowMs});
         }
         return result;
     }
@@ -135,16 +140,19 @@ public:
     {
         Result result;
         if (!m_pending.empty() && nowMs >= deadlineMs()) {
-            drain(nowMs, true, result);
+            drain(nowMs, DrainMode::Expired, result);
         }
         return result;
     }
 
 private:
+    enum class DrainMode { Contiguous, Expired, All };
+
     struct Pending {
         int sequence;
         Key key;
         QByteArray packet;
+        qint64 receivedMs;
     };
 
     void release(Pending pending, int missed, qint64 nowMs, Result& result)
@@ -157,7 +165,7 @@ private:
         m_lastReleaseMs = nowMs;
     }
 
-    void drain(qint64 nowMs, bool skipGaps, Result& result)
+    void drain(qint64 nowMs, DrainMode mode, Result& result)
     {
         while (!m_pending.empty()) {
             const auto first = std::min_element(m_pending.begin(), m_pending.end(),
@@ -166,7 +174,8 @@ private:
                         < ((b.sequence - m_lastSequence - 1) & 0x0F);
                 });
             const int missed = (first->sequence - m_lastSequence - 1) & 0x0F;
-            if (missed > 0 && !skipGaps) {
+            if (missed > 0 && (mode == DrainMode::Contiguous
+                || (mode == DrainMode::Expired && nowMs < deadlineMs()))) {
                 break;
             }
             m_queuedBytes -= first->packet.size();
@@ -180,7 +189,6 @@ private:
     Key m_lastKey;
     bool m_useKeys = true;
     qint64 m_lastReleaseMs = 0;
-    qint64 m_gapSinceMs = 0;
     qsizetype m_queuedBytes = 0;
     std::vector<Pending> m_pending;
 };

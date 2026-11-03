@@ -1179,7 +1179,9 @@ void PanadapterStream::deliverRxAudio(quint32 streamId, quint64 generation,
         }
         if (m_audioPlcGenerations.value(streamId) != generation) {
             m_audioPlc.remove(streamId);
-            m_opusCodec.reset();
+            if (m_opusCodec && m_opusCodecStreamId == streamId) {
+                m_opusCodec.reset();
+            }
             m_audioPlcGenerations[streamId] = generation;
         }
         const auto& delivery = result.ready[i];
@@ -1667,14 +1669,15 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
     if (payloadBytes <= 0) return;
 
-    // Lazy-init Opus decoder on first packet
-    if (!m_opusCodec) {
+    // Decoder history belongs to the active Opus stream, independently of PCM/DAX.
+    if (!m_opusCodec || m_opusCodecStreamId != streamId) {
         m_opusCodec = std::make_unique<OpusCodec>();
         if (!m_opusCodec->isValid()) {
             qCWarning(lcVita49) << "PanadapterStream: Opus codec init failed";
             m_opusCodec.reset();
             return;
         }
+        m_opusCodecStreamId = streamId;
         qCDebug(lcVita49) << "PanadapterStream: Opus decoder initialized";
     }
 

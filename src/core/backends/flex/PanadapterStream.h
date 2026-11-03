@@ -478,6 +478,7 @@ private:
 
     // Opus audio decoder (lazy-initialized on first Opus packet)
     std::unique_ptr<OpusCodec> m_opusCodec;
+    quint32 m_opusCodecStreamId{0};
 
     // DAX stream routing: stream ID → DAX channel (1-8)
     QMap<quint32, int> m_daxStreamIds;
