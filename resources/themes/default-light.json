@@ -75,6 +75,13 @@
             "accent": "{color.blue.500}",
             "tx":     "#b08840"
           },
+          "networkQuality": {
+              "excellent": "{color.green.500}",
+              "good": "{color.blue.500}",
+              "fair": "#a85a00",
+              "poor": "{color.red.500}",
+              "off": "#8aa8c0"
+          },
           "titlebar": {
             "background":             "#ebf5f5f8",
             "border":                 "#4d506e8c",
