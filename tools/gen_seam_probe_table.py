@@ -465,7 +465,14 @@ def main() -> int:
     out = render(names)
 
     if args.check:
-        current = PROBE_TABLE.read_text() if PROBE_TABLE.is_file() else ""
+        # Explicit utf-8 so the locale codec gets no say, but default
+        # (universal) newline handling: a core.autocrlf=true checkout
+        # materializes the committed LF as CRLF, and that file is pristine.
+        # Compare content, not line endings. Do not pass newline="" here.
+        if PROBE_TABLE.is_file():
+            current = PROBE_TABLE.read_text(encoding="utf-8")
+        else:
+            current = ""
         if current == out:
             print(f"seam probe table up to date ({len(names)} signals)")
             return 0
@@ -490,7 +497,15 @@ def main() -> int:
         return 1
 
     PROBE_TABLE.parent.mkdir(parents=True, exist_ok=True)
-    PROBE_TABLE.write_text(out)
+    # encoding= and newline= are both load-bearing.
+    #
+    # Without encoding=, the write uses the locale codec — cp1252 on a Windows
+    # console, which encodes the em dash in the generated header as 0x97. That
+    # is not valid UTF-8, so a Linux checkout or CI fails to decode the file
+    # while Windows --check still passes (#6987).
+    #
+    # newline="" pins LF, so the committed file is LF on every platform.
+    PROBE_TABLE.write_text(out, encoding="utf-8", newline="")
     print(f"wrote {PROBE_TABLE.relative_to(REPO)}: {len(names)} seam signals")
     return 0
 

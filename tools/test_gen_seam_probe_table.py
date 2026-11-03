@@ -269,7 +269,7 @@ def test_live_header_matches_the_committed_table():
         check(excluded not in names,
               f"{excluded} is a protected/private member of IRadioBackend, "
               "not a signal")
-    check(gen.render(names) == gen.PROBE_TABLE.read_text(),
+    check(gen.render(names) == gen.PROBE_TABLE.read_text(encoding="utf-8"),
           "tests/SeamSignalProbeTable.inc is stale — run "
           "`python tools/gen_seam_probe_table.py`")
 
