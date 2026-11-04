@@ -447,7 +447,7 @@ void workerUnderrunTrace()
     for (unsigned chunk = 0; chunk < 512 && !pipeline->needsRepair(); ++chunk) { feed(); }
     check(pipeline->needsRepair() && slicePackets == 8,
           "real nonblocking WFM exchange withdraws beyond its bounded eight-block credit");
-    check(!pipeline->outputSettledForTest(), "a faulted receiver cannot acknowledge an offline feed");
+    check(!pipeline->outputSettledForTest(), "a faulted pipeline cannot acknowledge an offline feed");
     std::printf("WFM_HELD_BURST successful_blocks=%zu repair=%d\n", slicePackets, pipeline->needsRepair());
     const std::uint64_t faultCaptureFirst = failedCaptureFirst;
     // Subsequent continuous RF cannot publish stale decoder output or a second

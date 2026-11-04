@@ -906,7 +906,7 @@ int main(int argc, char** argv)
             break;
         }
     }
-    check(!pipeline->needsRepair() && pipeline->droppedPackets() == 0, "paced whole pipeline has no withdrawal or queue drop");
+    check(!pipeline->needsRepair() && pipeline->droppedPackets() == 0, "DSP-acknowledged whole pipeline has no withdrawal or queue drop");
     for (int id = 0; id < 4; ++id) {
         const double selected = magnitude(audio[id], tones[id]);
         double peak = 0.0;
