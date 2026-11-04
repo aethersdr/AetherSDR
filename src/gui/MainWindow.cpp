@@ -1960,8 +1960,6 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Title bar: PC Audio, master volume, headphone volume ────────────────
     // The remote_audio_rx stream controls the radio's audio routing:
     // stream exists → audio to PC; stream removed → audio to radio speakers.
-    // TCI clients get RX audio via DAX (#1331), not this stream, so PC Audio
-    // is free to toggle the stream purely on its own local-sink needs.
     connect(m_titleBar, &TitleBar::pcAudioToggled, this, [this](bool on) {
         if (on) {
             // Restart the local audio sink to recover from stale WASAPI sessions
@@ -1972,10 +1970,7 @@ MainWindow::MainWindow(QWidget* parent)
             });
             m_radioModel.createRxAudioStream();
         } else {
-            // Stop the local sink so audio isn't played locally, then drop
-            // the remote_audio_rx stream. TCI clients get RX audio via DAX
-            // (#1331), not this stream, so there's no client to keep it
-            // alive for.
+            // Stop the local sink so audio isn't played locally.
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->stopRxStream();
             });
@@ -3802,10 +3797,7 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         if (newComp != prevComp && m_radioModel.isConnected()) {
             qDebug() << "MainWindow: audio compression changed from" << prevComp
                      << "to" << newComp << "— recreating audio stream";
-            m_radioModel.removeRxAudioStream();
-            QTimer::singleShot(500, this, [this]() {
-                m_radioModel.createRxAudioStream();
-            });
+            m_radioModel.createAudioStream();
             updateNr2Availability();  // Disable NR2 if switching to Opus (#1597)
         }
     });

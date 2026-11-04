@@ -3,6 +3,7 @@
 #include <QWidget>
 
 class QPushButton;
+class QCheckBox;
 class QLabel;
 class QLineEdit;
 
@@ -11,6 +12,7 @@ namespace AetherSDR {
 class RadioModel;
 class TciServer;
 class MeterSlider;
+class ControlAvailabilityRegistry;
 
 // TCI Applet — TCI WebSocket server control panel.
 // Mirrors DaxApplet framework: per-channel meters + gain sliders for 8 RX
@@ -57,6 +59,10 @@ private:
     int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton* m_tciEnable{nullptr};
+    QCheckBox* m_lineOutIncludeTx{nullptr};
+    QCheckBox* m_lineOutPcAudioOffConsent{nullptr};
+    ControlAvailabilityRegistry* m_lineOutAvailability{nullptr};
+    ControlAvailabilityRegistry* m_lineOutPcAudioOffAvailability{nullptr};
     QLineEdit*   m_tciPort{nullptr};
     QLabel*      m_tciStatus{nullptr};
 
