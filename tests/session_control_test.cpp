@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/FlexSessionControls.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/WanConnection.h"
 #include "core/backends/sim/SimBackend.h"
 #include "models/RadioModel.h"
@@ -49,6 +50,12 @@ public:
     static bool pingActive(const RadioModel& model) { return model.m_pingTimer.isActive(); }
     static void startMonitor(RadioModel& model) { model.startNetworkMonitor(); }
     static void changeTransport(RadioModel& model) { ++model.m_connection->m_sessionGeneration; }
+    static void closeTransport(RadioModel& model, ConnectionState state)
+    {
+        model.m_connection->m_state.store(state);
+        ++model.m_connection->m_sessionGeneration;
+    }
+    static bool reconnectActive(const RadioModel& model) { return model.m_reconnectTimer.isActive(); }
     static bool registered(const RadioModel& model)
     { return model.m_guiClientRegistrationState.phase() == GuiClientRegistrationState::Phase::Registered; }
     static void installWriter(RadioConnection& connection, std::function<void(quint32, const QString&)> writer)
@@ -302,6 +309,64 @@ private slots:
             "sub amplifier all", "sub meter all", "sub audio all", "sub gps all", "sub apd all",
             "sub client all", "sub xvtr all"}));
         AppSettings::instance().setValue("LowBandwidthConnect", "False");
+    }
+    void registrationRejectionSurvivesQueuedClose()
+    {
+        for (ConnectionState state : {ConnectionState::Error, ConnectionState::Disconnected}) {
+            RadioModel model;
+            RecordingSessionBackend* backend = install(model);
+            QSignalSpy failures(&model, &RadioModel::guiClientRegistrationFailed);
+            QSignalSpy errors(&model, &RadioModel::connectionError);
+            SessionControlTestAccess::registerClient(model, "test-client");
+            const auto reply = backend->commands.back().reply;
+            const size_t before = backend->commands.size();
+            SessionControlTestAccess::closeTransport(model, state);
+            reply({RadioControlReply::Kind::Refused, static_cast<int>(0xf3000001u), "No GUI client slots"});
+            QCOMPARE(failures.size(), 1);
+            QVERIFY(!errors.isEmpty());
+            QVERIFY(errors.first().first().toString().contains("GUI client registration failed"));
+            QVERIFY(failures.first().first().toString().contains("No GUI client slots"));
+            QVERIFY(failures.first().first().toString().contains("choose Connect"));
+            QVERIFY(!SessionControlTestAccess::reconnectActive(model));
+            QVERIFY(!SessionControlTestAccess::registered(model));
+            QCOMPARE(backend->commands.size(), before);
+            reply({RadioControlReply::Kind::Refused, static_cast<int>(0xf3000001u), "duplicate"});
+            QCOMPARE(failures.size(), 1);
+        }
+    }
+    void registrationCannotAdvanceAfterCloseOrReplacement()
+    {
+        for (bool replace : {false, true}) {
+            for (bool refused : {false, true}) {
+                if (!replace && refused) { continue; }
+                RadioModel model;
+                RecordingSessionBackend* backend = install(model);
+                QSignalSpy failures(&model, &RadioModel::guiClientRegistrationFailed);
+                SessionControlTestAccess::registerClient(model, "test-client");
+                const auto reply = backend->commands.back().reply;
+                const size_t before = backend->commands.size();
+                if (replace) { SessionControlTestAccess::changeTransport(model); }
+                else { SessionControlTestAccess::closeTransport(model, ConnectionState::Disconnected); }
+                reply({refused ? RadioControlReply::Kind::Refused : RadioControlReply::Kind::Accepted,
+                       refused ? 42 : 0, {}});
+                QCOMPARE(failures.size(), 0);
+                QVERIFY(!SessionControlTestAccess::registered(model));
+                QCOMPARE(backend->commands.size(), before);
+            }
+        }
+    }
+    void retiredRegistrationRefusalCannotEndReplacementSession()
+    {
+        RadioModel model;
+        RecordingSessionBackend* backend = install(model);
+        QSignalSpy failures(&model, &RadioModel::guiClientRegistrationFailed);
+        SessionControlTestAccess::registerClient(model, "test-client");
+        const auto reply = backend->commands.back().reply;
+        SessionControlTestAccess::retire(model);
+        SessionControlTestAccess::begin(model, *backend);
+        SessionControlTestAccess::closeTransport(model, ConnectionState::Disconnected);
+        reply({RadioControlReply::Kind::Refused, 42, "old session"});
+        QCOMPARE(failures.size(), 0);
     }
     void startupDoesNotPersistSettings()
     {
