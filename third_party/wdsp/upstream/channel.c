@@ -2,7 +2,7 @@
 
 This file is part of a program that implements a Software-Defined Radio.
 
-Copyright (C) 2013 Warren Pratt, NR0V
+Copyright (C) 2013, 2026 Warren Pratt, NR0V
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -20,7 +20,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 The author can be reached by email at  
 
-warren@wpratt.com
+warren@pratt.one
 
 */
 
@@ -516,6 +516,34 @@ int SetChannelState (int channel, int state, int dmode)
 			InterlockedBitTestAndSet (&ch[channel].exchange, 0);
 			LeaveCriticalSection (&ch[channel].csEXCH);
 			break;
+		}
+	}
+	else if (state == 0 && dmode)
+	{	// already OFF; if a turn-off begun with dmode == 0 is still in progress, wait for it to complete
+		//
+		// AetherSDR patch 23: wait only for a turn-off whose ramp has already
+		// COMPLETED -- exchange clear and flushflag set, the same condition as
+		// patch 8's wait in case 1. That flush needs only the flushChannel
+		// thread, so the wait ends. A ramp still PENDING leaves exchange set and
+		// advances only when the host clocks fexchange*; a host that stopped
+		// with dmode 0 and is now inside RXASetNC/TXASetNC/SetDSPBuffsize/
+		// SetDSPSamplerate, or closing the channel, cannot clock it, so
+		// upstream's wait would always run to the 100 ms timeout -- under
+		// WdspChannel's global setup lock on every running-channel filter change
+		// (#5424), and on every close of a stopped channel. The pending ramp is
+		// left as 2.10 left it; patch 7 cancels it at the next start.
+		while (!_InterlockedAnd (&ch[channel].exchange, 1) &&
+				_InterlockedAnd (&ch[channel].flushflag, 1) &&
+				count < timeout)
+		{
+			Sleep(1);
+			count++;
+		}
+		if (count >= timeout)
+		{
+			InterlockedBitTestAndReset (&ch[channel].exchange, 0);
+			InterlockedBitTestAndReset (&ch[channel].flushflag, 0);
+			InterlockedBitTestAndReset (&a->slew.downflag, 0);
 		}
 	}
 	return prior_state;

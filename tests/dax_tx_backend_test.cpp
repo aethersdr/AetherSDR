@@ -1,6 +1,7 @@
 // Production decoding and command/reply injection: no transport is connected,
 // no listener is bound, and no radio, device, peer or RF is used.
 #include "TestSettingsProfile.h"
+#include "SeamThreadAffinityProbe.h"
 #include "core/backends/flex/FlexBackend.h"
 
 #include <QCoreApplication>
@@ -52,9 +53,11 @@ struct Fixture {
     std::vector<DaxTxRequestGuard> guards;
     std::vector<DaxTxStreamDelta> observations;
     FlexBackend backend;
+    test::SeamThreadAffinityProbe affinity{&backend};
 
     Fixture()
     {
+        test::attachAllSeamSignals(affinity);
         backend.setDaxTxClientHandleProvider([this] { return handle; });
         backend.setDaxTxCommandSink([this](const QString& command, FlexBackend::CommandReply reply,
                                           const DaxTxRequestGuard& guard) {
@@ -65,6 +68,11 @@ struct Fixture {
         });
         QObject::connect(&backend, &IRadioBackend::daxTxStreamChanged, &backend,
             [this](const DaxTxStreamDelta& delta) { observations.push_back(delta); });
+    }
+
+    ~Fixture()
+    {
+        check(affinity.violations().isEmpty(), "DAX seam signals stay on the backend owner's thread");
     }
 
     void status(quint32 id = kStream, quint32 owner = kOurs, bool tx = false)

@@ -27,6 +27,7 @@ warren@pratt.one
 #define _CRT_SECURE_NO_WARNINGS
 
 #include "comm.h"
+#include <limits.h>
 
 #define NNIO_NAMELEN	40
 #define NNIO_ENTRYLEN	72
@@ -112,7 +113,8 @@ static NNIO nnio_parse (const unsigned char* raw, size_t nbytes,
 	}
 
 	if (ntensors == 0 || ntensors > 100000 ||
-		(unsigned long long)nbytes < data_offset + data_bytes ||
+		data_offset > (unsigned long long)nbytes ||
+		data_bytes  > (unsigned long long)nbytes - data_offset ||
 		(unsigned long long)nbytes <
 			NNIO_HDRLEN + (unsigned long long)ntensors * NNIO_ENTRYLEN)
 	{
@@ -149,7 +151,7 @@ static NNIO nnio_parse (const unsigned char* raw, size_t nbytes,
 			f->ent[i].dims[d] = (int)nnio_u32 (e + 48 + 4 * d);
 			if (d < (int)ndim)
 			{
-				if (f->ent[i].dims[d] < 1)
+				if (f->ent[i].dims[d] < 1 || numel > INT_MAX / f->ent[i].dims[d])
 				{
 					dprintf ("nnio: tensor '%s' has bad dim[%d]\n", f->ent[i].name, d);
 					goto fail;
@@ -164,6 +166,12 @@ static NNIO nnio_parse (const unsigned char* raw, size_t nbytes,
 			(unsigned long long)offset + nbytes_t > data_bytes)
 		{
 			dprintf ("nnio: tensor '%s' has an inconsistent descriptor\n", f->ent[i].name);
+			goto fail;
+		}
+
+		if (numel > INT_MAX / (int)sizeof (double) - total)
+		{
+			dprintf ("nnio: %s is too large\n", what);
 			goto fail;
 		}
 

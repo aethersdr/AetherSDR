@@ -1,8 +1,10 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "CwReceiveControl.h"
 #include "SpotRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
+#include "CwTextRequest.h"
 #include "PanDisplayRequest.h"
 #include "PanLifecycleRequest.h"
 #include "AudioControlRequest.h"
@@ -670,6 +672,7 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    std::optional<CwReceiveControl> cwReceiveControl;
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
     std::optional<PanControl> panControl;
@@ -977,6 +980,7 @@ struct RadioCapabilities {
     int cwPitchStepHz = 10;
 
     QString cwTextKeyerName{QStringLiteral("CWX")};
+    std::optional<CwTextControl> cwTextControl;
     int cwTextMinWpm = 5;
     int cwTextMaxWpm = 100;
     int cwTextMaxMessageChars = 0;  // 0 = backend has no fixed whole-message limit

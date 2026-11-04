@@ -610,7 +610,8 @@ void DaxIqWorker::processIqPacket(int channel, const QByteArray& rawPayload, int
     // Write to pipe (non-blocking, Linux/macOS only)
 #ifndef Q_OS_WIN
     if (m_pipeFds[idx] >= 0) {
-        ::write(m_pipeFds[idx], swapped.constData(), swapped.size());
+        // Non-blocking FIFO: a block the reader has no room for is dropped.
+        [[maybe_unused]] const ssize_t written = ::write(m_pipeFds[idx], swapped.constData(), swapped.size());
     }
 #endif
 }

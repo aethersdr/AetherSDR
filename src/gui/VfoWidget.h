@@ -422,6 +422,10 @@ private:
     void updateFilterLabel();
     void updateModeTab();
     void rebuildFilterButtons();
+    void updateCwAutoTuneControls();
+    bool m_cwLoopRequested{false};
+    QPointer<QPushButton> m_registeredCwOnce;
+    QPointer<QPushButton> m_registeredCwLoop;
     void updateFilterHighlight();
     void applyFilterPreset(int widthHz);
     void saveFilterPresets();

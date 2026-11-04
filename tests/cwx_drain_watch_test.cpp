@@ -18,6 +18,7 @@
 // Run: ./build/cwx_drain_watch_test
 
 #include "models/CwxModel.h"
+#include "CwxControlTestFixture.h"
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <cstdio>
@@ -53,7 +54,7 @@ int main(int argc, char** argv)
         CwxModel m;
         const int epoch0 = m.drainEpoch();
         m.send("CQ");                       // emits replyCommandReady(cmd, epoch0)
-        m.handleSendReply(0, "42,1", epoch0, 1); // reply arrives → arm at end 42 (1-char batch)
+        m.handleSendReply(FlexCwxControls::decodeReply(0, "42,1", 1), epoch0, 1); // reply arrives → arm at end 42 (1-char batch)
         report("item3: reply arms watch at radio_index",
                m.cwxEndIndex() == 42,
                "cwxEndIndex=" + std::to_string(m.cwxEndIndex()));
@@ -65,7 +66,7 @@ int main(int argc, char** argv)
                m.drainEpoch() != epoch0, "");
 
         // Late reply for the discarded batch carries the pre-clear epoch.
-        m.handleSendReply(0, "99,2", epoch0, 1);
+        m.handleSendReply(FlexCwxControls::decodeReply(0, "99,2", 2), epoch0, 1);
         report("item3: stale (pre-clear epoch) reply is rejected, no re-arm",
                m.cwxEndIndex() == -1,
                "cwxEndIndex=" + std::to_string(m.cwxEndIndex()));
@@ -76,7 +77,7 @@ int main(int argc, char** argv)
         CwxModel m;
         const int epochA = m.drainEpoch();
         m.send("LONG MESSAGE");
-        m.handleSendReply(0, "500,1", epochA, 1);   // armed high, mid-macro
+        m.handleSendReply(FlexCwxControls::decodeReply(0, "500,1", 1), epochA, 1);   // armed high, mid-macro
         report("item3: armed at 500 before disconnect",
                m.cwxEndIndex() == 500, "");
 
@@ -87,7 +88,7 @@ int main(int argc, char** argv)
 
         // New session's first reply has a smaller radio_index than the stale 500.
         m.send("CQ");
-        m.handleSendReply(0, "10,1", epochB, 1);
+        m.handleSendReply(FlexCwxControls::decodeReply(0, "10,1", 1), epochB, 1);
         report("item3: post-reconnect smaller index arms cleanly (guard not wedged)",
                m.cwxEndIndex() == 10,
                "cwxEndIndex=" + std::to_string(m.cwxEndIndex()));
@@ -97,8 +98,8 @@ int main(int argc, char** argv)
     {
         CwxModel m;
         const int e = m.drainEpoch();
-        m.send("A"); m.handleSendReply(0, "50,1", e, 1);   // arm at end 50
-        m.send("B"); m.handleSendReply(0, "30,2", e, 1);   // out-of-order smaller
+        m.send("A"); m.handleSendReply(FlexCwxControls::decodeReply(0, "50,1", 1), e, 1);   // arm at end 50
+        m.send("B"); m.handleSendReply(FlexCwxControls::decodeReply(0, "30,2", 2), e, 1);   // out-of-order smaller
         report("item3: smaller in-session reply does not retract the watch",
                m.cwxEndIndex() == 50,
                "cwxEndIndex=" + std::to_string(m.cwxEndIndex()));
@@ -107,7 +108,7 @@ int main(int argc, char** argv)
     // ── Item 2: live-mode sendChar arms and drains the watch ──────────────────
     {
         CwxModel m;
-        QSignalSpy replySpy(&m, &CwxModel::replyCommandReady);
+        CwxWireSpy replySpy(&m, true);
         QSignalSpy emptySpy(&m, &CwxModel::queueEmpty);
         m.setLive(true);
 
@@ -117,7 +118,7 @@ int main(int argc, char** argv)
                replySpy.count() == 1,
                "replyCommandReady count=" + std::to_string(replySpy.count()));
 
-        m.handleSendReply(0, "5,1", e, 1);   // single live char: end == radio_index
+        m.handleSendReply(FlexCwxControls::decodeReply(0, "5,1", 1), e, 1);   // single live char: end == radio_index
         report("item2: live char arms the watch",
                m.cwxEndIndex() == 5, "");
 
@@ -135,7 +136,7 @@ int main(int argc, char** argv)
         QSignalSpy emptySpy(&m, &CwxModel::queueEmpty);
         const int e = m.drainEpoch();
         m.send("CQ");
-        m.handleSendReply(0, "10,1", e, 1);      // arm at end 10
+        m.handleSendReply(FlexCwxControls::decodeReply(0, "10,1", 1), e, 1);      // arm at end 10
 
         // Interleaved unrelated status (as arrives during interlock flicker).
         m.applyStatus({{QStringLiteral("wpm"), QStringLiteral("25")}});
@@ -160,7 +161,7 @@ int main(int argc, char** argv)
         QSignalSpy emptySpy(&m, &CwxModel::queueEmpty);
         const int e = m.drainEpoch();
         m.send("PARIS PARIS PARIS PARIS");          // 23 chars
-        m.handleSendReply(0, "49,1", e, 23);        // radio_index=49 (first char)
+        m.handleSendReply(FlexCwxControls::decodeReply(0, "49,1", 1), e, 23);        // radio_index=49 (first char)
         report("item4a: end index = radio_index + nChars - 1 (49+23-1)",
                m.cwxEndIndex() == 71,
                "cwxEndIndex=" + std::to_string(m.cwxEndIndex()));
@@ -191,7 +192,7 @@ int main(int argc, char** argv)
     // ── Cleanup: saveMacro strips client-only +/- before the shared radio store ─
     {
         CwxModel m;
-        QSignalSpy cmdSpy(&m, &CwxModel::commandReady);
+        CwxWireSpy cmdSpy(&m, false);
         m.saveMacro(0, "+CQ TEST");   // F1, raw text carries a speed modifier
         report("saveMacro keeps the raw +/- text client-side (for our expansion)",
                m.macro(0) == QStringLiteral("+CQ TEST"),
@@ -208,7 +209,7 @@ int main(int argc, char** argv)
     // ── Cleanup: sendMacro falls back to radio-side expansion when unsynced ────
     {
         CwxModel m;
-        QSignalSpy cmdSpy(&m, &CwxModel::commandReady);
+        CwxWireSpy cmdSpy(&m, false);
         m.sendMacro(1);   // F1 not yet synced (m_macros[0] empty) — must not no-op
         const QString got = cmdSpy.isEmpty() ? QString() : cmdSpy.last().at(0).toString();
         report("sendMacro (unsynced) falls back to `cwx macro send N`, not silence",

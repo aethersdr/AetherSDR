@@ -67,12 +67,14 @@
 #include <QSet>
 #include <functional>
 #include <memory>
+#include "core/backends/SessionCommandGuard.h"
 
 #include <QTimer>
 #include <QElapsedTimer>
 
 namespace AetherSDR {
 class TxController;
+class WanConnection;
 class IAutoRfGainControl;
 
 
@@ -944,7 +946,7 @@ public:
     // Send `radio reboot` (FlexLib Radio.cs:2575), surface a notification to
     // the operator, then trigger forceDisconnect so the standard reconnect
     // timer brings the link back when the radio finishes booting.
-    void rebootRadio();
+    bool rebootRadio(std::optional<RadioControlSession> expectedSession = {});
     bool isWan() const { return m_wanConn != nullptr; }
 
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forward the user's
@@ -1047,6 +1049,12 @@ public:
                        std::chrono::steady_clock::time_point scheduledAt);
     void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
+    void requestCwAutoTune(SliceModel* source, CwAutoTuneAction action);
+    bool cwAutoTuneLoopRequested(int sliceId) const;
+    QString cwAutoTuneUnavailableReason(SliceModel* source, CwAutoTuneAction action) const;
+    bool remoteOnRequested() const;
+    bool multiFlexRequested() const;
+    bool administrationSettingAvailable(RadioSetupField field) const;
     bool addSlice();           // Create a new slice on the active panadapter
     bool addSliceOnPan(const QString& panId); // Create a new slice on a specific pan
     bool addSliceOnPan(const QString& panId, double freqMhz);
@@ -1284,6 +1292,7 @@ public:
     void setPanNoiseFloorEnable(bool on);
 
 signals:
+    void cwAutoTuneIntentChanged(int sliceId);
     // RFC #5535's visibility condition, republished for the GUI. See
     // core/backends/FrontEndOverload.h.
     void frontEndOverloadChanged(const AetherSDR::FrontEndOverload& state);
@@ -2085,6 +2094,41 @@ private:
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
+    friend class RadioAdministrationTestAccess;
+    struct PendingAdministrationWrite {
+        RadioControlSession session{};
+        SessionCommandGuard guard;
+        RadioControlFence current;
+        RadioControlCompletion completion;
+        std::function<void()> written;
+        QPointer<QTimer> deadline;
+        QPointer<WanConnection> wan;
+        quint64 wireGeneration{0};
+        quint32 sequence{0};
+        bool delivered{false};
+    };
+    struct CwAutoTuneOperation;
+    bool dispatchAdministrationCommand(const QString& command,
+        const RadioControlCompletion& completion, const RadioControlFence& current,
+        const std::function<void()>& written);
+    void finishAdministrationWrite(quint64 ticket, const RadioControlReply& reply);
+    void administrationWriteResult(quint64 ticket, bool written);
+    void forgetAdministrationReply(const PendingAdministrationWrite& operation);
+    void reconcileAdministration();
+    void resetAdministration(bool notify = true);
+    ReceiveDispatch requestAdministrationSetting(const RadioSetupRequest& request,
+        QObject* context, const RadioControlCompletion& completion);
+    QHash<quint64, std::shared_ptr<PendingAdministrationWrite>> m_administrationWrites;
+    QHash<int, std::shared_ptr<CwAutoTuneOperation>> m_cwAutoTuneOperations;
+    quint64 m_administrationTicket{0};
+    std::array<quint64, 2> m_administrationRevisions{};
+    std::array<std::optional<bool>, 2> m_administrationPending{};
+    std::array<bool, 2> m_administrationObserved{};
+    quint64 m_rebootRevision{0};
+    bool m_rebootQueued{false};
+    QString m_rebootRadioSerial;
+    bool m_reconcilingAdministration{false};
+    bool m_resettingAdministration{false};
     friend class WaveformEnvTestAccess;
     friend class NtpSourcesTestAccess;
     friend class StoredControlTestAccess;
@@ -2215,6 +2259,7 @@ private:
     TxCoordinator::Operation m_cwxCommandOperation;
     unsigned m_cwxPendingDeliveries{0};
     bool m_cwxHandoffComplete{false};
+    std::shared_ptr<std::atomic<bool>> m_cwxSessionValid{std::make_shared<std::atomic<bool>>(true)};
     std::atomic<quint64> m_cwInputSession{0};
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
@@ -2239,11 +2284,10 @@ private:
     void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
-    void sendCwxCommand(const QString& command, bool keying,
-                        const TxCoordinator::Operation& operation, ResponseCallback reply = {});
-    void dispatchCwxCommand(const QString& command, TxCoordinator::Operation operation,
-                            int epoch = -1, int nChars = -1);
+    ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
+                                       int epoch, int nChars, RadioControlFence current);
     bool dispatchCwxText(const QString& text, TxCoordinator::Operation operation);
+    bool sendCwxConfigurationCommand(const QString& command, RadioControlFence current);
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);

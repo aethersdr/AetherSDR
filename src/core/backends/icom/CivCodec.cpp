@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 
 namespace AetherSDR::icom {
@@ -1397,10 +1396,10 @@ std::optional<GpsPosition> decodeGpsPosition(std::span<const std::uint8_t> data)
         const int second = decodeBcdByte(data[26]);
         if (validDate(year, month, day)
             && hour <= 23 && minute <= 59 && second <= 60) {
-            char iso[21]{};
-            std::snprintf(iso, sizeof(iso), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-                          year, month, day, hour, minute, second);
-            out.utcIso8601 = iso;
+            // Every field is in range here: the year has four digits, the rest two.
+            const auto two = [](int v) { return std::string{char('0' + v / 10), char('0' + v % 10)}; };
+            out.utcIso8601 = std::to_string(year) + '-' + two(month) + '-' + two(day) + 'T' + two(hour)
+                             + ':' + two(minute) + ':' + two(second) + 'Z';
         }
     }
     return out;
