@@ -14,7 +14,7 @@ Open it from **Tools → Memory...**
 For quick recall while operating, the panadapter's overlay **Memory** button
 opens a browse panel (see [Memory browse panel](#memory-browse-panel)).
 
-<img src="/img/screens/memory-dialog.png" width="1000" alt="Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode. Its selected row is owned by KI4TTZ and reads 8.891000 MHz, Atlantic Flights into UK, USB, 500, SIMPLEX, 0.0 and OFF. A tip line explains how to tune and edit. The bottom buttons are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 1 selected." />
+<img src="/img/screens/memory-dialog.png" width="1000" alt="Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KI4TTZ, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected." />
 
 *The Memory Channels window, listing the memories stored in the radio.*
 
