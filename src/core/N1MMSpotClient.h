@@ -35,7 +35,7 @@ public:
 
 public slots:
     // Defer socket construction to the worker thread (#1929) — see
-    // SpotCollectorClient::initialize().
+    // WsjtxClient::initialize().
     void initialize();
 
 signals:

@@ -33,6 +33,7 @@
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/ReceiveCommand.h"
 #include "core/backends/ModelControlRequest.h"
+#include "core/backends/CwTextRequest.h"
 #include "core/backends/RadioSetupRequest.h"
 #include "core/backends/SpotRequest.h"
 #include "core/backends/PanControlRequest.h"
@@ -186,6 +187,12 @@ public:
             || request.field == RadioSetupRequest::Field::ClientStation)
             ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
     }
+    virtual ReceiveDispatch requestRadioReboot(const RadioControlCompletion&,
+        const RadioControlFence&, const std::function<void()>&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestCwAutoTune(int, CwAutoTuneAction,
+        const RadioControlCompletion&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSpot(const SpotRequest&, const QString& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestPanControl(const QString&, const PanControlRequest&)
@@ -825,6 +832,16 @@ public:
     Q_UNUSED(completion);
         Q_UNUSED(text);
         return QStringLiteral("radio has no text keyer");
+    }
+    // Buffered text control is optional. Keying retains an admitted operation;
+    // operator configuration uses session/edit fences without an operation;
+    // original-intent cleanup retains its operation and never acquires one here.
+    virtual ReceiveDispatch requestCwTextControl(const CwTextRequest& request,
+        const TxCoordinator::Command& command, const RadioControlFence& current,
+        const CwTextCompletion& completion = {})
+    {
+        Q_UNUSED(request); Q_UNUSED(command); Q_UNUSED(current); Q_UNUSED(completion);
+        return ReceiveDispatch::Unsupported;
     }
     virtual void abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) { Q_UNUSED(operation); Q_UNUSED(completion); }
     virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }

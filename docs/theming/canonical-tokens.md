@@ -98,6 +98,11 @@ band of reserved-but-empty space above the old strip for as long as they matched
 
 | Token | Canonical (dark) | Refs |
 |---|---|---|
+| `color.networkQuality.excellent` | `#00cc66` | Excellent/Very Good network grade; light aliases `green.500` |
+| `color.networkQuality.good` | `#00b4d8` | Good grade; light aliases `blue.500` |
+| `color.networkQuality.fair` | `#cc9900` | Fair grade / 8 fps cap; light `#a85a00` |
+| `color.networkQuality.poor` | `#cc3333` | Poor grade / 4 fps cap; light aliases `red.500` |
+| `color.networkQuality.off` | `#8aa8c0` | Off or unknown network grade, both themes |
 | `color.titlebar.background` | `#eb0d1624` | the 52 px bar's surface (0.92 alpha, pre-composited over `background.app` — the window is opaque) |
 | `color.titlebar.border` | `#2978bee6` | 1 px rule under the bar (0.16 alpha) |
 | `color.titlebar.tab.hover` | `#12ffffff` | inactive radio tab, hovered |

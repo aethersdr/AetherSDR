@@ -48,7 +48,11 @@ the Tuner Genius XL.
 ### TUNE
 
 - **Right-click TUNE** to choose **Mono Tone** or **Two Tone** for the tune
-  carrier.
+  carrier. **Two Tone** requires a radio with a two-tone generator (FlexRadio).
+  On other connected radios the entry is dimmed with a reason; its keyboard
+  shortcut and MIDI action show the reason without starting TUNE. Use ordinary
+  **TUNE** for a single carrier on transmit-capable radios. Stopping an active
+  tune remains available.
 - Changes to **Tune Power** made while TUNE is keyed take effect immediately,
   including on the Hermes-Lite 2 and networked Icom radios.
 - TUNE and CW keying lock each other out: while TUNE is on, a paddle, straight
@@ -137,7 +141,13 @@ confirmation.
 - **+ACC** — accessory input toggle
 - **PROC** — speech processor (NOR/DX/DX+)
 - **DAX** — DAX audio toggle
-- **MON** — monitor + volume slider
+- **MON** — monitor + volume slider. Both are disabled, with an explanation
+  in their tooltips and accessible descriptions, when the connected radio
+  does not expose monitor control.
+
+MON and VOX shortcuts and MIDI mappings also refuse unsupported controls and
+show an unsupported-control notice instead of changing the model state.
+Radios that expose these controls keep their normal behavior.
 
 Hover the Level, Compression or ALC gauge for its exact value. In CW modes the
 applet switches to keyer controls, including the APF toggle and level.
@@ -158,6 +168,10 @@ changes made at the radio or by another client; **Breakin** requests a change.
 
 - **AM Carrier slider** (0–100)
 - **VOX** toggle + level + delay
+
+  The toggle and level slider are disabled, with an explanation in their
+  tooltips and accessible descriptions, when the connected radio does not
+  expose VOX control. Delay is available only when the radio exposes it.
 
   Automation can explicitly disarm VOX with `invoke "VOX voice-operated transmit"
   setChecked false` without TX permission. The `vox_toggle` automation shortcut

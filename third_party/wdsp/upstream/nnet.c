@@ -20,7 +20,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 The author can be reached by email at
 
-warren@wpratt.com
+warren@pratt.one
 
 */
 
@@ -36,15 +36,16 @@ warren@wpratt.com
 #define NNET_KF			5
 #define NNET_SF			2
 #define NNET_PF			2
-#define NNET_GMAX_DB	12.0
+#define NNET_GMAX_DB	12.0				// leave at default
 
 #define NNR_PI			3.14159265358979323846
 #define NNR_TWOPI		6.28318530717958647692
 #define DF_TINY			1.0e-30
 #define COND_TINY		1.0e-20
 
-#define NNET_TAU_DEFAULT	2.0
-#define NNET_FRAME_RATE		62.5
+#define NNET_TAU_DEFAULT	2.0				// leave at default
+
+#define NNET_FRAME_RATE		62.5            // fallback only
 
 static char nnet_model_path[NNET_NSLOTS][512] =
 {
@@ -59,7 +60,6 @@ static char nnet_model_path[NNET_NSLOTS][512] =
 	"wdsp_nnr_3.bin",
 #endif
 };
-
 
 extern const unsigned char nnr_model_0_data[];
 extern const unsigned int  nnr_model_0_size;
@@ -1038,6 +1038,7 @@ typedef struct _nnet
 	int slot;
 	int nbins;
 	int lookahead;
+	double frame_rate;
 	double tau;
 	double gmax_db;
 	double sm_att;
@@ -1066,7 +1067,104 @@ typedef struct _nnet
 	double* p[2];
 	double* d[4];
 	double* cat[4];
-} nnet;				/* NNET is typedef'd in nnet.h */
+
+	double band_low;
+	double band_high;
+} nnet;						/* NNET is typedef'd in nnet.h */
+
+static NNIO nnet_open_model (int slot, int verbose)
+{
+	NNIO f;
+
+	if (slot < 0 || slot >= NNET_NSLOTS) slot = 0;
+
+	if (nnet_model_path[slot][0] != '\0' &&
+		(f = nnio_open (nnet_model_path[slot])) != 0)
+	{
+		if (verbose)
+			dprintf ("nnet: slot %d using the model file '%s'\n",
+					 slot, nnet_model_path[slot]);
+		return f;
+	}
+
+	if (*nnr_builtin[slot].size > 0 &&
+		(f = nnio_open_mem (nnr_builtin[slot].data, *nnr_builtin[slot].size,
+							"a built-in model")) != 0)
+	{
+		if (verbose)
+			dprintf ("nnet: no '%s' in the working directory - slot %d is "
+					 "using its built-in model\n",
+					 nnet_model_path[slot], slot);
+		return f;
+	}
+
+	if (verbose)
+		dprintf ("nnet: slot %d is empty - no '%s' and nothing built in\n",
+				 slot, nnet_model_path[slot]);
+	return 0;
+}
+
+
+int nnet_probe_slot (int slot, int* nbins, int* nrate, int* nfft, int* hop,
+	int* lookahead, double* band_lo, double* band_hi)
+{
+	NNIO f;
+	int idx;
+	const double* v;
+	int lnb = 0, lnr = 16000, lnf = 512, lhp = 256, lla = 0;
+
+	double lbl = 0.0, lbh = 0.0;
+
+	if ((f = nnet_open_model (slot, 0)) == 0) return 0;
+
+	if ((v = nnio_get (f, "cfg", 7, 0, 0, 0)) != 0)
+		lnb = (int)v[0];
+
+	if ((idx = nnio_find (f, "geom")) >= 0 && nnio_numel (f, idx) == 3
+		&& (v = nnio_data (f, idx)) != 0)
+	{
+		lnr = (int)v[0];
+		lnf = (int)v[1];
+		lhp = (int)v[2];
+	}
+
+	if ((idx = nnio_find (f, "lookahead")) >= 0 && nnio_numel (f, idx) == 1
+		&& (v = nnio_data (f, idx)) != 0)
+		lla = (int)v[0];
+
+	if ((idx = nnio_find (f, "band")) >= 0 && nnio_numel (f, idx) == 2
+		&& (v = nnio_data (f, idx)) != 0)
+	{
+		lbl = v[0];
+		lbh = v[1];
+		if (lbl < 0.0 || lbh <= lbl)
+		{
+			dprintf ("nnet: slot %d model declares band %.1f-%.1f Hz, "
+					 "which is not usable - ignoring it\n", slot, lbl, lbh);
+			lbl = lbh = 0.0;
+		}
+	}
+
+	nnio_close (f);
+
+	if (lnb <= 0 || lnr <= 0 || lnf <= 0 || lhp <= 0 || lla < 0) return 0;
+	if (lnf % lhp != 0)
+	{
+		dprintf ("nnet: slot %d model hop %d does not divide fftsize %d\n",
+				 slot, lhp, lnf);
+		return 0;
+	}
+
+	if (nbins)     *nbins     = lnb;
+	if (nrate)     *nrate     = lnr;
+	if (nfft)      *nfft      = lnf;
+	if (hop)       *hop       = lhp;
+	if (lookahead) *lookahead = lla;
+	if (band_lo)   *band_lo   = lbl;
+	if (band_hi)   *band_hi   = lbh;
+	return 1;
+}
+
 
 static int nnet_build (NNET n)
 {
@@ -1076,24 +1174,7 @@ static int nnet_build (NNET n)
 
 	if (n->slot < 0 || n->slot >= NNET_NSLOTS) n->slot = 0;
 
-	if (nnet_model_path[n->slot][0] != '\0' &&
-		(n->mf = nnio_open (nnet_model_path[n->slot])) != 0)
-		dprintf ("nnet: slot %d using the model file '%s'\n",
-				 n->slot, nnet_model_path[n->slot]);
-	else if (*nnr_builtin[n->slot].size > 0 &&
-			 (n->mf = nnio_open_mem (nnr_builtin[n->slot].data,
-									 *nnr_builtin[n->slot].size,
-									 "a built-in model")) != 0)
-		dprintf ("nnet: no '%s' in the working directory - slot %d is using "
-				 "its built-in model\n", nnet_model_path[n->slot], n->slot);
-	else
-	{
-		dprintf ("nnet: slot %d is empty - no '%s' and nothing built in\n",
-				 n->slot, nnet_model_path[n->slot]);
-		return 0;
-	}
-
-	if (n->mf == 0) return 0;
+	if ((n->mf = nnet_open_model (n->slot, 1)) == 0) return 0;
 	if ((cfg = nnio_get (n->mf, "cfg", 7, 0, 0, 0)) == 0) return 0;
 
 	if ((int)cfg[0] != n->nbins)
@@ -1183,16 +1264,12 @@ static int nnet_build (NNET n)
 	}
 
 	n->df = create_dfhead (n->nbins, n->order, n->floor_db, n->gmax_db);
-	setSmooth_dfhead (n->df, n->sm_att, n->sm_rel, (double) NNET_FRAME_RATE);
+	setSmooth_dfhead (n->df, n->sm_att, n->sm_rel, n->frame_rate);
 	return 1;
 }
 
-NNET create_nnet (int nbins, int lookahead, double floor_db)
-{
-	return create_nnet_slot (0, nbins, lookahead, floor_db);
-}
-
-NNET create_nnet_slot (int slot, int nbins, int lookahead, double floor_db)
+NNET create_nnet_slot (int slot, int nbins, int lookahead, double floor_db,
+	double frame_rate, double band_low, double band_high)
 {
 	NNET n = (NNET) malloc0 (sizeof (nnet));
 	n->slot      = slot;
@@ -1203,13 +1280,17 @@ NNET create_nnet_slot (int slot, int nbins, int lookahead, double floor_db)
 	n->sm_att = 0.0;
 	n->sm_rel = 0.0;
 	n->floor_db  = floor_db;
+	n->band_low = band_low;
+	n->band_high = band_high;
 
-	n->cnd = create_cond (nbins, 0.3, n->tau, 62.5, 1.0e-9);
+	if (!(frame_rate > 0.0)) frame_rate = 62.5;
+	n->frame_rate = frame_rate;
+	n->cnd = create_cond (nbins, 0.3, n->tau, frame_rate, 1.0e-9);
 
 	n->ready = nnet_build (n);
 	if (!n->ready)
 		dprintf ("nnet: no usable model at '%s' - passing audio through\n",
-			nnet_model_path);
+			nnet_model_path[slot]);
 	else
 		dprintf ("nnet: model loaded - ch %d/%d/%d/%d, hid %d, order %d, "
 			"bins %d/%d/%d/%d/%d\n",
@@ -1569,8 +1650,7 @@ void setSmooth_nnet (NNET n, double att_ms, double rel_ms)
 	n->sm_att = att_ms;
 	n->sm_rel = rel_ms;
 	if (n->df)
-		setSmooth_dfhead (n->df, att_ms, rel_ms,
-			(double) NNET_FRAME_RATE);
+		setSmooth_dfhead (n->df, att_ms, rel_ms, n->frame_rate);
 }
 
 void getSmooth_nnet (NNET n, double* att_ms, double* rel_ms)
@@ -1649,6 +1729,15 @@ int getBins_nnet (NNET n)
 int getLookahead_nnet (NNET n)
 {
 	return n->lookahead;
+}
+
+int getTrainingBand (NNET n, double* band_low, double* band_high)
+{
+	if (n == 0) { *band_low = *band_high = 0.0; return 0; }
+	*band_low  = n->band_low;
+	*band_high = n->band_high;
+	if (n->band_low == 0.0 && n->band_high == 0.0) return 0;
+	else                                           return 1;
 }
 
 PORT void

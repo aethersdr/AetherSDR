@@ -4,7 +4,7 @@
 #include <type_traits>
 
 // Operator ranges and default markers for WDSP Neural Noise Reduction. Every
-// number is read out of WDSP 2.10: tuning defaults from create_dfhead() and
+// number is read out of WDSP 2.11: tuning defaults from create_dfhead() and
 // create_nnet_slot() (nnet.c), range limits from the setters' clamps. Exception:
 // kMaskFloor's default comes from the create_nnr() call in
 // third_party/wdsp/upstream/RXA.c and setFloor_nnet() clamps nothing, so its
