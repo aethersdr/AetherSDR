@@ -232,7 +232,7 @@ void TciApplet::buildUI()
     auto* lineOutConsentRow = new QHBoxLayout;
     lineOutConsentRow->setContentsMargins(4, 1, 4, 2);
     m_lineOutPcAudioOffConsent = new QCheckBox(
-        tr("Line Out with PC Audio off (mutes radio outputs)"), this);
+        tr("Line Out with PC Audio off\n(mutes radio outputs)"), this);
     m_lineOutPcAudioOffConsent->setObjectName(QStringLiteral("tciLineOutPcAudioOffConsent"));
     m_lineOutPcAudioOffConsent->setAccessibleName(
         tr("Allow Line Out with PC Audio off; mutes radio outputs"));

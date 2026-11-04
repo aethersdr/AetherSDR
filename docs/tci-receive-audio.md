@@ -29,8 +29,10 @@ default-off **Line Out with PC Audio off** consent is enabled. Without consent,
 PC Audio off releases the radio stream and Line Out sends no type-4 frames.
 Without a playback device, the
 existing 10 ms timer drains the same mixer at 48 kHz; no audio sink is opened.
-Turning PC Audio off closes only playback and does not stop recording. The last
-Line Out subscriber releases its demand without removing a stream needed by PC Audio.
+Turning PC Audio off preserves the subscription. Capture continues only with
+consent; otherwise its PCM epoch is revoked and no type-4 frames are sent until
+PC Audio returns or consent is granted. The last Line Out subscriber releases
+its demand without removing a stream needed by PC Audio.
 
 `TciRecording.lineOutIncludeTx` defaults false. While false, Line Out sends
 silence during any radio TX, including simultaneous receive. While true, it

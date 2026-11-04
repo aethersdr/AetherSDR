@@ -113,6 +113,8 @@ public:
     bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
     void setLineOutPcAudioOffConsent(bool enabled);
     bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
+    // The application owns PC Audio preferences; refresh after its toggle.
+    void updateLineOutCapture();
     // Thread-safe owning ingress, safe even if a source callback overlaps
     // controller destruction. The closure contains no controller pointer.
     std::function<void(int, const PcmFrame&)> daxPcmSink() const;
@@ -366,7 +368,6 @@ private:
 
     void syncClient(const ClientState& client);
     void syncLineOutClient(const ClientState& client);
-    void updateLineOutCapture();
     bool m_lineOutIncludeTx{false};
     bool m_lineOutPcAudioOffConsent{false};
     bool m_lineOutCaptureWanted{false};

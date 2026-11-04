@@ -47,6 +47,9 @@ int main(int argc, char** argv)
           && lineOutConsent->text().contains(QStringLiteral("Line Out with PC Audio off"))
           && lineOutConsent->text().contains(QStringLiteral("mutes radio outputs")),
           "PC Audio-off Line Out consent is distinct from TX inclusion and names its radio-output effect");
+    if (lineOutConsent) { lineOutConsent->ensurePolished(); }
+    check(lineOutConsent && lineOutConsent->sizeHint().width() <= 240,
+          "the consent warning fits the default 248-pixel applet without clipping");
     check(lineOutConsent && !lineOutConsent->isChecked()
           && consentWarning.contains(QStringLiteral("mutes"))
           && consentWarning.contains(QStringLiteral("speaker"))

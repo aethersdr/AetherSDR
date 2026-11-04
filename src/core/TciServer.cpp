@@ -330,6 +330,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // ensureDaxForTci() and would otherwise never get an RX stream (#3270).
         connect(m_model, &RadioModel::connectionStateChanged,
                 this, [this](bool connected) {
+            updateLineOutCapture();
             if (!connected) {
                 // A backend may retain its capabilities while disconnected.
                 // Tell clients that every receiver is unavailable before the
@@ -550,6 +551,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
 
         connect(m_model, &RadioModel::capabilitiesChanged, this,
                 [this](bool, const RadioCapabilities&) {
+            updateLineOutCapture();
             broadcastTxPermissions();
             announceEffectiveIqSampleRate();
             reconcileIqStreams();
@@ -2894,6 +2896,7 @@ void TciServer::setLineOutPcAudioOffConsent(bool enabled)
     m_lineOutPcAudioOffConsent = enabled;
     writeRecordingSetting(QStringLiteral("lineOutPcAudioOffConsent"), enabled);
     if (m_model) { m_model->setLineOutPcAudioOffConsent(enabled); }
+    updateLineOutCapture();
     emit lineOutPcAudioOffConsentChanged(enabled);
 }
 
@@ -2910,9 +2913,13 @@ void TciServer::updateLineOutCapture()
     for (const ClientState& client : m_clients) { wanted |= !client.lineOutReceivers.isEmpty(); }
     wanted = wanted && m_audio && isRunning() && m_model && m_model->isConnected();
     if (m_model) { m_model->setLineOutAudioRequested(wanted); }
-    if (!m_audio || wanted == m_lineOutCaptureWanted) { return; }
-    m_lineOutCaptureWanted = wanted;
-    QMetaObject::invokeMethod(m_audio, [audio = m_audio, wanted] { audio->setLineOutCaptureEnabled(wanted); }, Qt::AutoConnection);
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    const bool captureWanted = wanted && (pcAudio || m_lineOutPcAudioOffConsent);
+    if (!m_audio || captureWanted == m_lineOutCaptureWanted) { return; }
+    m_lineOutCaptureWanted = captureWanted;
+    QMetaObject::invokeMethod(m_audio, [audio = m_audio, captureWanted] {
+        audio->setLineOutCaptureEnabled(captureWanted);
+    }, Qt::AutoConnection);
 }
 
 void TciServer::syncClient(const ClientState& client)

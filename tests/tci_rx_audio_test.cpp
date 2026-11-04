@@ -13,6 +13,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QSemaphore>
+#include <QScopeGuard>
 #include <QJsonArray>
 #include <QStringList>
 #include "core/TciClient.h"
@@ -27,6 +28,15 @@
 #include <vector>
 
 namespace AetherSDR {
+class AudioEngineRatesTestAccess {
+public:
+    static void drain(AudioEngine& engine)
+    {
+        engine.drainRxAudio(480 * 2 * sizeof(float));
+    }
+    static void stopTimer(AudioEngine& engine) { engine.m_rxTimer->stop(); }
+};
+
 namespace {
 int checks = 0;
 int failures = 0;
@@ -184,6 +194,86 @@ class TciRxAudioTest {
         }
     }
 public:
+    static void lineOutCaptureConsent()
+    {
+        AppSettings& settings = AppSettings::instance();
+        const QVariant previousPcAudio = settings.value("PcAudioEnabled", "True");
+        const bool hadRecording = settings.contains("TciRecording");
+        const QVariant previousRecording = settings.value("TciRecording");
+        const auto restoreSettings = qScopeGuard([&] {
+            settings.setValue("PcAudioEnabled", previousPcAudio);
+            if (hadRecording) { settings.setValue("TciRecording", previousRecording); }
+            else { settings.remove("TciRecording"); }
+            settings.save();
+        });
+        settings.setValue("PcAudioEnabled", "False");
+
+        PcmFrame captured;
+        AudioEngine audio;
+        AudioEngineRatesTestAccess::stopTimer(audio);
+        Fixture fixture;
+        fixture.server.setAudioEngine(&audio);
+        fixture.server.setLineOutPcAudioOffConsent(false);
+        fixture.server.m_running.store(true);
+        fixture.backend->connected = true;
+        fixture.backend->add(0);
+        TciClient* listener = fixture.client(48000, 0);
+        fixture.command(listener, QStringLiteral("audio_stop:0;line_out_start:0;"));
+        QObject::connect(&audio, &AudioEngine::lineOutPcmReady, &audio,
+            [&captured](const PcmFrame& frame, bool) { captured = frame; });
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        const auto feedMix = [&] {
+            audio.feedPcmFrame(frame(producer, 480));
+            AudioEngineRatesTestAccess::drain(audio);
+        };
+        const auto noPackets = [&](const char* message) {
+            feedMix();
+            check(fixture.packets[listener].isEmpty(), message);
+        };
+        const auto receivesLineOut = [&](const char* message) {
+            feedMix();
+            const QList<QByteArray>& packets = fixture.packets[listener];
+            check(!packets.isEmpty() && word(packets.last(), 6) == 4, message);
+            fixture.packets[listener].clear();
+        };
+
+        check(fixture.model.lineOutAudioRequested()
+              && !fixture.model.lineOutAudioStreamDemanded(),
+              "inactive Line Out keeps its subscription without demanding radio audio");
+        noPackets("PC Audio off without consent cannot record a live shared mixer");
+
+        fixture.server.setLineOutPcAudioOffConsent(true);
+        receivesLineOut("granting consent starts type-4 mixer delivery without PC playback");
+        check(captured.current(), "consented Line Out publishes a live PCM epoch");
+        fixture.server.setLineOutPcAudioOffConsent(false);
+        check(!captured.current(), "withdrawing consent revokes queued Line Out PCM");
+        fixture.server.m_io->receiveLineOutPcm(captured, false);
+        noPackets("withdrawing consent stops live and previously queued type-4 audio");
+        fixture.packets[listener].clear();
+
+        settings.setValue("PcAudioEnabled", "True");
+        fixture.server.updateLineOutCapture();
+        receivesLineOut("restoring PC Audio resumes the existing Line Out subscription");
+        settings.setValue("PcAudioEnabled", "False");
+        fixture.server.updateLineOutCapture();
+        check(!captured.current(), "turning PC Audio off revokes Line Out without consent");
+        noPackets("turning PC Audio off suspends Line Out until consent is granted");
+        fixture.packets[listener].clear();
+        fixture.server.setLineOutPcAudioOffConsent(true);
+        receivesLineOut("consent resumes Line Out after a PC Audio toggle");
+
+        fixture.backend->connected = false;
+        emit fixture.model.connectionStateChanged(false);
+        check(!captured.current() && !fixture.model.lineOutAudioRequested(),
+              "radio disconnect retires mixer capture and radio demand");
+        noPackets("a disconnected radio cannot retain a Line Out capture");
+        fixture.packets[listener].clear();
+        fixture.backend->connected = true;
+        emit fixture.model.connectionStateChanged(true);
+        receivesLineOut("radio reconnect resumes an authorized existing Line Out subscription");
+    }
+
     static void lineOutFailureIsolation()
     {
         for (int failureMode : {0, 1, 2}) {
@@ -1318,7 +1408,7 @@ public:
     {
         serverConstructedAfterReceiverRestore();
         simultaneousEightReceiverHandshakes();
-        lineOutFailureIsolation(); lineOutProtocol(); lineOutDemandLifecycle(); lineOutDelivery(); eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
+        lineOutCaptureConsent(); lineOutFailureIsolation(); lineOutProtocol(); lineOutDemandLifecycle(); lineOutDelivery(); eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding(); nonFiniteInt16IsSilence(); receiveAttenuationAndMeter();
         replayAndEpochs(); resetIsolation(); sampleTypeIsNamed(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); daxRouteSurvivesStreamUnregister(); pressureAndReplacement();

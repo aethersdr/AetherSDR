@@ -19,9 +19,9 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | Spots | Separate DX cluster connection | Same WebSocket |
 | CW keying | Serial DTR/RTS or rigctld | Same WebSocket |
 
-<img src="/img/screens/tci-applet.png" width="248" alt="TCI Server applet. Level bars for RX1, assigned to Slice A, RX2 to RX4, unassigned, and TX, assigned to Slice A, sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server." />
+<img src="/img/screens/tci-applet.png" width="248" alt="TCI Server applet with RX1 and TX level meters, unchecked Include TX (Line Out) and Line Out with PC Audio off controls, a visible mutes radio outputs warning, port 50001, and a Disabled button." />
 
-*The TCI Server applet in the applet panel.*
+*The TCI Server applet with separate Line Out TX inclusion and PC Audio-off consent controls.*
 
 ## Setup
 
@@ -208,8 +208,10 @@ input routing or transmitter state.
 Switching PC Audio on or off does not stop an active Line Out subscription.
 When PC Audio is turned off without consent, the subscription remains active
 but sends no type-4 frames until PC Audio is restored or consent is enabled.
-The radio audio stream is released after the last Line Out listener stops unless
-PC playback still needs it or the consent setting is enabled.
+Withdrawing consent while PC Audio is off also stops type-4 delivery without
+removing the subscription. The radio audio stream is released after the last
+Line Out listener stops unless PC playback still needs it; consent alone does
+not keep the stream open.
 Server-side `line_out_recorder_*` file recording is not implemented.
 Live TX, MON and multi-client recording qualification remain outstanding
 ([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
