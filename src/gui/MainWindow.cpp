@@ -71,6 +71,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "AppletPanel.h"
+#include "PureSignalApplet.h"
 #include "DemoApplet.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
@@ -7573,6 +7574,10 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     // without cached wisdom, so the operator needs a visible explanation. The
     // panadapter animation is hidden behind ConnectionPanel (parented
     // Qt::Dialog, shown until connected), hence a dialog (#5052, #4775).
+    // PureSignal is HL2-only; any other family unbinds the applet.
+    if (m_appletPanel && m_appletPanel->pureSignalApplet())
+        m_appletPanel->pureSignalApplet()->setBackend(dynamic_cast<hl2::Hl2Backend*>(backend));
+
     if (auto* hl2Backend = dynamic_cast<hl2::Hl2Backend*>(backend)) {
         // Disconnected first, like every other lambda connect in this function:
         // the helper promises to be idempotent for the same live backend, and

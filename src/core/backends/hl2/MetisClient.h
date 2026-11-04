@@ -58,6 +58,10 @@ public:
         // a board for more receivers than it has is a configuration the
         // gateware cannot honour, and it does not report the refusal.
         int boardMaxRx = 0;
+        // PureSignal (HL2, MI0BOT's Thetis design): the wire runs at least four
+        // receivers, DDC2 and DDC3 follow the TX NCO, and the 0x0a bank carries
+        // the PS bit. effectiveNumRx() applies the floor; see setPureSignal().
+        bool pureSignal = false;
         // J16 open-collector filter selection (MetisProtocol kOc* bits). Rides
         // the config register, so it is part of the same Params the config
         // register is rebuilt from — see setSampleRate() for why a field that
@@ -208,6 +212,21 @@ public:
     // keep their frequencies, new ones start on RX1's.
     Q_INVOKABLE void setReceiverCount(int count);
     Q_INVOKABLE void setLnaGainDb(int db);
+    // PureSignal on the wire. On: at least four receivers (a hard-edge restart
+    // like setReceiverCount() if that changes the count), DDC2 and DDC3 on the
+    // TX frequency, and the PS bit in every 0x0a bank. While keyed the 0x0a bank
+    // carries setPureSignalTxGainDb() instead of the receive gain, and each key
+    // edge queues the bank at once so the feedback gain switches with T/R. The
+    // caller owns availability: a board with fewer than four DDCs streams
+    // nothing on the missing ones, so Hl2Backend never asks for it there.
+    Q_INVOKABLE void setPureSignal(bool enabled);
+    // AD9866 gain during a PureSignal transmission, dB (-12..+48). Thetis keeps
+    // this as an attenuation att = 19 - dB.
+    Q_INVOKABLE void setPureSignalTxGainDb(int db);
+    [[nodiscard]] bool pureSignal() const noexcept { return m_params.pureSignal; }
+    [[nodiscard]] int pureSignalTxGainDb() const noexcept { return m_psTxGainDb; }
+    // The 0x0a bank as the round robin sends it right now. Public for tests.
+    [[nodiscard]] Cc currentGainBank() const noexcept;
     // Select the companion filter board's band filter (MetisProtocol kOc* bits).
     // Latched into the config register, which rides bank A of every EP2 frame, so the
     // relays follow within one frame (~2.6 ms at 48 kHz). Not also queued as a
@@ -749,6 +768,13 @@ private:
     // array of banks rather than one bank with a varying payload.
     std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
+    // PureSignal feedback gain while keyed (see setPureSignalTxGainDb()). The
+    // lowest gain by default: auto-attenuate raises it from the safe side.
+    int m_psTxGainDb = -12;
+    // DDC2 and DDC3 onto the TX NCO when PureSignal is on. Idempotent.
+    void applyPureSignalNcos();
+    // setReceiverCount()'s body once the new count is in m_params.
+    void relayoutReceivers(int before);
     // Queue (or re-queue) the twenty-four VersaClock banks, and remove any
     // still waiting. Private because the ORDER and the replace-don't-append
     // rule are part of the contract and a caller outside this class cannot

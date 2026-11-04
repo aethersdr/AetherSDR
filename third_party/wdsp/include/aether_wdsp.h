@@ -550,6 +550,21 @@ void SynchronizeChannelWorkerForTest(int channel);
 // thread. AetherSDR calls it only from wdsp_calcc_teardown_test (patch 22).
 void PSRestoreCorr(int channel, char* filename);
 
+// PureSignal (calcc.c), driven by core/dsp/WdspChannel's pureSignal*() wrappers
+// for the Hermes-Lite 2 (MI0BOT's Thetis design). TX channels only.
+void pscc(int channel, int size, double* tx, double* rx);
+void PSSaveCorr(int channel, char* filename);
+void SetPSRunCal(int channel, int run);
+void SetPSMox(int channel, int mox);
+void GetPSInfo(int channel, int* info);
+void SetPSControl(int channel, int reset, int mancal, int automode, int turnon);
+void SetPSLoopDelay(int channel, double delay);
+void SetPSMoxDelay(int channel, double delay);
+double SetPSTXDelay(int channel, double delay);
+void SetPSHWPeak(int channel, double peak);
+void GetPSMaxTX(int channel, double* maxtx);
+void SetPSFeedbackRate(int channel, int rate);
+
 #ifdef __cplusplus
 }
 #endif

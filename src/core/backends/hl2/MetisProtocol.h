@@ -250,6 +250,14 @@ Cc ccRxFreq(int rxIndex, std::uint32_t hz) noexcept;
 Cc ccRx1Freq(std::uint32_t hz) noexcept;
 // AD9866 LNA gain in dB, clamped to [-12, +48]; C4 = 0x40 | (dB + 12).
 Cc ccRxGain(int db) noexcept;
+// The same 0x0a bank with the PureSignal enable, DATA[22] = C2 bit 6. Thetis
+// (MI0BOT, networkproto1.c) sets it for the whole PureSignal session and, while
+// keyed, puts the feedback attenuation in C4 instead of the receive gain:
+// ((31 - att) & 0x3F) | 0x40, att -28..31, which is ccRxGain(19 - att). With
+// the bit set the HL2 gateware streams the TX DAC samples and the ADC on the
+// third and fourth receivers during transmit (DDC3 = reference, DDC2 = feedback).
+inline constexpr std::uint8_t kGainPureSignal = 0x40;   // C2 bit 6 = DATA[22]
+Cc ccGain(int db, bool pureSignal) noexcept;
 // Per-receiver ADC assignment (see kC0AdcAssignOrTxGain). Phase 1 runs one receiver on
 // ADC0, so every field is zero; the bank still has to be SENT for a conforming
 // device to route ADC samples to RX1 at all.

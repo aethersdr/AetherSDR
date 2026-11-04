@@ -936,6 +936,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
+    src/core/backends/hl2/Hl2PureSignal.cpp  # PureSignal control loop (MI0BOT's Thetis design)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2TelemetryPoller.cpp # stream-free telemetry on port 1025 (#15)
@@ -1496,6 +1497,7 @@ set(GUI_SOURCES
     src/gui/WaveformWidget.cpp
     src/gui/AetherClockApplet.cpp
     src/gui/WfmApplet.cpp
+    src/gui/PureSignalApplet.cpp
     src/gui/WfmLockScope.cpp
     src/gui/ClockAlignmentWidget.cpp
     src/gui/ClientEqApplet.cpp

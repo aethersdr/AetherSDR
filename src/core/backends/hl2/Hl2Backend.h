@@ -19,6 +19,7 @@
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2HardwareOptions.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
+#include "core/backends/hl2/Hl2PureSignal.h"
 #include "core/backends/hl2/Hl2TelemetryCadence.h"  // Hl2LinkState (#15)
 #include "core/backends/hl2/Hl2TelemetryService.h"  // borrowed, owned by RadioModel
 #include "core/backends/hl2/Hl2TelemetrySource.h"   // the shared attribution rule
@@ -40,6 +41,7 @@ namespace AetherSDR::hl2 {
 class MetisClient;
 class Hl2RxDsp;
 class Hl2TxDsp;
+class Hl2PureSignal;
 
 // The IQ rates the HL2's DDC can run, ascending. One list serves as the
 // capability advertisement (sampleRatesHz), the pan zoom limits and the snap set
@@ -270,7 +272,25 @@ public:
         setTelemetryService(dynamic_cast<Hl2TelemetryService*>(src));
     }
 
+    // ---- PureSignal (docs/HERMES.md §11) -----------------------------------
+    // GUI thread. Each forwards to Hl2PureSignal on the I/O thread; the result
+    // comes back through pureSignalStatusChanged(). Enabling claims DDC 2 and 3
+    // (feedback and TX DAC reference), so it needs a 4-receiver board, a span
+    // whose link budget carries four, and at most two receivers open — and
+    // while it is on the receiver ceiling is two.
+    [[nodiscard]] const Hl2PureSignalStatus& pureSignalStatus() const noexcept { return m_psStatus; }
+    void setPureSignalEnabled(bool on);
+    void setPureSignalAutoCalibrate(bool on);
+    void pureSignalCalibrateOnce();
+    void pureSignalResetCorrection();
+    void setPureSignalAutoAttenuate(bool on);
+    void setPureSignalAttenuationDb(int att);
+    void savePureSignalCorrection(const QString& path);
+    void restorePureSignalCorrection(const QString& path);
+
 signals:
+    // PureSignal state for the applet, on the GUI thread, only on a change.
+    void pureSignalStatusChanged(const AetherSDR::hl2::Hl2PureSignalStatus& status);
     // Connect-time progress for the client-side WDSP build; not on the seam because
     // WDSP is this family's alone. `stage` is operator-facing text without a counter;
     // `done`/`total` count receiver WDSP channel opens (TX opens none). Emitted on
@@ -439,6 +459,19 @@ private:
 
     MetisClient* m_metis = nullptr;
     Hl2TxDsp* m_txDsp = nullptr;
+    // I/O thread, like m_txDsp; deleted before it in the destructor.
+    Hl2PureSignal* m_pureSignal = nullptr;
+    bool m_psEnabled = false;            // GUI thread: DDC 2/3 are claimed
+    bool m_psAvailable = false;          // last availability sent to m_pureSignal
+    QString m_psUnavailableReason;
+    int m_psFeedbackRateHz = 0;
+    Hl2PureSignalStatus m_psStatus;
+    // Why PureSignal cannot run right now, or empty when it can.
+    [[nodiscard]] QString pureSignalBlocker() const;
+    // Re-derive availability after a connect, rate or receiver change; turns
+    // PureSignal off if the change took away what it needs.
+    void refreshPureSignalAvailability();
+    void applyPureSignalWire(bool on);
     bool m_connected = false;
 
     // Stream-free telemetry: reads the radio over the alternate control port, on its
