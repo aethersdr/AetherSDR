@@ -151,7 +151,7 @@ or **Open Log Folder** to find the current file. Windows can keep older files
 from an installer or portable build in the original location. **File an
 Issue** opens the folder that holds the support bundle it just saved.
 
-- Every launch starts a new file named `aethersdr-<date>-<time>.log`. Attach the newest one. On Linux and macOS, `aethersdr.log` in the same folder is a link to it; on Windows it is a `.lnk` shortcut.
+- Every launch starts a new file named `aethersdr-<date>-<time>.log`. Attach the newest one. On Linux and macOS, `aethersdr.log` in the same folder is a link to it. Windows keeps only the timestamped files; **Help → Support & Diagnostics...** shows the current log.
 - A log that grows past 100 MB is rotated to a new file.
 - Old logs are pruned at startup after 7 days or once they total more than 500 MB; the two most recent are always kept.
 - Logging is buffered and written in the background, so it does not slow the app down.

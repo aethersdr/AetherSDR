@@ -135,6 +135,7 @@ signals:
 private:
     LogManager();
     void applyFilterRules();
+    static void updateLatestLogAlias(const QString& path);
 
     QList<Category> m_categories;
     mutable QMutex m_pathMutex;

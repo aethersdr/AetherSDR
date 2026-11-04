@@ -8284,6 +8284,17 @@ endif()
 set_target_properties(log_manager_filter_rules_test PROPERTIES AUTOMOC ON)
 add_test(NAME log_manager_filter_rules_test COMMAND log_manager_filter_rules_test)
 
+add_executable(log_manager_file_test
+    tests/log_manager_file_test.cpp
+)
+target_include_directories(log_manager_file_test PRIVATE src tests)
+target_link_libraries(log_manager_file_test PRIVATE aethercore Qt6::Core)
+if(UNIX)
+    target_link_libraries(log_manager_file_test PRIVATE pthread)
+endif()
+set_target_properties(log_manager_file_test PROPERTIES AUTOMOC ON)
+add_test(NAME log_manager_file_test COMMAND log_manager_file_test)
+
 # Windows Firewall verdicts and Fix command, and failed external-request
 # logging (aether.network). Pure logic; the COM inspection compiles on Windows
 # only, so this runs everywhere.
@@ -10749,6 +10760,7 @@ set(AETHER_SETTINGS_CONSUMERS
     workspace_controller_test
     mini_pan_widget_test
     log_manager_filter_rules_test
+    log_manager_file_test
     bandplan_voice_labels_test
     bandplan_usage_resource_test
     vkamp_connection_test
