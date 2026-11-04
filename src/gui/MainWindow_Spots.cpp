@@ -20,6 +20,7 @@
 #include "core/MqttSettings.h"
 #endif
 #include "core/AppSettings.h"
+#include "core/WsjtxOverlayConfig.h"
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
@@ -750,7 +751,7 @@ void MainWindow::wireSpotSubsystem()
         // no "spot add" traffic to the radio, without stopping the listener
         // Status (Rx/Tx) parsing depends on. Default on: preserves existing
         // behavior for anyone who never sees this new checkbox.
-        if (AppSettings::instance().value("WsjtxPostSpotsEnabled", "True").toString() != "True")
+        if (!wsjtxOverlayPostSpots())  // Principle V: reads from owned config object
             return;
         if (!m_radioModel.isConnected()) return;
         if (isDuplicateSpot(spot)) return;

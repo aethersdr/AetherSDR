@@ -15,6 +15,7 @@
 #include "core/DxSpotLineParser.h"
 #include "core/GoClusterSettings.h"
 #include "core/AppSettings.h"
+#include "core/WsjtxOverlayConfig.h"
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
@@ -1465,13 +1466,10 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     // without decode-spot clutter. Default on: existing installs keep
     // today's behavior unless this new box is unchecked.
     m_wsjtxPostSpots = new QCheckBox("Post decoded stations as spots");
-    m_wsjtxPostSpots->setChecked(
-        s.value("WsjtxPostSpotsEnabled", "True").toString() == "True");
+    m_wsjtxPostSpots->setChecked(wsjtxOverlayPostSpots());
     ThemeManager::instance().applyStyleSheet(m_wsjtxPostSpots, "QCheckBox { color: {{color.text.primary}}; }");
     connect(m_wsjtxPostSpots, &QCheckBox::toggled, this, [](bool on) {
-        auto& s = AppSettings::instance();
-        s.setValue("WsjtxPostSpotsEnabled", on ? "True" : "False");
-        s.save();
+        wsjtxOverlaySetPostSpots(on);  // Principle V: writes to owned config object
     });
     layout->addWidget(m_wsjtxPostSpots);
 
