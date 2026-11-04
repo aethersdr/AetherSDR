@@ -24,6 +24,7 @@ warren@pratt.one
 */
 
 #define _CRT_SECURE_NO_WARNINGS
+#include <limits.h>
 #include "comm.h"
 #include "../include/aether_wbfm_observation.h"
 
