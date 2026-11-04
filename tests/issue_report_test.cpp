@@ -178,7 +178,8 @@ void testHl2BlockPresent()
     report("TX modulator fault blocks line",
            body.contains("- TX modulator fault blocks: 5\n"));
     report("HL2 section sits before OS & version",
-           body.indexOf("### Hermes-Lite 2") < body.indexOf("### OS & version"));
+           body.indexOf("### Hermes-Lite 2") >= 0
+           && body.indexOf("### Hermes-Lite 2") < body.indexOf("### OS & version"));
 
     // Unreported values are left out, never printed as zero.
     SupportBundle::RadioInfo sparse = sampleHl2Radio();
@@ -215,10 +216,13 @@ void testHl2BlockAbsentElsewhere()
            !buildIssueReport(sampleSys(), gone, QString()).contains("### Hermes-Lite 2"));
 }
 
-// The HL2's serial is its MAC: redacted like any serial, never listed whole.
+// Identifiers in the HL2 block and its MAC-shaped serial are scrubbed.
 void testHl2MacRedacted()
 {
-    const QString body = buildIssueReport(sampleSys(), sampleHl2Radio(), QString());
+    SupportBundle::RadioInfo radio = sampleHl2Radio();
+    radio.hl2.mode = "USB 00:1C:C0:A2:13:DD 192.168.50.77";
+    const QString body = buildIssueReport(sampleSys(), radio, QString());
+    report("HL2 block preserves the public mode", body.contains("- Mode: USB "));
     report("HL2 MAC is absent from body",
            !body.contains("00:1C:C0:A2:13:DD") && !body.contains("A2:13"));
     report("HL2 serial keeps only its last octet",

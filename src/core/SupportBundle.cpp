@@ -105,8 +105,9 @@ SupportBundle::Hl2Info SupportBundle::collectHl2Info(RadioModel* model)
         return info;
     }
     IRadioBackend* backend = model->backend();
-    if (!backend)
+    if (!backend) {
         return info;
+    }
     info.present = true;
 
     // Board variant: the operator's declared board, through hw.get like the
@@ -122,8 +123,9 @@ SupportBundle::Hl2Info SupportBundle::collectHl2Info(RadioModel* model)
         QObject guard;
         QObject::connect(backend, &IRadioBackend::extensionResult, &guard,
                          [&hw](quint64 id, const QVariant& result) {
-                             if (id == kRequestId)
+                             if (id == kRequestId) {
                                  hw = result.toMap();
+                             }
                          });
         model->invokeBackendExtension(QStringLiteral("hl2"),
                                       QStringLiteral("hw.get"), kRequestId);
@@ -140,37 +142,44 @@ SupportBundle::Hl2Info SupportBundle::collectHl2Info(RadioModel* model)
     const IRadioBackend::HealthSnapshot h = backend->healthSnapshot();
     info.sampleRateHz = h.values.value(QStringLiteral("sampleRateHz")).toInt();
     info.receivers    = h.values.value(QStringLiteral("receivers")).toInt();
-    if (h.values.contains(QStringLiteral("droppedPackets")))
+    if (h.values.contains(QStringLiteral("droppedPackets"))) {
         info.droppedPackets = h.values.value(QStringLiteral("droppedPackets")).toLongLong();
-    if (h.values.contains(QStringLiteral("ep4Drops")))
+    }
+    if (h.values.contains(QStringLiteral("ep4Drops"))) {
         info.ep4Drops = h.values.value(QStringLiteral("ep4Drops")).toLongLong();
-    if (h.values.contains(QStringLiteral("txFifoRecovery")))
+    }
+    if (h.values.contains(QStringLiteral("txFifoRecovery"))) {
         info.txFifoFault = h.values.value(QStringLiteral("txFifoRecovery")).toBool() ? 1 : 0;
+    }
     // Per-receiver rows are keyed dspUnderruns<N> / dspFaultCount<N>; sum them,
     // and leave the total unreported when no receiver has reported at all.
     for (auto it = h.values.constBegin(); it != h.values.constEnd(); ++it) {
-        if (it.key().startsWith(QLatin1String("dspUnderruns")))
+        if (it.key().startsWith(QLatin1String("dspUnderruns"))) {
             info.dspUnderruns = qMax<qlonglong>(info.dspUnderruns, 0) + it.value().toLongLong();
-        else if (it.key().startsWith(QLatin1String("dspFaultCount")))
+        } else if (it.key().startsWith(QLatin1String("dspFaultCount"))) {
             info.dspFaults = qMax<qlonglong>(info.dspFaults, 0) + it.value().toLongLong();
+        }
     }
 
     // Which TX modulator this build carries, and the blocks it could not place.
     const QVariantList chains = backend->dspChains();
     for (const QVariant& c : chains) {
         const QVariantMap m = c.toMap();
-        if (m.value(QStringLiteral("chain")).toString() != QLatin1String("hl2-tx"))
+        if (m.value(QStringLiteral("chain")).toString() != QLatin1String("hl2-tx")) {
             continue;
+        }
         info.txModulator = m.value(QStringLiteral("modulator")).toString();
-        if (m.contains(QStringLiteral("modulatorFaultBlocks")))
+        if (m.contains(QStringLiteral("modulatorFaultBlocks"))) {
             info.txModulatorFaultBlocks =
                 m.value(QStringLiteral("modulatorFaultBlocks")).toLongLong();
+        }
     }
 
     QStringList modes;
     for (const SliceModel* slice : model->slices()) {
-        if (slice && !slice->mode().isEmpty() && !modes.contains(slice->mode()))
+        if (slice && !slice->mode().isEmpty() && !modes.contains(slice->mode())) {
             modes << slice->mode();
+        }
     }
     info.mode = modes.join(QStringLiteral(", "));
     return info;
