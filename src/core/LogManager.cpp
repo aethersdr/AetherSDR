@@ -10,7 +10,9 @@
 #include <QJsonObject>
 #include <QMutexLocker>
 #include <QStandardPaths>
+#include <QString>
 #include <QTime>
+#include <QtCore/qlogging.h>
 
 #ifdef Q_OS_UNIX
 #include <cerrno>
@@ -275,6 +277,16 @@ bool LogManager::startLogging(const QString& path, bool mirrorToStderr)
     return true;
 }
 
+namespace {
+// main() installs its message handler only after startLogging() returns, so
+// alias warnings go straight to the writer to reach the log file.
+void warnLogAlias(const QString& message)
+{
+    const QMessageLogContext context(__FILE__, __LINE__, Q_FUNC_INFO, "default");
+    LogManager::instance().enqueueMessage(QtWarningMsg, context, message);
+}
+} // namespace
+
 void LogManager::updateLatestLogAlias(const QString& path)
 {
     const QFileInfo logFile(path);
@@ -290,16 +302,22 @@ void LogManager::updateLatestLogAlias(const QString& path)
     const QByteArray targetBytes = QFile::encodeName(logFile.absoluteFilePath());
     ::unlink(tmpBytes.constData());
     if (::symlink(targetBytes.constData(), tmpBytes.constData()) != 0) {
-        qWarning("failed to create temp log symlink: %s", strerror(errno));
+        const int err = errno;
+        warnLogAlias(QStringLiteral("LogManager: failed to create temp log symlink %1: %2")
+                         .arg(alias + QStringLiteral(".new"), QString::fromLocal8Bit(strerror(err))));
     } else if (::rename(tmpBytes.constData(), aliasBytes.constData()) != 0) {
-        qWarning("failed to rename log symlink into place: %s", strerror(errno));
+        const int err = errno;
         ::unlink(tmpBytes.constData());
+        warnLogAlias(QStringLiteral("LogManager: failed to rename log symlink into place %1: %2")
+                         .arg(alias, QString::fromLocal8Bit(strerror(err))));
     }
 #elif defined(Q_OS_WIN)
     // QFile::link creates a binary shell shortcut on Windows, even with a
     // .log name. Remove aliases left by older installs; use logFilePath().
-    if (QFileInfo::exists(alias) && !QFile::remove(alias)) {
-        qWarning("failed to remove legacy log shortcut");
+    QFile legacyAlias(alias);
+    if (legacyAlias.exists() && !legacyAlias.remove()) {
+        warnLogAlias(QStringLiteral("LogManager: failed to remove legacy log shortcut %1: %2")
+                         .arg(QDir::toNativeSeparators(alias), legacyAlias.errorString()));
     }
 #endif
 }

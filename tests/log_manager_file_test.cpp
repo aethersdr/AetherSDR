@@ -140,5 +140,19 @@ int main(int argc, char** argv)
     check(hasMarker(direct, "direct-marker") && !QFileInfo(direct).isSymLink(),
           "alias management never replaces a live direct log");
     manager.shutdownLogging();
+
+#ifdef Q_OS_UNIX
+    // No message handler is installed here, as in main() during startLogging():
+    // an alias failure must still reach the log file itself.
+    const QString blockedDir = profile.path() + QStringLiteral("/blocked");
+    check(QDir().mkpath(blockedDir + QStringLiteral("/aethersdr.log.new/occupied")),
+          "occupy the temporary alias name with a directory");
+    const QString blocked = blockedDir + QStringLiteral("/aethersdr-20000103-000000.log");
+    check(manager.startLogging(blocked, false), "logging starts when the alias cannot be made");
+    manager.flushLog();
+    check(hasMarker(blocked, "failed to create temp log symlink"),
+          "startup alias failure is written to the active log");
+    manager.shutdownLogging();
+#endif
     return failures == 0 ? 0 : 1;
 }
