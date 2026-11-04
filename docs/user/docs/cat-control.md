@@ -122,6 +122,7 @@ The letter is the port's row (first row = `cat-A`), not the slice. The path is a
 - **S-meter.** rigctld `l STRENGTH` reads the real S-meter of the addressed slice, in dB relative to S9.
 - **Tuning step.** `set_ts 0` answers `RPRT -1` on every radio. On radios other than FlexRadio, `set_ts` sets AetherSDR's own tuning step.
 - **RF gain on other radios.** On the Hermes-Lite 2 and other non-Flex radios, `L RF` / `l RF` scale across the radio's published RF-gain range (on the HL2, 0.5 = +18 dB). Until a range is published the command answers `RPRT -11` (#6013).
+- **MON and VOX availability.** When the connected radio has no monitor or VOX control, rigctld refuses the corresponding `MONITOR_GAIN`, `VOXGAIN`, `VOXDELAY` and VOX-on requests with `RPRT -11` (unavailable). VOX-off requests remain accepted.
 - **CW over rigctld.** `cwx send` and the clear commands go through the CWX model, so sidetone matches manual keying.
 
 ## Known issues

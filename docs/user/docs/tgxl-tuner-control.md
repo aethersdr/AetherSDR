@@ -53,7 +53,9 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
 
 - **Fwd Power** gauge. It scales for barefoot (0–200 W), Aurora or a KPA500 in
   operate (0–600 W) and PGXL (0–2000 W) power levels, and uses the tuner's own
-  peak reading, so voice peaks read correctly.
+  peak reading, so voice peaks read correctly. An associated KXPA100 does not
+  reduce an Aurora's tuner gauge range; it remains 0–600 W even when the shared
+  transmit meters show the KXPA100's output.
 - **SWR** gauge (1.0–3.0).
 - **C1**, **L** and **C2** relay bars.
 - **TUNE**: starts an auto-tune. While a tune runs it reads **STOP**;

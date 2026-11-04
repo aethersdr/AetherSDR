@@ -402,7 +402,7 @@ public:
     float dfnrAttenLimit() const;
     void setDfnrPostFilterBeta(float beta);
 
-    // Client-side NNR (WDSP 2.10 neural noise reduction, trained on HF).
+    // Client-side NNR (WDSP 2.11 neural noise reduction).
     // Unconditional, unlike DFNR/MNR/BNR: the models are compiled into the
     // vendored WDSP, so there is no library to find and no GPU to require.
     Q_INVOKABLE void setNnrEnabled(bool on);
@@ -1390,7 +1390,7 @@ private:
 #endif
     std::atomic<bool> m_dfnrEnabled{false};
 
-    // Client-side NNR (WDSP 2.10). No build guard: the models ship in-tree.
+    // Client-side NNR (WDSP 2.11). No build guard: the models ship in-tree.
     std::unique_ptr<NnrFilter> m_nnr;
     std::unique_ptr<NnrFilter> m_kiwiSdrNnr;
     std::atomic<bool> m_nnrEnabled{false};

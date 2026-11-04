@@ -6,6 +6,10 @@
  * shutdown through its run flags and semaphores.
  */
 
+// Check the standalone NNR facade against upstream's declarations in every build.
+#include "aether_wdsp.h"
+#include "nnr.h"
+
 // Default-inactive, one-worker test rendezvous at the existing handoff hook.
 // Inactive hooks only read their state; no shipping scheduling change.
 enum WdspHandoffHoldState { WDSP_HOLD_OFF, WDSP_HOLD_ARMED, WDSP_HOLD_ENTERED };

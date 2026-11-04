@@ -147,7 +147,9 @@ private slots:
             const QString dir = state + QLatin1Char('/') + version;
             QDir().mkpath(dir + QStringLiteral("/usr/bin"));
             QFile f(dir + QStringLiteral("/usr/bin/AetherSDR"));
-            f.open(QIODevice::WriteOnly);
+            if (!f.open(QIODevice::WriteOnly)) {
+                qFatal("cannot create the staged binary in %s", qPrintable(dir));
+            }
             return dir;
         };
         int tests = 0;
