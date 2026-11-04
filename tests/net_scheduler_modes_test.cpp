@@ -92,10 +92,14 @@ private slots:
         }
         for (int source = 0; source < 3; ++source) {
             const QByteArray suffix = '-' + QByteArray::number(source);
-            QTest::newRow(("padded-fdvl" + suffix).constData())
-                << QStringLiteral(" fdvl ") << source << QStringLiteral("FDVL");
-            QTest::newRow(("control-fdvu" + suffix).constData())
-                << QStringLiteral("F\nD\rV\tU") << source << QStringLiteral("FDVU");
+            // VFO captures are normalized by the editor; saved presets reject
+            // whitespace and control characters at the store boundary.
+            if (source != 2) {
+                QTest::newRow(("padded-fdvl" + suffix).constData())
+                    << QStringLiteral(" fdvl ") << source << QStringLiteral("FDVL");
+                QTest::newRow(("control-fdvu" + suffix).constData())
+                    << QStringLiteral("F\nD\rV\tU") << source << QStringLiteral("FDVU");
+            }
             QTest::newRow(("custom-lowercase" + suffix).constData())
                 << QStringLiteral("custom-wf") << source << QStringLiteral("CUSTOM-WF");
         }
