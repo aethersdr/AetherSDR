@@ -2930,12 +2930,12 @@ QWidget* RadioSetupDialog::buildTxTab()
         // Client-side, so deliberately not in timingEdits: it never depends on
         // the radio accepting setup fields and stays enabled while disconnected.
         {
-            auto* lbl = new QLabel(tr("TX Off Delay:"));
+            auto* lbl = new QLabel(tr("TX Off Delay (ms):"));
             applyLabelStyle(lbl);
             grid->addWidget(lbl, 2, 2);
             auto* edit = new QLineEdit(QString::number(tx.txOffDelayMs()));
             edit->setFixedWidth(60);
-            edit->setAccessibleName(tr("TX Off Delay"));
+            edit->setAccessibleName(tr("TX Off Delay (milliseconds)"));
             const QString tip = tr(
                 "Keeps transmitting this many ms (0-%1) after you release PTT in "
                 "voice modes, so the end of your last word is not cut off. 0 = off.\n"

@@ -255,10 +255,10 @@ These status reports do not start a transmission or send a PTT command.
 
 ### TX off delay
 
-**TX Off Delay:** in the **Timings (in ms)** group of
+**TX Off Delay (ms):** in the **Timings (in ms)** group of
 **Settings → Radio Setup... → Transmit** keeps the radio transmitting for that
 many milliseconds after you release PTT, so the end of your last word is not
-cut off. Enter 0 to 1000; 0 turns it off and is the default. AetherSDR stores
+cut off. Enter 0 to 10000 (10 seconds); 0 turns it off and is the default. AetherSDR stores
 the value on this computer, not on the radio.
 
 - It applies in voice modes only (USB, LSB, AM, FM, NFM). CW, digital modes,

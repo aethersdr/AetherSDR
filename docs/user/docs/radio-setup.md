@@ -167,7 +167,7 @@ The connected radio or this build cannot use that control.
 The **Timings (in ms)** group on **Transmit** requires a connected radio that
 supports those controls. **Timeout (sec):** is entered in seconds; the other
 timings are entered in milliseconds. The Demo does not implement these settings.
-**TX Off Delay:** is the exception: AetherSDR stores it on this computer, so
+**TX Off Delay (ms):** is the exception: AetherSDR stores it on this computer, so
 it can be edited while disconnected. See
 [TX off delay](./tx-controls.md#tx-off-delay).
 

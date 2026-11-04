@@ -11,7 +11,7 @@ namespace AetherSDR {
 class TxOffDelaySettings {
 public:
     static constexpr int kMinMs = 0;
-    static constexpr int kMaxMs = 1000;
+    static constexpr int kMaxMs = 10000;
 
     // Milliseconds to keep transmitting after a phone-mode PTT release.
     // A missing, malformed or out-of-range stored value reads as 0 (off).
