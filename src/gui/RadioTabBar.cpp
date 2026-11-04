@@ -1250,7 +1250,7 @@ void RadioTabBar::showDiscoveryPopover()
         radioRows.append(container);
     }
     listLayout->addStretch();
-    auto filterRows = [radioRows, empty, this](const QString& query) {
+    auto filterRows = [radioRows, empty](const QString& query) {
         bool found = false;
         for (QWidget* row : radioRows) {
             const bool matches = row->property("radioSearchText").toString()

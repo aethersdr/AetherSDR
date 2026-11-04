@@ -37,8 +37,10 @@ RtlRfExtractor::RtlRfExtractor(Config config) : m_config(std::move(config))
     m_step = {std::cos(step), std::sin(step)};
     // Fixed staging makes converter calls independent of USB packet partition.
     // The 10% transition leaves the declared +/-45% DSP-rate passband intact.
-    m_i = std::make_unique<Resampler>(capture.achievedSampleRateHz, m_config.outputRateHz, kInputChunk, 10.0);
-    m_q = std::make_unique<Resampler>(capture.achievedSampleRateHz, m_config.outputRateHz, kInputChunk, 10.0);
+    m_i = std::make_unique<Resampler>(capture.achievedSampleRateHz, m_config.outputRateHz,
+        static_cast<int>(kInputChunk), 10.0);
+    m_q = std::make_unique<Resampler>(capture.achievedSampleRateHz, m_config.outputRateHz,
+        static_cast<int>(kInputChunk), 10.0);
     // At most 2x upsampling; room includes r8brain's staging burst. The RF
     // fit still uses actual capture coverage, never the interpolated IQ rate.
     m_convertedI.reserve(16384 * sizeof(float));

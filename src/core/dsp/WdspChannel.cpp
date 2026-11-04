@@ -70,6 +70,24 @@ std::mutex& g_setupMutex = AetherSDR::fftwPlannerMutex();
 constexpr int kApfSelectionDoublePole = 0;
 std::array<bool, kWdspChannelCount> g_channelsInUse {};
 
+// The variable's value; empty when it is unset. MSVC deprecates getenv in
+// favor of _dupenv_s.
+std::string envValue(const char* name)
+{
+#ifdef _MSC_VER
+    char* value = nullptr;
+    std::size_t size = 0;
+    if (_dupenv_s(&value, &size, name) != 0 || value == nullptr)
+        return {};
+    std::string result(value);
+    std::free(value);
+    return result;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr ? std::string(value) : std::string();
+#endif
+}
+
 // WDSP plans FFTs with FFTW_PATIENT (~220 planner calls over 11 distinct
 // kind/size pairs per RX open, ~a minute cold). Wisdom is global, so prime it
 // from a persisted cache; the first run measures and caches. Called under
@@ -82,18 +100,17 @@ std::string wisdomPath()
     // build-local dir so tests can't touch the operator's cache while keeping their
     // own persistent one. tests/TestWdspWisdomIsolation.cpp sets it before main()
     // so it also holds for test binaries run directly.
-    if (const char* override = std::getenv("AETHER_WDSP_WISDOM_DIR");
-        override != nullptr && *override != '\0') {
+    if (const std::string override = envValue("AETHER_WDSP_WISDOM_DIR"); !override.empty()) {
         dir = override;
         std::error_code overrideEc;
         fs::create_directories(dir, overrideEc);   // best-effort
         return (dir / "wdsp-fftw-wisdom").string();
     }
 #ifdef _WIN32
-    if (const char* la = std::getenv("LOCALAPPDATA")) dir = la;
+    dir = envValue("LOCALAPPDATA");
 #else
-    if (const char* xdg = std::getenv("XDG_CACHE_HOME")) dir = xdg;
-    else if (const char* home = std::getenv("HOME")) dir = fs::path(home) / ".cache";
+    if (const std::string xdg = envValue("XDG_CACHE_HOME"); !xdg.empty()) dir = xdg;
+    else if (const std::string home = envValue("HOME"); !home.empty()) dir = fs::path(home) / ".cache";
 #endif
     if (dir.empty()) {
         std::error_code ec;
@@ -114,9 +131,10 @@ std::string wisdomPath()
 double plannerTimeLimitSeconds()
 {
     static const double limit = [] {
-        const char* raw = std::getenv("AETHER_WDSP_FFTW_TIMELIMIT");
-        if (raw == nullptr || *raw == '\0')
+        const std::string value = envValue("AETHER_WDSP_FFTW_TIMELIMIT");
+        if (value.empty())
             return -1.0;
+        const char* raw = value.c_str();
         char* end = nullptr;
         const double parsed = std::strtod(raw, &end);
         // A malformed value is ignored rather than treated as 0: silently
@@ -313,8 +331,8 @@ std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
     if (!validateConfig(config, error)) {
         return nullptr;
     }
-    if (GetWDSPVersion() != 210) {
-        setError(error, "The linked WDSP library is not version 2.10");
+    if (GetWDSPVersion() != 211) {
+        setError(error, "The linked WDSP library is not version 2.11");
         return nullptr;
     }
     std::optional<Reservation> reservation = reserveChannels(1);
@@ -331,8 +349,8 @@ std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
     if (!validateConfig(config, error)) {
         return nullptr;
     }
-    if (GetWDSPVersion() != 210) {
-        setError(error, "The linked WDSP library is not version 2.10");
+    if (GetWDSPVersion() != 211) {
+        setError(error, "The linked WDSP library is not version 2.11");
         return nullptr;
     }
     if (reservation.m_count == 0) {
