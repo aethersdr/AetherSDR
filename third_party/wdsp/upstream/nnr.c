@@ -20,7 +20,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 The author can be reached by email at
 
-warren@wpratt.com
+warren@pratt.one
 
 */
 
@@ -31,6 +31,38 @@ warren@wpratt.com
 #define NNR_TWOPI		6.28318530717958647692
 #define NNR_KAISER_BETA	7.857
 #define NNR_PHASELEN	51
+
+#define NNR_NRATE_DEFAULT		16000
+#define NNR_FFTSIZE_DEFAULT		512
+#define NNR_HOP_DEFAULT			256
+
+typedef struct _nnrstft
+{
+	int valid;
+	int fftsize;
+	int overlap;
+	int hop;
+	int nbins;
+	int lookahead;
+	double olascale;
+	double* inacc;
+	double* abuf;
+	double* oacc;
+	double* awin;
+	double* swin;
+	double* tdin;
+	double* tdout;
+	double* fdout;
+	double* fdin;
+	double* xre;
+	double* xim;
+	double* yre;
+	double* yim;
+	fftw_plan pfor;
+	fftw_plan prev;
+	int prime;
+	int delay;
+} nnrstft;
 
 typedef struct _nnr
 {
@@ -80,6 +112,7 @@ typedef struct _nnr
 	double* yim;
 	NNET net;
 	NNET nets[NNET_NSLOTS];
+	nnrstft st[NNET_NSLOTS];
 	int  model;
 
 	double* orbuf;
@@ -131,18 +164,101 @@ static void nnr_design_proto (NNR a)
 	for (n = 0; n < M; n++) a->proto[n] /= sum;
 }
 
-static void nnr_design_windows (NNR a)
+static void nnr_design_windows (nnrstft* t)
 {
 	int n;
 	double h;
-	for (n = 0; n < a->fftsize; n++)
+	for (n = 0; n < t->fftsize; n++)
 	{
-		h = 0.5 * (1.0 - cos (NNR_TWOPI * (double)n / (double)a->fftsize));
-		a->awin[n] = sqrt (h);
-		a->swin[n] = sqrt (h);
+		h = 0.5 * (1.0 - cos (NNR_TWOPI * (double)n / (double)t->fftsize));
+		t->awin[n] = sqrt (h);
+		t->swin[n] = sqrt (h);
 	}
-	a->olascale = (2.0 / (double)a->overlap) / (double)a->fftsize;
+	t->olascale = (2.0 / (double)t->overlap) / (double)t->fftsize;
 }
+
+
+static int nnr_build_stft (NNR a, int slot, int fftsize, int hop,
+	int lookahead)
+{
+	nnrstft* t = &a->st[slot];
+
+	if (fftsize < 16 || hop < 1 || fftsize % hop != 0) return 0;
+
+	t->fftsize   = fftsize;
+	t->hop       = hop;
+	t->overlap   = fftsize / hop;
+	t->nbins     = fftsize / 2 + 1;
+	t->lookahead = lookahead;
+
+	t->inacc = (double*) malloc0 (hop            * sizeof (double));
+	t->abuf  = (double*) malloc0 (fftsize        * sizeof (double));
+	t->oacc  = (double*) malloc0 (fftsize        * sizeof (double));
+	t->awin  = (double*) malloc0 (fftsize        * sizeof (double));
+	t->swin  = (double*) malloc0 (fftsize        * sizeof (double));
+	t->tdin  = (double*) malloc0 (fftsize        * sizeof (double));
+	t->tdout = (double*) malloc0 (fftsize        * sizeof (double));
+	t->fdout = (double*) malloc0 (2 * t->nbins   * sizeof (double));
+	t->fdin  = (double*) malloc0 (2 * t->nbins   * sizeof (double));
+	t->xre   = (double*) malloc0 (t->nbins       * sizeof (double));
+	t->xim   = (double*) malloc0 (t->nbins       * sizeof (double));
+	t->yre   = (double*) malloc0 (t->nbins       * sizeof (double));
+	t->yim   = (double*) malloc0 (t->nbins       * sizeof (double));
+
+	nnr_design_windows (t);
+
+	t->pfor = fftw_plan_dft_r2c_1d (fftsize, t->tdin,
+		(fftw_complex*)t->fdout, FFTW_PATIENT);
+	t->prev = fftw_plan_dft_c2r_1d (fftsize, (fftw_complex*)t->fdin,
+		t->tdout, FFTW_PATIENT);
+
+	t->prime = a->decim * hop;
+	t->delay = a->decim * (fftsize - hop + lookahead * hop)
+			 + a->nproto - 1
+			 + t->prime;
+
+	t->valid = 1;
+	return 1;
+}
+
+
+static void nnr_free_stft (NNR a, int slot)
+{
+	nnrstft* t = &a->st[slot];
+	if (!t->valid) return;
+	fftw_destroy_plan (t->prev);
+	fftw_destroy_plan (t->pfor);
+	_aligned_free (t->yim);   _aligned_free (t->yre);
+	_aligned_free (t->xim);   _aligned_free (t->xre);
+	_aligned_free (t->fdin);  _aligned_free (t->fdout);
+	_aligned_free (t->tdout); _aligned_free (t->tdin);
+	_aligned_free (t->swin);  _aligned_free (t->awin);
+	_aligned_free (t->oacc);  _aligned_free (t->abuf);
+	_aligned_free (t->inacc);
+	memset (t, 0, sizeof (nnrstft));
+}
+
+
+static void nnr_activate (NNR a, int slot)
+{
+	nnrstft* t = &a->st[slot];
+	a->fftsize   = t->fftsize;
+	a->overlap   = t->overlap;
+	a->hop       = t->hop;
+	a->nbins     = t->nbins;
+	a->lookahead = t->lookahead;
+	a->olascale  = t->olascale;
+	a->inacc = t->inacc;  a->abuf  = t->abuf;   a->oacc  = t->oacc;
+	a->awin  = t->awin;   a->swin  = t->swin;
+	a->tdin  = t->tdin;   a->tdout = t->tdout;
+	a->fdout = t->fdout;  a->fdin  = t->fdin;
+	a->xre   = t->xre;    a->xim   = t->xim;
+	a->yre   = t->yre;    a->yim   = t->yim;
+	a->pfor  = t->pfor;   a->prev  = t->prev;
+	a->prime = t->prime;  a->delay = t->delay;
+}
+
+
 
 static void nnr_fifo_put (NNR a, double v)
 {
@@ -282,8 +398,21 @@ static void nnr_reset_state (NNR a)
 
 static void calc_nnr (NNR a)
 {
-	a->hop    = a->fftsize / a->overlap;
-	a->nbins  = a->fftsize / 2 + 1;
+	{
+		int snb, snr, snf, shp, sla, k;
+		double band_lo, band_hi;
+
+		for (k = 0; k < NNET_NSLOTS; k++)
+			if (nnet_probe_slot (k, &snb, &snr, &snf, &shp, &sla, &band_lo, &band_hi))
+			{
+				if (snr != a->nrate)
+					dprintf ("nnr: slot %d sets the network rate to %d Hz "
+							 "(was %d)\n", k, snr, a->nrate);
+				a->nrate = snr;
+				break;
+			}
+	}
+
 	a->decim  = a->rate / a->nrate;
 
 	if (a->decim < 1 || a->decim * a->nrate != a->rate)
@@ -297,111 +426,118 @@ static void calc_nnr (NNR a)
 	a->nphase = NNR_PHASELEN;
 	a->nproto = a->nphase * a->decim;
 
-	a->prime = a->decim * a->hop;
-
-	a->delay = a->decim * (a->fftsize - a->hop + a->lookahead * a->hop)
-			 + a->nproto - 1
-			 + a->prime;
-
-	a->orsize = a->prime + 2 * a->size + a->decim * (a->fftsize + a->hop) + 64;
-
 	a->proto     = (double*) malloc0 (a->nproto      * sizeof (double));
 	a->dline_dec = (double*) malloc0 (2 * a->nproto  * sizeof (double));
 	a->dline_int = (double*) malloc0 (2 * a->nphase  * sizeof (double));
-	a->inacc     = (double*) malloc0 (a->hop         * sizeof (double));
-	a->abuf      = (double*) malloc0 (a->fftsize     * sizeof (double));
-	a->oacc      = (double*) malloc0 (a->fftsize     * sizeof (double));
-	a->awin      = (double*) malloc0 (a->fftsize     * sizeof (double));
-	a->swin      = (double*) malloc0 (a->fftsize     * sizeof (double));
-	a->tdin      = (double*) malloc0 (a->fftsize     * sizeof (double));
-	a->tdout     = (double*) malloc0 (a->fftsize     * sizeof (double));
-	a->fdout     = (double*) malloc0 (2 * a->nbins   * sizeof (double));
-	a->fdin      = (double*) malloc0 (2 * a->nbins   * sizeof (double));
-	a->xre       = (double*) malloc0 (a->nbins       * sizeof (double));
-	a->xim       = (double*) malloc0 (a->nbins       * sizeof (double));
-	a->yre       = (double*) malloc0 (a->nbins       * sizeof (double));
-	a->yim       = (double*) malloc0 (a->nbins       * sizeof (double));
-	a->orbuf     = (double*) malloc0 (a->orsize      * sizeof (double));
-
-	nnr_design_proto   (a);
-	nnr_design_windows (a);
-
-	a->pfor = fftw_plan_dft_r2c_1d (a->fftsize, a->tdin, (fftw_complex*)a->fdout, FFTW_PATIENT);
-	a->prev = fftw_plan_dft_c2r_1d (a->fftsize, (fftw_complex*)a->fdin, a->tdout, FFTW_PATIENT);
+	nnr_design_proto (a);
 
 	{
-		int k;
-		for (k = 0; k < NNET_NSLOTS; k++) a->nets[k] = 0;
+		int k, first = -1, maxor = 0;
 
-		a->nets[0] = create_nnet_slot (0, a->nbins, a->lookahead,
-									   a->mask_floor);
-		for (k = 1; k < NNET_NSLOTS; k++)
+		for (k = 0; k < NNET_NSLOTS; k++)
 		{
-			NNET m = create_nnet_slot (k, a->nbins, a->lookahead,
-									   a->mask_floor);
-			if (m == 0) continue;
-			if (!ok_nnet (m) || getBins_nnet (m) != a->nbins)
+			a->nets[k] = 0;
+			memset (&a->st[k], 0, sizeof (nnrstft));
+		}
+
+		for (k = 0; k < NNET_NSLOTS; k++)
+		{
+			NNET m;
+			int snb, snr, snf, shp, sla, or;
+			double band_low, band_high;
+
+			if (!nnet_probe_slot (k, &snb, &snr, &snf, &shp, &sla, &band_low, &band_high))
+				continue;
+
+			if (snr != a->nrate)
 			{
-				dprintf ("nnr: model slot %d rejected - it wants %d bins, "
-						 "the channel is built for %d\n",
-						 k, getBins_nnet (m), a->nbins);
-				destroy_nnet (m);
+				dprintf ("nnr: model slot %d rejected - it wants %d Hz and "
+						 "the channel resamples to %d\n", k, snr, a->nrate);
 				continue;
 			}
-			a->nets[k] = m;
-			dprintf ("nnr: model slot %d ready, %d frame(s) of lookahead\n",
-					 k, getLookahead_nnet (m));
-		}
-		a->model = 0;
-		a->net   = a->nets[0];
-	}
 
-	{
-		int la = getLookahead_nnet (a->net);
-		if (la != a->lookahead)
-		{
-			dprintf ("nnr: model uses %d frame(s) of lookahead, channel was "
-					 "created for %d - using the model's\n", la, a->lookahead);
-			a->lookahead = la;
+			if (!nnr_build_stft (a, k, snf, shp, sla))
+			{
+				dprintf ("nnr: model slot %d rejected - N %d with hop %d is "
+						 "not a usable transform\n", k, snf, shp);
+				continue;
+			}
+
+			m = create_nnet_slot (k, a->st[k].nbins, a->st[k].lookahead,
+								  a->mask_floor,
+								  (double)a->nrate / (double)a->st[k].hop,
+		                          band_low, band_high);
+			if (m == 0 || !ok_nnet (m)
+				|| getBins_nnet (m) != a->st[k].nbins)
+			{
+				if (m)
+				{
+					dprintf ("nnr: model slot %d rejected - it wants %d "
+							 "bins, its transform gives %d\n",
+							 k, getBins_nnet (m), a->st[k].nbins);
+					destroy_nnet (m);
+				}
+				nnr_free_stft (a, k);
+				continue;
+			}
+
+			a->nets[k] = m;
+			if (first < 0) first = k;
+
+			or = a->st[k].prime + 2 * a->size
+			   + a->decim * (a->st[k].fftsize + a->st[k].hop) + 64;
+			if (or > maxor) maxor = or;
+
+			dprintf ("nnr: model slot %d ready - N %d, hop %d (overlap %d), "
+					 "%.1f frames/s, %d frame(s) of lookahead, delay %d "
+					 "(%.2f ms)\n", k, a->st[k].fftsize, a->st[k].hop,
+					 a->st[k].overlap,
+					 (double)a->nrate / (double)a->st[k].hop,
+					 a->st[k].lookahead, a->st[k].delay,
+					 1000.0 * (double)a->st[k].delay / (double)a->rate);
 		}
-		a->delay = a->decim * (a->fftsize - a->hop + a->lookahead * a->hop)
-				 + a->nproto - 1
-				 + a->prime;
+
+		if (first < 0)
+		{
+			dprintf ("nnr: no usable model in any slot - passing audio "
+					 "through\n");
+			nnr_build_stft (a, 0, NNR_FFTSIZE_DEFAULT, NNR_HOP_DEFAULT, 0);
+			first = 0;
+			maxor = a->st[0].prime + 2 * a->size
+				  + a->decim * (a->st[0].fftsize + a->st[0].hop) + 64;
+		}
+
+		a->orsize = maxor;
+		a->orbuf  = (double*) malloc0 (a->orsize * sizeof (double));
+
+		a->model = first;
+		a->net   = a->nets[first];
+		nnr_activate (a, first);
 	}
 
 	nnr_reset_state (a);
 
-	dprintf ("nnr: rate=%d nrate=%d decim=%d N=%d hop=%d bins=%d proto=%d prime=%d delay=%d (%.2f ms)\n",
+	dprintf ("nnr: rate=%d nrate=%d decim=%d N=%d hop=%d bins=%d proto=%d "
+		"prime=%d delay=%d (%.2f ms)\n",
 		a->rate, a->nrate, a->decim, a->fftsize, a->hop, a->nbins, a->nproto,
 		a->prime, a->delay, 1000.0 * (double)a->delay / (double)a->rate);
 }
 
 static void decalc_nnr (NNR a)
 {
-	{
-		int k;
-		for (k = 0; k < NNET_NSLOTS; k++)
-			if (a->nets[k]) { destroy_nnet (a->nets[k]); a->nets[k] = 0; }
-		a->net = 0;
-	}
+	int k;
 
-	fftw_destroy_plan (a->prev);
-	fftw_destroy_plan (a->pfor);
+	for (k = 0; k < NNET_NSLOTS; k++)
+		if (a->nets[k]) { destroy_nnet (a->nets[k]); a->nets[k] = 0; }
+	a->net = 0;
+
+	for (k = 0; k < NNET_NSLOTS; k++) nnr_free_stft (a, k);
+
+	a->inacc = a->abuf = a->oacc = a->awin = a->swin = 0;
+	a->tdin = a->tdout = a->fdout = a->fdin = 0;
+	a->xre = a->xim = a->yre = a->yim = 0;
 
 	_aligned_free (a->orbuf);
-	_aligned_free (a->yim);
-	_aligned_free (a->yre);
-	_aligned_free (a->xim);
-	_aligned_free (a->xre);
-	_aligned_free (a->fdin);
-	_aligned_free (a->fdout);
-	_aligned_free (a->tdout);
-	_aligned_free (a->tdin);
-	_aligned_free (a->swin);
-	_aligned_free (a->awin);
-	_aligned_free (a->oacc);
-	_aligned_free (a->abuf);
-	_aligned_free (a->inacc);
 	_aligned_free (a->dline_int);
 	_aligned_free (a->dline_dec);
 	_aligned_free (a->proto);
@@ -415,27 +551,26 @@ NNR create_nnr
 	double* in_buff,
 	double* out_buff,
 	int rate,
-	int nrate,
-	int fftsize,
-	int overlap,
-	int lookahead,
 	double mask_floor,
 	int cmode
 	)
 {
 	NNR a = (NNR) malloc0 (sizeof (nnr));
+
 	a->run        = run;
 	a->position   = position;
 	a->size       = size;
 	a->in_buff    = in_buff;
 	a->out_buff   = out_buff;
 	a->rate       = rate;
-	a->nrate      = nrate;
-	a->fftsize    = fftsize;
-	a->overlap    = overlap;
-	a->lookahead  = lookahead;
 	a->mask_floor = mask_floor;
 	a->cmode      = cmode;
+
+	a->nrate      = NNR_NRATE_DEFAULT;
+	a->fftsize    = NNR_FFTSIZE_DEFAULT;
+	a->overlap    = NNR_FFTSIZE_DEFAULT / NNR_HOP_DEFAULT;
+	a->lookahead  = 0;
+
 	calc_nnr (a);
 	return a;
 }
@@ -488,16 +623,20 @@ void setBuffers_nnr (NNR a, double* in, double* out)
 
 void setSamplerate_nnr (NNR a, int rate)
 {
+	int keep = a->model;
 	decalc_nnr (a);
 	a->rate = rate;
 	calc_nnr (a);
+	setModel_nnr (a, keep);
 }
 
 void setSize_nnr (NNR a, int size)
 {
+	int keep = a->model;
 	decalc_nnr (a);
 	a->size = size;
 	calc_nnr (a);
+	setModel_nnr (a, keep);
 }
 
 #define NNR_ALL_MODELS(a, call)                                            \
@@ -509,7 +648,8 @@ void setSize_nnr (NNR a, int size)
 
 int setModel_nnr (NNR a, int slot)
 {
-	if (slot < 0 || slot >= NNET_NSLOTS || a->nets[slot] == 0)
+	if (slot < 0 || slot >= NNET_NSLOTS || a->nets[slot] == 0
+		|| !a->st[slot].valid)
 	{
 		dprintf ("nnr: model slot %d is not loaded - staying on slot %d\n",
 				 slot, a->model);
@@ -519,15 +659,14 @@ int setModel_nnr (NNR a, int slot)
 
 	a->model = slot;
 	a->net   = a->nets[slot];
-	flush_nnet (a->net);
 
-	a->lookahead = getLookahead_nnet (a->net);
-	a->delay = a->decim * (a->fftsize - a->hop + a->lookahead * a->hop)
-			 + a->nproto - 1
-			 + a->prime;
+	nnr_activate (a, slot);
+	nnr_reset_state (a);
 
-	dprintf ("nnr: switched to model slot %d, lookahead %d, delay %d (%.2f ms)\n",
-			 slot, a->lookahead, a->delay,
+	dprintf ("nnr: switched to model slot %d - N %d, hop %d (overlap %d), "
+			 "%.1f frames/s, lookahead %d, delay %d (%.2f ms)\n",
+			 slot, a->fftsize, a->hop, a->overlap,
+			 (double)a->nrate / (double)a->hop, a->lookahead, a->delay,
 			 1000.0 * (double)a->delay / (double)a->rate);
 	return a->model;
 }
@@ -542,7 +681,7 @@ int getDelay_nnr (NNR a)
 	return a->delay;
 }
 
-int getRun_nnr(NNR a)
+int getRun_nnr (NNR a)
 {
 	return a->run;
 }
@@ -613,6 +752,79 @@ void setSmooth_nnr (NNR a, double att_ms, double rel_ms)
 	NNR_ALL_MODELS (a, setSmooth_nnet (n, att_ms, rel_ms));
 }
 
+int getPosition_nnr (NNR a)
+{
+	return a->position;
+}
+
+int getNNRTrainingBand (NNR a, double* band_low, double* band_high)
+{
+	NNET n = a->nets[a->model];
+	*band_low = *band_high = 0.0;
+	if (n == 0) return 0;
+	return getTrainingBand (n, band_low, band_high);
+}
+
+/********************************************************************************************************
+*																										*
+*									   Training BW & NNR Bypass											*
+*																										*
+********************************************************************************************************/
+
+
+void setNNRbypassRun (int channel)
+{
+	double band_low = 0.0, band_high = 0.0;
+	NNR a = rxa[channel].nnr.p;
+	NNRBYPASS b = rxa[channel].nnrbypass.p;
+	int was = getRun_nnrbypass (b);
+	if (getRun_nnr (a) &&
+		getNNRTrainingBand (a, &band_low, &band_high))
+	{
+		switch (rxa[channel].mode)
+		{
+			case RXA_CWU:
+			case RXA_USB:
+			case RXA_DIGU:
+				setRun_nnrbypass (b, 1, +band_low, +band_high);
+				break;
+			case RXA_CWL:
+			case RXA_LSB:
+			case RXA_DIGL:
+				setRun_nnrbypass (b, 1, -band_high, -band_low);
+				break;
+			default:
+				setRun_nnrbypass (b, 0, band_low, band_high);
+				break;
+		}
+	}
+	else   setRun_nnrbypass (b, 0,  band_low,  band_high);
+
+	if (was && !getRun_nnrbypass(b))
+	{
+		flush_bpsnba(rxa[channel].bpsnba.p);
+		flush_snba(rxa[channel].snba.p);
+		flush_eqp(rxa[channel].eqp.p);
+		if (rxa[channel].anf.p->position == 0) flush_anf(rxa[channel].anf.p);
+		if (rxa[channel].anr.p->position == 0) flush_anr(rxa[channel].anr.p);
+		if (rxa[channel].emnr.p->position == 0) flush_emnr(rxa[channel].emnr.p);
+	}
+
+	{
+		int position = getRun_nnrbypass (b) ? 0 : 1;
+		if (a->position != position)
+		{
+			a->position = position;
+			flush_nnr (a);
+		}
+	}
+
+	RXAbp1Check (channel, 
+		rxa[channel].amd.p->run, rxa[channel].snba.p->run,
+		rxa[channel].emnr.p->run, getRun_nnrbypass (b), 
+		rxa[channel].anf.p->run, rxa[channel].anr.p->run);
+	RXAbp1Set (channel);
+}
 
 /********************************************************************************************************
 *																										*
@@ -623,24 +835,25 @@ void setSmooth_nnr (NNR a, double att_ms, double rel_ms)
 PORT void
 SetRXANNRRun (int channel, int setit)
 {
-	EnterCriticalSection (&ch[channel].csDSP);
 	if (rxa[channel].nnr.p->run != setit)
 	{
+		EnterCriticalSection (&ch[channel].csDSP);
 		rxa[channel].nnr.p->run = setit;
 		flush_nnr (rxa[channel].nnr.p);
+		setNNRbypassRun (channel);
+		LeaveCriticalSection (&ch[channel].csDSP);
 	}
-	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
 PORT void
 SetRXANNRPosition (int channel, int position)
 {
-	EnterCriticalSection (&ch[channel].csDSP);
-	rxa[channel].nnr.p->position = position;
-	flush_nnr (rxa[channel].nnr.p);
-	LeaveCriticalSection (&ch[channel].csDSP);
+	(void)channel;
+	(void)position;
 }
 
+// Major user control - Sets the minimum gain which effectively sets
+//    the amount of pass-through signal/noise for user comfort.
 PORT void
 SetRXANNRMaskFloor (int channel, double floor_db)
 {
@@ -650,16 +863,19 @@ SetRXANNRMaskFloor (int channel, double floor_db)
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
+// Select which model to use -- selects the 'slot'.
 PORT int
 SetRXANNRModel (int channel, int slot)
 {
 	int now;
 	EnterCriticalSection (&ch[channel].csDSP);
 	now = setModel_nnr (rxa[channel].nnr.p, slot);
+	setNNRbypassRun(channel);
 	LeaveCriticalSection (&ch[channel].csDSP);
 	return now;
 }
 
+// Returns the model currently in use.
 PORT int
 GetRXANNRModel (int channel)
 {
@@ -670,6 +886,8 @@ GetRXANNRModel (int channel)
 	return now;
 }
 
+// 'cmode == 0' returns audio in both I and Q.
+// 'cmode != 0' returns audio in I and '0.0' in Q.
 PORT void
 SetRXANNRcmode (int channel, int cmode)
 {
@@ -678,6 +896,7 @@ SetRXANNRcmode (int channel, int cmode)
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
+// Used in testing; not intended as a user control.
 PORT void
 SetRXANNRTestMode (int channel, int mode)
 {
@@ -687,6 +906,7 @@ SetRXANNRTestMode (int channel, int mode)
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
+// Used in testing; not intended as a user control.
 PORT void
 SetRXANNRAlpha (int channel, double alpha)
 {
@@ -695,6 +915,7 @@ SetRXANNRAlpha (int channel, double alpha)
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
+// Used in testing; not intended as a user control.
 PORT void
 SetRXANNRAlphaKnee (int channel, double knee_db)
 {
@@ -703,6 +924,7 @@ SetRXANNRAlphaKnee (int channel, double knee_db)
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
+// Used in testing; not intended as a user control.
 PORT void
 SetRXANNRTau (int channel, double tau)
 {
@@ -711,6 +933,7 @@ SetRXANNRTau (int channel, double tau)
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
+// Used in testing; not intended as a user control.
 PORT void
 SetRXANNRMaxGain (int channel, double gmax_db)
 {
@@ -719,6 +942,7 @@ SetRXANNRMaxGain (int channel, double gmax_db)
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
+// Used in testing; not intended as a user control.
 PORT void
 SetRXANNRSmooth (int channel, double att_ms, double rel_ms)
 {
@@ -726,3 +950,5 @@ SetRXANNRSmooth (int channel, double att_ms, double rel_ms)
 	NNR_ALL_MODELS (rxa[channel].nnr.p, setSmooth_nnet (n, att_ms, rel_ms));
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
+
+

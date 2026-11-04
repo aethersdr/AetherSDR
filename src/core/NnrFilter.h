@@ -12,7 +12,7 @@ namespace AetherSDR {
 
 class Resampler;
 
-// Client-side neural NR using WDSP 2.10's NNR (RFC #5684), shaped like
+// Client-side neural NR using WDSP 2.11's NNR (RFC #5684), shaped like
 // DeepFilterFilter: 24 or 48 kHz stereo float32, one instance per channel,
 // recreate for a new rate. WDSP differences:
 //   - NNR runs at a multiple of 16 kHz, so 24 kHz resamples to 48 and back (as
