@@ -130,6 +130,54 @@ static void testParseBodyNoOffsetsInStream()
     check(body.rxDfHz == 0 && body.txDfHz == 0, "no-offsets case leaves rxDfHz/txDfHz at their default");
 }
 
+// Datagram ending inside the 8-byte (Rx DF, Tx DF) pair: any length 0–7 must
+// set hasOffsets=false. This pins the ds.status()==QDataStream::Ok guard: without
+// it, 4–7 bytes would set hasOffsets=true with txDfHz zero-filled, drawing a
+// spurious red bracket at the dial — the partial-read outcome the
+// "refuse-rather-than-guess" contract forbids.
+static QByteArray buildStatusBodyWithPartialOffsets(int offsetBytes, quint32 rxDfHz)
+{
+    QByteArray buf;
+    QDataStream ds(&buf, QIODevice::WriteOnly);
+    ds.setByteOrder(QDataStream::BigEndian);
+    writeWsjtxQString(ds, "K1ABC");
+    writeWsjtxQString(ds, "-10");
+    writeWsjtxQString(ds, "FT8");
+    writeWsjtxBool(ds, true);
+    writeWsjtxBool(ds, false);  // transmitting
+    writeWsjtxBool(ds, false);  // decoding
+    // Encode the full 8-byte pair then trim to offsetBytes.
+    QByteArray offsets;
+    QDataStream os(&offsets, QIODevice::WriteOnly);
+    os.setByteOrder(QDataStream::BigEndian);
+    os << rxDfHz << static_cast<quint32>(2200);
+    buf.append(offsets.left(offsetBytes));
+    return buf;
+}
+
+static void testParseBodyPartialOffsets()
+{
+    // 0–7 bytes: every incomplete prefix must refuse to set hasOffsets.
+    for (int n = 0; n < 8; ++n) {
+        const QByteArray buf = buildStatusBodyWithPartialOffsets(n, 1500);
+        QDataStream ds(buf);
+        ds.setByteOrder(QDataStream::BigEndian);
+        const WsjtxStatusBody body = parseWsjtxStatusBody(ds);
+        const std::string label =
+            "partial offset " + std::to_string(n) + " bytes: hasOffsets must be false";
+        check(!body.hasOffsets, label.c_str());
+    }
+    // 8 bytes exactly: must succeed and round-trip correctly.
+    {
+        const QByteArray buf = buildStatusBodyWithPartialOffsets(8, 1500);
+        QDataStream ds(buf);
+        ds.setByteOrder(QDataStream::BigEndian);
+        const WsjtxStatusBody body = parseWsjtxStatusBody(ds);
+        check(body.hasOffsets, "complete 8-byte offset pair: hasOffsets=true");
+        check(body.rxDfHz == 1500, "complete 8-byte offset pair: rxDfHz correct");
+    }
+}
+
 // A zero Rx/Tx DF that IS present in the stream is a legitimate offset value
 // and must be distinguished from "field absent" — same distinction
 // resolveWsjtxFreq() relies on via hasOffsets.
@@ -206,6 +254,7 @@ int main(int argc, char** argv)
     AetherSDR::testParseBodyTransmittingFalse();
     AetherSDR::testParseBodyNoOffsetsInStream();
     AetherSDR::testParseBodyZeroOffsetsPresent();
+    AetherSDR::testParseBodyPartialOffsets();
 
     if (AetherSDR::g_failures == 0)
         std::fprintf(stderr, "wsjtx_status_freq_test: all checks passed\n");

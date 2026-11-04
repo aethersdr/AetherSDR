@@ -80,6 +80,7 @@
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
+#include "core/WsjtxOverlayConfig.h"
 #include "core/DisplayPresence.h"
 #include "core/KiwiSdrProtocol.h"
 #include "InteractionSettings.h"
@@ -2664,7 +2665,8 @@ void SpectrumWidget::loadSettings()
     m_singleClickTune = s.value("SingleClickTune", "False").toString() == "True";
     m_showTuneGuides  = s.value("ShowTuneGuides", "False").toString() == "True";
     // Per-pan (not global like the flat keys above) — see setShowWsjtxFreq().
-    m_showWsjtxFreq   = s.value(settingsKey("WsjtxShowFreqOverlay"), "False").toString() == "True";
+    // Read from the Principle V config object, not a flat key.
+    m_showWsjtxFreq   = wsjtxOverlayShowFreq(m_panIndex);
     m_extendedFrequencyLine = s.value("ExtendedFrequencyLine", "False").toString() == "True";
     m_extendedPassband = DisplaySettings::extendedPassband();
     m_extendedTnf = DisplaySettings::extendedTnf();
@@ -4462,9 +4464,7 @@ void SpectrumWidget::setShowWsjtxFreq(bool on) {
     // scheme DisplayWfColorScheme/Display3DGain already use for per-pan
     // display appearance.
     m_showWsjtxFreq = on;
-    auto& s = AppSettings::instance();
-    s.setValue(settingsKey("WsjtxShowFreqOverlay"), on ? "True" : "False");
-    s.save();
+    wsjtxOverlaySetShowFreq(m_panIndex, on);  // Principle V: writes to owned config object
     if (on)
         emit wsjtxListenerNeeded();  // Start listener mid-session if not running (#4526)
     markOverlayDirty();
@@ -16575,6 +16575,7 @@ void SpectrumWidget::setWsjtxMarkers(const QVector<WsjtxMarker>& markers)
             const auto& a = m_wsjtxMarkers.at(i);
             const auto& b = markers.at(i);
             if (a.id != b.id || a.transmitting != b.transmitting ||
+                a.mode != b.mode ||
                 std::abs(a.rxFreqHz - b.rxFreqHz) > 0.5 ||
                 std::abs(a.txFreqHz - b.txFreqHz) > 0.5) {
                 return true;
@@ -18345,11 +18346,15 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
         // dial would hide the markers exactly when the operator is most zoomed
         // in. Each line is already span-checked individually below.
         const double rxMhz = marker.rxFreqHz / 1.0e6;
-        if (rxMhz >= startMhz && rxMhz <= endMhz) {
+        const double modeWidthMhz = wsjtxModeWidthHz(marker.mode) / 1.0e6;
+        // Interval intersection: draw if any part of [lower, upper] is visible.
+        // A lower-edge-only check hides the whole bracket when zoomed so that
+        // only the upper edge is on screen.
+        if (rxMhz <= endMhz && rxMhz + modeWidthMhz >= startMhz) {
             drawModeWidthLines(rxMhz, rxColor, marker.mode);
             p.setPen(rxColor);
             // Label at the centre of the bracket (lower edge + half width).
-            const double rxCenterMhz = rxMhz + wsjtxModeWidthHz(marker.mode) / 2.0 / 1.0e6;
+            const double rxCenterMhz = rxMhz + modeWidthMhz / 2.0;
             p.drawText(mhzToX(rxCenterMhz) + 3, labelY,
                        QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
         }
@@ -18361,7 +18366,7 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
         const bool txDiffersFromRx = std::abs(marker.txFreqHz - marker.rxFreqHz) > 1.0;
         if (marker.transmitting || txDiffersFromRx) {
             const double txMhz = marker.txFreqHz / 1.0e6;
-            if (txMhz >= startMhz && txMhz <= endMhz) {
+            if (txMhz <= endMhz && txMhz + modeWidthMhz >= startMhz) {
                 drawModeWidthLines(txMhz, txColor, marker.mode);
             }
         }

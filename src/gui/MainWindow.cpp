@@ -257,6 +257,7 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
+#include "core/WsjtxOverlayConfig.h"
 #include "core/AudioDevicePreferencePolicy.h"
 #include "core/NnrSettings.h"
 #include "core/AutomationServer.h"
@@ -6991,16 +6992,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
                     QMetaObject::invokeMethod(m_rbnClient, [=, this] { m_rbnClient->connectToCluster(host, rPort, call); });
             }
             // Auto-start WSJT-X listener if enabled for spots, or if any pan has
-            // the Rx/Tx overlay enabled (#4526). Per-pan key: bare
-            // "WsjtxShowFreqOverlay" for pan 0, "WsjtxShowFreqOverlay_N" for pan N.
+            // the Rx/Tx overlay enabled (#4526). Per-pan state lives in the
+            // Principle V WsjtxOverlay config object.
             {
                 bool needListener = cs.value("WsjtxAutoStart", "False").toString() == "True";
-                if (!needListener && cs.value("WsjtxShowFreqOverlay", "False").toString() == "True")
-                    needListener = true;
-                for (int i = 1; i < 8 && !needListener; ++i) {
-                    if (cs.value(QString("WsjtxShowFreqOverlay_%1").arg(i), "False").toString() == "True")
-                        needListener = true;
-                }
+                if (!needListener)
+                    needListener = wsjtxOverlayAnyPanEnabled();
                 if (needListener) {
                     QString wAddr = cs.value("WsjtxAddress", "224.0.0.1").toString();
                     quint16 wPort = static_cast<quint16>(cs.value("WsjtxPort", 2237).toInt());
