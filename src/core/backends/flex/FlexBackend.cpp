@@ -811,6 +811,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // SmartSDR+ entitlement gate.
     caps.hasRadioSideCwKeyer = true;
     caps.cwTextKeyerName = QStringLiteral("CWX");
+    using CwField = CwTextRequest::Field;
+    caps.cwTextControl = CwTextControl{{CwField::Send, CwField::SendMacro,
+        CwField::SaveMacro, CwField::Speed, CwField::Delay, CwField::Qsk,
+        CwField::Erase, CwField::Clear}, CwTextControl::Completion::RadioCharacterIndex};
     caps.cwTextMinWpm = 5;
     caps.cwTextMaxWpm = 100;
     caps.cwTextMaxMessageChars = 0;
@@ -826,6 +830,12 @@ RadioCapabilities FlexBackend::capabilities() const
     if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform != RadioPlatform::Unknown
         && !isKnownNonWfpPlatform(mc.platform)) {
         caps.waveformEnvControl = RadioCapabilities::WaveformEnvControl{};
+    }
+    // The radio's own NTP time sources (FlexLib 4.3.16 NtpSource.cs; SMART-10565
+    // names FLEX-8000/Aurora). FlexLib subscribes on every radio, so the gate is
+    // the platform those share: BigBend, ML-9600 and CL-9300 included.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform == RadioPlatform::BigBend) {
+        caps.ntpSourceControl = RadioCapabilities::NtpSourceControl{NtpSourceRules::kMaxSources};
     }
     caps.hasMultiClientSessions = true;  // multiFLEX
     caps.alwaysUseClientSideSpots = false;
@@ -1499,7 +1509,8 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
     }
 
     for (int index : meterOrder) {
-        const QMap<QString, QString>& f = grouped.constFind(index).value();
+        const auto group = grouped.constFind(index);
+        const QMap<QString, QString>& f = group.value();
         // Build the typed MeterDef directly (#4070). Present-only: a field the
         // wire didn't report keeps its MeterDef default. The carry() ok-guard is
         // defensive/consistency only here — a plain MeterDef field's default IS
