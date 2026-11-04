@@ -370,10 +370,12 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
 | `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar text-keyer indicator and every text-send entry point. Icom: ✅ only for the verified IC-705 / IC-7300MK2 command-17 profiles |
 | `cwTextKeyerName`, ranges and support flags | CWX, 5–100 WPM, progress/macros/live/modifiers | defaults (unused) | defaults (unused) | `MainWindow::applyCapabilitiesToUi`, CAT/TCI/rigctl/automation adapters | Shapes the shared surface without a family branch. Icom: CWK, 6–48 WPM, 30 chars, no progress/stored macros/live typing/speed modifiers; unsupported text is rejected rather than rewritten |
+| `cwTextControl` | buffered text, stored macros, speed/delay/QSK, erase/clear | absent | absent | `RadioModel::dispatchCwxRequest`, `dispatchCwxText`, `finishCwxDispatch` | Desktop-only field-set record, not daemon TX permission. Flex uses the operation-fenced buffered writer; Icom retains its existing native text adapter and typed CW-speed route. ANAN/RTL also explicitly declare absence. No new backend support or delay management |
 | `hasVoiceKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasVoiceKeyer()` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` (Tools ▸ Waveforms… + AetherModem D-STAR tab), `MainWindow::scheduleDigitalVoiceAutoStart` | ThumbDV helper needs a SmartSDR D-STAR waveform. Flex sets true; Icom/HL2/Sim set false; ANAN/RTL inherit the `= false` default. Disconnected restores the tab. Autostart of `aether-dv-waveform` is gated on the same flag so a non-Flex connect cannot launch a helper with no Stop surface |
 | `waveformEnvControl` | engaged on firmware 4.3.16+ on a platform with a Waveform Processor (not Microburst/DeepEddy/Unknown) | absent | absent | `RadioModel::requestWaveformEnv`, `RadioModel::applyWaveformEnvironment`, `waveformEnvironmentUnavailableReason` (Waveforms ▸ Environment…, `WaveformEnvironmentDialog`) | Optional record (#6947): the radio keeps a per-container environment (`waveform env K=V` / `waveform env clear` / `waveform recreate`, status `env=` + `waveform restarted`). Requires `hasWaveforms`. Unavailable = the action is dimmed with the reason |
+| `ntpSourceControl` | engaged on firmware 4.3.16+ on the BigBend platform (FLEX-8000, Aurora, ML-9600/MLS-9601, CL-9300/CLS-9301), `maxSources` = 10 | absent | absent | `RadioModel::requestNtpSource`, `RadioModel::replaceNtpSource`, `RadioModel::syncNtpSources` (the once-per-session `sub ntp_sources all`), `NtpSourcesPage::unavailableReason` (Radio Setup ▸ Time) | Optional record (#6953): the radio keeps its own NTP source list (`ntp_sources create|remove|enable|disable`, status `ntp_sources id=…`). Unavailable = the Time page stays, dimmed with the reason |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `alwaysUseClientSideSpots` | ❌ | ✅ | ❌ | `MainWindow_Spots.cpp`, `MainWindow_Wiring.cpp` through `SpotCommandPolicy` | Forces SpotHub and manual spots into the existing passive-local `SpotModel` instead of emitting Flex `spot add` commands. Icom: ✅ because CI-V has no compatible spot service. HL2: ✅ because it has no command plane — `RadioModel::sendCmd` drops `spot add`, so with ❌ no DX-cluster, RBN, WSJT-X, POTA or manual spot was ever drawn (N1MM and EiBi markers were always client-side). Flex and Sim remain under the existing operator Passive toggle. ANAN/RTL inherit the `= false` default and have no command plane either. |
 | `hasGpsLocation` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi`, `RadioModel::hasGpsHardware`, GPS dashboard | Family/model can provide coordinates. Flex combines this with per-unit GPSDO/GNSS presence; IC-705 is ✅ from verified `23 00` |
@@ -382,7 +384,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasGpsTimeConfiguration` | ❌ | ❌ | ❌ | `GpsLocationDialog::updateGpsTimeControls`, `RadioModel` GPS clock intents | Shows the radio-owned NTP client, configured server address, GPS Time Correct, and Sync Now controls. IC-705: ✅; explicit writes are read back before display |
 | `hasGpsHardware` | ✅ | ❌ | ❌ | `RadioSetupDialog` | Shows the GPS page and the GPS entry under Radio › Options only when the backend declares hardware. Icom: ✅ only for the IC-705 profile; IC-9700 and IC-7300MK2 are ❌. Separate from `hasGpsLocation`: hardware presence drives the Setup page, while `hasGpsLocation` (IC-705 `23 00`) drives the live dashboard, so a future model can declare a receiver without a position readout. |
 | `gpsHardwareRequiresPresence` | ✅ | ❌ | ❌ | `RadioModel::hasGpsSetupHardware` | Flex GPS hardware is optional per unit and needs live oscillator/GPS presence; fixed-profile hardware such as the IC-705 does not. |
-| `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar. Icom: ✅ only when the active model profile provides a calibrated Vd curve; unprofiled models neither publish nor poll Vd/Id. ANAN: ✅ — the DC rail from High Priority status bytes 57-58 (AIN3) at 23.0/1.1 into a 5 V 12-bit ADC, measured on a G2 (536 counts = 13.68 V against a meter's 13.65 V); NOT bytes 49-50, the input the spec calls supply voltage, which fits no published scale on that radio |
+| `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi`, `MainWindow_Wiring.cpp` (gauge registration) | PA supply-voltage readout in the status bar (hidden) and the MTR applet's Supply Voltage gauge (dimmed with a reason, via `ControlAvailabilityRegistry`) while connected to a radio that declares `false`. Icom: ✅ only when the active model profile provides a calibrated Vd curve; unprofiled models neither publish nor poll Vd/Id. ANAN: ✅ — the DC rail from High Priority status bytes 57-58 (AIN3) at 23.0/1.1 into a 5 V 12-bit ADC, measured on a G2 (536 counts = 13.68 V against a meter's 13.65 V); NOT bytes 49-50, the input the spec calls supply voltage, which fits no published scale on that radio |
 | `hasPaTemperatureTelemetry` | ✅ | ✅ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA-temperature gauge and °C/°F selector in Radio Vitals. Icom: ❌ until a model profile declares and implements a PA-temperature meter; the IC-9700 has no such declared telemetry |
 | `hasPaCurrentTelemetry` | ❌ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Calibrated PA drain-current face in Radio Vitals, used only when PA-temperature telemetry is unavailable. Icom: ✅ only for the IC-9700 profile's documented 0–20 A Id calibration. Flex remains ❌ because its PACURRENT meter is known to clip below real full-power draw |
 | `paTelemetryAudit` (record) | — (absent) | — (absent) | — (absent) | `MainWindow::applyCapabilitiesToUi` | A PROTOCOL audit of the PA telemetry the wire format can carry at all, as opposed to what a session has so far RECEIVED. ENGAGED with `temperatureAbsent` means the payload was read field by field and there is no temperature in it, so the status bar WITHDRAWS its PA temperature row instead of leaving it on `PA --°C` forever. ABSENT (the default) means NOT AUDITED and every consumer keeps its historical presentation — which is what holds Flex, HL2, Icom, Sim and RTL at today's behaviour rather than reclassifying a default `false` above as "proven absent". ANAN: engaged, because Protocol 2's whole analog payload is six fields and none is a temperature. A record and not a bool per #5262 M2, whose boolean count is frozen and shrink-only; the audit can also grow a current/supply field without a second ratchet argument |
@@ -736,7 +738,7 @@ and conflating them would hide one of them.
 
 | Field | Flex | HL2 | Icom | ANAN | Question it answers |
 |---|:--:|:--:|:--:|:--:|---|
-| `radioOwnsDbmScale` | ✅ (default) | ⚠️ **✅ (default)** | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
+| `radioOwnsDbmScale` | ✅ (default) | ❌ | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
 | `clientPersistsDbmRange()` (`panAmplitude->clientPersistsDbmRange`, with `binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ❌ (declared false) | May the client store and restore the dBm range the operator sets? RTL: ❌ (declared false). Sim: ❌ (absent) |
@@ -817,26 +819,21 @@ draws nothing still raises the notice. `setWaterfallColorGainFor` withholds it
 where auto black is on or `panBinsAbsolute()` is true: with manual black on any
 other row every row is black, whatever the gain.
 
-**THE HL2 KEEPS THE PERMISSIVE DEFAULT, and that is deliberate rather than an
-omission.** `Hl2Backend::capabilities()` never assigns the field and says why at
-the point where it would: the flag answers two questions, and on this radio the
-answers differ — it cannot be commanded a dBm range (so `false` is right), and
-its auto-floor loop's measurement does not depend on one either (so `false`
-would switch off a loop that bench run d101 measured working). The only two
-`c.radioOwnsDbmScale = false` sites in the tree are `IcomCivBackend` and
-`AnanBackend`. This PR's own test refuses to assert the HL2's value for the same
-reason.
-
-**So every gate in the table below is LIVE on an HL2**, not disarmed. An earlier
-version of this row read ❌ and the table then said the opposite of the code —
-caught by `aethersdr-agent` on #5725.
+**The HL2 declares `false`.** It cannot be commanded a dBm range: with the
+default `true`, a scale drag or strip click dispatched a `LevelRange` request
+that the HL2's `panDisplayControl` refuses as Unsupported, raising a notice for a
+range that was applied and saved locally anyway. Its auto-floor loop does not
+depend on the flag: `binsAbsolute` keeps `noiseFloorAutoAdjustAllowed()` open
+(bench run d101 measured it settling). The `c.radioOwnsDbmScale = false` sites
+are `Hl2Backend`, `IcomCivBackend` and `AnanBackend`;
+`tests/hl2_pan_limits_declaration_test.cpp` pins the HL2's.
 
 **`radioOwnsDbmScale` is consumed**, and a backend declaring `false` changes
 behaviour at four gates plus two fan-out sites:
 
 | Site | What `false` does |
 |---|---|
-| `SpectrumWidget::applyNoiseFloorAutoAdjust` | Early return — the gate that actually stops the runaway, because `m_refLevel` is local and would keep marching without it |
+| `SpectrumWidget::applyNoiseFloorAutoAdjust` | Early return only when the bins are also not absolute (`noiseFloorAutoAdjustAllowed`, an OR): stops the runaway on Icom, where `m_refLevel` is local and would keep marching; a no-op on HL2, ANAN and RTL |
 | `sendDbmRangeCommand` (`MainWindow_Wiring.cpp`) | Backstop: no dBm range leaves for the radio, whichever caller asked |
 | `radioDbmHeadroomRecoveryRequested` handler | Return — the second ratchet source; gating `dbmRangeChangeRequested` alone did not stop it |
 | `dbmRangeChangeRequested`, auto-floor branch | Re-seeds the widget from the pan's real range instead of commanding one |
@@ -861,15 +858,11 @@ passes the HL2's absolute float dBFS bins through untouched and
 not move with `m_refLevel`. The declaration rests on the source fact (there is no
 echo to wait for); the runtime question is open.
 
-**One read of this flag is doing a second job**, and it is worth knowing before
-the next backend sets it. Four of the gates above stop outbound traffic that
-cannot arrive. The first — `SpectrumWidget::applyNoiseFloorAutoAdjust` — turns
-the noise-floor auto-adjust off, justified in its own comment by a radio whose
-floor "is already where the calibration puts it". That is true of an Icom and
-false of a raw-IQ backend, whose scale is arbitrary and local and where a local
-auto-floor is the only one available. The two questions coincide on a Flex and an
-Icom and come apart here; the gate should eventually ask whether the floor
-MEASUREMENT depends on a commanded range.
+**The auto-floor gate no longer rests on this flag alone.** It once turned the
+noise-floor auto-adjust off for every backend declaring `false`, which is wrong
+for a raw-IQ backend whose local auto-floor is the only one it has. That split
+has happened through `panBinsAbsolute`: `noiseFloorAutoAdjustAllowed()`
+(`NoiseFloorAutoAdjustGate.h`) keeps the loop open when the bins are absolute.
 
 **The calibration claim is declared and nothing reads it yet.** It is the
 second question: an HL2's axis is dBFS wearing a dBm label, because nothing on
@@ -1058,10 +1051,10 @@ other backends keep the controls those refusals take away.
 [`tests/icom_ptt_authority_test.cpp`](../../tests/icom_ptt_authority_test.cpp)
 covers the keying-authority side.
 [`tests/hl2_pan_limits_declaration_test.cpp`](../../tests/hl2_pan_limits_declaration_test.cpp)
-pins the HL2's panadapter-limit declarations — `panSpanModel` and
-`panAmplitude`, and **not** `radioOwnsDbmScale`, which the HL2 deliberately
-leaves undeclared: that target asserts only its *default*, which is a different
-fact — and asserts the rate list against
+pins the HL2's panadapter-limit declarations — `panSpanModel`,
+`panAmplitude` and `radioOwnsDbmScale` (false, with the auto-floor gate still
+open through absolute bins), beside the field's permissive *default* — and
+asserts the rate list against
 `hl2::kIqSampleRatesHz` and the axis against
 `Hl2DbReference::isCalibrated()` rather than against re-typed values, so the
 declaration cannot drift away from the code it describes without a failure. It is

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/backends/RadioCapabilities.h"
+
+#include <QCoreApplication>
 #include <QWidget>
 
 class QPushButton;
@@ -19,10 +22,22 @@ public:
     explicit MeterApplet(QWidget* parent = nullptr);
 
     void setMeterModel(MeterModel* model);
+    // The Supply Voltage gauge is dimmed, never hidden, on a radio with no
+    // supply rail (HL2); MainWindow registers it with ControlAvailabilityRegistry.
+    HGauge* supplyGauge() const { return m_supplyGauge; }
+    static bool supplyVoltageAvailable(bool, const RadioCapabilities& caps)
+    {
+        return caps.hasSupplyVoltageTelemetry;
+    }
+    static QString supplyVoltageUnavailableReason()
+    {
+        return QCoreApplication::translate(
+            "MeterApplet", "This radio does not report its supply voltage.");
+    }
     void setPaInstrumentTelemetryState(bool connected,
                                        bool temperatureAvailable,
                                        bool currentAvailable);
-    void setSupplyVoltageTelemetryState(bool connected);
+    void setSupplyVoltageTelemetryState(bool connected, bool available);
     void setMainFanTelemetryState(bool connected, bool available);
     void setTransmitting(bool transmitting);
 

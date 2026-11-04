@@ -513,7 +513,7 @@
       "source": [
         {
           "file": "src/core/CatPort.cpp",
-          "line": 71,
+          "line": 86,
           "text": "CatPort: failed to bind port"
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2906,
+          "line": 2907,
           "text": "HL2: could not open the UDP socket"
         }
       ]

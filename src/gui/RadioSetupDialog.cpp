@@ -6,6 +6,7 @@
 // header rather than from the wire code.
 #include "core/backends/anan/AnanSettings.h"
 #include "RadioSetupDialog.h"
+#include "NtpSourcesPage.h"
 #include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
@@ -695,13 +696,6 @@ static void showCopiedPopup(QWidget* anchor)
     QTimer::singleShot(1000, popup, &QLabel::close);
 }
 
-// A status line that takes no room while it has nothing to say.
-static void setShownText(QLabel* label, const QString& text)
-{
-    label->setText(text);
-    label->setVisible(!text.isEmpty());
-}
-
 static QWidget* makeInfoField(const QString& labelText, QWidget* valueWidget,
                               int labelWidth = kInfoLeftLabelWidth)
 {
@@ -1197,7 +1191,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
       m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter),
-      m_kpa1500(kpa1500), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100), m_rfkit(rfkit)
+      m_kpa1500(kpa1500), m_rfkit(rfkit), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100)
 {
     theme::setContainer(this, QStringLiteral("canon/radioSetup"));
     // Size and position persist under the key it used as a PersistentDialog,
@@ -1307,6 +1301,11 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(radioCategory, QStringLiteral("GPS"),
         QStringLiteral("gpsdo satellite location oscillator time"), [this] { return buildGpsTab(); });
     m_gpsPageIndex = m_pageIndexes.value(QStringLiteral("GPS"));
+    // Shown on every radio; dimmed with the reason where the radio keeps no NTP
+    // sources of its own (#6953).
+    addPage(radioCategory, QStringLiteral("Time"),
+        QStringLiteral("ntp time server clock pool chrony sync"),
+        [this] { return new NtpSourcesPage(*m_model); });
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),
@@ -3983,7 +3982,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     };
 
     connect(calBtn, &QPushButton::clicked, this,
-            [this, apply, referenceHz, activeSliceHz, setStatus] {
+            [apply, referenceHz, activeSliceHz, setStatus] {
         const double ref = referenceHz();
         if (!(ref > 0.0)) {
             setStatus(QStringLiteral("Enter a reference frequency."), Tone::Warn);

@@ -915,6 +915,14 @@ void RadioModel::setupBackend(const QString& family)
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
             });
+            flex->setCwxCommandSink([this](const QString& command, const TxCoordinator::Command& fence,
+                                           const RadioControlFence& current, FlexBackend::CommandReply reply) {
+                return sendTxTcpCommand(command, fence.operation, fence.keying,
+                    [completion = fence.completion] { completion.finish(); }, std::move(reply), current);
+            });
+            flex->setCwxConfigurationSink([this](const QString& command, const RadioControlFence& current) {
+                return sendCwxConfigurationCommand(command, current);
+            });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
             // moving slice encode behind the seam keeps TX safety above it.
             flex->setSliceCommandSink([this](const QString& cmd){
@@ -1361,6 +1369,8 @@ void RadioModel::setupBackend(const QString& family)
     });
     connect(m_backend.get(), &IRadioBackend::profileChanged, this,
             [this](const ProfileDelta& delta) { applyProfileChanges(delta); });
+    connect(m_backend.get(), &IRadioBackend::ntpSourceChanged, this,
+            [this](const NtpSourceDelta& delta) { applyNtpSourceChanges(delta); });
 
     // The PanadapterStream connects below exist only on Flex and Sim; a backend
     // carrying its own IQ has no m_panStream. Each is guarded individually, not by an
@@ -2144,6 +2154,8 @@ RadioModel::RadioModel(QObject* parent)
     wireSliceLifecycle();
     qRegisterMetaType<SliceControlRequest>();
     qRegisterMetaType<TransmitControlRequest>();
+    qRegisterMetaType<CwTextRequest>();
+    qRegisterMetaType<CwTextReply>();
     qRegisterMetaType<RadioSetupRequest>();
     qRegisterMetaType<SpotRequest>();
     qRegisterMetaType<PanControlRequest>();
@@ -2188,6 +2200,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
     qRegisterMetaType<GpsDelta>();
+    qRegisterMetaType<NtpSourceDelta>();
     qRegisterMetaType<MemoryDelta>();
 
     // Watch both sides of the TX filter so a cut that silences the transmit
@@ -2276,6 +2289,7 @@ RadioModel::RadioModel(QObject* parent)
             &m_dstarModel, &DStarModel::handleWaveformStatus);
     connect(this, &RadioModel::capabilitiesChanged,
             this, &RadioModel::autoClearWaveformEnvironmentStaging);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::syncNtpSources);
     connect(&m_flexWaveformModel, &FlexWaveformModel::environmentChanged,
             this, &RadioModel::waveformContainersChanged);
     connect(&m_flexWaveformModel, &FlexWaveformModel::waveformsChanged, this, [this] {
@@ -2574,17 +2588,16 @@ RadioModel::RadioModel(QObject* parent)
         const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(input);
         return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
     });
-    connect(&m_cwxModel, &CwxModel::commandReady, this, [this](const QString& cmd){
-        dispatchCwxCommand(cmd, m_cwxCommandOperation);
-    });
-    connect(&m_cwxModel, &CwxModel::speedCommandIssued, this, [this](int wpm) {
-        if (!usesFlexCommandPlane()) {
-            m_transmitModel.setCwSpeed(wpm);
-        }
+    m_cwxModel.setRequestSender([this](const CwTextRequest& request, int epoch, int nChars,
+                                      CwxModel::TransmissionPermit current) {
+        return dispatchCwxRequest(request, m_cwxCommandOperation, epoch, nChars, std::move(current));
     });
     m_cwxModel.setTextSender([this](const QString& text, int wpm) {
         Q_UNUSED(wpm);
         return dispatchCwxText(text, m_cwxCommandOperation);
+    });
+    connect(&m_cwxModel, &CwxModel::requestRejected, this, [this](const QString& reason) {
+        emit radioMessageReceived(reason, MessageSeverity::Warning);
     });
     connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
         const TxCoordinator::Intent intent = m_cwxCommandIntent;
@@ -2592,7 +2605,7 @@ RadioModel::RadioModel(QObject* parent)
         (void)m_txCoordinator.requestIntentEnd(intent);
         m_cwxActive = false;
         m_cwxDrainArmed = false;
-        if (m_backend && !usesFlexCommandPlane()
+        if (m_backend && !backendCapabilities().cwTextControl
             && backendCapabilities().hasRadioSideCwKeyer) {
             m_backend->abortCwText(operation.permitsCleanup() ? operation : m_txCoordinator.cleanupFence(),
                                    trackTxQueue(operation));
@@ -2602,14 +2615,6 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_cwxModel, &CwxModel::transmissionDispatched, this,
             [this](int epoch, bool untrackedMacro) {
         finishCwxDispatch(epoch, untrackedMacro, m_cwxCommandIntent);
-    });
-    // Final cwx send of each macro/text block goes via replyCommandReady so we
-    // can capture the radio_index from the reply.  CwxModel::handleSendReply
-    // stores it; applyStatus fires queueEmpty() when cwx sent= reaches it.
-    // This replaces the broken cwx queue= path — firmware never sends it
-    // (observed on FLEX-6500 fw 4.2.20.41343; the 8600 target runs 4.2.18). (#3949)
-    connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch, int nChars){
-        dispatchCwxCommand(cmd, m_cwxCommandOperation, epoch, nChars);
     });
     // Release TX when the radio reports the CWX buffer drained (#2450): with
     // sync_cwx=1 the radio needs an explicit `xmit 0` or holds TX for its ~60 s
@@ -3361,7 +3366,7 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
     }
 
     if (!inhibited) {
-        const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId) > 0;
+        const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId);
         const bool hadRestoreSlice =
             m_panTransmitInhibitedTxSlices.contains(trimmedPanId);
         const InhibitedTxSelection restore = hadRestoreSlice
@@ -4648,6 +4653,22 @@ bool RadioModel::hasDaxStreams() const
     return backendCapabilities().hasDaxStreams;
 }
 
+bool RadioModel::transmitMonitorAvailable() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached: unchanged, as hasDaxStreams()
+    }
+    return backendCapabilities().txMonitorControl.has_value();
+}
+
+bool RadioModel::voxAvailable() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;
+    }
+    return backendCapabilities().voxControl.has_value();
+}
+
 // The single fan-out point for "what this radio says it can do".
 //
 // Everything capability-driven — model-side flags pushed into TransmitModel, and
@@ -5756,6 +5777,25 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
     return parts != 0;
 }
 
+bool RadioModel::sendCwxConfigurationCommand(const QString& command, RadioControlFence current)
+{
+    const std::shared_ptr<std::atomic<bool>> session = m_cwxSessionValid;
+    const auto permitted = [session, current = std::move(current)] {
+        return session->load(std::memory_order_acquire) && (!current || current());
+    };
+    if (!permitted()) { return false; }
+    if (m_wanConn) {
+        m_wanConn->sendCommand(command);
+        return true;
+    }
+    const QPointer<RadioConnection> connection = m_connection;
+    if (!connection) { return false; }
+    const quint32 seq = m_seqCounter.fetch_add(1);
+    return QMetaObject::invokeMethod(connection, [connection, seq, command, permitted] {
+        if (connection && permitted()) { connection->writeCommand(seq, command); }
+    }, Qt::QueuedConnection);
+}
+
 bool RadioModel::sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
                                   bool keying, std::function<void()> delivered,
                                   ResponseCallback reply, std::function<bool()> currentBatch)
@@ -6508,6 +6548,14 @@ bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
     const QPointer<PanadapterModel> pan(panadapter(panId));
     if (!pan || (!hasCenter && !hasBandwidth)) { return false; }
     if (hasCenter) {
+        // Bound optimistic geometry to the declared range. Confirmed backends
+        // retain their own request validation and report the accepted geometry.
+        if (const auto range = backendCapabilities().receivePanCenterControl;
+            !confirmsReceiveControls() && range
+            && range->authority != SliceFrequencyControl::Authority::Unknown
+            && range->maximumHz >= range->minimumHz) {
+            centerMhz = std::clamp(centerMhz, range->minimumHz / 1.0e6, range->maximumHz / 1.0e6);
+        }
         centerMhz = std::max(centerMhz, (hasBandwidth ? bandwidthMhz : pan->bandwidthMhz()) / 2.0);
     }
     PanGeometryRequest geometry;
@@ -9726,6 +9774,13 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
         return;
     }
 
+    // Objects the Flex backend reads from the raw line itself (ntp_sources),
+    // from this session only.
+    if (m_flexBackend && gpsSessionGeneration == m_gpsSessionGeneration
+        && m_flexBackend->decodeRawStatus(body)) {
+        return;
+    }
+
     // GPS status: "gps lat=...#lon=...#grid=...#tracked=...#visible=...#status=..."
     if (body.startsWith("gps ")) {
         if (gpsSessionGeneration != m_gpsSessionGeneration) {
@@ -12148,11 +12203,9 @@ void RadioModel::onStatusReceived(const QString& object,
             int idx = sm.captured(1).toInt();
             if (kvs.isEmpty() && object.contains("removed")) {
                 m_spotModel.removeSpot(idx);
-            } else if (kvs.isEmpty() && object.contains("triggered")) {
-                // Parse pan= from the object string if present
-                static const QRegularExpression panRe2(R"(pan=(0x[0-9A-Fa-f]+))");
-                const auto pm = panRe2.match(object);
-                emit m_spotModel.spotTriggered(idx, pm.hasMatch() ? pm.captured(1) : QString());
+            } else if (object.contains("triggered")) {
+                // CommandParser separates pan= from the event's object text.
+                emit m_spotModel.spotTriggered(idx, kvs.value("pan"));
             } else {
                 m_spotModel.applySpotStatus(idx, kvs);
             }

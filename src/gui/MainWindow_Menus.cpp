@@ -672,7 +672,7 @@ void MainWindow::buildMenuBar()
     connect(spotsAction, &QAction::triggered, this, [this] {
         const bool wasFresh = showOrRaiseCanon(m_spotHubDialog, [this] {
             return new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
-                                       m_spotCollectorClient, m_potaClient, m_eibiClient,
+                                       m_potaClient, m_eibiClient,
                                        m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                                        m_freedvClient,
@@ -768,12 +768,6 @@ void MainWindow::buildMenuBar()
         });
         connect(dlg, &DxClusterDialog::wsjtxStopRequested,
                 this, [this] { QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->stopListening(); }); });
-        connect(dlg, &DxClusterDialog::spotCollectorStartRequested,
-                this, [this](quint16 port) {
-            QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->startListening(port); });
-        });
-        connect(dlg, &DxClusterDialog::spotCollectorStopRequested,
-                this, [this] { QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->stopListening(); }); });
         connect(dlg, &DxClusterDialog::potaStartRequested,
                 this, [this](int interval) {
             QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->startPolling(interval); });
@@ -2247,7 +2241,7 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     menu.addSeparator();
     // Name what is stored, in operating terms. A remembered arrangement the
     // operator cannot see is the difference between a feature and a haunting.
-    auto panWord = [this](int pan) {
+    auto panWord = [](int pan) {
         if (pan <= 33) return tr("left");
         if (pan >= 67) return tr("right");
         return tr("centre");

@@ -635,19 +635,6 @@ void TunerApplet::applyDensityAtScale(qreal scale)
         dial->setPreferredDiameter(px(kDialDesignDiameter));
     }
 
-    // The SWR bar carries its scale as a gradient across the empty track —
-    // the one piece of the panel that is a colour, not a layout, so it is
-    // resolved from the theme rather than copied off the hardware.
-    QGradientStops swrStops;
-    if (f) {
-        const ThemeGradient scale =
-            theme.gradient(this, QStringLiteral("color.accessory.swrScale"));
-        for (const ThemeGradientStop& stop : scale.stops) {
-            swrStops.append({stop.at, stop.color});
-        }
-    }
-    static_cast<HGauge*>(m_swrGauge)->setTrackGradient(swrStops);
-
     applyAlertStyle();
     theme.applyStyleSheet(m_bypassSpan, QStringLiteral(
         "QLabel { border: 2px solid {{color.accent.warning}}; border-radius: 3px; "

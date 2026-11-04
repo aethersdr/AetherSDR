@@ -153,6 +153,7 @@ const sidebars = {
       "label": "Settings",
       "items": [
         "radio-setup",
+        "ntp-time-sources",
         "audio-settings",
         "settings-and-backups",
         "keyboard-shortcuts",
