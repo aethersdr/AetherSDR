@@ -1632,9 +1632,13 @@ public:
     // an optimistic update in case the radio doesn't echo the state change.
     void requestLocalPtt();
 
-    // PC Audio: create/remove remote_audio_rx stream
+    // Speaker mix shared by PC playback and independent Line Out demand.
     void createRxAudioStream();
     void removeRxAudioStream();
+    void setLineOutAudioRequested(bool requested);
+    bool lineOutAudioRequested() const { return m_lineOutAudioRequested; }
+    bool lineOutAudioStreamDemanded() const;
+    void setLineOutPcAudioOffConsent(bool enabled);
 
     // True only when dispatched; the callback reports the later radio reply.
     bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
@@ -2636,6 +2640,8 @@ private:
     bool        m_profileDatabaseExporting{false};
     bool        m_cwProfilesRequested{false};   // this session asked for "profile cw info"
     RadioStatusOwnership::RemoteAudioRxTracking m_rxAudio;
+    bool m_lineOutAudioRequested{false};
+    bool m_lineOutPcAudioOffConsent{false};
     struct DaxStreamDebugState {
         QString type;
         quint32 clientHandle{0};
