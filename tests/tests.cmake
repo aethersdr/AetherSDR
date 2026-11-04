@@ -9708,6 +9708,15 @@ set_tests_properties(unified_title_bar_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 if(APPLE)
+    add_executable(mac_native_window_title_test
+        tests/mac_native_window_title_test.mm
+        src/gui/mac/NativeWindowTitle.mm)
+    target_include_directories(mac_native_window_title_test PRIVATE src)
+    target_link_libraries(mac_native_window_title_test PRIVATE Qt6::Widgets "-framework AppKit")
+    add_test(NAME mac_native_window_title_test COMMAND mac_native_window_title_test)
+    # A hidden Cocoa window checks native ownership; offscreen cannot reach AppKit.
+    set_tests_properties(mac_native_window_title_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
+
     foreach(titlebar_target IN ITEMS unified_title_bar_test titlebar_headphone_mute_test hl2_pc_audio_lock_test
             mixer_control_availability_test)
         target_sources(${titlebar_target} PRIVATE src/gui/mac/NativeWindowTitle.mm)

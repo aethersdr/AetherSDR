@@ -37,8 +37,9 @@ the `CanonWindow` section of
 QWidget's automatic top-level safe-area margin and instead reserves horizontal
 control gutters from `QWindow::safeAreaMargins()` and, on macOS, the measured
 caption bounds (`WindowChrome::contentInsets`). Safe-area changes re-run the
-layout. A fullscreen safe-area top inset can make the reserved height exceed
-52 px. On macOS the buttons are measured in Qt content-view coordinates,
+layout. Genuine fullscreen display safe-area insets are preserved; the macOS
+alignment toolbar is hidden in fullscreen so it adds no empty top strip.
+On macOS the buttons are measured in Qt content-view coordinates,
 leaving exactly one 16 px gap before the brand unless a larger safe-area inset
 is required.
 
@@ -66,11 +67,13 @@ item (`syncMenuCheckColumn()`, refreshed before each show).
   `NSWindow.titleVisibility` and installs an empty unified `NSToolbar` so
   AppKit centres its own traffic lights in the 52 px region. It measures the
   buttons but never moves or reparents them, and implements no frame,
-  move/resize, masking, blur or tiling. The toolbar is removed and the prior
-  toolbar style restored when expanded chrome is disabled; a toolbar it did not
-  install is left alone. Every native access is guarded by the cocoa platform
-  name and an existing native view, so offscreen tests never reach AppKit. The
-  window title itself is kept (Window menu and accessibility need it); Qt's
+  move/resize, masking, blur or tiling. The toolbar stays installed but hidden
+  in native fullscreen, preserving AppKit's transition bookkeeping, and is
+  shown again on exit. Disabling expanded chrome removes it and restores the
+  prior toolbar style. A toolbar it did not install is left alone. Every native
+  access is guarded by the cocoa platform name and an existing native view, so offscreen
+  tests never reach AppKit. The window title itself is kept (Window menu and
+  accessibility need it); Qt's
   background flag alone does not hide the title text.
 - **Windows:** Qt owns the expanded frame, DWM integration (shadow, rounded
   corners) and the resize borders; the bar draws its own caption buttons.
@@ -196,6 +199,12 @@ overflow, wheel and drag scrolling, hidden-tab link carrier, link-alarm raise/cl
 minimal mode, search, action enablement/dispatch, keyboard-only focus rings and
 light-theme panel colours. These are QWidget checks, not native frame
 certification.
+
+`mac_native_window_title_test` checks the alignment toolbar's ownership,
+fullscreen visibility and windowed restoration on a hidden Cocoa window. It skips
+on other Qt platforms, including offscreen; run it with `QT_QPA_PLATFORM=cocoa`
+on a Mac. Its requested-state checks do not exercise native Space transitions;
+the live automation-bridge check covers those.
 
 Drive the live bar with the [automation bridge](../automation-bridge.md#titlebar)
 (`get titlebar`, `titlebar`, `applet`) on an isolated settings profile and the
