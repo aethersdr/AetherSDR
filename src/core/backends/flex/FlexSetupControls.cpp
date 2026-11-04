@@ -57,7 +57,16 @@ ReceiveDispatch FlexBackend::requestRadioSetup(const RadioSetupRequest& request,
                                                const RadioControlFence& current)
 {
     using Field = RadioSetupRequest::Field;
-    if (!request.valid() || !m_setupSink || (current && !current())) { return ReceiveDispatch::Unsupported; }
+    if (!request.valid() || (current && !current())) { return ReceiveDispatch::Unsupported; }
+    if (request.field == Field::RemoteOnEnabled || request.field == Field::MultiFlexEnabled) {
+        if (!m_administrationSink || !current || !current()) { return ReceiveDispatch::Unsupported; }
+        const QString key = request.field == Field::RemoteOnEnabled
+            ? QStringLiteral("remote_on_enabled") : QStringLiteral("mf_enable");
+        return m_administrationSink(QStringLiteral("radio set %1=%2")
+            .arg(key).arg(int(std::get<bool>(request.value))), completion, current, {})
+            ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+    }
+    if (!m_setupSink) { return ReceiveDispatch::Unsupported; }
     const auto integer = [&] { return QString::number(std::get<int>(request.value)); };
     const auto boolean = [&] { return QString::number(int(std::get<bool>(request.value))); };
     QString command;
@@ -154,11 +163,38 @@ ReceiveDispatch FlexBackend::requestRadioSetup(const RadioSetupRequest& request,
                         + QString::number(std::get<double>(request.value), 'f', 6), referenceReply)
             ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
     }
+    case Field::RemoteOnEnabled: case Field::MultiFlexEnabled:
     case Field::Count: return ReceiveDispatch::Unsupported;
     }
     const auto sink = m_setupSink;
     if (current && !current()) { return ReceiveDispatch::Unsupported; }
     return sink(command, completion) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+}
+
+ReceiveDispatch FlexBackend::requestRadioReboot(const RadioControlCompletion& completion,
+    const RadioControlFence& current, const std::function<void()>& written)
+{
+    if (!m_administrationSink || !current || !current() || !capabilities().canReboot) {
+        return ReceiveDispatch::Unsupported;
+    }
+    return m_administrationSink(QStringLiteral("radio reboot"), completion, current, written)
+        ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+}
+
+ReceiveDispatch FlexBackend::requestCwAutoTune(int sliceId, CwAutoTuneAction action,
+    const RadioControlCompletion& completion, const RadioControlFence& current)
+{
+    if (sliceId < 0 || !validCwAutoTuneAction(action) || !m_administrationSink
+        || !current || !current()) { return ReceiveDispatch::Unsupported; }
+    const auto control = capabilities().cwReceiveControl;
+    if (!control || !control->supports(action)) { return ReceiveDispatch::Unsupported; }
+    // FlexLib 4.3.16 Slice.SendCWAutotuneCommand: null is once, false stops.
+    QString command = QStringLiteral("slice auto_tune %1").arg(sliceId);
+    if (action != CwAutoTuneAction::Once) {
+        command += QStringLiteral(" int=%1").arg(action == CwAutoTuneAction::Start ? 1 : 0);
+    }
+    return m_administrationSink(command, completion, current, {})
+        ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }
 
 ReceiveDispatch FlexBackend::requestTxBand(const TxBandRequest& request,

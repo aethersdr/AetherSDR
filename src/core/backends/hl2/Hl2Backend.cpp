@@ -1896,6 +1896,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {};
     c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
+    c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
@@ -2160,6 +2161,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // CW, and this client's own noise modules are the only DSP it has. TNF is
     // deliberately NOT gated — see the note in RadioCapabilities.h.
     c.hasRadioSideCwKeyer = false;
+    c.cwTextControl = std::nullopt;
     c.hasVoiceKeyer = false;
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface

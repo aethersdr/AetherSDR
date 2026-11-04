@@ -46,6 +46,7 @@ warren@pratt.one
 #include <string.h>
 #include <stdlib.h>
 #include "extrapolate.h"
+#include "wdsp_align.h"
  
 #define LOWESS_BANDWIDTH   0.15
 #define LOWESS_ROBUST_ITER 3 

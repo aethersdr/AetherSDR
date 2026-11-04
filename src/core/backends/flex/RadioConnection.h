@@ -5,6 +5,7 @@
 #include "CommandParser.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/IndependentTxControl.h"
+#include "core/backends/SessionCommandGuard.h"
 
 #include <QObject>
 #include <QTcpSocket>
@@ -35,6 +36,7 @@ class RadioConnection : public QObject {
     friend class RadioConnectionSessionTestAccess;
     friend class TuneOutputControlTestAccess;
     friend class LanUdpKeepaliveTestAccess;
+    friend class RadioAdministrationTestAccess;
     std::function<void(quint32, const QString&)> m_commandSinkForTest;
 
 public:
@@ -75,6 +77,9 @@ public slots:
     // Write a pre-sequenced command to the socket. Called from RadioModel
     // via QMetaObject::invokeMethod (auto-queued to worker thread). (#502)
     void writeCommand(quint32 seq, const QString& command);
+    quint64 commandSessionGeneration() const { return m_sessionGeneration.load(); }
+    bool writeAdministrationCommand(quint32 seq, const QString& command,
+        quint64 generation, const SessionCommandGuard& guard);
     void writeIndependentPtt(quint32 seq, const TxCoordinator::Command& command);
     void stopIndependentPtt(quint32 seq, const TxCoordinator::Operation& operation,
                             const TxCoordinator::StopRequest& request);
@@ -88,6 +93,7 @@ public slots:
 
 signals:
     void setupStatusObserved(const AetherSDR::SetupStatusObservation& observation);
+    void administrationCommandWritten(quint64 ticket, bool written);
     void independentPttStopped(const AetherSDR::TxStopEvidence& evidence);
     void stateChanged(ConnectionState state);
     void connected();
@@ -150,7 +156,7 @@ private:
     // captures it so a timer armed in one session cannot fire into the next
     // (the synthetic-demo handshake). Connection-thread only, like the
     // buffer above. (#5653 review)
-    quint64      m_sessionGeneration{0};
+    std::atomic<quint64> m_sessionGeneration{0};
     QTimer*      m_heartbeat{nullptr};
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};

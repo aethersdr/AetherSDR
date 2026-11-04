@@ -73,8 +73,20 @@ radio copy.
 |---|---|---|---|---|---|---|---|
 | `radioSetupControl` | All implemented `RadioSetupRequest` fields, including physical outputs | absent | absent | absent | Lineout gain/mute | absent | `RadioModel::requestRadioSetup` admission; Radio Setup timing and maximum-power availability; existing output setters and controller requests |
 | `spotControl` | Add, remove, clear, trigger | absent | absent | absent | absent | absent | `RadioModel::requestSpot` and its session/epoch-fenced queue; local/passive, TCI and memory routes remain separate |
+| `cwReceiveControl` | Once, Start, Stop | absent | absent | absent | absent | absent | `RadioModel::requestCwAutoTune`; owned, current slice and SmartSDR+ eligibility for starts; existing-loop Stop remains available for cleanup |
 | `panControl` | Band zoom, segment zoom, receive antenna | absent | absent | absent | absent | absent | `RadioModel::requestPanControl`, exact pan identity and the existing zoom availability gate |
 | `slicePresetControl` | Step, repeater offset, tone mode/value | absent | absent | absent | absent | absent | `RadioModel::requestSlicePreset`; absent fields remain unchanged. Client-owned step still applies locally where no command plane exists |
+
+### Radio administration and CW receive auto-tune
+
+Radio administration uses typed `RemoteOnEnabled` and `MultiFlexEnabled` setup
+fields and the existing `canReboot` capability paired with `requestRadioReboot`.
+Settings require an initial radio observation. Requested values and CW loop
+intent are separate from confirmed radio state; ACK does not fabricate status.
+Administration writes carry a bounded operation guard and the original transport
+generation across the LAN queue or WAN writer. Reconnect, owner retirement and
+superseding edits cancel pending work. Reboot recovery is bounded to the original
+radio. None of these controls extends daemon RPC permissions or permits TX.
 
 ### Radio automatic AGC threshold
 
@@ -368,6 +380,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
 | `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar text-keyer indicator and every text-send entry point. Icom: ✅ only for the verified IC-705 / IC-7300MK2 command-17 profiles |
 | `cwTextKeyerName`, ranges and support flags | CWX, 5–100 WPM, progress/macros/live/modifiers | defaults (unused) | defaults (unused) | `MainWindow::applyCapabilitiesToUi`, CAT/TCI/rigctl/automation adapters | Shapes the shared surface without a family branch. Icom: CWK, 6–48 WPM, 30 chars, no progress/stored macros/live typing/speed modifiers; unsupported text is rejected rather than rewritten |
+| `cwTextControl` | buffered text, stored macros, speed/delay/QSK, erase/clear | absent | absent | `RadioModel::dispatchCwxRequest`, `dispatchCwxText`, `finishCwxDispatch` | Desktop-only field-set record, not daemon TX permission. Flex uses the operation-fenced buffered writer; Icom retains its existing native text adapter and typed CW-speed route. ANAN/RTL also explicitly declare absence. No new backend support or delay management |
 | `hasVoiceKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasVoiceKeyer()` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` (Tools ▸ Waveforms… + AetherModem D-STAR tab), `MainWindow::scheduleDigitalVoiceAutoStart` | ThumbDV helper needs a SmartSDR D-STAR waveform. Flex sets true; Icom/HL2/Sim set false; ANAN/RTL inherit the `= false` default. Disconnected restores the tab. Autostart of `aether-dv-waveform` is gated on the same flag so a non-Flex connect cannot launch a helper with no Stop surface |

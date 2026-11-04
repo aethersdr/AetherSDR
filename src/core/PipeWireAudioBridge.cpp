@@ -461,7 +461,8 @@ void PipeWireAudioBridge::feedDaxAudio(int channel, const QByteArray& pcm)
     {
         auto& rx = m_rx[channel - 1];
         if (rx.fd < 0) return;
-        ::write(rx.fd, out.constData(), out.size());
+        // Non-blocking FIFO: a block the reader has no room for is dropped.
+        [[maybe_unused]] const ssize_t written = ::write(rx.fd, out.constData(), out.size());
     }
 
     // Calculate RMS for meter display (every ~100ms = ~10 packets at 24kHz)
@@ -560,7 +561,8 @@ void PipeWireAudioBridge::feedSilenceToAllPipes()
         } else
 #endif
         if (m_rx[i].fd >= 0) {
-            ::write(m_rx[i].fd, silence.constData(), silence.size());
+            // Non-blocking FIFO: a block the reader has no room for is dropped.
+            [[maybe_unused]] const ssize_t written = ::write(m_rx[i].fd, silence.constData(), silence.size());
         }
         // Reset upsample state to silence so the first real packet after TX
         // doesn't interpolate from a stale audio sample.
