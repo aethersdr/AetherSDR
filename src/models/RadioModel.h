@@ -1795,6 +1795,7 @@ private:
     void resetSessionControls();
     bool sessionTransportCurrent() const;
     RadioControlFence sessionControlFence() const;
+    RadioControlFence registrationRejectionFence() const;
     std::function<void()> sessionContinuation(std::function<void()> action) const;
     SessionCommandGuard m_sessionCommands;
     QPointer<QObject> m_sessionWire;

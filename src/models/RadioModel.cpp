@@ -7770,8 +7770,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
     // chosen its source, so the guard is never consulted (#4759).
     emit sliceConnectEnumerationStarted();
     if (!current()) { return; }
-    requestSessionControl({SessionControlField::RegisterGui, clientId}, [this, current](const SessionControlReply& reply) {
-        if (!current()) { return; }
+    const RadioControlFence rejectionCurrent = registrationRejectionFence();
+    requestSessionControl({SessionControlField::RegisterGui, clientId}, [this, current, rejectionCurrent](const SessionControlReply& reply) {
+        const bool registrationRejected = reply.result.kind == RadioControlReply::Kind::Refused
+            && reply.result.code != 0 && rejectionCurrent();
+        if (!current() && !registrationRejected) { return; }
         const int code = reply.result.code;
         const QString body = reply.accepted() ? reply.clientId : reply.result.message;
         armClientConnectionNoticeSuppression();
@@ -10291,6 +10294,25 @@ bool RadioModel::sessionTransportCurrent() const
     }
     return !m_connection || (m_sessionWire == m_connection && m_connection->isConnected()
         && m_sessionWireGeneration == m_connection->commandSessionGeneration());
+}
+
+RadioControlFence RadioModel::registrationRejectionFence() const
+{
+    const QPointer<const RadioModel> model(this);
+    const RadioControlSession session = controlSession();
+    const SessionCommandGuard guard = m_sessionCommands;
+    return [model, session, guard] {
+        if (!model || !guard.current() || session != model->controlSession()
+            || model->m_txSessionClosing || model->m_expiringPendingCallbacks) { return false; }
+        if (model->sessionTransportCurrent()) { return true; }
+        // A refusal queued before TCP close must remain terminal until the
+        // model processes that close. It cannot authorize handshake writes
+        // or cross a replacement transport that is connecting or connected.
+        if (model->m_wanConn || !model->m_connection
+            || model->m_sessionWire != model->m_connection) { return false; }
+        const ConnectionState state = model->m_connection->state();
+        return state == ConnectionState::Disconnected || state == ConnectionState::Error;
+    };
 }
 
 quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb,

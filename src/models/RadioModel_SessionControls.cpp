@@ -55,13 +55,18 @@ ReceiveDispatch RadioModel::requestSessionControl(const SessionControlRequest& r
         const auto finished = std::make_shared<bool>(false);
         const QPointer<QTimer> timer(new QTimer(this));
         timer->setSingleShot(true);
-        reply = [model, session, guard, id, finished, timer, completion](const SessionControlReply& response) {
+        const RadioControlFence rejectionCurrent = request.field == SessionControlField::RegisterGui
+            ? registrationRejectionFence() : RadioControlFence{};
+        reply = [model, session, guard, id, finished, timer, completion, rejectionCurrent](const SessionControlReply& response) {
             if (std::exchange(*finished, true)) { return; }
             if (timer) { timer->stop(); timer->deleteLater(); }
             if (!model) { return; }
             model->m_sessionCancellations.remove(id);
             SessionControlReply result = response;
-            if (!model->controlSessionCurrent(session) || !model->sessionTransportCurrent() || !model->m_sessionCommands.current()) {
+            const bool registrationRejected = response.result.kind == RadioControlReply::Kind::Refused
+                && response.result.code != 0 && rejectionCurrent && rejectionCurrent();
+            if (!registrationRejected && (!model->controlSessionCurrent(session)
+                || !model->sessionTransportCurrent() || !model->m_sessionCommands.current())) {
                 result = {{RadioControlReply::Kind::Cancelled, -1, QStringLiteral("Original session ended")}};
             }
             guard.cancel();
