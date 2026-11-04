@@ -493,6 +493,13 @@ public:
     // nothing to be honest about, and blanking the controls on unplug would look
     // like a fault rather than a fact about the radio.
     bool hasDaxStreams() const;
+    // Whether the connected radio declares a transmit monitor (MON on/volume)
+    // or voice-operated transmit (VOX on/level/delay): RadioCapabilities::
+    // txMonitorControl / voxControl. Same permissive disconnected rule as
+    // hasDaxStreams(). Where false, the TCI, CAT, shortcut and MIDI roads to
+    // those controls refuse instead of flipping a model value nothing consumes.
+    bool transmitMonitorAvailable() const;
+    bool voxAvailable() const;
 
     // True for 2-SCU radios that support diversity RX, from the FlexLib-sourced
     // ModelCapabilities table (Principle I).  Replaces the hand-maintained
@@ -2182,6 +2189,7 @@ private:
     TxCoordinator::Operation m_cwxCommandOperation;
     unsigned m_cwxPendingDeliveries{0};
     bool m_cwxHandoffComplete{false};
+    std::shared_ptr<std::atomic<bool>> m_cwxSessionValid{std::make_shared<std::atomic<bool>>(true)};
     std::atomic<quint64> m_cwInputSession{0};
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
@@ -2206,11 +2214,10 @@ private:
     void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
-    void sendCwxCommand(const QString& command, bool keying,
-                        const TxCoordinator::Operation& operation, ResponseCallback reply = {});
-    void dispatchCwxCommand(const QString& command, TxCoordinator::Operation operation,
-                            int epoch = -1, int nChars = -1);
+    ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
+                                       int epoch, int nChars, RadioControlFence current);
     bool dispatchCwxText(const QString& text, TxCoordinator::Operation operation);
+    bool sendCwxConfigurationCommand(const QString& command, RadioControlFence current);
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);

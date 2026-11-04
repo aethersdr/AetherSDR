@@ -4,6 +4,8 @@
 // panFollowVfo()/revealFrequencyIfNeeded().
 
 #include "MainWindow.h"
+#include "ControlAvailabilityRegistry.h"
+#include "HGauge.h"
 #include "StatusIndicator.h"
 #include "models/CwDecodeSettings.h"
 #include "PeripheralAuthStore.h"
@@ -7744,7 +7746,7 @@ void MainWindow::wireMeters()
         }
     }
 
-    // Data and scale use the same confirmed selection.
+    // Shared TX meter data and scale use the same confirmed selection.
     auto updatePowerScale = [this]() {
         const SharedTxMeterSelection selection = sharedTxMeterSelection();
         if (selection.source != m_sharedTxMeterSource) {
@@ -7765,7 +7767,8 @@ void MainWindow::wireMeters()
         const bool integratedAmp = m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(radioMaxWatts, integratedAmp);
-        m_appletPanel->tunerApplet()->setPowerScale(selection.maxWatts, selection.highPowerAmplifier);
+        m_appletPanel->tunerApplet()->setPowerScale(tunerMaxWatts(radioMaxWatts, selection),
+                                                   selection.highPowerAmplifier);
         m_appletPanel->healthApplet()->setPowerScale(radioMaxWatts, integratedAmp);
         m_appletPanel->setMeterPowerScale(selection.maxWatts, selection.highPowerAmplifier);
     };
@@ -7900,6 +7903,12 @@ void MainWindow::wireMeters()
 
     // ── Meter applet: all meters consolidated ──────────────────────────────
     m_appletPanel->meterApplet()->setMeterModel(&m_radioModel.meterModel());
+    {
+        auto* supplyAvailability = new ControlAvailabilityRegistry(m_radioModel, this);
+        supplyAvailability->registerWidget(m_appletPanel->meterApplet()->supplyGauge(),
+            MeterApplet::supplyVoltageUnavailableReason(),
+            &MeterApplet::supplyVoltageAvailable);
+    }
 
     // ── PROF applet: Global / TX / Mic profile switcher (#3376) ─────────────
     m_appletPanel->profileSwitcherApplet()->setRadioModel(&m_radioModel);

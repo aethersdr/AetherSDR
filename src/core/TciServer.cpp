@@ -218,8 +218,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 const QString legacy = s.value(QStringLiteral("DaxRxGain%1").arg(ch), "0.5").toString();
                 s.setValue(key, legacy);
             }
-            m_rxChannelGain[ch - 1] = std::clamp(
-                s.value(key, "0.5").toString().toFloat(), 0.0f, 1.0f);
+            const float saved = s.value(key, "0.5").toString().toFloat();
+            m_rxChannelGain[ch - 1] = std::isfinite(saved)
+                ? std::clamp(saved, 0.0f, 1.0f) : 0.5f;
         }
         s.save();
     }
@@ -883,6 +884,7 @@ void TciServer::setOverflowMode(int mode)
 void TciServer::setRxChannelGain(int channel, float gain)
 {
     if (channel < 1 || channel > 8) return;
+    if (!std::isfinite(gain)) return;
     const float clamped = std::clamp(gain, 0.0f, 1.0f);
     if (m_rxChannelGain[channel - 1] == clamped) return;
     m_rxChannelGain[channel - 1] = clamped;
@@ -3119,14 +3121,15 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         publishActiveTrx();
     }
 
-    // Per-slice audioGain → `rx_volume:trx,N;` broadcast. Without this,
+    // Per-slice audioGain → `rx_volume:trx,0,dB;` broadcast. Without this,
     // a GUI change to a slice's audio level was invisible to TCI clients;
     // remote controllers would drift out of sync. Part of issue #1764 fix.
+    // Same spec form and dB scale as the cmdRxVolume echo.
     connect(slice, &SliceModel::audioGainChanged, this, [this, slice](float gain) {
         if (m_clients.isEmpty()) return;
         const int trx = m_trxMap.trxForSlice(m_model, slice);
-        broadcast(QStringLiteral("rx_volume:%1,%2;")
-                      .arg(trx).arg(static_cast<int>(gain)));
+        broadcast(QStringLiteral("rx_volume:%1,0,%2;")
+                      .arg(trx).arg(TciProtocol::volumeDbFromPercent(qRound(gain))));
     });
 
     // Squelch level → `sql_level:trx,dB;`, since the sql_enable relay below
@@ -3257,6 +3260,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
             }
             announce(guard);
         });
+        return announce;
     };
     wireValue(&SliceModel::ritChanged, "rit_offset",
               [slice] { return QString::number(slice->ritFreq()); });
@@ -3264,8 +3268,10 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
               [slice] { return QString::number(slice->xitFreq()); });
     wireValue(&SliceModel::agcModeChanged, "agc_mode",
               [slice] { return slice->receiveAgcMode().toLower(); });
-    wireValue(&SliceModel::agcThresholdChanged, "agc_gain",
-              [slice] { return QString::number(slice->receiveAgcThreshold()); });
+    const auto announceAgcGain = wireValue(&SliceModel::agcThresholdChanged, "agc_gain",
+        [slice] { return QString::number(TciProtocol::agcGainDb(slice)); });
+    connect(slice, &SliceModel::externalReceiveAgcThresholdChanged, this,
+            [slice, announceAgcGain] { announceAgcGain(slice); });
 
     // Deferred state sync on (re)wire: a Flex band change recreates the slice, and
     // if the restored frequency equals the init value no frequencyChanged fires,

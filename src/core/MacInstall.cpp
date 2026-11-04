@@ -36,6 +36,14 @@ namespace AetherSDR {
 namespace {
 
 const QString kBinary = QStringLiteral("Contents/MacOS/AetherSDR");
+const QString kCodesign = QStringLiteral("/usr/bin/codesign");
+
+// A missing codesign is a check that couldn't run, found without spawning:
+// under ThreadSanitizer, QProcess::start of a missing program never returns.
+bool codesignAvailable()
+{
+    return QFileInfo(kCodesign).isExecutable();
+}
 
 fs::path toPath(const QString& s)
 {
@@ -120,9 +128,12 @@ bool MacInstall::sameVolume(const QString& a, const QString& b)
 bool MacInstall::teamOf(const QString& bundle, QString* team)
 {
     team->clear();
+    if (!codesignAvailable()) {
+        return false;
+    }
     QProcess p;
     p.setProcessChannelMode(QProcess::MergedChannels);
-    p.start(QStringLiteral("/usr/bin/codesign"), {QStringLiteral("-dv"), QStringLiteral("--verbose=2"), bundle});
+    p.start(kCodesign, {QStringLiteral("-dv"), QStringLiteral("--verbose=2"), bundle});
     if (!p.waitForStarted(10000) || !p.waitForFinished(30000) || p.exitStatus() != QProcess::NormalExit
         || p.exitCode() != 0) {
         p.kill();
@@ -162,9 +173,13 @@ MacInstall::Signature MacInstall::verifySignature(const QString& tree, const QSt
                     .arg(team);
     }
     args << tree;
+    if (!codesignAvailable()) {
+        *problem = QStringLiteral("Its code signature could not be checked.");
+        return Signature::NotChecked;
+    }
     QProcess p;
     p.setProcessChannelMode(QProcess::MergedChannels);
-    p.start(QStringLiteral("/usr/bin/codesign"), args);
+    p.start(kCodesign, args);
     if (!p.waitForStarted(10000) || !p.waitForFinished(120000) || p.exitStatus() != QProcess::NormalExit) {
         p.kill();
         p.waitForFinished(5000);
@@ -187,9 +202,16 @@ bool MacInstall::selfTest(const QString& tree, const QString& version)
         return false;
     }
     const QString marker = dir.filePath(QStringLiteral("selftest"));
+    // Nothing to start is a failed start, found without spawning: under
+    // ThreadSanitizer, QProcess::start of a missing program never returns.
+    const QString program = QDir(tree).filePath(kBinary);
+    if (!QFileInfo(program).isExecutable()) {
+        qCWarning(lcUpdater).noquote() << "self-test of v" + version + " could not be started";
+        return false;
+    }
     QProcess p;
     p.setProcessChannelMode(QProcess::ForwardedChannels);
-    p.start(QDir(tree).filePath(kBinary), {QStringLiteral("--update-selftest"), marker});
+    p.start(program, {QStringLiteral("--update-selftest"), marker});
     if (!p.waitForStarted(10000)) {
         qCWarning(lcUpdater).noquote() << "self-test of v" + version + " could not be started";
         return false;

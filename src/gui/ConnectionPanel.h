@@ -141,6 +141,8 @@ signals:
     // The operator signed out of SmartLink and the WAN list was cleared.
     void smartLinkSignedOut();
     void networkDiagnosticsRequested();
+    // The operator toggled "Enable adaptive frame-rate throttle".
+    void adaptiveThrottleEnabledChanged(bool enabled);
     void smartLinkLoginRequested(const QString& email, const QString& password);
     // A startup auto-connect gave up before it could reach the radio. Carries
     // the operator-facing reason, which would otherwise be stranded on the

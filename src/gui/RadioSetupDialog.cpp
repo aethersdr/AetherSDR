@@ -697,13 +697,6 @@ static void showCopiedPopup(QWidget* anchor)
     QTimer::singleShot(1000, popup, &QLabel::close);
 }
 
-// A status line that takes no room while it has nothing to say.
-static void setShownText(QLabel* label, const QString& text)
-{
-    label->setText(text);
-    label->setVisible(!text.isEmpty());
-}
-
 static QWidget* makeInfoField(const QString& labelText, QWidget* valueWidget,
                               int labelWidth = kInfoLeftLabelWidth)
 {
@@ -1199,7 +1192,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
       m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter),
-      m_kpa1500(kpa1500), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100), m_rfkit(rfkit)
+      m_kpa1500(kpa1500), m_rfkit(rfkit), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100)
 {
     theme::setContainer(this, QStringLiteral("canon/radioSetup"));
     // Size and position persist under the key it used as a PersistentDialog,
@@ -4014,7 +4007,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     };
 
     connect(calBtn, &QPushButton::clicked, this,
-            [this, apply, referenceHz, activeSliceHz, setStatus] {
+            [apply, referenceHz, activeSliceHz, setStatus] {
         const double ref = referenceHz();
         if (!(ref > 0.0)) {
             setStatus(QStringLiteral("Enter a reference frequency."), Tone::Warn);
