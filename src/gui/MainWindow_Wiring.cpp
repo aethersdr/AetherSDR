@@ -5340,6 +5340,23 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // conjure a slice; click is the explicit "create here" affordance.
     });
 
+    // ── WSJT-X overlay mid-session listener start (#4526) ────────────────────
+    // The auto-start block in onConnectionStateChanged only runs at radio-
+    // connect time. If the operator enables the overlay after connecting,
+    // nothing would start the listener until the next reconnect. This signal
+    // fires from setShowWsjtxFreq(true) so we can close that gap.
+    connect(sw, &SpectrumWidget::wsjtxListenerNeeded,
+            this, [this] {
+        if (!m_radioModel.isConnected() || m_wsjtxClient->isListening())
+            return;
+        auto& s = AppSettings::instance();
+        const QString addr = s.value("WsjtxAddress", "224.0.0.1").toString();
+        const quint16 port = static_cast<quint16>(s.value("WsjtxPort", 2237).toInt());
+        QMetaObject::invokeMethod(m_wsjtxClient, [=, this] {
+            m_wsjtxClient->startListening(addr, port);
+        });
+    });
+
     // ── Edge auto-pan step during slice drag (user-reported) ─────────────────
     // Pan the view AND tune the slice in one shot, deliberately bypassing the
     // pan-follow/reveal path: the SpectrumWidget already computed the explicit

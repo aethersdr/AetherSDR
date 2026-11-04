@@ -1058,6 +1058,11 @@ signals:
     void sliceDragActiveChanged(bool active);
     void sliceDragCancelled();
     void spotTriggered(int spotIndex);
+    // Emitted when the per-pan WSJT-X Rx/Tx overlay is switched on so
+    // MainWindow can start the UDP listener if the radio is already connected
+    // (the auto-start path in onConnectionStateChanged only runs at connect
+    // time and would miss a mid-session toggle). (#4526)
+    void wsjtxListenerNeeded();
     // Emitted when the user changes both center and bandwidth as one explicit
     // pan/zoom operation and the radio should apply them coherently. Splitting
     // those into separate commands was a known source of waterfall edge loss

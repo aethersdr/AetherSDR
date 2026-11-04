@@ -580,6 +580,14 @@ void MainWindow::wireSpotSubsystem()
     // consumer connected anywhere in the app.
     connect(m_wsjtxClient, &WsjtxClient::statusReceived,
             this, [this](const WsjtxStatus& status) {
+        // Cap at 16 instances: far more than any real station runs, but bounded
+        // so a rogue LAN host cannot drive unbounded GUI-thread rebuilds by
+        // spoofing many distinct instance IDs (Principle VII — boundary input
+        // validation). Known IDs always update regardless of the cap.
+        constexpr int kMaxWsjtxInstances = 16;
+        if (!m_wsjtxInstances.contains(status.id)
+                && m_wsjtxInstances.size() >= kMaxWsjtxInstances)
+            return;
         m_wsjtxInstances[status.id] = status;
         m_wsjtxInstanceLastSeenMs[status.id] = QDateTime::currentMSecsSinceEpoch();
         rebuildWsjtxMarkers();
