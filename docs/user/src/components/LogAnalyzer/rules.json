@@ -354,12 +354,12 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4281,
+          "line": 4294,
           "text": "AudioEngine: failed to open RX audio sink on any negotiated format"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 4317,
+          "line": 4330,
           "text": "AudioEngine: QAudioSink stopped with error, not auto-restarting RX"
         }
       ]
@@ -376,17 +376,17 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 8877,
+          "line": 8971,
           "text": "AudioEngine: no audio input device available"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9108,
+          "line": 9202,
           "text": "AudioEngine: failed to open audio source at"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9160,
+          "line": 9254,
           "text": "AudioEngine: all TX source formats failed"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13216,
+          "line": 13257,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -713,7 +713,7 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 7713,
+          "line": 7807,
           "text": "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
         }
       ]
