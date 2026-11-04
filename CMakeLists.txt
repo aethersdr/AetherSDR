@@ -1264,6 +1264,7 @@ set(MODEL_SOURCES
     src/models/RadioModel.cpp
     src/models/RadioModel_DaxTx.cpp
     src/models/RadioModel_Setup.cpp
+    src/models/RadioModel_Administration.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
     src/models/RadioModel_WaveformEnv.cpp
@@ -3607,7 +3608,8 @@ endif()
 
 if(HAVE_PIPEWIRE_NATIVE)
     target_compile_definitions(aethercore PUBLIC HAVE_PIPEWIRE_NATIVE)
-    target_include_directories(aethercore PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
+    # SYSTEM: the SPA headers use GNU C extensions -Wpedantic flags in C++.
+    target_include_directories(aethercore SYSTEM PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
     target_link_libraries(aethercore PRIVATE ${PIPEWIRE_NATIVE_LIBRARIES})
     target_compile_options(aethercore PRIVATE ${PIPEWIRE_NATIVE_CFLAGS_OTHER})
     message(STATUS "Linux DAX RX uses native pw_stream (libpipewire-0.3 ${PIPEWIRE_NATIVE_VERSION})")

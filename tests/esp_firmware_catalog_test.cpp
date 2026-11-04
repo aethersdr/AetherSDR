@@ -74,7 +74,7 @@ struct Key {
 void write(const QString& path, const QByteArray& data)
 {
     QFile f(path);
-    f.open(QIODevice::WriteOnly);
+    check(f.open(QIODevice::WriteOnly), "the fixture file can be written");
     f.write(data);
 }
 

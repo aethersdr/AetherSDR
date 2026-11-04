@@ -583,7 +583,7 @@
  },
  "core/NnrControls.h": {
   "tag": "ui-support",
-  "note": "Compile-time NNR control ranges and default-marker positions read out of WDSP 2.10; no state and no WDSP include, shared by the ADSP tab and the filter",
+  "note": "Compile-time NNR control ranges and default-marker positions read out of WDSP 2.11; no state and no WDSP include, shared by the ADSP tab and the filter",
   "split": "",
   "confidence": "high"
  },

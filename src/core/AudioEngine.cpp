@@ -8202,7 +8202,7 @@ void AudioEngine::setRn2Enabled(bool on)
     emit rn2EnabledChanged(on);
 }
 
-// ─── NNR (WDSP 2.10 neural noise reduction) ──────────────────────────────────
+// ─── NNR (WDSP 2.11 neural noise reduction) ──────────────────────────────────
 // Unconditional, unlike DFNR/MNR/BNR: both trained models are compiled into
 // the vendored WDSP, so there is no library to locate and no GPU to require.
 // It is a SPEECH model — a steady carrier is attenuated ~28 dB — so callers
