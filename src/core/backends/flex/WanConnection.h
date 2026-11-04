@@ -1,7 +1,7 @@
 #pragma once
+#include "core/backends/SessionCommandGuard.h"
 
 #include "CommandParser.h"
-#include "core/backends/SessionCommandGuard.h"
 
 #include <QObject>
 #include <QSslSocket>
@@ -64,6 +64,8 @@ public:
     { if (generation == m_sessionGeneration) { m_pendingCallbacks.remove(sequence); } }
     quint32 sendSessionCommand(const QString& command, quint64 generation,
                                const SessionCommandGuard& guard, ResponseCallback callback = {});
+    quint32 sendAdministrationCommand(const QString& command, quint64 generation,
+        const SessionCommandGuard& guard, ResponseCallback callback);
 
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): operator decides whether
     // to accept a new cert presented during a mismatch.  Connection is
@@ -106,10 +108,10 @@ private slots:
 private:
     friend class WanConnectionTestAccess;
     friend class SessionControlTestAccess;
+    friend class RadioAdministrationTestAccess;
 
     void processLine(const QString& line);
 
-    quint64 m_sessionGeneration{0};
     QSslSocket m_socket;
     void resetSessionState();   // drop everything scoped to one TLS session
 
@@ -118,6 +120,7 @@ private:
     QString    m_wanHandle;
 
     bool    m_connected{false};
+    quint64 m_sessionGeneration{0};
     bool    m_validated{false};  // wan validate sent
     quint32 m_handle{0};
     std::atomic<quint32> m_seqCounter{1};

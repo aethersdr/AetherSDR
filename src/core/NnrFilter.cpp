@@ -21,13 +21,6 @@ namespace {
 // whole number of the 256-sample hops the network runs on.
 constexpr int kBlockFrames = 256;
 
-// The internal rate, transform and overlap the models were trained for, and
-// what RXA.c constructs. Not ours to vary.
-constexpr int kNetworkRate = 16000;
-constexpr int kFftSize = 512;
-constexpr int kOverlap = 2;
-constexpr int kLookahead = 1;
-
 // The rate NNR actually runs at here. 24 kHz is not a multiple of the network
 // rate, so a 24 kHz source is resampled around the block; a 48 kHz one is not.
 constexpr int kProcessingRate = 48000;
@@ -52,11 +45,9 @@ NnrFilter::NnrFilter(int sampleRate)
         m_blockOut[channel].assign(static_cast<std::size_t>(m_blockFrames) * 2, 0.0);
     }
 
-    // Each create_nnr() plans two FFTW_PATIENT double-precision transforms
-    // (nnr.c calc_nnr), four per filter, and FFTW's planner is not
-    // thread-safe, so both calls run under one hold of the process-global
-    // planner lock (#6287): one acquisition per filter, not one per channel.
-    // Guarded here, not in vendored WDSP.
+    // Each create_nnr() plans FFTW_PATIENT transforms for all four model slots.
+    // FFTW's planner is not thread-safe, so both channels share one hold of
+    // the process-global planner lock (#6287), outside vendored WDSP.
     //
     // run=1: this object's existence IS the enable, so WDSP's own run flag
     // stays set and AudioEngine simply stops calling process(). position=0
@@ -68,7 +59,6 @@ NnrFilter::NnrFilter(int sampleRate)
         for (int channel = 0; channel < 2 && created; ++channel) {
             m_nnr[channel] = create_nnr(1, 0, m_blockFrames, m_blockIn[channel].data(),
                                         m_blockOut[channel].data(), kProcessingRate,
-                                        kNetworkRate, kFftSize, kOverlap, kLookahead,
                                         Nnr::maskFloorForStrength(m_strength.load()), 1);
             created = m_nnr[channel] != nullptr;
         }

@@ -35,6 +35,7 @@ class RadioConnection : public QObject {
     friend class SessionControlTestAccess;
     friend class TuneOutputControlTestAccess;
     friend class LanUdpKeepaliveTestAccess;
+    friend class RadioAdministrationTestAccess;
     std::function<void(quint32, const QString&)> m_commandSinkForTest;
 
 public:
@@ -75,6 +76,8 @@ public slots:
     quint64 commandSessionGeneration() const { return m_sessionGeneration.load(); }
     bool writeSessionCommand(quint32 seq, const QString& command,
                              quint64 generation, const SessionCommandGuard& guard);
+    bool writeAdministrationCommand(quint32 seq, const QString& command,
+        quint64 generation, const SessionCommandGuard& guard);
     void writeIndependentPtt(quint32 seq, const TxCoordinator::Command& command);
     void stopIndependentPtt(quint32 seq, const TxCoordinator::Operation& operation,
                             const TxCoordinator::StopRequest& request);
@@ -87,6 +90,7 @@ public slots:
     void injectFaultStatus(const QString& line);
 
 signals:
+    void administrationCommandWritten(quint64 ticket, bool written);
     void independentPttStopped(const AetherSDR::TxStopEvidence& evidence);
     void stateChanged(ConnectionState state);
     void connected();

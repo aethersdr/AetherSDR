@@ -70,6 +70,7 @@ struct RadioSetupRequest {
         case Field::MuteLocalWhenRemote: case Field::BinauralReceive:
         case Field::LowLatencyDigital: case Field::LineoutMute:
         case Field::HeadphoneMute: case Field::FrontSpeakerMute:
+        case Field::RemoteOnEnabled: case Field::MultiFlexEnabled:
             return std::holds_alternative<bool>(value);
         case Field::NetworkMtu: {
             const int* mtu = std::get_if<int>(&value);

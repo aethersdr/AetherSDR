@@ -1,6 +1,7 @@
 #pragma once
 #include "RadioSetupControl.h"
 #include "SessionControlRequest.h"
+#include "CwReceiveControl.h"
 #include "SpotRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
@@ -673,6 +674,7 @@ struct RadioCapabilities {
     std::optional<RadioSetupControl> radioSetupControl;
     // Desktop session bootstrap; does not advertise daemon methods or TX rights.
     std::optional<SessionControl> sessionControl;
+    std::optional<CwReceiveControl> cwReceiveControl;
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
     std::optional<PanControl> panControl;

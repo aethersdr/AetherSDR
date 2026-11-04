@@ -704,6 +704,8 @@ RadioCapabilities FlexBackend::capabilities() const
         session.fields.insert(static_cast<SessionControlField>(field));
     }
     caps.sessionControl = session;
+    caps.cwReceiveControl = CwReceiveControl{{CwAutoTuneAction::Once,
+        CwAutoTuneAction::Start, CwAutoTuneAction::Stop}};
     caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
                                     SpotAction::Clear, SpotAction::Trigger}};
     caps.panControl = PanControl{{PanControlField::BandZoom, PanControlField::SegmentZoom,

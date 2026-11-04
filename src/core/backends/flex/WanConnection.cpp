@@ -9,6 +9,7 @@
 #include <QJsonValue>
 #include <QSslCertificate>
 #include <QSslConfiguration>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -195,6 +196,23 @@ quint32 WanConnection::sendSessionCommand(const QString& command, quint64 genera
 {
     if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return 0; }
     return sendCommand(command, std::move(callback));
+}
+
+quint32 WanConnection::sendAdministrationCommand(const QString& command, quint64 generation,
+    const SessionCommandGuard& guard, ResponseCallback callback)
+{
+    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return 0; }
+    const quint32 seq = m_seqCounter.fetch_add(1);
+    if (callback) { m_pendingCallbacks.insert(seq, std::move(callback)); }
+    const QByteArray data = CommandParser::buildCommand(seq, command);
+    qCDebug(lcSmartLink) << "WAN TX:" << data.trimmed();
+    const qint64 written = m_socket.write(data);
+    m_socket.flush();
+    if (written != data.size()) {
+        m_pendingCallbacks.remove(seq);
+        return 0;
+    }
+    return seq;
 }
 
 quint32 WanConnection::sendCommand(const QString& command, ResponseCallback callback)
@@ -436,8 +454,10 @@ void WanConnection::processLine(const QString& line)
     case MessageType::Response: {
         auto it = m_pendingCallbacks.find(msg.sequence);
         if (it != m_pendingCallbacks.end()) {
-            it.value()(msg.resultCode, msg.object);
+            // A completion may retire this session or alter the callback map.
+            ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
+            callback(msg.resultCode, msg.object);
         }
         break;
     }
