@@ -47,7 +47,8 @@ public:
 
     // Parse JSON bytes. Tolerant: unknown keys are ignored, missing optional
     // fields fall back to NetEntry defaults, and entries without an id are
-    // assigned one. Malformed top-level JSON populates errors and returns empty.
+    // assigned one. Unsafe preset tokens populate errors and omit that entry;
+    // malformed top-level JSON populates errors and returns empty.
     static ParseResult parse(const QByteArray& bytes);
 
     // Merge `incoming` into `existing` by id per `policy`. Returns the merged

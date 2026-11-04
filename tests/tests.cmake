@@ -1701,6 +1701,29 @@ target_include_directories(hl2_noise_blanker_test PRIVATE src)
 target_link_libraries(hl2_noise_blanker_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_noise_blanker_test COMMAND hl2_noise_blanker_test)
 
+# The receive AGC, manual notch and squelch, measured at the audio of the real
+# Hl2RxDsp (offline, sample-counted, no sockets or audio device), and the
+# declaration of which receive-DSP stages the HL2 does and does not have.
+add_executable(hl2_rxdsp_agc_test tests/hl2_rxdsp_agc_test.cpp)
+target_include_directories(hl2_rxdsp_agc_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_agc_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_agc_test COMMAND hl2_rxdsp_agc_test)
+
+add_executable(hl2_rxdsp_notch_audio_test tests/hl2_rxdsp_notch_audio_test.cpp)
+target_include_directories(hl2_rxdsp_notch_audio_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_notch_audio_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_notch_audio_test COMMAND hl2_rxdsp_notch_audio_test)
+
+add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.cpp)
+target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_squelch_audio_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_squelch_audio_test COMMAND hl2_rxdsp_squelch_audio_test)
+
+add_executable(hl2_rx_dsp_declaration_test tests/hl2_rx_dsp_declaration_test.cpp)
+target_include_directories(hl2_rx_dsp_declaration_test PRIVATE src tests)
+target_link_libraries(hl2_rx_dsp_declaration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rx_dsp_declaration_test COMMAND hl2_rx_dsp_declaration_test)
+
 # Receive squelch from Hl2RxDsp to the WDSP channel: held before configure,
 # moved by mode, kept across configure() and the asynchronous rebuild (#5678
 # row 1.5), and re-pushed by an Hl2Backend LNA change (#6092). The
@@ -6982,6 +7005,12 @@ target_include_directories(cwx_quote_test PRIVATE src)
 target_link_libraries(cwx_quote_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME cwx_quote_test COMMAND cwx_quote_test)
 
+# Socket-free typed CWX requests, callback ordering and original-batch fences.
+add_executable(cwx_control_routing_test tests/cwx_control_routing_test.cpp)
+target_include_directories(cwx_control_routing_test PRIVATE src)
+target_link_libraries(cwx_control_routing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME cwx_control_routing_test COMMAND cwx_control_routing_test)
+
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp
@@ -10595,6 +10624,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_tx_gate_test
     hl2_pan_limits_declaration_test
     hl2_fm_controls_declaration_test
+    hl2_rx_dsp_declaration_test
     hl2_mode_vocabulary_test
     hl2_client_side_spots_declaration_test
     hl2_gain_split_test
@@ -10665,6 +10695,7 @@ set(AETHER_SETTINGS_CONSUMERS
     cwx_speed_modifier_test
     cwx_drain_watch_test
     cwx_quote_test
+    cwx_control_routing_test
     cwx_panel_test
     dvk_panel_test
     local_voice_keyer_test
