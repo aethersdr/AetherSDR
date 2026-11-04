@@ -95,7 +95,7 @@ inline bool claimsWholeWindowAsClient(Qt::WindowFlags flags, const QOperatingSys
 // needs before it will offer drag-to-edge Snap (#6825). Only the caller knows
 // which points are the bar's empty background rather than its tabs, menus and
 // buttons, so this reports Caption for the whole `captionHeight` strip and
-// MainWindow::nativeEvent narrows it with TitleBar::isSystemMoveAreaAt() —
+// MainWindow::nativeEvent narrows it with TitleBar::isCaptionMoveAreaAt() —
 // answering HTCAPTION over an interactive widget is what made menus close as
 // they opened (#6272). A `captionHeight` of 0 disables it, which is how every
 // non-main window keeps the old behaviour.
@@ -105,15 +105,9 @@ enum class FrameHit { Client, Caption, Left, Right, Top, Bottom, TopLeft, TopRig
 // while Qt's widget geometry — and so TitleBar::isSystemMoveAreaAt() — is in
 // logical ones.
 //
-// The conversion must anchor on the CLIENT area, not the window rect. On
-// Windows 11 GetWindowRect includes the invisible DWM resize border, which
-// Qt's frame geometry does not: measured here, a 1414 px window rect around a
-// 1401 px client, 6 px of it on the left (and the rect overhangs the screen
-// while maximized). Scaling one onto the other skews every mapped point by
-// that inset, which put the right half of the ☰ glyph into HTCAPTION — a
-// press there started a window move instead of opening the menu (#6272's
-// class, found in review on #6830). The client origin and Qt's own widget
-// origin describe the same area, so pairing those two cannot skew.
+// Anchor on the client origin: GetWindowRect includes Windows 11's
+// invisible DWM resize border, while Qt's widget geometry describes the
+// client area. Pairing the two client origins preserves control alignment.
 //
 // `physical` is the WM_NCHITTEST point; `clientOriginPhysical` is the client
 // area's top-left in screen pixels (GetClientRect + ClientToScreen);
@@ -129,12 +123,9 @@ inline QPoint logicalScreenPoint(const QPoint& physical, const QPoint& clientOri
                   widgetOriginLogical.y() + qRound((physical.y() - clientOriginPhysical.y()) / dpr));
 }
 
-// The caption-height half of the main window's WM_NCHITTEST gate, hoisted out
-// of nativeEvent so the wiring itself is testable: `isMoveArea` is asked about
-// the message's own point, converted through the client origin, and the height
-// is measured from the client top rather than from the window rect — which
-// while maximized starts above it. Returns 0 (no caption) when the bar is
-// absent or the point is not a move area. (#6830 review)
+// Ask the move-area gate about the message's point in logical coordinates.
+// Measure from the client top, including the maximized frame inset. A missing
+// bar or rejected point gives no caption.
 //
 // `windowTop` is GetWindowRect's top; `clientOriginPhysical` the client's
 // top-left in screen pixels; `widgetOriginLogical` the same corner per Qt;

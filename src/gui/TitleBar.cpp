@@ -14,6 +14,8 @@
 #include "core/NetworkDiagnostics.h"
 #include "core/AppSettings.h"
 
+#include <QAbstractButton>
+#include <QAbstractSlider>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -846,12 +848,13 @@ bool TitleBar::isCaptionMoveAreaAt(const QPoint& globalPos) const
     if (!isSystemMoveAreaAt(globalPos)) {
         return false;
     }
-    // A tooltip on the widget under the point (or on the drag handle holding
-    // it) would never appear once Windows treats this as caption, so leave
-    // those points client. The bare background has no child and no tooltip.
+    // Interactive children keep client input inside a draggable container.
+    // Tooltipped handles also stay client because caption mouse moves bypass
+    // Qt's tooltip timer.
     for (QWidget* widget = childAt(mapFromGlobal(globalPos)); widget && widget != this;
          widget = widget->parentWidget()) {
-        if (!widget->toolTip().isEmpty()) {
+        if (qobject_cast<QAbstractButton*>(widget) || qobject_cast<QAbstractSlider*>(widget)
+            || !widget->toolTip().isEmpty()) {
             return false;
         }
     }

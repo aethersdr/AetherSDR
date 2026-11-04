@@ -402,6 +402,56 @@ int main(int argc, char** argv)
             check(tipBar->isCaptionMoveAreaAt(onGutter),
                   "the bare drag gutter still becomes the caption, so Snap works");
         }
+        const QPoint origin = tipHost.mapToGlobal(QPoint(0, 0));
+        const QRect nativeWindow(origin, tipHost.size());
+        const auto checkClientControl = [&](QWidget* control) {
+            const QPoint samples[] = {
+                QPoint(0, control->height() / 2),
+                control->rect().center(),
+                QPoint(control->width() - 1, control->height() / 2),
+            };
+            for (const QPoint& local : samples) {
+                const QPoint point = control->mapToGlobal(local);
+                check(!tipBar->isCaptionMoveAreaAt(point),
+                      "interactive audio controls stay outside the caption move area");
+                const int captionHeight = WindowChrome::captionHeightForHitTest(
+                    point, nativeWindow.top(), origin, origin, tipBar->height(), 1.0,
+                    [tipBar](const QPoint& logical) {
+                        return tipBar->isCaptionMoveAreaAt(logical);
+                    });
+                check(WindowChrome::expandedFrameHit(point, nativeWindow, 8, 8, captionHeight)
+                          == WindowChrome::FrameHit::Client,
+                      "restored-window audio controls answer client across their width");
+                check(WindowChrome::expandedFrameHit(point, nativeWindow, 0, 0, captionHeight)
+                          == WindowChrome::FrameHit::Client,
+                      "maximized-window audio controls answer client across their width");
+            }
+        };
+
+        for (const char* name : {"Master volume", "Headphone volume"}) {
+            QSlider* slider = nullptr;
+            for (QSlider* candidate : tipBar->findChildren<QSlider*>()) {
+                if (candidate->accessibleName() == QLatin1String(name)) {
+                    slider = candidate;
+                }
+            }
+            check(slider && slider->isVisible(), "caption probe finds each visible volume slider");
+            if (slider && slider->isVisible()) {
+                const QString tooltip = slider->toolTip();
+                slider->setToolTip(QString());
+                checkClientControl(slider);
+                slider->setToolTip(tooltip);
+            }
+        }
+
+        auto* pcAudio = tipBar->findChild<QPushButton*>(QStringLiteral("pcAudioBtn"));
+        check(pcAudio && pcAudio->isVisible(), "caption probe finds the PC Audio button");
+        if (pcAudio && pcAudio->isVisible()) {
+            const QString tooltip = pcAudio->toolTip();
+            pcAudio->setToolTip(QString());
+            checkClientControl(pcAudio);
+            pcAudio->setToolTip(tooltip);
+        }
         tipBar->setOperatorTransmitting(false);
     }
 

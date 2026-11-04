@@ -3911,18 +3911,9 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         POINT clientOrigin{0, 0};
         ClientToScreen(msg->hwnd, &clientOrigin);
         // The bar's height is in logical pixels and WM_NCHITTEST is physical.
-        // Only the bar's empty background may answer HTCAPTION: over its tabs,
-        // menus and buttons that is what closed menus as they opened (#6272),
-        // and isSystemMoveAreaAt() is the same test the bar's own drag uses, so
-        // a point either starts a system move or stays client — never both.
-        //
-        // Ask about the point in the message, not QCursor::pos(): WM_NCHITTEST
-        // answers for the coordinate it carries, which WindowFromPoint() and
-        // the shell may query while the pointer is somewhere else entirely.
-        //
-        // isCaptionMoveAreaAt() is isSystemMoveAreaAt() minus the drag handles
-        // that carry a tooltip: a caption gets WM_NCMOUSEMOVE, which never
-        // starts Qt's tooltip timer, so those would lose their hover text.
+        // Classify the message's point even when the shell queries it away
+        // from the cursor. Interactive controls stay client, as do tooltipped
+        // handles because caption mouse moves bypass Qt's tooltip timer.
         const bool barShown = m_titleBar && m_titleBar->isVisible();
         const int captionHeight = WindowChrome::captionHeightForHitTest(
             point, window.top, QPoint(clientOrigin.x, clientOrigin.y),
