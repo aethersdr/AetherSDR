@@ -434,8 +434,10 @@ AnanBackend::~AnanBackend()
 RadioCapabilities AnanBackend::capabilities() const
 {
     RadioCapabilities c;
+    c.cwTextControl = std::nullopt;
     c.broadcastFmReceive = std::nullopt;
     c.family = QStringLiteral("anan");
+    c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage,
         PanDisplayField::SpectrumPoints}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};

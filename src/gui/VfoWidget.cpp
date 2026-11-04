@@ -3592,6 +3592,47 @@ void VfoWidget::relayoutToCurrentContent()
     }
 }
 
+void VfoWidget::updateCwAutoTuneControls()
+{
+    if (!m_radioModel || !m_slice) { return; }
+    const bool loop = m_radioModel->cwAutoTuneLoopRequested(m_slice->sliceId());
+    const bool licensed = m_radioModel->cwAutotuneLicensed();
+    const bool rebuild = licensed != m_cwAutotuneLicensed || (loop && !m_autotuneLoopBtn)
+        || (!loop && !licensed && m_autotuneLoopBtn);
+    m_cwLoopRequested = loop;
+    m_cwAutotuneLicensed = licensed;
+    if (rebuild) {
+        // A reply may be synchronous with a button signal; retire that event
+        // before replacing the controls that emitted it.
+        QTimer::singleShot(0, this, &VfoWidget::rebuildFilterButtons);
+        return;
+    }
+    if (m_autotuneLoopBtn) {
+        const QSignalBlocker blocker(m_autotuneLoopBtn);
+        m_autotuneLoopBtn->setChecked(loop);
+    }
+    if (!m_filterAvailability) { return; }
+    if (m_autotuneOnceBtn && m_registeredCwOnce != m_autotuneOnceBtn) {
+        m_registeredCwOnce = m_autotuneOnceBtn;
+        m_filterAvailability->registerRestriction(m_autotuneOnceBtn,
+            tr("Requires a connected, owned, unlocked CW slice and a CW auto-tune license."),
+            [this](bool, const RadioCapabilities&) {
+                return m_radioModel && m_radioModel->cwAutoTuneUnavailableReason(
+                    m_slice, CwAutoTuneAction::Once).isEmpty();
+            });
+    }
+    if (m_autotuneLoopBtn && m_registeredCwLoop != m_autotuneLoopBtn) {
+        m_registeredCwLoop = m_autotuneLoopBtn;
+        m_filterAvailability->registerRestriction(m_autotuneLoopBtn,
+            tr("Requires a supported CW slice, or an outstanding loop request to stop."),
+            [this](bool, const RadioCapabilities&) {
+                return m_radioModel && m_radioModel->cwAutoTuneUnavailableReason(m_slice,
+                    m_cwLoopRequested ? CwAutoTuneAction::Stop : CwAutoTuneAction::Start).isEmpty();
+            });
+    }
+    m_filterAvailability->refreshEngaged();
+}
+
 void VfoWidget::setCwAutotuneLicensed(bool licensed)
 {
     if (m_cwAutotuneLicensed == licensed) return;
@@ -5436,6 +5477,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_updatingFromModel = false;
     });
     connect(m_slice, &SliceModel::lockedChanged, this, [this](bool locked) {
+        updateCwAutoTuneControls();
         QSignalBlocker b(m_lockVfoBtn);
         m_lockVfoBtn->setChecked(locked);
         m_lockVfoBtn->setText(locked ? "\xF0\x9F\x94\x92" : "\xF0\x9F\x94\x93");
@@ -6393,7 +6435,7 @@ void VfoWidget::rebuildFilterButtons()
     }
 
     // Add CW autotune row spanning all 4 columns when in CW mode
-    if (m_slice && isCwMode(m_slice->mode())) {
+    if (m_slice && (isCwMode(m_slice->mode()) || m_cwLoopRequested)) {
         int row = (m_filterWidths.size() + 3) / 4 + 1;
 
         m_autotuneContainer = new QWidget;
@@ -6413,8 +6455,10 @@ void VfoWidget::rebuildFilterButtons()
             "QPushButton:pressed { background: #00607a; }"
             "QPushButton:checked { background: #00607a; color: #e0f0ff; border-color: #00b4d8; }";
 
-        if (m_cwAutotuneLicensed) {
+        if (m_cwAutotuneLicensed || m_cwLoopRequested) {
             m_autotuneOnceBtn = new QPushButton("Once");
+            m_autotuneOnceBtn->setAccessibleName(tr("CW auto-tune once"));
+            m_autotuneOnceBtn->setObjectName(QStringLiteral("cwAutoTuneOnce"));
             m_autotuneOnceBtn->setFixedHeight(26);
             m_autotuneOnceBtn->setStyleSheet(btnStyle);
             connect(m_autotuneOnceBtn, &QPushButton::clicked, this, [this]() {
@@ -6423,7 +6467,10 @@ void VfoWidget::rebuildFilterButtons()
             hbox->addWidget(m_autotuneOnceBtn, 1);
 
             m_autotuneLoopBtn = new QPushButton("Loop");
+            m_autotuneLoopBtn->setAccessibleName(tr("CW auto-tune loop request"));
+            m_autotuneLoopBtn->setObjectName(QStringLiteral("cwAutoTuneLoop"));
             m_autotuneLoopBtn->setCheckable(true);
+            m_autotuneLoopBtn->setChecked(m_cwLoopRequested);
             m_autotuneLoopBtn->setFixedHeight(26);
             m_autotuneLoopBtn->setStyleSheet(btnStyle);
             connect(m_autotuneLoopBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -6446,6 +6493,7 @@ void VfoWidget::rebuildFilterButtons()
         m_filterGrid->addWidget(container, row, 0, 1, 4);
     }
 
+    updateCwAutoTuneControls();
     // The filter presets and the CW autotune / marker / adaptive controls were
     // just recreated — give the fresh buttons the hand cursor too (#4036).
     applyInteractiveCursors();
@@ -6997,6 +7045,11 @@ void VfoWidget::updateDspParameterResetControls()
 void VfoWidget::setRadioModel(RadioModel* radioModel)
 {
     if (m_radioModel) {
+        disconnect(m_radioModel, &RadioModel::infoChanged, this, &VfoWidget::updateCwAutoTuneControls);
+        disconnect(m_radioModel, &RadioModel::connectionStateChanged, this, &VfoWidget::updateCwAutoTuneControls);
+        disconnect(m_radioModel, &RadioModel::capabilitiesChanged, this, &VfoWidget::updateCwAutoTuneControls);
+        disconnect(m_radioModel, &RadioModel::cwAutoTuneIntentChanged, this, &VfoWidget::updateCwAutoTuneControls);
+        disconnect(m_radioModel, &RadioModel::slotOccupancyChanged, this, &VfoWidget::updateCwAutoTuneControls);
         releaseTransmitFrequencyCheck();
         disconnect(m_radioModel, &RadioModel::connectionStateChanged, this, &VfoWidget::updateDspParameterResetControls);
         disconnect(m_radioModel, &RadioModel::capabilitiesChanged, this, &VfoWidget::updateDspParameterResetControls);
@@ -7020,8 +7073,15 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     m_filterAvailability = nullptr;
     m_radioModel = radioModel;
     if (m_advancedDsp) { m_advancedDsp->setContext(m_radioModel, m_dspResetSlice); }
+    m_registeredCwOnce.clear();
+    m_registeredCwLoop.clear();
     m_dspResetIntentArmed = false;
     if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::infoChanged, this, &VfoWidget::updateCwAutoTuneControls);
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this, &VfoWidget::updateCwAutoTuneControls);
+        connect(m_radioModel, &RadioModel::capabilitiesChanged, this, &VfoWidget::updateCwAutoTuneControls);
+        connect(m_radioModel, &RadioModel::cwAutoTuneIntentChanged, this, &VfoWidget::updateCwAutoTuneControls);
+        connect(m_radioModel, &RadioModel::slotOccupancyChanged, this, &VfoWidget::updateCwAutoTuneControls);
         connect(m_radioModel, &RadioModel::connectionStateChanged,
                 this, &VfoWidget::updateDspParameterResetControls);
         connect(m_radioModel, &RadioModel::capabilitiesChanged,
@@ -7164,6 +7224,7 @@ void VfoWidget::configureFmToneControls()
     const bool connected = m_radioModel && m_radioModel->isConnected();
     const RadioCapabilities caps = connected
         ? m_radioModel->backendCapabilities() : RadioCapabilities{};
+    updateCwAutoTuneControls();
     const bool repeaterAvailable = !connected || caps.hasFmRepeaterOffset;
     if (m_fmOffsetSpin) {
         m_fmOffsetSpin->setEnabled(repeaterAvailable);

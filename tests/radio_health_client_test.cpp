@@ -181,7 +181,7 @@ int main(int argc, char** argv)
 
         // A damaged copy left on disk is replaced, not installed.
         QFile damaged(path);
-        damaged.open(QIODevice::WriteOnly);
+        check(damaged.open(QIODevice::WriteOnly), "the damaged copy can be written");
         damaged.write("not the package");
         damaged.close();
         const QString again = radiohealth::writeBundledPackage(dir.path(), &error);

@@ -2,6 +2,7 @@
 // Send/Insert/SaveMacro substitute quotes with 0x1e; StatusUpdate reverses it.
 // AetherSDR currently exposes send and macro operations, but no insert verb.
 #include "models/CwxModel.h"
+#include "CwxControlTestFixture.h"
 #include "core/backends/flex/CommandParser.h"
 
 #include <QByteArray>
@@ -12,6 +13,8 @@
 #include <QStringList>
 #include <cstdio>
 #include <initializer_list>
+#include <memory>
+#include <QPointer>
 
 using namespace AetherSDR;
 
@@ -44,8 +47,8 @@ int main(int argc, char** argv)
     const QString text = QStringLiteral("CQ \"DX\" = + ( & $");
     {
         CwxModel model;
-        QSignalSpy replies(&model, &CwxModel::replyCommandReady);
-        QSignalSpy commands(&model, &CwxModel::commandReady);
+        CwxWireSpy replies(&model, true);
+        CwxWireSpy commands(&model, false);
         QSignalSpy requested(&model, &CwxModel::transmissionRequested);
         model.send(text);
         check(replies.size() == 1 && commands.isEmpty(), "batched send uses reply path");
@@ -54,7 +57,7 @@ int main(int argc, char** argv)
             check(wire == QByteArray("C42|cwx send \"") + encoded + "\" 1\n",
                   "batched command has actual 0x1e/0x7f bytes and only framing quotes");
             check(replies[0][2].toInt() == text.size(), "quote substitution preserves drain character count");
-            model.handleSendReply(0, "100,1", replies[0][1].toInt(), replies[0][2].toInt());
+            model.handleSendReply(FlexCwxControls::decodeReply(0, "100,1", 1), replies[0][1].toInt(), replies[0][2].toInt());
             check(model.cwxEndIndex() == 100 + text.size() - 1, "quoted text retains queue drain endpoint");
         }
         check(requested.size() == 1 && requested[0][0].toString() == text,
@@ -62,7 +65,7 @@ int main(int argc, char** argv)
     }
     {
         CwxModel model;
-        QSignalSpy replies(&model, &CwxModel::replyCommandReady);
+        CwxWireSpy replies(&model, true);
         QSignalSpy requested(&model, &CwxModel::transmissionRequested);
         model.sendChar("\"");
         model.sendChar(" ");
@@ -83,10 +86,10 @@ int main(int argc, char** argv)
     {
         CwxModel model;
         QStringList commands;
-        QObject::connect(&model, &CwxModel::commandReady, &model,
-                         [&commands](const QString& command) { commands.append(command); });
-        QObject::connect(&model, &CwxModel::replyCommandReady, &model,
-                         [&commands](const QString& command, int, int) { commands.append(command); });
+        QObject::connect(&model, &CwxModel::controlRequested, &model,
+                         [&commands](const CwTextRequest& request) { commands.append(FlexCwxControls::encode(request)); });
+        QObject::connect(&model, &CwxModel::replyControlRequested, &model,
+                         [&commands](const CwTextRequest& request, int, int) { commands.append(FlexCwxControls::encode(request)); });
         model.send(QStringLiteral("+\"DX\" + ="));
         const QString first = QString::fromUtf8(QByteArray("cwx send \"")
             + QByteArray::fromHex("1e44581e") + "\" 1");
@@ -98,7 +101,7 @@ int main(int argc, char** argv)
     }
     {
         CwxModel model;
-        QSignalSpy commands(&model, &CwxModel::commandReady);
+        CwxWireSpy commands(&model, false);
         const QString raw = QStringLiteral("+CQ \"DX\" = + ( & $");
         model.saveMacro(11, raw);
         check(model.macro(11) == raw, "local macro retains raw speed modifiers and quotes");
@@ -115,7 +118,7 @@ int main(int argc, char** argv)
         check(changed.size() == 1 && changed[0][0].toInt() == 11
                   && changed[0][1].toString() == text, "macro change notification contains decoded text");
         check(commands.isEmpty(), "macro status never sends a command");
-        QSignalSpy replies(&model, &CwxModel::replyCommandReady);
+        CwxWireSpy replies(&model, true);
         model.sendMacro(12);
         check(replies.size() == 1 && replies[0][0].toString().toUtf8()
                   == QByteArray("cwx send \"") + encoded + "\" 1",
@@ -128,7 +131,7 @@ int main(int argc, char** argv)
     }
     {
         CwxModel model;
-        QSignalSpy replies(&model, &CwxModel::replyCommandReady);
+        CwxWireSpy replies(&model, true);
         model.send("CQ TEST = + ( & $");
         check(replies.size() == 1 && replies[0][0].toString().toUtf8()
                   == QByteArray("cwx send \"CQ\x7f" "TEST\x7f=\x7f+\x7f(\x7f&\x7f$\" 1"),
@@ -142,8 +145,8 @@ int main(int argc, char** argv)
         } else {
             model.setTransmissionAdmission([] { return CwxModel::TransmissionPermit{}; });
         }
-        QSignalSpy commands(&model, &CwxModel::commandReady);
-        QSignalSpy replies(&model, &CwxModel::replyCommandReady);
+        CwxWireSpy commands(&model, false);
+        CwxWireSpy replies(&model, true);
         QSignalSpy requested(&model, &CwxModel::transmissionRequested);
         QSignalSpy dispatched(&model, &CwxModel::transmissionDispatched);
         model.send("\"CQ\"");
@@ -152,6 +155,20 @@ int main(int argc, char** argv)
         check(commands.isEmpty() && replies.isEmpty() && requested.isEmpty() && dispatched.isEmpty(),
               denyAvailability ? "TX availability denial still blocks all sends"
                                : "TX admission denial still blocks all sends");
+    }
+    {
+        auto model = std::make_unique<CwxModel>();
+        const QPointer<CwxModel> original(model.get());
+        QObject::connect(model.get(), &CwxModel::speedChanged, [&] { model.reset(); });
+        original->setSpeed(30);
+        check(!original, "speed notification may synchronously destroy its model");
+    }
+    {
+        auto model = std::make_unique<CwxModel>();
+        const QPointer<CwxModel> original(model.get());
+        QObject::connect(model.get(), &CwxModel::charSent, [&] { model.reset(); });
+        original->applyStatus({{"sent", "1"}, {"wpm", "30"}});
+        check(!original, "progress notification may retire its model before more status fields");
     }
     return failures == 0 ? 0 : 1;
 }

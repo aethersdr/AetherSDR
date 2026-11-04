@@ -823,6 +823,69 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
     return std::make_unique<FlexBackend>();
 }
 
+bool RadioModel::dispatchAdministrationCommand(const QString& command,
+    const RadioControlCompletion& completion, const RadioControlFence& current,
+    const std::function<void()>& written)
+{
+    if (QThread::currentThread() != thread() || m_resettingAdministration
+        || !controlSessionCurrent(controlSession()) || !current || !current()
+        || m_administrationWrites.size() >= 64 || (!m_connection && !m_wanConn)) { return false; }
+    const QPointer<RadioModel> alive(this);
+    const auto operation = std::make_shared<PendingAdministrationWrite>();
+    operation->session = controlSession();
+    operation->guard = SessionCommandGuard::create().request();
+    operation->current = current;
+    operation->completion = completion;
+    operation->written = written;
+    operation->wan = m_wanConn;
+    operation->wireGeneration = m_wanConn ? m_wanConn->commandSessionGeneration()
+        : m_connection->commandSessionGeneration();
+    const quint64 ticket = ++m_administrationTicket;
+    m_administrationWrites.insert(ticket, operation);
+    operation->deadline = new QTimer(this);
+    operation->deadline->setSingleShot(true);
+    connect(operation->deadline, &QTimer::timeout, this, [this, ticket] {
+        finishAdministrationWrite(ticket, {RadioControlReply::Kind::Failed, -1,
+            tr("No radio response; the operation's outcome is unknown.")});
+    });
+    operation->deadline->start(30000);
+    const ResponseCallback reply = [alive, ticket](int code, const QString& message) {
+        if (alive) {
+            alive->finishAdministrationWrite(ticket,
+                {code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed,
+                 code, message});
+        }
+    };
+    if (m_wanConn) {
+        operation->sequence = m_wanConn->sendAdministrationCommand(command,
+            operation->wireGeneration, operation->guard, reply);
+        if (alive) { administrationWriteResult(ticket, operation->sequence != 0); }
+        return operation->sequence != 0;
+    }
+    operation->sequence = m_seqCounter.fetch_add(1);
+    m_pendingCallbacks.insert(operation->sequence, reply);
+    RadioConnection* connection = m_connection;
+    const SessionCommandGuard guard = operation->guard;
+    const quint64 generation = operation->wireGeneration;
+    const quint32 sequence = operation->sequence;
+    const bool queued = QMetaObject::invokeMethod(connection,
+        [connection, ticket, sequence, command, generation, guard] {
+            const bool sent = connection->writeAdministrationCommand(sequence, command, generation, guard);
+            emit connection->administrationCommandWritten(ticket, sent);
+        }, Qt::QueuedConnection);
+    if (!queued) { administrationWriteResult(ticket, false); }
+    return queued;
+}
+
+void RadioModel::forgetAdministrationReply(const PendingAdministrationWrite& operation)
+{
+    if (operation.wan) {
+        operation.wan->forgetSessionReply(operation.sequence, operation.wireGeneration);
+    } else {
+        m_pendingCallbacks.remove(operation.sequence);
+    }
+}
+
 RadioModel::SetupCommandSink RadioModel::setupCommandSink(const SetupCommandWriter& writer)
 {
     const QPointer<RadioModel> model(this);
@@ -910,8 +973,21 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
+            flex->setAdministrationCommandSink([this](const QString& command,
+                const RadioControlCompletion& completion, const RadioControlFence& current,
+                const std::function<void()>& written) {
+                return dispatchAdministrationCommand(command, completion, current, written);
+            });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);
+            });
+            flex->setCwxCommandSink([this](const QString& command, const TxCoordinator::Command& fence,
+                                           const RadioControlFence& current, FlexBackend::CommandReply reply) {
+                return sendTxTcpCommand(command, fence.operation, fence.keying,
+                    [completion = fence.completion] { completion.finish(); }, std::move(reply), current);
+            });
+            flex->setCwxConfigurationSink([this](const QString& command, const RadioControlFence& current) {
+                return sendCwxConfigurationCommand(command, current);
             });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
             // moving slice encode behind the seam keeps TX safety above it.
@@ -1446,6 +1522,11 @@ void RadioModel::setupBackend(const QString& family)
         onVersionReceived(version);
     });
 
+    connect(m_connection, &RadioConnection::administrationCommandWritten, this,
+            [this, generation](quint64 ticket, bool written) {
+        if (generation == m_backendReceiverGeneration) { administrationWriteResult(ticket, written); }
+    });
+
     // Response callbacks: RadioConnection emits commandResponse on worker thread,
     // we dispatch to the matching callback on the main thread. (#502)
     connect(m_connection, &RadioConnection::commandResponse,
@@ -1780,6 +1861,7 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    resetAdministration();
     resetTransmitDaxSessionState();
     // Retirement callbacks can attempt edits before teardown returns.
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
@@ -2081,6 +2163,12 @@ RadioModel::RadioModel(QObject* parent)
     , m_txCoordinator([this](const TxCoordinator::Operation& operation,
                             TxCoordinator::StopReason reason) { stopTxOperation(operation, reason); })
 {
+    connect(this, &RadioModel::infoChanged, this, &RadioModel::reconcileAdministration);
+    connect(this, &RadioModel::licenseFeaturesChanged, this, &RadioModel::reconcileAdministration);
+    connect(this, &RadioModel::sliceRemoved, this, &RadioModel::reconcileAdministration);
+    connect(this, &RadioModel::slotOccupancyChanged, this, &RadioModel::reconcileAdministration);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::reconcileAdministration);
+    connect(this, &RadioModel::connectionStateChanged, this, &RadioModel::reconcileAdministration);
     m_desktopTxActor = m_txCoordinator.registerActor({true, 0});
     // FlexLib APD.cs matches against the transmit slice, else the active one.
     m_transmitModel.setApdTxSliceResolver([this]() -> std::optional<TransmitModel::ApdTxSlice> {
@@ -2143,6 +2231,8 @@ RadioModel::RadioModel(QObject* parent)
     wireSliceLifecycle();
     qRegisterMetaType<SliceControlRequest>();
     qRegisterMetaType<TransmitControlRequest>();
+    qRegisterMetaType<CwTextRequest>();
+    qRegisterMetaType<CwTextReply>();
     qRegisterMetaType<RadioSetupRequest>();
     qRegisterMetaType<SpotRequest>();
     qRegisterMetaType<PanControlRequest>();
@@ -2575,17 +2665,16 @@ RadioModel::RadioModel(QObject* parent)
         const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(input);
         return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
     });
-    connect(&m_cwxModel, &CwxModel::commandReady, this, [this](const QString& cmd){
-        dispatchCwxCommand(cmd, m_cwxCommandOperation);
-    });
-    connect(&m_cwxModel, &CwxModel::speedCommandIssued, this, [this](int wpm) {
-        if (!usesFlexCommandPlane()) {
-            m_transmitModel.setCwSpeed(wpm);
-        }
+    m_cwxModel.setRequestSender([this](const CwTextRequest& request, int epoch, int nChars,
+                                      CwxModel::TransmissionPermit current) {
+        return dispatchCwxRequest(request, m_cwxCommandOperation, epoch, nChars, std::move(current));
     });
     m_cwxModel.setTextSender([this](const QString& text, int wpm) {
         Q_UNUSED(wpm);
         return dispatchCwxText(text, m_cwxCommandOperation);
+    });
+    connect(&m_cwxModel, &CwxModel::requestRejected, this, [this](const QString& reason) {
+        emit radioMessageReceived(reason, MessageSeverity::Warning);
     });
     connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
         const TxCoordinator::Intent intent = m_cwxCommandIntent;
@@ -2593,7 +2682,7 @@ RadioModel::RadioModel(QObject* parent)
         (void)m_txCoordinator.requestIntentEnd(intent);
         m_cwxActive = false;
         m_cwxDrainArmed = false;
-        if (m_backend && !usesFlexCommandPlane()
+        if (m_backend && !backendCapabilities().cwTextControl
             && backendCapabilities().hasRadioSideCwKeyer) {
             m_backend->abortCwText(operation.permitsCleanup() ? operation : m_txCoordinator.cleanupFence(),
                                    trackTxQueue(operation));
@@ -2603,14 +2692,6 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_cwxModel, &CwxModel::transmissionDispatched, this,
             [this](int epoch, bool untrackedMacro) {
         finishCwxDispatch(epoch, untrackedMacro, m_cwxCommandIntent);
-    });
-    // Final cwx send of each macro/text block goes via replyCommandReady so we
-    // can capture the radio_index from the reply.  CwxModel::handleSendReply
-    // stores it; applyStatus fires queueEmpty() when cwx sent= reaches it.
-    // This replaces the broken cwx queue= path — firmware never sends it
-    // (observed on FLEX-6500 fw 4.2.20.41343; the 8600 target runs 4.2.18). (#3949)
-    connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch, int nChars){
-        dispatchCwxCommand(cmd, m_cwxCommandOperation, epoch, nChars);
     });
     // Release TX when the radio reports the CWX buffer drained (#2450): with
     // sync_cwx=1 the radio needs an explicit `xmit 0` or holds TX for its ~60 s
@@ -2777,6 +2858,7 @@ RadioModel::~RadioModel()
     // Observers may already be tearing down. Cleanup must reach the backend
     // without calling presentation slots from a partially destroyed aggregate.
     blockSignals(true);
+    resetAdministration(false);
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
     m_independentTxGrants.reset(); // stop while every model member is still alive
@@ -3360,7 +3442,7 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
     }
 
     if (!inhibited) {
-        const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId) > 0;
+        const bool wasInhibited = m_panTransmitInhibitReasons.remove(trimmedPanId);
         const bool hadRestoreSlice =
             m_panTransmitInhibitedTxSlices.contains(trimmedPanId);
         const InhibitedTxSelection restore = hadRestoreSlice
@@ -3764,6 +3846,11 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    if (!m_rebootRadioSerial.isEmpty() && m_rebootRadioSerial != info.serial) {
+        ++m_rebootRevision;
+        m_rebootInProgress = false;
+        m_rebootRadioSerial.clear();
+    }
     discardTuneInhibit();
     resetTuneOutputControl();
     cancelRadioWake();
@@ -4221,10 +4308,13 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
 
 void RadioModel::disconnectFromRadio()
 {
+    resetAdministration();
     resetTxOperations();
     restoreTuneInhibit();
     cancelRadioWake();
     m_intentionalDisconnect = true;
+    ++m_rebootRevision;
+    m_rebootRadioSerial.clear();
     m_rebootInProgress = false;
     m_connectAttemptActive = false;  // the operator abandoned it (#4912)
     m_reconnectTimer.stop();
@@ -4297,41 +4387,6 @@ void RadioModel::forceDisconnect()
     } else {
         QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio);
     }
-}
-
-void RadioModel::rebootRadio()
-{
-    // Gate on isConnected() (which already covers WAN/SmartLink sessions), not
-    // the LAN socket alone — sendCommand() already routes through m_wanConn
-    // for WAN, so a SmartLink user clicking Reboot should send the command
-    // and tear the link down the same way as a LAN user.
-    if (!isConnected()) {
-        return;
-    }
-    // F3 (#4448): "radio reboot" is a SmartSDR command. A backend that does not
-    // support a client-triggered reboot (HL2) leaves canReboot=false; refuse so
-    // we neither send a meaningless command nor schedule the forceDisconnect that
-    // would follow. The UI also disables the button on this capability.
-    if (!backendCapabilities().canReboot) {
-        return;
-    }
-    m_rebootInProgress = true;
-    sendCommand(QStringLiteral("radio reboot"));
-    // Give the TCP write a brief moment to flush before tearing down the
-    // socket, then drop into the unexpected-disconnect path so the existing
-    // reconnect timer brings us back when the radio is up again.
-    QTimer::singleShot(250, this, &RadioModel::forceDisconnect);
-    // Fail-open safety: if the reboot wedges the radio's network stack, the
-    // reconnect timer keeps firing "connection refused" forever and the user
-    // sees no toasts at all because m_rebootInProgress is gating them. Time
-    // the suppression out after 60s so a stuck radio surfaces real errors
-    // instead of silently retrying forever. 60s comfortably covers a healthy
-    // 6000/8600 boot.
-    QTimer::singleShot(60'000, this, [this] {
-        if (m_rebootInProgress) {
-            m_rebootInProgress = false;
-        }
-    });
 }
 
 RadioCapabilities RadioModel::backendCapabilities() const
@@ -5771,6 +5826,25 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
     return parts != 0;
 }
 
+bool RadioModel::sendCwxConfigurationCommand(const QString& command, RadioControlFence current)
+{
+    const std::shared_ptr<std::atomic<bool>> session = m_cwxSessionValid;
+    const auto permitted = [session, current = std::move(current)] {
+        return session->load(std::memory_order_acquire) && (!current || current());
+    };
+    if (!permitted()) { return false; }
+    if (m_wanConn) {
+        m_wanConn->sendCommand(command);
+        return true;
+    }
+    const QPointer<RadioConnection> connection = m_connection;
+    if (!connection) { return false; }
+    const quint32 seq = m_seqCounter.fetch_add(1);
+    return QMetaObject::invokeMethod(connection, [connection, seq, command, permitted] {
+        if (connection && permitted()) { connection->writeCommand(seq, command); }
+    }, Qt::QueuedConnection);
+}
+
 bool RadioModel::sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
                                   bool keying, std::function<void()> delivered,
                                   ResponseCallback reply, std::function<bool()> currentBatch)
@@ -5838,22 +5912,6 @@ bool RadioModel::sendTxTcpCommand(const QString& command, const TxCoordinator::O
         }
     }, Qt::QueuedConnection);
     return true;
-}
-
-void RadioModel::cwAutoTune(int sliceId, bool intermittent)
-{
-    if (intermittent) {
-        sendCmd(QString("slice auto_tune %1 int=1").arg(sliceId));
-    } else {
-        // int=0 stops the autotune engine (FlexLib: isIntermittent=false)
-        sendCmd(QString("slice auto_tune %1 int=0").arg(sliceId));
-    }
-}
-
-void RadioModel::cwAutoTuneOnce(int sliceId)
-{
-    // One-shot autotune (FlexLib: isIntermittent=null)
-    sendCmd(QString("slice auto_tune %1").arg(sliceId));
 }
 
 bool RadioModel::addSlice()
@@ -7036,6 +7094,8 @@ void RadioModel::onConnected()
     // after any drop-and-reconnect while the GUI and bridge keep enforcing the
     // declared number. That divergence is the thing this field exists to close.
     publishRadioReportedCapacity();
+    ++m_rebootRevision;
+    m_rebootRadioSerial.clear();
     m_rebootInProgress = false;
     // Belt-and-braces (#4122 review): the connect entry points clear fixtures,
     // but isConnected() stays false for the whole Connecting phase, so a
@@ -8303,6 +8363,7 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    resetAdministration();
     resetTransmitDaxSessionState();
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
     discardTuneInhibit();
@@ -12492,23 +12553,6 @@ QString RadioModel::licenseFeatureReason(const QString& name) const
     return licenseFeature(name).reason;
 }
 
-void RadioModel::setRemoteOnEnabled(bool on)
-{
-    if (!backendCapabilities().hasRemoteOnControl) {
-        return;
-    }
-    m_remoteOnEnabled = on;
-    sendCmd(QString("radio set remote_on_enabled=%1").arg(on ? 1 : 0));
-    emit infoChanged();
-}
-
-void RadioModel::setMultiFlexEnabled(bool on)
-{
-    m_multiFlexEnabled = on;
-    sendCmd(QString("radio set mf_enable=%1").arg(on ? 1 : 0));
-    emit infoChanged();
-}
-
 void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
 {
     // aetherd RFC 2.3 (RadioModel residual): the radio-global wire decode moved
@@ -12605,8 +12649,18 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.netmask) { m_netmask = *d.netmask; changed = true; }
     if (d.gateway) { m_gateway = *d.gateway; changed = true; }
     if (d.networkName) { m_networkName = *d.networkName; changed = true; }
-    if (d.remoteOnEnabled) { m_remoteOnEnabled = *d.remoteOnEnabled; changed = true; }
-    if (d.multiFlexEnabled) { m_multiFlexEnabled = *d.multiFlexEnabled; changed = true; }
+    if (d.remoteOnEnabled) {
+        m_administrationObserved[0] = true;
+        m_administrationPending[0].reset();
+        m_remoteOnEnabled = *d.remoteOnEnabled;
+        changed = true;
+    }
+    if (d.multiFlexEnabled) {
+        m_administrationObserved[1] = true;
+        m_administrationPending[1].reset();
+        m_multiFlexEnabled = *d.multiFlexEnabled;
+        changed = true;
+    }
     if (d.enforcePrivateIp) { m_enforcePrivateIp = *d.enforcePrivateIp; changed = true; }
     if (d.binauralRx) { m_binauralRx = *d.binauralRx; changed = true; }
     if (d.fullDuplex) {

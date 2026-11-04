@@ -583,7 +583,7 @@
  },
  "core/NnrControls.h": {
   "tag": "ui-support",
-  "note": "Compile-time NNR control ranges and default-marker positions read out of WDSP 2.10; no state and no WDSP include, shared by the ADSP tab and the filter",
+  "note": "Compile-time NNR control ranges and default-marker positions read out of WDSP 2.11; no state and no WDSP include, shared by the ADSP tab and the filter",
   "split": "",
   "confidence": "high"
  },
@@ -703,7 +703,7 @@
  },
  "core/RfkitConnection.h": {
   "tag": "peripheral(rfkit)",
-  "note": "Direct HTTP/JSON REST client (default port 8080) for the RF-KIT amplifier — a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h, core/VkampConnection.h and core/Kpa1500Connection.h. The Flex radio neither discovers it nor proxies its telemetry, so its REST API is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/rfkit-amplifier-design.md.",
+  "note": "Direct HTTP/JSON REST client (default port 8080) for the RF-KIT amplifier \u2014 a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h, core/VkampConnection.h and core/Kpa1500Connection.h. The Flex radio neither discovers it nor proxies its telemetry, so its REST API is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/rfkit-amplifier-design.md.",
   "split": "",
   "confidence": "high"
  },
@@ -1015,7 +1015,7 @@
  },
  "models/CwxModel.h": {
   "tag": "universal",
-  "note": "CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name.",
+  "note": "Plain-text CW keyer intent: typed WPM/delay/QSK, macro and send/erase requests, batch cancellation and bounded speed-echo bookkeeping. Command encoding and queue-reply decoding live below the seam; legacy CWX status parsing remains.",
   "split": "",
   "confidence": "high"
  },
@@ -1778,6 +1778,18 @@
  "core/backends/DspParameter.h": {
   "tag": "universal",
   "note": "Typed desktop advanced DSP parameter identities, validated value domains, sparse observations and capability shape. No radio command text; Flex wire names stay in FlexBackend. Consumed by the parameter editor through RadioModel and SliceModel.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/CwTextRequest.h": {
+  "tag": "universal",
+  "note": "Typed desktop buffered-keyer intents, capability fields and normalized queue replies. Plain text and original caller identity; no vendor command grammar or daemon TX permission.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/flex/FlexCwxControls.h": {
+  "tag": "vendor(flex)",
+  "note": "FlexLib-authoritative CWX command encoding and bounded queue-reply decoding. Only backend implementations and socket-free wire fixtures consume it.",
   "split": "",
   "confidence": "high"
  }
