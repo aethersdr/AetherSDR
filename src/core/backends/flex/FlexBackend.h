@@ -65,6 +65,14 @@ public:
         const FileTransferGuard&, const RadioControlFence&) override;
     ReceiveDispatch requestFileTransfer(const FileTransferRequest&, const FileTransferCompletion&,
         const FileTransferGuard&, const RadioControlFence&) override;
+    using AdministrationCommandSink = std::function<bool(const QString&,
+        const RadioControlCompletion&, const RadioControlFence&, const std::function<void()>&)>;
+    void setAdministrationCommandSink(AdministrationCommandSink sink)
+    { m_administrationSink = std::move(sink); }
+    ReceiveDispatch requestRadioReboot(const RadioControlCompletion& completion,
+        const RadioControlFence& current, const std::function<void()>& written) override;
+    ReceiveDispatch requestCwAutoTune(int sliceId, CwAutoTuneAction action,
+        const RadioControlCompletion& completion, const RadioControlFence& current) override;
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
     // Primary keying verbs use an operation-fenced writer, never the generic
@@ -307,6 +315,7 @@ private:
     TransferCommandSink m_transferSink;
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
+    AdministrationCommandSink m_administrationSink;
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};
     quint64 m_nicknameAppliedRequest{0};

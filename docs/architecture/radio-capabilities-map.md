@@ -75,8 +75,20 @@ radio copy.
 | `spotControl` | Add, remove, clear, trigger | absent | absent | absent | absent | absent | `RadioModel::requestSpot` and its session/epoch-fenced queue; local/passive, TCI and memory routes remain separate |
 | `waveformControl` | Restart, uninstall, remove container | absent | absent | absent | absent | absent | Typed waveform intent; backend encodes the command; completion is not a status observation |
 | `fileTransferControl` | Firmware, legacy waveform, profiles, DVK; Docker on WFP-capable hardware | absent | absent | absent | absent | absent | `RadioModel::beginFileTransfer` reserves the original session and peer; typed backend negotiation; queued-write cancellation and deadlines |
+| `cwReceiveControl` | Once, Start, Stop | absent | absent | absent | absent | absent | `RadioModel::requestCwAutoTune`; owned, current slice and SmartSDR+ eligibility for starts; existing-loop Stop remains available for cleanup |
 | `panControl` | Band zoom, segment zoom, receive antenna | absent | absent | absent | absent | absent | `RadioModel::requestPanControl`, exact pan identity and the existing zoom availability gate |
 | `slicePresetControl` | Step, repeater offset, tone mode/value | absent | absent | absent | absent | absent | `RadioModel::requestSlicePreset`; absent fields remain unchanged. Client-owned step still applies locally where no command plane exists |
+
+### Radio administration and CW receive auto-tune
+
+Radio administration uses typed `RemoteOnEnabled` and `MultiFlexEnabled` setup
+fields and the existing `canReboot` capability paired with `requestRadioReboot`.
+Settings require an initial radio observation. Requested values and CW loop
+intent are separate from confirmed radio state; ACK does not fabricate status.
+Administration writes carry a bounded operation guard and the original transport
+generation across the LAN queue or WAN writer. Reconnect, owner retirement and
+superseding edits cancel pending work. Reboot recovery is bounded to the original
+radio. None of these controls extends daemon RPC permissions or permits TX.
 
 ### Radio automatic AGC threshold
 
