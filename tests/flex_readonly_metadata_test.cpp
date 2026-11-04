@@ -78,6 +78,7 @@ public:
     static void beginSession(RadioModel& radio)
     {
         radio.resetSessionControls();
+        radio.m_txSessionClosing = false;
         radio.m_sessionCommands = SessionCommandGuard::create();
         radio.m_sessionWire = radio.m_connection;
         radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
