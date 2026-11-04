@@ -205,6 +205,257 @@ int main(int argc, char** argv)
               "the left/right band and the top/bottom band follow their own widths");
     }
 
+    // ── The title bar answers as the caption so Windows offers Snap (#6825) ──
+    {
+        using Hit = WindowChrome::FrameHit;
+        const QRect win(100, 50, 1000, 600);
+        const int band = 8;
+        const int caption = 52;
+
+        // Without a caption height nothing changes: every existing caller
+        // (and every window that is not the main window) keeps the old answer.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, band, band) == Hit::Client,
+              "the title bar is client area when no caption height is given");
+
+        // The bar's background drags the window, which is what Windows needs
+        // before it offers drag-to-edge Snap and the Snap Assist picker.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, band, band, caption)
+                  == Hit::Caption,
+              "the title bar's background is the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 101), win, band, band, caption)
+                  == Hit::Caption,
+              "the last pixel of the caption strip still drags");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 102), win, band, band, caption)
+                  == Hit::Client,
+              "the first pixel below the caption is client area");
+
+        // The resize band wins over the caption, or the top edge and the top
+        // corners would stop resizing the moment the caption was introduced.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 50), win, band, band, caption) == Hit::Top,
+              "the top resize band still wins over the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(101, 51), win, band, band, caption)
+                  == Hit::TopLeft
+                  && WindowChrome::expandedFrameHit(QPoint(1098, 51), win, band, band, caption)
+                      == Hit::TopRight,
+              "the top corners still resize under the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(101, 70), win, band, band, caption)
+                  == Hit::Left,
+              "the side band still resizes alongside the caption");
+
+        // Maximized: no resize band, but the caption must still answer or the
+        // window cannot be dragged back down off the top of the screen.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, 0, 0, caption) == Hit::Caption,
+              "the caption answers while maximized, so the window can be dragged free");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 350), win, 0, 0, caption) == Hit::Client,
+              "the body is still client area while maximized");
+
+        // A point outside the window is never the caption.
+        check(WindowChrome::expandedFrameHit(QPoint(20, 20), win, band, band, caption)
+                  == Hit::Client,
+              "a point outside the window is not the caption");
+    }
+
+    // ── WM_NCHITTEST answers for the point it carries, not the cursor (#6825) ──
+    {
+        // The message's coordinate is physical; isSystemMoveAreaAt() needs Qt's
+        // logical global space. The conversion anchors on the CLIENT origin,
+        // because GetWindowRect carries the invisible DWM resize border that
+        // Qt's frame geometry does not.
+        //
+        // Real Windows 11 geometry measured on this PR, 100% scale: a window
+        // rect of x=253 w=1414 around a client at x=259 w=1401 — 6 px of
+        // border on the left. The widget origin is the same corner as Qt sees
+        // it, so these two describe the same area and cannot skew.
+        const QPoint clientOrigin(259, 300);
+        const QPoint widgetOrigin(259, 300);
+
+        check(WindowChrome::logicalScreenPoint(clientOrigin, clientOrigin, widgetOrigin, 1.0)
+                  == widgetOrigin,
+              "the client origin maps to the widget origin");
+
+        // The regression this replaces: scaling GetWindowRect onto Qt's frame
+        // geometry shifted every point by the border inset, so a press on the
+        // right of the ☰ glyph answered HTCAPTION and started a window move.
+        // Anchored on the client, a point 36 px into the client stays 36 px in.
+        check(WindowChrome::logicalScreenPoint(QPoint(259 + 36, 326), clientOrigin,
+                                               widgetOrigin, 1.0)
+                  == QPoint(259 + 36, 326),
+              "a point inside the client keeps its offset, with no border skew");
+
+        // The window rect's own left edge is 6 px outside the client, and must
+        // map to a negative offset rather than to the widget origin.
+        check(WindowChrome::logicalScreenPoint(QPoint(253, 300), clientOrigin, widgetOrigin, 1.0)
+                  == QPoint(253, 300),
+              "a point in the resize border maps outside the widget, not onto its origin");
+
+        // DPR 2: offsets halve, and the origin still anchors the result.
+        const QPoint hiClient(400, 200);
+        const QPoint hiWidget(200, 100);
+        check(WindowChrome::logicalScreenPoint(QPoint(400, 200), hiClient, hiWidget, 2.0)
+                  == hiWidget,
+              "at DPR 2 the client origin still maps to the widget origin");
+        check(WindowChrome::logicalScreenPoint(QPoint(600, 400), hiClient, hiWidget, 2.0)
+                  == QPoint(300, 200),
+              "a point at DPR 2 halves its offset from the client origin");
+
+        // A fractional ratio (150% scaling) must not drift.
+        const QPoint p150 = WindowChrome::logicalScreenPoint(QPoint(400 + 150, 200),
+                                                             hiClient, hiWidget, 1.5);
+        check(p150.x() == 300 && p150.y() == 100,
+              "a non-integer scale divides the offset without drifting");
+
+        // A zero or negative ratio must not divide by zero.
+        check(WindowChrome::logicalScreenPoint(QPoint(7, 9), clientOrigin, widgetOrigin, 0.0)
+                  == QPoint(7, 9),
+              "a zero device pixel ratio returns the point unchanged");
+
+        // The whole point of the conversion: two different physical points in
+        // the same message stream map to two different logical points, so the
+        // caption test can distinguish them while the cursor sits elsewhere.
+        const QPoint a = WindowChrome::logicalScreenPoint(QPoint(400, 160), clientOrigin,
+                                                          widgetOrigin, 1.0);
+        const QPoint b = WindowChrome::logicalScreenPoint(QPoint(1800, 160), clientOrigin,
+                                                          widgetOrigin, 1.0);
+        check(a != b && a.y() == b.y(),
+              "two queried points stay distinct after conversion");
+
+        // ── The gate itself, not just the conversion ───────────────────────
+        // Real Windows 11 maximized geometry: the window rect starts 6 px
+        // above and left of the client and overhangs the screen.
+        const int windowTop = 294;              // GetWindowRect top
+        const QPoint maxClient(259, 300);       // client origin, 6 px inside
+        const QPoint maxWidget(259, 300);
+        const int barHeight = 52;
+
+        // Which point the gate asks about: record it, so a revert to the live
+        // cursor (or to the window rect) is visible as a different answer.
+        QPoint asked(-1, -1);
+        auto recording = [&asked](const QPoint& p) {
+            asked = p;
+            return true;
+        };
+        const int h = WindowChrome::captionHeightForHitTest(
+            QPoint(259 + 36, 326), windowTop, maxClient, maxWidget, barHeight, 1.0, recording);
+        check(asked == QPoint(259 + 36, 326),
+              "the gate asks about the message's own point, client-anchored");
+        checkEqual(h, (300 - 294) + 52,
+                   "the caption spans the frame inset plus the bar, measured from the client top");
+
+        // A point the move-area test rejects yields no caption at all.
+        auto never = [](const QPoint&) { return false; };
+        checkEqual(WindowChrome::captionHeightForHitTest(QPoint(300, 326), windowTop, maxClient,
+                                                         maxWidget, barHeight, 1.0, never),
+                   0, "a point outside the move area gives no caption");
+
+        // No bar (or a hidden one) must never produce a caption, and must not
+        // consult the move-area test at all.
+        bool consulted = false;
+        auto noting = [&consulted](const QPoint&) {
+            consulted = true;
+            return true;
+        };
+        checkEqual(WindowChrome::captionHeightForHitTest(QPoint(300, 326), windowTop, maxClient,
+                                                         maxWidget, 0, 1.0, noting),
+                   0, "a hidden title bar gives no caption");
+        check(!consulted, "a hidden title bar does not consult the move-area test");
+    }
+
+    // ── A tooltipped drag handle stays client, so its tooltip survives ──────
+    // Over a caption Windows sends WM_NCMOUSEMOVE, which Qt delivers as
+    // NonClientAreaMouseMove; that never starts the tooltip timer. Measured on
+    // Windows 11: every HTCAPTION point suppressed its tooltip, every HTCLIENT
+    // point showed it. So isCaptionMoveAreaAt() excludes the drag handles that
+    // carry one, while isSystemMoveAreaAt() — the bar's own drag, shared with
+    // Linux — still accepts them. (#6830 review)
+    {
+        QWidget tipHost;
+        auto* tipBar = new TitleBar(&tipHost);
+        tipHost.resize(1400, 200);
+        tipHost.show();
+        app.processEvents();
+
+        tipBar->setOperatorTransmitting(true);
+        app.processEvents();
+
+        auto* timer = tipBar->findChild<QLabel*>(QStringLiteral("txTimerLabel"));
+        auto* gutter = tipBar->findChild<QWidget*>(QStringLiteral("titleBarDragGutter"));
+        check(timer && gutter, "tooltip probe finds the transmit timer and the drag gutter");
+        // Assert visibility rather than folding it into the guard: if the timer
+        // ever stops showing while transmitting, these checks must fail loudly
+        // instead of quietly not running.
+        check(timer && timer->isVisible(), "the transmit timer shows while transmitting");
+        if (timer && gutter && timer->isVisible()) {
+            check(!timer->toolTip().isEmpty(), "the transmit timer carries a tooltip");
+            check(gutter->toolTip().isEmpty(), "the drag gutter carries no tooltip");
+
+            const QPoint onTimer = timer->mapToGlobal(timer->rect().center());
+            const QPoint onGutter = gutter->mapToGlobal(gutter->rect().center());
+
+            // Both are drag handles: the bar's own drag accepts either.
+            check(tipBar->isSystemMoveAreaAt(onTimer),
+                  "the transmit timer is still a drag handle for the bar's own move");
+            check(tipBar->isSystemMoveAreaAt(onGutter),
+                  "the drag gutter is a drag handle");
+
+            // Only the tooltip-free one may answer HTCAPTION.
+            check(!tipBar->isCaptionMoveAreaAt(onTimer),
+                  "a tooltipped drag handle does not become the caption, so its tooltip shows");
+            check(tipBar->isCaptionMoveAreaAt(onGutter),
+                  "the bare drag gutter still becomes the caption, so Snap works");
+        }
+        const QPoint origin = tipHost.mapToGlobal(QPoint(0, 0));
+        const QRect nativeWindow(origin, tipHost.size());
+        const auto checkClientControl = [&](QWidget* control) {
+            const QPoint samples[] = {
+                QPoint(0, control->height() / 2),
+                control->rect().center(),
+                QPoint(control->width() - 1, control->height() / 2),
+            };
+            for (const QPoint& local : samples) {
+                const QPoint point = control->mapToGlobal(local);
+                check(!tipBar->isCaptionMoveAreaAt(point),
+                      "interactive audio controls stay outside the caption move area");
+                const int captionHeight = WindowChrome::captionHeightForHitTest(
+                    point, nativeWindow.top(), origin, origin, tipBar->height(), 1.0,
+                    [tipBar](const QPoint& logical) {
+                        return tipBar->isCaptionMoveAreaAt(logical);
+                    });
+                check(WindowChrome::expandedFrameHit(point, nativeWindow, 8, 8, captionHeight)
+                          == WindowChrome::FrameHit::Client,
+                      "restored-window audio controls answer client across their width");
+                check(WindowChrome::expandedFrameHit(point, nativeWindow, 0, 0, captionHeight)
+                          == WindowChrome::FrameHit::Client,
+                      "maximized-window audio controls answer client across their width");
+            }
+        };
+
+        for (const char* name : {"Master volume", "Headphone volume"}) {
+            QSlider* slider = nullptr;
+            for (QSlider* candidate : tipBar->findChildren<QSlider*>()) {
+                if (candidate->accessibleName() == QLatin1String(name)) {
+                    slider = candidate;
+                }
+            }
+            check(slider && slider->isVisible(), "caption probe finds each visible volume slider");
+            if (slider && slider->isVisible()) {
+                const QString tooltip = slider->toolTip();
+                slider->setToolTip(QString());
+                checkClientControl(slider);
+                slider->setToolTip(tooltip);
+            }
+        }
+
+        auto* pcAudio = tipBar->findChild<QPushButton*>(QStringLiteral("pcAudioBtn"));
+        check(pcAudio && pcAudio->isVisible(), "caption probe finds the PC Audio button");
+        if (pcAudio && pcAudio->isVisible()) {
+            const QString tooltip = pcAudio->toolTip();
+            pcAudio->setToolTip(QString());
+            checkClientControl(pcAudio);
+            pcAudio->setToolTip(tooltip);
+        }
+        tipBar->setOperatorTransmitting(false);
+    }
+
     // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──
     {
         // Rects measured on Windows 10: the expanded frame keeps an 8 px resize
