@@ -14,7 +14,7 @@
 
 namespace AetherSDR {
 
-static constexpr const char* kWsjtxOverlayKey = "WsjtxOverlay";
+constexpr const char* kWsjtxOverlayKey = "WsjtxOverlay";
 
 // Read/write the whole config object.
 inline QJsonObject wsjtxOverlayRead()
