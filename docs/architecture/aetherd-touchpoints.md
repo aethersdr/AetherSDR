@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 285 touchpoint headers (230 core, 55 models) — 285/285 tagged, 0/285 converted.
+**Totals:** 286 touchpoint headers (231 core, 55 models) — 286/286 tagged, 0/286 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -193,6 +193,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/WfmSettings.h` | 1 | ui-support — Client-side settings blob (AppSettings JSON) storing WFM audio output device id + legacy-key migration. | unconverted |
 | `core/WindowsFirewall.h` | 1 | ui-support — Reads Windows Defender Firewall's rules for the AetherSDR executable and runs the UAC netsh fix. Host-OS plumbing, not radio state; read only by the Network Diagnostics Windows Firewall page. | unconverted |
 | `core/WsjtxClient.h` | 2 | ui-support — UDP listener for local WSJT-X app decodes/status; desktop-side integration feeding the universal spot surface | unconverted |
+| `core/WsjtxOverlayConfig.h` | 4 | ui-support — AppSettings-backed per-pan WSJT-X Rx/Tx overlay toggles and spot-posting switch; pure desktop preference, no radio state | unconverted |
 | `core/WsprAgent.h` | 2 | peripheral(wspr-agent) — The WSPR receiver's status, spots and settings (types, bounded JSON parsing, the settings body, the SpotHub DxSpot) and its pinned package. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h). | unconverted |
 | `core/WsprAgentClient.h` | 4 | peripheral(wspr-agent) — Polls the WSPR receiver's /v1/status and reads and saves its /v1/config at the radio's LAN or tailnet-shim address. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h). | unconverted |
 | `core/WsprBeacon.h` | 1 | universal — WSPR type-1 message encoder and sample-accurate continuous-phase 4-FSK generator (lock-free, allocation-free on the audio thread). Radio-agnostic engine DSP. | unconverted |
