@@ -10129,7 +10129,8 @@ void RadioModel::createRxAudioStream()
                 if (std::exchange(m_remoteRxRestartAfterCancel, false) && controlSessionCurrent(session)) {
                     QTimer::singleShot(0, this, [this, session, revision] {
                         if (controlSessionCurrent(session) && m_remoteRxRequestRevision == revision
-                            && AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True") {
+                            && (AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True"
+                                || lineOutAudioStreamDemanded())) {
                             createRxAudioStream();
                         }
                     });
@@ -10179,7 +10180,6 @@ void RadioModel::setLineOutAudioRequested(bool requested)
     if (m_lineOutAudioRequested == requested) { return; }
     m_lineOutAudioRequested = requested;
     if (lineOutAudioStreamDemanded()) {
-        m_rxAudio.removeRequested = false;
         createRxAudioStream();
     } else if (AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True") {
         removeRxAudioStream();
@@ -10197,7 +10197,6 @@ void RadioModel::setLineOutPcAudioOffConsent(bool enabled)
     if (m_lineOutPcAudioOffConsent == enabled) { return; }
     m_lineOutPcAudioOffConsent = enabled;
     if (lineOutAudioStreamDemanded()) {
-        m_rxAudio.removeRequested = false;
         createRxAudioStream();
     } else if (AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True") {
         removeRxAudioStream();
