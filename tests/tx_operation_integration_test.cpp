@@ -210,8 +210,17 @@ public:
     {
         return radio.m_pendingCallbacks.isEmpty() ? 0 : radio.m_pendingCallbacks.cbegin().key();
     }
+    static void primeInertSession(RadioModel& radio)
+    {
+        radio.m_connection->m_state.store(ConnectionState::Connected);
+        radio.m_txSessionClosing = false;
+        radio.m_sessionCommands = SessionCommandGuard::create();
+        radio.m_sessionWire = radio.m_connection;
+        radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
+    }
     static void beginMultiFlexProbe(RadioModel& radio)
     {
+        primeInertSession(radio);
         radio.peekForMultiFlexConflictThen([] {});
     }
     static bool hasMultiFlexContinuation(const RadioModel& radio)
@@ -221,11 +230,13 @@ public:
     static void disconnectClientsThen(RadioModel& radio, const QList<quint32>& handles,
                                       std::function<void()> continuation)
     {
+        primeInertSession(radio);
         radio.disconnectClientHandlesThen(handles, std::move(continuation));
     }
     static void primeGuiRegistration(RadioModel& radio, PanadapterStream& stream,
                                      QStringList& commands)
     {
+        primeInertSession(radio);
         radio.m_family = QStringLiteral("flex");
         radio.m_panStream = &stream;
         radio.m_connection->m_commandSinkForTest =
