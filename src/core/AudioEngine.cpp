@@ -141,6 +141,8 @@ constexpr qint64 kTxPostChainEmitMinIntervalMs = 8;
 constexpr qint64 kRxPostChainEmitMinIntervalMs = 8;
 constexpr int kAutomationAudioCaptureMaxDurationMs = 15000;
 constexpr qsizetype kAutomationAudioCaptureMaxBytes = 64 * 1024 * 1024;
+constexpr qint64 kLineOutDrainIntervalMs = 10;
+constexpr qint64 kLineOutMaxDrainCatchUpMs = 50;
 // WDSP/Thetis runs EMNR at 4096/4 with 48 kHz DSP audio. Geometry sweeps at
 // AetherSDR's 24 kHz RX DSP rate show that 1024/4 is the better tradeoff for
 // this implementation: 42.7 ms window, 10.7 ms hop, and 23.4 Hz bin spacing.
@@ -2028,10 +2030,18 @@ AudioEngine::AudioEngine(QObject* parent)
     m_rxTimer = new QTimer(this);
     m_rxTimer->setTimerType(Qt::PreciseTimer);
     m_rxTimer->setInterval(10);
+    m_lineOutDrainClock.start();
     connect(m_rxTimer, &QTimer::timeout, this, [this]() {
+        const qint64 elapsedDrainMs = m_lineOutDrainClock.restart();
         retireInvalidPcmSources();
         if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen()
             || m_audioSink->state() == QAudio::StoppedState) {
+            if (m_lineOutCaptureEnabled) {
+                const int drainMs = static_cast<int>(std::clamp(
+                    elapsedDrainMs, kLineOutDrainIntervalMs,
+                    kLineOutMaxDrainCatchUpMs));
+                drainRxAudio(audioBytesForMsAtRate(m_rxOutputRate.load(), drainMs));
+            }
             return;
         }
         drainRxAudio(m_audioSink->bytesFree());
@@ -2044,7 +2054,7 @@ AudioEngine::AudioEngine(QObject* parent)
 void AudioEngine::drainRxAudio(qsizetype freeBytes)
 {
     retireInvalidPcmSources();
-    if (!m_audioDevice || !m_audioDevice->isOpen()) {
+    if ((!m_audioDevice || !m_audioDevice->isOpen()) && !m_lineOutCaptureEnabled) {
         return;
     }
 
@@ -2718,10 +2728,13 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
 
         // Recheck after processing, before exposing a mixed chunk. If an epoch
         // was revoked during DSP, none of that chunk may reach the device.
-        if (retireInvalidPcmSources() || !m_audioDevice) {
+        if (retireInvalidPcmSources() || (!m_audioDevice && !m_lineOutCaptureEnabled)) {
             return;
         }
-        len = m_audioDevice->write(chunk);
+        captureLineOutAudio(chunk, sampleRate);
+        if (retireInvalidPcmSources()) { return; }
+        len = m_audioDevice && m_audioDevice->isOpen()
+            ? m_audioDevice->write(chunk) : chunk.size();
         if (len > 0) {
             const qsizetype capturedBytes =
                 alignedStereoFloatBytes(
@@ -4420,10 +4433,89 @@ void AudioEngine::applyPendingRxSinkRate()
     }
 }
 
+void AudioEngine::setLineOutCaptureEnabled(bool enabled)
+{
+    m_lineOutCaptureEnabled = enabled;
+    if (enabled && !m_audioDevice) { setRxDeviceRate(48000); }
+    if (!enabled) { resetLineOutCapture(); }
+}
+
+void AudioEngine::resetLineOutCapture()
+{
+    m_lineOutProducer.invalidate();
+    m_lineOutProducerStarted = false;
+    m_lineOutDeviceRate = 0;
+    m_lineOutLeftResampler.reset();
+    m_lineOutRightResampler.reset();
+}
+
+void AudioEngine::captureLineOutAudio(const QByteArray& pcm, int sampleRate)
+{
+    constexpr qsizetype frameBytes = 2 * sizeof(float);
+    if (!m_lineOutCaptureEnabled || sampleRate < 8000 || sampleRate > 384000 || pcm.isEmpty()
+        || pcm.size() % frameBytes != 0 || pcm.size() / frameBytes > PcmFrame::kMaxFrames) { return; }
+    const bool transmitting = m_radioTransmitting.load();
+    if (m_lineOutDeviceRate != sampleRate || m_lineOutCaptureTransmitting != transmitting) {
+        resetLineOutCapture();
+        m_lineOutDeviceRate = sampleRate;
+        m_lineOutCaptureTransmitting = transmitting;
+    }
+    QVector<float> samples(pcm.size() / sizeof(float));
+    std::memcpy(samples.data(), pcm.constData(), static_cast<std::size_t>(pcm.size()));
+    if (!std::ranges::all_of(samples, [](float sample) { return std::isfinite(sample); })) { return; }
+    const auto publish = [this, transmitting](QVector<float> output, int rate) {
+        const PcmFormat format{rate, PcmLayout::Stereo};
+        if (!m_lineOutProducerStarted) {
+            if (!m_lineOutProducer.start(PcmPurpose::Speaker, -1, format)) { return; }
+            m_lineOutProducerStarted = true;
+        }
+        const auto frame = m_lineOutProducer.produce(std::move(output));
+        if (frame) { emit lineOutPcmReady(*frame, transmitting); }
+    };
+    if (sampleRate == 24000 || sampleRate == 48000) {
+        publish(std::move(samples), sampleRate);
+        return;
+    }
+    constexpr int blockFrames = 4096;
+    if (!m_lineOutLeftResampler) {
+        m_lineOutLeftResampler = std::make_unique<Resampler>(sampleRate, 48000, blockFrames);
+        m_lineOutRightResampler = std::make_unique<Resampler>(sampleRate, 48000, blockFrames);
+    }
+    const qsizetype frames = samples.size() / 2;
+    for (qsizetype offset = 0; offset < frames;) {
+        const int count = static_cast<int>(std::min<qsizetype>(blockFrames, frames - offset));
+        QVector<float> left(count);
+        QVector<float> right(count);
+        for (int index = 0; index < count; ++index) {
+            left[index] = samples[(offset + index) * 2];
+            right[index] = samples[(offset + index) * 2 + 1];
+        }
+        const QByteArray leftOutput = m_lineOutLeftResampler->process(left.constData(), count);
+        const QByteArray rightOutput = m_lineOutRightResampler->process(right.constData(), count);
+        if (leftOutput.size() != rightOutput.size()) { resetLineOutCapture(); return; }
+        const qsizetype outputFrames = leftOutput.size() / sizeof(float);
+        if (outputFrames > 0) {
+            QVector<float> output(outputFrames * 2);
+            for (qsizetype index = 0; index < outputFrames; ++index) {
+                std::memcpy(&output[index * 2], leftOutput.constData() + index * sizeof(float), sizeof(float));
+                std::memcpy(&output[index * 2 + 1], rightOutput.constData() + index * sizeof(float), sizeof(float));
+            }
+            publish(std::move(output), 48000);
+        }
+        offset += count;
+    }
+}
+
 void AudioEngine::stopRxStream()
 {
     stopSidetoneStream();
     stopQuindarLocalSink();
+    if (m_lineOutCaptureEnabled) {
+        closeRxSink();
+        if (m_rxOutputRate.load() != 48000) { setRxDeviceRate(48000); }
+        emit rxStopped();
+        return;
+    }
     resetRxChainStateForSourceSwitch();
     m_rxBuffer.clear();
     m_rxPackets.clear();
@@ -4457,6 +4549,7 @@ void AudioEngine::stopRxStream()
 
 void AudioEngine::closeRxSink()
 {
+    resetLineOutCapture();
     ++m_rxSinkGeneration;
     m_pendingRxSinkRate.reset();
     m_rxSinkProducerRate = 0;
@@ -5550,7 +5643,7 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
 void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
                                      RxAudioBuffer targetBuffer)
 {
-    if (!m_audioDevice) return;  // PC audio disabled
+    if (!m_audioDevice && !m_lineOutCaptureEnabled) return;
     m_lastAudioFeedTime.start();  // reset liveness watchdog (#1411)
 
     // Source callbacks queue stereo PCM at their declared producer rate. With NR2 enabled,
@@ -5601,7 +5694,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                                           RxDspSource source,
                                           ExternalRxAudioSourceState* externalSource)
 {
-    if (!m_audioDevice) return;  // PC audio disabled
+    if (!m_audioDevice && !m_lineOutCaptureEnabled) return;
 
     const auto sourcePan = [this, externalSource]() {
         return externalSource ? externalSource->pan : m_rxPan.load();
@@ -5632,15 +5725,16 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
 
     // Pre-DSP receive-presentation feed: nothing below has touched `pcm` yet,
     // so this is the one place every source's audio exists without client DSP.
-    // It carries the same open-sink and transmit-gate conditions as the
-    // post-DSP emit in writeAudio(), so both feeds go quiet together. It does
-    // NOT wait on an enabled NR processor that is still preparing (the early
-    // returns below) — nothing in this block depends on one.
+    // It carries the same sink-or-Line-Out-capture and transmit-gate conditions
+    // as the post-DSP emit in writeAudio(), so both feeds go quiet together.
+    // It does NOT wait on an enabled NR processor that is still preparing (the
+    // early returns below) — nothing in this block depends on one.
     //
     // Channels is 2 because every caller hands this function whole interleaved
     // stereo frames at the producer rate; see the drain loops in
     // drainRxAudio() and the frame alignment in the feed paths.
-    if (m_audioDevice->isOpen() && !txPresentationGated) {
+    if (((m_audioDevice && m_audioDevice->isOpen()) || m_lineOutCaptureEnabled)
+        && !txPresentationGated) {
         emit receivePresentationPreDspAudioReady(
             source == RxDspSource::KiwiSdr ? QStringLiteral("kiwi")
                                            : QStringLiteral("flex"),
@@ -5669,7 +5763,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                        txPresentationGated, bypassRxChainForTx](
                           const QByteArray& data,
                           bool applyOutputPan = false) {
-        if (!m_audioDevice || !m_audioDevice->isOpen()) return;
+        if ((!m_audioDevice || !m_audioDevice->isOpen()) && !m_lineOutCaptureEnabled) return;
         ClientEq* eq = auxiliaryEffects ? &auxiliaryEffects->eq() : m_clientEqRx.get();
         ClientGate* gate = auxiliaryEffects ? &auxiliaryEffects->gate() : m_clientGateRx.get();
         ClientComp* comp = auxiliaryEffects ? &auxiliaryEffects->comp() : m_clientCompRx.get();

@@ -120,6 +120,7 @@ int main()
     {
         const QStringList fields = {"mode", "offsetDir", "toneMode"};
         QStringList invalid = {"USB C2|xmit 1", "USB\nC2|xmit 1", " USB", "USB ",
+                               " fdvl ", "F\nD\rV\tU",
                                "USB=FM", "USB|FM", QString(65, QLatin1Char('A')),
                                QStringLiteral("USB") + QChar(0x7f),
                                QStringLiteral("USB") + QChar(0xa0),
