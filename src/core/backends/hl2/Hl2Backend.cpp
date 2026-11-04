@@ -1896,6 +1896,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {};
     c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
+    c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};

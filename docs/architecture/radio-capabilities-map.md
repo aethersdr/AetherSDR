@@ -73,8 +73,20 @@ radio copy.
 |---|---|---|---|---|---|---|---|
 | `radioSetupControl` | All implemented `RadioSetupRequest` fields, including physical outputs | absent | absent | absent | Lineout gain/mute | absent | `RadioModel::requestRadioSetup` admission; Radio Setup timing and maximum-power availability; existing output setters and controller requests |
 | `spotControl` | Add, remove, clear, trigger | absent | absent | absent | absent | absent | `RadioModel::requestSpot` and its session/epoch-fenced queue; local/passive, TCI and memory routes remain separate |
+| `cwReceiveControl` | Once, Start, Stop | absent | absent | absent | absent | absent | `RadioModel::requestCwAutoTune`; owned, current slice and SmartSDR+ eligibility for starts; existing-loop Stop remains available for cleanup |
 | `panControl` | Band zoom, segment zoom, receive antenna | absent | absent | absent | absent | absent | `RadioModel::requestPanControl`, exact pan identity and the existing zoom availability gate |
 | `slicePresetControl` | Step, repeater offset, tone mode/value | absent | absent | absent | absent | absent | `RadioModel::requestSlicePreset`; absent fields remain unchanged. Client-owned step still applies locally where no command plane exists |
+
+### Radio administration and CW receive auto-tune
+
+Radio administration uses typed `RemoteOnEnabled` and `MultiFlexEnabled` setup
+fields and the existing `canReboot` capability paired with `requestRadioReboot`.
+Settings require an initial radio observation. Requested values and CW loop
+intent are separate from confirmed radio state; ACK does not fabricate status.
+Administration writes carry a bounded operation guard and the original transport
+generation across the LAN queue or WAN writer. Reconnect, owner retirement and
+superseding edits cancel pending work. Reboot recovery is bounded to the original
+radio. None of these controls extends daemon RPC permissions or permits TX.
 
 ### Radio automatic AGC threshold
 

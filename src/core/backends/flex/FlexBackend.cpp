@@ -698,6 +698,8 @@ RadioCapabilities FlexBackend::capabilities() const
         setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
     }
     caps.radioSetupControl = setup;
+    caps.cwReceiveControl = CwReceiveControl{{CwAutoTuneAction::Once,
+        CwAutoTuneAction::Start, CwAutoTuneAction::Stop}};
     caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
                                     SpotAction::Clear, SpotAction::Trigger}};
     caps.panControl = PanControl{{PanControlField::BandZoom, PanControlField::SegmentZoom,
