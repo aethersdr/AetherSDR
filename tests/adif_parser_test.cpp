@@ -155,6 +155,15 @@ int main(int argc, char** argv)
 
     {
         const auto recs = parse(dir,
+            "Generated log\n<CALL:5>G3ABC<BAND:3>40m<MODE:3>SSB<EOR><EOH>\n"
+            "<CALL:5>K1ABC<BAND:3>20m<MODE:2>CW<EOR>\n");
+        check(recs.size() == 1 && recs[0].callsign == "K1ABC"
+                  && recs[0].band == "20m" && recs[0].modeGroup == "CW",
+              "QSO-looking text in the initial header is not imported");
+    }
+
+    {
+        const auto recs = parse(dir,
             "Log A\n<PROGRAMID:1>A<EOH>\n"
             "<CALL:5>K1ABC<BAND:3>20m<MODE:2>CW<EOR>\n"
             "Log B\n<PROGRAMID:1>B<eoh>\n"

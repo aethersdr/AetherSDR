@@ -75,6 +75,7 @@ QVector<QsoRecord> AdifParser::parse(const QByteArray& data)
         R"(<([^<>:]+)(?::([0-9]+)(?::[A-Z])?)?>)",
         QRegularExpression::CaseInsensitiveOption);
     QHash<QString, QString> fields;
+    bool inInitialHeader = !text.isEmpty() && text.front() != u'<';
     qsizetype pos = 0;
     while (pos < text.size()) {
         const qsizetype tagStart = text.indexOf(u'<', pos);
@@ -109,6 +110,12 @@ QVector<QsoRecord> AdifParser::parse(const QByteArray& data)
         }
         if (name == "EOH") {
             fields.clear();
+            // ADIF IV.A.3 permits arbitrary text before the initial EOH.
+            // Later headers must preserve contacts from previous sections.
+            if (inInitialHeader) {
+                records.clear();
+                inInitialHeader = false;
+            }
             continue;
         }
         if (name != "EOR") {
