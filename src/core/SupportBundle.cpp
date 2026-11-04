@@ -142,12 +142,12 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
     const QString tmp = tmpDir.path();
 
     // 1. Copy log files — grab the 3 most recent timestamped logs.
-    // On Windows, aethersdr.log can be a .lnk shortcut (binary garbage).
-    // Bypasses symlink issues entirely by scanning for actual log files.
+    // Scan timestamped files so stale aliases from older Windows builds
+    // cannot be copied as binary shortcut content.
     {
         QDir logDir(QFileInfo(logMgr.logFilePath()).absolutePath());
         QStringList logs = logDir.entryList(
-            {"aethersdr-*.log", "aethersdr.log"}, QDir::Files, QDir::Time);
+            {"aethersdr-*.log"}, QDir::Files, QDir::Time);
         int copied = 0;
         for (const auto& name : logs) {
             if (copied >= 3) break;

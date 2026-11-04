@@ -1,6 +1,7 @@
 #include "LogManager.h"
 #include "AppSettings.h"
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -10,6 +11,13 @@
 #include <QMutexLocker>
 #include <QStandardPaths>
 #include <QTime>
+
+#ifdef Q_OS_UNIX
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <unistd.h>
+#endif
 
 namespace AetherSDR {
 
@@ -239,12 +247,9 @@ bool LogManager::startLogging(const QString& path, bool mirrorToStderr)
     const RetentionConfig cfg = retentionConfig();
     const qint64 maxBytes = static_cast<qint64>(cfg.activeLogMaxMb) * 1024 * 1024;
 
-    // Rotation callback runs on the writer thread. It picks a fresh
-    // timestamped path under the same dir, updates the active path, and
-    // re-points the aethersdr.log symlink so the Support dialog and
-    // support-bundle scan continue to find the live file. Writer hands us
-    // the closed file via currentPath; we never touch the writer's file
-    // handle here. (#2498)
+    // Rotation runs on the writer thread and publishes the timestamped path
+    // used by Support and bundles. The POSIX alias is for external tools.
+    // currentPath names the closed file; its handle stays with the writer.
     m_writer.setRotationConfig(maxBytes,
         [this](const QString& currentPath) -> QString {
             const QString dir = QFileInfo(currentPath).absolutePath();
@@ -259,16 +264,44 @@ bool LogManager::startLogging(const QString& path, bool mirrorToStderr)
 
             setActiveLogFilePath(candidate);
 
-            const QString symlink = dir + "/aethersdr.log";
-            QFile::remove(symlink);
-            QFile::link(candidate, symlink);
+            updateLatestLogAlias(candidate);
             return candidate;
         });
 
     if (!m_writer.start(path, mirrorToStderr))
         return false;
 
+    updateLatestLogAlias(path);
     return true;
+}
+
+void LogManager::updateLatestLogAlias(const QString& path)
+{
+    const QFileInfo logFile(path);
+    // Callers that log directly to the legacy name must keep their live file.
+    if (logFile.fileName() == QStringLiteral("aethersdr.log")) {
+        return;
+    }
+    const QString alias = logFile.absolutePath() + QStringLiteral("/aethersdr.log");
+#ifdef Q_OS_UNIX
+    // A same-directory rename keeps the latest-log symlink replacement atomic.
+    const QByteArray aliasBytes = QFile::encodeName(alias);
+    const QByteArray tmpBytes = QFile::encodeName(alias + QStringLiteral(".new"));
+    const QByteArray targetBytes = QFile::encodeName(logFile.absoluteFilePath());
+    ::unlink(tmpBytes.constData());
+    if (::symlink(targetBytes.constData(), tmpBytes.constData()) != 0) {
+        qWarning("failed to create temp log symlink: %s", strerror(errno));
+    } else if (::rename(tmpBytes.constData(), aliasBytes.constData()) != 0) {
+        qWarning("failed to rename log symlink into place: %s", strerror(errno));
+        ::unlink(tmpBytes.constData());
+    }
+#elif defined(Q_OS_WIN)
+    // QFile::link creates a binary shell shortcut on Windows, even with a
+    // .log name. Remove aliases left by older installs; use logFilePath().
+    if (QFileInfo::exists(alias) && !QFile::remove(alias)) {
+        qWarning("failed to remove legacy log shortcut");
+    }
+#endif
 }
 
 void LogManager::shutdownLogging()
