@@ -75,8 +75,7 @@ from pathlib import Path
 # drop the number here in the same commit. When a file reaches 0, delete its row.
 BASELINE = {
     # ---- models ----
-    "src/models/RadioModel.cpp": 79,
-    "src/models/CwxModel.cpp": 9,
+    "src/models/RadioModel.cpp": 73,
     "src/models/DaxIqModel.cpp": 4,
     "src/models/EqualizerModel.cpp": 4,
     "src/models/FlexWaveformModel.cpp": 3,
@@ -152,6 +151,7 @@ ABOVE_SEAM_DIR_FLOOR = 20
 # to catch a reintroduction of its retired raw-command helper.
 PLANE_HELPER_FILES = {
     "src/models/RadioModel.cpp",
+    "src/models/RadioModel_TxCoordinator.cpp",
     "src/models/SliceModel.cpp",
 }
 

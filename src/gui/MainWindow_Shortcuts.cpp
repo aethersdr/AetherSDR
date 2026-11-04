@@ -10,6 +10,7 @@
 #include "PttHoldKeyStep.h"
 #include "ShortcutRefusalNotice.h"
 #include "StatusBarNotice.h"
+#include "TwoToneTuneGate.h"
 #include "core/IambicKeyer.h"
 
 #include <QApplication>
@@ -1418,12 +1419,26 @@ void MainWindow::registerShortcutActions()
                     m_radioModel.transmitModel().setTuneMode(QStringLiteral("single_tone"));
                 }
             } else {
+                // Refuse before any keying call: a radio with no two-tone
+                // generator would key a single carrier.
+                if (!twoToneTuneMayStart(m_radioModel, [this](const QString& why) {
+                        statusBar()->showMessage(why, 6000);
+                    })) {
+                    return;
+                }
                 (void)input.start(true);
             }
         });
     m_shortcutManager.registerAction("vox_toggle", "VOX Toggle", "TX",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
+            // Same refusal as dax_toggle: a radio that declares no VOX would
+            // flip the optimistic voxEnable() and transmit nothing.
+            if (!m_radioModel.voxAvailable()) {
+                qCWarning(lcDevices) << "vox_toggle refused: this radio has no VOX";
+                showUnsupportedControlNotice();
+                return;
+            }
             auto& tx = m_radioModel.transmitModel();
             tx.setVoxEnable(!tx.voxEnable());
         }, /*autoRepeat=*/false, /*keysTx=*/true);
@@ -1452,6 +1467,11 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("tx_monitor_toggle", "TX Monitor Toggle", "TX",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
+            if (!m_radioModel.transmitMonitorAvailable()) {
+                qCWarning(lcDevices) << "tx_monitor_toggle refused: this radio has no transmit monitor";
+                showUnsupportedControlNotice();
+                return;
+            }
             auto& tx = m_radioModel.transmitModel();
             tx.setSbMonitor(!tx.sbMonitor());
         });

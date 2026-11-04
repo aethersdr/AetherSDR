@@ -31,6 +31,7 @@
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/MetisClient.h"
 #include "core/RadioDiscovery.h"
 #include "core/TciProtocol.h"
 #include "core/TciServer.h"
@@ -75,12 +76,36 @@ static RadioInfo flexInfo()
     return i;
 }
 
+namespace hl2 {
+struct MetisClientTestAccess {
+    static void setStreaming(MetisClient& client) { client.m_running = true; }
+};
+// Reuses an existing friend rather than adding a production test hook.
+struct Hl2TxGateTestAccess {
+    // Link state only; no Metis client is started. Typed model controls
+    // dispatch only while the radio is up.
+    static void setConnected(Hl2Backend& backend, bool connected)
+    {
+        backend.m_connected = connected;
+    }
+    // A running session without a socket: a keyed radio has one, and the
+    // backend refuses a key without it.
+    static void startSession(Hl2Backend& backend)
+    {
+        QMetaObject::invokeMethod(backend.m_metis, [metis = backend.m_metis] {
+            MetisClientTestAccess::setStreaming(*metis);
+        }, Qt::BlockingQueuedConnection);
+    }
+};
+}  // namespace hl2
+
 // The TX-signaling contract is independent of connection establishment. Use
-// the production backend seam without opening a Metis transport or pretending
-// an unanswered TEST-NET connection is a completed radio session.
+// the production backend seam without opening a Metis transport; the client is
+// only marked as streaming, because a key needs a running session.
 static void prepareTxFixture(RadioModel& model)
 {
     model.setBackendForTest(std::make_unique<hl2::Hl2Backend>(), QStringLiteral("hl2"));
+    hl2::Hl2TxGateTestAccess::startSession(*static_cast<hl2::Hl2Backend*>(model.backend()));
     if (!model.automationApplySliceFixture(0, QStringLiteral("A")) || !model.slice(0)) {
         qFatal("Could not install the TX slice fixture");
     }
@@ -649,17 +674,6 @@ static void testSeamBackendCannotWedgeOnVfoB()
           "a refused VFO-B tune leaves no route transition in flight");
 }
 
-namespace hl2 {
-// Reuses an existing friend rather than adding a production test hook.
-struct Hl2TxGateTestAccess {
-    // Link state only; no Metis client is started. Typed model controls
-    // dispatch only while the radio is up.
-    static void setConnected(Hl2Backend& backend, bool connected)
-    {
-        backend.m_connected = connected;
-    }
-};
-}  // namespace hl2
 
 // promoteTxSliceAndContinue() has the same shape of trap: `slice set N tx=1` is
 // Flex text with no seam counterpart, and every caller opens a route transition
