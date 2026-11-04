@@ -59,12 +59,31 @@ public:
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    using AdministrationCommandSink = std::function<bool(const QString&,
+        const RadioControlCompletion&, const RadioControlFence&, const std::function<void()>&)>;
+    void setAdministrationCommandSink(AdministrationCommandSink sink)
+    { m_administrationSink = std::move(sink); }
+    ReceiveDispatch requestRadioReboot(const RadioControlCompletion& completion,
+        const RadioControlFence& current, const std::function<void()>& written) override;
+    ReceiveDispatch requestCwAutoTune(int sliceId, CwAutoTuneAction action,
+        const RadioControlCompletion& completion, const RadioControlFence& current) override;
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
     void setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink);
+    // Queue admission and radio reply are separate. Replies run on the owner
+    // thread; current is an immutable worker-safe fence at the terminal writer.
+    using CwxCommandSink = std::function<bool(const QString&, const TxCoordinator::Command&,
+                                             const RadioControlFence&, CommandReply)>;
+    void setCwxCommandSink(CwxCommandSink sink) { m_cwxSink = std::move(sink); }
+    // Operator configuration has a session/edit fence, never a TX generation.
+    using CwxConfigurationSink = std::function<bool(const QString&, const RadioControlFence&)>;
+    void setCwxConfigurationSink(CwxConfigurationSink sink) { m_cwxConfigurationSink = std::move(sink); }
+    ReceiveDispatch requestCwTextControl(const CwTextRequest& request,
+        const TxCoordinator::Command& command, const RadioControlFence& current,
+        const CwTextCompletion& completion = {}) override;
     // Slice verbs (setSliceFrequency/Mode/Filter) route through THIS sink, which
     // RadioModel wires to its TX-inhibit-guarded sendSliceCommand — so keeping
     // the encode's TX safety above the seam (RFC §6). Falls back to the generic
@@ -138,6 +157,9 @@ public:
     ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest& request,
                                        const RadioControlCompletion& completion = {},
                                        const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestNtpSource(const NtpSourceRequest& request,
+                                     const RadioControlCompletion& completion = {},
+                                     const RadioControlFence& current = {}) override;
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request) override;
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                        const RadioSetupCompletion& completion = {}) override;
@@ -218,6 +240,15 @@ public:
     // RadioModel residual). Satellite counts are numeric; the rest keep the
     // radio's string form (units included).
     void decodeGpsStatus(const QString& rawBody);
+    // Decode a raw status body (after "S<handle>|") whose object this backend
+    // parses from the raw line itself; false when it is not one of them. Today
+    // that is `ntp_sources`, whose quoted description keeps its spaces only in
+    // the raw line.
+    bool decodeRawStatus(const QString& body);
+    // Decode one `ntp_sources id=<id> …` status body (after "ntp_sources ") into
+    // a present-only NtpSourceDelta and emit ntpSourceChanged. The description is
+    // quoted and may hold spaces (FlexLib NtpSource.cs SplitStatusTokens).
+    void decodeNtpSourceStatus(const QString& rawBody);
     // Decode a Flex memory-slot status kv-set (keyed by slot index) into a
     // normalized MemoryDelta and emit memoryChanged (aetherd RFC 2.3 — RadioModel
     // residual). Sets delta.removed for "in_use=0" / a bare "removed"; carries
@@ -246,6 +277,7 @@ private:
     std::function<bool(const QString&, CommandReply)> m_sink;
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
+    AdministrationCommandSink m_administrationSink;
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};
     quint64 m_nicknameAppliedRequest{0};
@@ -253,6 +285,8 @@ private:
     QMap<int, quint64> m_tuneOutputRequests;
     QSet<int> m_tuneOutputKnownBands;
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
+    CwxCommandSink m_cwxSink;
+    CwxConfigurationSink m_cwxConfigurationSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
     bool firmwareAtLeast(const QVersionNumber& minimum) const;

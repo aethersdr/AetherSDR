@@ -6,6 +6,8 @@
 // header rather than from the wire code.
 #include "core/backends/anan/AnanSettings.h"
 #include "RadioSetupDialog.h"
+#include <utility>
+#include "NtpSourcesPage.h"
 #include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
@@ -695,13 +697,6 @@ static void showCopiedPopup(QWidget* anchor)
     QTimer::singleShot(1000, popup, &QLabel::close);
 }
 
-// A status line that takes no room while it has nothing to say.
-static void setShownText(QLabel* label, const QString& text)
-{
-    label->setText(text);
-    label->setVisible(!text.isEmpty());
-}
-
 static QWidget* makeInfoField(const QString& labelText, QWidget* valueWidget,
                               int labelWidth = kInfoLeftLabelWidth)
 {
@@ -1197,7 +1192,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
       m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter),
-      m_kpa1500(kpa1500), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100), m_rfkit(rfkit)
+      m_kpa1500(kpa1500), m_rfkit(rfkit), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100)
 {
     theme::setContainer(this, QStringLiteral("canon/radioSetup"));
     // Size and position persist under the key it used as a PersistentDialog,
@@ -1307,6 +1302,11 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(radioCategory, QStringLiteral("GPS"),
         QStringLiteral("gpsdo satellite location oscillator time"), [this] { return buildGpsTab(); });
     m_gpsPageIndex = m_pageIndexes.value(QStringLiteral("GPS"));
+    // Shown on every radio; dimmed with the reason where the radio keeps no NTP
+    // sources of its own (#6953).
+    addPage(radioCategory, QStringLiteral("Time"),
+        QStringLiteral("ntp time server clock pool chrony sync"),
+        [this] { return new NtpSourcesPage(*m_model); });
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),
@@ -1640,7 +1640,9 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
         m_flexControlInfoField->setVisible(!connected || caps.hasFlexControlIntegration);
     }
     if (m_multiFlexInfoField) {
-        m_multiFlexInfoField->setVisible(!connected || caps.hasMultiClientSessions);
+        applyCapabilitySurfaceAvailability(m_multiFlexInfoField, connected,
+            caps.radioSetupControl && caps.radioSetupControl->supports(RadioSetupField::MultiFlexEnabled),
+            tr("Not supported by this radio"));
     }
     if (m_remoteOnInfoField) {
         applyCapabilitySurfaceAvailability(
@@ -1831,7 +1833,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                               m_hwVersionLabel),
                         1, 0);
 
-        m_remoteOnBtn = makeToggle(m_model->remoteOnEnabled());
+        m_remoteOnBtn = makeToggle(m_model->remoteOnRequested());
+        m_remoteOnBtn->setObjectName(QStringLiteral("remoteOnEnabledButton"));
         connect(m_remoteOnBtn, &QPushButton::toggled, this, [this](bool on) {
             m_remoteOnBtn->setText(on ? "Enabled" : "Disabled");
             m_model->setRemoteOnEnabled(on);
@@ -1861,11 +1864,32 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                                kInfoRightLabelWidth);
         grid->addWidget(m_flexControlInfoField, 2, 1);
 
-        auto* mfBtn = makeToggle(m_model->multiFlexEnabled());
+        auto* mfBtn = makeToggle(m_model->multiFlexRequested());
+        mfBtn->setObjectName(QStringLiteral("radioSetupMultiFlexButton"));
         connect(mfBtn, &QPushButton::toggled, this, [this, mfBtn](bool on) {
             mfBtn->setText(on ? "Enabled" : "Disabled");
             m_model->setMultiFlexEnabled(on);
         });
+        const auto syncAdministration = [this, mfBtn] {
+            const QSignalBlocker remoteBlock(m_remoteOnBtn);
+            const QSignalBlocker multiBlock(mfBtn);
+            m_remoteOnBtn->setChecked(m_model->remoteOnRequested());
+            m_remoteOnBtn->setText(m_model->remoteOnRequested() ? "Enabled" : "Disabled");
+            mfBtn->setChecked(m_model->multiFlexRequested());
+            mfBtn->setText(m_model->multiFlexRequested() ? "Enabled" : "Disabled");
+            const QString reason = tr("Requires a connected radio with confirmed setting status.");
+            for (const auto& entry : {std::pair{m_remoteOnBtn, RadioSetupField::RemoteOnEnabled},
+                                      std::pair{mfBtn, RadioSetupField::MultiFlexEnabled}}) {
+                const bool available = m_model->administrationSettingAvailable(entry.second);
+                entry.first->setEnabled(available);
+                entry.first->setToolTip(available ? QString() : reason);
+                entry.first->setAccessibleDescription(available ? QString() : reason);
+            }
+        };
+        connect(m_model, &RadioModel::infoChanged, this, syncAdministration);
+        connect(m_model, &RadioModel::connectionStateChanged, this, syncAdministration);
+        connect(m_model, &RadioModel::capabilitiesChanged, this, syncAdministration);
+        syncAdministration();
         m_multiFlexInfoField = makeInfoField(QStringLiteral("multiFLEX:"), mfBtn,
                                              kInfoRightLabelWidth);
         grid->addWidget(m_multiFlexInfoField, 3, 1);
@@ -1885,6 +1909,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
             rebootBtn->setEnabled(connected && m_model->backendCapabilities().canReboot);
         });
         connect(rebootBtn, &QPushButton::clicked, this, [this] {
+            const RadioControlSession rebootSession = m_model->controlSession();
             const bool wan = m_model->isWan();
             const QString body = wan
                 ? QStringLiteral("Reboot the connected radio now?\n\n"
@@ -1905,8 +1930,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 || ret != QMessageBox::Ok) {
                 return;
             }
-            model->rebootRadio();
-            self->close();
+            if (model->rebootRadio(rebootSession)) { self->close(); }
         });
         m_rebootInfoField = makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
                                           kInfoLeftLabelWidth);
@@ -3983,7 +4007,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     };
 
     connect(calBtn, &QPushButton::clicked, this,
-            [this, apply, referenceHz, activeSliceHz, setStatus] {
+            [apply, referenceHz, activeSliceHz, setStatus] {
         const double ref = referenceHz();
         if (!(ref > 0.0)) {
             setStatus(QStringLiteral("Enter a reference frequency."), Tone::Warn);

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/backends/SessionCommandGuard.h"
 
 #include "CommandParser.h"
 #include "FlexDisplayStatus.h"
@@ -60,6 +61,11 @@ public:
     using ResponseCallback = std::function<void(int resultCode, const QString& body)>;
     quint32 sendCommand(const QString& command,
                         ResponseCallback callback = nullptr);
+    quint64 commandSessionGeneration() const { return m_sessionGeneration; }
+    void forgetSessionReply(quint32 sequence, quint64 generation)
+    { if (generation == m_sessionGeneration) { m_pendingCallbacks.remove(sequence); } }
+    quint32 sendAdministrationCommand(const QString& command, quint64 generation,
+        const SessionCommandGuard& guard, ResponseCallback callback);
 
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): operator decides whether
     // to accept a new cert presented during a mismatch.  Connection is
@@ -104,6 +110,7 @@ private:
     friend class FlexDisplayStatusTestAccess;
     FlexDisplayStatusSource m_displayStatusSource;
     friend class WanConnectionTestAccess;
+    friend class RadioAdministrationTestAccess;
 
     void processLine(const QString& line);
 
@@ -115,6 +122,7 @@ private:
     QString    m_wanHandle;
 
     bool    m_connected{false};
+    quint64 m_sessionGeneration{0};
     bool    m_validated{false};  // wan validate sent
     quint32 m_handle{0};
     std::atomic<quint32> m_seqCounter{1};

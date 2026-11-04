@@ -1,8 +1,10 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "CwReceiveControl.h"
 #include "SpotRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
+#include "CwTextRequest.h"
 #include "PanDisplayRequest.h"
 #include "PanLifecycleRequest.h"
 
@@ -669,6 +671,7 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    std::optional<CwReceiveControl> cwReceiveControl;
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
     std::optional<PanControl> panControl;
@@ -974,6 +977,7 @@ struct RadioCapabilities {
     int cwPitchStepHz = 10;
 
     QString cwTextKeyerName{QStringLiteral("CWX")};
+    std::optional<CwTextControl> cwTextControl;
     int cwTextMinWpm = 5;
     int cwTextMaxWpm = 100;
     int cwTextMaxMessageChars = 0;  // 0 = backend has no fixed whole-message limit
@@ -1007,6 +1011,12 @@ struct RadioCapabilities {
     // action; meaningless unless hasWaveforms is also true.
     struct WaveformEnvControl {};
     std::optional<WaveformEnvControl> waveformEnvControl;
+    // The radio keeps its own list of NTP time sources that a client can list,
+    // add, remove, enable and disable (Flex `ntp_sources …`, SmartSDR 4.3.16+ on
+    // the BigBend platform: FLEX-8000, Aurora, ML-9600, CL-9300). Engaged gates NtpSourceRequest and the Radio Setup Time
+    // page; maxSources is the radio's ceiling.
+    struct NtpSourceControl { int maxSources{10}; };
+    std::optional<NtpSourceControl> ntpSourceControl;
 
     // Several GUI clients can hold independent sessions on the radio at once,
     // each with its own slices and audio streams (SmartSDR multiFLEX). A backend

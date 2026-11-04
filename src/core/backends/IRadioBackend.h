@@ -34,11 +34,13 @@
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/ReceiveCommand.h"
 #include "core/backends/ModelControlRequest.h"
+#include "core/backends/CwTextRequest.h"
 #include "core/backends/RadioSetupRequest.h"
 #include "core/backends/SpotRequest.h"
 #include "core/backends/PanControlRequest.h"
 #include "core/backends/SlicePresetRequest.h"
 #include "core/backends/ProfileRequest.h"
+#include "core/backends/NtpSourceRequest.h"
 #include "core/backends/WaveformEnvRequest.h"
 #include "core/backends/MemoryRequest.h"
 #include "core/backends/SliceLifecycleRequest.h"
@@ -185,6 +187,12 @@ public:
             || request.field == RadioSetupRequest::Field::ClientStation)
             ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
     }
+    virtual ReceiveDispatch requestRadioReboot(const RadioControlCompletion&,
+        const RadioControlFence&, const std::function<void()>&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestCwAutoTune(int, CwAutoTuneAction,
+        const RadioControlCompletion&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSpot(const SpotRequest&, const QString& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestPanControl(const QString&, const PanControlRequest&)
@@ -257,6 +265,12 @@ public:
     virtual ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest&,
                                                const RadioControlCompletion& = {},
                                                const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    // One command toward the radio's NTP time source list. Gated by
+    // capabilities().ntpSourceControl; ntpSourceChanged is the only confirmation.
+    virtual ReceiveDispatch requestNtpSource(const NtpSourceRequest&,
+                                             const RadioControlCompletion& = {},
+                                             const RadioControlFence& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestUsbCable(const UsbCableRequest&)
     { return ReceiveDispatch::Unsupported; }
@@ -820,6 +834,16 @@ public:
         Q_UNUSED(text);
         return QStringLiteral("radio has no text keyer");
     }
+    // Buffered text control is optional. Keying retains an admitted operation;
+    // operator configuration uses session/edit fences without an operation;
+    // original-intent cleanup retains its operation and never acquires one here.
+    virtual ReceiveDispatch requestCwTextControl(const CwTextRequest& request,
+        const TxCoordinator::Command& command, const RadioControlFence& current,
+        const CwTextCompletion& completion = {})
+    {
+        Q_UNUSED(request); Q_UNUSED(command); Q_UNUSED(current); Q_UNUSED(completion);
+        return ReceiveDispatch::Unsupported;
+    }
     virtual void abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) { Q_UNUSED(operation); Q_UNUSED(completion); }
     virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
     virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }
@@ -1241,6 +1265,9 @@ signals:
     // database importing/exporting flags); RadioModel routes it to TransmitModel
     // tx/mic profiles, the global-profile list, or the import/export flags.
     void profileChanged(const ProfileDelta& delta);
+
+    // Present-only status for one of the radio's NTP time sources, or its removal.
+    void ntpSourceChanged(const NtpSourceDelta& delta);
 
     // Meter definition catalog (aetherd RFC 2.3 — MeterModel touchpoint). The
     // backend decodes the vendor meter-status wire format into a typed MeterDef;

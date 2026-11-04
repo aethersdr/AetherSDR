@@ -2,9 +2,8 @@
 //
 // Four properties of this radio were true and undeclared: a 48 kHz span floor,
 // four discrete rates, one span shared by every receiver, and an uncalibrated
-// dBFS axis. A fifth, radioOwnsDbmScale, was worse than undeclared — it was
-// inheriting the permissive default, which asserts a command plane this backend
-// does not have.
+// dBFS axis. A fifth, radioOwnsDbmScale, is declared false: this backend has no
+// command plane, so a commanded dBm range can neither arrive nor be echoed.
 //
 // WHY THIS TEST EXISTS AT ALL. A capability declaration is the shape that rots
 // silently. Nothing calls it, nothing crashes when it drifts, and the only
@@ -32,6 +31,7 @@
 
 #include "TestSettingsProfile.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "gui/PanSpanControlGate.h"
 #include "gui/PanZoomModeGate.h"
@@ -168,16 +168,24 @@ int main(int argc, char** argv)
     // of RadioModel::setupBackend. Flex display status is the only
     // reader of min_dbm anywhere in the tree.
     //
-    // THE HL2'S radioOwnsDbmScale IS NOT ASSERTED HERE. Its DEFAULT is, below,
-    // which is a different fact — the one that would change every silent
-    // backend's claim at once if it moved. It is wrong for this radio and it
-    // is deliberately left undeclared: bench run d101 measured the auto-floor
-    // loop SETTLING on this radio (0.307 dB in 74 s quiescent, 0.0000 dB/s over
-    // the second half, re-settling within ~30 s after a 12 dB LNA step), and the
-    // early return in SpectrumWidget::applyNoiseFloorAutoAdjust keys on the same
-    // flag -- so declaring it would remove a loop that works. See the note in
-    // Hl2Backend::capabilities(). Asserting it here would pin a decision this
-    // change deliberately does not take.
+    check(!caps.radioOwnsDbmScale,
+          "the HL2 declares radioOwnsDbmScale FALSE: no dBm range is sent to a "
+          "backend that refuses it, so a scale drag stays local");
+    check(noiseFloorAutoAdjustAllowed(caps.radioOwnsDbmScale, caps.panBinsAbsolute()),
+          "and the auto-floor gate stays open through absolute bins (d101)");
+    {
+        // Only a SpectrumWidget-free source contract can reach the dispatch:
+        // sendDbmRangeCommand must refuse on the flag before it builds the
+        // LevelRange request, or the declaration above changes nothing.
+        const QByteArray wiring = readSource("src/gui/MainWindow_Wiring.cpp");
+        const qsizetype send = wiring.indexOf("auto sendDbmRangeCommand =");
+        const qsizetype guard = wiring.indexOf(
+            "if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {", send);
+        const qsizetype request = wiring.indexOf("PanDisplayField::LevelRange", send);
+        check(send >= 0 && guard > send && request > guard,
+              "sendDbmRangeCommand returns on !radioOwnsDbmScale before it "
+              "requests a LevelRange from the radio");
+    }
 
     // ---- the span floor and the four discrete rates ----
     //

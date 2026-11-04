@@ -500,7 +500,8 @@ void Ctr2ProxyModel::onUsbStateChanged()
             why.chop(1);
         m_stopReason = (why.isEmpty() ? QString() : why + QStringLiteral(". "))
             + tr("The CTR2 never answered. If it is still plugged in, USB mode needs CTR2-Max "
-                 "firmware v1.02.00 or later, or AetherCTR2. For other firmware, use Wi-Fi mode.");
+                 "firmware v2.00.00 or later, AetherCTR2, or CTR2-MIDI firmware with USB "
+                 "support. For other firmware, use Wi-Fi mode.");
         emit lastErrorChanged();
     }
     // Connecting means the CTR2 answered; Stopped and Error end the run.
@@ -519,8 +520,9 @@ QString Ctr2ProxyModel::noAnswerHint() const
 {
     if (!m_noAnswer || !usbActive())
         return {};
-    return tr("No answer from the CTR2. USB mode needs CTR2-Max firmware v1.02.00 or "
-              "later, or AetherCTR2. For other firmware, stop and use Wi-Fi mode.");
+    return tr("No answer from the CTR2. USB mode needs CTR2-Max firmware v2.00.00 or "
+              "later, AetherCTR2, or CTR2-MIDI firmware with USB support. For other "
+              "firmware, stop and use Wi-Fi mode.");
 }
 
 void Ctr2ProxyModel::setNoAnswerHintMs(int ms)

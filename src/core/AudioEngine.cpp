@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "TxChainLatency.h"
 #include "RxChainRunner.h"
 #include "RxClientEffects.h"
 #include <QSignalBlocker>
@@ -8201,7 +8202,7 @@ void AudioEngine::setRn2Enabled(bool on)
     emit rn2EnabledChanged(on);
 }
 
-// ─── NNR (WDSP 2.10 neural noise reduction) ──────────────────────────────────
+// ─── NNR (WDSP 2.11 neural noise reduction) ──────────────────────────────────
 // Unconditional, unlike DFNR/MNR/BNR: both trained models are compiled into
 // the vendored WDSP, so there is no library to locate and no GPU to require.
 // It is a SPEECH model — a steady carrier is attenuated ~28 dB — so callers
@@ -9503,6 +9504,8 @@ void AudioEngine::onTxAudioReady()
         if (m_audioSource) {
             observeTxCaptureState(m_audioSource->state(), bufferedBeforeDrain);
         }
+        // TCI owns TX audio: the voice processor is not on the path.
+        TxChainLatency::publishVoiceProcessorFrames(-1);
         return;
     }
 #ifdef Q_OS_MACOS
@@ -9670,7 +9673,12 @@ void AudioEngine::onTxAudioReady()
 
     // DAX TX mode: VirtualAudioBridge handles TX audio via feedDaxTxAudio().
     // Don't send mic audio — it would conflict with the DAX stream.
-    if (m_daxTxMode) return;
+    if (m_daxTxMode) {
+        // The voice processor is not on the transmit path now, so its latency
+        // is not part of the key-down budget. See TxChainLatency.h.
+        TxChainLatency::publishVoiceProcessorFrames(-1);
+        return;
+    }
 
     // ── Fixed-rate TX voice processor ───────────────────────────────────
     // Canonical mic input enters this seam at the negotiated device rate,
@@ -9690,6 +9698,9 @@ void AudioEngine::onTxAudioReady()
     const bool voiceProcessed = capturedFloat32
         ? m_txVoiceProcessor->processCapturedFloat32(data)
         : m_txVoiceProcessor->processCapturedInt16(data);
+    // Per block: RNNoise and the gate can be toggled mid-over. See
+    // TxChainLatency.h.
+    TxChainLatency::publishVoiceProcessorFrames(m_txVoiceProcessor->latencyFrames());
     if (m_txVoiceProcessor->egressRecoveryPending()
         && !m_txVoiceEgressRecoveryQueued) {
         m_txVoiceEgressRecoveryQueued = true;

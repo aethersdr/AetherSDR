@@ -10,7 +10,6 @@
 #include "core/DxClusterClient.h"
 #include "core/DxccColorProvider.h"
 #include "core/WsjtxClient.h"
-#include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
 #include "core/EibiClient.h"
 #include "core/N1MMSpotClient.h"
@@ -89,7 +88,7 @@ class DxClusterDialog : public CanonWindow {
 
 public:
     explicit DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
-                             WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
+                             WsjtxClient* wsjtxClient,
                              PotaClient* potaClient, EibiClient* eibiClient,
                              N1MMSpotClient* n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
@@ -117,8 +116,6 @@ signals:
     void rbnDisconnectRequested();
     void wsjtxStartRequested(const QString& address, quint16 port);
     void wsjtxStopRequested();
-    void spotCollectorStartRequested(quint16 port);
-    void spotCollectorStopRequested();
     void potaStartRequested(int intervalSec);
     void potaStopRequested();
     void eibiStartRequested();
@@ -187,13 +184,11 @@ private:
     QString m_potaLogPath;
     QString m_eibiLogPath;
     QString m_freedvLogPath;
-    QString m_scLogPath;
     QString m_n1mmLogPath;
 
     DxClusterClient*      m_client;
     DxClusterClient*      m_rbnClient;
     WsjtxClient*          m_wsjtxClient;
-    SpotCollectorClient*  m_spotCollectorClient;
     PotaClient*           m_potaClient;
     EibiClient*           m_eibiClient;
     N1MMSpotClient*       m_n1mmSpotClient;
@@ -234,13 +229,6 @@ private:
     QCheckBox*      m_wsjtxFilterCQ;
     QCheckBox*      m_wsjtxFilterPOTA;
     QCheckBox*      m_wsjtxFilterCallingMe;
-
-    // SpotCollector tab
-    QSpinBox*       m_scPortSpin;
-    QPushButton*    m_scStartBtn;
-    QPushButton*    m_scAutoStartBtn;
-    QLabel*         m_scStatusLabel;
-    QPlainTextEdit* m_scConsole;
 
     // POTA tab
     QSpinBox*       m_potaIntervalSpin;

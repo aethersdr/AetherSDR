@@ -327,6 +327,7 @@ static void manualMoxCancelsCwHang()
 {
     TxTestAuthority authority;
     Hl2Backend b;
+    Access::startSession(b);   // a key needs a running session
     b.setSliceMode(0, QStringLiteral("CW"));
     QSignalSpy txSpy(&b, &IRadioBackend::transmitChanged);
 

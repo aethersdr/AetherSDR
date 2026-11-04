@@ -92,7 +92,9 @@ struct InstallRig {
                               tmp.filePath(QStringLiteral("install")).toStdString(),
                               std::filesystem::copy_options::recursive, ec);
         QFile m(fixture + QStringLiteral("/release/manifest.json"));
-        m.open(QIODevice::ReadOnly);
+        if (!m.open(QIODevice::ReadOnly)) {
+            qFatal("cannot read the fixture manifest");
+        }
         const QByteArray manifest = m.readAll();
         uint8_t sig[64];
         crypto_ed25519_sign(sig, secret, reinterpret_cast<const uint8_t*>(manifest.constData()),
@@ -102,7 +104,9 @@ struct InstallRig {
         if (withBundle) {
             const QString bundle = QStringLiteral("AetherSDR-v26.10.3-Windows-x64-from-v26.10.2.update.tar");
             QFile b(fixture + QStringLiteral("/release/") + bundle);
-            b.open(QIODevice::ReadOnly);
+            if (!b.open(QIODevice::ReadOnly)) {
+                qFatal("cannot read the fixture bundle");
+            }
             put(QStringLiteral("dl/v26.10.3/") + bundle, b.readAll());
         }
         UpdateStager::setDownloadBaseForTesting(QUrl::fromLocalFile(tmp.filePath(QStringLiteral("dl"))));
@@ -113,7 +117,9 @@ struct InstallRig {
         const QString path = tmp.filePath(rel);
         QDir().mkpath(QFileInfo(path).absolutePath());
         QFile f(path);
-        f.open(QIODevice::WriteOnly | QIODevice::Truncate);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            qFatal("cannot write %s", qPrintable(path));
+        }
         f.write(data);
     }
     UpdateController::Environment env()
@@ -493,9 +499,11 @@ int main(int argc, char** argv)
         if (primary) {
             primary->click();
         }
-        QTest::qWaitFor([&] { return controller.state() == UpdateController::State::Staged; }, 20000);
+        const bool staged =
+            QTest::qWaitFor([&] { return controller.state() == UpdateController::State::Staged; }, 20000);
         app.processEvents();
-        check(controller.state() == UpdateController::State::Staged, "Install update stages the release");
+        check(staged && controller.state() == UpdateController::State::Staged,
+              "Install update stages the release");
         check(primary && primary->isVisible() && primary->text() == QLatin1String("Restart to update"),
               "staged, the primary action is Restart to update");
         check(text(*w, "updatesFootnote").contains(QLatin1String("installs when you quit")),
@@ -573,9 +581,9 @@ int main(int argc, char** argv)
         if (primary) {
             primary->click();
         }
-        QTest::qWaitFor([&] { return primary && primary->text().startsWith(QLatin1String("Get AetherSDR")); },
-                        20000);
-        check(primary && primary->text().startsWith(QLatin1String("Get AetherSDR 26.10.3")),
+        const bool fellBack = QTest::qWaitFor(
+            [&] { return primary && primary->text().startsWith(QLatin1String("Get AetherSDR")); }, 20000);
+        check(fellBack && primary->text().startsWith(QLatin1String("Get AetherSDR 26.10.3")),
               "a release that can't be prepared here falls back to the download");
         check(text(w, "updatesNote").contains(QLatin1String("Download it instead")), "the note says why");
     }
