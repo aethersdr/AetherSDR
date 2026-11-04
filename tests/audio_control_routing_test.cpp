@@ -1,5 +1,6 @@
 // Production encoders and model admission, with unopened transports only.
 #include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "PanControlTestFixture.h"
 #include "core/backends/sim/SimBackend.h"
 
@@ -7,6 +8,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QThread>
+#include <QVariant>
 #include <cstdio>
 #include <thread>
 #include <vector>
@@ -274,6 +276,67 @@ void terminalWriter()
         "production queued writer drops canceled creates, superseded EQ and retired pan binding");
 }
 
+void lineOutStreamLifecycle()
+{
+    auto& settings = AppSettings::instance();
+    const QVariant previous = settings.value("PcAudioEnabled", "True");
+    settings.setValue("PcAudioEnabled", "False");
+    for (bool toggleConsent : {false, true}) {
+        for (bool statusFirst : {false, true}) {
+            AudioFixture f;
+            TxOperationIntegrationTestAccess::acceptGuiRegistration(f.radio);
+            f.radio.setLineOutAudioRequested(true);
+            check(f.backend->writes.empty(), "Line Out cannot allocate with PC Audio off without consent");
+            f.radio.setLineOutPcAudioOffConsent(true);
+            check(!f.backend->writes.empty(), "consented Line Out allocates without PC playback");
+            if (f.backend->writes.empty()) { continue; }
+            const size_t first = f.backend->writes.size() - 1;
+            const AudioControlGuard guard = f.guards.back();
+            TxOperationIntegrationTestAccess::stopRx(f.radio);
+            check(guard.permits(), "PC playback removal preserves a pending stream demanded by Line Out");
+            if (statusFirst) { f.stream(0x100, QStringLiteral("remote_audio_rx")); }
+            if (toggleConsent) {
+                f.radio.setLineOutPcAudioOffConsent(false);
+                f.radio.setLineOutPcAudioOffConsent(true);
+            } else {
+                f.radio.setLineOutAudioRequested(false);
+                f.radio.setLineOutAudioRequested(true);
+            }
+            check(!guard.permits(), "withdrawing Line Out demand revokes the original allocation");
+            f.answer(first, 0x100);
+            events();
+            check(f.backend->commands().filter(QStringLiteral("stream create type=remote_audio_rx")).size() == 2,
+                "restored Line Out demand restarts a canceled allocation exactly once");
+            if (f.backend->commands().filter(QStringLiteral("stream create type=remote_audio_rx")).size() != 2) { continue; }
+            f.answer(f.backend->writes.size() - 1, 0x200);
+            f.stream(0x200, QStringLiteral("remote_audio_rx"));
+            f.radio.setLineOutAudioRequested(false);
+            check(f.backend->commands().contains(QStringLiteral("stream remove 0x200")),
+                "last Line Out listener releases the replacement stream when PC Audio is off");
+            check(settings.value("PcAudioEnabled").toString() == QStringLiteral("False"),
+                "Line Out never enables the PC playback preference");
+        }
+    }
+    {
+        AudioFixture f;
+        TxOperationIntegrationTestAccess::acceptGuiRegistration(f.radio);
+        f.radio.setLineOutPcAudioOffConsent(true);
+        f.radio.setLineOutAudioRequested(true);
+        check(!f.backend->writes.empty(), "Line Out cancellation fixture starts an allocation");
+        if (!f.backend->writes.empty()) {
+            const size_t first = f.backend->writes.size() - 1;
+            f.radio.setLineOutAudioRequested(false);
+            f.radio.setLineOutAudioRequested(true);
+            f.radio.setLineOutPcAudioOffConsent(false);
+            f.answer(first, 0x100);
+            events();
+            check(f.backend->commands().filter(QStringLiteral("stream create type=remote_audio_rx")).size() == 1,
+                "withdrawn consent prevents a queued Line Out restart");
+        }
+    }
+    settings.setValue("PcAudioEnabled", previous);
+}
+
 void remoteRxAndNativeAudio()
 {
     {
@@ -339,5 +402,6 @@ int main(int argc, char** argv)
     iqAndBinding();
     terminalWriter();
     remoteRxAndNativeAudio();
+    lineOutStreamLifecycle();
     return failures == 0 ? 0 : 1;
 }

@@ -944,8 +944,8 @@
           "optional": true
         }
       ],
-      "caption": "The TCI Server applet in the applet panel.",
-      "alt": "TCI Server applet. Level bars for RX1, assigned to Slice A, RX2 to RX4, unassigned, and TX, assigned to Slice A, sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server."
+      "caption": "The TCI Server applet with separate Line Out TX inclusion and PC Audio-off consent controls.",
+      "alt": "TCI Server applet with RX1 and TX level meters, unchecked Include TX (Line Out) and Line Out with PC Audio off controls, a visible mutes radio outputs warning, port 50001, and a Disabled button."
     },
     {
       "id": "dax-applet",

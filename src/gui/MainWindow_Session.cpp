@@ -2651,6 +2651,7 @@ void MainWindow::wireCatPorts()
     // through a context-bound queued connection carrying the TX permit.
     auto* tci = new TciServer(&m_radioModel, nullptr);
     tci->setAudioEngine(m_audio);
+    connect(m_titleBar, &TitleBar::pcAudioToggled, tci, &TciServer::updateLineOutCapture);
     m_session->setTciServer(tci);
     m_appletPanel->tciApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->tciApplet()->setTciServer(tciServer());
