@@ -19,9 +19,9 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | Spots | Separate DX cluster connection | Same WebSocket |
 | CW keying | Serial DTR/RTS or rigctld | Same WebSocket |
 
-<img src="/img/screens/tci-applet.png" width="248" alt="TCI Server applet. Level bars for RX1, assigned to Slice A, RX2 to RX4, unassigned, and TX, assigned to Slice A, sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server." />
+<img src="/img/screens/tci-applet.png" width="248" alt="TCI Server applet with RX1 and TX level meters, unchecked Include TX (Line Out) and Line Out with PC Audio off controls, a visible mutes radio outputs warning, port 50001, and a Disabled button." />
 
-*The TCI Server applet in the applet panel.*
+*The TCI Server applet with separate Line Out TX inclusion and PC Audio-off consent controls.*
 
 ## Setup
 
@@ -36,6 +36,8 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 |---|---|
 | **RX1 … RX8** | One row per receive channel: the slice it carries, a logarithmic output level meter and a 0-100% receive gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
+| **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
+| **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -174,6 +176,45 @@ Each **RX** slider attenuates the audio sent to every TCI client receiving that 
 The RX meter shows the **post-gain output** on a logarithmic **-60 to 0 dBFS RMS** scale. Half the bar is -30 dBFS RMS. The thumb indicates gain, not measured audio level. Moving the slider updates the meter immediately using the most recent source level. Speaker volume, speaker mute and DAX applet gain do not adjust TCI receive audio.
 
 The meter measures RMS, not peaks, so leave headroom for speech transients when adjusting recording levels in an external application. A larger logarithmic meter indication does not mean the stream has been amplified.
+
+### Line Out recording
+
+Clients start and stop a separate stereo mix with `line_out_start:<receiver>;`
+and `line_out_stop:<receiver>;`. It uses TCI stream type **4**, fixed at
+**48 kHz stereo float32**, independently of ordinary RX format negotiation.
+The receiver number labels the subscription; its content is the same complete
+playback mix, not that receiver alone. RX and Line Out can run together.
+
+**PC Audio is optional.** When PC Audio is off and the separate default-off
+**Line Out with PC Audio off** consent is disabled, the subscription remains
+active but no Line Out type-4 frames are sent; it does not transmit encoded
+silence. Enable the consent setting to allow the radio audio stream to stay
+open; while a TCI client records, this mutes the radio speaker, headphone and
+line-out outputs. With PC Audio on, Line Out keeps the incoming radio audio and
+software mixer running without opening an additional playback device. It records
+the final shared stereo mix, including the open slices' existing volume, pan and
+mute, client-side RX DSP, and other sources in that mix. PC playback master
+volume and mute do not affect the recording, including when PC Audio is off.
+The TCI RX, TX and MIC faders do not add another recording gain to Line Out.
+It does not record other applications or separate local cue/sidetone devices.
+
+**Include TX (Line Out)** is off by default. When off, Line Out sends silence
+throughout radio TX, including any simultaneous RX: TX monitor and RX cannot be
+separated after mixing. When on, it records the existing playback mix during TX
+without adding a separate TX source. On FlexRadio, enable MON yourself to hear
+and record radio-side TX monitor audio. Subscribing never changes MON, radio
+input routing or transmitter state.
+
+Switching PC Audio on or off does not stop an active Line Out subscription.
+When PC Audio is turned off without consent, the subscription remains active
+but sends no type-4 frames until PC Audio is restored or consent is enabled.
+Withdrawing consent while PC Audio is off also stops type-4 delivery without
+removing the subscription. The radio audio stream is released after the last
+Line Out listener stops unless PC playback still needs it; consent alone does
+not keep the stream open.
+Server-side `line_out_recorder_*` file recording is not implemented.
+Live TX, MON and multi-client recording qualification remain outstanding
+([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
 
 ### TX overflow handling
 
