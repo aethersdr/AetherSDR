@@ -700,8 +700,9 @@ void RadioCertification::stageControlDomain(const Options& o)
     // A level-only comparison reads "on at 0" back as 0 and certifies the
     // defect. Auto SQL writes the slice on every pan frame, so with it engaged
     // a "moved to N" here would be Auto, not a decode: decline instead.
-    const std::optional<bool> autoBefore = o.autoSquelchEngaged ? o.autoSquelchEngaged()
-                                                                : std::nullopt;
+    std::optional<bool> autoBefore;
+    if (o.autoSquelchEngaged)
+        autoBefore = o.autoSquelchEngaged();
     const QPointer<SliceModel> slice(m_radio ? m_radio->slice(0) : nullptr);
     if (autoBefore.value_or(false)) {
         m[QStringLiteral("squelch")] = QStringLiteral(

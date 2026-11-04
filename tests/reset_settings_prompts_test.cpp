@@ -53,7 +53,7 @@ void whenShown(const char* objectName, std::function<void(CanonWindow*)> act)
         CanonWindow* box = openBox(objectName);
         check(box != nullptr, "the prompt is a visible canon window");
         if (!box) return;
-        QTest::qWaitForWindowExposed(box);
+        check(QTest::qWaitForWindowExposed(box), "the prompt is exposed");
         act(box);
         if (box->isVisible()) box->reject();
     });
