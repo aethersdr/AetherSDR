@@ -3929,6 +3929,7 @@ static LRESULT frameHitCode(WindowChrome::FrameHit hit)
     case WindowChrome::FrameHit::TopRight:    return HTTOPRIGHT;
     case WindowChrome::FrameHit::BottomLeft:  return HTBOTTOMLEFT;
     case WindowChrome::FrameHit::BottomRight: return HTBOTTOMRIGHT;
+    case WindowChrome::FrameHit::Caption:     return HTCAPTION;
     case WindowChrome::FrameHit::Client:      break;
     }
     return HTCLIENT;
@@ -3940,7 +3941,8 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
     // Under the expanded client area Qt 6.12 answers WM_NCHITTEST by turning
     // the live mouse-button state into synthetic presses, which doubles real
     // clicks and closes menus as they open (#6272). Answer it here instead:
-    // the resize band at the edges, client area everywhere else.
+    // the resize band at the edges, the title bar's own background as the
+    // caption so Windows offers Snap (#6825), client area everywhere else.
     if (msg && result && msg->message == WM_NCHITTEST
         && windowFlags().testFlag(Qt::ExpandedClientAreaHint)) {
         RECT window{};
@@ -3956,7 +3958,23 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
         const QRect rect(window.left, window.top,
                          window.right - window.left, window.bottom - window.top);
-        *result = frameHitCode(WindowChrome::expandedFrameHit(point, rect, borderX, borderY));
+        // The client area's top-left in screen pixels. GetWindowRect includes
+        // the invisible DWM resize border and Qt's geometry does not, so the
+        // caption gate anchors here instead — see logicalScreenPoint().
+        POINT clientOrigin{0, 0};
+        ClientToScreen(msg->hwnd, &clientOrigin);
+        // The bar's height is in logical pixels and WM_NCHITTEST is physical.
+        // Classify the message's point even when the shell queries it away
+        // from the cursor. Interactive controls stay client, as do tooltipped
+        // handles because caption mouse moves bypass Qt's tooltip timer.
+        const bool barShown = m_titleBar && m_titleBar->isVisible();
+        const int captionHeight = WindowChrome::captionHeightForHitTest(
+            point, window.top, QPoint(clientOrigin.x, clientOrigin.y),
+            mapToGlobal(QPoint(0, 0)), barShown ? m_titleBar->height() : 0,
+            devicePixelRatioF(),
+            [this](const QPoint& logical) { return m_titleBar->isCaptionMoveAreaAt(logical); });
+        *result = frameHitCode(
+            WindowChrome::expandedFrameHit(point, rect, borderX, borderY, captionHeight));
         return true;
     }
     // The whole window is client area, inset only while maximized so nothing

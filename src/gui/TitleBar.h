@@ -122,6 +122,10 @@ public:
 
     bool isSystemMoveAreaAt(const QPoint& globalPos) const;
 
+    // Windows caption subset: interactive controls and tooltipped handles
+    // stay client so their input and Qt tooltip delivery remain available.
+    bool isCaptionMoveAreaAt(const QPoint& globalPos) const;
+
     // ── Radio tabs ──────────────────────────────────────────────────────────
     // The strip of per-radio tabs plus the "+" discovered-radios popover.
     // MainWindow feeds these from discovery + the active connection.
