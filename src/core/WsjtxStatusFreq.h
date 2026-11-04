@@ -45,9 +45,16 @@ inline WsjtxStatusBody parseWsjtxStatusBody(QDataStream& ds)
     if (ok && !ds.atEnd()) {
         quint32 rxDf = 0, txDf = 0;
         ds >> rxDf >> txDf;
-        body.rxDfHz = rxDf;
-        body.txDfHz = txDf;
-        body.hasOffsets = true;
+        // Guard on stream status: a datagram that ends inside Tx DF leaves
+        // Qt zero-filling Tx DF and setting ReadPastEnd. Without this check
+        // hasOffsets would be true with txDfHz == 0, drawing a spurious red
+        // bracket at the dial — exactly the partial-read outcome the
+        // "refuse rather than guess" contract forbids.
+        if (ds.status() == QDataStream::Ok) {
+            body.rxDfHz = rxDf;
+            body.txDfHz = txDf;
+            body.hasOffsets = true;
+        }
     }
     return body;
 }

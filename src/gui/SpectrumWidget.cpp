@@ -4465,6 +4465,8 @@ void SpectrumWidget::setShowWsjtxFreq(bool on) {
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("WsjtxShowFreqOverlay"), on ? "True" : "False");
     s.save();
+    if (on)
+        emit wsjtxListenerNeeded();  // Start listener mid-session if not running (#4526)
     markOverlayDirty();
 }
 
@@ -15983,6 +15985,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
     drawSwrSweep(p, specRect);
     drawSliceMarkers(p, specRect, wfRect);
+    drawWsjtxMarkers(p, specRect, wfRect);  // CPU path: GPU path adds this in renderGpuFrame()
     drawSmartMtrValueLabels(p);
     drawOffScreenSlices(p, specRect);
 
@@ -18336,17 +18339,11 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
     const int labelY = wfRect.top() + fm.height();
 
     for (const auto& marker : std::as_const(m_wsjtxMarkers)) {
-        // Filter by dial frequency (raw radio tuning point, no audio offset).
-        // This correctly disambiguates two WSJT-X instances on different mode
-        // frequencies (e.g. FT8 on 14.074 vs FT4 on 14.080) even when both
-        // pans share an overlapping display range — the audio-offset rxFreqHz
-        // of one instance can easily fall inside the other pan's span, but
-        // the dial frequencies are distinct. If a single WSJT-X instance's
-        // dial frequency is outside this pan's span, skip it entirely.
-        const double dialMhz = marker.dialFreqHz / 1.0e6;
-        if (dialMhz < startMhz || dialMhz > endMhz)
-            continue;
-
+        // No dial-frequency gate here: WSJT-X Rx DF is an audio offset above
+        // the dial, so an operator zoomed into the passband will have the dial
+        // off-screen while the Rx/Tx brackets are on-screen. Filtering on the
+        // dial would hide the markers exactly when the operator is most zoomed
+        // in. Each line is already span-checked individually below.
         const double rxMhz = marker.rxFreqHz / 1.0e6;
         if (rxMhz >= startMhz && rxMhz <= endMhz) {
             drawModeWidthLines(rxMhz, rxColor, marker.mode);
