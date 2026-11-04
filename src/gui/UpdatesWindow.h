@@ -33,6 +33,10 @@ class UpdateController;
 // button is Install update: progress and Cancel inline, then Restart to
 // update. Closing the window while it stages cancels it; a staged release
 // stays, and installs when AetherSDR quits.
+//
+// Run as an AppImage with nothing installed for updates (Linux), it also
+// offers Install for updates: the running release is copied into the
+// install the updater keeps current, and AetherSDR restarts from there.
 class UpdatesWindow : public CanonWindow {
     Q_OBJECT
 
@@ -82,6 +86,8 @@ private:
     void rebuildRelease();
     void openDownload();
     void primaryClicked();
+    // Install for updates: asks first, with the choice to trash the AppImage.
+    void installForUpdatesClicked();
     // Install update applies to this release (in place, not yet refused).
     bool installsInPlace(const QString& version) const;
 
@@ -93,6 +99,7 @@ private:
     QString m_browserVersion;
     QString m_installProblem;   // the last attempt's failure, shown as the note
     QString m_problemVersion;   // ...for this release only
+    QString m_appImageProblem;  // how the last Install for updates went wrong
     bool m_canInPlace{false};   // the controller's answer, asked once
     bool m_failed{false};
     bool m_firmwareBusy{false};
@@ -108,7 +115,7 @@ private:
     QWidget*     m_chips{nullptr};
     FlowLayout*  m_chipsLayout{nullptr};
     QPushButton* m_get{nullptr};
-    QPushButton* m_download{nullptr};   // "Download installer": the browser route beside Install update
+    QPushButton* m_download{nullptr};   // "Download release": the browser route beside Install update
     QWidget*     m_progressRow{nullptr};
     QLabel*      m_progressLabel{nullptr};
     QProgressBar* m_progress{nullptr};
@@ -116,6 +123,9 @@ private:
     QPushButton* m_notes{nullptr};
     QPushButton* m_skip{nullptr};
     QPushButton* m_checkNow{nullptr};
+    QWidget*     m_appImageRow{nullptr};   // Install for updates, or where the install is
+    QLabel*      m_appImageText{nullptr};
+    QPushButton* m_installForUpdates{nullptr};
     QLabel*      m_footnote{nullptr};
     QCheckBox*   m_autoCheck{nullptr};
     QStringList  m_builtChapters;   // the chapters the chips were built from

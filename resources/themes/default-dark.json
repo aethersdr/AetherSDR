@@ -74,6 +74,13 @@
             "accent": "{color.blue.500}",
             "tx":     "#5a4a28"
           },
+          "networkQuality": {
+              "excellent": "#00cc66",
+              "good": "#00b4d8",
+              "fair": "#cc9900",
+              "poor": "#cc3333",
+              "off": "#8aa8c0"
+          },
           "titlebar": {
             "background":             "#eb0d1624",
             "border":                 "#2978bee6",
@@ -198,17 +205,7 @@
             "key.meffa.active.border":     "#008040",
             "key.meffa.active.hover":      "#007040",
             "key.meffa.active.foreground": "{color.gray.50}",
-            "key.meffa.standby.foreground": "#008040",
-            "swrScale": {
-              "type": "linear-gradient",
-              "angle": 90,
-              "stops": [
-                { "at": 0.00, "color": "#1a5c30" },
-                { "at": 0.35, "color": "#4a5520" },
-                { "at": 0.65, "color": "#6a4520" },
-                { "at": 1.00, "color": "#6e1f1f" }
-              ]
-            }
+            "key.meffa.standby.foreground": "#008040"
           },
           "waterfall.colormap": {
             "default": {
@@ -349,6 +346,10 @@
             "footer.danger.background.hover":    "#46ff4d4d",
             "footer.success.background.checked": "#2d4dd87a",
             "footer.success.background.hover":   "#464dd87a"
+          },
+          "qr": {
+            "dark":  "#000000",
+            "light": "#ffffff"
           },
           "highlight": {
             "tx":      "#fc4500",

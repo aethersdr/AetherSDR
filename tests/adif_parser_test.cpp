@@ -9,6 +9,7 @@
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QTemporaryDir>
 
@@ -150,6 +151,56 @@ int main(int argc, char** argv)
         check(duplicateInvalid.isEmpty(), "invalid first CALL is not replaced by a duplicate");
         const auto missingEnd = parse(dir, "<CALL:6>WN4AZY<COMMENT:5><EOR>");
         check(missingEnd.isEmpty(), "a record needs a real EOR outside field data");
+    }
+
+    {
+        const auto recs = parse(dir,
+            "Log A\n<PROGRAMID:1>A<EOH>\n"
+            "<CALL:5>K1ABC<BAND:3>20m<MODE:2>CW<EOR>\n"
+            "Log B\n<PROGRAMID:1>B<eoh>\n"
+            "<CALL:5>K2DEF<BAND:3>40m<MODE:3>SSB<EOR>\n");
+        check(recs.size() == 2, "concatenated headers preserve both contacts");
+        check(recs.size() == 2 && recs[0].callsign == "K1ABC"
+                  && recs[0].band == "20m" && recs[0].modeGroup == "CW"
+                  && recs[1].callsign == "K2DEF" && recs[1].band == "40m"
+                  && recs[1].modeGroup == "PHONE",
+              "a later header does not erase previously imported fields");
+    }
+
+    // Recover at an ASCII tag boundary even if nonstandard Unicode data has
+    // a length that splits its UTF-16 surrogate pair.
+    {
+        const auto recs = parse(dir,
+            "<COMMENT:1>\xF0\x9F\x98\x80<CALL:5>K1ABC<BAND:3>20m<MODE:2>CW<EOR>");
+        check(recs.size() == 1 && recs[0].callsign == "K1ABC"
+                  && recs[0].band == "20m" && recs[0].modeGroup == "CW",
+              "a split surrogate in ignored data preserves the following contact");
+    }
+
+    // The allowance is deliberately much larger than a linear scan needs,
+    // including under sanitizers, while repeated subject validation is quadratic.
+    {
+        constexpr int kRecordCount = 10000;
+        const QByteArray record = "<CALL:5>K1ABC<BAND:3>20m<MODE:2>CW<COMMENT:64>"
+            + QByteArray(64, 'x') + "<EOR>\n";
+        QByteArray data;
+        data.reserve(record.size() * kRecordCount);
+        for (int i = 0; i < kRecordCount; ++i) {
+            data += record;
+        }
+        QElapsedTimer timer;
+        timer.start();
+        const auto recs = parse(dir, data);
+        const qint64 elapsedMs = timer.elapsed();
+        check(recs.size() == kRecordCount, "large export imports every contact");
+        check(recs.size() == kRecordCount && recs.front().callsign == "K1ABC"
+                  && recs.front().band == "20m" && recs.front().modeGroup == "CW"
+                  && recs.back().callsign == "K1ABC" && recs.back().band == "20m"
+                  && recs.back().modeGroup == "CW",
+              "large export retains first and last contact fields");
+        std::printf("Large export: %lld bytes, %lld ms\n",
+                    static_cast<long long>(data.size()), static_cast<long long>(elapsedMs));
+        check(elapsedMs < 10000, "large export parses within the generous 10-second allowance");
     }
 
     // ── A length at INT_MAX ─────────────────────────────────────────────

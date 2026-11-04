@@ -77,7 +77,15 @@ QVector<QsoRecord> AdifParser::parse(const QByteArray& data)
     QHash<QString, QString> fields;
     qsizetype pos = 0;
     while (pos < text.size()) {
-        const QRegularExpressionMatch match = fieldRe.match(text, pos);
+        const qsizetype tagStart = text.indexOf(u'<', pos);
+        if (tagStart == -1) {
+            break;
+        }
+        // fromUtf8() yields valid UTF-16, and '<' starts a code point even
+        // when a malformed field length ends inside a surrogate pair.
+        const QRegularExpressionMatch match = fieldRe.match(
+            text, tagStart, QRegularExpression::NormalMatch,
+            QRegularExpression::DontCheckSubjectStringMatchOption);
         if (!match.hasMatch()) {
             break;
         }
@@ -101,7 +109,6 @@ QVector<QsoRecord> AdifParser::parse(const QByteArray& data)
         }
         if (name == "EOH") {
             fields.clear();
-            records.clear();
             continue;
         }
         if (name != "EOR") {
