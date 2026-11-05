@@ -518,8 +518,10 @@ private:
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
-    // tx_sensors' SWR goes through the S-meter's trust gate (see the
-    // txMetersChanged hookup); reset on every un-key edge.
+    // tx_sensors' SWR goes through the same validity gate as the S-meter (see
+    // the txMetersChanged hookup); reset on every un-key edge. The sentinel
+    // value for a confirmed below-unity reading is TCI's own: the S-meter
+    // pegs at its scale end (3), TCI reports 10.
     static constexpr float kTciMaximumSwr = 10.0f;
     RadioSwrValidityFilter m_txSwrFilter;
     QElapsedTimer     m_txSwrClock;

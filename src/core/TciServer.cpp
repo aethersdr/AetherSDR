@@ -249,11 +249,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // TCI's wire format has no absent marker; 1.0 is what this cache
             // held before any SWR arrived, so absence maps back to it rather
             // than to 0.0 (which is out of the meter's domain).
-            // The raw ratio is only a measurement while carrier is present:
-            // in speech pauses and at low drive it divides two noise floors
-            // (HL2 often reads rev > fwd there) and TCI clients light their
-            // high-SWR alarm on a matched antenna. Gate it through the same
-            // filter the S-meter uses so TCI reports what the operator sees.
+            // The raw ratio is only a measurement while carrier is present.
+            // Gate it on instantaneous forward power with the same validity
+            // filter the S-meter uses, so a reading taken without measurable
+            // carrier holds the last trusted value instead of reaching TCI
+            // clients as a fresh SWR.
             const RadioSwrValidityFilter::Result gated = m_txSwrFilter.update(
                 m_model->meterModel().fwdPowerInstant(),
                 swrValid ? swr : 1.0f,
