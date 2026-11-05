@@ -13,6 +13,9 @@
 #include <array>
 #include <deque>
 #include <memory>
+#include <map>
+#include <set>
+#include <utility>
 #include <optional>
 #include <span>
 #include <string>
@@ -71,6 +74,9 @@ public:
 
     // ---- intents DOWN ----
     void setActiveSlice(int sliceId) override;
+    bool createPanadapter() override;
+    bool removePanadapter(const QString& panId) override;
+    bool removeSlice(int sliceId) override;
     void setSliceFrequency(int sliceId, double hz) override;
     void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
     void setSliceMode(int sliceId, const QString& mode) override;
@@ -354,8 +360,15 @@ private:
     std::vector<std::uint8_t> receiverCommand(const std::vector<std::uint8_t>& frame) const;
     std::optional<ModulationProfile> currentModulationProfile() const;
     void onDualAudio(const std::vector<float>& interleaved);
+    void publishDualPan(int receiver);
+    void settleDualPanLifecycle();
+    void requestDualScopeWindow(int receiver, double centreHz, double widthHz);
+    void flushDualScopeWindow(int receiver);
+    bool restoreDualScopePresetsConfirmed();
+    bool handleDualScopePreset(const CivFrame& frame);
     struct ReceiverState {
         std::uint64_t frequencyHz = 0;
+        std::optional<std::uint64_t> commandedFrequencyHz;
         CivMode mode = CivMode::Usb;
         std::uint8_t data = 0;
         int filter = 1;
@@ -372,14 +385,44 @@ private:
         qint64 lastScopeAtMs = 0;
         std::uint64_t audioFrames = 0;
         double audioRms = 0.0;
+        bool visible = false;
+        bool viewInitialised = false;
+        int edgeSlot = 0;
+        int borrowedSlot = 0;
+        int originalSlot = 0;
+        std::optional<ScopeEdgeWindow> windowTarget;
+        int windowRange = 0;
+        std::optional<double> pendingCentreHz;
+        qint64 lastWindowWriteMs = -200;
+        bool windowFlushScheduled = false;
+        std::uint64_t windowEpoch = 0;
+        qint64 windowHoldUntilMs = 0;
         std::unique_ptr<Resampler> audio;
     };
     std::array<ReceiverState, 2> m_receivers;
     bool m_dualInitialised = false;
     std::optional<bool> m_dualSplit;
+    std::optional<int> m_dualRequestedTxReceiver;
+    std::optional<std::uint64_t> m_dualTxFrequencyHz;
+    std::array<int, 4> m_dualModInputs{{-1, -1, -1, -1}};
     std::optional<bool> m_dualWatch;
     int m_dualTxReceiver = 0;
     int m_dualFocus = 0;
+    bool m_dualPanOpening = false;
+    bool m_dualPanWatchRequested = false;
+    bool m_dualPanClosing = false;
+    bool m_dualWatchOwned = false;
+    bool m_dualPanHasOpened = false;
+    int m_dualMainMonitorPan = 0;
+    std::uint64_t m_dualPaneEpoch = 0;
+    using ScopePresetKey = std::pair<int, int>;
+    std::map<ScopePresetKey, ScopeEdgeWindow> m_dualSavedPresets;
+    std::map<ScopePresetKey, ScopeEdgeWindow> m_dualWrittenPresets;
+    std::set<ScopePresetKey> m_dualPresetReads;
+    std::map<ScopePresetKey, ScopeEdgeWindow> m_dualObservedPresets;
+    std::map<ScopePresetKey, ScopeEdgeWindow> m_dualRestoreExpected;
+    std::array<int, 2> m_dualRestoreSlots{};
+    bool m_dualRestoring = false;
     int m_lanOutput = -1;
 
     std::unique_ptr<IcomSession> m_session;

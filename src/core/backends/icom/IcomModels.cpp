@@ -235,9 +235,19 @@ constexpr std::array<FeatureEvidence, 5> kIc785xEvidence{{
     {IcomFeature::AntennaTuner, EvidenceKind::OfficialGuide,
      "IC-7850/7851 instruction manual, 1C 01"},
 }};
-constexpr std::array<ModulationInputChoice, 1> kIc7610LanChoice{{
+constexpr std::array<ModulationInputChoice, 6> kIc7610LanChoice{{
+    {0x00, "MIC", ModSourceMic}, {0x01, "ACC", ModSourceAccessory},
+    {0x02, "MIC/ACC", ModSourceMic | ModSourceAccessory},
+    {0x03, "USB", ModSourceUsb}, {0x04, "MIC/USB", ModSourceMic | ModSourceUsb},
     {0x05, "LAN", ModSourceNetwork}}};
-constexpr std::array<ModulationInputChoice, 1> kIc7760LanChoice{{
+constexpr std::array<ModulationInputChoice, 10> kIc7760LanChoice{{
+    {0x00, "MIC", ModSourceMic}, {0x01, "USB", ModSourceUsb},
+    {0x02, "LINE-IN", ModSourceAccessory}, {0x03, "ACC", ModSourceAccessory},
+    {0x04, "MIC/USB", ModSourceMic | ModSourceUsb},
+    {0x05, "MIC/LINE-IN", ModSourceMic | ModSourceAccessory},
+    {0x06, "MIC/ACC", ModSourceMic | ModSourceAccessory},
+    {0x07, "MIC/USB/ACC", ModSourceMic | ModSourceUsb | ModSourceAccessory},
+    {0x08, "MIC/LINE-IN/ACC", ModSourceMic | ModSourceAccessory},
     {0x09, "LAN", ModSourceNetwork}}};
 constexpr std::array<ModulationInputChoice, 11> kIc785xModChoices{{
     {0x00, "MIC", ModSourceMic}, {0x01, "ACC-A", ModSourceAccessory},
@@ -710,7 +720,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .features = kDualReceiverEvidence,
         .modulation = ModulationProfile{-1, -1, 90, 91, 92, 0x05, 0, kIc7610LanChoice},
         .dualReceiver = DualReceiverProfile{86, {92, 93, 94}},
-        .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::None, true},
+        .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::Hf60, true},
         .modes = kDualReceiverModes,
     };
     static const IcomModelProfile kIc7760Profile{
@@ -719,7 +729,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .features = kDualReceiverEvidence,
         .modulation = ModulationProfile{-1, -1, 128, 129, 130, 0x09, 0, kIc7760LanChoice},
         .dualReceiver = DualReceiverProfile{123, {130, 131, 132}},
-        .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::None, true},
+        .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::Hf60, true},
         .modes = kDualReceiverModes,
     };
     static const IcomModelProfile kIc785xProfile{
@@ -730,7 +740,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         // Relative slope measured on the lab IC-7851: 0.72 dB/display unit.
         // The absolute dBm floor remains estimated; no RF calibration claim.
         .dualReceiver = DualReceiverProfile{56, {64, 65, 66}, 144.0, -20.0, 20.0, false},
-        .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::None, true},
+        .scope = ScopeCommandProfile{true, true, true, true, true, 0, ScopeEdgeTable::Hf60, true},
         .modes = kDualReceiverModes,
     };
     static const IcomModelProfile kUnprofiled{};

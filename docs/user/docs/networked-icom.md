@@ -152,13 +152,29 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 
 ### IC-7610, IC-7760 and IC-7851
 
-These models have two fixed slices and panadapters: **MAIN** and **SUB**. Each
-uses its radio's native 689-bin scope. Spectrum and waterfall share the same
-frequency edges. Center zoom uses native spans; Fixed and scroll views retain
-the radio's edge presets. Turn on Dualwatch and dual scope on the radio when
-using both receivers. The IC-7851 profile targets the modern 689-bin / 200-unit
-format documented in the firmware 1.40 supplement. CI-V identity does not
-provide an exact firmware version or distinguish IC-7850 from IC-7851.
+Connect starts with **MAIN** in **Scroll-F**. Open a second panadapter to show
+**SUB**; AetherSDR enables Dualwatch if needed and initializes SUB to Scroll-F.
+Each pan uses its radio's native 689-bin scope, with the same frequency edges
+for spectrum and waterfall. Opening SUB preserves MAIN's selected scope mode
+and both receiver frequencies. Reopening SUB retains its last scope mode.
+
+Closing SUB removes its local audio and returns MAIN's default monitor to both
+speakers. If opening SUB enabled Dualwatch, closing it turns Dualwatch off after
+radio confirmation. A Dualwatch setting explicitly enabled by the operator is
+preserved. Stereo receive transport stays negotiated while only MAIN is visible.
+
+In Scroll-F, dragging the spectrum or waterfall background moves the native
+window while keeping the VFO inside it. Zoom changes its native width. Fixed
+mode allows moving the window away from the VFO; Center mode drag tunes the VFO.
+Window gestures temporarily borrow separate edge-preset slots for MAIN and SUB,
+reading their contents before any write. Normal disconnect waits for readback of
+the saved presets and selections before closing the transport. A lost
+connection cannot guarantee that restoration reaches the radio.
+
+The IC-7851 profile targets the modern 689-bin / 200-unit format documented in
+the firmware 1.40 supplement. CI-V identity does not provide an exact firmware
+version or distinguish IC-7850 from IC-7851. The connected tab and status bar
+use the identified model after the CI-V reply arrives.
 
 Select **AF** under the radio's **LAN AF/IF Output** menu for PC listening.
 An IF selection is reported and receive audio is withheld. Stereo LAN receive
@@ -175,10 +191,14 @@ a mono connection warns that SUB audio is unavailable.
 
 There is one transmitter and one outgoing mono audio stream. Selecting SUB for
 tuning leaves transmit routing unchanged. The radio's split setting determines
-the transmit receiver, and actual transmit frequency is read back from the
+the transmit receiver. The VFO card's **TX** button selects MAIN (split off) or
+SUB (split on) without keying PTT. The card changes after radio readback, and
+keying waits while the selection is unconfirmed. Actual transmit frequency is read back from the
 radio. Configure **LAN** as the modulation source for the DATA mode you use;
 DATA1, DATA2 and DATA3 have separate radio settings. **PC Audio** changes DATA
-OFF input only when requested. Basic RX/TX operation remains experimental until
+OFF input only when requested. Radio Health names the active DATA variant;
+the source warning checks that variant, so D1 on USB does not imply D2 is also
+on USB. Basic RX/TX operation remains experimental until
 checked on a physical radio. Receiver-specific DSP, calibrated meters and other
 model differences are deferred.
 

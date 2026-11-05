@@ -730,6 +730,9 @@ inline constexpr std::array<ScopeEdgeRange, 3> kScopeEdgeRangesIc9700{{
 // "Set the upper Edge frequency within 1 MHz of the lower frequency" (MK2
 // Advanced Manual, Fixed Edges). Icom publishes no minimum; 5 kHz is the
 // narrowest Center span.
+inline constexpr int kScopeEdgeWriteIntervalMs = 200;
+inline constexpr double kScopeDragVfoMarginFraction = 0.02;
+inline constexpr double kScopeDragVfoMarginMinHz = 2000.0;
 inline constexpr std::uint64_t kScopeFixedEdgeMaxWidthHz = 1'000'000;
 inline constexpr std::uint64_t kScopeFixedEdgeMinWidthHz = 5'000;
 

@@ -333,8 +333,15 @@ void MainWindow::refreshRadioTabs()
     }
 
     if (connected) {
-        for (const RadioTabEntry& entry : std::as_const(tabs)) {
+        for (RadioTabEntry& entry : tabs) {
             if (entry.id == activeSerial) {
+                const QString previousModel = entry.model;
+                entry.model = m_radioModel.model();
+                if (entry.name.isEmpty() || entry.name == previousModel) {
+                    const QString fallback = m_radioModel.nickname().isEmpty()
+                        ? entry.model : m_radioModel.nickname();
+                    entry.name = m_connPanel->radioDisplayName(m_radioModel.lastRadioInfo(), fallback);
+                }
                 m_lastSessionTab = entry;
                 break;
             }
@@ -578,6 +585,8 @@ void MainWindow::wireDiscovery()
             [this](const QString&) { scheduleRadioTabRefresh(); });
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
             [this](bool) { scheduleRadioTabRefresh(); });
+    connect(&m_radioModel, &RadioModel::infoChanged,
+            this, &MainWindow::scheduleRadioTabRefresh);
     connect(&m_smartLink, &SmartLinkClient::radioListReceived, this,
             [this](const QList<WanRadioInfo>& radios) {
         m_smartLinkRadios = radios;

@@ -3465,7 +3465,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         // rfgain branch already splits the joined value and handles both shapes,
         // so the handler was right and only the parser choice was wrong.
         add("pan", {},
-            "pan <create|add|remove|close|center|rfgain|autorfgain|float|dock> [value] — "
+            "pan <create|add|remove|close|center|range|rfgain|autorfgain|float|dock> [value] — "
             "float/dock drive PanadapterStack's real reparent path (#4864); "
             "autorfgain takes on|off, 'mode <bandscope|ramp|probe|binary>' for which "
             "control law, or 'floor <dB>' for how far below the "
@@ -3475,7 +3475,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
                         "pan requires an action "
-                        "(create|add|remove|close|center|rfgain|autorfgain|float|dock)"));
+                        "(create|add|remove|close|center|range|rfgain|autorfgain|float|dock)"));
                 return s.doPan(a.action, a.value);
             });
 
@@ -3693,7 +3693,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|profile|dualwatch on|off|session|scheduler|incident> — CI-V "
+            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|profile|dualwatch on|off|scopepreset <range> <slot> [lower-Hz upper-Hz]|scopeslot <receiver> <slot>|session|scheduler|incident> — CI-V "
             "inject, frame trace, receiver profile, lease/scheduler health, or last incident "
             "(Icom; send is TX-gated)",
             parseActionRest,
@@ -8928,12 +8928,14 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
     }
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
                         && a != QLatin1String("dualwatch")
+                        && a != QLatin1String("scopepreset")
+                        && a != QLatin1String("scopeslot")
                         && a != QLatin1String("session")
                         && a != QLatin1String("profile")
                         && a != QLatin1String("incident")
                         && a != QLatin1String("scheduler"))) {
         return err(QStringLiteral(
-            "civ requires an action (send|trace|profile|dualwatch|session|scheduler|incident)"));
+            "civ requires an action (send|trace|profile|dualwatch|scopepreset|scopeslot|session|scheduler|incident)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -8967,6 +8969,8 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
 
     const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
                        : a == QLatin1String("dualwatch") ? QStringLiteral("receiver.dualwatch")
+                       : a == QLatin1String("scopepreset") ? QStringLiteral("scope.preset")
+                       : a == QLatin1String("scopeslot") ? QStringLiteral("scope.slot")
                        : a == QLatin1String("profile") ? QStringLiteral("profile.show")
                        : a == QLatin1String("trace") ? QStringLiteral("civ.trace")
                        : a == QLatin1String("incident") ? QStringLiteral("civ.incident")
@@ -11371,6 +11375,43 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                            {QStringLiteral("requested"), true}, {QStringLiteral("priorCount"), have}};
     }
 
+    if (action == QLatin1String("range")) {
+        const QStringList parts = arg.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.size() != 3) {
+            return err(QStringLiteral("pan range requires <panId|index|active> <center MHz> <width MHz>"));
+        }
+        PanadapterModel* pan = nullptr;
+        if (parts[0] == QLatin1String("active")) {
+            pan = radio->activePanadapter();
+        } else if (parts[0].startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
+            pan = radio->panadapter(parts[0]);
+        } else {
+            bool valid = false;
+            const int index = parts[0].toInt(&valid);
+            if (valid && index >= 0 && index < radio->panadapters().size()) {
+                pan = radio->panadapters().at(index);
+            }
+        }
+        bool centerValid = false;
+        bool widthValid = false;
+        const double center = parts[1].toDouble(&centerValid);
+        const double width = parts[2].toDouble(&widthValid);
+        if (!pan || !radio->isConnected() || !pan->ownedByClient(radio->ourClientHandle())
+            || !centerValid || !widthValid || !std::isfinite(center) || !std::isfinite(width)
+            || width <= 0 || center < width / 2.0) {
+            return err(QStringLiteral("pan range requires an owned live pan and finite positive geometry"));
+        }
+        const auto control = radio->backendCapabilities().panDisplayControl;
+        if (!control || !control->supports(PanDisplayField::Geometry)
+            || !control->geometry.contains(PanGeometryComponent::Center)
+            || !control->geometry.contains(PanGeometryComponent::Bandwidth)) {
+            return err(QStringLiteral("this backend does not accept pan center and width"));
+        }
+        const QString id = pan->panId();
+        radio->requestPanCenter(id, center, width);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("range")},
+                           {QStringLiteral("panId"), id}, {QStringLiteral("requested"), true}};
+    }
     if (action == QLatin1String("center")) {
         // Same contract as `tune` — see refuseUntunableMhz(). It matters more
         // here: optimistic receive controls clamp the LOW edge and any declared
