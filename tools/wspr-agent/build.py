@@ -46,7 +46,7 @@ def zig_cc(args, out, cache):
         objs.append(str(o))
     subprocess.run(['zig', 'cc', *args, *CFLAGS, *LDFLAGS, '-Wextra', '-Werror', '-I', str(HERE), '-o', str(out),
                     str(HERE / 'agent.c'), str(HERE / 'wsprd' / 'fftw_compat.c'),
-                    str(HERE / 'wsprd' / 'osd_stub.c'), *objs, '-lm'],
+                    str(HERE / 'wsprd' / 'osdwspr.c'), str(HERE / 'grayline.c'), *objs, '-lm'],
                    check=True, env=env)
     for o in objs:
         os.unlink(o)

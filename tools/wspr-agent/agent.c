@@ -49,6 +49,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "grayline.h"
 #include "wsprd/wsprsim_utils.h"
 
 #define AGENT_VERSION "0.1.0"
@@ -159,6 +160,13 @@ static const band_t BANDS[] = {
     {"6m", 50293000},     {"2m", 144489000},
 };
 
+static int band_index(const char *name)
+{
+    for (size_t i = 0; i < sizeof BANDS / sizeof BANDS[0]; i++)
+        if (!strcmp(BANDS[i].name, name)) return (int)i;
+    return -1;
+}
+
 static long long band_dial(const char *name)
 {
     for (size_t i = 0; i < sizeof BANDS / sizeof BANDS[0]; i++)
@@ -168,12 +176,25 @@ static long long band_dial(const char *name)
 
 /* ---------------------------------------------------------------- config */
 
+/* Band hopping follows WSJT-X: for each time-of-day period (sunrise gray
+ * line, day, sunset gray line, night) a set of bands, as bit masks over
+ * BANDS[]. */
+static const char *const PERIOD_KEY[4] = {"hop_sunrise", "hop_day", "hop_sunset", "hop_night"};
+static const char *const PERIOD_NAME[4] = {"sunrise", "day", "sunset", "night"};
+
+/* Decode depth: WSJT-X's three, and "standard" (wsprd's own defaults: the
+ * Fano decoder uncapped, no OSD), which decoded best on simulated weak
+ * signals and is the default. */
+static const char *const DEPTH_NAME[4] = {"standard", "fast", "normal", "deep"};
+
 typedef struct {
     char callsign[16];       /* blank: the radio's callsign */
     char grid[8];            /* blank: the radio's GPS grid */
-    char bands[MAX_BANDS][8];
-    int nbands;
-    int cycles;              /* two-minute cycles on each band */
+    char band[8];            /* the band when hopping is off */
+    int hopping;
+    unsigned hop[4];         /* bands per period, bits over BANDS[] */
+    int gray_minutes;        /* gray line width, 1-120 (WSJT-X's range) */
+    int depth;               /* index into DEPTH_NAME */
     char rxant[12];          /* blank: the radio's default */
     int upload;              /* send spots to wsprnet.org */
     int dax_channel;
@@ -182,9 +203,8 @@ typedef struct {
 static void config_default(config_t *c)
 {
     memset(c, 0, sizeof *c);
-    strcpy(c->bands[0], "20m");
-    c->nbands = 1;
-    c->cycles = 1;
+    strcpy(c->band, "20m");
+    c->gray_minutes = 60;
     c->dax_channel = 4;
 }
 
@@ -270,9 +290,22 @@ static const char *config_parse(const char *text, size_t len, config_t *c)
         } else if (!strcmp(key, "rxant")) {
             if (!jstr(&j, s, sizeof s) || strlen(s) >= sizeof c->rxant || !valid_token(s, "_")) return "bad rxant";
             strcpy(c->rxant, s);
-        } else if (!strcmp(key, "cycles")) {
-            if (!jint(&j, &v) || v < 1 || v > 30) return "cycles must be 1-30";
-            c->cycles = (int)v;
+        } else if (!strcmp(key, "band")) {
+            if (!jstr(&j, s, sizeof s) || band_index(s) < 0) return "unknown band";
+            strcpy(c->band, s);
+        } else if (!strcmp(key, "hopping")) {
+            if (jlit(&j, "true")) c->hopping = 1;
+            else if (jlit(&j, "false")) c->hopping = 0;
+            else return "hopping must be true or false";
+        } else if (!strcmp(key, "gray_minutes")) {
+            if (!jint(&j, &v) || v < 1 || v > 120) return "gray_minutes must be 1-120";
+            c->gray_minutes = (int)v;
+        } else if (!strcmp(key, "depth")) {
+            int d = -1;
+            if (jstr(&j, s, sizeof s))
+                for (int i = 0; i < 4; i++) if (!strcmp(s, DEPTH_NAME[i])) d = i;
+            if (d < 0) return "depth must be standard, fast, normal or deep";
+            c->depth = d;
         } else if (!strcmp(key, "dax_channel")) {
             if (!jint(&j, &v) || v < 1 || v > 8) return "dax_channel must be 1-8";
             c->dax_channel = (int)v;
@@ -280,20 +313,23 @@ static const char *config_parse(const char *text, size_t len, config_t *c)
             if (jlit(&j, "true")) c->upload = 1;
             else if (jlit(&j, "false")) c->upload = 0;
             else return "upload must be true or false";
-        } else if (!strcmp(key, "bands")) {
-            if (!jlit(&j, "[")) return "bands must be an array";
-            int n = 0;
+        } else if (!strncmp(key, "hop_", 4)) {
+            int period = -1;
+            for (int i = 0; i < 4; i++) if (!strcmp(key, PERIOD_KEY[i])) period = i;
+            if (period < 0) return "unknown key";
+            if (!jlit(&j, "[")) return "a hop_ period must be an array of bands";
+            unsigned mask = 0;
             jws(&j);
             if (!jlit(&j, "]")) {
                 for (;;) {
-                    if (n >= MAX_BANDS || !jstr(&j, s, sizeof s) || !band_dial(s)) return "unknown band";
-                    strcpy(c->bands[n++], s);
+                    int bi;
+                    if (!jstr(&j, s, sizeof s) || (bi = band_index(s)) < 0) return "unknown band";
+                    mask |= 1u << bi;
                     if (jlit(&j, "]")) break;
-                    if (!jlit(&j, ",")) return "bad bands";
+                    if (!jlit(&j, ",")) return "bad band list";
                 }
             }
-            if (!n) return "bands must not be empty";
-            c->nbands = n;
+            c->hop[period] = mask;
         } else {
             return "unknown key";
         }
@@ -308,9 +344,21 @@ static void config_json(buf_t *b, const config_t *c)
 {
     bputs(b, "{\"callsign\":"); bjson_str(b, c->callsign);
     bputs(b, ",\"grid\":"); bjson_str(b, c->grid);
-    bputs(b, ",\"bands\":[");
-    for (int i = 0; i < c->nbands; i++) { if (i) bputs(b, ","); bjson_str(b, c->bands[i]); }
-    bprintf(b, "],\"cycles\":%d,\"rxant\":", c->cycles);
+    bputs(b, ",\"band\":"); bjson_str(b, c->band);
+    bprintf(b, ",\"hopping\":%s,\"gray_minutes\":%d", c->hopping ? "true" : "false", c->gray_minutes);
+    for (int p = 0; p < 4; p++) {
+        bprintf(b, ",\"%s\":[", PERIOD_KEY[p]);
+        int first = 1;
+        for (size_t i = 0; i < sizeof BANDS / sizeof BANDS[0]; i++)
+            if (c->hop[p] & (1u << i)) {
+                if (!first) bputs(b, ",");
+                first = 0;
+                bjson_str(b, BANDS[i].name);
+            }
+        bputs(b, "]");
+    }
+    bputs(b, ",\"depth\":"); bjson_str(b, DEPTH_NAME[c->depth]);
+    bputs(b, ",\"rxant\":");
     bjson_str(b, c->rxant);
     bprintf(b, ",\"upload\":%s,\"dax_channel\":%d}", c->upload ? "true" : "false", c->dax_channel);
 }
@@ -342,6 +390,7 @@ static struct {
     const char *state;          /* connecting, waiting_clock, capturing, ... */
     char band[8];
     long long dial_hz;
+    int hop_period;             /* period of the tuned cycle, -1 when not hopping */
     int slice_ok, stream_ok;
     spot_t spots[MAX_SPOTS];
     int nspots, spot_head;
@@ -351,7 +400,7 @@ static struct {
     int upload_queued;
     char upload_error[80];
     long long started;
-} G = { .mu = PTHREAD_MUTEX_INITIALIZER, .state = "starting" };
+} G = { .mu = PTHREAD_MUTEX_INITIALIZER, .state = "starting", .hop_period = -1 };
 
 static void effective_call_grid(char *call, char *grid)
 {
@@ -569,7 +618,7 @@ static long mem_available_kb(void)
 static char g_self[512];
 static char g_work[300];
 
-static int start_decode(decode_t *dc, const char *c2)
+static int start_decode(decode_t *dc, const char *c2, int depth)
 {
     int p[2];
     if (pipe(p)) return 0;
@@ -581,8 +630,18 @@ static int start_decode(decode_t *dc, const char *c2)
         close(p[1]);
         setpriority(PRIO_PROCESS, 0, 19);
         if (chdir(g_work)) _exit(2);
-        char *argv[] = {"wsprd", "-a", g_work, (char *)c2, NULL};
-        int rc = wsprd_main(4, argv);
+        /* WSJT-X's arguments for its Fast, Normal and Deep. */
+        char *argv[12];
+        int argc = 0;
+        argv[argc++] = "wsprd";
+        if (depth == 1) argv[argc++] = "-q", argv[argc++] = "-B";
+        if (depth >= 2) argv[argc++] = "-C", argv[argc++] = "500", argv[argc++] = "-o", argv[argc++] = "4";
+        if (depth == 3) argv[argc++] = "-d";
+        argv[argc++] = "-a";
+        argv[argc++] = g_work;
+        argv[argc++] = (char *)c2;
+        argv[argc] = NULL;
+        int rc = wsprd_main(argc, argv);
         fflush(NULL);   /* stdout is a pipe, so fully buffered */
         _exit(rc == 0 ? 0 : 1);
     }
@@ -813,6 +872,10 @@ static void status_json(buf_t *b, long long since)
     bputs(b, ",\"band\":"); bjson_str(b, G.band);
     bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"audio\":%s", G.dial_hz, G.slice_ok ? "true" : "false",
             G.stream_ok ? "true" : "false");
+    bputs(b, ",\"hop_period\":");
+    bjson_str(b, G.hop_period >= 0 ? PERIOD_NAME[G.hop_period] : "");
+    bputs(b, ",\"depth\":");
+    bjson_str(b, DEPTH_NAME[G.cfg.depth]);
     bprintf(b, ",\"upload\":{\"enabled\":%s,\"sent\":%lld,\"rejected\":%lld,\"queued\":%d,\"last_error\":",
             G.cfg.upload ? "true" : "false", G.uploaded, G.upload_failed, queued);
     bjson_str(b, G.upload_error);
@@ -1229,8 +1292,53 @@ static double gauss(void)
     return sqrt(-2 * log(u)) * cos(2 * M_PI * v);
 }
 
+static const char *band_for_cycle(const config_t *c, const char *grid, long long cycle_t, const char *current, int *period_out);
+static const char *const COORDINATED[10];
+
 static int selftest(double snr_db)
 {
+    /* Hopping: every coordinated band ticked follows the slot exactly; a
+     * subset only ever yields ticked bands; nothing ticked stays put. */
+    {
+        config_t c;
+        config_default(&c);
+        c.hopping = 1;
+        for (int p = 0; p < 4; p++)
+            for (int i = 0; i < 10; i++) c.hop[p] |= 1u << band_index(COORDINATED[i]);
+        long long t0 = 1793836800; /* 2026-11-04 00:00 UTC */
+        for (int k = 0; k < 720; k++) {
+            int period;
+            long long t = t0 + 120LL * k;
+            const char *b = band_for_cycle(&c, "DN18pg", t, "", &period);
+            const char *want = COORDINATED[((t / 60) % 60 % 20) / 2];
+            if (strcmp(b, want) || period < 0) { printf("selftest FAIL: hop %d gave %s, want %s\n", k, b, want); return 1; }
+        }
+        unsigned sub = (1u << band_index("40m")) | (1u << band_index("6m"));
+        for (int p = 0; p < 4; p++) c.hop[p] = sub;
+        int seen6 = 0;
+        for (int k = 0; k < 720; k++) {
+            int period;
+            const char *b = band_for_cycle(&c, "DN18pg", t0 + 120LL * k, "", &period);
+            if (strcmp(b, "40m") && strcmp(b, "6m")) { printf("selftest FAIL: subset hop gave %s\n", b); return 1; }
+            seen6 += !strcmp(b, "6m");
+        }
+        if (!seen6) { printf("selftest FAIL: a non-coordinated ticked band never came up\n"); return 1; }
+        for (int p = 0; p < 4; p++) c.hop[p] = 0;
+        int period;
+        if (strcmp(band_for_cycle(&c, "DN18pg", t0, "17m", &period), "17m")) { printf("selftest FAIL: empty hop moved\n"); return 1; }
+        c.hopping = 0;
+        if (strcmp(band_for_cycle(&c, "DN18pg", t0, "17m", &period), "20m") || period != -1) { printf("selftest FAIL: hopping off\n"); return 1; }
+        /* Settings round trip. */
+        config_t r;
+        config_default(&r);
+        const char *js = "{\"band\":\"30m\",\"hopping\":true,\"gray_minutes\":45,\"hop_day\":[\"20m\",\"6m\"],\"hop_night\":[],\"depth\":\"deep\"}";
+        if (config_parse(js, strlen(js), &r) || strcmp(r.band, "30m") || !r.hopping || r.gray_minutes != 45 || r.depth != 3
+            || r.hop[1] != ((1u << band_index("20m")) | (1u << band_index("6m")))) { printf("selftest FAIL: settings parse\n"); return 1; }
+        const char *bad[] = {"{\"gray_minutes\":0}", "{\"depth\":\"max\"}", "{\"hop_noon\":[]}", "{\"band\":\"11m\"}", "{\"bands\":[\"20m\"]}"};
+        for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++)
+            if (!config_parse(bad[i], strlen(bad[i]), &r)) { printf("selftest FAIL: accepted %s\n", bad[i]); return 1; }
+    }
+
     /* Gap sizing: in-order, small gaps, and gaps past the 4-bit wrap. */
     const double per = 128.0 / AUDIO_RATE;
     struct { int last, count; double elapsed; int want; } gaps[] = {
@@ -1271,7 +1379,7 @@ static int selftest(double snr_db)
     snprintf(c2, sizeof c2, "%s/260101_0000.c2", g_work);
     if (!write_c2(c2, "260101_0000.c2", 14.0956, idat, qdat, d.n)) { fprintf(stderr, "write c2 failed\n"); return 1; }
     decode_t dc = {0};
-    if (!start_decode(&dc, c2)) return 1;
+    if (!start_decode(&dc, c2, 0)) return 1;
     int st;
     for (;;) {
         ssize_t k = read(dc.fd, dc.out + dc.n, sizeof dc.out - 1 - dc.n);
@@ -1327,12 +1435,49 @@ static void record_cycle(const decode_t *dc)
 }
 
 
-/* The band for a cycle: rotations count two-minute cycles since 1970, so
- * they carry on over restarts and midnight. */
-static const char *band_for_cycle(const config_t *c, long long cycle_t)
+/* WSJT-X's coordinated band hopping: slot (minute % 20) / 2 of each
+ * two-minute cycle names one of these ten bands, used if it is ticked for
+ * the period of the day; otherwise the next band of a random permutation of
+ * the period's ticked bands. Hopping off, no grid or nothing ticked: stay. */
+static const char *const COORDINATED[10] = {"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m"};
+static int g_perm[MAX_BANDS], g_nperm;   /* main thread only */
+
+/* *period is the hopping period used, -1 when not hopping. */
+static const char *band_for_cycle(const config_t *c, const char *grid, long long cycle_t, const char *current, int *period_out)
 {
-    long long idx = cycle_t / 120;
-    return c->bands[(idx / c->cycles) % c->nbands];
+    *period_out = -1;
+    if (!c->hopping || strlen(grid) < 4) return c->band;
+    time_t tt = (time_t)cycle_t;
+    struct tm tm;
+    gmtime_r(&tt, &tm);
+    float uth = (float)tm.tm_hour + (float)tm.tm_min / 60.0f + (float)tm.tm_sec / 3600.0f;
+    int period = wspr_grayline(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, uth, grid, c->gray_minutes);
+    *period_out = period;
+    unsigned mask = c->hop[period];
+    if (!mask) return current[0] ? current : c->band;
+    int ci = band_index(COORDINATED[(tm.tm_min % 20) / 2]);
+    if (mask & (1u << ci)) {
+        /* As WSJT-X does, keep a coordinated band from also coming up in
+         * the random permutation too soon after. */
+        for (int i = 0; i < g_nperm; i++)
+            if (g_perm[i] == ci) { memmove(&g_perm[i], &g_perm[i + 1], sizeof g_perm[0] * (size_t)(g_nperm - i - 1)); g_nperm--; break; }
+        return BANDS[ci].name;
+    }
+    int stale = !g_nperm;
+    for (int i = 0; i < g_nperm; i++) if (!(mask & (1u << g_perm[i]))) stale = 1;
+    if (stale) {
+        g_nperm = 0;
+        for (size_t i = 0; i < sizeof BANDS / sizeof BANDS[0]; i++) if (mask & (1u << i)) g_perm[g_nperm++] = (int)i;
+        for (int i = g_nperm - 1; i > 0; i--) {
+            int j = rand() % (i + 1), t = g_perm[i];
+            g_perm[i] = g_perm[j];
+            g_perm[j] = t;
+        }
+    }
+    int b = g_perm[0];
+    memmove(&g_perm[0], &g_perm[1], sizeof g_perm[0] * (size_t)(g_nperm - 1));
+    g_nperm--;
+    return BANDS[b].name;
 }
 
 int main(int argc, char *argv[])
@@ -1353,6 +1498,7 @@ int main(int argc, char *argv[])
     if (argc >= 2 && !strcmp(argv[1], "selftest")) return selftest(argc >= 3 ? atof(argv[2]) : -24);
     if (getenv("AETHER_WSPR_RADIO")) g_radio_addr = getenv("AETHER_WSPR_RADIO");
 
+    srand((unsigned)time(NULL) ^ (unsigned)getpid());
     config_default(&G.cfg);
     pick_state_dir(self_dir);
     load_config();
@@ -1433,7 +1579,13 @@ int main(int argc, char *argv[])
         if (a.fd >= 0 && synced && !a.want_slice) {
             long long target = (now - cyc) >= CAPTURE_SECONDS ? next : cyc;
             if (target != tuned_for) {
-                const char *band = band_for_cycle(&cfg, target);
+                char grid[8], cur[8];
+                pthread_mutex_lock(&G.mu);
+                snprintf(grid, sizeof grid, "%s", cfg.grid[0] ? cfg.grid : G.gps_grid);
+                snprintf(cur, sizeof cur, "%s", G.band);
+                pthread_mutex_unlock(&G.mu);
+                int period;
+                const char *band = band_for_cycle(&cfg, grid, target, cur, &period);
                 long long dial = band_dial(band);
                 if (a.slice < 0) make_slice(&a, dial, cfg.rxant, cfg.dax_channel);
                 else {
@@ -1443,6 +1595,7 @@ int main(int argc, char *argv[])
                 pthread_mutex_lock(&G.mu);
                 snprintf(G.band, sizeof G.band, "%s", band);
                 G.dial_hz = dial;
+                G.hop_period = period;
                 pthread_mutex_unlock(&G.mu);
                 tuned_for = target;
             }
@@ -1474,7 +1627,7 @@ int main(int argc, char *argv[])
                 snprintf(band, sizeof band, "%s", G.band);
                 G.state = "decoding";
                 pthread_mutex_unlock(&G.mu);
-                if (write_c2(path, name, dial / 1e6, idat, qdat, d.n) && start_decode(&dc, path)) {
+                if (write_c2(path, name, dial / 1e6, idat, qdat, d.n) && start_decode(&dc, path, cfg.depth)) {
                     dc.cycle_t = capture_t;
                     dc.dial_hz = dial;
                     snprintf(dc.band, sizeof dc.band, "%s", band);
