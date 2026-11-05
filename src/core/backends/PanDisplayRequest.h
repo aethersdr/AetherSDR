@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AudioControlRequest.h"
+
 #include <QMetaType>
 #include <QSet>
 #include <QString>
@@ -20,7 +22,7 @@ struct PanPixelDimensions { int width; int height; };
 
 enum class PanDisplayField {
     Geometry, Band, LevelRange, Pixels, SpectrumPoints, Average, FrameRate,
-    WeightedAverage, RfGain, Wnb, WnbLevel, LoopA, LoopB, NoiseFloorPosition, NoiseFloorEnabled,
+    WeightedAverage, RfGain, Wnb, WnbLevel, LoopA, LoopB, NoiseFloorPosition, NoiseFloorEnabled, DaxIqChannel,
     WaterfallRate, WaterfallColorGain, WaterfallBlackLevel, WaterfallAutoBlack,
     WaterfallDefaults, Count
 };
@@ -36,6 +38,7 @@ struct PanDisplayControl {
 struct PanDisplayRequest {
     PanDisplayField field{PanDisplayField::Count};
     std::variant<int, bool, QString, PanGeometryRequest, PanLevelRange, PanPixelDimensions> value;
+    AudioControlGuard guard{}; // IQ binding also fences the terminal transport write.
 
     bool targetsWaterfall() const
     {
@@ -84,6 +87,7 @@ struct PanDisplayRequest {
         const int* number = std::get_if<int>(&value);
         if (!number) { return false; }
         switch (field) {
+        case Field::DaxIqChannel: return *number >= 0 && *number <= 4;
         case Field::SpectrumPoints: return *number > 0 && *number <= 65535;
         case Field::FrameRate: return *number > 0 && *number <= 100;
         case Field::Average: case Field::WnbLevel: case Field::WaterfallColorGain:

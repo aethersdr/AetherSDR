@@ -915,6 +915,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexNtpSourceControls.cpp
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
     src/core/backends/flex/FlexPanControls.cpp
+    src/core/backends/flex/FlexAudioControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
     src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
@@ -1262,6 +1263,7 @@ set(MODEL_SOURCES
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
+    src/models/RadioModel_DaxTx.cpp
     src/models/RadioModel_Setup.cpp
     src/models/RadioModel_Administration.cpp
     src/models/RadioModel_Utilities.cpp
@@ -1270,6 +1272,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_NtpSources.cpp
     src/models/RadioModel_SliceLifecycle.cpp
     src/models/RadioModel_PanControls.cpp
+    src/models/RadioModel_AudioControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp

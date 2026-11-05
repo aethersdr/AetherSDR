@@ -402,6 +402,8 @@ public:
 
     // ── Mic / monitor / processor commands ────────────────────────────────
     void setMicSelection(const QString& input);
+    quint64 micSelectionIntentRevision() const
+    { return m_controlIntentRevisions[static_cast<size_t>(TransmitControlRequest::Field::MicInput)]; }
     void setMicLevel(int level);
     void setMicAcc(bool on);
     void setSpeechProcessorEnable(bool on);

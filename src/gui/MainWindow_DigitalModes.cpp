@@ -58,6 +58,7 @@
 
 #include <QCoreApplication>
 #include <QMessageBox>
+#include <QStatusBar>
 #include <QTimer>
 
 #include <algorithm>
@@ -650,7 +651,7 @@ void MainWindow::activateRADE(int sliceId)
         m_radeEooPending = false;
         m_radeTxActive = true;
         syncKiwiSdrTransmitMute();
-        const TxCoordinator::Context context = m_radioModel.captureTxMedia(radeProducer);
+        const TxCoordinator::Context context = m_radioModel.captureDaxTxMedia(radeProducer);
         QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, context]() {
             if (context.permitsDispatch(TxCoordinator::monotonicMs())) {
                 engine->resetTx(context);
@@ -1397,7 +1398,7 @@ bool MainWindow::startDax()
     const TxCoordinator::Producer daxProducer = m_radioModel.registerTxProducer(m_daxBridge);
     connect(&m_radioModel, &RadioModel::localTransmitEngaged, m_daxBridge,
             [this, bridge = m_daxBridge, daxProducer] {
-        bridge->setTxContext(m_radioModel.captureTxMedia(daxProducer));
+        bridge->setTxContext(m_radioModel.captureDaxTxMedia(daxProducer));
     });
     connect(m_daxBridge, &DaxBridge::txAudioReady,
             this, [this](const QByteArray& pcm, const TxCoordinator::Context& context) {
@@ -1410,13 +1411,15 @@ bool MainWindow::startDax()
 
     // Save current mic selection before forcing PC audio source.
     m_savedMicSelection = m_radioModel.transmitModel().micSelection();
+    m_daxMicOverrideSession = m_radioModel.controlSession();
 
     // Default to the radio-native DAX route (dax=1, int16 mono).  RADE
     // mode overrides this to the low-latency route via setRadeMode()
     // when the user enters RADE — see AudioEngine::setRadeMode().
     m_audio->setDaxTxUseRadioRoute(true);
     m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
-    m_radioModel.sendCommand("transmit set mic_selection=PC");
+    m_daxMicOverrideRevision = m_radioModel.transmitModel().micSelectionIntentRevision() + 1;
+    m_radioModel.transmitModel().setMicSelection(QStringLiteral("PC"));
     // Don't force dax=1 here — radio-side DAX flag follows mode changes
     // via updateDaxTxMode(). Bridge up ≠ DAX TX active. (#534)
 
@@ -1458,8 +1461,11 @@ void MainWindow::stopDax()
     }
 
     // Restore original mic selection
-    if (!receiveOnly && !m_savedMicSelection.isEmpty() && m_savedMicSelection != "PC") {
-        m_radioModel.sendCommand(QString("transmit set mic_selection=%1").arg(m_savedMicSelection));
+    if (!receiveOnly && !m_savedMicSelection.isEmpty() && m_savedMicSelection != "PC"
+        && m_radioModel.controlSessionCurrent(m_daxMicOverrideSession)
+        && m_radioModel.transmitModel().micSelection() == QLatin1String("PC")
+        && m_radioModel.transmitModel().micSelectionIntentRevision() == m_daxMicOverrideRevision) {
+        m_radioModel.transmitModel().setMicSelection(m_savedMicSelection);
     }
 
     if (receiveOnly) {
@@ -1549,6 +1555,13 @@ void MainWindow::activateWFM(int sliceId)
         return;
     }
     deactivateWFM();
+    if (m_radioModel.daxIqModel().stream(WfmDemodulator::DAX_CHANNEL).exists
+        || m_radioModel.daxIqModel().createPending(WfmDemodulator::DAX_CHANNEL)) {
+        qCWarning(lcDevices) << "WFM refused: DAX IQ channel 1 is already in use";
+        statusBar()->showMessage(tr("WFM needs DAX IQ channel 1 to be free."), 5000);
+        reflectWfmButtons(false, sliceId);
+        return;
+    }
 
     m_wfmCooldown = true;
     QTimer::singleShot(1000, this, [this]{ m_wfmCooldown = false; });
@@ -1605,8 +1618,13 @@ void MainWindow::activateWFM(int sliceId)
     centerPanAtSlice();
 
     m_wfmDemod = new WfmDemodulator(this);
-    connect(m_wfmDemod, &WfmDemodulator::commandReady,
-            &m_radioModel, &RadioModel::sendCommand);
+    const RadioControlSession iqSession = m_radioModel.controlSession();
+    const QPointer<PanadapterModel> iqPan(m_radioModel.panadapter(s->panId()));
+    m_wfmDemod->setIqPanBinder([this, iqSession, iqPan](const QString& panId, int channel) {
+        return iqPan && iqPan->panId() == panId && m_radioModel.controlSessionCurrent(iqSession)
+            && m_radioModel.panadapter(panId) == iqPan
+            && m_radioModel.requestPanIqBinding(iqPan, channel) != ReceiveDispatch::Unsupported;
+    });
     m_wfmDemod->setVolume(static_cast<int>(s->audioGain()));
     connect(s, &SliceModel::audioGainChanged,
             m_wfmDemod, [demod = m_wfmDemod](float g) { demod->setVolume(static_cast<int>(g)); });

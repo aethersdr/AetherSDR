@@ -7,6 +7,7 @@
 #include "CwTextRequest.h"
 #include "PanDisplayRequest.h"
 #include "PanLifecycleRequest.h"
+#include "AudioControlRequest.h"
 
 #include <QFlags>
 #include <QList>
@@ -933,6 +934,8 @@ struct RadioCapabilities {
     // Discrete DAX IQ request rates in Hz. Empty means unsupported or unknown.
     // Applied by the existing DaxIqModel command path, including stream restore.
     QList<int> daxIqSampleRates;
+    std::optional<AudioStreamControl> audioStreamControl;
+    std::optional<GraphicEqControl> radioGraphicEqControl;
 
     // Audio DSP runs inside the radio via command-plane verbs (Flex: NR/NB/ANF/NRL/
     // ANFL/ANFT, APD, wideband NB, 8-band hardware EQ `eq RXsc`/`eq TXsc`). False for
