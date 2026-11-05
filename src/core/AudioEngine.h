@@ -341,6 +341,15 @@ public:
     Q_INVOKABLE void clearTxAccumulators();
     void discardTxMedia(const TxCoordinator::Context& context);
     void feedDaxTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
+    // TCI TX audio. Identical to feedDaxTxAudio() unless setTciTxVoiceDsp(true):
+    // then the audio first runs through the client TX voice chain the mic uses
+    // (gate, EQ, de-esser, compressor, tube, enhancer, reverb, final limiter).
+    // Off by default, because digital-mode TCI clients (WSJT-X, JTDX) send
+    // pre-shaped tones that a voice chain would distort. DAX is never affected.
+    void feedTciTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
+    // Any thread.
+    void setTciTxVoiceDsp(bool on) { m_tciTxVoiceDsp.store(on, std::memory_order_release); }
+    bool tciTxVoiceDsp() const { return m_tciTxVoiceDsp.load(std::memory_order_acquire); }
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
     void feedDecodedSpeech(const QByteArray& pcm);
@@ -1468,6 +1477,15 @@ private:
     std::unique_ptr<WsprBeacon>         m_wsprBeacon;
     std::unique_ptr<ClientQuindarTone>  m_clientQuindarTone;
     std::unique_ptr<TxVoiceProcessor>   m_txVoiceProcessor;
+    // TCI voice through the client TX chain (setTciTxVoiceDsp). A separate
+    // instance because its input is TCI's 24 kHz, not the capture device rate,
+    // and its resamplers carry state. The stage processors are shared with the
+    // mic instance: both run on this thread, and onTxAudioReady() steps the mic
+    // aside while TCI audio is fresh, so their blocks never interleave.
+    std::unique_ptr<TxVoiceProcessor>   m_tciTxVoiceProcessor;
+    std::atomic<bool> m_tciTxVoiceDsp{false};
+    // Audio thread only: the processor is reset each time the option turns on.
+    bool m_tciTxVoiceDspWasOn{false};
     // Audio-thread only: prevents duplicate queued recovery work after the
     // impossible matched-egress frame-count mismatch.
     bool m_txVoiceEgressRecoveryQueued{false};

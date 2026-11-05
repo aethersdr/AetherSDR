@@ -1883,6 +1883,7 @@ AudioEngine::AudioEngine(QObject* parent)
     , m_wsprBeacon(std::make_unique<WsprBeacon>())
     , m_clientQuindarTone(std::make_unique<ClientQuindarTone>())
     , m_txVoiceProcessor(std::make_unique<TxVoiceProcessor>())
+    , m_tciTxVoiceProcessor(std::make_unique<TxVoiceProcessor>())
 {
     // Recorder-sidetone generator: always enabled at a fixed, audible level and
     // centre pan so a Client-Side QSO recording captures the operator's sent
@@ -1971,6 +1972,10 @@ AudioEngine::AudioEngine(QObject* parent)
     };
     m_txVoiceProcessor->setProcessors(txProcessors);
     m_txVoiceProcessor->prepare(DEFAULT_SAMPLE_RATE, 16384);
+    // TCI TX audio is always 24 kHz (TciIoWorker resamples to it), so this one
+    // is prepared once and never follows the capture device.
+    m_tciTxVoiceProcessor->setProcessors(txProcessors);
+    m_tciTxVoiceProcessor->prepare(DEFAULT_SAMPLE_RATE, 16384);
     m_wsprPumpTimer = new QTimer(this);
     m_wsprPumpTimer->setTimerType(Qt::PreciseTimer);
     m_wsprPumpTimer->setInterval(5);
@@ -10533,6 +10538,63 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm, const TxCoordinator::C
     feedDaxTxAudioInternal(inPcm, true, false, TxAudioSource::ClientLeveled, context);
 }
 
+void AudioEngine::feedTciTxAudio(const QByteArray& inPcm, const TxCoordinator::Context& context)
+{
+    if (!m_tciTxVoiceDsp.load(std::memory_order_acquire) || inPcm.isEmpty()) {
+        m_tciTxVoiceDspWasOn = false;
+        feedDaxTxAudio(inPcm, context);
+        return;
+    }
+    // Same fence as feedDaxTxAudio(): the beacon owns the TX stream.
+    if (m_wsprBeacon && m_wsprBeacon->isActive()) {
+        return;
+    }
+    if (!m_tciTxVoiceDspWasOn) {
+        // Resampler and stage state from before the switch belong to other audio.
+        m_tciTxVoiceProcessor->reset();
+        m_tciTxVoiceDspWasOn = true;
+    }
+
+    // Interleaved stereo float32 at 24 kHz. The processor reads the left channel
+    // of a canonical duplicated-mono block, so fold L/R into both first; a client
+    // that fills only one channel then still transmits.
+    QByteArray block = inPcm;
+    {
+        auto* s = reinterpret_cast<float*>(block.data());
+        const int frames = block.size() / static_cast<int>(2 * sizeof(float));
+        for (int i = 0; i < frames; ++i) {
+            const float m = 0.5f * (s[2 * i] + s[2 * i + 1]);
+            s[2 * i] = m;
+            s[2 * i + 1] = m;
+        }
+    }
+    m_tciTxVoiceProcessor->setStageOrder(m_txChainPacked.load(std::memory_order_acquire));
+    // The client sets its own level (ClientLeveled): the PC mic slider is a mic
+    // control and is not applied here, as it is not on the bypass path either.
+    m_tciTxVoiceProcessor->setMicGain(1.0f);
+    m_tciTxVoiceProcessor->setRnnoiseEnabled(false);
+    const bool processed = m_tciTxVoiceProcessor->processCapturedFloat32(block);
+    if (m_tciTxVoiceProcessor->egressRecoveryPending()) {
+        // Serviced outside this block, as onTxAudioReady() does for the mic.
+        QMetaObject::invokeMethod(
+            this, [this]() { m_tciTxVoiceProcessor->recoverEgressAfterMismatch(); },
+            Qt::QueuedConnection);
+    }
+    if (!processed) {
+        return;
+    }
+
+    // The chain returns 24 kHz stereo Int16; the rest of the TCI path is float.
+    const auto* i16 = reinterpret_cast<const int16_t*>(block.constData());
+    const int n = block.size() / static_cast<int>(sizeof(int16_t));
+    QByteArray f32(n * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* f = reinterpret_cast<float*>(f32.data());
+    for (int i = 0; i < n; ++i) {
+        f[i] = static_cast<float>(i16[i]) / 32768.0f;
+    }
+    feedDaxTxAudioInternal(f32, true, false, TxAudioSource::ClientLeveled, context);
+}
+
 void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                                          bool markExternalSource,
                                          bool forceRadioDaxRoute,
@@ -10558,7 +10620,9 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
     // (WSJT-X, fldigi, PipeWire bridge, etc.) — digital modes carry
     // pre-shaped tones that would be destroyed by a voice-tuned
     // compressor or EQ.  Mic voice TX goes through onTxAudioReady,
-    // which keeps the full DSP chain.
+    // which keeps the full DSP chain. TCI voice clients can opt in
+    // with setTciTxVoiceDsp(); feedTciTxAudio() then applies the chain
+    // before calling here.
     const QByteArray& float32pcm = inPcm;
 
     // Measure DAX TX input level and emit via pcMicLevelChanged so the

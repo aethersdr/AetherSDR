@@ -176,6 +176,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         .object();
     m_lineOutIncludeTx = recording.value("lineOutIncludeTx").toBool(false);
     m_lineOutPcAudioOffConsent = recording.value("lineOutPcAudioOffConsent").toBool(false);
+    m_txVoiceDsp = AppSettings::instance().value("TciTxVoiceDsp", "False").toString()
+        == QStringLiteral("True");
     if (m_model) { m_model->setLineOutPcAudioOffConsent(m_lineOutPcAudioOffConsent); }
     m_io = std::make_unique<TciIoWorker>();
     m_io->setLineOutIncludeTx(m_lineOutIncludeTx);
@@ -3013,7 +3015,8 @@ void TciServer::setAudioEngine(AudioEngine* audio)
     m_lineOutCaptureWanted = false;
     if (audio) {
         connect(m_io.get(), &TciIoWorker::txPcmReady, audio,
-                &AudioEngine::feedDaxTxAudio, Qt::QueuedConnection);
+                &AudioEngine::feedTciTxAudio, Qt::QueuedConnection);
+        audio->setTciTxVoiceDsp(m_txVoiceDsp);
         connect(audio, &QObject::destroyed, this, [this] {
             m_audio = nullptr;
             m_lineOutCaptureWanted = false;
@@ -3029,6 +3032,17 @@ void TciServer::setAudioEngine(AudioEngine* audio)
             }, Qt::DirectConnection);
     }
     updateLineOutCapture();
+}
+
+void TciServer::setTxVoiceDsp(bool on)
+{
+    if (m_txVoiceDsp == on) { return; }
+    m_txVoiceDsp = on;
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("TciTxVoiceDsp"), on ? "True" : "False");
+    s.save();
+    if (m_audio) { m_audio->setTciTxVoiceDsp(on); }
+    emit txVoiceDspChanged(on);
 }
 
 void TciServer::setLineOutIncludeTx(bool enabled)
