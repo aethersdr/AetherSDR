@@ -79,6 +79,7 @@
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
+#include "core/WsjtxOverlayConfig.h"
 #include "core/DisplayPresence.h"
 #include "core/KiwiSdrProtocol.h"
 #include "InteractionSettings.h"
@@ -2607,6 +2608,9 @@ void SpectrumWidget::loadSettings()
         m_kiwiSdrWaterfallActive ? m_kiwiDssFloorDepth : m_flexDssFloorDepth);
     m_singleClickTune = s.value("SingleClickTune", "False").toString() == "True";
     m_showTuneGuides  = s.value("ShowTuneGuides", "False").toString() == "True";
+    // Per-pan (not global like the flat keys above) — see setShowWsjtxFreq().
+    // Read from the Principle V config object, not a flat key.
+    m_showWsjtxFreq   = wsjtxOverlayShowFreq(m_panIndex);
     m_extendedFrequencyLine = s.value("ExtendedFrequencyLine", "False").toString() == "True";
     m_extendedPassband = DisplaySettings::extendedPassband();
     m_extendedTnf = DisplaySettings::extendedTnf();
@@ -4394,6 +4398,20 @@ void SpectrumWidget::propagateGlobalDisplayToggle(
             applyToSibling(sw);
         }
     }
+}
+
+void SpectrumWidget::setShowWsjtxFreq(bool on) {
+    // Deliberately per-pan, NOT propagated to siblings (unlike
+    // setShowTuneGuides/setExtendedFrequencyLine above) — see the header
+    // comment. settingsKey() suffixes the AppSettings key by pan index
+    // (m_panIndex == 0 keeps the bare key for backward compat), the same
+    // scheme DisplayWfColorScheme/Display3DGain already use for per-pan
+    // display appearance.
+    m_showWsjtxFreq = on;
+    wsjtxOverlaySetShowFreq(m_panIndex, on);  // Principle V: writes to owned config object
+    if (on)
+        emit wsjtxListenerNeeded();  // Start listener mid-session if not running (#4526)
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setExtendedFrequencyLine(bool on) {
@@ -10644,6 +10662,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             tuneGuideAction->setChecked(m_showTuneGuides);
             connect(tuneGuideAction, &QAction::toggled, this, &SpectrumWidget::setShowTuneGuides);
 
+            // #4526: lives next to Show Tune Guides rather than a Spots-dialog
+            // checkbox, but unlike Show Tune Guides this is per-PAN, not
+            // global — showing it on the 20 m pan while hiding it on the
+            // 40 m pan is the normal case for a two-slice/two-instance WSJT-X
+            // setup. See SpectrumWidget::setShowWsjtxFreq().
+            QAction* wsjtxFreqAction = menu.addAction("Show WSJT-X Rx/Tx Frequency");
+            wsjtxFreqAction->setCheckable(true);
+            wsjtxFreqAction->setChecked(m_showWsjtxFreq);
+            connect(wsjtxFreqAction, &QAction::toggled, this, &SpectrumWidget::setShowWsjtxFreq);
+
             QAction* extendedLineAction = menu.addAction("Extended Frequency Line");
             extendedLineAction->setCheckable(true);
             extendedLineAction->setChecked(m_extendedFrequencyLine);
@@ -14686,6 +14714,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
             drawSwrSweep(frequencyPainter, specRect);
             drawSliceMarkers(frequencyPainter, specRect, wfRect);
+            drawWsjtxMarkers(frequencyPainter, specRect, wfRect);
             drawOffScreenSlices(frequencyPainter, specRect);
 
             m_overlayStatic.fill(Qt::transparent);
@@ -15875,6 +15904,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
     drawSwrSweep(p, specRect);
     drawSliceMarkers(p, specRect, wfRect);
+    drawWsjtxMarkers(p, specRect, wfRect);  // CPU path: GPU path adds this in renderGpuFrame()
     drawSmartMtrValueLabels(p);
     drawOffScreenSlices(p, specRect);
 
@@ -16446,6 +16476,33 @@ void SpectrumWidget::setSpotMarkers(const QVector<SpotMarker>& markers)
 
     const bool visualChange = !spotMarkersVisuallyEqual(m_spotMarkers, markers);
     m_spotMarkers = markers;
+    if (!visualChange) {
+        return;
+    }
+    markOverlayDirty();
+}
+
+void SpectrumWidget::setWsjtxMarkers(const QVector<WsjtxMarker>& markers)
+{
+    // MainWindow pushes an updated list on every WSJT-X Status (roughly once
+    // per decode cycle, more often while transmitting) — skip the overlay
+    // texture rebuild when nothing actually moved, matching setSpotMarkers()
+    // above.
+    const bool visualChange = [&] {
+        if (m_wsjtxMarkers.size() != markers.size()) return true;
+        for (int i = 0; i < markers.size(); ++i) {
+            const auto& a = m_wsjtxMarkers.at(i);
+            const auto& b = markers.at(i);
+            if (a.id != b.id || a.transmitting != b.transmitting ||
+                a.mode != b.mode ||
+                std::abs(a.rxFreqHz - b.rxFreqHz) > 0.5 ||
+                std::abs(a.txFreqHz - b.txFreqHz) > 0.5) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    m_wsjtxMarkers = markers;
     if (!visualChange) {
         return;
     }
@@ -18121,6 +18178,118 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         if (!so.isActive) drawOne(so);
     for (const auto& so : m_sliceOverlays)
         if (so.isActive) drawOne(so);
+}
+
+// ─── WSJT-X Rx/Tx frequency overlay (#4526) ───────────────────────────────────
+//
+// Deliberately its own draw path rather than routed through drawSpotMarkers():
+// this is the digital-mode program's live Rx/Tx position (persistent lines,
+// like a slice VFO marker), not a fading DX spot, and the issue calls out
+// that the two must stay visually distinct so operators don't confuse a
+// bandmap tick with "this is where WSJT-X is right now". Decoded-station
+// markers are unaffected — those already exist via SpotHub's WSJT-X feed and
+// drawSpotMarkers(), per the triage on #4526.
+// Occupied-bandwidth widths per WSJT-X mode, used to render each Rx/Tx cue as
+// a double line (two edges) instead of a single centre line. These are fixed
+// protocol values (not derived from tone/symbol-rate math) per operator
+// direction, 2026-09-16.
+constexpr double kWsjtxFt8WidthHz = 50.0;
+constexpr double kWsjtxFt4WidthHz = 90.0;
+constexpr double kWsjtxFt2WidthHz = 150.0;
+
+namespace {
+double wsjtxModeWidthHz(const QString& mode)
+{
+    if (mode.compare(QStringLiteral("FT4"), Qt::CaseInsensitive) == 0) {
+        return kWsjtxFt4WidthHz;
+    }
+    if (mode.compare(QStringLiteral("FT2"), Qt::CaseInsensitive) == 0) {
+        return kWsjtxFt2WidthHz;
+    }
+    // FT8 and any unrecognized/empty mode string both fall back to the FT8
+    // width rather than a single line, so an unknown mode still renders a
+    // sensible bracket instead of silently changing shape.
+    return kWsjtxFt8WidthHz;
+}
+} // namespace
+
+void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect)
+{
+    Q_UNUSED(specRect);
+    if (!m_showWsjtxFreq || m_wsjtxMarkers.isEmpty() || wfRect.isEmpty()) {
+        return;
+    }
+
+    const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
+
+    // Green/red follows the issue's own suggested scheme and matches the
+    // existing RTTY mark/space cue colors (drawSliceMarkers, above) rather
+    // than inventing a third color pair for "two related but different
+    // frequencies" on the same panadapter.
+    const QColor rxColor = AetherSDR::ThemeManager::instance().color("color.accent.success");
+    const QColor txColor = AetherSDR::ThemeManager::instance().color("color.accent.danger");
+
+    // Waterfall-only (2026-09-16): the spectrum trace already shows the live
+    // signal shape, so a persistent Rx/Tx cue there duplicates information
+    // and competes visually with the FFT peaks. The waterfall is the
+    // historical record (#1270-style reasoning, see drawSliceMarkers'
+    // passband fill above), so that's where a standing position cue belongs.
+    auto drawFrequencyLine = [&](int x, const QColor& col) {
+        p.setPen(QPen(col, 1));
+        p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+    };
+
+    // Double line: one at each edge of the mode's occupied bandwidth,
+    // freqMhz is the lower audio edge of the signal (WSJT-X "Rx DF" convention
+    // reports the start of the decode subband, not the center). Draw one line
+    // at the lower edge and one at the upper edge so the signal occupies the
+    // space between them.
+    auto drawModeWidthLines = [&](double freqMhz, const QColor& col, const QString& mode) {
+        const double widthHz = wsjtxModeWidthHz(mode);
+        drawFrequencyLine(mhzToX(freqMhz), col);
+        drawFrequencyLine(mhzToX(freqMhz + widthHz / 1.0e6), col);
+    };
+
+    QFont labelFont = p.font();
+    labelFont.setPixelSize(10);
+    labelFont.setBold(true);
+    p.setFont(labelFont);
+    const QFontMetrics fm(labelFont);
+    const int labelY = wfRect.top() + fm.height();
+
+    for (const auto& marker : std::as_const(m_wsjtxMarkers)) {
+        // No dial-frequency gate here: WSJT-X Rx DF is an audio offset above
+        // the dial, so an operator zoomed into the passband will have the dial
+        // off-screen while the Rx/Tx brackets are on-screen. Filtering on the
+        // dial would hide the markers exactly when the operator is most zoomed
+        // in. Each line is already span-checked individually below.
+        const double rxMhz = marker.rxFreqHz / 1.0e6;
+        const double modeWidthMhz = wsjtxModeWidthHz(marker.mode) / 1.0e6;
+        // Interval intersection: draw if any part of [lower, upper] is visible.
+        // A lower-edge-only check hides the whole bracket when zoomed so that
+        // only the upper edge is on screen.
+        if (rxMhz <= endMhz && rxMhz + modeWidthMhz >= startMhz) {
+            drawModeWidthLines(rxMhz, rxColor, marker.mode);
+            p.setPen(rxColor);
+            // Label at the centre of the bracket (lower edge + half width).
+            const double rxCenterMhz = rxMhz + modeWidthMhz / 2.0;
+            p.drawText(mhzToX(rxCenterMhz) + 3, labelY,
+                       QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
+        }
+
+        // Tx marker only when it means something: actively transmitting, or
+        // split (Tx differs from Rx) so a QSY-in-progress Reply doesn't read
+        // as a permanent second marker sitting on top of Rx (issue: "a
+        // distinct marker at Tx frequency when it differs").
+        const bool txDiffersFromRx = std::abs(marker.txFreqHz - marker.rxFreqHz) > 1.0;
+        if (marker.transmitting || txDiffersFromRx) {
+            const double txMhz = marker.txFreqHz / 1.0e6;
+            if (txMhz <= endMhz && txMhz + modeWidthMhz >= startMhz) {
+                drawModeWidthLines(txMhz, txColor, marker.mode);
+            }
+        }
+    }
 }
 
 // ─── Frequency scale bar ──────────────────────────────────────────────────────

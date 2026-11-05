@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 280 touchpoint headers (228 core, 52 models) — 280/280 tagged, 0/280 converted.
+**Totals:** 281 touchpoint headers (229 core, 52 models) — 281/281 tagged, 0/281 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -193,6 +193,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/WfmSettings.h` | 1 | ui-support — Client-side settings blob (AppSettings JSON) storing WFM audio output device id + legacy-key migration. | unconverted |
 | `core/WindowsFirewall.h` | 1 | ui-support — Reads Windows Defender Firewall's rules for the AetherSDR executable and runs the UAC netsh fix. Host-OS plumbing, not radio state; read only by the Network Diagnostics Windows Firewall page. | unconverted |
 | `core/WsjtxClient.h` | 2 | ui-support — UDP listener for local WSJT-X app decodes/status; desktop-side integration feeding the universal spot surface | unconverted |
+| `core/WsjtxOverlayConfig.h` | 4 | ui-support — AppSettings-backed per-pan WSJT-X Rx/Tx overlay toggles and spot-posting switch; pure desktop preference, no radio state | unconverted |
 | `core/WsprBeacon.h` | 1 | universal — WSPR type-1 message encoder and sample-accurate continuous-phase 4-FSK generator (lock-free, allocation-free on the audio thread). Radio-agnostic engine DSP. | unconverted |
 | `core/aprs/AprsBeacon.h` | 1 | universal — APRS position/status beacon composition; radio-agnostic packet operating feature. | unconverted |
 | `core/aprs/AprsMessenger.h` | 2 | universal — APRS messaging (send/ack/retry) over canonical TX path; radio-agnostic. | unconverted |

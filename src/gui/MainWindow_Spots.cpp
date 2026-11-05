@@ -20,6 +20,7 @@
 #include "core/MqttSettings.h"
 #endif
 #include "core/AppSettings.h"
+#include "core/WsjtxOverlayConfig.h"
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
@@ -547,6 +548,78 @@ void MainWindow::wireSpotSubsystem()
     connect(&m_radioModel.spotModel(), &SpotModel::spotsCleared,
             this, [this] { m_passiveSpotExpiryMs.clear(); m_n1mmSpotIdByKey.clear(); });
 
+    // WSJT-X Rx/Tx frequency overlay instance timeout (#4526). Reuses the
+    // same 1 Hz timer above rather than adding a second QTimer for one more
+    // sweep. 45 s comfortably outlasts every mode's Status cadence (FT8 15 s,
+    // FT4 7.5 s, up to WSPR's 2-minute cycle WSJT-X still pings Status well
+    // inside) while still clearing a marker within a reasonable window after
+    // that WSJT-X instance exits without a clean Close or the network drops.
+    connect(passiveSpotExpiryTimer, &QTimer::timeout, this, [this] {
+        if (m_wsjtxInstanceLastSeenMs.isEmpty())
+            return;
+        constexpr qint64 kWsjtxInstanceTimeoutMs = 45000;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        bool anyExpired = false;
+        for (auto it = m_wsjtxInstanceLastSeenMs.begin(); it != m_wsjtxInstanceLastSeenMs.end(); ) {
+            if (now - it.value() > kWsjtxInstanceTimeoutMs) {
+                m_wsjtxInstances.remove(it.key());
+                it = m_wsjtxInstanceLastSeenMs.erase(it);
+                anyExpired = true;
+            } else {
+                ++it;
+            }
+        }
+        if (anyExpired) {
+            rebuildWsjtxMarkers();
+        }
+    });
+
+    // ── WSJT-X Rx/Tx frequency overlay (#4526) ──────────────────────────────
+    // Separate from the spotReceived/queueSpotCmd path above: this is the
+    // digital-mode program's live Rx/Tx position, sourced from Status (type
+    // 1), not a decoded station. statusReceived() previously had no
+    // consumer connected anywhere in the app.
+    connect(m_wsjtxClient, &WsjtxClient::statusReceived,
+            this, [this](const WsjtxStatus& status) {
+        // Cap at 16 instances: far more than any real station runs, but bounded
+        // so a rogue LAN host cannot drive unbounded GUI-thread rebuilds by
+        // spoofing many distinct instance IDs (Principle VII — boundary input
+        // validation). Known IDs always update regardless of the cap.
+        constexpr int kMaxWsjtxInstances = 16;
+        if (!m_wsjtxInstances.contains(status.id)
+                && m_wsjtxInstances.size() >= kMaxWsjtxInstances)
+            return;
+        m_wsjtxInstances[status.id] = status;
+        m_wsjtxInstanceLastSeenMs[status.id] = QDateTime::currentMSecsSinceEpoch();
+        rebuildWsjtxMarkers();
+    });
+    connect(m_wsjtxClient, &WsjtxClient::stopped, this, [this] {
+        if (m_wsjtxInstances.isEmpty()) return;
+        m_wsjtxInstances.clear();
+        m_wsjtxInstanceLastSeenMs.clear();
+        rebuildWsjtxMarkers();
+    });
+    // A clean exit clears the marker immediately rather than waiting out the
+    // 45 s activity-timeout sweep below (RFC #4526 review item 3) — the
+    // sweep is the fallback for a WSJT-X crash/kill, not the normal path.
+    connect(m_wsjtxClient, &WsjtxClient::instanceClosed, this, [this](const QString& id) {
+        if (!m_wsjtxInstances.contains(id)) return;
+        m_wsjtxInstances.remove(id);
+        m_wsjtxInstanceLastSeenMs.remove(id);
+        rebuildWsjtxMarkers();
+    });
+    // Heartbeat carries no frequency data — it only proves the instance is
+    // still running through a quiet spell in Status traffic (e.g. Monitor
+    // off), so it refreshes the activity timeout WITHOUT touching
+    // m_wsjtxInstances or triggering a marker rebuild (RFC #4526 review item
+    // 4). An instance never seen via Status has nothing to place on the
+    // panadapter yet, so its Heartbeat is ignored rather than creating an
+    // entry with no frequency.
+    connect(m_wsjtxClient, &WsjtxClient::instanceHeartbeat, this, [this](const QString& id) {
+        if (!m_wsjtxInstances.contains(id)) return;
+        m_wsjtxInstanceLastSeenMs[id] = QDateTime::currentMSecsSinceEpoch();
+    });
+
     // N1MM/DXLog spots (#2906): the logger sends explicit add/update/delete, so
     // these bypass queueSpotCmd's freq dedup and key on
     // N1MMSpotParser::spotKey() (callsign+band); a long lifetime backstops a
@@ -672,6 +745,14 @@ void MainWindow::wireSpotSubsystem()
 
     connect(m_wsjtxClient, &WsjtxClient::spotReceived,
             this, [this, isDuplicateSpot, spotLifetimeSeconds, addPassiveSpotToModel](const DxSpot& spot) {
+        // Decoded-station spots and the Rx/Tx frequency overlay (#4526) share
+        // one WSJT-X listener but are otherwise independent — this toggle
+        // lets an operator run the overlay alone, with no decode markers and
+        // no "spot add" traffic to the radio, without stopping the listener
+        // Status (Rx/Tx) parsing depends on. Default on: preserves existing
+        // behavior for anyone who never sees this new checkbox.
+        if (!wsjtxOverlayPostSpots())  // Principle V: reads from owned config object
+            return;
         if (!m_radioModel.isConnected()) return;
         if (isDuplicateSpot(spot)) return;
 
@@ -762,6 +843,29 @@ void MainWindow::wireSpotSubsystem()
     });
 #endif
 
+}
+
+// Pushes the current set of live WSJT-X instances (m_wsjtxInstances) to every
+// panadapter's SpectrumWidget as WsjtxMarker entries (#4526). Called whenever
+// that set changes: a new/updated Status, a Heartbeat, an instance closing or
+// timing out, or the listener stopping. The marker DATA is broadcast to every
+// pan uniformly — cheap, and each pan already culls to markers within its own
+// visible frequency span (drawWsjtxMarkers()). Whether a given pan actually
+// PAINTS them is a separate, per-pan decision the pan's own right-click menu
+// makes (SpectrumWidget::setShowWsjtxFreq(), persisted per pan index) — this
+// function never touches that flag.
+void MainWindow::rebuildWsjtxMarkers()
+{
+    QVector<SpectrumWidget::WsjtxMarker> markers;
+    markers.reserve(m_wsjtxInstances.size());
+    for (auto it = m_wsjtxInstances.cbegin(); it != m_wsjtxInstances.cend(); ++it) {
+        const WsjtxStatus& st = it.value();
+        markers.append({st.id, st.dialFreqHz, st.rxFreqHz, st.txFreqHz, st.transmitting, st.mode});
+    }
+
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        applet->spectrumWidget()->setWsjtxMarkers(markers);
+    }
 }
 
 } // namespace AetherSDR

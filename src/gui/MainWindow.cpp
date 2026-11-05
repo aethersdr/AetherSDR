@@ -256,6 +256,7 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
+#include "core/WsjtxOverlayConfig.h"
 #include "core/AudioDevicePreferencePolicy.h"
 #include "core/NnrSettings.h"
 #include "core/AutomationServer.h"
@@ -6960,12 +6961,19 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!call.isEmpty() && !m_rbnClient->isConnected())
                     QMetaObject::invokeMethod(m_rbnClient, [=, this] { m_rbnClient->connectToCluster(host, rPort, call); });
             }
-            // Auto-start WSJT-X listener if enabled
-            if (cs.value("WsjtxAutoStart", "False").toString() == "True") {
-                QString wAddr = cs.value("WsjtxAddress", "224.0.0.1").toString();
-                quint16 wPort = static_cast<quint16>(cs.value("WsjtxPort", 2237).toInt());
-                if (!m_wsjtxClient->isListening())
-                    QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(wAddr, wPort); });
+            // Auto-start WSJT-X listener if enabled for spots, or if any pan has
+            // the Rx/Tx overlay enabled (#4526). Per-pan state lives in the
+            // Principle V WsjtxOverlay config object.
+            {
+                bool needListener = cs.value("WsjtxAutoStart", "False").toString() == "True";
+                if (!needListener)
+                    needListener = wsjtxOverlayAnyPanEnabled();
+                if (needListener) {
+                    QString wAddr = cs.value("WsjtxAddress", "224.0.0.1").toString();
+                    quint16 wPort = static_cast<quint16>(cs.value("WsjtxPort", 2237).toInt());
+                    if (!m_wsjtxClient->isListening())
+                        QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(wAddr, wPort); });
+                }
             }
             // Auto-start POTA polling if enabled
             if (cs.value("PotaAutoStart", "False").toString() == "True") {

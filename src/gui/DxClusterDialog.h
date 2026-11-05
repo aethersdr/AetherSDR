@@ -229,6 +229,11 @@ private:
     QCheckBox*      m_wsjtxFilterCQ;
     QCheckBox*      m_wsjtxFilterPOTA;
     QCheckBox*      m_wsjtxFilterCallingMe;
+    // Master switch for decode->spot posting, independent of the Rx/Tx
+    // frequency overlay (which lives on each panadapter's own right-click
+    // menu, not in this dialog — see SpectrumWidget::setShowWsjtxFreq()) and
+    // of listening itself (#4526). Default on.
+    QCheckBox*      m_wsjtxPostSpots{nullptr};
 
     // POTA tab
     QSpinBox*       m_potaIntervalSpin;

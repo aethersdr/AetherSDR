@@ -15,6 +15,7 @@
 #include "core/DxSpotLineParser.h"
 #include "core/GoClusterSettings.h"
 #include "core/AppSettings.h"
+#include "core/WsjtxOverlayConfig.h"
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
@@ -1456,6 +1457,22 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
                        "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c.name());
     };
 
+    // ── Post decoded stations as spots (#4526) ───────────────────────────
+    // Master switch for the filter row below: unchecking this stops WSJT-X
+    // decodes from becoming spots at all — no waterfall markers, no "spot
+    // add" traffic to the radio — while leaving the listener (and the Rx/Tx
+    // frequency overlay, which depends on the same listener's Status
+    // messages) running. Lets an operator use the overlay on its own
+    // without decode-spot clutter. Default on: existing installs keep
+    // today's behavior unless this new box is unchecked.
+    m_wsjtxPostSpots = new QCheckBox("Post decoded stations as spots");
+    m_wsjtxPostSpots->setChecked(wsjtxOverlayPostSpots());
+    ThemeManager::instance().applyStyleSheet(m_wsjtxPostSpots, "QCheckBox { color: {{color.text.primary}}; }");
+    connect(m_wsjtxPostSpots, &QCheckBox::toggled, this, [](bool on) {
+        wsjtxOverlaySetPostSpots(on);  // Principle V: writes to owned config object
+    });
+    layout->addWidget(m_wsjtxPostSpots);
+
     // CQ color + checkbox
     QColor cqColor(s.value("WsjtxColorCQ", "#00FF00").toString());
     m_wsjtxColorCQ = new QPushButton;
@@ -1549,6 +1566,14 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     filterRow->addWidget(defaultLabel);
 
     layout->addLayout(filterRow);
+
+    // Note: the Rx/Tx frequency overlay's on/off toggle (#4526) does NOT live
+    // here. It moved to each panadapter's own right-click menu ("Show WSJT-X
+    // Rx/Tx Frequency", next to "Show Tune Guides") and is per-pan rather
+    // than a single dialog-wide switch — see SpectrumWidget::setShowWsjtxFreq().
+    // "Post decoded stations as spots" above is unrelated and stays here,
+    // since it's about the WSJT-X listener's spot-posting behavior, not
+    // panadapter display.
 
     // ── Console output ──────────────────────────────────────────────────
     // Decodes label + spot lifetime slider
