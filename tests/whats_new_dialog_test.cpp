@@ -81,7 +81,9 @@ void canonWindow()
 
         // The notes are rich text: their colours come from this theme's canon
         // tokens, not the old fixed dark palette.
-        WhatsNewDialogTestAccess::notes(*d, QStringLiteral("# Heading\n\nSome **text** and [a link](https://example.com)."));
+        WhatsNewDialogTestAccess::notes(*d, QStringLiteral(
+            "# Heading\n\nSome **text** and [a link](https://example.com), "
+            "[a **bold** link](https://example.com/b) and [another](https://example.com/c)."));
         auto* browser = d->findChild<QTextBrowser*>("whatsNewNotes");
         const QString docSheet = browser ? browser->document()->defaultStyleSheet() : QString();
         const QString ink = tm.color(d, QStringLiteral("color.canon.ink")).name();

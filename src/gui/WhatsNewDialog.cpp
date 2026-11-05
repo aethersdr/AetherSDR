@@ -22,6 +22,8 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QList>
+#include <QPair>
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollBar>
@@ -266,18 +268,23 @@ void recolourLinks(QTextDocument* document, const QColor& colour)
 {
     if (!document)
         return;
+    // Collect first: merging a format can split or join the fragments being
+    // iterated (the same care HelpDialog::applyLinkColour() takes).
+    QList<QPair<int, int>> anchors;
     for (QTextBlock block = document->begin(); block.isValid(); block = block.next()) {
         for (auto it = block.begin(); !it.atEnd(); ++it) {
             const QTextFragment fragment = it.fragment();
-            if (!fragment.isValid() || !fragment.charFormat().isAnchor())
-                continue;
-            QTextCursor cursor(document);
-            cursor.setPosition(fragment.position());
-            cursor.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
-            QTextCharFormat format;
-            format.setForeground(colour);
-            cursor.mergeCharFormat(format);
+            if (fragment.isValid() && fragment.charFormat().isAnchor())
+                anchors.append({fragment.position(), fragment.length()});
         }
+    }
+    QTextCharFormat format;
+    format.setForeground(colour);
+    for (const auto& [position, length] : anchors) {
+        QTextCursor cursor(document);
+        cursor.setPosition(position);
+        cursor.setPosition(position + length, QTextCursor::KeepAnchor);
+        cursor.mergeCharFormat(format);
     }
 }
 
