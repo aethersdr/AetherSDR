@@ -2,16 +2,22 @@
 // JSON parse; malformed replies are refused and out-of-range spots and
 // cycles dropped; the settings body round-trips through the receiver's own
 // keys; a spot becomes a SpotHub DxSpot; and only LAN or tailnet addresses
-// are tried. Socket-free.
+// are tried; the package bundled in AetherSDR matches its pin. Socket-free;
+// files only in a temporary dir.
 
 #include "core/DxSpot.h"
+#include "core/LegacyWaveformPackage.h"
 #include "core/WsprAgent.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTemporaryDir>
 
 #include <cstdio>
 
@@ -136,6 +142,33 @@ int main(int argc, char** argv)
     check(wspr::reachableAddress(QHostAddress("100.114.103.82")), "a tailnet shim address is reachable");
     check(!wspr::reachableAddress(QHostAddress("8.8.8.8")), "a public address is not tried");
     check(!wspr::reachableAddress(QHostAddress()), "no address is not tried");
+
+    // ── the bundled package ───────────────────────────────────────────────
+    check(isWsprWaveform(QStringLiteral("AetherWSPR"), false) && !isWsprWaveform(QStringLiteral("AetherWSPR"), true)
+              && !isWsprWaveform(QStringLiteral("AetherHealth"), false),
+          "the receiver's legacy row is recognized, and nothing else is");
+    {
+        QTemporaryDir dir;
+        QString error;
+        const QString path = wspr::writeBundledPackage(dir.path(), &error);
+        QFile f(path);
+        const QByteArray bytes = f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+        check(!path.isEmpty() && bytes.size() == WsprPackage::kSize
+                  && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()
+                         == QByteArray(WsprPackage::kSha256),
+              "the bundled package is written and matches its pin");
+        f.close();
+        const LegacyWaveformPackageInfo info = inspectLegacyWaveformPackageFile(path);
+        check(info.valid && info.waveformName == QLatin1String(kWsprWaveformName)
+                  && info.version == QLatin1String(WsprPackage::kVersion),
+              "it is a valid legacy waveform named AetherWSPR, at the pinned version");
+        QTemporaryDir other;
+        QString why;
+        const QString none = wspr::writeBundledPackage(other.path(), &why, QStringLiteral(":/cty.dat"));
+        check(none.isEmpty() && !why.isEmpty()
+                  && !QFile::exists(QDir(other.path()).filePath(QStringLiteral("AetherWSPR.ssdr_waveform"))),
+              "a resource that doesn't match the pin is refused and nothing is written");
+    }
 
     std::printf("%s\n", g_failed ? "FAILED" : "PASSED");
     return g_failed ? 1 : 0;

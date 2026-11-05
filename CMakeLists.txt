@@ -1417,6 +1417,7 @@ set(GUI_SOURCES
     src/gui/WaveformsDialog.cpp
     src/gui/WaveformEnvironmentDialog.cpp
     src/gui/TailnetShimDialog.cpp
+    src/gui/WsprConfigureWindow.cpp
     src/gui/QrCodeImage.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp

@@ -38,6 +38,8 @@ private slots:
     void onInstallLegacyClicked();
     void onInstallDockerClicked();
     void onInstallRemoteAccessClicked();
+    // The WSPR receiver (tools/wspr-agent), bundled in AetherSDR.
+    void onInstallWsprClicked();
     // Removes the installed remote-access shim (the container, or on a radio
     // without a Waveform Processor the legacy waveform) and installs the
     // pinned one again, for a computer that lacks the radio's admin token
@@ -94,6 +96,7 @@ private:
     QToolButton*       m_installBtn{nullptr};
     QAction*           m_installDockerAction{nullptr};
     QAction*           m_installRemoteAccessAction{nullptr};
+    QAction*           m_installWsprAction{nullptr};
     struct RowNotice {
         QString text;
         QString tone;      // "pending", "ok" or "error"

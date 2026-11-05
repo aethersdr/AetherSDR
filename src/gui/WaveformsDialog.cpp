@@ -10,7 +10,9 @@
 #include "core/TailnetShimDownloader.h"
 #include "core/RadioHealthClient.h"
 #include "core/RadioHealthPackage.h"
+#include "core/WsprAgent.h"
 #include "TailnetShimDialog.h"
+#include "WsprConfigureWindow.h"
 #include "WaveformEnvironmentDialog.h"
 #include "FramelessResizer.h"
 #include "CanonMessageBox.h"
@@ -1403,6 +1405,9 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     // this AetherSDR pins and verified by SHA-256 before it is installed.
     m_installRemoteAccessAction = installMenu->addAction(
         tr("Remote Access (Tailscale)"), this, &WaveformsDialog::onInstallRemoteAccessClicked);
+    // The WSPR receiver ships inside AetherSDR, pinned like the health tools.
+    m_installWsprAction = installMenu->addAction(
+        tr("WSPR Receiver"), this, &WaveformsDialog::onInstallWsprClicked);
     installMenu->addSeparator();
     installMenu->addAction(tr("Legacy Waveform (.ssdr_waveform)..."),
                            this, &WaveformsDialog::onInstallLegacyClicked);
@@ -1613,6 +1618,23 @@ void WaveformsDialog::updateInstallButtonState()
         m_installRemoteAccessAction->setToolTip(remoteTip);
         m_installRemoteAccessAction->setStatusTip(remoteTip);
     }
+    if (m_installWsprAction) {
+        // A legacy waveform: any radio with waveforms takes it. Its spots are
+        // read over the LAN or through Remote Access.
+        const bool reachable = wspr::reachableAddress(m_radioModel->radioAddress());
+        const bool hasWaveforms = m_radioModel->backendCapabilities().hasWaveforms;
+        m_installWsprAction->setEnabled(!busy && connected && hasWaveforms && reachable);
+        const QString wsprTip = busy ? tr("A waveform install is already in progress.")
+            : !connected            ? tr("Connect to a radio before installing the WSPR receiver.")
+            : !hasWaveforms         ? tr("This radio doesn't run waveforms.")
+            : !reachable            ? tr("Connect over the radio's local network or Remote Access to install "
+                                         "the WSPR receiver.")
+                                    : tr("Install the WSPR receiver (version %1), a receive-only WSPR "
+                                         "decoder that runs on the radio.")
+                                          .arg(QString::fromLatin1(WsprPackage::kVersion));
+        m_installWsprAction->setToolTip(wsprTip);
+        m_installWsprAction->setStatusTip(wsprTip);
+    }
     if (busy) {
         m_installDockerAction->setToolTip(tr("A waveform install is already in progress."));
     } else if (dockerReady) {
@@ -1655,6 +1677,26 @@ void WaveformsDialog::onInstallRemoteAccessClicked()
         return;
     }
     installRemoteAccess(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+void WaveformsDialog::onInstallWsprClicked()
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return;
+    }
+    // The package ships inside AetherSDR; the installer wants a file.
+    QString error;
+    const QString path = wspr::writeBundledPackage(
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+            + QStringLiteral("/waveforms/aether-wspr-%1").arg(QString::fromLatin1(WsprPackage::kVersion)),
+        &error);
+    if (path.isEmpty()) {
+        ScopedChildWidget<CanonMessageBox> box(tr("WSPR Receiver Not Installed"), error, this);
+        box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
+        box.get()->exec();
+        return;
+    }
+    installWaveformPath(false, path, m_radioModel);
 }
 
 void WaveformsDialog::installRemoteAccess(bool container)
@@ -2490,6 +2532,24 @@ void WaveformsDialog::refreshWaveformList()
                 });
                 open = dialog;
                 dialog->show();
+            });
+        }
+
+        // The WSPR receiver: Configure… opens its settings.
+        if (isWsprWaveform(name, isContainer)) {
+            configureBtn = new QPushButton(tr("Configure…"), actionWidget);
+            configureBtn->setAccessibleName(tr("Configure the WSPR receiver"));
+            connect(configureBtn, &QPushButton::clicked, this, [this]() {
+                static QPointer<WsprConfigureWindow> open;
+                if (open) {
+                    open->raise();
+                    open->activateWindow();
+                    return;
+                }
+                auto* window = new WsprConfigureWindow(m_radioModel, this);
+                window->setAttribute(Qt::WA_DeleteOnClose);
+                open = window;
+                window->show();
             });
         }
 
