@@ -538,7 +538,6 @@ private:
     bool m_tuneBroadcastQueued { false };
     QList<QPair<QPointer<TciClient>, int>> m_tuneRequesters;  // owed an answer
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
-    float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
     float             m_cachedMicLevel{-50.0f};
     float             m_cachedAlc{0.0f};       // SW-ALC peak, dBFS
