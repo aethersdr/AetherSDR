@@ -387,6 +387,63 @@ int main(int argc, char** argv)
               "and the live noise blanker");
     }
 
+    // ---- each seam call reaches its own receiver, and no other ----
+    // Slice i and pan "anan-i" are receiver i, one per kReceiverRoutes entry.
+    // The first id past the table names no receiver, so a call addressed to
+    // it must change nothing. RX1's state is read back through its DSP
+    // config, the state a connect or a rate change would build from.
+    {
+        AnanBackend backend;
+        backend.setSliceMode(0, QStringLiteral("LSB"));
+        backend.setSliceAgc(0, QStringLiteral("slow"), 40);
+        backend.setPanRfGain(QStringLiteral("anan-0"), -6);
+        const AnanRxDsp::Config before = backend.liveRxConfigForTest();
+
+        const int absent = static_cast<int>(kReceiverRoutes.size());
+        const QString absentPan = QStringLiteral("anan-%1").arg(absent);
+        backend.setSliceMode(absent, QStringLiteral("CWU"));
+        backend.setSliceFilter(absent, -50, 50);
+        backend.setSliceAgc(absent, QStringLiteral("fast"), 90);
+        backend.requestSliceAgc(absent, {SliceAgcRequest::Field::OffLevel, QStringLiteral("fast"),
+                                         90, 80, SliceAgcRequest::Origin::Operator});
+        backend.setSliceNoiseBlanker(absent, AetherSDR::NoiseBlankerKind::Impulse, 70,
+                                     AetherSDR::NoiseBlankerFill::Interpolate);
+        backend.setPanRfGain(absentPan, -20);
+
+        const AnanRxDsp::Config after = backend.liveRxConfigForTest();
+        check(backend.modeForTest() == QStringLiteral("LSB") && after.mode == before.mode
+                  && after.filterLowHz == before.filterLowHz
+                  && after.filterHighHz == before.filterHighHz,
+              "a mode or filter for a slice this backend does not have leaves RX1's alone");
+        check(after.agcMode == before.agcMode
+                  && after.maximumAgcGainDb == before.maximumAgcGainDb
+                  && after.agcFixedGainDb == before.agcFixedGainDb,
+              "an AGC edit for a missing slice leaves RX1's AGC alone");
+        check(!backend.noiseBlankerOnForTest(),
+              "a noise blanker for a missing slice leaves RX1's off");
+        check(backend.attenuationDbForTest() == 6,
+              "an RF gain for a pan this backend does not have leaves RX1's attenuator alone");
+        check(backend.requestSliceDsp(absent, {SliceDspRequest::Feature::Nb,
+                  SliceDspRequest::Field::Enabled, true, 80}) == ReceiveDispatch::Unsupported
+                  && backend.requestSliceAudio(absent, {SliceAudioRequest::Field::Gain, 37})
+                         == ReceiveDispatch::Unsupported,
+              "the typed DSP and audio routes refuse a slice this backend does not have");
+    }
+
+    // ---- the session asks the radio for one DDC per receiver, RX1 first ----
+    // P2Client::Params::activeDdcs is authoritative when it is not empty, and
+    // its first entry is the link DDC that linkUp and the connect timeout key on.
+    {
+        AnanBackend backend;
+        const P2Client::Params params = backend.sessionParamsForTest();
+        check(params.activeDdcs.size() == kReceiverRoutes.size(),
+              "the session's DDC list has one entry per receiver");
+        check(!params.activeDdcs.empty() && params.activeDdcs.front().ddc == kRx1Route.ddc
+                  && params.activeDdcs.front().adcIndex == kRx1Route.adc
+                  && params.activeDdcs.front().rateKsps == 48,
+              "RX1 comes first, on its routed DDC and ADC, at the first-connect rate");
+    }
+
     // ---- the knob shows what the DSP runs, through RadioModel (#5988) ----
     // SliceModel's own default is 65. The backend's published AGC replaces it,
     // so a touch or bookmark recall starts from what the DSP runs.
