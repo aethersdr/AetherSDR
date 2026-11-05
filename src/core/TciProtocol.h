@@ -55,6 +55,13 @@ public:
         bool locked { false };
     };
 
+    // keyer: keys the TX slice's CW, as it did before it was arbitrated; its
+    // trx and duration arguments are not used.
+    struct KeyerRequest
+    {
+        bool down { false };
+    };
+
     explicit TciProtocol(RadioModel* model, TciRoutingState* routingState = nullptr,
                          const TciTrxMap* trxMap = nullptr);
 
@@ -81,6 +88,7 @@ public:
     {
         m_centerLockQuery = std::move(query);
     }
+    std::optional<KeyerRequest> takeKeyerRequest();
 
     // After handleCommand(), if the command was a master-volume SET, this
     // returns the requested level (0-100). -1 means no master-volume change
@@ -287,6 +295,7 @@ private:
     std::optional<TuneRequest> m_tuneRequest;
     std::optional<CenterLockRequest> m_centerLockRequest;
     std::function<bool(int)> m_centerLockQuery;
+    std::optional<KeyerRequest> m_keyerRequest;
     int         m_pendingMasterVolume{-1};   // -1 = no change requested
     int         m_pendingTxGain{-1};         // -1 = no change requested
     int         m_activeTrx{-1};             // -1 = focus not yet known (#4160)
