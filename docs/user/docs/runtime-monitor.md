@@ -90,6 +90,12 @@ Pages are grouped in a tree on the left:
 - The chart **Timeframe** offers 1 minute, 5 minutes, 15 minutes, 1 hour, 1 day and 1 week.
 - **Search diagnostics** (Ctrl+F, ⌘F on macOS) filters the pages by symptom, stream, protocol or measurement. Try *jitter*, *underrun*, *UDP*, *packet gaps*, *bitrate* or *WSJT-X*.
 
+On Flex radios, a busy display skips superseded spectrum frames and discards old
+queued waterfall rows so it can return to current reception. Meter freshness
+starts when the sample arrives, so waiting for the display cannot make an old
+sample appear fresh. These local delivery drops are separate from the radio
+packet-loss figures in **Network Diagnostics**.
+
 For what to do about a poor link, see [Low Bandwidth Connections](./low-bandwidth-connections.md).
 
 ## Troubleshooting

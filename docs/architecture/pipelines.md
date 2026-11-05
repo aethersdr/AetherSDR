@@ -8,6 +8,17 @@ downmixing, metering taps, and VITA/Opus packetization details, see
 [AetherSDR Audio Pipeline](audio-pipeline.md). This page is a thread and
 high-level routing overview; it intentionally omits many audio-stage details.
 
+### Flex display and telemetry handoff
+
+`PanadapterStream` decodes spectrum, waterfall and meters on the existing network
+worker, then deposits owning observations into `FlexReceiveData`. One queued
+wake drains a bounded batch on the `FlexBackend` owner thread. Typed backend
+signals reach `RadioModel`, which feeds the existing display and meter models.
+The waterfall row retains its radio timecode, bounds and auto-black observation;
+it is not synthesized from the Flex FFT. Transport telemetry is sampled on the
+worker and cached by the backend. Audio/DAX/IQ keep their existing routes.
+See [limits and lifetime rules](../aetherd-flex-receive-data.md).
+
 ### Data Pipelines
 
 Multi-thread architecture — up to 13 threads depending on features enabled:

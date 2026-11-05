@@ -2,8 +2,6 @@
 
 #include "models/RadioModel.h"
 
-#include <QDateTime>
-
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -207,8 +205,11 @@ void RadioTelemetryAdapter::sample(int index, float value)
     if (!m_radio->isConnected() || it == m_meters.end() || !std::isfinite(value)) {
         return;
     }
+    const qint64 receiptAge = m_radio->meterModel().valueAgeMs(index);
+    if (receiptAge < 0) { return; }
     it->sample = value;
-    it->sampledAt = now(); // unchanged samples refresh liveness too
+    // Queueing in the engine must not restart freshness in the daemon view.
+    it->sampledAt = now() - std::min(receiptAge, qint64(kStaleAfterMs + 1));
 }
 
 void RadioTelemetryAdapter::flush()
@@ -223,7 +224,7 @@ void RadioTelemetryAdapter::flush()
             qint64(0), qint64(kStaleAfterMs + 1)) : -1;
         const bool fresh = meter.sample && age <= kStaleAfterMs;
         const bool valid = fresh && (!meter.swr || m_radio->meterModel().swrSampleLive(
-            QDateTime::currentMSecsSinceEpoch(), MeterModel::kTxMeterStaleMs));
+            MeterModel::kTxMeterStaleMs));
         QJsonObject value{{QStringLiteral("id"), QString::number(it.key())},
             {QStringLiteral("definition"), meter.definition},
             {QStringLiteral("sample"), QJsonObject{{QStringLiteral("known"), meter.sample.has_value()},
