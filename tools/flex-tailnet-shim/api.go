@@ -280,7 +280,7 @@ func NewAPI(n *Node) http.Handler {
 		case errors.Is(err, errExposeConflict):
 			writeJSON(w, http.StatusConflict, apiError{err.Error()})
 			return
-		case errors.Is(err, errExposeListen):
+		case errors.Is(err, errExposeListen), errors.Is(err, errExposeLookup):
 			writeJSON(w, http.StatusServiceUnavailable, apiError{err.Error()})
 			return
 		case err != nil:

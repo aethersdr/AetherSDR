@@ -33,12 +33,16 @@ import (
 const (
 	exposeLease = 10 * time.Minute
 	maxExposed  = 8
+	// maxExposeConns bounds each port's splices: an admitted peer that opens
+	// connections and stalls can't pile up sockets in the radio's memory.
+	maxExposeConns = 32
 )
 
 // exposeReserved are ports an app may never publish: SSH, the SmartSDR
-// ports and the shim's own.
+// ports (4995 and 42607 take firmware and file uploads, reference/FlexLib
+// v4.3.16 Radio.cs) and the shim's own.
 var exposeReserved = map[int]bool{
-	22: true, radioVitaInPort: true, radioAPIPort: true, 4993: true, 4994: true, 42607: true,
+	22: true, radioVitaInPort: true, radioAPIPort: true, 4993: true, 4994: true, 4995: true, 42607: true,
 	ProvisionPort: true, TelemetryPort: true,
 }
 
@@ -49,61 +53,22 @@ var (
 	errExposeName      = errors.New("name must be 1-32 printable characters")
 	errExposeNoService = errors.New("nothing listens on this port beyond loopback")
 	errExposeListen    = errors.New("the shim could not listen on this port on the tailnet")
-	errPortTaken       = errors.New("the port is already in use on the tailnet")
+	errExposeLookup    = errors.New("the shim could not read the radio's listeners")
 )
 
-// tailnetPorts makes each dynamic tailnet port exclusive between side
-// channels and published ports. tsnet doesn't: a side channel listens on
-// ":P" and a published port on "<ip>:P", which are different keys, and the
-// exact address silently wins, so a published port could capture a transfer
-// and skip its per-session grant. A port is reserved before either listens,
-// and stays reserved until that listener closes.
-type tailnetPorts struct {
-	mu   sync.Mutex
-	held map[int]bool
-}
-
-func (p *tailnetPorts) listen(port int, open func() (net.Listener, error)) (net.Listener, error) {
-	p.mu.Lock()
-	if p.held[port] {
-		p.mu.Unlock()
-		return nil, errPortTaken
-	}
-	if p.held == nil {
-		p.held = map[int]bool{}
-	}
-	p.held[port] = true
-	p.mu.Unlock()
-	ln, err := open()
-	if err != nil {
-		p.release(port)
-		return nil, err
-	}
-	return &heldListener{Listener: ln, release: func() { p.release(port) }}, nil
-}
-
-func (p *tailnetPorts) release(port int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.held, port)
-}
-
-type heldListener struct {
-	net.Listener
-	once    sync.Once
-	release func()
-}
-
-func (l *heldListener) Close() error {
-	err := l.Listener.Close()
-	l.once.Do(l.release)
-	return err
+// service is one listening socket: where to dial it (the radio's LAN address
+// for a wildcard listener, so callers reach the app as LAN callers do and
+// never as loopback) and which socket it is, so a new process on the same
+// address is a different service.
+type service struct {
+	addr  netip.Addr
+	inode uint64
 }
 
 type exposure struct {
 	port    int
-	target  netip.Addr // where the app listens: loopback for a wildcard listener
-	moves   uint64     // counts target changes, to fence dials in flight across one
+	target  service
+	moves   uint64 // counts target changes, to fence dials in flight across one
 	name    string
 	expires time.Time
 	timer   *time.Timer
@@ -130,7 +95,8 @@ type exposer struct {
 	splices   *liveSplices
 	// Seams for tests; nil means the real ones.
 	dial      func(target netip.Addr, port int) (net.Conn, error)
-	listening func(port int) (netip.Addr, bool)
+	listening func(port int) (service, error)
+	lanIP     func() (netip.Addr, error)
 	lease     time.Duration
 }
 
@@ -163,18 +129,22 @@ func (e *exposer) register(port int, name string) (time.Duration, bool, error) {
 	if !validExposeName(name) {
 		return 0, false, errExposeName
 	}
-	target, ok := e.lookup(port)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !ok {
+	// Under the lock, so two renewals can't apply what they saw out of order.
+	target, err := e.lookup(port)
+	if errors.Is(err, errExposeNoService) {
 		// The app is telling us its service is gone: what is still published
-		// under its name goes too, so nothing that binds the port later is
-		// exposed by a lease it never asked for.
+		// under its name goes too.
 		if x := e.m[port]; x != nil && x.name == name {
 			e.dropLocked(port, x)
 			log.Printf("expose: TCP %d (%s) withdrawn: nothing listens beyond loopback", port, name)
 		}
 		return 0, false, errExposeNoService
+	}
+	if err != nil {
+		// Not knowing is no reason to end a working publication.
+		return 0, false, fmt.Errorf("%w: %v", errExposeLookup, err)
 	}
 	if e.m == nil {
 		e.m = map[int]*exposure{}
@@ -202,7 +172,7 @@ func (e *exposer) register(port int, name string) (time.Duration, bool, error) {
 			conns: map[net.Conn]struct{}{}}
 		x.timer = time.AfterFunc(lease, func() { e.expire(port, x) })
 		e.m[port] = x
-		log.Printf("expose: %s published TCP %d (%s)", name, port, target)
+		log.Printf("expose: %s published TCP %d (%s)", name, port, target.addr)
 	}
 	if err := e.openLocked(x); err != nil {
 		if !renew {
@@ -236,21 +206,26 @@ func (e *exposer) dropLocked(port int, x *exposure) {
 	x.closeConnsLocked()
 }
 
-// lookup finds the address port's service can be dialed at now.
-func (e *exposer) lookup(port int) (netip.Addr, bool) {
+// lookup finds the publishable service on port now: errExposeNoService when
+// there is none, another error when the shim couldn't tell.
+func (e *exposer) lookup(port int) (service, error) {
 	if e.listening != nil {
 		return e.listening(port)
 	}
-	return serviceAddr(port)
+	lan := e.lanIP
+	if lan == nil {
+		lan = radioLANAddr
+	}
+	return findService(port, lan)
 }
 
-// served reports whether the eligible service on port is still at target.
-// A lease outlives the app that took it, and another process can bind the
-// port meanwhile, perhaps on loopback alone, so a registration proves nothing
-// about the connection arriving now.
-func (e *exposer) served(port int, target netip.Addr) bool {
-	a, ok := e.lookup(port)
-	return ok && a == target
+// served reports whether port is still served by the socket the app
+// registered. A lease outlives the app that took it, and another process can
+// bind the port meanwhile, so a registration proves nothing about the
+// connection arriving now.
+func (e *exposer) served(port int, target service) bool {
+	s, err := e.lookup(port)
+	return err == nil && s == target
 }
 
 func (x *exposure) closeConnsLocked() {
@@ -305,7 +280,7 @@ func (e *exposer) list() []ExposedPort {
 	defer e.mu.Unlock()
 	out := []ExposedPort{}
 	for _, x := range e.m {
-		out = append(out, ExposedPort{Port: x.port, Name: x.name, Target: x.target.String(),
+		out = append(out, ExposedPort{Port: x.port, Name: x.name, Target: x.target.addr.String(),
 			ExpiresIn: int(time.Until(x.expires).Seconds()), Listening: x.ln != nil})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Port < out[j].Port })
@@ -329,6 +304,10 @@ func (e *exposer) track(x *exposure, ln net.Listener, moves uint64, conns ...net
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.m[x.port] != x || x.ln != ln || x.moves != moves {
+		return false
+	}
+	if len(x.conns)+len(conns) > 2*maxExposeConns { // a caller and its app socket each
+		log.Printf("expose %d: refused a connection: %d are open", x.port, len(x.conns)/2)
 		return false
 	}
 	for _, c := range conns {
@@ -359,7 +338,7 @@ func (e *exposer) splice(c net.Conn, x *exposure, ln net.Listener) {
 		return
 	}
 	if !e.served(x.port, target) {
-		log.Printf("expose %d: refused %s: the app no longer listens at %s", x.port, c.RemoteAddr(), target)
+		log.Printf("expose %d: refused %s: the app that published it no longer listens", x.port, c.RemoteAddr())
 		return
 	}
 	if dial == nil {
@@ -367,9 +346,9 @@ func (e *exposer) splice(c net.Conn, x *exposure, ln net.Listener) {
 			return net.DialTimeout("tcp", netip.AddrPortFrom(t, uint16(p)).String(), 5*time.Second)
 		}
 	}
-	r, err := dial(target, x.port)
+	r, err := dial(target.addr, x.port)
 	if err != nil {
-		log.Printf("expose %d: app at %s unreachable: %v", x.port, target, err)
+		log.Printf("expose %d: app at %s unreachable: %v", x.port, target.addr, err)
 		return
 	}
 	defer r.Close()
@@ -404,15 +383,54 @@ func (n *Node) localCaller(a netip.Addr) bool {
 	return a.IsLoopback() || n.isRadio(a)
 }
 
-// serviceAddr finds a TCP listener on port that is reachable beyond
-// loopback, from /proc/net/tcp and tcp6. It returns the address to dial it
-// at: loopback for a wildcard listener, else the address it is bound to.
-func serviceAddr(port int) (netip.Addr, bool) {
-	var found []netip.Addr
+// findService finds a TCP listener on port that is reachable beyond
+// loopback, from /proc/net/tcp and tcp6. lan gives the address to dial a
+// wildcard listener at.
+func findService(port int, lan func() (netip.Addr, error)) (service, error) {
+	var found []listenSocket
 	for _, f := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		found = append(found, listeners(f, port)...)
+		l, err := listeners(f, port)
+		if err != nil {
+			return service{}, err
+		}
+		found = append(found, l...)
 	}
-	return pickTarget(found)
+	addr, lanErr := lan()
+	s, ok := pickTarget(found, addr)
+	if ok {
+		return s, nil
+	}
+	if lanErr != nil {
+		return service{}, lanErr
+	}
+	return service{}, errExposeNoService
+}
+
+// radioLANAddr is the radio's own LAN address, read from its interfaces. On
+// an 8000-series radio those include 172.30.0.0/16, which isn't LAN.
+func radioLANAddr() (netip.Addr, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	var own []netip.Addr
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			if ip, ok := netip.AddrFromSlice(n.IP); ok {
+				own = append(own, ip.Unmap())
+			}
+		}
+	}
+	return pickLANAddr(own)
+}
+
+func pickLANAddr(own []netip.Addr) (netip.Addr, error) {
+	for _, a := range own {
+		if a.Is4() && !a.IsLoopback() && (buildVariant != "" || !containerNet.Contains(a)) {
+			return a, nil
+		}
+	}
+	return netip.Addr{}, errors.New("the radio has no LAN address")
 }
 
 // publishableBind reports whether a service bound to exactly a counts as
@@ -421,44 +439,56 @@ func serviceAddr(port int) (netip.Addr, bool) {
 // keeps to itself. On a FLEX-6000 (a non-container build) that range is just
 // LAN, as localCaller notes, and any address but loopback will do.
 func publishableBind(a netip.Addr) bool {
+	if a.Is6() && a.IsLinkLocalUnicast() {
+		return false // /proc carries no zone, so it could never be dialed
+	}
 	if buildVariant != "" {
 		return !a.IsLoopback()
 	}
 	return lanAddr(a)
 }
 
-func pickTarget(addrs []netip.Addr) (netip.Addr, bool) {
-	var specific netip.Addr
-	for _, a := range addrs {
-		switch {
-		case a.IsUnspecified() && a.Is4():
-			return netip.MustParseAddr("127.0.0.1"), true
+func pickTarget(socks []listenSocket, lan netip.Addr) (service, bool) {
+	var specific service
+	for _, s := range socks {
+		switch a := s.addr; {
 		case a.IsUnspecified():
-			return netip.IPv6Loopback(), true
-		case publishableBind(a) && (!specific.IsValid() || a.Is4()):
-			specific = a
+			if lan.IsValid() {
+				return service{lan, s.inode}, true
+			}
+		case publishableBind(a) && (!specific.addr.IsValid() || a.Is4()):
+			specific = service{a, s.inode}
 		}
 	}
-	return specific, specific.IsValid()
+	return specific, specific.addr.IsValid()
 }
 
-// listeners returns the local addresses of the LISTEN sockets on port in a
-// /proc/net/tcp-format file.
-func listeners(path string, port int) []netip.Addr {
+// listenSocket is one LISTEN line of /proc/net/tcp.
+type listenSocket struct {
+	addr  netip.Addr
+	inode uint64
+}
+
+// listeners returns the LISTEN sockets on port in a /proc/net/tcp-format
+// file. A file that doesn't exist has none: tcp6 is absent without IPv6.
+func listeners(path string, port int) ([]listenSocket, error) {
 	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer f.Close()
 	return parseListeners(f, port)
 }
 
-func parseListeners(r io.Reader, port int) []netip.Addr {
-	var out []netip.Addr
+func parseListeners(r io.Reader, port int) ([]listenSocket, error) {
+	var out []listenSocket
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
-		if len(f) < 4 || f[3] != "0A" { // 0A is TCP_LISTEN
+		if len(f) < 10 || f[3] != "0A" { // 0A is TCP_LISTEN
 			continue
 		}
 		host, p, ok := strings.Cut(f[1], ":")
@@ -468,11 +498,15 @@ func parseListeners(r io.Reader, port int) []netip.Addr {
 		if v, err := strconv.ParseUint(p, 16, 16); err != nil || int(v) != port {
 			continue
 		}
+		inode, err := strconv.ParseUint(f[9], 10, 64)
+		if err != nil {
+			continue
+		}
 		if a, ok := procAddr(host); ok {
-			out = append(out, a)
+			out = append(out, listenSocket{a, inode})
 		}
 	}
-	return out
+	return out, sc.Err()
 }
 
 // procAddr decodes /proc/net/tcp's hex address: 4-byte words in host

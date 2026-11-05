@@ -18,14 +18,21 @@ import (
 	"time"
 )
 
-var loop4 = netip.MustParseAddr("127.0.0.1")
+var (
+	loop4   = netip.MustParseAddr("127.0.0.1")
+	lanTest = netip.MustParseAddr("192.168.50.100")
+)
+
+// lanIsLoopback dials wildcard test listeners on loopback, so no test leaves
+// the host.
+func lanIsLoopback() (netip.Addr, error) { return loop4, nil }
 
 // anyService reports every port as served by a wildcard listener.
-func anyService(int) (netip.Addr, bool) { return loop4, true }
+func anyService(int) (service, error) { return service{addr: loop4}, nil }
 
 func TestExposeValidates(t *testing.T) {
 	e := exposer{listening: anyService}
-	for _, port := range []int{0, 80, 1023, 4991, 4992, 4993, 4994, 42607, ProvisionPort, TelemetryPort, 65536} {
+	for _, port := range []int{0, 80, 1023, 4991, 4992, 4993, 4994, 4995, 42607, ProvisionPort, TelemetryPort, 65536} {
 		if _, _, err := e.register(port, "app"); err != errExposePort {
 			t.Errorf("port %d: got %v, want errExposePort", port, err)
 		}
@@ -56,7 +63,7 @@ func TestExposeValidates(t *testing.T) {
 }
 
 func TestExposeNeedsAServiceBeyondLoopback(t *testing.T) {
-	e := exposer{listening: func(int) (netip.Addr, bool) { return netip.Addr{}, false }}
+	e := exposer{listening: func(int) (service, error) { return service{}, errExposeNoService }}
 	if _, _, err := e.register(48995, "app"); err != errExposeNoService {
 		t.Fatalf("got %v, want errExposeNoService", err)
 	}
@@ -81,11 +88,15 @@ func TestParseListeners(t *testing.T) {
 		port int
 		want string
 		ok   bool
-	}{{48995, "127.0.0.1", true}, {48994, "", false}, {4992, "192.168.50.100", true}, {8080, "::1", true}, {9999, "", false}}
+	}{{48995, lanTest.String(), true}, {48994, "", false}, {4992, "192.168.50.100", true}, {8080, lanTest.String(), true}, {9999, "", false}}
 	for _, c := range cases {
-		addrs := append(parseListeners(strings.NewReader(tcp), c.port), parseListeners(strings.NewReader(tcp6), c.port)...)
-		got, ok := pickTarget(addrs)
-		if ok != c.ok || (ok && got.String() != c.want) {
+		v4, err4 := parseListeners(strings.NewReader(tcp), c.port)
+		v6, err6 := parseListeners(strings.NewReader(tcp6), c.port)
+		if err4 != nil || err6 != nil {
+			t.Fatal(err4, err6)
+		}
+		got, ok := pickTarget(append(v4, v6...), lanTest)
+		if ok != c.ok || (ok && got.addr.String() != c.want) {
 			t.Errorf("port %d: got %v %v, want %q %v", c.port, got, ok, c.want, c.ok)
 		}
 	}
@@ -303,26 +314,52 @@ func TestPickTargetCountsOnlyLANBinds(t *testing.T) {
 		bind    string
 		want    string // "" refused
 	}{
-		{"", "0.0.0.0", "127.0.0.1"},
-		{"", "::", "::1"},
+		{"", "0.0.0.0", "192.168.50.100"},
+		{"", "::", "192.168.50.100"},
 		{"", "127.0.0.1", ""},
 		{"", "192.168.50.100", "192.168.50.100"},
 		{"", "169.254.1.1", "169.254.1.1"},
 		{"", "172.30.1.1", ""}, // the 8000's container network
 		{"", "8.8.8.8", ""},
+		{"", "fe80::1", ""}, // no zone in /proc, so never dialable
+		{"-native", "fe80::1", ""},
 		{"-native", "172.30.1.1", "172.30.1.1"}, // plain LAN on a FLEX-6000
 		{"-native", "127.0.0.1", ""},
-		{"-native", "0.0.0.0", "127.0.0.1"},
+		{"-native", "0.0.0.0", "192.168.50.100"},
 	} {
 		buildVariant = tc.variant
-		got, ok := pickTarget([]netip.Addr{addr(tc.bind)})
+		got, ok := pickTarget([]listenSocket{{addr: addr(tc.bind)}}, lanTest)
 		if tc.want == "" {
 			if ok {
 				t.Errorf("%q %s: published at %v", tc.variant, tc.bind, got)
 			}
-		} else if !ok || got != addr(tc.want) {
+		} else if !ok || got.addr != addr(tc.want) {
 			t.Errorf("%q %s: got %v %v, want %s", tc.variant, tc.bind, got, ok, tc.want)
 		}
+	}
+}
+
+func TestWildcardNeedsALANAddress(t *testing.T) {
+	if s, ok := pickTarget([]listenSocket{{addr: netip.IPv4Unspecified()}}, netip.Addr{}); ok {
+		t.Errorf("a wildcard listener with no LAN address was published at %v", s)
+	}
+}
+
+func TestPickLANAddr(t *testing.T) {
+	addr := netip.MustParseAddr
+	defer func(v string) { buildVariant = v }(buildVariant)
+	// The 8600's interfaces: loopback, its two container subnets, the LAN.
+	radio := []netip.Addr{addr("127.0.0.1"), addr("172.30.1.1"), addr("172.30.2.1"), addr("192.168.50.100"), addr("fd00::1")}
+	if a, err := pickLANAddr(radio); err != nil || a != addr("192.168.50.100") {
+		t.Errorf("container: got %v %v", a, err)
+	}
+	buildVariant = "-native"
+	if a, err := pickLANAddr([]netip.Addr{addr("127.0.0.1"), addr("172.30.5.9")}); err != nil || a != addr("172.30.5.9") {
+		t.Errorf("native: got %v %v", a, err)
+	}
+	buildVariant = ""
+	if a, err := pickLANAddr([]netip.Addr{addr("127.0.0.1"), addr("172.30.1.1")}); err == nil {
+		t.Errorf("container with no LAN: got %v", a)
 	}
 }
 
@@ -340,11 +377,11 @@ func TestServiceAddrReadsRealListeners(t *testing.T) {
 		t.Skip("cannot listen:", err)
 	}
 	defer local.Close()
-	if a, ok := serviceAddr(wild.Addr().(*net.TCPAddr).Port); !ok || a != loop4 {
-		t.Errorf("wildcard listener: got %v %v, want 127.0.0.1", a, ok)
+	if s, err := findService(wild.Addr().(*net.TCPAddr).Port, lanIsLoopback); err != nil || s.addr != loop4 || s.inode == 0 {
+		t.Errorf("wildcard listener: got %v %v, want 127.0.0.1 and its inode", s, err)
 	}
-	if a, ok := serviceAddr(local.Addr().(*net.TCPAddr).Port); ok {
-		t.Errorf("loopback-only listener was offered for publishing at %v", a)
+	if s, err := findService(local.Addr().(*net.TCPAddr).Port, lanIsLoopback); err != errExposeNoService {
+		t.Errorf("loopback-only listener was offered for publishing at %v (%v)", s, err)
 	}
 }
 
@@ -389,7 +426,7 @@ func TestExposeNeverReachesALoopbackReplacement(t *testing.T) {
 	port := public.Addr().(*net.TCPAddr).Port
 	got := map[int]string{}
 	var fail atomic.Bool
-	e := exposer{}
+	e := exposer{lanIP: lanIsLoopback}
 	e.attach(listenLoopback(got, &fail), func(net.Addr) (string, bool) { return "peer", true }, nil)
 	defer e.detach()
 	if _, _, err := e.register(port, "app"); err != nil {
@@ -493,7 +530,7 @@ func TestExposeFencesDialsInFlight(t *testing.T) {
 			got := map[int]string{}
 			var fail atomic.Bool
 			listen := listenLoopback(got, &fail)
-			e := exposer{dial: gate.dial, listening: func(int) (netip.Addr, bool) { return *at.Load(), true }}
+			e := exposer{dial: gate.dial, listening: func(int) (service, error) { return service{addr: *at.Load()}, nil }}
 			e.attach(listen, admit, nil)
 			defer e.detach()
 			if _, _, err := e.register(48995, "app"); err != nil {
@@ -514,16 +551,43 @@ func TestExposeFencesDialsInFlight(t *testing.T) {
 	}
 }
 
-// The tsnet behavior this guards: both listeners always succeed, so without
-// the reservation neither side would ever see the other. openAnyway stands
-// in for it.
+// sharedPorts stands in for tsnet: one listener per port, whoever asks, as
+// Node gives both sides the same listen function.
+func sharedPorts() func(int) (net.Listener, error) {
+	var mu sync.Mutex
+	open := map[int]bool{}
+	return func(port int) (net.Listener, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if open[port] {
+			return nil, errors.New("tsnet: listener already open")
+		}
+		ln, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err == nil {
+			open[port] = true
+		}
+		return &closeHook{Listener: ln, closed: func() { mu.Lock(); defer mu.Unlock(); delete(open, port) }}, err
+	}
+}
+
+// closeHook frees its port once: as in tsnet, closing a listener again
+// (Forwarder.shut does) must not free it from whoever holds it now.
+type closeHook struct {
+	net.Listener
+	once   sync.Once
+	closed func()
+}
+
+func (c *closeHook) Close() error {
+	defer c.once.Do(c.closed)
+	return c.Listener.Close()
+}
+
 func TestPublishedPortsAndSideChannelsExcludeEachOther(t *testing.T) {
-	openAnyway := func() (net.Listener, error) { return net.Listen("tcp4", "127.0.0.1:0") }
-	var ports tailnetPorts
-	fwd := &Forwarder{Listen: func(p int) (net.Listener, error) { return ports.listen(p, openAnyway) }}
+	listen := sharedPorts()
+	fwd := &Forwarder{Listen: listen}
 	e := exposer{listening: anyService}
-	e.attach(func(p int) (net.Listener, error) { return ports.listen(p, openAnyway) },
-		func(net.Addr) (string, bool) { return "peer", true }, nil)
+	e.attach(listen, func(net.Addr) (string, bool) { return "peer", true }, nil)
 	defer e.detach()
 
 	// A transfer holds the port: publishing it fails, and works afterward.
@@ -544,13 +608,124 @@ func TestPublishedPortsAndSideChannelsExcludeEachOther(t *testing.T) {
 		t.Fatalf("publishing once the transfer ended: %v %v", listening, err)
 	}
 
-	// A published port is held: the transfer's listener is refused, and the
-	// same goes the other way once the publication is gone.
-	if err := fwd.Open(48995, 2, loop4, nil); !errors.Is(err, errPortTaken) {
-		t.Fatalf("a side channel on a published port: got %v", err)
+	// A published port is held: the transfer is refused until it closes.
+	if err := fwd.Open(48995, 2, loop4, nil); err == nil {
+		t.Fatal("a side channel opened on a published port")
 	}
 	e.detach()
 	if err := fwd.Open(48995, 2, loop4, nil); err != nil {
 		t.Fatalf("a side channel after the publication closed: %v", err)
+	}
+}
+
+func TestExposeCapsConnections(t *testing.T) {
+	app := echoApp(t)
+	defer app.Close()
+	got := map[int]string{}
+	var fail atomic.Bool
+	e := exposer{listening: anyService, dial: dialApp(app)}
+	e.attach(listenLoopback(got, &fail), func(net.Addr) (string, bool) { return "peer", true }, nil)
+	defer e.detach()
+	if _, _, err := e.register(48995, "app"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxExposeConns; i++ {
+		_, c := readFirstLine(t, got[48995])
+		defer c.Close()
+	}
+	over, err := net.Dial("tcp", got[48995])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer over.Close()
+	over.SetDeadline(time.Now().Add(2 * time.Second))
+	if b, err := io.ReadAll(over); err != nil || len(b) != 0 {
+		t.Fatalf("the connection over the cap: got %q, %v", b, err)
+	}
+	if n := func() int { e.mu.Lock(); defer e.mu.Unlock(); return len(e.m[48995].conns) }(); n != 2*maxExposeConns {
+		t.Fatalf("%d sockets tracked, want %d", n, 2*maxExposeConns)
+	}
+}
+
+// Another process taking a published port isn't what the app published: its
+// callers are refused until the name's owner registers again.
+func TestExposeRefusesAnotherProcessOnThePort(t *testing.T) {
+	if _, err := os.Stat("/proc/net/tcp"); err != nil {
+		t.Skip("no /proc/net/tcp:", err)
+	}
+	first, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Skip("cannot listen:", err)
+	}
+	serve(first, "first")
+	port := first.Addr().(*net.TCPAddr).Port
+	got := map[int]string{}
+	var fail atomic.Bool
+	e := exposer{lanIP: lanIsLoopback}
+	e.attach(listenLoopback(got, &fail), func(net.Addr) (string, bool) { return "peer", true }, nil)
+	defer e.detach()
+	if _, _, err := e.register(port, "app"); err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+	second, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		t.Skip("cannot rebind:", err)
+	}
+	defer second.Close()
+	serve(second, "second")
+	if s := readAll(t, got[port]); strings.Contains(s, "second") {
+		t.Fatal("a lease reached a service that never asked to be published")
+	}
+	if _, _, err := e.register(port, "app"); err != nil {
+		t.Fatal(err)
+	}
+	if s := readAll(t, got[port]); !strings.Contains(s, "second") {
+		t.Fatalf("after the owner renewed: got %q", s)
+	}
+}
+
+// Failing to read /proc isn't evidence the service went: the publication
+// stays, though nothing is forwarded while the shim can't check.
+func TestExposeLookupFailureKeepsThePublication(t *testing.T) {
+	var broken atomic.Bool
+	app := echoApp(t)
+	defer app.Close()
+	got := map[int]string{}
+	var fail atomic.Bool
+	e := exposer{dial: dialApp(app), listening: func(int) (service, error) {
+		if broken.Load() {
+			return service{}, errors.New("too many open files")
+		}
+		return service{addr: loop4}, nil
+	}}
+	e.attach(listenLoopback(got, &fail), func(net.Addr) (string, bool) { return "peer", true }, nil)
+	defer e.detach()
+	if _, _, err := e.register(48995, "app"); err != nil {
+		t.Fatal(err)
+	}
+	broken.Store(true)
+	if _, _, err := e.register(48995, "app"); !errors.Is(err, errExposeLookup) {
+		t.Fatalf("renewal: got %v", err)
+	}
+	if l := e.list(); len(l) != 1 || !l[0].Listening {
+		t.Fatalf("a failed read ended the publication: %+v", l)
+	}
+	if s := readAll(t, got[48995]); s != "" {
+		t.Fatalf("forwarded while unable to check: %q", s)
+	}
+}
+
+// A radio without IPv6 has no tcp6 table, which is no failure to read.
+func TestListenersMissingFileIsEmpty(t *testing.T) {
+	if l, err := listeners(t.TempDir()+"/tcp6", 48995); l != nil || err != nil {
+		t.Errorf("got %v, %v", l, err)
+	}
+}
+
+func TestParseListenersReportsReadErrors(t *testing.T) {
+	long := strings.Repeat("x", bufio.MaxScanTokenSize+1)
+	if _, err := parseListeners(strings.NewReader(long), 48995); err == nil {
+		t.Error("an unreadable table parsed as no listeners")
 	}
 }

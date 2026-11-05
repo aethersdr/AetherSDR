@@ -140,12 +140,15 @@ including other 172.30.x hosts, gets 403.
   network; on a FLEX-6000 that range is plain LAN and any address but
   loopback qualifies. The shim reads binds, not firewall rules, so a wildcard
   listener a firewall keeps from the LAN qualifies too.
-- This is checked again for each connection. A port's service that goes
-  away or comes back on loopback alone is refused, and a renewal that finds
-  it gone withdraws the publication.
-- The shim listens on that port on its own tailnet address and splices
-  each caller the tailnet admits (the same `WhoIs` check as the radio) to
-  the app's listener. The reply's `listening` is false while the tailnet
+- This is checked again for each connection, against the socket the app
+  registered. If the service goes away, or anything else takes the port, new
+  callers are refused until the app that owns the name renews, and a renewal
+  that finds nothing listening withdraws the publication.
+- The shim listens on that port on its own tailnet addresses, IPv4 and IPv6,
+  and splices each caller the tailnet admits (the same `WhoIs` check as the
+  radio) to the app's listener, at most 32 at a time per port. A wildcard
+  listener is dialed at the radio's LAN address, so callers reach the app as
+  a LAN caller does, never as loopback. The reply's `listening` is false while the tailnet
   node is down; the port opens when it comes up. If the shim can't listen
   (for example, a radio file transfer holds the port), the reply is 503.
   Each port has one owner: a transfer the radio announces on a published
@@ -153,9 +156,12 @@ including other 172.30.x hosts, gets 403.
 - The registration is a 10-minute lease (`expires_in_s`), renewed by posting
   again. The app's `name` owns the port: the same name renews it, another
   gets 409. When the lease lapses, the port and its open connections close.
-- Ports 1024-65535 only, never 22, 4991-4994, 42607, 48992 or 48993, and at
+- Ports 1024-65535 only, never 22, 4991-4995, 42607, 48992 or 48993, and at
   most 8. `/v1/status` lists them as `exposed_ports`. They survive the
   tailnet node restarting, but not the shim.
+- Anything running on the radio is trusted to publish: names are
+  self-asserted, and any wildcard listener can be published. That matches a
+  radio that lets any LAN host install containers.
 
 **Trust model:** the first provisioning is open to the LAN. That matches the
 radio itself: its API on 4992 and its image upload on 42607 are

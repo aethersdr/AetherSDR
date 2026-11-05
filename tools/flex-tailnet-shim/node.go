@@ -134,10 +134,9 @@ type Node struct {
 	localAddrs func() []netip.Addr
 	locals     localAddrCache
 
-	fwd     *Forwarder   // side channels, while the node runs
-	splices liveSplices  // station-device splices in progress, for revocation
-	exposed exposer      // ports apps on the radio published (expose.go)
-	ports   tailnetPorts // side channels and published ports, one owner each
+	fwd     *Forwarder  // side channels, while the node runs
+	splices liveSplices // station-device splices in progress, for revocation
+	exposed exposer     // ports apps on the radio published (expose.go)
 }
 
 func (n *Node) cfgPath() string  { return filepath.Join(n.StateDir, "provision.json") }
@@ -460,24 +459,21 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 		Authorize: n.authorizer(lc),
 		MaxMTU:    n.MaxMTU,
 	}
+	// Side channels and published ports share this, so a port has one owner:
+	// tsnet refuses a second listener on the same address. With no IP it
+	// matches only flows to the node's own addresses, IPv4 and IPv6, never
+	// ones to a shared station device.
+	listenPort := func(port int) (net.Listener, error) {
+		return srv.Listen("tcp", fmt.Sprintf(":%d", port))
+	}
 	fwd := &Forwarder{
-		Listen: func(port int) (net.Listener, error) {
-			return n.ports.listen(port, func() (net.Listener, error) {
-				return srv.Listen("tcp", fmt.Sprintf(":%d", port))
-			})
-		},
+		Listen: listenPort,
 		DialRadio: func(port int) (net.Conn, error) {
 			return net.DialTimeout("tcp", net.JoinHostPort(n.RadioAddr, fmt.Sprint(port)), 5*time.Second)
 		},
 		Authorize: n.authorizer(lc),
 	}
-	// Bound to the node's own address, as the UDP listeners above are, so a
-	// published port never catches flows to a shared station device.
-	n.exposed.attach(func(port int) (net.Listener, error) {
-		return n.ports.listen(port, func() (net.Listener, error) {
-			return srv.Listen("tcp", fmt.Sprintf("%s:%d", ip4, port))
-		})
-	}, n.authorizer(lc), &n.splices)
+	n.exposed.attach(listenPort, n.authorizer(lc), &n.splices)
 	closers = append(closers, func() error { n.exposed.detach(); return nil })
 	relay.OpenForward = fwd.Open
 	relay.ForgetForward = fwd.Forget
