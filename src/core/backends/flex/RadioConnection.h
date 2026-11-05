@@ -146,8 +146,8 @@ private:
     QByteArray   m_readBuffer;
     // Bumped by resetSessionState() at every session edge. Deferred work
     // captures it so a timer armed in one session cannot fire into the next
-    // (the synthetic-demo handshake). Connection-thread only, like the
-    // buffer above. (#5653 review)
+    // (the synthetic-demo handshake). Only the connection thread mutates it;
+    // owner-thread callers capture the atomic value to fence queued commands.
     std::atomic<quint64> m_sessionGeneration{0};
     QTimer*      m_heartbeat{nullptr};
 

@@ -448,7 +448,7 @@ void WanConnection::processLine(const QString& line)
         auto it = m_pendingCallbacks.find(msg.sequence);
         if (it != m_pendingCallbacks.end()) {
             // A completion may retire this session or alter the callback map.
-            ResponseCallback callback = std::move(it.value());
+            const ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
             callback(msg.resultCode, msg.object);
         }
