@@ -31,15 +31,23 @@ namespace AetherSDR {
 // echoing the command with its current value, so one parser handles the
 // whole stream.
 //
-// Transport is TCP on port 1500 (the amp also exposes a UDP server on the
-// same port accepting the same command set; this implementation is TCP-only
-// on purpose — see Kpa1500Connection.h).
+// Transport is TCP or UDP on port 1500: the amp runs a UDP server on the
+// same port accepting the identical command set. The framing is the same on
+// both; see Kpa1500Connection.h for how UDP control is confirmed.
 namespace Kpa1500 {
 
-// Default TCP control port. The amp allows this to be moved with `^CP`, so
-// the Peripherals row exposes it as an editable field rather than a
-// constant.
+// Default control port, shared by the amp's TCP and UDP servers. The amp
+// allows this to be moved with `^CP`, so the Peripherals row exposes it as
+// an editable field rather than a constant.
 inline constexpr quint16 kDefaultPort = 1500;
+
+enum class Transport { Tcp, Udp };
+
+// Stable settings value ("tcp" / "udp"). Anything unrecognized, including
+// an unset key, reads back as Tcp so existing configurations keep TCP.
+QString transportSettingValue(Transport transport);
+Transport transportFromSettingValue(const QString& value);
+QString transportLabel(Transport transport);  // "TCP" / "UDP"
 
 // ── Wire framing ─────────────────────────────────────────────────────────
 
@@ -81,9 +89,10 @@ public:
     void feed(const QByteArray& bytes);
     void reset() { m_buf.clear(); }
 
-    // Widest payload any documented KPA1500 reply carries, with generous
-    // headroom — anything longer is a desynchronized stream, not a message.
-    static constexpr int kMaxArgChars = 64;
+    // Widest payload any documented KPA1500 reply carries (the ^DA ATU
+    // setting text, ~70 chars), with headroom — anything longer is a
+    // desynchronized stream, not a message.
+    static constexpr int kMaxArgChars = 128;
     static constexpr int kMaxBufferBytes = 4096;
 
 private:
@@ -121,6 +130,17 @@ struct Status {
     std::optional<bool>  atuInline;       // ^AI
     std::optional<bool>  tuning;          // ^TP, a full-search tune is running
     std::optional<bool>  keyed;           // ^TQ — amp's own view of its key state
+    std::optional<bool>  powerOn;         // ^ON, false while the amp sleeps
+    std::optional<float> inputWatts;      // ^PWI drive power; 0 in STBY or while tuning
+    std::optional<float> paVolts;         // ^VI supply voltage (reply in tenths)
+    std::optional<int>   paAmps;          // ^VI PA current, whole amps
+    std::optional<int>   fanMinimum;      // ^FC operator-set minimum, 0-5
+    std::optional<int>   fanSpeed;        // ^FS current speed, 0-5 (may exceed the minimum)
+    std::optional<int>   attenuatorCode;  // ^AS two hex digits, 0x00 = not deployed
+    std::optional<int>   frequencyKhz;    // ^FR frequency the amp is tracking
+    std::optional<QString> atuSetting;    // ^DA the amp's own ATU summary text
+    std::optional<QString> firmware;      // ^RV e.g. "03.10"
+    std::optional<QString> serialNumber;  // ^SN e.g. "00022"
 };
 
 // Folds one decoded message into `status`, returning true if it changed
@@ -135,6 +155,9 @@ bool applyMessage(const Message& message, Status& status);
 // rather than as a band the operator does not have.
 QString bandName(int code);
 
+// `^AS` overdrive-attenuator reason → short label ("PA CURRENT"). Unknown
+// non-zero codes render as their hex value; 0 renders as empty.
+QString attenuatorReason(int code);
 // ── Command builders (host → amp) ────────────────────────────────────────
 //
 // Queries. The amp does not broadcast spontaneously, so the connection
@@ -152,6 +175,18 @@ QByteArray buildCancelTune();                   // ^FE
 // they are accepted on readback (kMaxAntennaNumber) but never commanded.
 QByteArray buildSelectAntenna(int port);        // ^AN<n>
 QByteArray buildClearFault();                   // ^FLC
+QByteArray buildSetPower(bool on);              // ^ON1 / ^ON0
+// ^FCn, 0 (off) to 5 (all fans full). Out of range yields an empty frame.
+QByteArray buildSetFanMinimum(int level);
+// ^FRfffff in kHz: tells the amp the TX frequency so it selects the band
+// and ATU memory without transmitting. Outside kMinTrackKhz..kMaxTrackKhz
+// (the amp's 160-6 m coverage, with margin) yields an empty frame.
+QByteArray buildSetFrequency(int khz);
+
+inline constexpr int kMinFan = 0;
+inline constexpr int kMaxFan = 5;
+inline constexpr int kMinTrackKhz = 1500;
+inline constexpr int kMaxTrackKhz = 55000;
 
 inline constexpr int kMinAntenna = 1;
 inline constexpr int kMaxAntenna = 2;
