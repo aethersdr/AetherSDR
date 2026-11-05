@@ -78,7 +78,8 @@ ReceiveDispatch RadioModel::requestPanControl(PanadapterModel* pan, const PanCon
         : caps.panControl && caps.panControl->supports(request.field)
             && (request.field == PanControlField::ReceiveAntenna || caps.panZoomModes);
     const bool available = m_backend && controlSessionCurrent(session) && request.valid()
-        && pan && panadapter(pan->panId()) == pan && declared;
+        && !m_displayInventoryUncertain && pan && panadapter(pan->panId()) == pan
+        && pan->ownedByClient(clientHandle()) && declared;
     const QPointer<RadioModel> alive(this);
     const ReceiveDispatch result = available
         ? m_backend->requestPanControl(pan->panId(), request) : ReceiveDispatch::Unsupported;

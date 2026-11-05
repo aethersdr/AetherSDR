@@ -102,6 +102,20 @@ Contract: [`docs/aetherd-stage4-tx-coordinator.md`](../aetherd-stage4-tx-coordin
   through backend queues and retries. Producer identity does not confer an
   independent actor grant.
 
+## Display status observations
+
+Flex LAN and WAN decode panadapter/waterfall reports into present-only
+`DisplayObservation` values before the owner-thread seam. The transport revokes
+its original lifetime before disconnect/reconnect; queued reports cannot acquire
+new-session authority. RadioModel owns the bounded inventory, ownership,
+pairing, retirement and publication policy. Initialize available fields before
+publishing a new or reclaimed pan; optional waterfall status may follow later.
+Explicit foreign or zero ownership revokes writes while a held pan remains quiet.
+Do not clear confirmed ownership evidence to relieve cache pressure: an incomplete
+inventory refuses controls until reconnect. Repeated cadence reports remain
+observations even when their numeric values do not change. Native backend values
+and Demo's synthetic lifecycle retain their distinct existing routes.
+
 ## In-process audio and spectrum — one route each
 
 `IRadioBackend::audioFrameReady` has two possible routes to

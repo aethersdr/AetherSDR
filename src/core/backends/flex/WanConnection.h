@@ -2,6 +2,7 @@
 #include "core/backends/SessionCommandGuard.h"
 
 #include "CommandParser.h"
+#include "FlexDisplayStatus.h"
 
 #include <QObject>
 #include <QSslSocket>
@@ -41,6 +42,7 @@ class WanConnection : public QObject {
     Q_OBJECT
 
 public:
+    void retireDisplayObservations() { m_displayStatusSource.retire(); }
     explicit WanConnection(QObject* parent = nullptr);
     ~WanConnection() override;
 
@@ -78,6 +80,7 @@ public:
     void rejectPresentedCert();
 
 signals:
+    void displayObserved(const AetherSDR::DisplayObservation& observation);
     void connected();
     void disconnected();
     void errorOccurred(const QString& message);
@@ -104,6 +107,8 @@ private slots:
     void onHeartbeat();
 
 private:
+    friend class FlexDisplayStatusTestAccess;
+    FlexDisplayStatusSource m_displayStatusSource;
     friend class WanConnectionTestAccess;
     friend class RadioAdministrationTestAccess;
 

@@ -126,6 +126,7 @@ WanConnection::WanConnection(QObject* parent)
 
 WanConnection::~WanConnection()
 {
+    m_displayStatusSource.retire();
     disconnectFromRadio();
 }
 
@@ -133,6 +134,7 @@ WanConnection::~WanConnection()
 
 void WanConnection::resetSessionState()
 {
+    m_displayStatusSource.retire();
     ++m_sessionGeneration;
     // This object outlives every TLS session (a by-value MainWindow member), so
     // reset per session: otherwise a partial line from the dead link prefixes the
@@ -157,6 +159,7 @@ void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
     }
 
     resetSessionState();
+    m_displayStatusSource.reset();
     m_wanHandle = wanHandle;
     m_host      = host;
     m_expectedFingerprintHex = loadStoredFingerprint(host);
@@ -369,8 +372,12 @@ void WanConnection::onReadyRead()
         return;
     }
 
+    // Display revocation must not suppress teardown acknowledgments. Only a
+    // replaced transport lifetime ends this read batch.
+    const auto readEpoch = m_displayStatusSource.epoch();
     int newlinePos;
-    while ((newlinePos = m_readBuffer.indexOf('\n')) >= 0) {
+    while (readEpoch == m_displayStatusSource.epoch()
+           && (newlinePos = m_readBuffer.indexOf('\n')) >= 0) {
         const QString line = QString::fromUtf8(m_readBuffer.left(newlinePos)).trimmed();
         m_readBuffer.remove(0, newlinePos + 1);
         if (!line.isEmpty())
@@ -388,6 +395,7 @@ void WanConnection::onHeartbeat()
 
 void WanConnection::processLine(const QString& line)
 {
+    const auto displayEpoch = m_displayStatusSource.epoch();
     // GPS coordinates are never useful in a support log. Compute this before
     // the certificate-decision early return so that path cannot bypass the
     // normal GPS payload suppression below.
@@ -456,6 +464,11 @@ void WanConnection::processLine(const QString& line)
     }
 
     case MessageType::Status:
+        if (auto display = decodeFlexDisplayStatus(msg.object, msg.kvs, displayEpoch);
+            display && display->current()) {
+            display->sourceHandle = msg.handle;
+            emit displayObserved(*display);
+        }
         emit statusReceived(msg.object, msg.kvs);
         break;
 

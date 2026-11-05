@@ -42,7 +42,7 @@ void RadioModel::settlePanCreations()
         const bool uncertain = request->historyEpoch != m_displayHistoryEpoch
             || (!request->id.isEmpty() && (request->existing.contains(request->id)
                 || request->retirements.value(request->id) != m_displayRetirements.value(request->id)));
-        const bool published = pan && pan->ownedByClient(clientHandle());
+        const bool published = pan && pan->lifecyclePublished() && !m_displayInventoryUncertain && pan->ownedByClient(clientHandle());
         if (m_pendingPanCreations.value(it.key()) != request) { continue; }
         if (!ended && (uncertain || (!request->owner && !published))) {
             if (!request->notified) {
@@ -76,7 +76,7 @@ void RadioModel::settlePanCreations()
 ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreationCompletion& completion,
                                                bool initializeDisplay)
 {
-    if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
+    if (m_displayInventoryUncertain || QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const QPointer<RadioModel> alive(this);
     settlePanCreations();
     if (!alive) { return ReceiveDispatch::Unsupported; }
@@ -196,7 +196,7 @@ ReceiveDispatch RadioModel::requestPanCreation(QObject* context, const PanCreati
 ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDisplayRequest& request,
     const RadioControlCompletion& completion, bool announce)
 {
-    if (QThread::currentThread() != thread() || !request.valid() || !pan
+    if (m_displayInventoryUncertain || QThread::currentThread() != thread() || !request.valid() || !pan
         || panadapter(pan->panId()) != pan || !m_backend) { return ReceiveDispatch::Unsupported; }
     const RadioControlSession session = controlSession();
     const QPointer<RadioModel> alive(this);
@@ -213,7 +213,7 @@ ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDis
     const RadioControlFence current = [alive, original, session, revision, request, intent,
                                       waterfallId, waterfallRetired, historyEpoch,
                                       colorIntent, blackIntent, autoBlackIntent] {
-        if (!(alive && original && alive->controlSessionCurrent(session)
+        if (!(alive && original && !alive->m_displayInventoryUncertain && alive->controlSessionCurrent(session)
             && alive->panadapter(original->panId()) == original
             && (request.targetsWaterfall() ? original->controlRevision() : original->ownershipRevision()) == revision
             && original->ownedByClient(alive->clientHandle())
@@ -226,10 +226,7 @@ ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDis
                 || original->displayIntentRevision(PanDisplayField::WaterfallAutoBlack) != autoBlackIntent)) { return false; }
         if (alive->m_displayHistoryEpoch != historyEpoch
             || alive->m_displayRetirements.value(waterfallId) != waterfallRetired) { return false; }
-        const auto observed = alive->m_radioDisplayWaterfalls.constFind(waterfallId);
-        return observed == alive->m_radioDisplayWaterfalls.cend()
-            || ((observed->clientHandle == 0 || observed->clientHandle == alive->clientHandle())
-                && (observed->parentPanId.isEmpty() || observed->parentPanId == original->panId()));
+        return alive->displayWaterfallOwned(waterfallId, original->panId());
     };
     const ReceiveDispatch result = control && control->supports(request.field) && current()
         ? m_backend->requestPanDisplay(backendPanIdFor(pan->panId()), waterfallId, request, completion, current)
@@ -267,7 +264,7 @@ void RadioModel::requestPanRfGainInfo(PanadapterModel* pan)
     const RadioControlSession session = controlSession();
     const quint64 revision = pan->ownershipRevision();
     const RadioControlFence current = [alive, original, session, revision] {
-        return alive && original && alive->controlSessionCurrent(session)
+        return alive && original && !alive->m_displayInventoryUncertain && alive->controlSessionCurrent(session)
             && alive->panadapter(original->panId()) == original && original->ownershipRevision() == revision;
     };
     m_backend->requestPanLifecycle({PanLifecycleAction::RfGainInfo, backendPanIdFor(pan->panId()), {}},

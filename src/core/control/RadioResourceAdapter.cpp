@@ -191,19 +191,19 @@ RadioResourceAdapter::RadioResourceAdapter(
             this, &RadioResourceAdapter::refreshPanadapter);
     connect(m_radio, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
-                PanadapterModel* removed = nullptr;
-                for (PanadapterModel* panadapter : std::as_const(m_panadapters)) {
-                    if (panadapter && panadapter->panId() == panId) {
-                        removed = panadapter;
-                        break;
+                PanadapterModel* live = m_radio->panadapter(panId);
+                const auto attached = m_panadapters;
+                for (PanadapterModel* pan : attached) {
+                    if (pan && pan != live && pan->panId() == panId) {
+                        QObject::disconnect(pan, nullptr, this, nullptr);
+                        m_panadapters.remove(pan);
                     }
                 }
-                if (removed) {
-                    QObject::disconnect(removed, nullptr, this, nullptr);
+                if (live) {
+                    refreshPanadapter(live);
+                } else {
+                    m_resources->remove({QStringLiteral("panadapter"), m_radioSessionId, panId});
                 }
-                m_panadapters.remove(removed);
-                m_resources->remove({QStringLiteral("panadapter"), m_radioSessionId,
-                                     panId});
             });
 
     m_telemetry = std::make_unique<RadioTelemetryAdapter>(m_radio, m_resources, m_radioSessionId);
@@ -453,7 +453,7 @@ void RadioResourceAdapter::publishSlice(SliceModel* slice)
 
 void RadioResourceAdapter::publishPanadapter(PanadapterModel* panadapter)
 {
-    if (!panadapter || !m_panadapters.contains(panadapter)) {
+    if (!panadapter || !panadapter->lifecyclePublished() || !m_panadapters.contains(panadapter)) {
         return;
     }
     const QJsonObject value{
