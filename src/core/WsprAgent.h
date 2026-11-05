@@ -30,11 +30,11 @@ struct WsprPackage {
     static constexpr const char* kVersion = "0.1.0";
     // FLEX-6000: a legacy waveform, whose settings persist on /user.
     static constexpr Pin kLegacy{":/waveforms/AetherWSPR.ssdr_waveform", "AetherWSPR.ssdr_waveform",
-                                 "dcc2662cb9bf6b6371b5f60c8a750a8bf0a8987a99e38d336d09e8c4d26f4cb9", 139334};
+                                 "dcf0cb0ed470bf4f0004a0925c029821641ea423395b596c2360b897d7f192c0", 141483};
     // FLEX-8000 and Aurora: a container, because a legacy waveform has only
     // RAM there and the container's writable layer survives a reboot.
     static constexpr Pin kContainer{":/waveforms/AetherWSPR.tar.gz", "AetherWSPR.tar.gz",
-                                    "381245192dd05e19c06c60464b6382258d7ed2cafef948565159f5f72bb01e81", 152176};
+                                    "d84b126d0c4a93a254a0939ca66fc822613de5e66c7827b2f3a8170067cb2bf2", 154825};
 };
 
 // The receiver's waveform name, in both packages.
@@ -177,6 +177,9 @@ QString serializeSpotHubSettings(const WsprSpotHubSettings& settings);
 // The receiver answers LAN callers, and a tailnet shim publishes it: a
 // private, link-local or Tailscale (100.64.0.0/10) IPv4 address.
 bool reachableAddress(const QHostAddress& address);
+// The same for the connected radio. Over SmartLink its address is left from
+// the last LAN session, and may be another radio's.
+bool reachableRadio(bool overWan, const QHostAddress& address);
 
 // Writes a bundled package to `dir` for the installer, reusing a matching
 // copy already there. Only bytes matching the pin are written: empty, with

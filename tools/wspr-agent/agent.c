@@ -25,6 +25,7 @@
  */
 #define _GNU_SOURCE
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -63,6 +64,8 @@
 #define C2_SAMPLES 45000
 #define NTAPS 127
 #define MAX_SPOTS 2000
+#define MAX_SLICES 8
+#define MAX_CYCLE_SPOTS 200   /* MAX_UNIQUES in wsprd.c: all it can print */
 #define MAX_CYCLES 60
 #define MAX_BANDS 16
 #define MAX_UPLOADS 2000
@@ -71,9 +74,12 @@ int wsprd_main(int argc, char *argv[]);
 
 /* ------------------------------------------------------------------ util */
 
+static volatile pid_t g_decoder;
+
 static void on_term(int sig)
 {
     (void)sig;
+    if (g_decoder > 0) kill(g_decoder, SIGKILL);
     _exit(0);
 }
 
@@ -284,6 +290,19 @@ static int valid_token(const char *s, const char *extra)
     return 1;
 }
 
+/* Maidenhead: field letters A-R, digits, then subsquare letters A-X. */
+static int valid_grid(const char *s)
+{
+    size_t n = strlen(s);
+    if (n == 0) return 1;
+    if (n != 4 && n != 6) return 0;
+    if (toupper((unsigned char)s[0]) < 'A' || toupper((unsigned char)s[0]) > 'R'
+        || toupper((unsigned char)s[1]) < 'A' || toupper((unsigned char)s[1]) > 'R'
+        || !isdigit((unsigned char)s[2]) || !isdigit((unsigned char)s[3])) return 0;
+    return n == 4 || (toupper((unsigned char)s[4]) >= 'A' && toupper((unsigned char)s[4]) <= 'X'
+                      && toupper((unsigned char)s[5]) >= 'A' && toupper((unsigned char)s[5]) <= 'X');
+}
+
 /* Parses a config object into *c (starting from the current settings, so
  * fields left out keep their values). Returns NULL or an error message. */
 static const char *config_parse(const char *text, size_t len, config_t *c)
@@ -301,7 +320,7 @@ static const char *config_parse(const char *text, size_t len, config_t *c)
             strcpy(c->callsign, s);
             for (char *q = c->callsign; *q; q++) if (*q >= 'a' && *q <= 'z') *q -= 32;
         } else if (!strcmp(key, "grid")) {
-            if (!jstr(&j, s, sizeof s) || (strlen(s) != 0 && strlen(s) != 4 && strlen(s) != 6) || !valid_token(s, "")) return "bad grid";
+            if (!jstr(&j, s, sizeof s) || !valid_grid(s)) return "bad grid";
             strcpy(c->grid, s);
         } else if (!strcmp(key, "rxant")) {
             if (!jstr(&j, s, sizeof s) || strlen(s) >= sizeof c->rxant || !valid_token(s, "_")) return "bad rxant";
@@ -425,25 +444,27 @@ static void effective_call_grid(char *call, char *grid)
     snprintf(grid, 8, "%s", g);
 }
 
-static void save_config_locked(void)
+/* 0 when the settings couldn't be stored. */
+static int save_config_locked(void)
 {
-    if (!G.state_path[0]) return;
+    if (!G.state_path[0]) return 1;
     char path[540], tmp[550], text[1024];
     buf_t b = {text, 0, sizeof text, 0};
     bputs(&b, "{\"token\":"); bjson_str(&b, G.token);
     bputs(&b, ",\"config\":"); config_json(&b, &G.cfg); bputs(&b, "}\n");
-    if (b.full) return;
+    if (b.full) return 0;
     snprintf(path, sizeof path, "%s/config.json", G.state_path);
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) return;
+    if (fd < 0) return 0;
     /* Synced before the rename: a radio can lose power at any moment, and the
      * old settings must survive unless the new ones are whole. */
     int ok = write(fd, text, b.n) == (ssize_t)b.n && fsync(fd) == 0;
     close(fd);
-    if (!ok || rename(tmp, path)) { unlink(tmp); return; }
+    if (!ok || rename(tmp, path)) { unlink(tmp); return 0; }
     int dir = open(G.state_path, O_RDONLY | O_DIRECTORY);
     if (dir >= 0) { fsync(dir); close(dir); }
+    return 1;
 }
 
 static void load_config(void)
@@ -659,7 +680,9 @@ static int start_decode(decode_t *dc, const char *c2, int depth)
     if (pid == 0) {
         close(p[0]);
         dup2(p[1], 1);
-        close(p[1]);
+        /* Sockets stay with the agent: a decoder outliving it mustn't hold
+         * port 48995 against the next start. */
+        for (int fd = 3; fd < 256; fd++) close(fd);
         setpriority(PRIO_PROCESS, 0, 19);
         if (chdir(g_work)) _exit(2);
         /* WSJT-X's arguments for its Fast, Normal and Deep. */
@@ -680,6 +703,7 @@ static int start_decode(decode_t *dc, const char *c2, int depth)
     close(p[1]);
     fcntl(p[0], F_SETFL, O_NONBLOCK);
     dc->pid = pid;
+    g_decoder = pid;
     dc->fd = p[0];
     dc->n = 0;
     dc->started = mono_s();
@@ -983,12 +1007,16 @@ static void http_error(int fd, int code, const char *why)
     http_reply(fd, code, body, b.n);
 }
 
-static void random_token(char *out, size_t cap)
+static int random_token(char *out, size_t cap)
 {
-    unsigned char r[16] = {0};
+    unsigned char r[16];
     int fd = open("/dev/urandom", O_RDONLY);
-    if (fd >= 0) { if (read(fd, r, sizeof r) != sizeof r) memset(r, 0, sizeof r); close(fd); }
+    if (fd < 0) return 0;
+    int ok = read(fd, r, sizeof r) == sizeof r;
+    close(fd);
+    if (!ok) return 0;
     for (size_t i = 0; i < sizeof r && 2 * i + 2 < cap; i++) snprintf(out + 2 * i, 3, "%02x", r[i]);
+    return 1;
 }
 
 static void serve(int fd)
@@ -1000,7 +1028,11 @@ static void serve(int fd)
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     char *body = NULL;
     size_t clen = 0;
+    /* One connection at a time, so a slow caller can't hold the server: the
+     * socket timeout is per read, this is for the whole request. */
+    double deadline = mono_s() + 5;
     for (;;) {
+        if (mono_s() > deadline) return;
         ssize_t k = read(fd, req + n, sizeof req - 1 - n);
         if (k <= 0) return;
         n += (size_t)k;
@@ -1057,10 +1089,22 @@ static void serve(int fd)
         const char *err = config_parse(body, clen, &c);
         if (err) { pthread_mutex_unlock(&G.mu); http_error(fd, 400, err); return; }
         int fresh = !G.token[0];
-        if (fresh) random_token(G.token, sizeof G.token);
+        if (fresh && !random_token(G.token, sizeof G.token)) {
+            G.token[0] = 0;
+            pthread_mutex_unlock(&G.mu);
+            http_error(fd, 500, "no random bytes for a token");
+            return;
+        }
+        config_t old = G.cfg;
         G.cfg = c;
+        if (!save_config_locked()) {
+            G.cfg = old;
+            if (fresh) G.token[0] = 0;
+            pthread_mutex_unlock(&G.mu);
+            http_error(fd, 500, "the settings could not be stored");
+            return;
+        }
         G.cfg_dirty = 1;
-        save_config_locked();
         char out[1200];
         buf_t b = {out, 0, sizeof out, 0};
         bputs(&b, "{\"config\":");
@@ -1142,6 +1186,11 @@ typedef struct {
     int want_slice, want_stream, want_info;
     int slice;            /* our slice index, -1 none */
     unsigned stream;      /* our DAX stream id, 0 none */
+    double stream_retry;  /* mono_s() to ask for a refused stream again, 0 none */
+    /* Where the radio says each slice is tuned, by index. All of them: a
+     * slice's status can arrive before the reply that names it ours. */
+    long long rf_hz[MAX_SLICES];
+    long long create_hz;  /* what we asked the next slice to be created at */
     unsigned handle;
     int lost;             /* our slice was removed: remake it now */
 } api_t;
@@ -1190,7 +1239,8 @@ static void api_close(api_t *a)
 static void make_slice(api_t *a, long long dial_hz, const char *ant, int dax)
 {
     (void)dax;
-    if (ant[0]) a->want_slice = api_send(a, "slice create freq=%.6f ant=%s mode=DIGU", dial_hz / 1e6, ant);
+    a->create_hz = dial_hz;
+    if (ant[0]) a->want_slice = api_send(a, "slice create freq=%.6f rxant=%s mode=DIGU", dial_hz / 1e6, ant);
     else a->want_slice = api_send(a, "slice create freq=%.6f mode=DIGU", dial_hz / 1e6);
 }
 
@@ -1221,6 +1271,7 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             char call[16];
             field(msg, "callsign=", call, sizeof call);
             pthread_mutex_lock(&G.mu);
+            for (char *q = call; *q; q++) *q = (char)toupper((unsigned char)*q);
             snprintf(G.radio_call, sizeof G.radio_call, "%s", call);
             pthread_mutex_unlock(&G.mu);
         } else if (seq == a->want_slice) {
@@ -1230,11 +1281,17 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             api_send(a, "slice set %d tx=0", a->slice);
             api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
             a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
+            if (a->slice < MAX_SLICES && !a->rf_hz[a->slice]) a->rf_hz[a->slice] = a->create_hz;
             pthread_mutex_lock(&G.mu); G.slice_ok = 1; pthread_mutex_unlock(&G.mu);
             logf_("slice %d on %s", a->slice, G.band);
         } else if (seq == a->want_stream) {
             a->want_stream = 0;
-            if (code) { logf_("DAX audio refused: %08lx %s", code, msg); return; }
+            if (code) {
+                logf_("DAX audio refused: %08lx %s", code, msg);
+                a->stream_retry = mono_s() + 10;
+                return;
+            }
+            a->stream_retry = 0;
             a->stream = (unsigned)strtoul(msg, NULL, 16);
             pthread_mutex_lock(&G.mu); G.stream_ok = 1; pthread_mutex_unlock(&G.mu);
             logf_("DAX audio stream 0x%08x", a->stream);
@@ -1253,7 +1310,15 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             snprintf(G.gps_grid, sizeof G.gps_grid, "%s", grid);
             pthread_mutex_unlock(&G.mu);
         }
-    } else if (!strncmp(body, "slice ", 6) && a->slice >= 0 && atoi(body + 6) == a->slice) {
+    } else if (!strncmp(body, "slice ", 6)) {
+        int index = atoi(body + 6);
+        if (index >= 0 && index < MAX_SLICES) {
+            char mhz[24];
+            field(body, "RF_frequency=", mhz, sizeof mhz);
+            if (mhz[0]) a->rf_hz[index] = llround(atof(mhz) * 1e6);
+            if (strstr(body, " in_use=0")) a->rf_hz[index] = 0;
+        }
+        if (index != a->slice) return;
         /* The radio removes headless slices when its last GUI client
          * disconnects, and anyone may close ours. Its DAX stream is left
          * attached to nothing, so drop that too and make both again. */
@@ -1261,11 +1326,18 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             if (a->stream) api_send(a, "stream remove 0x%08X", a->stream);
             a->slice = -1;
             a->stream = 0;
+            a->stream_retry = 0;
             a->lost = 1;
             pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
             logf_("our slice was removed; making it again");
         }
     }
+}
+
+/* The radio reports the slice to the Hz; anything else is another frequency. */
+static int on_dial(const api_t *a, long long dial_hz)
+{
+    return a->slice >= 0 && a->slice < MAX_SLICES && llabs(a->rf_hz[a->slice] - dial_hz) < 2;
 }
 
 static int api_read(api_t *a, const config_t *cfg)
@@ -1416,6 +1488,91 @@ static int selftest_spots(void)
     return 0;
 }
 
+static void record_cycle(const decode_t *dc);
+
+/* Every decode wsprd can print reaches the spot list. */
+static int selftest_busy_cycle(void)
+{
+    static decode_t dc;
+    memset(&dc, 0, sizeof dc);
+    for (int i = 0; i < MAX_CYCLE_SPOTS; i++)
+        dc.n += (size_t)snprintf(dc.out + dc.n, sizeof dc.out - dc.n,
+                                 "0000 -21  0.1  14.097%03d  0  K%dAB FN42 37\n", i, i % 10);
+    int before = G.nspots;
+    record_cycle(&dc);
+    if (G.nspots - before != MAX_CYCLE_SPOTS) { printf("selftest FAIL: busy cycle kept %d of %d\n", G.nspots - before, MAX_CYCLE_SPOTS); return 1; }
+    G.nspots = before;
+    G.ncycles = 0;
+    return 0;
+}
+
+/* What the radio says about our slice and stream. */
+static int selftest_radio_lines(void)
+{
+    int p[2];
+    if (pipe(p)) return 1;
+    fcntl(p[1], F_SETFL, O_NONBLOCK);
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = p[1];
+    a.slice = 0;
+    config_t c;
+    config_default(&c);
+    char l[160];
+    a.want_info = 7;
+    strcpy(l, "R7|0|model=\"FLEX-8600\",callsign=kk7gwy,name=x");
+    api_line(&a, l, &c);
+    int fail = strcmp(G.radio_call, "KK7GWY") != 0;
+    a.slice = -1;
+    strcpy(l, "S1|slice 0 RF_frequency=7.038600 mode=DIGU");   /* before the reply */
+    api_line(&a, l, &c);
+    a.want_slice = 8;
+    a.create_hz = 7000000;   /* the radio's word beats what we asked for */
+    strcpy(l, "R8|0|0");
+    api_line(&a, l, &c);
+    fail |= a.slice != 0 || !on_dial(&a, 7038600) || on_dial(&a, 14095600);
+    strcpy(l, "S1|slice 1 RF_frequency=14.095600");   /* someone else's */
+    api_line(&a, l, &c);
+    fail |= !on_dial(&a, 7038600);
+    strcpy(l, "S1|slice 0 RF_frequency=14.095600");   /* someone moved ours */
+    api_line(&a, l, &c);
+    fail |= on_dial(&a, 7038600) || !on_dial(&a, 14095600);
+    /* A slice no status ever described is where it was asked to be. */
+    api_t b;
+    memset(&b, 0, sizeof b);
+    b.fd = p[1];
+    b.slice = -1;
+    b.want_slice = 3;
+    b.create_hz = 3568600;
+    strcpy(l, "R3|0|1");
+    api_line(&b, l, &c);
+    fail |= !on_dial(&b, 3568600);
+    strcpy(l, "S1|slice 1 in_use=0");
+    api_line(&b, l, &c);
+    fail |= b.slice != -1 || b.rf_hz[1] != 0;
+    a.want_stream = 9;
+    strcpy(l, "R9|50000016|");
+    api_line(&a, l, &c);
+    fail |= a.want_stream != 0 || a.stream_retry <= 0;
+    a.want_stream = 10;
+    strcpy(l, "R10|0|04000008");
+    api_line(&a, l, &c);
+    fail |= a.stream != 0x04000008 || a.stream_retry != 0;
+    /* FlexLib's key for the antenna (Radio.cs RequestSlice). */
+    char sent[256];
+    while (read(p[0], sent, sizeof sent) == (ssize_t)sizeof sent) {}
+    make_slice(&a, 14095600, "ANT2", 4);
+    ssize_t k = read(p[0], sent, sizeof sent - 1);
+    sent[k > 0 ? k : 0] = 0;
+    fail |= !strstr(sent, " rxant=ANT2 ");
+    close(p[0]);
+    close(p[1]);
+    G.radio_call[0] = 0;
+    G.stream_ok = 0;
+    if (fail) { printf("selftest FAIL: radio lines\n"); return 1; }
+    return 0;
+}
+
 /* Upload off leaves nothing queued; on keeps the queue. */
 static int selftest_upload_off(void)
 {
@@ -1429,9 +1586,15 @@ static int selftest_upload_off(void)
     return 0;
 }
 
+static const char *BAD_GRIDS[] = {"ZZ99", "AA00zz", "D18P", "DN1", "DN18p", "1234", "DN18-g"};
+
 static int selftest(double snr_db)
 {
-    if (selftest_persistence() || selftest_spots() || selftest_upload_off()) return 1;
+    if (selftest_persistence() || selftest_spots() || selftest_upload_off()
+        || selftest_busy_cycle() || selftest_radio_lines()) return 1;
+    for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
+        if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
+    if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }
     /* Hopping: every coordinated band ticked follows the slot exactly; a
      * subset only ever yields ticked bands; nothing ticked stays put. */
     {
@@ -1537,13 +1700,13 @@ static int selftest(double snr_db)
 static void record_cycle(const decode_t *dc)
 {
     char *line, *save = NULL;
-    spot_t got[64];
+    spot_t got[MAX_CYCLE_SPOTS];
     int n = 0;
     for (line = strtok_r((char *)dc->out, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
         if (strstr(line, "<DecodeFinished>")) continue;
         char tmp[256];
         snprintf(tmp, sizeof tmp, "%s", line);
-        if (n < 64 && parse_spot(tmp, dc->cycle_t, &got[n])) n++;
+        if (n < MAX_CYCLE_SPOTS && parse_spot(tmp, dc->cycle_t, &got[n])) n++;
     }
     pthread_mutex_lock(&G.mu);
     for (int i = 0; i < n; i++) {
@@ -1675,12 +1838,15 @@ int main(int argc, char *argv[])
     long long capture_dial = 0; /* what it was tuned to when it started: */
     char capture_band[8] = "";  /* by its end the slice may be moving on */
     long long tuned_for = 0;   /* cycle the slice is tuned for */
+    long long skipped = 0;     /* cycle already logged as off its dial */
     double next_connect = 0;
     config_t cfg = G.cfg;
 
     for (;;) {
         double now = now_s();
         int old_dax = cfg.dax_channel;
+        char old_rxant[sizeof cfg.rxant];
+        snprintf(old_rxant, sizeof old_rxant, "%s", cfg.rxant);
         pthread_mutex_lock(&G.mu);
         cfg = G.cfg;
         int dirty = G.cfg_dirty;
@@ -1688,13 +1854,16 @@ int main(int argc, char *argv[])
         pthread_mutex_unlock(&G.mu);
         if (dirty && a.fd >= 0 && a.slice >= 0 && cfg.rxant[0])
             api_send(&a, "slice set %d rxant=%s", a.slice, cfg.rxant);
-        if (dirty && a.fd >= 0 && a.slice >= 0 && cfg.dax_channel != old_dax) {
-            /* A new DAX channel needs a new slice and stream; bands and the
-             * rest apply at the next cycle without one. */
+        if (dirty && a.fd >= 0 && a.slice >= 0
+            && (cfg.dax_channel != old_dax || (old_rxant[0] && !cfg.rxant[0]))) {
+            /* A new DAX channel needs a new slice and stream, and only a new
+             * slice can go back to the radio's default antenna; bands and
+             * the rest apply at the next cycle without one. */
             api_send(&a, "slice remove %d", a.slice);
             if (a.stream) api_send(&a, "stream remove 0x%08X", a.stream);
             a.slice = -1;
             a.stream = 0;
+            a.stream_retry = 0;
             tuned_for = 0;
             pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
         }
@@ -1744,9 +1913,25 @@ int main(int argc, char *argv[])
             }
         }
 
+        if (a.fd >= 0 && a.slice >= 0 && !a.stream && !a.want_stream && a.stream_retry
+            && mono_s() >= a.stream_retry) {
+            a.stream_retry = 0;
+            a.want_stream = api_send(&a, "stream create type=dax_rx dax_channel=%d", cfg.dax_channel);
+        }
+
         /* Start a capture at the top of an even minute, if the slice is
-         * tuned for it and audio is flowing. */
-        if (!capture_t && synced && a.stream && tuned_for == cyc && now - cyc < 1.0) {
+         * tuned for it and audio is flowing. A slice that isn't where the
+         * cycle says, because the radio refused the band or another client
+         * moved it, would publish its decodes under the wrong frequency. */
+        if (!capture_t && synced && a.stream && tuned_for == cyc && now - cyc < 1.0 && skipped != cyc) {
+            pthread_mutex_lock(&G.mu);
+            long long want = G.dial_hz;
+            pthread_mutex_unlock(&G.mu);
+            if (!on_dial(&a, want)) {
+                logf_("cycle %lld skipped: the slice isn't at %lld Hz", cyc, want);
+                skipped = cyc;
+                continue;
+            }
             dsp_reset(&d);
             capture_t = cyc;
             pthread_mutex_lock(&G.mu);
@@ -1757,7 +1942,9 @@ int main(int argc, char *argv[])
         }
         if (capture_t && (d.n >= CAPTURE_SAMPLES || now - capture_t >= CAPTURE_SECONDS + 1)) {
             int pct = (int)(100.0 * d.n / CAPTURE_SAMPLES);
-            if (dc.pid) {
+            if (!on_dial(&a, capture_dial)) {
+                logf_("cycle %lld discarded: the slice moved during it", capture_t);
+            } else if (dc.pid) {
                 logf_("previous decode still running; skipping cycle %lld", capture_t);
             } else if (pct < 80) {
                 logf_("cycle %lld: only %d%% of the audio arrived; not decoded", capture_t, pct);
@@ -1844,6 +2031,7 @@ int main(int argc, char *argv[])
                 snprintf(p, sizeof p, "%s/%s", g_work, c2name);
                 unlink(p);
                 dc.pid = 0;
+                g_decoder = 0;
                 dc.fd = -1;
             }
         }

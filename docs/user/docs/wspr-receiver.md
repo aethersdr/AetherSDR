@@ -19,7 +19,7 @@ It is receive-only: it never transmits, and its slice is never the transmit slic
 
 ## Requirements
 
-- A FLEX-8000 series or Aurora radio, where it runs as a container and so needs the radio's Waveform Processor ready. A FLEX-6000 can install it as a legacy waveform, but its single processor core may not finish decoding a busy band within the two-minute cycle; this hasn't been tested.
+- A FLEX-8000 series or Aurora radio, where it runs as a container and so needs the radio's Waveform Processor ready. A FLEX-6000 can install it as a legacy waveform, but this hasn't been tested: its single processor core may not finish decoding a busy band within the two-minute cycle, and the receiver records only once the radio's clock is synchronized, which may not happen on a radio with no time source.
 - AetherSDR connected to the radio over its **local network** or through [Remote Access](./tailscale-remote-access.md) version 0.5.2 or later. SmartLink can't reach the receiver.
 - One free slice. The receiver takes one of the radio's slices for as long as it runs.
 

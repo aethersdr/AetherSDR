@@ -1622,7 +1622,7 @@ void WaveformsDialog::updateInstallButtonState()
         // A radio with a Waveform Processor takes the container, whose settings
         // survive a reboot, under the Docker gate; any other, the legacy
         // waveform. Its spots are read over the LAN or through Remote Access.
-        const bool reachable = wspr::reachableAddress(m_radioModel->radioAddress());
+        const bool reachable = wspr::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress());
         const bool hasWaveforms = m_radioModel->backendCapabilities().hasWaveforms;
         const bool native = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Native;
         const bool runtimeReady = native || dockerReady;

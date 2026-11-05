@@ -71,8 +71,15 @@ int main(int argc, char** argv)
     }
     check(!wspr::parseStatus("not json"), "non-JSON is refused");
     check(!wspr::parseStatus(R"({"agent":"AetherHealth"})"), "another agent's JSON is refused");
-    check(!wspr::parseStatus(R"({"agent":"AetherWSPR","callsign":"bad call","grid":"","band":"20m"})"),
-          "a status with a malformed callsign is refused");
+    {
+        const auto st = wspr::parseStatus(
+            R"({"agent":"AetherWSPR","callsign":"kk7-gwy.1","grid":"ZZ99","band":"20m",
+                "spots":[{"t":1,"band":"20m","snr":-20,"dt":0,"hz":14097000,"drift":0,"call":"K1ABC","grid":"FN42","dbm":37}]})");
+        check(st && st->callsign == "KK7-GWY.1" && st->grid.isEmpty() && st->spots.size() == 1,
+              "a radio's unusual call is read and a grid that isn't one is dropped, keeping the decodes");
+        const auto bad = wspr::parseStatus(R"({"agent":"AetherWSPR","callsign":"bad call","grid":"","band":"20m"})");
+        check(bad && bad->callsign.isEmpty(), "a call that can't be shown is dropped, not the status");
+    }
     check(!wspr::parseStatus(R"({"agent":"AetherWSPR","callsign":"","grid":"","band":"11m"})"),
           "a status on a band the receiver doesn't have is refused");
     {
@@ -172,6 +179,9 @@ int main(int argc, char** argv)
     check(wspr::reachableAddress(QHostAddress("100.114.103.82")), "a tailnet shim address is reachable");
     check(!wspr::reachableAddress(QHostAddress("8.8.8.8")), "a public address is not tried");
     check(!wspr::reachableAddress(QHostAddress()), "no address is not tried");
+    check(wspr::reachableRadio(false, QHostAddress("192.168.50.100"))
+              && !wspr::reachableRadio(true, QHostAddress("192.168.50.100")),
+          "over SmartLink the stale LAN address is not tried");
 
     // ── the bundled package ───────────────────────────────────────────────
     check(isWsprWaveform(QStringLiteral("AetherWSPR")) && !isWsprWaveform(QStringLiteral("AetherHealth")),

@@ -1863,7 +1863,8 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
         if (m_wsprFeed->isRunning()) {
             m_wsprFeed->stop();
         } else if (m_radioModel) {
-            m_wsprFeed->start(m_radioModel->radioAddress());
+            // An unreachable address makes start() report why.
+            m_wsprFeed->start(m_radioModel->isWan() ? QHostAddress() : m_radioModel->radioAddress());
         }
     });
     btnRow->addWidget(m_wsprStartBtn);

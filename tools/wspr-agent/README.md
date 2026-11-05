@@ -10,8 +10,7 @@ delivers only to a separate computer on its LAN.
   is the container's writable layer on an 8000 and `/user` on a 6000, so both
   survive a reboot, and removing the receiver removes them. A legacy waveform
   has only RAM on an 8000, which is why that radio takes the container.
-  Decoder scratch stays in RAM (`TMPDIR=/dev/shm` in the image), so only a
-  settings change writes to flash.
+  Decoder scratch stays in RAM (`TMPDIR=/dev/shm` in the image).
 - **Radio side:** a non-GUI client on `SSDR_RADIO_ADDRESS` (a container) or
   127.0.0.1 (a legacy waveform), port 4992, makes one headless DIGU
   slice (`tx=0`) and takes its DAX audio (`dax_rx`, 24 kHz). The radio

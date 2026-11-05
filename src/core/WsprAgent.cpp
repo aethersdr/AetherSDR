@@ -43,7 +43,7 @@ constexpr qint64 kMaxHz = 500000000;
 
 bool validCall(const QString& s)
 {
-    static const QRegularExpression re(QStringLiteral("^[A-Z0-9/]{0,15}$"));
+    static const QRegularExpression re(QStringLiteral("^[A-Z0-9/.-]{0,15}$"));
     return re.match(s).hasMatch();
 }
 
@@ -186,8 +186,16 @@ std::optional<WsprStatus> parseStatus(const QByteArray& json)
     st.clockSynced = o.value(QLatin1String("clock_synced")).toBool();
     st.uptimeS = inRange(o.value(QLatin1String("uptime_s")), 0, 1e10)
         ? o.value(QLatin1String("uptime_s")).toInteger() : 0;
-    st.callsign = o.value(QLatin1String("callsign")).toString();
+    // The station's own call and grid come from the radio, whatever it was
+    // told: one it can't show mustn't cost every decode in the reply.
+    st.callsign = o.value(QLatin1String("callsign")).toString().toUpper();
+    if (!validCall(st.callsign)) {
+        st.callsign.clear();
+    }
     st.grid = o.value(QLatin1String("grid")).toString();
+    if (!validGrid(st.grid)) {
+        st.grid.clear();
+    }
     st.band = o.value(QLatin1String("band")).toString();
     st.dialHz = inRange(o.value(QLatin1String("dial_hz")), 0, kMaxHz)
         ? o.value(QLatin1String("dial_hz")).toInteger() : 0;
@@ -195,7 +203,7 @@ std::optional<WsprStatus> parseStatus(const QByteArray& json)
     st.depth = o.value(QLatin1String("depth")).toString();
     st.slice = o.value(QLatin1String("slice")).toBool();
     st.audio = o.value(QLatin1String("audio")).toBool();
-    if (!validCall(st.callsign) || !validGrid(st.grid) || !validBand(st.band)
+    if (!validBand(st.band)
         || (!st.depth.isEmpty() && !depths().contains(st.depth))) {
         return std::nullopt;
     }
@@ -373,6 +381,11 @@ int distanceKm(const QString& fromGrid, const QString& toGrid)
         return -1;
     }
     return static_cast<int>(std::lround(km));
+}
+
+bool reachableRadio(bool overWan, const QHostAddress& address)
+{
+    return !overWan && reachableAddress(address);
 }
 
 bool reachableAddress(const QHostAddress& address)

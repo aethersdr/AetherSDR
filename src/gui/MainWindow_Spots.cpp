@@ -776,6 +776,7 @@ void MainWindow::wireSpotSubsystem()
         // A radio without the receiver just refuses the poll, and one that
         // gets it later is picked up by the next one.
         if (connected && m_radioModel.backendCapabilities().hasWaveforms
+            && wspr::reachableRadio(m_radioModel.isWan(), m_radioModel.radioAddress())
             && wspr::loadSpotHubSettings().autoStart) {
             m_wsprFeed->start(m_radioModel.radioAddress());
         }

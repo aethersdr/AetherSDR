@@ -8,6 +8,7 @@
 #include "core/WsprAgentClient.h"
 #include "models/RadioModel.h"
 
+#include <QCloseEvent>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -419,7 +420,7 @@ WsprConfigureWindow::WsprConfigureWindow(RadioModel* model, QWidget* parent)
 
 void WsprConfigureWindow::load()
 {
-    if (!m_model || !m_model->isConnected() || !wspr::reachableAddress(m_model->radioAddress())) {
+    if (!m_model || !m_model->isConnected() || !wspr::reachableRadio(m_model->isWan(), m_model->radioAddress())) {
         setStatusLine(tr("Not reachable"), QStringLiteral("error"));
         setMessage(tr("The WSPR receiver can be reached only on the radio's local network or "
                       "through Remote Access."), QStringLiteral("error"));
@@ -459,8 +460,22 @@ void WsprConfigureWindow::showConfig(const WsprConfig& c, bool claimed)
     updateControls();
 }
 
+void WsprConfigureWindow::closeEvent(QCloseEvent* event)
+{
+    // The reply to a first save carries the only copy of the admin token.
+    if (m_busy) {
+        event->ignore();
+        return;
+    }
+    CanonWindow::closeEvent(event);
+}
+
 void WsprConfigureWindow::showStatus(const WsprStatus& st)
 {
+    // It answers now, so it may not have when the window opened.
+    if (!m_loaded) {
+        m_client->fetchConfig();
+    }
     setStatusLine(stateText(st), st.state == QLatin1String("capturing") || st.state == QLatin1String("decoding")
                                          || st.state == QLatin1String("waiting_cycle")
                                      ? QStringLiteral("running")

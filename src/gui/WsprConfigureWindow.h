@@ -38,6 +38,7 @@ private:
     void load();
     void showConfig(const WsprConfig& config, bool claimed);
     void showStatus(const WsprStatus& status);
+    void closeEvent(QCloseEvent* event) override;
     WsprConfig collect() const;
     void apply();
     void setMessage(const QString& text, const QString& tone = {});
