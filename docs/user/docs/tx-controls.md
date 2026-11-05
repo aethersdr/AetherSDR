@@ -97,10 +97,14 @@ the Tuner Genius XL.
 - **MEM** shows the tuner's real memory state as the radio reports it, not
   just your last click.
 - ATU tune failures are reported in the status bar.
+- After a successful match, pressing **ATU** again at the same TX frequency
+  requests bypass. At a different TX frequency, it starts a new matching cycle.
 - On FlexRadio, selecting **XVTA**, **XVTB** or **XVTR** as the TX antenna dims
   **ATU**, **MEM** and the **Success**, **Byp** and **Mem** indicators. The
   internal ATU is outside that transmit path. **TUNE** remains available for
   carrier and transverter drive checks; it does not start an ATU matching cycle.
+  **Tools → Pre-tune ATU Bands...** and **Tools → Clear ATU Memories...** are
+  also disabled, with the same transverter-path explanation.
 
 **ATU band pre-tune sweep.** Open it from **Tools → Pre-tune ATU Bands...** or
 right-click **ATU** → **Pre-tune bands…**. It walks the band-plan segments of

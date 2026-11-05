@@ -20,6 +20,7 @@ class BandPlanManager;
 class RadioModel;
 class TransmitModel;
 class TunerModel;
+enum class ATUStatus;
 
 // TX applet: transmit controls matching the SmartSDR TX panel (power/SWR
 // gauges, RF and Tune power, TX profile, TUNE/MOX/ATU/MEM, APD).
@@ -65,6 +66,7 @@ private:
     void requestMox(bool on, const TxController::Input& input);
     void requestAtu(const TxController::Input& input);
     void syncFromModel();
+    void syncAtuState();
     void syncAtuIndicators();
     // Combines tuner capabilities, TX-path availability and TGXL Operate;
     // no individual input may re-enable controls another input withdrew.
@@ -90,6 +92,7 @@ private:
     // current TX frequency still matches the freq we tuned at.  Any freq
     // change between clicks falls back to "atu start". (#1993)
     double m_atuTunedFreqMhz{-1.0};
+    ATUStatus m_lastAtuStatus{};
 
     // Capability inputs to updateAtuAvailability(). Matching and Flex-style
     // memory operations are separate claims; both default permissive so an

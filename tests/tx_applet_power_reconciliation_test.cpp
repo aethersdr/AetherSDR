@@ -305,6 +305,90 @@ void testAtuSuccessTogglesToBypass()
                && commandSpy.takeLast().at(0).toBool());
 }
 
+void testAtuRedrawPreservesMatchedFrequency()
+{
+    for (const QString& result : {QStringLiteral("TUNE_SUCCESSFUL"), QStringLiteral("TUNE_OK")}) {
+        TransmitModel model;
+        TxApplet applet;
+        applet.setTransmitModel(&model);
+        auto* atu = qobject_cast<QPushButton*>(namedWidget(applet, QStringLiteral("ATU tune")));
+        if (!atu) {
+            report("ATU redraw regression button exists", false);
+            return;
+        }
+        QSignalSpy commands(&model, &TransmitModel::atuCommandIssued);
+        TransmitDelta matched;
+        matched.transmitFreq = 14.100;
+        matched.atuStatusRaw = result;
+        model.applyChanges(matched);
+        model.setAtuAvailable(false);
+        model.setAtuAvailable(true);
+        atu->click();
+        report("same-frequency availability redraw retains bypass",
+               commands.size() == 1 && !commands.takeFirst().at(0).toBool());
+
+        TransmitDelta moved;
+        moved.transmitFreq = 14.200;
+        model.applyChanges(moved);
+        model.setAtuAvailable(false);
+        model.setAtuAvailable(true);
+        atu->click();
+        report("new-frequency availability redraw requests a matching cycle",
+               commands.size() == 1 && commands.takeFirst().at(0).toBool());
+
+        TransmitDelta memory;
+        memory.memoriesEnabled = true;
+        model.applyChanges(memory);
+        TransmitDelta apd;
+        apd.apdEnabled = true;
+        model.applyChanges(apd);
+        atu->click();
+        report("memory and APD redraws do not retag a previous match",
+               commands.size() == 1 && commands.takeFirst().at(0).toBool());
+
+        TransmitDelta progress;
+        progress.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS");
+        model.applyChanges(progress);
+        matched.transmitFreq = 14.200;
+        model.applyChanges(matched);
+        atu->click();
+        report("actual matching result pins the new frequency",
+               commands.size() == 1 && !commands.takeFirst().at(0).toBool());
+
+        model.resetState();
+        matched.transmitFreq = 14.300;
+        model.applyChanges(matched);
+        atu->click();
+        report("first match after reset replaces the old session frequency",
+               commands.size() == 1 && !commands.takeFirst().at(0).toBool());
+    }
+}
+
+void testAtuMenuHonoursTransverterAvailability()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    TransmitDelta memory;
+    memory.memoriesEnabled = true;
+    model.applyChanges(memory);
+    model.setAtuAvailable(false);
+    QMenu unavailable;
+    applet.buildAtuContextMenu(unavailable);
+    for (QAction* action : unavailable.actions()) {
+        report("transverter ATU menu action is disabled with an accessible reason",
+               !action->isEnabled()
+                   && action->toolTip().contains(QStringLiteral("transverter TX path"))
+                   && action->statusTip() == action->toolTip());
+    }
+    model.setAtuAvailable(true);
+    QMenu restored;
+    applet.buildAtuContextMenu(restored);
+    for (QAction* action : restored.actions()) {
+        report("normal antenna restores ATU menu actions", action->isEnabled());
+    }
+}
+
 // Inject the production backend seam, not a firmware peer. No sockets or RF.
 class TxActionBackend final : public IRadioBackend {
 public:
@@ -1163,6 +1247,8 @@ int main(int argc, char** argv)
     testCapabilityPowerScaleHonoursBandCeiling();
     testForwardPowerResponseCapabilityIsConsumed();
     testAtuSuccessTogglesToBypass();
+    testAtuRedrawPreservesMatchedFrequency();
+    testAtuMenuHonoursTransverterAvailability();
     testMidiProducerDispatch();
     testScopedControllerActions();
     testScopedPointerActivation();
