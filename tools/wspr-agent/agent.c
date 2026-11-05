@@ -1,0 +1,1541 @@
+/*
+ * AetherWSPR: a WSPR receiver that runs on a FlexRadio as a legacy waveform.
+ * Part of AetherSDR, GPL-3.0-or-later.
+ *
+ * It connects to the radio's API on 127.0.0.1 as a non-GUI client, makes
+ * one DIGU slice of its own and takes that slice's DAX audio, so it needs no
+ * GUI client slot. Each even UTC minute it records 114 s, shifts the WSPR
+ * window down to baseband at 375 samples/s and runs WSJT-X's wsprd decoder
+ * (wsprd/, built in) on it in a child process. Spots are kept in memory,
+ * uploaded to wsprnet.org when that is on, and served as JSON on TCP 48995:
+ *
+ *   GET  /v1/status[?since=<unix>]  state, recent cycles and spots
+ *   GET  /v1/config                 the settings
+ *   POST /v1/config                 new settings (JSON). The first POST is
+ *                                   open and returns an admin token; later
+ *                                   ones need "Authorization: Bearer <token>"
+ *
+ * Only LAN callers are answered. It never transmits: it sends no TX, PTT or
+ * keying command, and its slice is set tx=0.
+ *
+ *   aether-wspr                   run
+ *   aether-wspr decode ARGS...    wsprd itself (the agent runs this in a child)
+ *   aether-wspr selftest [SNR]    synthesize a signal, run it through the
+ *                                 capture DSP and the decoder, check the decode
+ */
+#define _GNU_SOURCE
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <math.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <poll.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/timex.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "wsprd/wsprsim_utils.h"
+
+#define AGENT_VERSION "0.1.0"
+#define STATUS_PORT 48995
+#define AUDIO_RATE 24000
+#define BB_RATE 375
+#define DECIM1 16                       /* 24000 -> 1500 */
+#define DECIM2 4                        /* 1500 -> 375 */
+#define CAPTURE_SECONDS 114
+#define CAPTURE_SAMPLES (CAPTURE_SECONDS * BB_RATE) /* 42750 */
+#define C2_SAMPLES 45000
+#define NTAPS 127
+#define MAX_SPOTS 2000
+#define MAX_CYCLES 60
+#define MAX_BANDS 16
+#define MAX_UPLOADS 2000
+
+int wsprd_main(int argc, char *argv[]);
+
+/* ------------------------------------------------------------------ util */
+
+static void logf_(const char *fmt, ...)
+{
+    char ts[32];
+    time_t now = time(NULL);
+    strftime(ts, sizeof ts, "%H:%M:%S", gmtime(&now));
+    fprintf(stderr, "aether-wspr %s ", ts);
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+}
+
+static double now_s(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_REALTIME, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+
+/* The kernel's view of the clock: synchronized (by the radio's GPS-fed NTP,
+ * or NTP over the internet) or not. WSPR needs the cycle start within ~1 s. */
+static int clock_synced(void)
+{
+    struct timex tx;
+    memset(&tx, 0, sizeof tx);
+    int state = adjtimex(&tx);
+    return state != TIME_ERROR && !(tx.status & STA_UNSYNC);
+}
+
+static int lan_caller(const struct sockaddr_in *a)
+{
+    unsigned long ip = ntohl(a->sin_addr.s_addr);
+    return (ip >> 24) == 10 || (ip >> 24) == 127
+        || (ip >> 20) == (172UL << 4 | 1)          /* 172.16.0.0/12 */
+        || (ip >> 16) == (192UL << 8 | 168)        /* 192.168.0.0/16 */
+        || (ip >> 16) == (169UL << 8 | 254);       /* 169.254.0.0/16 */
+}
+
+/* Appends to a fixed buffer; on overflow it marks the buffer full and later
+ * appends do nothing, so a caller checks once at the end. */
+typedef struct { char *p; size_t n, cap; int full; } buf_t;
+
+static void bputs(buf_t *b, const char *s)
+{
+    size_t l = strlen(s);
+    if (b->full || b->n + l + 1 > b->cap) { b->full = 1; return; }
+    memcpy(b->p + b->n, s, l + 1);
+    b->n += l;
+}
+
+static void bprintf(buf_t *b, const char *fmt, ...)
+{
+    if (b->full) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int l = vsnprintf(b->p + b->n, b->cap - b->n, fmt, ap);
+    va_end(ap);
+    if (l < 0 || (size_t)l >= b->cap - b->n) { b->full = 1; return; }
+    b->n += (size_t)l;
+}
+
+/* JSON string: only printable ASCII is kept; quote and backslash escaped. */
+static void bjson_str(buf_t *b, const char *s)
+{
+    bputs(b, "\"");
+    char one[3] = {0};
+    for (; s && *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c < 32 || c > 126) continue;
+        if (c == '"' || c == '\\') { one[0] = '\\'; one[1] = (char)c; one[2] = 0; }
+        else { one[0] = (char)c; one[1] = 0; }
+        bputs(b, one);
+    }
+    bputs(b, "\"");
+}
+
+/* ----------------------------------------------------------------- bands */
+
+typedef struct { const char *name; long long dial_hz; } band_t;
+
+static const band_t BANDS[] = {
+    {"2200m", 136000},    {"630m", 474200},     {"160m", 1836600},
+    {"80m", 3568600},     {"60m", 5287200},     {"40m", 7038600},
+    {"30m", 10138700},    {"20m", 14095600},    {"17m", 18104600},
+    {"15m", 21094600},    {"12m", 24924600},    {"10m", 28124600},
+    {"6m", 50293000},     {"2m", 144489000},
+};
+
+static long long band_dial(const char *name)
+{
+    for (size_t i = 0; i < sizeof BANDS / sizeof BANDS[0]; i++)
+        if (!strcmp(BANDS[i].name, name)) return BANDS[i].dial_hz;
+    return 0;
+}
+
+/* ---------------------------------------------------------------- config */
+
+typedef struct {
+    char callsign[16];       /* blank: the radio's callsign */
+    char grid[8];            /* blank: the radio's GPS grid */
+    char bands[MAX_BANDS][8];
+    int nbands;
+    int cycles;              /* two-minute cycles on each band */
+    char rxant[12];          /* blank: the radio's default */
+    int upload;              /* send spots to wsprnet.org */
+    int dax_channel;
+} config_t;
+
+static void config_default(config_t *c)
+{
+    memset(c, 0, sizeof *c);
+    strcpy(c->bands[0], "20m");
+    c->nbands = 1;
+    c->cycles = 1;
+    c->dax_channel = 4;
+}
+
+/* Minimal JSON reader for one flat object of strings, integers, booleans and
+ * arrays of strings. Anything else is refused. */
+typedef struct { const char *p, *end; } jr_t;
+
+static void jws(jr_t *j) { while (j->p < j->end && (*j->p == ' ' || *j->p == '\t' || *j->p == '\r' || *j->p == '\n')) j->p++; }
+
+static int jstr(jr_t *j, char *out, size_t cap)
+{
+    jws(j);
+    if (j->p >= j->end || *j->p != '"') return 0;
+    j->p++;
+    size_t n = 0;
+    while (j->p < j->end && *j->p != '"') {
+        char c = *j->p++;
+        if (c == '\\') {
+            if (j->p >= j->end) return 0;
+            c = *j->p++;
+            if (c != '"' && c != '\\' && c != '/') return 0;
+        }
+        if ((unsigned char)c < 32) return 0;
+        if (n + 1 >= cap) return 0;
+        out[n++] = c;
+    }
+    if (j->p >= j->end) return 0;
+    j->p++;
+    out[n] = 0;
+    return 1;
+}
+
+static int jlit(jr_t *j, const char *lit)
+{
+    jws(j);
+    size_t l = strlen(lit);
+    if ((size_t)(j->end - j->p) < l || strncmp(j->p, lit, l)) return 0;
+    j->p += l;
+    return 1;
+}
+
+static int jint(jr_t *j, long *v)
+{
+    jws(j);
+    char tmp[24];
+    size_t n = 0;
+    while (j->p < j->end && n + 1 < sizeof tmp && ((*j->p >= '0' && *j->p <= '9') || (n == 0 && *j->p == '-')))
+        tmp[n++] = *j->p++;
+    tmp[n] = 0;
+    if (!n || (n == 1 && tmp[0] == '-')) return 0;
+    *v = strtol(tmp, NULL, 10);
+    return 1;
+}
+
+static int valid_token(const char *s, const char *extra)
+{
+    if (!*s) return 1;
+    for (; *s; s++)
+        if (!((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z') || (*s >= '0' && *s <= '9') || strchr(extra, *s)))
+            return 0;
+    return 1;
+}
+
+/* Parses a config object into *c (starting from the current settings, so
+ * fields left out keep their values). Returns NULL or an error message. */
+static const char *config_parse(const char *text, size_t len, config_t *c)
+{
+    jr_t j = {text, text + len};
+    if (!jlit(&j, "{")) return "expected an object";
+    jws(&j);
+    if (jlit(&j, "}")) return NULL;
+    for (;;) {
+        char key[24], s[32];
+        long v;
+        if (!jstr(&j, key, sizeof key) || !jlit(&j, ":")) return "bad key";
+        if (!strcmp(key, "callsign")) {
+            if (!jstr(&j, s, sizeof s) || strlen(s) >= sizeof c->callsign || !valid_token(s, "/")) return "bad callsign";
+            strcpy(c->callsign, s);
+            for (char *q = c->callsign; *q; q++) if (*q >= 'a' && *q <= 'z') *q -= 32;
+        } else if (!strcmp(key, "grid")) {
+            if (!jstr(&j, s, sizeof s) || (strlen(s) != 0 && strlen(s) != 4 && strlen(s) != 6) || !valid_token(s, "")) return "bad grid";
+            strcpy(c->grid, s);
+        } else if (!strcmp(key, "rxant")) {
+            if (!jstr(&j, s, sizeof s) || strlen(s) >= sizeof c->rxant || !valid_token(s, "_")) return "bad rxant";
+            strcpy(c->rxant, s);
+        } else if (!strcmp(key, "cycles")) {
+            if (!jint(&j, &v) || v < 1 || v > 30) return "cycles must be 1-30";
+            c->cycles = (int)v;
+        } else if (!strcmp(key, "dax_channel")) {
+            if (!jint(&j, &v) || v < 1 || v > 8) return "dax_channel must be 1-8";
+            c->dax_channel = (int)v;
+        } else if (!strcmp(key, "upload")) {
+            if (jlit(&j, "true")) c->upload = 1;
+            else if (jlit(&j, "false")) c->upload = 0;
+            else return "upload must be true or false";
+        } else if (!strcmp(key, "bands")) {
+            if (!jlit(&j, "[")) return "bands must be an array";
+            int n = 0;
+            jws(&j);
+            if (!jlit(&j, "]")) {
+                for (;;) {
+                    if (n >= MAX_BANDS || !jstr(&j, s, sizeof s) || !band_dial(s)) return "unknown band";
+                    strcpy(c->bands[n++], s);
+                    if (jlit(&j, "]")) break;
+                    if (!jlit(&j, ",")) return "bad bands";
+                }
+            }
+            if (!n) return "bands must not be empty";
+            c->nbands = n;
+        } else {
+            return "unknown key";
+        }
+        if (jlit(&j, "}")) break;
+        if (!jlit(&j, ",")) return "expected , or }";
+    }
+    jws(&j);
+    return j.p == j.end ? NULL : "trailing data";
+}
+
+static void config_json(buf_t *b, const config_t *c)
+{
+    bputs(b, "{\"callsign\":"); bjson_str(b, c->callsign);
+    bputs(b, ",\"grid\":"); bjson_str(b, c->grid);
+    bputs(b, ",\"bands\":[");
+    for (int i = 0; i < c->nbands; i++) { if (i) bputs(b, ","); bjson_str(b, c->bands[i]); }
+    bprintf(b, "],\"cycles\":%d,\"rxant\":", c->cycles);
+    bjson_str(b, c->rxant);
+    bprintf(b, ",\"upload\":%s,\"dax_channel\":%d}", c->upload ? "true" : "false", c->dax_channel);
+}
+
+/* ----------------------------------------------------------------- state */
+
+typedef struct {
+    long long t;           /* cycle start, unix seconds */
+    int snr, drift, dbm;
+    float dt;
+    long long hz;
+    char call[16], grid[8], band[8];
+} spot_t;
+
+typedef struct {
+    long long t, dial_hz;
+    char band[8];
+    int spots, decode_ms, audio_pct, lost_packets;
+    float audio_dbfs;
+} cycle_t;
+
+static struct {
+    pthread_mutex_t mu;
+    config_t cfg;
+    int cfg_dirty;              /* new settings to apply */
+    char token[40];
+    char state_path[256];       /* config.json, token */
+    char radio_call[16], gps_grid[8];
+    const char *state;          /* connecting, waiting_clock, capturing, ... */
+    char band[8];
+    long long dial_hz;
+    int slice_ok, stream_ok;
+    spot_t spots[MAX_SPOTS];
+    int nspots, spot_head;
+    cycle_t cycles[MAX_CYCLES];
+    int ncycles, cycle_head;
+    long long uploaded, upload_failed;
+    int upload_queued;
+    char upload_error[80];
+    long long started;
+} G = { .mu = PTHREAD_MUTEX_INITIALIZER, .state = "starting" };
+
+static void effective_call_grid(char *call, char *grid)
+{
+    strcpy(call, G.cfg.callsign[0] ? G.cfg.callsign : G.radio_call);
+    const char *g = G.cfg.grid[0] ? G.cfg.grid : G.gps_grid;
+    snprintf(grid, 8, "%s", g);
+}
+
+static void save_config_locked(void)
+{
+    if (!G.state_path[0]) return;
+    char path[300], tmp[310], text[1024];
+    buf_t b = {text, 0, sizeof text, 0};
+    bputs(&b, "{\"token\":"); bjson_str(&b, G.token);
+    bputs(&b, ",\"config\":"); config_json(&b, &G.cfg); bputs(&b, "}\n");
+    if (b.full) return;
+    snprintf(path, sizeof path, "%s/config.json", G.state_path);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+    int ok = write(fd, text, b.n) == (ssize_t)b.n;
+    close(fd);
+    if (ok) rename(tmp, path); else unlink(tmp);
+}
+
+static void load_config(void)
+{
+    char path[300], text[2048];
+    snprintf(path, sizeof path, "%s/config.json", G.state_path);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    size_t n = fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    text[n] = 0;
+    char *tok = strstr(text, "\"token\":\"");
+    if (tok) {
+        tok += 9;
+        size_t i = 0;
+        while (tok[i] && tok[i] != '"' && i + 1 < sizeof G.token) { G.token[i] = tok[i]; i++; }
+        G.token[i] = 0;
+    }
+    char *cfg = strstr(text, "\"config\":");
+    char *end = strrchr(text, '}');
+    if (cfg && end && end > cfg) {
+        cfg += 9;
+        config_t c = G.cfg;
+        if (!config_parse(cfg, (size_t)(end - cfg), &c)) G.cfg = c;
+    }
+}
+
+static void pick_state_dir(const char *self_dir)
+{
+    const char *cands[2] = {self_dir, "/tmp"};
+    for (int i = 0; i < 2; i++) {
+        char d[256];
+        snprintf(d, sizeof d, "%s/aether-wspr-state", cands[i]);
+        mkdir(d, 0700);
+        char probe[300];
+        snprintf(probe, sizeof probe, "%s/.w", d);
+        int fd = open(probe, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd >= 0) {
+            close(fd);
+            unlink(probe);
+            snprintf(G.state_path, sizeof G.state_path, "%s", d);
+            return;
+        }
+    }
+}
+
+/* --------------------------------------------------------------- capture */
+
+static float g_h1[NTAPS], g_h2[NTAPS];
+
+static void design_lowpass(float *h, double cutoff_over_fs)
+{
+    double sum = 0;
+    for (int i = 0; i < NTAPS; i++) {
+        double m = i - (NTAPS - 1) / 2.0;
+        double x = 2 * M_PI * cutoff_over_fs * m;
+        double sinc = m == 0 ? 2 * cutoff_over_fs : sin(x) / (M_PI * m);
+        double w = 0.42 - 0.5 * cos(2 * M_PI * i / (NTAPS - 1)) + 0.08 * cos(4 * M_PI * i / (NTAPS - 1));
+        h[i] = (float)(sinc * w);
+        sum += h[i];
+    }
+    for (int i = 0; i < NTAPS; i++) h[i] = (float)(h[i] / sum);
+}
+
+/* Audio (real, 24 kHz) -> mix 1500 Hz to 0 -> two FIR decimators -> complex
+ * 375 Hz, in the scale and sign wsprd's own .wav reader produces. */
+typedef struct {
+    double ph, dph;
+    float r1[2][NTAPS], r2[2][NTAPS];
+    int i1, i2, k1, k2;
+    float *idat, *qdat;
+    int n;           /* baseband samples captured */
+    long long in;    /* audio samples taken */
+    double sumsq;    /* audio power, for the cycle's level */
+    int lost;        /* packets missing from the stream, filled with silence */
+    int last_count;  /* VITA packet count of the previous packet, -1 none */
+} dsp_t;
+
+static void dsp_reset(dsp_t *d)
+{
+    float *i = d->idat, *q = d->qdat;
+    memset(d, 0, sizeof *d);
+    d->idat = i;
+    d->qdat = q;
+    d->dph = 2 * M_PI * 1500.0 / AUDIO_RATE;
+    d->last_count = -1;
+}
+
+static float fir(const float *ring, int head, const float *h)
+{
+    float acc = 0;
+    int j = head;
+    for (int i = 0; i < NTAPS; i++) {
+        acc += h[i] * ring[j];
+        if (++j == NTAPS) j = 0;
+    }
+    return acc;
+}
+
+/* 2 x 737.28: matches wsprd's readwavfile scaling for 16-bit audio. */
+#define BB_SCALE 1474.56f
+
+static void dsp_push(dsp_t *d, float x)
+{
+    if (d->n >= CAPTURE_SAMPLES) return;
+    d->in++;
+    d->sumsq += (double)x * x;
+    float re = (float)(x * cos(d->ph)), im = (float)(-x * sin(d->ph));
+    d->ph += d->dph;
+    if (d->ph > 2 * M_PI) d->ph -= 2 * M_PI;
+    d->r1[0][d->i1] = re;
+    d->r1[1][d->i1] = im;
+    if (++d->i1 == NTAPS) d->i1 = 0;
+    if (++d->k1 < DECIM1) return;
+    d->k1 = 0;
+    d->r2[0][d->i2] = fir(d->r1[0], d->i1, g_h1);
+    d->r2[1][d->i2] = fir(d->r1[1], d->i1, g_h1);
+    if (++d->i2 == NTAPS) d->i2 = 0;
+    if (++d->k2 < DECIM2) return;
+    d->k2 = 0;
+    d->idat[d->n] = BB_SCALE * fir(d->r2[0], d->i2, g_h2);
+    d->qdat[d->n] = BB_SCALE * fir(d->r2[1], d->i2, g_h2);
+    d->n++;
+}
+
+/* The .c2 file wsprd reads: 14-byte name, int minutes, double dial MHz,
+ * 45000 complex floats stored as (I, -Q). */
+static int write_c2(const char *path, const char *name14, double dial_mhz, const float *idat, const float *qdat, int n)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) return 0;
+    char name[14];
+    memset(name, 0, sizeof name);
+    memcpy(name, name14, strlen(name14) < 14 ? strlen(name14) : 14);
+    int trmin = 2;
+    int ok = fwrite(name, 1, 14, f) == 14 && fwrite(&trmin, sizeof trmin, 1, f) == 1
+        && fwrite(&dial_mhz, sizeof dial_mhz, 1, f) == 1;
+    static float buf[2 * C2_SAMPLES];
+    for (int i = 0; i < C2_SAMPLES; i++) {
+        buf[2 * i] = i < n ? idat[i] : 0.0f;
+        buf[2 * i + 1] = i < n ? -qdat[i] : 0.0f;
+    }
+    ok = ok && fwrite(buf, sizeof(float), 2 * C2_SAMPLES, f) == 2 * C2_SAMPLES;
+    return fclose(f) == 0 && ok;
+}
+
+/* ---------------------------------------------------------------- decode */
+
+typedef struct {
+    pid_t pid;
+    int fd;
+    char out[16384];
+    size_t n;
+    long long cycle_t, dial_hz;
+    char band[8];
+    double started;
+    int audio_pct, lost;
+    float dbfs;
+} decode_t;
+
+static char g_self[512];
+static char g_work[300];
+
+static int start_decode(decode_t *dc, const char *c2)
+{
+    int p[2];
+    if (pipe(p)) return 0;
+    pid_t pid = fork();
+    if (pid < 0) { close(p[0]); close(p[1]); return 0; }
+    if (pid == 0) {
+        close(p[0]);
+        dup2(p[1], 1);
+        close(p[1]);
+        setpriority(PRIO_PROCESS, 0, 19);
+        if (chdir(g_work)) _exit(2);
+        char *argv[] = {"wsprd", "-a", g_work, (char *)c2, NULL};
+        int rc = wsprd_main(4, argv);
+        fflush(NULL);   /* stdout is a pipe, so fully buffered */
+        _exit(rc == 0 ? 0 : 1);
+    }
+    close(p[1]);
+    fcntl(p[0], F_SETFL, O_NONBLOCK);
+    dc->pid = pid;
+    dc->fd = p[0];
+    dc->n = 0;
+    dc->started = now_s();
+    return 1;
+}
+
+static const char *band_of(long long hz)
+{
+    for (size_t i = 0; i < sizeof BANDS / sizeof BANDS[0]; i++)
+        if (llabs(hz - BANDS[i].dial_hz) < 10000) return BANDS[i].name;
+    return "";
+}
+
+/* "HHMM SNR DT FREQ DRIFT CALL GRID DBM" (or "CALL DBM" / "<CALL> GRID6 DBM"). */
+static int parse_spot(char *line, long long t, spot_t *s)
+{
+    char *f[10];
+    int n = 0;
+    for (char *tok = strtok(line, " \t"); tok && n < 10; tok = strtok(NULL, " \t")) f[n++] = tok;
+    if (n < 7 || strlen(f[0]) != 4) return 0;
+    memset(s, 0, sizeof *s);
+    s->t = t;
+    s->snr = atoi(f[1]);
+    s->dt = (float)atof(f[2]);
+    s->hz = llround(atof(f[3]) * 1e6);
+    s->drift = atoi(f[4]);
+    const char *call = f[5], *grid = n >= 8 ? f[6] : "", *dbm = f[n - 1];
+    if (call[0] == '<') call = "";   /* unresolved hash */
+    snprintf(s->call, sizeof s->call, "%s", call);
+    char *gt = s->call;
+    for (; *gt; gt++) if (*gt == '<' || *gt == '>') *gt = 0;
+    snprintf(s->grid, sizeof s->grid, "%s", grid);
+    s->dbm = atoi(dbm);
+    snprintf(s->band, sizeof s->band, "%s", band_of(s->hz));
+    return 1;
+}
+
+/* -------------------------------------------------------------- uploader */
+
+typedef struct { char form[512]; long long t; int spot; } upreq_t;
+
+static struct {
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    upreq_t q[MAX_UPLOADS];
+    int head, n;
+} U = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
+
+static void urlenc(buf_t *b, const char *s)
+{
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || strchr("-_.~", c))
+            bprintf(b, "%c", c);
+        else
+            bprintf(b, "%%%02X", c);
+    }
+}
+
+static void form_add(buf_t *b, const char *k, const char *v)
+{
+    if (b->n) bputs(b, "&");
+    bputs(b, k);
+    bputs(b, "=");
+    urlenc(b, v);
+}
+
+static void queue_upload(const char *form, long long t, int spot)
+{
+    pthread_mutex_lock(&U.mu);
+    if (U.n == MAX_UPLOADS) { U.head = (U.head + 1) % MAX_UPLOADS; U.n--; }
+    upreq_t *r = &U.q[(U.head + U.n) % MAX_UPLOADS];
+    snprintf(r->form, sizeof r->form, "%s", form);
+    r->t = t;
+    r->spot = spot;
+    U.n++;
+    pthread_cond_signal(&U.cv);
+    pthread_mutex_unlock(&U.mu);
+}
+
+/* One cycle's reports, the way WSJT-X sends them: a function=wspr POST per
+ * spot, or a function=wsprstat when nothing was heard. */
+static void queue_cycle_uploads(long long t, long long dial_hz, const spot_t *s, int n)
+{
+    char call[16], grid[8];
+    pthread_mutex_lock(&G.mu);
+    int on = G.cfg.upload;
+    effective_call_grid(call, grid);
+    pthread_mutex_unlock(&G.mu);
+    if (!on || !call[0] || strlen(grid) < 4) return;
+    char date[8], hhmm[8], rqrg[24], v[32];
+    time_t tt = (time_t)t;
+    struct tm tm;
+    gmtime_r(&tt, &tm);
+    strftime(date, sizeof date, "%y%m%d", &tm);
+    strftime(hhmm, sizeof hhmm, "%H%M", &tm);
+    snprintf(rqrg, sizeof rqrg, "%.6f", dial_hz / 1e6);
+    int sent = 0;
+    for (int i = 0; i < n; i++) {
+        if (!s[i].call[0] || llabs(s[i].hz - dial_hz) > 10000) continue;
+        char form[512];
+        buf_t b = {form, 0, sizeof form, 0};
+        form[0] = 0;
+        form_add(&b, "function", "wspr");
+        form_add(&b, "date", date);
+        form_add(&b, "time", hhmm);
+        snprintf(v, sizeof v, "%d", s[i].snr); form_add(&b, "sig", v);
+        snprintf(v, sizeof v, "%.1f", s[i].dt); form_add(&b, "dt", v);
+        snprintf(v, sizeof v, "%d", s[i].drift); form_add(&b, "drift", v);
+        snprintf(v, sizeof v, "%.6f", s[i].hz / 1e6); form_add(&b, "tqrg", v);
+        form_add(&b, "tcall", s[i].call);
+        form_add(&b, "tgrid", s[i].grid);
+        snprintf(v, sizeof v, "%d", s[i].dbm); form_add(&b, "dbm", v);
+        form_add(&b, "version", "AetherWSPR " AGENT_VERSION);
+        form_add(&b, "rcall", call);
+        form_add(&b, "rgrid", grid);
+        form_add(&b, "rqrg", rqrg);
+        form_add(&b, "mode", "2");
+        if (!b.full) { queue_upload(form, t, 1); sent++; }
+    }
+    if (!sent) {
+        char form[512];
+        buf_t b = {form, 0, sizeof form, 0};
+        form[0] = 0;
+        form_add(&b, "function", "wsprstat");
+        form_add(&b, "rcall", call);
+        form_add(&b, "rgrid", grid);
+        form_add(&b, "rqrg", rqrg);
+        form_add(&b, "tpct", "0");
+        snprintf(v, sizeof v, "%.6f", (dial_hz + 1500) / 1e6); form_add(&b, "tqrg", v);
+        form_add(&b, "dbm", "0");
+        form_add(&b, "version", "AetherWSPR " AGENT_VERSION);
+        form_add(&b, "mode", "2");
+        if (!b.full) queue_upload(form, t, 0);
+    }
+}
+
+/* 0 accepted, 1 retry later, -1 rejected. */
+static int post_wsprnet(const upreq_t *r, char *err, size_t errcap)
+{
+    struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM}, *ai = NULL;
+    if (getaddrinfo("wsprnet.org", "80", &hints, &ai) || !ai) { snprintf(err, errcap, "DNS lookup failed"); return 1; }
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct timeval tv = {15, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    if (fd < 0 || connect(fd, ai->ai_addr, ai->ai_addrlen)) {
+        freeaddrinfo(ai);
+        if (fd >= 0) close(fd);
+        snprintf(err, errcap, "connect failed");
+        return 1;
+    }
+    freeaddrinfo(ai);
+    char req[1024];
+    int l = snprintf(req, sizeof req,
+                     "POST /post/ HTTP/1.0\r\nHost: wsprnet.org\r\nUser-Agent: AetherWSPR/" AGENT_VERSION
+                     "\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %zu\r\n\r\n%s",
+                     strlen(r->form), r->form);
+    if (l <= 0 || (size_t)l >= sizeof req || write(fd, req, (size_t)l) != l) { close(fd); snprintf(err, errcap, "send failed"); return 1; }
+    char resp[4096];
+    size_t n = 0;
+    ssize_t k;
+    while (n + 1 < sizeof resp && (k = read(fd, resp + n, sizeof resp - 1 - n)) > 0) n += (size_t)k;
+    resp[n] = 0;
+    close(fd);
+    int code = 0;
+    if (sscanf(resp, "HTTP/%*s %d", &code) != 1) { snprintf(err, errcap, "no HTTP reply"); return 1; }
+    if (code >= 500 || code == 429) { snprintf(err, errcap, "HTTP %d", code); return 1; }
+    if (code != 200) { snprintf(err, errcap, "HTTP %d", code); return -1; }
+    if (r->spot && !strstr(resp, "spot(s) added")) { snprintf(err, errcap, "unexpected reply"); return -1; }
+    return 0;
+}
+
+static void *upload_thread(void *arg)
+{
+    (void)arg;
+    int backoff = 0;
+    for (;;) {
+        pthread_mutex_lock(&U.mu);
+        while (!U.n) pthread_cond_wait(&U.cv, &U.mu);
+        upreq_t r = U.q[U.head];
+        pthread_mutex_unlock(&U.mu);
+        if (time(NULL) - r.t > 24 * 3600) {   /* wsprnet drops old spots anyway */
+            pthread_mutex_lock(&U.mu); U.head = (U.head + 1) % MAX_UPLOADS; U.n--; pthread_mutex_unlock(&U.mu);
+            continue;
+        }
+        char err[80] = "";
+        int rc = post_wsprnet(&r, err, sizeof err);
+        pthread_mutex_lock(&G.mu);
+        if (rc == 0 && r.spot) G.uploaded++;
+        if (rc < 0) G.upload_failed++;
+        snprintf(G.upload_error, sizeof G.upload_error, "%s", err);
+        pthread_mutex_unlock(&G.mu);
+        if (rc <= 0) {
+            pthread_mutex_lock(&U.mu); U.head = (U.head + 1) % MAX_UPLOADS; U.n--; pthread_mutex_unlock(&U.mu);
+            backoff = 0;
+            usleep(300000);    /* stay well under wsprnet's rate limits */
+        } else {
+            backoff = backoff ? (backoff * 2 > 600 ? 600 : backoff * 2) : 15;
+            sleep((unsigned)backoff);
+        }
+    }
+    return NULL;
+}
+
+/* --------------------------------------------------------- status server */
+
+static void status_json(buf_t *b, long long since)
+{
+    char call[16], grid[8];
+    effective_call_grid(call, grid);
+    pthread_mutex_lock(&U.mu);
+    int queued = U.n;
+    pthread_mutex_unlock(&U.mu);
+    bprintf(b, "{\"agent\":\"AetherWSPR\",\"version\":\"%s\",\"state\":", AGENT_VERSION);
+    bjson_str(b, G.state);
+    bprintf(b, ",\"clock_synced\":%s,\"uptime_s\":%lld,\"callsign\":", clock_synced() ? "true" : "false",
+            (long long)time(NULL) - G.started);
+    bjson_str(b, call);
+    bputs(b, ",\"grid\":"); bjson_str(b, grid);
+    bputs(b, ",\"band\":"); bjson_str(b, G.band);
+    bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"audio\":%s", G.dial_hz, G.slice_ok ? "true" : "false",
+            G.stream_ok ? "true" : "false");
+    bprintf(b, ",\"upload\":{\"enabled\":%s,\"sent\":%lld,\"rejected\":%lld,\"queued\":%d,\"last_error\":",
+            G.cfg.upload ? "true" : "false", G.uploaded, G.upload_failed, queued);
+    bjson_str(b, G.upload_error);
+    bputs(b, "},\"cycles\":[");
+    for (int i = 0; i < G.ncycles; i++) {
+        const cycle_t *c = &G.cycles[(G.cycle_head + i) % MAX_CYCLES];
+        if (c->t < since) continue;
+        if (b->n && b->p[b->n - 1] == '}') bputs(b, ",");
+        bprintf(b, "{\"t\":%lld,\"band\":", c->t);
+        bjson_str(b, c->band);
+        bprintf(b, ",\"dial_hz\":%lld,\"spots\":%d,\"decode_ms\":%d,\"audio_pct\":%d,\"lost_packets\":%d,"
+                   "\"audio_dbfs\":%.1f}", c->dial_hz, c->spots, c->decode_ms, c->audio_pct, c->lost_packets, c->audio_dbfs);
+    }
+    bputs(b, "],\"spots\":[");
+    int first = 1;
+    for (int i = 0; i < G.nspots; i++) {
+        const spot_t *s = &G.spots[(G.spot_head + i) % MAX_SPOTS];
+        if (s->t < since) continue;
+        if (!first) bputs(b, ",");
+        first = 0;
+        bprintf(b, "{\"t\":%lld,\"band\":", s->t);
+        bjson_str(b, s->band);
+        bprintf(b, ",\"snr\":%d,\"dt\":%.1f,\"hz\":%lld,\"drift\":%d,\"call\":", s->snr, s->dt, s->hz, s->drift);
+        bjson_str(b, s->call);
+        bputs(b, ",\"grid\":"); bjson_str(b, s->grid);
+        bprintf(b, ",\"dbm\":%d}", s->dbm);
+    }
+    bputs(b, "]}");
+}
+
+static void http_reply(int fd, int code, const char *body, size_t len)
+{
+    char head[160];
+    const char *msg = code == 200 ? "OK" : code == 400 ? "Bad Request" : code == 401 ? "Unauthorized"
+                    : code == 404 ? "Not Found" : code == 413 ? "Payload Too Large" : "Error";
+    int l = snprintf(head, sizeof head,
+                     "HTTP/1.0 %d %s\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
+                     code, msg, len);
+    if (write(fd, head, (size_t)l) == l && len) {
+        size_t off = 0;
+        while (off < len) {
+            ssize_t k = write(fd, body + off, len - off);
+            if (k <= 0) break;
+            off += (size_t)k;
+        }
+    }
+}
+
+static void http_error(int fd, int code, const char *why)
+{
+    char body[160];
+    buf_t b = {body, 0, sizeof body, 0};
+    bputs(&b, "{\"error\":"); bjson_str(&b, why); bputs(&b, "}");
+    http_reply(fd, code, body, b.n);
+}
+
+static void random_token(char *out, size_t cap)
+{
+    unsigned char r[16] = {0};
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd >= 0) { if (read(fd, r, sizeof r) != sizeof r) memset(r, 0, sizeof r); close(fd); }
+    for (size_t i = 0; i < sizeof r && 2 * i + 2 < cap; i++) snprintf(out + 2 * i, 3, "%02x", r[i]);
+}
+
+static void serve(int fd)
+{
+    static char req[8192];
+    size_t n = 0;
+    struct timeval tv = {3, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    char *body = NULL;
+    size_t clen = 0;
+    for (;;) {
+        ssize_t k = read(fd, req + n, sizeof req - 1 - n);
+        if (k <= 0) return;
+        n += (size_t)k;
+        req[n] = 0;
+        char *hend = strstr(req, "\r\n\r\n");
+        if (hend) {
+            body = hend + 4;
+            char *cl = strcasestr(req, "\r\nContent-Length:");
+            clen = cl && cl < hend ? strtoul(cl + 17, NULL, 10) : 0;
+            if (clen > 2048) { http_error(fd, 413, "body too large"); return; }
+            if ((size_t)(req + n - body) >= clen) break;
+        }
+        if (n + 1 >= sizeof req) { http_error(fd, 413, "request too large"); return; }
+    }
+    char method[8] = "", path[128] = "";
+    sscanf(req, "%7s %127s", method, path);
+    char *query = strchr(path, '?');
+    if (query) *query++ = 0;
+
+    if (!strcmp(method, "GET") && !strcmp(path, "/v1/status")) {
+        long long since = 0;
+        if (query && !strncmp(query, "since=", 6)) since = atoll(query + 6);
+        static char out[512 * 1024];
+        buf_t b = {out, 0, sizeof out, 0};
+        pthread_mutex_lock(&G.mu);
+        status_json(&b, since);
+        pthread_mutex_unlock(&G.mu);
+        if (b.full) { http_error(fd, 500, "status too large"); return; }
+        http_reply(fd, 200, out, b.n);
+    } else if (!strcmp(method, "GET") && !strcmp(path, "/v1/config")) {
+        char out[1024];
+        buf_t b = {out, 0, sizeof out, 0};
+        pthread_mutex_lock(&G.mu);
+        bputs(&b, "{\"config\":");
+        config_json(&b, &G.cfg);
+        bprintf(&b, ",\"claimed\":%s}", G.token[0] ? "true" : "false");
+        pthread_mutex_unlock(&G.mu);
+        http_reply(fd, 200, out, b.n);
+    } else if (!strcmp(method, "POST") && !strcmp(path, "/v1/config")) {
+        pthread_mutex_lock(&G.mu);
+        if (G.token[0]) {
+            char want[64];
+            snprintf(want, sizeof want, "Bearer %s", G.token);
+            char *auth = strcasestr(req, "\r\nAuthorization:");
+            int ok = 0;
+            if (auth && auth < body) {
+                auth += 16;
+                while (*auth == ' ') auth++;
+                ok = !strncmp(auth, want, strlen(want)) && (auth[strlen(want)] == '\r');
+            }
+            if (!ok) { pthread_mutex_unlock(&G.mu); http_error(fd, 401, "admin token required"); return; }
+        }
+        config_t c = G.cfg;
+        const char *err = config_parse(body, clen, &c);
+        if (err) { pthread_mutex_unlock(&G.mu); http_error(fd, 400, err); return; }
+        int fresh = !G.token[0];
+        if (fresh) random_token(G.token, sizeof G.token);
+        G.cfg = c;
+        G.cfg_dirty = 1;
+        save_config_locked();
+        char out[1200];
+        buf_t b = {out, 0, sizeof out, 0};
+        bputs(&b, "{\"config\":");
+        config_json(&b, &G.cfg);
+        if (fresh) { bputs(&b, ",\"admin_token\":"); bjson_str(&b, G.token); }
+        bputs(&b, "}");
+        pthread_mutex_unlock(&G.mu);
+        http_reply(fd, 200, out, b.n);
+    } else {
+        http_error(fd, 404, "not found");
+    }
+}
+
+static void *status_thread(void *arg)
+{
+    int ls = *(int *)arg;
+    for (;;) {
+        struct sockaddr_in peer;
+        socklen_t pl = sizeof peer;
+        int fd = accept(ls, (struct sockaddr *)&peer, &pl);
+        if (fd < 0) { if (errno != EINTR) usleep(100000); continue; }
+        if (peer.sin_family == AF_INET && lan_caller(&peer)) serve(fd);
+        close(fd);
+    }
+    return NULL;
+}
+
+/* ------------------------------------------------ tailnet shim publishing */
+
+/* When the tailnet shim runs on this radio, publish the status port to the
+ * tailnet so a remote AetherSDR can read it. The lease is 10 minutes; renew
+ * every 5. Without the shim the request just fails. */
+static void *publish_thread(void *arg)
+{
+    (void)arg;
+    int logged = -1;
+    for (;;) {
+        int ok = 0;
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(48992)};
+        inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
+        struct timeval tv = {10, 0};
+        if (fd >= 0) {
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+        }
+        if (fd >= 0 && !connect(fd, (struct sockaddr *)&sa, sizeof sa)) {
+            char body[64], req[256], resp[512];
+            int bl = snprintf(body, sizeof body, "{\"port\":%d,\"name\":\"AetherWSPR\"}", STATUS_PORT);
+            int l = snprintf(req, sizeof req,
+                             "POST /v1/local/expose HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                             "Content-Length: %d\r\n\r\n%s", bl, body);
+            if (write(fd, req, (size_t)l) == l) {
+                ssize_t k = read(fd, resp, sizeof resp - 1);
+                if (k > 0) {
+                    resp[k] = 0;
+                    ok = strstr(resp, " 200 ") != NULL;
+                }
+            }
+        }
+        if (fd >= 0) close(fd);
+        if (ok != logged) {
+            logf_(ok ? "status port published on the tailnet by the shim" : "no tailnet shim to publish the status port");
+            logged = ok;
+        }
+        sleep(ok ? 300 : 60);
+    }
+    return NULL;
+}
+
+/* ------------------------------------------------------------ radio API */
+
+typedef struct {
+    int fd;
+    char in[65536];
+    size_t n;
+    int seq;
+    /* outstanding request numbers we care about */
+    int want_slice, want_stream, want_info;
+    int slice;            /* our slice index, -1 none */
+    unsigned stream;      /* our DAX stream id, 0 none */
+    unsigned handle;
+    int lost;             /* our slice was removed: remake it now */
+} api_t;
+
+static int api_send(api_t *a, const char *fmt, ...)
+{
+    char line[512];
+    int l = snprintf(line, sizeof line, "C%d|", ++a->seq);
+    va_list ap;
+    va_start(ap, fmt);
+    l += vsnprintf(line + l, sizeof line - (size_t)l - 1, fmt, ap);
+    va_end(ap);
+    if (l <= 0 || (size_t)l >= sizeof line - 1) return -1;
+    line[l++] = '\n';
+    if (write(a->fd, line, (size_t)l) != l) return -1;
+    return a->seq;
+}
+
+static const char *g_radio_addr = "127.0.0.1";
+
+static int api_connect(api_t *a, int udp_port)
+{
+    memset(a, 0, sizeof *a);
+    a->slice = -1;
+    struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(4992)};
+    inet_pton(AF_INET, g_radio_addr, &sa.sin_addr);
+    a->fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (a->fd < 0) return 0;
+    if (connect(a->fd, (struct sockaddr *)&sa, sizeof sa)) { close(a->fd); a->fd = -1; return 0; }
+    int one = 1;
+    setsockopt(a->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    api_send(a, "client program AetherWSPR");
+    api_send(a, "client udpport %d", udp_port);
+    a->want_info = api_send(a, "info");
+    api_send(a, "sub gps all");
+    api_send(a, "sub slice all");
+    return 1;
+}
+
+static void api_close(api_t *a)
+{
+    if (a->fd >= 0) close(a->fd);
+    a->fd = -1;
+}
+
+static void make_slice(api_t *a, long long dial_hz, const char *ant, int dax)
+{
+    (void)dax;
+    if (ant[0]) a->want_slice = api_send(a, "slice create freq=%.6f ant=%s mode=DIGU", dial_hz / 1e6, ant);
+    else a->want_slice = api_send(a, "slice create freq=%.6f mode=DIGU", dial_hz / 1e6);
+}
+
+static void field(const char *s, const char *key, char *out, size_t cap)
+{
+    out[0] = 0;
+    const char *p = strstr(s, key);
+    if (!p) return;
+    p += strlen(key);
+    if (*p == '"') p++;
+    size_t i = 0;
+    while (p[i] && p[i] != '"' && p[i] != ' ' && p[i] != ',' && p[i] != '#' && i + 1 < cap) { out[i] = p[i]; i++; }
+    out[i] = 0;
+}
+
+/* Handles one line from the radio. */
+static void api_line(api_t *a, char *l, const config_t *cfg)
+{
+    if (l[0] == 'H') { a->handle = (unsigned)strtoul(l + 1, NULL, 16); return; }
+    if (l[0] == 'R') {
+        int seq = atoi(l + 1);
+        char *p1 = strchr(l, '|');
+        if (!p1) return;
+        unsigned long code = strtoul(p1 + 1, NULL, 16);
+        char *msg = strchr(p1 + 1, '|');
+        msg = msg ? msg + 1 : (char *)"";
+        if (seq == a->want_info && !code) {
+            char call[16];
+            field(msg, "callsign=", call, sizeof call);
+            pthread_mutex_lock(&G.mu);
+            snprintf(G.radio_call, sizeof G.radio_call, "%s", call);
+            pthread_mutex_unlock(&G.mu);
+        } else if (seq == a->want_slice) {
+            a->want_slice = 0;
+            if (code) { logf_("slice create refused: %08lx %s", code, msg); return; }
+            a->slice = atoi(msg);
+            api_send(a, "slice set %d tx=0", a->slice);
+            api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
+            a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
+            pthread_mutex_lock(&G.mu); G.slice_ok = 1; pthread_mutex_unlock(&G.mu);
+            logf_("slice %d on %s", a->slice, G.band);
+        } else if (seq == a->want_stream) {
+            a->want_stream = 0;
+            if (code) { logf_("DAX audio refused: %08lx %s", code, msg); return; }
+            a->stream = (unsigned)strtoul(msg, NULL, 16);
+            pthread_mutex_lock(&G.mu); G.stream_ok = 1; pthread_mutex_unlock(&G.mu);
+            logf_("DAX audio stream 0x%08x", a->stream);
+        }
+        return;
+    }
+    if (l[0] != 'S') return;
+    char *body = strchr(l, '|');
+    if (!body) return;
+    body++;
+    if (!strncmp(body, "gps ", 4)) {
+        char grid[8];
+        field(body, "grid=", grid, sizeof grid);
+        if (strlen(grid) >= 4) {
+            pthread_mutex_lock(&G.mu);
+            snprintf(G.gps_grid, sizeof G.gps_grid, "%s", grid);
+            pthread_mutex_unlock(&G.mu);
+        }
+    } else if (!strncmp(body, "slice ", 6) && a->slice >= 0 && atoi(body + 6) == a->slice) {
+        /* The radio removes headless slices when its last GUI client
+         * disconnects, and anyone may close ours. Its DAX stream is left
+         * attached to nothing, so drop that too and make both again. */
+        if (strstr(body, " in_use=0")) {
+            if (a->stream) api_send(a, "stream remove 0x%08X", a->stream);
+            a->slice = -1;
+            a->stream = 0;
+            a->lost = 1;
+            pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
+            logf_("our slice was removed; making it again");
+        }
+    }
+}
+
+static int api_read(api_t *a, const config_t *cfg)
+{
+    ssize_t k = read(a->fd, a->in + a->n, sizeof a->in - 1 - a->n);
+    if (k <= 0) return 0;
+    a->n += (size_t)k;
+    a->in[a->n] = 0;
+    char *start = a->in, *nl;
+    while ((nl = memchr(start, '\n', (size_t)(a->in + a->n - start)))) {
+        *nl = 0;
+        if (nl > start && nl[-1] == '\r') nl[-1] = 0;
+        api_line(a, start, cfg);
+        start = nl + 1;
+    }
+    a->n = (size_t)(a->in + a->n - start);
+    memmove(a->in, start, a->n);
+    if (a->n == sizeof a->in - 1) a->n = 0;   /* one absurdly long line: drop it */
+    return 1;
+}
+
+/* VITA-49 DAX audio: 28-byte header, payload float32 stereo BE (PCC 0x03E3)
+ * or int16 mono BE (PCC 0x0123), optional 4-byte trailer. */
+static void vita_packet(const unsigned char *p, ssize_t n, unsigned want, dsp_t *d, int capturing)
+{
+    if (n < 28 || !want) return;
+    uint32_t w0 = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+    uint32_t sid = (uint32_t)p[4] << 24 | (uint32_t)p[5] << 16 | (uint32_t)p[6] << 8 | p[7];
+    if (sid != want) return;
+    unsigned pcc = (unsigned)p[14] << 8 | p[15];
+    ssize_t end = n - ((w0 & 0x04000000u) ? 4 : 0);
+    if (!capturing) return;
+    /* A lost packet must become silence of the same length: dropping it
+     * would pull every later sample earlier and break WSPR's symbol timing. */
+    int count = (int)((w0 >> 16) & 0xF);
+    ssize_t per = pcc == 0x03E3 ? (end - 28) / 8 : (end - 28) / 2;
+    if (d->last_count >= 0 && per > 0) {
+        int gap = (count - d->last_count - 1) & 0xF;
+        d->lost += gap;
+        for (long long z = 0; z < (long long)gap * per; z++) dsp_push(d, 0.0f);
+    }
+    d->last_count = count;
+    if (pcc == 0x03E3) {
+        for (ssize_t o = 28; o + 8 <= end; o += 8) {
+            uint32_t u = (uint32_t)p[o] << 24 | (uint32_t)p[o + 1] << 16 | (uint32_t)p[o + 2] << 8 | p[o + 3];
+            float x;
+            memcpy(&x, &u, 4);
+            dsp_push(d, x);
+        }
+    } else if (pcc == 0x0123) {
+        for (ssize_t o = 28; o + 2 <= end; o += 2)
+            dsp_push(d, (int16_t)(p[o] << 8 | p[o + 1]) / 32768.0f);
+    }
+}
+
+/* ------------------------------------------------------------- selftest */
+
+static double gauss(void)
+{
+    double u = (rand() + 1.0) / (RAND_MAX + 2.0), v = (rand() + 1.0) / (RAND_MAX + 2.0);
+    return sqrt(-2 * log(u)) * cos(2 * M_PI * v);
+}
+
+static int selftest(double snr_db)
+{
+    unsigned char sym[162];
+    char msg[] = "K1ABC FN42 37";
+    char *hashtab = calloc(32768 * 13, 1), *loctab = calloc(32768 * 5, 1);
+    if (get_wspr_channel_symbols(msg, hashtab, loctab, sym) != 1) { fprintf(stderr, "symbol generation failed\n"); return 1; }
+    const double f0 = 55.0, df = 375.0 / 256.0, tsym = 256.0 / 375.0;
+    /* Noise sigma 1 at 24 kHz: noise power in 2500 Hz is 2500/12000. */
+    double amp = sqrt(2 * pow(10, snr_db / 10) * 2500.0 / 12000.0);
+    static float idat[CAPTURE_SAMPLES], qdat[CAPTURE_SAMPLES];
+    dsp_t d;
+    d.idat = idat;
+    d.qdat = qdat;
+    dsp_reset(&d);
+    srand(1234);
+    double ph = 0;
+    long long total = (long long)CAPTURE_SECONDS * AUDIO_RATE;
+    for (long long i = 0; i < total; i++) {
+        double t = (double)i / AUDIO_RATE - 1.0;  /* WSPR starts 1 s in */
+        double s = 0;
+        if (t >= 0 && t < 162 * tsym) {
+            int k = (int)(t / tsym);
+            ph += 2 * M_PI * (1500.0 + f0 + (sym[k] - 1.5) * df) / AUDIO_RATE;
+            s = amp * cos(ph);
+        }
+        dsp_push(&d, (float)(0.01 * (s + gauss())));
+    }
+    char c2[400];
+    snprintf(c2, sizeof c2, "%s/260101_0000.c2", g_work);
+    if (!write_c2(c2, "260101_0000.c2", 14.0956, idat, qdat, d.n)) { fprintf(stderr, "write c2 failed\n"); return 1; }
+    decode_t dc = {0};
+    if (!start_decode(&dc, c2)) return 1;
+    int st;
+    for (;;) {
+        ssize_t k = read(dc.fd, dc.out + dc.n, sizeof dc.out - 1 - dc.n);
+        if (k > 0) { dc.n += (size_t)k; continue; }
+        if (k == 0) break;
+        if (errno == EAGAIN) { usleep(20000); continue; }
+        break;
+    }
+    waitpid(dc.pid, &st, 0);
+    dc.out[dc.n] = 0;
+    printf("selftest at %.1f dB (%d baseband samples):\n%s", snr_db, d.n, dc.out);
+    int ok = strstr(dc.out, "K1ABC FN42 37") && strstr(dc.out, "14.097155");
+    printf("selftest %s\n", ok ? "PASS" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+/* ------------------------------------------------------------------ main */
+
+#ifdef AETHER_WSPR_TEST_REPORT
+static void test_report(const char *fmt, ...);
+#endif
+
+static void record_cycle(const decode_t *dc)
+{
+    char *line, *save = NULL;
+    spot_t got[64];
+    int n = 0;
+    for (line = strtok_r((char *)dc->out, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        if (strstr(line, "<DecodeFinished>")) continue;
+        char tmp[256];
+        snprintf(tmp, sizeof tmp, "%s", line);
+        if (n < 64 && parse_spot(tmp, dc->cycle_t, &got[n])) n++;
+    }
+    pthread_mutex_lock(&G.mu);
+    for (int i = 0; i < n; i++) {
+        int idx = (G.spot_head + G.nspots) % MAX_SPOTS;
+        if (G.nspots == MAX_SPOTS) G.spot_head = (G.spot_head + 1) % MAX_SPOTS; else G.nspots++;
+        G.spots[idx] = got[i];
+    }
+    int cidx = (G.cycle_head + G.ncycles) % MAX_CYCLES;
+    if (G.ncycles == MAX_CYCLES) G.cycle_head = (G.cycle_head + 1) % MAX_CYCLES; else G.ncycles++;
+    cycle_t *c = &G.cycles[cidx];
+    c->t = dc->cycle_t;
+    c->dial_hz = dc->dial_hz;
+    snprintf(c->band, sizeof c->band, "%s", dc->band);
+    c->spots = n;
+    c->decode_ms = (int)((now_s() - dc->started) * 1000);
+    c->audio_pct = dc->audio_pct;
+    c->lost_packets = dc->lost;
+    c->audio_dbfs = dc->dbfs;
+    pthread_mutex_unlock(&G.mu);
+    logf_("cycle %lld %s: %d spot(s), decode %d ms, audio %d%%, %d packet(s) lost, level %.1f dBFS", dc->cycle_t,
+          dc->band, n, c->decode_ms, dc->audio_pct, dc->lost, dc->dbfs);
+    queue_cycle_uploads(dc->cycle_t, dc->dial_hz, got, n);
+#ifdef AETHER_WSPR_TEST_REPORT
+    char hhmm[8];
+    time_t tt = (time_t)dc->cycle_t;
+    struct tm tm;
+    gmtime_r(&tt, &tm);
+    strftime(hhmm, sizeof hhmm, "%H%M", &tm);
+    char top[64] = "";
+    size_t tl = 0;
+    for (int i = 0; i < n && tl < 20; i++)
+        tl += (size_t)snprintf(top + tl, sizeof top - tl, "%s%d,", got[i].call[0] ? got[i].call : "?", got[i].snr);
+    test_report("W%s:%s:n%d:a%d:l%d:%.0fdB:%dms:%s", hhmm, dc->band, n, dc->audio_pct, dc->lost, dc->dbfs, c->decode_ms, top);
+#endif
+}
+
+#ifdef AETHER_WSPR_TEST_REPORT
+/* Test builds only: the radio's own LAN ports can't be reached from a
+ * computer that reaches the radio through the tailnet shim, so each cycle's
+ * summary is shown as the station name of a short-lived GUI client, which any
+ * API client can read. Station names hold 40 characters, no spaces. */
+static pthread_mutex_t g_report_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_report_fd = -1;
+
+/* One long-lived GUI client whose station name is updated each cycle: a
+ * GUI client that leaves would make the radio remove the agent's slice. */
+static void test_report(const char *fmt, ...)
+{
+    char line[48];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, 41, fmt, ap);
+    va_end(ap);
+    for (char *q = line; *q; q++) if (*q == ' ') *q = '_';
+    pthread_mutex_lock(&g_report_mu);
+    char cmd[200];
+    int l;
+    if (g_report_fd < 0) {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(4992)};
+        inet_pton(AF_INET, g_radio_addr, &sa.sin_addr);
+        if (fd >= 0 && !connect(fd, (struct sockaddr *)&sa, sizeof sa)) {
+            g_report_fd = fd;
+            l = snprintf(cmd, sizeof cmd, "C1|client program AetherWSPRtest\nC2|client gui\n");
+            if (write(fd, cmd, (size_t)l) != l) { close(fd); g_report_fd = -1; }
+        } else if (fd >= 0) {
+            close(fd);
+        }
+    }
+    if (g_report_fd >= 0) {
+        l = snprintf(cmd, sizeof cmd, "C3|client station %s\n", line);
+        if (write(g_report_fd, cmd, (size_t)l) != l) { close(g_report_fd); g_report_fd = -1; }
+    }
+    pthread_mutex_unlock(&g_report_mu);
+}
+#endif
+
+/* The band for a cycle: rotations count two-minute cycles since 1970, so
+ * they carry on over restarts and midnight. */
+static const char *band_for_cycle(const config_t *c, long long cycle_t)
+{
+    long long idx = cycle_t / 120;
+    return c->bands[(idx / c->cycles) % c->nbands];
+}
+
+int main(int argc, char *argv[])
+{
+    if (argc >= 2 && !strcmp(argv[1], "decode")) return wsprd_main(argc - 1, argv + 1);
+    signal(SIGPIPE, SIG_IGN);
+    design_lowpass(g_h1, 800.0 / AUDIO_RATE);
+    design_lowpass(g_h2, 187.5 / (AUDIO_RATE / DECIM1));
+    snprintf(g_self, sizeof g_self, "%s", argv[0]);
+    char self_dir[400];
+    snprintf(self_dir, sizeof self_dir, "%s", argv[0]);
+    char *slash = strrchr(self_dir, '/');
+    if (slash) *slash = 0; else strcpy(self_dir, ".");
+    /* Decoder scratch (the .c2 file, wsprd's hash table) lives in RAM. */
+    const char *tmp = getenv("TMPDIR") && *getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp";
+    snprintf(g_work, sizeof g_work, "%s/aether-wspr", tmp);
+    mkdir(g_work, 0700);
+    if (argc >= 2 && !strcmp(argv[1], "selftest")) return selftest(argc >= 3 ? atof(argv[2]) : -24);
+    if (getenv("AETHER_WSPR_RADIO")) g_radio_addr = getenv("AETHER_WSPR_RADIO");
+
+    config_default(&G.cfg);
+    pick_state_dir(self_dir);
+    load_config();
+    G.started = time(NULL);
+    logf_("AetherWSPR %s, state in %s", AGENT_VERSION, G.state_path[0] ? G.state_path : "(none)");
+
+    int ls = socket(AF_INET, SOCK_STREAM, 0), one = 1;
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    struct sockaddr_in la = {.sin_family = AF_INET, .sin_port = htons(STATUS_PORT), .sin_addr.s_addr = htonl(INADDR_ANY)};
+    if (bind(ls, (struct sockaddr *)&la, sizeof la) || listen(ls, 8)) { logf_("cannot listen on %d: %s", STATUS_PORT, strerror(errno)); return 1; }
+    pthread_t th;
+    pthread_create(&th, NULL, status_thread, &ls);
+    pthread_create(&th, NULL, upload_thread, NULL);
+    if (!getenv("AETHER_WSPR_RADIO")) pthread_create(&th, NULL, publish_thread, NULL);
+
+    int udp = socket(AF_INET, SOCK_DGRAM, 0);
+    int rcv = 1 << 20;
+    setsockopt(udp, SOL_SOCKET, SO_RCVBUF, &rcv, sizeof rcv);
+    struct sockaddr_in ua = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_ANY)};
+    bind(udp, (struct sockaddr *)&ua, sizeof ua);
+    socklen_t ual = sizeof ua;
+    getsockname(udp, (struct sockaddr *)&ua, &ual);
+    int udp_port = ntohs(ua.sin_port);
+
+    static float idat[CAPTURE_SAMPLES], qdat[CAPTURE_SAMPLES];
+    static unsigned char pkt[65536];
+    dsp_t d;
+    d.idat = idat;
+    d.qdat = qdat;
+    dsp_reset(&d);
+
+    api_t a = {.fd = -1, .slice = -1};
+    decode_t dc = {.pid = 0, .fd = -1};
+    long long capture_t = 0;   /* cycle being recorded, 0 none */
+    long long tuned_for = 0;   /* cycle the slice is tuned for */
+    double next_connect = 0;
+    config_t cfg;
+
+    for (;;) {
+        double now = now_s();
+        pthread_mutex_lock(&G.mu);
+        cfg = G.cfg;
+        int dirty = G.cfg_dirty;
+        G.cfg_dirty = 0;
+        pthread_mutex_unlock(&G.mu);
+        if (dirty && a.fd >= 0 && a.slice >= 0) {
+            /* A new DAX channel or antenna needs a new slice; bands apply
+             * at the next cycle. */
+            api_send(&a, "slice remove %d", a.slice);
+            a.slice = -1;
+            a.stream = 0;
+            tuned_for = 0;
+            pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
+        }
+
+        if (a.fd < 0 && now >= next_connect) {
+            pthread_mutex_lock(&G.mu); G.state = "connecting"; pthread_mutex_unlock(&G.mu);
+            if (api_connect(&a, udp_port)) logf_("connected to the radio at %s", g_radio_addr);
+            else next_connect = now + 5;
+            tuned_for = 0;
+        }
+
+        if (a.lost) {
+            a.lost = 0;
+            tuned_for = 0;
+            if (capture_t) logf_("cycle %lld abandoned: the slice was removed mid-cycle", capture_t);
+            capture_t = 0;
+        }
+        long long cyc = (long long)now / 120 * 120;
+        long long next = cyc + 120;
+        int synced = clock_synced();
+
+        /* Slice for the next cycle: made or retuned after the capture
+         * ends (second 114), so it settles before the cycle starts. */
+        if (a.fd >= 0 && synced && !a.want_slice) {
+            long long target = (now - cyc) >= CAPTURE_SECONDS ? next : cyc;
+            if (target != tuned_for) {
+                const char *band = band_for_cycle(&cfg, target);
+                long long dial = band_dial(band);
+                if (a.slice < 0) make_slice(&a, dial, cfg.rxant, cfg.dax_channel);
+                else {
+                    api_send(&a, "slice tune %d %.6f", a.slice, dial / 1e6);
+                    if (cfg.rxant[0]) api_send(&a, "slice set %d rxant=%s", a.slice, cfg.rxant);
+                }
+                pthread_mutex_lock(&G.mu);
+                snprintf(G.band, sizeof G.band, "%s", band);
+                G.dial_hz = dial;
+                pthread_mutex_unlock(&G.mu);
+                tuned_for = target;
+            }
+        }
+
+        /* Start a capture at the top of an even minute, if the slice is
+         * tuned for it and audio is flowing. */
+        if (!capture_t && synced && a.stream && tuned_for == cyc && now - cyc < 1.0) {
+            dsp_reset(&d);
+            capture_t = cyc;
+            pthread_mutex_lock(&G.mu); G.state = "capturing"; pthread_mutex_unlock(&G.mu);
+        }
+        if (capture_t && (d.n >= CAPTURE_SAMPLES || now - capture_t >= CAPTURE_SECONDS + 1)) {
+            int pct = (int)(100.0 * d.n / CAPTURE_SAMPLES);
+            if (dc.pid) {
+                logf_("previous decode still running; skipping cycle %lld", capture_t);
+            } else if (pct < 80) {
+                logf_("cycle %lld: only %d%% of the audio arrived; not decoded", capture_t, pct);
+            } else {
+                char name[20], path[400];
+                time_t tt = (time_t)capture_t;
+                struct tm tm;
+                gmtime_r(&tt, &tm);
+                strftime(name, sizeof name, "%y%m%d_%H%M.c2", &tm);
+                snprintf(path, sizeof path, "%s/%s", g_work, name);
+                pthread_mutex_lock(&G.mu);
+                long long dial = G.dial_hz;
+                char band[8];
+                snprintf(band, sizeof band, "%s", G.band);
+                G.state = "decoding";
+                pthread_mutex_unlock(&G.mu);
+                if (write_c2(path, name, dial / 1e6, idat, qdat, d.n) && start_decode(&dc, path)) {
+                    dc.cycle_t = capture_t;
+                    dc.dial_hz = dial;
+                    snprintf(dc.band, sizeof dc.band, "%s", band);
+                    dc.audio_pct = pct;
+                    dc.lost = d.lost;
+                    dc.dbfs = d.in ? (float)(10 * log10(d.sumsq / (double)d.in + 1e-20)) : -200.0f;
+                }
+            }
+            capture_t = 0;
+        }
+
+        pthread_mutex_lock(&G.mu);
+        if (!synced) G.state = "waiting_clock";
+        else if (a.fd >= 0 && !capture_t && !dc.pid) G.state = a.stream ? "waiting_cycle" : "starting_audio";
+        pthread_mutex_unlock(&G.mu);
+
+        struct pollfd pf[3];
+        int np = 0;
+        pf[np++] = (struct pollfd){.fd = udp, .events = POLLIN};
+        int ai = -1, di = -1;
+        if (a.fd >= 0) { ai = np; pf[np++] = (struct pollfd){.fd = a.fd, .events = POLLIN}; }
+        if (dc.pid) { di = np; pf[np++] = (struct pollfd){.fd = dc.fd, .events = POLLIN}; }
+        poll(pf, (nfds_t)np, 100);
+
+        if (pf[0].revents & POLLIN) {
+            for (int burst = 0; burst < 64; burst++) {
+                ssize_t k = recv(udp, pkt, sizeof pkt, MSG_DONTWAIT);
+                if (k <= 0) break;
+                vita_packet(pkt, k, a.stream, &d, capture_t != 0);
+            }
+        }
+        if (ai >= 0 && (pf[ai].revents & (POLLIN | POLLHUP | POLLERR))) {
+            if (!api_read(&a, &cfg)) {
+                logf_("radio API connection closed");
+                api_close(&a);
+                capture_t = 0;
+                pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
+                next_connect = now_s() + 5;
+            }
+        }
+        if (di >= 0 && (pf[di].revents & (POLLIN | POLLHUP | POLLERR))) {
+            ssize_t k = read(dc.fd, dc.out + dc.n, sizeof dc.out - 1 - dc.n);
+            if (k > 0) dc.n += (size_t)k;
+            else if (k == 0 || dc.n >= sizeof dc.out - 1) {
+                int st;
+                waitpid(dc.pid, &st, 0);
+                close(dc.fd);
+                dc.out[dc.n] = 0;
+                record_cycle(&dc);
+                /* wsprd also appends to these on every run; only the hash
+                 * table is worth keeping. */
+                char p[400];
+                const char *junk[] = {"ALL_WSPR.TXT", "wspr_spots.txt", "wspr_timer.out", "fftwf_wisdom.dat"};
+                for (size_t i = 0; i < sizeof junk / sizeof junk[0]; i++) {
+                    snprintf(p, sizeof p, "%s/%s", g_work, junk[i]);
+                    unlink(p);
+                }
+                char c2name[20];
+                time_t tt = (time_t)dc.cycle_t;
+                struct tm tm;
+                gmtime_r(&tt, &tm);
+                strftime(c2name, sizeof c2name, "%y%m%d_%H%M.c2", &tm);
+                snprintf(p, sizeof p, "%s/%s", g_work, c2name);
+                unlink(p);
+                dc.pid = 0;
+                dc.fd = -1;
+            }
+        }
+    }
+}
