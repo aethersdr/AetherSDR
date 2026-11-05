@@ -34,7 +34,8 @@ The **IC-7300MK2** is supported and shows no EXPERIMENTAL badge. Every other Ico
 | **IC-705** | Wi-Fi | Early (experimental); verified against its CI-V guide |
 | **IC-9700** | Ethernet | Early (experimental); works, with read-only memories |
 | **IC-7610, IC-7760** | Ethernet | Initial MAIN/SUB bring-up; experimental, hardware qualification pending |
-| IC-785x, IC-905 | Ethernet | Listed in the model chooser, not verified |
+| **IC-7851** | Ethernet | Experimental MAIN/SUB profile for the modern scope format; shares CI-V identity with IC-7850 |
+| IC-905 | Ethernet | Listed in the model chooser, not verified |
 
 The original IC-7300 has no network port and is not in the model list.
 
@@ -149,20 +150,26 @@ The Icom RC-28 remote encoder is supported (**Settings → Controllers → Icom 
 - If CI-V stalls, AetherSDR tries a bounded automatic recovery before a full reconnect.
 - Its MAIN/SUB dual-receiver layout is not modeled.
 
-### IC-7610 and IC-7760
+### IC-7610, IC-7760 and IC-7851
 
 These models have two fixed slices and panadapters: **MAIN** and **SUB**. Each
 uses its radio's native 689-bin scope. Spectrum and waterfall share the same
 frequency edges. Center zoom uses native spans; Fixed and scroll views retain
 the radio's edge presets. Turn on Dualwatch and dual scope on the radio when
-using both receivers. The actual LAN startup sequence still needs verification
-on both models.
+using both receivers. The IC-7851 profile targets the modern 689-bin / 200-unit
+format documented in the firmware 1.40 supplement. CI-V identity does not
+provide an exact firmware version or distinguish IC-7850 from IC-7851.
 
 Select **AF** under the radio's **LAN AF/IF Output** menu for PC listening.
 An IF selection is reported and receive audio is withheld. Stereo LAN receive
 audio is split into separate decoder feeds and a speaker mix; per-slice gain,
 mute and balance adjust the local monitor. MAIN-left/SUB-right channel identity
-is an initial implementation assumption that needs verification on each model.
+is verified on the lab IC-7851; it is an initial implementation assumption on
+the IC-7610 and IC-7760.
+The shared stereo playback queue prefills 200 ms and uses a 400 ms buffer cap
+(or your larger configured cap) to absorb network replay and delivery bursts.
+Both channels refill together after starvation. Decoder feeds remain before
+the playback buffer and local monitor controls.
 With a custom CI-V address, explicitly choosing the radio model requests stereo;
 a mono connection warns that SUB audio is unavailable.
 

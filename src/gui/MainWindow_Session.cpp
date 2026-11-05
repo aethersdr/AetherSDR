@@ -1112,6 +1112,12 @@ void MainWindow::wireRadioModel()
     // set its visibility.
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, &MainWindow::applyCapabilitiesToUi);
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, m_audio,
+            [this](bool connected, const RadioCapabilities& capabilities) {
+        const auto policy = connected ? capabilities.receiveAudioPlayout : std::nullopt;
+        m_audio->setReceiveJitterBuffer(policy ? policy->prefillMs : 0,
+                                       policy ? policy->bufferCapMs : 0);
+    });
     // Icom's connected edge precedes its verified CI-V model identity. Re-run
     // only when the canonical capability picture changes so the family-wide
     // experimental treatment can settle model-specifically without exposing a

@@ -2834,6 +2834,7 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     }
     if (name == QLatin1String("civ")) {
         return normalizedAction == QLatin1String("trace")
+            || normalizedAction == QLatin1String("profile")
             || normalizedAction == QLatin1String("session")
             || normalizedAction == QLatin1String("scheduler");
     }
@@ -3692,8 +3693,8 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|session|scheduler|incident> — CI-V "
-            "inject, frame trace, lease/scheduler health, or last incident "
+            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|profile|dualwatch on|off|session|scheduler|incident> — CI-V "
+            "inject, frame trace, receiver profile, lease/scheduler health, or last incident "
             "(Icom; send is TX-gated)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
@@ -8926,11 +8927,13 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
             {QStringLiteral("status"), QStringLiteral("wake requested; identity not yet verified")}};
     }
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
+                        && a != QLatin1String("dualwatch")
                         && a != QLatin1String("session")
+                        && a != QLatin1String("profile")
                         && a != QLatin1String("incident")
                         && a != QLatin1String("scheduler"))) {
         return err(QStringLiteral(
-            "civ requires an action (send|trace|session|scheduler|incident)"));
+            "civ requires an action (send|trace|profile|dualwatch|session|scheduler|incident)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -8963,6 +8966,8 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
     }, Qt::DirectConnection);
 
     const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
+                       : a == QLatin1String("dualwatch") ? QStringLiteral("receiver.dualwatch")
+                       : a == QLatin1String("profile") ? QStringLiteral("profile.show")
                        : a == QLatin1String("trace") ? QStringLiteral("civ.trace")
                        : a == QLatin1String("incident") ? QStringLiteral("civ.incident")
                        : a == QLatin1String("scheduler")

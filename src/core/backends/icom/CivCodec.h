@@ -159,6 +159,7 @@ inline constexpr std::uint8_t kReadFreq     = 0x03;
 inline constexpr std::uint8_t kReadMode     = 0x04;
 inline constexpr std::uint8_t kSetFreq      = 0x05;
 inline constexpr std::uint8_t kSetMode      = 0x06;
+inline constexpr std::uint8_t kVfoControl   = 0x07; // selection, MAIN/SUB and Dualwatch
 inline constexpr std::uint8_t kReadRepeaterOffset = 0x0C; // 100 Hz units, LE BCD
 inline constexpr std::uint8_t kSetRepeaterOffset  = 0x0D;
 inline constexpr std::uint8_t kDuplex       = 0x0F;   // 10 simplex, 11 down, 12 up

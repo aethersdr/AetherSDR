@@ -368,11 +368,16 @@ private:
         std::int64_t centreHz = 0;
         std::int64_t spanHz = 0;
         ScopeMode scopeMode = ScopeMode::Centre;
+        std::uint64_t scopeFrames = 0;
+        qint64 lastScopeAtMs = 0;
+        std::uint64_t audioFrames = 0;
+        double audioRms = 0.0;
         std::unique_ptr<Resampler> audio;
     };
     std::array<ReceiverState, 2> m_receivers;
     bool m_dualInitialised = false;
     std::optional<bool> m_dualSplit;
+    std::optional<bool> m_dualWatch;
     int m_dualTxReceiver = 0;
     int m_dualFocus = 0;
     int m_lanOutput = -1;

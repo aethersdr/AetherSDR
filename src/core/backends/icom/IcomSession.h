@@ -213,6 +213,10 @@ private:
     TxPacketizer m_tx;
     TxCoordinator::Context m_txContext;
     RxAssembler m_rx;
+    quint64 m_rxReceivedPackets = 0;
+    quint64 m_rxReceivedFrames = 0;
+    quint64 m_rxConcealedFrames = 0;
+    quint64 m_rxConcealmentBlocks = 0;
 };
 
 }  // namespace AetherSDR::icom

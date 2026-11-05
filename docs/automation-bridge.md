@@ -4230,6 +4230,27 @@ Icom CI-V and RS-BA1 session diagnostics. The read-only actions work in an
 observe-only bridge; raw injection remains TX-gated because arbitrary CI-V can
 key or retune the radio.
 
+For MAIN/SUB profiles, `civ profile` includes receiver-bound `scopeFrames`,
+`scopeAgeMs`, `audioFrames` and `audioRms`. Scope counters count accepted native
+sweeps; audio frames count processed input sample frames before monitor gain
+or mute, including any transport loss-concealment silence. These are separate
+from repaint/FPS counters and do not establish exact received sample time or
+loss-free network replay.
+
+MAIN/SUB profiles also report radio-read `dualWatch` (null until known).
+`civ dualwatch on` / `civ dualwatch off` explicitly request the documented
+`07 C2` RX setting. Confirm the resulting boolean with `civ profile`; acceptance
+of the request is not readback. These commands preserve receiver frequencies,
+editing focus, split and TX routing, are unavailable in observe-only mode, and
+do not enable TX automation. Connection startup reads Dualwatch without setting it.
+
+`civ session` also exposes `transport.media`: `receivedPackets`,
+`receivedFrames`, `concealedFrames`, `concealmentBlocks`, `rxChannels` and
+`sampleRateHz`. Frame counts are per channel at the negotiated source rate.
+Received frames exclude inserted silence; outer UDP idles do not add media
+frames. Compare counter deltas within one connection, and report concealment
+separately from speaker underruns or renderer FPS.
+
 **`civ session`** reports the media lease and each independent UDP stream:
 
 ```json
@@ -4997,7 +5018,7 @@ audio devices require separate hardware validation.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
+| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |

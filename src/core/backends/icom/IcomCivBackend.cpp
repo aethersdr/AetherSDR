@@ -384,6 +384,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.receiveFilterControl = std::nullopt;
     c.receiveAudioControl = std::nullopt;
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    if (m_session && m_session->rxChannels() == 2) {
+        c.receiveAudioPlayout = ReceiveAudioPlayout{200, 400};
+    }
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt;
     c.receivePanBandwidthControl = std::nullopt;
@@ -981,7 +984,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     m_audioRateHz = kRadioAudioRateHz;
     p.sampleRateHz = static_cast<quint32>(m_audioRateHz);
     p.rxChannels = request.params.value(QStringLiteral("icom.rxChannels"),
-        m_wakeModelId == 0x98 || m_wakeModelId == 0xB2 ? 2 : 0).toInt();
+        preferredRxChannelsForModelHint(m_wakeModelId) == 2 ? 2 : 0).toInt();
 
     m_session = std::make_unique<IcomSession>();
     const std::uint64_t sessionGeneration = ++m_sessionGeneration;
@@ -1062,6 +1065,7 @@ void IcomCivBackend::disconnectRadio()
     m_receivers = {};
     m_dualInitialised = false;
     m_dualSplit.reset();
+    m_dualWatch.reset();
     m_dualTxReceiver = 0;
     m_dualFocus = 0;
     m_lanOutput = -1;
@@ -1452,6 +1456,9 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
 
     m_civReported = address;
     m_civModelId = modelId;
+    if (m_civDetectTimer) {
+        m_civDetectTimer->stop();
+    }
     const IcomModel* identified = modelForId(modelId);
     m_model = identified ? identified : &unknownModel();
     // Cancel the identity read and any fallback snapshot before selecting the
@@ -1550,8 +1557,8 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     m_model = &unknownModel();
     publishIdentity();
 
-    // The radio's audio is 48 kHz mono; the seam's per-slice contract is 24 kHz
-    // interleaved stereo. Built once here rather than per-buffer: r8brain is
+    // LAN audio is 48 kHz PCM; the seam uses 24 kHz interleaved stereo. The
+    // single-receiver converter is built once per session: r8brain is
     // stateful, and a fresh instance per callback restarts its filter history
     // every block, which is audible as a periodic tick.
     m_rxResampler = std::make_unique<Resampler>(
@@ -2187,8 +2194,18 @@ void IcomCivBackend::publishReportedScopeMode()
     emit panScopeModeChanged(panId(), index);
 }
 
-void IcomCivBackend::setPanScopeMode(const QString&, int index)
+void IcomCivBackend::setPanScopeMode(const QString& id, int index)
 {
+    if (hasDualReceivers()) {
+        bool ok = false;
+        const int receiver = id.toInt(&ok);
+        if (!ok || receiver < 0 || receiver > 1 || index < 0 || index > 2
+            || !m_session || !m_connected) { return; }
+        const std::array<ScopeMode,3> modes{ScopeMode::Centre, ScopeMode::ScrollF, ScopeMode::Fixed};
+        sendUserCommand(cmdScopeMode(m_session->civAddress(),
+            static_cast<std::uint8_t>(modes[index]), static_cast<std::uint8_t>(receiver)));
+        return;
+    }
     if (!scopeModesOffered()) {
         return;
     }
@@ -4360,6 +4377,9 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
     }
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
     if (hasDualReceivers() && parsed->hasSub) {
+        if (parsed->cmd == cmd::kVfoControl && parsed->sub == 0xc2) {
+            return buildFrameSub(addr, cmd::kVfoControl, 0xc2);
+        }
         if (parsed->cmd == 0x25 || parsed->cmd == 0x26) {
             return buildFrameSub(addr, parsed->cmd, parsed->sub);
         }
@@ -6912,11 +6932,19 @@ QVariantMap IcomCivBackend::profileMap() const
                 {QStringLiteral("dataVariant"), state.data},
                 {QStringLiteral("filter"), state.filter},
                 {QStringLiteral("scopeBins"), state.scope.geometry().points},
+                {QStringLiteral("scopeMode"), static_cast<int>(state.scopeMode)},
+                {QStringLiteral("monitorPan"), state.monitorPan},
+                {QStringLiteral("monitorMute"), state.monitorMute},
+                {QStringLiteral("scopeFrames"), QVariant::fromValue<qulonglong>(state.scopeFrames)},
+                {QStringLiteral("scopeAgeMs"), state.scopeFrames ? nowMs() - state.lastScopeAtMs : -1},
+                {QStringLiteral("audioFrames"), QVariant::fromValue<qulonglong>(state.audioFrames)},
+                {QStringLiteral("audioRms"), state.audioRms},
                 {QStringLiteral("centreHz"), static_cast<qlonglong>(state.centreHz)},
                 {QStringLiteral("halfSpanHz"), static_cast<qlonglong>(state.spanHz)}});
         }
         out.insert(QStringLiteral("receivers"), receivers);
         out.insert(QStringLiteral("txReceiver"), m_dualTxReceiver);
+        out.insert(QStringLiteral("dualWatch"), m_dualWatch ? QVariant(*m_dualWatch) : QVariant());
         out.insert(QStringLiteral("lanOutput"), m_lanOutput);
         out.insert(QStringLiteral("rxChannels"), m_session ? m_session->rxChannels() : 0);
         out.insert(QStringLiteral("hardwareQualified"), false);
@@ -7762,8 +7790,11 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
     if (verb == QLatin1String("scope.reference")) {
         if (hasDualReceivers()) {
             const double value = arg.toDouble();
-            if (!m_session || !std::isfinite(value) || value < -30 || value > 10) {
-                emit extensionError(requestId, QStringLiteral("Scope REF requires -30 to +10 dB."));
+            const auto& profile = *profileFor(*m_model).dualReceiver;
+            if (!m_session || !std::isfinite(value)
+                || value < profile.referenceMinDb || value > profile.referenceMaxDb) {
+                emit extensionError(requestId, QStringLiteral("Scope REF requires %1 to %2 dB.")
+                    .arg(profile.referenceMinDb).arg(profile.referenceMaxDb));
                 return;
             }
             const int hundredths = static_cast<int>(std::lround(std::abs(value) * 2.0)) * 50;
@@ -7839,6 +7870,18 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
     }
     if (verb == QLatin1String("controls.map")) {
         emit extensionResult(requestId, controlMap());
+        return;
+    }
+    if (verb == QLatin1String("receiver.dualwatch")) {
+        const QString value = arg.toString().trimmed().toLower();
+        if (!hasDualReceivers() || !m_session || !m_connected
+            || (value != QLatin1String("on") && value != QLatin1String("off"))) {
+            emit extensionError(requestId, QStringLiteral("Dualwatch requires a connected MAIN/SUB profile and on/off."));
+            return;
+        }
+        const std::array<std::uint8_t,1> setting{static_cast<std::uint8_t>(value == QLatin1String("on"))};
+        sendUserCommand(buildFrameSub(m_session->civAddress(), cmd::kVfoControl, 0xc2, setting));
+        emit extensionResult(requestId, QStringLiteral("Dualwatch requested; confirm with civ profile."));
         return;
     }
     if (verb == QLatin1String("profile.show")) {
@@ -8064,6 +8107,8 @@ void IcomCivBackend::onMeterTick()
     }
 
     for (MeterId id : m_meters.due(now)) {
+        const auto& dual = profileFor(*m_model).dualReceiver;
+        if (id == MeterId::Overflow && dual && !dual->adcOverflowRead) { continue; }
         const MeterSpec* spec = meterSpecFor(id);
         if (!spec)
             continue;

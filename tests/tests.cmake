@@ -1545,16 +1545,9 @@ add_test(NAME icom_power_clamp_model_test COMMAND icom_power_clamp_model_test)
 #   cmake --build build --target icom_live_probe
 #   ./build/icom_live_probe ic-705.local <user> <password>
 add_executable(icom_live_probe EXCLUDE_FROM_ALL
-    tests/icom_live_probe.cpp
-    src/core/TxCoordinator.cpp
-    src/core/backends/icom/IcomSession.cpp
-    src/core/backends/icom/IcomStream.cpp
-    src/core/backends/icom/IcomProtocol.cpp
-    src/core/backends/icom/CivCodec.cpp
-    src/core/backends/icom/IcomScope.cpp
-    src/core/backends/icom/IcomAudio.cpp)
+    tests/icom_live_probe.cpp)
 target_include_directories(icom_live_probe PRIVATE src)
-target_link_libraries(icom_live_probe PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(icom_live_probe PRIVATE aethercore Qt6::Core Qt6::Network)
 
 # IcomCIV live CI-V ADDRESS probe — also REQUIRES A REAL RADIO, also EXCLUDE_FROM_ALL.
 # Drives IcomCivBackend (not IcomSession) because the address resolution under

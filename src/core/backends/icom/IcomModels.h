@@ -428,6 +428,10 @@ struct SquelchScaleProfile {
 struct DualReceiverProfile {
     int lanOutputItem = -1;
     std::array<int, 3> dataInputItems{};
+    double scopeSpanDb = 100.0;
+    double referenceMinDb = -30.0;
+    double referenceMaxDb = 10.0;
+    bool adcOverflowRead = true;
 };
 
 struct IcomModelProfile {
@@ -472,6 +476,8 @@ struct IcomModelProfile {
 };
 
 [[nodiscard]] const IcomModelProfile& profileFor(const IcomModel& model) noexcept;
+// Negotiation hint only; CI-V identity remains the capability authority.
+[[nodiscard]] int preferredRxChannelsForModelHint(std::uint8_t modelId) noexcept;
 [[nodiscard]] std::string_view featureName(IcomFeature feature) noexcept;
 [[nodiscard]] std::string_view evidenceName(EvidenceKind evidence) noexcept;
 
