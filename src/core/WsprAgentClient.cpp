@@ -168,6 +168,9 @@ void WsprSpotFeed::start(const QHostAddress& radio)
         emit failed(tr("The radio's address can't reach the WSPR receiver."));
         return;
     }
+    if (radio != m_client->radioAddress()) {
+        m_recent.clear();   // another radio's decodes
+    }
     m_client->setRadioAddress(radio);
     const int lifetime = wspr::loadSpotHubSettings().lifetimeMinutes;
     m_since = QDateTime::currentSecsSinceEpoch() - qint64(lifetime) * 60;
@@ -201,8 +204,11 @@ void WsprSpotFeed::onStatus(const WsprStatus& status)
         return;
     }
     emit statusReceived(status);
+    m_receiverCall = status.callsign;
+    m_receiverGrid = status.grid;
     const WsprSpotHubSettings style = wspr::loadSpotHubSettings();
-    for (const WsprSpot& s : wspr::spotsSince(status.spots, m_since, &m_since)) {
+    const QList<WsprSpot> fresh = wspr::spotsSince(status.spots, m_since, &m_since);
+    for (const WsprSpot& s : fresh) {
         emit decoded(s, status.grid);
         if (s.call.isEmpty()) {
             continue;   // an unresolved hashed call is no label
@@ -211,6 +217,14 @@ void WsprSpotFeed::onStatus(const WsprStatus& status)
         d.color = style.color;
         d.lifetimeSec = style.lifetimeMinutes * 60;
         emit spotReceived(d);
+    }
+    if (!fresh.isEmpty()) {
+        m_recent.append(fresh);
+        constexpr qsizetype kMaxRecent = 2000;   // as many as the receiver keeps
+        if (m_recent.size() > kMaxRecent) {
+            m_recent.remove(0, m_recent.size() - kMaxRecent);
+        }
+        emit spotsUpdated();
     }
 }
 

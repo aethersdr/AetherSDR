@@ -71,6 +71,12 @@ public:
     bool isRunning() const { return m_running; }
     QHostAddress radioAddress() const { return m_client->radioAddress(); }
 
+    // The decodes kept for AetherMap, oldest first (bounded), and the
+    // station that heard them.
+    const QList<WsprSpot>& recentSpots() const { return m_recent; }
+    QString receiverCallsign() const { return m_receiverCall; }
+    QString receiverGrid() const { return m_receiverGrid; }
+
 signals:
     void started();
     void stopped();
@@ -80,6 +86,8 @@ signals:
     void decoded(const AetherSDR::WsprSpot& spot, const QString& receiverGrid);
     // A new decode with a resolved callsign, for the panadapter.
     void spotReceived(const AetherSDR::DxSpot& spot);
+    // recentSpots() gained this poll's decodes.
+    void spotsUpdated();
     void failed(const QString& message);
 
 private:
@@ -90,6 +98,9 @@ private:
     QTimer* m_timer{nullptr};
     bool m_running{false};
     qint64 m_since{0};           // the first cycle start not yet emitted
+    QList<WsprSpot> m_recent;
+    QString m_receiverCall;
+    QString m_receiverGrid;
 };
 
 namespace wspr {
