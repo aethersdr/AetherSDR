@@ -1132,6 +1132,8 @@ set(CORE_SOURCES
     src/core/TailnetShimTokenStore.cpp
     src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
     src/core/RadioHealthClient.cpp    # radio health agent readout (tools/radio-health)
+    src/core/WsprAgent.cpp            # WSPR receiver on the radio (tools/wspr-agent)
+    src/core/WsprAgentClient.cpp
     src/core/TailnetLinkTelemetry.cpp   # link telemetry from the shim, for Network Diagnostics
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp

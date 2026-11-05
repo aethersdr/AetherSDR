@@ -1,0 +1,151 @@
+#pragma once
+
+#include <QByteArray>
+#include <QHostAddress>
+#include <QList>
+#include <QString>
+#include <QStringList>
+#include <QtGlobal>
+
+#include <optional>
+
+namespace AetherSDR {
+
+struct DxSpot;
+
+// The WSPR receiver that runs on the radio (tools/wspr-agent): a legacy
+// waveform that decodes WSPR from a slice of its own and serves its spots
+// and settings as JSON on TCP 48995. It ships inside AetherSDR as a Qt
+// resource and is installed only if its bytes match this pin.
+// `tools/wspr-agent/build.py` rebuilds the identical file with zig 0.17;
+// copy it to resources/waveforms/ and bump all four together.
+struct WsprPackage {
+    static constexpr const char* kVersion = "0.1.0";
+    static constexpr const char* kResource = ":/waveforms/AetherWSPR.ssdr_waveform";
+    static constexpr const char* kSha256 =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    static constexpr qint64 kSize = 0;
+};
+
+// The receiver's waveform name (tools/wspr-agent/package/AetherWSPR.cfg).
+inline constexpr const char* kWsprWaveformName = "AetherWSPR";
+// The port it answers on: at the radio's LAN address, or at the tailnet
+// shim's address when the shim publishes it.
+inline constexpr quint16 kWsprPort = 48995;
+
+inline bool isWsprWaveform(const QString& name, bool isContainer)
+{
+    return !isContainer && name == QLatin1String(kWsprWaveformName);
+}
+
+// One decode.
+struct WsprSpot {
+    qint64 cycleStart{0};   // UTC seconds, start of the two-minute cycle
+    QString band;
+    int snr{0};             // dB in 2500 Hz
+    double dt{0.0};         // s
+    qint64 frequencyHz{0};  // the transmitter's frequency
+    int drift{0};           // Hz per minute
+    QString call;           // empty for an unresolved hashed call
+    QString grid;
+    int dbm{0};
+};
+
+// One decoded (or skipped) cycle.
+struct WsprCycle {
+    qint64 start{0};
+    QString band;
+    qint64 dialHz{0};
+    int spots{0};
+    int decodeMs{0};
+    int audioPct{0};
+    int lostPackets{0};
+    double audioDbfs{0.0};
+};
+
+// GET /v1/status.
+struct WsprStatus {
+    QString version;
+    QString state;          // starting, connecting, waiting_clock, starting_audio, waiting_cycle, capturing, decoding
+    bool clockSynced{false};
+    qint64 uptimeS{0};
+    QString callsign;       // in effect: the setting, or the radio's
+    QString grid;           // in effect: the setting, or the radio's GPS grid
+    QString band;
+    qint64 dialHz{0};
+    QString hopPeriod;      // sunrise, day, sunset, night; empty when not hopping
+    QString depth;
+    bool slice{false};
+    bool audio{false};
+    struct Upload {
+        bool enabled{false};
+        qint64 sent{0};
+        qint64 rejected{0};
+        int queued{0};
+        QString lastError;
+    } upload;
+    QList<WsprCycle> cycles;
+    QList<WsprSpot> spots;
+};
+
+// GET and POST /v1/config. WSJT-X's band hopping: a band list for each
+// time-of-day period.
+struct WsprConfig {
+    enum Period { Sunrise, Day, Sunset, Night, PeriodCount };
+    QString callsign;       // empty: the radio's
+    QString grid;           // empty: the radio's GPS grid
+    QString band{QStringLiteral("20m")};
+    bool hopping{false};
+    int grayMinutes{60};
+    QStringList hop[PeriodCount];
+    QString depth{QStringLiteral("standard")};
+    QString rxant;          // empty: the radio's default
+    bool upload{false};
+    int daxChannel{4};
+
+    bool operator==(const WsprConfig& o) const;
+    bool operator!=(const WsprConfig& o) const { return !(*this == o); }
+};
+
+namespace wspr {
+
+// The bands the receiver knows, in band order, and WSJT-X's ten coordinated
+// hopping bands.
+const QStringList& bands();
+const QStringList& coordinatedBands();
+// The depth names the receiver takes, in menu order (standard first).
+const QStringList& depths();
+// The JSON key for a hopping period (hop_sunrise ...).
+QString periodKey(WsprConfig::Period period);
+
+// Parse the receiver's replies. Anything malformed or out of range is
+// refused (nullopt) or, for one spot or cycle, dropped.
+std::optional<WsprStatus> parseStatus(const QByteArray& json);
+// `claimed` (when non-null) is whether the receiver already issued an
+// admin token.
+std::optional<WsprConfig> parseConfig(const QByteArray& json, bool* claimed = nullptr);
+// The admin token in a POST /v1/config reply, when this was the first.
+QString adminToken(const QByteArray& json);
+
+// The body POST /v1/config takes.
+QByteArray configJson(const WsprConfig& config);
+
+// A spot for SpotHub and the panadapter: the station heard, its frequency,
+// the receiving station as spotter, "WSPR -21 dB 37 dBm" as the comment.
+DxSpot toDxSpot(const WsprSpot& spot, const QString& receiver);
+
+// Great-circle distance in km between two grids; -1 when either is unknown.
+int distanceKm(const QString& fromGrid, const QString& toGrid);
+
+// The receiver answers LAN callers, and a tailnet shim publishes it: a
+// private, link-local or Tailscale (100.64.0.0/10) IPv4 address.
+bool reachableAddress(const QHostAddress& address);
+
+// Writes the bundled package to `dir`/AetherWSPR.ssdr_waveform for the
+// installer, reusing a matching copy already there. Only bytes matching the
+// pin are written: empty, with `error` set, otherwise.
+QString writeBundledPackage(const QString& dir, QString* error,
+                            const QString& resource = QString::fromLatin1(WsprPackage::kResource));
+
+}  // namespace wspr
+}  // namespace AetherSDR

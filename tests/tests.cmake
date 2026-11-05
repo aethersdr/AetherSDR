@@ -4541,6 +4541,17 @@ else()
 endif()
 add_test(NAME radio_health_client_test COMMAND radio_health_client_test)
 
+# The WSPR receiver on the radio (tools/wspr-agent): status and settings
+# JSON parse and are bounded, the settings body round-trips, a spot becomes
+# a SpotHub DxSpot, only LAN or tailnet addresses are tried. Socket-free.
+add_executable(wspr_agent_test
+    tests/wspr_agent_test.cpp
+    src/core/WsprAgent.cpp
+)
+target_include_directories(wspr_agent_test PRIVATE src)
+target_link_libraries(wspr_agent_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME wspr_agent_test COMMAND wspr_agent_test)
+
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,
 # finder patterns, theme-invariant colors), socket-free.
 add_executable(qr_code_image_test
