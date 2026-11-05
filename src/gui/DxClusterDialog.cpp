@@ -1935,6 +1935,9 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
             }
             m_wsprStatusLabel->setText(line);
         });
+        connect(m_wsprFeed, &WsprSpotFeed::spotReceived, this, [this](const DxSpot& spot) {
+            m_spotBatch.append(spot);   // the Spot List tab
+        });
         connect(m_wsprFeed, &WsprSpotFeed::decoded, this, [this](const WsprSpot& s, const QString& here) {
             const int km = wspr::distanceKm(here, s.grid);
             const QString when = QDateTime::fromSecsSinceEpoch(s.cycleStart, QTimeZone::UTC).toString("HH:mm");
