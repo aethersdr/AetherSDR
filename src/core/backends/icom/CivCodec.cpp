@@ -89,6 +89,7 @@ bool commandHasSubcommand(std::uint8_t command)
     case 0x25: // Absolute MAIN/SUB frequency on high-end receivers.
     case 0x29: // Receiver-addressed command wrapper.
     case cmd::kVfoMode:
+    case cmd::kVfoControl:
         return true;
     default:
         return false;

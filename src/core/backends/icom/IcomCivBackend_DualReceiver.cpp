@@ -42,7 +42,7 @@ std::vector<std::uint8_t> IcomCivBackend::receiverCommand(
     if (parsed->cmd == cmd::kReadMode) {
         return buildFrameSub(address, 0x26, 0);
     }
-    // Exact 29 marks in both model guides; TX levels/functions are global.
+    // Shared subset of the model guides' 29 marks; TX controls are global.
     // In particular 14 0A/0B/0C/0E and 16 44/45/46/47 must stay unwrapped.
     const auto listed = [](std::uint8_t value, std::initializer_list<std::uint8_t> allowed) {
         return std::ranges::find(allowed, value) != allowed.end();
@@ -65,15 +65,18 @@ void IcomCivBackend::initialiseDualReceivers()
     m_dualInitialised = true;
     for (int receiver = 0; receiver < 2; ++receiver) {
         ReceiverState& state = m_receivers[receiver];
+        state.monitorPan = receiver == 0 ? 0 : 100;
         ScopeGeometry geometry;
         geometry.points = m_model->scopePoints;
         geometry.maxAmplitude = m_model->scopeMaxAmplitude;
         geometry.divisionsUsb = m_model->scopeDivisionsUsb;
         state.scope = ScopeDecoder(geometry);
-        state.calibration.spanDb = 100.0;
+        state.calibration.spanDb = profileFor(*m_model).dualReceiver->scopeSpanDb;
         state.audio = std::make_unique<Resampler>(m_audioRateHz, kEngineAudioRateHz, 4096);
         const QString id = QString::number(receiver);
         emit panCenterBandwidthChanged(id, 0.0, 0.0);
+        emit panScopeModesChanged(id, {QStringLiteral("Center"),
+            QStringLiteral("Scroll-F"), QStringLiteral("Fixed")});
         emit panRangeChanged(id, state.calibration.floorDbm,
                              state.calibration.floorDbm + state.calibration.spanDb);
         emit panBandwidthLimitsChanged(id, 0.005, 1.0);
@@ -111,6 +114,7 @@ void IcomCivBackend::pollDualReceivers()
                   IcomCivScheduler::Priority::Maintenance, 0, {receiver});
     }
     read(buildFrame(address, cmd::kDuplex));
+    read(buildFrameSub(address, cmd::kVfoControl, 0xc2));
     read(cmdReadTransmitFrequency(address));
     read(buildFrameSub(address, cmd::kControl, control::kPtt));
     const auto mod = currentModulationProfile();
@@ -196,9 +200,16 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         ReceiverState& state = m_receivers[receiver];
         const auto sweep = state.scope.feed(frame);
         if (!sweep || sweep->bandwidthHz() <= 0) { return true; }
+        ++state.scopeFrames;
+        state.lastScopeAtMs = nowMs();
         state.centreHz = sweep->centreHz();
         state.spanHz = sweep->bandwidthHz() / 2;
+        const bool modeChanged = state.scopeFrames == 1 || state.scopeMode != sweep->mode;
         state.scopeMode = sweep->mode;
+        if (modeChanged) {
+            emit panScopeModeChanged(QString::number(receiver), sweep->mode == ScopeMode::Centre ? 0
+                : sweep->mode == ScopeMode::ScrollF ? 1 : sweep->mode == ScopeMode::Fixed ? 2 : -1);
+        }
         const std::vector<float> bins = toDbm(*sweep, state.scope.geometry(), state.calibration);
         emit panCenterBandwidthChanged(QString::number(receiver), sweep->centreHz() / 1e6,
                                        sweep->bandwidthHz() / 1e6);
@@ -212,7 +223,7 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         if (frame.data.size() != kFreqBytes) { return true; }
         const auto frequency = decodeFreq(frame.data);
         if (!frequency) { return true; }
-        m_civScheduler.observe(frame, nowMs());
+        (void)m_civScheduler.observe(frame, nowMs());
         TransmitDelta delta;
         delta.transmitFreq = *frequency / 1e6;
         emit transmitChanged(delta);
@@ -222,6 +233,7 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
     const bool mode = frame.cmd == 0x26;
     const bool split = frame.cmd == cmd::kDuplex;
     const bool scopeState = frame.cmd == cmd::kScope;
+    const bool dualWatch = frame.cmd == cmd::kVfoControl && frame.hasSub && frame.sub == 0xc2;
     if (frame.cmd == 0x29) {
         if (!frame.hasSub || frame.sub > 1 || frame.data.size() < 3) { return true; }
         // Only MAIN's generic register replies have legacy consumers. SUB
@@ -241,13 +253,14 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
         }
         return false;
     }
-    if (!frequency && !mode && !split && !scopeState) { return false; }
+    if (!frequency && !mode && !split && !scopeState && !dualWatch) { return false; }
     if ((frequency || mode) && (!frame.hasSub || frame.sub > 1)) { return true; }
     if (frequency && (frame.data.size() != kFreqBytes || !decodeFreq(frame.data))) { return true; }
     if (mode && (frame.data.size() != 3 || frame.data[1] > 3
         || frame.data[2] < 1 || frame.data[2] > 3
         || modeToNeutral(static_cast<CivMode>(frame.data[0]), frame.data[1] != 0).empty())) { return true; }
     if (split && (frame.data.size() != 1 || frame.data[0] > 1)) { return true; }
+    if (dualWatch && (frame.data.size() != 1 || frame.data[0] > 1)) { return true; }
     if (scopeState && (frame.data.size() < 2 || frame.data[0] > 1)) { return true; }
     const qint64 now = nowMs();
     std::vector<std::uint8_t> body{frame.cmd};
@@ -283,11 +296,14 @@ bool IcomCivBackend::handleDualReceiverFrame(const CivFrame& frame)
             && (magnitude[1] >> 4) <= 9 && (magnitude[1] & 15) == 0 && frame.data[3] <= 1) {
             const double value = (decodeBcdByte(magnitude[0]) + decodeBcdByte(magnitude[1]) / 100.0)
                 * (frame.data[3] == 0 ? 1 : -1);
-            if (value >= -30 && value <= 10) {
+            const auto& profile = *profileFor(*m_model).dualReceiver;
+            if (value >= profile.referenceMinDb && value <= profile.referenceMaxDb) {
                 m_receivers[frame.data[0]].calibration.referenceDb = value;
                 publishScopeDbmRange();
             }
         }
+    } else if (dualWatch) {
+        m_dualWatch = frame.data[0] != 0;
     } else if (split) {
         const int receiver = frame.data[0];
         if (receiver != m_dualTxReceiver) { m_dataModInput = -1; }
@@ -310,11 +326,16 @@ void IcomCivBackend::onDualAudio(const std::vector<float>& interleaved)
     for (int receiver = 0; receiver < 2; ++receiver) {
         if (!m_receivers[receiver].audio) { return; }
         std::vector<float> mono(frames);
-        for (std::size_t i = 0; i < frames; ++i) { mono[i] = interleaved[i * 2 + receiver]; }
+        double sumSquares = 0;
+        for (std::size_t i = 0; i < frames; ++i) {
+            mono[i] = interleaved[i * 2 + receiver];
+            sumSquares += static_cast<double>(mono[i]) * mono[i];
+        }
+        m_receivers[receiver].audioFrames += frames;
+        m_receivers[receiver].audioRms = std::sqrt(sumSquares / frames);
         streams[receiver] = m_receivers[receiver].audio->processMonoToStereo(mono.data(), static_cast<int>(frames));
-        if (streams[receiver].isEmpty()) { return; }
     }
-    if (streams[0].size() != streams[1].size()) { return; }
+    if (streams[0].isEmpty() || streams[0].size() != streams[1].size()) { return; }
     for (int receiver = 0; receiver < 2; ++receiver) {
         publishLegacySliceAudio(receiver, streams[receiver]);
     }
@@ -322,15 +343,19 @@ void IcomCivBackend::onDualAudio(const std::vector<float>& interleaved)
     const float* main = reinterpret_cast<const float*>(streams[0].constData());
     const float* sub = reinterpret_cast<const float*>(streams[1].constData());
     float* out = reinterpret_cast<float*>(mixed.data());
+    std::array<std::array<double,2>,2> weights{};
+    std::array<double,2> gains{};
+    for (int receiver = 0; receiver < 2; ++receiver) {
+        const ReceiverState& state = m_receivers[receiver];
+        const double balance = state.monitorPan / 100.0;
+        weights[receiver] = {std::min(1.0, 2.0 * (1.0 - balance)), std::min(1.0, 2.0 * balance)};
+        gains[receiver] = state.monitorMute ? 0.0 : state.monitorGain / 100.0;
+    }
     for (qsizetype i = 0; i < mixed.size() / static_cast<qsizetype>(sizeof(float)); ++i) {
-        const auto monitorScale = [i](const ReceiverState& state) {
-            const double balance = state.monitorPan / 100.0;
-            const double channel = i % 2 == 0 ? std::min(1.0, 2.0 * (1.0 - balance))
-                                             : std::min(1.0, 2.0 * balance);
-            return state.monitorMute ? 0.0f : static_cast<float>(state.monitorGain / 100.0 * channel);
-        };
-        out[i] = 0.5f * (main[i] * monitorScale(m_receivers[0])
-                        + sub[i] * monitorScale(m_receivers[1]));
+        const int channel = i % 2;
+        const double divisor = std::max(1.0, weights[0][channel] + weights[1][channel]);
+        out[i] = static_cast<float>((main[i] * gains[0] * weights[0][channel]
+                                 + sub[i] * gains[1] * weights[1][channel]) / divisor);
     }
     publishLegacyAudio(mixed);
 }

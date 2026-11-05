@@ -6,6 +6,8 @@
 #include "core/backends/icom/IcomAudio.h"
 
 #include <cmath>
+#include <algorithm>
+#include <limits>
 #include <cstdio>
 #include <vector>
 
@@ -171,6 +173,10 @@ static void testLossConcealment()
     check(fill[0] == 0.0f, "and it is silence, not a repeat");
     check(rx.concealLoss(0, 48000).empty(), "no loss, no fill");
     check(rx.concealLoss(-1, 48000).empty(), "a negative count is not a giant allocation");
+    check(rx.concealLoss(32767,48000).size() <= 48000,
+          "a discontinuous outer sequence cannot allocate minutes of mono silence");
+    check(rx.concealLoss(1,std::numeric_limits<int>::max()).empty(),
+          "invalid receive sample rates cannot allocate unbounded concealment");
 }
 
 static void testStereoPacketBoundaries()
@@ -184,8 +190,8 @@ static void testStereoPacketBoundaries()
         samples.insert(samples.end(), second.begin(), second.end());
         check(samples == std::vector<float>{0.25f,-0.25f,0.5f,-0.5f},
               "fragmented stereo payload retains channel and byte alignment");
-        check(rx.concealLoss(3,48000).size() == 2880,
-              "stereo concealment counts frames rather than scalar mono samples");
+        check(rx.concealLoss(3,48000).empty(),
+              "outer transport gaps cannot invent stereo media duration");
     }
     RxAssembler rx(AudioCodec::Lpcm2ch16);
     check(rx.accept(std::span<const std::uint8_t>(bytes).first(3)).empty(),
@@ -195,9 +201,37 @@ static void testStereoPacketBoundaries()
           "loss clears a partial stereo frame before the next packet");
 }
 
+static void testStereoMediaContinuity()
+{
+    for (const std::uint16_t start : {std::uint16_t{10}, std::uint16_t{65530}}) {
+        RxAssembler rx(AudioCodec::Lpcm2ch16);
+        const std::array<std::size_t,3> sizes{1364,1364,1112};
+        for (int i = 0; i < 6; ++i) {
+            check(rx.concealBefore(std::vector<std::uint8_t>(sizes[i%3]), start+i).empty(),
+                  "two observed cycles establish stereo phase without creating samples");
+        }
+        auto fill = rx.concealBefore(std::vector<std::uint8_t>(sizes[1]), start+7);
+        check(fill.size() == 1 && fill[0].size() == 682
+              && std::ranges::all_of(fill[0], [](float v) { return v == 0; }),
+              "missing long fragment is exactly 341 silent frames on both channels, across wrap");
+        fill = rx.concealBefore(std::vector<std::uint8_t>(sizes[0]), start+9);
+        check(fill.size() == 1 && fill[0].size() == 556,
+              "missing short fragment is exactly 278 silent frames on both channels");
+        check(rx.concealBefore(std::vector<std::uint8_t>(sizes[1]), start+10).empty(),
+              "contiguous media after an outer idle gap creates no silence");
+        check(rx.concealBefore(std::vector<std::uint8_t>(sizes[2]), start+100).empty(),
+              "large discontinuity resets learning without an unbounded silence allocation");
+    }
+    RxAssembler unknown(AudioCodec::Lpcm2ch16);
+    (void)unknown.concealBefore(std::vector<std::uint8_t>(1364), 1);
+    check(unknown.concealBefore(std::vector<std::uint8_t>(1112), 3).empty(),
+          "unqualified fragment geometry cannot manufacture lost audio");
+}
+
 int main()
 {
     testStereoPacketBoundaries();
+    testStereoMediaContinuity();
     testCodecSupport();
     testLpcm16RoundTrip();
     testEightBitAndULaw();
