@@ -9,6 +9,11 @@ with a real radio to verify.
   toggles.
 - [`profile-import-export-checklist.md`](profile-import-export-checklist.md)
   — manual QA for FlexRadio `.ssdr_cfg` profile import/export.
+- [`bench-equipment.md`](bench-equipment.md) — bill of materials for
+  validating signals on the wire: dummy loads, samplers, analyzers,
+  generators, JTAG and capture gear, with level budgets and what each
+  item proves for HL2, ANAN and G2 gateware work, plus a specific
+  LAN/USB-drivable model for each item so an agent can run the bench.
 
 **Not to be confused with [`/tests/`](../../tests/)**, which holds
 automated unit-test source code (`*_test.cpp` files compiled by CMake

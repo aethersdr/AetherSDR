@@ -332,8 +332,8 @@ Allowed inputs, in precedence order:
    HL2 layer. Worth naming separately from item 5, since the two sit differently
    with respect to this backend.
 4. **Apache Labs G2 user manual** for hardware behaviour, mic and PA specifics.
-5. **Other host-side clients** — NereusSDR, Thetis, piHPSDR, deskHPSDR, Zeus SDR
-   station-engine — consulted for *what to check*, never copied. The same
+5. **Other host-side clients** — NereusSDR, Thetis, piHPSDR, deskHPSDR —
+   consulted for *what to check*, never copied. The same
    standing they had during the HL2 work.
 
 **Disclosure, stated up front.** Before writing this RFC I read NereusSDR's

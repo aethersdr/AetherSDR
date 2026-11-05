@@ -63,6 +63,18 @@ tool's `--check` on every PR and fails naming the signal you missed.
 | `anan` | `AnanBackend` (`src/core/backends/anan/`) | ANAN-G2 receive support over openHPSDR Ethernet Protocol 2; raw-IQ RX DSP runs in-client and TX remains absent by construction |
 | `rtl` | `RtlSdrBackend` (`src/core/backends/rtl/`) | RTL-SDR USB receive backend; raw-IQ RX DSP runs in-client and the backend is RX-only by construction |
 
+**openHPSDR gateware reference (`hl2`, `anan`).** Before changing HL2 or ANAN wire
+handling, discovery parsing or version gates, read the gateware reference in the
+[`aether-fabric`](https://github.com/aethersdr/aether-fabric) repository (private for now):
+[`openhpsdr-gateware-fpga-2026-11-05.md`](https://github.com/aethersdr/aether-fabric/blob/main/docs/research/openhpsdr-gateware-fpga-2026-11-05.md).
+It covers the three gateware lineages, where each one's protocol authority lives (the
+Verilog on HL2 and classic ANAN, `p2app.c` on the G2), the P1/P2 board-ID collision,
+advertised-vs-real DDC counts, version-byte semantics, and known quirks. Its companion,
+[`openhpsdr-gateware-design-internals-2026-11-05.md`](https://github.com/aethersdr/aether-fabric/blob/main/docs/research/openhpsdr-gateware-design-internals-2026-11-05.md),
+covers the design internals read from the HDL: clocking, DDC/DUC parameters and filter taps,
+CW shaping, PureSignal routing, datapaths, resource limits and verification. Both are dated
+snapshots: re-check a detail against its cited source before relying on it.
+
 ### Rules for step 3 (aetherd control plane)
 
 - New resource fields belong in `RadioResourceAdapter` and the versioned
