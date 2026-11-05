@@ -156,6 +156,13 @@ void invalidAndAutomaticAgc()
     f.recall(e);
     check(f.backend->commands == QStringList{"slice set 3 mode=LSB"},
           "invalid optional ports and AGC fields are skipped while the valid mode still applies");
+    e.rxAntenna = QStringLiteral("ANT9"); e.txAntenna = QStringLiteral("ANT9");
+    e.agcMode.clear(); e.agcThreshold = f.slice->agcThreshold();
+    f.backend->commands.clear();
+    f.recall(e);
+    check(!f.backend->commands.contains("slice set 3 rxant=ANT9")
+          && !f.backend->commands.contains("slice set 3 txant=ANT9"),
+          "a well-formed port the radio does not list is skipped");
     f.backend->commands.clear();
     e.frequencyMhz = std::numeric_limits<double>::quiet_NaN();
     f.recall(e);
@@ -175,6 +182,11 @@ void invalidAndAutomaticAgc()
     f.backend->commands.clear();
     f.recall(e);
     check(f.backend->commands.isEmpty(), "pending automatic AGC-T is not overwritten by recall");
+    f.slice->setExternalReceiveAudioReplacementMute(true, false);
+    f.backend->commands.clear();
+    f.recall(e);
+    check(f.backend->commands.isEmpty(), "pending automatic AGC-T is not overwritten behind Kiwi receive");
+    f.slice->setExternalReceiveAudioReplacementMute(false, false);
     f.slice->requestAgcThresholdMode(AgcThresholdMode::Manual);
     f.slice->setExternalReceiveAudioReplacementMute(true, false);
     f.backend->commands.clear();
@@ -202,6 +214,11 @@ void recallModeVocabulary()
     f.recall(e);
     check(f.backend->commands.contains("slice set 3 mode=QPSK"),
           "a safe radio-advertised waveform mode remains recallable");
+    d.modeList = QStringList{"USB", "Thor"}; f.slice->applyChanges(d);
+    e.mode = QStringLiteral("Thor"); f.backend->commands.clear();
+    f.recall(e);
+    check(f.backend->commands.contains("slice set 3 mode=Thor"),
+          "a radio-advertised lower-case mode remains recallable");
     e.mode = QStringLiteral("USB\ninvalid");
     d.modeList = QStringList{e.mode}; f.slice->applyChanges(d);
     f.backend->commands.clear(); f.recall(e);

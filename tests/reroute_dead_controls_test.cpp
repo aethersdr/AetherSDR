@@ -619,7 +619,7 @@ void testBandStackRecallWritesTheSameFlexWireText()
     // And a recall that matches the slice sends nothing, as before.
     wire.lines.clear();
     f.radio.recallBandStack(f.slice, bookmark(), [](SliceModel*, double) {});
-    check(wire.lines.isEmpty(), "band stack/flex: an already-matching recall sends nothing");
+    check(wire.lines.isEmpty(), "band stack/flex: an already-matching recall sends no slice settings");
 }
 
 void testBandStackRecallLeavesTheKiwiAgcAlone()

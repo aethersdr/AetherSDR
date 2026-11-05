@@ -23,6 +23,7 @@ void RadioModel::recallBandStack(SliceModel* target, BandStackEntry entry,
     const bool modeToken = !entry.mode.isEmpty() && entry.mode.size() <= 32
         && std::all_of(entry.mode.cbegin(), entry.mode.cend(), [](QChar c) {
             return (c >= QLatin1Char('A') && c <= QLatin1Char('Z'))
+                || (c >= QLatin1Char('a') && c <= QLatin1Char('z'))
                 || (c >= QLatin1Char('0') && c <= QLatin1Char('9'))
                 || c == QLatin1Char('_') || c == QLatin1Char('-');
         });
