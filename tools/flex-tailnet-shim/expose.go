@@ -25,9 +25,10 @@ import (
 // radio agents (radio health, WSPR) serve their JSON this way to a remote
 // operator.
 //
-// Only a port something already listens on beyond loopback can be
-// published, so the shim never exposes a service the radio keeps to itself;
-// it makes reachable over the tailnet what the radio's LAN can already reach.
+// Only a port bound where the radio's LAN could reach it can be published:
+// the wildcard, or a LAN address (publishableBind). The shim reads binds, not
+// firewall rules, so a wildcard listener a firewall keeps from the LAN
+// passes too.
 
 const (
 	exposeLease = 10 * time.Minute
@@ -48,11 +49,61 @@ var (
 	errExposeName      = errors.New("name must be 1-32 printable characters")
 	errExposeNoService = errors.New("nothing listens on this port beyond loopback")
 	errExposeListen    = errors.New("the shim could not listen on this port on the tailnet")
+	errPortTaken       = errors.New("the port is already in use on the tailnet")
 )
+
+// tailnetPorts makes each dynamic tailnet port exclusive between side
+// channels and published ports. tsnet doesn't: a side channel listens on
+// ":P" and a published port on "<ip>:P", which are different keys, and the
+// exact address silently wins, so a published port could capture a transfer
+// and skip its per-session grant. A port is reserved before either listens,
+// and stays reserved until that listener closes.
+type tailnetPorts struct {
+	mu   sync.Mutex
+	held map[int]bool
+}
+
+func (p *tailnetPorts) listen(port int, open func() (net.Listener, error)) (net.Listener, error) {
+	p.mu.Lock()
+	if p.held[port] {
+		p.mu.Unlock()
+		return nil, errPortTaken
+	}
+	if p.held == nil {
+		p.held = map[int]bool{}
+	}
+	p.held[port] = true
+	p.mu.Unlock()
+	ln, err := open()
+	if err != nil {
+		p.release(port)
+		return nil, err
+	}
+	return &heldListener{Listener: ln, release: func() { p.release(port) }}, nil
+}
+
+func (p *tailnetPorts) release(port int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.held, port)
+}
+
+type heldListener struct {
+	net.Listener
+	once    sync.Once
+	release func()
+}
+
+func (l *heldListener) Close() error {
+	err := l.Listener.Close()
+	l.once.Do(l.release)
+	return err
+}
 
 type exposure struct {
 	port    int
 	target  netip.Addr // where the app listens: loopback for a wildcard listener
+	moves   uint64     // counts target changes, to fence dials in flight across one
 	name    string
 	expires time.Time
 	timer   *time.Timer
@@ -112,16 +163,19 @@ func (e *exposer) register(port int, name string) (time.Duration, bool, error) {
 	if !validExposeName(name) {
 		return 0, false, errExposeName
 	}
-	look := e.listening
-	if look == nil {
-		look = serviceAddr
-	}
-	target, ok := look(port)
-	if !ok {
-		return 0, false, errExposeNoService
-	}
+	target, ok := e.lookup(port)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if !ok {
+		// The app is telling us its service is gone: what is still published
+		// under its name goes too, so nothing that binds the port later is
+		// exposed by a lease it never asked for.
+		if x := e.m[port]; x != nil && x.name == name {
+			e.dropLocked(port, x)
+			log.Printf("expose: TCP %d (%s) withdrawn: nothing listens beyond loopback", port, name)
+		}
+		return 0, false, errExposeNoService
+	}
 	if e.m == nil {
 		e.m = map[int]*exposure{}
 	}
@@ -135,6 +189,7 @@ func (e *exposer) register(port int, name string) (time.Duration, bool, error) {
 			// The app moved (it restarted on another address): splices to
 			// the old one go.
 			x.target = target
+			x.moves++
 			x.closeConnsLocked()
 		}
 		x.expires = time.Now().Add(lease)
@@ -167,13 +222,35 @@ func (e *exposer) expire(port int, x *exposure) {
 	if e.m[port] != x || time.Now().Before(x.expires) {
 		return
 	}
+	e.dropLocked(port, x)
+	log.Printf("expose: TCP %d (%s) lease lapsed", port, x.name)
+}
+
+func (e *exposer) dropLocked(port int, x *exposure) {
 	delete(e.m, port)
+	x.timer.Stop()
 	if x.ln != nil {
 		x.ln.Close()
 		x.ln = nil
 	}
 	x.closeConnsLocked()
-	log.Printf("expose: TCP %d (%s) lease lapsed", port, x.name)
+}
+
+// lookup finds the address port's service can be dialed at now.
+func (e *exposer) lookup(port int) (netip.Addr, bool) {
+	if e.listening != nil {
+		return e.listening(port)
+	}
+	return serviceAddr(port)
+}
+
+// served reports whether the eligible service on port is still at target.
+// A lease outlives the app that took it, and another process can bind the
+// port meanwhile, perhaps on loopback alone, so a registration proves nothing
+// about the connection arriving now.
+func (e *exposer) served(port int, target netip.Addr) bool {
+	a, ok := e.lookup(port)
+	return ok && a == target
 }
 
 func (x *exposure) closeConnsLocked() {
@@ -241,16 +318,17 @@ func (e *exposer) accept(ln net.Listener, x *exposure) {
 		if err != nil {
 			return
 		}
-		go e.splice(c, x)
+		go e.splice(c, x, ln)
 	}
 }
 
-// track adds c to x's connections while x is still the port's live
-// registration; false means it no longer is.
-func (e *exposer) track(x *exposure, conns ...net.Conn) bool {
+// track adds conns to x's connections if nothing retired them since splice
+// took its snapshot: x is still the port's registration, on the same
+// listener (a detach and reattach replaces it), with the target unmoved.
+func (e *exposer) track(x *exposure, ln net.Listener, moves uint64, conns ...net.Conn) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.m[x.port] != x || x.ln == nil {
+	if e.m[x.port] != x || x.ln != ln || x.moves != moves {
 		return false
 	}
 	for _, c := range conns {
@@ -267,16 +345,21 @@ func (e *exposer) untrack(x *exposure, conns ...net.Conn) {
 	}
 }
 
-func (e *exposer) splice(c net.Conn, x *exposure) {
+func (e *exposer) splice(c net.Conn, x *exposure, ln net.Listener) {
 	defer c.Close()
 	e.mu.Lock()
-	authorize, dial, splices, target := e.authorize, e.dial, e.splices, x.target
+	authorize, dial, splices, target, moves := e.authorize, e.dial, e.splices, x.target, x.moves
+	current := x.ln == ln
 	e.mu.Unlock()
-	if authorize == nil {
+	if authorize == nil || !current {
 		return
 	}
 	if who, ok := authorize(c.RemoteAddr()); !ok {
 		log.Printf("expose %d: refused %s", x.port, who)
+		return
+	}
+	if !e.served(x.port, target) {
+		log.Printf("expose %d: refused %s: the app no longer listens at %s", x.port, c.RemoteAddr(), target)
 		return
 	}
 	if dial == nil {
@@ -290,7 +373,9 @@ func (e *exposer) splice(c net.Conn, x *exposure) {
 		return
 	}
 	defer r.Close()
-	if !e.track(x, c, r) {
+	// Again now the dial is done: it may have reached whatever took the port
+	// while it ran. Either way nothing has been read from r yet.
+	if !e.served(x.port, target) || !e.track(x, ln, moves, c, r) {
 		return
 	}
 	defer e.untrack(x, c, r)
@@ -330,6 +415,18 @@ func serviceAddr(port int) (netip.Addr, bool) {
 	return pickTarget(found)
 }
 
+// publishableBind reports whether a service bound to exactly a counts as
+// reachable from the LAN. On an 8000-series radio 172.30.0.0/16 is the
+// internal container network, so a service bound there is one the radio
+// keeps to itself. On a FLEX-6000 (a non-container build) that range is just
+// LAN, as localCaller notes, and any address but loopback will do.
+func publishableBind(a netip.Addr) bool {
+	if buildVariant != "" {
+		return !a.IsLoopback()
+	}
+	return lanAddr(a)
+}
+
 func pickTarget(addrs []netip.Addr) (netip.Addr, bool) {
 	var specific netip.Addr
 	for _, a := range addrs {
@@ -338,7 +435,7 @@ func pickTarget(addrs []netip.Addr) (netip.Addr, bool) {
 			return netip.MustParseAddr("127.0.0.1"), true
 		case a.IsUnspecified():
 			return netip.IPv6Loopback(), true
-		case !a.IsLoopback() && (!specific.IsValid() || a.Is4()):
+		case publishableBind(a) && (!specific.IsValid() || a.Is4()):
 			specific = a
 		}
 	}

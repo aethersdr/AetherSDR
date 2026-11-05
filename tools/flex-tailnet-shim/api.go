@@ -82,12 +82,17 @@ func validAllow(allow []string) bool {
 	return true
 }
 
+// lanAddr reports whether a is on the radio's LAN: private or link-local,
+// and not its internal container network.
+func lanAddr(a netip.Addr) bool {
+	return !containerNet.Contains(a) && (a.IsPrivate() || a.IsLinkLocalUnicast())
+}
+
 // lanOnly admits callers on private or link-local addresses, excluding the
 // radio's internal container network (172.30.1.0/24), so another container
 // cannot provision the shim. The tailnet side never reaches this server: it
 // lives in tsnet's own network stack.
 func lanOnly(next http.Handler) http.Handler {
-	internal := netip.MustParsePrefix("172.30.0.0/16")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ap, err := netip.ParseAddrPort(r.RemoteAddr)
 		if err != nil {
@@ -95,7 +100,7 @@ func lanOnly(next http.Handler) http.Handler {
 			return
 		}
 		ip := ap.Addr().Unmap()
-		if internal.Contains(ip) || !(ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+		if !lanAddr(ip) {
 			log.Printf("api: refused %s %s from %s", r.Method, r.URL.Path, ip)
 			writeJSON(w, http.StatusForbidden, apiError{"only LAN callers may use this API"})
 			return

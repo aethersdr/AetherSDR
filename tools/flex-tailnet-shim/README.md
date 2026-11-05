@@ -134,15 +134,22 @@ them: loopback and the radio's own addresses. An 8000-series container
 shares the radio's network, so it calls from these too. Anyone else,
 including other 172.30.x hosts, gets 403.
 
-- Only a port something already listens on beyond loopback can be
-  published (400 otherwise), read from `/proc/net/tcp`. The shim never
-  exposes a service the radio keeps to itself; it makes reachable over the
-  tailnet what the radio's LAN can already reach.
+- Only a port bound where the LAN could reach it can be published (400
+  otherwise), read from `/proc/net/tcp`: the wildcard, or a LAN address. On
+  an 8000-series radio that excludes 172.30.0.0/16, its internal container
+  network; on a FLEX-6000 that range is plain LAN and any address but
+  loopback qualifies. The shim reads binds, not firewall rules, so a wildcard
+  listener a firewall keeps from the LAN qualifies too.
+- This is checked again for each connection. A port's service that goes
+  away or comes back on loopback alone is refused, and a renewal that finds
+  it gone withdraws the publication.
 - The shim listens on that port on its own tailnet address and splices
   each caller the tailnet admits (the same `WhoIs` check as the radio) to
   the app's listener. The reply's `listening` is false while the tailnet
   node is down; the port opens when it comes up. If the shim can't listen
   (for example, a radio file transfer holds the port), the reply is 503.
+  Each port has one owner: a transfer the radio announces on a published
+  port fails the same way, until the publication ends.
 - The registration is a 10-minute lease (`expires_in_s`), renewed by posting
   again. The app's `name` owns the port: the same name renews it, another
   gets 409. When the lease lapses, the port and its open connections close.
