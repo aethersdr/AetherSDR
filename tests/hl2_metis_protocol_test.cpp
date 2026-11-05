@@ -810,6 +810,25 @@ int main()
                   "clear() leaves no stale peak for the next window");
         }
 
+        // Reverse power: the same window keeps the loudest non-ACK RADDR 2
+        // DATA[31:16]. Bias (DATA[15:0]), RADDR 1 and an ACK's echo are not it,
+        // and it does not count toward the forward denominator.
+        {
+            ForwardPowerWindow w;
+            check(!w.reversePeak.has_value(), "an empty window has no reverse peak");
+            w.observe(*parseEp6Response(frame(0x10, (40u << 16) | 900u).data()));
+            w.observe(*parseEp6Response(frame(0x10, (220u << 16) | 5u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3000u).data()));
+            w.observe(*parseEp6Response(frame(0x80 | (0x02 << 1), 0xFFFF0000u).data()));
+            w.observe(*parseEp6Response(frame(0x10, (60u << 16) | 900u).data()));
+            check(w.reversePeak.value_or(-1) == 220,
+                  "reverse peak is the loudest RADDR 2 upper word, not the last (60)");
+            check(w.peak.value_or(-1) == 3000 && w.samples == 1,
+                  "RADDR 2 leaves the forward peak and its count alone");
+            w.clear();
+            check(!w.reversePeak.has_value(), "clear() drops the reverse peak too");
+        }
+
         // A RADDR-1 response whose temperature word is 0 is not a measurement:
         // its forward word is neither the peak nor counted. Nothing else is
         // dropped: not the response after it, and not a lone high sample.

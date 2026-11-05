@@ -515,6 +515,12 @@ struct Hl2Telemetry {
     // The window's RADDR-1 responses skipped as isNonMeasurementRaddr1(). A unit
     // whose temperature word is always 0 has every response here and no peak.
     int forwardPowerSkipped = 0;
+    // Maximum of the same window's non-ACK RADDR-2 DATA[31:16]. Reverse power
+    // arrives in other responses than forward power, so the last values of the
+    // two are taken at different moments of the envelope; in speech their ratio
+    // swings from 1:1 to the red. Two maxima of one window are one measurement:
+    // the keyed SWR is the ratio of this and forwardPowerPeakRaw.
+    std::optional<int> reversePowerPeakRaw;
 
     // Merge a decoded response in, leaving untouched fields alone. ACK
     // responses contribute only PTT: their raddr is the command address and
@@ -532,16 +538,26 @@ struct Hl2Telemetry {
 }
 
 // Accumulator for Hl2Telemetry::forwardPowerPeakRaw: the maximum of DATA[15:0]
-// over non-ACK RADDR-1 responses that carry a measurement. Kept here so the
-// rule is testable without a socket.
+// over non-ACK RADDR-1 responses that carry a measurement, and for
+// reversePowerPeakRaw: the maximum of DATA[31:16] over non-ACK RADDR-2
+// responses. Kept here so the rule is testable without a socket.
 struct ForwardPowerWindow {
     std::optional<int> peak;
     int samples = 0;
     int skipped = 0;
+    std::optional<int> reversePeak;
 
     void observe(const Ep6Response& r) noexcept
     {
-        if (r.ack || r.raddr != 0x01)
+        if (r.ack)
+            return;
+        if (r.raddr == 0x02) {
+            const int rev = static_cast<int>((r.data >> 16) & 0xFFFF);
+            if (!reversePeak || rev > *reversePeak)
+                reversePeak = rev;
+            return;
+        }
+        if (r.raddr != 0x01)
             return;
         // Only this window skips it: Hl2Telemetry::apply() still takes both
         // halves of the word as last values.
@@ -559,6 +575,7 @@ struct ForwardPowerWindow {
         peak.reset();
         samples = 0;
         skipped = 0;
+        reversePeak.reset();
     }
 };
 

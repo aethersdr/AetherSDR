@@ -8276,9 +8276,17 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // detectorVolts(), #4578), and only meaningful with real forward power:
     // below kMinForwardCountsForSwr (MetisProtocol.h, shared with Radio Health)
     // noise drives the ratio to 255.99:1.
-    if (t.forwardPowerRaw && t.reversePowerRaw
-        && *t.forwardPowerRaw >= kMinForwardCountsForSwr) {
-        if (const auto swr = swrFromRaw(*t.forwardPowerRaw, *t.reversePowerRaw))
+    // Keyed, the pair is the window's two maxima, not the last values: forward
+    // (RADDR 1) and reverse (RADDR 2) are sampled in different responses, so in
+    // speech the last two catch different points of the envelope, often a
+    // trough, and the ratio jumps into the red on a matched load. The maxima of
+    // one window both sit on its loudest syllable. Unkeyed, the last values, as
+    // for FWDPWR below.
+    const bool windowPair = m_keyed && t.forwardPowerPeakRaw && t.reversePowerPeakRaw;
+    const std::optional<int> swrFwd = windowPair ? t.forwardPowerPeakRaw : t.forwardPowerRaw;
+    const std::optional<int> swrRev = windowPair ? t.reversePowerPeakRaw : t.reversePowerRaw;
+    if (swrFwd && swrRev && *swrFwd >= kMinForwardCountsForSwr) {
+        if (const auto swr = swrFromRaw(*swrFwd, *swrRev))
             emit meterUpdate(QStringLiteral("TX:SWR"), *swr);
     }
     // Forward/reverse power through directionalWatts()'s uncalibrated reference
