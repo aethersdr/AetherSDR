@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include "core/ProfileTransfer.h"
 
@@ -16,14 +16,19 @@ namespace AetherSDR {
 class ProfileTransfer;
 class RadioModel;
 
-class ProfileImportExportDialog : public PersistentDialog {
+// A canon workspace (RFC #6226) that has the radio export its database to an
+// .ssdr_cfg package, or upload one for the radio to import.
+class ProfileImportExportDialog : public CanonWindow {
     Q_OBJECT
+    friend class ProfileImportExportDialogTestAccess;
 
 public:
     explicit ProfileImportExportDialog(RadioModel* model, QWidget* parent = nullptr);
 
-protected:
-    void closeEvent(QCloseEvent* event) override;
+    // Every close path ends here: Esc and ⌘W / Ctrl+W through reject(), the
+    // corner ✕ through closeEvent(). While a transfer runs it asks first, and
+    // closes only on Cancel Transfer.
+    void done(int result) override;
 
 private:
     QWidget* buildExportPage();
@@ -65,7 +70,8 @@ private:
     QPushButton* m_exportButton{nullptr};
     QPushButton* m_importButton{nullptr};
     QPushButton* m_cancelButton{nullptr};
-    QPushButton* m_closeButton{nullptr};
+    bool m_confirmingClose{false};
+    bool m_closingAfterCancel{false};
 };
 
 } // namespace AetherSDR

@@ -2396,6 +2396,28 @@ add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
 set_tests_properties(callsign_lookup_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Import/Export Profiles on CanonWindow (#7032): the "transfer still running"
+# question guards Esc, Ctrl+W and the corner close alike, and the import
+# confirmation defaults to Cancel. Socket-free: transfers are only marked busy.
+add_executable(profile_import_export_dialog_test
+    tests/profile_import_export_dialog_test.cpp
+    src/gui/ProfileImportExportDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(profile_import_export_dialog_test PRIVATE src tests)
+target_link_libraries(profile_import_export_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(profile_import_export_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME profile_import_export_dialog_test COMMAND profile_import_export_dialog_test)
+set_tests_properties(profile_import_export_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
+
 # The CTR2 window (FirmwareInstallDialog): with only another kind of
 # controller selected it shows the relay alone, and its height follows the
 # CTR2-Max part as it hides and shows. Socket-free: device lists injected, no
@@ -10732,6 +10754,7 @@ set(AETHER_SETTINGS_CONSUMERS
     theme_manager_test
     canon_window_test
     callsign_lookup_dialog_test
+    profile_import_export_dialog_test
     canon_message_box_test
     shortcut_dialog_test
     reset_settings_prompts_test

@@ -83,6 +83,8 @@ The **PROF** applet ("Profile Switcher", in the Station group of the applet butt
 
 **Profiles → Import/Export Profiles...** moves profile libraries between radios, and between SmartSDR for Windows and AetherSDR, using SmartSDR-compatible `.ssdr_cfg` backup packages. **Both directions are carried out by the radio**; AetherSDR transfers the package but never edits its contents.
 
+It opens in a window of its own that remembers its size and position. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). **Cancel** at the bottom stops a running transfer. Closing the window while a transfer runs asks first: **Keep Transferring** (the default) leaves it running, **Cancel Transfer** stops it and closes the window.
+
 <img src="/img/screens/profile-import-export.png" width="560" alt="Import/Export Profiles window on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and Cancel and Close buttons." />
 
 *The Import/Export Profiles window, on the Export tab. The destination path is blacked out.*
@@ -100,7 +102,7 @@ The **PROF** applet ("Profile Switcher", in the Station group of the applet butt
    - imported profiles, memories and other settings can replace matching items on the radio, including defaults;
    - packages from newer firmware may fail or leave the radio database in an unexpected state;
    - packages that include Preferences can close or reopen slices and panadapters.
-3. **Export Backup First** saves a backup of the radio before you go ahead; **Import** uploads the package and the radio applies it. Profile lists refresh when it finishes.
+3. **Export Backup First** saves a backup of the radio before you go ahead; **Import** uploads the package and the radio applies it. **Cancel** is the default, so pressing Return, **Esc** or the **✕** imports nothing. Profile lists refresh when it finishes.
 
 ## Workspaces and profiles
 
