@@ -4044,7 +4044,13 @@ void TciServer::broadcastStatus()
                 }
             }
         }
-        if (cs.txSensorsEnabled && m_model->transmitModel().isTransmitting()) {
+        // Tune is a transmission too: isTransmitting() is MOX/PTT only, so
+        // during tune a client would get no forward power or SWR at all, and
+        // tune is exactly when an operator reads SWR.
+        const bool keyed = m_model->transmitModel().isTransmitting()
+                           || m_model->transmitModel().isTuning()
+                           || m_model->isRadioTransmitting();
+        if (cs.txSensorsEnabled && keyed) {
             // tx_sensors:trx,mic_dbm,fwd_watts,peak_watts,swr,alc_dbfs
             // alc_dbfs (trailing field, AetherSDR extension) is the SW-ALC
             // peak; index-based parsers safely ignore the extra field.
