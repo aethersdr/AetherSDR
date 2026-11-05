@@ -23,8 +23,8 @@ struct WsprPackage {
     static constexpr const char* kVersion = "0.1.0";
     static constexpr const char* kResource = ":/waveforms/AetherWSPR.ssdr_waveform";
     static constexpr const char* kSha256 =
-        "3c6c7f228b0f4d4232a58b8bcca25e22167aeb4bee4426cb8ac897d95545cf03";
-    static constexpr qint64 kSize = 283686;
+        "6a894c6765bb03db44d35c4b069fe9815341b64dfadc9edd38284bdc74d8d621";
+    static constexpr qint64 kSize = 283955;
 };
 
 // The receiver's waveform name (tools/wspr-agent/package/AetherWSPR.cfg).

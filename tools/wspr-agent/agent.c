@@ -385,7 +385,7 @@ static struct {
     config_t cfg;
     int cfg_dirty;              /* new settings to apply */
     char token[40];
-    char state_path[256];       /* config.json, token */
+    char state_path[512];       /* config.json, token */
     char radio_call[16], gps_grid[8];
     const char *state;          /* connecting, waiting_clock, capturing, ... */
     char band[8];
@@ -412,7 +412,7 @@ static void effective_call_grid(char *call, char *grid)
 static void save_config_locked(void)
 {
     if (!G.state_path[0]) return;
-    char path[300], tmp[310], text[1024];
+    char path[540], tmp[550], text[1024];
     buf_t b = {text, 0, sizeof text, 0};
     bputs(&b, "{\"token\":"); bjson_str(&b, G.token);
     bputs(&b, ",\"config\":"); config_json(&b, &G.cfg); bputs(&b, "}\n");
@@ -428,7 +428,7 @@ static void save_config_locked(void)
 
 static void load_config(void)
 {
-    char path[300], text[2048];
+    char path[540], text[2048];
     snprintf(path, sizeof path, "%s/config.json", G.state_path);
     FILE *f = fopen(path, "r");
     if (!f) return;
@@ -451,22 +451,33 @@ static void load_config(void)
     }
 }
 
+/* Settings and the admin token live beside the program when that is
+ * writable (a FLEX-6000), where uninstalling removes them. A FLEX-8000 has
+ * only RAM, which outlives a reinstall: naming the directory after this
+ * install's binary means a reinstall really starts over, so a computer that
+ * lost the token can claim the receiver again, while a restart keeps it. */
 static void pick_state_dir(const char *self_dir)
 {
-    const char *cands[2] = {self_dir, "/tmp"};
+    struct stat self;
+    long long install = stat("/proc/self/exe", &self) == 0 ? (long long)self.st_ctime : 0;
+    char dirs[2][500];
+    snprintf(dirs[0], sizeof dirs[0], "%s/aether-wspr-state", self_dir);
+    snprintf(dirs[1], sizeof dirs[1], "/tmp/aether-wspr-state-%lld", install);
     for (int i = 0; i < 2; i++) {
-        char d[256];
-        snprintf(d, sizeof d, "%s/aether-wspr-state", cands[i]);
-        mkdir(d, 0700);
-        char probe[300];
-        snprintf(probe, sizeof probe, "%s/.w", d);
+        mkdir(dirs[i], 0700);
+        char probe[520];
+        if (snprintf(probe, sizeof probe, "%s/.w", dirs[i]) >= (int)sizeof probe
+            || snprintf(G.state_path, sizeof G.state_path, "%s", dirs[i]) >= (int)sizeof G.state_path) {
+            G.state_path[0] = 0;
+            continue;
+        }
         int fd = open(probe, O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd >= 0) {
             close(fd);
             unlink(probe);
-            snprintf(G.state_path, sizeof G.state_path, "%s", d);
             return;
         }
+        G.state_path[0] = 0;
     }
 }
 
@@ -1533,6 +1544,8 @@ int main(int argc, char *argv[])
     api_t a = {.fd = -1, .slice = -1};
     decode_t dc = {.pid = 0, .fd = -1};
     long long capture_t = 0;   /* cycle being recorded, 0 none */
+    long long capture_dial = 0; /* what it was tuned to when it started: */
+    char capture_band[8] = "";  /* by its end the slice may be moving on */
     long long tuned_for = 0;   /* cycle the slice is tuned for */
     double next_connect = 0;
     config_t cfg = G.cfg;
@@ -1574,9 +1587,10 @@ int main(int argc, char *argv[])
         long long next = cyc + 120;
         int synced = clock_synced();
 
-        /* Slice for the next cycle: made or retuned after the capture
-         * ends (second 114), so it settles before the cycle starts. */
-        if (a.fd >= 0 && synced && !a.want_slice) {
+        /* Slice for the next cycle: made or retuned once the capture has
+         * ended (second 114), so it settles before the cycle starts and the
+         * capture keeps its band to the last sample. */
+        if (a.fd >= 0 && synced && !a.want_slice && !capture_t) {
             long long target = (now - cyc) >= CAPTURE_SECONDS ? next : cyc;
             if (target != tuned_for) {
                 char grid[8], cur[8];
@@ -1606,7 +1620,11 @@ int main(int argc, char *argv[])
         if (!capture_t && synced && a.stream && tuned_for == cyc && now - cyc < 1.0) {
             dsp_reset(&d);
             capture_t = cyc;
-            pthread_mutex_lock(&G.mu); G.state = "capturing"; pthread_mutex_unlock(&G.mu);
+            pthread_mutex_lock(&G.mu);
+            G.state = "capturing";
+            capture_dial = G.dial_hz;
+            snprintf(capture_band, sizeof capture_band, "%s", G.band);
+            pthread_mutex_unlock(&G.mu);
         }
         if (capture_t && (d.n >= CAPTURE_SAMPLES || now - capture_t >= CAPTURE_SECONDS + 1)) {
             int pct = (int)(100.0 * d.n / CAPTURE_SAMPLES);
@@ -1621,16 +1639,11 @@ int main(int argc, char *argv[])
                 gmtime_r(&tt, &tm);
                 strftime(name, sizeof name, "%y%m%d_%H%M.c2", &tm);
                 snprintf(path, sizeof path, "%s/%s", g_work, name);
-                pthread_mutex_lock(&G.mu);
-                long long dial = G.dial_hz;
-                char band[8];
-                snprintf(band, sizeof band, "%s", G.band);
-                G.state = "decoding";
-                pthread_mutex_unlock(&G.mu);
-                if (write_c2(path, name, dial / 1e6, idat, qdat, d.n) && start_decode(&dc, path, cfg.depth)) {
+                pthread_mutex_lock(&G.mu); G.state = "decoding"; pthread_mutex_unlock(&G.mu);
+                if (write_c2(path, name, capture_dial / 1e6, idat, qdat, d.n) && start_decode(&dc, path, cfg.depth)) {
                     dc.cycle_t = capture_t;
-                    dc.dial_hz = dial;
-                    snprintf(dc.band, sizeof dc.band, "%s", band);
+                    dc.dial_hz = capture_dial;
+                    snprintf(dc.band, sizeof dc.band, "%s", capture_band);
                     dc.audio_pct = pct;
                     dc.lost = d.lost;
                     dc.dbfs = d.in ? (float)(10 * log10(d.sumsq / (double)d.in + 1e-20)) : -200.0f;
