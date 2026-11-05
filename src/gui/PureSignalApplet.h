@@ -1,8 +1,12 @@
 #pragma once
 
+#include "MeterSmoother.h"
+
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QSet>
 #include <QString>
+#include <QTimer>
 #include <QVariant>
 #include <QVariantMap>
 #include <QVector>
@@ -61,7 +65,10 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override;
 private:
-    int m_level = -1;
+    int m_level = -1;               // the number and the colour band: exact
+    MeterSmoother m_smooth;         // the fill: smoothed, like every meter
+    QTimer m_animTimer;
+    QElapsedTimer m_animElapsed;
 };
 
 // HL2 PureSignal controls. Shown only while a Hermes-Lite 2 backend is bound;
@@ -90,7 +97,6 @@ private:
     void unbind();
     void setSettingsExpanded(bool expanded);
     void savePreferences();
-    void pushPreferences();
     void showAttenuation(int att);
 
     QPointer<IRadioBackend> m_backend;

@@ -25,6 +25,7 @@
 
 #include "core/AutomationBridgeSettings.h"
 #include "core/LogManager.h"
+#include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
 #include "core/backends/hl2/Hl2FreqCal.h"
 #include "core/backends/hl2/Hl2Settings.h"
@@ -1917,7 +1918,73 @@ QVariantMap Hl2Backend::pureSignalFields() const
     s.enabled = m_psEnabled;
     s.available = m_psAvailable;
     s.unavailableReason = m_psUnavailableReason;
+    s.autoCalibrate = m_psAutoCalibrate;
+    s.autoAttenuate = m_psAutoAttenuate;
+    // Auto-attenuate moves the attenuation on the I/O thread; only a manual
+    // setting is this thread's to report.
+    if (!m_psAutoAttenuate)
+        s.attenuationDb = m_psAttenuationDb;
     return pureSignalStatusFields(s);
+}
+
+namespace {
+constexpr auto kPureSignalFeature = "PureSignal";
+constexpr int kPureSignalSchemaVersion = 1;
+// PSSaveCorr / PSRestoreCorr ignore a name of this many bytes or more
+// (calcc.c), without telling the caller.
+constexpr int kPureSignalMaxPathBytes = 256;
+}  // namespace
+
+void Hl2Backend::loadPureSignalPreferences()
+{
+    // Consumer read: this radio's row, else the family-wide default, else the
+    // built-in defaults. An empty serial reads the family-wide row only.
+    const RadioSettingsScope scope(QStringLiteral("hl2"), m_radioSerial);
+    int version = 0;
+    const QJsonObject doc = scope.feature(QLatin1String(kPureSignalFeature), &version);
+    m_psAutoCalibrate = true;
+    m_psAutoAttenuate = true;
+    m_psAttenuationDb = Hl2PureSignalLogic::kAttMax;
+    if (!doc.isEmpty() && version <= kPureSignalSchemaVersion) {
+        m_psAutoCalibrate = doc.value(QStringLiteral("autoCalibrate")).toBool(m_psAutoCalibrate);
+        m_psAutoAttenuate = doc.value(QStringLiteral("autoAttenuate")).toBool(m_psAutoAttenuate);
+        const QJsonValue att = doc.value(QStringLiteral("attenuationDb"));
+        if (att.isDouble())
+            m_psAttenuationDb = Hl2PureSignalLogic::clampAtt(att.toInt(m_psAttenuationDb));
+    } else if (version > kPureSignalSchemaVersion) {
+        qCWarning(lcHl2) << "HL2: PureSignal preferences are schema" << version
+                         << "— newer than this build; using defaults";
+    }
+    setPureSignalAutoCalibrate(m_psAutoCalibrate);
+    setPureSignalAutoAttenuate(m_psAutoAttenuate);
+    setPureSignalAttenuationDb(m_psAttenuationDb);
+    // The controller publishes only on a change of its own; this radio's
+    // preferences may differ from the last one's without changing that.
+    emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"), pureSignalFields());
+}
+
+void Hl2Backend::savePureSignalPreferences()
+{
+    // Never write an empty radio_id row: it would hand this station's coupler
+    // attenuation to every HL2 (same guard as applyHardwareOptions()).
+    if (m_radioSerial.isEmpty()) {
+        qCWarning(lcHl2) << "HL2: not persisting PureSignal preferences —"
+                         << "no radio identity yet; applying for this session only";
+        return;
+    }
+    const RadioSettingsScope scope(QStringLiteral("hl2"), m_radioSerial);
+    int version = 0;
+    QJsonObject doc = scope.featureExact(QLatin1String(kPureSignalFeature), &version);
+    if (version > kPureSignalSchemaVersion) {
+        qCWarning(lcHl2) << "HL2: not overwriting PureSignal preferences of schema" << version;
+        return;
+    }
+    doc.insert(QStringLiteral("autoCalibrate"), m_psAutoCalibrate);
+    doc.insert(QStringLiteral("autoAttenuate"), m_psAutoAttenuate);
+    doc.insert(QStringLiteral("attenuationDb"), m_psAttenuationDb);
+    if (!scope.setFeature(QLatin1String(kPureSignalFeature), kPureSignalSchemaVersion, doc))
+        qCWarning(lcHl2) << "HL2: PureSignal preferences did not persist";
+    AppSettings::instance().save();
 }
 
 void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const QVariant& arg)
@@ -1944,16 +2011,33 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
         if (!boolArg(on))
             return refuse(QStringLiteral("puresignal.auto: expects a bool"));
         setPureSignalAutoCalibrate(on);
+        if (on != m_psAutoCalibrate) {
+            m_psAutoCalibrate = on;
+            savePureSignalPreferences();
+        }
     } else if (verb == QLatin1String("puresignal.autoatt")) {
         if (!boolArg(on))
             return refuse(QStringLiteral("puresignal.autoatt: expects a bool"));
         setPureSignalAutoAttenuate(on);
+        if (on != m_psAutoAttenuate) {
+            // Turning it off keeps the attenuation it had reached, which then
+            // becomes the manual setting.
+            if (!on)
+                m_psAttenuationDb = Hl2PureSignalLogic::clampAtt(m_psStatus.attenuationDb);
+            m_psAutoAttenuate = on;
+            savePureSignalPreferences();
+        }
     } else if (verb == QLatin1String("puresignal.att")) {
         bool ok = false;
         const int att = arg.toInt(&ok);
         if (!ok)
             return refuse(QStringLiteral("puresignal.att: expects an integer in dB"));
-        setPureSignalAttenuationDb(Hl2PureSignalLogic::clampAtt(att));
+        const int clamped = Hl2PureSignalLogic::clampAtt(att);
+        setPureSignalAttenuationDb(clamped);
+        if (clamped != m_psAttenuationDb) {
+            m_psAttenuationDb = clamped;
+            savePureSignalPreferences();
+        }
     } else if (verb == QLatin1String("puresignal.single")
                || verb == QLatin1String("puresignal.reset")) {
         if (!m_psEnabled)
@@ -1967,6 +2051,9 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
         const QString path = arg.toString();
         if (path.isEmpty())
             return refuse(QStringLiteral("%1: expects a file path").arg(verb));
+        if (path.toLocal8Bit().size() >= kPureSignalMaxPathBytes)
+            return refuse(QStringLiteral("%1: the file path is too long for WDSP (at most %2 bytes)").arg(verb)
+                              .arg(kPureSignalMaxPathBytes - 1));
         if (!m_psEnabled)
             return refuse(QStringLiteral("PureSignal is off"));
         if (verb == QLatin1String("puresignal.save"))
@@ -2739,6 +2826,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // feedback path, so it is the operator's choice each time.
     applyPureSignalWire(false);
     mp.pureSignal = false;
+    // ...but its preferences are this radio's, so they follow the radio.
+    loadPureSignalPreferences();
     // The filter board must be right from the first config frame: the radio
     // reports no state. All receivers start on one frequency, so this is that
     // frequency's filter (see applyBandFilter()). The receive byte, since some

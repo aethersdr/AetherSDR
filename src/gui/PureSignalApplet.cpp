@@ -92,6 +92,12 @@ PureSignalFeedbackMeter::PureSignalFeedbackMeter(QWidget* parent) : QWidget(pare
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
             qOverload<>(&QWidget::update));
+    m_animTimer.setTimerType(Qt::PreciseTimer);
+    m_animTimer.setInterval(kMeterSmootherIntervalMs);
+    connect(&m_animTimer, &QTimer::timeout, this, [this] {
+        if (!m_smooth.tick(m_animElapsed.restart())) { m_animTimer.stop(); }
+        update();
+    });
 }
 
 PureSignalFeedbackMeter::Band PureSignalFeedbackMeter::bandFor(int level) noexcept
@@ -108,6 +114,15 @@ void PureSignalFeedbackMeter::setLevel(int level)
     if (level == m_level) { return; }
     m_level = level;
     setAccessibleDescription(level < 0 ? tr("No feedback") : QString::number(level));
+    m_smooth.setTarget(level < 0 ? 0.0f
+                                 : static_cast<float>(std::min(level, kScaleMax)) / kScaleMax);
+    if (level < 0) { m_smooth.snapToTarget(); }   // no data: empty now, not decaying
+    if (!m_smooth.needsAnimation()) {
+        m_animTimer.stop();
+    } else if (!m_animTimer.isActive()) {
+        m_animElapsed.restart();
+        m_animTimer.start();
+    }
     update();
 }
 
@@ -123,8 +138,8 @@ void PureSignalFeedbackMeter::paintEvent(QPaintEvent*)
     p.save();
     p.setClipPath(clip);
 
-    const auto xAt = [&](int v) {
-        return track.left() + track.width() * static_cast<double>(v) / kScaleMax;
+    const auto xAt = [&](double v) {
+        return track.left() + track.width() * v / kScaleMax;
     };
     // calcc's target window.
     QColor window = theme.color(this, QStringLiteral("color.accent.success"));
@@ -140,7 +155,7 @@ void PureSignalFeedbackMeter::paintEvent(QPaintEvent*)
         case Band::Marginal: token = QStringLiteral("color.accent.warning"); break;
         default:             token = QStringLiteral("color.accent.danger"); break;
         }
-        const int shown = std::min(m_level, kScaleMax);
+        const double shown = static_cast<double>(m_smooth.value()) * kScaleMax;
         QRectF fill = track.adjusted(1.5, 3, 0, -3);
         fill.setRight(std::max(fill.left(), xAt(shown) - 1.5));
         p.setPen(Qt::NoPen);
@@ -292,12 +307,10 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     drawer->addLayout(fileRow);
     root->addWidget(m_settingsDrawer);
 
-    // Preferences: everything but the enable, which starts off every session.
+    // Auto, auto-attenuate and the attenuation belong to the radio: the
+    // backend keeps them per radio and reports them in the status map. This
+    // widget keeps only its own chrome (the drawer).
     const QJsonObject prefs = preferences();
-    m_status.autoCalibrate = prefs.value(QStringLiteral("autoCalibrate")).toBool(true);
-    m_status.autoAttenuate = prefs.value(QStringLiteral("autoAttenuate")).toBool(true);
-    m_status.attenuationDb = std::clamp(
-        prefs.value(QStringLiteral("attenuationDb")).toInt(kAttMax), kAttMin, kAttMax);
 
     connect(m_enable, &QPushButton::clicked, this, [this](bool on) {
         send(QStringLiteral("enable"), on);
@@ -306,24 +319,22 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
         m_enable->setChecked(m_status.enabled);
     });
     connect(m_auto, &QPushButton::clicked, this, [this](bool on) {
-        m_status.autoCalibrate = on;
         send(QStringLiteral("auto"), on);
-        savePreferences();
     });
     connect(m_single, &QPushButton::clicked, this, [this] {
         send(QStringLiteral("single"));
     });
     connect(m_autoAttenuate, &QCheckBox::toggled, this, [this](bool on) {
-        m_status.autoAttenuate = on;
         m_attenuation->setEnabled(!on);
         send(QStringLiteral("autoatt"), on);
-        savePreferences();
     });
+    // One request per setting, not one per drag step: the backend persists
+    // each one.
+    m_attenuation->setTracking(false);
+    connect(m_attenuation, &QSlider::sliderMoved, this, [this](int att) { showAttenuation(att); });
     connect(m_attenuation, &QSlider::valueChanged, this, [this](int att) {
         showAttenuation(att);
-        m_status.attenuationDb = att;
         send(QStringLiteral("att"), att);
-        savePreferences();
     });
     connect(m_reset, &QPushButton::clicked, this, [this] {
         send(QStringLiteral("reset"));
@@ -346,7 +357,7 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
         m_auto->setChecked(m_status.autoCalibrate);
         m_autoAttenuate->setChecked(m_status.autoAttenuate);
         m_attenuation->setValue(m_status.attenuationDb);
-        m_attenuation->setEnabled(!m_status.autoAttenuate);
+        m_attenuation->setEnabled(false);
     }
     showAttenuation(m_status.attenuationDb);
     setSettingsExpanded(prefs.value(QStringLiteral("settingsExpanded")).toBool(false));
@@ -442,7 +453,6 @@ void PureSignalApplet::setBackend(IRadioBackend* backend)
             unbind();
             emit availabilityChanged(false);
         }));
-        pushPreferences();
         send(QStringLiteral("get"));
     } else {
         onStatus(m_status);
@@ -481,13 +491,6 @@ void PureSignalApplet::onFields(const QVariantMap& fields)
     onStatus(PureSignalView::fromFields(fields, m_status));
 }
 
-void PureSignalApplet::pushPreferences()
-{
-    send(QStringLiteral("auto"), m_status.autoCalibrate);
-    send(QStringLiteral("autoatt"), m_status.autoAttenuate);
-    send(QStringLiteral("att"), m_status.attenuationDb);
-}
-
 void PureSignalApplet::showAttenuation(int att)
 {
     m_attenuationValue->setText(tr("%1 dB").arg(att));
@@ -500,12 +503,8 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
         const QSignalBlocker block(m_attenuation);
         m_attenuation->setRange(s.attMin, s.attMax);
     }
-    // The operator's switches are this widget's; the backend reports the rest.
-    const bool autoCal = m_status.autoCalibrate;
-    const bool autoAtt = m_status.autoAttenuate;
+    // The backend owns every value shown here, the switches included.
     m_status = s;
-    m_status.autoCalibrate = autoCal;
-    m_status.autoAttenuate = autoAtt;
 
     const bool bound = !m_backend.isNull();
     const bool usable = bound && (s.available || s.enabled);
@@ -519,14 +518,18 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
     m_reset->setEnabled(bound && s.enabled);
     m_save->setEnabled(bound && s.enabled && s.correcting);
     m_restore->setEnabled(bound && s.enabled);
-
-    // Auto-attenuate moves the attenuation; follow it without echoing it back.
-    if (s.autoAttenuate && m_status.autoAttenuate && m_attenuation->value() != s.attenuationDb) {
-        const QSignalBlocker block(m_attenuation);
-        m_attenuation->setValue(s.attenuationDb);
-        showAttenuation(s.attenuationDb);
+    {
+        // Follow the backend without echoing it back.
+        const QSignalBlocker b1(m_auto), b2(m_autoAttenuate), b3(m_attenuation);
+        m_auto->setChecked(s.autoCalibrate);
+        m_autoAttenuate->setChecked(s.autoAttenuate);
+        m_autoAttenuate->setEnabled(bound);
+        m_attenuation->setEnabled(bound && !s.autoAttenuate);
+        if (!m_attenuation->isSliderDown() && m_attenuation->value() != s.attenuationDb) {
+            m_attenuation->setValue(s.attenuationDb);
+            showAttenuation(s.attenuationDb);
+        }
     }
-    if (!autoAtt) { m_status.attenuationDb = m_attenuation->value(); }
 
     m_meter->setLevel(s.enabled && (s.keyed || s.feedbackLevel > 0) ? s.feedbackLevel : -1);
     setReadout(m_readout, s.enabled
@@ -581,10 +584,9 @@ void PureSignalApplet::setSettingsExpanded(bool expanded)
 void PureSignalApplet::savePreferences()
 {
     if (!m_settingsDrawer || !m_attenuation) { return; }
-    QJsonObject document = preferences();
-    document.insert(QStringLiteral("autoCalibrate"), m_status.autoCalibrate);
-    document.insert(QStringLiteral("autoAttenuate"), m_status.autoAttenuate);
-    document.insert(QStringLiteral("attenuationDb"), m_attenuation->value());
+    // GUI chrome only; the radio's PureSignal settings live in the backend's
+    // radio_settings document.
+    QJsonObject document;
     document.insert(QStringLiteral("settingsExpanded"), !m_settingsDrawer->isHidden());
     const QString text = QString::fromUtf8(QJsonDocument(document).toJson(QJsonDocument::Compact));
     if (AppSettings::instance().value(QStringLiteral("PureSignalApplet"), QString{}).toString() == text) {

@@ -467,6 +467,14 @@ private:
     QString m_psUnavailableReason;
     int m_psFeedbackRateHz = 0;
     Hl2PureSignalStatus m_psStatus;
+    // The operator's PureSignal preferences. GUI thread; the backend owns them
+    // and persists them per radio as the "PureSignal" radio_settings document
+    // (one coupler, one feedback attenuation), loaded on every connect.
+    bool m_psAutoCalibrate = true;
+    bool m_psAutoAttenuate = true;
+    int m_psAttenuationDb = Hl2PureSignalLogic::kAttMax;
+    void loadPureSignalPreferences();
+    void savePureSignalPreferences();
     // Why PureSignal cannot run right now, or empty when it can.
     [[nodiscard]] QString pureSignalBlocker() const;
     // The "hl2" extension's puresignal.* verbs (get, enable, auto, single,

@@ -327,8 +327,12 @@ void Hl2PureSignal::setAttenuationDb(int att)
 
 void Hl2PureSignal::saveCorrection(const QString& path)
 {
+    const QByteArray p = path.toLocal8Bit();
+    if (p.size() >= 256) {   // calcc ignores it silently; the backend refuses first
+        qCWarning(lcHl2Ps) << "HL2 PureSignal: path too long to save to" << path;
+        return;
+    }
     if (WdspChannel* ch = channel()) {
-        const QByteArray p = path.toLocal8Bit();
         ch->pureSignalSave(p.constData());
         qCInfo(lcHl2Ps) << "HL2 PureSignal: correction saved to" << path;
     }
@@ -338,8 +342,12 @@ void Hl2PureSignal::restoreCorrection(const QString& path)
 {
     if (!m_enabled)
         return;
+    const QByteArray p = path.toLocal8Bit();
+    if (p.size() >= 256) {   // calcc would load nothing and we would turn it on
+        qCWarning(lcHl2Ps) << "HL2 PureSignal: path too long to restore from" << path;
+        return;
+    }
     if (WdspChannel* ch = channel()) {
-        const QByteArray p = path.toLocal8Bit();
         ch->pureSignalRestore(p.constData());
         m_logic.requestRestore();
         qCInfo(lcHl2Ps) << "HL2 PureSignal: restoring correction from" << path;
