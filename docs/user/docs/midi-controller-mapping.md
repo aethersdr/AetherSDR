@@ -29,6 +29,8 @@ AetherSDR supports class-compliant USB MIDI controllers for hands-on control of 
 
 *The MIDI Controller Mapping window, before any control is bound.*
 
+It is a window of its own that remembers its size and position. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux); choosing **MIDI Mapping...** while it is open brings it to the front.
+
 - **Port** with **Refresh** and **Connect / Disconnect**
 - **Auto-connect on startup** — reconnect to the last device at launch
 - Activity line — the last message received (channel, type, number, value)
@@ -49,11 +51,13 @@ AetherSDR supports class-compliant USB MIDI controllers for hands-on control of 
 3. Move a knob, press a button or slide a fader.
 4. AetherSDR captures the message and creates the binding. Bindings are saved automatically.
 
+Closing the window cancels a Learn that is still waiting for a control.
+
 ### Manual entry
 
 Click **Manual…** to type a binding instead of learning it: **Channel** (Any or 1–16), **Type** (Note On, Control Change (CC) or Pitch Bend), **Number** (note or CC number), plus **Invert value range** and **Relative (knob sends deltas)**.
 
-The **✎** button on any row opens the same form filled in, so you can fix a binding that Learn captured wrongly without re-learning it. If two bindings share the same source, AetherSDR warns you — only the last one would work.
+The **✎** button on any row opens the same form filled in, so you can fix a binding that Learn captured wrongly without re-learning it. If two bindings share the same source, AetherSDR asks before going ahead, because only the last one would work: **Replace** removes the older binding, and **Cancel** (the default, so also Return, **Esc** or the **✕**) leaves both as they were and adds nothing.
 
 ## Using relative encoders
 

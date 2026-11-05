@@ -2,8 +2,13 @@
 #ifdef HAVE_MIDI
 
 #include "MidiMappingDialog.h"
+#include "CanonIndicators.h"
+#include "CanonMessageBox.h"
+#include "CanonScrollBarStyle.h"
+#include "CanonTableStyle.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
 #include "core/AppSettings.h"
-#include "FramelessMessageBox.h"
 #include "ScopedChildWidget.h"
 #include "core/MidiControlManager.h"
 #include "core/MidiSettings.h"
@@ -12,6 +17,7 @@
 #include <memory>
 
 #include <QAbstractItemView>
+#include <QHideEvent>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -21,11 +27,8 @@
 #include <QHeaderView>
 #include <QCheckBox>
 #include <QLineEdit>
-#include <QInputDialog>
-#include <QMessageBox>
 #include <QSpinBox>
 #include <QFormLayout>
-#include <QDialogButtonBox>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -63,78 +66,129 @@ void rememberMidiTransferDirectory(const QString& path)
 
 } // namespace
 
-static const QString kGroupStyle =
-    "QGroupBox { border: 1px solid #304050; border-radius: 4px; "
-    "margin-top: 8px; padding-top: 12px; font-weight: bold; color: #8aa8c0; }"
-    "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }";
+// What the shared canon dialog sheet (ModemChrome::Look::Canon: buttons,
+// fields, combo boxes, spin boxes, check boxes) leaves out, after the canon
+// table rules: group boxes as MQTT Settings has them; the table's selection
+// ink; the combo lists; Learn outlined as the primary way to add a binding
+// (#4760); and the fields' right-click menus, children of the fields that the
+// sheet's transparent rule would otherwise leave with no panel.
+constexpr const char* kMidiMappingRules = R"(
+QGroupBox {
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+    margin-top: 14px;
+    padding-top: 6px;
+    font-weight: 700;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: {{color.canon.cyan}};
+}
+QTableView::item:selected {
+    color: {{color.canon.ink}};
+}
+QLineEdit,
+QSpinBox {
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QComboBox QAbstractItemView {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QPushButton#midiLearnButton {
+    color: {{color.canon.cyan}};
+    border-color: {{color.canon.cyan}};
+}
+QLabel#midiActivity {
+    color: {{color.canon.cyan}};
+    font-size: 10px;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+)";
 
-static const QString kComboStyle =
-    "QComboBox { background: #1a2a3a; border: 1px solid #304050; "
-    "border-radius: 3px; color: #c8d8e8; font-size: 11px; padding: 2px 6px; }"
-    "QComboBox::drop-down { border: none; }"
-    "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8; "
-    "selection-background-color: #00b4d8; }";
-
-static const QString kBtnStyle =
-    "QPushButton { background: #00b4d8; color: #0f0f1a; font-weight: bold; "
-    "border: 1px solid #008ba8; padding: 5px 14px; border-radius: 3px; }"
-    "QPushButton:hover { background: #00c8f0; }"
-    "QPushButton:disabled { background: #404060; color: #808080; }";
-
-// Muted sibling of kBtnStyle for secondary actions — Learn stays the visually
-// primary way to create bindings; manual entry is the bypass (#4760).
-// {{token}} template: apply via ThemeManager::applyStyleSheet, never setStyleSheet.
-static const QString kBtnSubtleStyle =
-    "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
-    "border: 1px solid {{color.border.strong}}; padding: 5px 14px; border-radius: 3px; }"
-    "QPushButton:hover { background: {{color.background.2}}; color: {{color.text.primary}}; }";
-
-// Same palette for the fixed-size square glyph buttons in the table rows. The
-// 14 px side padding of kBtnSubtleStyle exceeds a 24 px button's width, which
-// leaves no room for the glyph and renders it blank.
-static const QString kBtnGlyphStyle =
-    "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
-    "border: 1px solid {{color.border.strong}}; padding: 0; border-radius: 3px; }"
-    "QPushButton:hover { background: {{color.background.2}}; color: {{color.text.primary}}; }";
-
-// One apply site for the shared primary-button sheet — the colour ratchet
-// counts setStyleSheet() call sites, not colours (tools/audit_colours.py).
-static QPushButton* makeStyledButton(const QString& text)
+QString midiMappingSheet()
 {
-    auto* btn = new QPushButton(text);
-    btn->setStyleSheet(kBtnStyle);
-    return btn;
+    return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+         + canonTableRules() + canonScrollBarRules() + canonSpinArrowRules()
+         + QString::fromLatin1(kMidiMappingRules);
 }
 
+// The fixed-size square glyph buttons in the table rows. The shared sheet's
+// button padding exceeds a 24 px button's width and would leave no room for
+// the glyph, so they carry their own. The delete glyph is drawn as destructive,
+// in the gold CanonMessageBox gives a destructive button.
+// {{token}} templates: apply via ThemeManager::applyStyleSheet.
+static const QString kBtnGlyphStyle =
+    "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}}; "
+    "border: 1px solid {{color.canon.lineHi}}; padding: 0; border-radius: 4px; }"
+    "QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }";
+static const QString kBtnGlyphDestructiveStyle =
+    "QPushButton { background: {{color.canon.control}}; color: {{color.canon.sparkGold}}; "
+    "border: 1px solid {{color.canon.lineHi}}; padding: 0; border-radius: 4px; font-weight: bold; }"
+    "QPushButton:hover { background: {{color.canon.nested}}; }";
+
 MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* parent)
-    : PersistentDialog("MIDI Controller Mapping", "MidiMappingDialogGeometry", parent),
+    : CanonWindow(QStringLiteral("MIDI Controller Mapping"), parent, Kind::Workspace),
       m_manager(manager)
 {
-    theme::setContainer(this, QStringLiteral("dialog/midiMapping"));
-    setMinimumSize(700, 550);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; }");
+    setObjectName(QStringLiteral("MidiMappingDialog"));
+    theme::setContainer(this, QStringLiteral("canon/midiMapping"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("MidiMappingDialogGeometry"));
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] { return midiMappingSheet(); });
 
     auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(8);
+    root->addWidget(makeCanonHeader(QStringLiteral("MIDI Controller Mapping")));
 
     // ── Device section ──────────────────────────────────────────────────
     {
         auto* group = new QGroupBox("MIDI Device");
-        group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
         grid->addWidget(new QLabel("Port:"), 0, 0);
         m_portCombo = new QComboBox;
-        m_portCombo->setStyleSheet(kComboStyle);
+        m_portCombo->setObjectName(QStringLiteral("midiPortCombo"));
         m_portCombo->setMinimumWidth(250);
         grid->addWidget(m_portCombo, 0, 1);
 
-        auto* refreshBtn = makeStyledButton("Refresh");
+        auto* refreshBtn = new QPushButton("Refresh");
         connect(refreshBtn, &QPushButton::clicked, this, &MidiMappingDialog::refreshPortList);
         grid->addWidget(refreshBtn, 0, 2);
 
-        m_connectBtn = makeStyledButton("Connect");
+        m_connectBtn = new QPushButton("Connect");
+        m_connectBtn->setObjectName(QStringLiteral("midiConnectButton"));
         connect(m_connectBtn, &QPushButton::clicked, this, [this] {
             if (m_manager->isOpen()) {
                 m_manager->closePort();
@@ -147,19 +201,20 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         });
         grid->addWidget(m_connectBtn, 0, 3);
 
-        m_statusLabel = new QLabel(m_manager->isOpen()
-            ? "Connected: " + m_manager->currentPortName() : "Disconnected");
-        m_statusLabel->setStyleSheet(m_manager->isOpen()
-            ? "QLabel { color: #30d050; font-size: 11px; }"
-            : "QLabel { color: #808080; font-size: 11px; }");
+        m_statusLabel = new QLabel;
+        m_statusLabel->setObjectName(QStringLiteral("midiPortStatus"));
+        m_statusLabel->setTextFormat(Qt::PlainText);
+        setPortStatus(m_manager->isOpen() ? "Connected: " + m_manager->currentPortName()
+                                          : QStringLiteral("Disconnected"),
+                      m_manager->isOpen() ? QStringLiteral("{{color.accent.success}}")
+                                          : QStringLiteral("{{color.text.label}}"));
         grid->addWidget(m_statusLabel, 1, 0, 1, 2);
 
         m_activityLabel = new QLabel("");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_activityLabel, "QLabel { color: {{color.accent}}; font-size: 10px; font-family: monospace; }");
+        m_activityLabel->setObjectName(QStringLiteral("midiActivity"));
         grid->addWidget(m_activityLabel, 1, 2, 1, 2);
 
         auto* autoConnect = new QCheckBox("Auto-connect on startup");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(autoConnect, "QCheckBox { color: {{color.text.primary}}; }");
         autoConnect->setChecked(MidiSettings::instance().autoConnect());
         connect(autoConnect, &QCheckBox::toggled, this, [](bool on) {
             MidiSettings::instance().setAutoConnect(on);
@@ -173,10 +228,11 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
     // ── Binding table ───────────────────────────────────────────────────
     {
         auto* group = new QGroupBox("Parameter Bindings");
-        group->setStyleSheet(kGroupStyle);
         auto* vbox = new QVBoxLayout(group);
 
         m_bindingTable = new QTableWidget;
+        m_bindingTable->setObjectName(QStringLiteral("midiBindingTable"));
+        m_bindingTable->setAccessibleName(QStringLiteral("MIDI parameter bindings"));
         m_bindingTable->setColumnCount(7);
         m_bindingTable->setHorizontalHeaderLabels({"Parameter", "MIDI Source", "Channel", "Invert", "Relative", "", ""});
         m_bindingTable->horizontalHeader()->setStretchLastSection(false);
@@ -185,29 +241,28 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         m_bindingTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
         m_bindingTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
         m_bindingTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
-        m_bindingTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
-        m_bindingTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
+        // The edit and delete columns hold 24 px glyph buttons and no text,
+        // so sizing them to contents measures the empty header and clips the
+        // button; give them room for it.
+        for (int glyphColumn : {5, 6}) {
+            m_bindingTable->horizontalHeader()->setSectionResizeMode(glyphColumn, QHeaderView::Fixed);
+            m_bindingTable->horizontalHeader()->resizeSection(glyphColumn, 34);
+        }
         m_bindingTable->setSelectionBehavior(QAbstractItemView::SelectRows);
         m_bindingTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
         m_bindingTable->verticalHeader()->setVisible(false);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_bindingTable, "QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}}; "
-            "border: 1px solid {{color.background.1}}; font-size: 11px; gridline-color: {{color.background.1}}; }"
-            "QTableWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }"
-            "QHeaderView::section { background: {{color.background.0}}; color: {{color.text.secondary}}; "
-            "border: 1px solid {{color.background.1}}; padding: 3px; font-size: 11px; }");
         vbox->addWidget(m_bindingTable, 1);
 
         // Add binding row
         auto* addRow = new QHBoxLayout;
         m_categoryCombo = new QComboBox;
-        m_categoryCombo->setStyleSheet(kComboStyle);
+        m_categoryCombo->setObjectName(QStringLiteral("midiCategoryCombo"));
         m_categoryCombo->addItems({"All", "RX", "TX", "Phone/CW", "EQ",
                                    "Global", "Mode", "Band", "Filter",
                                    "Slice", "Display", "Frequency"});
         addRow->addWidget(m_categoryCombo);
 
         m_paramCombo = new QComboBox;
-        m_paramCombo->setStyleSheet(kComboStyle);
         m_paramCombo->setObjectName("midiParamCombo");
         m_paramCombo->setMinimumWidth(200);
         addRow->addWidget(m_paramCombo, 1);
@@ -223,7 +278,8 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         connect(m_categoryCombo, &QComboBox::currentTextChanged, this, populateParams);
         populateParams();
 
-        auto* learnBtn = makeStyledButton("Learn");
+        auto* learnBtn = new QPushButton("Learn");
+        learnBtn->setObjectName(QStringLiteral("midiLearnButton"));
         learnBtn->setToolTip("Add binding: select a parameter, click Learn, then move a knob on your controller");
         connect(learnBtn, &QPushButton::clicked, this, [this, learnBtn] {
             if (m_manager->isLearning()) {
@@ -249,7 +305,6 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
                 [learnBtn] { learnBtn->setText("Learn"); });
 
         auto* manualBtn = new QPushButton("Manual…");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(manualBtn, kBtnSubtleStyle);
         manualBtn->setObjectName("midiManualAddButton");
         manualBtn->setAccessibleName("Add MIDI binding manually");
         manualBtn->setToolTip("Add binding by typing channel, message type and number — "
@@ -276,7 +331,8 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
 
         // Button row
         auto* btnRow = new QHBoxLayout;
-        auto* clearAllBtn = makeStyledButton("Clear All");
+        auto* clearAllBtn = new QPushButton("Clear All");
+        clearAllBtn->setObjectName(QStringLiteral("midiClearAllButton"));
         connect(clearAllBtn, &QPushButton::clicked, this, [this] {
             m_manager->clearBindings();
             refreshBindingTable();
@@ -289,14 +345,13 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         m_profileCombo = new QComboBox;
         m_profileCombo->setObjectName(QStringLiteral("midiProfileCombo"));
         m_profileCombo->setAccessibleName(QStringLiteral("MIDI profile name"));
-        m_profileCombo->setStyleSheet(kComboStyle);
         m_profileCombo->setMinimumWidth(120);
         m_profileCombo->setEditable(true);
         m_profileCombo->setPlaceholderText("profile name");
         btnRow->addWidget(new QLabel("Profile:"));
         btnRow->addWidget(m_profileCombo);
 
-        auto* saveProfileBtn = makeStyledButton("Save");
+        auto* saveProfileBtn = new QPushButton("Save");
         saveProfileBtn->setObjectName(QStringLiteral("midiProfileSaveButton"));
         saveProfileBtn->setAccessibleName(QStringLiteral("Save MIDI profile"));
         saveProfileBtn->setToolTip(
@@ -314,8 +369,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
             if (!MidiSettings::isValidProfileName(name)) {
                 // The store refuses these names silently; say why here so the
                 // operator isn't left with a Save that does nothing. (#4975)
-                FramelessMessageBox::warning(
-                    this, QStringLiteral("Save Profile"),
+                showNotice(QStringLiteral("Save Profile"),
                     QStringLiteral("\"%1\" isn't a valid profile name — a name "
                                    "can't contain / or \\ or start with \".\".")
                         .arg(name));
@@ -330,23 +384,20 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
                 // The store refuses an empty set (it would replace the profile
                 // with nothing); say so here so the refusal isn't reported as
                 // an unwritable directory.
-                FramelessMessageBox::warning(
-                    this, QStringLiteral("Save Profile"),
+                showNotice(QStringLiteral("Save Profile"),
                     QStringLiteral("No bindings to save — add a binding first."));
                 return;
             }
             const bool existed = MidiSettings::profileExists(name);
             if (!MidiSettings::instance().saveProfile(name, m_manager->bindings())) {
-                FramelessMessageBox::warning(
-                    this, QStringLiteral("Save Profile"),
+                showNotice(QStringLiteral("Save Profile"),
                     QStringLiteral("Couldn't write profile \"%1\" — check that %2 "
                                    "is writable.")
                         .arg(name, QDir::toNativeSeparators(MidiSettings::profileDir())));
                 return;
             }
             refreshProfileList();
-            FramelessMessageBox::information(
-                this, QStringLiteral("Save Profile"),
+            showNotice(QStringLiteral("Save Profile"),
                 QStringLiteral("%1 profile \"%2\" (%3 binding%4).")
                     .arg(existed ? QStringLiteral("Overwrote") : QStringLiteral("Saved"),
                          name, QString::number(count),
@@ -354,7 +405,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         });
         btnRow->addWidget(saveProfileBtn);
 
-        auto* loadProfileBtn = makeStyledButton("Load");
+        auto* loadProfileBtn = new QPushButton("Load");
         loadProfileBtn->setObjectName(QStringLiteral("midiProfileLoadButton"));
         loadProfileBtn->setAccessibleName(QStringLiteral("Load MIDI profile"));
         loadProfileBtn->setToolTip(
@@ -366,8 +417,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
             if (bindings.isEmpty()) {
                 // A missing or empty profile silently doing nothing is the
                 // same failure class the importer refuses — say so instead.
-                FramelessMessageBox::warning(
-                    this, QStringLiteral("Load Profile"),
+                showNotice(QStringLiteral("Load Profile"),
                     QStringLiteral("Profile \"%1\" is empty or missing.").arg(name));
                 return;
             }
@@ -379,7 +429,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         });
         btnRow->addWidget(loadProfileBtn);
 
-        auto* importProfileBtn = makeStyledButton("Import...");
+        auto* importProfileBtn = new QPushButton("Import...");
         importProfileBtn->setObjectName(QStringLiteral("midiProfileImportButton"));
         importProfileBtn->setAccessibleName(QStringLiteral("Import MIDI profile"));
         importProfileBtn->setToolTip(QStringLiteral(
@@ -388,7 +438,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
                 &MidiMappingDialog::importProfileFromFile);
         btnRow->addWidget(importProfileBtn);
 
-        auto* exportProfileBtn = makeStyledButton("Export...");
+        auto* exportProfileBtn = new QPushButton("Export...");
         exportProfileBtn->setObjectName(QStringLiteral("midiProfileExportButton"));
         exportProfileBtn->setAccessibleName(QStringLiteral("Export MIDI profile"));
         exportProfileBtn->setToolTip(
@@ -401,13 +451,9 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         root->addWidget(group, 1);
     }
 
-    // ── Close button ────────────────────────────────────────────────────
-    auto* closeRow = new QHBoxLayout;
-    closeRow->addStretch();
-    auto* closeBtn = makeStyledButton("Close");
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-    closeRow->addWidget(closeBtn);
-    root->addLayout(closeRow);
+    // 40 px taller than before for the canon header, and never smaller than
+    // the layout needs at this theme's font.
+    setMinimumSize(QSize(700, 590).expandedTo(minimumSizeHint()));
 
     // ── Activity indicator ──────────────────────────────────────────────
     connect(m_manager, &MidiControlManager::midiActivity, this,
@@ -453,14 +499,9 @@ void MidiMappingDialog::importProfileFromFile()
 
     const QString fileName = QFileInfo(path).fileName();
     if (!result.ok()) {
-        ScopedChildWidget<FramelessMessageBox> boxOwner(this);
-        FramelessMessageBox& box = *boxOwner.get();
-        box.setIcon(QMessageBox::Warning);
-        box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
-        box.setText(QStringLiteral("No bindings were imported from %1.").arg(fileName));
-        box.setStandardButtons(QMessageBox::Ok);
-        box.setDetailedText(result.errors.join(QLatin1Char('\n')));
-        box.exec();
+        showNotice(QStringLiteral("Import MIDI Profile"),
+                   QStringLiteral("No bindings were imported from %1.").arg(fileName),
+                   QString(), result.errors.join(QLatin1Char('\n')));
         return;
     }
 
@@ -488,39 +529,23 @@ void MidiMappingDialog::importProfileFromFile()
                QStringLiteral("%1 duplicate row(s) were dropped."));
 
     if (result.importedCount == 0) {
-        ScopedChildWidget<FramelessMessageBox> boxOwner(this);
-        FramelessMessageBox& box = *boxOwner.get();
-        box.setIcon(QMessageBox::Warning);
-        box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
-        box.setText(QStringLiteral("No usable bindings in %1.").arg(fileName));
-        box.setStandardButtons(QMessageBox::Ok);
-        if (!informativeLines.isEmpty())
-            box.setInformativeText(informativeLines.join(QLatin1Char('\n')));
-        if (!detailLines.isEmpty())
-            box.setDetailedText(detailLines.join(QLatin1Char('\n')));
-        box.exec();
+        showNotice(QStringLiteral("Import MIDI Profile"),
+                   QStringLiteral("No usable bindings in %1.").arg(fileName),
+                   informativeLines.join(QLatin1Char('\n')),
+                   detailLines.join(QLatin1Char('\n')));
         return;
     }
 
     refreshProfileList();
     m_profileCombo->setCurrentText(result.profileName);
 
-    ScopedChildWidget<FramelessMessageBox> boxOwner(this);
-    FramelessMessageBox& box = *boxOwner.get();
-    box.setIcon(informativeLines.isEmpty() ? QMessageBox::Information
-                                           : QMessageBox::Warning);
-    box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
-    box.setText(QStringLiteral(
-                    "Imported %1 binding(s) from %2 as profile \"%3\". "
-                    "Click Load to apply it.")
-                    .arg(result.importedCount)
-                    .arg(fileName, result.profileName));
-    box.setStandardButtons(QMessageBox::Ok);
-    if (!informativeLines.isEmpty())
-        box.setInformativeText(informativeLines.join(QLatin1Char('\n')));
-    if (!detailLines.isEmpty())
-        box.setDetailedText(detailLines.join(QLatin1Char('\n')));
-    box.exec();
+    showNotice(QStringLiteral("Import MIDI Profile"),
+               QStringLiteral("Imported %1 binding(s) from %2 as profile \"%3\". "
+                              "Click Load to apply it.")
+                   .arg(result.importedCount)
+                   .arg(fileName, result.profileName),
+               informativeLines.join(QLatin1Char('\n')),
+               detailLines.join(QLatin1Char('\n')));
 }
 
 void MidiMappingDialog::exportProfileToFile()
@@ -532,7 +557,7 @@ void MidiMappingDialog::exportProfileToFile()
     }
     const auto bindings = manager->bindings();
     if (bindings.isEmpty()) {
-        FramelessMessageBox::information(this, QStringLiteral("Export MIDI Profile"),
+        showNotice(QStringLiteral("Export MIDI Profile"),
                                          QStringLiteral("There are no bindings to export."));
         return;
     }
@@ -562,15 +587,27 @@ void MidiMappingDialog::exportProfileToFile()
 
     const MidiExportResult result = MidiSettings::instance().exportProfile(path, bindings);
     if (!result.ok()) {
-        FramelessMessageBox::warning(this, QStringLiteral("Export MIDI Profile"),
+        showNotice(QStringLiteral("Export MIDI Profile"),
                                      result.error);
         return;
     }
-    FramelessMessageBox::information(
-        this, QStringLiteral("Export MIDI Profile"),
+    showNotice(QStringLiteral("Export MIDI Profile"),
         QStringLiteral("Exported %1 binding(s) to %2.")
             .arg(result.exportedCount)
             .arg(QFileInfo(path).fileName()));
+}
+
+void MidiMappingDialog::showNotice(const QString& title, const QString& text,
+                                   const QString& informative, const QString& details)
+{
+    ScopedChildWidget<CanonMessageBox> boxOwner(title, text, this);
+    CanonMessageBox& box = *boxOwner.get();
+    if (!informative.isEmpty())
+        box.setInformativeText(informative);
+    if (!details.isEmpty())
+        box.setDetailedText(details);
+    box.setDefaultButton(box.addButton(QStringLiteral("OK"), CanonMessageBox::Role::Accept));
+    box.exec();
 }
 
 void MidiMappingDialog::setPortStatus(const QString& text, const QString& colorToken)
@@ -678,7 +715,7 @@ bool MidiMappingDialog::connectToSelectedPort()
 
 void MidiMappingDialog::showEvent(QShowEvent* event)
 {
-    PersistentDialog::showEvent(event);
+    CanonWindow::showEvent(event);
     refreshPortList();
     // The Connect button and status line are also built once and can be
     // describing a connection state that changed while this window was
@@ -698,8 +735,7 @@ void MidiMappingDialog::showEvent(QShowEvent* event)
     if (!m_savesBlockedNoticeShown && MidiSettings::instance().savesBlocked()) {
         m_savesBlockedNoticeShown = true;
         QTimer::singleShot(0, this, [this] {
-            FramelessMessageBox::warning(
-                this, QStringLiteral("MIDI Changes Not Saved"),
+            showNotice(QStringLiteral("MIDI Changes Not Saved"),
                 QStringLiteral("AetherSDR couldn't read midi.settings at startup, so "
                                "MIDI binding and device preference changes won't be "
                                "saved this session. The file was left unchanged. "
@@ -707,6 +743,13 @@ void MidiMappingDialog::showEvent(QShowEvent* event)
                                "AetherSDR."));
         });
     }
+}
+
+void MidiMappingDialog::hideEvent(QHideEvent* event)
+{
+    if (m_manager && m_manager->isLearning())
+        m_manager->cancelLearn();
+    CanonWindow::hideEvent(event);
 }
 
 void MidiMappingDialog::refreshBindingTable()
@@ -732,6 +775,7 @@ void MidiMappingDialog::refreshBindingTable()
         // Invert checkbox
         auto* invertCheck = new QCheckBox;
         invertCheck->setChecked(b.inverted);
+        invertCheck->setAccessibleName(QString("Invert %1").arg(paramName));
         invertCheck->setStyleSheet("QCheckBox { padding-left: 10px; }");
         connect(invertCheck, &QCheckBox::toggled, this, [this, i](bool on) {
             if (i < m_manager->bindings().size()) {
@@ -745,6 +789,7 @@ void MidiMappingDialog::refreshBindingTable()
         // Relative checkbox (CC sends delta, not absolute position)
         auto* relCheck = new QCheckBox;
         relCheck->setChecked(b.relative);
+        relCheck->setAccessibleName(QString("Relative %1").arg(paramName));
         relCheck->setStyleSheet("QCheckBox { padding-left: 10px; }");
         connect(relCheck, &QCheckBox::toggled, this, [this, i](bool on) {
             if (i < m_manager->bindings().size()) {
@@ -785,9 +830,9 @@ void MidiMappingDialog::refreshBindingTable()
         // Delete button
         auto* delBtn = new QPushButton("×");
         delBtn->setFixedSize(24, 24);
-        delBtn->setStyleSheet(
-            "QPushButton { background: #602020; color: #ff6060; font-weight: bold; "
-            "border: 1px solid #803030; border-radius: 3px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(delBtn, kBtnGlyphDestructiveStyle);
+        delBtn->setToolTip("Remove this binding");
+        delBtn->setAccessibleName(QString("Remove binding for %1").arg(paramName));
         connect(delBtn, &QPushButton::clicked, this, [this, paramId = b.paramId] {
             m_manager->removeBinding(paramId);
             refreshBindingTable();
@@ -828,28 +873,34 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
     // mirrors that as a default so a typed VFO knob behaves like a learned one.
     const bool isVfoKnob = MidiControlManager::isVfoTuneKnob(stableParamId);
 
-    ScopedChildWidget<QDialog> dialogOwner(this);
-    QDialog& dlg = *dialogOwner.get();
-    dlg.setWindowTitle(existing ? "Edit MIDI Binding" : "Add MIDI Binding");
+    // A canon dialog in the window's scope, as Net Scheduler's editor is.
+    // Return on a field clicks OK, the default; Esc, the ✕ and Cancel add nothing.
+    const QString editorTitle = existing ? QStringLiteral("Edit MIDI Binding")
+                                         : QStringLiteral("Add MIDI Binding");
+    ScopedChildWidget<CanonWindow> dialogOwner(editorTitle, this);
+    CanonWindow& dlg = *dialogOwner.get();
     dlg.setModal(true);
     dlg.setObjectName("midiManualBindingDialog");
-    // checkBoxIndicatorStyle() is the #4013 fix for invisible indicators in
-    // dark themes; it returns an unresolved template, so it must ride through
-    // applyStyleSheet (not setStyleSheet) like the dialogs it came from.
-    AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg,
-        QString("QDialog { background: {{color.background.0}}; }"
-        "QLabel { color: {{color.text.primary}}; }"
-        "QCheckBox { color: {{color.text.primary}}; }"
-        "QComboBox, QSpinBox { background: {{color.background.1}}; "
-        "border: 1px solid {{color.border.strong}}; border-radius: 3px; "
-        "color: {{color.text.primary}}; font-size: 11px; padding: 2px 6px; }")
-        + ThemeManager::checkBoxIndicatorStyle());
+    theme::setContainer(&dlg, QStringLiteral("canon/midiMapping"));
+    applyCanonSheet(dlg.bodyWidget(), [] {
+        // OK is outlined in cyan as the default, as CanonMessageBox draws it.
+        return midiMappingSheet()
+             + QStringLiteral("QPushButton:default { color: {{color.canon.cyan}};"
+                              " border-color: {{color.canon.cyan}}; }");
+    });
 
-    auto* form = new QFormLayout(&dlg);
-    form->setLabelAlignment(Qt::AlignRight);
+    auto* editorRoot = new QVBoxLayout(dlg.bodyWidget());
+    editorRoot->setContentsMargins(14, 12, 14, 14);
+    editorRoot->setSpacing(10);
+    editorRoot->addWidget(makeCanonHeader(editorTitle));
+    auto* form = new QFormLayout;
+    form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     form->setSpacing(8);
+    editorRoot->addLayout(form);
 
-    form->addRow(new QLabel(QString("Binding for: %1").arg(paramLabel)));
+    auto* bindingFor = new QLabel(QString("Binding for: %1").arg(paramLabel));
+    bindingFor->setTextFormat(Qt::PlainText);
+    form->addRow(bindingFor);
 
     auto* channelCombo = new QComboBox(&dlg);
     channelCombo->setObjectName("manualChannelCombo");
@@ -891,10 +942,20 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
     relativeCheck->setObjectName("manualRelativeCheck");
     form->addRow(QString(), relativeCheck);
 
-    auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    form->addRow(box);
+    // Cancel, then OK at the far right, as CanonMessageBox lays out its row.
+    auto* buttonRow = new QHBoxLayout;
+    buttonRow->addStretch(1);
+    auto* cancelBtn = new QPushButton(QStringLiteral("Cancel"), &dlg);
+    cancelBtn->setObjectName(QStringLiteral("manualCancelButton"));
+    cancelBtn->setAutoDefault(false);
+    auto* okBtn = new QPushButton(QStringLiteral("OK"), &dlg);
+    okBtn->setObjectName(QStringLiteral("manualOkButton"));
+    okBtn->setDefault(true);
+    connect(cancelBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+    connect(okBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+    buttonRow->addWidget(cancelBtn);
+    buttonRow->addWidget(okBtn);
+    editorRoot->addLayout(buttonRow);
 
     if (existing) {
         const int chIdx = channelCombo->findData(existing->channel);
@@ -930,6 +991,8 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
     };
     connect(typeCombo, &QComboBox::currentIndexChanged, &dlg, refreshFieldStates);
     refreshFieldStates();
+    // The Dialog-scale field padding (12 px) plus the 1 px border.
+    ModemChrome::insetSpinText(&dlg, 13);
 
     const int dialogResult = dlg.exec();
     if (!self || !dialogOwner || !manager || dialogResult != QDialog::Accepted) {
@@ -971,19 +1034,27 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
         }
     }
     if (!shadowedIds.isEmpty()) {
-        const auto answer = FramelessMessageBox::question(
-            this, "Source Already Bound",
-            QString("%1 is already bound to:\n  %2\n\n"
-                    "Two bindings on the same or overlapping source cannot "
-                    "both respond on the channel they share — the older one "
-                    "would silently stop working there.\n\n"
-                    "Replace the existing binding%3?")
-                .arg(b.sourceDisplayName(), shadowedNames.join("\n  "),
-                     shadowedIds.size() > 1 ? QStringLiteral("s") : QString()));
-        if (!self || !manager) {
+        // Replacing removes bindings: Cancel is the default, and Cancel,
+        // Return, Esc or the ✕ replace nothing.
+        const QString plural = shadowedIds.size() > 1 ? QStringLiteral("s") : QString();
+        ScopedChildWidget<CanonMessageBox> boxOwner(
+            QStringLiteral("Source Already Bound"),
+            QString("%1 is already bound to:").arg(b.sourceDisplayName()), this);
+        CanonMessageBox& box = *boxOwner.get();
+        box.setDetailedText(shadowedNames.join(QLatin1Char('\n')));
+        box.setInformativeText(
+            QString("Two bindings on the same or overlapping source cannot both "
+                    "respond on the channel they share — the older one would "
+                    "silently stop working there.\n\nReplace the existing binding%1?")
+                .arg(plural));
+        auto* cancel = box.addButton(QStringLiteral("Cancel"), CanonMessageBox::Role::Reject);
+        auto* replace = box.addButton(QStringLiteral("Replace"), CanonMessageBox::Role::Destructive);
+        box.setDefaultButton(cancel);
+        box.exec();
+        if (!self || !manager || !boxOwner) {
             return;
         }
-        if (answer != FramelessMessageBox::Yes)
+        if (box.clickedButton() != replace)
             return;
         for (const auto& id : shadowedIds)
             manager->removeBinding(id);

@@ -2,7 +2,7 @@
 
 #ifdef HAVE_MIDI
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QTableWidget>
 #include <QComboBox>
@@ -18,7 +18,9 @@ struct MidiBinding;
 // controller bindings. Opened from Settings → Controllers → MIDI Mapping.
 // Shows device selector, binding table with Learn mode, and profile
 // save/load. All bindings stored in ~/.config/AetherSDR/midi.settings.
-class MidiMappingDialog : public PersistentDialog {
+// A canon workspace (RFC #6226, #7040) for the MIDI device, the parameter
+// bindings and their profiles.
+class MidiMappingDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -29,6 +31,10 @@ protected:
     // device list changed. Normal MainWindow close deletes the dialog via
     // WA_DeleteOnClose; the next open constructs a fresh instance.
     void showEvent(QShowEvent* event) override;
+    // Every close path ends in a hide (Esc and Ctrl+W send no close event):
+    // a Learn still armed then would capture the next controller message
+    // with no window left to save it.
+    void hideEvent(QHideEvent* event) override;
 
 private:
     // Repopulates m_portCombo from a live enumeration, carrying each port's
@@ -40,6 +46,9 @@ private:
     // the named port is no longer there.
     bool connectToSelectedPort();
     void setPortStatus(const QString& text, const QString& colorToken);
+    // A canon notice with one OK button; `details`, if any, in its list.
+    void showNotice(const QString& title, const QString& text,
+                    const QString& informative = {}, const QString& details = {});
     void refreshBindingTable();
     void refreshProfileList();
     // Manual add/edit form (#4760). One form serves both the "Manual…" button

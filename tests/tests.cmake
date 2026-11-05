@@ -2396,6 +2396,28 @@ add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
 set_tests_properties(callsign_lookup_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# MIDI Controller Mapping on CanonWindow (#7040): a canon workspace whose
+# manual editor is a canon dialog, whose shared-source question defaults to
+# Cancel, and whose every close path cancels a waiting Learn. No port opened.
+add_executable(midi_mapping_dialog_test
+    tests/midi_mapping_dialog_test.cpp
+    src/gui/MidiMappingDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(midi_mapping_dialog_test PRIVATE src tests)
+target_link_libraries(midi_mapping_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(midi_mapping_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME midi_mapping_dialog_test COMMAND midi_mapping_dialog_test)
+set_tests_properties(midi_mapping_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
+
 # The CTR2 window (FirmwareInstallDialog): with only another kind of
 # controller selected it shows the relay alone, and its height follows the
 # CTR2-Max part as it hides and shows. Socket-free: device lists injected, no
@@ -10732,6 +10754,7 @@ set(AETHER_SETTINGS_CONSUMERS
     theme_manager_test
     canon_window_test
     callsign_lookup_dialog_test
+    midi_mapping_dialog_test
     canon_message_box_test
     shortcut_dialog_test
     reset_settings_prompts_test
