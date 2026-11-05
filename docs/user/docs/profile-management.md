@@ -85,7 +85,7 @@ The **PROF** applet ("Profile Switcher", in the Station group of the applet butt
 
 It opens in a window of its own that remembers its size and position. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). **Cancel** at the bottom stops a transfer that is still in progress. Closing the window while a transfer runs asks first: **Keep Transferring** (the default) leaves it running, **Cancel Transfer** stops it and closes the window. Once an import package has finished uploading, the radio is applying it: cancelling then only stops AetherSDR from waiting, and the radio finishes the import anyway.
 
-<img src="/img/screens/profile-import-export.png" width="560" alt="Import/Export Profiles window on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and Cancel and Close buttons." />
+<img src="/img/screens/profile-import-export.png" width="560" alt="Import/Export Profiles window, with a round close button in its top-right corner, on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and a Cancel button." />
 
 *The Import/Export Profiles window, on the Export tab. The destination path is blacked out.*
 
