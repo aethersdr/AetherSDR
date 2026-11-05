@@ -53,7 +53,7 @@ CW settings, kept as named profiles on radios running SmartSDR v4.3.16 or later.
 
 On each profile tab:
 
-<img src="/img/screens/profile-manager.png" width="460" alt="Profile Manager window with tabs Global, Transmit, Microphone and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF. A Close button sits at the bottom." />
+<img src="/img/screens/profile-manager.png" width="460" alt="Profile Manager window with a round close button in its top-right corner and tabs Global, Transmit, Microphone, CW and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF." />
 
 *The Profile Manager, listing the global profiles stored in the radio.*
 
