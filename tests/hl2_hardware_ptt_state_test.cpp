@@ -1,5 +1,7 @@
-// #5998: the HL2's own PTT/key input (EP6 ptt_resp) is an observation. It moves the
-// transmit state and mutes receive; it never keys, modulates or touches drive.
+// #5998: the HL2's own PTT/key input (EP6 ptt_resp) is an observation. In the
+// backend it moves the transmit state and mutes receive; it never keys, modulates
+// or touches drive. RadioModel follows it with a host key through the gated
+// producer path, so the front-panel PTT modulates like MOX, and releases only that.
 // Socket-free: EP6 status frames go into the backend's own MetisClient on its I/O
 // thread. The silence leg waits out MetisClient's real silence timeout once.
 
@@ -437,7 +439,7 @@ void installTxSlice(RadioModel& model)
     model.slice(0)->applyChanges(delta);
 }
 
-void testModelFollowsWithoutIntent()
+void testModelKeysForRadioPtt()
 {
     std::printf("\n  RadioModel on an HL2\n");
     RadioModel model;
@@ -456,12 +458,6 @@ void testModelFollowsWithoutIntent()
     QList<bool> edges;
     QObject::connect(&model, &RadioModel::radioTransmittingChanged, &model,
                      [&edges](bool tx) { edges << tx; });
-    int moxSignals = 0;
-    int moxCommands = 0;
-    QObject::connect(&model.transmitModel(), &TransmitModel::moxChanged, &model,
-                     [&moxSignals](bool) { ++moxSignals; });
-    QObject::connect(&model.transmitModel(), &TransmitModel::moxCommandIssued, &model,
-                     [&moxCommands](bool) { ++moxCommands; });
 
     // An earlier host transmission leaves the model and backend a live operation.
     model.transmitModel().setMox(true);
@@ -469,26 +465,40 @@ void testModelFollowsWithoutIntent()
     check(edges == (QList<bool>{true, false}) && !Access::hostMoxOnWire(*backend),
           "control: a host MOX cycle is one transmission");
     edges.clear();
-    moxSignals = 0;
-    moxCommands = 0;
 
     Access::radioPtt(*backend, true);
     check(edges == QList<bool>{true}, "radio PTT raises radioTransmittingChanged");
     check(model.isRadioTransmitting(), "isRadioTransmitting() follows the radio");
-    check(!model.transmitModel().isTransmitting(), "the MOX intent state is untouched");
-    check(moxSignals == 0 && moxCommands == 0, "no MOX signal and no MOX command");
-    check(!Access::hostMoxOnWire(*backend), "the model keys nothing");
-
-    model.transmitModel().setMox(true);
-    check(Access::hostMoxOnWire(*backend), "control: host MOX still keys");
-    model.transmitModel().setMox(false);
-    check(!Access::hostMoxOnWire(*backend), "host MOX-off unkeys the host");
-    check(model.isRadioTransmitting(), "host MOX-off does not clear a PTT the radio reports");
-    check(edges == QList<bool>{true}, "the overlap is one transmission");
+    check(Access::hostMoxOnWire(*backend), "radio PTT keys the host modulator");
+    check(model.transmitModel().isTransmitting(), "through the model's own keying path");
 
     Access::radioPtt(*backend, false);
-    check(edges == (QList<bool>{true, false}), "the radio's falling edge ends it");
+    check(!Access::hostMoxOnWire(*backend), "the radio's falling edge unkeys the host");
+    check(!model.transmitModel().isTransmitting(), "and releases the model's intent");
+    check(edges == (QList<bool>{true, false}), "the press is one transmission");
     check(!model.isRadioTransmitting(), "back to receive");
+    edges.clear();
+
+    // A host key held before the radio's PTT owns its own release.
+    model.transmitModel().setMox(true);
+    Access::radioPtt(*backend, true);
+    Access::radioPtt(*backend, false);
+    check(Access::hostMoxOnWire(*backend), "the radio's release leaves a host MOX keyed");
+    check(model.isRadioTransmitting(), "and the transmission running");
+    model.transmitModel().setMox(false);
+    check(!Access::hostMoxOnWire(*backend), "host MOX-off unkeys the host");
+    check(edges == (QList<bool>{true, false}), "the overlap is one transmission");
+    edges.clear();
+
+    // CW: the radio's own keyer raises the same PTT, and the CW path keys itself.
+    SliceDelta cw;
+    cw.mode = QStringLiteral("CW");
+    model.slice(0)->applyChanges(cw);
+    Access::radioPtt(*backend, true);
+    check(!Access::hostMoxOnWire(*backend), "in CW the radio's PTT keys nothing");
+    check(model.isRadioTransmitting(), "in CW the radio's PTT is still shown");
+    Access::radioPtt(*backend, false);
+    check(!model.isRadioTransmitting(), "in CW the falling edge ends it");
     Access::tearDown(*backend);
 }
 
@@ -543,6 +553,11 @@ void testUndeclaredBackendIsUnchanged()
     model.setTransmit(false, TransmitModel::PttSource::Mox);
     check(!model.isRadioTransmitting(),
           "without the record the command edge still clears the state");
+    TransmitDelta ptt;
+    ptt.radioPtt = true;
+    model.applyBackendTransmitDeltaForTest(ptt);
+    check(!model.transmitModel().isTransmitting(),
+          "a radioPtt from an undeclared backend keys nothing");
 }
 
 }  // namespace
@@ -558,7 +573,7 @@ int main(int argc, char** argv)
     testHostKeyOverlapsRadioPtt();
     testTxMonitorHearsRadioPtt();
     testLinkLossFailsToReceive();
-    testModelFollowsWithoutIntent();
+    testModelKeysForRadioPtt();
     testUndeclaredBackendIsUnchanged();
 
     std::printf("\n%s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,
