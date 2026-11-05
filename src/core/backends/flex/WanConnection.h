@@ -62,6 +62,8 @@ public:
     quint64 commandSessionGeneration() const { return m_sessionGeneration; }
     void forgetSessionReply(quint32 sequence, quint64 generation)
     { if (generation == m_sessionGeneration) { m_pendingCallbacks.remove(sequence); } }
+    quint32 sendSessionCommand(const QString& command, quint64 generation,
+                               const SessionCommandGuard& guard, ResponseCallback callback = {});
     quint32 sendAdministrationCommand(const QString& command, quint64 generation,
         const SessionCommandGuard& guard, ResponseCallback callback);
 
@@ -105,6 +107,7 @@ private slots:
 
 private:
     friend class WanConnectionTestAccess;
+    friend class SessionControlTestAccess;
     friend class RadioAdministrationTestAccess;
 
     void processLine(const QString& line);

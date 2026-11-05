@@ -408,6 +408,14 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
         << " totalMs=" << totalTimer.elapsed();
 }
 
+bool RadioConnection::writeSessionCommand(quint32 seq, const QString& command,
+                                          quint64 generation, const SessionCommandGuard& guard)
+{
+    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return false; }
+    writeCommand(seq, command);
+    return true;
+}
+
 bool RadioConnection::writeAdministrationCommand(quint32 seq, const QString& command,
     quint64 generation, const SessionCommandGuard& guard)
 {

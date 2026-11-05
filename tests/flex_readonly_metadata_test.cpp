@@ -4,6 +4,7 @@
 #include "core/AppSettings.h"
 #include "core/AutomationServer.h"
 #include "core/backends/RadioDelta.h"
+#include "core/backends/SessionCommandGuard.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
@@ -74,6 +75,14 @@ public:
 
 class RadioNicknameTestAccess {
 public:
+    static void beginSession(RadioModel& radio)
+    {
+        radio.resetSessionControls();
+        radio.m_txSessionClosing = false;
+        radio.m_sessionCommands = SessionCommandGuard::create();
+        radio.m_sessionWire = radio.m_connection;
+        radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
+    }
     static void requestInfo(RadioModel& radio) { radio.requestRadioInfo(); }
     static RadioConnection::ResponseCallback callback(RadioModel& radio, quint32 seq)
     {
@@ -124,13 +133,18 @@ struct Fixture {
         if (!backend) {
             return false;
         }
-        RadioConnectionSessionTestAccess::capture(*backend->connection(), &wireCommands, &wireRequests);
+        attach();
         backend->setSliceCommandSink([this](const QString& command) {
             sliceCommands.append(command);
         });
         radio.handleSliceStatusForTest(0, sliceStatus());
         clearCommands();
         return radio.slice(0) != nullptr;
+    }
+    void attach()
+    {
+        RadioConnectionSessionTestAccess::capture(*backend->connection(), &wireCommands, &wireRequests);
+        RadioNicknameTestAccess::beginSession(radio);
     }
     void clearCommands()
     {
@@ -466,9 +480,9 @@ private slots:
         const quint64 oldModels = RadioNicknameTestAccess::modelGeneration(f.radio);
         const quint64 oldBackend = RadioNicknameTestAccess::backendGeneration(f.radio);
         RadioNicknameTestAccess::disconnect(f.radio);
-        // Reopen only transport admission: no connect callback can start the
-        // UDP stream, and the session guard is tested without a model edge.
-        RadioConnectionSessionTestAccess::capture(*f.backend->connection(), &f.wireCommands, &f.wireRequests);
+        // Establish the next guarded session without invoking the connection
+        // handshake or UDP startup; model and backend generations stay fixed.
+        f.attach();
         QVERIFY(RadioNicknameTestAccess::session(f.radio) != oldSession);
         QCOMPARE(RadioNicknameTestAccess::modelGeneration(f.radio), oldModels);
         QCOMPARE(RadioNicknameTestAccess::backendGeneration(f.radio), oldBackend);
@@ -529,7 +543,7 @@ private slots:
         QVERIFY(RadioNicknameTestAccess::backendGeneration(f.radio) != oldBackend);
         QCOMPARE(RadioNicknameTestAccess::session(f.radio), oldSession);
         QCOMPARE(RadioNicknameTestAccess::modelGeneration(f.radio), oldModels);
-        RadioConnectionSessionTestAccess::capture(*f.backend->connection(), &f.wireCommands, &f.wireRequests);
+        f.attach();
         const quint32 current = f.requestInfo();
         QVERIFY(current != 0);
         QCOMPARE(f.wireCommands, QStringList{QStringLiteral("info")});

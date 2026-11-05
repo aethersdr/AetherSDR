@@ -191,6 +191,13 @@ void WanConnection::disconnectFromRadio()
 
 // ─── Command dispatch ────────────────────────────────────────────────────────
 
+quint32 WanConnection::sendSessionCommand(const QString& command, quint64 generation,
+                                          const SessionCommandGuard& guard, ResponseCallback callback)
+{
+    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return 0; }
+    return sendCommand(command, std::move(callback));
+}
+
 quint32 WanConnection::sendAdministrationCommand(const QString& command, quint64 generation,
     const SessionCommandGuard& guard, ResponseCallback callback)
 {
