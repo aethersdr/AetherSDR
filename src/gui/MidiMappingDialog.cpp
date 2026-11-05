@@ -354,15 +354,20 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         auto* saveProfileBtn = new QPushButton("Save");
         saveProfileBtn->setObjectName(QStringLiteral("midiProfileSaveButton"));
         saveProfileBtn->setAccessibleName(QStringLiteral("Save MIDI profile"));
-        saveProfileBtn->setToolTip(
-            QStringLiteral("Save the current bindings as a named profile"));
         // No name means no target: show that before the click rather than
-        // letting Save silently do nothing. (#5077)
-        saveProfileBtn->setEnabled(!m_profileCombo->currentText().trimmed().isEmpty());
-        connect(m_profileCombo, &QComboBox::currentTextChanged, saveProfileBtn,
-                [saveProfileBtn](const QString& text) {
-                    saveProfileBtn->setEnabled(!text.trimmed().isEmpty());
-                });
+        // letting Save silently do nothing (#5077), and say why on the
+        // accessible channel as well as the tooltip.
+        const auto updateSaveState = [saveProfileBtn](const QString& text) {
+            const bool named = !text.trimmed().isEmpty();
+            saveProfileBtn->setEnabled(named);
+            const QString reason = named
+                ? QStringLiteral("Save the current bindings as a named profile")
+                : QStringLiteral("Type a profile name to save the current bindings");
+            saveProfileBtn->setToolTip(reason);
+            saveProfileBtn->setAccessibleDescription(reason);
+        };
+        updateSaveState(m_profileCombo->currentText());
+        connect(m_profileCombo, &QComboBox::currentTextChanged, saveProfileBtn, updateSaveState);
         connect(saveProfileBtn, &QPushButton::clicked, this, [this] {
             QString name = m_profileCombo->currentText().trimmed();
             if (name.isEmpty()) return;  // unreachable while disabled; kept as the guard
@@ -747,7 +752,10 @@ void MidiMappingDialog::showEvent(QShowEvent* event)
 
 void MidiMappingDialog::hideEvent(QHideEvent* event)
 {
-    if (m_manager && m_manager->isLearning())
+    // A spontaneous hide is the OS minimising the window (Win+D, the macOS
+    // Dock): the operator may be reaching for the controller, so Learn stays
+    // armed. Closing sends a real hide, minimised or not.
+    if (!event->spontaneous() && m_manager && m_manager->isLearning())
         m_manager->cancelLearn();
     CanonWindow::hideEvent(event);
 }

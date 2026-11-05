@@ -23,6 +23,10 @@
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QTest>
+#include <QAbstractScrollArea>
+#include <QHideEvent>
+#include <QToolButton>
+#include <QtTest/qtestspontaneevent.h>
 #include <QTimer>
 #include <cstdio>
 #include <functional>
@@ -136,10 +140,6 @@ void canonWorkspace()
             for (const char* hex : {"#30d050", "#808080", "#602020", "#ff6060", "#008ba8", "#8aa8c0"})
                 literal = literal || widget->styleSheet().contains(QLatin1String(hex), Qt::CaseInsensitive);
         check(!literal, "the old hard-coded colours are gone");
-        check(dialog.minimumHeight() <= 700, "the minimum height fits a 768 px screen");
-        check(dialog.minimumHeight() >= dialog.minimumSizeHint().height()
-                  && dialog.minimumWidth() >= dialog.minimumSizeHint().width(),
-              "the minimum size is never smaller than the layout's");
         // Learn is drawn outlined in canon cyan, Manual… in the plain line
         // colour: read the drawn top edge, mid-way along each button.
         auto* learn = dialog.findChild<QPushButton*>("midiLearnButton");
@@ -171,6 +171,80 @@ void canonWorkspace()
     tm.setActiveTheme(before);
 }
 
+// At the smallest size the shown window allows, every control outside the
+// table keeps the height it needs. Measured shown, in both themes: the
+// constructor's hint comes before the canon sheet.
+void legibleAtMinimum()
+{
+    MidiControlManager manager;
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        tm.setActiveTheme(QLatin1String(theme));
+        MidiMappingDialog dialog(&manager);
+        dialog.show();
+        QTest::qWaitForWindowExposed(&dialog);
+        dialog.resize(QSize(1, 1));
+        QTest::qWait(50);
+        bool legible = true;
+        for (QWidget* w : dialog.bodyWidget()->findChildren<QWidget*>()) {
+            if (!w->isVisible()) continue;
+            bool inTable = false;
+            for (QWidget* p = w->parentWidget(); p && p != &dialog; p = p->parentWidget())
+                inTable = inTable || qobject_cast<QAbstractScrollArea*>(p) != nullptr;
+            // A combo box sizes its own editor; judge the combo, not its parts.
+            if (inTable || qobject_cast<QComboBox*>(w->parentWidget())) continue;
+            if (w->height() < w->minimumSizeHint().height()) {
+                legible = false;
+                std::printf("  %s: %s h=%d need=%d\n", theme, w->metaObject()->className(),
+                            w->height(), w->minimumSizeHint().height());
+            }
+        }
+        std::printf("  %s: shown minimum %dx%d\n", theme, dialog.width(), dialog.height());
+        check(legible, "every control keeps its height at the smallest size");
+        check(dialog.height() <= 700, "the shown minimum height fits a 768 px screen");
+        dialog.hide();
+    }
+    tm.setActiveTheme(before);
+}
+
+// The disabled Save says why on the accessible channel, not only the tooltip.
+void saveSaysWhy()
+{
+    MidiControlManager manager;
+    MidiMappingDialog dialog(&manager);
+    auto* save = dialog.findChild<QPushButton*>("midiProfileSaveButton");
+    auto* profile = dialog.findChild<QComboBox*>("midiProfileCombo");
+    if (!save || !profile) { check(false, "Save and the profile field exist"); return; }
+    profile->setCurrentText(QString());
+    check(!save->isEnabled() && save->accessibleDescription().contains("Type a profile name")
+              && save->toolTip() == save->accessibleDescription(),
+          "a disabled Save gives its reason to screen readers and the tooltip alike");
+    profile->setCurrentText(QStringLiteral("Contest"));
+    check(save->isEnabled() && !save->accessibleDescription().contains("Type a profile name"),
+          "a named Save describes what it does");
+}
+
+// Minimising (a spontaneous hide from the OS) leaves a Learn armed; closing
+// still cancels it.
+void minimiseKeepsLearn()
+{
+    MidiControlManager manager;
+    registerParams(manager);
+    MidiMappingDialog dialog(&manager);
+    dialog.show();
+    QTest::qWaitForWindowExposed(&dialog);
+    manager.startLearn(QStringLiteral("rx.afGain"));
+    QHideEvent minimise;
+    QSpontaneKeyEvent::setSpontaneous(&minimise);
+    // Delivered directly: QCoreApplication::sendEvent() clears the
+    // spontaneous flag, which is the one thing this case is about.
+    static_cast<QObject&>(dialog).event(&minimise);
+    check(manager.isLearning(), "a minimise (spontaneous hide) leaves Learn armed");
+    dialog.hide();
+    check(!manager.isLearning(), "a real hide cancels it");
+}
+
 // Every way out destroys the WA_DeleteOnClose window, and cancels a Learn.
 void closePathsCancelLearn()
 {
@@ -183,8 +257,21 @@ void closePathsCancelLearn()
         const bool exposed = QTest::qWaitForWindowExposed(dialog);
         manager.startLearn(QStringLiteral("rx.afGain"));
         if (path == 0) QTest::keyClick(dialog, Qt::Key_Escape);
-        if (path == 1) QTest::keySequence(dialog, QKeySequence::Close);
-        if (path == 2) dialog->close();
+        if (path == 1) {
+            // A window shortcut: it needs the window active, which a desktop
+            // gives a newly shown window but a background test process may not.
+            dialog->activateWindow();
+            QTest::qWaitForWindowActive(dialog);
+            QTest::keySequence(dialog, QKeySequence::Close);
+        }
+        if (path == 2) {
+            // Press the corner ✕ itself, so its connection is pinned too.
+            QToolButton* corner = nullptr;
+            for (QToolButton* b : dialog->findChildren<QToolButton*>())
+                if (b->accessibleName() == QLatin1String("Close")) corner = b;
+            check(corner != nullptr, "the corner close button exists");
+            if (corner) QTest::mouseClick(corner, Qt::LeftButton);
+        }
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         check(exposed && dialog.isNull(),
               path == 0 ? "Esc destroys the window"
@@ -330,6 +417,9 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
 
     canonWorkspace();
+    legibleAtMinimum();
+    saveSaysWhy();
+    minimiseKeepsLearn();
     closePathsCancelLearn();
     returnInProfileFieldClicksNothing();
     manualEditorAndSourceQuestion();
