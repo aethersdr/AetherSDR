@@ -8,8 +8,8 @@
 #include "core/WsprAgentClient.h"
 #include "models/RadioModel.h"
 
-#include <QCloseEvent>
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
 #include <QFrame>

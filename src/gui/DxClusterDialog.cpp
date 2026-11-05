@@ -1863,8 +1863,7 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
         if (m_wsprFeed->isRunning()) {
             m_wsprFeed->stop();
         } else if (m_radioModel) {
-            // An unreachable address makes start() report why.
-            m_wsprFeed->start(m_radioModel->isWan() ? QHostAddress() : m_radioModel->radioAddress());
+            m_wsprFeed->start(m_radioModel->radioAddress());
         }
     });
     btnRow->addWidget(m_wsprStartBtn);
@@ -1970,11 +1969,18 @@ void DxClusterDialog::updateWsprControls()
     const bool running = m_wsprFeed && m_wsprFeed->isRunning();
     const bool connected = m_radioModel && m_radioModel->isConnected();
     m_wsprStartBtn->setText(running ? tr("Stop") : tr("Start"));
-    m_wsprStartBtn->setEnabled(m_wsprFeed && (running || connected));
-    const QString why = connected ? QString() : tr("Connect to a radio first.");
+    const bool runsWaveforms = connected && m_radioModel->backendCapabilities().hasWaveforms;
+    const bool reachable = runsWaveforms
+        && wspr::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress());
+    m_wsprStartBtn->setEnabled(m_wsprFeed && (running || reachable));
+    const QString why = !connected        ? tr("Connect to a radio first.")
+                        : !runsWaveforms  ? tr("This radio doesn't run waveforms.")
+                        : !reachable      ? tr("The WSPR receiver can be reached only on the radio's local "
+                                               "network or through Remote Access.")
+                                          : QString();
     m_wsprStartBtn->setToolTip(why);
     m_wsprStartBtn->setAccessibleDescription(why);
-    m_wsprConfigureBtn->setEnabled(connected);
+    m_wsprConfigureBtn->setEnabled(reachable);
     m_wsprConfigureBtn->setToolTip(why);
     m_wsprConfigureBtn->setAccessibleDescription(why);
 }

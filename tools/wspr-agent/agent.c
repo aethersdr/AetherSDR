@@ -1573,6 +1573,32 @@ static int selftest_radio_lines(void)
     return 0;
 }
 
+/* A POST that can't be stored is refused and changes nothing: not the live
+ * settings, and not the claim. Driven through the real request handler. */
+static int selftest_save_failure(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
+    config_default(&G.cfg);
+    G.token[0] = 0;
+    snprintf(G.state_path, sizeof G.state_path, "%s/no/such/dir", g_work);
+    const char body[] = "{\"band\":\"40m\"}";
+    char req[200], reply[256] = "";
+    int l = snprintf(req, sizeof req, "POST /v1/config HTTP/1.0\r\nContent-Length: %zu\r\n\r\n%s", strlen(body), body);
+    if (write(sv[0], req, (size_t)l) != l) return 1;
+    serve(sv[1]);
+    ssize_t k = read(sv[0], reply, sizeof reply - 1);
+    close(sv[0]);
+    close(sv[1]);
+    int fail = k <= 0 || !strstr(reply, " 500 ") || strstr(reply, "admin_token")
+        || strcmp(G.cfg.band, "20m") || G.token[0];
+    config_default(&G.cfg);
+    G.state_path[0] = 0;
+    G.token[0] = 0;
+    if (fail) { printf("selftest FAIL: an unsaved POST was accepted\n"); return 1; }
+    return 0;
+}
+
 /* Upload off leaves nothing queued; on keeps the queue. */
 static int selftest_upload_off(void)
 {
@@ -1591,7 +1617,7 @@ static const char *BAD_GRIDS[] = {"ZZ99", "AA00zz", "D18P", "DN1", "DN18p", "123
 static int selftest(double snr_db)
 {
     if (selftest_persistence() || selftest_spots() || selftest_upload_off()
-        || selftest_busy_cycle() || selftest_radio_lines()) return 1;
+        || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
         if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
     if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }
