@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 // #6506: production receive routing and firmware status, injected without sockets.
 #include "TestSettingsProfile.h"
 #include "core/AgcTCalibrator.h"
@@ -120,16 +121,16 @@ void wireAndParser()
           "exact FlexLib mode commands carry no threshold, speed or off-level field");
     SliceModel slice(2);
     QSignalSpy requests(&slice, &SliceModel::receiveAgcThresholdModeRequested);
-    QObject::connect(&flex, &IRadioBackend::sliceChanged, &slice,
-                     [&](int, const SliceDelta& delta) { slice.applyChanges(delta); });
+    QObject::connect(&flex, &IRadioBackend::sliceObserved, &slice,
+                     [&](const SliceObservation& observation) { slice.applyChanges(observation.values); });
     for (const QString& invalid : {QStringLiteral("AUTO"), QStringLiteral("Manual"), QStringLiteral("1"),
                                   QStringLiteral("auto "), QString()}) {
-        flex.decodeSliceStatus(2, {{QStringLiteral("agc_threshold_mode"), invalid}});
+        publishFlexSliceStatus(flex, 2, {{QStringLiteral("agc_threshold_mode"), invalid}});
         check(!slice.agcThresholdMode(), "invalid mode status leaves observation unknown");
     }
-    flex.decodeSliceStatus(2, {{QStringLiteral("agc_threshold_mode"), QStringLiteral("auto")}});
+    publishFlexSliceStatus(flex, 2, {{QStringLiteral("agc_threshold_mode"), QStringLiteral("auto")}});
     check(slice.agcThresholdMode() == AgcThresholdMode::Automatic, "radio auto status is authoritative");
-    flex.decodeSliceStatus(2, {{QStringLiteral("agc_threshold_mode"), QStringLiteral("manual")}});
+    publishFlexSliceStatus(flex, 2, {{QStringLiteral("agc_threshold_mode"), QStringLiteral("manual")}});
     check(slice.agcThresholdMode() == AgcThresholdMode::Manual && requests.isEmpty() && commands.size() == 2,
           "radio manual status changes observation without command feedback");
 }

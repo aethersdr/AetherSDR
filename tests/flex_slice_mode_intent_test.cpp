@@ -1,3 +1,4 @@
+#include "FlexSliceStatusTestSupport.h"
 // Socket-free regression requested in #5924's maintainer review. Capture only
 // real FlexBackend seam dispatches; no radio, simulator peer or transport opens.
 #include "TestSettingsProfile.h"
@@ -40,7 +41,7 @@ int main(int argc, char** argv)
     flex->setSliceCommandSink([&](const QString& command) { commands << command; });
     const QMap<QString, QString> status{{"in_use", "1"}, {"RF_frequency", "14.200000"},
         {"mode", "USB"}, {"active", "1"}};
-    model.handleSliceStatusForTest(0, status, false);
+    applyFlexSliceStatus(model, 0, status, false);
     SliceModel* slice = model.slice(0);
     check(slice != nullptr, "slice zero materializes through real status handling");
     if (!slice) { return 1; }
@@ -49,7 +50,7 @@ int main(int argc, char** argv)
     check(commands == QStringList{QStringLiteral("slice set 0 mode=LSB")},
           "one mode intent reaches the Flex seam exactly once");
     check(slice->mode() == QLatin1String("LSB"), "Flex mode retains optimistic publication");
-    model.handleSliceStatusForTest(0, status, false);
+    applyFlexSliceStatus(model, 0, status, false);
     commands.clear();
     slice->setMode(QStringLiteral("CW"));
     check(commands == QStringList{QStringLiteral("slice set 0 mode=CW")},

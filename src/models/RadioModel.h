@@ -882,7 +882,7 @@ public:
     // states for any global slice index: ours (we have a SliceModel for
     // it), foreign (another client owns it — we have no SliceModel but
     // know the slot is taken), and empty (neither).  Updated by
-    // handleSliceStatus() as slice ownership comes in.
+    // applySliceObservation() as slice ownership comes in.
     bool isSlotOurs(int sliceId) const;
     bool isSlotForeign(int sliceId) const;
     // Station name of the client occupying a foreign slot, or empty string
@@ -1703,7 +1703,9 @@ private:
     void applyMemoryChanges(const MemoryDelta& delta);
     void reportMemoryImportFailure(const QString& reason);
     void applyProfileChanges(const ProfileDelta& delta);
-    void handleSliceStatus(int id, const QMap<QString, QString>& kvs, bool removed);
+    void applySliceObservation(const SliceObservation& observation);
+    void initializeObservedSlice(SliceModel* slice);
+    void retireObservedSlice(int id, bool keepForeign);
     void scheduleDStarRuntimeConfiguration();
     void applyPendingDStarRuntimeConfiguration();
     void syncDigitalVoiceTxSelection(bool force = false);
@@ -1962,9 +1964,9 @@ public:
         return backendPanIdFor(modelPanId);
     }
     static QString neutralPanIdStringForTest(int panIdx);
-    void handleSliceStatusForTest(int id, const QMap<QString, QString>& kvs, bool removed = false)
+    void applySliceObservationForTest(const SliceObservation& observation)
     {
-        handleSliceStatus(id, kvs, removed);
+        applySliceObservation(observation);
     }
     // Feed a decoded status line straight into the router. Used to pin the TNF
     // removal-status handling — the wire says the notch is gone, and the router
@@ -2102,6 +2104,8 @@ private:
     quint64 m_fullDuplexObservationRevision{0};
     quint64 m_txSliceSelectionRevision{0};
     quint64 m_backendReceiverGeneration = 0;
+    quint64 m_sliceObservationRevision = 0;
+    QHash<int, quint64> m_activeSliceObservations;
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
     // Remaining selection bindings and initial global lock observation.
     // Both helpers must be called at every SliceModel construction site.

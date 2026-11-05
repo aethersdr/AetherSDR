@@ -910,6 +910,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexSetupControls.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexSliceStatus.cpp
     src/core/backends/flex/FlexCwxControls.cpp
     src/core/backends/flex/FlexWaveformEnvControls.cpp
     src/core/backends/flex/FlexNtpSourceControls.cpp
@@ -1269,6 +1270,7 @@ set(MODEL_SOURCES
     src/models/RadioModel_WaveformEnv.cpp
     src/models/RadioModel_NtpSources.cpp
     src/models/RadioModel_SliceLifecycle.cpp
+    src/models/RadioModel_SliceObservations.cpp
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
     src/models/TxController.cpp
