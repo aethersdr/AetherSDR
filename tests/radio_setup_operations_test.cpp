@@ -1,3 +1,4 @@
+#include "FlexRadioStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "RadioSetupControlFixture.h"
 #include "core/AppSettings.h"
@@ -108,10 +109,10 @@ private slots:
         QVERIFY(!start->isEnabled());
         backend->replyLast({RadioSetupReply::Kind::Accepted});
         QVERIFY(!start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        observeRadioStatus(radio, QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
         QVERIFY(!start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")},
+        observeRadioStatus(radio, QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
+        observeRadioStatus(radio, QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")},
                                                             {QStringLiteral("freq_error_ppb"), QStringLiteral("-23")}});
         QVERIFY(start->isEnabled());
         bool completed = false;
@@ -154,8 +155,8 @@ private slots:
         backend->live = false;
         emit radio.connectionStateChanged(false);
         QVERIFY(start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        observeRadioStatus(radio, QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
+        observeRadioStatus(radio, QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
         bool disconnected = false;
         for (QLabel* label : group->findChildren<QLabel*>()) {
             disconnected |= label->text() == QStringLiteral("Disconnected");
@@ -191,8 +192,8 @@ private slots:
         backend->acceptCalibrationPrelude();
         backend->replyLast({RadioSetupReply::Kind::Accepted});
         QVERIFY(!start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        observeRadioStatus(radio, QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
+        observeRadioStatus(radio, QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
         QVERIFY(start->isEnabled());
     }
 

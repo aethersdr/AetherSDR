@@ -1,9 +1,4 @@
-// aetherd RFC 2.3 (RadioModel residual) — FlexBackend::decodeRadioStatus.
-// Pins the radio-global wire → typed RadioDelta translation (key renames,
-// "1"→bool, ok-guarded numerics, present-only) that moved out of
-// RadioModel::handleRadioStatus.
-
-#include "core/backends/flex/FlexBackend.h"
+#include "core/backends/flex/FlexRadioStatus.h"
 #include "core/backends/RadioDelta.h"
 
 #include <QCoreApplication>
@@ -17,23 +12,21 @@ static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
 
-static RadioDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs)
+static RadioDelta decode(const QMap<QString, QString>& kvs)
 {
-    QSignalSpy spy(&b, &IRadioBackend::radioChanged);
-    b.decodeRadioStatus(kvs);
-    if (spy.count() != 1) return {};
-    return spy.takeFirst().at(0).value<RadioDelta>();
+    const auto observation = decodeFlexRadioStatus(QStringLiteral("radio"), kvs,
+        std::make_shared<RadioStatusLifetime>());
+    return observation ? observation->radio : RadioDelta{};
 }
 
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     qRegisterMetaType<RadioDelta>();
-    FlexBackend b;
 
     // ---- key renames + typed values + "1"→bool ----
     {
-        const RadioDelta d = decode(b, {
+        const RadioDelta d = decode({
             {QStringLiteral("model"), QStringLiteral("FLEX-8600")},
             {QStringLiteral("slices"), QStringLiteral("4")},
             {QStringLiteral("callsign"), QStringLiteral("KK7GWY")},
@@ -56,7 +49,7 @@ int main(int argc, char** argv)
 
     // ---- ok-guard: malformed present numeric dropped ----
     {
-        const RadioDelta d = decode(b, {
+        const RadioDelta d = decode({
             {QStringLiteral("slices"), QStringLiteral("junk")},
             {QStringLiteral("cal_freq"), QStringLiteral("nope")},
             {QStringLiteral("region"), QStringLiteral("US")},

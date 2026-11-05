@@ -127,6 +127,17 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
         emit disconnected();
     });
 
+    // RadioDelta remains the demo's native identity source. Its synthetic
+    // client and setup reports use the same typed lifecycle as the Flex relay.
+    connect(m_connection, &RadioConnection::radioStatusObserved, this,
+            [this](const RadioStatusObservation& observation) {
+        if (!observation.current() || observation.kind == RadioStatusObservation::Kind::Radio) { return; }
+        emit radioStatusObserved(observation);
+        if (observation.kind == RadioStatusObservation::Kind::SessionEnded) {
+            observation.lifetime->deliveryOpen.store(false, std::memory_order_release);
+        }
+    });
+
     // Seam geometry for dynamically created pans (#4887 phase 4): each needs the
     // panCenterBandwidthChanged bridge pan 0 gets in emitInitialState(), but only
     // after RadioModel has claimed the pan or the geometry is cached by index and
