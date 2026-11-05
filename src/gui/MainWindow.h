@@ -172,6 +172,7 @@ class UiTickLagMeter;
 class WhatsNewDialog;
 class Nr2WisdomDialog;
 class ProfileManagerDialog;
+class HelpDialog;
 class SettingsBrowserDialog;
 class ProfileImportExportDialog;
 class RadioSetupDialog;
@@ -1136,6 +1137,7 @@ private:
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
     void showSystemInfoDialog();
+    void showHelpGuide(const QString& title, const QString& resourcePath);
     void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
     // Construct the AetherModem window hidden if it does not exist yet, and
@@ -1794,6 +1796,7 @@ private:
     QPointer<MultiFlexDialog> m_multiFlexDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
+    QHash<QString, QPointer<HelpDialog>> m_helpDialogs;   // by resource path
     QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
     QPointer<Nr2WisdomDialog> m_nr2WisdomDialog;

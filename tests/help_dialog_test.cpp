@@ -3,9 +3,21 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
+#include "gui/CanonWindow.h"
 #include "gui/HelpDialog.h"
 
+#include <QAbstractScrollArea>
 #include <QApplication>
+#include <QDialog>
+#include <QDir>
+#include <QFileInfo>
+#include <QKeySequence>
+#include <QPalette>
+#include <QPointer>
+#include <QTextBlock>
+#include <QTextFragment>
+#include <QToolButton>
 #include <QDesktopServices>
 #include <QFile>
 #include <QLabel>
@@ -131,11 +143,21 @@ void testNoMatchClearsSelectionAndRecovers()
     widgets.button->click();
     report("no match status is shown", widgets.status->text() == "No matches",
            widgets.status->text().toStdString());
+    // The no-match state is a property the canon sheet matches, drawn in
+    // color.accent.danger, not a swapped hex sheet (#7049).
+    widgets.status->ensurePolished();
+    report("no match marks the status and the field",
+           widgets.status->property("noMatch").toBool() && widgets.edit->property("noMatch").toBool());
+    report("the no-match status draws in color.accent.danger",
+           widgets.status->palette().color(QPalette::WindowText)
+               == AetherSDR::ThemeManager::instance().color(widgets.status, QStringLiteral("color.accent.danger")));
     report("no match leaves no selection", !widgets.browser->textCursor().hasSelection());
 
     widgets.edit->setText("middle");
     report("query change clears status", widgets.status->text().isEmpty(),
            widgets.status->text().toStdString());
+    report("query change clears the no-match marks",
+           !widgets.status->property("noMatch").toBool() && !widgets.edit->property("noMatch").toBool());
     report("query change clears selection", !widgets.browser->textCursor().hasSelection());
 
     widgets.button->click();
@@ -252,6 +274,152 @@ void testExternalLinksOpenInSystemBrowser()
 }
 
 } // namespace
+// The guide on the style guide's CanonWindow (#7049): a workspace in the
+// canon/help scope with the canon header, no footer Close, links in canon cyan
+// in each theme, every close path, a legible floor, and the per-guide geometry
+// key carried over.
+void testCanonWindow()
+{
+    QTemporaryFile file;
+    if (!writeTempHelp(file)) { report("temp help document created", false); return; }
+    auto& tm = AetherSDR::ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        report(theme, tm.setActiveTheme(QLatin1String(theme)));
+        HelpDialog dialog("Canon Test", file.fileName());
+        report("the guide is a CanonWindow", qobject_cast<AetherSDR::CanonWindow*>(&dialog) != nullptr);
+        report("it is a frameless workspace window",
+               dialog.windowType() == Qt::Window && dialog.windowFlags().testFlag(Qt::FramelessWindowHint));
+        report("it uses the canon/help scope", dialog.property("themeContainer").toString() == "canon/help");
+        auto* header = dialog.findChild<QLabel*>("canonHeaderTitle");
+        report("the canon header carries the guide's title", header && header->text() == "Canon Test");
+        bool closeButton = false;
+        for (QPushButton* b : dialog.findChildren<QPushButton*>())
+            closeButton = closeButton || b->text() == "Close";
+        report("the footer Close is gone", !closeButton);
+        const QString sheet = dialog.bodyWidget()->styleSheet();
+        report("the sheet resolves, with menu and selection rules",
+               !sheet.contains(": ;") && sheet.contains("QMenu") && sheet.contains("selection-color"));
+        bool literal = false;
+        for (QWidget* w : dialog.findChildren<QWidget*>())
+            for (const char* hex : {"#111d29", "#c65050", "#203040", "#e07070", "#245a7a"})
+                literal = literal || w->styleSheet().contains(QLatin1String(hex), Qt::CaseInsensitive);
+        report("the old hard-coded colours are gone", !literal);
+    }
+    tm.setActiveTheme(before);
+}
+
+void testLinksAreCanonCyan()
+{
+    QTemporaryFile file;
+    if (!file.open()) { report("temp help document created", false); return; }
+    file.write("See [the docs](https://docs.aethersdr.com) for more.\n");
+    file.close();
+    auto& tm = AetherSDR::ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        tm.setActiveTheme(QLatin1String(theme));
+        HelpDialog dialog("Links", file.fileName());
+        auto* browser = dialog.findChild<QTextBrowser*>("helpBrowser");
+        const QColor cyan = tm.color(browser, QStringLiteral("color.canon.cyan"));
+        int links = 0, cyanLinks = 0;
+        for (QTextBlock b = browser->document()->begin(); b.isValid(); b = b.next())
+            for (auto it = b.begin(); !it.atEnd(); ++it)
+                if (it.fragment().charFormat().isAnchor()) {
+                    ++links;
+                    cyanLinks += it.fragment().charFormat().foreground().color() == cyan;
+                }
+        report("links are drawn in this theme's canon cyan", links > 0 && cyanLinks == links);
+    }
+    tm.setActiveTheme(before);
+}
+
+void testClosePaths()
+{
+    QTemporaryFile file;
+    if (!writeTempHelp(file)) { report("temp help document created", false); return; }
+    for (int path = 0; path < 3; ++path) {
+        QPointer<HelpDialog> d = new HelpDialog("Close Test", file.fileName());
+        d->setAttribute(Qt::WA_DeleteOnClose);
+        d->show();
+        const bool exposed = QTest::qWaitForWindowExposed(d);
+        if (path == 0) QTest::keyClick(d, Qt::Key_Escape);
+        if (path == 1) {
+            d->activateWindow();
+            QTest::qWaitForWindowActive(d);
+            QTest::keySequence(d, QKeySequence::Close);
+        }
+        if (path == 2) {
+            QToolButton* corner = nullptr;
+            for (QToolButton* b : d->findChildren<QToolButton*>())
+                if (b->accessibleName() == QLatin1String("Close")) corner = b;
+            report("the corner close button exists", corner != nullptr);
+            if (corner) QTest::mouseClick(corner, Qt::LeftButton);
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        report(path == 0 ? "Esc destroys the guide"
+               : path == 1 ? "Ctrl+W / Cmd+W destroys the guide"
+                           : "the corner close button destroys the guide",
+               exposed && d.isNull());
+        delete d.data();
+    }
+}
+
+void testLegibleAtMinimum()
+{
+    QTemporaryFile file;
+    if (!writeTempHelp(file)) { report("temp help document created", false); return; }
+    auto& tm = AetherSDR::ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        tm.setActiveTheme(QLatin1String(theme));
+        HelpDialog d("Floor Test", file.fileName());
+        d.show();
+        QTest::qWaitForWindowExposed(&d);
+        d.resize(QSize(1, 1));
+        QTest::qWait(50);
+        bool legible = true;
+        for (QWidget* w : d.bodyWidget()->findChildren<QWidget*>()) {
+            if (!w->isVisible()) continue;
+            bool scrolled = false;
+            for (QWidget* p = w->parentWidget(); p && p != &d; p = p->parentWidget())
+                scrolled = scrolled || qobject_cast<QAbstractScrollArea*>(p) != nullptr;
+            if (scrolled) continue;
+            int need = w->minimumSizeHint().height();
+            if (auto* l = qobject_cast<QLabel*>(w); l && l->wordWrap()) need = l->heightForWidth(l->width());
+            if (w->height() < need) {
+                legible = false;
+                std::printf("  %s: %s h=%d need=%d\n", theme, w->metaObject()->className(), w->height(), need);
+            }
+        }
+        std::printf("  %s: shown minimum %dx%d\n", theme, d.width(), d.height());
+        report("every control keeps its height at the smallest size", legible);
+        report("the shown minimum height fits a 768 px screen", d.height() <= 700);
+        d.hide();
+    }
+    tm.setActiveTheme(before);
+}
+
+void testGeometryCarriesOver()
+{
+    QTemporaryFile file(QDir::tempPath() + QStringLiteral("/canon-geometry-XXXXXX.md"));
+    if (!writeTempHelp(file)) { report("temp help document created", false); return; }
+    const QString key = QStringLiteral("HelpDialogGeometry_") + QFileInfo(file.fileName()).baseName();
+    auto& settings = AppSettings::instance();
+    settings.remove(key);
+    HelpDialog restored("Geometry Test", file.fileName());
+    const QSize chosen(restored.minimumWidth() + 30, restored.minimumHeight() + 40);
+    QDialog legacy;
+    legacy.resize(chosen);
+    settings.setValue(key, QString::fromLatin1(legacy.saveGeometry().toBase64()));
+    restored.show();
+    QTest::qWaitForWindowExposed(&restored);
+    for (int i = 0; i < 50 && restored.size() != chosen; ++i)
+        QTest::qWait(20);
+    report("geometry saved under the guide's old key restores", restored.size() == chosen);
+    restored.hide();
+}
+
 
 int main(int argc, char** argv)
 {
@@ -268,6 +436,11 @@ int main(int argc, char** argv)
     testReturnPressedFindsNext();
     testEmptyQueryDisablesFind();
     testExternalLinksOpenInSystemBrowser();
+    testCanonWindow();
+    testLinksAreCanonCyan();
+    testClosePaths();
+    testLegibleAtMinimum();
+    testGeometryCarriesOver();
 
     std::printf("\n%s\n",
                 g_failed == 0
