@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QPointer>
 #include <QString>
@@ -16,8 +16,12 @@ namespace AetherSDR {
 // rendered as styled HTML in a scrollable text browser.
 //
 // Also accessible via Help → What's New (#483).
-class WhatsNewDialog : public PersistentDialog {
+// The release notes for this version, fetched from GitHub, in a short-lived
+// canon window (RFC #6226, #7045). The notes' colours come from canon tokens
+// in this window's scope and are rebuilt on a theme change.
+class WhatsNewDialog : public CanonWindow {
     Q_OBJECT
+    friend class WhatsNewDialogTestAccess;
 
 public:
     // Show GitHub release notes for currentVersion.
@@ -44,12 +48,20 @@ private:
                               const QString& publishedAt,
                               const QString& bodyMarkdown);
     void promptFind();
+    // Re-render whatever the browser shows (loading, error or notes) with
+    // the current theme's colours.
+    void rerender();
     bool findInNotes(const QString& text);
     void setStatusText(const QString& text);
     QString releaseTag() const;
 
     QString m_currentVersion;
     QString m_lastFindText;
+    enum class Content { Loading, Error, Notes } m_content{Content::Loading};
+    QString m_errorMessage;
+    QString m_notesMarkdown;
+    // Tests build the window without reaching GitHub (socket-free).
+    static inline bool s_fetchReleaseNotes = true;
     bool m_isWelcome{false};
 
     QPointer<QTextBrowser> m_browser;

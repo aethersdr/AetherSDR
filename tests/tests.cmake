@@ -2396,6 +2396,27 @@ add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
 set_tests_properties(callsign_lookup_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# What's New on CanonWindow (#7045): canon colours for the rich-text notes in
+# each theme, a canon Find prompt, and every close path. Socket-free: the
+# GitHub fetch is switched off through WhatsNewDialogTestAccess.
+add_executable(whats_new_dialog_test
+    tests/whats_new_dialog_test.cpp
+    src/gui/WhatsNewDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(whats_new_dialog_test PRIVATE src tests)
+target_link_libraries(whats_new_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(whats_new_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME whats_new_dialog_test COMMAND whats_new_dialog_test)
+set_tests_properties(whats_new_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
+
 # The CTR2 window (FirmwareInstallDialog): with only another kind of
 # controller selected it shows the relay alone, and its height follows the
 # CTR2-Max part as it hides and shows. Socket-free: device lists injected, no
@@ -10732,6 +10753,7 @@ set(AETHER_SETTINGS_CONSUMERS
     theme_manager_test
     canon_window_test
     callsign_lookup_dialog_test
+    whats_new_dialog_test
     canon_message_box_test
     shortcut_dialog_test
     reset_settings_prompts_test

@@ -1790,16 +1790,10 @@ void MainWindow::buildMenuBar()
         dlg->activateWindow();
     });
     helpMenu->addAction("What's New...", this, [this]() {
-        if (m_whatsNewDialog) {
-            m_whatsNewDialog->show();
-            m_whatsNewDialog->raise();
-            m_whatsNewDialog->activateWindow();
-            return;
-        }
-        m_whatsNewDialog = WhatsNewDialog::showAll(this);
-        m_whatsNewDialog->setFramelessMode(
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-        trackPersistentDialog(m_whatsNewDialog);
+        showOrRaiseCanon(m_whatsNewDialog, [this] {
+            return new WhatsNewDialog(QString(), QCoreApplication::applicationVersion(), this,
+                                      false, true);
+        });
     });
     helpMenu->addSeparator();
 
