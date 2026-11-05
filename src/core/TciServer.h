@@ -213,7 +213,7 @@ private:
 
     // tx_sensors goes out while the transmitter carries RF: MOX/PTT, tune, or
     // a key the radio reports.
-    static bool txSensorsKeyed(const RadioModel& model);
+    static bool txSensorsKeyed(RadioModel& model);
     // Forward power for tx_sensors, the current reading, as Thetis sends it.
     static float txSensorsForwardWatts(const MeterModel& mm);
 
