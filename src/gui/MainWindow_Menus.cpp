@@ -1639,7 +1639,7 @@ void MainWindow::buildMenuBar()
     swrScanAction->setEnabled(false);
     swrScanAction->setProperty(kTxKeyingProperty, true);
     connect(swrScanAction, &QAction::triggered, this, [this] {
-        startSwrSweep(-1, 1, 0.0, 0.0, /*forceLicenseConfirm=*/true);
+        startSwrSweep();
     });
     auto* preTuneAction = toolsMenu->addAction("Pre-tune ATU Bands...");
     m_preTuneAction = preTuneAction;
