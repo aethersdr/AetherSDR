@@ -29,6 +29,10 @@ public:
     // `native`: the shim is installed as a legacy waveform, not a container.
     explicit TailnetShimDialog(RadioModel* model, bool native, QWidget* parent = nullptr);
 
+    // For every confirmation that takes the radio off the tailnet: signing it
+    // in again takes the radio's local network.
+    static QString offTailnetWarning();
+
 signals:
     // The operator chose Reset: this computer can't change the radio's
     // remote access (it lacks the admin token), so the container is to be
