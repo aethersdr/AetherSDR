@@ -139,6 +139,7 @@ namespace AetherSDR {
 enum class RadioSliceSelectionSource;
 
 class AetherClockApplet;
+class WsprSpotFeed;
 class AetherClockEngine;
 class AetherClockModel;
 class AntennaAnalyzerModel;
@@ -1429,6 +1430,9 @@ private:
     EibiClient*          m_eibiClient{nullptr};
     QHash<QString, int>  m_eibiSpotKeyToId;
     N1MMSpotClient*      m_n1mmSpotClient{nullptr};
+    // The WSPR receiver on the radio (tools/wspr-agent): its spots for
+    // SpotHub and the panadapter. Main thread; it only polls HTTP.
+    WsprSpotFeed*        m_wsprFeed{nullptr};
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
