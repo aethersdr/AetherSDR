@@ -25,6 +25,14 @@
 namespace AetherSDR {
 
 namespace {
+// The tab's label, for accessible names ("Transmit profile name").
+QString tabLabel(const QString& type)
+{
+    return type == QLatin1String("global") ? QStringLiteral("Global")
+        : type == QLatin1String("transmit") ? QStringLiteral("Transmit")
+        : type == QLatin1String("cw") ? QStringLiteral("CW") : QStringLiteral("Microphone");
+}
+
 ProfileRequest::Kind profileKind(const QString& type)
 {
     return type == QLatin1String("global") ? ProfileRequest::Kind::Global
@@ -199,6 +207,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
     auto* nameEdit = new QLineEdit;
     nameEdit->setPlaceholderText("New Profile Name");
     nameEdit->setObjectName(QString("profileNameEdit_%1").arg(type));
+    nameEdit->setAccessibleName(QString("%1 profile name").arg(tabLabel(type)));
     vbox->addWidget(nameEdit);
 
     // Buttons: Load, Save/Create, Delete.
@@ -267,6 +276,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
     // Profile list
     auto* list = new QListWidget;
     list->setObjectName(QString("profileList_%1").arg(type));
+    list->setAccessibleName(QString("%1 profiles").arg(tabLabel(type)));
     for (const auto& p : profiles) {
         auto* item = new QListWidgetItem(p);
         if (p == active)

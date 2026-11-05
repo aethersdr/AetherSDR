@@ -19,9 +19,11 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QString>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QTest>
 #include <QTimer>
+#include <QToolButton>
 #include <QWidget>
 #include <cstdio>
 #include <utility>
@@ -314,6 +316,45 @@ void profileCanonWindow()
     tm.setActiveTheme(before);
 }
 
+// At the smallest size the shown window allows, on every tab, each visible
+// control gets the height it needs (a wrapped label: its height for its
+// width). The floor has to come from the shown, polished layout.
+void profileLegibleAtMinimum()
+{
+    RadioModel model;
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        tm.setActiveTheme(QLatin1String(theme));
+        ProfileManagerDialog dialog(&model);
+        dialog.show();
+        QTest::qWaitForWindowExposed(&dialog);
+        auto* tabs = dialog.findChild<QTabWidget*>();
+        bool legible = tabs != nullptr;
+        for (int t = 0; tabs && t < tabs->count(); ++t) {
+            tabs->setCurrentIndex(t);
+            dialog.resize(QSize(1, 1));
+            QTest::qWait(30);
+            for (QWidget* w : tabs->currentWidget()->findChildren<QWidget*>()) {
+                if (!w->isVisible()) continue;
+                int need = w->minimumSizeHint().height();
+                if (auto* label = qobject_cast<QLabel*>(w); label && label->wordWrap())
+                    need = label->heightForWidth(label->width());
+                if (w->height() < need) {
+                    legible = false;
+                    std::fprintf(stderr, "  %s tab %d: %s h=%d need=%d\n", theme, t,
+                                 w->metaObject()->className(), w->height(), need);
+                }
+            }
+        }
+        std::fprintf(stderr, "  %s: shown minimum %dx%d\n", theme, dialog.width(), dialog.height());
+        check(legible, "every control on every tab gets its height at the smallest size");
+        check(dialog.height() <= 700, "the shown minimum height fits a 768 px screen");
+        dialog.hide();
+    }
+    tm.setActiveTheme(before);
+}
+
 // Every way out destroys the WA_DeleteOnClose window showOrRaiseCanon() makes;
 // Return in the name field clicks nothing.
 void profileClosePaths()
@@ -340,8 +381,21 @@ void profileClosePaths()
         dialog->show();
         const bool exposed = QTest::qWaitForWindowExposed(dialog);
         if (path == 0) QTest::keyClick(dialog, Qt::Key_Escape);
-        if (path == 1) QTest::keySequence(dialog, QKeySequence::Close);
-        if (path == 2) dialog->close();
+        if (path == 1) {
+            // A window shortcut: it needs the window active, which a desktop
+            // gives a newly shown window but a background test process may not.
+            dialog->activateWindow();
+            QTest::qWaitForWindowActive(dialog);
+            QTest::keySequence(dialog, QKeySequence::Close);
+        }
+        if (path == 2) {
+            // Press the corner ✕ itself, so its connection is pinned too.
+            QToolButton* corner = nullptr;
+            for (QToolButton* b : dialog->findChildren<QToolButton*>())
+                if (b->accessibleName() == QLatin1String("Close")) corner = b;
+            check(corner != nullptr, "the corner close button exists");
+            if (corner) QTest::mouseClick(corner, Qt::LeftButton);
+        }
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         check(exposed && dialog.isNull(),
               path == 0 ? "Esc destroys the profile manager"
@@ -353,16 +407,29 @@ void profileClosePaths()
 
 // Delete asks a CanonMessageBox with Cancel as the default: Cancel, Return,
 // Esc and closing it send nothing; Delete sends the removal.
-void profileDeleteConfirm()
+// A destructive profile question (Delete, or CW Reset) asks a CanonMessageBox
+// with Cancel as the default: Cancel, Return, Esc and closing it send nothing;
+// only the destructive button acts.
+void profileDestructiveConfirm(const QString& type, const QString& buttonName,
+                               const QString& confirmText, const QString& title,
+                               const QString& verb)
 {
     RadioModel model;
     RadioSetupTestBackend* backend = installRadioSetupBackend(model);
-    ProfileDelta delta; delta.type = "global"; delta.list = QStringList{"Doomed"};
+    // CW profiles need SmartSDR 4.3.16; the page is dimmed without it.
+    backend->setFirmwareVersionProvider([] { return QStringLiteral("4.3.16.42034"); });
+    ProfileDelta delta; delta.type = type == "global" ? QStringLiteral("global") : type;
+    delta.list = QStringList{"Doomed"};
     StoredControlTestAccess::profile(model, delta);
     ProfileManagerDialog dialog(&model);
-    auto* list = dialog.findChild<QListWidget*>("profileList_global");
-    auto* remove = dialog.findChild<QPushButton*>("profileDeleteBtn_global");
-    if (!list || list->count() != 1 || !remove) { check(false, "global profile row and Delete exist"); return; }
+    auto* list = dialog.findChild<QListWidget*>(QStringLiteral("profileList_%1").arg(type));
+    auto* remove = dialog.findChild<QPushButton*>(buttonName);
+    if (!list || list->count() != 1 || !remove) {
+        check(false, "the profile row and its destructive button exist");
+        return;
+    }
+    list->setCurrentRow(0);
+    check(remove->isEnabled(), "the destructive button is enabled for the selected row");
 
     enum class Answer { Cancel, Delete, Close, Return, Escape };
     auto run = [&](Answer answer) {
@@ -381,7 +448,7 @@ void profileDeleteConfirm()
                 if (answer == Answer::Close) { box->close(); return; }
                 if (answer == Answer::Return) { QTest::keyClick(box->focusWidget() ? box->focusWidget() : box, Qt::Key_Return); return; }
                 if (answer == Answer::Escape) { QTest::keyClick(box, Qt::Key_Escape); return; }
-                const QString text = answer == Answer::Delete ? "Delete" : "Cancel";
+                const QString text = answer == Answer::Delete ? confirmText : QStringLiteral("Cancel");
                 for (QPushButton* button : box->findChildren<QPushButton*>())
                     if (button->text() == text) { button->click(); return; }
                 box->reject();
@@ -403,20 +470,21 @@ void profileDeleteConfirm()
         return std::make_pair(seenTitle, seenDefault);
     };
 
-    const auto [title, defaultButton] = run(Answer::Cancel);
-    check(title == "Delete Profile", "Delete asks in a CanonMessageBox");
-    check(defaultButton == "Cancel", "Cancel is the delete question's default");
-    check(backend->commands.isEmpty(), "Cancel deletes nothing");
+    std::fprintf(stderr, "  %s\n", qPrintable(title));
+    const auto [seenTitle, defaultButton] = run(Answer::Cancel);
+    check(seenTitle == title, "it asks in a CanonMessageBox");
+    check(defaultButton == "Cancel", "Cancel is the question's default");
+    check(backend->commands.isEmpty(), "Cancel sends nothing");
     run(Answer::Return);
-    check(backend->commands.isEmpty(), "Return on the question deletes nothing");
+    check(backend->commands.isEmpty(), "Return on the question sends nothing");
     run(Answer::Escape);
-    check(backend->commands.isEmpty(), "Esc on the question deletes nothing");
+    check(backend->commands.isEmpty(), "Esc on the question sends nothing");
     run(Answer::Close);
-    check(backend->commands.isEmpty(), "closing the question deletes nothing");
+    check(backend->commands.isEmpty(), "closing the question sends nothing");
     run(Answer::Delete);
     check(backend->commands.size() == 1 && backend->commands.value(0).contains("Doomed")
-              && backend->commands.value(0).startsWith("profile global"),
-          "Delete sends the removal");
+              && backend->commands.value(0).startsWith(QStringLiteral("profile %1 %2").arg(type == "global" ? "global" : type, verb)),
+          "the destructive button sends its command");
     if (backend->commands.size() != 1)
         std::fprintf(stderr, "commands: %s\n", qPrintable(backend->commands.join(" | ")));
 }
@@ -452,6 +520,7 @@ int main(int argc, char** argv)
     if (!profile.isValid()) { return 2; }
     AppSettings::instance().load();
     profileDialog(); memoryDialog(); stoppedImport(); memoryCanonWindow(); memoryRemoveConfirm();
-    profileCanonWindow(); profileClosePaths(); profileDeleteConfirm(); profileGeometryCarriesOver();
+    profileCanonWindow(); profileLegibleAtMinimum(); profileClosePaths(); profileDestructiveConfirm("global", "profileDeleteBtn_global", "Delete", "Delete Profile", "delete");
+    profileDestructiveConfirm("cw", "profileResetBtn_cw", "Reset", "Reset CW Profile", "reset"); profileGeometryCarriesOver();
     return failures == 0 ? 0 : 1;
 }
