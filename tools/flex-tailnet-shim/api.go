@@ -257,7 +257,44 @@ func NewAPI(n *Node) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, n.Status())
 	})
-	return lanOnly(mux)
+	// Apps on the radio itself publish a port to the tailnet here. This is
+	// the one path for callers lanOnly refuses: it is open only to the
+	// radio, and it can only forward to the caller's own address.
+	local := http.NewServeMux()
+	local.HandleFunc("POST /v1/local/expose", func(w http.ResponseWriter, r *http.Request) {
+		ap, _ := netip.ParseAddrPort(r.RemoteAddr)
+		var req struct {
+			Port int    `json:"port"`
+			Name string `json:"name"`
+		}
+		if err := decode(r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{"bad request: " + err.Error()})
+			return
+		}
+		lease, err := n.exposed.register(ap.Addr().Unmap(), req.Port, req.Name)
+		switch {
+		case errors.Is(err, errExposeConflict):
+			writeJSON(w, http.StatusConflict, apiError{err.Error()})
+			return
+		case err != nil:
+			writeJSON(w, http.StatusBadRequest, apiError{err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "expires_in_s": int(lease.Seconds())})
+	})
+	lan := lanOnly(mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/v1/local/") {
+			lan.ServeHTTP(w, r)
+			return
+		}
+		ap, err := netip.ParseAddrPort(r.RemoteAddr)
+		if err != nil || !n.localCaller(ap.Addr()) {
+			writeJSON(w, http.StatusForbidden, apiError{"only apps on the radio may use this API"})
+			return
+		}
+		local.ServeHTTP(w, r)
+	})
 }
 
 // ServeAPI runs the provisioning API. It starts before, and independently

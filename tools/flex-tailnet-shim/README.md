@@ -45,9 +45,10 @@ AetherSDR (tailnet peer)                       radio container (host network nam
   limits access to listed logins or tags, on the radio, station devices and
   side channels alike. Each announced side channel admits one connection,
   from the computer whose transfer opened it. Saving a narrower list ends the
-  open sessions, transfers and device connections it no longer admits. The shim listens only on its own tailnet ports, so the
-  radio's other services, such as its SSH, are not exposed, and a shared
-  route never splices into the radio's own addresses.
+  open sessions, transfers and device connections it no longer admits. The shim listens only on its own tailnet ports and on
+  ports an app on the radio published (see Published ports), so the radio's
+  other services, such as its SSH, are not exposed, and a shared route never
+  splices into the radio's own addresses.
 - **Teardown (Principle VI):** when either side ends, the shim closes the radio
   connection at once. The radio drops the GUI client and unkeys anything that
   client owned. The shim never keeps a radio session alive for a client it
@@ -122,6 +123,25 @@ are refused.
 | GET | `/v1/login` | yes | `{state, auth_url, key_expiry}`: the sign-in URL while one is wanted (a new join, or an expired key) |
 | PUT | `/v1/allow` | yes | `{allow: []}` clears a list an older version kept; from 0.5.0 a non-empty list is refused (400): who may connect is the tailnet's access rules |
 | POST | `/v1/signout` | yes | Logs out, deletes the node state and forgets the token |
+
+### Published ports
+
+An app running on the radio itself, such as another container or a legacy
+waveform, can make one of its TCP ports reachable on the tailnet:
+`POST /v1/local/expose {"port": 48995, "name": "AetherWSPR"}` on TCP 48992.
+This is the one path open to callers the table above refuses, and only to
+them: loopback, the container network 172.30.0.0/16 and the radio's own
+addresses. Anyone else gets 403.
+
+- The shim listens on that port on its tailnet address and splices each
+  caller the tailnet admits (the same `WhoIs` check as the radio) to the app,
+  at the address the app registered from.
+- The registration is a 10-minute lease (`expires_in_s` in the reply). The
+  app renews it by posting again; when it lapses the port closes.
+- Ports 1024-65535 only, never 22, 4991-4994, 42607, 48992 or 48993. At most
+  8 ports, and a port another app holds is refused (409).
+- `/v1/status` lists them as `exposed_ports`. They survive the tailnet node
+  restarting, but not the shim.
 
 **Trust model:** the first provisioning is open to the LAN. That matches the
 radio itself: its API on 4992 and its image upload on 42607 are

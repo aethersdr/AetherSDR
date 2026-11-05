@@ -136,6 +136,7 @@ type Node struct {
 
 	fwd     *Forwarder  // side channels, while the node runs
 	splices liveSplices // station-device splices in progress, for revocation
+	exposed exposer     // ports apps on the radio published (expose.go)
 }
 
 func (n *Node) cfgPath() string  { return filepath.Join(n.StateDir, "provision.json") }
@@ -467,6 +468,11 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 		},
 		Authorize: n.authorizer(lc),
 	}
+	n.exposed.splices = &n.splices
+	n.exposed.attach(func(port int) (net.Listener, error) {
+		return srv.Listen("tcp", fmt.Sprintf(":%d", port))
+	}, n.authorizer(lc))
+	closers = append(closers, func() error { n.exposed.detach(); return nil })
 	relay.OpenForward = fwd.Open
 	relay.ForgetForward = fwd.Forget
 	n.mu.Lock()
@@ -961,6 +967,8 @@ type Status struct {
 	// Command verbs relayed so far (never arguments), for diagnosing what a
 	// client such as a Maestro asks the radio for.
 	RecentCommands []string `json:"recent_commands"`
+	// Exposed: TCP ports apps on the radio published to the tailnet.
+	Exposed []ExposedPort `json:"exposed_ports"`
 }
 
 func (n *Node) Status() Status {
@@ -1047,6 +1055,7 @@ func (n *Node) statusLocked() Status {
 	}
 	st.RecentCommands = []string{}
 	st.SessionDetail = []SessionInfo{}
+	st.Exposed = n.exposed.list()
 	st.Routes = append([]string{}, n.cfg.Routes...)
 	st.ShareDiscovered = n.cfg.shareDiscovered()
 	st.Discovered = []Device{}
