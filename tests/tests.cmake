@@ -8221,8 +8221,8 @@ set_target_properties(help_dialog_test PROPERTIES AUTOMOC ON)
 add_test(NAME help_dialog_test COMMAND help_dialog_test)
 set_tests_properties(help_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
-# SwrSweepLicenseDialog::confirm() — remembered-answer short-circuit and
-# force-override paths.  No MainWindow required; confirm() only needs
+# SwrSweepLicenseDialog::confirm() — remembered-answer short-circuit and when
+# the answer is stored.  No MainWindow required; confirm() only needs
 # AppSettings and QDialog::exec(); the test dismisses the modal from a timer.
 add_executable(swr_sweep_license_dialog_test
     tests/swr_sweep_license_dialog_test.cpp

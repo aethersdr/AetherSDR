@@ -51,7 +51,8 @@ Before a sweep transmits, a modal "Antenna SWR Sweep — License Confirmation"
 explains that it sends a 1 W tune carrier at several frequencies across the
 band, and that you are responsible for checking the band is clear and for
 complying with your license. Tick **Remember my answer** to skip it next time,
-from either the ANT panel or **Tools → Start SWR Scan...**.
+from either the ANT panel or **Tools → Start SWR Scan...**. To see it again,
+set `SwrSweepLicenseConfirmed` to `False` in **Settings → Settings Browser...**.
 
 ### What gets swept
 

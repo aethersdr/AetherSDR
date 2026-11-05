@@ -1,5 +1,5 @@
 // Headless tests for SwrSweepLicenseDialog::confirm().
-// Covers the remembered-answer short-circuit and the force-override path.
+// Covers the remembered-answer short-circuit and when the answer is stored.
 // Build: CMake target `swr_sweep_license_dialog_test`. Exit 0 = pass.
 
 #include "TestSettingsProfile.h"
@@ -8,6 +8,8 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QDeadlineTimer>
+#include <QEventLoop>
 #include <QTimer>
 #include <cstdio>
 #include <memory>
@@ -21,17 +23,24 @@ constexpr const char* kSettingsKey = "SwrSweepLicenseConfirmed";
 
 int g_failed = 0;
 
+struct Dismissal {
+    bool fired = false;
+    bool shown = false;
+};
+
 // Schedule a one-shot that finds the modal SwrSweepLicenseDialog once exec()
-// has shown it and closes it. Returns a flag recording whether it appeared.
-std::shared_ptr<bool> dismissNextDialog(bool accept, bool tickRemember)
+// has shown it and closes it. A dialog that should not have opened therefore
+// fails its case instead of blocking the run.
+std::shared_ptr<Dismissal> dismissNextDialog(bool accept, bool tickRemember)
 {
-    auto shown = std::make_shared<bool>(false);
+    auto dismissal = std::make_shared<Dismissal>();
     QTimer::singleShot(0, [=] {
+        dismissal->fired = true;
         for (QWidget* w : QApplication::topLevelWidgets()) {
             auto* dlg = qobject_cast<SwrSweepLicenseDialog*>(w);
             if (!dlg || !dlg->isVisible())
                 continue;
-            *shown = true;
+            dismissal->shown = true;
             if (tickRemember)
                 if (auto* cb = dlg->findChild<QCheckBox*>())
                     cb->setChecked(true);
@@ -39,7 +48,7 @@ std::shared_ptr<bool> dismissNextDialog(bool accept, bool tickRemember)
             return;
         }
     });
-    return shown;
+    return dismissal;
 }
 
 void report(const char* name, bool ok, const std::string& detail = {})
@@ -51,70 +60,84 @@ void report(const char* name, bool ok, const std::string& detail = {})
     if (!ok) ++g_failed;
 }
 
-// confirm(nullptr, false) returns true without opening a dialog when the
-// operator has previously ticked "Remember my answer" and accepted.
+// Runs the one-shot if confirm() returned without entering exec(), so it cannot
+// close the next case's dialog.
+void drain(const std::shared_ptr<Dismissal>& dismissal)
+{
+    QDeadlineTimer deadline(1000);
+    while (!dismissal->fired && !deadline.hasExpired())
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+}
+
+void clearRememberedAnswer()
+{
+    auto& s = AppSettings::instance();
+    s.remove(kSettingsKey);
+    s.save();
+}
+
+bool answerIsRemembered()
+{
+    return AppSettings::instance().value(kSettingsKey, "False").toString() == "True";
+}
+
 void testRememberedAnswerSkipsDialog()
 {
     auto& s = AppSettings::instance();
     s.setValue(kSettingsKey, "True");
     s.save();
 
-    // If confirm() tried to show a modal it would block forever in an
-    // offscreen harness — returning true here proves it short-circuited.
-    const bool result = SwrSweepLicenseDialog::confirm(nullptr, /*force=*/false);
-    report("remembered answer skips dialog and returns true", result);
+    auto dismissal = dismissNextDialog(/*accept=*/false, /*tick=*/false);
+    const bool result = SwrSweepLicenseDialog::confirm(nullptr);
+    drain(dismissal);
+    report("remembered answer skips dialog and returns true", result && !dismissal->shown);
 
-    s.remove(kSettingsKey);
-    s.save();
+    clearRememberedAnswer();
 }
 
-// confirm(nullptr, false) without a saved answer must NOT return true
-// immediately — it must show the dialog. The timer dismisses it and records
-// that it appeared; cancelling returns false.
-void testNoRememberedAnswerDoesNotSkip()
+void testNoRememberedAnswerShowsDialog()
 {
-    auto& s = AppSettings::instance();
-    s.remove(kSettingsKey);
-    s.save();
+    clearRememberedAnswer();
 
-    auto shown = dismissNextDialog(/*accept=*/false, /*tick=*/false);
-    const bool result = SwrSweepLicenseDialog::confirm(nullptr, /*force=*/false);
-    report("no remembered answer shows dialog; cancel returns false", *shown && !result);
+    auto dismissal = dismissNextDialog(/*accept=*/false, /*tick=*/false);
+    const bool result = SwrSweepLicenseDialog::confirm(nullptr);
+    drain(dismissal);
+    report("no remembered answer shows dialog; cancel returns false", dismissal->shown && !result);
 }
 
-// confirm(nullptr, true) must NOT short-circuit even when the key is set.
-// The timer dismisses the dialog and records that it appeared; cancelling
-// returns false. A true return here would mean force was ignored.
-void testForceOverridesRememberedAnswer()
-{
-    auto& s = AppSettings::instance();
-    s.setValue(kSettingsKey, "True");
-    s.save();
-
-    auto shown = dismissNextDialog(/*accept=*/false, /*tick=*/false);
-    const bool result = SwrSweepLicenseDialog::confirm(nullptr, /*force=*/true);
-    report("force=true overrides remembered answer and shows dialog", *shown && !result);
-
-    s.remove(kSettingsKey);
-    s.save();
-}
-
-// Accepting with "Remember my answer" ticked persists the key, so the next
-// non-forced confirm() short-circuits.
 void testAcceptWithRememberPersists()
 {
-    auto& s = AppSettings::instance();
-    s.remove(kSettingsKey);
-    s.save();
+    clearRememberedAnswer();
 
-    auto shown = dismissNextDialog(/*accept=*/true, /*tick=*/true);
-    const bool result = SwrSweepLicenseDialog::confirm(nullptr, /*force=*/false);
-    const bool persisted = s.value(kSettingsKey, "False").toString() == "True";
+    auto dismissal = dismissNextDialog(/*accept=*/true, /*tick=*/true);
+    const bool result = SwrSweepLicenseDialog::confirm(nullptr);
+    drain(dismissal);
     report("accept with remember ticked persists the answer",
-           *shown && result && persisted);
+           dismissal->shown && result && answerIsRemembered());
 
-    s.remove(kSettingsKey);
-    s.save();
+    clearRememberedAnswer();
+}
+
+void testAcceptWithoutRememberDoesNotPersist()
+{
+    clearRememberedAnswer();
+
+    auto dismissal = dismissNextDialog(/*accept=*/true, /*tick=*/false);
+    const bool result = SwrSweepLicenseDialog::confirm(nullptr);
+    drain(dismissal);
+    report("accept without remember stores nothing",
+           dismissal->shown && result && !answerIsRemembered());
+}
+
+void testCancelWithRememberDoesNotPersist()
+{
+    clearRememberedAnswer();
+
+    auto dismissal = dismissNextDialog(/*accept=*/false, /*tick=*/true);
+    const bool result = SwrSweepLicenseDialog::confirm(nullptr);
+    drain(dismissal);
+    report("cancel with remember ticked stores nothing",
+           dismissal->shown && !result && !answerIsRemembered());
 }
 
 } // namespace
@@ -130,9 +153,10 @@ int main(int argc, char** argv)
     std::printf("SwrSweepLicenseDialog::confirm() test harness\n\n");
 
     testRememberedAnswerSkipsDialog();
-    testNoRememberedAnswerDoesNotSkip();
-    testForceOverridesRememberedAnswer();
+    testNoRememberedAnswerShowsDialog();
     testAcceptWithRememberPersists();
+    testAcceptWithoutRememberDoesNotPersist();
+    testCancelWithRememberDoesNotPersist();
 
     std::printf("\n%s\n",
                 g_failed == 0
