@@ -8767,6 +8767,33 @@ add_test(NAME aethercontrol_window_test COMMAND aethercontrol_window_test)
 set_tests_properties(aethercontrol_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# SmartLink effect injection keeps both policy modes and guard mutations offline.
+add_executable(smartlink_demo_isolation_test tests/smartlink_demo_isolation_test.cpp)
+target_include_directories(smartlink_demo_isolation_test PRIVATE src tests)
+target_link_libraries(smartlink_demo_isolation_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME smartlink_demo_isolation_test COMMAND smartlink_demo_isolation_test restricted)
+add_test(NAME smartlink_demo_isolation_normal_test COMMAND smartlink_demo_isolation_test normal)
+set_tests_properties(smartlink_demo_isolation_test smartlink_demo_isolation_normal_test PROPERTIES TIMEOUT 30)
+
+# Socket-free admission: injected backend, uninitialized TCP transport, and
+# picker signals without a connection receiver. No peer, bind, or device access.
+add_executable(automation_demo_only_test
+    tests/automation_demo_only_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(automation_demo_only_test PRIVATE src tests)
+target_link_libraries(automation_demo_only_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test)
+set_target_properties(automation_demo_only_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_demo_only_test COMMAND automation_demo_only_test restricted)
+add_test(NAME automation_demo_only_normal_test COMMAND automation_demo_only_test normal)
+set_tests_properties(automation_demo_only_test automation_demo_only_normal_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
 # The multiFLEX Dashboard is a canon dialog: chrome, geometry carried over
 # from PersistentDialog, and the Enabled / Disabled colors in both themes.
 add_executable(multiflex_dashboard_window_test
@@ -10577,6 +10604,9 @@ endif()
 set(AETHER_SETTINGS_CONSUMERS
     bandstack_cat_controls_test
     two_tone_tune_gate_test
+    automation_demo_only_test
+    smartlink_demo_isolation_test
+
     update_controller_test
     update_installer_test
     update_stager_test

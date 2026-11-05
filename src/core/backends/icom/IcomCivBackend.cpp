@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "core/backends/icom/IcomCivBackend.h"
 
 #include <QPointer>
@@ -929,6 +930,11 @@ int IcomCivBackend::activeTxBandwidthItem() const
 
 void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        emit connectionError(AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     disconnectRadio();
 
     // The stable import identity arrives in the authenticated RS-BA1

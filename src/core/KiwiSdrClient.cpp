@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "KiwiSdrClient.h"
 
 #include "KiwiSdrRedirectPolicy.h"
@@ -427,6 +428,11 @@ void KiwiSdrClient::setReceiverControls(
 void KiwiSdrClient::connectToEndpoint(const QString& endpoint,
                                       const QString& password)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        setState(State::Error, AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     if (!KiwiSdrProtocol::authPasswordFitsServerLimit(password)) {
         setState(
             State::Error,
@@ -552,6 +558,11 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint,
 #ifdef HAVE_WEBSOCKETS
 void KiwiSdrClient::startStatusPreflight(const QUrl& url)
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        setState(State::Error, AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     if (!m_statusNetworkAccessManager) {
         m_statusNetworkAccessManager = new QNetworkAccessManager(this);
     }
@@ -786,6 +797,11 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
 
 void KiwiSdrClient::openWebSockets()
 {
+    if (AutomationIsolationPolicy::demoOnly()) {
+        setState(State::Error, AutomationIsolationPolicy::refusal());
+        return;
+    }
+
     m_pcmProducer.start(PcmPurpose::Auxiliary);
     const QString scheme = m_secureWebSocket
         ? QStringLiteral("wss")
