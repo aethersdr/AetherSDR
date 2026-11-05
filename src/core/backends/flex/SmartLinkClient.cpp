@@ -1,7 +1,7 @@
 #include "SmartLinkClient.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
-#include "models/ConnectionWorkspace.h"
+#include "core/SettingsCredentialPolicy.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -256,7 +256,7 @@ void SmartLinkClient::saveCredentials()
 
     auto* job = new QKeychain::WritePasswordJob("AetherSDR");
     job->setAutoDelete(true);
-    job->setKey(ConnectionWorkspace::credentialKey(m_accountId));
+    job->setKey(SettingsCredentialPolicy::smartLinkCredentialKey(m_accountId));
     job->setInsecureFallback(false);
     job->setTextData(m_refreshToken);
     connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
@@ -275,7 +275,7 @@ void SmartLinkClient::clearCredentials()
 #ifdef HAVE_KEYCHAIN
     auto* job = new QKeychain::DeletePasswordJob("AetherSDR");
     job->setAutoDelete(true);
-    job->setKey(ConnectionWorkspace::credentialKey(m_accountId));
+    job->setKey(SettingsCredentialPolicy::smartLinkCredentialKey(m_accountId));
     job->setInsecureFallback(false);
     connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
         if (j->error() != QKeychain::NoError && j->error() != QKeychain::EntryNotFound)
@@ -304,7 +304,7 @@ void SmartLinkClient::tryAutoLogin()
 #ifdef HAVE_KEYCHAIN
     auto* job = new QKeychain::ReadPasswordJob("AetherSDR");
     job->setAutoDelete(true);
-    job->setKey(ConnectionWorkspace::credentialKey(m_accountId));
+    job->setKey(SettingsCredentialPolicy::smartLinkCredentialKey(m_accountId));
     job->setInsecureFallback(false);
     const quint64 generation = m_authGeneration;
     connect(job, &QKeychain::Job::finished, this, [this, generation](QKeychain::Job* j) {

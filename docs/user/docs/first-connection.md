@@ -32,7 +32,7 @@ The window has no title bar. It opens above the status bar; drag any empty part 
 
 The window automatically fits its height to the available screen space, including room for a horizontal scrollbar when the contents are wider than the window. On a smaller screen, scroll the body to reach its controls; the connection status and **Disconnect** button remain below it.
 
-<img src="/img/screens/connect-dialog.png" width="912" alt="Connect to a radio window with Locations, the Radios at Home list, selected radio details, operator selection and SmartLink accounts." />
+<img src="/img/screens/connect-dialog.png" width="1094" alt="Connect to a radio window with Locations, the Radios at Home list, selected radio details, operator selection and SmartLink accounts." />
 
 *Choose a location, select a radio and use Connect to connect to that radio.*
 

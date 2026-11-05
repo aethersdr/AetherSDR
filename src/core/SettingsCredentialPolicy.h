@@ -56,10 +56,25 @@ struct ScopedCredential {
     const char* prefix;
     const char* suffix;
 };
-inline constexpr ScopedCredential kScopedCredentials[] = {
-    {"smartlink/", "/refresh_token"},
-    {"icom/", "/password"},
-};
+inline constexpr ScopedCredential kSmartLinkCredential{"smartlink/", "/refresh_token"};
+inline constexpr ScopedCredential kIcomCredential{"icom/", "/password"};
+inline constexpr ScopedCredential kScopedCredentials[] = {kSmartLinkCredential, kIcomCredential};
+
+inline QString scopedCredentialKey(const ScopedCredential& type, const QString& id)
+{
+    return QLatin1String(type.prefix) + id + QLatin1String(type.suffix);
+}
+
+inline QString smartLinkCredentialKey(const QString& id)
+{
+    return id.isEmpty() || id == QLatin1String("legacy") ? QStringLiteral("smartlink_refresh_token")
+        : scopedCredentialKey(kSmartLinkCredential, id);
+}
+
+inline QString icomCredentialKey(const QString& id)
+{
+    return scopedCredentialKey(kIcomCredential, id);
+}
 
 inline bool isScopedCredentialKey(const QString& key)
 {

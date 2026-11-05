@@ -524,7 +524,6 @@ void MainWindow::wireDiscovery()
 
     connect(m_connPanel, &ConnectionPanel::operatorPreferencesRequested, this,
             [this](const QJsonObject& preferences) {
-        if (m_radioModel.isConnected()) { return; }
         const auto deviceFor = [](const QList<QAudioDevice>& devices, const QString& encoded) {
             const QByteArray id = QByteArray::fromBase64(encoded.toLatin1());
             for (const QAudioDevice& device : devices) {
@@ -534,13 +533,20 @@ void MainWindow::wireDiscovery()
         };
         const QAudioDevice input = deviceFor(QMediaDevices::audioInputs(), preferences.value("inputDeviceId").toString());
         const QAudioDevice output = deviceFor(QMediaDevices::audioOutputs(), preferences.value("outputDeviceId").toString());
-        applyAudioDeviceSelection(input, output, AudioDeviceSelection::OperatorChoice,
-                                  AudioDeviceSelection::OperatorChoice, false);
+        const bool missingInput = input.isNull() && !preferences.value("inputDeviceId").toString().isEmpty();
+        const bool missingOutput = output.isNull() && !preferences.value("outputDeviceId").toString().isEmpty();
+        auto& settings = AppSettings::instance();
+        if (missingInput) { settings.setValue("AudioInputDeviceId", QByteArray::fromBase64(preferences.value("inputDeviceId").toString().toLatin1())); }
+        if (missingOutput) { settings.setValue("AudioOutputDeviceId", QByteArray::fromBase64(preferences.value("outputDeviceId").toString().toLatin1())); }
+        applyAudioDeviceSelection(input, output,
+            missingInput ? AudioDeviceSelection::Fallback : AudioDeviceSelection::OperatorChoice,
+            missingOutput ? AudioDeviceSelection::Fallback : AudioDeviceSelection::OperatorChoice, false);
+        if (missingInput || missingOutput) {
+            statusBar()->showMessage(tr("Saved audio device unavailable; using the system default temporarily. Saved preferences are kept."), 10000);
+        }
         const QString layout = preferences.value("layout").toString("1");
-        AppSettings::instance().setValue("PanadapterLayout", layout);
-        AppSettings::instance().save();
-        // Arrangement is client-owned; never create/delete radio panadapters
-        // while applying an operator profile.
+        settings.setValue("PanadapterLayout", layout);
+        settings.save();
         if (m_panStack) { m_panStack->rearrangeLayout(layout); }
     });
     connect(m_connPanel, &ConnectionPanel::connectRequested,
@@ -769,6 +775,8 @@ void MainWindow::wireDiscovery()
 
         m_wanReconnectTimer.stop();
         m_wanReconnectAttemptInProgress = false;
+        m_smartLink.setAccountLocked(false);
+        m_pendingWanRadio = {};
         m_connPanel->setStatusText("SmartLink sign-in required");
         statusBar()->showMessage("SmartLink reconnect stopped: " + err, 5000);
         setPanadapterConnectionAnimation(false);
@@ -931,11 +939,6 @@ void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
         m_connPanel->setStatusText(
             QStringLiteral("%1 is already in use by another client and can't be shared.")
                 .arg(info.model));
-        setPanadapterConnectionAnimation(false);
-        return;
-    }
-
-    if (!m_connPanel->applyWorkspaceOperator()) {
         setPanadapterConnectionAnimation(false);
         return;
     }

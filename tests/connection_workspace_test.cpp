@@ -5,6 +5,8 @@
 #include "gui/ConnectionPanel.h"
 
 #include <QApplication>
+#include <QPointingDevice>
+#include <QFocusEvent>
 #include <QAbstractItemModel>
 #include <QJsonDocument>
 #include <QListWidget>
@@ -61,24 +63,27 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     AppSettings& settings = AppSettings::instance();
     settings.load();
+    const QJsonObject fresh = ConnectionWorkspace::load();
+    check("clean settings do not invent a SmartLink account", fresh.value("accounts").toArray().isEmpty()
+        && fresh.value("selectedAccount").toString().isEmpty());
+    settings.removeRadioFeature("local", "", "ConnectionWorkspace");
     settings.setValue("LastConnectedRadioSerial", "saved-flex");
     settings.setValue("SmartLinkEmail", QString::fromLatin1(QByteArray("personal@example.test").toBase64()));
     settings.setValue("AudioInputDeviceId", QByteArray("missing-headset"));
+    settings.setValue("RecentConnectByIpAddresses", R"(["192.0.2.249"])" );
     settings.setValue("RoutedProfilesJson", R"({"radio.example.test":{"identity":{"family":"hl2"},"bind":{"mode":"explicit","interface_id":"vpn"}}})");
     settings.save();
     QJsonObject document = ConnectionWorkspace::load();
     check("default operator has the user-facing name", document.value("operators").toArray().first().toObject().value("name").toString() == "Radio operator");
     const QJsonArray starterStations = document.value("stations").toArray();
-    check("first workspace starts at Home with discoverable starter stations", starterStations.size() == 4
-        && starterStations[0].toObject().value("name").toString() == "Home"
-        && starterStations[1].toObject().value("name").toString() == "POTA"
-        && starterStations[2].toObject().value("name").toString() == "Club"
-        && starterStations[3].toObject().value("name").toString() == "RV");
+    check("first workspace starts with Home only", starterStations.size() == 1
+        && starterStations.first().toObject().value("name").toString() == "Home");
+    check("address history waits for explicit import", document.value("addressHistory").toArray() == QJsonArray{"192.0.2.249"});
     QJsonObject customized = document;
-    QJsonArray retained = starterStations;
-    retained.removeLast();
-    customized["stations"] = retained;
-    check("starter stations can be removed permanently", ConnectionWorkspace::save(customized)
+    QJsonObject namedHome = starterStations.first().toObject();
+    namedHome["name"] = QString::fromUtf8("Home 🏠");
+    customized["stations"] = QJsonArray{namedHome};
+    check("typed emoji in a location name survives save and reload", ConnectionWorkspace::save(customized)
         && ConnectionWorkspace::load() == customized);
     ConnectionWorkspace::save(document);
     const QJsonObject imported = document.value("stations").toArray().first().toObject();
@@ -90,7 +95,8 @@ int main(int argc, char** argv)
     check("migration preserves existing single-account key reference",
         document.value("selectedAccount").toString() == "legacy"
         && ConnectionWorkspace::credentialKey("legacy") == "smartlink_refresh_token");
-    check("legacy source is retained as downgrade snapshot", settings.contains("RoutedProfilesJson"));
+    check("legacy source is retained byte-for-byte", settings.value("RoutedProfilesJson").toString()
+        == QString::fromLatin1(R"({"radio.example.test":{"identity":{"family":"hl2"},"bind":{"mode":"explicit","interface_id":"vpn"}}})"));
     check("migration is idempotent", ConnectionWorkspace::load() == document);
     const QString secondAccount = ConnectionWorkspace::accountId("club@example.test");
     QJsonArray accounts = document.value("accounts").toArray();
@@ -125,7 +131,7 @@ int main(int argc, char** argv)
         legacyWorkspace["stations"] = QJsonArray{custom};
         ConnectionWorkspace::save(legacyWorkspace);
         const QJsonObject upgraded = ConnectionWorkspace::load();
-        check("starter migration keeps custom station names and membership", upgraded.value("stations").toArray().size() == 5
+        check("load keeps custom station names without adding unused locations", upgraded.value("stations").toArray().size() == 1
             && upgraded.value("stations").toArray().first().toObject().value("name").toString() == "Mountain shack"
             && upgraded.value("stations").toArray().first().toObject().value("connections") == imported.value("connections"));
         ConnectionWorkspace::save(document);
@@ -133,11 +139,35 @@ int main(int argc, char** argv)
 
     {
         ConnectionPanel panel;
+        check("one Location uses the compact header", panel.findChild<QWidget*>("connectionLocationsColumn")->isHidden()
+            && !panel.findChild<QWidget*>("connectionLocationHeader")->isHidden());
+        check("one operator uses a name instead of an empty selector", panel.findChild<QComboBox*>("connectionOperatorProfile")->isHidden()
+            && !panel.findChild<QLabel*>("connectionSingleOperator")->isHidden()
+            && panel.findChild<QPushButton*>("connectionManageProfiles")->text() == "Operators…");
+        auto* touchDevice = QTest::createTouchDevice(QInputDevice::DeviceType::TouchScreen);
+        auto* ipField = panel.findChild<QLineEdit*>("connectionManualIp");
+        QFocusEvent focusEvent(QEvent::FocusIn);
+        QApplication::sendEvent(ipField, &focusEvent);
+        auto* keyboard = ipField->findChild<QAction*>("connectionManualIpKeyboard");
+        check("touchscreen exposes the onscreen keyboard action", touchDevice && keyboard && keyboard->isVisible());
+        check("host entry requests URL characters without predictions", ipField->inputMethodHints().testFlag(Qt::ImhUrlCharactersOnly)
+            && ipField->inputMethodHints().testFlag(Qt::ImhNoPredictiveText));
+        auto* password = panel.findChild<QLineEdit*>("connectionManualIcomPassword");
+        check("password entry marks input sensitive", password && password->inputMethodHints().testFlag(Qt::ImhSensitiveData));
+        panel.findChild<QPushButton*>("connectionImportHistory")->click();
+        auto* historyDialog = panel.findChild<QDialog*>("connectionHistoryImport");
+        auto* review = historyDialog->findChild<QPushButton*>("connectionHistoryReview");
+        check("history import requires an explicit radio family", !review->isEnabled());
+        historyDialog->findChild<QComboBox*>("connectionHistoryFamily")->setCurrentIndex(0);
+        check("history can be reviewed without connecting", review->isEnabled());
+        historyDialog->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QSignalSpy connects(&panel, &ConnectionPanel::connectRequested);
         QSignalSpy audioChanges(&panel, &ConnectionPanel::operatorPreferencesRequested);
         QJsonObject next = document;
         QJsonArray stations = next.value("stations").toArray();
         const QString cabin = ConnectionWorkspace::newId();
+        stations.append(QJsonObject{{"id", ConnectionWorkspace::newId()}, {"name", "POTA"}, {"connections", QJsonArray()}});
         stations.append(QJsonObject{{"id", cabin}, {"name", "Cabin"}, {"connections", QJsonArray()}});
         next["stations"] = stations;
         check("additional station persists", ConnectionWorkspace::save(next));
@@ -181,7 +211,8 @@ int main(int argc, char** argv)
                 panel.workspaceSnapshot().value("operators").toArray().size() == 2
                 && ConnectionWorkspace::find(panel.workspaceSnapshot().value("operators").toArray(),
                     panel.workspaceSnapshot().value("selectedOperator").toString()).value("name").toString() == "Portable operator");
-            check("creating and selecting preferences never applies them to a radio", connects.isEmpty() && audioChanges.isEmpty());
+            check("create and use explicitly recalls local preferences without connecting", connects.isEmpty() && audioChanges.count() == 1);
+            audioChanges.clear();
         }
         panel.setConnected(true);
         check("live radio permits browsing another station", panel.selectWorkspaceProfile("stations", cabin));
@@ -194,12 +225,18 @@ int main(int argc, char** argv)
         QSignalSpy audioChanges(&panel, &ConnectionPanel::operatorPreferencesRequested);
         const QString importedOperator = document.value("selectedOperator").toString();
         panel.selectWorkspaceProfile("operators", importedOperator);
+        const QJsonObject savedPreferences = ConnectionWorkspace::find(panel.workspaceSnapshot().value("operators").toArray(), importedOperator).value("preferences").toObject();
+        check("an explicit operator switch recalls preferences with a visible fallback warning", audioChanges.count() == 1
+            && panel.findChild<QLabel*>("connectionOperatorWarning")->text().contains("system default")
+            && audioChanges.first().first().toJsonObject() == savedPreferences);
+        audioChanges.clear();
         panel.addDemoRadio();
-        // The public automation path uses the same missing-device guard.
+        // Reconnecting keeps current preferences after the explicit switch.
         QString error;
         panel.automationConnectLocalSerial("DEMO-0001", &error);
         QCoreApplication::processEvents();
-        check("missing saved microphone blocks connect without silent fallback", connects.isEmpty() && audioChanges.isEmpty());
+        check("connect succeeds without replaying a missing-device operator snapshot", connects.count() == 1 && audioChanges.isEmpty());
+        check("temporary fallback preserves the saved operator device", ConnectionWorkspace::find(panel.workspaceSnapshot().value("operators").toArray(), importedOperator).value("preferences").toObject() == savedPreferences);
     }
     {
         SmartLinkClient client;

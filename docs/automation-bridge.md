@@ -2799,14 +2799,15 @@ connect wait 30000
 disconnect
 ```
 
-`connect profiles` returns the versioned connection workspace: saved locations and
+`connect profiles` returns the credential-free, versioned connection workspace: saved locations and
 their connection paths, operator audio/layout preferences, account labels and
 references, and the selected IDs. The API retains the `stations` collection name
 for compatibility with saved documents; the UI calls these **Locations**.
 It never contains passwords or refresh tokens.
 It is available in Observe-only mode. `connect profile stations|operators <id>`
-persists a selection for the next connection, including while a radio is live;
-it neither connects nor applies audio or radio state. This mutation is refused
+persists a selection, including while a radio is live. Location selection does
+not connect or change audio. Explicitly switching operators recalls the saved
+computer audio/layout preferences, without changing radio-owned state. This mutation is refused
 in Observe-only mode. Profile creation and editing are exercised through the
 normal `connectionProfileEditor` widgets with `invoke`.
 

@@ -272,6 +272,7 @@ private:
     QString formatLocalRadioLabel(const RadioInfo& radio) const;
     QString formatWanRadioLabel(const WanRadioInfo& radio) const;
     void buildWorkspace(QVBoxLayout* root);
+    void importAddressHistory();
     void refreshWorkspace();
     void refreshWorkspaceDetails();
     bool persistWorkspace(const QJsonObject& document);
@@ -294,6 +295,12 @@ private:
 
     QJsonObject m_workspace;
     QListWidget* m_stationList{nullptr};
+    QWidget* m_locationColumn{nullptr};
+    QWidget* m_locationHeader{nullptr};
+    QLabel* m_singleLocationName{nullptr};
+    QLabel* m_singleOperatorName{nullptr};
+    QLabel* m_operatorWarning{nullptr};
+    QPushButton* m_historyImport{nullptr};
     QListWidget* m_workspaceRadioList{nullptr};
     QLabel* m_workspaceTitle{nullptr};
     QLabel* m_workspaceModel{nullptr};

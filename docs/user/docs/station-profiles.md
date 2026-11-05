@@ -6,17 +6,21 @@ description: "Organize saved radio connections by location and choose personal a
 
 **Connect to a radio** connects to an individual radio. Locations such as Home, POTA, Cabin or Club organize the saved radios and connection paths you can choose from. Each location can contain several radio families. A location can share a physical radio with another location while keeping its own connection paths. Open it with **File → Connect to Radio...**.
 
-An operator profile stores your microphone, audio output and panadapter arrangement. It is separate from SmartLink credentials and the radio's Global, TX and Mic profiles. Choosing a location or operator previews the next connection; it does not disconnect a live radio, change its operating state or reroute live audio.
+An operator profile stores your microphone, audio output and panadapter arrangement. It is separate from SmartLink credentials and the radio's Global, TX and Mic profiles. Choosing a location previews its radios without changing the live session. Switching operators explicitly recalls that operator’s saved computer audio and layout preferences.
 
 ## Setup
 
-The selected location appears in bold, and the blue **Radios at Home** heading updates to show the location you chose.
+A new setup starts with **Home**. With one location, its name and **Add location** appear above the radio list. Adding another location reveals the **Locations** column. The selected location appears in bold, and the blue radio-list heading names it.
 
-Home, POTA, Club and RV are supplied as starter locations. Rename or remove any of them, or add your own. Starter locations are created once; removing one keeps it removed.
+**Add location** offers **POTA**, **Club**, **Cabin** and **RV** as name suggestions. Choose one or type your own name, including emoji.
 
-<img src="/img/screens/station-home.png" width="912" alt="Connect to a radio with Home selected in bold and a blue Radios at Home heading above the radio list." />
+<img src="/img/screens/location-suggestions.png" width="636" alt="Add Location dialog offering POTA, Club, Cabin and RV name suggestions." />
 
-*Locations organize your saved radios. The selected location is bold; the blue heading names its radio list.*
+*Choose a suggested location name or type your own, including emoji.*
+
+<img src="/img/screens/station-home.png" width="1094" alt="Connect to a radio with a compact Home header and saved radio list." />
+
+*Home keeps a single-location setup compact. Add another location to reveal the Locations column.*
 
 1. Choose **+ Add location**, enter a distinguishable name and save.
 2. Add a discovered radio through **Nearby radios**, create a manual path with **+ Add radio by IP**, or save a remote radio through **SmartLink accounts…**.
@@ -26,7 +30,7 @@ Drag locations up or down to set their order; the order is saved automatically. 
 
 Press **Enter** or keypad **Enter** to save an entry in the location, saved-connection, operator and SmartLink account profile dialogs. The same keys confirm the destination in **Move radio** and **Copy connection to location**. Invalid entries stay open with a validation message.
 
-> **Upgrading from an older version:** **Home** imports your saved addresses, routed source interfaces and last radio. **Radio operator** imports your current audio and layout choices. Startup auto-connect keeps its existing setting. Rename these profiles whenever you are ready; no geographic names are assumed.
+> **Upgrading from an older version:** **Home** imports saved connections with a known radio family, routed source interfaces and the last radio. Older recent-address history is available through **Import address history…**: choose an address and radio type, review its settings, then save it. Merely reviewing an address does not connect. **Radio operator** imports your current audio and layout choices. Startup auto-connect keeps its existing setting. Rename these profiles whenever you are ready; no geographic names are assumed.
 
 ## Using saved connections
 
@@ -40,13 +44,13 @@ Connection forms retain the selected family's settings, including source interfa
 
 **Startup and connection preferences** contains startup auto-connect, adaptive throttling, Icom wake behavior and the simulator toggle. The window expands to show all preference checkboxes. These app-wide preferences keep their existing defaults.
 
-<img src="/img/screens/station-pota.png" width="912" alt="POTA selected in the Locations list with its radios and connection summary." />
+<img src="/img/screens/station-pota.png" width="1094" alt="POTA selected in the Locations list with its radios and connection summary." />
 
 *Choose POTA or another location to see its saved connection paths. Browsing locations does not connect or disconnect a radio.*
 
 ## Using operator profiles
 
-<img src="/img/screens/operator-profile-selection.png" width="732" alt="Operator profiles library with saved profiles and Create, Edit, Duplicate, Remove and Use profile actions." />
+<img src="/img/screens/operator-profile-selection.png" width="732" alt="Operators library with saved profiles and Create, Edit, Duplicate, Remove and Use profile actions." />
 
 *Operator profiles keep personal audio and layout preferences separate from locations and account credentials.*
 
@@ -54,14 +58,18 @@ Connection forms retain the selected family's settings, including source interfa
 
 *Start from defaults or another profile, then choose microphone, output and pan arrangement. Enter saves the profile.*
 
-1. Choose **Profiles…** to open **Operator profiles**.
+1. Choose **Operators…** to open **Operators**.
 2. Choose **Create**. Enter a unique name and start from app defaults, current preferences or another operator profile.
 3. Choose the microphone, audio output and pan arrangement, then **Create and use profile**.
-4. Use **Operating as** to choose an operator for the next connection, or select an entry in the library and **Use profile**.
+4. Use **Operating as** to switch operators, or select an entry in the library and **Use profile**. With one operator, its name appears as plain text; the dropdown appears when there are multiple operators.
 
 **Edit** renames or changes preferences. **Duplicate** creates an independent copy. To remove the selected profile, choose a replacement first; keep at least one operator. Profiles never contain account credentials, frequency, mode, power or radio operating profiles.
 
-Preferences apply when you connect. **System default** explicitly follows the computer's default device. A missing saved device is displayed as unavailable and blocks the connection until you choose a replacement or System default; AetherSDR does not silently choose another microphone.
+Preferences are recalled only when you explicitly switch operators or create and use a new operator. Reconnecting or browsing locations keeps your current computer audio and layout choices. Editing a saved operator changes its saved preferences.
+
+**System default** follows the computer’s default device. If an explicitly selected operator references an unavailable device, AetherSDR temporarily uses the system default and displays a warning. The saved device preference is kept, so it can be recalled when the device is available again.
+
+On a touchscreen, editable connection fields offer a keyboard button. Tapping a field requests the platform’s onscreen keyboard. Email, host and password fields provide appropriate input hints; the platform input method supplies the keyboard.
 
 ## Troubleshooting
 
@@ -76,9 +84,9 @@ Saving a connection does not establish reachability.
 
 ### The operator profile needs an unavailable device
 
-1. Open **Profiles…**, select the operator and choose **Edit**.
+1. Open **Operators…**, select the operator and choose **Edit**.
 2. Reconnect the saved device, choose a replacement, or explicitly choose **System default**.
-3. Save and retry the connection.
+3. Save the updated operator preferences. Switching to this operator recalls them.
 
 ### Profiles could not be saved
 

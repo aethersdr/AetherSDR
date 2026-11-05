@@ -1,5 +1,6 @@
 #include "ConnectionWorkspace.h"
 #include "core/AppSettings.h"
+#include "core/SettingsCredentialPolicy.h"
 
 #include <QByteArray>
 #include <QCryptographicHash>
@@ -44,6 +45,15 @@ bool validate(const QJsonObject& document, QString* error)
     if (document.value("version").toInt() != ConnectionWorkspace::kVersion || hasSecrets(document)
         || QJsonDocument(document).toJson(QJsonDocument::Compact).size() > 1024 * 1024) {
         return fail(error, QStringLiteral("Invalid connection workspace document."));
+    }
+    const QJsonValue history = document.value("addressHistory");
+    if (!history.isUndefined() && (!history.isArray() || history.toArray().size() > 256)) {
+        return fail(error, QStringLiteral("Invalid address history."));
+    }
+    for (const QJsonValue& value : history.toArray()) {
+        if (!value.isString() || value.toString().isEmpty() || value.toString().size() > 253) {
+            return fail(error, QStringLiteral("Invalid address history entry."));
+        }
     }
     const QJsonArray accounts = document.value("accounts").toArray();
     for (const QJsonValue& value : accounts) {
@@ -169,9 +179,7 @@ QString ConnectionWorkspace::credentialKey(const QString& id)
 {
     // Imported accounts retain the existing key; migration never copies or
     // deletes a working credential before the replacement is established.
-    return id.isEmpty() || id == QLatin1String("legacy")
-        ? QStringLiteral("smartlink_refresh_token")
-        : QStringLiteral("smartlink/%1/refresh_token").arg(id);
+    return SettingsCredentialPolicy::smartLinkCredentialKey(id);
 }
 
 QString ConnectionWorkspace::connectionCredentialId(const QString& host, const QString& username)
@@ -192,40 +200,6 @@ QJsonObject ConnectionWorkspace::load()
             return {};
         }
         if (!validate(document, nullptr)) { return {}; }
-        QJsonArray operators = document.value("operators").toArray();
-        if (uniqueName(operators, "Radio operator")) {
-            for (qsizetype i = 0; i < operators.size(); ++i) {
-                QJsonObject profile = operators[i].toObject();
-                if (profile.value("name").toString() == QLatin1String("Existing preferences")) {
-                    profile["name"] = "Radio operator";
-                    operators[i] = profile;
-                    document["operators"] = operators;
-                    if (!save(document)) { return {}; }
-                    break;
-                }
-            }
-        }
-        if (!document.value("starterStationsCreated").toBool()) {
-            QJsonArray stations = document.value("stations").toArray();
-            if (uniqueName(stations, "Home")) {
-                for (qsizetype i = 0; i < stations.size(); ++i) {
-                    QJsonObject station = stations[i].toObject();
-                    if (station.value("name").toString() == QLatin1String("Existing setup")) {
-                        station["name"] = "Home";
-                        stations[i] = station;
-                        break;
-                    }
-                }
-            }
-            for (const QString& name : {QStringLiteral("Home"), QStringLiteral("POTA"), QStringLiteral("Club"), QStringLiteral("RV")}) {
-                if (uniqueName(stations, name)) {
-                    stations.append(QJsonObject{{"id", newId()}, {"name", name}, {"connections", QJsonArray()}});
-                }
-            }
-            document["stations"] = stations;
-            document["starterStationsCreated"] = true;
-            if (!save(document)) { return {}; }
-        }
         return document;
     }
 
@@ -236,9 +210,11 @@ QJsonObject ConnectionWorkspace::load()
         settings.value("RoutedProfilesJson", "{}").toString().toUtf8()).object();
     const QJsonObject legacyIcom = QJsonDocument::fromJson(settings.value("Icom").toString().toUtf8()).object();
     QSet<QString> imported;
+    QJsonArray history;
     auto importAddress = [&](const QString& host, const QJsonObject& old) {
         if (host.trimmed().isEmpty() || imported.contains(host)) { return; }
         imported.insert(host);
+        for (qsizetype i = history.size(); i-- > 0;) { if (history[i].toString() == host) { history.removeAt(i); } }
         const QJsonObject identity = old.value("identity").toObject();
         const QString civSelection = legacyIcom.value("civSelection").toString();
         const int civAddress = legacyIcom.value("civAddress").toInt(0xa4);
@@ -252,12 +228,25 @@ QJsonObject ConnectionWorkspace::load()
             {"legacyCredentials", host == legacyIcom.value("lastHost").toString() || host == settings.value("LastRoutedRadioIp").toString()},
             {"route", old}, {"lowBandwidth", settings.value("LowBandwidthRemotePreferred", "False").toString() == "True"}});
     };
-    for (auto it = routed.begin(); it != routed.end(); ++it) { importAddress(it.key(), it.value().toObject()); }
+    for (auto it = routed.begin(); it != routed.end(); ++it) {
+        const QJsonObject route = it.value().toObject();
+        if (!route.value("identity").toObject().value("family").toString().isEmpty()) {
+            importAddress(it.key(), route);
+        } else {
+            history.append(it.key());
+        }
+    }
     for (const QJsonValue& host : QJsonDocument::fromJson(settings
              .value("RecentConnectByIpAddresses", "[]").toString().toUtf8()).array()) {
-        importAddress(host.toString(), {});
+        const QString address = host.toString().trimmed();
+        if (!address.isEmpty() && !imported.contains(address) && !history.contains(address)) { history.append(address); }
     }
-    importAddress(settings.value("LastRoutedRadioIp").toString(), {});
+    const QString lastHost = settings.value("LastRoutedRadioIp").toString();
+    if (!lastHost.isEmpty() && !imported.contains(lastHost)) {
+        const QString family = settings.value("ConnectByIpRadioFamily").toString();
+        if (!family.isEmpty()) { importAddress(lastHost, QJsonObject{{"identity", QJsonObject{{"family", family}}}}); }
+        else if (!history.contains(lastHost)) { history.append(lastHost); }
+    }
     const QString serial = settings.value("LastConnectedRadioSerial").toString();
     if (!serial.isEmpty() && settings.value("LastRoutedRadioIp").toString().isEmpty()) {
         connections.append(QJsonObject{{"id", newId()}, {"name", "Last radio"},
@@ -268,15 +257,14 @@ QJsonObject ConnectionWorkspace::load()
     const QString email = QString::fromUtf8(QByteArray::fromBase64(
         settings.value("SmartLinkEmail").toString().toUtf8()));
     // A legacy refresh token can exist without an email; keep its reference.
-    accounts.append(QJsonObject{{"id", "legacy"}, {"name", email.isEmpty() ? QStringLiteral("Existing account") : email.left(128)},
-                                 {"email", email}});
+    if (settings.contains("SmartLinkEmail")) {
+        accounts.append(QJsonObject{{"id", "legacy"}, {"name", email.isEmpty() ? QStringLiteral("SmartLink account") : email.left(128)},
+                                   {"email", email}});
+    }
     document = {{"version", kVersion}, {"selectedStation", stationId}, {"selectedOperator", operatorId},
-        {"selectedAccount", "legacy"}, {"accounts", accounts},
-        {"starterStationsCreated", true},
-        {"stations", QJsonArray{QJsonObject{{"id", stationId}, {"name", "Home"}, {"connections", connections}},
-            QJsonObject{{"id", newId()}, {"name", "POTA"}, {"connections", QJsonArray()}},
-            QJsonObject{{"id", newId()}, {"name", "Club"}, {"connections", QJsonArray()}},
-            QJsonObject{{"id", newId()}, {"name", "RV"}, {"connections", QJsonArray()}}}},
+        {"selectedAccount", accounts.isEmpty() ? QString() : QStringLiteral("legacy")}, {"accounts", accounts},
+        {"addressHistory", history},
+        {"stations", QJsonArray{QJsonObject{{"id", stationId}, {"name", "Home"}, {"connections", connections}}}},
         {"operators", QJsonArray{QJsonObject{{"id", operatorId}, {"name", "Radio operator"},
                                              {"preferences", captureOperatorPreferences()}}}}};
     return save(document) ? document : QJsonObject{};

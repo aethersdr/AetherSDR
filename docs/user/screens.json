@@ -4710,8 +4710,31 @@
           "_allow_fail": true
         }
       ],
-      "caption": "Locations organize your saved radios. The selected location is bold; the blue heading names its radio list.",
-      "alt": "Connect to a radio with Home selected in bold and a blue Radios at Home heading above the radio list."
+      "caption": "Home keeps a single-location setup compact. Add another location to reveal the Locations column.",
+      "alt": "Connect to a radio with a compact Home header and saved radio list."
+    },
+    {
+      "id": "location-suggestions",
+      "page": "station-profiles",
+      "anchor_heading": "Setup",
+      "radio": "demo",
+      "alt": "Add Location dialog offering POTA, Club, Cabin and RV name suggestions.",
+      "caption": "Choose a suggested location name or type your own, including emoji.",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "show"
+        },
+        {
+          "cmd": "invoke",
+          "target": "connectionAddStation",
+          "action": "click"
+        },
+        {
+          "cmd": "grab",
+          "target": "connectionProfileEditor"
+        }
+      ]
     },
     {
       "id": "station-pota",
@@ -4792,7 +4815,7 @@
         }
       ],
       "caption": "Operator profiles keep personal audio and layout preferences separate from locations and account credentials.",
-      "alt": "Operator profiles library with saved profiles and Create, Edit, Duplicate, Remove and Use profile actions."
+      "alt": "Operators library with saved profiles and Create, Edit, Duplicate, Remove and Use profile actions."
     },
     {
       "id": "operator-profile-creation",

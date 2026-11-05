@@ -1,3 +1,4 @@
+#include "core/SettingsCredentialPolicy.h"
 #include "core/backends/icom/IcomCredentials.h"
 
 #include <QLoggingCategory>
@@ -66,7 +67,7 @@ void IcomCredentials::loadForConnection(const QString& id, QObject* context,
 #ifdef HAVE_KEYCHAIN
     auto* job = new QKeychain::ReadPasswordJob(QLatin1String(kKeychainService));
     job->setAutoDelete(true);
-    job->setKey(QStringLiteral("icom/%1/password").arg(id));
+    job->setKey(SettingsCredentialPolicy::icomCredentialKey(id));
     job->setInsecureFallback(false);
     QObject::connect(job, &QKeychain::Job::finished, context, [id, callback = std::move(callback)](QKeychain::Job* job) {
         const QString value = job->error() == QKeychain::NoError
@@ -94,7 +95,7 @@ void IcomCredentials::saveForConnection(const QString& id, const QString& passwo
 #ifdef HAVE_KEYCHAIN
     auto* job = new QKeychain::WritePasswordJob(QLatin1String(kKeychainService));
     job->setAutoDelete(true);
-    job->setKey(QStringLiteral("icom/%1/password").arg(id));
+    job->setKey(SettingsCredentialPolicy::icomCredentialKey(id));
     job->setInsecureFallback(false);
     job->setTextData(password);
     QObject::connect(job, &QKeychain::Job::finished, job, [](QKeychain::Job* job) {
