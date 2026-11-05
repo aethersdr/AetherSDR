@@ -3,7 +3,8 @@
 #include "Theme.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
-#include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/IRadioBackend.h"
+#include "core/backends/RadioCapabilities.h"
 
 #include <QAccessible>
 #include <QCheckBox>
@@ -30,6 +31,20 @@ namespace {
 constexpr int kScaleMax = 256;      // IsFeedbackLevelOK's ceiling
 constexpr int kWindowLow = 128;     // FeedbackInRange: 128 < fb <= 181
 constexpr int kWindowHigh = 181;
+constexpr int kAttMin = -28;        // MI0BOT: the HL2 goes negative
+constexpr int kAttMax = 31;
+
+// calcc.c's _calcc_state, in its order: what the status map's engineState is.
+enum EngineState {
+    LReset, LWait, LMoxDelay, LSetup, LCollect, MoxCheck, LCalc, LDelay, LStayOn, LTurnOn
+};
+
+quint64 nextRequest()
+{
+    // GUI thread only. A range of its own, apart from other extension clients.
+    static quint64 sequence = 0x5053000000000000ULL;   // "PS"
+    return ++sequence;
+}
 
 QJsonObject preferences()
 {
@@ -160,7 +175,6 @@ void PureSignalFeedbackMeter::paintEvent(QPaintEvent*)
 
 PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
 {
-    qRegisterMetaType<hl2::Hl2PureSignalStatus>("AetherSDR::hl2::Hl2PureSignalStatus");
     setObjectName(QStringLiteral("PureSignalApplet"));
     setAccessibleName(tr("PureSignal"));
     theme::setContainer(this, QStringLiteral("applet/puresignal"));
@@ -246,7 +260,7 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     m_attenuation = slider;
     m_attenuation->setObjectName(QStringLiteral("pureSignalAttenuation"));
     m_attenuation->setAccessibleName(tr("PureSignal TX attenuation"));
-    m_attenuation->setRange(hl2::Hl2PureSignalLogic::kAttMin, hl2::Hl2PureSignalLogic::kAttMax);
+    m_attenuation->setRange(kAttMin, kAttMax);
     m_attenuation->setSingleStep(1);
     m_attenuation->setPageStep(5);
     applyPrimarySliderStyle(m_attenuation);
@@ -282,48 +296,48 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     const QJsonObject prefs = preferences();
     m_status.autoCalibrate = prefs.value(QStringLiteral("autoCalibrate")).toBool(true);
     m_status.autoAttenuate = prefs.value(QStringLiteral("autoAttenuate")).toBool(true);
-    m_status.attenuationDb = hl2::Hl2PureSignalLogic::clampAtt(
-        prefs.value(QStringLiteral("attenuationDb")).toInt(hl2::Hl2PureSignalLogic::kAttMax));
+    m_status.attenuationDb = std::clamp(
+        prefs.value(QStringLiteral("attenuationDb")).toInt(kAttMax), kAttMin, kAttMax);
 
     connect(m_enable, &QPushButton::clicked, this, [this](bool on) {
-        if (m_backend) { m_backend->setPureSignalEnabled(on); }
+        send(QStringLiteral("enable"), on);
         // The backend's answer decides what the button shows.
         QSignalBlocker block(m_enable);
         m_enable->setChecked(m_status.enabled);
     });
     connect(m_auto, &QPushButton::clicked, this, [this](bool on) {
         m_status.autoCalibrate = on;
-        if (m_backend) { m_backend->setPureSignalAutoCalibrate(on); }
+        send(QStringLiteral("auto"), on);
         savePreferences();
     });
     connect(m_single, &QPushButton::clicked, this, [this] {
-        if (m_backend) { m_backend->pureSignalCalibrateOnce(); }
+        send(QStringLiteral("single"));
     });
     connect(m_autoAttenuate, &QCheckBox::toggled, this, [this](bool on) {
         m_status.autoAttenuate = on;
         m_attenuation->setEnabled(!on);
-        if (m_backend) { m_backend->setPureSignalAutoAttenuate(on); }
+        send(QStringLiteral("autoatt"), on);
         savePreferences();
     });
     connect(m_attenuation, &QSlider::valueChanged, this, [this](int att) {
         showAttenuation(att);
         m_status.attenuationDb = att;
-        if (m_backend) { m_backend->setPureSignalAttenuationDb(att); }
+        send(QStringLiteral("att"), att);
         savePreferences();
     });
     connect(m_reset, &QPushButton::clicked, this, [this] {
-        if (m_backend) { m_backend->pureSignalResetCorrection(); }
+        send(QStringLiteral("reset"));
     });
     connect(m_save, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getSaveFileName(this, tr("Save PureSignal correction"),
             QDir(defaultCorrectionDir()).filePath(QStringLiteral("hl2-puresignal.psc")),
             tr("PureSignal correction (*.psc);;All files (*)"));
-        if (!path.isEmpty() && m_backend) { m_backend->savePureSignalCorrection(path); }
+        if (!path.isEmpty()) { send(QStringLiteral("save"), path); }
     });
     connect(m_restore, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getOpenFileName(this, tr("Restore PureSignal correction"),
             defaultCorrectionDir(), tr("PureSignal correction (*.psc);;All files (*)"));
-        if (!path.isEmpty() && m_backend) { m_backend->restorePureSignalCorrection(path); }
+        if (!path.isEmpty()) { send(QStringLiteral("restore"), path); }
     });
     connect(m_settingsToggle, &QPushButton::toggled, this, &PureSignalApplet::setSettingsExpanded);
 
@@ -345,62 +359,133 @@ QSize PureSignalApplet::minimumSizeHint() const { return {220, layout()->minimum
 
 QString PureSignalApplet::engineStateName(int state)
 {
-    using L = hl2::Hl2PureSignalLogic;
     switch (state) {
-    case L::LReset:    return tr("Reset");
-    case L::LWait:     return tr("Waiting");
-    case L::LMoxDelay: return tr("MOX delay");
-    case L::LSetup:    return tr("Setup");
-    case L::LCollect:  return tr("Collecting");
-    case L::MoxCheck:  return tr("MOX check");
-    case L::LCalc:     return tr("Calculating");
-    case L::LDelay:    return tr("Delay");
-    case L::LStayOn:   return tr("Holding");
-    case L::LTurnOn:   return tr("Turning on");
+    case LReset:    return tr("Reset");
+    case LWait:     return tr("Waiting");
+    case LMoxDelay: return tr("MOX delay");
+    case LSetup:    return tr("Setup");
+    case LCollect:  return tr("Collecting");
+    case MoxCheck:  return tr("MOX check");
+    case LCalc:     return tr("Calculating");
+    case LDelay:    return tr("Delay");
+    case LStayOn:   return tr("Holding");
+    case LTurnOn:   return tr("Turning on");
     default:           return tr("State %1").arg(state);
     }
 }
 
-void PureSignalApplet::setBackend(hl2::Hl2Backend* backend)
+PureSignalView PureSignalView::fromFields(const QVariantMap& f, PureSignalView v)
 {
+    const auto b = [&f](const char* key, bool& out) {
+        const auto it = f.constFind(QLatin1String(key));
+        if (it != f.constEnd()) { out = it->toBool(); }
+    };
+    const auto i = [&f](const char* key, int& out) {
+        const auto it = f.constFind(QLatin1String(key));
+        if (it != f.constEnd()) { out = it->toInt(); }
+    };
+    b("available", v.available);
+    if (f.contains(QStringLiteral("unavailableReason"))) {
+        v.unavailableReason = f.value(QStringLiteral("unavailableReason")).toString();
+    }
+    b("enabled", v.enabled);
+    b("autoCalibrate", v.autoCalibrate);
+    b("autoAttenuate", v.autoAttenuate);
+    b("calibrating", v.calibrating);
+    b("correcting", v.correcting);
+    i("feedbackLevel", v.feedbackLevel);
+    i("calibrationCount", v.calibrationCount);
+    i("engineState", v.engineState);
+    i("attenuationDb", v.attenuationDb);
+    i("attMin", v.attMin);
+    i("attMax", v.attMax);
+    b("keyed", v.keyed);
+    return v;
+}
+
+bool PureSignalApplet::supports(const RadioCapabilities& caps)
+{
+    return caps.extensionNamespaces.contains(QStringLiteral("hl2"))
+        && caps.extensions.value(QStringLiteral("hl2")).toMap()
+               .value(QStringLiteral("puresignal")).toInt() == 1;
+}
+
+void PureSignalApplet::setBackend(IRadioBackend* backend)
+{
+    if (backend && !supports(backend->capabilities())) { backend = nullptr; }
     if (backend == m_backend.data()) { return; }
-    for (const QMetaObject::Connection& c : std::as_const(m_connections)) { disconnect(c); }
-    m_connections.clear();
     const bool was = isAvailable();
+    unbind();
     m_backend = backend;
-    hl2::Hl2PureSignalStatus fresh;
-    fresh.autoCalibrate = m_status.autoCalibrate;
-    fresh.autoAttenuate = m_status.autoAttenuate;
-    fresh.attenuationDb = m_status.attenuationDb;
     if (backend) {
-        m_connections.append(connect(backend, &hl2::Hl2Backend::pureSignalStatusChanged,
-                                     this, &PureSignalApplet::onStatus));
+        const QPointer<IRadioBackend> source = backend;
+        m_connections.append(connect(backend, &IRadioBackend::extensionStatus, this,
+            [this, source](const QString& ns, const QString& kind, const QVariantMap& fields) {
+                if (source && source == m_backend && ns == QLatin1String("hl2")
+                    && kind == QLatin1String("puresignal")) {
+                    onFields(fields);
+                }
+            }));
+        m_connections.append(connect(backend, &IRadioBackend::extensionResult, this,
+            [this, source](quint64 id, const QVariant& value) {
+                if (!source || source != m_backend || !m_pending.remove(id)) { return; }
+                onFields(value.toMap());
+            }));
+        m_connections.append(connect(backend, &IRadioBackend::extensionError, this,
+            [this, source](quint64 id, const QString& reason) {
+                if (!source || source != m_backend || !m_pending.remove(id)) { return; }
+                m_error = reason;
+                onStatus(m_status);
+            }));
         // A family switch destroys the backend without unbinding it first.
         m_connections.append(connect(backend, &QObject::destroyed, this, [this] {
-            for (const QMetaObject::Connection& c : std::as_const(m_connections)) { disconnect(c); }
-            m_connections.clear();
-            m_backend.clear();
-            hl2::Hl2PureSignalStatus gone;
-            gone.autoCalibrate = m_status.autoCalibrate;
-            gone.autoAttenuate = m_status.autoAttenuate;
-            gone.attenuationDb = m_status.attenuationDb;
-            onStatus(gone);
+            unbind();
             emit availabilityChanged(false);
         }));
         pushPreferences();
-        fresh.available = backend->pureSignalStatus().available;
-        fresh.unavailableReason = backend->pureSignalStatus().unavailableReason;
+        send(QStringLiteral("get"));
+    } else {
+        onStatus(m_status);
     }
-    onStatus(fresh);
     if (was != isAvailable()) { emit availabilityChanged(isAvailable()); }
+}
+
+void PureSignalApplet::unbind()
+{
+    for (const QMetaObject::Connection& c : std::as_const(m_connections)) { disconnect(c); }
+    m_connections.clear();
+    m_pending.clear();
+    m_error.clear();
+    m_backend.clear();
+    // Keep the operator's switches; everything the radio reported goes.
+    PureSignalView gone;
+    gone.autoCalibrate = m_status.autoCalibrate;
+    gone.autoAttenuate = m_status.autoAttenuate;
+    gone.attenuationDb = m_status.attenuationDb;
+    m_status = gone;
+    onStatus(m_status);
+}
+
+void PureSignalApplet::send(const QString& verb, const QVariant& arg)
+{
+    if (!m_backend) { return; }
+    m_error.clear();
+    const quint64 id = nextRequest();
+    m_pending.insert(id);
+    m_backend->invokeExtension(QStringLiteral("hl2"), QStringLiteral("puresignal.") + verb, id, arg);
+}
+
+void PureSignalApplet::onFields(const QVariantMap& fields)
+{
+    if (fields.isEmpty()) { return; }
+    onStatus(PureSignalView::fromFields(fields, m_status));
 }
 
 void PureSignalApplet::pushPreferences()
 {
-    if (!m_backend) { return; }
-    m_backend->setPureSignalAutoCalibrate(m_status.autoCalibrate);
-    m_backend->setPureSignalAutoAttenuate(m_status.autoAttenuate);
-    m_backend->setPureSignalAttenuationDb(m_status.attenuationDb);
+    send(QStringLiteral("auto"), m_status.autoCalibrate);
+    send(QStringLiteral("autoatt"), m_status.autoAttenuate);
+    send(QStringLiteral("att"), m_status.attenuationDb);
 }
 
 void PureSignalApplet::showAttenuation(int att)
@@ -408,8 +493,13 @@ void PureSignalApplet::showAttenuation(int att)
     m_attenuationValue->setText(tr("%1 dB").arg(att));
 }
 
-void PureSignalApplet::onStatus(const hl2::Hl2PureSignalStatus& s)
+void PureSignalApplet::onStatus(const PureSignalView& s)
 {
+    if (m_attenuation && s.attMin < s.attMax
+        && (m_attenuation->minimum() != s.attMin || m_attenuation->maximum() != s.attMax)) {
+        const QSignalBlocker block(m_attenuation);
+        m_attenuation->setRange(s.attMin, s.attMax);
+    }
     // The operator's switches are this widget's; the backend reports the rest.
     const bool autoCal = m_status.autoCalibrate;
     const bool autoAtt = m_status.autoAttenuate;
@@ -448,6 +538,9 @@ void PureSignalApplet::onStatus(const hl2::Hl2PureSignalStatus& s)
     QString token = QStringLiteral("color.text.secondary");
     if (!bound) {
         text = tr("Hermes-Lite 2 only");
+    } else if (!m_error.isEmpty()) {
+        text = m_error;
+        token = QStringLiteral("color.accent.danger");
     } else if (!s.available && !s.enabled) {
         text = s.unavailableReason.isEmpty() ? tr("Unavailable") : s.unavailableReason;
         token = QStringLiteral("color.accent.warning");

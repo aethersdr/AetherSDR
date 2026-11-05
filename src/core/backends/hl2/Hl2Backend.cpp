@@ -363,13 +363,15 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_txDsp->moveToThread(m_ioThread);
     // PureSignal lives with the TXA channel it drives and the wire it sets the
     // keyed feedback gain on, so neither needs a lock.
+    qRegisterMetaType<Hl2PureSignalStatus>("AetherSDR::hl2::Hl2PureSignalStatus");
     m_pureSignal = new Hl2PureSignal(m_txDsp);
     m_pureSignal->setTxGainSink([metis = m_metis](int db) { metis->setPureSignalTxGainDb(db); });
     m_pureSignal->moveToThread(m_ioThread);
     connect(m_pureSignal, &Hl2PureSignal::statusChanged, this,
             [this](const Hl2PureSignalStatus& s) {
         m_psStatus = s;
-        emit pureSignalStatusChanged(s);
+        emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"),
+                             pureSignalFields());
     }, Qt::QueuedConnection);
     AetherSDR::startStreamThread(m_ioThread);   // High QoS; see AppActivity.h
 
@@ -1894,16 +1896,91 @@ void Hl2Backend::refreshPureSignalAvailability()
                               Q_ARG(bool, available), Q_ARG(QString, blocker));
 }
 
-void Hl2Backend::setPureSignalEnabled(bool on)
+bool Hl2Backend::setPureSignalEnabled(bool on)
 {
     if (on) {
         refreshPureSignalAvailability();
         if (!m_psAvailable) {
             qCWarning(lcHl2) << "HL2: PureSignal refused —" << m_psUnavailableReason;
-            return;
+            return false;
         }
     }
     applyPureSignalWire(on);
+    return true;
+}
+
+QVariantMap Hl2Backend::pureSignalFields() const
+{
+    // The controller's last report, with the three facts the GUI thread owns
+    // laid over it: the controller hears about them a queued hop later.
+    Hl2PureSignalStatus s = m_psStatus;
+    s.enabled = m_psEnabled;
+    s.available = m_psAvailable;
+    s.unavailableReason = m_psUnavailableReason;
+    return pureSignalStatusFields(s);
+}
+
+void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const QVariant& arg)
+{
+    const auto refuse = [this, requestId](const QString& reason) {
+        if (requestId != 0)
+            emit extensionError(requestId, reason);
+    };
+    const auto boolArg = [&arg](bool& out) {
+        if (!arg.canConvert<bool>())
+            return false;
+        out = arg.toBool();
+        return true;
+    };
+    bool on = false;
+    if (verb == QLatin1String("puresignal.get")) {
+        refreshPureSignalAvailability();
+    } else if (verb == QLatin1String("puresignal.enable")) {
+        if (!boolArg(on))
+            return refuse(QStringLiteral("puresignal.enable: expects a bool"));
+        if (!setPureSignalEnabled(on))
+            return refuse(m_psUnavailableReason);
+    } else if (verb == QLatin1String("puresignal.auto")) {
+        if (!boolArg(on))
+            return refuse(QStringLiteral("puresignal.auto: expects a bool"));
+        setPureSignalAutoCalibrate(on);
+    } else if (verb == QLatin1String("puresignal.autoatt")) {
+        if (!boolArg(on))
+            return refuse(QStringLiteral("puresignal.autoatt: expects a bool"));
+        setPureSignalAutoAttenuate(on);
+    } else if (verb == QLatin1String("puresignal.att")) {
+        bool ok = false;
+        const int att = arg.toInt(&ok);
+        if (!ok)
+            return refuse(QStringLiteral("puresignal.att: expects an integer in dB"));
+        setPureSignalAttenuationDb(Hl2PureSignalLogic::clampAtt(att));
+    } else if (verb == QLatin1String("puresignal.single")
+               || verb == QLatin1String("puresignal.reset")) {
+        if (!m_psEnabled)
+            return refuse(QStringLiteral("PureSignal is off"));
+        if (verb == QLatin1String("puresignal.single"))
+            pureSignalCalibrateOnce();
+        else
+            pureSignalResetCorrection();
+    } else if (verb == QLatin1String("puresignal.save")
+               || verb == QLatin1String("puresignal.restore")) {
+        const QString path = arg.toString();
+        if (path.isEmpty())
+            return refuse(QStringLiteral("%1: expects a file path").arg(verb));
+        if (!m_psEnabled)
+            return refuse(QStringLiteral("PureSignal is off"));
+        if (verb == QLatin1String("puresignal.save"))
+            savePureSignalCorrection(path);
+        else
+            restorePureSignalCorrection(path);
+    } else {
+        return refuse(QStringLiteral("hl2: unknown verb %1").arg(verb));
+    }
+    // Completes locally, like freqcal.*: the reply is the state as this thread
+    // knows it now. What the controller does with the request follows as
+    // extensionStatus once it has acted.
+    if (requestId != 0)
+        emit extensionResult(requestId, pureSignalFields());
 }
 
 void Hl2Backend::setPureSignalAutoCalibrate(bool on)
@@ -2269,6 +2346,14 @@ RadioCapabilities Hl2Backend::capabilities() const
     // an extension call, so leaving it empty while the verbs work would report
     // the opposite of the truth.
     c.extensionNamespaces << QStringLiteral("hl2");
+    // The puresignal.* verbs and the "puresignal" status kind, version 1.
+    // Declared on every HL2: whether it can run right now (TXA build, board,
+    // span, receivers open) is in the status map's available/unavailableReason.
+    {
+        QVariantMap hl2Ext = c.extensions.value(QStringLiteral("hl2")).toMap();
+        hl2Ext.insert(QStringLiteral("puresignal"), 1);
+        c.extensions.insert(QStringLiteral("hl2"), hl2Ext);
+    }
     // Wideband converter view (docs/HERMES.md §13 item 18), declared rather than
     // inferred from the family string. Only while connected: the verb raises
     // wide_spectrum on a streaming radio and MetisClient refuses otherwise.
@@ -6000,6 +6085,10 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                                  const QVariant& arg)
 {
     if (ns == QLatin1String("hl2")) {
+        if (verb.startsWith(QLatin1String("puresignal."))) {
+            invokePureSignal(verb, requestId, arg);
+            return;
+        }
         // Manual frequency calibration. Completes LOCALLY — unlike the Flex
         // tuner/amp verbs this namespace is modelled on, there is no device
         // round trip to await: the correction is a host-side scalar and the

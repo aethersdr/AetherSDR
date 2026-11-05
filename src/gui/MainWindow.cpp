@@ -7574,9 +7574,10 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     // without cached wisdom, so the operator needs a visible explanation. The
     // panadapter animation is hidden behind ConnectionPanel (parented
     // Qt::Dialog, shown until connected), hence a dialog (#5052, #4775).
-    // PureSignal is HL2-only; any other family unbinds the applet.
+    // PureSignal binds through the seam: the applet checks the backend's
+    // advertised hl2/puresignal extension and unbinds from anything else.
     if (m_appletPanel && m_appletPanel->pureSignalApplet())
-        m_appletPanel->pureSignalApplet()->setBackend(dynamic_cast<hl2::Hl2Backend*>(backend));
+        m_appletPanel->pureSignalApplet()->setBackend(backend);
 
     if (auto* hl2Backend = dynamic_cast<hl2::Hl2Backend*>(backend)) {
         // Disconnected first, like every other lambda connect in this function:

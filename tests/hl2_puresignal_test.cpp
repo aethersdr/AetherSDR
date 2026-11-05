@@ -193,6 +193,37 @@ void wire()
     check(MetisClient::effectiveNumRx(p) == 6, "more than four is left alone");
 }
 
+void statusFields()
+{
+    hl2::Hl2PureSignalStatus s;
+    s.available = true;
+    s.enabled = true;
+    s.correcting = true;
+    s.feedbackLevel = 150;
+    s.calibrationCount = 3;
+    s.engineState = Hl2PureSignalLogic::LStayOn;
+    s.attenuationDb = 12;
+    s.keyed = true;
+    const QVariantMap f = hl2::pureSignalStatusFields(s);
+    check(f.value(QStringLiteral("available")).toBool()
+          && f.value(QStringLiteral("enabled")).toBool()
+          && f.value(QStringLiteral("correcting")).toBool()
+          && f.value(QStringLiteral("keyed")).toBool(), "flags reach the extension map");
+    check(f.value(QStringLiteral("feedbackLevel")).toInt() == 150
+          && f.value(QStringLiteral("calibrationCount")).toInt() == 3
+          && f.value(QStringLiteral("engineState")).toInt() == 8
+          && f.value(QStringLiteral("attenuationDb")).toInt() == 12, "values reach the map");
+    check(f.value(QStringLiteral("attMin")).toInt() == -28
+          && f.value(QStringLiteral("attMax")).toInt() == 31, "the map carries the att range");
+    check(f.value(QStringLiteral("feedbackWindowLow")).toInt() == 128
+          && f.value(QStringLiteral("feedbackWindowHigh")).toInt() == 181,
+          "the map carries calcc's window");
+    check(f.contains(QStringLiteral("unavailableReason"))
+          && f.contains(QStringLiteral("autoCalibrate"))
+          && f.contains(QStringLiteral("autoAttenuate"))
+          && f.contains(QStringLiteral("calibrating")), "every key is always present");
+}
+
 } // namespace
 
 int main()
@@ -203,6 +234,7 @@ int main()
     restore();
     autoAttenuate();
     wire();
+    statusFields();
     if (g_failures == 0)
         std::puts("hl2_puresignal_test: all checks passed");
     return g_failures == 0 ? 0 : 1;

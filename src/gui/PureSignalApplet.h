@@ -1,8 +1,10 @@
 #pragma once
 
-#include "core/backends/hl2/Hl2PureSignal.h"
-
 #include <QPointer>
+#include <QSet>
+#include <QString>
+#include <QVariant>
+#include <QVariantMap>
 #include <QVector>
 #include <QWidget>
 
@@ -14,7 +16,32 @@ class QSlider;
 
 namespace AetherSDR {
 
-namespace hl2 { class Hl2Backend; }
+class IRadioBackend;
+struct RadioCapabilities;
+
+// The "hl2" extension's "puresignal" status map as this applet reads it. The
+// applet sits above the radio seam, so it reaches the HL2 only through
+// IRadioBackend::invokeExtension / extensionStatus and keeps its own copy of
+// the few numbers it needs; the map overrides them when it carries them.
+struct PureSignalView {
+    bool available = false;
+    QString unavailableReason;
+    bool enabled = false;
+    bool autoCalibrate = false;
+    bool autoAttenuate = true;
+    bool calibrating = false;
+    bool correcting = false;
+    int feedbackLevel = 0;
+    int calibrationCount = 0;
+    int engineState = 0;
+    int attenuationDb = 31;
+    int attMin = -28;
+    int attMax = 31;
+    bool keyed = false;
+    // Only the keys present in `fields` change `base`.
+    [[nodiscard]] static PureSignalView fromFields(const QVariantMap& fields,
+                                                   PureSignalView base = {});
+};
 
 // The feedback level bar: 0..256 with calcc's target window (128..181) marked,
 // coloured the way Thetis colours its feedback indicator.
@@ -43,8 +70,10 @@ class PureSignalApplet : public QWidget {
 public:
     explicit PureSignalApplet(QWidget* parent = nullptr);
     ~PureSignalApplet() override;
-    // Null unbinds (a non-HL2 radio, or none).
-    void setBackend(hl2::Hl2Backend* backend);
+    // Binds when the backend advertises the hl2 extension's puresignal verbs;
+    // anything else (another family, or null) unbinds.
+    void setBackend(IRadioBackend* backend);
+    [[nodiscard]] static bool supports(const RadioCapabilities& caps);
     [[nodiscard]] bool isAvailable() const { return !m_backend.isNull(); }
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -52,15 +81,22 @@ public:
 signals:
     void availabilityChanged(bool available);
 private:
-    void onStatus(const hl2::Hl2PureSignalStatus& status);
+    void onStatus(const PureSignalView& status);
+    void onFields(const QVariantMap& fields);
+    // invokeExtension("hl2", "puresignal." + verb), tracked so the reply and a
+    // refusal can be told apart from other clients' traffic.
+    void send(const QString& verb, const QVariant& arg = {});
+    void unbind();
     void setSettingsExpanded(bool expanded);
     void savePreferences();
     void pushPreferences();
     void showAttenuation(int att);
 
-    QPointer<hl2::Hl2Backend> m_backend;
+    QPointer<IRadioBackend> m_backend;
     QVector<QMetaObject::Connection> m_connections;
-    hl2::Hl2PureSignalStatus m_status;
+    QSet<quint64> m_pending;
+    QString m_error;              // the last refusal, until the next request
+    PureSignalView m_status;
     QPushButton* m_enable{nullptr};
     QPushButton* m_auto{nullptr};
     QPushButton* m_single{nullptr};

@@ -1,3 +1,6 @@
+// Ported from Thetis' PSForm.cs (MI0BOT's HL2 fork). Attribution and
+// license: see Hl2PureSignal.h and THIRD_PARTY_LICENSES entry 36.
+
 #include "core/backends/hl2/Hl2PureSignal.h"
 
 #include "core/backends/hl2/Hl2TxDsp.h"
@@ -442,6 +445,29 @@ void Hl2PureSignal::publish()
     m_havePublished = true;
     if (!same)
         emit statusChanged(s);
+}
+
+QVariantMap pureSignalStatusFields(const Hl2PureSignalStatus& s)
+{
+    return QVariantMap{
+        {QStringLiteral("available"), s.available},
+        {QStringLiteral("unavailableReason"), s.unavailableReason},
+        {QStringLiteral("enabled"), s.enabled},
+        {QStringLiteral("autoCalibrate"), s.autoCalibrate},
+        {QStringLiteral("autoAttenuate"), s.autoAttenuate},
+        {QStringLiteral("calibrating"), s.calibrating},
+        {QStringLiteral("correcting"), s.correcting},
+        {QStringLiteral("feedbackLevel"), s.feedbackLevel},
+        {QStringLiteral("calibrationCount"), s.calibrationCount},
+        {QStringLiteral("engineState"), s.engineState},
+        {QStringLiteral("attenuationDb"), s.attenuationDb},
+        {QStringLiteral("attMin"), Hl2PureSignalLogic::kAttMin},
+        {QStringLiteral("attMax"), Hl2PureSignalLogic::kAttMax},
+        {QStringLiteral("feedbackWindowLow"), 128},
+        {QStringLiteral("feedbackWindowHigh"), 181},
+        {QStringLiteral("maxTx"), s.maxTx},
+        {QStringLiteral("keyed"), s.keyed},
+    };
 }
 
 }  // namespace AetherSDR::hl2

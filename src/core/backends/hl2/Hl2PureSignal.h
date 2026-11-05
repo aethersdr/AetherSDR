@@ -4,7 +4,17 @@
 //
 // A port of the PureSignal control loop in Thetis as MI0BOT runs it on the
 // HL2 (Project Files/Source/Console/PSForm.cs, timer1code / timer2code, and
-// networkproto1.c for the wire), GPL like the rest of AetherSDR. WDSP's calcc
+// networkproto1.c for the wire).
+//
+//   Ported from: https://github.com/mi0bot/OpenHPSDR-Thetis
+//                (commit f9ff9f2515b7bf3e5aee5c1a155222a4f836c179)
+//   Copyright (C) 2000-2025 the original Thetis authors
+//   Copyright (C) 2020-2026 Richard Samphire (MW0LGE)
+//   2023-26 HL2 modifications by MI0BOT
+//   License: GPL-2.0-or-later, carried here as part of GPL-3.0-or-later
+//   AetherSDR. See THIRD_PARTY_LICENSES entry 36.
+//
+// WDSP's calcc
 // stage does the actual calibration and correction; this file is the part
 // Thetis keeps in its GUI: which SetPSControl() to send when, and the
 // auto-attenuate loop that keeps the feedback level in the window calcc wants.
@@ -22,6 +32,7 @@
 #include <QMetaType>
 #include <QObject>
 #include <QString>
+#include <QVariantMap>
 
 #include <complex>
 #include <functional>
@@ -50,6 +61,12 @@ struct Hl2PureSignalStatus {
     double maxTx = 0.0;          // GetPSMaxTX
     bool keyed = false;
 };
+
+// The status as the "hl2" extension's "puresignal" map: what extensionStatus
+// carries and what every puresignal.* verb replies with. The keys are the
+// member names above, plus the attenuation range (attMin/attMax) and calcc's
+// feedback window (feedbackWindowLow/High), so a client needs no HL2 header.
+[[nodiscard]] QVariantMap pureSignalStatusFields(const Hl2PureSignalStatus& s);
 
 class Hl2PureSignalLogic {
 public:

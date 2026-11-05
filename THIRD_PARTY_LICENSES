@@ -837,3 +837,38 @@ the package as LICENSES.
   Copyright: Copyright (c) 2005-2020 Rich Felker, et al.
   License:   MIT
   Source:    https://musl.libc.org/
+
+36. Thetis PureSignal control loop — HL2 PureSignal (ported code)
+-------------------------------------------------------------------------------
+src/core/backends/hl2/Hl2PureSignal.{h,cpp} (Hl2PureSignalLogic and the
+Hl2PureSignal controller) is a C++ port of the PureSignal control logic in
+Thetis' PSForm.cs, as MI0BOT's Thetis fork runs it on the Hermes-Lite 2: the
+eCMDState command state machine (timer1code), the eAAState auto-attenuate loop
+(timer2code) with its feedback-level step and 128 < fb <= 181 window, and the
+SetPSControl() sequences each state sends. It is a translation of that source,
+not an independent design, so it is a derivative of GPL-2.0-or-later code; it
+is carried here under GPL-2.0-or-later's "or any later version" as part of
+GPL-3.0-or-later AetherSDR.
+
+The HL2 wire facts used alongside it (0x0a C2 bit 6 as the PureSignal enable,
+the keyed feedback gain 19 - att with att -28..31, DDC2/DDC3 as the feedback and
+TX DAC reference pair) were read from the same fork (networkproto1.c and the
+console code that drives it) and are expressed in original code in
+MetisProtocol / MetisClient. The correction itself is WDSP's calcc stage
+(entry 1), which AetherSDR already bundles.
+
+PSForm.cs also carries a "Dual-Licensing Statement" by Richard Samphire
+(MW0LGE). It reserves to him, for his own contributions, the right to license
+them under other terms as well; it grants recipients nothing beyond the GPL and
+places no condition on them. AetherSDR receives that code under the GPL like
+every other recipient. The statement is not reproduced in, and does not apply
+to, any AetherSDR file.
+
+  Copyright: Copyright (C) 2000-2025 the original Thetis authors
+             Copyright (C) 2020-2026 Richard Samphire (MW0LGE)
+             2023-26 HL2 modifications by MI0BOT
+  License:   GPL-2.0-or-later
+  Source:    https://github.com/mi0bot/OpenHPSDR-Thetis
+             (Project Files/Source/Console/PSForm.cs and
+             Project Files/Source/ChannelMaster/networkproto1.c), as of
+             commit f9ff9f2515b7bf3e5aee5c1a155222a4f836c179

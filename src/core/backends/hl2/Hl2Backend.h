@@ -274,12 +274,15 @@ public:
 
     // ---- PureSignal (docs/HERMES.md §11) -----------------------------------
     // GUI thread. Each forwards to Hl2PureSignal on the I/O thread; the result
-    // comes back through pureSignalStatusChanged(). Enabling claims DDC 2 and 3
+    // comes back as extensionStatus("hl2", "puresignal", fields). Clients above
+    // the radio seam reach these only through invokeExtension("hl2",
+    // "puresignal.*") -- see invokePureSignal(). Enabling claims DDC 2 and 3
     // (feedback and TX DAC reference), so it needs a 4-receiver board, a span
     // whose link budget carries four, and at most two receivers open — and
     // while it is on the receiver ceiling is two.
     [[nodiscard]] const Hl2PureSignalStatus& pureSignalStatus() const noexcept { return m_psStatus; }
-    void setPureSignalEnabled(bool on);
+    // False, with the reason in pureSignalBlocker(), when PureSignal cannot run.
+    bool setPureSignalEnabled(bool on);
     void setPureSignalAutoCalibrate(bool on);
     void pureSignalCalibrateOnce();
     void pureSignalResetCorrection();
@@ -289,8 +292,6 @@ public:
     void restorePureSignalCorrection(const QString& path);
 
 signals:
-    // PureSignal state for the applet, on the GUI thread, only on a change.
-    void pureSignalStatusChanged(const AetherSDR::hl2::Hl2PureSignalStatus& status);
     // Connect-time progress for the client-side WDSP build; not on the seam because
     // WDSP is this family's alone. `stage` is operator-facing text without a counter;
     // `done`/`total` count receiver WDSP channel opens (TX opens none). Emitted on
@@ -468,6 +469,11 @@ private:
     Hl2PureSignalStatus m_psStatus;
     // Why PureSignal cannot run right now, or empty when it can.
     [[nodiscard]] QString pureSignalBlocker() const;
+    // The "hl2" extension's puresignal.* verbs (get, enable, auto, single,
+    // reset, autoatt, att, save, restore). Replies with the status map, or
+    // with extensionError carrying the reason a request was refused.
+    void invokePureSignal(const QString& verb, quint64 requestId, const QVariant& arg);
+    [[nodiscard]] QVariantMap pureSignalFields() const;
     // Re-derive availability after a connect, rate or receiver change; turns
     // PureSignal off if the change took away what it needs.
     void refreshPureSignalAvailability();
