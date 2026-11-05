@@ -369,6 +369,11 @@ void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
 void SetTXAAMCarrierLevel(int channel, double carrierLevel);
 void SetTXAFMDeviation(int channel, double deviationHz);
 void SetTXACTCSSRun(int channel, int run);
+// TXA counterparts of RXASetNC / RXASetMP (TXA.c): bp0/bp1/bp2, the FM filters
+// and (NC only) the CFIR. TXASetNC stops and restores the channel; `nc` is a
+// power of two >= the DSP size. TXASetMP does not stop it.
+void TXASetNC(int channel, int nc);
+void TXASetMP(int channel, int mp);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength
 // meters. RXA_ADC_PK / RXA_ADC_AV measure the POST-DDC slice, which is a
 // different question from the HL2's own pre-DDC full-spectrum clip
@@ -393,12 +398,13 @@ double GetRXAMeter(int channel, int meterType);
 // (RFC #5684 §3.4). RXA builds its own NNR per channel regardless; that one
 // is left at run=0 and is not this.
 //
-// A SPEECH MODEL, trained on HF noise with SSB-processed speech. Measured on
+// The speech slots are trained on HF noise with SSB-processed speech. Measured on
 // a 700 Hz carrier it attenuates 28 dB — it classifies an unmodulated tone as
 // noise and deletes it. Voice modes only; CW, the digital modes and anything
 // on the data path must never reach it.
 //
-// SAMPLE RATE MUST BE AN INTEGER MULTIPLE OF 16000. calc_nnr() sets run = 0
+// SAMPLE RATE MUST BE AN INTEGER MULTIPLE OF THE MODEL'S NETWORK RATE
+// (16000 for the built-in models). calc_nnr() sets run = 0
 // and logs otherwise, so a 44.1 kHz path would silently produce no noise
 // reduction rather than an error. 48000 gives decim 3.
 //
@@ -413,34 +419,32 @@ double GetRXAMeter(int channel, int meterType);
 //
 // SIZE AND RATE ARE FIXED AT CONSTRUCTION in practice. setSize_nnr() and
 // setSamplerate_nnr() tear the block down and rebuild it, which reallocates
-// ~17 buffers, re-plans two FFTW_PATIENT transforms and re-deserialises both
-// trained models. Control-path work only — never from an audio callback.
+// per-slot buffers, re-plans FFTW_PATIENT transforms and re-deserialises all
+// four trained models. Control-path work only — never from an audio callback.
 //
-// COSTS, measured: ~13% of one modern x86 P-core for the Standard model and
-// ~29% for Premium, per instance, plus ~9 MB RSS because each instance copies
-// both models' weights into its own double blob.
+// Every instance loads all four models and their transform state. Runtime cost
+// depends on the active model; third_party/wdsp/README.md records the model data.
 //
 // LOCKING IS THE CALLER'S. The setters below are the RXA properties without
 // their ch[channel].csDSP section (AETHERSDR-PATCHES.md patch 5), so a host
 // that drives them from a GUI thread while xnnr() runs on an audio thread
 // must serialise them itself.
 //
-// MODEL FILES: every construction looks for wdsp_nnr_0.bin and wdsp_nnr_1.bin
-// in the PROCESS'S WORKING DIRECTORY and prefers either over the built-in
-// copy. A well-formed model with the wrong dimensions leaves that slot
-// passing audio through untouched. Kept deliberately (RFC #5684 §8);
+// MODEL FILES: every construction looks for wdsp_nnr_0.bin through
+// wdsp_nnr_3.bin in the PROCESS'S WORKING DIRECTORY and prefers each over its
+// built-in copy. Each slot supplies its own transform geometry and is validated
+// independently. Kept deliberately (RFC #5684 §8);
 // third_party/wdsp/README.md has the measured behaviour.
 typedef struct _nnr* NNR;
 
 // run: 0 bypasses (a straight copy when in != out). position: which xnnr()
 // call site acts, for hosts that call it from more than one. size: complex
-// samples per xnnr() call. rate: must be a multiple of nrate. nrate/fftsize/
-// overlap/lookahead: 16000/512/2/1 are what RXA uses and what the models were
-// trained for. mask_floor: how far one bin may be attenuated, −10 (most noise
+// samples per xnnr() call. rate: must be a multiple of the model's network rate.
+// Network rate, FFT size, hop and lookahead come from each model's metadata.
+// mask_floor: how far one bin may be attenuated, −10 (most noise
 // passed) to −50 (maximum suppression), default −25. cmode: 1 zeroes Q.
 NNR create_nnr(int run, int position, int size, double* in_buff, double* out_buff,
-               int rate, int nrate, int fftsize, int overlap, int lookahead,
-               double mask_floor, int cmode);
+               int rate, double mask_floor, int cmode);
 void destroy_nnr(NNR a);
 // Runs only when the block's own position matches `pos`; otherwise copies.
 void xnnr(NNR a, int pos);
@@ -453,8 +457,9 @@ void setSize_nnr(NNR a, int size);
 // Algorithmic delay in samples at the dsp rate.
 int getDelay_nnr(NNR a);
 int getRun_nnr(NNR a);
-// 0 = Standard, 1 = Premium. Both are compiled in and both are loaded, so a
-// switch takes effect within a frame. RETURNS THE SLOT ACTUALLY IN USE, which
+// 0/1 = Standard/Premium speech, 2/3 = Standard/Premium CW. All are loaded;
+// AetherSDR selects only the speech slots, since standalone NNR has no RXA
+// training-band bypass. RETURNS THE SLOT ACTUALLY IN USE, which
 // differs from the request when that slot holds no model — the documented way
 // to discover what a build contains instead of assuming.
 int setModel_nnr(NNR a, int slot);

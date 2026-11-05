@@ -19,6 +19,8 @@
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <key>AetherSDRDAXSource</key>
+    <string>${AETHERSDR_DAX_SOURCE}</string>
     <key>AudioServerPlugIn_BundleResourceID</key>
     <string>com.aethersdr.dax</string>
     <key>CFPlugInFactories</key>

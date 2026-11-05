@@ -1,7 +1,14 @@
 #include "ShortcutDialog.h"
+#include "CanonIndicators.h"
+#include "CanonMessageBox.h"
+#include "ComboStyle.h"
+#include "FramelessResizer.h"
 #include "KeyboardMapWidget.h"
+#include "ModemChrome.h"
+#include "ScopedChildWidget.h"
 #include "core/AppSettings.h"
 #include "core/ShortcutManager.h"
+#include "core/ThemeManager.h"
 
 #include <QBoxLayout>
 #include <QComboBox>
@@ -11,57 +18,149 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
-#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QTableWidget>
-#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
-static const char* kDialogStyle =
-    "QDialog { background: #0f0f1a; }"
-    "QLabel { color: #c8d8e8; }"
-    "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
-    "  border-radius: 3px; color: #c8d8e8; padding: 4px 12px; }"
-    "QPushButton:hover { background: #203040; border-color: #00b4d8; }"
-    "QComboBox { background: #1a2a3a; border: 1px solid #304050; "
-    "  border-radius: 3px; color: #c8d8e8; padding: 2px 6px; }"
-    "QComboBox::drop-down { border: none; }"
-    "QComboBox QAbstractItemView { background: #0f0f1a; color: #c8d8e8; "
-    "  selection-background-color: #1a3a5a; }"
-    "QLineEdit { background: #1a2a3a; border: 1px solid #304050; "
-    "  border-radius: 3px; color: #c8d8e8; padding: 2px 6px; }"
-    "QTableWidget { background: #0f0f1a; color: #c8d8e8; "
-    "  gridline-color: #203040; border: 1px solid #304050; }"
-    "QTableWidget::item { padding: 2px 6px; }"
-    "QTableWidget::item:selected { background: #1a3a5a; color: #00b4d8; }"
-    "QHeaderView::section { background: #1a2a3a; color: #8aa8c0; "
-    "  border: 1px solid #203040; padding: 4px; }";
+namespace {
+
+// The canon dialog sheet, with what this window adds: popups (the combos'
+// lists, the Filter field's right-click menu) get their panel back from the
+// sheet's transparent ground, and the table sits on a nested card.
+QString shortcutDialogStyleSheet()
+{
+    return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+           + QStringLiteral(R"(
+QTableWidget {
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 6px;
+    selection-color: {{color.canon.ink}};
+    selection-background-color: {{color.canon.control}};
+}
+QTableWidget::item:selected {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.control}};
+}
+QComboBox QAbstractItemView {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+    margin: 2px 8px 2px 8px;
+    border-radius: 6px;
+}
+QScrollBar::handle:horizontal {
+    background: {{color.canon.lineHi}};
+    border-radius: 5px;
+    min-width: 34px;
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+QLabel#shortcutKeyLabel {
+    color: {{color.canon.cyan}};
+    font-weight: bold;
+}
+QLabel[shortcutRole="legend"] {
+    color: {{color.canon.inkSoft}};
+    font-size: 11px;
+}
+QLabel#shortcutCategoryLabel {
+    color: {{color.canon.muted}};
+}
+QComboBox::drop-down {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 22px;
+    border: none;
+}
+)") + comboArrowRule();
+}
+
+// A notice with one OK button, over the editor.
+void showNotice(QWidget* parent, const QString& title, const QString& text,
+                const QString& info = {}, const QString& details = {})
+{
+    ScopedChildWidget<CanonMessageBox> box(title, text, parent);
+    box.get()->setInformativeText(info);
+    box.get()->setDetailedText(details);
+    box.get()->setDefaultButton(box.get()->addButton(QStringLiteral("OK"),
+                                                     CanonMessageBox::Role::Accept));
+    box.get()->exec();
+}
+
+// A question whose accepting button is `accept`; true only when it was clicked.
+bool confirm(QWidget* parent, const QString& title, const QString& text,
+             const QString& accept, CanonMessageBox::Role role)
+{
+    ScopedChildWidget<CanonMessageBox> box(title, text, parent);
+    QPushButton* cancel = box.get()->addButton(QStringLiteral("Cancel"),
+                                               CanonMessageBox::Role::Reject);
+    QPushButton* go = box.get()->addButton(accept, role);
+    box.get()->setDefaultButton(role == CanonMessageBox::Role::Destructive ? cancel : go);
+    box.get()->exec();
+    return box && box.get()->clickedButton() == go;
+}
+
+} // namespace
 
 ShortcutDialog::ShortcutDialog(ShortcutManager* mgr, QWidget* parent)
-    : QDialog(parent), m_mgr(mgr)
+    : CanonWindow(QStringLiteral("Keyboard Shortcuts"), parent), m_mgr(mgr)
 {
-    theme::setContainer(this, QStringLiteral("dialog/shortcut"));
-    setWindowTitle("Keyboard Shortcuts");
+    theme::setContainer(this, QStringLiteral("canon/shortcuts"));
+    // 700 px tall fits a 768 px screen's usable height.
     setMinimumSize(950, 700);
-    resize(1100, 800);
-    setStyleSheet(kDialogStyle);
+    resize(1100, 840);
+    // A page of controls, not a form: Return in the filter field must not
+    // press Clear or Reset to Default.
+    setReturnClicksDefault(false);
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] { return shortcutDialogStyleSheet(); });
     buildUI();
     populateTable();
 }
 
 void ShortcutDialog::buildUI()
 {
-    auto* root = new QVBoxLayout(this);
-    root->setSpacing(8);
+    auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
+    root->setSpacing(10);
+    root->addWidget(makeCanonHeader(QStringLiteral("Keyboard Shortcuts")));
 
     // ── Keyboard map ────────────────────────────────────────────────────
     m_keyboardMap = new KeyboardMapWidget(m_mgr, this);
-    root->addWidget(m_keyboardMap, 4);
+    root->addWidget(m_keyboardMap);
     connect(m_keyboardMap, &KeyboardMapWidget::keySelected,
             this, [this](Qt::Key key) { onKeySelected(key); });
 
@@ -76,21 +175,24 @@ void ShortcutDialog::buildUI()
             .arg(c.name(), c.lighter(140).name()));
         legendRow->addWidget(swatch);
         auto* lbl = new QLabel(cat);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        lbl->setProperty("shortcutRole", QStringLiteral("legend"));
         legendRow->addWidget(lbl);
     }
     legendRow->addStretch();
     root->addLayout(legendRow);
+    // The editing rows stand a little apart from the map and its legend.
+    root->addSpacing(6);
 
     // ── Selected key info ───────────────────────────────────────────────
     auto* selGroup = new QHBoxLayout;
-    selGroup->setSpacing(8);
+    selGroup->setSpacing(10);
 
     selGroup->addWidget(new QLabel("Key:"));
     m_selectedKeyLabel = new QLabel("(none)");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_selectedKeyLabel, "QLabel { color: {{color.accent}}; font-weight: bold; font-size: 14px; }");
+    m_selectedKeyLabel->setObjectName(QStringLiteral("shortcutKeyLabel"));
     m_selectedKeyLabel->setFixedWidth(80);
     selGroup->addWidget(m_selectedKeyLabel);
+    selGroup->addSpacing(8);
 
     selGroup->addWidget(new QLabel("Action:"));
     m_actionCombo = new QComboBox;
@@ -105,8 +207,9 @@ void ShortcutDialog::buildUI()
     selGroup->addWidget(m_actionCombo);
 
     m_categoryLabel = new QLabel;
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_categoryLabel, "QLabel { color: {{color.text.secondary}}; }");
+    m_categoryLabel->setObjectName(QStringLiteral("shortcutCategoryLabel"));
     selGroup->addWidget(m_categoryLabel);
+    selGroup->addSpacing(8);
 
     auto* clearBtn = new QPushButton("Clear");
     connect(clearBtn, &QPushButton::clicked, this, &ShortcutDialog::clearSelected);
@@ -121,6 +224,7 @@ void ShortcutDialog::buildUI()
 
     // ── Action table ────────────────────────────────────────────────────
     auto* filterRow = new QHBoxLayout;
+    filterRow->setSpacing(10);
     filterRow->addWidget(new QLabel("Filter:"));
     m_filterEdit = new QLineEdit;
     m_filterEdit->setPlaceholderText("Search actions...");
@@ -129,6 +233,7 @@ void ShortcutDialog::buildUI()
         populateTable(text, m_categoryFilter->currentText());
     });
     filterRow->addWidget(m_filterEdit);
+    filterRow->addSpacing(8);
 
     filterRow->addWidget(new QLabel("Category:"));
     m_categoryFilter = new QComboBox;
@@ -155,7 +260,7 @@ void ShortcutDialog::buildUI()
     connect(m_table, &QTableWidget::currentCellChanged, this, [this](int row) {
         onTableRowSelected(row);
     });
-    root->addWidget(m_table, 3);
+    root->addWidget(m_table, 1);
 
     // ── Bottom buttons ──────────────────────────────────────────────────
     auto* bottomRow = new QHBoxLayout;
@@ -182,9 +287,9 @@ void ShortcutDialog::buildUI()
     resetAllBtn->setObjectName(QStringLiteral("shortcutResetAllButton"));
     resetAllBtn->setAccessibleName(QStringLiteral("Reset all shortcuts to defaults"));
     connect(resetAllBtn, &QPushButton::clicked, this, [this]() {
-        auto r = QMessageBox::question(this, "Reset Shortcuts",
-            "Reset all keyboard shortcuts to their defaults?");
-        if (r == QMessageBox::Yes) {
+        if (confirm(this, QStringLiteral("Reset Shortcuts"),
+                    QStringLiteral("Reset all keyboard shortcuts to their defaults?"),
+                    QStringLiteral("Reset All"), CanonMessageBox::Role::Destructive)) {
             m_mgr->resetToDefaults();
             populateTable(m_filterEdit->text(), m_categoryFilter->currentText());
             updateSelectedKeyInfo();
@@ -195,6 +300,7 @@ void ShortcutDialog::buildUI()
     bottomRow->addStretch();
 
     auto* closeBtn = new QPushButton("Close");
+    closeBtn->setObjectName(QStringLiteral("shortcutCloseButton"));
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     bottomRow->addWidget(closeBtn);
 
@@ -248,26 +354,16 @@ void ShortcutDialog::importShortcuts()
 
     const ShortcutImportResult result = m_mgr->importFromFile(path);
     if (!result.ok()) {
-        QMessageBox box(QMessageBox::Warning, QStringLiteral("Import Keyboard Shortcuts"),
-                        QStringLiteral("No shortcuts were imported from %1.")
-                            .arg(QFileInfo(path).fileName()),
-                        QMessageBox::Ok, this);
-        box.setDetailedText(result.errors.join(QLatin1Char('\n')));
-        box.exec();
+        showNotice(this, QStringLiteral("Import Keyboard Shortcuts"),
+                   QStringLiteral("No shortcuts were imported from %1.")
+                       .arg(QFileInfo(path).fileName()),
+                   {}, result.errors.join(QLatin1Char('\n')));
         return;
     }
 
     populateTable(m_filterEdit->text(), m_categoryFilter->currentText());
     updateSelectedKeyInfo();
 
-    const bool hasWarnings =
-        !result.unknownActions.isEmpty() || !result.displacedActions.isEmpty();
-    QMessageBox box(hasWarnings ? QMessageBox::Warning : QMessageBox::Information,
-                    QStringLiteral("Import Keyboard Shortcuts"),
-                    QStringLiteral("Imported %1 shortcut actions from %2.")
-                        .arg(result.importedCount)
-                        .arg(QFileInfo(path).fileName()),
-                    QMessageBox::Ok, this);
     QStringList informativeLines;
     QStringList detailLines;
     if (!result.unknownActions.isEmpty()) {
@@ -285,11 +381,15 @@ void ShortcutDialog::importShortcuts()
         detailLines << QStringLiteral("Displaced local bindings:");
         detailLines << result.displacedActions;
     }
-    if (!informativeLines.isEmpty()) {
-        box.setInformativeText(informativeLines.join(QLatin1Char('\n')));
-        box.setDetailedText(detailLines.join(QLatin1Char('\n')));
-    }
-    box.exec();
+    // A canon box has no warning icon, so the text says it.
+    showNotice(this, QStringLiteral("Import Keyboard Shortcuts"),
+               (informativeLines.isEmpty()
+                    ? QStringLiteral("Imported %1 shortcut actions from %2.")
+                    : QStringLiteral("Imported %1 shortcut actions from %2, with warnings."))
+                   .arg(result.importedCount)
+                   .arg(QFileInfo(path).fileName()),
+               informativeLines.join(QLatin1Char('\n')),
+               detailLines.join(QLatin1Char('\n')));
 }
 
 void ShortcutDialog::exportShortcuts()
@@ -313,14 +413,13 @@ void ShortcutDialog::exportShortcuts()
 
     const ShortcutExportResult result = m_mgr->exportToFile(path);
     if (!result.ok()) {
-        QMessageBox::warning(this, QStringLiteral("Export Keyboard Shortcuts"), result.error);
+        showNotice(this, QStringLiteral("Export Keyboard Shortcuts"), result.error);
         return;
     }
-    QMessageBox::information(
-        this, QStringLiteral("Export Keyboard Shortcuts"),
-        QStringLiteral("Exported %1 shortcut actions to %2.")
-            .arg(result.exportedCount)
-            .arg(QFileInfo(path).fileName()));
+    showNotice(this, QStringLiteral("Export Keyboard Shortcuts"),
+               QStringLiteral("Exported %1 shortcut actions to %2.")
+                   .arg(result.exportedCount)
+                   .arg(QFileInfo(path).fileName()));
 }
 
 void ShortcutDialog::populateTable(const QString& filter, const QString& category)
@@ -381,10 +480,13 @@ void ShortcutDialog::assignAction(const QString& actionId)
         // Check for conflict
         QString conflict = m_mgr->conflictCheck(seq, actionId);
         if (!conflict.isEmpty()) {
-            auto r = QMessageBox::question(this, "Key Conflict",
-                QString("Key [%1] is currently bound to '%2'.\nReassign it?")
-                    .arg(seq.toString(), conflict));
-            if (r != QMessageBox::Yes) return;
+            if (!confirm(this, QStringLiteral("Key Conflict"),
+                         QString("Key [%1] is currently bound to '%2'.\nReassign it?")
+                             .arg(seq.toString(), conflict),
+                         QStringLiteral("Reassign"), CanonMessageBox::Role::Accept)) {
+                updateSelectedKeyInfo();   // the combo goes back to the key's own action
+                return;
+            }
         }
         m_mgr->setBinding(actionId, seq);
     }
@@ -440,15 +542,6 @@ void ShortcutDialog::updateSelectedKeyInfo()
         m_actionCombo->setCurrentIndex(0);
         m_categoryLabel->clear();
     }
-}
-
-void ShortcutDialog::keyPressEvent(QKeyEvent* ev)
-{
-    // Don't let Escape close the dialog if we're just deselecting
-    if (ev->key() == Qt::Key_Escape && m_keyboardMap->selectedKeyIndex() >= 0) {
-        // Could use this for key capture mode in the future
-    }
-    QDialog::keyPressEvent(ev);
 }
 
 } // namespace AetherSDR

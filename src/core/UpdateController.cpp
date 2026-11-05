@@ -1,12 +1,19 @@
 #include "UpdateController.h"
 
+#include "LinuxInstall.h"
+#include "MacInstall.h"
 #include "LogManager.h"
 #include "UpdateInstaller.h"
 #include "UpdateSettings.h"
 #include "VersionNumber.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QFutureWatcher>
 #include <QSysInfo>
+#include <QtConcurrent/QtConcurrentRun>
 
 namespace AetherSDR {
 
@@ -23,22 +30,84 @@ UpdateController::Environment UpdateController::forThisApp()
 #endif
     env.request.arch = QSysInfo::buildCpuArchitecture();
     env.request.installRoot = QCoreApplication::applicationDirPath();
+#if defined(Q_OS_LINUX)
+    // The release tree, whose root the manifest's paths start from (AppRun,
+    // usr/bin/AetherSDR), not the binary's own folder.
+    if (const QString tree = LinuxInstall::treeOf(LinuxInstall::binaryDir(), LinuxInstall::forThisUser().base);
+        !tree.isEmpty()) {
+        env.request.installRoot = tree;
+    }
+#elif defined(Q_OS_MACOS)
+    // The app bundle, whose root the manifest's paths start from
+    // (Contents/MacOS/AetherSDR), not the binary's own folder.
+    if (const QString bundle = MacInstall::bundleOf(QCoreApplication::applicationDirPath()); !bundle.isEmpty()) {
+        env.request.installRoot = bundle;
+    }
+#endif
     env.request.stagingRoot = UpdateInstaller::stateDir();
-    // The portable zip is the tree setup.exe installs, so either install
-    // can take it when no patch applies.
+#if defined(Q_OS_MACOS)
+    env.installedDaxDriverSource = [] {
+        return MacInstall::daxDriverSourceOf(QStringLiteral("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver"));
+    };
+#endif
+    // Windows: the portable zip is the tree setup.exe installs, so either
+    // install can take it when no patch applies. Linux: the tarball is the
+    // installed tree.
     env.request.fullFallback = true;
     env.canInstall = [](QString* why) { return UpdateInstaller::canInstallInPlace(why); };
     env.launchHelper = [](const QString& dir, const QString& version, bool restart, QString* problem) {
         return UpdateInstaller::launchHelper(dir, version, restart, problem);
     };
     env.rolledBackVersion = [] { return UpdateSettings::rolledBackVersion(); };
+#if defined(Q_OS_LINUX)
+    const QString base = LinuxInstall::forThisUser().base;
+    env.appImage = LinuxInstall::appImageOf(LinuxInstall::binaryDir(), base);
+    env.installFolder = base.startsWith(QDir::homePath() + QLatin1Char('/'))
+                            ? QStringLiteral("~") + base.mid(QDir::homePath().size())
+                            : base;
+    env.installedVersion = [base] { return LinuxInstall::installedVersion(base); };
+    env.installRunning = [version = env.request.runningVersion](QString* problem, QString* note) {
+        // This binary is <tree>/usr/bin/AetherSDR, inside the AppImage's mount.
+        QDir tree(LinuxInstall::binaryDir());
+        tree.cdUp();
+        tree.cdUp();
+        return LinuxInstall::install(tree.absolutePath(), version, LinuxInstall::forThisUser(), problem, note,
+                                     LinuxInstall::Current::KeepExisting);
+    };
+    env.trash = [](const QString& file) { return QFile::moveToTrash(file); };
+    env.startInstalled = [base, version = env.request.runningVersion] {
+        // The installed copy says so once it starts (lastUpdate).
+        UpdateSettings::setInstalledFromAppImage(version);
+        // Without the AppImage's variables: its mount is gone by then.
+        if (!LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
+                                          {QDir(base).filePath(QStringLiteral("current/AppRun"))},
+                                          LinuxInstall::appImageVariables())) {
+            UpdateSettings::setInstalledFromAppImage({});
+            return false;
+        }
+        return true;
+    };
+#endif
     return env;
 }
 
 UpdateController::LastUpdate UpdateController::lastUpdate()
 {
     const UpdateInstaller::SwapResult r = UpdateInstaller::lastSwapResult();
-    return {r.outcome, r.version};
+    if (!r.outcome.isEmpty()) {
+        return {r.outcome, r.version};
+    }
+#if defined(Q_OS_LINUX)
+    // Install for updates restarted into the install: said once, by the
+    // installed copy only.
+    const QString installed = UpdateSettings::installedFromAppImage();
+    if (!installed.isEmpty()
+        && !LinuxInstall::treeOf(LinuxInstall::binaryDir(), LinuxInstall::forThisUser().base).isEmpty()) {
+        UpdateSettings::setInstalledFromAppImage({});
+        return {QStringLiteral("Installed"), installed};
+    }
+#endif
+    return {};
 }
 
 UpdateController::UpdateController(Environment env, QObject* parent)
@@ -124,7 +193,7 @@ void UpdateController::setState(State s, const QString& version)
     }
     m_state = s;
     m_version = version;
-    if (s != State::Staged && s != State::Handed) {
+    if (s != State::Staged && s != State::Installing && s != State::Handed) {
         m_staged = {};
     }
     emit stateChanged();
@@ -135,7 +204,7 @@ void UpdateController::refreshStaged(const QString& latestVersion)
     if (!latestVersion.isEmpty()) {
         m_latest = latestVersion;
     }
-    if (m_state == State::Staging || m_state == State::Handed) {
+    if (m_state == State::Staging || m_state == State::Installing || m_state == State::Handed) {
         return;   // the sweep would remove the work in progress
     }
     const QString rolledBack = m_env.rolledBackVersion ? m_env.rolledBackVersion() : QString();
@@ -155,7 +224,8 @@ void UpdateController::refreshStaged(const QString& latestVersion)
 
 void UpdateController::install(const QString& latestVersion)
 {
-    if (m_state == State::Staging || m_state == State::Handed || latestVersion.isEmpty()) {
+    if (m_state == State::Staging || m_state == State::Installing || m_state == State::Handed
+        || latestVersion.isEmpty()) {
         return;
     }
     if (m_state == State::Staged && m_version == latestVersion) {
@@ -195,48 +265,170 @@ void UpdateController::discard(const QString& version)
     }
 }
 
-bool UpdateController::handOver(bool restart, QString* problemOut)
+UpdateController::HandOver UpdateController::runHandOver(const Environment& env,
+                                                         const UpdateStager::StagedRelease& staged, bool restart)
 {
-    QString scratch;
-    QString* problem = problemOut ? problemOut : &scratch;
-    if (m_state != State::Staged || m_staged.version.isEmpty()) {
-        *problem = tr("No update is ready to install.");
-        return false;
-    }
-    const UpdateStager::Request& r = m_env.request;
+    HandOver h;
+    const UpdateStager::Request& r = env.request;
     QString why;
     // The staged files are checked once more, against the signed manifest
     // kept beside them: nothing changed since staging goes in.
-    if (!UpdateStager::revalidate(r.stagingRoot, m_staged, r.platform, r.arch, &why)) {
-        qCWarning(lcUpdater).noquote() << "staged update to v" + m_staged.version + " refused:" << why;
-        UpdateStager::discard(r.stagingRoot, m_staged.version);
+    if (!UpdateStager::revalidate(r.stagingRoot, staged, r.platform, r.arch, &why)) {
+        qCWarning(lcUpdater).noquote() << "staged update to v" + staged.version + " refused:" << why;
+        h.changed = true;
+        return h;
+    }
+    if (!env.launchHelper || !env.launchHelper(staged.dir, staged.version, restart, &h.problem)) {
+        // On Linux the hand-over is the switch itself: a release that failed
+        // its self-test there is gone, and nothing is staged any more.
+        h.consumed = !QFileInfo::exists(staged.dir);
+        return h;
+    }
+    h.handed = true;
+    return h;
+}
+
+bool UpdateController::finishHandOver(const HandOver& h, const UpdateStager::StagedRelease& staged,
+                                      QString* problem)
+{
+    const QString& root = m_env.request.stagingRoot;
+    if (h.changed || h.consumed) {
+        UpdateStager::discard(root, staged.version);
         setState(State::Idle, {});
-        *problem = tr("The downloaded update changed on disk, so it was removed. Install it again.");
+        *problem = h.changed ? tr("The downloaded update changed on disk, so it was removed. Install it again.")
+                             : h.problem;
         return false;
     }
-    if (!m_env.launchHelper || !m_env.launchHelper(m_staged.dir, m_staged.version, restart, &why)) {
-        *problem = why.isEmpty() ? tr("The updater could not be started.") : why;
+    if (!h.handed) {
+        *problem = h.problem.isEmpty() ? tr("The updater could not be started.") : h.problem;
+        setState(State::Staged, staged.version);
+        m_staged = staged;
         return false;
     }
-    const QString version = m_staged.version;
-    const UpdateStager::StagedRelease handed = m_staged;
-    setState(State::Handed, version);
-    m_staged = handed;
+    setState(State::Handed, staged.version);
+    m_staged = staged;
     return true;
 }
 
 bool UpdateController::restartToUpdate(QString* problem)
 {
-    return handOver(true, problem);
+    if (m_state != State::Staged || m_staged.version.isEmpty()) {
+        *problem = tr("No update is ready to install.");
+        return false;
+    }
+    const UpdateStager::StagedRelease staged = m_staged;
+    setState(State::Installing, staged.version);
+    auto* watcher = new QFutureWatcher<HandOver>(this);
+    connect(watcher, &QFutureWatcher<HandOver>::finished, this, [this, watcher, staged] {
+        QString why;
+        const bool handed = finishHandOver(watcher->result(), staged, &why);
+        watcher->deleteLater();
+        emit restartReady(handed, why, staged.version);
+    });
+    watcher->setFuture(QtConcurrent::run([env = m_env, staged] { return runHandOver(env, staged, true); }));
+    return true;
+}
+
+bool UpdateController::daxDriverChanges(const std::optional<QString>& installed, const QString& staged)
+{
+    return !staged.isEmpty() && installed.has_value() && *installed != staged;
+}
+
+bool UpdateController::daxDriverChanges() const
+{
+    if (m_state != State::Staged || m_version.isEmpty() || !m_env.installedDaxDriverSource) {
+        return false;
+    }
+    if (m_daxSourceVersion != m_version) {
+        const UpdateStager::Request& r = m_env.request;
+        m_daxSource = UpdateStager::stagedDaxDriverSource(r.stagingRoot, m_version, r.platform, r.arch);
+        m_daxSourceVersion = m_version;
+    }
+    return daxDriverChanges(m_env.installedDaxDriverSource(), m_daxSource);
+}
+
+QString UpdateController::appImageToInstall() const
+{
+    return m_env.appImage.isEmpty() || !m_env.installRunning || !installedVersion().isEmpty() ? QString()
+                                                                                              : m_env.appImage;
+}
+
+QString UpdateController::installedVersion() const
+{
+    return m_env.installedVersion ? m_env.installedVersion() : QString();
+}
+
+void UpdateController::installAppImage(bool trash)
+{
+    if (m_installingAppImage || appImageToInstall().isEmpty()) {
+        return;
+    }
+    struct Result {
+        bool installed = false;
+        bool trashed = true;
+        QString problem;
+        QString note;
+    };
+    m_installingAppImage = true;
+    emit stateChanged();
+    const QString version = m_env.request.runningVersion;
+    auto* watcher = new QFutureWatcher<Result>(this);
+    connect(watcher, &QFutureWatcher<Result>::finished, this, [this, watcher, version] {
+        const Result r = watcher->result();
+        watcher->deleteLater();
+        m_installingAppImage = false;
+        QString problem;
+        if (!r.installed) {
+            qCWarning(lcUpdater).noquote() << "v" + version + " not installed for updates:" << r.problem;
+            // Another install finished while this one copied: it is kept.
+            const QString installed = installedVersion();
+            problem = installed.isEmpty()
+                          ? tr("AetherSDR wasn't installed: %1").arg(r.problem)
+                          : tr("AetherSDR %1 was installed for updates meanwhile, so this AppImage wasn't "
+                               "installed over it. Start it from your applications menu.")
+                                .arg(installed);
+        } else {
+            if (!r.note.isEmpty()) {
+                qCInfo(lcUpdater).noquote() << r.note;
+            }
+            if (!r.trashed) {
+                qCWarning(lcUpdater).noquote() << "could not move" << m_env.appImage << "to the trash";
+                problem = tr("AetherSDR %1 is installed for updates, but %2 couldn't be moved to the trash, so "
+                             "delete it yourself. Quit, then start AetherSDR from your applications menu.")
+                              .arg(version, m_env.appImage);
+            } else if (!m_env.startInstalled || !m_env.startInstalled()) {
+                problem = tr("AetherSDR %1 is installed for updates. Quit, then start it from your applications "
+                             "menu.")
+                              .arg(version);
+            }
+        }
+        emit stateChanged();
+        emit appImageInstalled(r.installed && problem.isEmpty(), problem);
+    });
+    watcher->setFuture(QtConcurrent::run([env = m_env, trash] {
+        Result r;
+        r.installed = env.installRunning(&r.problem, &r.note);
+        if (r.installed && trash) {
+            r.trashed = env.trash && env.trash(env.appImage);
+        }
+        return r;
+    }));
+}
+
+void UpdateController::dropPendingSwap()
+{
+    UpdateInstaller::dropPendingSwap();
 }
 
 bool UpdateController::installOnQuit()
 {
-    if (m_state != State::Staged) {
+    if (m_state != State::Staged || m_staged.version.isEmpty()) {
         return false;
     }
+    // AetherSDR is closing: waited for here, on its way out.
+    const UpdateStager::StagedRelease staged = m_staged;
     QString problem;
-    if (!handOver(false, &problem)) {
+    if (!finishHandOver(runHandOver(m_env, staged, false), staged, &problem)) {
         qCWarning(lcUpdater).noquote() << "update not installed on quit:" << problem;
         return false;
     }

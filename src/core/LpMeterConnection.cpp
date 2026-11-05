@@ -1,17 +1,18 @@
 #include "LpMeterConnection.h"
 #include "LogManager.h"
 
-#include <QDateTime>
-
 #include <cmath>
 
 namespace AetherSDR {
 
 namespace {
-// Link is up but the meter has gone quiet. Generous relative to the 100 ms
-// poll interval so a brief hiccup, or the handover as a foreign poller stops
-// and we take over, never trips it.
-constexpr int kDataTimeoutMs = 2000;
+// Link is up but the meter has gone quiet. Must exceed the longest silence the
+// poll gate itself allows -- riding along stops at kMaxQuietMs, then our own
+// poll needs a reply -- or the handover as a foreign poller stops trips it on
+// every cycle (#6794).
+constexpr int kDataTimeoutMs = static_cast<int>(LpMeter::PollGate::kMaxQuietMs) + 1000;
+static_assert(kDataTimeoutMs > LpMeter::PollGate::kMaxQuietMs + LpMeter::PollGate::kSoloPollIntervalMs,
+              "the data watchdog must outlast the poll gate's own longest silence");
 // Reconnect cadence, matching AcomConnection/SpeConnection: retry forever
 // until the meter returns or the operator disconnects.
 constexpr int kReconnectMs = 5000;
@@ -20,14 +21,15 @@ constexpr int kReconnectMs = 5000;
 constexpr int kGateSettleMs = 1500;
 }  // namespace
 
-qint64 LpMeterConnection::nowMs()
+qint64 LpMeterConnection::nowMs() const
 {
-    return QDateTime::currentMSecsSinceEpoch();
+    return m_clock.elapsed();
 }
 
 LpMeterConnection::LpMeterConnection(QObject* parent)
     : QObject(parent)
 {
+    m_clock.start();
     connect(&m_socket, &QTcpSocket::connected, this, &LpMeterConnection::onTransportUp);
     connect(&m_socket, &QTcpSocket::disconnected, this, &LpMeterConnection::onTransportDown);
     connect(&m_socket, &QTcpSocket::readyRead, this, &LpMeterConnection::onReadyRead);
@@ -107,12 +109,26 @@ LpMeterConnection::LpMeterConnection(QObject* parent)
         // transport healthy is a real observed state, and tearing down the
         // socket would take the applet tile away at the exact moment the
         // operator needs to be told the meter stopped answering.
-        qCWarning(lcTuner) << "LpMeterConnection: link up but no valid record in"
-                           << kDataTimeoutMs / 1000.0
-                           << "s — meter may be wedged (it can stop answering with"
-                              " the serial link perfectly healthy) or the records"
+        //
+        // Says how long ago our last poll went out. The watchdog outlasts the
+        // poll gate's longest ride-along, so by now we should be polling: a
+        // recent accepted poll helps distinguish a silent meter from a poll
+        // loop that stopped writing (e.g. the main thread stalled).
+        // A support bundle cannot otherwise tell those apart.
+        const qint64 now = nowMs();
+        if (m_silenceSinceMs < 0) {
+            m_silenceSinceMs = (m_lastRecordMs >= 0) ? m_lastRecordMs : m_transportUpMs;
+        }
+        qCWarning(lcTuner).noquote()
+            << QStringLiteral("LpMeterConnection: link up but no valid record in %1 s"
+                              " (%2) — meter may be wedged (it can stop answering"
+                              " with the serial link perfectly healthy) or the records"
                               " may be unparseable. Power-cycling the meter clears"
-                              " the former.";
+                              " the former.")
+                   .arg(kDataTimeoutMs / 1000.0)
+                   .arg(m_lastPollMs >= 0
+                            ? QStringLiteral("our last poll %1 ms ago").arg(now - m_lastPollMs)
+                            : QStringLiteral("no poll of ours sent since connect"));
         setDataFlowing(false);
     });
 }
@@ -172,9 +188,7 @@ void LpMeterConnection::connectSerial(const QString& portName)
     // Retire the old session before changing its mode or reconnect target.
     // QSerialPort::close() does not emit disconnected(), so teardownDevice()
     // alone leaves m_connected and the reconnect lifecycle stale.
-    disconnect();
-    m_mode = Mode::Serial;
-    m_lastSerialPort = portName;
+    prepareConnection(Mode::Serial, portName);
     m_deliberateDisconnect = false;
 
     if (!m_serialPort) {
@@ -220,16 +234,32 @@ void LpMeterConnection::connectNetwork(const QString& host, quint16 port)
 {
     // Also aborts an in-flight previous TCP attempt under the deliberate-
     // disconnect guard, so its teardown cannot arm a retry for the old host.
-    disconnect();
-    m_mode = Mode::Network;
-    m_lastHost = host;
-    m_lastPort = port;
+    prepareConnection(Mode::Network, host, port);
     m_deliberateDisconnect = false;
 
     m_device = &m_socket;
     qCDebug(lcTuner) << "LpMeterConnection: connecting to" << host << ":" << port;
     m_socket.connectToHost(host, port);
     // onTransportUp() fires from the connected() signal (async).
+}
+
+void LpMeterConnection::prepareConnection(Mode mode, const QString& endpoint, quint16 port)
+{
+    const bool sameTarget = m_mode == mode
+        && (mode == Mode::Network
+                ? m_lastHost == endpoint && m_lastPort == port
+                : m_lastSerialPort == endpoint);
+    disconnect();
+    if (!sameTarget) {
+        m_silenceSinceMs = -1;
+    }
+    m_mode = mode;
+    if (mode == Mode::Network) {
+        m_lastHost = endpoint;
+        m_lastPort = port;
+    } else {
+        m_lastSerialPort = endpoint;
+    }
 }
 
 void LpMeterConnection::disconnect()
@@ -282,6 +312,8 @@ void LpMeterConnection::onTransportUp()
     m_ridingAlongReported = false;
     m_gateStateReported = false;
     m_lastRecordMs = -1;
+    m_transportUpMs = nowMs();
+    m_lastPollMs = -1;
     m_firstBytesMs = -1;
     m_dataFlowing = false;
     m_dataFlowStateKnown = false;
@@ -376,7 +408,9 @@ void LpMeterConnection::pollTick()
     }
 
     if (!poll) { return; }
-    m_device->write(QByteArray(1, LpMeter::kPollCommand));
+    if (m_device->write(QByteArray(1, LpMeter::kPollCommand)) == 1) {
+        m_lastPollMs = now;
+    }
 }
 
 void LpMeterConnection::onReading(const LpMeter::Reading& reading)
@@ -404,7 +438,18 @@ void LpMeterConnection::setDataFlowing(bool flowing)
     m_dataFlowing = flowing;
     m_dataFlowStateKnown = true;
     if (flowing) {
-        qCInfo(lcTuner) << "LpMeterConnection: records flowing again.";
+        // A recovery that closes a logged dim is logged at the dim's level, so
+        // a default (warning-level) support bundle shows both sides of every
+        // outage rather than a run of dims that never end.
+        if (m_silenceSinceMs >= 0) {
+            qCWarning(lcTuner).noquote()
+                << QStringLiteral("LpMeterConnection: records flowing again after %1 s"
+                                  " without one.")
+                       .arg((nowMs() - m_silenceSinceMs) / 1000.0, 0, 'f', 1);
+            m_silenceSinceMs = -1;
+        } else {
+            qCInfo(lcTuner) << "LpMeterConnection: records flowing again.";
+        }
     }
     emit dataFlowingChanged(flowing);
 }

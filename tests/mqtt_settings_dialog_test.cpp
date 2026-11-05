@@ -13,6 +13,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPointer>
+#include <QSpinBox>
 #include <QTest>
 #include <cstdio>
 
@@ -49,6 +50,16 @@ void fieldMenuIsOpaque()
           "a field's right-click menu has an opaque background");
     menu->close();
     delete menu;
+}
+
+// The sheet's padding never reaches a spin box's editor, so the port's text
+// gets the text fields' inset from ModemChrome::insetSpinText().
+void portTextIsInset()
+{
+    MqttSettingsDialog dialog;
+    auto* port = dialog.findChild<QSpinBox*>(QStringLiteral("mqttPort"));
+    auto* editor = port ? port->findChild<QLineEdit*>() : nullptr;
+    check(editor && editor->textMargins().left() > 0, "the port's text is inset");
 }
 
 // MainWindow opens the window with WA_DeleteOnClose. Every way out destroys
@@ -88,6 +99,7 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
 
     fieldMenuIsOpaque();
+    portTextIsInset();
     everyCloseDestroysTheWindow();
 
     return g_failures ? 1 : 0;

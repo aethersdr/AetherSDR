@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QEvent>
 #include <QKeyEvent>
@@ -21,7 +21,12 @@ class RadioModel;
 struct MemoryCsvParseResult;
 struct RadioControlSession;
 
-class MemoryDialog : public PersistentDialog {
+// The Memory Channels window: the memory bank as an editable table, with
+// search, a profile filter, add, tune, sync, import, export and remove. A
+// canon workspace (CanonWindow::Kind::Workspace) under the canon/memory theme
+// scope; it keeps its size and position under MemoryDialogGeometry and
+// resizes from every edge. Its notices and questions are CanonMessageBoxes.
+class MemoryDialog : public CanonWindow {
     Q_OBJECT
 
 public:

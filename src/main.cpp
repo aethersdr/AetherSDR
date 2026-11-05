@@ -3,6 +3,7 @@
 #include "gui/FramelessMessageBox.h"
 #include "gui/SliceColorManager.h"
 #include "core/UpdateInstaller.h"
+#include "core/LinuxInstall.h"
 #include "core/AppSettings.h"
 #include "core/SystemInfo.h"
 #include "core/SettingsBootstrap.h"
@@ -236,6 +237,50 @@ static int runConfigCli(int argc, char* argv[])
     return usage();
 }
 
+#ifdef Q_OS_LINUX
+// ── `AetherSDR --install` — the Linux install the updater keeps current ───────
+// Run from an unpacked release tarball or the AppImage: copies the release
+// into ~/.local/share/AetherSDR/install/<version>/, makes it current, adds
+// the menu entry and the aethersdr command, then starts it (RFC #5304 Phase 5).
+// Needs a console, not a window; nothing of the user's settings is touched.
+static int runInstallCli(int argc, char* argv[])
+{
+    QCoreApplication app(argc, argv);
+    QCoreApplication::setApplicationName(QStringLiteral("AetherSDR"));
+    QCoreApplication::setOrganizationName(QStringLiteral("AetherSDR"));
+    const QString version = QStringLiteral(AETHERSDR_VERSION);
+    // This binary is <tree>/usr/bin/AetherSDR.
+    QDir tree(AetherSDR::LinuxInstall::binaryDir());
+    tree.cdUp();
+    tree.cdUp();
+    const AetherSDR::LinuxInstall::Paths paths = AetherSDR::LinuxInstall::forThisUser();
+    QString problem;
+    QString note;
+    if (!AetherSDR::LinuxInstall::install(tree.absolutePath(), version, paths, &problem, &note)) {
+        std::fprintf(stderr, "AetherSDR %s was not installed: %s\n", qPrintable(version), qPrintable(problem));
+        return EXIT_FAILURE;
+    }
+    const QString run = QDir(paths.base).filePath(QStringLiteral("current/AppRun"));
+    // The command by name only when ~/.local/bin is on PATH.
+    const bool onPath = qEnvironmentVariable("PATH").split(QLatin1Char(':')).contains(paths.bin);
+    std::printf("AetherSDR %s is installed in %s.\n"
+                "Start it from your applications menu, or run %s. "
+                "It updates itself from File > Update.\n",
+                qPrintable(version), qPrintable(QDir(paths.base).filePath(version)),
+                onPath ? "aethersdr" : qPrintable(QDir(paths.bin).filePath(QStringLiteral("aethersdr"))));
+    if (!note.isEmpty()) {
+        std::printf("%s\n", qPrintable(note));
+    }
+    if (qEnvironmentVariableIsSet("WAYLAND_DISPLAY") || qEnvironmentVariableIsSet("DISPLAY")) {
+        // Once this installer has exited, without the AppImage's variables
+        // or descriptors when run from it, as Install for updates starts it.
+        AetherSDR::LinuxInstall::startAfterExit(QCoreApplication::applicationPid(), {run},
+                                                AetherSDR::LinuxInstall::appImageVariables());
+    }
+    return EXIT_SUCCESS;
+}
+#endif
+
 // The Qt platform-selection decision made on a Wayland session, recorded before
 // the log handler exists and re-emitted next to the GpuSelector summary once
 // logging is up — so a Support bundle shows why we chose xcb vs wayland (the
@@ -266,6 +311,11 @@ int main(int argc, char* argv[])
     if (argc >= 2 && qstrcmp(argv[1], "--config") == 0) {
         return runConfigCli(argc, argv);
     }
+#ifdef Q_OS_LINUX
+    if (argc >= 2 && qstrcmp(argv[1], "--install") == 0) {
+        return runInstallCli(argc, argv);
+    }
+#endif
 
     // ── Pre-QApplication environment setup ────────────────────────────────
 
@@ -597,7 +647,7 @@ int main(int argc, char* argv[])
     {
         QDir rootDir(configRoot);
         // App debug logs — every aethersdr-*.log, plus the aethersdr.log
-        // symlink (we remove it; LogManager will recreate inside logs/).
+        // alias (LogManager recreates it inside logs/ on POSIX only).
         for (const QString& f : rootDir.entryList({"aethersdr-*.log"},
                                                   QDir::Files | QDir::Hidden)) {
             const QString src = configRoot + "/" + f;
@@ -639,7 +689,7 @@ int main(int argc, char* argv[])
         auto& s = AetherSDR::AppSettings::instance();
         bool removed = false;
         for (const char* key : {"SHistorySoftEdgeDb", "AboutDialogGeometry",
-                                "MqttSettingsDialogGeometry"}) {
+                                "MqttSettingsDialogGeometry", "UlanziDialMapperGeom"}) {
             if (s.contains(key)) {
                 s.remove(key);
                 removed = true;
@@ -696,31 +746,6 @@ int main(int argc, char* argv[])
                 qWarning().noquote() << lines.at(1);
             }
         }
-
-        // Symlink aethersdr.log → latest timestamped file (for Support dialog)
-        const QString symlink = logDir + "/aethersdr.log";
-#ifdef Q_OS_UNIX
-        // Atomic replace: create temp symlink, then rename() over the old one.
-        // POSIX guarantees rename() is atomic within a single filesystem,
-        // closing the TOCTOU window that the previous remove()+link() pair
-        // left open between the two calls. (Principle XIV)
-        const QByteArray symlinkBytes = symlink.toLocal8Bit();
-        const QByteArray tmpBytes     = (symlink + QStringLiteral(".new")).toLocal8Bit();
-        const QByteArray targetBytes  = logPath.toLocal8Bit();
-        ::unlink(tmpBytes.constData());  // clear stale temp from a prior crash
-        if (::symlink(targetBytes.constData(), tmpBytes.constData()) != 0) {
-            qWarning("failed to create temp log symlink: %s", strerror(errno));
-        } else if (::rename(tmpBytes.constData(), symlinkBytes.constData()) != 0) {
-            qWarning("failed to rename log symlink into place: %s", strerror(errno));
-            ::unlink(tmpBytes.constData());
-        }
-#else
-        // Windows: QFile::link creates a .lnk shortcut; non-atomic is
-        // acceptable here since the symlink is only consumed by the
-        // Support dialog locally.
-        QFile::remove(symlink);
-        QFile::link(logPath, symlink);
-#endif
     } else {
         fprintf(stderr, "Warning: could not open log file %s\n", logPath.toLocal8Bit().constData());
     }
@@ -778,6 +803,10 @@ int main(int argc, char* argv[])
 
         exitCode = app.exec();
     }
+
+    // macOS: a staged update goes in now, with the window gone and nothing
+    // more to load from the bundle (RFC #5304 Phase 4). Nothing elsewhere.
+    AetherSDR::UpdateInstaller::finishSwapOnExit();
 
     AetherSDR::ShutdownTrace::complete("application");
 
