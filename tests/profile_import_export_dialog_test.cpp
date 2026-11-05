@@ -14,6 +14,7 @@
 #include "models/RadioModel.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QDialog>
 #include <QKeySequence>
 #include <QLabel>
@@ -22,6 +23,7 @@
 #include <QPushButton>
 #include <QTest>
 #include <QTimer>
+#include <QToolButton>
 #include <cstdio>
 #include <functional>
 
@@ -143,10 +145,6 @@ void canonWorkspace()
             for (const char* hex : {"#9fb0c0", "#406080", "#607080"})
                 literal = literal || widget->styleSheet().contains(QLatin1String(hex), Qt::CaseInsensitive);
         check(!literal, "the old hard-coded colours are gone");
-        check(dialog.minimumHeight() <= 700, "the minimum height fits a 768 px screen");
-        check(dialog.minimumHeight() >= dialog.minimumSizeHint().height()
-                  && dialog.minimumWidth() >= dialog.minimumSizeHint().width(),
-              "the minimum size is never smaller than the layout's");
     }
     tm.setActiveTheme(before);
 }
@@ -162,7 +160,14 @@ void close(ProfileImportExportDialog* dialog, int path)
         QTest::qWaitForWindowActive(dialog);
         QTest::keySequence(dialog, QKeySequence::Close);
     }
-    if (path == 2) dialog->close();
+    if (path == 2) {
+        // Press the corner ✕ itself, so its connection is pinned too.
+        QToolButton* corner = nullptr;
+        for (QToolButton* b : dialog->findChildren<QToolButton*>())
+            if (b->accessibleName() == QLatin1String("Close")) corner = b;
+        if (corner) QTest::mouseClick(corner, Qt::LeftButton);
+        else { check(false, "the corner close button exists"); dialog->close(); }
+    }
 }
 
 const char* pathName(int path)
@@ -277,7 +282,9 @@ void geometryCarriesOver()
     settings.remove(kKey);
     RadioModel model;
     ProfileImportExportDialog restored(&model);
-    const QSize chosen(restored.minimumWidth() + 30, restored.minimumHeight() + 20);
+    // Well above the floor the shown layout sets (the constructor's minimum is
+    // only a lower bound until then).
+    const QSize chosen(restored.minimumWidth() + 30, restored.minimumHeight() + 160);
     QDialog legacy;
     legacy.resize(chosen);
     settings.setValue(kKey, QString::fromLatin1(legacy.saveGeometry().toBase64()));
@@ -288,6 +295,54 @@ void geometryCarriesOver()
         QTest::qWait(20);
     check(restored.size() == chosen, "geometry saved by the old dialog restores under its key");
     restored.hide();
+
+    // A size saved under the old 430 px minimum is shorter than the layout
+    // needs: it opens at the floor, with nothing crushed.
+    QDialog shortLegacy;
+    shortLegacy.resize(QSize(560, 430));
+    settings.setValue(kKey, QString::fromLatin1(shortLegacy.saveGeometry().toBase64()));
+    ProfileImportExportDialog reopened(&model);
+    reopened.show();
+    QTest::qWaitForWindowExposed(&reopened);
+    QTest::qWait(50);
+    bool legible = true;
+    for (QCheckBox* box : reopened.findChildren<QCheckBox*>())
+        legible = legible && (!box->isVisible() || box->height() >= box->minimumSizeHint().height());
+    check(reopened.height() >= reopened.minimumHeight() && legible,
+          "an old saved size below the floor opens at the floor, legible");
+    reopened.hide();
+}
+
+// At the minimum size the window can be resized to, every control gets its
+// full height: the floor is measured from the shown, polished layout, not
+// from the constructor's hint (which the canon sheet has not reached yet).
+void controlsLegibleAtMinimum()
+{
+    RadioModel model;
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        tm.setActiveTheme(QLatin1String(theme));
+        ProfileImportExportDialog dialog(&model);
+        dialog.show();
+        QTest::qWaitForWindowExposed(&dialog);
+        dialog.resize(QSize(1, 1));
+        QTest::qWait(50);
+        bool legible = true;
+        for (QWidget* w : dialog.findChildren<QWidget*>()) {
+            if (!w->isVisible() || qobject_cast<QCheckBox*>(w) == nullptr) continue;
+            if (w->height() < w->minimumSizeHint().height()) {
+                legible = false;
+                std::printf("  %s: %s h=%d hint=%d\n", theme, qPrintable(static_cast<QCheckBox*>(w)->text()),
+                            w->height(), w->minimumSizeHint().height());
+            }
+        }
+        std::printf("  %s: shown minimum %dx%d\n", theme, dialog.width(), dialog.height());
+        check(legible, "every category check box gets its full height at the smallest size");
+        check(dialog.height() <= 700, "the shown minimum height fits a 768 px screen");
+        dialog.hide();
+    }
+    tm.setActiveTheme(before);
 }
 
 } // namespace
@@ -300,6 +355,7 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
 
     canonWorkspace();
+    controlsLegibleAtMinimum();
     idleClosePaths();
     busyClosePathsAsk();
     importConfirmDefaultsToCancel();

@@ -5,6 +5,7 @@
 #include "core/ProfileTransfer.h"
 
 class QCheckBox;
+class QShowEvent;
 class QLabel;
 class QLineEdit;
 class QProgressBar;
@@ -29,6 +30,10 @@ public:
     // corner ✕ through closeEvent(). While a transfer runs it asks first, and
     // closes only on Cancel Transfer.
     void done(int result) override;
+
+protected:
+    // Raises the floor to what the shown, polished layout needs (see .cpp).
+    void showEvent(QShowEvent* event) override;
 
 private:
     QWidget* buildExportPage();

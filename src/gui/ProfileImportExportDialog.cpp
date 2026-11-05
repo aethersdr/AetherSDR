@@ -19,6 +19,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayout>
+#include <QShowEvent>
 #include <QLineEdit>
 #include <QProgressBar>
 #include <QPushButton>
@@ -169,6 +171,7 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
     root->addWidget(m_statusLabel);
 
     m_progress = new QProgressBar(this);
+    m_progress->setAccessibleName(QStringLiteral("Transfer progress"));
     m_progress->setRange(0, 100);
     m_progress->setValue(0);
     root->addWidget(m_progress);
@@ -256,6 +259,23 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
     updateControls();
 }
 
+void ProfileImportExportDialog::showEvent(QShowEvent* event)
+{
+    CanonWindow::showEvent(event);
+    // The constructor's minimumSizeHint() is taken before the canon sheet has
+    // polished anything, and a layout's minimum ignores height-for-width, so
+    // the word-wrapped intros were not counted: the window could be shrunk
+    // until the category check boxes were crushed. Measure the shown layout
+    // at the minimum width instead, wrapped text included.
+    if (QLayout* l = layout()) {
+        l->activate();
+        const int width = qMax(minimumWidth(), l->totalMinimumSize().width());
+        const int needed = l->hasHeightForWidth() ? l->totalHeightForWidth(width)
+                                                  : l->totalMinimumSize().height();
+        setMinimumSize(QSize(width, qMax(minimumHeight(), needed)));
+    }
+}
+
 void ProfileImportExportDialog::done(int result)
 {
     if (m_confirmingClose)
@@ -283,7 +303,9 @@ void ProfileImportExportDialog::done(int result)
         // The transfer may have ended while the question was up.
         if (transferGuard && self->m_transfer == transferGuard.data() && transferGuard->isBusy()) {
             self->m_closingAfterCancel = true;
-            transferGuard->cancel();
+            transferGuard->cancel();      // emits failed() synchronously
+            if (self)
+                self->m_closingAfterCancel = false;
         }
     }
     CanonWindow::done(result);
@@ -335,7 +357,10 @@ QWidget* ProfileImportExportDialog::buildExportPage()
     auto* fileGroup = new QGroupBox(QStringLiteral("Destination"), page);
     auto* fileRow = new QHBoxLayout(fileGroup);
     m_exportPath = new QLineEdit(defaultExportPath(), fileGroup);
+    m_exportPath->setObjectName(QStringLiteral("profileIoExportPath"));
+    m_exportPath->setAccessibleName(QStringLiteral("Export destination path"));
     auto* browse = new QPushButton(QStringLiteral("Browse..."), fileGroup);
+    browse->setAccessibleName(QStringLiteral("Browse for export destination"));
     fileRow->addWidget(m_exportPath, 1);
     fileRow->addWidget(browse);
     root->addWidget(fileGroup);
@@ -387,7 +412,10 @@ QWidget* ProfileImportExportDialog::buildImportPage()
     auto* fileGroup = new QGroupBox(QStringLiteral("Configuration Package"), page);
     auto* fileRow = new QHBoxLayout(fileGroup);
     m_importPath = new QLineEdit(fileGroup);
+    m_importPath->setObjectName(QStringLiteral("profileIoImportPath"));
+    m_importPath->setAccessibleName(QStringLiteral("Import package path"));
     auto* browse = new QPushButton(QStringLiteral("Browse..."), fileGroup);
+    browse->setAccessibleName(QStringLiteral("Browse for import package"));
     fileRow->addWidget(m_importPath, 1);
     fileRow->addWidget(browse);
     root->addWidget(fileGroup);
