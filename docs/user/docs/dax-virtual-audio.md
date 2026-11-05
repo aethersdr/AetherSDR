@@ -4,18 +4,18 @@ slug: "/dax-virtual-audio"
 description: "DAX (Digital Audio eXchange) creates virtual audio devices on your computer that digital-mode programs (WSJT-X, fldigi, JS8Call, VARA and others) use as their sound card."
 status: "Supported"
 applies_to: ["FlexRadio", "RTL-SDR (experimental, receive-only)"]
-platforms: ["Linux", "macOS"]
+platforms: ["Linux", "macOS", "Windows"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, RTL-SDR (experimental, receive-only) · **Platforms:** Linux, macOS
+**Status:** Supported · **Applies to:** FlexRadio, RTL-SDR (experimental, receive-only) · **Platforms:** Linux, macOS, Windows (DAX TX stream selection only)
 
 :::
 
 DAX (Digital Audio eXchange) creates virtual audio devices on your computer that digital-mode programs (WSJT-X, fldigi, JS8Call, VARA and others) use as their sound card. Receive audio flows from a slice to the program, and the program's transmit audio flows back to the radio, all through AetherSDR with no cables.
 
-FlexRadio provides receive and transmit DAX. RTL-SDR provides experimental **receive-only** DAX on Linux and macOS; see [RTL-SDR receive audio](#rtl-sdr-receive-audio). On radios without an audio-export route, use the [TCI Server](./tci-server.md).
+FlexRadio provides receive and transmit DAX. AetherSDR hosts virtual audio devices on Linux and macOS; its DAX TX stream selection controls are also available on Windows. RTL-SDR provides experimental **receive-only** DAX on Linux and macOS; see [RTL-SDR receive audio](#rtl-sdr-receive-audio). On radios without an audio-export route, use the [TCI Server](./tci-server.md).
 
 ## Requirements
 
@@ -23,13 +23,13 @@ FlexRadio provides receive and transmit DAX. RTL-SDR provides experimental **rec
 |---|---|
 | **Linux** | Built in. Needs PipeWire. Receive channels are native PipeWire streams; they also show up through PipeWire's PulseAudio and JACK layers. |
 | **macOS** | Built in, through the **DAX Virtual Audio Driver** that ships in the AetherSDR DMG; install it from there. If it is missing, enabling DAX shows "DAX Audio Driver Missing". |
-| **Windows** | No built-in DAX driver. The DAX applet says "No built-in DAX driver on Windows. Use TCI, or SmartSDR DAX." Use the [TCI Server](./tci-server.md) (audio and CAT over one connection), or FlexRadio's own SmartSDR DAX. |
+| **Windows** | No built-in DAX driver. The DAX applet says "No built-in DAX driver on Windows. Use TCI, or SmartSDR DAX." The **DAX** control is **Unavailable**; the **TX stream** toggle selects AetherSDR's own stream independently of audio drivers. SmartSDR DAX manages its own separate stream. Use the [TCI Server](./tci-server.md) (audio and CAT over one connection), or FlexRadio's own SmartSDR DAX, for audio. |
 
 ## Setup
 
 ### Turning DAX on
 
-- The **DAX Audio** applet (applet-tray button **DAX**) has a **DAX: Enabled / Disabled** button at the bottom.
+- The **DAX Audio** applet (applet-tray button **DAX**) has a **DAX: Enabled / Disabled** button at the bottom. It starts or stops local virtual audio routing. It is **Unavailable** on Windows and in builds without local bridge support, with an explanation.
 - **Settings → Autostart DAX with AetherSDR** is the same setting: while it is on, DAX starts every time you connect. This menu entry is not shown on Windows.
 
 ### Assigning a slice to a DAX channel
@@ -59,14 +59,21 @@ The normal RTL limit remains one receiver. Additional inputs are for the process
 
 ### Transmit audio
 
-On FlexRadio, when a digital program transmits in a digital mode (DIGU, DIGL), its audio from **AetherSDR TX** goes to the radio. Voice modes use your microphone. You don't switch anything by hand.
+On FlexRadio, a digital program's audio from **AetherSDR TX** uses this client's DAX TX stream. Before transmitting, select your local TX slice, leave the radio idle, and click the **TX stream** toggle in **DAX Audio**. Wait for **Selected** without **Audio blocked**. Put the TX slice in a digital mode (DIGU or DIGL) and initiate transmission separately in your program. Voice modes use your microphone.
+
+With MultiFlex, another client can select its own DAX TX stream. AetherSDR's label follows the radio's report, and deselection blocks its DAX transmit audio. Click **Selected** while idle to deselect AetherSDR's stream. These actions do not change the TX slice or global DAX input, key the radio, start audio, or restore a previous transmission. A later transmission needs a new operator action.
+
+After a transmission ends, the toggle becomes available when the radio reports
+a settled receive state and local transmit preparation and cleanup have finished.
+
+Selection requests are not saved or replayed on reconnect. The label follows current radio status and can already show **Selected** when the radio reports this client's stream as selected. If a request is refused or times out, the applet shows its reason; check the current status before making another request.
 
 ### Wiring WSJT-X (Linux and macOS)
 
 This transmit-capable setup applies to FlexRadio.
 
 1. Put the slice in **DIGU** and set its DAX channel to **1**.
-2. Turn DAX on, and turn on a **Rigctld** CAT port (see [CAT Control](./cat-control.md)).
+2. Enable **DAX**, click the **TX stream** toggle while the radio is idle, and wait for **Selected** without **Audio blocked**. Turn on a **Rigctld** CAT port (see [CAT Control](./cat-control.md)).
 3. In WSJT-X, **File → Settings → Audio**: Input **AetherSDR DAX 1**, Output **AetherSDR TX**.
 4. **Settings → Radio**: Rig `Hamlib NET rigctl`, Network Server `127.0.0.1:4532`, PTT Method `CAT`.
 
@@ -103,9 +110,27 @@ For FlexRadio, AetherSDR offers **up to eight RX channels plus one TX channel**.
 
 Each RX row shows **DAX n:**, the slice currently assigned to that channel (or "—"), and a combined **level meter and gain slider**. The **TX:** row shows which slice holds transmit and the gain applied to audio coming from your program. Gains are saved per channel.
 
-<img src="/img/screens/dax-applet.png" width="248" alt="DAX Audio applet. Level bars for DAX 1, assigned to Slice A, DAX 2 to DAX 4, unassigned, and TX, assigned to Slice A, above a DAX row with a Disabled button." />
+The **DAX** button starts or stops local virtual audio routing and controls **Settings → Autostart DAX with AetherSDR**. The **TX stream** toggle separately selects or deselects AetherSDR's transmit-audio stream. Receive audio can remain enabled while that stream is deselected; TCI and built-in audio sources can use the stream with the local bridge disabled.
 
-*The DAX Audio applet on Linux: one level bar per DAX channel and the button that starts DAX.*
+The stream-selection row is present on every platform, including Windows:
+
+| Control or status | Meaning |
+|---|---|
+| **TX stream: Not selected** | Click to select AetherSDR's stream. It can create that stream when needed. |
+| **TX stream: Selected** | The radio confirms selection. Click while idle to deselect the stream. This does not start transmission. |
+| **Selecting… / Deselecting…** | A request is pending. The toggle is disabled until the request settles. |
+| **Unknown** | Current selection cannot be confirmed. The toggle is disabled while waiting for fresh radio status. |
+| **Unavailable** | Disconnected or unsupported. The visible explanation, tooltip, and accessible description give the reason. |
+| **Request refused / Request timed out** | The request failed; the displayed reason explains why. A timeout remains **Unknown** until fresh status arrives. |
+| **Audio blocked** | Selection alone is insufficient for the current audio route. Do not treat a level on the TX meter as confirmation that audio reaches the radio. |
+
+Manual handoff requires an idle radio with no local transmit intent or profile load in progress; selecting also requires a TX slice confirmed as belonging to this client. Selection is not saved or restored. The toggle does not start or stop the local bridge, change its autostart setting, change the TX slice or radio-wide DAX source, or key the transmitter.
+
+On Windows, **DAX: Unavailable** describes AetherSDR's missing local virtual audio driver. TCI and built-in transmit sources can still use AetherSDR's **TX stream** toggle. FlexRadio's separate SmartSDR DAX application manages its own stream; this toggle does not control that application.
+
+<img src="/img/screens/dax-applet.png" width="248" alt="DAX Audio applet. Receive level and gain bars for DAX 1, assigned to Slice A, and DAX 2 through DAX 8, unassigned. The TX row is assigned to Slice A. DAX is Enabled and the single TX stream toggle is Selected." />
+
+*The DAX Audio applet with the local audio bridge enabled and AetherSDR’s TX stream selected.*
 
 ## Known issues
 
@@ -125,10 +150,12 @@ The slice has no DAX channel, or the program is reading a different device.
 
 ### Transmit audio does not reach the radio
 
-The program sends to the wrong device, or the TX slice is in a voice mode.
+The program sends to the wrong device, the TX slice is in a voice mode, or this app's DAX TX stream is not selected.
 
 1. Set the program's audio output to **AetherSDR TX**.
 2. Put the TX slice in a digital mode (DIGU or DIGL).
+3. With the radio idle and your local TX slice selected, click the **TX stream** toggle. Wait for **Selected** without **Audio blocked**, then initiate a new transmission in your program.
+4. If taking is disabled, read its tooltip for the current reason. Resolve an active transmission or profile load before requesting a handoff.
 
 ### A DAX row is missing
 

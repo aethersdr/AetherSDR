@@ -220,22 +220,7 @@ void TciIoWorker::acceptConnections()
         const quint64 id = client.lifetime->id;
         m_clients.insert(id, client);
         connect(socket, &QWebSocket::textMessageReceived, this, [this, id](const QString& text) {
-            auto it = m_clients.find(id);
-            if (it == m_clients.end() || !it->lifetime->live.load()) { return; }
-            const qsizetype bytes = text.size() * sizeof(QChar);
-            if (bytes > kTextBytes - it->textBytes || it->texts.size() >= 64) {
-                closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
-                return;
-            }
-            const QStringList commands = text.split(QLatin1Char(';'), Qt::SkipEmptyParts);
-            if (it->texts.size() + commands.size() > 64) {
-                closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
-                return;
-            }
-            for (const QString& command : commands) { it->texts.push_back({command + QLatin1Char(';'), {}}); }
-            if (it->activated) { captureTextInputs(*it); }
-            it->textBytes += bytes;
-            dispatchText(id);
+            receiveText(id, text);
         });
         connect(socket, &QWebSocket::binaryMessageReceived, this, [this, id](const QByteArray& data) {
             receiveBinary(id, data);
@@ -261,6 +246,28 @@ void TciIoWorker::acceptConnections()
         });
         emit clientOpened(client.lifetime, socket->peerAddress(), socket->peerPort());
     }
+}
+
+void TciIoWorker::receiveText(quint64 id, const QString& text)
+{
+    auto it = m_clients.find(id);
+    if (it == m_clients.end() || !it->lifetime->live.load()) { return; }
+    const qsizetype bytes = text.size() * sizeof(QChar);
+    if (bytes > kTextBytes - it->textBytes || it->texts.size() >= 64) {
+        closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
+        return;
+    }
+    const QStringList commands = text.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    if (it->texts.size() + commands.size() > 64) {
+        closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
+        return;
+    }
+    for (const QString& command : commands) {
+        it->texts.push_back({command + QLatin1Char(';'), {}, false, m_daxTxAudioPermit, true});
+    }
+    if (it->activated) { captureTextInputs(*it); }
+    it->textBytes += bytes;
+    dispatchText(id);
 }
 
 void TciIoWorker::activate(quint64 id, const TxCoordinator::Producer& producer)
@@ -291,6 +298,11 @@ void TciIoWorker::captureTextInputs(Client& client)
                 if (m_txClient == client.lifetime->id) { stopChrono(); }
             } else if (request && request->transmitting) {
                 text.input = client.producer.request();
+                // Native enqueue pins the route even before client activation.
+                if (!text.daxPermitCaptured) {
+                    text.daxPermit = m_daxTxAudioPermit;
+                    text.daxPermitCaptured = true;
+                }
             }
         }
     }
@@ -305,7 +317,13 @@ void TciIoWorker::dispatchText(quint64 id)
     it->textInFlight = true;
     // Includes the in-flight message until acknowledgement; controller backlog
     // remains bounded while its event loop is busy.
-    emit textReceived(id, text.message, text.input);
+    emit textReceived(id, text.message, text.input, text.daxPermit);
+}
+
+void TciIoWorker::setDaxTxAudioPermit(const DaxTxAudioPermit& permit)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    m_daxTxAudioPermit = permit;
 }
 
 void TciIoWorker::acknowledgeText(quint64 id)

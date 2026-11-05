@@ -7,11 +7,18 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QAccessible>
+#include <QJsonObject>
+#include <QSignalBlocker>
+#include <QSizePolicy>
+#include <QString>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <algorithm>
+#include <initializer_list>
+#include <memory>
 
 namespace AetherSDR {
 
@@ -23,12 +30,6 @@ constexpr const char* kSectionStyle =
     "QPushButton { background: #1a2a3a; border: 1px solid #205070;"
     "  border-radius: 3px; padding: 2px 8px; font-size: 11px; font-weight: bold; color: #c8d8e8; }"
     "QPushButton:hover { background: #204060; }";
-
-const QString kGreenToggle =
-    "QPushButton { background: #1a2a3a; border: 1px solid #205070; border-radius: 3px;"
-    " color: #c8d8e8; font-size: 11px; font-weight: bold; padding: 2px 8px; }"
-    "QPushButton:hover { background: #204060; }"
-    "QPushButton:checked { background: #006040; color: #00ff88; border: 1px solid #00a060; }";
 
 constexpr const char* kDimLabel =
     "QLabel { color: #8090a0; font-size: 11px; }";
@@ -44,6 +45,8 @@ DaxApplet::DaxApplet(QWidget* parent) : QWidget(parent)
     hide();  // hidden by default
 }
 
+DaxApplet::~DaxApplet() = default;
+
 void DaxApplet::buildUI()
 {
     setStyleSheet(kSectionStyle);
@@ -57,11 +60,9 @@ void DaxApplet::buildUI()
     // audio driver we ship only on macOS/Linux (the daxToggled → startDax()
     // wiring is compiled out here, see MainWindow_Session.cpp). DAX still works
     // on Windows via FlexRadio's own SmartSDR DAX drivers; we just don't provide
-    // one. The Enable button, per-channel/TX meters and their labels would all
-    // be inert, so on Windows the applet shows ONLY this note and nothing else
-    // is built (#4112). The control member pointers stay null; the level/enable
-    // setters and setRadioModel() are guarded for that. The full "where to set
-    // it up" pointer lives in Help → Configuring Data Modes.
+    // one. The hosted-device Enable button and meters would be inert here;
+    // stream ownership controls below remain available independently of a driver.
+    // The setup pointer lives in Help → Configuring Data Modes.
     auto* winNote = new QLabel(
         tr("No built-in DAX driver on Windows.\n"
            "Use TCI, or SmartSDR DAX."));
@@ -71,41 +72,9 @@ void DaxApplet::buildUI()
     winNote->setStyleSheet(
         "QLabel { color: #d0a040; font-size: 11px; padding: 4px 6px; }");
     outer->addWidget(winNote);
-    outer->addStretch();  // pin the note to the top; nothing below it on Windows
-    return;
 #else
 
     auto& settings = AppSettings::instance();
-
-    // DAX enable row
-    auto* daxEnRow = new QHBoxLayout;
-    daxEnRow->setContentsMargins(4, 2, 4, 2);
-    auto* daxLabel = new QLabel("DAX:");
-    daxLabel->setStyleSheet(kDimLabel);
-    daxEnRow->addWidget(daxLabel);
-    daxEnRow->addStretch();
-    const bool daxAutoStart = settings.value("AutoStartDAX", "False").toString() == "True";
-    m_daxEnable = new QPushButton(daxAutoStart ? "Enabled" : "Disabled");
-    m_daxEnable->setCheckable(true);
-    m_daxEnable->setObjectName(QStringLiteral("daxEnable"));
-    m_daxEnable->setAccessibleName(tr("DAX enable"));
-    m_daxEnable->setAccessibleDescription(tr("Enable or disable DAX digital audio routing"));
-    m_daxEnable->setStyleSheet(kGreenToggle);
-    m_daxEnable->setFixedSize(76, 22);
-    daxEnRow->addWidget(m_daxEnable);
-
-    // DAX enable button → save setting + notify MainWindow
-    {
-        const QSignalBlocker b(m_daxEnable);
-        m_daxEnable->setChecked(daxAutoStart);
-    }
-    connect(m_daxEnable, &QPushButton::toggled, this, [this](bool on) {
-        m_daxEnable->setText(on ? "Enabled" : "Disabled");
-        auto& ss = AppSettings::instance();
-        ss.setValue("AutoStartDAX", on ? "True" : "False");
-        ss.save();
-        emit daxToggled(on);
-    });
 
     // RX channel meter/sliders (DAX 1-8)
     for (int i = 0; i < kChannels; ++i) {
@@ -176,14 +145,18 @@ void DaxApplet::buildUI()
     txRow->addWidget(m_daxTxMeter, 1);
 
     outer->addLayout(txRow);
-    outer->addLayout(daxEnRow);
 #endif  // !Q_OS_WIN
+    buildBridgeUI(outer);
+    buildOwnershipUI(outer);
+#ifdef Q_OS_WIN
+    outer->addStretch();
+#endif
 }
 
 // Hide RX rows above the radio's slice capacity so a 2-slice (6300/6400) or
 // 4-slice (6600/8600) radio doesn't show dead DAX rows with live-but-routing-
 // nowhere gain sliders. kChannels stays the allocation; we only toggle
-// visibility. Note-only Windows builds leave m_daxRxRow[] null — guarded. (#4854)
+// visibility. Windows hosted-driver builds leave m_daxRxRow[] null — guarded. (#4854)
 void DaxApplet::setMaxDaxChannels(int n)
 {
     n = qBound(1, n, kChannels);
@@ -196,63 +169,287 @@ void DaxApplet::setMaxDaxChannels(int n)
     }
 }
 
+void DaxApplet::buildBridgeUI(QVBoxLayout* outer)
+{
+    auto* row = new QHBoxLayout;
+    row->setContentsMargins(4, 2, 4, 2);
+    auto* label = new QLabel(tr("DAX:"), this);
+    label->setObjectName(QStringLiteral("daxBridgeLabel"));
+    ThemeManager::instance().applyStyleSheet(label,
+        QStringLiteral("QLabel { color: {{color.canon.muted}}; font-size: 11px; }"));
+    row->addWidget(label);
+    row->addStretch();
+    m_daxEnable = new QPushButton(this);
+    m_daxEnable->setObjectName(QStringLiteral("daxEnable"));
+    m_daxEnable->setAccessibleName(tr("DAX"));
+    m_daxEnable->setCheckable(true);
+    m_daxEnable->setFixedSize(96, 22);
+    ThemeManager::instance().applyStyleSheet(m_daxEnable, QStringLiteral(
+        "QPushButton { background: {{color.canon.control}};"
+        " border: 1px solid {{color.canon.lineHi}}; border-radius: 3px;"
+        " color: {{color.canon.inkSoft}}; font-size: 11px; font-weight: bold; padding: 2px 4px; }"
+        "QPushButton:hover { background: {{color.canon.nested}}; }"
+        "QPushButton:checked { background: {{color.toggle.success.background.checked}};"
+        " color: {{color.toggle.success.foreground.checked}};"
+        " border-color: {{color.toggle.success.border.checked}}; }"
+        "QPushButton:disabled { color: {{color.control.unavailable}}; }"));
+#if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
+    const bool autoStart = AppSettings::instance().value("AutoStartDAX", "False").toString() == "True";
+    setDaxEnabled(autoStart);
+    const QString description = tr("Enable local virtual audio routing and autostart DAX on connection. "
+                                   "TX stream selection is separate.");
+    m_daxEnable->setAccessibleDescription(description);
+    m_daxEnable->setToolTip(description);
+    connect(m_daxEnable, &QPushButton::toggled, this, [this](bool on) {
+        m_daxEnable->setText(on ? tr("Enabled") : tr("Disabled"));
+        auto& settings = AppSettings::instance();
+        settings.setValue("AutoStartDAX", on ? "True" : "False");
+        settings.save();
+        emit daxToggled(on);
+    });
+#else
+    m_daxEnable->setText(tr("Unavailable"));
+    m_daxEnable->setEnabled(false);
+#ifdef Q_OS_WIN
+    const QString reason = tr("No built-in audio bridge on Windows. Use TCI or SmartSDR DAX. "
+                              "SmartSDR DAX manages its own TX stream.");
+#else
+    const QString reason = tr("This build has no local audio bridge support. Use TCI for audio.");
+#endif
+    m_daxEnable->setAccessibleDescription(reason);
+    m_daxEnable->setToolTip(reason);
+#endif
+    row->addWidget(m_daxEnable);
+    outer->addLayout(row);
+}
+
+void DaxApplet::buildOwnershipUI(QVBoxLayout* outer)
+{
+    auto* section = new QWidget(this);
+    section->setObjectName(QStringLiteral("daxTxOwnership"));
+    auto* layout = new QVBoxLayout(section);
+    layout->setContentsMargins(4, 2, 4, 4);
+    layout->setSpacing(2);
+    ThemeManager::instance().applyStyleSheet(section, QStringLiteral(
+        "QWidget#daxTxOwnership { background: {{color.canon.nested}};"
+        " border: 1px solid {{color.canon.line}}; }"
+        "QLabel { color: {{color.canon.inkSoft}}; font-size: 11px; }"
+        "QPushButton { background: {{color.canon.control}};"
+        " border: 1px solid {{color.canon.lineHi}}; border-radius: 3px;"
+        " padding: 2px 4px; font-size: 11px; font-weight: bold;"
+        " color: {{color.canon.inkSoft}}; }"
+        "QPushButton:hover { background: {{color.canon.nested}}; }"
+        "QPushButton:checked { background: {{color.toggle.accent.background.checked}};"
+        " color: {{color.canon.cyan}}; border-color: {{color.canon.cyan}}; }"
+        "QPushButton:focus { border: 1px solid {{color.canon.aqua}}; }"
+        "QPushButton:disabled { color: {{color.control.unavailable}};"
+        " border-color: {{color.canon.line}}; }"));
+    auto* row = new QHBoxLayout;
+    row->addWidget(new QLabel(tr("TX stream:"), section));
+    row->addStretch();
+    m_daxTxToggle = new QPushButton(section);
+    m_daxTxToggle->setObjectName(QStringLiteral("daxTxToggle"));
+    m_daxTxToggle->setAccessibleName(tr("AetherSDR TX stream"));
+    m_daxTxToggle->setCheckable(true);
+    m_daxTxToggle->setFixedSize(96, 22);
+    row->addWidget(m_daxTxToggle);
+    layout->addLayout(row);
+    m_daxTxOwnershipStatus = new QLabel(section);
+    m_daxTxOwnershipStatus->setObjectName(QStringLiteral("daxTxOwnershipStatus"));
+    m_daxTxOwnershipStatus->setTextFormat(Qt::PlainText);
+    m_daxTxOwnershipStatus->setWordWrap(true);
+    layout->addWidget(m_daxTxOwnershipStatus);
+    outer->addWidget(section);
+
+    connect(m_daxTxToggle, &QPushButton::toggled, this, [this](bool take) {
+        const QPointer<DaxApplet> self(this);
+        const QPointer<RadioModel> origin(m_model);
+        // Restore the observation before dispatching the requested selection.
+        updateDaxTxOwnership();
+        if (self && origin && m_model == origin) {
+            origin->requestDaxTxOwnership(take);
+        }
+        if (self) { self->updateDaxTxOwnership(); }
+    });
+    updateDaxTxOwnership();
+}
+
+void DaxApplet::updateDaxTxOwnership()
+{
+    m_ownershipAvailability.reset();
+    const QJsonObject snapshot = m_model ? m_model->daxTxOwnershipSnapshot() : QJsonObject();
+    const bool available = snapshot.value(QStringLiteral("available")).toBool();
+    const bool pending = snapshot.value(QStringLiteral("pending")).toBool();
+    const bool uncertain = snapshot.value(QStringLiteral("uncertain")).toBool();
+    const bool known = snapshot.value(QStringLiteral("txKnown")).toBool();
+    const bool owned = snapshot.value(QStringLiteral("owned")).toBool();
+    const bool ready = snapshot.value(QStringLiteral("ready")).toBool();
+    const QString state = snapshot.value(QStringLiteral("state")).toString();
+    const bool noStream = snapshot.value(QStringLiteral("streamId")).toString() == QLatin1String("0x00000000");
+    QString text;
+    if (!available) {
+        text = tr("Unavailable");
+    } else if (pending) {
+        text = state == QLatin1String("releasing") ? tr("Deselecting…") : tr("Selecting…");
+    } else if (uncertain || (!known && !noStream)) {
+        text = tr("Unknown");
+    } else {
+        text = owned ? tr("Selected") : tr("Not selected");
+    }
+    const bool take = !owned;
+    const bool canRequest = available && !pending && !uncertain && (known || noStream)
+        && snapshot.value(take ? QStringLiteral("canTake") : QStringLiteral("canRelease")).toBool();
+    {
+        const QSignalBlocker blocker(m_daxTxToggle);
+        m_daxTxToggle->setChecked(available && !uncertain && known && owned);
+        m_daxTxToggle->setText(text);
+    }
+    const QString description = tr("Select or deselect AetherSDR's DAX transmit-audio stream. "
+                                   "This does not start transmission or control SmartSDR DAX's stream.");
+    m_daxTxToggle->setAccessibleDescription(description);
+    m_daxTxToggle->setToolTip(description);
+    QString reason = snapshot.value(take ? QStringLiteral("takeReason") : QStringLiteral("releaseReason")).toString();
+    if (reason.isEmpty()) {
+        reason = tr("Waiting for confirmed TX stream status from a supported radio.");
+    }
+    if (m_model) {
+        m_ownershipAvailability = std::make_unique<ControlAvailabilityRegistry>(*m_model, this);
+        m_ownershipAvailability->registerWidget(m_daxTxToggle, reason,
+            [canRequest](bool, const RadioCapabilities&) { return canRequest; },
+            [owned] { return owned; }, false);
+    } else {
+        m_daxTxToggle->setEnabled(false);
+        m_daxTxToggle->setToolTip(reason);
+        m_daxTxToggle->setAccessibleDescription(reason);
+    }
+
+    QString status;
+    if (available && known && owned && !ready) {
+        status = tr("Audio blocked");
+    }
+    if (state == QLatin1String("refused")) {
+        if (!status.isEmpty()) { status += QStringLiteral(" · "); }
+        status += tr("Request refused");
+    } else if (state == QLatin1String("timed-out")) {
+        if (!status.isEmpty()) { status += QStringLiteral(" · "); }
+        status += tr("Request timed out");
+    }
+    const QString error = snapshot.value(QStringLiteral("error")).toString();
+    if (!error.isEmpty()) {
+        if (!status.isEmpty()) { status += QLatin1Char('\n'); }
+        status += error;
+    }
+    // Reasons remain visible even when a disabled button cannot receive focus.
+    if (!canRequest && status.isEmpty()) { status = reason; }
+    const bool changed = m_daxTxOwnershipStatus->text() != status;
+    m_daxTxOwnershipStatus->setText(status);
+    m_daxTxOwnershipStatus->setVisible(!status.isEmpty());
+    m_daxTxOwnershipStatus->setAccessibleName(tr("TX stream status"));
+    m_daxTxOwnershipStatus->setAccessibleDescription(status);
+    if (changed) {
+        QAccessibleEvent event(m_daxTxOwnershipStatus, QAccessible::DescriptionChanged);
+        QAccessible::updateAccessibility(&event);
+    }
+}
+
 void DaxApplet::setRadioModel(RadioModel* model)
 {
+    m_ownershipAvailability.reset();
+    m_modelBinding.reset();
     m_model = model;
-    // On Windows the applet is note-only — no status labels to update. (#4112)
-    if (!model || !m_daxTxStatus) {
+    if (!model) {
+        updateReceiveLabels();
+        updateTxSliceLabel();
+        updateDaxTxOwnership();
         return;
     }
 
-    auto* availability = new ControlAvailabilityRegistry(*model,this);
-    availability->registerWidget(m_daxTxMeter,tr("DAX transmit audio is unavailable on this receive-only radio."),
-        [](bool connected,const RadioCapabilities& caps) {
-            return !connected || (caps.canTransmit && caps.hasDaxStreams);
-        });
-
-    // Wire slice add/remove for DAX channel tracking
-    connect(model, &RadioModel::sliceAdded, this, [this](SliceModel* s) {
-        connect(s, &SliceModel::daxChannelChanged, this, [this]() {
-            if (m_nativeReceiveRouting) { return; }
-            // Update DAX status labels
-            for (int i = 0; i < kChannels; ++i) {
-                m_daxRxStatus[i]->setText(QStringLiteral("\u2014"));
-            }
-            if (!m_model) {
-                return;
-            }
-            for (auto* sl : m_model->slices()) {
-                int ch = sl->daxChannel();
-                if (ch >= 1 && ch <= kChannels) {
-                    m_daxRxStatus[ch - 1]->setText(
-                        QString("Slice %1").arg(
-                            SliceLabel::richText(sl->sliceId(), sl->letter())));
-                }
-            }
-        });
+    m_modelBinding = std::make_unique<QObject>(this);
+    QObject* binding = m_modelBinding.get();
+    connect(model, &RadioModel::daxTxOwnershipChanged, binding,
+            [this] { updateDaxTxOwnership(); });
+    connect(model, &RadioModel::capabilitiesChanged, binding,
+            [this] { updateDaxTxOwnership(); });
+    connect(model, &RadioModel::connectionStateChanged, binding,
+            [this] { updateDaxTxOwnership(); });
+    connect(model, &QObject::destroyed, binding, [this] {
+        m_model = nullptr;
+        updateReceiveLabels();
+        updateTxSliceLabel();
+        updateDaxTxOwnership();
     });
 
-    // Wire TX slice label — always show which slice has TX privileges
-    auto updateTxLabel = [this]() {
-        if (!m_model) {
-            m_daxTxStatus->setText(QStringLiteral("\u2014"));
-            return;
-        }
-        for (auto* s : m_model->slices()) {
-            if (s->isTxSlice()) {
-                m_daxTxStatus->setText(
-                    QString("Slice %1").arg(
-                        SliceLabel::richText(s->sliceId(), s->letter())));
-                return;
-            }
-        }
-        m_daxTxStatus->setText(QStringLiteral("\u2014"));
+    if (m_daxTxMeter) {
+        auto* availability = new ControlAvailabilityRegistry(*model, binding);
+        availability->registerWidget(m_daxTxMeter,
+            tr("DAX transmit audio is unavailable on this receive-only radio."),
+            [](bool connected, const RadioCapabilities& caps) {
+                return !connected || (caps.canTransmit && caps.hasDaxStreams);
+            });
+    }
+
+    const auto bindSlice = [this, binding](SliceModel* slice) {
+        connect(slice, &SliceModel::daxChannelChanged, binding,
+                [this] { updateReceiveLabels(); });
+        connect(slice, &SliceModel::txSliceChanged, binding, [this] {
+            updateTxSliceLabel();
+            updateDaxTxOwnership();
+        });
+        updateReceiveLabels();
+        updateTxSliceLabel();
+        updateDaxTxOwnership();
     };
-    connect(model, &RadioModel::sliceAdded, this, [this, updateTxLabel](SliceModel* s) {
-        connect(s, &SliceModel::txSliceChanged, this, updateTxLabel);
-        updateTxLabel();
+    connect(model, &RadioModel::sliceAdded, binding, bindSlice);
+    connect(model, &RadioModel::sliceRemoved, binding, [this] {
+        updateReceiveLabels();
+        updateTxSliceLabel();
+        updateDaxTxOwnership();
     });
-    updateTxLabel();
+    for (SliceModel* slice : model->slices()) {
+        bindSlice(slice);
+    }
+    updateReceiveLabels();
+    updateTxSliceLabel();
+    updateDaxTxOwnership();
+}
+
+void DaxApplet::updateReceiveLabels()
+{
+    if (m_model && m_nativeReceiveRouting) {
+        return;
+    }
+    for (QLabel* label : m_daxRxStatus) {
+        if (label) {
+            label->setText(QStringLiteral("—"));
+        }
+    }
+    if (!m_model) {
+        return;
+    }
+    for (SliceModel* slice : m_model->slices()) {
+        const int channel = slice->daxChannel();
+        if (channel >= 1 && channel <= kChannels && m_daxRxStatus[channel - 1]) {
+            m_daxRxStatus[channel - 1]->setText(tr("Slice %1").arg(
+                SliceLabel::richText(slice->sliceId(), slice->letter())));
+        }
+    }
+}
+
+void DaxApplet::updateTxSliceLabel()
+{
+    if (!m_daxTxStatus) {
+        return;
+    }
+    if (m_model) {
+        for (SliceModel* slice : m_model->slices()) {
+            if (slice->isTxSlice()) {
+                m_daxTxStatus->setText(tr("Slice %1").arg(
+                    SliceLabel::richText(slice->sliceId(), slice->letter())));
+                return;
+            }
+        }
+    }
+    m_daxTxStatus->setText(QStringLiteral("—"));
 }
 
 void DaxApplet::setNativeReceiveRouting(bool native)
@@ -274,18 +471,20 @@ void DaxApplet::setReceiveChannelSlice(int channel, SliceModel* slice)
 
 void DaxApplet::setDaxEnabled(bool on)
 {
-    if (!m_daxEnable) {  // note-only on Windows (#4112)
-        return;
-    }
+#if !defined(Q_OS_MACOS) && !defined(HAVE_PIPEWIRE)
+    Q_UNUSED(on);
+    return;
+#endif
+    if (!m_daxEnable) { return; }
     QSignalBlocker b(m_daxEnable);
     m_daxEnable->setChecked(on);
-    m_daxEnable->setText(on ? "Enabled" : "Disabled");
+    m_daxEnable->setText(on ? tr("Enabled") : tr("Disabled"));
 }
 
 void DaxApplet::setDaxRxLevel(int channel, float rms)
 {
     if (channel < 1 || channel > kChannels || !m_daxRxMeter[channel - 1]) {
-        return;  // note-only on Windows (#4112)
+        return;  // no hosted-device controls on Windows
     }
     // Exponential smoothing: fast attack (α=0.4), slow decay (α=0.08)
     static float smoothed[kChannels]{};
@@ -297,7 +496,7 @@ void DaxApplet::setDaxRxLevel(int channel, float rms)
 
 void DaxApplet::setDaxTxLevel(float rms)
 {
-    if (!m_daxTxMeter) {  // note-only on Windows (#4112)
+    if (!m_daxTxMeter) {  // no hosted-device controls on Windows
         return;
     }
     m_daxTxMeter->setLevel(std::clamp(rms * 2.0f, 0.0f, 1.0f));
