@@ -217,17 +217,22 @@ static void transverterOutputsRefuseInternalAtu()
               "transverter output retains carrier TUNE availability");
 
         int memoryRequests = 0;
+        int clearRequests = 0;
         QObject::connect(&f.radio.transmitModel(), &TransmitModel::controlRequested,
-                         &f.radio, [&memoryRequests](const TransmitControlRequest& request) {
+                         &f.radio, [&memoryRequests, &clearRequests](const TransmitControlRequest& request) {
             if (request.field == TransmitControlRequest::Field::AtuMemories) {
                 ++memoryRequests;
+            } else if (request.field == TransmitControlRequest::Field::AtuClear) {
+                ++clearRequests;
             }
         });
         f.radio.transmitModel().atuStart();
         f.radio.transmitModel().setAtuMemories(true);
         f.radio.transmitModel().setAtuMemories(false);
+        f.radio.transmitModel().atuClearMemories();
         check(f.backend->atuStarts == 0, "transverter output: no ATU start reaches backend");
         check(memoryRequests == 0, "transverter output: no memory writes are issued");
+        check(clearRequests == 0, "transverter output: memories are not cleared");
         f.radio.transmitModel().atuBypass();
         check(f.backend->atuBypasses == 1, "transverter output: explicit bypass remains available");
 
@@ -236,7 +241,8 @@ static void transverterOutputsRefuseInternalAtu()
         check(f.radio.transmitModel().atuAvailable(), "return to ANT2 restores internal ATU");
         f.radio.transmitModel().atuStart();
         f.radio.transmitModel().setAtuMemories(true);
-        check(f.backend->atuStarts == 1 && memoryRequests == 1,
+        f.radio.transmitModel().atuClearMemories();
+        check(f.backend->atuStarts == 1 && memoryRequests == 1 && clearRequests == 1,
               "return to ANT2 restores ATU start and memory requests");
     }
 }
@@ -295,6 +301,20 @@ static void scopedAtuRechecksAvailabilityAfterAdmission()
     check(bypasses == 2, "scoped bypass remains available on withdrawn path");
 }
 
+static void producerStartWithdrawnDuringAdmissionIsRefused()
+{
+    Fixture f(QStringLiteral("flex"), /*canTransmit=*/true);
+    f.backend->connected = true;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+    const TxCoordinator::Request request = producer.request();
+    f.radio.setTxProducerAdmissionObserver(producer, [&f] {
+        f.radio.transmitModel().setAtuAvailable(false);
+    });
+    check(!f.radio.requestProducerAtu(request, true),
+          "producer start withdrawn during admission is not accepted");
+    check(f.backend->atuStarts == 0, "withdrawn producer start reaches no backend start");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("atu-seam-gate"));
@@ -309,6 +329,7 @@ int main(int argc, char** argv)
     transverterOutputsRefuseInternalAtu();
     availabilityFollowsTxSliceOnly();
     scopedAtuRechecksAvailabilityAfterAdmission();
+    producerStartWithdrawnDuringAdmissionIsRefused();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

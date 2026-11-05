@@ -726,6 +726,7 @@ void TransmitModel::setAtuMemories(bool on)
 void TransmitModel::atuClearMemories()
 {
     if (refuseControlOffThread()) { return; }
+    if (!m_atuAvailable) { return; }
     const auto field = TransmitControlRequest::Field::AtuClear;
     captureControlIntent(field);
     // FlexLib Radio.cs:11055-11060 confirms "atu clear" wipes the entire

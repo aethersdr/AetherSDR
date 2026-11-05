@@ -54,6 +54,8 @@ public:
     }
     static void cancel(AtuPreTuneDialog& dialog) { dialog.cancelProgram(); }
     static QPushButton* tune(AtuPreTuneDialog& dialog) { return dialog.m_tuneBtn; }
+    static QPushButton* start(AtuPreTuneDialog& dialog) { return dialog.m_startBtn; }
+    static bool active(const AtuPreTuneDialog& dialog) { return dialog.m_sweepActive; }
 };
 
 } // namespace AetherSDR
@@ -833,6 +835,33 @@ void testSweepRetainsOriginalAuthority()
     report("operator cancellation fences an ATU point not admitted yet", recorder->commands.isEmpty());
 }
 
+void testPreTuneFollowsTransverterPath()
+{
+    RadioModel radio;
+    auto backend = std::make_unique<TxActionBackend>();
+    backend->connected = true;
+    radio.setBackendForTest(std::move(backend), QStringLiteral("test"));
+    radio.transmitModel().setTxModeGetter([] { return QStringLiteral("USB"); });
+    {
+        AtuPreTuneDialog idle(&radio, nullptr);
+        radio.transmitModel().setAtuAvailable(false);
+        QPushButton* start = TxAppletPowerReconciliationTestAccess::start(idle);
+        report("open pre-tune sweep cannot start on a transverter output",
+               !start->isEnabled()
+                   && start->toolTip().contains(QStringLiteral("transverter output"))
+                   && start->accessibleDescription() == start->toolTip());
+        radio.transmitModel().setAtuAvailable(true);
+        report("pre-tune sweep stays closed until it is reopened", !start->isEnabled());
+    }
+    AtuPreTuneDialog running(&radio, nullptr);
+    const auto controller = std::make_shared<TxController>(&radio);
+    TxAppletPowerReconciliationTestAccess::prepareSweep(running, controller);
+    report("pre-tune sweep is running", TxAppletPowerReconciliationTestAccess::active(running));
+    radio.transmitModel().setAtuAvailable(false);
+    report("running pre-tune sweep stops on a transverter output",
+           !TxAppletPowerReconciliationTestAccess::active(running));
+}
+
 void testAtuCapabilityUsesThreeVisibleStates()
 {
     TransmitModel model;
@@ -1255,6 +1284,7 @@ int main(int argc, char** argv)
     testOptionalReceiveControlActivation();
     testModemReceiveProgramAuthority();
     testSweepRetainsOriginalAuthority();
+    testPreTuneFollowsTransverterPath();
     testAtuCapabilityUsesThreeVisibleStates();
     testTransverterAtuAvailability();
     testTuneAvailability();
