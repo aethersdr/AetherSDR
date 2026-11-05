@@ -752,9 +752,11 @@ void MidiMappingDialog::showEvent(QShowEvent* event)
 
 void MidiMappingDialog::hideEvent(QHideEvent* event)
 {
-    // A spontaneous hide is the OS minimising the window (Win+D, the macOS
-    // Dock): the operator may be reaching for the controller, so Learn stays
-    // armed. Closing sends a real hide, minimised or not.
+    // A spontaneous hide comes from the window system: minimising (Win+D,
+    // the macOS Dock), ⌘H hiding the app, or some X11 desktop switches. The
+    // window is still alive to save what Learn captures, and the operator may
+    // be reaching for the controller, so Learn stays armed. Closing sends a
+    // real hide, minimised or not.
     if (!event->spontaneous() && m_manager && m_manager->isLearning())
         m_manager->cancelLearn();
     CanonWindow::hideEvent(event);

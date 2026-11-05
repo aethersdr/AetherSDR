@@ -33,7 +33,7 @@ protected:
     void showEvent(QShowEvent* event) override;
     // Every close path ends in a hide (Esc and Ctrl+W send no close event):
     // a Learn still armed then would capture the next controller message
-    // with no window left to save it. A minimise does not cancel it.
+    // with no window left to save it. A minimise or app-hide does not.
     void hideEvent(QHideEvent* event) override;
 
 private:

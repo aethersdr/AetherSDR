@@ -51,7 +51,7 @@ It is a window of its own that remembers its size and position. Close it with th
 3. Move a knob, press a button or slide a fader.
 4. AetherSDR captures the message and creates the binding. Bindings are saved automatically.
 
-Closing the window cancels a Learn that is still waiting for a control.
+Closing the window cancels a Learn that is still waiting for a control. Minimising it, or hiding AetherSDR, does not: the Learn stays armed and saves the binding when you move the control.
 
 ### Manual entry
 
