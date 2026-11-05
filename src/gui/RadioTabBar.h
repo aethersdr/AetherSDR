@@ -6,6 +6,7 @@
 #include <QSizeF>
 #include <QString>
 #include <QStringList>
+#include <QStringList>
 #include <QVariantMap>
 #include <QPointer>
 #include <QWidget>
@@ -70,6 +71,10 @@ struct RadioTabEntry {
             && connectReason == o.connectReason && serial == o.serial && location == o.location && kind == o.kind;
     }
 };
+
+// Select two radio shortcuts while retaining workspace tabs and saved visual order.
+QList<RadioTabEntry> recentRadioShortcuts(const QList<RadioTabEntry>& entries,
+    const QStringList& recentIds, const QString& activeId);
 
 // A single radio tab.  QAbstractButton (not a styled QWidget) so it is
 // tab-focusable, space/enter-activatable, and reported to screen readers as a
@@ -163,7 +168,7 @@ private:
     bool          m_focusVisible{false};
 };
 
-// Persistent workspace radio tabs; "+" opens Locations and saved connections.
+// Radio shortcuts and independent workspace tabs; More radios opens the full drawer.
 class RadioTabBar : public QWidget {
     Q_OBJECT
 

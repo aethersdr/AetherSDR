@@ -75,6 +75,7 @@
 #include <QMediaDevices>
 #include <QAudioDevice>
 #include <QLabel>
+#include <QIcon>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -370,6 +371,12 @@ void MainWindow::refreshRadioTabs()
         lab.detail = tr("Antenna Analyzer · USB");
         tabs.append(lab);
     }
+    QStringList recentIds;
+    for (const auto& value : switcher.value("recentRadios").toArray()) { recentIds.append(value.toString()); }
+    tabs = recentRadioShortcuts(tabs, recentIds, activeId);
+    for (auto& entry : picker) {
+        entry.visibleInTabs = std::any_of(tabs.cbegin(), tabs.cend(), [&entry](const auto& tab) { return tab.id == entry.id; });
+    }
     m_titleBar->setRadioTabs(tabs);
     m_titleBar->setDiscoveredRadios(picker);
     m_titleBar->setActiveRadio(activeId);
@@ -442,6 +449,8 @@ void MainWindow::requestRadioTarget(const QJsonObject& target)
     description->setWordWrap(true);
     layout->addWidget(description);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, prompt);
+    buttons->button(QDialogButtonBox::Cancel)->setIcon(QIcon());
+    buttons->button(QDialogButtonBox::Cancel)->setDefault(true);
     auto* confirm = buttons->addButton(tr("Switch"), QDialogButtonBox::AcceptRole);
     confirm->setObjectName(QStringLiteral("radioSwitchConfirm"));
     confirm->setAccessibleName(tr("Switch to %1").arg(target.value("name").toString()));
@@ -565,7 +574,8 @@ void MainWindow::handleRadioTabAction(const QString& id, const QString& action)
         m_connPanel->cancelConnectionAttempt();
         beginExplicitRadioChoice();
     } else if (action == QLatin1String("disconnect")) {
-        if (m_radioModel.isConnected() && m_titleBar->radioTabBar()->activeRadioId() == id) { disconnectFromRadioByUser(); }
+        if (m_radioModel.isConnected() && (m_activeRadioTarget.value("id").toString() == id
+            || m_radioModel.serial() == id)) { disconnectFromRadioByUser(); }
     } else if (action == QLatin1String("rename")) {
         m_connPanel->renameConnectionTarget(id);
     } else if (action == QLatin1String("settings") || action == QLatin1String("setup")) {
@@ -590,6 +600,13 @@ void MainWindow::handleRadioTabAction(const QString& id, const QString& action)
         if (action == QLatin1String("remove")) { updated.append(id); }
         document["version"] = 1;
         document["hiddenRadios"] = updated;
+        if (action == QLatin1String("restore")) {
+            QJsonArray recent{id};
+            for (const auto& old : document.value("recentRadios").toArray()) {
+                if (recent.size() < 2 && old.toString() != id) { recent.append(old); }
+            }
+            document["recentRadios"] = recent;
+        }
         settings.setValue("RadioSwitcher", QString::fromUtf8(QJsonDocument(document).toJson(QJsonDocument::Compact)));
         settings.save();
         scheduleRadioTabRefresh();
@@ -786,6 +803,7 @@ void MainWindow::wireDiscovery()
     connect(m_connPanel, &ConnectionPanel::connectionTargetRequested, this, &MainWindow::requestRadioTarget);
     connect(m_connPanel, &ConnectionPanel::connectionAttemptFailed, this, &MainWindow::failRadioSwitch);
     connect(m_connPanel, &ConnectionPanel::workspaceChanged, this, &MainWindow::scheduleRadioTabRefresh);
+    connect(m_connPanel, &ConnectionPanel::radioAvailabilityChanged, this, &MainWindow::scheduleRadioTabRefresh);
     connect(m_connPanel, &ConnectionPanel::tabVisibilityRequested, this, [this](const QString& id, bool visible) {
         handleRadioTabAction(id, visible ? QStringLiteral("restore") : QStringLiteral("remove"));
     });
@@ -817,6 +835,15 @@ void MainWindow::wireDiscovery()
             }
             m_connPanel->rememberSuccessfulTarget(m_activeRadioTarget);
             auto& settings = AppSettings::instance();
+            QJsonObject switcher = QJsonDocument::fromJson(settings.value("RadioSwitcher", "{}").toString().toUtf8()).object();
+            const QString recentId = m_activeRadioTarget.value("id").toString(m_radioModel.serial());
+            QJsonArray recent{recentId};
+            for (const auto& old : switcher.value("recentRadios").toArray()) {
+                if (recent.size() < 2 && old.toString() != recentId) { recent.append(old); }
+            }
+            switcher["version"] = 1;
+            switcher["recentRadios"] = recent;
+            settings.setValue("RadioSwitcher", QString::fromUtf8(QJsonDocument(switcher).toJson(QJsonDocument::Compact)));
             settings.setValue("LastConnectedRadioSerial", m_radioModel.serial());
             const RadioInfo info = m_radioModel.lastRadioInfo();
             if (info.isRouted) { settings.setValue("LastRoutedRadioIp", info.address.toString()); }

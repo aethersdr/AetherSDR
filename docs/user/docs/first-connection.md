@@ -36,7 +36,7 @@ The window automatically fits its height to the available screen space, includin
 
 *Choose a location, select a radio and use Connect to connect to that radio.*
 
-1. **Launch AetherSDR.** On first launch, the **Connect to a radio** window opens at **Home**. Later launches can auto-connect to the last radio when that startup preference is enabled. Reopen it with **File → Connect to Radio...**, or the **+** beside the title bar's radio tabs.
+1. **Launch AetherSDR.** On first launch, the **Connect to a radio** window opens at **Home**. Later launches can auto-connect to the last radio when that startup preference is enabled. Reopen it with **File → Connect to Radio...**, or **⋯ More radios → Locations and connections…** beside the title bar’s radio shortcuts.
 2. Select your location. If it has no saved connections, discovered radios appear directly in its list.
 3. Select your radio and click **Connect**. The connection is saved in this location.
 4. The spectrum, waterfall and receive audio start.

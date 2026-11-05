@@ -290,7 +290,9 @@ int main(int argc, char** argv)
             && panel.findChild<QLabel*>("connectionOperatorWarning")->text().contains("system default")
             && audioChanges.first().first().toJsonObject() == savedPreferences);
         audioChanges.clear();
+        QSignalSpy availability(&panel, &ConnectionPanel::radioAvailabilityChanged);
         panel.addDemoRadio();
+        check("discovery publishes availability for the radio drawer", availability.count() == 1);
         // Reconnecting keeps current preferences after the explicit switch.
         QString error;
         panel.automationConnectLocalSerial("DEMO-0001", &error);
@@ -643,8 +645,8 @@ int main(int argc, char** argv)
         panel.connectTarget(target); // Missing Icom username: no transport or keychain access.
         check("attempt uses the captured Location while another is browsed", ConnectionPanelWorkspaceTestAccess::station(panel) == home
             && panel.workspaceSnapshot().value("selectedStation").toString() == other);
-        check("attempt applies the captured operator", ConnectionPanelWorkspaceTestAccess::attemptOperator(panel) == target.value("operator").toObject()
-            && preferences.count() == 1 && preferences.first().first().toJsonObject() == frozenOperator.value("preferences").toObject());
+        check("connection attempts retain operator metadata without recalling preferences", ConnectionPanelWorkspaceTestAccess::attemptOperator(panel) == target.value("operator").toObject()
+            && preferences.isEmpty());
         const int audioBeforeBrowse = preferences.count();
         panel.setConnected(true);
         panel.selectWorkspaceProfile("stations", home);

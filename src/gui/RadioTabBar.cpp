@@ -12,6 +12,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QSet>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -117,6 +118,30 @@ QString statusToken(RadioTabStatus status)
 }
 
 } // namespace
+
+QList<RadioTabEntry> recentRadioShortcuts(const QList<RadioTabEntry>& entries,
+    const QStringList& recentIds, const QString& activeId)
+{
+    QSet<QString> selected;
+    const auto choose = [&](const RadioTabEntry& entry, bool force = false) {
+        if (entry.kind == RadioTabEntry::Kind::Radio && selected.size() < 2
+            && (force || entry.visibleInTabs)) { selected.insert(entry.id); }
+    };
+    for (const auto& entry : entries) { if (entry.id == activeId) { choose(entry, true); } }
+    for (const auto& entry : entries) { if (entry.canCancel) { choose(entry, true); } }
+    for (const auto& id : recentIds) {
+        for (const auto& entry : entries) { if (entry.id == id) { choose(entry); break; } }
+    }
+    for (const auto& entry : entries) { choose(entry); }
+    QList<RadioTabEntry> result;
+    for (auto entry : entries) {
+        if (entry.kind == RadioTabEntry::Kind::Workspace || selected.contains(entry.id)) {
+            entry.visibleInTabs = true;
+            result.append(entry);
+        }
+    }
+    return result;
+}
 
 QString radioTabStatusText(RadioTabStatus status)
 {
@@ -540,7 +565,7 @@ public:
     {
         setObjectName(QStringLiteral("discoveredRadiosPopover"));
         setAttribute(Qt::WA_TranslucentBackground, true);
-        setAccessibleName(tr("Discovered radios"));
+        setAccessibleName(tr("Saved and nearby radios"));
 
         auto* outer = new QVBoxLayout(this);
         outer->setContentsMargins(0, 0, 0, 0);
@@ -640,14 +665,14 @@ RadioTabBar::RadioTabBar(QWidget* parent)
 
     m_addButton = new QToolButton(this);
     m_addButton->setObjectName(QStringLiteral("radioTabAddButton"));
-    m_addButton->setText(QStringLiteral("+"));
+    m_addButton->setText(QStringLiteral("⋯"));
     m_addButton->setFixedSize(kAddButtonSize, kTabHeight);
     m_addButton->setCursor(Qt::PointingHandCursor);
     m_addButton->setFocusPolicy(Qt::StrongFocus);
-    m_addButton->setAccessibleName(tr("Add radio"));
+    m_addButton->setAccessibleName(tr("More radios"));
     m_addButton->setAccessibleDescription(
-        tr("Open Locations and saved radio connections"));
-    m_addButton->setToolTip(tr("Connect to a radio"));
+        tr("Open all saved and nearby radios"));
+    m_addButton->setToolTip(tr("More radios and connections"));
     ThemeManager::instance().applyStyleSheet(
         m_addButton,
         QStringLiteral(
@@ -664,9 +689,7 @@ RadioTabBar::RadioTabBar(QWidget* parent)
     // "+" on every launch, because it is the first focusable widget in the
     // window and takes its initial focus.
     m_addButton->installEventFilter(this);
-    connect(m_addButton, &QToolButton::clicked, this, [this]() {
-        emit connectManuallyRequested();
-    });
+    connect(m_addButton, &QToolButton::clicked, this, &RadioTabBar::showDiscoveryPopover);
     m_layout->addWidget(m_addButton);
     m_dragScrollTimer = new QTimer(this);
     m_dragScrollTimer->setInterval(kDragScrollMs);
@@ -1228,7 +1251,7 @@ void RadioTabBar::showDiscoveryPopover()
     m_popover = popover;
     QVBoxLayout* rows = popover->rows();
 
-    auto* heading = new QLabel(tr("Discovered radios"), popover->panel());
+    auto* heading = new QLabel(tr("Radios"), popover->panel());
     heading->setObjectName(QStringLiteral("discoveredRadiosHeading"));
     ThemeManager::instance().applyStyleSheet(
         heading,
@@ -1281,7 +1304,7 @@ void RadioTabBar::showDiscoveryPopover()
         auto* container = new QWidget(list);
         container->setProperty("radioSearchText", entry.name + ' ' + entry.model
             + ' ' + entry.transport
-            + ' ' + entry.id + ' ' + radioTabStatusText(entry.status)
+            + ' ' + entry.location + ' ' + entry.id + ' ' + radioTabStatusText(entry.status)
             // Both spellings: the filter is case-insensitive, so the token
             // already covers a typed "Connected" in English, but a translated
             // label is a different word and has to be searchable too.
@@ -1298,7 +1321,8 @@ void RadioTabBar::showDiscoveryPopover()
         QFont rowFont = ThemeManager::instance().font(row, QStringLiteral("font.family.ui"));
         rowFont.setPixelSize(12);
         row->setFont(rowFont);
-        const QString status = entry.transport + middleDot() + radioTabStatusLabel(entry.status);
+        const QString status = (entry.location.isEmpty() ? QString() : entry.location + middleDot())
+            + entry.transport + middleDot() + radioTabStatusLabel(entry.status);
         const QFontMetrics metrics(rowFont);
         row->setText(metrics.elidedText(entry.name, Qt::ElideRight, 240)
             + '\n' + metrics.elidedText(status, Qt::ElideRight, 240));
@@ -1360,13 +1384,13 @@ void RadioTabBar::showDiscoveryPopover()
                                   " max-height: 1px; }"));
     rows->addWidget(separator);
 
-    auto* manual = new QPushButton(tr("Manage connections\u2026"),
+    auto* manual = new QPushButton(tr("Locations and connections\u2026"),
                                    popover->panel());
     manual->setFlat(true);
     manual->setCursor(Qt::PointingHandCursor);
     manual->setFocusPolicy(Qt::StrongFocus);
     manual->setObjectName(QStringLiteral("connectManuallyRow"));
-    manual->setAccessibleName(tr("Manage connections"));
+    manual->setAccessibleName(tr("Locations and connections"));
     ThemeManager::instance().applyStyleSheet(manual, rowStyleTemplate());
     connect(manual, &QPushButton::clicked, this, [this]() {
         if (m_popover) {
@@ -1440,7 +1464,7 @@ QMenu* RadioTabBar::createRadioMenu(const RadioTabEntry& entry, QWidget* parent)
             emit radioActionRequested(id, action);
         });
     };
-    const bool active = entry.id == m_activeId;
+    const bool active = entry.status == RadioTabStatus::Connected || entry.status == RadioTabStatus::Disconnecting;
     if (entry.canCancel) {
         add(tr("Cancel connection"), QStringLiteral("cancel"), true, tr("Cancel this connection attempt."));
     } else {
