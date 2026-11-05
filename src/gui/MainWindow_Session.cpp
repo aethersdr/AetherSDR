@@ -1009,6 +1009,8 @@ void MainWindow::wireDiscovery()
             [this](const QString&) { scheduleRadioTabRefresh(); });
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
             [this](bool) { scheduleRadioTabRefresh(); });
+    connect(&m_radioModel, &RadioModel::infoChanged,
+            this, &MainWindow::scheduleRadioTabRefresh);
     connect(&m_smartLink, &SmartLinkClient::radioListReceived, this,
             [this](const QList<WanRadioInfo>& radios) {
         m_smartLinkRadios = radios;

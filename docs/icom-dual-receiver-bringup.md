@@ -118,15 +118,15 @@ were checked, not that this app was tested on that hardware.
 
 | Area | Initial contract |
 | --- | --- |
-| Topology | Slice/pan 0 is MAIN; slice/pan 1 is SUB. Both are fixed resources. Pans are published before their slices. The IC-9700 retains its existing single selectable scope. |
+| Topology | Physical receiver 0 is MAIN; receiver 1 is SUB. Connect publishes MAIN only in Scroll-F. Native pan creation opens SUB after Dualwatch confirmation; closure retires its pane/audio and releases only app-owned Dualwatch. Pans are published before their slices. The IC-9700 retains its existing single selectable scope. |
 | Frequency | `25 rr` reads/writes absolute MAIN/SUB. A selected-band transceive push prompts addressed reconciliation; it cannot overwrite an arbitrary receiver cache. |
 | Mode | `26 rr` retains base mode, DATA OFF/D1/D2/D3 and FIL1/FIL2/FIL3. Writes carry all fields and use an addressed readback. The existing neutral mode vocabulary collapses the DATA variant in the displayed label; the backend retains the actual enum. |
 | Other receiver controls | Only explicitly supported command families use `29 rr`. Shared PTT, split, modulation menus and scope commands are not wrapped. Generic ACK/NG is serialized by the existing scheduler. MAIN and SUB use separate semantic generations. |
 | Scope | Two independent decoders, 689 amplitudes each, documented 0–200 range. Each normal Ethernet sweep has 704 data bytes after `27 00`, including 15 metadata bytes. Truncated/oversized traces and invalid selectors are rejected. Out-of-range clears only its receiver. |
 | Frequency axes | Center mode is centre ± half-span. Fixed and scroll modes report actual lower/upper edges. Bytes already run from low to high RF; there is no IQ conjugation or FFT half-rotation. RadioModel derives spectrum and waterfall from the same bins and geometry. |
-| Zoom | Center mode snaps to the eight native spans, 5 kHz–1 MHz total width. Fixed/scroll views preserve radio edge presets; arbitrary preset editing is deferred. |
+| Zoom | Center mode snaps to the eight native spans, 5 kHz–1 MHz total width. Fixed/Scroll-F drag and zoom use kHz-rounded edge windows. Each receiver borrows a slot not selected/reserved by the other scope, saves the range/slot preset before writing, and restores saved presets/selections during normal disconnect. |
 | RX audio | Stereo PCM16 RX and mono PCM16 TX are negotiated independently at 48 kHz. Stereo packet fragments retain complete interleaved frames. The IC-7851 live capture confirms channel 0 MAIN/channel 1 SUB; the other dual profiles use the same documented mapping. Each receiver has its own persistent 48→24 kHz converter and decoder feed. Speakers get a bounded equal mix with local per-slice gain/mute/balance. |
-| LAN AF/IF | Read-only inspection of the model's AF/IF menu. IF is not played as demodulated AF. No connect-time menu rewrite. IC-7610 item 86; IC-7760 item 123; IC-7851 item 56. |
+| LAN AF/IF | Read-only inspection of the model's AF/IF menu. IF is not played as demodulated AF. No connect-time AF/IF menu rewrite. IC-7610 item 86; IC-7760 item 123; IC-7851 item 56. |
 | TX routing | One global PTT and one mono uplink. Editing focus does not move TX. Radio split readback selects MAIN or SUB; `1C 03` reports actual TX frequency. Key-on waits for receiver frequency/mode and split readback. Existing operation admission, queued-audio cancellation, PTT readback and fail-safe unkey remain in place. |
 | Modulation | IC-7610 LAN=05, DATA OFF item 91, D1/D2/D3 items 92/93/94. IC-7760 LAN=09, DATA OFF item 129, D1/D2/D3 items 130/131/132. Diagnostics follow the actual transmit receiver's DATA variant. IC-7851 LAN=09, DATA OFF item 63, D1/D2/D3 items 64/65/66. PC Audio continues to change DATA OFF only on operator request. |
 
@@ -195,3 +195,94 @@ Useful next automation verbs would report per-receiver scope freshness/bin
 geometry, capture identified audio channels, and assert the global TX route
 against actual TX-frequency readback. They should consume real observations,
 not manufacture a radio session or elevate offline fixtures into hardware proof.
+
+## Shared pane lifecycle and Scroll-F window navigation
+
+The desktop exposes fixed MAIN/SUB hardware through native pan create/remove
+intents. MAIN connects in Scroll-F. Opening SUB requests Dualwatch only if its
+readback was off, initializes its first view to Scroll-F, and waits for radio
+confirmation before publishing the pane. Opening/reopening never resets MAIN's
+mode or tunes either receiver. Hidden SUB frames update diagnostics without
+recreating a closed model or contributing local/decoder audio. Stereo transport
+is negotiated once; each persistent converter continues consuming its channel.
+MAIN alone defaults to centered monitor audio; two panes default to MAIN left
+and SUB right. Explicit Dualwatch requests supersede pane ownership.
+
+Scope window edits reuse the common CI-V edge builder, range tables, kHz
+clamping and VFO-holding rules. Modern dual profiles declare the twelve HF/6 m
+edge ranges. Because presets are global but selection is receiver-addressed,
+the adapter reserves distinct slots and requires a matching preset readback
+before a write. Coalesced gestures are paced at 200 ms. Paired center/width
+changes share one target; tuning-related window changes wait for addressed
+frequency readback. Stale-window sweeps are held while a bounded request settles.
+`civ profile` reports pane visibility, current/borrowed slots, saved preset
+contents and Dualwatch ownership/pending pane transitions. Normal disconnect
+serializes saved presets and original selections, awaiting exact readbacks
+before closing sockets; unexpected
+transport loss cannot establish restoration. A newer observed operator preset
+edit withdraws the old restoration claim.
+
+Scope reads preserve their full receiver or range/slot address as the scheduler
+reply prefix. A reply for another scope/preset cannot retire the pending read
+or authorize a backup. Disconnect retires PCM and cancels view gestures, sends
+fail-safe unkey first, then drains serialized restore writes/readbacks through
+a bounded owner-thread event loop (12 s, excluding GUI input). Ordinary polls
+and new user writes are suppressed during this phase. Missing confirmation is
+reported rather than counted as restoration. `scopepreset` and `scopeslot`
+bridge actions support typed RX-only preset inspection/recovery and exact
+post-reconnect verification; raw CI-V injection remains TX-gated.
+
+Connected radio tabs refresh on `RadioModel::infoChanged`, so late CI-V identity
+updates both the tab model and status bar. The active session's canonical model
+supersedes a stale discovery/connection label while retaining operator names.
+Native pane creation waits for confirmed publication instead of reporting a
+capacity failure at dispatch. The VFO TX selector writes split off for MAIN or
+on for SUB, retains editing focus, and publishes its designation from readback.
+Pending selection prevents PTT/TUNE from using the previous route; `civ profile`
+exposes the pending target and actual `1C 03` transmit-frequency readback.
+The restore drain serializes stop acknowledgments before setting transactions;
+response-free teardown writes are reserved for the terminal close burst, where
+their untagged FB/FA replies cannot retire a subsequent setting read.
+
+## Live pane/Scroll-F acceptance — 2026-11-05
+
+Modulation source menus are global; DATA OFF, D1, D2 and D3 each have their
+own source. These are decimal menu numbers encoded as BCD after `1A 05`:
+
+| Model | LAN level | DATA OFF | D1 / D2 / D3 | LAN source value |
+|---|---|---|---|---|
+| IC-7610 | 0090 | 0091 | 0092 / 0093 / 0094 | `05` |
+| IC-7760 | 0128 | 0129 | 0130 / 0131 / 0132 | `09` |
+| IC-7851 | 0062 | 0063 | 0064 / 0065 / 0066 | `09` |
+
+Authority: IC-7610 CI-V A7380-7EX-4 p.5–6, IC-7760 CI-V A7788-8EX-2 p.9,
+and IC-7850/7851 instruction manual edition 3 p.18-8. Complete source enums
+are model-owned. All four readbacks are retained independently and exposed in
+`civ profile`; only the TX receiver's active variant supplies the advisory.
+PC Audio checks DATA OFF only while DATA is off. Selecting another DATA variant
+uses that variant's cached readback, not the previous one's source. Diagnostics
+never rewrite these settings. The lab IC-7851 reported D1 as USB (`0064 = 08`),
+consistent with the oracle's earlier D2/LAN test; the two are distinct routes.
+
+The IC-7851 bridge run passed MAIN-only startup in Scroll-F, centered MAIN
+monitor audio, confirmed Dualwatch enable on SUB creation, app-owned release
+on close, no hidden-pane resurrection, and reopen without retuning. Opening
+SUB preserved a manually selected MAIN Fixed mode; reopening SUB preserved its
+selected Center mode. Both were returned to Scroll-F. The live tab mismatch
+was reproduced (tab Unknown Icom / status IC-7851) and the repaired info-change
+refresh reported IC-7851 in both. The experimental badge was visible.
+
+Fourteen window checks passed across both receivers on the same HF band:
+spectrum/waterfall background drag, zoom in/out, native 5 kHz and 1 MHz widths,
+and drag clamping before the VFO leaves Scroll-F. Each preserved both dial
+frequencies and the other scope's window. Twelve additional checks passed for
+spectrum/waterfall double-click and wheel tuning, passband drag, and edge
+following on both receivers; test dial frequencies were restored. Coordinates
+were selected outside the VFO control overlays.
+
+Normal disconnect confirmed both saved range/slot values, both original
+selectors and app-owned Dualwatch-off before transport closure (1.86 s in the
+retained run). Fresh-session preset reads independently matched those originals.
+A final monitor PCM capture had positive RMS on both channels; the operator's
+master mute was preserved. All live actions ran with TX automation disabled
+and PTT observed off. No RF TX result is claimed.

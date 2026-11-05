@@ -320,7 +320,7 @@ struct SetMenuProfile {
 };
 
 // Which Fixed Edges range table (CivCodec.h) a model uses.
-enum class ScopeEdgeTable : std::uint8_t { None, Hf, Ic705, Ic9700 };
+enum class ScopeEdgeTable : std::uint8_t { None, Hf, Hf60, Ic705, Ic9700 };
 
 struct ScopeCommandProfile {
     bool center = false;
