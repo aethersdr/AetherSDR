@@ -524,6 +524,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             m_linkStatsTimer->stop();
             resetIoBoardSchedule();
             resetBandscopeMirrors();
+            // IQ taps belong to the session too. A consumer that held one
+            // re-arms it on the next session; one that left during the outage
+            // must not have its copy resumed by the next DSP build.
+            m_iqTapUis.clear();
             emit disconnected();
         }
     });

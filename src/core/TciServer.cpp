@@ -4466,6 +4466,17 @@ void TciServer::releaseAllIqStreams()
 
 void TciServer::resetIqStreamBookkeeping()
 {
+    // Release host taps BEFORE forgetting which slices hold them: once the
+    // set is empty, an iq_stop or a client leaving during the outage has
+    // nothing left to release, and the backend would keep copying IQ for a
+    // subscriber that is gone. Turning a tap off needs no live receiver.
+    // The logical subscriptions survive; reconcileIqStreams() re-arms them
+    // when the slices return.
+    if (m_model) {
+        for (int sliceId : std::as_const(m_hostIqSlices)) {
+            m_model->setBackendSliceIqTap(sliceId, false);
+        }
+    }
     m_hostIqSlices.clear();
     m_hostIqRate = 0;
     m_hostIqDecimators.clear();
