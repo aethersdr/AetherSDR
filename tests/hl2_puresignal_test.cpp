@@ -186,7 +186,8 @@ void wire()
     p.boardMaxRx = 0;
     check(MetisClient::effectiveNumRx(p) == 4, "unknown board: four");
     p.boardMaxRx = 2;
-    check(MetisClient::effectiveNumRx(p) == 2, "never past the board");
+    check(MetisClient::effectiveNumRx(p) == 1,
+          "a two-DDC board gets no floor (the backend refuses PS there)");
     p.boardMaxRx = 8;
     p.numRx = 6;
     check(MetisClient::effectiveNumRx(p) == 6, "more than four is left alone");
