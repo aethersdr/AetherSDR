@@ -1865,12 +1865,11 @@ void MainWindow::buildMenuBar()
     // Tools for capturing logs, chasing slice problems, resetting local
     // settings, and staying up to date.
     helpMenu->addAction("Support && Diagnostics...", this, [this]() {
-        auto* dlg = new SupportDialog(this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setRadioModel(&m_radioModel);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
+        showOrRaiseCanon(m_supportDialog, [this] {
+            auto* dlg = new SupportDialog(this);
+            dlg->setRadioModel(&m_radioModel);
+            return dlg;
+        });
     });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         auto* dlg = new SliceTroubleshootingDialog(
