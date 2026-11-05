@@ -1,4 +1,4 @@
-# AetherWSPR (prototype)
+# AetherWSPR
 
 A receive-only WSPR receiver that runs on a FlexRadio as a legacy waveform
 and serves its spots as JSON. It needs no PC, no GUI client slot and no DAX
