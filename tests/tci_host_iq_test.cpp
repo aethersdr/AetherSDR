@@ -267,6 +267,33 @@ public:
         emit b->disconnected();
         check(!f.backend->tapped(3), "the last subscriber's disconnect releases the tap");
     }
+    // A radio outage clears TciServer's per-session bookkeeping. The backend
+    // taps must be released with it, or an iq_stop / client departure during
+    // the outage finds nothing to release and the tap outlives its subscriber.
+    static void outageReleasesTaps()
+    {
+        {
+            Fixture f; f.backend->add(3);
+            TciClient* a = f.client();
+            f.command(a, QStringLiteral("iq_start:0;"));
+            check(f.backend->tapped(3), "outage: tap initially held");
+            emit f.model.connectionStateChanged(false);
+            check(!f.backend->tapped(3) && f.server.m_hostIqSlices.isEmpty(),
+                  "outage: the radio going away releases the backend tap");
+            f.command(a, QStringLiteral("iq_stop:0;"));
+            check(!f.backend->tapped(3),
+                  "outage: iq_stop during the outage leaves the tap released");
+        }
+        {
+            Fixture f; f.backend->add(3);
+            TciClient* a = f.client();
+            f.command(a, QStringLiteral("iq_start:0;"));
+            emit f.model.connectionStateChanged(false);
+            emit a->disconnected();
+            check(!f.backend->tapped(3),
+                  "outage: a client leaving during the outage leaves the tap released");
+        }
+    }
     static void secondReceiverKeepsFirst()
     {
         Fixture f; f.backend->add(3); f.backend->add(17);
@@ -289,7 +316,8 @@ public:
     }
     static int run()
     {
-        startStreamsStop(); sharedAndDisconnect(); secondReceiverKeepsFirst(); refusalAnswers();
+        startStreamsStop(); sharedAndDisconnect(); outageReleasesTaps();
+        secondReceiverKeepsFirst(); refusalAnswers();
         decimatesToRequestedRate(); decimatorKeepsTonesAndRejectsAliases();
         std::printf("TCI host IQ: %d checks, %d failures\n", checks, failures);
         return failures == 0 ? 0 : 1;
