@@ -137,6 +137,36 @@ int main(int argc, char** argv)
           "distance from the station's grid");
     check(wspr::distanceKm("DN18pg", "") == -1, "no distance without a grid");
 
+    // ── new spots, and SpotHub's settings ─────────────────────────────────
+    {
+        QList<WsprSpot> spots;
+        for (qint64 t : {100, 100, 220, 340}) {
+            WsprSpot s;
+            s.cycleStart = t;
+            spots << s;
+        }
+        qint64 next = 0;
+        check(wspr::spotsSince(spots, 0, &next).size() == 4 && next == 341, "the first read takes everything");
+        check(wspr::spotsSince(spots, next, &next).isEmpty() && next == 341,
+              "the same reply again adds nothing, and the position holds");
+        check(wspr::spotsSince(spots, 220, &next).size() == 2 && next == 341,
+              "a later read takes only the newer cycles");
+        check(wspr::spotsSince({}, 500, &next).isEmpty() && next == 500, "an empty reply keeps the position");
+    }
+    {
+        const WsprSpotHubSettings d;
+        check(!d.autoStart && d.color == "#B388FF" && d.lifetimeMinutes == 30,
+              "SpotHub defaults: Auto-Start off, violet, 30 minutes");
+        WsprSpotHubSettings s;
+        s.autoStart = true;
+        s.color = "#112233";
+        s.lifetimeMinutes = 120;
+        check(wspr::parseSpotHubSettings(wspr::serializeSpotHubSettings(s)) == s, "SpotHub settings round-trip");
+        check(wspr::parseSpotHubSettings(QString()) == d, "no stored settings give the defaults");
+        check(wspr::parseSpotHubSettings(R"({"color":"red","lifetimeMinutes":99999})") == d,
+              "stored values out of range give the defaults");
+    }
+
     // ── addresses ─────────────────────────────────────────────────────────
     check(wspr::reachableAddress(QHostAddress("192.168.50.100")), "a LAN radio is reachable");
     check(wspr::reachableAddress(QHostAddress("100.114.103.82")), "a tailnet shim address is reachable");

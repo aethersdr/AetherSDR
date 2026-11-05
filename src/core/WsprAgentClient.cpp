@@ -1,5 +1,11 @@
 #include "WsprAgentClient.h"
 
+#include "AppSettings.h"
+#include "DxSpot.h"
+
+#include <QDateTime>
+#include <QTimer>
+
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrl>
@@ -142,5 +148,86 @@ void WsprAgentClient::handle(QNetworkReply* reply, const QString& operation)
         }
     });
 }
+
+WsprSpotFeed::WsprSpotFeed(QObject* parent)
+    : QObject(parent)
+    , m_client(new WsprAgentClient(this))
+    , m_timer(new QTimer(this))
+{
+    m_timer->setInterval(30000);
+    connect(m_timer, &QTimer::timeout, this, &WsprSpotFeed::poll);
+    connect(m_client, &WsprAgentClient::statusReceived, this, &WsprSpotFeed::onStatus);
+    connect(m_client, &WsprAgentClient::requestFailed, this,
+            [this](const QString&, const QString& message, bool) { emit failed(message); });
+}
+
+void WsprSpotFeed::start(const QHostAddress& radio)
+{
+    stop();
+    if (!wspr::reachableAddress(radio)) {
+        emit failed(tr("The radio's address can't reach the WSPR receiver."));
+        return;
+    }
+    m_client->setRadioAddress(radio);
+    const int lifetime = wspr::loadSpotHubSettings().lifetimeMinutes;
+    m_since = QDateTime::currentSecsSinceEpoch() - qint64(lifetime) * 60;
+    m_running = true;
+    m_timer->start();
+    emit started();
+    poll();
+}
+
+void WsprSpotFeed::stop()
+{
+    if (!m_running) {
+        return;
+    }
+    m_running = false;
+    m_timer->stop();
+    m_client->cancel();
+    emit stopped();
+}
+
+void WsprSpotFeed::poll()
+{
+    if (m_running) {
+        m_client->fetchStatus(m_since);
+    }
+}
+
+void WsprSpotFeed::onStatus(const WsprStatus& status)
+{
+    if (!m_running) {
+        return;
+    }
+    emit statusReceived(status);
+    const WsprSpotHubSettings style = wspr::loadSpotHubSettings();
+    for (const WsprSpot& s : wspr::spotsSince(status.spots, m_since, &m_since)) {
+        emit decoded(s, status.grid);
+        if (s.call.isEmpty()) {
+            continue;   // an unresolved hashed call is no label
+        }
+        DxSpot d = wspr::toDxSpot(s, status.callsign);
+        d.color = style.color;
+        d.lifetimeSec = style.lifetimeMinutes * 60;
+        emit spotReceived(d);
+    }
+}
+
+namespace wspr {
+
+WsprSpotHubSettings loadSpotHubSettings()
+{
+    return parseSpotHubSettings(AppSettings::instance().value(QStringLiteral("WsprSpots")).toString());
+}
+
+void saveSpotHubSettings(const WsprSpotHubSettings& settings)
+{
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("WsprSpots"), serializeSpotHubSettings(settings));
+    s.save();
+}
+
+}  // namespace wspr
 
 }  // namespace AetherSDR

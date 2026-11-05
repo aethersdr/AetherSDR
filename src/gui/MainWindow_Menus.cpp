@@ -673,7 +673,7 @@ void MainWindow::buildMenuBar()
         const bool wasFresh = showOrRaiseCanon(m_spotHubDialog, [this] {
             return new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
                                        m_potaClient, m_eibiClient,
-                                       m_n1mmSpotClient,
+                                       m_n1mmSpotClient, m_wsprFeed,
 #ifdef HAVE_WEBSOCKETS
                                        m_freedvClient,
 #endif

@@ -107,6 +107,20 @@ struct WsprConfig {
     bool operator!=(const WsprConfig& o) const { return !(*this == o); }
 };
 
+// SpotHub → WSPR's own settings, one object under AppSettings key
+// "WsprSpots" (Principle V): whether reading starts when a radio with the
+// receiver connects, and how its spots look on the panadapter.
+struct WsprSpotHubSettings {
+    bool autoStart{false};
+    QString color{QStringLiteral("#B388FF")};
+    int lifetimeMinutes{30};
+
+    bool operator==(const WsprSpotHubSettings& o) const
+    {
+        return autoStart == o.autoStart && color == o.color && lifetimeMinutes == o.lifetimeMinutes;
+    }
+};
+
 namespace wspr {
 
 // The bands the receiver knows, in band order, and WSJT-X's ten coordinated
@@ -136,6 +150,16 @@ DxSpot toDxSpot(const WsprSpot& spot, const QString& receiver);
 
 // Great-circle distance in km between two grids; -1 when either is unknown.
 int distanceKm(const QString& fromGrid, const QString& toGrid);
+
+// The spots from cycle `since` on, and in `next` where the next read should
+// start: after the newest cycle among them, or `since` if there are none. A
+// cycle's spots arrive together, once it has decoded.
+QList<WsprSpot> spotsSince(const QList<WsprSpot>& spots, qint64 since, qint64* next);
+
+// SpotHub settings to and from their stored JSON; anything missing or out
+// of range takes its default.
+WsprSpotHubSettings parseSpotHubSettings(const QString& json);
+QString serializeSpotHubSettings(const WsprSpotHubSettings& settings);
 
 // The receiver answers LAN callers, and a tailnet shim publishes it: a
 // private, link-local or Tailscale (100.64.0.0/10) IPv4 address.

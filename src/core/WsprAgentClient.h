@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DxSpot.h"
 #include "WsprAgent.h"
 
 #include <QHostAddress>
@@ -9,6 +10,7 @@
 #include <QString>
 
 class QNetworkReply;
+class QTimer;
 
 namespace AetherSDR {
 
@@ -53,5 +55,46 @@ private:
     quint64 m_generation{0};
     QPointer<QNetworkReply> m_statusReply;   // one status poll at a time
 };
+
+// Reads the receiver's spots for SpotHub and the panadapter: polls its
+// status every 30 s and emits each spot it hasn't seen yet, as a DxSpot in
+// the WSPR source's color and lifetime. Starts with the spots still within
+// that lifetime, so a restart doesn't flood the panadapter with old ones.
+class WsprSpotFeed : public QObject {
+    Q_OBJECT
+
+public:
+    explicit WsprSpotFeed(QObject* parent = nullptr);
+
+    void start(const QHostAddress& radio);
+    void stop();
+    bool isRunning() const { return m_running; }
+    QHostAddress radioAddress() const { return m_client->radioAddress(); }
+
+signals:
+    void started();
+    void stopped();
+    void statusReceived(const AetherSDR::WsprStatus& status);
+    // Every new decode, hashed calls included, with the receiving station's
+    // grid for its distance: for SpotHub's console.
+    void decoded(const AetherSDR::WsprSpot& spot, const QString& receiverGrid);
+    // A new decode with a resolved callsign, for the panadapter.
+    void spotReceived(const AetherSDR::DxSpot& spot);
+    void failed(const QString& message);
+
+private:
+    void poll();
+    void onStatus(const WsprStatus& status);
+
+    WsprAgentClient* m_client{nullptr};
+    QTimer* m_timer{nullptr};
+    bool m_running{false};
+    qint64 m_since{0};           // the first cycle start not yet emitted
+};
+
+namespace wspr {
+WsprSpotHubSettings loadSpotHubSettings();
+void saveSpotHubSettings(const WsprSpotHubSettings& settings);
+}  // namespace wspr
 
 }  // namespace AetherSDR

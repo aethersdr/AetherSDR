@@ -321,6 +321,50 @@ DxSpot toDxSpot(const WsprSpot& spot, const QString& receiver)
     return d;
 }
 
+QList<WsprSpot> spotsSince(const QList<WsprSpot>& spots, qint64 since, qint64* next)
+{
+    QList<WsprSpot> fresh;
+    qint64 newest = since - 1;
+    for (const WsprSpot& s : spots) {
+        if (s.cycleStart >= since) {
+            fresh.append(s);
+            newest = qMax(newest, s.cycleStart);
+        }
+    }
+    if (next) {
+        *next = newest + 1;
+    }
+    return fresh;
+}
+
+WsprSpotHubSettings parseSpotHubSettings(const QString& json)
+{
+    WsprSpotHubSettings s;
+    const auto o = object(json.toUtf8());
+    if (!o) {
+        return s;
+    }
+    s.autoStart = o->value(QLatin1String("autoStart")).toBool(s.autoStart);
+    static const QRegularExpression hex(QStringLiteral("^#[0-9A-Fa-f]{6}$"));
+    const QString color = o->value(QLatin1String("color")).toString();
+    if (hex.match(color).hasMatch()) {
+        s.color = color;
+    }
+    if (inRange(o->value(QLatin1String("lifetimeMinutes")), 1, 1440)) {
+        s.lifetimeMinutes = o->value(QLatin1String("lifetimeMinutes")).toInt();
+    }
+    return s;
+}
+
+QString serializeSpotHubSettings(const WsprSpotHubSettings& s)
+{
+    QJsonObject o;
+    o.insert(QStringLiteral("autoStart"), s.autoStart);
+    o.insert(QStringLiteral("color"), s.color);
+    o.insert(QStringLiteral("lifetimeMinutes"), s.lifetimeMinutes);
+    return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
 int distanceKm(const QString& fromGrid, const QString& toGrid)
 {
     double km = 0.0;
