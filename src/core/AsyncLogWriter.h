@@ -44,7 +44,7 @@ public:
     // Invoked from the writer thread once the new file is open: the place
     // to publish the active path and any aliases. When the open fails it is
     // not called; the writer keeps appending to the old file, writes a
-    // warning into it and stops rotating.
+    // warning into it and tries again after another maxFileBytes.
     using RotatedCallback = std::function<void(const QString& newPath)>;
 
     AsyncLogWriter();

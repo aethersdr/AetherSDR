@@ -575,6 +575,7 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         rotationCb = m_rotationCallback;
         rotatedCb = m_rotatedCallback;
     }
+    qint64 rotateAtBytes = maxFileBytes;
 
     QDir().mkpath(QFileInfo(path).absolutePath());
 
@@ -642,7 +643,7 @@ void AsyncLogWriter::run(std::promise<bool> opened)
     auto maybeRotate = [&]() {
         if (maxFileBytes <= 0 || !rotationCb)
             return;
-        if (file.size() < maxFileBytes)
+        if (file.size() < rotateAtBytes)
             return;
 
         const QString oldPath = file.fileName();
@@ -662,14 +663,21 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         file.setFileName(newPath);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
             const QString reason = file.errorString();
-            reopenForAppendOrMirrorToStderr(oldPath);
-            maxFileBytes = 0;
+            if (!reopenForAppendOrMirrorToStderr(oldPath)) {
+                maxFileBytes = 0;
+                writeRotationWarning(
+                    QStringLiteral("Log rotation could not open %1: %2; could not reopen %3, logging to stderr only")
+                        .arg(newPath, reason, oldPath));
+                return;
+            }
+            rotateAtBytes = file.size() + maxFileBytes;
             writeRotationWarning(
-                QStringLiteral("Log rotation could not open %1: %2; still logging to %3, rotation disabled")
+                QStringLiteral("Log rotation could not open %1: %2; still logging to %3, retrying after another size limit")
                     .arg(newPath, reason, oldPath));
             return;
         }
         file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        rotateAtBytes = maxFileBytes;
 
         {
             std::lock_guard lock(m_mutex);

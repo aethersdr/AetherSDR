@@ -39,6 +39,12 @@ bool hasMarker(const QString& path, const QByteArray& marker)
     return file.open(QIODevice::ReadOnly) && file.readAll().contains(marker);
 }
 
+int markerCount(const QString& path, const QByteArray& marker)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? static_cast<int>(file.readAll().count(marker)) : 0;
+}
+
 void checkAlias(const QString& dir, const QString& target)
 {
     const QFileInfo alias(dir + QStringLiteral("/aethersdr.log"));
@@ -183,8 +189,36 @@ int main(int argc, char** argv)
         manager.flushLog();
         check(hasMarker(kept, "after-failed-rotation-marker"),
               "logging continues in the old file after a failed rotation");
-        manager.shutdownLogging();
+        manager.enqueueMessage(QtWarningMsg, context, padding);
+        manager.flushLog();
+        check(markerCount(kept, failedRotation) == 1,
+              "a failed rotation waits for another size limit");
+        for (int i = 0; i < 24 && markerCount(kept, failedRotation) < 2; ++i) {
+            manager.enqueueMessage(QtWarningMsg, context, padding);
+            manager.flushLog();
+        }
+        check(markerCount(kept, failedRotation) == 2,
+              "a failed rotation retries after another size limit");
+
         QFile::setPermissions(lockedDir, writable);
+        for (int i = 0; i < 24 && manager.logFilePath() == kept; ++i) {
+            manager.enqueueMessage(QtWarningMsg, context, padding);
+            manager.flushLog();
+        }
+        const QString recovered = manager.logFilePath();
+        check(recovered != kept, "rotation recovers once the directory is writable");
+        check(QFileInfo(lockedDir + QStringLiteral("/aethersdr.log")).symLinkTarget() == recovered,
+              "a recovered rotation moves the alias");
+        manager.enqueueMessage(QtWarningMsg, context, QStringLiteral("after-recovery-marker"));
+        manager.flushLog();
+        check(hasMarker(recovered, "after-recovery-marker"),
+              "logging continues in the recovered file");
+        for (int i = 0; i < 24 && manager.logFilePath() == recovered; ++i) {
+            manager.enqueueMessage(QtWarningMsg, context, padding);
+            manager.flushLog();
+        }
+        check(manager.logFilePath() != recovered, "a recovered log rotates at the normal limit");
+        manager.shutdownLogging();
     }
 #endif
     return failures == 0 ? 0 : 1;
