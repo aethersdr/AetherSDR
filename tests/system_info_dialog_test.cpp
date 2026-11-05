@@ -42,6 +42,8 @@
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QThread>
+#include <QToolButton>
+#include <QAbstractScrollArea>
 #include <QDialog>
 
 #include <cstdio>
@@ -930,11 +932,6 @@ int main(int argc, char** argv)
             report("no token in the sheet resolved empty", !sheet.contains(QLatin1String(": ;")));
             report("the sheet gives menus a panel and selections an ink",
                    sheet.contains(QLatin1String("QMenu")) && sheet.contains(QLatin1String("selection-color")));
-            report("the minimum size is never smaller than the layout's",
-                   canon.minimumWidth() >= canon.minimumSizeHint().width()
-                       && canon.minimumHeight() >= canon.minimumSizeHint().height());
-            std::printf("  minimum %dx%d\n", canon.minimumWidth(), canon.minimumHeight());
-            report("the minimum height fits a 768 px screen", canon.minimumHeight() <= 700);
 
             canon.resize(canon.minimumSize().expandedTo(QSize(900, 640)));
             canon.show();
@@ -956,6 +953,37 @@ int main(int argc, char** argv)
             }
             report("the Overview charts are shown", charts == 4);
             report("every chart paints the canon ground of this theme", charts > 0 && onGround == charts);
+
+            // At the smallest size the shown window allows, on every tab, each
+            // control outside a scroll area keeps the height it needs (a
+            // wrapped label: its height for its width). Measured shown: the
+            // constructor's hint comes before the canon sheet.
+            auto* canonTabs = canon.findChild<QTabWidget*>();
+            bool legible = canonTabs != nullptr;
+            for (int t = 0; canonTabs && t < canonTabs->count(); ++t) {
+                canonTabs->setCurrentIndex(t);
+                canon.resize(QSize(1, 1));
+                QTest::qWait(30);
+                for (QWidget* w : canon.bodyWidget()->findChildren<QWidget*>()) {
+                    if (!w->isVisible()) continue;
+                    bool scrolled = false;
+                    for (QWidget* p = w->parentWidget(); p && p != &canon; p = p->parentWidget())
+                        scrolled = scrolled || qobject_cast<QAbstractScrollArea*>(p) != nullptr;
+                    if (scrolled) continue;
+                    int need = w->minimumSizeHint().height();
+                    if (auto* label = qobject_cast<QLabel*>(w); label && label->wordWrap())
+                        need = label->heightForWidth(label->width());
+                    if (w->height() < need) {
+                        legible = false;
+                        std::printf("  tab %d: %s %s h=%d need=%d\n", t, w->metaObject()->className(),
+                                    qPrintable(w->objectName()), w->height(), need);
+                    }
+                }
+            }
+            std::printf("  shown minimum %dx%d\n", canon.width(), canon.height());
+            report("every control keeps its height at the smallest size", legible);
+            report("the shown minimum height fits a 768 px screen", canon.height() <= 700);
+            canonTabs->setCurrentIndex(0);
             canon.hide();
         }
         tm.setActiveTheme(before);
@@ -970,8 +998,21 @@ int main(int argc, char** argv)
         const bool exposed = QTest::qWaitForWindowExposed(closing);
         const bool sampling = closing->findChild<QThread*>() != nullptr;
         if (path == 0) QTest::keyClick(closing, Qt::Key_Escape);
-        if (path == 1) QTest::keySequence(closing, QKeySequence::Close);
-        if (path == 2) closing->close();
+        if (path == 1) {
+            // A window shortcut: it needs the window active, which a desktop
+            // gives a newly shown window but a background test process may not.
+            closing->activateWindow();
+            QTest::qWaitForWindowActive(closing);
+            QTest::keySequence(closing, QKeySequence::Close);
+        }
+        if (path == 2) {
+            // Press the corner ✕ itself, so its connection is pinned too.
+            QToolButton* corner = nullptr;
+            for (QToolButton* b : closing->findChildren<QToolButton*>())
+                if (b->accessibleName() == QLatin1String("Close")) corner = b;
+            report("the corner close button exists", corner != nullptr);
+            if (corner) QTest::mouseClick(corner, Qt::LeftButton);
+        }
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         report(path == 0 ? "Esc closes and destroys the window, sampling while open"
                : path == 1 ? "Ctrl+W / Cmd+W closes and destroys the window, sampling while open"
