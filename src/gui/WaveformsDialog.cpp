@@ -1619,16 +1619,20 @@ void WaveformsDialog::updateInstallButtonState()
         m_installRemoteAccessAction->setStatusTip(remoteTip);
     }
     if (m_installWsprAction) {
-        // A legacy waveform: any radio with waveforms takes it. Its spots are
-        // read over the LAN or through Remote Access.
+        // A radio with a Waveform Processor takes the container, whose settings
+        // survive a reboot, under the Docker gate; any other, the legacy
+        // waveform. Its spots are read over the LAN or through Remote Access.
         const bool reachable = wspr::reachableAddress(m_radioModel->radioAddress());
         const bool hasWaveforms = m_radioModel->backendCapabilities().hasWaveforms;
-        m_installWsprAction->setEnabled(!busy && connected && hasWaveforms && reachable);
+        const bool native = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Native;
+        const bool runtimeReady = native || dockerReady;
+        m_installWsprAction->setEnabled(!busy && connected && hasWaveforms && reachable && runtimeReady);
         const QString wsprTip = busy ? tr("A waveform install is already in progress.")
             : !connected            ? tr("Connect to a radio before installing the WSPR receiver.")
             : !hasWaveforms         ? tr("This radio doesn't run waveforms.")
             : !reachable            ? tr("Connect over the radio's local network or Remote Access to install "
                                          "the WSPR receiver.")
+            : !runtimeReady         ? dockerBlocker
                                     : tr("Install the WSPR receiver (version %1), a receive-only WSPR "
                                          "decoder that runs on the radio.")
                                           .arg(QString::fromLatin1(WsprPackage::kVersion));
@@ -1684,9 +1688,18 @@ void WaveformsDialog::onInstallWsprClicked()
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
+    const bool docker = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container;
+    if (docker) {
+        const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
+        if (!blocker.isEmpty()) {
+            showDockerWfpNotReadyDialog(this, blocker);
+            return;
+        }
+    }
     // The package ships inside AetherSDR; the installer wants a file.
     QString error;
     const QString path = wspr::writeBundledPackage(
+        docker ? WsprPackage::kContainer : WsprPackage::kLegacy,
         QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
             + QStringLiteral("/waveforms/aether-wspr-%1").arg(QString::fromLatin1(WsprPackage::kVersion)),
         &error);
@@ -1696,7 +1709,7 @@ void WaveformsDialog::onInstallWsprClicked()
         box.get()->exec();
         return;
     }
-    installWaveformPath(false, path, m_radioModel);
+    installWaveformPath(docker, path, m_radioModel);
 }
 
 void WaveformsDialog::installRemoteAccess(bool container)
@@ -2536,7 +2549,7 @@ void WaveformsDialog::refreshWaveformList()
         }
 
         // The WSPR receiver: Configure… opens its settings.
-        if (isWsprWaveform(name, isContainer)) {
+        if (isWsprWaveform(name)) {
             configureBtn = new QPushButton(tr("Configure…"), actionWidget);
             configureBtn->setAccessibleName(tr("Configure the WSPR receiver"));
             connect(configureBtn, &QPushButton::clicked, this, [this]() {

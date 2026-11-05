@@ -15,27 +15,37 @@ struct DxSpot;
 
 // The WSPR receiver that runs on the radio (tools/wspr-agent): a legacy
 // waveform that decodes WSPR from a slice of its own and serves its spots
-// and settings as JSON on TCP 48995. It ships inside AetherSDR as a Qt
-// resource and is installed only if its bytes match this pin.
-// `tools/wspr-agent/build.py` rebuilds the identical file with zig 0.17;
-// copy it to resources/waveforms/ and bump all four together.
+// and settings as JSON on TCP 48995. It ships inside AetherSDR as Qt
+// resources, a package for each kind of radio, and is installed only if the
+// bytes match the pin. `tools/wspr-agent/build.py` rebuilds both identical
+// files with zig 0.17; copy them to resources/waveforms/ and bump all of
+// this together.
 struct WsprPackage {
+    struct Pin {
+        const char* resource;
+        const char* fileName;
+        const char* sha256;
+        qint64 size;
+    };
     static constexpr const char* kVersion = "0.1.0";
-    static constexpr const char* kResource = ":/waveforms/AetherWSPR.ssdr_waveform";
-    static constexpr const char* kSha256 =
-        "6a894c6765bb03db44d35c4b069fe9815341b64dfadc9edd38284bdc74d8d621";
-    static constexpr qint64 kSize = 283955;
+    // FLEX-6000: a legacy waveform, whose settings persist on /user.
+    static constexpr Pin kLegacy{":/waveforms/AetherWSPR.ssdr_waveform", "AetherWSPR.ssdr_waveform",
+                                 "e0aeeaad99775fffcd13bcd10915578c052cdf58418313a33d7587aedfefeb3d", 138321};
+    // FLEX-8000 and Aurora: a container, because a legacy waveform has only
+    // RAM there and the container's writable layer survives a reboot.
+    static constexpr Pin kContainer{":/waveforms/AetherWSPR.tar.gz", "AetherWSPR.tar.gz",
+                                    "d9069eafde6f33d9b08d1eb0579cf69ee338733100c25dcb126ce15f46a199a3", 151315};
 };
 
-// The receiver's waveform name (tools/wspr-agent/package/AetherWSPR.cfg).
+// The receiver's waveform name, in both packages.
 inline constexpr const char* kWsprWaveformName = "AetherWSPR";
 // The port it answers on: at the radio's LAN address, or at the tailnet
 // shim's address when the shim publishes it.
 inline constexpr quint16 kWsprPort = 48995;
 
-inline bool isWsprWaveform(const QString& name, bool isContainer)
+inline bool isWsprWaveform(const QString& name)
 {
-    return !isContainer && name == QLatin1String(kWsprWaveformName);
+    return name == QLatin1String(kWsprWaveformName);
 }
 
 // One decode.
@@ -112,7 +122,7 @@ struct WsprConfig {
 // receiver connects, and how its spots look on the panadapter.
 struct WsprSpotHubSettings {
     bool autoStart{false};
-    QString color{QStringLiteral("#B388FF")};
+    QString color;          // empty: the theme's violet (wspr::spotColor)
     int lifetimeMinutes{30};
 
     bool operator==(const WsprSpotHubSettings& o) const
@@ -165,11 +175,10 @@ QString serializeSpotHubSettings(const WsprSpotHubSettings& settings);
 // private, link-local or Tailscale (100.64.0.0/10) IPv4 address.
 bool reachableAddress(const QHostAddress& address);
 
-// Writes the bundled package to `dir`/AetherWSPR.ssdr_waveform for the
-// installer, reusing a matching copy already there. Only bytes matching the
-// pin are written: empty, with `error` set, otherwise.
-QString writeBundledPackage(const QString& dir, QString* error,
-                            const QString& resource = QString::fromLatin1(WsprPackage::kResource));
+// Writes a bundled package to `dir` for the installer, reusing a matching
+// copy already there. Only bytes matching the pin are written: empty, with
+// `error` set, otherwise.
+QString writeBundledPackage(const WsprPackage::Pin& pin, const QString& dir, QString* error);
 
 }  // namespace wspr
 }  // namespace AetherSDR

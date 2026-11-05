@@ -1,10 +1,19 @@
 # AetherWSPR
 
-A receive-only WSPR receiver that runs on a FlexRadio as a legacy waveform
-and serves its spots as JSON. It needs no PC, no GUI client slot and no DAX
-IQ, which the radio delivers only to a separate computer on its LAN.
+A receive-only WSPR receiver that runs on a FlexRadio and serves its spots
+as JSON. It needs no PC, no GUI client slot and no DAX IQ, which the radio
+delivers only to a separate computer on its LAN.
 
-- **Radio side:** a non-GUI client on 127.0.0.1:4992 makes one headless DIGU
+- **Packages:** a container on FLEX-8000 and Aurora radios (arm64), and a
+  legacy waveform on FLEX-6000 radios (ARMv7).
+- **Settings:** `config.json` beside the program, with the admin token. That
+  is the container's writable layer on an 8000 and `/user` on a 6000, so both
+  survive a reboot, and removing the receiver removes them. A legacy waveform
+  has only RAM on an 8000, which is why that radio takes the container.
+  Decoder scratch stays in RAM (`TMPDIR=/dev/shm` in the image), so only a
+  settings change writes to flash.
+- **Radio side:** a non-GUI client on `SSDR_RADIO_ADDRESS` (a container) or
+  127.0.0.1 (a legacy waveform), port 4992, makes one headless DIGU
   slice (`tx=0`) and takes its DAX audio (`dax_rx`, 24 kHz). The radio
   removes headless slices when its last GUI client disconnects; the agent
   remakes the slice at once and loses that one cycle.
@@ -51,5 +60,5 @@ OUT/aether-wspr-host selftest -27           # synthetic signal through DSP + dec
 ./test_osd.sh /path/to/wsjtx                # C ports vs WSJT-X's Fortran (needs gfortran)
 ```
 
-`AETHER_WSPR_RADIO=<ip>` runs the host build against
-a radio over the network.
+`AETHER_WSPR_RADIO=<ip>` runs the host build against a radio over the
+network. The selftest includes settings surviving a restart.

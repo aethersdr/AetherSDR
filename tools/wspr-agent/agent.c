@@ -71,6 +71,12 @@ int wsprd_main(int argc, char *argv[]);
 
 /* ------------------------------------------------------------------ util */
 
+static void on_term(int sig)
+{
+    (void)sig;
+    _exit(0);
+}
+
 static void logf_(const char *fmt, ...)
 {
     char ts[32];
@@ -421,9 +427,13 @@ static void save_config_locked(void)
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return;
-    int ok = write(fd, text, b.n) == (ssize_t)b.n;
+    /* Synced before the rename: a radio can lose power at any moment, and the
+     * old settings must survive unless the new ones are whole. */
+    int ok = write(fd, text, b.n) == (ssize_t)b.n && fsync(fd) == 0;
     close(fd);
-    if (ok) rename(tmp, path); else unlink(tmp);
+    if (!ok || rename(tmp, path)) { unlink(tmp); return; }
+    int dir = open(G.state_path, O_RDONLY | O_DIRECTORY);
+    if (dir >= 0) { fsync(dir); close(dir); }
 }
 
 static void load_config(void)
@@ -451,9 +461,10 @@ static void load_config(void)
     }
 }
 
-/* Settings and the admin token live beside the program when that is
- * writable (a FLEX-6000), where uninstalling removes them. A FLEX-8000 has
- * only RAM, which outlives a reinstall: naming the directory after this
+/* Settings and the admin token live beside the program, which survives a
+ * reboot: the container's writable layer on a FLEX-8000, /user on a
+ * FLEX-6000. Removing the receiver removes them. A full partition falls back
+ * to RAM, which outlives a reinstall: naming that directory after this
  * install's binary means a reinstall really starts over, so a computer that
  * lost the token can claim the receiver again, while a restart keeps it. */
 static void pick_state_dir(const char *self_dir)
@@ -1297,6 +1308,55 @@ static void vita_packet(const unsigned char *p, ssize_t n, unsigned want, dsp_t 
 
 /* ------------------------------------------------------------- selftest */
 
+/* The longest settings there are come back whole after a restart, and a
+ * damaged file leaves the defaults. */
+static int selftest_persistence(void)
+{
+    char dir[420];
+    if (snprintf(dir, sizeof dir, "%s/persist", g_work) >= (int)sizeof dir) return 1;
+    mkdir(dir, 0700);
+    strcpy(G.state_path, dir);
+    strcpy(G.token, "0123456789abcdef0123456789abcdef");
+    config_default(&G.cfg);
+    config_t c = G.cfg;
+    const char *full = "{\"callsign\":\"VP2E/KK7GWY\",\"grid\":\"DN18pg\",\"band\":\"40m\",\"hopping\":true,"
+        "\"gray_minutes\":120,\"depth\":\"deep\",\"rxant\":\"XVTA\",\"upload\":true,\"dax_channel\":3}";
+    if (config_parse(full, strlen(full), &c)) { printf("selftest FAIL: persistence settings\n"); return 1; }
+    for (int p = 0; p < 4; p++) c.hop[p] = (1u << (sizeof BANDS / sizeof BANDS[0])) - 1;
+    G.cfg = c;
+    save_config_locked();
+    config_t want = G.cfg;
+    char token[sizeof G.token];
+    strcpy(token, G.token);
+
+    config_default(&G.cfg);
+    G.token[0] = 0;
+    load_config();
+    if (strcmp(G.token, token) || strcmp(G.cfg.callsign, want.callsign) || strcmp(G.cfg.grid, want.grid)
+        || strcmp(G.cfg.band, want.band) || G.cfg.hopping != want.hopping || G.cfg.gray_minutes != want.gray_minutes
+        || strcmp(G.cfg.rxant, want.rxant) || G.cfg.upload != want.upload || G.cfg.dax_channel != want.dax_channel
+        || G.cfg.depth != want.depth) { printf("selftest FAIL: settings did not survive a restart\n"); return 1; }
+    for (int p = 0; p < 4; p++)
+        if (G.cfg.hop[p] != want.hop[p]) { printf("selftest FAIL: hop list %d did not survive a restart\n", p); return 1; }
+
+    char path[540];
+    snprintf(path, sizeof path, "%s/config.json", dir);
+    FILE *f = fopen(path, "w");
+    if (!f) return 1;
+    fputs("{\"config\":{\"band\":\"11m\"}}", f);
+    fclose(f);
+    config_default(&G.cfg);
+    config_t def = G.cfg;
+    load_config();
+    if (strcmp(G.cfg.band, def.band)) { printf("selftest FAIL: damaged settings were used\n"); return 1; }
+    unlink(path);
+    rmdir(dir);
+    config_default(&G.cfg);
+    G.state_path[0] = 0;
+    G.token[0] = 0;
+    return 0;
+}
+
 static double gauss(void)
 {
     double u = (rand() + 1.0) / (RAND_MAX + 2.0), v = (rand() + 1.0) / (RAND_MAX + 2.0);
@@ -1308,6 +1368,7 @@ static const char *const COORDINATED[10];
 
 static int selftest(double snr_db)
 {
+    if (selftest_persistence()) return 1;
     /* Hopping: every coordinated band ticked follows the slot exactly; a
      * subset only ever yields ticked bands; nothing ticked stays put. */
     {
@@ -1495,6 +1556,8 @@ int main(int argc, char *argv[])
 {
     if (argc >= 2 && !strcmp(argv[1], "decode")) return wsprd_main(argc - 1, argv + 1);
     signal(SIGPIPE, SIG_IGN);
+    /* PID 1 in a container: the kernel drops SIGTERM unless it is handled. */
+    signal(SIGTERM, on_term);
     design_lowpass(g_h1, 800.0 / AUDIO_RATE);
     design_lowpass(g_h2, 187.5 / (AUDIO_RATE / DECIM1));
     snprintf(g_self, sizeof g_self, "%s", argv[0]);
@@ -1507,6 +1570,8 @@ int main(int argc, char *argv[])
     snprintf(g_work, sizeof g_work, "%s/aether-wspr", tmp);
     mkdir(g_work, 0700);
     if (argc >= 2 && !strcmp(argv[1], "selftest")) return selftest(argc >= 3 ? atof(argv[2]) : -24);
+    /* The radio tells a container its API address. */
+    if (getenv("SSDR_RADIO_ADDRESS") && *getenv("SSDR_RADIO_ADDRESS")) g_radio_addr = getenv("SSDR_RADIO_ADDRESS");
     if (getenv("AETHER_WSPR_RADIO")) g_radio_addr = getenv("AETHER_WSPR_RADIO");
 
     srand((unsigned)time(NULL) ^ (unsigned)getpid());

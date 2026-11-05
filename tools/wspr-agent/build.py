@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-"""Build AetherWSPR.ssdr_waveform: the AetherWSPR agent (agent.c, with the
-wsprd decoder from wsprd/) as two static binaries, ARMv7 for FLEX-6000
-radios and arm64 for FLEX-8000/Aurora,
-with the launcher that picks one, the waveform manifest and the licenses.
+"""Build the AetherWSPR agent (agent.c, with the wsprd decoder from wsprd/)
+for both kinds of radio, as static binaries with the licenses:
+
+  AetherWSPR.ssdr_waveform  a legacy waveform for FLEX-6000 radios (ARMv7),
+                            which keep it on their /user partition.
+  AetherWSPR.tar.gz         a container image for FLEX-8000 and Aurora radios
+                            (arm64), whose legacy waveforms have only RAM: a
+                            container's writable layer keeps the settings
+                            across a reboot.
 
     python3 -I build.py --output OUT_DIR [--host]
 
 Needs zig 0.17 (it bundles the linker and musl for both targets). The
-package is reproducible byte for byte with the same zig. --host also builds
+packages are reproducible byte for byte with the same zig. --host also builds
 a native binary for the tests.
 
-AetherSDR ships the package as a Qt resource: copy it to
-resources/waveforms/AetherWSPR.ssdr_waveform and update the version, SHA-256
-and size in src/core/WsprAgent.h together.
+AetherSDR ships both as Qt resources: copy them to resources/waveforms/ and
+update the version, SHA-256s and sizes in src/core/WsprAgent.h together.
 """
 import argparse
+import importlib.util
 import os
 import pathlib
 import re
@@ -27,11 +32,11 @@ NAME = 'AetherWSPR'
 FIXED_TIME = (2026, 1, 1, 0, 0, 0)
 # A FLEX-6700's /user partition is 19 MB, shared by every legacy waveform.
 MAX_BYTES = 512 * 1024
+# Decoder scratch stays in RAM: the writable layer is the radio's flash.
+CONTAINER_ENV = ['TMPDIR=/dev/shm']
 WSPRD = ['wsprd', 'wsprsim_utils', 'wsprd_utils', 'tab', 'fano', 'jelinek', 'nhash']
-TARGETS = {
-    'aether-wspr-armv7': ['-target', 'arm-linux-musleabihf', '-mcpu=cortex_a8'],
-    'aether-wspr-arm64': ['-target', 'aarch64-linux-musl'],
-}
+ARMV7 = ['-target', 'arm-linux-musleabihf', '-mcpu=cortex_a8']
+ARM64 = ['-target', 'aarch64-linux-musl']
 CFLAGS = ['-O2', '-std=gnu11', '-Wall', '-ffunction-sections', '-fdata-sections', f'-ffile-prefix-map={HERE}=.']
 LDFLAGS = ['-static', '-s', '-Wl,--gc-sections', '-Wl,--build-id=none']
 
@@ -74,6 +79,13 @@ def licenses():
             + '=' * 64 + '\nmusl libc\n' + '=' * 64 + '\n' + musl)
 
 
+def mkimage():
+    spec = importlib.util.spec_from_file_location('mkimage', HERE.parent / 'flex-tailnet-shim' / 'mkimage.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--output', required=True, type=pathlib.Path)
@@ -81,17 +93,17 @@ def main():
     a = ap.parse_args()
     check_version()
     a.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='aether-health-') as t:
+    with tempfile.TemporaryDirectory(prefix='aether-wspr-') as t:
         stage = pathlib.Path(t)
         cache = stage / 'zig-cache'
         files = {
             f'{NAME}.cfg': ((HERE / 'package' / f'{NAME}.cfg').read_bytes(), 0o644),
             'launch.sh': ((HERE / 'package' / 'launch.sh').read_bytes(), 0o755),
         }
-        for name, target in TARGETS.items():
-            zig_cc(target, stage / name, cache)
-            files[name] = ((stage / name).read_bytes(), 0o755)
-        files['LICENSES'] = (licenses().encode(), 0o644)
+        zig_cc(ARMV7, stage / 'aether-wspr-armv7', cache)
+        files['aether-wspr-armv7'] = ((stage / 'aether-wspr-armv7').read_bytes(), 0o755)
+        license_text = licenses().encode()
+        files['LICENSES'] = (license_text, 0o644)
         target = a.output / f'{NAME}.ssdr_waveform'
         tmp = target.with_suffix('.tmp')
         with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -106,8 +118,17 @@ def main():
             tmp.unlink()
             raise SystemExit(f'package is {size} bytes, over the {MAX_BYTES}-byte bound')
         os.replace(tmp, target)
-        sizes = ', '.join(f'{n} {len(files[n][0])} bytes' for n in TARGETS)
-        print(f'built {target} ({size} bytes; {sizes})')
+        print(f'built {target} ({size} bytes)')
+
+        zig_cc(ARM64, stage / 'aether-wspr', cache)
+        version = re.search(r'#define AGENT_VERSION "([^"]+)"', (HERE / 'agent.c').read_text()).group(1)
+        image = mkimage().build_image(NAME, [('aether-wspr', (stage / 'aether-wspr').read_bytes(), 0o755),
+                                             ('LICENSES', license_text, 0o644)], version, CONTAINER_ENV)
+        if len(image) > MAX_BYTES:
+            raise SystemExit(f'image is {len(image)} bytes, over the {MAX_BYTES}-byte bound')
+        image_path = a.output / f'{NAME}.tar.gz'
+        image_path.write_bytes(image)
+        print(f'built {image_path} ({len(image)} bytes)')
         if a.host:
             zig_cc(['-target', 'x86_64-linux-musl'], a.output / 'aether-wspr-host', cache)
             print(f'built {a.output / "aether-wspr-host"}')

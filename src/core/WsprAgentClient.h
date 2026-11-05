@@ -106,6 +106,8 @@ private:
 namespace wspr {
 WsprSpotHubSettings loadSpotHubSettings();
 void saveSpotHubSettings(const WsprSpotHubSettings& settings);
+// The color WSPR spots are drawn in: the setting, or the theme's violet.
+QString spotColor(const WsprSpotHubSettings& settings);
 }  // namespace wspr
 
 }  // namespace AetherSDR

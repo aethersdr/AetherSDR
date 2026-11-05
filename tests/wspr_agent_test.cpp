@@ -155,7 +155,7 @@ int main(int argc, char** argv)
     }
     {
         const WsprSpotHubSettings d;
-        check(!d.autoStart && d.color == "#B388FF" && d.lifetimeMinutes == 30,
+        check(!d.autoStart && d.color.isEmpty() && d.lifetimeMinutes == 30,
               "SpotHub defaults: Auto-Start off, violet, 30 minutes");
         WsprSpotHubSettings s;
         s.autoStart = true;
@@ -174,29 +174,33 @@ int main(int argc, char** argv)
     check(!wspr::reachableAddress(QHostAddress()), "no address is not tried");
 
     // ── the bundled package ───────────────────────────────────────────────
-    check(isWsprWaveform(QStringLiteral("AetherWSPR"), false) && !isWsprWaveform(QStringLiteral("AetherWSPR"), true)
-              && !isWsprWaveform(QStringLiteral("AetherHealth"), false),
-          "the receiver's legacy row is recognized, and nothing else is");
+    check(isWsprWaveform(QStringLiteral("AetherWSPR")) && !isWsprWaveform(QStringLiteral("AetherHealth")),
+          "the receiver's row is recognized, and nothing else is");
     {
+        for (const WsprPackage::Pin& pin : {WsprPackage::kLegacy, WsprPackage::kContainer}) {
+            QTemporaryDir dir;
+            QString error;
+            const QString path = wspr::writeBundledPackage(pin, dir.path(), &error);
+            QFile f(path);
+            const QByteArray bytes = f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+            check(!path.isEmpty() && bytes.size() == pin.size
+                      && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex() == QByteArray(pin.sha256),
+                  "a bundled package is written and matches its pin");
+        }
         QTemporaryDir dir;
         QString error;
-        const QString path = wspr::writeBundledPackage(dir.path(), &error);
-        QFile f(path);
-        const QByteArray bytes = f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
-        check(!path.isEmpty() && bytes.size() == WsprPackage::kSize
-                  && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()
-                         == QByteArray(WsprPackage::kSha256),
-              "the bundled package is written and matches its pin");
-        f.close();
-        const LegacyWaveformPackageInfo info = inspectLegacyWaveformPackageFile(path);
+        const LegacyWaveformPackageInfo info =
+            inspectLegacyWaveformPackageFile(wspr::writeBundledPackage(WsprPackage::kLegacy, dir.path(), &error));
         check(info.valid && info.waveformName == QLatin1String(kWsprWaveformName)
                   && info.version == QLatin1String(WsprPackage::kVersion),
-              "it is a valid legacy waveform named AetherWSPR, at the pinned version");
+              "the legacy one is a valid waveform named AetherWSPR, at the pinned version");
         QTemporaryDir other;
         QString why;
-        const QString none = wspr::writeBundledPackage(other.path(), &why, QStringLiteral(":/cty.dat"));
+        WsprPackage::Pin wrong = WsprPackage::kLegacy;
+        wrong.resource = ":/cty.dat";
+        const QString none = wspr::writeBundledPackage(wrong, other.path(), &why);
         check(none.isEmpty() && !why.isEmpty()
-                  && !QFile::exists(QDir(other.path()).filePath(QStringLiteral("AetherWSPR.ssdr_waveform"))),
+                  && !QFile::exists(QDir(other.path()).filePath(QString::fromLatin1(wrong.fileName))),
               "a resource that doesn't match the pin is refused and nothing is written");
     }
 

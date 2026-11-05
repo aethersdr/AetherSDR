@@ -19,7 +19,7 @@ It is receive-only: it never transmits, and its slice is never the transmit slic
 
 ## Requirements
 
-- A FLEX-8000 series or Aurora radio. A FLEX-6000 can install it, but its single processor core may not finish decoding a busy band within the two-minute cycle; this hasn't been tested.
+- A FLEX-8000 series or Aurora radio, where it runs as a container and so needs the radio's Waveform Processor ready. A FLEX-6000 can install it as a legacy waveform, but its single processor core may not finish decoding a busy band within the two-minute cycle; this hasn't been tested.
 - AetherSDR connected to the radio over its **local network** or through [Remote Access](./tailscale-remote-access.md) version 0.5.2 or later. SmartLink can't reach the receiver.
 - One free slice. The receiver takes one of the radio's slices for as long as it runs.
 
@@ -28,13 +28,13 @@ It is receive-only: it never transmits, and its slice is never the transmit slic
 1. Open **Tools → Waveforms...**
 2. Click **Install** and choose **WSPR Receiver**.
 
-The receiver ships inside AetherSDR, so nothing is downloaded. It takes about 750 KB on the radio. It starts within seconds, and listens on 20 m until you change that.
+The receiver ships inside AetherSDR, so nothing is downloaded. It takes less than 500 KB on the radio. It starts within seconds, and listens on 20 m until you change that.
 
-To remove it, click **Uninstall** on its **AetherWSPR** row.
+To remove it, click **Remove** (FLEX-8000 and Aurora) or **Uninstall** (FLEX-6000) on its **AetherWSPR** row. This also removes its settings.
 
 ## Configuring it
 
-Click **Configure...** on the **AetherWSPR** row in the Waveforms window, or in **SpotHub → WSPR**. The receiver keeps these settings itself, so they apply with no computer connected. Click **Apply** to send your changes to the radio.
+Click **Configure...** on the **AetherWSPR** row in the Waveforms window, or in **SpotHub → WSPR**. The receiver keeps these settings itself, in a file on the radio, so they apply with no computer connected and survive a reboot. Click **Apply** to send your changes to the radio.
 
 The first computer to click **Apply** claims the receiver: AetherSDR keeps the receiver's admin token in your system keychain, and only that computer can change the settings afterward. On another computer, reinstall the receiver to start over.
 
@@ -84,7 +84,7 @@ Open **Settings → SpotHub...** and choose the **WSPR** tab, then click **Start
 
 - The radio removes the receiver's slice when its last GUI client disconnects, so closing SmartSDR or AetherSDR can lose the cycle in progress. The receiver makes a new slice at once and carries on with the next cycle.
 - It waits for the radio's clock to be set before it starts recording, up to about a minute and a half after the radio boots.
-- A FLEX-8000 radio keeps nothing the receiver writes across a reboot: its settings go back to their defaults. Use **Configure...** to set them again.
+- Removing or updating the receiver starts it over with default settings, and any computer can claim it again.
 - Decoding takes one processor core for about 10 to 25 seconds in each two-minute cycle, at low priority, so SmartSDR always comes first.
 
 ## Related pages

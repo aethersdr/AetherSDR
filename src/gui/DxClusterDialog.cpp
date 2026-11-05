@@ -1887,10 +1887,10 @@ void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
             "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
             "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c));
     };
-    paintSwatch(settings.color);
+    paintSwatch(wspr::spotColor(settings));
     connect(colorBtn, &QPushButton::clicked, this, [this, paintSwatch] {
         WsprSpotHubSettings s = wspr::loadSpotHubSettings();
-        const QColor c = getColorForLiveParent(QColor(s.color), this, tr("WSPR Spot Color"));
+        const QColor c = getColorForLiveParent(QColor(wspr::spotColor(s)), this, tr("WSPR Spot Color"));
         if (c.isValid()) {
             s.color = c.name();
             wspr::saveSpotHubSettings(s);

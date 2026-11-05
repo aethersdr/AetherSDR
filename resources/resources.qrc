@@ -16,6 +16,7 @@
     <qresource prefix="/waveforms">
         <file alias="AetherHealth.ssdr_waveform">waveforms/AetherHealth.ssdr_waveform</file>
         <file alias="AetherWSPR.ssdr_waveform">waveforms/AetherWSPR.ssdr_waveform</file>
+        <file alias="AetherWSPR.tar.gz">waveforms/AetherWSPR.tar.gz</file>
     </qresource>
     <!-- CTR2 USB access rule, installed on demand from the CTR2 Proxy applet;
          the same file packaging installs, so the two cannot drift. -->

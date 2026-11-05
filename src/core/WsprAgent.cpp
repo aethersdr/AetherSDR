@@ -127,11 +127,10 @@ std::optional<QJsonObject> object(const QByteArray& json)
     return doc.object();
 }
 
-bool matchesPin(const QByteArray& bytes)
+bool matchesPin(const QByteArray& bytes, const WsprPackage::Pin& pin)
 {
-    return bytes.size() == WsprPackage::kSize
-        && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()
-               == QByteArray(WsprPackage::kSha256);
+    return bytes.size() == pin.size
+        && QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex() == QByteArray(pin.sha256);
 }
 
 }  // namespace
@@ -385,18 +384,17 @@ bool reachableAddress(const QHostAddress& address)
     return address.isPrivateUse() || address.isLinkLocal() || address.isInSubnet(tailnet);
 }
 
-QString writeBundledPackage(const QString& dir, QString* error, const QString& resource)
+QString writeBundledPackage(const WsprPackage::Pin& pin, const QString& dir, QString* error)
 {
-    const QString target = QDir(dir).filePath(QStringLiteral("AetherWSPR.ssdr_waveform"));
+    const QString target = QDir(dir).filePath(QString::fromLatin1(pin.fileName));
     QFile existing(target);
-    if (existing.open(QIODevice::ReadOnly) && existing.size() == WsprPackage::kSize
-        && matchesPin(existing.readAll())) {
+    if (existing.open(QIODevice::ReadOnly) && existing.size() == pin.size && matchesPin(existing.readAll(), pin)) {
         return target;
     }
     existing.close();
-    QFile bundled(resource);
-    const QByteArray bytes = bundled.open(QIODevice::ReadOnly) ? bundled.read(WsprPackage::kSize + 1) : QByteArray();
-    if (!matchesPin(bytes)) {
+    QFile bundled(QString::fromLatin1(pin.resource));
+    const QByteArray bytes = bundled.open(QIODevice::ReadOnly) ? bundled.read(pin.size + 1) : QByteArray();
+    if (!matchesPin(bytes, pin)) {
         if (error) {
             *error = QObject::tr("This AetherSDR's WSPR receiver is damaged, so nothing was installed.");
         }
