@@ -457,7 +457,8 @@ bool RadioModel::requestProducerAtu(const TxCoordinator::Request& request, bool 
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Atu, dispatched);
     m_transmitModel.requestAtu(start, route);
-    const bool accepted = dispatched;
+    // A start withdrawn during admission dispatches its cleanup, not a cycle.
+    const bool accepted = dispatched && (!start || m_transmitModel.atuAvailable());
     if (start && !accepted) {
         m_transmitModel.requestAtu(false, route);
     }

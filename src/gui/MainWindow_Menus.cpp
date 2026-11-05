@@ -673,7 +673,7 @@ void MainWindow::buildMenuBar()
         const bool wasFresh = showOrRaiseCanon(m_spotHubDialog, [this] {
             return new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
                                        m_potaClient, m_eibiClient,
-                                       m_n1mmSpotClient,
+                                       m_n1mmSpotClient, m_wsprFeed,
 #ifdef HAVE_WEBSOCKETS
                                        m_freedvClient,
 #endif
@@ -1639,7 +1639,7 @@ void MainWindow::buildMenuBar()
     swrScanAction->setEnabled(false);
     swrScanAction->setProperty(kTxKeyingProperty, true);
     connect(swrScanAction, &QAction::triggered, this, [this] {
-        startSwrSweep(-1, 1, 0.0, 0.0, /*forceLicenseConfirm=*/true);
+        startSwrSweep();
     });
     auto* preTuneAction = toolsMenu->addAction("Pre-tune ATU Bands...");
     m_preTuneAction = preTuneAction;

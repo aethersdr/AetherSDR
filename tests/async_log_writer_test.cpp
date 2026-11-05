@@ -430,6 +430,10 @@ void testRotationReopenFailureMirrorsToStderr(const QString& dir)
                                   + ": future logs mirror to stderr").toUtf8();
         report(label.constData(), started && blockerCreated
                && captured.contains(marker.toUtf8()));
+        if (returnInvalidNewPath) {
+            report("rotation fallback new-path: warning says logging moved to stderr",
+                   captured.contains("logging to stderr only"));
+        }
 
         QFile::remove(activeDir);
     };

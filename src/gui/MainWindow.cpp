@@ -2313,6 +2313,8 @@ MainWindow::MainWindow(QWidget* parent)
     // by luck rather than by wiring.
     connect(&m_radioModel.transmitModel(), &TransmitModel::stateChanged,
             this, [this]() { updatePaTempLabel(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::atuAvailabilityChanged,
+            this, &MainWindow::updateToolsMenuState);
 
     auto normalizeOscillatorValue = [](QString value) {
         value = value.trimmed().toLower();
@@ -10450,16 +10452,11 @@ void MainWindow::updateToolsMenuState()
         && m_radioModel.txOwnedByUs() && idle;
     const bool hasTxApplet = m_appletPanel && m_appletPanel->txApplet();
 
-    // An external TunerGenius XL in OPERATE puts the internal ATU out of the
-    // line, and TxApplet::updateAtuAvailability() greys the ATU and MEM buttons
-    // for exactly that reason (#443). The ATU right-click menu rides the
-    // disabled ATU button, so before Tools existed that gate was also the only
-    // route to these two actions — lifting them to the menu bar without the same
-    // condition would make Tools the one way left to pre-tune through a tuner
-    // that is in OPERATE.
+    // Tools and the applet share the internal-ATU path gate: neither TGXL
+    // Operate nor a transverter output can use the radio's tuner.
     const bool tgxlOperate = tuner.isPresent() && tuner.isOperate()
         && !tuner.isBypass();
-    const bool memories = caps.hasTunerMemories && !tgxlOperate;
+    const bool memories = caps.hasTunerMemories && !tgxlOperate && tx.atuAvailable();
 
     if (m_addPanAction) {
         m_addPanAction->setEnabled(connected && m_panStack
@@ -10494,7 +10491,7 @@ void MainWindow::updateToolsMenuState()
     }
 
     // Every disabling condition names itself. A greyed control with no stated
-    // reason reads as broken (#5510), and Pre-tune now has five of them.
+    // reason reads as broken (#5510).
     if (m_preTuneAction) {
         m_preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
             && hasTxApplet);
@@ -10503,6 +10500,8 @@ void MainWindow::updateToolsMenuState()
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
                 ? tr("Disabled — TGXL is in OPERATE mode")
+            : !tx.atuAvailable()
+                ? tr("Disabled — the internal ATU is not in the transverter TX path")
             : !hasTxApplet
                 ? tr("The transmit applet is unavailable in this build")
             : !tx.memoriesEnabled()
@@ -10521,6 +10520,8 @@ void MainWindow::updateToolsMenuState()
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
                 ? tr("Disabled — TGXL is in OPERATE mode")
+            : !tx.atuAvailable()
+                ? tr("Disabled — the internal ATU is not in the transverter TX path")
             : !hasTxApplet
                 ? tr("The transmit applet is unavailable in this build")
             : !connected

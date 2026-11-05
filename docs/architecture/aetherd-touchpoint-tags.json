@@ -83,6 +83,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/WsprAgent.h": {
+  "tag": "peripheral(wspr-agent)",
+  "note": "The WSPR receiver's status, spots and settings (types, bounded JSON parsing, the settings body, the SpotHub DxSpot) and its pinned package. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/WsprAgentClient.h": {
+  "tag": "peripheral(wspr-agent)",
+  "note": "Polls the WSPR receiver's /v1/status and reads and saves its /v1/config at the radio's LAN or tailnet-shim address. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/TailnetShimTokenStore.h": {
   "tag": "peripheral(tailnet-shim)",
   "note": "OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",

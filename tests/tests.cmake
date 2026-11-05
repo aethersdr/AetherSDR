@@ -4548,6 +4548,27 @@ else()
 endif()
 add_test(NAME radio_health_client_test COMMAND radio_health_client_test)
 
+# The WSPR receiver on the radio (tools/wspr-agent): status and settings
+# JSON parse and are bounded, the settings body round-trips, a spot becomes
+# a SpotHub DxSpot, only LAN or tailnet addresses are tried, and the bundled
+# package matches its pin. Socket-free; writes only to a QTemporaryDir.
+qt_add_resources(WSPR_AGENT_TEST_RESOURCES resources/resources.qrc)
+add_executable(wspr_agent_test
+    tests/wspr_agent_test.cpp
+    src/core/WsprAgent.cpp
+    src/core/LegacyWaveformPackage.cpp
+    src/core/ZipArchive.cpp
+    ${WSPR_AGENT_TEST_RESOURCES}
+)
+target_include_directories(wspr_agent_test PRIVATE src)
+target_link_libraries(wspr_agent_test PRIVATE Qt6::Core Qt6::Network)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(wspr_agent_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(wspr_agent_test PRIVATE zlibstatic)
+endif()
+add_test(NAME wspr_agent_test COMMAND wspr_agent_test)
+
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,
 # finder patterns, theme-invariant colors), socket-free.
 add_executable(qr_code_image_test
@@ -8291,6 +8312,17 @@ endif()
 set_target_properties(log_manager_filter_rules_test PROPERTIES AUTOMOC ON)
 add_test(NAME log_manager_filter_rules_test COMMAND log_manager_filter_rules_test)
 
+add_executable(log_manager_file_test
+    tests/log_manager_file_test.cpp
+)
+target_include_directories(log_manager_file_test PRIVATE src tests)
+target_link_libraries(log_manager_file_test PRIVATE aethercore Qt6::Core)
+if(UNIX)
+    target_link_libraries(log_manager_file_test PRIVATE pthread)
+endif()
+set_target_properties(log_manager_file_test PROPERTIES AUTOMOC ON)
+add_test(NAME log_manager_file_test COMMAND log_manager_file_test)
+
 # Windows Firewall verdicts and Fix command, and failed external-request
 # logging (aether.network). Pure logic; the COM inspection compiles on Windows
 # only, so this runs everywhere.
@@ -8614,6 +8646,29 @@ target_link_libraries(help_dialog_test PRIVATE
 set_target_properties(help_dialog_test PROPERTIES AUTOMOC ON)
 add_test(NAME help_dialog_test COMMAND help_dialog_test)
 set_tests_properties(help_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# SwrSweepLicenseDialog::confirm() — remembered-answer short-circuit and when
+# the answer is stored.  No MainWindow required; confirm() only needs
+# AppSettings and QDialog::exec(); the test dismisses the modal from a timer.
+add_executable(swr_sweep_license_dialog_test
+    tests/swr_sweep_license_dialog_test.cpp
+    src/gui/SwrSweepLicenseDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+target_include_directories(swr_sweep_license_dialog_test PRIVATE src)
+target_link_libraries(swr_sweep_license_dialog_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(swr_sweep_license_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME swr_sweep_license_dialog_test COMMAND swr_sweep_license_dialog_test)
+set_tests_properties(swr_sweep_license_dialog_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # In-app links to docs.aethersdr.com (src/gui/DocsLinks.h, header-only): the
 # Help menu's documentation block, the docs pages the app links to, and the
@@ -9716,6 +9771,15 @@ set_tests_properties(unified_title_bar_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 if(APPLE)
+    add_executable(mac_native_window_title_test
+        tests/mac_native_window_title_test.mm
+        src/gui/mac/NativeWindowTitle.mm)
+    target_include_directories(mac_native_window_title_test PRIVATE src)
+    target_link_libraries(mac_native_window_title_test PRIVATE Qt6::Widgets "-framework AppKit")
+    add_test(NAME mac_native_window_title_test COMMAND mac_native_window_title_test)
+    # A hidden Cocoa window checks native ownership; offscreen cannot reach AppKit.
+    set_tests_properties(mac_native_window_title_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
+
     foreach(titlebar_target IN ITEMS unified_title_bar_test titlebar_headphone_mute_test hl2_pc_audio_lock_test
             mixer_control_availability_test)
         target_sources(${titlebar_target} PRIVATE src/gui/mac/NativeWindowTitle.mm)
@@ -10729,6 +10793,7 @@ set(AETHER_SETTINGS_CONSUMERS
     memory_import_test
     transmit_model_apd_test
     help_dialog_test
+    swr_sweep_license_dialog_test
     flex_control_dialog_size_test
     aethercontrol_window_test
     multiflex_dashboard_window_test
@@ -10748,6 +10813,7 @@ set(AETHER_SETTINGS_CONSUMERS
     workspace_controller_test
     mini_pan_widget_test
     log_manager_filter_rules_test
+    log_manager_file_test
     bandplan_voice_labels_test
     bandplan_usage_resource_test
     vkamp_connection_test

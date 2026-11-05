@@ -1935,7 +1935,7 @@
         "target": "MemoryDialog"
       },
       "caption": "The Memory Channels window, listing the memories stored in the radio.",
-      "alt": "Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KK7GWY, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected."
+      "alt": "Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KI4TTZ, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected."
     },
     {
       "id": "keyboard-shortcuts",
