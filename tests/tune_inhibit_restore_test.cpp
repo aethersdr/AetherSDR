@@ -17,6 +17,11 @@ public:
         connection.m_commandSinkForTest = [&wire](quint32, const QString& command) { wire << command; };
         radio.m_connection = &connection;
     }
+    static void setup(RadioModel& radio, FlexBackend& backend)
+    {
+        backend.setSetupCommandSink(radio.setupCommandSink());
+        radio.wireFlexTransmitServices(&backend);
+    }
     static bool apply(RadioModel& radio) { return radio.applyTuneInhibit(); }
     static void restore(RadioModel& radio) { radio.restoreTuneInhibit(); }
     static void disconnect(RadioModel& radio) { radio.onDisconnected(); }
@@ -63,7 +68,14 @@ void preferences(bool acc, bool tx1, bool tx2, bool tx3)
 class ConnectedFlex final : public FlexBackend {
 public:
     bool connected = false;
+    bool firmwareSuppression = false;
     bool isConnected() const override { return connected; }
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps = FlexBackend::capabilities();
+        if (firmwareSuppression) { caps.tuneOutputSuppression = TuneOutputSuppressionControl{}; }
+        return caps;
+    }
 };
 struct Fixture {
     QStringList wire;
@@ -76,6 +88,7 @@ struct Fixture {
         backend = owned.get();
         radio.setBackendForTest(std::move(owned), QStringLiteral("flex"));
         TxOperationIntegrationTestAccess::inject(radio, inert, wire);
+        TxOperationIntegrationTestAccess::setup(radio, *backend);
         check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "injected TX slice installed");
         SliceDelta delta;
         delta.txSlice = true;
@@ -149,8 +162,8 @@ void ownershipAndChurn()
 
     Fixture local;
     local.apply();
-    local.radio.sendCommand("interlock bandset 9 acc_tx_enabled=0");
-    local.radio.sendCmdPublic("interlock bandset 5 tx1_enabled=0", {});
+    local.radio.requestTxBand({9, TxBandRequest::Field::AccessoryTx, false});
+    local.radio.requestTxBand({5, TxBandRequest::Field::Tx1, false});
     local.restore();
     check(local.wire.count("interlock bandset 9 acc_tx_enabled=1") == 0
         && local.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
@@ -202,7 +215,7 @@ void reentrantPaths()
     TxOperationIntegrationTestAccess::onWrite(f.inert, [&](const QString& command) {
         f.wire << command;
         if (!std::exchange(once, true)) {
-            f.radio.sendCommand("interlock bandset 9 tx1_enabled=0");
+            f.radio.requestTxBand({9, TxBandRequest::Field::Tx1, false});
             TxOperationIntegrationTestAccess::apply(f.radio);
         }
     });
@@ -221,7 +234,7 @@ void reentrantPaths()
         cleanup.wire << command;
         if (!std::exchange(once, true)) {
             TxOperationIntegrationTestAccess::restore(cleanup.radio);
-            cleanup.radio.sendCmdPublic("interlock bandset 9 tx1_enabled=0", {});
+            cleanup.radio.requestTxBand({9, TxBandRequest::Field::Tx1, false});
         }
     });
     cleanup.restore();
@@ -260,6 +273,31 @@ void lateRepliesAndDrops()
     TxOperationIntegrationTestAccess::expiring(drop.radio, false);
     drop.restore();
     check(drop.wire.isEmpty(), "zero-return dispatch without a callback acquires no restoration write");
+
+    Fixture unknown;
+    unknown.apply();
+    TxOperationIntegrationTestAccess::replyAll(unknown.radio, -1);
+    unknown.restore();
+    check(unknown.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
+          "unknown reply retains restoration for a write that may have reached the radio");
+
+    preferences(true, true, false, false);
+    Fixture partial;
+    partial.apply();
+    const auto pending = TxOperationIntegrationTestAccess::callbacks(partial.radio);
+    if (!pending.isEmpty()) { pending.first()(0x5000002d, {}); }
+    partial.restore();
+    check(partial.wire.count("interlock bandset 9 acc_tx_enabled=1") == 0
+        && partial.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
+          "partial rejection relinquishes only the refused output");
+
+    Fixture firmware;
+    firmware.backend->firmwareSuppression = true;
+    firmware.apply();
+    firmware.restore();
+    check(firmware.wire == QStringList{"interlock bandset 9 acc_tx_enabled=0",
+                                      "interlock bandset 9 acc_tx_enabled=1"},
+          "firmware RCA suppression leaves only accessory output under client control");
 }
 void allOutputCombinations()
 {
@@ -337,6 +375,10 @@ void refusalAndClosing()
     TxOperationIntegrationTestAccess::closing(closing.radio, true);
     check(!TxOperationIntegrationTestAccess::apply(closing.radio),
           "an active snapshot cannot bypass session-closing refusal");
+    closing.restore();
+    check(closing.wire.count("interlock bandset 9 acc_tx_enabled=1") == 1
+        && closing.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
+          "session closing still restores owned outputs before disconnecting the transport");
     closing.backend->connected = false;
     TxOperationIntegrationTestAccess::closing(closing.radio, false);
     check(!TxOperationIntegrationTestAccess::apply(closing.radio),

@@ -274,7 +274,12 @@ int main(int argc, char** argv)
            prop(fkey3, "live").isEmpty() && prop(dot, "state").isEmpty() && !bar3->isVisible());
 
     // ── A refusal reads as an error, in words ──────────────────────────────
-    model.handleCommandResponse(QStringLiteral("playback_start"), 3, 0x50004001u, QString());
+    quint64 requestId = 0;
+    QObject::connect(&model, &DvkModel::controlRequested, &model,
+        [&](const DvkRequest&, quint64 token) { requestId = token; });
+    model.playbackStart(3);
+    model.handleControlReply(requestId, {TransmitServiceReply::Outcome::Rejected, 0x50004001u, {}});
+
     report(QStringLiteral("refusal: status tone is error and says failed"),
            prop(status, "tone") == QLatin1String("error")
                && status->text().startsWith(QLatin1String("Play failed (slot 3)")));
