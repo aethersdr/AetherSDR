@@ -17,6 +17,7 @@
 #include <QPushButton>
 #include <QTableWidget>
 #include <QTest>
+#include <QToolButton>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -95,8 +96,21 @@ void everyCloseDestroysTheWindow()
         dialog->show();
         const bool exposed = QTest::qWaitForWindowExposed(dialog);
         if (path == 0) QTest::keyClick(dialog, Qt::Key_Escape);
-        if (path == 1) QTest::keySequence(dialog, QKeySequence::Close);
-        if (path == 2) dialog->close();
+        if (path == 1) {
+            // A window shortcut: it needs the window active, which a desktop
+            // gives a newly shown window but a background test process may not.
+            dialog->activateWindow();
+            QTest::qWaitForWindowActive(dialog);
+            QTest::keySequence(dialog, QKeySequence::Close);
+        }
+        if (path == 2) {
+            // Press the corner ✕ itself, so its connection is pinned too.
+            QToolButton* corner = nullptr;
+            for (QToolButton* b : dialog->findChildren<QToolButton*>())
+                if (b->accessibleName() == QLatin1String("Close")) corner = b;
+            check(corner != nullptr, "the corner close button exists");
+            if (corner) QTest::mouseClick(corner, Qt::LeftButton);
+        }
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         check(exposed && dialog.isNull(),
               path == 0 ? "Esc destroys the window"
@@ -124,18 +138,39 @@ void returnClicksNothing()
     dialog.hide();
 }
 
-// Fits a 1366x768 screen with room for the taskbar, and never smaller than
-// its layout (measured, not a fixed number: CI fonts differ).
+// At the smallest size the shown window allows, every control keeps the
+// height it needs (the wrapped intro: its height for its width), and that size
+// fits a 1366x768 screen. Measured on the shown, polished window, in both
+// themes: the constructor's hint comes before the canon sheet.
 void minimumSizeFits()
 {
-    RadioHealthDialog dialog(nullptr);
-    std::printf("  minimum %dx%d, layout hint %dx%d\n", dialog.minimumWidth(),
-                dialog.minimumHeight(), dialog.minimumSizeHint().width(),
-                dialog.minimumSizeHint().height());
-    check(dialog.minimumHeight() <= 700, "the minimum height fits a 768 px screen");
-    check(dialog.minimumWidth() >= dialog.minimumSizeHint().width()
-              && dialog.minimumHeight() >= dialog.minimumSizeHint().height(),
-          "the minimum size is never smaller than the layout's");
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        tm.setActiveTheme(QLatin1String(theme));
+        RadioHealthDialog dialog(nullptr);
+        dialog.show();
+        QTest::qWaitForWindowExposed(&dialog);
+        dialog.resize(QSize(1, 1));
+        QTest::qWait(50);
+        bool legible = true;
+        for (QWidget* w : dialog.bodyWidget()->findChildren<QWidget*>()) {
+            if (!w->isVisible() || qobject_cast<QTableWidget*>(w->parentWidget())) continue;
+            int need = w->minimumSizeHint().height();
+            if (auto* label = qobject_cast<QLabel*>(w); label && label->wordWrap())
+                need = label->heightForWidth(label->width());
+            if (w->height() < need) {
+                legible = false;
+                std::printf("  %s: %s h=%d need=%d\n", theme, w->metaObject()->className(),
+                            w->height(), need);
+            }
+        }
+        std::printf("  %s: shown minimum %dx%d\n", theme, dialog.width(), dialog.height());
+        check(legible, "every control keeps its height at the smallest size");
+        check(dialog.height() <= 700, "the minimum height fits a 768 px screen");
+        dialog.hide();
+    }
+    tm.setActiveTheme(before);
 }
 
 // Size and position persist under RadioHealthDialogGeometry, the key the old
