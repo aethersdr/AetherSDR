@@ -4697,7 +4697,8 @@
           "cmd": "invoke",
           "target": "connectionStationList",
           "action": "selectRow",
-          "value": "0"
+          "value": "0",
+          "_allow_fail": true
         }
       ],
       "grab": {
@@ -4729,10 +4730,16 @@
           "cmd": "invoke",
           "target": "connectionAddStation",
           "action": "click"
-        },
+        }
+      ],
+      "grab": {
+        "target": "connectionProfileEditor"
+      },
+      "cleanup": [
         {
-          "cmd": "grab",
-          "target": "connectionProfileEditor"
+          "cmd": "close",
+          "target": "connectionProfileEditor",
+          "_allow_fail": true
         }
       ]
     },
