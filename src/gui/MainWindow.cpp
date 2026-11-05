@@ -4721,8 +4721,10 @@ void MainWindow::showNetworkDiagnosticsDialog()
 
 void MainWindow::showSystemInfoDialog()
 {
-    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get(), m_cpuHistory.get(),
-                          m_uiTickLagMeter.get());
+    showOrRaiseCanon(m_systemInfoDialog, [this] {
+        return new SystemInfoDialog(m_memoryHistory.get(), m_cpuHistory.get(),
+                                    m_uiTickLagMeter.get(), this);
+    });
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)
