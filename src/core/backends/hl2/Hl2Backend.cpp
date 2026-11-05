@@ -2003,6 +2003,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
+    c.dspParameters = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
         static_cast<qint64>(kTuningMinHz), static_cast<qint64>(kTuningMaxHz)};
     c.receivePanBandwidthControl = std::nullopt; // radio-wide rate can retire other receivers

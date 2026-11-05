@@ -19,6 +19,7 @@
 
 #include "core/backends/SquelchLevelScale.h"
 #include "core/backends/DspParameterReset.h"
+#include "core/backends/DspParameter.h"
 
 namespace AetherSDR {
 
@@ -701,6 +702,7 @@ struct RadioCapabilities {
     std::optional<NrsLevelControl> nrsLevelControl;
 
     std::optional<DspParameterResetControl> dspParameterReset;
+    std::optional<DspParameterControl> dspParameters;
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
 
     // WDSP LMS/FFT filter family: NRL, ANFL, ANFT. Narrower than hasRadioSideDsp and

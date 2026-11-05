@@ -259,6 +259,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
     caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     caps.dspParameterReset = std::nullopt;
+    caps.dspParameters = std::nullopt;
     caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
     caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
     caps.canReboot = false;
