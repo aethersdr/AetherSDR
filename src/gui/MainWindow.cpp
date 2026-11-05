@@ -127,6 +127,7 @@
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
+#include "RadioHealthDialog.h"
 #include "SwrSweepLicenseDialog.h"
 #include "DxClusterDialog.h"
 #ifdef HAVE_WEBSOCKETS

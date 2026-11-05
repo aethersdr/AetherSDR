@@ -60,6 +60,8 @@ To capture more detail, turn on the **Performance** and **Render** categories in
 
 **Tools → Radio Health...** lists the health and status registers that the connected radio itself reports, refreshed every 500 ms. A dash means the radio has not reported that value, which is not the same as zero. **Copy** puts the whole table on the clipboard as text for a bug report.
 
+It is a window of its own that can sit on another monitor while you operate. Drag any empty part of it to move it, or an edge to resize it; it reopens at the same size and place. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). Choosing **Tools → Radio Health...** while it is open brings it to the front. It reads the radio only while it is open.
+
 What appears depends on the radio:
 
 - **FlexRadio:** Flex radios do not publish health registers through this window, so it reads "This radio reports no health registers." Use the **MTR** (Radio Vitals) applet for PA temperature, fan speed and supply voltage. See [Meters](./meters.md).

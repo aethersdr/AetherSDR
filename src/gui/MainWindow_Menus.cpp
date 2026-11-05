@@ -1719,12 +1719,8 @@ void MainWindow::buildMenuBar()
 
     toolsMenu->addSeparator();
     toolsMenu->addAction("Radio Health...", this, [this] {
-        auto* dlg = new RadioHealthDialog(&m_radioModel, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showOrRaiseCanon(m_radioHealthDialog,
+                         [this] { return new RadioHealthDialog(&m_radioModel, this); });
     });
     auto* gpsDashboardAction = toolsMenu->addAction("AetherGPS...", this, [this] {
         showGpsLocationDialog();
