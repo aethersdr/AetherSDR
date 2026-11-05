@@ -73,9 +73,6 @@ def licenses():
 
 
 def main():
-    test = os.environ.get('AETHER_WSPR_TEST_REPORT') == '1'
-    if test:
-        CFLAGS.append('-DAETHER_WSPR_TEST_REPORT')
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--output', required=True, type=pathlib.Path)
     ap.add_argument('--host', action='store_true', help='also build a native binary for tests')

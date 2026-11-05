@@ -41,7 +41,5 @@ python3 -I build.py --output OUT --host     # needs zig 0.17
 OUT/aether-wspr-host selftest -27           # synthetic signal through DSP + decoder
 ```
 
-`AETHER_WSPR_TEST_REPORT=1` builds a test variant that also shows each
-cycle's summary as a GUI client's station name, for testing a radio reached
-only through the shim. `AETHER_WSPR_RADIO=<ip>` runs the host build against
+`AETHER_WSPR_RADIO=<ip>` runs the host build against
 a radio over the network.

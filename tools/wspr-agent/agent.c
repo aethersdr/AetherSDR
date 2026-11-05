@@ -451,6 +451,7 @@ typedef struct {
     double sumsq;    /* audio power, for the cycle's level */
     int lost;        /* packets missing from the stream, filled with silence */
     int last_count;  /* VITA packet count of the previous packet, -1 none */
+    double last_at;  /* when that packet arrived */
 } dsp_t;
 
 static void dsp_reset(dsp_t *d)
@@ -533,7 +534,37 @@ typedef struct {
     double started;
     int audio_pct, lost;
     float dbfs;
+    /* Load while it ran: the radio's CPU (all cores) and the child's own. */
+    unsigned long long cpu0_busy, cpu0_total;
+    float sys_busy_pct, child_cpu_s;
+    long child_rss_kb, mem_avail_kb;
 } decode_t;
+
+/* /proc/stat's first line: busy and total jiffies over all cores. */
+static void cpu_jiffies(unsigned long long *busy, unsigned long long *total)
+{
+    *busy = *total = 0;
+    FILE *f = fopen("/proc/stat", "r");
+    if (!f) return;
+    unsigned long long v[8] = {0};
+    if (fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]) >= 4) {
+        for (int i = 0; i < 8; i++) *total += v[i];
+        *busy = *total - v[3] - v[4];
+    }
+    fclose(f);
+}
+
+static long mem_available_kb(void)
+{
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) return -1;
+    char line[128];
+    long kb = -1;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, "MemAvailable: %ld kB", &kb) == 1) break;
+    fclose(f);
+    return kb;
+}
 
 static char g_self[512];
 static char g_work[300];
@@ -561,6 +592,7 @@ static int start_decode(decode_t *dc, const char *c2)
     dc->fd = p[0];
     dc->n = 0;
     dc->started = now_s();
+    cpu_jiffies(&dc->cpu0_busy, &dc->cpu0_total);
     return 1;
 }
 
@@ -1143,6 +1175,18 @@ static int api_read(api_t *a, const config_t *cfg)
 
 /* VITA-49 DAX audio: 28-byte header, payload float32 stereo BE (PCC 0x03E3)
  * or int16 mono BE (PCC 0x0123), optional 4-byte trailer. */
+/* Packets missing before this one. The 4-bit count wraps every 16 packets
+ * and the radio's DAX timestamps don't advance, so a long gap is sized from
+ * the arrival time: the count's residue (mod 16) closest to elapsed time. */
+static int missing_packets(int last, int count, double elapsed, double per_s)
+{
+    int residue = (count - last - 1) & 0xF;
+    double est = elapsed / per_s - 1;
+    if (est < 16) return residue;
+    int k = (int)((est - residue) / 16 + 0.5);
+    return residue + 16 * (k < 0 ? 0 : k);
+}
+
 static void vita_packet(const unsigned char *p, ssize_t n, unsigned want, dsp_t *d, int capturing)
 {
     if (n < 28 || !want) return;
@@ -1156,12 +1200,14 @@ static void vita_packet(const unsigned char *p, ssize_t n, unsigned want, dsp_t 
      * would pull every later sample earlier and break WSPR's symbol timing. */
     int count = (int)((w0 >> 16) & 0xF);
     ssize_t per = pcc == 0x03E3 ? (end - 28) / 8 : (end - 28) / 2;
+    double at = now_s();
     if (d->last_count >= 0 && per > 0) {
-        int gap = (count - d->last_count - 1) & 0xF;
+        int gap = missing_packets(d->last_count, count, at - d->last_at, (double)per / AUDIO_RATE);
         d->lost += gap;
         for (long long z = 0; z < (long long)gap * per; z++) dsp_push(d, 0.0f);
     }
     d->last_count = count;
+    d->last_at = at;
     if (pcc == 0x03E3) {
         for (ssize_t o = 28; o + 8 <= end; o += 8) {
             uint32_t u = (uint32_t)p[o] << 24 | (uint32_t)p[o + 1] << 16 | (uint32_t)p[o + 2] << 8 | p[o + 3];
@@ -1185,6 +1231,17 @@ static double gauss(void)
 
 static int selftest(double snr_db)
 {
+    /* Gap sizing: in-order, small gaps, and gaps past the 4-bit wrap. */
+    const double per = 128.0 / AUDIO_RATE;
+    struct { int last, count; double elapsed; int want; } gaps[] = {
+        {5, 6, per, 0}, {5, 8, 3 * per, 2}, {15, 0, per, 0},
+        {5, (5 + 41) & 15, 41 * per, 40}, {5, (5 + 41) & 15, 41 * per * 1.15, 40}, {5, 6, 17 * per, 16},
+    };
+    for (size_t i = 0; i < sizeof gaps / sizeof gaps[0]; i++) {
+        int got = missing_packets(gaps[i].last, gaps[i].count, gaps[i].elapsed, per);
+        if (got != gaps[i].want) { printf("selftest FAIL: gap case %zu gave %d, want %d\n", i, got, gaps[i].want); return 1; }
+    }
+
     unsigned char sym[162];
     char msg[] = "K1ABC FN42 37";
     char *hashtab = calloc(32768 * 13, 1), *loctab = calloc(32768 * 5, 1);
@@ -1233,9 +1290,6 @@ static int selftest(double snr_db)
 
 /* ------------------------------------------------------------------ main */
 
-#ifdef AETHER_WSPR_TEST_REPORT
-static void test_report(const char *fmt, ...);
-#endif
 
 static void record_cycle(const decode_t *dc)
 {
@@ -1266,63 +1320,12 @@ static void record_cycle(const decode_t *dc)
     c->lost_packets = dc->lost;
     c->audio_dbfs = dc->dbfs;
     pthread_mutex_unlock(&G.mu);
-    logf_("cycle %lld %s: %d spot(s), decode %d ms, audio %d%%, %d packet(s) lost, level %.1f dBFS", dc->cycle_t,
-          dc->band, n, c->decode_ms, dc->audio_pct, dc->lost, dc->dbfs);
+    logf_("cycle %lld %s: %d spot(s), decode %d ms (%.1f s CPU, %ld KB peak, radio %.0f%% busy), audio %d%%, "
+          "%d packet(s) lost, level %.1f dBFS, %ld KB free", dc->cycle_t, dc->band, n, c->decode_ms, dc->child_cpu_s,
+          dc->child_rss_kb, dc->sys_busy_pct, dc->audio_pct, dc->lost, dc->dbfs, dc->mem_avail_kb);
     queue_cycle_uploads(dc->cycle_t, dc->dial_hz, got, n);
-#ifdef AETHER_WSPR_TEST_REPORT
-    char hhmm[8];
-    time_t tt = (time_t)dc->cycle_t;
-    struct tm tm;
-    gmtime_r(&tt, &tm);
-    strftime(hhmm, sizeof hhmm, "%H%M", &tm);
-    char top[64] = "";
-    size_t tl = 0;
-    for (int i = 0; i < n && tl < 20; i++)
-        tl += (size_t)snprintf(top + tl, sizeof top - tl, "%s%d,", got[i].call[0] ? got[i].call : "?", got[i].snr);
-    test_report("W%s:%s:n%d:a%d:l%d:%.0fdB:%dms:%s", hhmm, dc->band, n, dc->audio_pct, dc->lost, dc->dbfs, c->decode_ms, top);
-#endif
 }
 
-#ifdef AETHER_WSPR_TEST_REPORT
-/* Test builds only: the radio's own LAN ports can't be reached from a
- * computer that reaches the radio through the tailnet shim, so each cycle's
- * summary is shown as the station name of a short-lived GUI client, which any
- * API client can read. Station names hold 40 characters, no spaces. */
-static pthread_mutex_t g_report_mu = PTHREAD_MUTEX_INITIALIZER;
-static int g_report_fd = -1;
-
-/* One long-lived GUI client whose station name is updated each cycle: a
- * GUI client that leaves would make the radio remove the agent's slice. */
-static void test_report(const char *fmt, ...)
-{
-    char line[48];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(line, 41, fmt, ap);
-    va_end(ap);
-    for (char *q = line; *q; q++) if (*q == ' ') *q = '_';
-    pthread_mutex_lock(&g_report_mu);
-    char cmd[200];
-    int l;
-    if (g_report_fd < 0) {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(4992)};
-        inet_pton(AF_INET, g_radio_addr, &sa.sin_addr);
-        if (fd >= 0 && !connect(fd, (struct sockaddr *)&sa, sizeof sa)) {
-            g_report_fd = fd;
-            l = snprintf(cmd, sizeof cmd, "C1|client program AetherWSPRtest\nC2|client gui\n");
-            if (write(fd, cmd, (size_t)l) != l) { close(fd); g_report_fd = -1; }
-        } else if (fd >= 0) {
-            close(fd);
-        }
-    }
-    if (g_report_fd >= 0) {
-        l = snprintf(cmd, sizeof cmd, "C3|client station %s\n", line);
-        if (write(g_report_fd, cmd, (size_t)l) != l) { close(g_report_fd); g_report_fd = -1; }
-    }
-    pthread_mutex_unlock(&g_report_mu);
-}
-#endif
 
 /* The band for a cycle: rotations count two-minute cycles since 1970, so
  * they carry on over restarts and midnight. */
@@ -1386,18 +1389,21 @@ int main(int argc, char *argv[])
     long long capture_t = 0;   /* cycle being recorded, 0 none */
     long long tuned_for = 0;   /* cycle the slice is tuned for */
     double next_connect = 0;
-    config_t cfg;
+    config_t cfg = G.cfg;
 
     for (;;) {
         double now = now_s();
+        int old_dax = cfg.dax_channel;
         pthread_mutex_lock(&G.mu);
         cfg = G.cfg;
         int dirty = G.cfg_dirty;
         G.cfg_dirty = 0;
         pthread_mutex_unlock(&G.mu);
-        if (dirty && a.fd >= 0 && a.slice >= 0) {
-            /* A new DAX channel or antenna needs a new slice; bands apply
-             * at the next cycle. */
+        if (dirty && a.fd >= 0 && a.slice >= 0 && cfg.rxant[0])
+            api_send(&a, "slice set %d rxant=%s", a.slice, cfg.rxant);
+        if (dirty && a.fd >= 0 && a.slice >= 0 && cfg.dax_channel != old_dax) {
+            /* A new DAX channel needs a new slice and stream; bands and the
+             * rest apply at the next cycle without one. */
             api_send(&a, "slice remove %d", a.slice);
             a.slice = -1;
             a.stream = 0;
@@ -1514,7 +1520,16 @@ int main(int argc, char *argv[])
             if (k > 0) dc.n += (size_t)k;
             else if (k == 0 || dc.n >= sizeof dc.out - 1) {
                 int st;
-                waitpid(dc.pid, &st, 0);
+                struct rusage ru;
+                memset(&ru, 0, sizeof ru);
+                wait4(dc.pid, &st, 0, &ru);
+                unsigned long long b1, t1;
+                cpu_jiffies(&b1, &t1);
+                dc.sys_busy_pct = t1 > dc.cpu0_total ? 100.0f * (float)(b1 - dc.cpu0_busy) / (float)(t1 - dc.cpu0_total) : -1;
+                dc.child_cpu_s = (float)(ru.ru_utime.tv_sec + ru.ru_stime.tv_sec)
+                               + (float)(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 1e6f;
+                dc.child_rss_kb = ru.ru_maxrss;
+                dc.mem_avail_kb = mem_available_kb();
                 close(dc.fd);
                 dc.out[dc.n] = 0;
                 record_cycle(&dc);
