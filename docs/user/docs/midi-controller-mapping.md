@@ -25,7 +25,7 @@ AetherSDR supports class-compliant USB MIDI controllers for hands-on control of 
 
 **MIDI Device**
 
-<img src="/img/screens/midi-mapping-dialog.png" width="700" alt="MIDI Controller Mapping window. The MIDI Device group has a Port selector, Refresh and Connect buttons, a Disconnected status and Auto-connect on startup ticked. The Parameter Bindings table, with columns Parameter, MIDI Source, Channel, Invert and Relative, is empty. Below are a category filter, a parameter selector set to [RX] AF Gain with Learn and Manual… buttons, and Clear All, Profile, Save, Load, Import… and Export… controls, with Close at the bottom." />
+<img src="/img/screens/midi-mapping-dialog.png" width="700" alt="MIDI Controller Mapping window, with a round close button in its top-right corner. The MIDI Device group has a Port selector, Refresh and Connect buttons, a Disconnected status and Auto-connect on startup ticked. The Parameter Bindings table, with columns Parameter, MIDI Source, Channel, Invert and Relative, is empty. Below are a category filter, a parameter selector set to [RX] AF Gain with Learn and Manual… buttons, and Clear All, Profile, Save, Load, Import… and Export… controls." />
 
 *The MIDI Controller Mapping window, before any control is bound.*
 
