@@ -451,18 +451,10 @@
       "page": "menu-reference",
       "anchor_heading": "intro",
       "grab": {
-        "target": "MainWindow"
+        "target": "AetherSDR::TitleBar"
       },
-      "crop": {
-        "box": [
-          0,
-          0,
-          1600,
-          52
-        ]
-      },
-      "caption": "The title bar: the menu button, one tab per radio, PC Audio and volume controls, panel layout buttons and window controls.",
-      "alt": "The AetherSDR title bar. From left: the menu button, the AetherSDR logo, three radio tabs reading Hermes-Lite 2 available, FLX8600 FLEX-8600 connected KK7GWY (highlighted, with a green dot) and Simulator (not on the air) AetherSDR Demo available DEMO, and a plus button. On the right: a green PC Audio button, a speaker icon and slider at 100, a headphone icon and slider at 100, three panel layout buttons, and minimise, maximise and close buttons."
+      "caption": "The title bar shows two recent radio shortcuts, More radios, PC Audio and volume controls.",
+      "alt": "The AetherSDR title bar with the connected simulator, a Home radio shortcut, More radios and audio controls."
     },
     {
       "id": "customize-button-bar",
@@ -5048,7 +5040,7 @@
           "action": "click"
         }
       ],
-      "caption": "An unavailable saved IP path keeps its connection name and offers Back to Locations.",
+      "caption": "A failed saved IP path retains its name. Back to Locations returns to its saved radio.",
       "alt": "Connect by IP shows a saved connection name, a documentation IP address, the failed connection reason and a Back to Locations button."
     },
     {
@@ -5138,6 +5130,35 @@
       ],
       "caption": "Highlighted menu text uses the matching canon foreground and selection surface in the light theme.",
       "alt": "Light-theme radio tab context menu with Rename highlighted and readable dark text on a light selection surface."
+    },
+    {
+      "id": "radio-recent-drawer",
+      "page": "menu-reference",
+      "anchor_heading": "Radio tabs",
+      "radio": "demo",
+      "steps": [
+        {
+          "cmd": "connect",
+          "action": "hide"
+        },
+        {
+          "cmd": "invoke",
+          "target": "radioTabAddButton",
+          "action": "click"
+        }
+      ],
+      "grab": {
+        "target": "discoveredRadiosPopover"
+      },
+      "cleanup": [
+        {
+          "cmd": "close",
+          "target": "discoveredRadiosPopover",
+          "_allow_fail": true
+        }
+      ],
+      "caption": "More radios keeps all saved and nearby radios available beyond the two title-bar shortcuts.",
+      "alt": "Radio drawer with Home, POTA and Cabin connections, search, per-radio actions and Locations and connections."
     }
   ]
 }

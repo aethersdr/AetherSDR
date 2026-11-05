@@ -3269,9 +3269,10 @@ tab is actually showing it. `radios.discovered[].canRename` says whether the swi
 offers Rename… for that radio (client-owned nickname) or routes to Radio
 Setup instead.
 `radios.overflowing` reports whether the bounded tab viewport is
-currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
-retained tab preference and `visible` is current widget visibility (which can
-also change in minimal mode). `radios.tabs[].linkCarrier` identifies
+currently clipping configured shortcuts. The app supplies up to two recent radio
+shortcuts plus independent workspace tabs. `radios.discovered` retains the full
+saved/discovered drawer list; its `visibleInTabs` identifies current shortcuts.
+`radios.tabs[].visible` is widget visibility (which can also change in minimal mode). `radios.tabs[].linkCarrier` identifies
 the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected`, `available`,
 `in use`, `saved`, `unavailable`, `sign-in required`, `connecting`, `disconnecting`, or `failed` — a lower-case,
 untranslated token. `serial` identifies the hardware separately from the stable workspace tab `id`;
@@ -3309,8 +3310,8 @@ Inspect enabled states and status tips before invoking. Opening a menu never act
 exercise failure recovery. Rename uses `connectionProfileName` and the existing profile editor.
 
 `titlebar showDiscovery` retains the searchable saved/discovered picker for inspection and restoration;
-its menus use the same actions. `connectManuallyRow` now opens Locations. The title-bar **+** also opens
-Locations, preserving the browsed context. In the connection dialog, `connectionRadioRestoreTab`
+its menus use the same actions. The title-bar **⋯ More radios** opens this drawer.
+`connectManuallyRow` opens Locations, preserving the browsed context. In the connection dialog, `connectionRadioRestoreTab`
 restores a saved tab and `connectionBackToStation` returns from IP recovery to Locations.
 
 ```json
@@ -4741,7 +4742,7 @@ The app must be connected to the instrument on the MCP server's host.
 See [the implementation and qualification guide](./rigexpert-usb-poc.md).
 
 AetherLab is embedded in the main window. Invoke `aetherLabAction` to open it,
-`radioSwitcherAetherLab` in the open **+** popover, or `radioTab_aetherlab`
+`radioSwitcherAetherLab` in the open **More radios** drawer, or `radioTab_aetherlab`
 after first use. Invoke `aetherLabReturn` to stop the analyzer session and
 restore the radio workspace. The `titlebar` tab model distinguishes
 `kind: "workspace"` / `status: "workspace"` from radio entries, and the radio

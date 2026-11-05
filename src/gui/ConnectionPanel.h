@@ -175,6 +175,7 @@ signals:
     void startupConnectUnavailable(const QString& reason);
     void operatorPreferencesRequested(const QJsonObject& preferences);
     void workspaceChanged();
+    void radioAvailabilityChanged();
     void explicitConnectionRequested();
     void connectionTargetRequested(const QJsonObject& target);
     void connectionNeedsAttention(const QString& reason);

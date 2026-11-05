@@ -951,6 +951,27 @@ int main(int argc, char** argv)
         bar->setActiveRadio(connected.id);
     }
 
+    {
+        RadioTabEntry a = connected; a.id = "recent-a";
+        RadioTabEntry b = inUse; b.id = "recent-b";
+        RadioTabEntry c = inUse; c.id = "recent-c";
+        RadioTabEntry d = inUse; d.id = "recent-d";
+        RadioTabEntry lab; lab.id = "aetherlab"; lab.kind = RadioTabEntry::Kind::Workspace;
+        const auto ids = [](const QList<RadioTabEntry>& entries) {
+            QStringList result; for (const auto& entry : entries) { result.append(entry.id); } return result;
+        };
+        check(ids(recentRadioShortcuts({a,b,c,d,lab}, {d.id,c.id}, a.id)) == QStringList{a.id,d.id,lab.id},
+            "two recent shortcuts retain the active radio and independent workspace tabs");
+        check(ids(recentRadioShortcuts({a,b,c,d}, {d.id,c.id}, {})) == QStringList{c.id,d.id},
+            "recent selection retains saved visual order after restart");
+        b.canCancel = true;
+        check(ids(recentRadioShortcuts({a,b,c,d}, {d.id,c.id}, a.id)) == QStringList{a.id,b.id},
+            "a pending target replaces the second shortcut without hiding the active radio");
+        b.canCancel = false; d.visibleInTabs = false;
+        check(ids(recentRadioShortcuts({a,b,c,d}, {d.id,c.id}, {})) == QStringList{a.id,c.id},
+            "hidden recent radios stay in the drawer and another shortcut fills the slot");
+    }
+
     // Reordering works without overflow and preserves widget/connection identity.
     {
         RadioTabBar reorder;
@@ -1101,7 +1122,7 @@ int main(int argc, char** argv)
             check(lab && rescan && lab->y() > rescan->y(), "AetherLab is offered below Rescan radios");
             check(heading != nullptr, "the popover exposes its heading");
             if (manual) {
-                check(manual->text() == QStringLiteral("Manage connections\u2026"),
+                check(manual->text() == QStringLiteral("Locations and connections\u2026"),
                       "the manual-connect ellipsis is valid Unicode");
                 check(!manual->styleSheet().contains(QStringLiteral("{{")),
                       "the popover row resolves every theme token");

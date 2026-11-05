@@ -2202,6 +2202,7 @@ void ConnectionPanel::onRadioDiscovered(const RadioInfo& radio)
             if (auto* item = m_radioList->item(i))
                 item->setText(formatLocalRadioLabel(radio));
             updateLocalPageState();
+            emit radioAvailabilityChanged();
             return;
         }
     }
@@ -2219,6 +2220,7 @@ void ConnectionPanel::onRadioDiscovered(const RadioInfo& radio)
         moveDemoRadioToBottom();
     }
     updateLocalPageState();
+    emit radioAvailabilityChanged();
 }
 
 void ConnectionPanel::moveDemoRadioToBottom()
@@ -2253,6 +2255,7 @@ void ConnectionPanel::onRadioUpdated(const RadioInfo& radio)
             if (auto* item = m_radioList->item(i))
                 item->setText(formatLocalRadioLabel(radio));
             refreshWorkspace();
+            emit radioAvailabilityChanged();
             return;
         }
     }
@@ -2264,6 +2267,7 @@ void ConnectionPanel::onRadioLost(const QString& serial)
         if (m_radios[i].serial == serial) {
             delete m_radioList->takeItem(i);
             m_radios.removeAt(i);
+            emit radioAvailabilityChanged();
             break;
         }
     }

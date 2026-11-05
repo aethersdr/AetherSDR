@@ -50,9 +50,9 @@ Connection forms retain the selected family's settings, including source interfa
 
 ## Using workspace radio tabs
 
-Saved radios appear as persistent tabs in the main window, including saved IP connections and radios that are currently unavailable. A radio's saved paths share a tab within its Location. The second line shows its connection state and Location. Discovery updates availability without removing saved tabs or changing their order.
+Two recent radio shortcuts appear in the main window, including saved IP connections and radios that are currently unavailable. A radio’s saved paths share a shortcut within its Location. The second line shows its connection state and Location. Discovery updates availability; the drawer keeps the full saved radio list.
 
-Drag a tab left or right to reorder it, like browser tabs. Release to save the order across restarts; **Esc** cancels the drag. Drag near an edge to scroll through an overflowing strip. The mouse wheel and dragging empty strip space also scroll it. Reordering never connects or disconnects a radio. Hidden tabs retain their saved position, newly added radios appear at the end, and the active radio stays where you placed it.
+Drag a tab left or right to reorder it, like browser tabs. Release to save the order across restarts; **Esc** cancels the drag. Drag near an edge to scroll through an overflowing strip. The mouse wheel and dragging empty strip space also scroll it. Reordering never connects or disconnects a radio. Hidden shortcuts retain their saved position. Recent choices determine which two radios are shown, while dragged order controls their left-to-right positions.
 
 Click a disconnected radio tab to connect through its preferred saved path with the operator selected in **Operating as**. Clicking the connected tab keeps the current operating view. When another radio is connected, clicking a destination tab opens **Switch radio**. Choose **Switch** to disconnect the current radio and connect the destination, or **Cancel** to keep operating. Switching is unavailable during transmit. The active highlight changes only after the destination connects.
 
@@ -71,9 +71,11 @@ Right-click a tab, or focus it and press **Shift+F10**, for these actions:
 | **Connection settings…** | Open the matching Location, radio and saved path in the connection window. |
 | **Remove from tabs** | Hide a disconnected tab while preserving its saved paths and radio settings. |
 
-To restore a hidden tab, open **+**, select the saved radio and choose **Radio options… → Add to tabs**. **Remove** in the saved radio menu deletes saved entries after confirmation; it is separate from **Remove from tabs**.
+To restore a hidden shortcut, open **⋯ More radios** and choose the saved radio, or use **Actions → Add to tabs** in the drawer. **Remove** in the saved radio menu deletes saved entries after confirmation; it is separate from **Remove from tabs**.
 
-The **+** button opens **Connect to a radio** at the browsed Location. The dialog remembers the radio selected within each Location and the preferred path chosen for each radio. Browsing another Location or operator while connected preserves the live connection and audio. A pending connection keeps the Location, path and operator captured when it was requested, even if browsing changes afterward.
+The title bar shows up to **two recent radio shortcuts**. The active radio stays visible, and a pending target temporarily uses the other slot. Recent choices and dragged shortcut order are saved across restarts. Other saved and nearby radios remain available in **⋯ More radios**, searchable by name, Location, model, address or status. **Locations and connections…** opens the full connection window.
+
+The dialog remembers the radio selected within each Location and the preferred path chosen for each radio. Browsing Locations preserves the live connection and audio; explicitly switching operators recalls local preferences. A pending connection keeps the Location and path captured when it was requested.
 
 If credentials need attention, the connection window opens at the relevant saved connection. A SmartLink sign-in continues the requested connection after authentication. Switching SmartLink accounts can require ending the existing remote session before sign-in. If a switch fails after disconnecting, **Retry** attempts the destination again and **Reconnect to [previous radio]** offers an explicit return.
 
@@ -85,7 +87,7 @@ If a saved IP path fails at startup, **Connect by IP** shows the failure with th
 
 <img src="/img/screens/radio-ip-startup-recovery.png" width="912" alt="Connect by IP shows a saved connection name, a documentation IP address, the failed connection reason and a Back to Locations button." />
 
-*An unavailable saved IP path keeps its connection name and offers Back to Locations.*
+*A failed saved IP path retains its name. Back to Locations returns to its saved radio.*
 
 ## Using operator profiles
 

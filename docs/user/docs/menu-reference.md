@@ -11,9 +11,9 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 - **Windows and Linux:** the menus sit behind the **☰** button at the far left of the title bar. Alt+letter mnemonics (Alt+F, Alt+S, …) still open each menu under the button, and every menu shortcut keeps working.
 - **macOS:** the menus are in the system menu bar at the top of the screen. **Radio Setup…** appears as **AetherSDR → Preferences…**.
 
-<img src="/img/screens/title-bar.png" width="1600" alt="The AetherSDR title bar. From left: the menu button, the AetherSDR logo, three radio tabs reading Hermes-Lite 2 available, FLX8600 FLEX-8600 connected KK7GWY (highlighted, with a green dot) and Simulator (not on the air) AetherSDR Demo available DEMO, and a plus button. On the right: a green PC Audio button, a speaker icon and slider at 100, a headphone icon and slider at 100, three panel layout buttons, and minimize, maximize and close buttons." />
+<img src="/img/screens/title-bar.png" width="1800" alt="The AetherSDR title bar with the connected simulator, a Home radio shortcut, More radios and audio controls." />
 
-*The title bar: the menu button, one tab per radio, PC Audio and volume controls, panel layout buttons and window controls.*
+*The title bar shows two recent radio shortcuts, More radios, PC Audio and volume controls.*
 
 ## File
 
@@ -172,6 +172,10 @@ The **UPDATE** badge appears when a newer AetherSDR release is available; click 
 
 ### Radio tabs
 
+<img src="/img/screens/radio-recent-drawer.png" width="456" alt="Radio drawer with Home, POTA and Cabin connections, search, per-radio actions and Locations and connections." />
+
+*More radios keeps all saved and nearby radios available beyond the two title-bar shortcuts.*
+
 <img src="/img/screens/radio-tab-context-menu-light.png" width="216" alt="Light-theme radio tab context menu with Rename highlighted and readable dark text on a light selection surface." />
 
 *Highlighted menu text uses the matching canon foreground and selection surface in the light theme.*
@@ -180,10 +184,10 @@ The **UPDATE** badge appears when a newer AetherSDR release is available; click 
 
 *Each radio tab has a context menu. Unavailable actions remain visible with a reason.*
 
-- Saved radio tabs remain in the workspace when discovery cannot find them. Line one shows the saved name; line two shows the state and Location in words.
+- Up to two recent radio shortcuts appear in the title bar. The active radio remains visible; a pending connection uses the other slot. Saved radios remain in the drawer when discovery cannot find them. Line one shows the saved name; line two shows the state and Location in words.
 - Click a disconnected tab to connect through its preferred saved path. If another radio is live, confirm **Switch** before it disconnects. Clicking the active tab keeps the current view.
 - Right-click a tab, or focus it and press **Shift+F10**, for **Connect** / **Switch to this radio…**, **Disconnect**, **Rename…**, **Connection settings…**, and **Remove from tabs**. A pending connection offers **Cancel connection**. Removing a tab keeps its saved connection; restore it through **Radio options… → Add to tabs** in the connection window.
-- **+** opens Locations at the browsed Location. Connection settings opens the matching saved radio and path. Browsing preserves the active connection; see [Location and Operator Profiles](./station-profiles.md#using-workspace-radio-tabs).
+- **⋯ More radios** opens the full saved/discovered radio drawer. **Locations and connections…** opens Locations at the browsed Location. Connection settings opens the matching saved radio and path. Browsing preserves the active connection; see [Location and Operator Profiles](./station-profiles.md#using-workspace-radio-tabs).
 - The dot on the active tab is the **radio-link indicator**. It pulses with discovery heartbeats and shows link loss in red. The tab also spells out **Link lost**. **View → Blink Status Indicator** controls blinking.
 - Drag tabs to reorder them; the order persists across restarts. **Esc** cancels a drag. When tabs no longer fit, drag near an edge to scroll while reordering, use the mouse wheel, or drag empty strip space.
 
@@ -225,7 +229,7 @@ In **Minimal Mode** the bar shrinks to the active radio tab and status badges; t
 
 **Help → About AetherSDR** opens a rounded, borderless window showing:
 
-<img src="/img/screens/about-window.png" width="400" alt="About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 license, the GitHub link, trademark notices and an OK button follow." />
+<img src="/img/screens/about-window.png" width="400" alt="About AetherSDR window. Below the AetherSDR logo it shows the version v26.10.1 and commit, the tagline Cross-platform SmartSDR-compatible client for FlexRadio transceivers, and a box listing Built with Qt 6.12.0 and C++20, the compile date and the GPU QRhi (OpenGL) renderer. A Contributor Logbook button, the copyright and GPLv3 licence, the GitHub link, trademark notices and an OK button follow." />
 
 *The About AetherSDR window: version, build and renderer details.*
 
