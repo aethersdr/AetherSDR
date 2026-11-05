@@ -45,8 +45,9 @@ class AnanNoiseBlankerTestAccess {
 public:
     static bool onDsp(AnanBackend& backend, const std::function<void(AnanRxDsp&)>& action)
     {
-        return QMetaObject::invokeMethod(backend.m_dsp, [&] {
-            action(*backend.m_dsp);
+        AnanRxDsp* const dsp = backend.rx1().dsp;
+        return QMetaObject::invokeMethod(dsp, [&] {
+            action(*dsp);
         }, Qt::BlockingQueuedConnection);
     }
 };
@@ -138,6 +139,9 @@ void testReadback()
     QJsonObject state = receiver(server);
     check(!state.value("hasChain").toBool() && !state.value("on").toBool(),
           "a cold DSP object does not claim an installed blanker");
+    check(state.value("ddc").toInt() == kRx1Route.ddc
+              && state.value("panId").toString() == QStringLiteral("anan-0"),
+          "the receiver names the DDC it runs on and the pan that shows it");
     check(backend->requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
               SliceDspRequest::Field::Enabled, true, 80}) == ReceiveDispatch::Dispatched,
           "typed desktop NB dispatch uses the existing ANAN worker");
