@@ -1,251 +1,144 @@
 #include "UsbCableModel.h"
-#include <QDebug>
-#include <QStringList>
 #include <QPointer>
 #include <QThread>
 
 namespace AetherSDR {
-
-UsbCableModel::UsbCableModel(QObject* parent)
-    : QObject(parent)
-{}
-
-QString UsbCableModel::decodeSpaces(const QString& s)
+namespace {
+template<typename T> void assign(T& target, const std::optional<T>& value)
 {
-    return QString(s).replace(QChar(0x7F), ' ');
+    if (value) { target = *value; }
+}
+}
+
+UsbCableModel::UsbCableModel(QObject* parent) : QObject(parent) {}
+UsbCableModel::~UsbCableModel()
+{
+    for (const UsbCable& cable : m_cables) { if (cable.lifetime) { cable.lifetime->retire(); } }
 }
 
 QString UsbCableModel::normalizeTypeFamily(const QString& type)
 {
-    if (type == "bcd" || type == "vbcd" || type == "bcd_vbcd") {
-        return "bcd";
-    }
-    return type;
+    return type == QLatin1String("vbcd") || type == QLatin1String("bcd_vbcd") ? QStringLiteral("bcd") : type;
 }
 
-// ── Status parsing ──────────────────────────────────────────────────────────
-
-void UsbCableModel::applyStatus(const QString& serialNumber,
-                                 const QMap<QString, QString>& kvs)
+void UsbCableModel::applyObservation(const UsbCableStatusValues& value,
+                                      const std::shared_ptr<SetupStatusLifetime>& identity)
 {
-    bool isNew = !m_cables.contains(serialNumber);
-
-    // A type change on an already-known cable is a distinct lifecycle event,
-    // not an in-place mutation — mirrors FlexLib's UsbCable.CableType setter,
-    // which removes the old cable object and lets the radio's next status
-    // reconstruct a brand-new one of the new type (UsbCable.cs / Radio.cs
-    // ParseUsbCableStatus). Without this, stale fields from the old type
-    // (e.g. cable.band, cable.bits[]) would survive into the new type's page.
-    // Compared by family (normalizeTypeFamily) so a BCD sub-type change
-    // (bcd <-> vbcd <-> bcd_vbcd) doesn't trip a spurious recreate — FlexLib's
-    // setter compares UsbCableType, where all three are the same value.
-    UsbCable preservedBase;
-    bool isFamilyChange = false;
-    if (!isNew && kvs.contains("type") &&
-        normalizeTypeFamily(kvs["type"]) != normalizeTypeFamily(m_cables[serialNumber].type)) {
-        isFamilyChange = true;
-        preservedBase = m_cables[serialNumber];
-        m_cables.remove(serialNumber);
-        emit cableRemoved(serialNumber);
-        isNew = true;
-    }
-
-    auto& cable = m_cables[serialNumber];
-    cable.serialNumber = serialNumber;
-
-    // Radio-assigned identity fields survive a type-change recreate — FlexLib's
-    // Radio.cs ParseUsbCableStatus reuses these across the change rather than
-    // blanking them, so a partial retype-confirmation status (missing
-    // name=/enable=) doesn't clear the user's cable name/enabled flag until a
-    // full status arrives. parseBaseStatus() below overwrites these if the
-    // status does carry fresh values.
-    if (isFamilyChange) {
-        cable.name = preservedBase.name;
-        cable.enabled = preservedBase.enabled;
-        cable.present = preservedBase.present;
-        cable.loggingEnabled = preservedBase.loggingEnabled;
-    }
-
-    // Detect type on first status
-    if (kvs.contains("type")) {
-        cable.type = kvs["type"];
-    }
-
-    // Check for bit-level status: "bit" key with value = bit number
-    // These arrive as: usb_cable <sn> bit <N> key=val ...
-    // RadioModel pre-parses this and calls applyStatus with special
-    // "bit_number" key and the bit-specific KVs.
-    if (kvs.contains("_bit_number")) {
-        int bitNum = kvs["_bit_number"].toInt();
-        if (bitNum >= 0 && bitNum < 8) {
-            auto& bit = cable.bits[bitNum];
-            for (auto it = kvs.begin(); it != kvs.end(); ++it) {
-                const QString& k = it.key();
-                const QString& v = it.value();
-                if (k == "_bit_number") continue;
-                if      (k == "enable")       bit.enabled = (v == "1");
-                else if (k == "source")       bit.source = v;
-                else if (k == "output")       bit.output = v;
-                else if (k == "polarity")     bit.activeHigh = (v == "active_high");
-                else if (k == "ptt_dependent") bit.pttDependent = (v == "1");
-                else if (k == "ptt_delay")    bit.pttDelayMs = v.toInt();
-                else if (k == "tx_delay")     bit.txDelayMs = v.toInt();
-                else if (k == "band")         bit.band = v;
-                else if (k == "low_freq")     bit.lowFreqMhz = v.toDouble();
-                else if (k == "high_freq")    bit.highFreqMhz = v.toDouble();
-                else if (k == "source_rx_ant") bit.sourceRxAnt = v;
-                else if (k == "source_tx_ant") bit.sourceTxAnt = v;
-                else if (k == "source_slice") bit.sourceSlice = v;
-            }
-        }
-        emit cableChanged(serialNumber);
+    if (value.serial.isEmpty() || value.serial.size() > 128 || value.bit < -1 || value.bit > 7) { return; }
+    if (value.removed) {
+        if (!identity || m_cables.value(value.serial).lifetime == identity) { handleRemoved(value.serial); }
         return;
     }
-
-    parseBaseStatus(cable, kvs);
-
-    // Type-specific parsing
-    if      (cable.type == "cat")         parseCatStatus(cable, kvs);
-    else if (cable.type == "bcd" ||
-             cable.type == "vbcd" ||
-             cable.type == "bcd_vbcd")    parseBcdStatus(cable, kvs);
-    else if (cable.type == "bit")         parseBitStatus(cable, kvs);
-    else if (cable.type == "passthrough") parsePassthroughStatus(cable, kvs);
-    else if (cable.type == "ldpa") {
-        parseLdpaStatus(cable, kvs);
+    if (identity && !identity->current()) { return; }
+    auto existing = m_cables.constFind(value.serial);
+    if (value.bit >= 0) {
+        if (existing == m_cables.cend() || existing->type != QLatin1String("bit")
+            || (identity && existing->lifetime != identity)) { return; }
+        ++m_changeRevision;
+        auto& bit = m_cables[value.serial].bits[value.bit];
+        assign(bit.enabled, value.enabled);
+        assign(bit.source, value.source);
+        assign(bit.sourceRxAnt, value.sourceRxAnt);
+        assign(bit.sourceTxAnt, value.sourceTxAnt);
+        assign(bit.sourceSlice, value.sourceSlice);
+        assign(bit.output, value.output);
+        assign(bit.activeHigh, value.activeHigh);
+        assign(bit.pttDependent, value.pttDependent);
+        assign(bit.pttDelayMs, value.pttDelayMs);
+        assign(bit.txDelayMs, value.txDelayMs);
+        assign(bit.band, value.band);
+        assign(bit.lowFreqMhz, value.lowFreqMhz);
+        assign(bit.highFreqMhz, value.highFreqMhz);
+        emit cableChanged(value.serial);
+        return;
     }
-
-    if (isNew) {
-        qDebug() << "UsbCableModel: new cable" << serialNumber << "type:" << cable.type
-                 << "name:" << cable.name;
-        emit cableAdded(serialNumber);
-    } else {
-        emit cableChanged(serialNumber);
+    const bool isNew = existing == m_cables.cend();
+    if (isNew && (!value.type || m_cables.size() >= 256)) { return; }
+    const bool retype = !isNew && ((identity && identity != existing->lifetime)
+        || (value.type && normalizeTypeFamily(*value.type) != normalizeTypeFamily(existing->type)));
+    UsbCable cable = isNew ? UsbCable{} : *existing;
+    const quint64 revision = ++m_changeRevision;
+    if (retype) {
+        cable.lifetime->retire();
+        const UsbCable base = cable;
+        cable = {};
+        if (!identity) {
+            cable.name = base.name;
+            cable.enabled = base.enabled;
+            cable.present = base.present;
+            cable.loggingEnabled = base.loggingEnabled;
+        }
+        m_cables.remove(value.serial);
+        const QPointer<UsbCableModel> alive(this);
+        emit cableRemoved(value.serial);
+        if (!alive || revision != m_changeRevision) { return; }
     }
+    if (isNew || retype) { cable.lifetime = identity ? identity : std::make_shared<SetupStatusLifetime>(); }
+    cable.serialNumber = value.serial;
+    assign(cable.type, value.type);
+    assign(cable.name, value.name);
+    assign(cable.enabled, value.enabled);
+    assign(cable.present, value.present);
+    assign(cable.loggingEnabled, value.loggingEnabled);
+    const QString family = normalizeTypeFamily(cable.type);
+    if (family == QLatin1String("cat") || family == QLatin1String("passthrough")) {
+        assign(cable.speed, value.speed);
+        assign(cable.dataBits, value.dataBits);
+        assign(cable.stopBits, value.stopBits);
+        assign(cable.parity, value.parity);
+        assign(cable.flowControl, value.flowControl);
+    }
+    if (family == QLatin1String("cat")) { assign(cable.autoReport, value.autoReport); }
+    if (family == QLatin1String("bcd")) { assign(cable.activeHigh, value.activeHigh); }
+    if (family == QLatin1String("ldpa")) {
+        assign(cable.ldpaBand, value.band);
+        assign(cable.preamp, value.preamp);
+    }
+    if (family == QLatin1String("cat") || family == QLatin1String("bcd")
+        || family == QLatin1String("bit") || family == QLatin1String("ldpa")) {
+        assign(cable.source, value.source);
+        assign(cable.sourceRxAnt, value.sourceRxAnt);
+        assign(cable.sourceTxAnt, value.sourceTxAnt);
+        assign(cable.sourceSlice, value.sourceSlice);
+    }
+    m_cables.insert(value.serial, cable);
+    if (isNew || retype) { emit cableAdded(value.serial); }
+    else { emit cableChanged(value.serial); }
 }
 
-void UsbCableModel::handleRemoved(const QString& serialNumber)
+void UsbCableModel::handleRemoved(const QString& serial)
 {
-    if (m_cables.remove(serialNumber)) {
-        qDebug() << "UsbCableModel: cable removed" << serialNumber;
-        emit cableRemoved(serialNumber);
-    }
+    const auto it = m_cables.find(serial);
+    if (it == m_cables.end()) { return; }
+    ++m_changeRevision;
+    if (it->lifetime) { it->lifetime->retire(); }
+    m_cables.erase(it);
+    emit cableRemoved(serial);
 }
 
 void UsbCableModel::clear()
 {
     const QStringList serials = m_cables.keys();
+    for (const UsbCable& cable : m_cables) { if (cable.lifetime) { cable.lifetime->retire(); } }
     m_cables.clear();
+    const quint64 revision = ++m_changeRevision;
     const QPointer<UsbCableModel> alive(this);
     for (const QString& serial : serials) {
         emit cableRemoved(serial);
-        if (!alive) { return; }
-    }
-}
-
-void UsbCableModel::parseBaseStatus(UsbCable& cable, const QMap<QString, QString>& kvs)
-{
-    for (auto it = kvs.begin(); it != kvs.end(); ++it) {
-        const QString& k = it.key();
-        const QString& v = it.value();
-        if      (k == "enable")     cable.enabled = (v == "1");
-        else if (k == "plugged_in") cable.present = (v == "1");
-        else if (k == "name")       cable.name = decodeSpaces(v);
-        else if (k == "log")        cable.loggingEnabled = (v == "1");
-    }
-}
-
-void UsbCableModel::parseCatStatus(UsbCable& cable, const QMap<QString, QString>& kvs)
-{
-    for (auto it = kvs.begin(); it != kvs.end(); ++it) {
-        const QString& k = it.key();
-        const QString& v = it.value();
-        if      (k == "speed")          cable.speed = v.toInt();
-        else if (k == "data_bits")      cable.dataBits = v.toInt();
-        else if (k == "parity")         cable.parity = v;
-        else if (k == "stop_bits")      cable.stopBits = v.toInt();
-        else if (k == "flow_control")   cable.flowControl = v;
-        else if (k == "source")         cable.source = v;
-        else if (k == "source_rx_ant")  cable.sourceRxAnt = v;
-        else if (k == "source_tx_ant")  cable.sourceTxAnt = v;
-        else if (k == "source_slice")   cable.sourceSlice = v;
-        else if (k == "auto_report")    cable.autoReport = (v == "1");
-    }
-}
-
-void UsbCableModel::parseBcdStatus(UsbCable& cable, const QMap<QString, QString>& kvs)
-{
-    for (auto it = kvs.begin(); it != kvs.end(); ++it) {
-        const QString& k = it.key();
-        const QString& v = it.value();
-        if      (k == "polarity")       cable.activeHigh = (v == "active_high");
-        else if (k == "source")         cable.source = v;
-        else if (k == "source_rx_ant")  cable.sourceRxAnt = v;
-        else if (k == "source_tx_ant")  cable.sourceTxAnt = v;
-        else if (k == "source_slice")   cable.sourceSlice = v;
-    }
-}
-
-void UsbCableModel::parseBitStatus(UsbCable& cable, const QMap<QString, QString>& kvs)
-{
-    // Cable-level Bit properties (source, etc.) come without "bit N" prefix
-    for (auto it = kvs.begin(); it != kvs.end(); ++it) {
-        const QString& k = it.key();
-        const QString& v = it.value();
-        if      (k == "source")         cable.source = v;
-        else if (k == "source_rx_ant")  cable.sourceRxAnt = v;
-        else if (k == "source_tx_ant")  cable.sourceTxAnt = v;
-        else if (k == "source_slice")   cable.sourceSlice = v;
-    }
-    // Per-bit status is handled via the _bit_number path in applyStatus()
-}
-
-void UsbCableModel::parsePassthroughStatus(UsbCable& cable, const QMap<QString, QString>& kvs)
-{
-    for (auto it = kvs.begin(); it != kvs.end(); ++it) {
-        const QString& k = it.key();
-        const QString& v = it.value();
-        if      (k == "speed")          cable.speed = v.toInt();
-        else if (k == "data_bits")      cable.dataBits = v.toInt();
-        else if (k == "parity")         cable.parity = v;
-        else if (k == "stop_bits")      cable.stopBits = v.toInt();
-        else if (k == "flow_control")   cable.flowControl = v;
-    }
-}
-
-void UsbCableModel::parseLdpaStatus(UsbCable& cable, const QMap<QString, QString>& kvs)
-{
-    for (auto it = kvs.begin(); it != kvs.end(); ++it) {
-        const QString& k = it.key();
-        const QString& v = it.value();
-        if (k == "band") {
-            cable.ldpaBand = v;  // "2" or "4"
-        } else if (k == "preamp") {
-            cable.preamp = (v == "1");
-        } else if (k == "source") {
-            // AetherSDR extension beyond the FlexLib authority (Principle I):
-            // FlexLib's UsbLdpaCable.cs writes source= on set but does NOT
-            // parse it back from status (only band/preamp are read). We read it
-            // in case the radio echoes it, but the value is unverified against
-            // the reference client — harmless if the radio never sends it. See
-            // the CAT/BCD/Bit paths, where FlexLib does round-trip source=.
-            cable.source = v;
-        } else if (k == "source_rx_ant") {
-            cable.sourceRxAnt = v;
-        } else if (k == "source_tx_ant") {
-            cable.sourceTxAnt = v;
-        } else if (k == "source_slice") {
-            cable.sourceSlice = v;
-        }
+        if (!alive || revision != m_changeRevision) { return; }
     }
 }
 
 void UsbCableModel::requestSetting(const QString& sn, UsbCableRequest::Field field,
-                                  const QString& text, int bit)
+                                  const QString& text, int bit,
+                                  const std::shared_ptr<SetupStatusLifetime>& expectedLifetime)
 {
     if (QThread::currentThread() != thread()) { return; }
     using Field = UsbCableRequest::Field;
     UsbCableRequest request{sn, bit, field, text};
+    request.expectedLifetime = expectedLifetime ? expectedLifetime : m_cables.value(sn).lifetime;
+    if (request.expectedLifetime != m_cables.value(sn).lifetime) { return; }
+    if (!request.expectedLifetime || !request.expectedLifetime->current()) { return; }
     bool valid = true;
     switch (field) {
     case Field::Enabled: case Field::AutoReport: case Field::Preamp: case Field::PttDependent:
@@ -267,7 +160,10 @@ void UsbCableModel::requestSetting(const QString& sn, UsbCableRequest::Field fie
 void UsbCableModel::requestRemoval(const QString& sn)
 {
     if (QThread::currentThread() != thread()) { return; }
-    emit controlRequested({sn, -1, UsbCableRequest::Field::Remove, std::monostate{}});
+    const auto lifetime = m_cables.value(sn).lifetime;
+    if (lifetime && lifetime->current()) {
+        emit controlRequested({sn, -1, UsbCableRequest::Field::Remove, std::monostate{}, lifetime});
+    }
 }
 
 } // namespace AetherSDR

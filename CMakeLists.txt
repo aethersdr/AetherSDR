@@ -908,6 +908,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexModelControls.cpp
     src/core/backends/flex/FlexSetupControls.cpp
+    src/core/backends/flex/FlexSetupStatus.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
     src/core/backends/flex/FlexCwxControls.cpp
@@ -1263,6 +1264,7 @@ set(MODEL_SOURCES
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
     src/models/RadioModel_Setup.cpp
+    src/models/RadioModel_SetupObservations.cpp
     src/models/RadioModel_Administration.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp

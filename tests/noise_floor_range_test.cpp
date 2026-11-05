@@ -1,3 +1,4 @@
+#include "FlexSetupStatusTestSupport.h"
 // SmartSDR 4.3 Noise Floor Range (#6656): validation, Flex capability, encode,
 // pan status decode, RadioModel admission and the Display-menu control.
 // Recording command sinks and injected status only: no sockets, radio or TX.
@@ -36,8 +37,7 @@ void license(RadioModel& radio, const QString& enabled)
     const Kvs kvs{{QStringLiteral("name"), QStringLiteral("noise_floor")},
                   {QStringLiteral("enabled"), enabled},
                   {QStringLiteral("reason"), QStringLiteral("PLUS")}};
-    QMetaObject::invokeMethod(&radio, "onStatusReceived", Qt::DirectConnection,
-                              Q_ARG(QString, QStringLiteral("license feature")), Q_ARG(Kvs, kvs));
+    FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("license feature"), kvs);
 }
 
 void reportRange(PanadapterModel& pan, const QString& value)

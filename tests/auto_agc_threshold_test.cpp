@@ -1,3 +1,4 @@
+#include "FlexSetupStatusTestSupport.h"
 // #6506: production receive routing and firmware status, injected without sockets.
 #include "TestSettingsProfile.h"
 #include "core/AgcTCalibrator.h"
@@ -58,8 +59,7 @@ void license(RadioModel& radio, const QString& enabled)
     const Kvs kvs{{QStringLiteral("name"), QStringLiteral("auto_agc_t")},
                   {QStringLiteral("enabled"), enabled},
                   {QStringLiteral("reason"), QStringLiteral("PLUS")}};
-    QMetaObject::invokeMethod(&radio, "onStatusReceived", Qt::DirectConnection,
-                              Q_ARG(QString, QStringLiteral("license feature")), Q_ARG(Kvs, kvs));
+    FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("license feature"), kvs);
 }
 
 SliceDelta report(std::optional<AgcThresholdMode> mode = AgcThresholdMode::Manual)
