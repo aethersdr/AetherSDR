@@ -4,10 +4,12 @@
 
 #include <QList>
 
+class QCheckBox;
 class QLabel;
 class QHBoxLayout;
 class QPlainTextEdit;
 class QPushButton;
+class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -35,6 +37,10 @@ public:
     // Lets the operator select and copy the texts (commands to paste).
     void setTextSelectable(bool on);
 
+    // A choice that goes with the answer, unchecked, below the texts; read
+    // it once the box closes.
+    QCheckBox* addCheckBox(const QString& text);
+
     QPushButton* addButton(const QString& text, Role role);
     // The button Return clicks; also takes the focus when the box opens.
     // Every box sets one; without it nothing decides where the focus starts.
@@ -50,6 +56,7 @@ private:
     QLabel*             m_text{nullptr};
     QLabel*             m_info{nullptr};
     QPlainTextEdit*     m_details{nullptr};
+    QVBoxLayout*        m_checks{nullptr};
     QHBoxLayout*        m_buttons{nullptr};
     QList<QPushButton*> m_added;
     QPushButton*        m_default{nullptr};

@@ -208,7 +208,7 @@ int main(int argc, char** argv)
 
     keyer.pushStatus(VoiceKeyer::Disabled, -1);
     report("disabled_status_text",
-           status->text() == QString::fromUtf8("Disabled · SmartSDR+ required"),
+           status->text() == QString::fromUtf8("Disabled · not licensed (SmartSDR+)"),
            status->text().toStdString());
 
     emit keyer.commandFailed(QStringLiteral("rec_start"), 3, 1u,

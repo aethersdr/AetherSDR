@@ -54,6 +54,8 @@ public:
     }
     static void cancel(AtuPreTuneDialog& dialog) { dialog.cancelProgram(); }
     static QPushButton* tune(AtuPreTuneDialog& dialog) { return dialog.m_tuneBtn; }
+    static QPushButton* start(AtuPreTuneDialog& dialog) { return dialog.m_startBtn; }
+    static bool active(const AtuPreTuneDialog& dialog) { return dialog.m_sweepActive; }
 };
 
 } // namespace AetherSDR
@@ -305,6 +307,90 @@ void testAtuSuccessTogglesToBypass()
                && commandSpy.takeLast().at(0).toBool());
 }
 
+void testAtuRedrawPreservesMatchedFrequency()
+{
+    for (const QString& result : {QStringLiteral("TUNE_SUCCESSFUL"), QStringLiteral("TUNE_OK")}) {
+        TransmitModel model;
+        TxApplet applet;
+        applet.setTransmitModel(&model);
+        auto* atu = qobject_cast<QPushButton*>(namedWidget(applet, QStringLiteral("ATU tune")));
+        if (!atu) {
+            report("ATU redraw regression button exists", false);
+            return;
+        }
+        QSignalSpy commands(&model, &TransmitModel::atuCommandIssued);
+        TransmitDelta matched;
+        matched.transmitFreq = 14.100;
+        matched.atuStatusRaw = result;
+        model.applyChanges(matched);
+        model.setAtuAvailable(false);
+        model.setAtuAvailable(true);
+        atu->click();
+        report("same-frequency availability redraw retains bypass",
+               commands.size() == 1 && !commands.takeFirst().at(0).toBool());
+
+        TransmitDelta moved;
+        moved.transmitFreq = 14.200;
+        model.applyChanges(moved);
+        model.setAtuAvailable(false);
+        model.setAtuAvailable(true);
+        atu->click();
+        report("new-frequency availability redraw requests a matching cycle",
+               commands.size() == 1 && commands.takeFirst().at(0).toBool());
+
+        TransmitDelta memory;
+        memory.memoriesEnabled = true;
+        model.applyChanges(memory);
+        TransmitDelta apd;
+        apd.apdEnabled = true;
+        model.applyChanges(apd);
+        atu->click();
+        report("memory and APD redraws do not retag a previous match",
+               commands.size() == 1 && commands.takeFirst().at(0).toBool());
+
+        TransmitDelta progress;
+        progress.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS");
+        model.applyChanges(progress);
+        matched.transmitFreq = 14.200;
+        model.applyChanges(matched);
+        atu->click();
+        report("actual matching result pins the new frequency",
+               commands.size() == 1 && !commands.takeFirst().at(0).toBool());
+
+        model.resetState();
+        matched.transmitFreq = 14.300;
+        model.applyChanges(matched);
+        atu->click();
+        report("first match after reset replaces the old session frequency",
+               commands.size() == 1 && !commands.takeFirst().at(0).toBool());
+    }
+}
+
+void testAtuMenuHonoursTransverterAvailability()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    TransmitDelta memory;
+    memory.memoriesEnabled = true;
+    model.applyChanges(memory);
+    model.setAtuAvailable(false);
+    QMenu unavailable;
+    applet.buildAtuContextMenu(unavailable);
+    for (QAction* action : unavailable.actions()) {
+        report("transverter ATU menu action is disabled with an accessible reason",
+               !action->isEnabled()
+                   && action->toolTip().contains(QStringLiteral("transverter TX path"))
+                   && action->statusTip() == action->toolTip());
+    }
+    model.setAtuAvailable(true);
+    QMenu restored;
+    applet.buildAtuContextMenu(restored);
+    for (QAction* action : restored.actions()) {
+        report("normal antenna restores ATU menu actions", action->isEnabled());
+    }
+}
+
 // Inject the production backend seam, not a firmware peer. No sockets or RF.
 class TxActionBackend final : public IRadioBackend {
 public:
@@ -315,6 +401,8 @@ public:
         RadioCapabilities caps;
         caps.canTransmit = true;
         caps.hasTuner = true;
+        // The MIDI two-tone case below exercises a radio that has the generator.
+        caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{QStringLiteral("test")};
         return caps;
     }
     bool isConnected() const override { return connected; }
@@ -747,6 +835,33 @@ void testSweepRetainsOriginalAuthority()
     report("operator cancellation fences an ATU point not admitted yet", recorder->commands.isEmpty());
 }
 
+void testPreTuneFollowsTransverterPath()
+{
+    RadioModel radio;
+    auto backend = std::make_unique<TxActionBackend>();
+    backend->connected = true;
+    radio.setBackendForTest(std::move(backend), QStringLiteral("test"));
+    radio.transmitModel().setTxModeGetter([] { return QStringLiteral("USB"); });
+    {
+        AtuPreTuneDialog idle(&radio, nullptr);
+        radio.transmitModel().setAtuAvailable(false);
+        QPushButton* start = TxAppletPowerReconciliationTestAccess::start(idle);
+        report("open pre-tune sweep cannot start on a transverter output",
+               !start->isEnabled()
+                   && start->toolTip().contains(QStringLiteral("transverter output"))
+                   && start->accessibleDescription() == start->toolTip());
+        radio.transmitModel().setAtuAvailable(true);
+        report("pre-tune sweep stays closed until it is reopened", !start->isEnabled());
+    }
+    AtuPreTuneDialog running(&radio, nullptr);
+    const auto controller = std::make_shared<TxController>(&radio);
+    TxAppletPowerReconciliationTestAccess::prepareSweep(running, controller);
+    report("pre-tune sweep is running", TxAppletPowerReconciliationTestAccess::active(running));
+    radio.transmitModel().setAtuAvailable(false);
+    report("running pre-tune sweep stops on a transverter output",
+           !TxAppletPowerReconciliationTestAccess::active(running));
+}
+
 void testAtuCapabilityUsesThreeVisibleStates()
 {
     TransmitModel model;
@@ -864,6 +979,59 @@ void testAtuCapabilityUsesThreeVisibleStates()
                && memory->styleSheet() != inactiveMemoryStyle
                && success->styleSheet() != activeSuccessStyle
                && memory->styleSheet() != activeMemoryStyle);
+}
+
+void testTransverterAtuAvailability()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    QWidget* atu = namedWidget(applet, QStringLiteral("ATU tune"));
+    QWidget* mem = namedWidget(applet, QStringLiteral("ATU memories"));
+    QWidget* tune = namedWidget(applet, QStringLiteral("Tune"));
+    QLabel* success = labelWithText(applet, QStringLiteral("Success"));
+    QLabel* bypass = labelWithText(applet, QStringLiteral("Byp"));
+    QLabel* memory = labelWithText(applet, QStringLiteral("Mem"));
+    report("transverter gate widgets exist", atu && mem && tune && success && bypass && memory);
+    if (!atu || !mem || !tune || !success || !bypass || !memory) {
+        return;
+    }
+    TransmitDelta active;
+    active.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL");
+    active.memoriesEnabled = true;
+    active.usingMemory = true;
+    model.applyChanges(active);
+    const QString successStyle = success->styleSheet();
+    const QString memoryStyle = memory->styleSheet();
+    ModelControlWireSpy commands(&model);
+    QSignalSpy atuIntents(&model, &TransmitModel::atuCommandIssued);
+    model.setAtuAvailable(false);
+    report("transverter path dims ATU and MEM without hiding them",
+           !atu->isEnabled() && !mem->isEnabled() && !atu->isHidden() && !mem->isHidden());
+    report("transverter path dims all three ATU indicators",
+           !success->isEnabled() && !bypass->isEnabled() && !memory->isEnabled()
+               && success->styleSheet() != successStyle && memory->styleSheet() != memoryStyle);
+    report("transverter path explains ATU and MEM unavailability accessibly",
+           atu->toolTip().contains(QStringLiteral("transverter TX path"))
+               && atu->accessibleDescription() == atu->toolTip()
+               && mem->accessibleDescription() == atu->toolTip());
+    report("transverter path preserves carrier TUNE", tune->isEnabled());
+    report("availability update sends no commands", commands.isEmpty() && atuIntents.isEmpty());
+    report("transverter path preserves authoritative memory state",
+           model.memoriesEnabled() && model.usingMemory());
+    model.setHasTuner(false);
+    model.setHasTuner(true);
+    model.setHasTunerMemories(false);
+    model.setHasTunerMemories(true);
+    report("capability updates cannot re-enable a transverter ATU",
+           !atu->isEnabled() && !mem->isEnabled() && !success->isEnabled());
+    model.setAtuAvailable(true);
+    report("normal antenna restores ATU controls and reported indicators",
+           atu->isEnabled() && mem->isEnabled() && success->isEnabled()
+               && bypass->isEnabled() && memory->isEnabled()
+               && success->styleSheet() == successStyle && memory->styleSheet() == memoryStyle
+               && atu->toolTip().isEmpty() && atu->accessibleDescription().isEmpty()
+               && mem->accessibleDescription().isEmpty());
 }
 
 void testTuneAvailability()
@@ -1108,13 +1276,17 @@ int main(int argc, char** argv)
     testCapabilityPowerScaleHonoursBandCeiling();
     testForwardPowerResponseCapabilityIsConsumed();
     testAtuSuccessTogglesToBypass();
+    testAtuRedrawPreservesMatchedFrequency();
+    testAtuMenuHonoursTransverterAvailability();
     testMidiProducerDispatch();
     testScopedControllerActions();
     testScopedPointerActivation();
     testOptionalReceiveControlActivation();
     testModemReceiveProgramAuthority();
     testSweepRetainsOriginalAuthority();
+    testPreTuneFollowsTransverterPath();
     testAtuCapabilityUsesThreeVisibleStates();
+    testTransverterAtuAvailability();
     testTuneAvailability();
     testAtuContextMenuExplainsWhyPreTuneIsDisabled();
     testMemButtonFollowsReadbackOnly();

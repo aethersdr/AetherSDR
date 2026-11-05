@@ -6,6 +6,7 @@
 // at its original constructor position.
 
 #include "MainWindow.h"
+#include "models/AntennaAnalyzerModel.h"
 
 #include "MeterApplet.h"
 
@@ -21,6 +22,7 @@
 #include "PersistentDialog.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
+#include "RadioTabBar.h"
 #include "RfGainRestore.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with ConnectionPanel
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
@@ -48,6 +50,7 @@
 #include "PanadapterApplet.h"
 #include "PanFrameGuard.h"
 #include "CatControlApplet.h"
+#include "models/ReceiverSlotCount.h"
 #include "ClientChainApplet.h"
 #include "DaxApplet.h"
 #include "DaxIqApplet.h"
@@ -87,6 +90,7 @@
 #include <QMessageBox>
 #include <QAbstractButton>
 #include <QCheckBox>
+#include <QColor>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QPointer>
@@ -97,6 +101,49 @@
 #include <cmath>
 
 namespace AetherSDR {
+
+void MainWindow::refreshAdaptiveThrottleChip()
+{
+    if (!m_titleBar) {
+        return;
+    }
+    const bool enabled = AppSettings::instance()
+        .value("AdaptiveThrottleEnabled", "False").toString() == "True";
+    // Unticking the box doesn't lift a cap already in force:
+    // RadioModel::applyAdaptiveFrameRate() stops adjusting, so the cap stays
+    // until disconnect.  The chip stays with it, so the cap is never hidden.
+    const QString capColor = m_adaptiveFpsCap > 0
+        ? adaptiveFpsCapColor(m_adaptiveFpsCap) : QString();
+    m_titleBar->radioTabBar()->setAdaptiveThrottle(
+        enabled || m_adaptiveFpsCap > 0, m_adaptiveFpsCap,
+        capColor.isEmpty() ? QColor() : QColor(capColor));
+    m_titleBar->setThrottleFlashColor(capColor);
+}
+
+void MainWindow::refreshNetworkQualityIndicators()
+{
+    if (!m_networkLabel || !m_networkStatusBlock) {
+        return;
+    }
+    const QString quality = m_radioModel.networkQuality();
+    const QString color = networkQualityColor(quality);
+    if (m_titleBar) {
+        m_titleBar->radioTabBar()->setLinkQuality(
+            quality == QStringLiteral("Off") ? QColor() : QColor(color), quality);
+    }
+    const bool dwellPending = m_adaptiveFpsCap > 0 && m_radioModel.pendingThrottleLift();
+    const QString capSuffix = m_adaptiveFpsCap > 0
+        ? (dwellPending
+           ? QStringLiteral(" · %1 fps cap (restoring)").arg(m_adaptiveFpsCap)
+           : QStringLiteral(" · %1 fps cap").arg(m_adaptiveFpsCap))
+        : QString();
+    m_networkLabel->setText(QString("[<span style='color:%1'>%2</span>]")
+        .arg(color, quality + capSuffix));
+    const QString tooltip = buildNetworkTooltip(m_radioModel, m_adaptiveFpsCap, dwellPending);
+    m_networkLabel->setToolTip(tooltip);
+    m_networkStatusBlock->setToolTip(tooltip);
+    refreshAdaptiveThrottleChip();
+}
 
 namespace {
 QString defaultPanLayoutForCount(int panCount)
@@ -275,6 +322,11 @@ void MainWindow::refreshRadioTabs()
                 || path.value("id") == m_activeRadioTarget.value("path").toObject().value("id")
             : !serial.isEmpty() && entry.serial == serial && path.value("family").toString() == m_radioModel.family();
         if (connected && matchesActive && activeId.isEmpty()) {
+            const QString previousModel = entry.model;
+            entry.model = m_radioModel.model();
+            if (entry.name.isEmpty() || entry.name == previousModel) {
+                entry.name = m_radioModel.nickname().isEmpty() ? entry.model : m_radioModel.nickname();
+            }
             entry.status = m_radioSwitchPhase == QLatin1String("disconnecting") ? RadioTabStatus::Disconnecting : RadioTabStatus::Connected;
             activeId = entry.id;
             entry.canConnect = false;
@@ -315,9 +367,18 @@ void MainWindow::refreshRadioTabs()
     std::stable_sort(tabs.begin(), tabs.end(), [&ranks, &savedOrder](const RadioTabEntry& a, const RadioTabEntry& b) {
         return ranks.value(a.id, savedOrder.size()) < ranks.value(b.id, savedOrder.size());
     });
+    if (m_aetherLabWidget) {
+        RadioTabEntry lab;
+        lab.kind = RadioTabEntry::Kind::Workspace;
+        lab.id = QStringLiteral("aetherlab");
+        lab.name = tr("AetherLab");
+        lab.detail = tr("Antenna Analyzer · USB");
+        tabs.append(lab);
+    }
     m_titleBar->setRadioTabs(tabs);
     m_titleBar->setDiscoveredRadios(picker);
     m_titleBar->setActiveRadio(activeId);
+    if (m_aetherLabActive) { m_titleBar->setActiveRadio(QStringLiteral("aetherlab")); }
 }
 
 void MainWindow::beginExplicitRadioChoice()
@@ -839,6 +900,8 @@ void MainWindow::wireDiscovery()
             [this](const QString&) { scheduleRadioTabRefresh(); });
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
             [this](bool) { scheduleRadioTabRefresh(); });
+    connect(&m_radioModel, &RadioModel::infoChanged,
+            this, &MainWindow::scheduleRadioTabRefresh);
     connect(&m_smartLink, &SmartLinkClient::radioListReceived, this,
             [this](const QList<WanRadioInfo>& radios) {
         m_smartLinkRadios = radios;
@@ -860,6 +923,8 @@ void MainWindow::wireDiscovery()
 
     if (m_titleBar) {
         connect(m_titleBar, &TitleBar::radioTabActivated, this, [this](const QString& id) {
+            if (id == QLatin1String("aetherlab")) { showAetherLab(); return; }
+            returnFromAetherLab();
             if (m_radioModel.isConnected() && m_titleBar->radioTabBar()->activeRadioId() == id) { return; }
             m_connPanel->requestConnectionTarget(id);
         });
@@ -908,6 +973,8 @@ void MainWindow::wireDiscovery()
             dialog->show();
             editor->setFocus(Qt::OtherFocusReason);
         });
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::aetherLabRequested,
+                this, &MainWindow::showAetherLab);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::rescanRequested,
                 m_connPanel, &ConnectionPanel::retryDiscoveryRequested);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::radioActionRequested,
@@ -1069,6 +1136,10 @@ void MainWindow::disconnectFromRadioByUser()
     s.remove("LastConnectedRadioSerial");
     s.remove("LastRoutedRadioIp");
     s.save();
+    // Lift any adaptive cap while the link is up, so the radio keeps the
+    // operator's rates rather than the cap for the next session.
+    if (m_adaptiveThrottleActive)
+        restorePreCapPanRates();
     m_radioModel.disconnectFromRadio();
 }
 
@@ -1331,6 +1402,12 @@ void MainWindow::wireRadioModel()
     // set its visibility.
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, &MainWindow::applyCapabilitiesToUi);
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, m_audio,
+            [this](bool connected, const RadioCapabilities& capabilities) {
+        const auto policy = connected ? capabilities.receiveAudioPlayout : std::nullopt;
+        m_audio->setReceiveJitterBuffer(policy ? policy->prefillMs : 0,
+                                       policy ? policy->bufferCapMs : 0);
+    });
     // Icom's connected edge precedes its verified CI-V model identity. Re-run
     // only when the canonical capability picture changes so the family-wide
     // experimental treatment can settle model-specifically without exposing a
@@ -2777,6 +2854,45 @@ void MainWindow::wirePanLifecycle()
 
 }
 
+void MainWindow::applyCatPortCount()
+{
+    auto& s = AppSettings::instance();
+    const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
+
+    for (int i = 0; i < kCatPorts; ++i) {
+        if (!catPort(i)) {
+            continue;
+        }
+
+        const QString prefix = QString("CatPort_%1_").arg(i);
+        const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
+        const QString d = s.value(prefix + "Dialect", "Rigctld").toString();
+        const CatDialect dialect = dialectFromKey(d);
+        const QString defaultPort = dialect == CatDialect::OTRSP
+            ? QString::number(CatPort::kOtrspDefaultPort) : QString();
+        const QString savedPort = s.value(prefix + "Port", "").toString();
+        const int portNum = (savedPort.isEmpty() ? defaultPort : savedPort).toInt();
+        // CAT ports are independent control channels, not one port per receiver.
+        const bool shouldRun = masterOn && portEnabled && portNum >= 1024 && portNum <= 65535;
+
+        if (shouldRun && !catPort(i)->isRunning()) {
+            catPort(i)->setDialect(dialect);
+            catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+            catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
+            catPort(i)->start(static_cast<quint16>(portNum));
+        } else if (!shouldRun
+                   && (catPort(i)->isRunning() || !catPort(i)->errorString().isEmpty())) {
+            catPort(i)->stop();
+        }
+    }
+
+    auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
+    if (applet) {
+        applet->setCatEnabled(masterOn);
+        applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
+    }
+}
+
 void MainWindow::wireCatPorts()
 {
     // ── Unified CAT ports (kCatPorts slots, configured from settings) ───────────
@@ -2793,9 +2909,7 @@ void MainWindow::wireCatPorts()
         const QString prefix = QString("CatPort_%1_").arg(i);
         auto& s = AppSettings::instance();
         QString d = s.value(prefix + "Dialect", "Rigctld").toString();
-        CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
-                        : (d == "TS2000")  ? CatDialect::TS2000
-                        : CatDialect::Rigctld;
+        CatDialect dial = dialectFromKey(d);
         catPort(i)->setDialect(dial);
         catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
         catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
@@ -2832,9 +2946,16 @@ void MainWindow::wireCatPorts()
     // through a context-bound queued connection carrying the TX permit.
     auto* tci = new TciServer(&m_radioModel, nullptr);
     tci->setAudioEngine(m_audio);
+    connect(m_titleBar, &TitleBar::pcAudioToggled, tci, &TciServer::updateLineOutCapture);
     m_session->setTciServer(tci);
     m_appletPanel->tciApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->tciApplet()->setTciServer(tciServer());
+    // `rx_ctun_ex` (Thetis CTUN) drives center lock, the inverse switch. A TCI
+    // client is not the operator: it changes the live lock only, never the
+    // saved preference, so it does not outlive the session.
+    tci->setCenterLockHandlers(
+        [this](int sliceId, bool locked) { setSessionCenterLockForSlice(sliceId, locked); },
+        [this](int sliceId) { return centerLockActiveForSlice(m_radioModel.slice(sliceId)); });
     // TCI RX row count follows the radio's slice capacity too (#4854 review).
     if (auto* tciApplet = m_appletPanel->tciApplet()) {
         tciApplet->setMaxDaxChannels(m_radioModel.maxSlices());
@@ -3300,6 +3421,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             };
         }
         return tciServer()->routingSnapshot();
+    });
+    m_automation->setLabHandler([this](const QString& action, const QString& value) {
+        return antennaAnalyzerModel()->automation(action, value);
     });
     m_automation->setDeviceDiagnosticsHandler([this](const QString& diagnostic) {
         if (diagnostic != QLatin1String("ulanzi")

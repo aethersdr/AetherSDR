@@ -944,8 +944,8 @@
           "optional": true
         }
       ],
-      "caption": "The TCI Server applet in the applet panel.",
-      "alt": "TCI Server applet. Level bars for RX1, assigned to Slice A, RX2 to RX4, unassigned, and TX, assigned to Slice A, sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server."
+      "caption": "The TCI Server applet with separate Line Out TX inclusion and PC Audio-off consent controls.",
+      "alt": "TCI Server applet with RX1 and TX level meters, unchecked Include TX (Line Out) and Line Out with PC Audio off controls, a visible mutes radio outputs warning, port 50001, and a Disabled button."
     },
     {
       "id": "dax-applet",
@@ -1935,7 +1935,7 @@
         "target": "MemoryDialog"
       },
       "caption": "The Memory Channels window, listing the memories stored in the radio.",
-      "alt": "Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KK7GWY, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected."
+      "alt": "Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KI4TTZ, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected."
     },
     {
       "id": "keyboard-shortcuts",
@@ -2346,36 +2346,36 @@
           "_sleep": 1.5
         },
         {
-          "wait_visible": "QDialog"
+          "wait_visible": "netEditorDialog"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QLineEdit",
+          "target": "netEditorDialog/QLineEdit",
           "action": "setText",
           "value": "Tuesday 20 m Net"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Thursday",
+          "target": "netEditorDialog/Thursday",
           "action": "setChecked",
           "value": "false",
           "_allow_fail": true
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Tuesday",
+          "target": "netEditorDialog/Tuesday",
           "action": "setChecked",
           "value": "true"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QDoubleSpinBox",
+          "target": "netEditorDialog/QDoubleSpinBox",
           "action": "setValue",
           "value": "14.250"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/OK",
+          "target": "netEditorDialog/OK",
           "action": "click",
           "_sleep": 1.0
         },
@@ -2386,36 +2386,36 @@
           "_sleep": 1.5
         },
         {
-          "wait_visible": "QDialog"
+          "wait_visible": "netEditorDialog"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QLineEdit",
+          "target": "netEditorDialog/QLineEdit",
           "action": "setText",
           "value": "Sunday 20 m Net"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Thursday",
+          "target": "netEditorDialog/Thursday",
           "action": "setChecked",
           "value": "false",
           "_allow_fail": true
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Sunday",
+          "target": "netEditorDialog/Sunday",
           "action": "setChecked",
           "value": "true"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QDoubleSpinBox",
+          "target": "netEditorDialog/QDoubleSpinBox",
           "action": "setValue",
           "value": "14.300"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/OK",
+          "target": "netEditorDialog/OK",
           "action": "click",
           "_sleep": 1.0
         }
@@ -2424,7 +2424,7 @@
         "target": "NetSchedulerDialog"
       },
       "caption": "The Net Scheduler with two weekly nets added.",
-      "alt": "Net Scheduler window. A table with columns On, Name, Repeats, Next, Frequency and Mode lists two nets: Tuesday 20 m Net, weekly, 14.2500 MHz USB, and Sunday 20 m Net, weekly, 14.3000 MHz USB, the second selected. Add…, Edit…, Remove, Disable, Tune Now, Import… and Export… buttons run along the bottom."
+      "alt": "Net Scheduler window with its title in the canon header and a round close button in the top-right corner. A table with columns On, Name, Repeats, Next, Frequency and Mode lists two nets: Tuesday 20 m Net, weekly, 14.2500 MHz USB, and Sunday 20 m Net, weekly, 14.3000 MHz USB, the second selected. Add…, Edit…, Remove, Disable, Tune Now, Import… and Export… buttons run along the bottom."
     },
     {
       "id": "net-scheduler-add-net",
@@ -2447,47 +2447,47 @@
           "_sleep": 1.5
         },
         {
-          "wait_visible": "QDialog"
+          "wait_visible": "netEditorDialog"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QLineEdit",
+          "target": "netEditorDialog/QLineEdit",
           "action": "setText",
           "value": "Tuesday 20 m Net"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Thursday",
+          "target": "netEditorDialog/Thursday",
           "action": "setChecked",
           "value": "false",
           "_allow_fail": true
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/Tuesday",
+          "target": "netEditorDialog/Tuesday",
           "action": "setChecked",
           "value": "true"
         },
         {
           "cmd": "invoke",
-          "target": "QDialog/QDoubleSpinBox",
+          "target": "netEditorDialog/QDoubleSpinBox",
           "action": "setValue",
           "value": "14.250"
         }
       ],
       "grab": {
-        "target": "QDialog"
+        "target": "netEditorDialog"
       },
       "cleanup": [
         {
           "cmd": "invoke",
-          "target": "QDialog/Cancel",
+          "target": "netEditorDialog/Cancel",
           "action": "click",
           "_sleep": 1.0
         }
       ],
       "caption": "Adding a net: name, repeat pattern, time, reminder and frequency.",
-      "alt": "Add Net dialog. Name: Tuesday 20 m Net. Repeats Weekly every 1 week(s), On with day buttons M, T, W, T, F, S, S. At 8:00 PM, Etc/UTC. Remind me 10 minutes before. Frequency 14.250000 MHz, USB, with a Capture current VFO button. Filter 100 Hz to 2800 Hz, an empty Notes field, the next occurrence in blue, and OK and Cancel buttons."
+      "alt": "Add Net dialog with its title in the canon header and a round close button in the top-right corner. Name: Tuesday 20 m Net. Repeats Weekly every 1 week(s), On with day buttons M, T, W, T, F, S, S. At 8:00 PM, Etc/UTC. Remind me 10 minutes before. Frequency 14.250000 MHz, USB, with a Capture current VFO button. Filter 100 Hz to 2800 Hz, an empty Notes field, the next occurrence in blue, and OK and Cancel buttons."
     },
     {
       "id": "connect-dialog",
@@ -3837,7 +3837,7 @@
     {
       "id": "tailnet-remote-access",
       "page": "tailscale-remote-access",
-      "anchor_heading": "Part 4 — Join the radio to your tailnet",
+      "anchor_heading": "Part 4 — Sign the radio in to your tailnet",
       "settle": 2,
       "steps": [
         {
@@ -3861,14 +3861,38 @@
       "grab": {
         "target": "TailnetShimDialog"
       },
-      "caption": "The Remote Access window for the flex-tailnet-shim container. Tailnet names, addresses and station device addresses are blacked out.",
-      "alt": "Remote Access window. The status line reads On your tailnet, container 0.4.0, 0 remote session(s), above an explanation of remote access over Tailscale. The Tailnet group shows the tailnet name and address (both blacked out) with a Copy button, Remote sessions 0 and Container version 0.4.0. Join your tailnet has an Auth key field (placeholder tskey-auth-...), Machine name flx8600, a Who may connect field (placeholder you@example.com, tag:operators), a note on single-use keys, and Save Access List and Change Key buttons. Station devices lists the devices found on the radio's network (blacked out) with a Share the devices found here over the tailnet checkbox, an Other devices field and Save Sharing. An amber note about the admin token and Refresh, Sign Out of Tailnet and Done buttons close the window.",
+      "caption": "The Remote Access window with the radio on the tailnet. Tailnet names, addresses and station device addresses are blacked out.",
+      "alt": "Remote Access window. The status line reads On your tailnet, container 0.5.0, 0 remote session(s), above an explanation of remote access over Tailscale. The Tailnet group shows the tailnet name and address (both blacked out) with a Copy button, Remote sessions 0, Container version 0.5.0 and Sign-in expires Thursday, April 29, 2027, with a note on turning off key expiry in the Tailscale admin console. Station devices lists a Tuner Genius XL and an Antenna Genius (addresses blacked out) with a Share the devices found here over the tailnet checkbox, an Other devices field, a note that their routes are offered but not yet confirmed, and Save Sharing. Refresh, Disconnect and Done close the window.",
       "redact": [
         [
-          150,
-          716,
-          400,
-          22
+          167,
+          208,
+          163,
+          20
+        ],
+        [
+          167,
+          238,
+          85,
+          20
+        ],
+        [
+          265,
+          455,
+          85,
+          16
+        ],
+        [
+          257,
+          470,
+          85,
+          16
+        ],
+        [
+          188,
+          562,
+          359,
+          17
         ]
       ]
     },

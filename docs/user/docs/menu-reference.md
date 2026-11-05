@@ -79,7 +79,7 @@ See [Profile Management](./profile-management.md).
 | **FreeDV Reporter...** | FreeDV Reporter station list. |
 | **Net Scheduler...** | See [Net Scheduler](./net-scheduler.md). |
 | **Memory...** | See [Memory Channels](./memory-channels.md). |
-| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only). |
+| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only), and edit a Docker container's [environment](./waveform-environment.md). **Install** adds the [WSPR receiver](./wspr-receiver.md). Its bottom bar can install [Radio Health Tools](./radio-health-tools.md) and show the radio's free storage, memory and CPU. |
 | **Wideband Bandscope...** | The radio's converter view before tuning; dimmed on radios without one. See [Hermes-Lite 2](./hermes-lite-2.md). |
 | **Radio Health...** | Reachability, other clients holding the radio, PA temperature — works even with no session. |
 | **AetherGPS...** | See [AetherClock and GPS](./aetherclock-and-gps.md). |
@@ -186,6 +186,9 @@ The **UPDATE** badge appears when a newer AetherSDR release is available; click 
 - **+** opens Locations at the browsed Location. Connection settings opens the matching saved radio and path. Browsing preserves the active connection; see [Location and Operator Profiles](./station-profiles.md#using-workspace-radio-tabs).
 - The dot on the active tab is the **radio-link indicator**. It pulses with discovery heartbeats and shows link loss in red. The tab also spells out **Link lost**. **View → Blink Status Indicator** controls blinking.
 - Drag tabs to reorder them; the order persists across restarts. **Esc** cancels a drag. When tabs no longer fit, drag near an edge to scroll while reordering, use the mouse wheel, or drag empty strip space.
+
+- An **AT** chip after the connected radio's name means the adaptive frame-rate throttle is on. The chip is outlined while the throttle is on standby. The tab expands for the chip and shrinks again when it disappears. It fills with the cap's quality color while a frame-rate cap is in force, and hovering the tab shows the cap (for example "Adaptive throttle: 8 fps cap"). See [Low Bandwidth Connections](./low-bandwidth-connections.md#adaptive-frame-rate-throttle).
+- While the AT chip is showing and the link is healthy, the connected radio's dot shows the network quality in the same colors as the status bar: green for Excellent or Very Good, blue for Good, amber for Fair and red for Poor. Hover the tab to see the quality in words. The quality colors follow the selected theme. With the throttle off, the dot stays the plain green "connected" color.
 
 ### Transmit timer
 

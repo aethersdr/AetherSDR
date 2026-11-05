@@ -1,12 +1,15 @@
 #include "UpdateController.h"
 
 #include "LinuxInstall.h"
+#include "MacInstall.h"
 #include "LogManager.h"
 #include "UpdateInstaller.h"
 #include "UpdateSettings.h"
 #include "VersionNumber.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QSysInfo>
@@ -34,8 +37,19 @@ UpdateController::Environment UpdateController::forThisApp()
         !tree.isEmpty()) {
         env.request.installRoot = tree;
     }
+#elif defined(Q_OS_MACOS)
+    // The app bundle, whose root the manifest's paths start from
+    // (Contents/MacOS/AetherSDR), not the binary's own folder.
+    if (const QString bundle = MacInstall::bundleOf(QCoreApplication::applicationDirPath()); !bundle.isEmpty()) {
+        env.request.installRoot = bundle;
+    }
 #endif
     env.request.stagingRoot = UpdateInstaller::stateDir();
+#if defined(Q_OS_MACOS)
+    env.installedDaxDriverSource = [] {
+        return MacInstall::daxDriverSourceOf(QStringLiteral("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver"));
+    };
+#endif
     // Windows: the portable zip is the tree setup.exe installs, so either
     // install can take it when no patch applies. Linux: the tarball is the
     // installed tree.
@@ -45,13 +59,55 @@ UpdateController::Environment UpdateController::forThisApp()
         return UpdateInstaller::launchHelper(dir, version, restart, problem);
     };
     env.rolledBackVersion = [] { return UpdateSettings::rolledBackVersion(); };
+#if defined(Q_OS_LINUX)
+    const QString base = LinuxInstall::forThisUser().base;
+    env.appImage = LinuxInstall::appImageOf(LinuxInstall::binaryDir(), base);
+    env.installFolder = base.startsWith(QDir::homePath() + QLatin1Char('/'))
+                            ? QStringLiteral("~") + base.mid(QDir::homePath().size())
+                            : base;
+    env.installedVersion = [base] { return LinuxInstall::installedVersion(base); };
+    env.installRunning = [version = env.request.runningVersion](QString* problem, QString* note) {
+        // This binary is <tree>/usr/bin/AetherSDR, inside the AppImage's mount.
+        QDir tree(LinuxInstall::binaryDir());
+        tree.cdUp();
+        tree.cdUp();
+        return LinuxInstall::install(tree.absolutePath(), version, LinuxInstall::forThisUser(), problem, note,
+                                     LinuxInstall::Current::KeepExisting);
+    };
+    env.trash = [](const QString& file) { return QFile::moveToTrash(file); };
+    env.startInstalled = [base, version = env.request.runningVersion] {
+        // The installed copy says so once it starts (lastUpdate).
+        UpdateSettings::setInstalledFromAppImage(version);
+        // Without the AppImage's variables: its mount is gone by then.
+        if (!LinuxInstall::startAfterExit(QCoreApplication::applicationPid(),
+                                          {QDir(base).filePath(QStringLiteral("current/AppRun"))},
+                                          LinuxInstall::appImageVariables())) {
+            UpdateSettings::setInstalledFromAppImage({});
+            return false;
+        }
+        return true;
+    };
+#endif
     return env;
 }
 
 UpdateController::LastUpdate UpdateController::lastUpdate()
 {
     const UpdateInstaller::SwapResult r = UpdateInstaller::lastSwapResult();
-    return {r.outcome, r.version};
+    if (!r.outcome.isEmpty()) {
+        return {r.outcome, r.version};
+    }
+#if defined(Q_OS_LINUX)
+    // Install for updates restarted into the install: said once, by the
+    // installed copy only.
+    const QString installed = UpdateSettings::installedFromAppImage();
+    if (!installed.isEmpty()
+        && !LinuxInstall::treeOf(LinuxInstall::binaryDir(), LinuxInstall::forThisUser().base).isEmpty()) {
+        UpdateSettings::setInstalledFromAppImage({});
+        return {QStringLiteral("Installed"), installed};
+    }
+#endif
+    return {};
 }
 
 UpdateController::UpdateController(Environment env, QObject* parent)
@@ -271,6 +327,97 @@ bool UpdateController::restartToUpdate(QString* problem)
     });
     watcher->setFuture(QtConcurrent::run([env = m_env, staged] { return runHandOver(env, staged, true); }));
     return true;
+}
+
+bool UpdateController::daxDriverChanges(const std::optional<QString>& installed, const QString& staged)
+{
+    return !staged.isEmpty() && installed.has_value() && *installed != staged;
+}
+
+bool UpdateController::daxDriverChanges() const
+{
+    if (m_state != State::Staged || m_version.isEmpty() || !m_env.installedDaxDriverSource) {
+        return false;
+    }
+    if (m_daxSourceVersion != m_version) {
+        const UpdateStager::Request& r = m_env.request;
+        m_daxSource = UpdateStager::stagedDaxDriverSource(r.stagingRoot, m_version, r.platform, r.arch);
+        m_daxSourceVersion = m_version;
+    }
+    return daxDriverChanges(m_env.installedDaxDriverSource(), m_daxSource);
+}
+
+QString UpdateController::appImageToInstall() const
+{
+    return m_env.appImage.isEmpty() || !m_env.installRunning || !installedVersion().isEmpty() ? QString()
+                                                                                              : m_env.appImage;
+}
+
+QString UpdateController::installedVersion() const
+{
+    return m_env.installedVersion ? m_env.installedVersion() : QString();
+}
+
+void UpdateController::installAppImage(bool trash)
+{
+    if (m_installingAppImage || appImageToInstall().isEmpty()) {
+        return;
+    }
+    struct Result {
+        bool installed = false;
+        bool trashed = true;
+        QString problem;
+        QString note;
+    };
+    m_installingAppImage = true;
+    emit stateChanged();
+    const QString version = m_env.request.runningVersion;
+    auto* watcher = new QFutureWatcher<Result>(this);
+    connect(watcher, &QFutureWatcher<Result>::finished, this, [this, watcher, version] {
+        const Result r = watcher->result();
+        watcher->deleteLater();
+        m_installingAppImage = false;
+        QString problem;
+        if (!r.installed) {
+            qCWarning(lcUpdater).noquote() << "v" + version + " not installed for updates:" << r.problem;
+            // Another install finished while this one copied: it is kept.
+            const QString installed = installedVersion();
+            problem = installed.isEmpty()
+                          ? tr("AetherSDR wasn't installed: %1").arg(r.problem)
+                          : tr("AetherSDR %1 was installed for updates meanwhile, so this AppImage wasn't "
+                               "installed over it. Start it from your applications menu.")
+                                .arg(installed);
+        } else {
+            if (!r.note.isEmpty()) {
+                qCInfo(lcUpdater).noquote() << r.note;
+            }
+            if (!r.trashed) {
+                qCWarning(lcUpdater).noquote() << "could not move" << m_env.appImage << "to the trash";
+                problem = tr("AetherSDR %1 is installed for updates, but %2 couldn't be moved to the trash, so "
+                             "delete it yourself. Quit, then start AetherSDR from your applications menu.")
+                              .arg(version, m_env.appImage);
+            } else if (!m_env.startInstalled || !m_env.startInstalled()) {
+                problem = tr("AetherSDR %1 is installed for updates. Quit, then start it from your applications "
+                             "menu.")
+                              .arg(version);
+            }
+        }
+        emit stateChanged();
+        emit appImageInstalled(r.installed && problem.isEmpty(), problem);
+    });
+    watcher->setFuture(QtConcurrent::run([env = m_env, trash] {
+        Result r;
+        r.installed = env.installRunning(&r.problem, &r.note);
+        if (r.installed && trash) {
+            r.trashed = env.trash && env.trash(env.appImage);
+        }
+        return r;
+    }));
+}
+
+void UpdateController::dropPendingSwap()
+{
+    UpdateInstaller::dropPendingSwap();
 }
 
 bool UpdateController::installOnQuit()

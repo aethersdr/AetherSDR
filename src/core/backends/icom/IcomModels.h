@@ -320,7 +320,7 @@ struct SetMenuProfile {
 };
 
 // Which Fixed Edges range table (CivCodec.h) a model uses.
-enum class ScopeEdgeTable : std::uint8_t { None, Hf, Ic705, Ic9700 };
+enum class ScopeEdgeTable : std::uint8_t { None, Hf, Hf60, Ic705, Ic9700 };
 
 struct ScopeCommandProfile {
     bool center = false;
@@ -428,6 +428,10 @@ struct SquelchScaleProfile {
 struct DualReceiverProfile {
     int lanOutputItem = -1;
     std::array<int, 3> dataInputItems{};
+    double scopeSpanDb = 100.0;
+    double referenceMinDb = -30.0;
+    double referenceMaxDb = 10.0;
+    bool adcOverflowRead = true;
 };
 
 struct IcomModelProfile {
@@ -441,37 +445,39 @@ struct IcomModelProfile {
     bool pollCwSquelchAndTxBandwidth = false;
     int speechProcessorLevelMaximum = 2;
     std::string_view speechProcessorLabel = "PROC";
-    std::string_view guideRevision;
-    std::span<const FeatureEvidence> features;
+    std::string_view guideRevision{};
+    std::span<const FeatureEvidence> features{};
 
-    std::span<const IcomBand> bands;
-    std::optional<ModulationProfile> modulation;
-    std::optional<DualReceiverProfile> dualReceiver;
-    std::optional<TxBandwidthProfile> txBandwidth;
-    std::optional<FmRepeaterProfile> fmRepeater;
-    std::optional<CwTextKeyerProfile> cwTextKeyer;
-    std::optional<RxAntennaProfile> rxAntenna;
-    std::optional<GpsProfile> gps;
-    SetMenuProfile setMenu;
-    ScopeCommandProfile scope;
-    MeterCalibrationProfile meters;
-    std::optional<SquelchScaleProfile> squelchScale;
-    std::optional<PowerOnProfile> powerOn;
-    std::optional<CivRecoveryProfile> civRecovery;
-    std::optional<MemoryProfile> memory;
-    std::optional<NetworkConfigurationProfile> networkConfiguration;
-    std::span<const std::string_view> preampLabels;
+    std::span<const IcomBand> bands{};
+    std::optional<ModulationProfile> modulation{};
+    std::optional<DualReceiverProfile> dualReceiver{};
+    std::optional<TxBandwidthProfile> txBandwidth{};
+    std::optional<FmRepeaterProfile> fmRepeater{};
+    std::optional<CwTextKeyerProfile> cwTextKeyer{};
+    std::optional<RxAntennaProfile> rxAntenna{};
+    std::optional<GpsProfile> gps{};
+    SetMenuProfile setMenu{};
+    ScopeCommandProfile scope{};
+    MeterCalibrationProfile meters{};
+    std::optional<SquelchScaleProfile> squelchScale{};
+    std::optional<PowerOnProfile> powerOn{};
+    std::optional<CivRecoveryProfile> civRecovery{};
+    std::optional<MemoryProfile> memory{};
+    std::optional<NetworkConfigurationProfile> networkConfiguration{};
+    std::span<const std::string_view> preampLabels{};
     // Zero means no frequency restriction on the model ladder.
     std::uint64_t preampTwoStageUpperExclusiveHz = 0;
-    std::span<const AttenStep> attenuatorSteps;
-    std::span<const std::string_view> modes;
-    std::span<const std::string_view> receiveOnlyModes;
+    std::span<const AttenStep> attenuatorSteps{};
+    std::span<const std::string_view> modes{};
+    std::span<const std::string_view> receiveOnlyModes{};
 
     [[nodiscard]] const FeatureEvidence* evidenceFor(IcomFeature feature) const noexcept;
     [[nodiscard]] bool supports(IcomFeature feature) const noexcept;
 };
 
 [[nodiscard]] const IcomModelProfile& profileFor(const IcomModel& model) noexcept;
+// Negotiation hint only; CI-V identity remains the capability authority.
+[[nodiscard]] int preferredRxChannelsForModelHint(std::uint8_t modelId) noexcept;
 [[nodiscard]] std::string_view featureName(IcomFeature feature) noexcept;
 [[nodiscard]] std::string_view evidenceName(EvidenceKind evidence) noexcept;
 

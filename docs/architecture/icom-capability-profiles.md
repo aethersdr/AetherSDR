@@ -78,9 +78,9 @@ radio.
 The backend's read-only `profile.show` extension returns the active model, guide
 revision, SET-item differences, per-feature evidence, FM repeater access modes,
 RX-antenna readback behavior, and the scope-command and GPS facets.
-It contains no credentials. `controls map` is the currently public automation
-surface; routing the RFC's proposed `icom profile show` bridge spelling remains
-separate automation work so this foundation does not cross the radio seam.
+It contains no credentials. The automation bridge exposes this existing
+extension through read-only `civ profile`; `controls map` provides per-control
+evidence, and `civ session` provides transport and source-media counters.
 
 ## Adding another Icom
 

@@ -190,7 +190,15 @@ Daemon startup is passive by default (`sources: []`, `entries: []`).
 `--discover-local` explicitly enables existing Flex/HL2/ANAN LAN discovery and
 RTL-SDR USB enumeration when built in. `--discover-sim` independently publishes
 the existing simulator identity without constructing a radio backend or scanning
-LAN/USB. The flags may be combined. No discovered radio is connected. Icom's
+LAN/USB. The flags may be combined. With `--discover-local`, `--hl2-address <ipv4>`
+(repeatable) also probes that address by unicast for a Hermes-Lite 2 that a
+broadcast cannot reach, for example one on another subnet; a reply is handled
+like a broadcast reply. Each value must be an IPv4 literal: malformed and IPv6
+values, `0.0.0.0`, `255.255.255.255` and multicast addresses are rejected with a
+diagnostic and exit status 1 before the daemon opens its socket or loads settings.
+Repeated addresses are probed once per interface per sweep. Without
+`--discover-local`, valid addresses have no effect and the daemon reports that.
+No discovered radio is connected. Icom's
 manual address/credentials, SmartLink and external directories are outside this
 slice; desktop discovery and autoconnect remain unchanged.
 
@@ -345,3 +353,50 @@ It introduces no TX verb, grant, lease, policy decision or safety guarantee.
 
 FFT bins, waterfall rows, audio, and other high-rate streams never enter these
 JSON resources; they belong to the later bounded binary data plane.
+
+## HL2 backend observations
+
+What an HL2 session shows through the resources above, from
+`Hl2Backend::defineMeters` and `Hl2Backend::capabilities`. Nothing here adds a
+method or a resource.
+
+### Meters
+
+`Hl2Backend::defineMeters` defines nine meters. They reach clients through the
+generic `meter` resource; the HL2 chooses the indices, since the radio assigns
+none. Each additional receiver adds one `SLC` / `LEVEL` meter at index
+100 + receiver number (`sourceIndex` is the receiver number; same unit and
+range).
+
+| Index | `source` | `name` | `unit` | Range | Note |
+|---|---|---|---|---|---|
+| 1 | `SLC` | `LEVEL` | `dBm` | -140 to 0 | Receive signal level |
+| 2 | `TX` | `FWDPWR` | `dBm` | 0 to 41 | Forward power; uncalibrated |
+| 3 | `TX` | `REFPWR` | `dBm` | 0 to 41 | Reflected power; uncalibrated |
+| 4 | `TX` | `SWR` | `SWR` | 1 to 10 | Standing wave ratio |
+| 5 | `RAD` | `PATEMP` | `degC` | 0 to 100 | PA temperature |
+| 6 | `TX` | `MICPEAK` | `dBFS` | -100 to 0 | Microphone peak |
+| 7 | `TX` | `ALC` | `dBFS` | -100 to 0 | Post-ALC audio peak, before the modulator |
+| 8 | `TX` | `COMPPEAK` | `dB` | 0 to 25 | Speech processor compression |
+| 9 | `TX` | `ALCGAIN` | `dB` | -20 to 0 | Gain the ALC is applying |
+
+`FWDPWR` and `REFPWR` are labelled uncalibrated in their definitions: the value
+comes from an uncalibrated reference curve, not a calibrated power reading.
+
+### Not offered
+
+- Supply voltage and PA current telemetry: not offered. The HL2 sets
+  `hasSupplyVoltageTelemetry` and `hasPaCurrentTelemetry` to false.
+- ADC overload: the backend emits `frontEndOverloadChanged`, but no daemon
+  resource carries it.
+- `radioSession` capabilities: `maximumTransmitWatts` is `0.0` for the HL2,
+  meaning uncalibrated rather than zero watts. The HL2's `txPowerBands` is not
+  projected into any resource.
+
+### Extensions
+
+The HL2 advertises extension namespace `hl2`, listed in the `radioSession`
+capabilities `extensions` field, and implements its verbs in
+`Hl2Backend::invokeExtension`. The control protocol's method registry is
+closed and has no extension method, so a daemon client cannot invoke them;
+only in-process callers can.

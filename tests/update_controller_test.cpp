@@ -6,6 +6,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
@@ -13,6 +16,7 @@
 
 #include "monocypher-ed25519.h"
 
+#include <atomic>
 #include <filesystem>
 
 // UpdateController, the Install update / Restart to update flow (RFC #5304
@@ -131,10 +135,55 @@ struct Rig {
                 *problem = QStringLiteral("failed its start-up check");
                 return false;
             }
-            launches.append({dir, version, restart, QThread::currentThread() == qApp->thread()});
+            launches.append({dir, version, restart, QThread::currentThread() == QCoreApplication::instance()->thread()});
             return true;
         };
         e.rolledBackVersion = [this] { return rolledBack; };
+        return e;
+    }
+};
+
+// Install for updates' side of the environment: a recording fake install,
+// trash and restart.
+struct AppImageRig {
+    QString appImage = QStringLiteral("/home/op/Downloads/AetherSDR-v26.10.2-x86_64.AppImage");
+    QString installed;
+    QString installedMeanwhile;   // another install finished while this one copied
+    bool installWorks = true;
+    bool trashWorks = true;
+    bool startWorks = true;
+    std::atomic<int> installs{0};
+    std::atomic<bool> installedOnGuiThread{false};
+    QStringList trashed;
+    int starts = 0;
+
+    UpdateController::Environment env(UpdateController::Environment e)
+    {
+        e.appImage = appImage;
+        e.installedVersion = [this] { return installed; };
+        e.installRunning = [this](QString* problem, QString*) {
+            ++installs;
+            installedOnGuiThread = QThread::currentThread() == QCoreApplication::instance()->thread();
+            if (!installedMeanwhile.isEmpty()) {
+                installed = installedMeanwhile;
+                *problem = QStringLiteral("Another AetherSDR install became current meanwhile.");
+                return false;
+            }
+            if (!installWorks) {
+                *problem = QStringLiteral("disk full");
+                return false;
+            }
+            installed = QStringLiteral("26.10.2");
+            return true;
+        };
+        e.trash = [this](const QString& file) {
+            trashed.append(file);
+            return trashWorks;
+        };
+        e.startInstalled = [this] {
+            ++starts;
+            return startWorks;
+        };
         return e;
     }
 };
@@ -427,6 +476,154 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 1, 20000);
         QCOMPARE(c.state(), UpdateController::State::Idle);
         QVERIFY(failed.first().first().toString().contains(QLatin1String("not signed")));
+    }
+
+    // Install for updates (RFC #5304 Phase 6): offered only by an AppImage
+    // with nothing installed for updates.
+    void installForUpdatesIsOfferedOnlyByAnAppImageWithNothingInstalled()
+    {
+        Rig rig(m_key);
+        AppImageRig a;
+        UpdateController none(rig.env());
+        QVERIFY(none.appImageToInstall().isEmpty());   // not an AppImage
+        UpdateController offered(a.env(rig.env()));
+        QCOMPARE(offered.appImageToInstall(), a.appImage);
+        a.installed = QStringLiteral("26.10.1");
+        UpdateController installed(a.env(rig.env()));
+        QVERIFY(installed.appImageToInstall().isEmpty());   // never replaces an install
+        QCOMPARE(installed.installedVersion(), QStringLiteral("26.10.1"));
+        installed.installAppImage(false);
+        QVERIFY(!installed.isInstallingAppImage());
+        QCOMPARE(a.installs, 0);
+    }
+
+    void installForUpdatesInstallsOffTheGuiThreadThenRestarts()
+    {
+        Rig rig(m_key);
+        AppImageRig a;
+        UpdateController c(a.env(rig.env()));
+        QSignalSpy done(&c, &UpdateController::appImageInstalled);
+        c.installAppImage(false);
+        QVERIFY(c.isInstallingAppImage());
+        c.installAppImage(false);   // one at a time
+        QVERIFY(done.wait(20000));
+        QCOMPARE(a.installs, 1);
+        QVERIFY(!a.installedOnGuiThread);
+        QVERIFY(a.trashed.isEmpty());   // not asked
+        QCOMPARE(a.starts, 1);
+        QCOMPARE(done.at(0).at(0).toBool(), true);
+        QVERIFY(done.at(0).at(1).toString().isEmpty());
+        QVERIFY(!c.isInstallingAppImage());
+        QVERIFY(c.appImageToInstall().isEmpty());   // installed now
+    }
+
+    void theAppImageGoesToTheTrashOnlyOnceInstalled()
+    {
+        Rig rig(m_key);
+        {
+            AppImageRig a;
+            UpdateController c(a.env(rig.env()));
+            QSignalSpy done(&c, &UpdateController::appImageInstalled);
+            c.installAppImage(true);
+            QVERIFY(done.wait(20000));
+            QCOMPARE(a.trashed, QStringList{a.appImage});
+            QCOMPARE(a.starts, 1);
+            QCOMPARE(done.at(0).at(0).toBool(), true);
+        }
+        {
+            // Not installed: kept, nothing restarts, and it says why.
+            AppImageRig a;
+            a.installWorks = false;
+            UpdateController c(a.env(rig.env()));
+            QSignalSpy done(&c, &UpdateController::appImageInstalled);
+            c.installAppImage(true);
+            QVERIFY(done.wait(20000));
+            QVERIFY(a.trashed.isEmpty());
+            QCOMPARE(a.starts, 0);
+            QCOMPARE(done.at(0).at(0).toBool(), false);
+            QVERIFY(done.at(0).at(1).toString().contains(QLatin1String("disk full")));
+            QCOMPARE(c.appImageToInstall(), a.appImage);   // offered again
+        }
+        {
+            // Installed, but the trash refused it: no restart, which would
+            // hide the message; it is installed all the same.
+            AppImageRig a;
+            a.trashWorks = false;
+            UpdateController c(a.env(rig.env()));
+            QSignalSpy done(&c, &UpdateController::appImageInstalled);
+            c.installAppImage(true);
+            QVERIFY(done.wait(20000));
+            QCOMPARE(a.starts, 0);
+            QCOMPARE(done.at(0).at(0).toBool(), false);
+            QVERIFY(done.at(0).at(1).toString().contains(QLatin1String("trash")));
+            QVERIFY(c.appImageToInstall().isEmpty());
+        }
+        {
+            // A newer install finished while this one copied: kept, nothing
+            // trashed or restarted, and the window points to it.
+            AppImageRig a;
+            a.installedMeanwhile = QStringLiteral("26.10.5");
+            UpdateController c(a.env(rig.env()));
+            QSignalSpy done(&c, &UpdateController::appImageInstalled);
+            c.installAppImage(true);
+            QVERIFY(done.wait(20000));
+            QVERIFY(a.trashed.isEmpty());
+            QCOMPARE(a.starts, 0);
+            QCOMPARE(done.at(0).at(0).toBool(), false);
+            QVERIFY(done.at(0).at(1).toString().contains(QLatin1String("26.10.5 was installed for updates meanwhile")));
+            QVERIFY(c.appImageToInstall().isEmpty());
+        }
+        {
+            // Installed, but the restart couldn't be arranged.
+            AppImageRig a;
+            a.startWorks = false;
+            UpdateController c(a.env(rig.env()));
+            QSignalSpy done(&c, &UpdateController::appImageInstalled);
+            c.installAppImage(false);
+            QVERIFY(done.wait(20000));
+            QCOMPARE(done.at(0).at(0).toBool(), false);
+            QVERIFY(done.at(0).at(1).toString().contains(QLatin1String("applications menu")));
+        }
+    }
+
+    // The DAX driver note (RFC #5304 Phase 4): the staged release names a
+    // source, a driver is installed, and its stamp differs; a driver from
+    // before the stamp counts as different.
+    void theDaxDriverNoteComparesTheInstalledDriver()
+    {
+        const QString a = QStringLiteral("ebf4a3c10dbbbe04d70f59c99d55de467e9ccc07");
+        const QString b = QStringLiteral("0123456789abcdef0123456789abcdef01234567");
+        QVERIFY(UpdateController::daxDriverChanges(std::optional<QString>(a), b));
+        QVERIFY(!UpdateController::daxDriverChanges(std::optional<QString>(a), a));       // already current
+        QVERIFY(!UpdateController::daxDriverChanges(std::nullopt, b));                    // no driver installed
+        QVERIFY(UpdateController::daxDriverChanges(std::optional<QString>(QString()), b)); // unstamped driver
+        QVERIFY(!UpdateController::daxDriverChanges(std::optional<QString>(a), QString())); // manifest names none
+        // Nothing staged: no note.
+        Rig rig(m_key);
+        UpdateController::Environment e = rig.env();
+        std::optional<QString> installed = a;
+        e.installedDaxDriverSource = [&] { return installed; };
+        UpdateController c(e);
+        QVERIFY(!c.daxDriverChanges());
+        // Staged, with a manifest naming b for this platform: the note shows
+        // while the installed driver is a, and not once it is b.
+        c.install(QStringLiteral("26.10.3"));
+        QVERIFY(waitFor(c, UpdateController::State::Staged));
+        const QString kept = rig.staging + QStringLiteral("/26.10.3.manifest.json");
+        QJsonObject m = QJsonDocument::fromJson(readFile(kept)).object();
+        QJsonArray ps = m[QStringLiteral("payloads")].toArray();
+        for (int i = 0; i < ps.size(); ++i) {
+            QJsonObject p = ps[i].toObject();
+            p[QStringLiteral("dax_driver")] = QJsonObject{{QStringLiteral("source"), b}};
+            ps[i] = p;
+        }
+        m[QStringLiteral("payloads")] = ps;
+        writeFile(kept, QJsonDocument(m).toJson());
+        QVERIFY(c.daxDriverChanges());
+        installed = b;
+        QVERIFY(!c.daxDriverChanges());
+        installed = std::nullopt;
+        QVERIFY(!c.daxDriverChanges());
     }
 
     void inPlaceIsAskedOfTheEnvironment()

@@ -14,6 +14,8 @@
 #include "core/NetworkDiagnostics.h"
 #include "core/AppSettings.h"
 
+#include <QAbstractButton>
+#include <QAbstractSlider>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -839,6 +841,24 @@ bool TitleBar::isSystemMoveAreaAt(const QPoint& globalPos) const
     }
 
     return false;
+}
+
+bool TitleBar::isCaptionMoveAreaAt(const QPoint& globalPos) const
+{
+    if (!isSystemMoveAreaAt(globalPos)) {
+        return false;
+    }
+    // Interactive children keep client input inside a draggable container.
+    // Tooltipped handles also stay client because caption mouse moves bypass
+    // Qt's tooltip timer.
+    for (QWidget* widget = childAt(mapFromGlobal(globalPos)); widget && widget != this;
+         widget = widget->parentWidget()) {
+        if (qobject_cast<QAbstractButton*>(widget) || qobject_cast<QAbstractSlider*>(widget)
+            || !widget->toolTip().isEmpty()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool TitleBar::startWindowMove(QMouseEvent* ev)
@@ -1679,9 +1699,9 @@ void TitleBar::setDiscovering(bool active)
 
 QColor TitleBar::currentBeatColor() const
 {
-    return m_throttleFlashColor.isEmpty()
-        ? ThemeManager::instance().color(this, QStringLiteral("color.accent.success"))
-        : QColor(m_throttleFlashColor);
+    // Invalid = glow in the dot's own colour, which on a connected radio is
+    // now the link quality — a fixed green glow would contradict a red dot.
+    return m_throttleFlashColor.isEmpty() ? QColor() : QColor(m_throttleFlashColor);
 }
 
 void TitleBar::onHeartbeat()

@@ -792,7 +792,8 @@ connects).
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
-| `waveforms` | — | installed legacy/Docker waveforms, WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
+| `waveforms` | — | installed legacy/Docker waveforms (each container with `environmentKeys`: its environment variable names, never their values), WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
+| `ntp` | — (optional property) | the radio's own NTP time sources (SmartSDR 4.3.16, BigBend platform): `available` (the radio has them), `maxSources`, and `sources`, each with `id`, `address`, `directive` (server/pool/peer), `description`, `enabled`, `selected`, `inUse` (selected, or chrony state `selected`), `prefer`, `state` (raw chrony state), `stratum` and `reach` (−1 while unknown), and `updating` (an edit's remove-and-create is in flight; `enabled` is the radio's live value). Read-only; edits go through Radio Setup ▸ Time. |
 
 Read-only Flex metadata is available as `get radio` → `iaruRegion` (1–3 or
 `null`) and `get slice` / `get slices` → `chainMode` (bounded radio-reported
@@ -2610,7 +2611,8 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 | `action` | `value` | effect |
 |---|---|---|
 | `create` (alias `add`) | — | request a new panadapter through the backend's declared lifecycle control. |
-| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. It matters more on this verb — `setPanCenter()` clamps only the low edge, so an unguarded out-of-range centre is stored and advertised over TCI (`dds:`) even though the radio rejects it. |
+| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. Optimistic receive controls also clamp to a declared pan-centre range, where present; confirmed receive controls retain backend validation. The low edge of the display stays at or above 0 Hz. Without a declared range, an unguarded out-of-range centre can still be stored and advertised over TCI (`dds:`) even though the radio rejects it. |
+| `range` | `<panId\|index\|active> <center MHz> <width MHz>` | request an atomic native center/width change through the normal model geometry path. Re-poll radio-reported geometry; admission is not confirmation. |
 | `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | request removal of owned pan(s). Flex requests cleanup of the original paired waterfall too. A single target preserves the last pan; `all` allows requesting its removal but never overrides a native refusal or foreign ownership. |
 
 Replies describe request admission, not observed completion — re-poll `get pans`.
@@ -3256,20 +3258,23 @@ discovery beat and decays in ~850 ms), `radios.linkAlarm` (link lost: three
 missed beats) and `radios.linkOverrideColor` (the colour speaking over the
 active tab's status dot: amber while discovering, red on loss, empty when the
 link is healthy) are the heartbeat as data — assert on these rather than on
-the dot's pixels. `radios.discovered[].canRename` says whether the switcher
+the dot's pixels. `radios.linkQuality` / `radios.linkQualityColor` are the
+network grade and resolved theme color (empty when off or disconnected), which the session's dot shows
+only while the AT chip does;
+`radios.adaptiveThrottle` (the throttle is armed for this client: ticked, or a
+cap still in force after it was unticked, which lasts until disconnect; it
+stays `true` with nothing connected) and `radios.adaptiveFpsCap` (0 = no cap
+in force) drive the "AT" chip, and `radios.tabs[].throttleChip` says whether a
+tab is actually showing it. `radios.discovered[].canRename` says whether the switcher
 offers Rename… for that radio (client-owned nickname) or routes to Radio
 Setup instead.
 `radios.overflowing` reports whether the bounded tab viewport is
 currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
 retained tab preference and `visible` is current widget visibility (which can
 also change in minimal mode). `radios.tabs[].linkCarrier` identifies
-the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected`, `available`,
-`in use`, `saved`, `unavailable`, `sign-in required`, `connecting`, `disconnecting`, or `failed` — a lower-case,
-untranslated token. `serial` identifies the hardware separately from the stable workspace tab `id`;
-`location` names its saved Location. `canConnect`, `connectReason`, and `canCancel` describe connection
-availability. `radios.contextMenuVisible` reports an open per-tab menu. `radios.reordering` is true during a tab reorder drag.
-The `radios.tabs` array is in visual order; inspect it after `drag radioTab_<id> <dx> 0`, then restart
-the same isolated settings profile and compare the order. A drag changes neither `activeId` nor the session.
+the one tab carrying discovery/heartbeat state. `radios.tabs[].kind` distinguishes `radio` from `workspace`. Radio `status` is
+one of `connected` / `available` / `in use`, lower-case and untranslated.
+AetherLab has `status: "workspace"` and never carries the radio link indicator.
 The text the tab *renders* is sentence case and translated (`Connected`,
 `Available`, `In use`, and `Link lost` while the link alarm is up), so
 `statusLine` and `accessibleName` deliberately disagree with `status` on
@@ -4242,6 +4247,50 @@ Icom CI-V and RS-BA1 session diagnostics. The read-only actions work in an
 observe-only bridge; raw injection remains TX-gated because arbitrary CI-V can
 key or retune the radio.
 
+For MAIN/SUB profiles, `civ profile` includes receiver-bound `scopeFrames`,
+`scopeAgeMs`, `audioFrames` and `audioRms`. Scope counters count accepted native
+sweeps; audio frames count processed input sample frames before monitor gain
+or mute, including any transport loss-concealment silence. These are separate
+from repaint/FPS counters and do not establish exact received sample time or
+loss-free network replay.
+
+MAIN/SUB profiles also report `visible`, `scopeEdgeSlot`, `borrowedEdgeSlot`,
+`borrowedScopePresets` (original range/slot contents), `subOpening`, `subClosing`
+and `dualWatchOwned`. Use `pan create` / `pan close` through the normal model
+path to test MAIN-only connection, confirmed SUB enable and retirement. Closed
+SUB scope frames must not recreate its pane. Background drag and zoom must
+change radio-reported window edges, preserve both dial frequencies and leave
+the other receiver's window unchanged, including when both use the same band.
+
+`modulationInputs` reports separate DATA OFF/D1/D2/D3 menu numbers and
+radio-read source values/names. Missing values mean no readback yet. These
+are global menus, selected by the TX receiver's DATA variant, not local focus.
+`txReceiver` and `txFrequencyHz` expose split and actual `1C 03` readback;
+`pendingTxReceiver` is present while a VFO TX selection is unconfirmed.
+
+MAIN/SUB profiles also report radio-read `dualWatch` (null until known).
+`civ dualwatch on` / `civ dualwatch off` explicitly request the documented
+`07 C2` RX setting. Confirm the resulting boolean with `civ profile`; acceptance
+of the request is not readback. These commands preserve receiver frequencies,
+editing focus, split and TX routing, are unavailable in observe-only mode, and
+do not enable TX automation. Connection startup reads Dualwatch without setting it.
+
+`civ scopepreset <range> <slot>` requests a preset read; adding `<lower-Hz>
+<upper-Hz>` explicitly writes whole-kHz edges inside that range, up to 1 MHz
+wide. `civ scopeslot <receiver> <slot>` selects a physical scope's edge slot.
+Both are narrow RX/configuration actions, not arbitrary CI-V injection. Confirm
+`scopePresetValues` / receiver `scopeEdgeSlot` in `civ profile`. These actions
+support exact restore checks without enabling TX automation. `scopeRestoring`
+marks the bounded disconnect phase, which serializes saved preset/selection
+writes and waits for matching readbacks before deauthenticating.
+
+`civ session` also exposes `transport.media`: `receivedPackets`,
+`receivedFrames`, `concealedFrames`, `concealmentBlocks`, `rxChannels` and
+`sampleRateHz`. Frame counts are per channel at the negotiated source rate.
+Received frames exclude inserted silence; outer UDP idles do not add media
+frames. Compare counter deltas within one connection, and report concealment
+separately from speaker underruns or renderer FPS.
+
 **`civ session`** reports the media lease and each independent UDP stream:
 
 ```json
@@ -4708,6 +4757,43 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 
 ---
 
+## Stick Pro analyzer bring-up
+
+`lab status|devices|connect <index>|sweep <startHz> <stopHz> <intervals> isolated|stop|disconnect`
+controls the AetherLab USB proof of concept (RFC #6471). `status`
+returns identity, all accepted raw/derived samples, count hypothesis, terminal
+state and the last 128 HID reports. `devices` explicitly scans normal-mode
+Stick Pro interfaces. `connect` queries VER/FULLINFO and never starts RF.
+
+Acquisition requires `AETHER_AUTOMATION_ALLOW_LAB_RF=1` on the app process and
+an explicit `isolated` token. This permission is separate from radio TX.
+Generic invoke/pointer/coordinate automation refuses the Sweep button; use the typed `lab sweep` request. Status, device enumeration and
+stop work in observe-only mode; connect, sweep and disconnect are blocked.
+Every acquisition attempts `off` and closes USB; reconnect explicitly for the
+next sweep. RF-off and station TX interlock remain unproven/unimplemented.
+
+Through MCP, use `bridge_command` with e.g.
+`{"request":{"cmd":"lab","action":"status"}}` or
+`{"request":{"cmd":"lab","action":"sweep","value":"14000000 14350000 200 isolated"}}`.
+The app must be connected to the instrument on the MCP server's host.
+See [the implementation and qualification guide](./rigexpert-usb-poc.md).
+
+AetherLab is embedded in the main window. Invoke `aetherLabAction` to open it,
+`radioSwitcherAetherLab` in the open **+** popover, or `radioTab_aetherlab`
+after first use. Invoke `aetherLabReturn` to stop the analyzer session and
+restore the radio workspace. The `titlebar` tab model distinguishes
+`kind: "workspace"` / `status: "workspace"` from radio entries, and the radio
+retains `linkCarrier` while AetherLab is selected. Discovery lists contain only
+radios. Marker labels use stable `aetherLabValue_<sampleField>` object names.
+
+Samples also contain `impedanceMagnitudeOhm`, `impedancePhaseDeg`,
+`reflectionMagnitude`, `reflectionPhaseDeg`, `seriesInductanceH`,
+`seriesCapacitanceF`, `parallelResistanceOhm`, `parallelReactanceOhm`,
+`parallelInductanceH` and `parallelCapacitanceF`. Units are SI in JSON;
+non-finite or undefined results are null. The UI formats engineering prefixes.
+Raw CSV and device R/X are preserved. Reflection phase and impedance phase are
+separate quantities; reflection phase is null at a perfect match.
+
 ## Targeting a widget
 
 `grab` and `invoke` resolve a `target` string in this order. Within each match
@@ -4907,7 +4993,7 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 80 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 81 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4956,13 +5042,14 @@ audio devices require separate hardware validation.
 | `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — demo fault injection (RFC #4288; only valid when the demo is connected) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
-| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|autorfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864); autorfgain takes on\|off, 'mode <bandscope\|ramp\|probe\|binary>' for which control law, or 'floor <dB>' for how far below the operator's own RF gain an automatic control may go |
+| `pan` | — | pan <create\|add\|remove\|close\|center\|range\|rfgain\|autorfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864); autorfgain takes on\|off, 'mode <bandscope\|ramp\|probe\|binary>' for which control law, or 'floor <dB>' for how far below the operator's own RF gain an automatic control may go |
 | `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|pan-layout\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
+| `lab` | — | lab <status\|devices\|connect index\|sweep startHz stopHz intervals isolated\|stop\|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1) |
 | `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod profile, TXDELAY, RX tap, WIDE1-1 fill-in digipeater, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
@@ -4971,7 +5058,7 @@ audio devices require separate hardware validation.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
+| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |

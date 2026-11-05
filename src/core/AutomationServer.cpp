@@ -1448,6 +1448,14 @@ bool isTransmitControl(const QWidget* w)
     return match != TransmitControlMatch::None;
 }
 
+bool hasAnalyzerRfInChain(const QWidget* widget)
+{
+    for (const QWidget* current = widget; current; current = current->parentWidget()) {
+        if (current->property("aetherLabRf").toBool()) { return true; }
+    }
+    return false;
+}
+
 bool hasTransmitControlInChain(const QWidget* widget)
 {
     for (const QWidget* current = widget; current;
@@ -2774,8 +2782,10 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     }
 
     const QString normalizedAction = action.trimmed().toLower();
-    if (name == QLatin1String("connect") && normalizedAction == QLatin1String("profiles")) {
-        return true;
+    if (name == QLatin1String("lab")) {
+        // Stop remains available in observe-only mode to cancel analyzer RF.
+        return normalizedAction.isEmpty() || normalizedAction == QLatin1String("status")
+            || normalizedAction == QLatin1String("devices") || normalizedAction == QLatin1String("stop");
     }
     // The probe constructs only an isolated TransmitModel and touches no session.
     if (name == QLatin1String("interlock") && action == QLatin1String("probe")) {
@@ -2824,6 +2834,7 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
     }
     if (name == QLatin1String("civ")) {
         return normalizedAction == QLatin1String("trace")
+            || normalizedAction == QLatin1String("profile")
             || normalizedAction == QLatin1String("session")
             || normalizedAction == QLatin1String("scheduler");
     }
@@ -2858,6 +2869,7 @@ const QStringList& getModelNames()
         QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
         QStringLiteral("display"),
         QStringLiteral("waveforms"),
+        QStringLiteral("ntp"),
         QStringLiteral("kiwi"),
     };
     return kModels;
@@ -3453,7 +3465,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         // rfgain branch already splits the joined value and handles both shapes,
         // so the handler was right and only the parser choice was wrong.
         add("pan", {},
-            "pan <create|add|remove|close|center|rfgain|autorfgain|float|dock> [value] — "
+            "pan <create|add|remove|close|center|range|rfgain|autorfgain|float|dock> [value] — "
             "float/dock drive PanadapterStack's real reparent path (#4864); "
             "autorfgain takes on|off, 'mode <bandscope|ramp|probe|binary>' for which "
             "control law, or 'floor <dB>' for how far below the "
@@ -3463,7 +3475,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
                         "pan requires an action "
-                        "(create|add|remove|close|center|rfgain|autorfgain|float|dock)"));
+                        "(create|add|remove|close|center|range|rfgain|autorfgain|float|dock)"));
                 return s.doPan(a.action, a.value);
             });
 
@@ -3576,6 +3588,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doStreams(a.action);
             });
 
+        add("lab", {},
+            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doLab(a.action, a.value);
+            });
+
         add("devices", {},
             "devices <list|ulanzi|ulanzi-start|ulanzi-stop> — external-device diagnostics and lifecycle control",
             parseActionOnly,
@@ -3674,8 +3693,8 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|session|scheduler|incident> — CI-V "
-            "inject, frame trace, lease/scheduler health, or last incident "
+            "civ <wake <model-id-hex> <address-hex>|send <hex>|trace [all]|profile|dualwatch on|off|scopepreset <range> <slot> [lower-Hz upper-Hz]|scopeslot <receiver> <slot>|session|scheduler|incident> — CI-V "
+            "inject, frame trace, receiver profile, lease/scheduler health, or last incident "
             "(Icom; send is TX-gated)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
@@ -4522,6 +4541,10 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                            {QStringLiteral("class"), shortClassName(w)}};
     }
 
+    if (hasAnalyzerRfInChain(w)) {
+        return err(QStringLiteral("Use lab sweep for analyzer RF; generic UI automation cannot confirm physical isolation"));
+    }
+
     // TX-safety guard — never key a live radio from the test bridge unless the
     // operator has explicitly opted in. (#3646 Phase 1 safety requirement.)
     const bool transmitControl = isTransmitControl(w);
@@ -5312,11 +5335,17 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         if (m_radioModel) {
             const FlexWaveformModel& wf = m_radioModel->flexWaveformModel();
             for (const FlexWaveformEntry& entry : wf.waveforms()) {
+                // Environment values may be secrets: the bridge reports keys only.
+                QJsonArray envKeys;
+                for (const QString& key : entry.environment.keys()) {
+                    envKeys.append(key);
+                }
                 installed.append(QJsonObject{
                     {QStringLiteral("name"), entry.name},
                     {QStringLiteral("version"), entry.version},
                     {QStringLiteral("isContainer"), entry.isContainer},
                     {QStringLiteral("displayName"), entry.displayName()},
+                    {QStringLiteral("environmentKeys"), envKeys},
                 });
             }
             wfp = QJsonObject{
@@ -6185,6 +6214,30 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = radioSnapshot(radio);
     } else if (model == QLatin1String("gps")) {
         data = gpsSnapshot(radio);
+    } else if (model == QLatin1String("ntp")) {
+        // The radio's own NTP time sources as it last reported them (#6953).
+        const std::optional<RadioCapabilities::NtpSourceControl> control =
+            radio->backendCapabilities().ntpSourceControl;
+        QJsonArray sources;
+        for (const NtpSourceState& n : radio->ntpSources()) {
+            sources.append(QJsonObject{
+                {QStringLiteral("id"), n.id},
+                {QStringLiteral("address"), n.address},
+                {QStringLiteral("directive"), n.directive},
+                {QStringLiteral("description"), n.description},
+                {QStringLiteral("enabled"), n.enabled},
+                {QStringLiteral("selected"), n.selected},
+                {QStringLiteral("inUse"), n.inUse()},
+                {QStringLiteral("prefer"), n.prefer},
+                {QStringLiteral("state"), n.state},
+                {QStringLiteral("stratum"), n.stratum},
+                {QStringLiteral("reach"), n.reach},
+                {QStringLiteral("updating"), radio->ntpSourceReplaceActive(n.id)},
+            });
+        }
+        data = QJsonObject{{QStringLiteral("available"), control.has_value()},
+                           {QStringLiteral("maxSources"), control ? control->maxSources : 0},
+                           {QStringLiteral("sources"), sources}};
     } else if (model == QLatin1String("transmit")) {
         data = transmitSnapshot(&radio->transmitModel(),
                                 radio->backendCapabilities().hasDownwardExpander,
@@ -8887,11 +8940,15 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
             {QStringLiteral("status"), QStringLiteral("wake requested; identity not yet verified")}};
     }
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
+                        && a != QLatin1String("dualwatch")
+                        && a != QLatin1String("scopepreset")
+                        && a != QLatin1String("scopeslot")
                         && a != QLatin1String("session")
+                        && a != QLatin1String("profile")
                         && a != QLatin1String("incident")
                         && a != QLatin1String("scheduler"))) {
         return err(QStringLiteral(
-            "civ requires an action (send|trace|session|scheduler|incident)"));
+            "civ requires an action (send|trace|profile|dualwatch|scopepreset|scopeslot|session|scheduler|incident)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -8924,6 +8981,10 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
     }, Qt::DirectConnection);
 
     const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
+                       : a == QLatin1String("dualwatch") ? QStringLiteral("receiver.dualwatch")
+                       : a == QLatin1String("scopepreset") ? QStringLiteral("scope.preset")
+                       : a == QLatin1String("scopeslot") ? QStringLiteral("scope.slot")
+                       : a == QLatin1String("profile") ? QStringLiteral("profile.show")
                        : a == QLatin1String("trace") ? QStringLiteral("civ.trace")
                        : a == QLatin1String("incident") ? QStringLiteral("civ.incident")
                        : a == QLatin1String("scheduler")
@@ -10035,6 +10096,9 @@ QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
                                                  const QString& target,
                                                  const QString& verb) const
 {
+    if (hasAnalyzerRfInChain(widget)) {
+        return err(QStringLiteral("Use lab sweep for analyzer RF; pointer automation is unavailable on this control"));
+    }
     if (!widget->isVisible()) {
         return err(QStringLiteral("refused: '") + target
                    + QStringLiteral("' is not visible"));
@@ -11185,6 +11249,10 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
                            {QStringLiteral("class"), shortClassName(w)}};
     }
 
+    if (hasAnalyzerRfInChain(w)) {
+        return err(QStringLiteral("Use lab sweep for analyzer RF; coordinate automation is unavailable on this control"));
+    }
+
     // TX-safety guard — a raw coordinate click must honor the same opt-in as
     // invoke(), or it becomes a bypass around the keying gate. Walk the whole
     // ancestor chain (see the function comment): an unaccepted press propagates
@@ -11320,10 +11388,48 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                            {QStringLiteral("requested"), true}, {QStringLiteral("priorCount"), have}};
     }
 
+    if (action == QLatin1String("range")) {
+        const QStringList parts = arg.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.size() != 3) {
+            return err(QStringLiteral("pan range requires <panId|index|active> <center MHz> <width MHz>"));
+        }
+        PanadapterModel* pan = nullptr;
+        if (parts[0] == QLatin1String("active")) {
+            pan = radio->activePanadapter();
+        } else if (parts[0].startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
+            pan = radio->panadapter(parts[0]);
+        } else {
+            bool valid = false;
+            const int index = parts[0].toInt(&valid);
+            if (valid && index >= 0 && index < radio->panadapters().size()) {
+                pan = radio->panadapters().at(index);
+            }
+        }
+        bool centerValid = false;
+        bool widthValid = false;
+        const double center = parts[1].toDouble(&centerValid);
+        const double width = parts[2].toDouble(&widthValid);
+        if (!pan || !radio->isConnected() || !pan->ownedByClient(radio->ourClientHandle())
+            || !centerValid || !widthValid || !std::isfinite(center) || !std::isfinite(width)
+            || width <= 0 || center < width / 2.0) {
+            return err(QStringLiteral("pan range requires an owned live pan and finite positive geometry"));
+        }
+        const auto control = radio->backendCapabilities().panDisplayControl;
+        if (!control || !control->supports(PanDisplayField::Geometry)
+            || !control->geometry.contains(PanGeometryComponent::Center)
+            || !control->geometry.contains(PanGeometryComponent::Bandwidth)) {
+            return err(QStringLiteral("this backend does not accept pan center and width"));
+        }
+        const QString id = pan->panId();
+        radio->requestPanCenter(id, center, width);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("range")},
+                           {QStringLiteral("panId"), id}, {QStringLiteral("requested"), true}};
+    }
     if (action == QLatin1String("center")) {
         // Same contract as `tune` — see refuseUntunableMhz(). It matters more
-        // here: RadioModel::setPanCenter() clamps only the LOW edge, so an
-        // out-of-range centre is optimistically stored and advertised over TCI
+        // here: optimistic receive controls clamp the LOW edge and any declared
+        // receivePanCenterControl. Without a declared range, an out-of-range
+        // centre can still be optimistically stored and advertised over TCI
         // (`dds:`) even though the radio rejects it — the same silent no-op as
         // #4550, one verb over.
         double mhz = 0.0;
@@ -13132,6 +13238,20 @@ QJsonObject AutomationServer::doWhoami() const
         {QStringLiteral("readOnly"), m_readOnly},
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
     };
+}
+
+QJsonObject AutomationServer::doLab(const QString& action, const QString& value) const
+{
+    const QString normalized = action.trimmed().toLower();
+    if (normalized == QLatin1String("sweep")
+        && qEnvironmentVariable("AETHER_AUTOMATION_ALLOW_LAB_RF") != QLatin1String("1")) {
+        return err(QStringLiteral("Analyzer RF automation requires AETHER_AUTOMATION_ALLOW_LAB_RF=1 and physical RF isolation"));
+    }
+    if (!m_labHandler) { return err(QStringLiteral("AetherLab provider unavailable")); }
+    QJsonObject result = m_labHandler(normalized, value);
+    result.insert(QStringLiteral("automationRfAllowed"),
+                  qEnvironmentVariable("AETHER_AUTOMATION_ALLOW_LAB_RF") == QLatin1String("1"));
+    return result;
 }
 
 QJsonObject AutomationServer::doDeviceDiagnostics(const QString& action) const

@@ -4,6 +4,7 @@
 #include "ResetSettingsPrompts.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/ExternalFilePath.h"
 #include "core/SettingsPaths.h"
 #include "core/IssueReport.h"
 #include "core/LogManager.h"
@@ -96,7 +97,8 @@ void SupportDialog::buildUI()
     // ── Log file info ─────────────────────────────────────────────────────
     auto* fileRow = new QHBoxLayout;
     auto* pathLabel = new QLabel(QString("Log: <code>%1</code>").arg(
-        LogManager::instance().logFilePath()));
+        QDir::toNativeSeparators(
+            ExternalFilePath::resolve(LogManager::instance().logFilePath())).toHtmlEscaped()));
     pathLabel->setTextFormat(Qt::RichText);
     pathLabel->setStyleSheet("color: #8898a8; font-size: 11px;");
     m_sizeLabel = new QLabel;
@@ -233,7 +235,7 @@ void SupportDialog::clearLog()
 
 void SupportDialog::openLogFolder()
 {
-    QFileInfo fi(LogManager::instance().logFilePath());
+    QFileInfo fi(ExternalFilePath::resolve(LogManager::instance().logFilePath()));
     QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
 }
 
@@ -335,6 +337,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
         radio.callsign = radioModel->callsign();
         radio.ip = radioModel->radioAddress().toString();
         radio.connected = true;
+        radio.hl2 = SupportBundle::collectHl2Info(radioModel);
     }
     QString bundlePath = SupportBundle::createBundle(radio);
     if (bundlePath.isEmpty()) {
@@ -478,7 +481,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
         QDesktopServices::openUrl(url);
 
         // Open support bundle folder for drag-and-drop
-        QFileInfo fi(bundlePath);
+        QFileInfo fi(ExternalFilePath::resolve(bundlePath));
         QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
 
         FramelessMessageBox::information(parent, "Submit Bug Report",
@@ -513,32 +516,6 @@ void SupportDialog::disableAll()
 {
     LogManager::instance().setAllEnabled(false);
     syncCheckboxes();
-}
-
-void SupportDialog::sendToSupport()
-{
-    setCursor(Qt::WaitCursor);
-
-    auto sys = SupportBundle::collectSystemInfo();
-    auto radio = SupportBundle::collectRadioInfo(m_radioModel);
-    QString bundlePath = SupportBundle::createBundle(radio);
-
-    setCursor(Qt::ArrowCursor);
-
-    if (bundlePath.isEmpty()) {
-        FramelessMessageBox::warning(this, "Support Bundle",
-            "Failed to create support bundle.\n"
-            "Check that the log directory is writable.");
-        return;
-    }
-
-    FramelessMessageBox::information(this, "Support Bundle Created",
-        QString("Support bundle saved to:\n%1\n\n"
-                "Your email client will now open.\n"
-                "Please attach the bundle file and describe the issue.")
-            .arg(bundlePath));
-
-    SupportBundle::openEmailClient(bundlePath, sys, radio);
 }
 
 QString SupportDialog::formatFileSize(qint64 bytes) const

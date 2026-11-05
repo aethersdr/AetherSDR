@@ -7,6 +7,7 @@
 
 #include <QCoreApplication>
 #include <cstdio>
+#include <utility>
 #include <vector>
 
 using namespace AetherSDR;
@@ -26,6 +27,20 @@ int main(int argc, char** argv)
     int publications = 0;
     int publishedCapacity = -1;
     RadioModel radio;
+    // Exercise the Flex table fallback without connecting a transport.
+    if (!radio.rebuildBackendForTest(QStringLiteral("flex"))) {
+        return 1;
+    }
+    for (const auto& [model, expected] : std::vector<std::pair<QString, int>>{
+             {QStringLiteral("FLEX-6700"), 8}, {QStringLiteral("Unknown Flex"), 2}}) {
+        RadioDelta delta;
+        delta.model = model;
+        emit radio.backend()->radioChanged(delta);
+        const bool ok = radio.maxPanadapters() == expected;
+        std::printf("[%s] %s: undeclared Flex capacity=%d\n",
+                    ok ? "PASS" : "FAIL", qPrintable(model), expected);
+        failures += !ok;
+    }
     if (!radio.rebuildBackendForTest(QStringLiteral("icom"))) {
         return 1;
     }
@@ -58,9 +73,7 @@ int main(int argc, char** argv)
             ? snapshot->value.value("capabilities").toObject() : QJsonObject{};
         const bool modelCorrect = radio.backendCapabilities().maxPanadapters == expected
             && publications > before && publishedCapacity == expected
-            // A zero capability currently means "unknown" to this legacy
-            // desktop getter; its fallback is not changed by #5347.
-            && (expected == 0 || radio.maxPanadapters() == expected);
+            && radio.maxPanadapters() == expected;
         const bool resourceCorrect = published.value("maxPanadapters").toInt(-1) == expected
             && published.value("maxSlices").toInt(-1) == model.receivers;
         const bool daemonUnchanged = published.value("receiveModeControl").isNull()
@@ -74,6 +87,25 @@ int main(int argc, char** argv)
     if (dualScopeModels == 0 || noScopeModels == 0) {
         std::fprintf(stderr, "FAIL: need both multi-receiver scope and no-scope profiles\n");
         ++failures;
+    }
+    // Other families declare a positive capacity even before connection.
+    for (const auto& [family, expected] : std::vector<std::pair<QString, int>>{
+             {QStringLiteral("sim"), 4}, {QStringLiteral("hl2"), 1},
+             {QStringLiteral("anan"), 1}, {QStringLiteral("rtl"), 1}}) {
+        if (!radio.rebuildBackendForTest(family)) {
+#ifndef AETHER_BACKEND_RTL
+            if (family == QLatin1String("rtl")) {
+                std::printf("[SKIP] optional RTL backend not built\n");
+                continue;
+            }
+#endif
+            ++failures;
+            continue;
+        }
+        const bool ok = radio.maxPanadapters() == expected;
+        std::printf("[%s] %s: pre-connect capacity=%d\n",
+                    ok ? "PASS" : "FAIL", qPrintable(family), expected);
+        failures += !ok;
     }
     return failures == 0 ? 0 : 1;
 }

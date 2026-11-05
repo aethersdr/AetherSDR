@@ -628,8 +628,17 @@ void MainWindow::buildMenuBar()
 #else
         MidiControlManager* midi = nullptr;
 #endif
-        showOrRaisePersistent(m_ulanziMapperDialog, m_dialBackend,
-                              &m_shortcutManager, midi);
+        // A canon dialog, so not showOrRaisePersistent(): that applies View →
+        // Frameless Window, which a CanonWindow does not follow.
+        if (!m_ulanziMapperDialog) {
+            auto* dlg = new UlanziDialMapperDialog(m_dialBackend, &m_shortcutManager,
+                                                   midi, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            m_ulanziMapperDialog = dlg;
+        }
+        m_ulanziMapperDialog->show();
+        m_ulanziMapperDialog->raise();
+        m_ulanziMapperDialog->activateWindow();
     });
     settingsMenu->addSeparator();
     auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
@@ -661,23 +670,15 @@ void MainWindow::buildMenuBar()
 
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
-        // A canon workspace window: created directly rather than through
-        // showOrRaisePersistent(), which would apply View → Frameless Window.
-        const bool wasFresh = !m_spotHubDialog;
-        if (wasFresh) {
-            auto* hub = new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
-                                            m_spotCollectorClient, m_potaClient, m_eibiClient,
-                                            m_n1mmSpotClient,
+        const bool wasFresh = showOrRaiseCanon(m_spotHubDialog, [this] {
+            return new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
+                                       m_potaClient, m_eibiClient,
+                                       m_n1mmSpotClient, m_wsprFeed,
 #ifdef HAVE_WEBSOCKETS
-                                            m_freedvClient,
+                                       m_freedvClient,
 #endif
-                                            &m_radioModel, &m_dxccProvider, this);
-            hub->setAttribute(Qt::WA_DeleteOnClose);
-            m_spotHubDialog = hub;
-        }
-        m_spotHubDialog->show();
-        m_spotHubDialog->raise();
-        m_spotHubDialog->activateWindow();
+                                       &m_radioModel, &m_dxccProvider, this);
+        });
 #ifdef HAVE_WEBSOCKETS
         // Every open, not just the first: this dialog is a persistent
         // singleton, so without this the field would only ever show
@@ -767,12 +768,6 @@ void MainWindow::buildMenuBar()
         });
         connect(dlg, &DxClusterDialog::wsjtxStopRequested,
                 this, [this] { QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->stopListening(); }); });
-        connect(dlg, &DxClusterDialog::spotCollectorStartRequested,
-                this, [this](quint16 port) {
-            QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->startListening(port); });
-        });
-        connect(dlg, &DxClusterDialog::spotCollectorStopRequested,
-                this, [this] { QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->stopListening(); }); });
         connect(dlg, &DxClusterDialog::potaStartRequested,
                 this, [this](int interval) {
             QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->startPolling(interval); });
@@ -861,16 +856,7 @@ void MainWindow::buildMenuBar()
             statusBar()->showMessage("Not connected to radio", 3000);
             return;
         }
-        // A canon workspace window: created directly rather than through
-        // showOrRaisePersistent(), which would apply View → Frameless Window.
-        if (!m_txBandDialog) {
-            auto* dialog = new TxBandDialog(&m_radioModel, this);
-            dialog->setAttribute(Qt::WA_DeleteOnClose);
-            m_txBandDialog = dialog;
-        }
-        m_txBandDialog->show();
-        m_txBandDialog->raise();
-        m_txBandDialog->activateWindow();
+        showOrRaiseCanon(m_txBandDialog, [this] { return new TxBandDialog(&m_radioModel, this); });
     });
 
     // Inhibit during TUNE submenu — user selects which TX outputs to suppress.
@@ -1643,12 +1629,17 @@ void MainWindow::buildMenuBar()
     });
 
     toolsMenu->addSeparator();
+    auto* labAction = toolsMenu->addAction(tr("AetherLab…"));
+    labAction->setObjectName(QStringLiteral("aetherLabAction"));
+    labAction->setStatusTip(tr("Open the Stick Pro analyzer workspace; RF isolation is required"));
+    connect(labAction, &QAction::triggered, this, &MainWindow::showAetherLab);
+
     auto* swrScanAction = toolsMenu->addAction("Start SWR Scan...");
     m_swrScanAction = swrScanAction;
     swrScanAction->setEnabled(false);
     swrScanAction->setProperty(kTxKeyingProperty, true);
     connect(swrScanAction, &QAction::triggered, this, [this] {
-        startSwrSweep(-1, 1, 0.0, 0.0, /*forceLicenseConfirm=*/true);
+        startSwrSweep();
     });
     auto* preTuneAction = toolsMenu->addAction("Pre-tune ATU Bands...");
     m_preTuneAction = preTuneAction;
@@ -2250,7 +2241,7 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     menu.addSeparator();
     // Name what is stored, in operating terms. A remembered arrangement the
     // operator cannot see is the difference between a feature and a haunting.
-    auto panWord = [this](int pan) {
+    auto panWord = [](int pan) {
         if (pan <= 33) return tr("left");
         if (pan >= 67) return tr("right");
         return tr("centre");
@@ -2326,6 +2317,13 @@ void MainWindow::wireUpdateChecker()
                     close();
                 } else if (m_updatesWindow) {
                     m_updatesWindow->showInstallProblem(problem, version);
+                }
+            });
+    // Install for updates: installed, and it starts once this copy quits.
+    connect(m_updateController, &UpdateController::appImageInstalled, this,
+            [this](bool restart, const QString&) {
+                if (restart) {
+                    close();
                 }
             });
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
@@ -2420,6 +2418,8 @@ void MainWindow::reportLastUpdate()
         text = tr("The update to %1 couldn't be put in place, so nothing changed.").arg(r.version);
     } else if (r.outcome == QLatin1String("OldStillRunning")) {
         text = tr("The update to %1 installs the next time you quit.").arg(r.version);
+    } else if (r.outcome == QLatin1String("Installed")) {
+        text = tr("AetherSDR %1 is installed for updates. It updates itself from File > Update.").arg(r.version);
     }
     if (!text.isEmpty()) {
         statusBar()->showMessage(text, 10000);

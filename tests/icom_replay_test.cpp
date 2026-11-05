@@ -33,6 +33,12 @@ struct IcomStreamTestAccess {
     {
         stream.handleRetransmitRequest(buildRetransmitRequest(0, 0, sequence));
     }
+    static void receive(IcomStream& stream, quint16 seq, qint64 now)
+    { stream.queueForReorderAt(seq, QByteArray(1, static_cast<char>(seq & 0xff)), now); }
+    static void tick(IcomStream& stream, qint64 now) { stream.onReorderTickAt(now); }
+    static void rtt(IcomStream& stream, int value) { stream.m_counters.rttMs = value; }
+    static auto lost(const IcomStream& stream) { return stream.m_counters.rxLost; }
+    static int pending(const IcomStream& stream) { return stream.m_reorder.size(); }
 };
 }
 
@@ -49,6 +55,76 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     const std::vector<std::uint8_t> payload{0xDE, 0xAD};
+
+    // Real lab path: ~130 ms RTT. A replay requested after the 100 ms hold
+    // cannot return by the old fixed 200 ms give-up deadline.
+    {
+        IcomStream s;
+        IcomStreamTestAccess::rtt(s,130);
+        int requests = 0;
+        IcomStreamTestAccess::writer(s, [&](auto) { ++requests; });
+        std::vector<int> delivered;
+        QObject::connect(&s,&IcomStream::payloadReady,[&](const QByteArray& p) {
+            delivered.push_back(static_cast<unsigned char>(p[0]));
+        });
+        IcomStreamTestAccess::receive(s,1,0);
+        IcomStreamTestAccess::receive(s,3,10);
+        check(requests == 1, "a new hole requests repair immediately, before the hold timer");
+        IcomStreamTestAccess::tick(s,110);
+        IcomStreamTestAccess::tick(s,220);
+        check(IcomStreamTestAccess::lost(s) == 0, "RTT-aware replay survives the old premature deadline");
+        IcomStreamTestAccess::receive(s,2,240);
+        check(delivered == std::vector<int>{1,2,3}, "late recovered media is delivered once and in order");
+    }
+    {
+        IcomStream s;
+        IcomStreamTestAccess::rtt(s,130);
+        IcomStreamTestAccess::writer(s, [](auto) {});
+        IcomStreamTestAccess::receive(s,10,0);
+        IcomStreamTestAccess::receive(s,12,10);
+        IcomStreamTestAccess::receive(s,14,130);
+        IcomStreamTestAccess::tick(s,280); // first hole expires, younger one does not
+        check(IcomStreamTestAccess::lost(s) == 1 && IcomStreamTestAccess::pending(s) == 1,
+              "expiring the oldest hole preserves the younger hole's replay deadline");
+        IcomStreamTestAccess::tick(s,280);
+        IcomStreamTestAccess::receive(s,13,300);
+        check(IcomStreamTestAccess::lost(s) == 1 && IcomStreamTestAccess::pending(s) == 0,
+              "a younger replay can repair the remaining gap after older loss");
+    }
+    {
+        IcomStream s;
+        IcomStreamTestAccess::rtt(s,130);
+        IcomStreamTestAccess::writer(s, [](auto) {});
+        IcomStreamTestAccess::receive(s,0xfffd,0);
+        IcomStreamTestAccess::receive(s,0xffff,10);
+        IcomStreamTestAccess::receive(s,1,150);
+        IcomStreamTestAccess::receive(s,0xfffe,170);
+        IcomStreamTestAccess::tick(s,220);
+        check(IcomStreamTestAccess::lost(s) == 0, "repair across sequence wrap does not age a newer hole");
+        IcomStreamTestAccess::receive(s,0,250);
+        check(IcomStreamTestAccess::pending(s) == 0, "wrapped replay drains its contiguous successor");
+    }
+    {
+        IcomStream s;
+        IcomStreamTestAccess::writer(s, [](auto) {});
+        IcomStreamTestAccess::receive(s,0,0);
+        for (int seq = 2; seq < 100; ++seq) { IcomStreamTestAccess::receive(s,seq,10); }
+        check(IcomStreamTestAccess::pending(s) <= 64, "replay buffering stays bounded under missing media");
+    }
+
+    {
+        IcomStream stream;
+        IcomStreamTestAccess::rtt(stream,130);
+        IcomStreamTestAccess::writer(stream, [](auto) {});
+        IcomStreamTestAccess::receive(stream,10,0);
+        IcomStreamTestAccess::receive(stream,16,10);
+        IcomStreamTestAccess::receive(stream,14,100);
+        IcomStreamTestAccess::receive(stream,12,120);
+        IcomStreamTestAccess::receive(stream,11,130);
+        IcomStreamTestAccess::tick(stream,280);
+        check(IcomStreamTestAccess::lost(stream) == 1,
+              "a nearer late arrival cannot extend a hole already observed by an earlier packet");
+    }
 
     // Fill past the retain depth ACROSS A WRAP: 0xFFC0.. rolls through 0x0000.
     {

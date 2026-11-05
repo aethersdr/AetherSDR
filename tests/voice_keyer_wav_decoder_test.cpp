@@ -93,7 +93,7 @@ QString writeFile(const QDir& dir, const QString& name, const QByteArray& bytes)
 {
     const QString path = dir.filePath(name);
     QFile f(path);
-    f.open(QIODevice::WriteOnly);
+    CHECK(f.open(QIODevice::WriteOnly), "the fixture WAV can be written");
     f.write(bytes);
     f.close();
     return path;

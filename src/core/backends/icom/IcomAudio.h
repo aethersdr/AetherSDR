@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -91,13 +93,9 @@ private:
 // Receive reassembly
 // ---------------------------------------------------------------------------
 
-// The receive counterpart. The radio sends the same unequal pair, and the
-// naive reading — "each packet is 10 ms" — is an AVERAGE across the two, not a
-// per-packet truth: they carry 14.2 ms and 5.8 ms.
-//
-// So this class deliberately does NOT timestamp packets. It concatenates
-// payloads in the order the sequencer delivered them and lets the audio device
-// clock the result. A backend that derives timing from packet size drifts.
+// Decode ordered payloads without changing their sample clock. Mono uses an
+// unequal pair per 20 ms; native stereo uses three fragments per 20 ms. UDP
+// idles consume outer sequence numbers but contain no audio samples.
 class RxAssembler {
 public:
     explicit RxAssembler(AudioCodec codec = AudioCodec::Lpcm1ch16) : m_codec(codec) {}
@@ -105,15 +103,23 @@ public:
     // Decode one in-order payload. Returns the samples it contained.
     [[nodiscard]] std::vector<float> accept(std::span<const std::uint8_t> payload);
 
-    // Samples the caller should insert for `count` lost packets, so a gap the
-    // retransmitter could not repair becomes a brief silence rather than a
-    // click. Sized from the average packet, which is the right use of the 10 ms
-    // figure — an approximation standing in for data we do not have.
+    // Legacy mono loss estimate. Stereo must use the media sequence below:
+    // outer packet loss includes idles and does not establish missing samples.
     [[nodiscard]] std::vector<float> concealLoss(int packets, int sampleRateHz);
+
+    // Learn two consecutive native stereo cycles before filling missing media
+    // fragments. Each returned block occupies exactly the missing fragment's
+    // sample frames on BOTH channels; silence is concealment, not recovery.
+    [[nodiscard]] std::vector<std::vector<float>> concealBefore(
+        std::span<const std::uint8_t> payload, std::uint16_t mediaSequence);
 
 private:
     AudioCodec m_codec;
     std::vector<std::uint8_t> m_partialFrame; // At most three stereo PCM bytes.
+    std::optional<std::uint16_t> m_mediaSequence;
+    std::array<std::size_t,3> m_fragmentBytes{};
+    int m_fragmentPhase = 0;
+    int m_consecutiveFragments = 0;
 };
 
 }  // namespace AetherSDR::icom
