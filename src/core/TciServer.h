@@ -37,6 +37,7 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
+class MeterModel;
 class AudioEngine;
 class SliceModel;
 class PanadapterModel;
@@ -209,6 +210,12 @@ private slots:
 
 private:
     struct ClientState;
+
+    // tx_sensors goes out while the transmitter carries RF: MOX/PTT, tune, or
+    // a key the radio reports.
+    static bool txSensorsKeyed(const RadioModel& model);
+    // Forward power for tx_sensors, the current reading, as Thetis sends it.
+    static float txSensorsForwardWatts(const MeterModel& mm);
 
     // Controller-side cleanup plus a one-way barrier that destroys worker
     // sockets on their owning thread. Never asks the worker to access a model.

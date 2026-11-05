@@ -279,7 +279,7 @@ Notes:
 
 ```
 rx_sensors_enable:true;    # S-meter updates
-tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting
+tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting or tuning
 ```
 
 RX sensors broadcast each receiver's S-meter in dBm:
@@ -288,7 +288,7 @@ RX sensors broadcast each receiver's S-meter in dBm:
 rx_channel_sensors:0,0,-97.3;
 ```
 
-TX sensors broadcast during transmit, including ALC.
+TX sensors broadcast during transmit and tune, including ALC. Both power fields carry the current forward power in watts, without peak hold or meter smoothing, as Thetis sends them.
 
 ### CW keying
 

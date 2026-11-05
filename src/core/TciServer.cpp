@@ -4008,7 +4008,14 @@ void TciServer::teardownTciRoute()
     });
 }
 
-namespace {
+bool TciServer::txSensorsKeyed(const RadioModel& model)
+{
+    // isTransmitting() is MOX/PTT only; tune is a transmission too, and it is
+    // when an operator reads SWR.
+    return model.transmitModel().isTransmitting()
+           || model.transmitModel().isTuning()
+           || model.isRadioTransmitting();
+}
 
 // Forward power for tx_sensors, the way Thetis sends it: the current reading,
 // with no peak hold and no display smoothing, in both the rms and the peak
@@ -4017,7 +4024,7 @@ namespace {
 // talked. A backend whose FWDPWR is itself a peak hold (HL2) also publishes
 // the unheld reading as TX:FWDPWR_NOW; any other backend's FWDPWR sample is
 // already the current reading.
-float txSensorsForwardWatts(const MeterModel& mm)
+float TciServer::txSensorsForwardWatts(const MeterModel& mm)
 {
     float watts = mm.fwdPowerInstant();
     const int now = mm.findMeter(QStringLiteral("TX"), QStringLiteral("FWDPWR_NOW"));
@@ -4033,8 +4040,6 @@ float txSensorsForwardWatts(const MeterModel& mm)
     // No carrier reads 0 dBm, which is 1 mW, not 0 W.
     return watts <= 0.0011f ? 0.0f : watts;
 }
-
-}  // namespace
 
 void TciServer::broadcastStatus()
 {
@@ -4071,13 +4076,7 @@ void TciServer::broadcastStatus()
                 }
             }
         }
-        // Tune is a transmission too: isTransmitting() is MOX/PTT only, so
-        // during tune a client would get no forward power or SWR at all, and
-        // tune is exactly when an operator reads SWR.
-        const bool keyed = m_model->transmitModel().isTransmitting()
-                           || m_model->transmitModel().isTuning()
-                           || m_model->isRadioTransmitting();
-        if (cs.txSensorsEnabled && keyed) {
+        if (cs.txSensorsEnabled && txSensorsKeyed(*m_model)) {
             // tx_sensors:trx,mic_dbm,fwd_watts,peak_watts,swr,alc_dbfs
             // alc_dbfs (trailing field, AetherSDR extension) is the SW-ALC
             // peak; index-based parsers safely ignore the extra field.
