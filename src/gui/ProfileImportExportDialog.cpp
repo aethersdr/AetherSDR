@@ -467,6 +467,8 @@ void ProfileImportExportDialog::startExport()
 
 void ProfileImportExportDialog::startImport()
 {
+    if (!m_model) { return; }
+    const RadioControlSession session = m_model->controlSession();
     const QPointer<ProfileImportExportDialog> self(this);
     if (!m_importPath || m_importPath->text().trimmed().isEmpty()) {
         chooseImportPath();
@@ -475,9 +477,8 @@ void ProfileImportExportDialog::startImport()
         }
     }
     rememberProfileTransferDirectory(m_importPath->text());
-    if (!confirmImport())
-        return;
-    m_transfer->importDatabase(m_importPath->text());
+    if (!confirmImport() || !self || !m_model || !m_model->controlSessionCurrent(session)) { return; }
+    m_transfer->importDatabase(m_importPath->text(), session);
 }
 
 void ProfileImportExportDialog::setTransferring(bool transferring)

@@ -687,6 +687,15 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
     caps.hasRemoteOnControl = true;
     caps.canUpgradeFirmware = true;
+    caps.waveformControl = WaveformControl{{WaveformAction::Uninstall,
+        WaveformAction::RemoveContainer, WaveformAction::Restart}};
+    caps.fileTransferControl = FileTransferControl{{FileTransferPurpose::Firmware,
+        FileTransferPurpose::LegacyWaveform, FileTransferPurpose::ProfileMetadata,
+        FileTransferPurpose::ProfileImport, FileTransferPurpose::ProfileExport,
+        FileTransferPurpose::DvkUpload, FileTransferPurpose::DvkDownload}};
+    if (mc.platform != RadioPlatform::Microburst && mc.platform != RadioPlatform::DeepEddy) {
+        caps.fileTransferControl->purposes.insert(FileTransferPurpose::DockerWaveform);
+    }
     caps.hasSmartLink = true;
     caps.hasLicenseInfo = true;
     caps.hasClientNetworkConfig = true;

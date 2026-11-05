@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "core/backends/FileTransferOperation.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include <QScopedValueRollback>
 #include "TxController.h"
@@ -973,6 +974,7 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
+            flex->setTransferCommandSink(transferCommandSink());
             flex->setAdministrationCommandSink([this](const QString& command,
                 const RadioControlCompletion& completion, const RadioControlFence& current,
                 const std::function<void()>& written) {
@@ -1861,6 +1863,7 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    if (m_fileTransferOperation) { m_fileTransferOperation->cancel(); }
     resetAdministration();
     resetTransmitDaxSessionState();
     // Retirement callbacks can attempt edits before teardown returns.
@@ -2720,9 +2723,11 @@ RadioModel::RadioModel(QObject* parent)
             m_dvkModel.handleCommandResponse(verb, id, static_cast<uint>(respVal), body);
         });
     });
-    connect(&m_flexWaveformModel, &FlexWaveformModel::commandReady, this, [this](const QString& cmd){
-        sendCmd(cmd, [this, cmd](int code, const QString& body) {
-            m_flexWaveformModel.handleCommandReply(cmd, code, body);
+    connect(&m_flexWaveformModel, &FlexWaveformModel::controlRequested, this,
+            [this](const WaveformRequest& request) {
+        const QPointer<FlexWaveformModel> model(&m_flexWaveformModel);
+        requestWaveform(request, &m_flexWaveformModel, [model, request](const RadioControlReply& reply) {
+            if (model) { model->handleCommandReply(request, reply); }
         });
     });
     connect(&m_navtexModel, &NavtexModel::commandReady, this, [this](const QString& cmd){
@@ -9915,24 +9920,6 @@ bool RadioModel::sendCmdPublic(const QString& cmd, ResponseCallback cb)
     return sendCmd(cmd, std::move(cb)) != 0;
 }
 
-void RadioModel::requestFileUploadPort(qint64 size, const QString& uploadKind,
-                                        ResponseCallback cb)
-{
-    qCInfo(lcProtocol).noquote()
-        << "RadioModel: file upload requested"
-        << QStringLiteral("kind=%1").arg(uploadKind)
-        << QStringLiteral("bytes=%1").arg(size);
-    sendCmd(QStringLiteral("file upload %1 %2").arg(size).arg(uploadKind), cb);
-}
-
-void RadioModel::requestFileDownloadPort(const QString& downloadKind, ResponseCallback cb)
-{
-    qCInfo(lcProtocol).noquote()
-        << "RadioModel: file download requested"
-        << QStringLiteral("kind=%1").arg(downloadKind);
-    sendCmd(QStringLiteral("file download %1").arg(downloadKind), cb);
-}
-
 void RadioModel::refreshProfiles()
 {
     for (const ProfileRequest::Kind kind : {ProfileRequest::Kind::Global,
@@ -10251,8 +10238,28 @@ void RadioModel::logRemoteAudioRxSummary(const QString& reason) const
         << "RadioModel: remote_audio_rx summary" << fields.join(QLatin1Char(' '));
 }
 
-quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
+RadioModel::TransferCommandSink RadioModel::transferCommandSink(const TransferCommandWriter& writer)
 {
+    const QPointer<RadioModel> model(this);
+    const quint64 generation = m_backendReceiverGeneration;
+    return [model, generation, writer](const QString& command, const FileTransferGuard& guard,
+                                     const RadioControlCompletion& completion) {
+        if (!model || generation != model->m_backendReceiverGeneration || !guard.current()
+            || !model->controlSessionCurrent(model->controlSession())) { return false; }
+        const ResponseCallback reply = [completion](int code, const QString& body) {
+            if (completion) {
+                completion({code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed,
+                            code, body});
+            }
+        };
+        return writer ? writer(command, guard, reply) : model->sendCmd(command, reply, guard) != 0;
+    };
+}
+
+quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb,
+                            std::optional<FileTransferGuard> transferGuard)
+{
+    if (transferGuard && !transferGuard->current()) { return 0; }
     auto& perf = PerfTelemetry::instance();
     if (perf.enabled()
         && command.startsWith(QStringLiteral("display pan set "))
@@ -10346,8 +10353,10 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         return 0;
     }
 
-    if (m_wanConn)
+    if (transferGuard && !transferGuard->current()) { return 0; }
+    if (m_wanConn) {
         return m_wanConn->sendCommand(command, std::move(cb));
+    }
 
     // A callback being expired at the session boundary tried to chain another
     // command. There is no session left to write to, and registering it would
@@ -10385,8 +10394,13 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         m_pendingCallbacks.insert(seq, std::move(cb));
 
     // Queue the socket write on the connection's worker thread.
-    QMetaObject::invokeMethod(m_connection, [conn = m_connection, seq, command] {
-        conn->writeCommand(seq, command);
+    const quint64 wireSession = m_connection->commandSession();
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection, seq, command, transferGuard, wireSession] {
+        if (transferGuard) {
+            conn->writeTransferCommand(seq, command, *transferGuard, wireSession);
+        } else {
+            conn->writeCommand(seq, command);
+        }
     });
     return seq;
 }

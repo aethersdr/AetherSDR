@@ -173,12 +173,13 @@ int main(int argc, char** argv)
     // ── command names are protocol-safe tokens ─────────────────────────────
     {
         FlexWaveformModel m;
-        QSignalSpy spy(&m, &FlexWaveformModel::commandReady);
+        QSignalSpy spy(&m, &FlexWaveformModel::controlRequested);
 
         m.requestRestart(QStringLiteral("ThumbDV"));
         report("command: safe name emits command", spy.size() == 1);
         report("command: restart command text",
-               spy.takeFirst().at(0).toString() == QStringLiteral("waveform restart ThumbDV"));
+               spy.constFirst().at(0).value<AetherSDR::WaveformRequest>().action == AetherSDR::WaveformAction::Restart
+               && spy.takeFirst().at(0).value<AetherSDR::WaveformRequest>().name == QStringLiteral("ThumbDV"));
 
         m.requestRemoveContainer(QStringLiteral("Bad\nName"));
         report("command: newline name rejected", spy.isEmpty());

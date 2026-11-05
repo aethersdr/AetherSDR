@@ -1,4 +1,5 @@
 #include "TestSettingsProfile.h"
+#include "RadioSetupControlFixture.h"
 #include "core/FirmwareStager.h"
 #include "core/FirmwareUploader.h"
 #include "UpdateTestNetwork.h"
@@ -61,6 +62,8 @@ public:
     // An Install (network download) that has just finished staging.
     static void beginNetworkInstall(UpdatesWindow& window)
     {
+        window.m_firmware->m_preparationSession = std::make_shared<const RadioControlSession>(
+            window.m_firmware->m_model->controlSession());
         window.m_firmware->m_staging = true;
         window.m_firmware->m_uploadAfterStage = true;
     }
@@ -286,6 +289,7 @@ private slots:
         window.show();
         FirmwareStager* stager = UpdatesWindowTestAccess::stager(window);
         QVERIFY(!stager->stagedVerified());
+        installRadioSetupBackend(model);
         UpdatesWindowTestAccess::beginNetworkInstall(window);
         QString prompt;
         QTimer::singleShot(0, &window, [&] {
@@ -298,6 +302,20 @@ private slots:
         emit stager->stageComplete(QStringLiteral("FLEX-9600_v4.3.16.ssdr"), QStringLiteral("4.3.16"));
         QVERIFY(prompt.contains(QStringLiteral("was NOT checked")));
         QVERIFY(UpdatesWindowTestAccess::status(window)->text().contains(QStringLiteral("not started")));
+    }
+    void reconnectDuringPreparationDoesNotUpload()
+    {
+        RadioModel model;
+        HeldNetwork network;
+        UpdateChecker checker(nullptr, &network);
+        UpdatesWindow window(&checker, &model);
+        installRadioSetupBackend(model);
+        UpdatesWindowTestAccess::beginNetworkInstall(window);
+        RadioSetupControlTestAccess::replaceConnectionGeneration(model);
+        FirmwareStager* stager = UpdatesWindowTestAccess::stager(window);
+        emit stager->stageComplete(QStringLiteral("FLEX-9600_v4.3.16.ssdr"), QStringLiteral("4.3.16"));
+        QVERIFY(UpdatesWindowTestAccess::status(window)->text().contains(QStringLiteral("Original radio session ended")));
+        QVERIFY(!QApplication::activeModalWidget());
     }
     void ownerDeletedInsidePrompt()
     {
