@@ -868,6 +868,59 @@ void testAtuCapabilityUsesThreeVisibleStates()
                && memory->styleSheet() != activeMemoryStyle);
 }
 
+void testTransverterAtuAvailability()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    QWidget* atu = namedWidget(applet, QStringLiteral("ATU tune"));
+    QWidget* mem = namedWidget(applet, QStringLiteral("ATU memories"));
+    QWidget* tune = namedWidget(applet, QStringLiteral("Tune"));
+    QLabel* success = labelWithText(applet, QStringLiteral("Success"));
+    QLabel* bypass = labelWithText(applet, QStringLiteral("Byp"));
+    QLabel* memory = labelWithText(applet, QStringLiteral("Mem"));
+    report("transverter gate widgets exist", atu && mem && tune && success && bypass && memory);
+    if (!atu || !mem || !tune || !success || !bypass || !memory) {
+        return;
+    }
+    TransmitDelta active;
+    active.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL");
+    active.memoriesEnabled = true;
+    active.usingMemory = true;
+    model.applyChanges(active);
+    const QString successStyle = success->styleSheet();
+    const QString memoryStyle = memory->styleSheet();
+    ModelControlWireSpy commands(&model);
+    QSignalSpy atuIntents(&model, &TransmitModel::atuCommandIssued);
+    model.setAtuAvailable(false);
+    report("transverter path dims ATU and MEM without hiding them",
+           !atu->isEnabled() && !mem->isEnabled() && !atu->isHidden() && !mem->isHidden());
+    report("transverter path dims all three ATU indicators",
+           !success->isEnabled() && !bypass->isEnabled() && !memory->isEnabled()
+               && success->styleSheet() != successStyle && memory->styleSheet() != memoryStyle);
+    report("transverter path explains ATU and MEM unavailability accessibly",
+           atu->toolTip().contains(QStringLiteral("transverter TX path"))
+               && atu->accessibleDescription() == atu->toolTip()
+               && mem->accessibleDescription() == atu->toolTip());
+    report("transverter path preserves carrier TUNE", tune->isEnabled());
+    report("availability update sends no commands", commands.isEmpty() && atuIntents.isEmpty());
+    report("transverter path preserves authoritative memory state",
+           model.memoriesEnabled() && model.usingMemory());
+    model.setHasTuner(false);
+    model.setHasTuner(true);
+    model.setHasTunerMemories(false);
+    model.setHasTunerMemories(true);
+    report("capability updates cannot re-enable a transverter ATU",
+           !atu->isEnabled() && !mem->isEnabled() && !success->isEnabled());
+    model.setAtuAvailable(true);
+    report("normal antenna restores ATU controls and reported indicators",
+           atu->isEnabled() && mem->isEnabled() && success->isEnabled()
+               && bypass->isEnabled() && memory->isEnabled()
+               && success->styleSheet() == successStyle && memory->styleSheet() == memoryStyle
+               && atu->toolTip().isEmpty() && atu->accessibleDescription().isEmpty()
+               && mem->accessibleDescription().isEmpty());
+}
+
 void testTuneAvailability()
 {
     TransmitModel model;
@@ -1117,6 +1170,7 @@ int main(int argc, char** argv)
     testModemReceiveProgramAuthority();
     testSweepRetainsOriginalAuthority();
     testAtuCapabilityUsesThreeVisibleStates();
+    testTransverterAtuAvailability();
     testTuneAvailability();
     testAtuContextMenuExplainsWhyPreTuneIsDisabled();
     testMemButtonFollowsReadbackOnly();

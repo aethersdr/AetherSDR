@@ -635,6 +635,10 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         syncAtuIndicators();
     });
     m_radioHasTunerMemories = m_model->hasTunerMemories();
+    connect(m_model, &TransmitModel::atuAvailabilityChanged, this, [this] {
+        updateAtuAvailability();
+        syncAtuIndicators();
+    });
 
     syncFromModel();
     syncAtuIndicators();
@@ -643,10 +647,12 @@ void TxApplet::setTransmitModel(TransmitModel* model)
 
 void TxApplet::updateAtuAvailability()
 {
-    if (!m_atuBtn || !m_memBtn)
+    if (!m_atuBtn || !m_memBtn) {
         return;
-    const bool atuEnabled = m_radioHasTuner && !m_tgxlOperate;
-    const bool memoriesEnabled = m_radioHasTunerMemories && !m_tgxlOperate;
+    }
+    const bool pathAvailable = !m_model || m_model->atuAvailable();
+    const bool atuEnabled = m_radioHasTuner && !m_tgxlOperate && pathAvailable;
+    const bool memoriesEnabled = m_radioHasTunerMemories && !m_tgxlOperate && pathAvailable;
     m_atuBtn->setEnabled(atuEnabled);
     m_memBtn->setEnabled(memoriesEnabled);
     // The ATU context menu contains only memory operations. Keep the shared
@@ -660,16 +666,21 @@ void TxApplet::updateAtuAvailability()
     // point, and "Disabled — TGXL is in OPERATE mode" would send the operator
     // looking at the wrong box.
     QString tip;
-    if (!m_radioHasTuner)
+    if (!m_radioHasTuner) {
         tip = tr("Antenna tuner controls are unavailable for this radio");
-    else if (m_tgxlOperate)
+    } else if (m_tgxlOperate) {
         tip = tr("Disabled — TGXL is in OPERATE mode");
+    } else if (!pathAvailable) {
+        tip = tr("Disabled — the internal ATU is not in the transverter TX path");
+    }
     m_atuBtn->setToolTip(tip);
+    m_atuBtn->setAccessibleDescription(tip);
     if (!m_radioHasTunerMemories) {
         m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
     } else {
         m_memBtn->setToolTip(tip);
     }
+    m_memBtn->setAccessibleDescription(m_memBtn->toolTip());
 }
 
 void TxApplet::setTunerModel(TunerModel* tuner)
@@ -734,21 +745,22 @@ void TxApplet::syncAtuIndicators()
         m_atuTunedFreqMhz = -1.0;
     }
 
+    const bool pathAvailable = m_model->atuAvailable();
     // Success — green when tune was successful
     setIndicatorState(m_successInd,
-        indicatorState(m_radioHasTuner,
+        indicatorState(m_radioHasTuner && pathAvailable,
                        status == ATUStatus::Successful || status == ATUStatus::OK));
 
     // Byp — orange when in bypass
     setIndicatorState(m_bypInd,
-        indicatorState(m_radioHasTuner,
+        indicatorState(m_radioHasTuner && pathAvailable,
                        status == ATUStatus::Bypass
                            || status == ATUStatus::ManualBypass),
         QColor(0xd0, 0x90, 0x00));
 
     // Mem — green when using memory
     setIndicatorState(m_memInd,
-        indicatorState(m_radioHasTunerMemories, m_model->usingMemory()));
+        indicatorState(m_radioHasTunerMemories && pathAvailable, m_model->usingMemory()));
 
     // APD indicators — mutually exclusive states, all off when APD disabled
     // Progression: Cal (calibrating) → Avail (calibration ready) → Active (applied)
