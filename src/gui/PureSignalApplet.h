@@ -38,9 +38,10 @@ struct PureSignalView {
     int attMin = -28;
     int attMax = 31;
     bool keyed = false;
-    // Only the keys present in `fields` change `base`.
+    // Only the keys present in `fields` change `base`. (No `= {}` default:
+    // GCC and Clang reject it inside the class's own definition.)
     [[nodiscard]] static PureSignalView fromFields(const QVariantMap& fields,
-                                                   PureSignalView base = {});
+                                                   PureSignalView base);
 };
 
 // The feedback level bar: 0..256 with calcc's target window (128..181) marked,
