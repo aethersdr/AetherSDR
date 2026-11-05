@@ -468,10 +468,11 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 		},
 		Authorize: n.authorizer(lc),
 	}
-	n.exposed.splices = &n.splices
+	// Bound to the node's own address, as the UDP listeners above are, so a
+	// published port never catches flows to a shared station device.
 	n.exposed.attach(func(port int) (net.Listener, error) {
-		return srv.Listen("tcp", fmt.Sprintf(":%d", port))
-	}, n.authorizer(lc))
+		return srv.Listen("tcp", fmt.Sprintf("%s:%d", ip4, port))
+	}, n.authorizer(lc), &n.splices)
 	closers = append(closers, func() error { n.exposed.detach(); return nil })
 	relay.OpenForward = fwd.Open
 	relay.ForgetForward = fwd.Forget

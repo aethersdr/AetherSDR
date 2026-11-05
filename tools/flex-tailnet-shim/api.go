@@ -259,10 +259,9 @@ func NewAPI(n *Node) http.Handler {
 	})
 	// Apps on the radio itself publish a port to the tailnet here. This is
 	// the one path for callers lanOnly refuses: it is open only to the
-	// radio, and it can only forward to the caller's own address.
+	// radio, and it can only publish a port already reachable on the LAN.
 	local := http.NewServeMux()
 	local.HandleFunc("POST /v1/local/expose", func(w http.ResponseWriter, r *http.Request) {
-		ap, _ := netip.ParseAddrPort(r.RemoteAddr)
 		var req struct {
 			Port int    `json:"port"`
 			Name string `json:"name"`
@@ -271,16 +270,22 @@ func NewAPI(n *Node) http.Handler {
 			writeJSON(w, http.StatusBadRequest, apiError{"bad request: " + err.Error()})
 			return
 		}
-		lease, err := n.exposed.register(ap.Addr().Unmap(), req.Port, req.Name)
+		lease, listening, err := n.exposed.register(req.Port, req.Name)
 		switch {
 		case errors.Is(err, errExposeConflict):
 			writeJSON(w, http.StatusConflict, apiError{err.Error()})
+			return
+		case errors.Is(err, errExposeListen):
+			writeJSON(w, http.StatusServiceUnavailable, apiError{err.Error()})
 			return
 		case err != nil:
 			writeJSON(w, http.StatusBadRequest, apiError{err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "expires_in_s": int(lease.Seconds())})
+		// listening is false while the tailnet node is down; the port opens
+		// when it comes up.
+		writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "expires_in_s": int(lease.Seconds()),
+			"listening": listening})
 	})
 	lan := lanOnly(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

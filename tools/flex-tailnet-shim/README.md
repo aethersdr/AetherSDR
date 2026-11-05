@@ -130,18 +130,25 @@ An app running on the radio itself, such as another container or a legacy
 waveform, can make one of its TCP ports reachable on the tailnet:
 `POST /v1/local/expose {"port": 48995, "name": "AetherWSPR"}` on TCP 48992.
 This is the one path open to callers the table above refuses, and only to
-them: loopback, the container network 172.30.0.0/16 and the radio's own
-addresses. Anyone else gets 403.
+them: loopback and the radio's own addresses. An 8000-series container
+shares the radio's network, so it calls from these too. Anyone else,
+including other 172.30.x hosts, gets 403.
 
-- The shim listens on that port on its tailnet address and splices each
-  caller the tailnet admits (the same `WhoIs` check as the radio) to the app,
-  at the address the app registered from.
-- The registration is a 10-minute lease (`expires_in_s` in the reply). The
-  app renews it by posting again; when it lapses the port closes.
-- Ports 1024-65535 only, never 22, 4991-4994, 42607, 48992 or 48993. At most
-  8 ports, and a port another app holds is refused (409).
-- `/v1/status` lists them as `exposed_ports`. They survive the tailnet node
-  restarting, but not the shim.
+- Only a port something already listens on beyond loopback can be
+  published (400 otherwise), read from `/proc/net/tcp`. The shim never
+  exposes a service the radio keeps to itself; it makes reachable over the
+  tailnet what the radio's LAN can already reach.
+- The shim listens on that port on its own tailnet address and splices
+  each caller the tailnet admits (the same `WhoIs` check as the radio) to
+  the app's listener. The reply's `listening` is false while the tailnet
+  node is down; the port opens when it comes up. If the shim can't listen
+  (for example, a radio file transfer holds the port), the reply is 503.
+- The registration is a 10-minute lease (`expires_in_s`), renewed by posting
+  again. The app's `name` owns the port: the same name renews it, another
+  gets 409. When the lease lapses, the port and its open connections close.
+- Ports 1024-65535 only, never 22, 4991-4994, 42607, 48992 or 48993, and at
+  most 8. `/v1/status` lists them as `exposed_ports`. They survive the
+  tailnet node restarting, but not the shim.
 
 **Trust model:** the first provisioning is open to the LAN. That matches the
 radio itself: its API on 4992 and its image upload on 42607 are
