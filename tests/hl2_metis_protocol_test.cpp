@@ -829,6 +829,27 @@ int main()
             check(!w.reversePeak.has_value(), "clear() drops the reverse peak too");
         }
 
+        // Keyed SWR gate: a steady carrier always passes, a speech pause is
+        // dropped, and the next syllable passes again.
+        {
+            KeyedSwrGate g;
+            check(g.accept(2000), "the first window of an over passes");
+            for (int i = 0; i < 20; ++i)
+                g.accept(2000);
+            check(g.accept(1990), "a steady carrier keeps passing");
+            check(!g.accept(800), "a pause window well below the envelope is dropped");
+            check(!g.accept(700), "the pause stays dropped while the envelope remembers");
+            check(g.accept(1900), "the next syllable passes again");
+            g.reset();
+            check(g.accept(400), "reset() lets a quieter over start afresh");
+            KeyedSwrGate slow;
+            slow.accept(2000);
+            bool passedAgain = false;
+            for (int i = 0; i < 30 && !passedAgain; ++i)
+                passedAgain = slow.accept(1000);
+            check(passedAgain, "a lasting lower level passes once the envelope has decayed");
+        }
+
         // A RADDR-1 response whose temperature word is 0 is not a measurement:
         // its forward word is neither the peak nor counted. Nothing else is
         // dropped: not the response after it, and not a lone high sample.

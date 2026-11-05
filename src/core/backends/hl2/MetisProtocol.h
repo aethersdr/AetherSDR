@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <complex>
 #include <cstddef>
@@ -577,6 +578,29 @@ struct ForwardPowerWindow {
         skipped = 0;
         reversePeak.reset();
     }
+};
+
+// Keyed SWR is only published from a window that carries real modulation.
+// In speech, a window that falls in a pause still clears
+// kMinForwardCountsForSwr on the carrier's tail, but its forward and reverse
+// maxima no longer sit on the same syllable, and the ratio reads 3:1 to 6:1
+// on a matched load. The gate follows the forward peak with a decaying
+// envelope and passes a window only when its forward peak is within
+// kMinFraction of that envelope (counts follow detector volts, so about half
+// the envelope's power). A steady carrier (tune, CW, digital) always passes;
+// the first window of an over always passes, since it sets the envelope.
+struct KeyedSwrGate {
+    // Per 100 ms telemetry window: half-life about 0.66 s, so the envelope
+    // still remembers the last syllable through a normal pause.
+    static constexpr double kRelease = 0.9;
+    static constexpr double kMinFraction = 0.7;
+    double envelope = 0.0;
+    bool accept(int forwardCounts) noexcept
+    {
+        envelope = std::max(envelope * kRelease, static_cast<double>(forwardCounts));
+        return forwardCounts >= envelope * kMinFraction;
+    }
+    void reset() noexcept { envelope = 0.0; }
 };
 
 // Directional-coupler counts -> watts via Quisk's reference curve (see the

@@ -4566,6 +4566,8 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // can arrive before any no-carrier sample does, and the new over would
         // open displaying the old one's peak.
         m_fwdPeakWatts = 0.0;
+        // Likewise the SWR gate's envelope: the new over sets its own.
+        m_swrGate.reset();
     }
 
     const bool keyChanged = m_keyed != key;
@@ -8173,6 +8175,7 @@ void Hl2Backend::pushInitialState()
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
     m_radioPtt = false;
+    m_swrGate.reset();
     publishTransmitState();
     m_tuning = false;
     m_tuneOperation = {};
@@ -8282,10 +8285,13 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // trough, and the ratio jumps into the red on a matched load. The maxima of
     // one window both sit on its loudest syllable. Unkeyed, the last values, as
     // for FWDPWR below.
+    // A keyed window that falls in a speech pause is dropped by m_swrGate, so
+    // the meter holds the last syllable's reading instead of the pause's ratio.
     const bool windowPair = m_keyed && t.forwardPowerPeakRaw && t.reversePowerPeakRaw;
     const std::optional<int> swrFwd = windowPair ? t.forwardPowerPeakRaw : t.forwardPowerRaw;
     const std::optional<int> swrRev = windowPair ? t.reversePowerPeakRaw : t.reversePowerRaw;
-    if (swrFwd && swrRev && *swrFwd >= kMinForwardCountsForSwr) {
+    const bool swrModulated = !windowPair || m_swrGate.accept(*swrFwd);
+    if (swrFwd && swrRev && *swrFwd >= kMinForwardCountsForSwr && swrModulated) {
         if (const auto swr = swrFromRaw(*swrFwd, *swrRev))
             emit meterUpdate(QStringLiteral("TX:SWR"), *swr);
     }
