@@ -8,12 +8,17 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileDevice>
 #include <QFileInfo>
 #include <QMap>
 #include <QString>
 #include <QtCore/qlogging.h>
 
 #include <cstdio>
+
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#endif
 
 using namespace AetherSDR;
 
@@ -153,6 +158,34 @@ int main(int argc, char** argv)
     check(hasMarker(blocked, "failed to create temp log symlink"),
           "startup alias failure is written to the active log");
     manager.shutdownLogging();
+
+    // A rotation whose new file cannot be created must leave the active path
+    // and the alias on the file that is still being written. Root ignores
+    // directory permissions, so the case cannot be staged there.
+    if (::geteuid() != 0) {
+        const QString lockedDir = profile.path() + QStringLiteral("/locked");
+        check(QDir().mkpath(lockedDir), "create a log directory to lock");
+        const QString kept = lockedDir + QStringLiteral("/aethersdr-20000104-000000.log");
+        check(manager.startLogging(kept, false), "start logging before the lock");
+        const QFileDevice::Permissions writable = QFile::permissions(lockedDir);
+        check(QFile::setPermissions(lockedDir, QFileDevice::ReadOwner | QFileDevice::ExeOwner),
+              "make the log directory read-only");
+        const QByteArray failedRotation("Log rotation could not open");
+        for (int i = 0; i < 24 && !hasMarker(kept, failedRotation); ++i) {
+            manager.enqueueMessage(QtWarningMsg, context, padding);
+            manager.flushLog();
+        }
+        check(hasMarker(kept, failedRotation), "a failed rotation warns into the active log");
+        check(manager.logFilePath() == kept, "a failed rotation keeps the active path");
+        check(QFileInfo(lockedDir + QStringLiteral("/aethersdr.log")).symLinkTarget() == kept,
+              "a failed rotation keeps the alias");
+        manager.enqueueMessage(QtWarningMsg, context, QStringLiteral("after-failed-rotation-marker"));
+        manager.flushLog();
+        check(hasMarker(kept, "after-failed-rotation-marker"),
+              "logging continues in the old file after a failed rotation");
+        manager.shutdownLogging();
+        QFile::setPermissions(lockedDir, writable);
+    }
 #endif
     return failures == 0 ? 0 : 1;
 }

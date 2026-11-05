@@ -354,11 +354,13 @@ AsyncLogWriter::~AsyncLogWriter()
     shutdown();
 }
 
-void AsyncLogWriter::setRotationConfig(qint64 maxFileBytes, RotationCallback cb)
+void AsyncLogWriter::setRotationConfig(qint64 maxFileBytes, RotationCallback cb,
+                                       RotatedCallback rotated)
 {
     std::lock_guard lock(m_mutex);
     m_maxFileBytes = maxFileBytes;
     m_rotationCallback = std::move(cb);
+    m_rotatedCallback = std::move(rotated);
 }
 
 bool AsyncLogWriter::start(const QString& path, bool mirrorToStderr)
@@ -564,12 +566,14 @@ void AsyncLogWriter::run(std::promise<bool> opened)
     bool mirrorToStderr = false;
     qint64 maxFileBytes = 0;
     RotationCallback rotationCb;
+    RotatedCallback rotatedCb;
     {
         std::lock_guard lock(m_mutex);
         path = m_filePath;
         mirrorToStderr = m_mirrorToStderr;
         maxFileBytes = m_maxFileBytes;
         rotationCb = m_rotationCallback;
+        rotatedCb = m_rotatedCallback;
     }
 
     QDir().mkpath(QFileInfo(path).absolutePath());
@@ -617,6 +621,24 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         return true;
     };
 
+    // Rotation runs between batches with the buffer drained, so a warning
+    // about it is written and flushed on its own.
+    auto writeRotationWarning = [&](const QString& message) {
+        const QByteArray line = formatLine(QtWarningMsg, QTime::currentTime(),
+                                           QStringLiteral("aether.logging"), message);
+        if (file.isOpen()) {
+            buffer.append(line);
+            ++bufferedLineCount;
+            flushBuffer();
+            file.flush();
+            hasUnflushedWrites = false;
+        }
+        if (mirrorToStderr) {
+            fwrite(line.constData(), 1, static_cast<size_t>(line.size()), stderr);
+            fflush(stderr);
+        }
+    };
+
     auto maybeRotate = [&]() {
         if (maxFileBytes <= 0 || !rotationCb)
             return;
@@ -639,18 +661,23 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         QDir().mkpath(QFileInfo(newPath).absolutePath());
         file.setFileName(newPath);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-            if (!reopenForAppendOrMirrorToStderr(oldPath)) {
-                maxFileBytes = 0;
-                return;
-            }
+            const QString reason = file.errorString();
+            reopenForAppendOrMirrorToStderr(oldPath);
             maxFileBytes = 0;
+            writeRotationWarning(
+                QStringLiteral("Log rotation could not open %1: %2; still logging to %3, rotation disabled")
+                    .arg(newPath, reason, oldPath));
             return;
         }
         file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 
-        std::lock_guard lock(m_mutex);
-        m_filePath = newPath;
-        ++m_counters.rotationCount;
+        {
+            std::lock_guard lock(m_mutex);
+            m_filePath = newPath;
+            ++m_counters.rotationCount;
+        }
+        if (rotatedCb)
+            rotatedCb(newPath);
     };
 
     auto makeDropSummary = [](QtMsgType type, const QString& message) {
