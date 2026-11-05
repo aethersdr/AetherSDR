@@ -44,6 +44,9 @@
 #include "wsprsim_utils.h"
 
 #define max(x,y) ((x) > (y) ? (x) : (y))
+/* AetherSDR: every array of results is this long and bounded by it. Stock
+ * wsprd overruns decodes[50] at the 51st unique decode. */
+#define MAX_UNIQUES 200
 
 extern void osdwspr_ (float [], unsigned char [], int *, unsigned char [], int *, float *);
 
@@ -774,7 +777,7 @@ int wsprd_main(int argc, char *argv[])
         float dt; double freq; char message[23]; float drift;
         unsigned int cycles; int jitter; int blocksize; unsigned int metric;
         int nhardmin; int ipass; int decodetype;};
-    struct result decodes[50];
+    struct result decodes[MAX_UNIQUES];
     
     char *hashtab;
     hashtab=calloc(32768*13,sizeof(char));
@@ -789,10 +792,10 @@ int wsprd_main(int argc, char *argv[])
     callsign=calloc(13,sizeof(char));
     grid=calloc(5,sizeof(char));
     call_loc_pow=calloc(23,sizeof(char));
-    float allfreqs[100];
-    char allcalls[100][13];
-    for (i=0; i<100; i++) allfreqs[i]=0.0;
-    memset(allcalls,0,sizeof(char)*100*13);
+    float allfreqs[MAX_UNIQUES];
+    char allcalls[MAX_UNIQUES][13];
+    for (i=0; i<MAX_UNIQUES; i++) allfreqs[i]=0.0;
+    memset(allcalls,0,sizeof(char)*MAX_UNIQUES*13);
     
     int uniques=0, noprint=0, ndecodes_pass=0;
     
@@ -1444,7 +1447,7 @@ int wsprd_main(int argc, char *argv[])
                     if(!strcmp(callsign,allcalls[i]) &&
                        (fabs(f1-allfreqs[i]) <4.0)) dupe=1;
                 }
-                if( (verbose || !dupe) && !noprint) {
+                if( (verbose || !dupe) && !noprint && uniques < MAX_UNIQUES) {
                     strcpy(allcalls[uniques],callsign);
                     allfreqs[uniques]=f1;
                     uniques++;

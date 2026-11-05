@@ -445,6 +445,8 @@ void MainWindow::wireSpotSubsystem()
                 spotColor = as.value("RbnSpotColor", "#4488FF").toString();
             else if (source == "FreeDV")
                 spotColor = as.value("FreeDvSpotColor", "#FF8C00").toString();  // HAVE_WEBSOCKETS
+            else if (source == "WSPR")
+                spotColor = ThemeManager::instance().value(QString::fromLatin1(kWsprDefaultColorToken));
         }
         if (spotColor.length() == 7)
             spotColor = "#FF" + spotColor.mid(1);

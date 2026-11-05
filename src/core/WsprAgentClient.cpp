@@ -2,7 +2,6 @@
 
 #include "AppSettings.h"
 #include "DxSpot.h"
-#include "ThemeManager.h"
 
 #include <QDateTime>
 #include <QTimer>
@@ -215,7 +214,7 @@ void WsprSpotFeed::onStatus(const WsprStatus& status)
             continue;   // an unresolved hashed call is no label
         }
         DxSpot d = wspr::toDxSpot(s, status.callsign);
-        d.color = wspr::spotColor(style);
+        d.color = style.color;
         d.lifetimeSec = style.lifetimeMinutes * 60;
         emit spotReceived(d);
     }
@@ -241,12 +240,6 @@ void saveSpotHubSettings(const WsprSpotHubSettings& settings)
     auto& s = AppSettings::instance();
     s.setValue(QStringLiteral("WsprSpots"), serializeSpotHubSettings(settings));
     s.save();
-}
-
-QString spotColor(const WsprSpotHubSettings& settings)
-{
-    return settings.color.isEmpty() ? ThemeManager::instance().value(QStringLiteral("color.canon.category.violet"))
-                                    : settings.color;
 }
 
 }  // namespace wspr

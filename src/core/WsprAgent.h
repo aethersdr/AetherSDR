@@ -30,11 +30,11 @@ struct WsprPackage {
     static constexpr const char* kVersion = "0.1.0";
     // FLEX-6000: a legacy waveform, whose settings persist on /user.
     static constexpr Pin kLegacy{":/waveforms/AetherWSPR.ssdr_waveform", "AetherWSPR.ssdr_waveform",
-                                 "e0aeeaad99775fffcd13bcd10915578c052cdf58418313a33d7587aedfefeb3d", 138321};
+                                 "dcc2662cb9bf6b6371b5f60c8a750a8bf0a8987a99e38d336d09e8c4d26f4cb9", 139334};
     // FLEX-8000 and Aurora: a container, because a legacy waveform has only
     // RAM there and the container's writable layer survives a reboot.
     static constexpr Pin kContainer{":/waveforms/AetherWSPR.tar.gz", "AetherWSPR.tar.gz",
-                                    "d9069eafde6f33d9b08d1eb0579cf69ee338733100c25dcb126ce15f46a199a3", 151315};
+                                    "381245192dd05e19c06c60464b6382258d7ed2cafef948565159f5f72bb01e81", 152176};
 };
 
 // The receiver's waveform name, in both packages.
@@ -117,12 +117,15 @@ struct WsprConfig {
     bool operator!=(const WsprConfig& o) const { return !(*this == o); }
 };
 
+// The theme color WSPR spots take until one is chosen.
+inline constexpr const char* kWsprDefaultColorToken = "color.canon.category.violet";
+
 // SpotHub → WSPR's own settings, one object under AppSettings key
 // "WsprSpots" (Principle V): whether reading starts when a radio with the
 // receiver connects, and how its spots look on the panadapter.
 struct WsprSpotHubSettings {
     bool autoStart{false};
-    QString color;          // empty: the theme's violet (wspr::spotColor)
+    QString color;          // empty: kWsprDefaultColorToken
     int lifetimeMinutes{30};
 
     bool operator==(const WsprSpotHubSettings& o) const

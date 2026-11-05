@@ -97,6 +97,16 @@ static double now_s(void)
     return t.tv_sec + t.tv_nsec / 1e9;
 }
 
+/* For anything measured rather than a time of day. A radio boots with its
+ * clock hours off and NTP then steps it, which would otherwise move every
+ * timer armed before the step by that much. */
+static double mono_s(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+
 /* The kernel's view of the clock: synchronized (by the radio's GPS-fed NTP,
  * or NTP over the internet) or not. WSPR needs the cycle start within ~1 s. */
 static int clock_synced(void)
@@ -672,7 +682,7 @@ static int start_decode(decode_t *dc, const char *c2, int depth)
     dc->pid = pid;
     dc->fd = p[0];
     dc->n = 0;
-    dc->started = now_s();
+    dc->started = mono_s();
     cpu_jiffies(&dc->cpu0_busy, &dc->cpu0_total);
     return 1;
 }
@@ -698,10 +708,12 @@ static int parse_spot(char *line, long long t, spot_t *s)
     s->hz = llround(atof(f[3]) * 1e6);
     s->drift = atoi(f[4]);
     const char *call = f[5], *grid = n >= 8 ? f[6] : "", *dbm = f[n - 1];
-    if (call[0] == '<') call = "";   /* unresolved hash */
+    /* <K1ABC> is a hash wsprd resolved; <...> one it couldn't. */
+    if (!strcmp(call, "<...>")) call = "";
+    else if (call[0] == '<') call++;
     snprintf(s->call, sizeof s->call, "%s", call);
-    char *gt = s->call;
-    for (; *gt; gt++) if (*gt == '<' || *gt == '>') *gt = 0;
+    char *gt = strchr(s->call, '>');
+    if (gt) *gt = 0;
     snprintf(s->grid, sizeof s->grid, "%s", grid);
     s->dbm = atoi(dbm);
     snprintf(s->band, sizeof s->band, "%s", band_of(s->hz));
@@ -844,6 +856,20 @@ static int post_wsprnet(const upreq_t *r, char *err, size_t errcap)
     return 0;
 }
 
+/* Turning upload off is a promise that nothing more leaves the radio, so
+ * what is waiting for wsprnet goes too. */
+static int upload_drop_if_off(void)
+{
+    pthread_mutex_lock(&G.mu);
+    int on = G.cfg.upload;
+    pthread_mutex_unlock(&G.mu);
+    if (on) return 0;
+    pthread_mutex_lock(&U.mu);
+    U.head = U.n = 0;
+    pthread_mutex_unlock(&U.mu);
+    return 1;
+}
+
 static void *upload_thread(void *arg)
 {
     (void)arg;
@@ -851,6 +877,9 @@ static void *upload_thread(void *arg)
     for (;;) {
         pthread_mutex_lock(&U.mu);
         while (!U.n) pthread_cond_wait(&U.cv, &U.mu);
+        pthread_mutex_unlock(&U.mu);
+        if (upload_drop_if_off()) { backoff = 0; continue; }
+        pthread_mutex_lock(&U.mu);
         upreq_t r = U.q[U.head];
         pthread_mutex_unlock(&U.mu);
         if (time(NULL) - r.t > 24 * 3600) {   /* wsprnet drops old spots anyway */
@@ -888,7 +917,7 @@ static void status_json(buf_t *b, long long since)
     bprintf(b, "{\"agent\":\"AetherWSPR\",\"version\":\"%s\",\"state\":", AGENT_VERSION);
     bjson_str(b, G.state);
     bprintf(b, ",\"clock_synced\":%s,\"uptime_s\":%lld,\"callsign\":", clock_synced() ? "true" : "false",
-            (long long)time(NULL) - G.started);
+            (long long)(mono_s() - G.started));
     bjson_str(b, call);
     bputs(b, ",\"grid\":"); bjson_str(b, grid);
     bputs(b, ",\"band\":"); bjson_str(b, G.band);
@@ -1285,7 +1314,7 @@ static void vita_packet(const unsigned char *p, ssize_t n, unsigned want, dsp_t 
      * would pull every later sample earlier and break WSPR's symbol timing. */
     int count = (int)((w0 >> 16) & 0xF);
     ssize_t per = pcc == 0x03E3 ? (end - 28) / 8 : (end - 28) / 2;
-    double at = now_s();
+    double at = mono_s();
     if (d->last_count >= 0 && per > 0) {
         int gap = missing_packets(d->last_count, count, at - d->last_at, (double)per / AUDIO_RATE);
         d->lost += gap;
@@ -1366,9 +1395,43 @@ static double gauss(void)
 static const char *band_for_cycle(const config_t *c, const char *grid, long long cycle_t, const char *current, int *period_out);
 static const char *const COORDINATED[10];
 
+/* What wsprd prints for each kind of call. */
+static int selftest_spots(void)
+{
+    struct { const char *line, *call, *grid; } want[] = {
+        {"0000 -21  0.1  14.097100  0  K1ABC FN42 37", "K1ABC", "FN42"},
+        {"0000 -21  0.1  14.097100  0  <K1ABC> FN42AB 37", "K1ABC", "FN42AB"},
+        {"0000 -21  0.1  14.097100  0  <PA0SKT/2> JO33 40", "PA0SKT/2", "JO33"},
+        {"0000 -21  0.1  14.097100  0  <...> FN42AB 37", "", "FN42AB"},
+    };
+    for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
+        char line[80];
+        spot_t s;
+        snprintf(line, sizeof line, "%s", want[i].line);
+        if (!parse_spot(line, 0, &s) || strcmp(s.call, want[i].call) || strcmp(s.grid, want[i].grid)) {
+            printf("selftest FAIL: spot \"%s\" gave call \"%s\"\n", want[i].line, s.call);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Upload off leaves nothing queued; on keeps the queue. */
+static int selftest_upload_off(void)
+{
+    config_default(&G.cfg);
+    U.head = 3; U.n = 2;
+    G.cfg.upload = 1;
+    if (upload_drop_if_off() || U.n != 2) { printf("selftest FAIL: upload on dropped the queue\n"); return 1; }
+    G.cfg.upload = 0;
+    if (!upload_drop_if_off() || U.n != 0) { printf("selftest FAIL: upload off kept the queue\n"); return 1; }
+    U.head = 0;
+    return 0;
+}
+
 static int selftest(double snr_db)
 {
-    if (selftest_persistence()) return 1;
+    if (selftest_persistence() || selftest_spots() || selftest_upload_off()) return 1;
     /* Hopping: every coordinated band ticked follows the slot exactly; a
      * subset only ever yields ticked bands; nothing ticked stays put. */
     {
@@ -1495,7 +1558,7 @@ static void record_cycle(const decode_t *dc)
     c->dial_hz = dc->dial_hz;
     snprintf(c->band, sizeof c->band, "%s", dc->band);
     c->spots = n;
-    c->decode_ms = (int)((now_s() - dc->started) * 1000);
+    c->decode_ms = (int)((mono_s() - dc->started) * 1000);
     c->audio_pct = dc->audio_pct;
     c->lost_packets = dc->lost;
     c->audio_dbfs = dc->dbfs;
@@ -1578,7 +1641,7 @@ int main(int argc, char *argv[])
     config_default(&G.cfg);
     pick_state_dir(self_dir);
     load_config();
-    G.started = time(NULL);
+    G.started = (long long)mono_s();
     logf_("AetherWSPR %s, state in %s", AGENT_VERSION, G.state_path[0] ? G.state_path : "(none)");
 
     int ls = socket(AF_INET, SOCK_STREAM, 0), one = 1;
@@ -1629,16 +1692,17 @@ int main(int argc, char *argv[])
             /* A new DAX channel needs a new slice and stream; bands and the
              * rest apply at the next cycle without one. */
             api_send(&a, "slice remove %d", a.slice);
+            if (a.stream) api_send(&a, "stream remove 0x%08X", a.stream);
             a.slice = -1;
             a.stream = 0;
             tuned_for = 0;
             pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
         }
 
-        if (a.fd < 0 && now >= next_connect) {
+        if (a.fd < 0 && mono_s() >= next_connect) {
             pthread_mutex_lock(&G.mu); G.state = "connecting"; pthread_mutex_unlock(&G.mu);
             if (api_connect(&a, udp_port)) logf_("connected to the radio at %s", g_radio_addr);
-            else next_connect = now + 5;
+            else next_connect = mono_s() + 5;
             tuned_for = 0;
         }
 
@@ -1743,7 +1807,7 @@ int main(int argc, char *argv[])
                 api_close(&a);
                 capture_t = 0;
                 pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
-                next_connect = now_s() + 5;
+                next_connect = mono_s() + 5;
             }
         }
         if (di >= 0 && (pf[di].revents & (POLLIN | POLLHUP | POLLERR))) {
