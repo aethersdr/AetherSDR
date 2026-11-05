@@ -8279,14 +8279,11 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // detectorVolts(), #4578), and only meaningful with real forward power:
     // below kMinForwardCountsForSwr (MetisProtocol.h, shared with Radio Health)
     // noise drives the ratio to 255.99:1.
-    // Keyed, the pair is the window's two maxima, not the last values: forward
-    // (RADDR 1) and reverse (RADDR 2) are sampled in different responses, so in
-    // speech the last two catch different points of the envelope, often a
-    // trough, and the ratio jumps into the red on a matched load. The maxima of
-    // one window both sit on its loudest syllable. Unkeyed, the last values, as
-    // for FWDPWR below.
-    // A keyed window that falls in a speech pause is dropped by m_swrGate, so
-    // the meter holds the last syllable's reading instead of the pause's ratio.
+    // Keyed, the pair is the window's two maxima: forward (RADDR 1) and reverse
+    // (RADDR 2) come in different responses, so the last two can sit on
+    // different points of the speech envelope. Unkeyed, the last values, as
+    // for FWDPWR below. m_swrGate drops the key-on and speech-pause windows;
+    // the meter then holds its last reading.
     const bool windowPair = m_keyed && t.forwardPowerPeakRaw && t.reversePowerPeakRaw;
     const std::optional<int> swrFwd = windowPair ? t.forwardPowerPeakRaw : t.forwardPowerRaw;
     const std::optional<int> swrRev = windowPair ? t.reversePowerPeakRaw : t.reversePowerRaw;
@@ -8329,6 +8326,7 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
                          << "(uncalibrated reference curve);"
                          << "window peak" << t.forwardPowerPeakRaw.value_or(-1)
+                         << "rev peak" << t.reversePowerPeakRaw.value_or(-1)
                          << "of" << t.forwardPowerSamples << "RADDR-1 samples ("
                          << t.forwardPowerSkipped << "skipped) in"
                          << t.adcWindowMs << "ms";

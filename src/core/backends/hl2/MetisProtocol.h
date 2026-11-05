@@ -516,11 +516,8 @@ struct Hl2Telemetry {
     // The window's RADDR-1 responses skipped as isNonMeasurementRaddr1(). A unit
     // whose temperature word is always 0 has every response here and no peak.
     int forwardPowerSkipped = 0;
-    // Maximum of the same window's non-ACK RADDR-2 DATA[31:16]. Reverse power
-    // arrives in other responses than forward power, so the last values of the
-    // two are taken at different moments of the envelope; in speech their ratio
-    // swings from 1:1 to the red. Two maxima of one window are one measurement:
-    // the keyed SWR is the ratio of this and forwardPowerPeakRaw.
+    // Maximum of the same window's non-ACK RADDR-2 DATA[31:16]. Keyed, the SWR
+    // is the ratio of this and forwardPowerPeakRaw (Hl2Backend::publishTelemetry).
     std::optional<int> reversePowerPeakRaw;
 
     // Merge a decoded response in, leaving untouched fields alone. ACK
@@ -587,20 +584,35 @@ struct ForwardPowerWindow {
 // on a matched load. The gate follows the forward peak with a decaying
 // envelope and passes a window only when its forward peak is within
 // kMinFraction of that envelope (counts follow detector volts, so about half
-// the envelope's power). A steady carrier (tune, CW, digital) always passes;
-// the first window of an over always passes, since it sets the envelope.
+// the envelope's power). A steady carrier (tune, CW, digital) always passes.
+// The first kKeyOnWindows windows of an over are dropped as well: #6229 found
+// the slow-ADC words of RADDR 1 and 2 are not measurements for about 2 ms
+// after the T/R switch-over, and a window maximum would keep a junk reverse
+// word that the forward-side skip (isNonMeasurementRaddr1) cannot see. Two
+// windows, because the switch-over can fall in the second one when the key
+// comes late in the first. They still set the envelope.
 struct KeyedSwrGate {
     // Per 100 ms telemetry window: half-life about 0.66 s, so the envelope
     // still remembers the last syllable through a normal pause.
     static constexpr double kRelease = 0.9;
     static constexpr double kMinFraction = 0.7;
+    static constexpr int kKeyOnWindows = 2;
     double envelope = 0.0;
+    int keyOnWindowsLeft = kKeyOnWindows;
     bool accept(int forwardCounts) noexcept
     {
         envelope = std::max(envelope * kRelease, static_cast<double>(forwardCounts));
+        if (keyOnWindowsLeft > 0) {
+            --keyOnWindowsLeft;
+            return false;
+        }
         return forwardCounts >= envelope * kMinFraction;
     }
-    void reset() noexcept { envelope = 0.0; }
+    void reset() noexcept
+    {
+        envelope = 0.0;
+        keyOnWindowsLeft = kKeyOnWindows;
+    }
 };
 
 // Directional-coupler counts -> watts via Quisk's reference curve (see the

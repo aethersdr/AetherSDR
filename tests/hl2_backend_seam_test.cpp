@@ -90,6 +90,13 @@ struct Hl2TxGateTestAccess {
     static int receiverCeiling(const Hl2Backend& b) { return b.receiverCeiling(); }
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
     static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
+    // A new over whose key-on windows have passed, with an empty envelope.
+    static void pastKeyOn(Hl2Backend& b)
+    {
+        b.m_swrGate.reset();
+        for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+            b.m_swrGate.accept(0);
+    }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
     static double fwdPeakReleaseAlpha() { return Hl2Backend::kFwdPeakReleaseAlpha; }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
@@ -514,14 +521,23 @@ static void swrFromWindowPairWhileKeyed()
     const double trough = *hl2::swrFromRaw(400, 150);
     check(trough > matched + 0.5,
           "control: a trough forward beside a peak reverse reads a high SWR");
+    for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+        check(std::isnan(swrOf(true, 400, 150, 3000, 150)),
+              "SWR keyed: a key-on window publishes no SWR");
     check(swrOf(true, 400, 150, 3000, 150) == matched,
           "SWR keyed: the window's forward and reverse maxima, not the last pair");
     check(swrOf(false, 400, 150, 3000, 150) == trough,
           "SWR unkeyed: the last pair");
     check(swrOf(true, 400, 150, 3000, std::nullopt) == trough,
           "SWR keyed without a reverse maximum: falls back to the last pair");
+    Access::pastKeyOn(b);
     check(std::isnan(swrOf(true, 3000, 150, 200, 10)),
           "SWR keyed: the gate applies to the forward maximum");
+    Access::pastKeyOn(b);
+    check(swrOf(true, 400, 150, 3000, 150) == matched,
+          "SWR keyed: past the key-on windows, a fresh over publishes");
+    check(std::isnan(swrOf(true, 3000, 150, 1000, 50)),
+          "SWR keyed: a speech-pause window well below the envelope publishes none");
     Access::setKeyedFlag(b, false);
 }
 
