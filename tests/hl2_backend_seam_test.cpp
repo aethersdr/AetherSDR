@@ -11,6 +11,10 @@
 #include "core/backends/hl2/MetisProtocol.h"
 #include "gui/ClientFftSmoothingGate.h"
 #include "core/AppSettings.h"
+#include "core/RadioCertification.h"
+#include "models/RadioModel.h"
+#include <QJsonArray>
+#include <QJsonObject>
 
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
@@ -21,6 +25,7 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QSignalSpy>
+#include <QTest>
 #include <QStringList>
 
 #include <algorithm>
@@ -90,6 +95,15 @@ struct Hl2TxGateTestAccess {
     static int receiverCeiling(const Hl2Backend& b) { return b.receiverCeiling(); }
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
     static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
+    // A new over whose key-on windows have passed, with an empty envelope.
+    static void pastKeyOn(Hl2Backend& b)
+    {
+        b.m_swrGate.reset();
+        for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+            b.m_swrGate.accept(0);
+    }
+    static void changeSession(Hl2Backend& b) { ++b.m_connectGeneration; }
+    static void defineMeters(Hl2Backend& b) { b.defineMeters(); }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
     static double fwdPeakReleaseAlpha() { return Hl2Backend::kFwdPeakReleaseAlpha; }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
@@ -488,6 +502,52 @@ static void forwardPowerWindowPeakWhileKeyed()
     Access::setKeyedFlag(b, false);
 }
 
+// TX:SWR keyed is the ratio of the window's two maxima; the last values, taken
+// in different responses, are used only unkeyed or when a maximum is missing.
+static void swrFromWindowPairWhileKeyed()
+{
+    Hl2Backend b;
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    auto swrOf = [&](bool keyed, int fwdLast, int revLast,
+                     std::optional<int> fwdPeak, std::optional<int> revPeak) {
+        Access::setKeyedFlag(b, keyed);
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = fwdLast;
+        t.reversePowerRaw = revLast;
+        t.forwardPowerPeakRaw = fwdPeak;
+        t.reversePowerPeakRaw = revPeak;
+        meters.clear();
+        Access::publish(b, t);
+        for (const auto& args : meters) {
+            if (args.at(0).toString() == QStringLiteral("TX:SWR"))
+                return args.at(1).toDouble();
+        }
+        return std::nan("");
+    };
+    const double matched = *hl2::swrFromRaw(3000, 150);
+    const double trough = *hl2::swrFromRaw(400, 150);
+    check(trough > matched + 0.5,
+          "control: a trough forward beside a peak reverse reads a high SWR");
+    for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+        check(std::isnan(swrOf(true, 400, 150, 3000, 150)),
+              "SWR keyed: a key-on window publishes no SWR");
+    check(swrOf(true, 400, 150, 3000, 150) == matched,
+          "SWR keyed: the window's forward and reverse maxima, not the last pair");
+    check(swrOf(false, 400, 150, 3000, 150) == trough,
+          "SWR unkeyed: the last pair");
+    check(swrOf(true, 400, 150, 3000, std::nullopt) == trough,
+          "SWR keyed without a reverse maximum: falls back to the last pair");
+    Access::pastKeyOn(b);
+    check(std::isnan(swrOf(true, 3000, 150, 200, 10)),
+          "SWR keyed: the gate applies to the forward maximum");
+    Access::pastKeyOn(b);
+    check(swrOf(true, 400, 150, 3000, 150) == matched,
+          "SWR keyed: past the key-on windows, a fresh over publishes");
+    check(std::isnan(swrOf(true, 3000, 150, 1000, 50)),
+          "SWR keyed: a speech-pause window well below the envelope publishes none");
+    Access::setKeyedFlag(b, false);
+}
+
 // The Radio Health row for responses the peak window skipped: a session total,
 // absent until a RADDR-1 response arrived. No radio: telemetry is handed in.
 static void forwardPowerSkippedHealthRow()
@@ -737,6 +797,163 @@ static void panAveragingSeam()
           "an unknown pan id changes nothing");
 }
 
+namespace AetherSDR {
+class RadioCertificationTestAccess {
+public:
+    static void restartObservation(RadioCertification& cert) { cert.beginMeterObservation(); }
+    static QJsonObject inventory(RadioCertification& cert)
+    {
+        cert.observeKeyedRf();
+        cert.stageMeterInventory();
+        return cert.m_stages.last().toObject();
+    }
+};
+}
+
+// Exercise the actual producer, model wiring and certification report together.
+// No keying verb is invoked; only the backend's cached keyed flag is injected.
+static void suppressedSwrCertification()
+{
+    AetherSDR::RadioModel radio;
+    check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "HL2 offline fixture installs");
+    auto* backend = static_cast<Hl2Backend*>(radio.backend());
+    Access::defineMeters(*backend);
+    Access::setKeyedFlag(*backend, true);
+    auto feed = [&](std::optional<int> last, std::optional<int> peak,
+                    std::optional<int> reversePeak = 11) {
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = last;
+        t.reversePowerRaw = 11;
+        t.forwardPowerPeakRaw = peak;
+        t.reversePowerPeakRaw = reversePeak;
+        Access::publish(*backend, t);
+    };
+    auto inventory = [&](AetherSDR::RadioCertification& cert) {
+        return AetherSDR::RadioCertificationTestAccess::inventory(cert);
+    };
+    auto swrRow = [](const QJsonObject& stage) {
+        return stage.value(QStringLiteral("measured")).toObject()
+            .value(QStringLiteral("TX:SWR")).toObject();
+    };
+    auto verdict = [&](AetherSDR::RadioCertification& cert) {
+        return swrRow(inventory(cert)).value(QStringLiteral("verdict")).toString();
+    };
+    {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        for (int i = 0; i < 3; ++i) { feed(76, 76); }
+        const QJsonObject stage = inventory(cert);
+        const QJsonObject measured = stage.value(QStringLiteral("measured")).toObject();
+        check(measured.value(QStringLiteral("keyedRf")).toObject()
+                  .value(QStringLiteral("confirmed")).toBool(),
+              "control: FWDPWR clears certification's RF floor");
+        check(swrRow(stage).value(QStringLiteral("defined")).toBool()
+                  && !swrRow(stage).value(QStringLiteral("everFed")).toBool(),
+              "control: the real SWR meter is defined and withheld");
+        check(swrRow(stage).value(QStringLiteral("verdict")).toString() == QStringLiteral("SUPPRESSED"),
+              "certification names intentional SWR suppression instead of a broken meter");
+        check(stage.value(QStringLiteral("concern")).toString().contains(QStringLiteral("TX:SWR — SUPPRESSED")),
+              "suppressed SWR has an actionable concern");
+        const QJsonObject evidence = swrRow(stage).value(QStringLiteral("publicationEvidence")).toObject();
+        check(evidence.value(QStringLiteral("swrKeyedLowPower")).toInteger() == 1
+                  && evidence.value(QStringLiteral("swrKeyedSettling")).toInteger() == 2,
+              "counts include all producer windows, not only the final certification poll");
+    }
+    {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        Access::setKeyedFlag(*backend, false);
+        feed(2000, 2000);
+        Access::setKeyedFlag(*backend, true);
+        feed(76, 76);
+        check(verdict(cert) == QStringLiteral("SUPPRESSED"),
+              "an unkeyed update cannot hide intentional suppression in keyed windows");
+    }
+    {
+        Access::pastKeyOn(*backend);
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        feed(76, 2000);
+        const QJsonObject stage = inventory(cert);
+        check(swrRow(stage).value(QStringLiteral("fedWhileKeyedThisRun")).toBool()
+                  && swrRow(stage).value(QStringLiteral("verdict")).toString().isEmpty(),
+              "a qualifying peak publishes despite a last sample below the gate");
+        check(swrRow(stage).value(QStringLiteral("keyedUpdatesReceived")).toInteger() == 1,
+              "forward-power notifications do not duplicate an SWR receipt");
+        check(backend->healthSnapshot().values.value(QStringLiteral("swrMeterInput")).toString()
+                  == QStringLiteral("window peaks")
+                  && backend->healthSnapshot().values.value(QStringLiteral("swrMeterForwardRaw")).toInt() == 2000,
+              "health identifies the actual SWR input rather than the last raw reading");
+    }
+    {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        feed(400, 400);
+        check(verdict(cert) == QStringLiteral("SUPPRESSED"),
+              "speech-pause windows suppress even above the minimum forward threshold");
+        const QJsonObject row = swrRow(inventory(cert));
+        check(row.value(QStringLiteral("everFed")).toBool()
+                  && !row.value(QStringLiteral("fedWhileKeyedThisRun")).toBool(),
+              "a reading from an earlier run is not current-run delivery evidence");
+        AetherSDR::RadioCertificationTestAccess::restartObservation(cert);
+        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
+              "reusing a diagnostic clears prior run publication evidence");
+    }
+    {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        feed(std::nullopt, std::nullopt);
+        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
+              "missing telemetry is not evidence of deliberate suppression");
+    }
+    {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        Access::changeSession(*backend);
+        feed(76, 76);
+        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
+              "session changes invalidate certification's publication baseline");
+    }
+    {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        QTest::qWait(2);
+        Access::setKeyedFlag(*backend, false);
+        feed(2000, 2000);
+        Access::setKeyedFlag(*backend, true);
+        QObject::disconnect(backend, &AetherSDR::IRadioBackend::meterUpdate, &radio, nullptr);
+        // With a missing maximum, the real producer falls back to the last pair.
+        feed(2000, 76, std::nullopt);
+        check(verdict(cert) == QStringLiteral("NOT DELIVERED"),
+              "an eligible fallback sample with disconnected delivery remains a failure");
+        check(backend->healthSnapshot().values.value(QStringLiteral("swrMeterInput")).toString()
+                  == QStringLiteral("last pair"),
+              "missing-peak fallback is reported as the last pair");
+    }
+    {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        Access::setKeyedFlag(*backend, false);
+        feed(2000, 2000);
+        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
+              "unkeyed producer eligibility cannot certify a keyed window");
+    }
+    {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "offline backend replacement succeeds");
+        backend = static_cast<Hl2Backend*>(radio.backend());
+        Access::defineMeters(*backend);
+        Access::setKeyedFlag(*backend, true);
+        feed(76, 76);
+        check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
+              "backend replacement cannot borrow the previous backend's baseline");
+    }
+    {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        feed(2000, 2000);
+        check(verdict(cert) == QStringLiteral("SUPPRESSED"),
+              "a high-power window still settling after key-on is intentionally suppressed");
+        const QJsonObject evidence = swrRow(inventory(cert))
+            .value(QStringLiteral("publicationEvidence")).toObject();
+        check(evidence.value(QStringLiteral("swrKeyedSettling")).toInteger() == 1
+                  && evidence.value(QStringLiteral("swrKeyedLowPower")).toInteger() == 0,
+              "key-on suppression is reported separately from the power threshold");
+    }
+    Access::setKeyedFlag(*backend, false);
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-backend-seam-test"));
@@ -760,6 +977,8 @@ int main(int argc, char** argv)
     driveGateHealthRows();
     notchIdsAreNeverReused();
     forwardPowerWindowPeakWhileKeyed();
+    swrFromWindowPairWhileKeyed();
+    suppressedSwrCertification();
     forwardPowerSkippedHealthRow();
     forwardPowerKeyOnReplay();
     panAveragingSeam();
