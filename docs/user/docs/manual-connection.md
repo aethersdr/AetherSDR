@@ -15,12 +15,12 @@ Use **Connect by IP** for:
 
 ## Setup
 
-<img src="/img/screens/connect-by-ip-card.png" width="760" alt="Connect to Radio window with the Connect by IP card selected. The Radio IP address group has Radio type: FlexRadio, Radio IP: 192.0.2.25, Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander. Below are Connection options for slower links with a Use low bandwidth mode checkbox, and the shared checkboxes for the adaptive frame-rate throttle, connecting to the last radio, waking an Icom and showing the demo simulator." />
+<img src="/img/screens/connect-by-ip-card.png" width="912" alt="Connect to a radio manual form with Connection name above the radio family, host and source path, and Save connection beside Connect by IP." />
 
-*The Connect by IP card, with a documentation address typed in.*
+*The saved manual connection form, with a documentation address typed in.*
 
-1. Open the **Connect to Radio** window: **File → Connect to Radio...**, or the **+** button beside the title bar's radio tabs → **Connect manually…**.
-2. Choose the **Connect by IP** card ("Best for VPN or routed station access when you already know the radio IP").
+1. Open **File → Connect to Radio...** and select the destination location.
+2. Choose **+ Add radio by IP**.
 
 The **Radio IP address** group starts with two rows:
 
@@ -32,6 +32,11 @@ The **Radio IP address** group starts with two rows:
 **RTL-SDR (USB)** appears only in builds that include the RTL-SDR backend. Choosing **Icom (network)** adds its connection rows. **ANAN-G2** shows a pointer to **Settings → Radio Setup... → Radio → ANAN Front End**, where its receive options are configured before connecting; see [Networked Icom](./networked-icom.md) and [ANAN-G2](./anan-g2.md). For every family's status, see [Supported Radios](./supported-radios.md).
 
 ## Using Connect by IP
+
+If a saved IP connection fails during startup, this page retains its saved name and connection context. Choose **‹ Back to Locations** to return to that radio’s Location and select another path or radio. Editing the destination or choosing another connection cancels the startup attempt; a late probe result cannot reconnect the old destination.
+
+Enter an optional **Connection name:** at the top of the form, then choose **Save connection**, beside **Connect by IP**, to save without connecting. **Edit connection**, under **Connection settings** on the selected radio, restores its host, radio family, source interface, Icom settings and low bandwidth preference for editing. A saved connection stays visible while offline. An address is a saved locator; it is not proof that the same physical radio is still there.
+
 
 ### Connecting to a FlexRadio
 
@@ -54,7 +59,7 @@ For a networked Icom behind NAT, see the **Icom ports:** row on [Networked Icom]
 
 ### Slower links
 
-**Use low bandwidth mode** and **Enable adaptive frame-rate throttle** are in the same window, under "Connection options for slower links". See [Low Bandwidth Connections](./low-bandwidth-connections.md).
+**Use low bandwidth mode** is under **Connection options for slower links**. **Enable adaptive frame-rate throttle** is under **Startup and connection preferences**. See [Low Bandwidth Connections](./low-bandwidth-connections.md).
 
 ### Auto-reconnect
 
