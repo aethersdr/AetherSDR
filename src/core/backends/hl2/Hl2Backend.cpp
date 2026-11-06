@@ -8267,6 +8267,12 @@ void Hl2Backend::defineMeters()
         -140.0, 0.0,   QStringLiteral("Transmit audio after the ALC, into the modulator"));
     def(11, QStringLiteral("TX"), QStringLiteral("SC_FILT_2"), QStringLiteral("dBFS"),
         -140.0, 0.0,   QStringLiteral("Modulated transmit IQ, the modulator's output"));
+    // FWDPWR above is a PEP estimate with a ~2 s release, which is right for
+    // the gauge and wrong for a remote client that shows forward power as it
+    // happens: TCI's tx_sensors carries the current reading (Thetis sends its
+    // forward-power meter there unheld). Same window, same curve, no hold.
+    def(12, QStringLiteral("TX"), QStringLiteral("FWDPWR_NOW"), QStringLiteral("dBm"),
+        0.0, 41.0,     QStringLiteral("Forward power, this window, no peak hold (uncalibrated)"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
@@ -8301,6 +8307,7 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
         m_fwdPeakWatts = fwdPeakHoldStep(m_fwdPeakWatts, instantW, m_keyed,
                                          kFwdPeakReleaseAlpha);
         emit meterUpdate(QStringLiteral("TX:FWDPWR"), wattsToDbm(m_fwdPeakWatts));
+        emit meterUpdate(QStringLiteral("TX:FWDPWR_NOW"), wattsToDbm(instantW));
     }
     if (t.reversePowerRaw)
         emit meterUpdate(QStringLiteral("TX:REFPWR"),

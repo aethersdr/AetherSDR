@@ -37,6 +37,7 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
+class MeterModel;
 class AudioEngine;
 class SliceModel;
 class PanadapterModel;
@@ -209,6 +210,12 @@ private slots:
 
 private:
     struct ClientState;
+
+    // tx_sensors goes out while the transmitter carries RF: MOX/PTT, tune, or
+    // a key the radio reports.
+    static bool txSensorsKeyed(RadioModel& model);
+    // Forward power for tx_sensors, the current reading, as Thetis sends it.
+    static float txSensorsForwardWatts(const MeterModel& mm);
 
     // Controller-side cleanup plus a one-way barrier that destroys worker
     // sockets on their owning thread. Never asks the worker to access a model.
@@ -538,7 +545,6 @@ private:
     bool m_tuneBroadcastQueued { false };
     QList<QPair<QPointer<TciClient>, int>> m_tuneRequesters;  // owed an answer
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
-    float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
     float             m_cachedMicLevel{-50.0f};
     float             m_cachedAlc{0.0f};       // SW-ALC peak, dBFS
