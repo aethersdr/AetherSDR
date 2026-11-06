@@ -2396,6 +2396,31 @@ add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
 set_tests_properties(callsign_lookup_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Support & Diagnostics on CanonWindow (#7051): no layout warnings, a plain
+# selectable log path, every close path and a legible floor. No radio, no
+# sockets: the window only reads the log file.
+add_executable(support_dialog_test
+    tests/support_dialog_test.cpp
+    src/gui/SupportDialog.cpp
+    src/gui/FramelessMessageBox.cpp
+    src/gui/ResetSettingsPrompts.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(support_dialog_test PRIVATE src tests)
+target_link_libraries(support_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(support_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME support_dialog_test COMMAND support_dialog_test)
+set_tests_properties(support_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
+
 # Theme Editor on CanonWindow (#7057): canon chrome while every token row
 # still shows the edited theme, canon name prompts, every close path, and the
 # old geometry key.
@@ -10762,6 +10787,7 @@ set(AETHER_SETTINGS_CONSUMERS
     theme_manager_test
     canon_window_test
     callsign_lookup_dialog_test
+    support_dialog_test
     theme_editor_dialog_test
     canon_message_box_test
     shortcut_dialog_test
