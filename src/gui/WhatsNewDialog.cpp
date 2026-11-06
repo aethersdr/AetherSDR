@@ -1,14 +1,17 @@
 #include "WhatsNewDialog.h"
+#include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
+#include "ScopedChildWidget.h"
 #include "WhatsNewLinks.h"
 #include "core/UpdateChecker.h"
 #include "core/VersionNumber.h"
 #include "core/AppSettings.h"
 
-#include <QCoreApplication>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QHBoxLayout>
-#include <QInputDialog>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -18,10 +21,16 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QList>
+#include <QPair>
+#include <QPointer>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QRegularExpression>
 #include <QTextBrowser>
 #include <QTextBlock>
+#include <QTextCharFormat>
+#include <QTextFragment>
 #include <QTextBlockFormat>
 #include <QTextCursor>
 #include <QTextDocument>
@@ -127,40 +136,95 @@ QString releaseErrorText(QNetworkReply* reply, const QByteArray& payload)
     return message;
 }
 
-QString releaseMarkdownStyleSheet()
+// One canon token as a CSS colour, resolved in `scope`'s theme container. The
+// release notes are rich text, which a widget sheet does not reach, so their
+// colours are resolved here and rebuilt on every theme change.
+QString tokenColour(const QWidget* scope, const char* token)
 {
+    return AetherSDR::ThemeManager::instance()
+        .color(scope, QString::fromLatin1(token)).name(QColor::HexRgb);
+}
+
+QString releaseMarkdownStyleSheet(const QWidget* scope)
+{
+    const QString ink = tokenColour(scope, "color.canon.ink");
+    const QString inkSoft = tokenColour(scope, "color.canon.inkSoft");
+    const QString cyan = tokenColour(scope, "color.canon.cyan");
+    const QString aqua = tokenColour(scope, "color.canon.aqua");
+    const QString raised = tokenColour(scope, "color.canon.raised");
+    const QString line = tokenColour(scope, "color.canon.line");
     return QStringLiteral(
-        "body { color: #d6e2ee; font-family: sans-serif; font-size: 13px; line-height: 1.42; }"
-        "h1 { color: #f2f7fb; font-size: 22px; margin-top: 4px; margin-bottom: 12px; }"
-        "h2 { color: #00b4d8; font-size: 18px; margin-top: 20px; margin-bottom: 8px; }"
-        "h3 { color: #f2f7fb; font-size: 15px; margin-top: 14px; margin-bottom: 6px; }"
+        "body { color: %1; font-family: sans-serif; font-size: 13px; line-height: 1.42; }"
+        "h1 { color: %2; font-size: 22px; margin-top: 4px; margin-bottom: 12px; }"
+        "h2 { color: %3; font-size: 18px; margin-top: 20px; margin-bottom: 8px; }"
+        "h3 { color: %2; font-size: 15px; margin-top: 14px; margin-bottom: 6px; }"
         "p { margin-top: 6px; margin-bottom: 10px; }"
         "ul, ol { margin-top: 6px; margin-bottom: 12px; }"
         "li { margin-bottom: 5px; }"
-        "blockquote { color: #aebfce; border-left: 3px solid #00b4d8; margin-left: 0; padding-left: 12px; }"
-        "code { background: #172433; color: #d8eef8; padding: 1px 4px; }"
-        "pre { background: #101a26; color: #d8eef8; padding: 10px; }"
-        "a { color: #56ccf2; text-decoration: none; }"
-        "hr { color: #304050; background-color: #304050; height: 1px; }");
+        "blockquote { color: %1; border-left: 3px solid %3; margin-left: 0; padding-left: 12px; }"
+        "code { background: %4; color: %2; padding: 1px 4px; }"
+        "pre { background: %4; color: %2; padding: 10px; }"
+        "a { color: %5; text-decoration: none; }"
+        "hr { color: %6; background-color: %6; height: 1px; }")
+        .arg(inkSoft, ink, cyan, raised, aqua, line);
 }
 
-QString secondaryButtonStyle()
-{
-    return QStringLiteral(
-        "QPushButton { background: #1a2a3a; color: #d6e2ee; font-weight: bold; "
-        "font-size: 13px; border-radius: 6px; padding: 0 24px; "
-        "border: 1px solid #304050; }"
-        "QPushButton:hover { background: #20384c; }"
-        "QPushButton:pressed { background: #162838; }");
+// The window's widgets on the shared canon dialog sheet, plus the notes pane
+// on a nested card, the status line, and the browser's right-click menu (a
+// child of the browser that the sheet's transparent rule would otherwise
+// leave with no panel).
+constexpr const char* kWhatsNewRules = R"(
+QTextBrowser {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+    selection-background-color: {{color.canon.control}};
+    selection-color: {{color.canon.ink}};
 }
+QLabel#whatsNewEyebrow {
+    color: {{color.canon.cyan}};
+    font-size: 11px;
+    letter-spacing: 3px;
+}
+QLabel#whatsNewStatus {
+    color: {{color.canon.muted}};
+    font-size: 12px;
+}
+QLineEdit {
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QPushButton:default {
+    color: {{color.canon.cyan}};
+    border-color: {{color.canon.cyan}};
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+)";
 
-QString primaryButtonStyle()
+QString whatsNewSheet()
 {
-    return QStringLiteral(
-        "QPushButton { background: #00b4d8; color: #071018; font-weight: bold; "
-        "font-size: 13px; border-radius: 6px; padding: 0 28px; border: none; }"
-        "QPushButton:hover { background: #17c9ea; }"
-        "QPushButton:pressed { background: #0798b6; }");
+    return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+         + canonScrollBarRules() + QString::fromLatin1(kWhatsNewRules);
 }
 
 void applyReleaseMarkdownSpacing(QTextDocument* document)
@@ -198,6 +262,31 @@ void applyReleaseMarkdownSpacing(QTextDocument* document)
     }
 }
 
+// Every link fragment in `document`, drawn in `colour`.
+void recolourLinks(QTextDocument* document, const QColor& colour)
+{
+    if (!document)
+        return;
+    // Collect first: merging a format can split or join the fragments being
+    // iterated (the same care HelpDialog::applyLinkColour() takes).
+    QList<QPair<int, int>> anchors;
+    for (QTextBlock block = document->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (fragment.isValid() && fragment.charFormat().isAnchor())
+                anchors.append({fragment.position(), fragment.length()});
+        }
+    }
+    QTextCharFormat format;
+    format.setForeground(colour);
+    for (const auto& [position, length] : anchors) {
+        QTextCursor cursor(document);
+        cursor.setPosition(position);
+        cursor.setPosition(position + length, QTextCursor::KeepAnchor);
+        cursor.mergeCharFormat(format);
+    }
+}
+
 } // namespace
 
 WhatsNewDialog::WhatsNewDialog(const QString& lastSeenVersion,
@@ -205,20 +294,21 @@ WhatsNewDialog::WhatsNewDialog(const QString& lastSeenVersion,
                                QWidget* parent,
                                bool showUpgrade,
                                bool currentVersionOnly)
-    : PersistentDialog("What's New - AetherSDR", "WhatsNewDialogGeometry", parent)
+    : CanonWindow(QStringLiteral("What's New - AetherSDR"), parent)
     , m_currentVersion(currentVersion)
 {
-    theme::setContainer(this, QStringLiteral("dialog/whatsNew"));
+    setObjectName(QStringLiteral("WhatsNewDialog"));
+    theme::setContainer(this, QStringLiteral("canon/whatsNew"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge. Nothing
+    // here is a form, so Return clicks no button.
+    setGeometryKey(QStringLiteral("WhatsNewDialogGeometry"));
+    setReturnClicksDefault(false);
+    FramelessResizer::install(this);
     setAttribute(Qt::WA_DeleteOnClose);
+    applyCanonSheet(bodyWidget(), [] { return whatsNewSheet(); });
     buildUI(lastSeenVersion, currentVersion, showUpgrade, currentVersionOnly);
-}
-
-WhatsNewDialog* WhatsNewDialog::showAll(QWidget* parent)
-{
-    auto* dlg = new WhatsNewDialog("", QCoreApplication::applicationVersion(), parent,
-                                   false, true);
-    dlg->show();
-    return dlg;
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, &WhatsNewDialog::rerender);
 }
 
 void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
@@ -226,48 +316,31 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
                              bool showUpgrade,
                              bool currentVersionOnly)
 {
-    resize(820, 680);
-    setMinimumSize(560, 420);
-
     auto lastSeen = VersionNumber::parse(lastSeenVersion);
     m_isWelcome = lastSeen.isNull() && !currentVersionOnly;
 
     auto* layout = new QVBoxLayout(bodyWidget());
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    layout->setContentsMargins(14, 12, 14, 14);
+    layout->setSpacing(8);
+    layout->addWidget(makeCanonHeader(m_isWelcome ? QStringLiteral("Welcome!")
+                                                  : QStringLiteral("What's New")));
 
-    auto* header = new QLabel;
-    header->setAlignment(Qt::AlignCenter);
-    const QString heading = m_isWelcome ? "Welcome!" : "What's New";
-    header->setText(QString("<div style='padding: 18px 20px 12px 20px;'>"
-        "<span style='color: #00b4d8; font-size: 11px; letter-spacing: 3px;'>"
-        "AETHERSDR V%1</span><br>"
-        "<span style='color: #dce8f3; font-size: 24px; font-weight: bold;'>"
-        "%2</span></div>").arg(currentVersion, heading));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(header, "QLabel { background: {{color.background.0}}; }");
-    layout->addWidget(header);
+    auto* eyebrow = new QLabel(QStringLiteral("AETHERSDR V%1").arg(currentVersion));
+    eyebrow->setObjectName(QStringLiteral("whatsNewEyebrow"));
+    eyebrow->setTextFormat(Qt::PlainText);
+    layout->addWidget(eyebrow);
 
     m_statusLabel = new QLabel;
-    m_statusLabel->setAlignment(Qt::AlignCenter);
+    m_statusLabel->setObjectName(QStringLiteral("whatsNewStatus"));
     m_statusLabel->setWordWrap(true);
-    m_statusLabel->setContentsMargins(18, 0, 18, 8);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { background: {{color.background.0}}; color: {{color.text.secondary}}; font-size: 12px; }");
     layout->addWidget(m_statusLabel);
 
-    auto* sep = new QWidget;
-    sep->setFixedHeight(1);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(sep, "background: {{color.background.1}};");
-    layout->addWidget(sep);
-
     m_browser = new QTextBrowser;
+    m_browser->setObjectName(QStringLiteral("whatsNewNotes"));
+    m_browser->setAccessibleName(QStringLiteral("Release notes"));
     m_browser->setOpenExternalLinks(false);
     m_browser->setOpenLinks(false);
     m_browser->setReadOnly(true);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_browser, "QTextBrowser { background: {{color.background.0}}; color: #d6e2ee; border: none; "
-        "padding: 18px; font-size: 13px; }"
-        "QScrollBar:vertical { background: {{color.background.0}}; width: 10px; }"
-        "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 5px; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
     connect(m_browser, &QTextBrowser::anchorClicked, this, [](const QUrl& url) {
         if (const auto target = whatsNewLinkTarget(url)) {
             QDesktopServices::openUrl(*target);
@@ -275,59 +348,44 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
     });
     layout->addWidget(m_browser, 1);
 
-    auto* footer = new QWidget;
-    AetherSDR::ThemeManager::instance().applyStyleSheet(footer, "background: {{color.background.0}};");
-    auto* footerLayout = new QHBoxLayout(footer);
-    footerLayout->setContentsMargins(16, 12, 16, 16);
-    footerLayout->setSpacing(12);
+    auto* footerLayout = new QHBoxLayout;
+    footerLayout->setSpacing(10);
     footerLayout->addStretch(1);
 
     auto* findBtn = new QPushButton("Find");
-    findBtn->setMinimumWidth(96);
-    findBtn->setFixedHeight(36);
-    findBtn->setCursor(Qt::PointingHandCursor);
-    findBtn->setStyleSheet(secondaryButtonStyle());
+    findBtn->setObjectName(QStringLiteral("whatsNewFind"));
+    findBtn->setAccessibleName(QStringLiteral("Find in release notes"));
+    findBtn->setAutoDefault(false);
     connect(findBtn, &QPushButton::clicked, this, &WhatsNewDialog::promptFind);
-    footerLayout->addWidget(findBtn, 0, Qt::AlignCenter);
+    footerLayout->addWidget(findBtn);
 
     if (showUpgrade) {
         auto* upgradeBtn = new QPushButton("Upgrade");
-        upgradeBtn->setFixedHeight(36);
-        upgradeBtn->setCursor(Qt::PointingHandCursor);
-        upgradeBtn->setStyleSheet(secondaryButtonStyle());
+        upgradeBtn->setAutoDefault(false);
         connect(upgradeBtn, &QPushButton::clicked, this, [this] {
             QDesktopServices::openUrl(QUrl(AetherSDR::UpdateChecker::kReleasesPageUrl));
             close();
         });
-        footerLayout->addWidget(upgradeBtn, 0, Qt::AlignCenter);
+        footerLayout->addWidget(upgradeBtn);
 
         auto* skipBtn = new QPushButton("Skip this version");
-        skipBtn->setFixedHeight(36);
-        skipBtn->setCursor(Qt::PointingHandCursor);
-        skipBtn->setStyleSheet(secondaryButtonStyle());
+        skipBtn->setAutoDefault(false);
         connect(skipBtn, &QPushButton::clicked, this, [currentVersion, this] {
             auto& s = AppSettings::instance();
             s.setValue("LastSeenVersion", currentVersion);
             s.save();
             close();
         });
-        footerLayout->addWidget(skipBtn, 0, Qt::AlignCenter);
+        footerLayout->addWidget(skipBtn);
     }
+    layout->addLayout(footerLayout);
 
-    auto* closeBtn = new QPushButton("Close");
-    closeBtn->setMinimumWidth(96);
-    closeBtn->setFixedHeight(36);
-    closeBtn->setCursor(Qt::PointingHandCursor);
-    closeBtn->setStyleSheet(primaryButtonStyle());
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
-    footerLayout->addWidget(closeBtn, 0, Qt::AlignCenter);
-    footerLayout->addStretch(1);
-    layout->addWidget(footer);
-
-    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "WhatsNewDialog { background: {{color.background.0}}; }");
+    resize(820, 720);
+    setMinimumSize(QSize(560, 460).expandedTo(minimumSizeHint()));
 
     showLoadingState();
-    fetchLiveReleaseNotes();
+    if (s_fetchReleaseNotes)
+        fetchLiveReleaseNotes();
 }
 
 void WhatsNewDialog::fetchLiveReleaseNotes()
@@ -384,9 +442,8 @@ void WhatsNewDialog::showLoadingState()
         return;
 
     setStatusText(QString("Loading release notes for %1...").arg(releaseTag()));
-    m_browser->setHtml(
-        "<div style='color:#8aa8c0; font-family:sans-serif; font-size:13px; "
-        "padding:40px; text-align:center;'>Loading release notes from GitHub...</div>");
+    m_content = Content::Loading;
+    rerender();
 }
 
 void WhatsNewDialog::showReleaseLoadError(const QString& message)
@@ -395,13 +452,9 @@ void WhatsNewDialog::showReleaseLoadError(const QString& message)
         return;
 
     setStatusText(QString("Could not load release notes for %1").arg(releaseTag()));
-    m_browser->setHtml(QString(
-        "<div style='color:#c8d8e8; font-family:sans-serif; font-size:13px; "
-        "padding:32px; line-height:1.45;'>"
-        "<h3 style='color:#f2f7fb; margin-top:0;'>GitHub release notes unavailable</h3>"
-        "<p style='color:#aebfce;'>%1</p>"
-        "<p style='color:#8aa8c0;'>Check your network connection and reopen What's New to try again.</p>"
-        "</div>").arg(message.toHtmlEscaped()));
+    m_content = Content::Error;
+    m_errorMessage = message;
+    rerender();
 }
 
 void WhatsNewDialog::showLiveReleaseNotes(const QString& title,
@@ -417,9 +470,9 @@ void WhatsNewDialog::showLiveReleaseNotes(const QString& title,
         markdown = QString("_No detailed release notes were published for %1._")
             .arg(tagName.isEmpty() ? releaseTag() : tagName);
 
-    m_browser->document()->setDefaultStyleSheet(releaseMarkdownStyleSheet());
-    m_browser->document()->setMarkdown(markdown, QTextDocument::MarkdownDialectGitHub);
-    applyReleaseMarkdownSpacing(m_browser->document());
+    m_content = Content::Notes;
+    m_notesMarkdown = markdown;
+    rerender();
     m_browser->moveCursor(QTextCursor::Start);
 
     const QString releaseTitle = title.isEmpty()
@@ -432,19 +485,88 @@ void WhatsNewDialog::showLiveReleaseNotes(const QString& title,
     setStatusText(source);
 }
 
+void WhatsNewDialog::rerender()
+{
+    if (!m_browser)
+        return;
+    const int scroll = m_browser->verticalScrollBar() ? m_browser->verticalScrollBar()->value() : 0;
+    const QString muted = tokenColour(this, "color.canon.muted");
+    switch (m_content) {
+    case Content::Loading:
+        m_browser->setHtml(QStringLiteral(
+            "<div style='color:%1; font-family:sans-serif; font-size:13px; "
+            "padding:40px; text-align:center;'>Loading release notes from GitHub...</div>").arg(muted));
+        break;
+    case Content::Error:
+        m_browser->setHtml(QStringLiteral(
+            "<div style='color:%1; font-family:sans-serif; font-size:13px; "
+            "padding:32px; line-height:1.45;'>"
+            "<h3 style='color:%2; margin-top:0;'>GitHub release notes unavailable</h3>"
+            "<p style='color:%1;'>%3</p>"
+            "<p style='color:%4;'>Check your network connection and reopen What's New to try again.</p>"
+            "</div>")
+            .arg(tokenColour(this, "color.canon.inkSoft"), tokenColour(this, "color.canon.ink"),
+                 m_errorMessage.toHtmlEscaped(), muted));
+        break;
+    case Content::Notes: {
+        // setMarkdown() does not read the document's default stylesheet: the
+        // text takes the browser's ink, and the importer bakes Qt's default
+        // link blue into every link's format, unreadable on the canon ground.
+        // Recolour the links in canon cyan after each import, so a theme
+        // change follows. The stylesheet still serves any HTML in the notes.
+        m_browser->document()->setDefaultStyleSheet(releaseMarkdownStyleSheet(this));
+        m_browser->document()->setMarkdown(m_notesMarkdown, QTextDocument::MarkdownDialectGitHub);
+        applyReleaseMarkdownSpacing(m_browser->document());
+        recolourLinks(m_browser->document(),
+                      ThemeManager::instance().color(this, QStringLiteral("color.canon.cyan")));
+        break;
+    }
+    }
+    if (m_browser->verticalScrollBar())
+        m_browser->verticalScrollBar()->setValue(scroll);
+}
+
 void WhatsNewDialog::promptFind()
 {
     if (!m_browser)
         return;
 
-    bool ok = false;
-    const QString text = QInputDialog::getText(this,
-                                               "Find",
-                                               "Find:",
-                                               QLineEdit::Normal,
-                                               m_lastFindText,
-                                               &ok).trimmed();
-    if (!ok || text.isEmpty())
+    // A small canon dialog in this window's scope: the field, then Cancel and
+    // Find; Find is the default, so Return searches and Esc or the ✕ cancel.
+    const QPointer<WhatsNewDialog> self(this);
+    ScopedChildWidget<CanonWindow> promptOwner(QStringLiteral("Find"), this);
+    CanonWindow& prompt = *promptOwner.get();
+    prompt.setObjectName(QStringLiteral("whatsNewFindPrompt"));
+    prompt.setModal(true);
+    applyCanonSheet(prompt.bodyWidget(), [] { return whatsNewSheet(); });
+    auto* root = new QVBoxLayout(prompt.bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
+    root->setSpacing(10);
+    root->addWidget(makeCanonHeader(QStringLiteral("Find")));
+    auto* field = new QLineEdit(m_lastFindText, prompt.bodyWidget());
+    field->setObjectName(QStringLiteral("whatsNewFindField"));
+    field->setAccessibleName(QStringLiteral("Text to find in the release notes"));
+    field->setPlaceholderText(QStringLiteral("Text to find"));
+    field->setMinimumWidth(280);
+    field->selectAll();
+    root->addWidget(field);
+    auto* buttons = new QHBoxLayout;
+    buttons->addStretch(1);
+    auto* cancel = new QPushButton(QStringLiteral("Cancel"), prompt.bodyWidget());
+    cancel->setAutoDefault(false);
+    auto* find = new QPushButton(QStringLiteral("Find"), prompt.bodyWidget());
+    find->setDefault(true);
+    connect(cancel, &QPushButton::clicked, &prompt, &QDialog::reject);
+    connect(find, &QPushButton::clicked, &prompt, &QDialog::accept);
+    buttons->addWidget(cancel);
+    buttons->addWidget(find);
+    root->addLayout(buttons);
+    field->setFocus();
+    const int result = prompt.exec();
+    if (!self || !promptOwner || result != QDialog::Accepted)
+        return;
+    const QString text = field->text().trimmed();
+    if (text.isEmpty())
         return;
 
     m_lastFindText = text;
