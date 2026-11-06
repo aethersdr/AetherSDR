@@ -1,7 +1,7 @@
-// HL2 PureSignal (MI0BOT's Thetis design): the control state machines, the
-// auto-attenuate step, and the wire facts they lean on — the 0x0a PS bit, the
-// keyed feedback gain and the four-DDC floor. Clock-free and socket-free: the
-// logic is driven tick by tick with the GetPSInfo values a radio would give.
+// HL2 PureSignal: the controller, the feedback-gain step, and the wire facts
+// they lean on — the 0x0a PS bit, the keyed feedback gain and the four-DDC
+// floor. Clock-free and socket-free: the controller is driven report by
+// report with the GetPSInfo values calcc would give.
 
 #include "core/backends/hl2/Hl2PureSignal.h"
 #include "core/backends/hl2/MetisClient.h"
@@ -19,10 +19,11 @@ struct MetisClientTestAccess {
 }  // namespace AetherSDR::hl2
 
 using AetherSDR::hl2::Hl2PureSignal;
-using AetherSDR::hl2::Hl2PureSignalLogic;
+using AetherSDR::hl2::Hl2PsController;
 using AetherSDR::hl2::MetisClient;
 using AetherSDR::hl2::MetisClientTestAccess;
 namespace hl2 = AetherSDR::hl2;
+using L = AetherSDR::hl2::Hl2PsController;
 
 namespace {
 
@@ -32,152 +33,186 @@ void check(bool ok, const char* what)
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_failures; }
 }
 
-using Ctl = Hl2PureSignalLogic::Control;
-using Cmd = Hl2PureSignalLogic::Cmd;
-using Info = Hl2PureSignalLogic::Info;
+using Ctl = Hl2PsController::Flags;
+using Mode = Hl2PsController::Mode;
+using Report = Hl2PsController::Report;
+using Gain = hl2::Hl2PsGain;
 
-constexpr Ctl kReset{true, false, false, false};
+constexpr Ctl kOff{true, false, false, false};
+constexpr Ctl kAuto{true, false, true, false};
+constexpr Ctl kSingle{true, true, false, false};
+constexpr Ctl kTurnOn{false, false, false, true};
 
-void attenuationStep()
+Report at(int state, int attempts = 0, int fb = 0, bool correcting = false, bool fresh = true)
 {
-    check(Hl2PureSignalLogic::attenuationStepDb(152) == 0, "152 is on target");
-    check(Hl2PureSignalLogic::attenuationStepDb(0) == -10, "no feedback steps -10");
-    check(Hl2PureSignalLogic::attenuationStepDb(300) == 10, "beyond 256 steps +10");
-    check(Hl2PureSignalLogic::attenuationStepDb(76) == -6, "half the target is -6 dB");
-    check(Hl2PureSignalLogic::attenuationStepDb(256) == 5, "256 rounds 4.51 to 5");
-    check(Hl2PureSignalLogic::attenuationStepDb(30) == -14, "30 is -14 dB");
-
-    check(Hl2PureSignalLogic::needToRecalibrate(182, 0), "too hot recalibrates");
-    check(!Hl2PureSignalLogic::needToRecalibrate(150, 0), "in window holds");
-    check(Hl2PureSignalLogic::needToRecalibrate(100, 0), "too cold recalibrates");
-    check(!Hl2PureSignalLogic::needToRecalibrate(100, Hl2PureSignalLogic::kAttMin),
-          "too cold at minimum attenuation has nowhere to go");
-    check(Hl2PureSignalLogic::feedbackInRange(129) && !Hl2PureSignalLogic::feedbackInRange(128)
-          && Hl2PureSignalLogic::feedbackInRange(181) && !Hl2PureSignalLogic::feedbackInRange(182),
-          "window is 128 < fb <= 181");
-    check(Hl2PureSignalLogic::clampAtt(-40) == -28 && Hl2PureSignalLogic::clampAtt(40) == 31,
-          "attenuation clamps to -28..31");
-    check(Hl2PureSignalLogic::lnaGainDbForAtt(31) == -12
-          && Hl2PureSignalLogic::lnaGainDbForAtt(-28) == 47, "gain is 19 - att");
+    Report r;
+    r.state = state;
+    r.attempts = attempts;
+    r.feedbackLevel = fb;
+    r.correcting = correcting;
+    r.feedbackFresh = fresh;
+    return r;
 }
 
-void autoCalibrateOnAndOff()
+void gainStep()
 {
-    Hl2PureSignalLogic l;
-    l.setAutoAttenuate(false);
-    l.setAutoCalibrate(true);
-    auto o = l.tick({});
-    check(o.controls.size() == 1 && o.controls[0] == kReset, "OFF sends reset");
-    check(l.command() == Cmd::TurnOnAuto, "OFF -> TurnOnAuto");
-    o = l.tick({});
-    check(o.controls.size() == 1 && o.controls[0] == Ctl{true, false, true, false},
-          "TurnOnAuto sends automode");
-    check(l.command() == Cmd::Auto && l.calibrating(), "-> Auto");
-    o = l.tick({});
-    check(o.controls.empty() && l.command() == Cmd::Auto, "Auto idles");
+    check(Gain::stepDb(152) == 0, "152 is on the centre");
+    check(Gain::stepDb(0) == -Gain::kMaxStepDb, "no feedback: one full step more gain");
+    check(Gain::stepDb(300) == Gain::kMaxStepDb, "above the scale: one full step less");
+    check(Gain::stepDb(76) == -6, "half the centre is -6 dB");
+    check(Gain::stepDb(256) == 5, "full scale is 4.5 dB hot, rounds to 5");
+    check(Gain::stepDb(30) == -Gain::kMaxStepDb, "-14 dB is held to one full step");
+    check(Gain::stepDb(200) == 2, "200 is 2.4 dB hot");
 
-    l.setAutoCalibrate(false);
-    l.tick({});
-    check(l.command() == Cmd::TurnOff, "Auto off -> TurnOff");
-    Info stillOn;
-    stillOn.correcting = true;
-    stillOn.state = Hl2PureSignalLogic::LStayOn;
-    o = l.tick(stillOn);
-    check(o.controls.size() == 1 && o.controls[0] == kReset, "TurnOff resets");
-    check(l.command() == Cmd::TurnOff, "TurnOff waits for the engine to reset");
-    l.tick({});
-    check(l.command() == Cmd::Off && !l.calibrating(), "engine reset -> OFF");
+    check(Gain::inWindow(129) && !Gain::inWindow(128) && Gain::inWindow(181)
+              && !Gain::inWindow(182),
+          "window is 128 < fb <= 181");
+    check(Gain::clampAtt(-40) == -28 && Gain::clampAtt(40) == 31,
+          "attenuation clamps to -28..31");
+    check(Gain::lnaGainDbForAtt(31) == -12 && Gain::lnaGainDbForAtt(-28) == 47,
+          "gain is 19 - att, inside the LNA's -12..+48 dB");
+}
+
+void autoOnAndOff()
+{
+    Hl2PsController c;
+    c.setAutoAttenuate(false);
+    check(c.mode() == Mode::Off && !c.step(at(L::LReset)).flags, "starts Off, sends nothing");
+    c.selectAuto();
+    auto s = c.step(at(L::LReset));
+    check(s.flags == kAuto, "Auto: reset + automode");
+    check(c.mode() == Mode::Auto && c.calibrating(), "Auto is calibrating");
+    s = c.step(at(L::LCollect));
+    check(!s.flags && !s.attenuationDb, "Auto leaves calcc to it");
+    c.selectOff();
+    s = c.step(at(L::LCollect, 0, 0, true));
+    check(s.flags == kOff && c.mode() == Mode::Off && !c.calibrating(), "Off: reset alone");
+    check(!c.step(at(L::LReset)).flags, "Off sends nothing more");
 }
 
 void singleCalibration()
 {
-    Hl2PureSignalLogic l;
-    l.setAutoAttenuate(false);
-    l.requestSingleCalibration();
-    l.tick({});
-    check(l.command() == Cmd::TurnOnSingle, "OFF -> TurnOnSingle");
-    auto o = l.tick({});
-    check(o.controls.size() == 1 && o.controls[0] == Ctl{true, true, false, false},
-          "TurnOnSingle sends mancal");
-    check(l.command() == Cmd::Single, "-> Single");
-    l.tick({});
-    check(l.command() == Cmd::Single, "Single waits for a correction");
-    Info done;
-    done.correcting = true;
-    done.feedbackLevel = 150;
-    l.tick(done);
-    check(l.command() == Cmd::StayOn && !l.calibrating(), "correction applied -> StayOn");
-    o = l.tick(done);
-    check(o.controls.empty() && l.command() == Cmd::StayOn, "StayOn holds the correction");
+    Hl2PsController c;
+    c.setAutoAttenuate(false);
+    c.selectSingle();
+    check(c.step(at(L::LReset)).flags == kSingle, "Single: reset + mancal");
+    check(!c.step(at(L::LWait)).flags && c.mode() == Mode::Single, "waits for the key");
+    c.step(at(L::LCollect));
+    c.step(at(L::LCalc));
+    check(c.mode() == Mode::Single && c.calibrating(), "still Single while calcc works");
+    c.step(at(L::LStayOn, 1, 150, true));
+    check(c.mode() == Mode::Hold && !c.calibrating(), "correction held -> Hold");
+    check(!c.step(at(L::LStayOn, 1, 150, true)).flags, "Hold sends nothing");
 }
 
-void restore()
+void singleGivesUp()
 {
-    Hl2PureSignalLogic l;
-    l.setAutoAttenuate(false);
-    l.requestRestore();
-    l.tick({});
-    check(l.command() == Cmd::Restore, "OFF -> Restore");
-    auto o = l.tick({});
-    check(o.controls.size() == 1 && o.controls[0] == Ctl{false, false, false, true},
-          "Restore sends turnon");
-    Info on;
-    on.state = Hl2PureSignalLogic::LStayOn;
-    on.correcting = true;
-    l.tick(on);
-    check(l.command() == Cmd::StayOn, "restored correction -> StayOn");
+    Hl2PsController c;
+    c.setAutoAttenuate(false);
+    c.selectSingle();
+    c.step(at(L::LReset));
+    check(!c.step(at(L::LReset)).flags, "LRESET before calcc moved is not a failure");
+    for (int start = 2; start <= Hl2PsController::kSingleAttempts; ++start) {
+        c.step(at(L::LCollect));
+        const auto s = c.step(at(L::LReset));
+        check(s.flags == kSingle && c.mode() == Mode::Single, "calcc gave up: Single again");
+    }
+    c.step(at(L::LCollect));
+    const auto s = c.step(at(L::LReset));
+    check(!s.flags && c.mode() == Mode::Off, "out of attempts: Off");
 }
 
-void singleAndRestoreEndAuto()
+void restoring()
 {
-    // PSForm's Single and Restore untick Auto first (what the controller's
-    // forceAutoOff() does), and Auto must not come back on its own after them.
-    Hl2PureSignalLogic l;
-    l.setAutoAttenuate(false);
-    l.setAutoCalibrate(true);
-    l.tick({});
-    l.tick({});
-    check(l.command() == Cmd::Auto && l.autoCalibrate(), "auto armed");
-    l.setAutoCalibrate(false);
-    l.requestSingleCalibration();
-    check(l.singleCalibrating(), "Single lit from the press");
-    l.tick({});
-    check(l.command() == Cmd::TurnOff, "Auto + Single -> TurnOff first");
-    check(l.singleCalibrating(), "Single lit through TurnOff");
-    auto o = l.tick({});
-    check(o.controls.size() == 1 && o.controls[0] == kReset
-              && l.command() == Cmd::TurnOnSingle,
-          "TurnOff resets, then -> TurnOnSingle");
-    l.tick({});
-    check(l.command() == Cmd::Single && !l.autoCalibrate(), "-> Single, Auto off");
-    check(l.singleCalibrating(), "Single lit while calibrating");
-    Info done;
-    done.correcting = true;
-    done.feedbackLevel = 150;
-    l.tick(done);
-    check(l.command() == Cmd::StayOn, "single calibration done -> StayOn, not TurnOnAuto");
-    check(!l.singleCalibrating(), "Single unlit once done");
+    Hl2PsController c;
+    c.selectAuto();
+    c.step(at(L::LReset));
+    c.selectRestoring();
+    auto s = c.step(at(L::LCollect));
+    check(s.flags == kTurnOn, "Restore: turnon alone, clears automode");
+    check(c.mode() == Mode::Restoring && !c.calibrating(), "Restoring is not calibrating");
+    c.step(at(L::LStayOn, 0, 0, true));
+    check(c.mode() == Mode::Hold, "loaded correction held -> Hold");
+}
 
-    Hl2PureSignalLogic r;
-    r.setAutoAttenuate(false);
-    r.setAutoCalibrate(true);
-    r.tick({});
-    r.tick({});
-    r.setAutoCalibrate(false);
-    r.requestRestore();
-    r.tick({});
-    check(r.command() == Cmd::TurnOff, "Auto + Restore -> TurnOff first");
-    r.tick({});
-    check(r.command() == Cmd::Restore, "TurnOff -> Restore");
-    o = r.tick({});
-    check(o.controls.size() == 1 && o.controls[0] == Ctl{false, false, false, true}
-              && !r.autoCalibrate(),
-          "Restore sends turnon, Auto off");
-    Info on;
-    on.state = Hl2PureSignalLogic::LStayOn;
-    on.correcting = true;
-    r.tick(on);
-    check(r.command() == Cmd::StayOn, "restored correction -> StayOn, not TurnOnAuto");
+void autoAttenuate()
+{
+    Hl2PsController c;
+    check(c.attenuationDb() == 31 && c.autoAttenuate(), "starts at the lowest gain, on");
+    c.selectAuto();
+    c.step(at(L::LReset, 4));          // flags out; attempts 4 is the baseline
+
+    // An attempt that lands before calcc collected again is from before the
+    // flags: not judged.
+    auto s = c.step(at(L::LWait, 5, 30));
+    check(!s.attenuationDb && !s.flags, "attempt from before the flags is ignored");
+
+    c.step(at(L::LCollect, 5, 30));
+    s = c.step(at(L::LCollect, 6, 30));
+    check(s.attenuationDb && *s.attenuationDb == 21, "too cold: 31 - 10 = 21");
+    check(s.flags == kAuto, "and Auto starts over at the new gain");
+    check(c.attenuationDb() == 21, "controller holds 21");
+
+    s = c.step(at(L::LWait, 7, 30));
+    check(!s.attenuationDb, "next attempt only counts once calcc collected again");
+    c.step(at(L::LMoxDelay, 7, 30));
+    s = c.step(at(L::LCollect, 7, 30));
+    check(!s.attenuationDb, "same attempt count: nothing new");
+    s = c.step(at(L::LCollect, 8, 30, false, false));
+    check(!s.attenuationDb, "level not measured: nothing to judge");
+    s = c.step(at(L::LCollect, 9, 150));
+    check(!s.attenuationDb && !s.flags, "in the window: no move");
+    s = c.step(at(L::LCollect, 10, 200));
+    check(s.attenuationDb && *s.attenuationDb == 23, "2 dB hot: 21 + 2");
+
+    Hl2PsController top;
+    top.setAttenuationDb(Gain::kAttMin);
+    top.selectAuto();
+    top.step(at(L::LReset));
+    top.step(at(L::LCollect));
+    s = top.step(at(L::LCollect, 1, 30));
+    check(!s.attenuationDb && !s.flags, "at full gain a cold level has nowhere to go");
+
+    Hl2PsController manual;
+    manual.setAutoAttenuate(false);
+    manual.selectAuto();
+    manual.step(at(L::LReset));
+    manual.step(at(L::LCollect));
+    s = manual.step(at(L::LCollect, 1, 30));
+    check(!s.attenuationDb && !s.flags && manual.attenuationDb() == 31,
+          "auto-attenuate off leaves the gain alone");
+
+    Hl2PsController held;
+    held.setAutoAttenuate(false);
+    held.selectSingle();
+    held.step(at(L::LReset));
+    held.step(at(L::LCollect));
+    held.step(at(L::LStayOn, 1, 150, true));
+    held.setAutoAttenuate(true);
+    s = held.step(at(L::LStayOn, 2, 30, true));
+    check(held.mode() == Mode::Hold && !s.attenuationDb, "Hold never moves the gain");
+}
+
+void singleGainMovesBounded()
+{
+    Hl2PsController c;
+    c.setAttenuationDb(0);
+    c.selectSingle();
+    c.step(at(L::LReset));
+    int attempts = 0;
+    int moves = 0;
+    for (int i = 0; i < 2 * Hl2PsController::kSingleGainMoves; ++i) {
+        c.step(at(L::LCollect, attempts));
+        // Swing across the window: too hot, then too cold.
+        const auto s = c.step(at(L::LCollect, ++attempts, (i % 2) ? 60 : 250));
+        if (s.attenuationDb) {
+            ++moves;
+            check(s.flags == kSingle, "a gain move starts Single over");
+        }
+    }
+    check(moves == Hl2PsController::kSingleGainMoves,
+          "Single moves the gain a bounded number of times");
+    check(c.mode() == Mode::Single, "and is left to finish");
 }
 
 void controllerAutoSwitch()
@@ -231,53 +266,6 @@ void receiverCountUnderFloor()
     }
 }
 
-void autoAttenuate()
-{
-    Hl2PureSignalLogic l;
-    l.setAutoCalibrate(true);
-    check(l.attenuationDb() == 31, "starts at the lowest gain");
-    l.tick({});
-    l.tick({});
-    check(l.command() == Cmd::Auto, "auto running");
-
-    // A calibration attempt with the feedback far too low.
-    Info cold;
-    cold.feedbackLevel = 30;
-    cold.calibrationCount = 1;
-    auto o = l.tick(cold);
-    check(l.autoAttenuateState() == Hl2PureSignalLogic::Aa::SetNewValues, "-> SetNewValues");
-    check(o.controls.size() == 1 && o.controls[0] == kReset, "interrupts with a reset");
-    check(!o.attenuationDb, "attenuation moves on the next tick");
-    o = l.tick(cold);
-    check(o.attenuationDb && *o.attenuationDb == 17, "31 - 14 = 17 dB");
-    check(l.attenuationDb() == 17, "logic holds 17");
-    o = l.tick(cold);
-    check(o.controls.size() == 1 && o.controls[0] == Ctl{false, false, true, false},
-          "resumes auto");
-    check(l.autoAttenuateState() == Hl2PureSignalLogic::Aa::Monitor, "-> Monitor");
-    // Same attempt count: nothing new to judge.
-    o = l.tick(cold);
-    check(o.controls.empty(), "waits for the next attempt");
-
-    // In the window: no change.
-    Info good;
-    good.feedbackLevel = 150;
-    good.calibrationCount = 2;
-    o = l.tick(good);
-    check(o.controls.empty() && l.autoAttenuateState() == Hl2PureSignalLogic::Aa::Monitor,
-          "in window holds");
-
-    // Off: never touches attenuation.
-    Hl2PureSignalLogic manual;
-    manual.setAutoAttenuate(false);
-    manual.setAutoCalibrate(true);
-    manual.tick({});
-    manual.tick({});
-    o = manual.tick(cold);
-    check(o.controls.empty() && !o.attenuationDb && manual.attenuationDb() == 31,
-          "auto-attenuate off leaves attenuation alone");
-}
-
 void wire()
 {
     const hl2::Cc plain = hl2::ccGain(10, false);
@@ -286,9 +274,9 @@ void wire()
     check((ps[2] & hl2::kGainPureSignal) != 0 && (plain[2] & hl2::kGainPureSignal) == 0,
           "PS sets 0x0a C2 bit 6");
     check(ps[4] == plain[4], "PS bit leaves the gain byte");
-    check(hl2::ccGain(Hl2PureSignalLogic::lnaGainDbForAtt(31), true)[4] == 0x40,
+    check(hl2::ccGain(hl2::Hl2PsGain::lnaGainDbForAtt(31), true)[4] == 0x40,
           "att 31 is ((31 - 31) & 0x3F) | 0x40");
-    check(hl2::ccGain(Hl2PureSignalLogic::lnaGainDbForAtt(0), true)[4] == (0x40 | 31),
+    check(hl2::ccGain(hl2::Hl2PsGain::lnaGainDbForAtt(0), true)[4] == (0x40 | 31),
           "att 0 is ((31 - 0) & 0x3F) | 0x40");
 
     MetisClient::Params p;
@@ -315,7 +303,7 @@ void statusFields()
     s.correcting = true;
     s.feedbackLevel = 150;
     s.calibrationCount = 3;
-    s.engineState = Hl2PureSignalLogic::LStayOn;
+    s.engineState = Hl2PsController::LStayOn;
     s.attenuationDb = 12;
     s.keyed = true;
     const QVariantMap f = hl2::pureSignalStatusFields(s);
@@ -343,14 +331,15 @@ void statusFields()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
-    attenuationStep();
-    autoCalibrateOnAndOff();
+    gainStep();
+    autoOnAndOff();
     singleCalibration();
-    restore();
-    singleAndRestoreEndAuto();
+    singleGivesUp();
+    restoring();
+    autoAttenuate();
+    singleGainMovesBounded();
     controllerAutoSwitch();
     receiverCountUnderFloor();
-    autoAttenuate();
     wire();
     statusFields();
     if (g_failures == 0)

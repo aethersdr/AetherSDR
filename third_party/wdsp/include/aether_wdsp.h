@@ -551,7 +551,7 @@ void SynchronizeChannelWorkerForTest(int channel);
 void PSRestoreCorr(int channel, char* filename);
 
 // PureSignal (calcc.c), driven by core/dsp/WdspChannel's pureSignal*() wrappers
-// for the Hermes-Lite 2 (MI0BOT's Thetis design). TX channels only.
+// for the Hermes-Lite 2 (Hl2PureSignal). TX channels only.
 void pscc(int channel, int size, double* tx, double* rx);
 void PSSaveCorr(int channel, char* filename);
 void SetPSRunCal(int channel, int run);

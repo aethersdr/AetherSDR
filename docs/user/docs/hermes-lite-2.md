@@ -188,7 +188,7 @@ When one of these is missing, the PureSignal button is dimmed, and the line unde
 
 - **PureSignal** turns it on and off. It starts off on every connect. You can turn it on or off only while you are not transmitting.
 - **Auto** calibrates again and again while you transmit.
-- **Single** calibrates once, on your next transmission, then holds that correction. It stays lit from the press until that calibration is done.
+- **Single** calibrates once, on your next transmission, then holds that correction. It stays lit from the press until that calibration is done. If the calibration fails, Single starts it again, three tries in all, and then turns off.
 - **FB** is the feedback level. A calibration needs it inside the marked window (128–181).
 - The line under the meter shows the attenuation, the number of calibrations and the engine state. The state line says what PureSignal is doing, for example "Armed — key into a load to calibrate".
 
@@ -200,7 +200,7 @@ PureSignal never keys the radio. It calibrates on transmissions you make yoursel
 - **Reset** drops the correction.
 - **Save…** writes the current correction to a file. **Restore…** loads one. The file path must be shorter than 256 bytes.
 
-**Single, Reset and Restore switch Auto off,** as in Thetis. Press **Auto** again to go back to continuous calibration.
+**Single, Reset and Restore switch Auto off,** because each one replaces continuous calibration with a correction you chose. Press **Auto** again to go back to continuous calibration.
 
 AetherSDR remembers **Auto**, **Auto-attenuate feedback** and a manual **TX att** for each HL2. The attenuation that auto-attenuate reaches is not remembered: each session finds it again on the first calibration.
 

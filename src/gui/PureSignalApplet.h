@@ -50,7 +50,7 @@ struct PureSignalView {
 };
 
 // The feedback level bar: 0..256 with calcc's target window (128..181) marked,
-// coloured the way Thetis colours its feedback indicator.
+// coloured by where the level sits against that window.
 class PureSignalFeedbackMeter : public QWidget {
     Q_OBJECT
 public:
@@ -60,7 +60,7 @@ public:
     [[nodiscard]] int level() const noexcept { return m_level; }
     QSize sizeHint() const override { return {200, 18}; }
     QSize minimumSizeHint() const override { return {80, 18}; }
-    // Thetis' colour bands, exposed for the test.
+    // The colour bands, exposed for the test.
     enum class Band { None, Low, Marginal, Good, High };
     [[nodiscard]] static Band bandFor(int level) noexcept;
 protected:

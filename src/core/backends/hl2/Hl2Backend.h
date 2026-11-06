@@ -474,7 +474,7 @@ private:
     // (one coupler, one feedback attenuation), loaded on every connect.
     bool m_psAutoCalibrate = true;
     bool m_psAutoAttenuate = true;
-    int m_psAttenuationDb = Hl2PureSignalLogic::kAttMax;
+    int m_psAttenuationDb = Hl2PsGain::kAttMax;
     void loadPureSignalPreferences();
     void savePureSignalPreferences();
     // Why PureSignal cannot run right now, or empty when it can.

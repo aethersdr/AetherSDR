@@ -1,5 +1,5 @@
-// Ported from Thetis' PSForm.cs (MI0BOT's HL2 fork). Attribution and
-// license: see Hl2PureSignal.h and THIRD_PARTY_LICENSES entry 37.
+// PureSignal for the Hermes-Lite 2. See Hl2PureSignal.h for the design and the
+// calcc behaviour it relies on.
 
 #include "core/backends/hl2/Hl2PureSignal.h"
 
@@ -8,177 +8,148 @@
 #include <QLoggingCategory>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 
 static Q_LOGGING_CATEGORY(lcHl2Ps, "aether.hl2.puresignal")
 
 namespace AetherSDR::hl2 {
 
-// ---- Hl2PureSignalLogic ------------------------------------------------------
+// ---- Hl2PsGain ---------------------------------------------------------------
 
-void Hl2PureSignalLogic::setAutoCalibrate(bool on)
+int Hl2PsGain::stepDb(int fb) noexcept
 {
-    // PSForm chkPSAutoCalibrate: on arms auto, off asks for OFF.
-    if (on) {
-        m_autoOn = true;
-    } else {
-        m_autoOn = false;
-        m_off = true;
+    if (fb <= 0)
+        return -kMaxStepDb;
+    if (fb > kScale)
+        return kMaxStepDb;
+    static const double centre = std::sqrt(double(kWindowLow) * double(kWindowHigh));
+    const long db = std::lround(20.0 * std::log10(double(fb) / centre));
+    return int(std::clamp<long>(db, -kMaxStepDb, kMaxStepDb));
+}
+
+// ---- Hl2PsController ---------------------------------------------------------
+
+Hl2PsController::Flags Hl2PsController::flagsFor(Mode m) noexcept
+{
+    switch (m) {
+    case Mode::Auto:      return {true, false, true, false};
+    case Mode::Single:    return {true, true, false, false};
+    case Mode::Restoring: return {false, false, false, true};
+    case Mode::Off:
+    case Mode::Hold:      break;
     }
+    return {true, false, false, false};
 }
 
-void Hl2PureSignalLogic::resetToOff()
+void Hl2PsController::select(Mode m)
 {
-    m_cmd = Cmd::Off;
-    m_aa = Aa::Monitor;
-    m_autoOn = false;
-    m_singleCalOn = false;
-    m_off = false;
-    m_restoreOn = false;
-    m_performingSingleCal = false;
-    m_singleCalRetries = 0;
-    m_deltaDb = 0;
-    m_saveAuto = false;
-    m_saveSingle = false;
-    m_lastCalibrationCount = 0;
+    m_mode = m;
+    m_pending = flagsFor(m);
+    m_sawActive = false;
+    m_collected = false;
 }
 
-int Hl2PureSignalLogic::attenuationStepDb(int fb) noexcept
+void Hl2PsController::selectOff() { select(Mode::Off); }
+
+void Hl2PsController::selectAuto() { select(Mode::Auto); }
+
+void Hl2PsController::selectSingle()
 {
-    double ddB = 10.0;   // feedback beyond 256: MI0BOT's HL2 value
-    if (fb <= 256) {
-        ddB = 20.0 * std::log10(static_cast<double>(fb) * 1000.0 / kFeedbackIdeal100);
-        if (std::isnan(ddB)) ddB = 10.0;
-        if (ddB < -100.0) ddB = -10.0;   // fb == 0: log of zero
-        if (ddB > 100.0) ddB = 10.0;
+    select(Mode::Single);
+    m_singleStarts = 1;
+    m_singleGainMoves = 0;
+}
+
+void Hl2PsController::selectRestoring() { select(Mode::Restoring); }
+
+void Hl2PsController::reset()
+{
+    m_mode = Mode::Off;
+    m_pending.reset();
+    m_lastAttempts.reset();
+    m_sawActive = false;
+    m_collected = false;
+    m_singleStarts = 0;
+    m_singleGainMoves = 0;
+}
+
+std::optional<int> Hl2PsController::gainMove(const Report& r)
+{
+    // Judge each finished attempt once, and only one calcc collected after
+    // the last flags: an attempt that was already being calculated when they
+    // went out still reports the old gain, and it lands while calcc is back
+    // in LRESET or LWAIT. Collecting states come only after that.
+    const bool fresh = m_lastAttempts && r.attempts != *m_lastAttempts;
+    m_lastAttempts = r.attempts;
+    if (r.state >= LMoxDelay && r.state <= MoxCheck)
+        m_collected = true;
+    if (!fresh || !m_collected || !m_autoAttenuate || !calibrating())
+        return std::nullopt;
+    if (!r.feedbackFresh || Hl2PsGain::inWindow(r.feedbackLevel))
+        return std::nullopt;
+    if (m_mode == Mode::Single && m_singleGainMoves >= kSingleGainMoves)
+        return std::nullopt;
+    const int next = Hl2PsGain::clampAtt(m_att + Hl2PsGain::stepDb(r.feedbackLevel));
+    if (next == m_att)
+        return std::nullopt;   // at the end of the range: nothing to gain
+    m_att = next;
+    return next;
+}
+
+Hl2PsController::Step Hl2PsController::step(const Report& r)
+{
+    Step out;
+    if (m_pending) {
+        out.flags = *m_pending;
+        m_pending.reset();
+        m_lastAttempts = r.attempts;
+        return out;
     }
-    return static_cast<int>(std::lround(ddB));   // half away from zero
-}
 
-Hl2PureSignalLogic::Output Hl2PureSignalLogic::tick(const Info& info)
-{
-    Output out;
-    runCommand(info, out);
-    runAutoAttenuate(info, out);
-    m_lastCalibrationCount = info.calibrationCount;
-    return out;
-}
+    if (const auto att = gainMove(r)) {
+        // The calibration under way mixes samples from both gains, and a
+        // correction made at the old gain is wrong at the new one. Start the
+        // same mode over; calcc's MOX delay lets the new gain settle before
+        // it collects again.
+        out.attenuationDb = att;
+        out.flags = flagsFor(m_mode);
+        m_sawActive = false;
+        m_collected = false;
+        if (m_mode == Mode::Single)
+            ++m_singleGainMoves;
+        return out;
+    }
 
-void Hl2PureSignalLogic::runCommand(const Info& info, Output& out)
-{
-    const bool applied = info.correcting;
-    switch (m_cmd) {
-    case Cmd::Off:
-        out.controls.push_back({true, false, false, false});
-        if (m_restoreOn)
-            m_cmd = Cmd::Restore;
-        else if (m_autoOn)
-            m_cmd = Cmd::TurnOnAuto;
-        else if (m_singleCalOn)
-            m_cmd = Cmd::TurnOnSingle;
-        m_off = false;
-        break;
-    case Cmd::TurnOnAuto:
-        out.controls.push_back({true, false, true, false});
-        m_cmd = Cmd::Auto;
-        break;
-    case Cmd::Auto:
-        if (m_off)
-            m_cmd = Cmd::TurnOff;
-        else if (m_restoreOn)
-            m_cmd = Cmd::Restore;
-        else if (m_singleCalOn)
-            m_cmd = Cmd::TurnOnSingle;
-        break;
-    case Cmd::TurnOnSingle:
-        m_autoOn = false;
-        m_performingSingleCal = true;
-        out.controls.push_back({true, true, false, false});
-        m_cmd = Cmd::Single;
-        break;
-    case Cmd::Single:
-        m_singleCalOn = false;
-        if (m_off)
-            m_cmd = Cmd::TurnOff;
-        else if (m_restoreOn)
-            m_cmd = Cmd::Restore;
-        else if (m_autoOn)
-            m_cmd = Cmd::TurnOnAuto;
-        else if (applied)
-            m_cmd = Cmd::StayOn;
-        break;
-    case Cmd::StayOn:
-        if (m_off)
-            m_cmd = Cmd::TurnOff;
-        else if (m_restoreOn)
-            m_cmd = Cmd::Restore;
-        else if (m_autoOn)
-            m_cmd = Cmd::TurnOnAuto;
-        else if (m_singleCalOn)
-            m_cmd = Cmd::TurnOnSingle;
-        else if (m_performingSingleCal) {
-            // A single calibration that auto-attenuate had to interrupt: try
-            // again while the feedback is outside the window, five times.
-            m_performingSingleCal = false;
-            if (!feedbackInRange(info.feedbackLevel) && m_singleCalRetries < kSingleCalRetries) {
-                ++m_singleCalRetries;
-                m_singleCalOn = true;
+    switch (m_mode) {
+    case Mode::Single:
+        if (r.state != LReset)
+            m_sawActive = true;
+        if (r.state == LStayOn && r.correcting) {
+            m_mode = Mode::Hold;
+        } else if (m_sawActive && r.state == LReset && !r.correcting) {
+            // calcc gave up: three bad calculations, or a collection that
+            // could not fill. It sits in LRESET with nothing armed.
+            if (m_singleStarts < kSingleAttempts) {
+                ++m_singleStarts;
+                out.flags = flagsFor(Mode::Single);
+                m_sawActive = false;
+                m_collected = false;
             } else {
-                m_singleCalRetries = 0;
+                m_mode = Mode::Off;
             }
         }
         break;
-    case Cmd::TurnOff:
-        out.controls.push_back({true, false, false, false});
-        m_off = false;
-        if (m_restoreOn)
-            m_cmd = Cmd::Restore;
-        else if (m_autoOn)
-            m_cmd = Cmd::TurnOnAuto;
-        else if (m_singleCalOn)
-            m_cmd = Cmd::TurnOnSingle;
-        else if (!applied && info.state == LReset)
-            m_cmd = Cmd::Off;
+    case Mode::Restoring:
+        if (r.state == LStayOn && r.correcting)
+            m_mode = Mode::Hold;
         break;
-    case Cmd::Restore:
-        m_autoOn = false;
-        out.controls.push_back({false, false, false, true});
-        m_restoreOn = false;
-        if (info.state == LStayOn)
-            m_cmd = Cmd::StayOn;
+    case Mode::Off:
+    case Mode::Auto:
+    case Mode::Hold:
         break;
     }
-}
-
-void Hl2PureSignalLogic::runAutoAttenuate(const Info& info, Output& out)
-{
-    switch (m_aa) {
-    case Aa::Monitor: {
-        const bool attemptsChanged = info.calibrationCount != m_lastCalibrationCount;
-        if (m_autoAttenuate && attemptsChanged
-            && needToRecalibrate(info.feedbackLevel, m_att)) {
-            m_aa = Aa::SetNewValues;
-            m_deltaDb = attenuationStepDb(info.feedbackLevel);
-            m_saveAuto = m_cmd == Cmd::Auto;
-            m_saveSingle = m_cmd == Cmd::Single;
-            out.controls.push_back({true, false, false, false});
-        }
-        break;
-    }
-    case Aa::SetNewValues: {
-        m_aa = Aa::RestoreOperation;
-        const int next = clampAtt(m_att + m_deltaDb);
-        if (next != m_att) {
-            m_att = next;
-            out.attenuationDb = m_att;
-        }
-        break;
-    }
-    case Aa::RestoreOperation:
-        m_aa = Aa::Monitor;
-        out.controls.push_back({false, m_saveSingle, m_saveAuto, false});
-        break;
-    }
+    return out;
 }
 
 // ---- Hl2PureSignal -----------------------------------------------------------
@@ -193,6 +164,14 @@ Hl2PureSignal::Hl2PureSignal(Hl2TxDsp* tx, QObject* parent)
 
 Hl2PureSignal::~Hl2PureSignal() = default;
 
+void Hl2PureSignal::startController()
+{
+    m_ctl.reset();
+    m_lastInfo = {};
+    if (m_wantAuto)
+        m_ctl.selectAuto();
+}
+
 WdspChannel* Hl2PureSignal::channel()
 {
     WdspChannel* ch = m_tx ? m_tx->pureSignalChannel() : nullptr;
@@ -200,10 +179,8 @@ WdspChannel* Hl2PureSignal::channel()
         // A rebuilt TXA channel starts with calcc's defaults and no correction.
         seedChannel(ch);
         m_seededGeneration = m_tx->modulatorGeneration();
-        m_logic.resetToOff();
-        m_lastInfo = {};
-        if (m_enabled && m_wantAuto)
-            m_logic.setAutoCalibrate(true);
+        if (m_enabled)
+            startController();
     }
     return ch;
 }
@@ -229,11 +206,7 @@ void Hl2PureSignal::setEnabled(bool on)
     }
     m_enabled = on;
     m_fill = 0;
-    m_lastInfo = {};
     if (on) {
-        m_logic.resetToOff();
-        if (m_wantAuto)
-            m_logic.setAutoCalibrate(true);
         if (!m_timer) {
             m_timer = new QTimer(this);
             m_timer->setInterval(kTickMs);
@@ -241,18 +214,20 @@ void Hl2PureSignal::setEnabled(bool on)
         }
         if (WdspChannel* ch = channel())
             seedChannel(ch);
-        applyAttenuation(m_logic.attenuationDb());
+        startController();
+        applyAttenuation(m_ctl.attenuationDb());
         m_timer->start();
         qCInfo(lcHl2Ps) << "HL2 PureSignal: on";
     } else {
-        // Correction off on the way out. calcc only advances inside pscc(), so
+        // Correction off on the way out. calcc only moves inside pscc(), so
         // the reset needs a block to run on or the correction stays applied.
         if (WdspChannel* ch = channel()) {
             ch->pureSignalControl(true, false, false, false);
             ch->pureSignalMox(false);
             pumpIdle(ch);
         }
-        m_logic.resetToOff();
+        m_ctl.reset();
+        m_lastInfo = {};
         if (m_timer)
             m_timer->stop();
         qCInfo(lcHl2Ps) << "HL2 PureSignal: off";
@@ -296,47 +271,41 @@ void Hl2PureSignal::setFeedbackRateHz(int hz)
 void Hl2PureSignal::setAutoCalibrate(bool on)
 {
     m_wantAuto = on;
-    m_logic.setAutoCalibrate(on);
+    if (m_enabled) {
+        if (on)
+            m_ctl.selectAuto();
+        else if (m_ctl.mode() == Hl2PsController::Mode::Auto)
+            m_ctl.selectOff();   // a held correction stays when Auto was not running
+    }
     publish();
-}
-
-void Hl2PureSignal::forceAutoOff()
-{
-    // Console.ForcePureSignalAutoCalDisable(), which PSForm's Single, Reset and
-    // Restore buttons call first: untick Auto, which asks for OFF, so the
-    // machine runs Auto -> TurnOff -> the button's own step. Clearing the
-    // switch also keeps a rebuilt channel or the next enable from arming Auto
-    // again on top of the correction the operator chose.
-    if (!m_wantAuto && !m_logic.autoCalibrate())
-        return;
-    m_wantAuto = false;
-    m_logic.setAutoCalibrate(false);
 }
 
 void Hl2PureSignal::calibrateOnce()
 {
-    forceAutoOff();
-    m_logic.requestSingleCalibration();
+    m_wantAuto = false;
+    if (m_enabled)
+        m_ctl.selectSingle();
     publish();
 }
 
 void Hl2PureSignal::resetCorrection()
 {
     m_wantAuto = false;
-    m_logic.requestOff();
+    if (m_enabled)
+        m_ctl.selectOff();
     publish();
 }
 
 void Hl2PureSignal::setAutoAttenuate(bool on)
 {
-    m_logic.setAutoAttenuate(on);
+    m_ctl.setAutoAttenuate(on);
     publish();
 }
 
 void Hl2PureSignal::setAttenuationDb(int att)
 {
-    m_logic.setAttenuationDb(att);
-    applyAttenuation(m_logic.attenuationDb());
+    m_ctl.setAttenuationDb(att);
+    applyAttenuation(m_ctl.attenuationDb());
     publish();
 }
 
@@ -364,8 +333,8 @@ void Hl2PureSignal::restoreCorrection(const QString& path)
     }
     if (WdspChannel* ch = channel()) {
         ch->pureSignalRestore(p.constData());
-        forceAutoOff();
-        m_logic.requestRestore();
+        m_wantAuto = false;
+        m_ctl.selectRestoring();
         qCInfo(lcHl2Ps) << "HL2 PureSignal: restoring correction from" << path;
         publish();
     }
@@ -374,7 +343,7 @@ void Hl2PureSignal::restoreCorrection(const QString& path)
 void Hl2PureSignal::applyAttenuation(int att)
 {
     if (m_txGainSink)
-        m_txGainSink(Hl2PureSignalLogic::lnaGainDbForAtt(att));
+        m_txGainSink(Hl2PsGain::lnaGainDbForAtt(att));
 }
 
 void Hl2PureSignal::feed(const std::vector<std::complex<float>>& txRef,
@@ -402,11 +371,10 @@ void Hl2PureSignal::flushFeed()
 
 void Hl2PureSignal::pumpIdle(WdspChannel* ch)
 {
-    // Unkeyed, nothing feeds calcc, and its control machine only moves inside
-    // pscc(). A short block of silence lets OFF, restore and turn-on take
-    // effect between overs, as they do in Thetis where the PS receivers keep
-    // streaming. With mox clear calcc never leaves LRESET/LWAIT/LSTAYON/
-    // LTURNON on it, so silence cannot become a calibration.
+    // Unkeyed, nothing feeds calcc and its state machine stands still. A short
+    // block of silence lets a reset, a restore or a turn-on take effect
+    // between overs. With mox clear calcc never gets past LWAIT on it, so
+    // silence cannot become a calibration.
     static constexpr int kIdle = 64;
     double zt[2 * kIdle] = {};
     double zr[2 * kIdle] = {};
@@ -427,14 +395,16 @@ void Hl2PureSignal::onTick()
     WdspChannel::PureSignalInfo info;
     ch->pureSignalInfo(&info);
     m_lastInfo = info;
-    const auto out = m_logic.tick({info.feedbackLevel, info.calibrationCount, info.correcting,
-                                   info.state});
-    for (const auto& c : out.controls)
-        ch->pureSignalControl(c.reset, c.mancal, c.automode, c.turnon);
+    const auto out = m_ctl.step({info.state, info.correcting, info.feedbackLevel,
+                                 info.feedbackFresh, info.attempts});
     if (out.attenuationDb) {
         qCInfo(lcHl2Ps).nospace() << "HL2 PureSignal: feedback " << info.feedbackLevel
                                   << ", attenuation -> " << *out.attenuationDb << " dB";
         applyAttenuation(*out.attenuationDb);
+    }
+    if (out.flags) {
+        const auto& f = *out.flags;
+        ch->pureSignalControl(f.reset, f.mancal, f.automode, f.turnon);
     }
     publish();
 }
@@ -447,10 +417,10 @@ void Hl2PureSignal::publish()
     s.unavailableReason = m_unavailableReason;
     s.enabled = m_enabled;
     s.autoCalibrate = m_wantAuto;
-    s.autoAttenuate = m_logic.autoAttenuate();
-    s.calibrating = m_enabled && m_logic.calibrating();
-    s.singleCalibrating = m_enabled && m_logic.singleCalibrating();
-    s.attenuationDb = m_logic.attenuationDb();
+    s.autoAttenuate = m_ctl.autoAttenuate();
+    s.calibrating = m_enabled && m_ctl.calibrating();
+    s.singleCalibrating = m_enabled && m_ctl.mode() == Hl2PsController::Mode::Single;
+    s.attenuationDb = m_ctl.attenuationDb();
     s.keyed = m_keyed;
     if (m_enabled) {
         s.correcting = info.correcting;
@@ -489,10 +459,10 @@ QVariantMap pureSignalStatusFields(const Hl2PureSignalStatus& s)
         {QStringLiteral("calibrationCount"), s.calibrationCount},
         {QStringLiteral("engineState"), s.engineState},
         {QStringLiteral("attenuationDb"), s.attenuationDb},
-        {QStringLiteral("attMin"), Hl2PureSignalLogic::kAttMin},
-        {QStringLiteral("attMax"), Hl2PureSignalLogic::kAttMax},
-        {QStringLiteral("feedbackWindowLow"), 128},
-        {QStringLiteral("feedbackWindowHigh"), 181},
+        {QStringLiteral("attMin"), Hl2PsGain::kAttMin},
+        {QStringLiteral("attMax"), Hl2PsGain::kAttMax},
+        {QStringLiteral("feedbackWindowLow"), Hl2PsGain::kWindowLow},
+        {QStringLiteral("feedbackWindowHigh"), Hl2PsGain::kWindowHigh},
         {QStringLiteral("maxTx"), s.maxTx},
         {QStringLiteral("keyed"), s.keyed},
     };

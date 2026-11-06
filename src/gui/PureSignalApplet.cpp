@@ -28,10 +28,10 @@
 
 namespace AetherSDR {
 namespace {
-constexpr int kScaleMax = 256;      // IsFeedbackLevelOK's ceiling
-constexpr int kWindowLow = 128;     // FeedbackInRange: 128 < fb <= 181
+constexpr int kScaleMax = 256;      // calcc's level scale: 256 = hardware peak
+constexpr int kWindowLow = 128;     // target window: 128 < fb <= 181 (-6..-3 dB)
 constexpr int kWindowHigh = 181;
-constexpr int kAttMin = -28;        // MI0BOT: the HL2 goes negative
+constexpr int kAttMin = -28;        // below 0 is extra feedback gain (19 - att)
 constexpr int kAttMax = 31;
 
 // calcc.c's _calcc_state, in its order: what the status map's engineState is.
@@ -105,7 +105,7 @@ PureSignalFeedbackMeter::Band PureSignalFeedbackMeter::bandFor(int level) noexce
     if (level < 0) { return Band::None; }
     if (level > kWindowHigh) { return Band::High; }
     if (level > kWindowLow) { return Band::Good; }
-    if (level > 90) { return Band::Marginal; }
+    if (level > 90) { return Band::Marginal; }   // within 3 dB below the window
     return Band::Low;
 }
 

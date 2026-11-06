@@ -1948,13 +1948,13 @@ void Hl2Backend::loadPureSignalPreferences()
     // on the band, the drive and the coupler of the moment, so it is not
     // persisted: each session starts at kAttMax and auto-attenuate finds its
     // level again on the first calibration.
-    m_psAttenuationDb = Hl2PureSignalLogic::kAttMax;
+    m_psAttenuationDb = Hl2PsGain::kAttMax;
     if (!doc.isEmpty() && version <= kPureSignalSchemaVersion) {
         m_psAutoCalibrate = doc.value(QStringLiteral("autoCalibrate")).toBool(m_psAutoCalibrate);
         m_psAutoAttenuate = doc.value(QStringLiteral("autoAttenuate")).toBool(m_psAutoAttenuate);
         const QJsonValue att = doc.value(QStringLiteral("attenuationDb"));
         if (att.isDouble())
-            m_psAttenuationDb = Hl2PureSignalLogic::clampAtt(att.toInt(m_psAttenuationDb));
+            m_psAttenuationDb = Hl2PsGain::clampAtt(att.toInt(m_psAttenuationDb));
     } else if (version > kPureSignalSchemaVersion) {
         qCWarning(lcHl2) << "HL2: PureSignal preferences are schema" << version
                          << "— newer than this build; using defaults";
@@ -2032,7 +2032,7 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
             // Turning it off keeps the attenuation it had reached, which then
             // becomes the manual setting.
             if (!on)
-                m_psAttenuationDb = Hl2PureSignalLogic::clampAtt(m_psStatus.attenuationDb);
+                m_psAttenuationDb = Hl2PsGain::clampAtt(m_psStatus.attenuationDb);
             m_psAutoAttenuate = on;
             savePureSignalPreferences();
         }
@@ -2041,7 +2041,7 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
         const int att = arg.toInt(&ok);
         if (!ok)
             return refuse(QStringLiteral("puresignal.att: expects an integer in dB"));
-        const int clamped = Hl2PureSignalLogic::clampAtt(att);
+        const int clamped = Hl2PsGain::clampAtt(att);
         setPureSignalAttenuationDb(clamped);
         if (clamped != m_psAttenuationDb) {
             m_psAttenuationDb = clamped;

@@ -563,13 +563,15 @@ public:
     // ---- PureSignal (TX channels; calcc.c) ---------------------------------
     // Thin wrappers over WDSP's PS API for the Hermes-Lite 2 controller
     // (Hl2PureSignal). None takes the control fence: calcc guards its own state
-    // with cs_update, and Thetis calls these from its GUI thread against a
+    // with cs_update, and its API is meant to be called from a GUI thread against a
     // running channel. The caller keeps every call on one thread with the
     // channel's lifetime (the HL2 I/O thread) so none can outlive the channel.
     // All return false on a receive channel.
     struct PureSignalInfo {
-        int feedbackLevel = 0;    // info[4]: feedback peak, 152 is ideal
-        int calibrationCount = 0; // info[5]
+        int feedbackLevel = 0;    // info[4]: feedback peak, 256 = hardware peak
+        bool feedbackFresh = false; // info[0] bit 0 clear: info[4] measured last attempt
+        int calibrationCount = 0; // info[5]: successful calculations
+        int attempts = 0;         // info[7]: finished calculations, good or not
         bool correcting = false;  // info[14]
         int state = 0;            // info[15]: LRESET .. LTURNON
         double maxTx = 0.0;       // GetPSMaxTX

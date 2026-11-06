@@ -1367,7 +1367,9 @@ bool WdspChannel::pureSignalInfo(PureSignalInfo* out) const noexcept
     double maxTx = 0.0;
     GetPSMaxTX(m_channelId, &maxTx);
     out->feedbackLevel = info[4];
+    out->feedbackFresh = (info[0] & 1) == 0;
     out->calibrationCount = info[5];
+    out->attempts = info[7];
     out->correcting = info[14] != 0;
     out->state = info[15];
     out->maxTx = maxTx;
