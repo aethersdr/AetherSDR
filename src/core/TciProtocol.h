@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -46,6 +47,14 @@ public:
         bool tune { false };
     };
 
+    // rx_ctun_ex SET, already inverted: CTUN on is center lock off.
+    struct CenterLockRequest
+    {
+        int trx { -1 };
+        int sliceId { -1 };
+        bool locked { false };
+    };
+
     explicit TciProtocol(RadioModel* model, TciRoutingState* routingState = nullptr,
                          const TciTrxMap* trxMap = nullptr);
 
@@ -64,6 +73,14 @@ public:
     std::optional<SplitRequest> takeSplitRequest();
     std::optional<TrxRequest> takeTrxRequest();
     std::optional<TuneRequest> takeTuneRequest();
+    std::optional<CenterLockRequest> takeCenterLockRequest();
+
+    // Center lock lives in MainWindow, not RadioModel, so TciServer injects
+    // a query for `rx_ctun_ex` GETs. Unset (tests, no GUI) = GET unanswered.
+    void setCenterLockQuery(std::function<bool(int sliceId)> query)
+    {
+        m_centerLockQuery = std::move(query);
+    }
 
     // After handleCommand(), if the command was a master-volume SET, this
     // returns the requested level (0-100). -1 means no master-volume change
@@ -126,6 +143,7 @@ private:
     QString cmdCwMacrosSpeed(const QStringList& args, bool isSet);
     QString cmdCwMsg(const QStringList& args);
     QString cmdLock(const QStringList& args, bool isSet);
+    QString cmdRxCtunEx(const QStringList& args, bool isSet);
     QString cmdSqlEnable(const QStringList& args, bool isSet);
     QString cmdSqlLevel(const QStringList& args, bool isSet);
     void queueSquelch(SliceModel* s, int trx, bool on, int level);
@@ -209,6 +227,11 @@ public:
     // shared means a future change to slice iteration can't drift one path.
     static int txSliceTrxOrNone(RadioModel* model);
 
+    // Split made in the GUI: receiver `rx` listens while another slice holds
+    // TX. TCI reports it as split_enable on trx 0, the way a two-VFO radio
+    // reports VFO B transmitting.
+    static bool txOnOtherSlice(const RadioModel* model, const SliceModel* rx);
+
     // Resolve a contiguous TCI receiver index, then the legacy raw Flex slice
     // id, then the first slice for compatibility. Shared by parser and server
     // command paths so GET and SET never target different receivers.
@@ -224,6 +247,18 @@ public:
     static SliceModel* resolveSliceForTrxStrict(RadioModel* model, int trx);
 
     static long long mhzToHz(double mhz);
+
+    // A slice squelch level (0..100) as the spec's sql_level dB, the scale
+    // sql_level GET and SET use. TciServer relays GUI changes with it.
+    static int squelchLevelDb(RadioModel* model, SliceModel* s, int level);
+
+    // TCI 2.1 §AGC_GAIN: the gain in dB over -20..120. The AGC-T knob (0..100)
+    // maps onto that range linearly, the same for every backend. A KiwiSDR
+    // receive replacement already holds its AGC threshold in dB and passes
+    // through unchanged. TciServer relays GUI changes with it.
+    static int agcGainDb(SliceModel* s);
+    static int agcGainDbForLevel(int level);
+    static int agcLevelForGainDb(double db);
 
     // IQ center (DDS) for a slice = its populated panadapter center in Hz.
     // Falls back to the slice frequency while the pan is absent or its center
@@ -251,6 +286,8 @@ private:
     std::optional<SplitRequest> m_splitRequest;
     std::optional<TrxRequest> m_trxRequest;
     std::optional<TuneRequest> m_tuneRequest;
+    std::optional<CenterLockRequest> m_centerLockRequest;
+    std::function<bool(int)> m_centerLockQuery;
     int         m_pendingMasterVolume{-1};   // -1 = no change requested
     int         m_pendingTxGain{-1};         // -1 = no change requested
     int         m_activeTrx{-1};             // -1 = focus not yet known (#4160)

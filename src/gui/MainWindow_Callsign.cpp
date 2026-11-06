@@ -197,16 +197,7 @@ void MainWindow::clearLiveCwContact()
 
 void MainWindow::showCallsignLookupDialog(const QString& call)
 {
-    // A canon workspace window: created directly rather than through
-    // showOrRaisePersistent(), which would apply View → Frameless Window.
-    if (!m_callsignLookupDialog) {
-        auto* dialog = new CallsignLookupDialog(this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        m_callsignLookupDialog = dialog;
-    }
-    m_callsignLookupDialog->show();
-    m_callsignLookupDialog->raise();
-    m_callsignLookupDialog->activateWindow();
+    showOrRaiseCanon(m_callsignLookupDialog, [this] { return new CallsignLookupDialog(this); });
     if (!call.isEmpty())
         m_callsignLookupDialog->lookupCallsign(call);
 }

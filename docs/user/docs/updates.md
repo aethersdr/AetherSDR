@@ -1,7 +1,7 @@
 ---
 title: "Updates"
 slug: "/updates"
-description: "The Updates window shows the newest AetherSDR release and what is in it, and installs it on Windows and Linux or opens the download built for your computer."
+description: "The Updates window shows the newest AetherSDR release and what is in it, and installs it on Windows, macOS and Linux or opens the download built for your computer."
 status: "Supported"
 applies_to: ["All radios"]
 ---
@@ -12,7 +12,7 @@ applies_to: ["All radios"]
 
 :::
 
-The **Updates** window shows whether a newer AetherSDR is available and what is in it. On Windows, and on Linux when AetherSDR is [installed for updates](#installing-aethersdr-on-linux-so-it-updates-itself), **Install update** downloads it and installs it when AetherSDR restarts or quits. Elsewhere, **Get AetherSDR** opens the download built for your computer in your browser, and you install it as you installed AetherSDR. AetherSDR never downloads or installs an update until you ask it to.
+The **Updates** window shows whether a newer AetherSDR is available and what is in it. On Windows, on macOS, and on Linux when AetherSDR is [installed for updates](#installing-aethersdr-on-linux-so-it-updates-itself), **Install update** downloads it and installs it when AetherSDR restarts or quits. Elsewhere, **Get AetherSDR** opens the download built for your computer in your browser, and you install it as you installed AetherSDR. AetherSDR never downloads or installs an update until you ask it to.
 
 ## Requirements
 
@@ -26,8 +26,8 @@ When a newer release exists, the window shows:
 
 - **NEW RELEASE** with its date, the version, and the release's one-line summary.
 - **WHAT'S INSIDE**: one chip for each chapter of the release notes.
-- **Install update** (Windows, and Linux installed for updates): see [Installing an update](#installing-an-update). **Download release** beside it opens the download in your browser instead, if you'd rather install it yourself.
-- **Get AetherSDR** *version* (macOS, the Linux AppImage, and Windows or Linux when it can't install in place): opens the download in your browser. The line under it names the file: the Windows installer, the Windows portable zip if you run the portable copy, the macOS Apple silicon disk image, or the Linux AppImage for your processor. When there is no build for your computer, it opens the release page instead.
+- **Install update** (Windows, macOS, and Linux installed for updates): see [Installing an update](#installing-an-update). **Download release** beside it opens the download in your browser instead, if you'd rather install it yourself.
+- **Get AetherSDR** *version* (the Linux AppImage, and Windows, macOS or Linux when it can't install in place): opens the download in your browser. The line under it names the file: the Windows installer, the Windows portable zip if you run the portable copy, the macOS disk image for your Mac (Apple silicon or Intel), or the Linux AppImage for your processor. When there is no build for your computer, it opens the release page instead.
 - **Full release notes**: opens the release page on GitHub.
 - **Skip this version**: hides the **UPDATE** badge for this release. The window still shows it, and the next release shows the badge again. Skipping a release you already downloaded with **Install update** removes the download, so it doesn't install. Clicking **Install update** on a release you skipped un-skips it.
 
@@ -50,6 +50,7 @@ Most updates download only what changed since your version. When that isn't poss
 Before the new version goes in, it is started once with a quick check, without a window or the radio. If that check fails, your previous version stays, and that release is never offered again.
 
 - **Windows:** a small updater swaps the new version in after AetherSDR quits. If the check fails, your previous version is put back. The previous version is kept beside the new one (in a folder named like your install with `.previous` after it) until the next update.
+- **macOS:** the new version is checked while AetherSDR runs: its code signature must match what AetherSDR's developer signed, and it must pass the start-up check. It replaces the app in one step as the last thing AetherSDR does when it quits. If a check fails as AetherSDR quits, the update stays ready and is tried again next time; a failure after **Restart to update**, or at a third quit in a row, stops it being offered. The version you were running is kept in `~/Library/Application Support/AetherSDR/AetherSDR/update/previous` until the next update, unless AetherSDR is on another disk than your home folder; then it isn't kept. Only the app updates: when a release changes the DAX audio driver and you have it installed, the Updates window says so once the update is ready; install the driver from that release's disk image.
 - **Linux:** the new version goes in its own folder beside yours, and only once it passes the check does it become the one your menu entry and the `aethersdr` command start. If the check fails as AetherSDR quits, for example while you log out, the update stays ready and is tried again next time. A failure after **Restart to update**, or at a third quit in a row, stops it being offered. The version you were running is kept until the next update; see [Going back to the previous version on Linux](#going-back-to-the-previous-version-on-linux).
 
 The next time AetherSDR starts, the status bar says what happened: **Updated to AetherSDR** *version*, or that the update didn't start and your previous version was restored.
@@ -57,8 +58,9 @@ The next time AetherSDR starts, the status bar says what happened: **Updated to 
 Install update isn't offered when:
 
 - AetherSDR is running as administrator (Windows). Run the installer instead; a system-wide install updates that way.
-- The folder AetherSDR is installed in can't be changed by your user, for example under **Program Files**.
-- On Linux, AetherSDR wasn't installed with `--install`: you are running the AppImage itself, a distribution's package, or a copy you built.
+- The folder AetherSDR is installed in can't be changed by your user, for example under **Program Files**, or **Applications** on a Mac when your account isn't an administrator.
+- On macOS, AetherSDR is running from its disk image, or from where it was downloaded (macOS then runs it from a temporary place). Drag it to **Applications** and open it from there.
+- On Linux, AetherSDR isn't [installed for updates](#installing-aethersdr-on-linux-so-it-updates-itself): you are running the AppImage itself, a distribution's package, or a copy you built. The AppImage offers **Install for updates** instead.
 - A store installs your updates.
 - The release was rolled back on this computer. The window says so, and offers **Get AetherSDR** if you want to try it by hand. The **UPDATE** badge doesn't show for it.
 
@@ -66,26 +68,40 @@ Copies that cannot install in place offer **Get AetherSDR**. Store-managed copie
 
 ## Installing AetherSDR on Linux so it updates itself
 
-The AppImage runs from wherever you saved it, and updates by downloading the next AppImage. To have **Install update** keep AetherSDR current instead, install it once from the AppImage:
+The AppImage runs from wherever you saved it, and updates by downloading the next AppImage. To have **Install update** keep AetherSDR current instead, install it once.
 
-1. Download the AppImage for your processor from the [releases page](https://github.com/aethersdr/AetherSDR/releases/latest).
-2. In a terminal, in the folder you saved it to, unpack it:
+### From the AppImage
+
+1. Open **File > Update…** in the AppImage.
+2. Click **Install for updates**. AetherSDR asks first and says where it goes. Tick **Move this AppImage, *file name*, to the trash afterward** if you won't run the AppImage again.
+3. Click **Install and restart**. The release you are running is copied into `~/.local/share/AetherSDR/install/`, added to your applications menu, and given an `aethersdr` command in `~/.local/bin`. Nothing is downloaded. AetherSDR then quits and starts again from the install, and the status bar says it is installed for updates.
+
+From then on, start AetherSDR from your applications menu or with `aethersdr`. If you open the AppImage again, its Updates window says AetherSDR is installed for updates instead of offering it again.
+
+From a terminal, `./AetherSDR-<version>-x86_64.AppImage --install` installs the AppImage's release the same way, without the trash option. Unlike **Install for updates**, it installs over an existing install, even a newer one, so it is also a way back to an older release.
+
+### From the release tarball
+
+1. Download `AetherSDR-<version>-x86_64.tar.zst` (or `-aarch64.tar.zst` for a 64-bit ARM computer such as a Raspberry Pi) from the [releases page](https://github.com/aethersdr/AetherSDR/releases/latest). It holds the same files as the AppImage.
+2. In a terminal, in the folder you saved it to, unpack it into a folder of its own, using the name of the file you downloaded:
 
    ```sh
-   chmod +x AetherSDR-*.AppImage
-   ./AetherSDR-*.AppImage --appimage-extract
+   mkdir aethersdr
+   tar --zstd -xf AetherSDR-<version>-x86_64.tar.zst -C aethersdr
    ```
+
+   This needs the `zstd` package. If your `tar` doesn't know `--zstd` (GNU tar older than 1.31, as on Ubuntu 20.04), use `zstd -dc AetherSDR-<version>-x86_64.tar.zst | tar -xf - -C aethersdr` instead.
 
 3. Install it:
 
    ```sh
-   ./squashfs-root/AppRun --install
+   ./aethersdr/AppRun --install
    ```
 
    AetherSDR is copied into `~/.local/share/AetherSDR/install/`, added to your applications menu, and given an `aethersdr` command in `~/.local/bin`. It then starts.
-4. Delete the `squashfs-root` folder and the AppImage; they aren't used any more.
+4. Delete the `aethersdr` folder and the tarball; they aren't used any more.
 
-Your settings, logs and downloads are the same ones the AppImage uses, so nothing has to be set up again. Running `--install` again from a newer release's unpacked AppImage installs that release the same way. If `~/.local/bin/aethersdr` is already a file or link of your own, it is left alone and the installer says so.
+Either way, your settings, logs and downloads are the same ones the AppImage uses, so nothing has to be set up again. Running `--install` again from a newer release's unpacked tarball installs that release the same way. If `~/.local/bin/aethersdr` is already a file or link of your own, it is left alone and the installer says so.
 
 ### Going back to the previous version on Linux
 

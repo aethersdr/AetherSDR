@@ -369,7 +369,7 @@ void testWindowFlow()
     const QString path = dir.filePath(QStringLiteral("CTR2-Max_v10200l.zip"));
     {
         QFile out(path);
-        out.open(QIODevice::WriteOnly);
+        check(out.open(QIODevice::WriteOnly), "the fixture zip can be written");
         out.write(writeStoredZip({{QStringLiteral("CTR2-Max.bin"), merged(app(), rows8())}}));
     }
     auto devices = std::make_shared<Devices>();
@@ -428,7 +428,7 @@ void testWindowFlow()
                              "flash-backup-AAAAAAAAAAAA-20260101-000001.bin",
                              "flash-backup-B81F3FC45888-mine.bin"}) {
         QFile f(backups.filePath(QString::fromLatin1(name)));
-        f.open(QIODevice::WriteOnly);
+        check(f.open(QIODevice::WriteOnly), "the fixture backup can be created");
     }
 
     // Its stock firmware is running: the install waits for download mode.
@@ -688,7 +688,7 @@ void testFirmwareStore()
         const QString path = downloads.filePath(QStringLiteral("CTR2-Max_%1.zip").arg(
             QString::fromLatin1(version)));
         QFile out(path);
-        out.open(QIODevice::WriteOnly);
+        check(out.open(QIODevice::WriteOnly), "the fixture download can be written");
         out.write(writeStoredZip({{QStringLiteral("Manuals/manual.pdf"), "%PDF"},
                                   {QStringLiteral("CTR2-Max.bin"),
                                    merged(app(version), rows8())}}));
@@ -827,7 +827,7 @@ struct Key {
 void writeFile(const QString& path, const QByteArray& data)
 {
     QFile f(path);
-    f.open(QIODevice::WriteOnly);
+    check(f.open(QIODevice::WriteOnly), "the fixture file can be written");
     f.write(data);
 }
 

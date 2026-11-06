@@ -192,6 +192,17 @@ sessions are rechecked after cache signals, which can synchronously retire them.
 Neutral storage validation covers supported backend modes and wide FM filters;
 the legacy Flex editor dropdown is not the storage vocabulary.
 These desktop operations add no daemon catalogue methods or TX authority.
+CWX buffered-keyer requests are typed `CwTextRequest` values; Flex owns their
+encoding and queue-reply decoding. Native text keyers retain the existing
+`sendCwText` adapter, with one actual sender per backend. Keep original producer,
+operation, batch and speed-edit fences at the terminal writer. Operator
+configuration uses a separate session/edit-fenced writer, so admitting text
+cannot discard its staged WPM. Erase and clear remain counted, original-operation
+cleanup. Queue consumption is not radio-idle evidence. Unknown delivery must
+never retry text. Session reset retires transient speed echoes and queued restores;
+exhausting the echo bound cancels the batch and its queued writes together.
+No connect-time delay push or minimum is permitted (#5945); TCI delay semantics
+and TCI producer ownership remain separate work (#6193, #5873).
 Independent slice create/remove, TX-slice selection, full duplex and runtime
 slice refresh also use typed `RadioModel` routes. `FlexSliceLifecycleControls`
 owns their wire encoding; the initial connection subscription batch is separate.
@@ -205,6 +216,14 @@ and refuses any pending creation whose discarded history makes ownership
 uncertain, rather than issuing a cleanup receipt from incomplete evidence.
 GUI, CAT and TCI retain their existing topology, frequency, focus and audio
 policies. TX assignment is not keying and grants no extra TX authority.
+Band-stack recall runs through `RadioModel` with a value copy of the bookmark;
+the GUI supplies its existing tuning policy. Each step rechecks the original
+session, slice, pan and ownership, and a newer recall supersedes the older tail.
+Physical antenna requests and radio AGC behind external receive replacement use
+typed backend verbs. CAT tuning steps use the same typed preset route as desktop
+controls and retain the queued request's original session and slice identity.
+A completed recall requests one slice-status refresh so a mode-change status
+cannot leave AGC values stale on firmware that only acknowledges AGC writes.
 Desktop spot, pan-utility and net/tuning-step requests also use typed backend
 verbs; their desktop-only field-set records are not daemon permissions. Spot
 batches retain their original control session and Clear All epoch and detach

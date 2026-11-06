@@ -680,6 +680,14 @@ bool UpdateManifest::parse(const QByteArray& json, UpdateManifest* out, QString*
             || !readAsset(po.value(QLatin1String("full")).toObject(), m.tag, &p.full)) {
             return bad(QStringLiteral("a payload's full download"));
         }
+        if (const QJsonValue dax = po.value(QLatin1String("dax_driver")); !dax.isUndefined()) {
+            // \A and \z: $ would also take a hash with a trailing newline.
+            static const QRegularExpression treeHash(QStringLiteral("\\A[0-9a-f]{40}\\z"));
+            p.daxDriverSource = dax.toObject().value(QLatin1String("source")).toString();
+            if (!treeHash.match(p.daxDriverSource).hasMatch()) {
+                return bad(QStringLiteral("a payload's DAX driver source"));
+            }
+        }
         QSet<QString> paths;
         for (const QJsonValue& fv : po.value(QLatin1String("files")).toArray()) {
             const QJsonObject fo = fv.toObject();
@@ -1051,8 +1059,9 @@ bool UpdateStager::applyFull(const QString& installRoot, const QByteArray& zip,
     // release's own files never include them.
     // A release file of that name, in any case on Windows, where the
     // install's unins000.dat and the release's Unins000.dat are one file.
+    // macOS's default volume ignores case too.
     const auto isReleaseFile = [&wanted](const QString& name) {
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
         for (auto w = wanted.cbegin(); w != wanted.cend(); ++w) {
             if (w.key().compare(name, Qt::CaseInsensitive) == 0) {
                 return true;
@@ -1158,7 +1167,7 @@ bool sameInstall(const QString& a, const QString& b)
     if (a.isEmpty() || b.isEmpty()) {
         return false;
     }
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
     const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
 #else
     const Qt::CaseSensitivity cs = Qt::CaseSensitive;
@@ -1246,6 +1255,26 @@ void UpdateStager::discard(const QString& stagingRoot, const QString& version)
         fs::remove_all(toPath(recordPath(stagingRoot, version, suffix)), ec);
     }
     qCInfo(lcUpdater).noquote() << "staged update to v" + version + " discarded";
+}
+
+QString UpdateStager::stagedDaxDriverSource(const QString& stagingRoot, const QString& version,
+                                            const QString& platform, const QString& arch)
+{
+    if (stagingRoot.isEmpty() || !releaseVersion().match(version).hasMatch()) {
+        return {};
+    }
+    QFile f(recordPath(stagingRoot, version, QStringLiteral(".manifest.json")));
+    UpdateManifest m;
+    QString problem;
+    if (f.size() > kMaxManifestBytes || !f.open(QIODevice::ReadOnly) || !UpdateManifest::parse(f.readAll(), &m, &problem)) {
+        return {};
+    }
+    for (const UpdateManifest::Payload& p : m.payloads) {
+        if (p.platform == platform && p.arch == arch) {
+            return p.daxDriverSource;
+        }
+    }
+    return {};
 }
 
 bool UpdateStager::revalidate(const QString& stagingRoot, const StagedRelease& staged,

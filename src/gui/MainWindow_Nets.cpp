@@ -62,12 +62,12 @@ void MainWindow::initNetScheduler()
 
 void MainWindow::showNetSchedulerDialog()
 {
-    const bool wasFresh = !m_netSchedulerDialog;
-    NetSchedulerDialog::CaptureFn capture = [this]() { return captureCurrentNetPreset(); };
-    showOrRaisePersistent(m_netSchedulerDialog,
-                          m_netScheduler ? m_netScheduler->entries() : QList<NetEntry>(),
-                          capture);
-    if (wasFresh && m_netSchedulerDialog) {
+    const bool wasFresh = showOrRaiseCanon(m_netSchedulerDialog, [this] {
+        NetSchedulerDialog::CaptureFn capture = [this]() { return captureCurrentNetPreset(); };
+        return new NetSchedulerDialog(
+            m_netScheduler ? m_netScheduler->entries() : QList<NetEntry>(), capture, this);
+    });
+    if (wasFresh) {
         connect(m_netSchedulerDialog.data(), &NetSchedulerDialog::entriesChanged, this,
                 [this](const QList<NetEntry>& nets) { persistNetSchedule(nets); });
         connect(m_netSchedulerDialog.data(), &NetSchedulerDialog::tuneRequested, this,

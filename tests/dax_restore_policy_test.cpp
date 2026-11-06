@@ -243,6 +243,57 @@ void testKeyForIndexMatchesPersistedNames()
                == QStringLiteral("DaxChannel_SliceZ"));
 }
 
+void testDaxQuitWritesAndPrunes()
+{
+    // A=2 assigned, B unassigned: A is written, B and the tail are removed.
+    const DaxRestorePolicy::QuitWrite w =
+        DaxRestorePolicy::quitWrite(true, true, {2, 0});
+    const bool setA = w.set.size() == 1
+                   && w.set.first().first == QStringLiteral("DaxChannel_SliceA")
+                   && w.set.first().second == 2;
+    report("DAX radio quit writes assigned slices and removes the rest",
+           setA && w.remove.contains(QStringLiteral("DaxChannel_SliceB"))
+               && w.remove.contains(QStringLiteral("DaxChannel_SliceZ"))
+               && !w.remove.contains(QStringLiteral("DaxChannel_SliceA")));
+}
+
+void testDaxRadioLessQuitTouchesNothing()
+{
+    // Disconnected (slices staged away) or connected before enumeration:
+    // the empty list says nothing about the saved layout.
+    const DaxRestorePolicy::QuitWrite offline =
+        DaxRestorePolicy::quitWrite(true, false, {});
+    const DaxRestorePolicy::QuitWrite unenumerated =
+        DaxRestorePolicy::quitWrite(true, true, {});
+    report("DAX radio quit with no slices writes and prunes nothing",
+           offline.set.isEmpty() && offline.remove.isEmpty()
+               && unenumerated.set.isEmpty() && unenumerated.remove.isEmpty());
+}
+
+void testShouldRestoreOnlyOnDaxRadio()
+{
+    DaxRestorePolicy p;
+    p.onConnected();
+    report("DAX radio restores a saved channel in the window",
+           p.shouldRestore(2, true));
+    report("radio without DAX streams never restores a saved channel",
+           !p.shouldRestore(2, false));
+    report("no saved channel means no restore", !p.shouldRestore(0, true));
+    p.onSettleTimeout(p.generation());
+    report("closed window means no restore", !p.shouldRestore(2, true));
+}
+
+void testNonDaxQuitKeepsSavedKeys()
+{
+    // Saved Flex A=2 -> connect an Icom/HL2 (every slice reads channel 0)
+    // -> quit. The quit must not touch the keys, or the next Flex
+    // session has nothing to restore.
+    const DaxRestorePolicy::QuitWrite w =
+        DaxRestorePolicy::quitWrite(false, true, {0, 0});
+    report("non-DAX radio quit leaves the saved DAX keys alone",
+           w.set.isEmpty() && w.remove.isEmpty());
+}
+
 }  // namespace
 
 int main()
@@ -269,6 +320,10 @@ int main()
     testRadioLessQuitPrunesNothing();
     testConnectedButUnenumeratedQuitPrunesNothing();
     testKeyForIndexMatchesPersistedNames();
+    testDaxQuitWritesAndPrunes();
+    testDaxRadioLessQuitTouchesNothing();
+    testShouldRestoreOnlyOnDaxRadio();
+    testNonDaxQuitKeepsSavedKeys();
 
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
