@@ -14,7 +14,7 @@ applies_to: ["FlexRadio"]
 
 SmartLink lets you operate your FlexRadio over the internet. AetherSDR supports the full SmartLink sign-in and connection flow, including audio, panadapter and waterfall streaming.
 
-Can't forward ports at the station (CGNAT, Starlink, cellular)? On a FLEX-8000 series or Aurora radio with firmware 4.2.18 or later, see [Tailscale Remote Access](./tailscale-remote-access.md). It needs no port forwarding and runs on Tailscale's free plan.
+Can't forward ports at the location (CGNAT, Starlink, cellular)? On a FLEX-8000 series or Aurora radio with firmware 4.2.18 or later, see [Tailscale Remote Access](./tailscale-remote-access.md). It needs no port forwarding and runs on Tailscale's free plan.
 
 ## Requirements
 
@@ -23,7 +23,7 @@ Can't forward ports at the station (CGNAT, Starlink, cellular)? On a FLEX-8000 s
 
 ## Setup
 
-At the station, using SmartSDR for Windows:
+At the location, using SmartSDR for Windows:
 
 1. Open SmartSDR for Windows → **Settings** → **SmartLink Setup**.
 2. Log in with your FlexRadio account.
@@ -36,16 +36,22 @@ At the station, using SmartSDR for Windows:
 
 ## Connecting with SmartLink
 
-<img src="/img/screens/connect-smartlink-card.png" width="760" alt="Connect to Radio window with the Remote with SmartLink card selected. The SmartLink account group has empty Email and Password fields and a Sign In button, with the note Sign in to see radios at remote stations. The Remote radios group reads Remote radios appear here after SmartLink sign-in. Connection options for slower links with Use low bandwidth mode sits below." />
+<img src="/img/screens/connect-smartlink-card.png" width="912" alt="Connect to a radio SmartLink page with saved account selection, Add, Rename and Remove actions, sign-in fields and a remote radio list." />
 
-*The Remote with SmartLink card, before signing in.*
+*Saved SmartLink accounts and sign-in, before authentication.*
 
-1. Open the connect panel (**File → Connect to Radio...**, or the **+** on the title bar's radio tabs).
-2. Choose **Remote with SmartLink**.
-3. In **SmartLink account**, enter your FlexRadio account email and password and click **Sign In**.
-4. Your radio appears in the list of remote radios. Select it and click **Connect Remote Radio**.
+1. Open **File → Connect to Radio...** and select the location that will contain the remote radio.
+2. Choose **SmartLink accounts…**. Use **Add** to name an account and enter its email address.
+3. Enter that account's password and click **Sign In**.
+4. Select a remote radio and click **Save selected radio to location**. Return with **Back to location**, select the radio and press **Connect**.
 
-You stay signed in across restarts (see [Security](#security)).
+### Switching accounts
+
+Each saved remote connection remembers its account. Pressing **Connect** selects that identity and looks up its current radio list. A saved credential lets the connection continue automatically. If sign-in is required, authenticate that account and retry **Connect**.
+
+The account selector supports **Add**, **Rename** and **Remove**. Signing out or removing an account forgets only that account's credential. Connections that reference a removed account remain saved and explain that the account must be added again. Disconnect a live SmartLink radio before switching, signing out or removing an account. Local radios remain available independently of SmartLink authentication.
+
+Account discovery uses one account at a time. Switching clears the previous account's list; an offline saved radio is not presented as a freshly discovered radio. Account labels and email addresses survive restart. Refresh tokens survive restart only in builds with a working platform keychain; other builds display a session-only notice.
 
 On a slow or metered connection, tick **Use low bandwidth mode** under *Connection options for slower links* before connecting, and consider Opus audio compression — see [Low Bandwidth Connections](./low-bandwidth-connections.md).
 
@@ -98,12 +104,12 @@ Before reporting a SmartLink problem, turn on the **SmartLink**, **Audio** and *
 
 The radio is not registered with SmartLink, or its port test does not pass.
 
-1. At the station, open SmartSDR for Windows → **Settings** → **SmartLink Setup**.
+1. At the location, open SmartSDR for Windows → **Settings** → **SmartLink Setup**.
 2. Check that the radio is registered, and click **Test**: both indicators should be green.
 
 ### The connection drops after about 10 seconds
 
-Port forwarding at the station is probably not set up correctly.
+Port forwarding at the location is probably not set up correctly.
 
 1. Check that TCP 4994 and UDP 4993 are forwarded to the radio's LAN IP address.
 2. Run the SmartLink **Test** in SmartSDR again.
@@ -112,13 +118,13 @@ Port forwarding at the station is probably not set up correctly.
 
 TCP 4994 is probably not forwarded to the radio.
 
-1. Check the TCP 4994 forward on the station's router.
+1. Check the TCP 4994 forward on the location's router.
 
 ### A certificate mismatch warning appears
 
 The radio presented a different certificate from the one AetherSDR pinned. See [Certificate pinning](#certificate-pinning).
 
-1. If you did not change anything at the station, choose **Reject and disconnect**.
+1. If you did not change anything at the location, choose **Reject and disconnect**.
 2. If you know the certificate changed (for example after a firmware update or a radio replacement), choose **Accept new certificate**.
 
 ## See also

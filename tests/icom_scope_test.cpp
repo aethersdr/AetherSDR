@@ -230,10 +230,10 @@ static void testUsbMultiDivision()
         check(!d.feed(makeContinuation(div, 11, chunk)).has_value(),
               "middle divisions accumulate");
 
-    auto last = d.feed(makeContinuation(11, 11, chunk));
+    auto last = d.feed(makeContinuation(11, 11, std::vector<std::uint8_t>(25, 0x20)));
     check(last.has_value(), "division 11 completes the sweep");
     check(last->raw.size() == static_cast<std::size_t>(kScopePointsIc705),
-          "and is padded/trimmed to the geometry");
+          "and contains exactly the native geometry");
     check(last->startHz == 14'000'000, "the header from division 1 survived");
 }
 

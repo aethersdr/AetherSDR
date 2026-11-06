@@ -5,6 +5,8 @@
 #include <QMutexLocker>
 #include <QPointer>
 #include <QTimer>
+#include <QMap>
+#include <QRegularExpression>
 #include <QtGlobal>
 
 #include <utility>
@@ -28,6 +30,7 @@ constexpr const char* kKeychainKey     = "icom_password";
 // keychain callback writes it from wherever the job completed.
 QMutex g_mutex;
 QString g_sessionPassword;
+QMap<QString, QString> g_connectionPasswords;
 
 #ifdef HAVE_KEYCHAIN
 struct PendingLoad {
@@ -40,6 +43,66 @@ std::vector<PendingLoad> g_pendingLoads;
 #endif
 
 }  // namespace
+
+void IcomCredentials::loadForConnection(const QString& id, QObject* context,
+                                        std::function<void(const QString&)> callback)
+{
+    if (id.isEmpty()) { load(context, std::move(callback)); return; }
+    static const QRegularExpression valid(QStringLiteral("^[a-f0-9]{64}$"));
+    if (!context) { return; }
+    if (!valid.match(id).hasMatch()) {
+        QTimer::singleShot(0, context, [callback = std::move(callback)] { callback({}); });
+        return;
+    }
+    QString cached;
+    {
+        const QMutexLocker lock(&g_mutex);
+        cached = g_connectionPasswords.value(id);
+    }
+    if (!cached.isEmpty()) {
+        QTimer::singleShot(0, context, [callback = std::move(callback), cached] { callback(cached); });
+        return;
+    }
+#ifdef HAVE_KEYCHAIN
+    auto* job = new QKeychain::ReadPasswordJob(QLatin1String(kKeychainService));
+    job->setAutoDelete(true);
+    job->setKey(QStringLiteral("icom/%1/password").arg(id));
+    job->setInsecureFallback(false);
+    QObject::connect(job, &QKeychain::Job::finished, context, [id, callback = std::move(callback)](QKeychain::Job* job) {
+        const QString value = job->error() == QKeychain::NoError
+            ? static_cast<QKeychain::ReadPasswordJob*>(job)->textData() : QString();
+        if (!value.isEmpty()) {
+            const QMutexLocker lock(&g_mutex);
+            g_connectionPasswords[id] = value;
+        }
+        callback(value);
+    });
+    job->start();
+#else
+    QTimer::singleShot(0, context, [callback = std::move(callback)] { callback({}); });
+#endif
+}
+
+void IcomCredentials::saveForConnection(const QString& id, const QString& password)
+{
+    static const QRegularExpression valid(QStringLiteral("^[a-f0-9]{64}$"));
+    if (!valid.match(id).hasMatch() || password.isEmpty()) { return; }
+    {
+        const QMutexLocker lock(&g_mutex);
+        g_connectionPasswords[id] = password;
+    }
+#ifdef HAVE_KEYCHAIN
+    auto* job = new QKeychain::WritePasswordJob(QLatin1String(kKeychainService));
+    job->setAutoDelete(true);
+    job->setKey(QStringLiteral("icom/%1/password").arg(id));
+    job->setInsecureFallback(false);
+    job->setTextData(password);
+    QObject::connect(job, &QKeychain::Job::finished, job, [](QKeychain::Job* job) {
+        if (job->error() != QKeychain::NoError) { qCWarning(lcIcomCred) << "saved connection credential write failed:" << job->errorString(); }
+    });
+    job->start();
+#endif
+}
 
 void IcomCredentials::load(QObject* context, std::function<void(const QString&)> callback)
 {

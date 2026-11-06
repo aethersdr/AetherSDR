@@ -281,6 +281,13 @@ on the main thread — GUI accesses models directly with no pointer indirection.
 Each worker thread has a single responsibility and communicates exclusively via
 auto-queued signals. The main thread handles only paintEvent + model updates.
 
+The primary PCM playback queue also accepts backend-neutral transport timing
+through `RadioCapabilities::receiveAudioPlayout` and
+`AudioEngine::setReceiveJitterBuffer`. Its prefill is consumed during delivery
+gaps and restored after starvation; it is separate from Receive Sync's reserved
+presentation delay. Stereo Icom LAN requests 200 ms prefill / 400 ms cap through
+this shared queue. Decoder taps retain their independent pre-monitor timeline.
+
 **GPU-accelerated rendering (#391):** When `AETHER_GPU_SPECTRUM=ON` (default),
 `SpectrumWidget` inherits `QRhiWidget` instead of `QWidget`. The waterfall is
 a GPU texture with incremental row uploads (~6KB/frame via ring buffer offset

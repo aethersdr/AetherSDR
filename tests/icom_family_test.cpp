@@ -628,7 +628,7 @@ int main(int argc, char** argv)
             tunerModels.push_back(model.civAddress);
         }
     }
-    check(tunerModels == std::vector<std::uint8_t>{0xA4, 0x98, 0x8E, 0x94, 0xB6},
+    check(tunerModels == std::vector<std::uint8_t>{0xA4, 0x98, 0xB2, 0x8E, 0x94, 0xB6},
           "each evidenced internal/external-tuner model opts into tuner control");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
@@ -914,7 +914,7 @@ int main(int argc, char** argv)
     check(icom::modelForName("IC-705") == icom::modelForName("ic705"),
           "and all of them are the same model");
     check(icom::modelForName("") == nullptr, "an empty name resolves nothing");
-    check(icom::modelForName("IC-7760") == nullptr,
+    check(icom::modelForName("IC-9999") == nullptr,
           "a model absent from the table resolves nothing - which is the case "
           "only the broadcast address query can rescue");
 

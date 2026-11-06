@@ -3988,6 +3988,15 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     }
 }
 
+bool RadioModel::prepareWanConnection()
+{
+    if (isConnected() || m_connectAttemptActive) { return false; }
+    // A previous host-DSP or simulator backend must retire before SmartLink
+    // borrows a real VITA stream. No radio is dialled by this preparation.
+    if (!backendDeclaresExtension(QStringLiteral("flex"))) { rebuildBackendForFamily(QStringLiteral("flex")); }
+    return backendDeclaresExtension(QStringLiteral("flex"));
+}
+
 bool RadioModel::prepareFlexBackendForWan()
 {
     cancelRadioWake();

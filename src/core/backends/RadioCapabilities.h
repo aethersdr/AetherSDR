@@ -110,6 +110,13 @@ struct ReceiveAudioExport {
     int maximumReceivers = 0;
 };
 
+// Host playback timing for the existing primary PCM queue. This is transport
+// metadata, independent of model names, monitor controls and decoder exports.
+struct ReceiveAudioPlayout {
+    int prefillMs = 0;
+    int bufferCapMs = 0;
+};
+
 // Broadcast FM controls are available only when their typed request is supported.
 struct BroadcastFmReceive {
     QVector<int> deemphasisUs;
@@ -454,6 +461,7 @@ struct RadioCapabilities {
     std::optional<ReceiveCwPitchControl> receiveCwPitchControl;
     std::optional<ReceiveDspControl> receiveDspControl;
     std::optional<ReceiveAudioExport> receiveAudioExport;
+    std::optional<ReceiveAudioPlayout> receiveAudioPlayout;
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;

@@ -935,10 +935,15 @@ static void testSubcommandPredicate()
                   "a bare command keeps both payload bytes");
         }
     }
-    // The thirteen that carry subcommands: 12 14 15 16 18 19 1A 1B 1C 21 23 26 27. A
+    // Sub-addressed: 07 12 14 15 16 18 19 1A 1B 1C 21 23 25 26 27 29. A
     // change to the list is a deliberate protocol decision, so it should have
     // to come past this number rather than arrive as a silent side effect.
-    check(subAddressed == 13, "exactly thirteen CI-V commands are sub-addressed");
+    check(subAddressed == 16, "exactly sixteen CI-V commands are sub-addressed");
+    const auto dualWatch = parseFrame(std::vector<std::uint8_t>{
+        0xfe,0xfe,0xe0,0x8e,0x07,0xc2,0x01,0xfd});
+    check(dualWatch && dualWatch->cmd == cmd::kVfoControl && dualWatch->hasSub
+          && dualWatch->sub == 0xc2 && dualWatch->data == std::vector<std::uint8_t>{1},
+          "native Dualwatch reply preserves its C2 subcommand and enable byte");
 }
 
 // ---------------------------------------------------------------------------

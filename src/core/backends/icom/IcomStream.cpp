@@ -19,10 +19,8 @@ namespace {
 // is noticed with time left to actually repair it.
 constexpr int kReorderTickMs = 20;
 
-// Past twice the hold window the packet is not coming back. Skipping forward
-// beats stalling: on the audio stream a permanent stall is silence, and on the
-// serial stream it is a radio that appears to stop answering.
-constexpr int kGiveUpMs = kReorderHoldMs * 2;
+// Retain at most one bounded receive lap while a missing packet is repaired.
+constexpr int kMaxReorderPackets = 64;
 
 std::span<const std::uint8_t> asSpan(const QByteArray& b)
 {
@@ -116,6 +114,8 @@ bool IcomStream::bindOnly(const Config& config)
     m_gapPending = false;
     m_replay.clear();
     m_reorder.clear();
+    m_reorderArrivals.clear();
+    m_headSinceMs = -1;
     m_idleSince.start();
     return true;
 }
@@ -495,6 +495,11 @@ void IcomStream::handleRetransmitRequest(std::span<const std::uint8_t> pkt)
 
 void IcomStream::queueForReorder(quint16 seq, const QByteArray& packet)
 {
+    queueForReorderAt(seq, packet, m_activityClock.elapsed());
+}
+
+void IcomStream::queueForReorderAt(quint16 seq, const QByteArray& packet, qint64 nowMs)
+{
     if (!m_haveDelivered) {
         m_haveDelivered = true;
         m_lastDelivered = seq;
@@ -505,11 +510,17 @@ void IcomStream::queueForReorder(quint16 seq, const QByteArray& packet)
     // arrived after we gave up, and delivering it would put audio out of order.
     if (compareSeq(seq, m_lastDelivered) <= 0)
         return;
-    m_reorder.insert(seq, packet);
-    drainReorder();
+    if (!m_reorder.contains(seq)) {
+        m_reorder.insert(seq, packet);
+        m_reorderArrivals.insert(seq, nowMs);
+    }
+    drainReorder(nowMs);
+    while (m_reorder.size() > kMaxReorderPackets) {
+        onReorderTickAt(nowMs, true);
+    }
 }
 
-void IcomStream::drainReorder()
+void IcomStream::drainReorder(qint64 nowMs)
 {
     for (;;) {
         const quint16 next = static_cast<quint16>(m_lastDelivered + 1);
@@ -518,23 +529,52 @@ void IcomStream::drainReorder()
             break;
         const QByteArray packet = *it;
         m_reorder.erase(it);
+        m_reorderArrivals.remove(next);
         m_lastDelivered = next;
         deliver(packet);
     }
-    m_gapPending = !m_reorder.isEmpty();
-    if (m_gapPending && !m_headWait.isValid())
-        m_headWait.start();
-    if (!m_gapPending)
-        m_headWait.invalidate();
+    const quint16 next = static_cast<quint16>(m_lastDelivered + 1);
+    if (m_reorder.isEmpty()) {
+        m_gapPending = false;
+        m_headSinceMs = -1;
+    } else if (!m_gapPending || m_waitingFor != next) {
+        quint16 nearest = m_reorder.firstKey();
+        m_headSinceMs = nowMs;
+        for (auto it = m_reorder.constBegin(); it != m_reorder.constEnd(); ++it) {
+            m_headSinceMs = std::min(m_headSinceMs, m_reorderArrivals.value(it.key(), nowMs));
+            if (static_cast<quint16>(it.key() - next) < static_cast<quint16>(nearest - next)) {
+                nearest = it.key();
+            }
+        }
+        m_waitingFor = next;
+        m_gapPending = true;
+        // Ask as soon as a hole is observed. Waiting for the reorder timer's
+        // 100 ms hold first adds an avoidable 100 ms to every audio repair.
+        requestMissing(next, static_cast<quint16>(nearest - next));
+    }
+}
+
+void IcomStream::requestMissing(quint16 first, int count)
+{
+    for (int i = 0; i < std::min(count, kMaxRetransmitRun); ++i) {
+        sendRaw(buildRetransmitRequest(m_localSid, m_remoteSid,
+                                       static_cast<quint16>(first + i)));
+        ++m_counters.retransmitsAsked;
+    }
 }
 
 void IcomStream::onReorderTick()
 {
-    if (m_reorder.isEmpty() || !m_headWait.isValid())
+    onReorderTickAt(m_activityClock.elapsed());
+}
+
+void IcomStream::onReorderTickAt(qint64 nowMs, bool force)
+{
+    if (m_reorder.isEmpty() || m_headSinceMs < 0)
         return;
 
-    const qint64 waited = m_headWait.elapsed();
-    if (waited < kReorderHoldMs)
+    const qint64 waited = nowMs - m_headSinceMs;
+    if (!force && waited < kReorderHoldMs)
         return;
 
     const quint16 missing = static_cast<quint16>(m_lastDelivered + 1);
@@ -554,17 +594,15 @@ void IcomStream::onReorderTick()
     }
     const int gap = static_cast<int>(bestDistance);
 
-    if (waited < kGiveUpMs) {
+    // A replay needs a complete network round trip AFTER the first request.
+    // Keep the low-latency floor, with a bounded RTT-aware replay budget.
+    const int replayMs = std::clamp(m_counters.rttMs + 40, kReorderHoldMs, 300);
+    if (!force && waited < kReorderHoldMs + replayMs) {
         // Ask, once per tick, for the head of the gap. The single-sequence form
         // is used rather than the range form because the range form is
         // unverified against real hardware (see buildRetransmitRanges); more
         // datagrams, but provably correct.
-        const int ask = std::min(gap, kMaxRetransmitRun);
-        for (int i = 0; i < ask; ++i) {
-            sendRaw(buildRetransmitRequest(m_localSid, m_remoteSid,
-                                           static_cast<quint16>(missing + i)));
-            ++m_counters.retransmitsAsked;
-        }
+        requestMissing(missing, gap);
         return;
     }
 
@@ -574,8 +612,8 @@ void IcomStream::onReorderTick()
     m_counters.rxLost += static_cast<quint64>(gap);
     emit packetsLost(gap);
     m_lastDelivered = static_cast<quint16>(haveUpTo - 1);
-    m_headWait.invalidate();
-    drainReorder();
+    m_gapPending = false;
+    drainReorder(nowMs);
 }
 
 void IcomStream::deliver(const QByteArray& packet)

@@ -349,7 +349,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
-| | [`titlebar <action> [id]`](#titlebar) | Drive the unified title bar: selectRadio / showDiscovery / minimize / maximize / close. |
+| | [`titlebar <action> [id]`](#titlebar) | Drive the unified title bar: selectRadio / showRadioMenu / showDiscovery / minimize / maximize / close. |
 | | [`shortcut <id>`](#shortcut) | Fire a ShortcutManager/MIDI action by id (TX-guarded). |
 | | [`midi cc <0-127>`](#midi) | Inject a learned VFO Tune Knob CC event (RX-only). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
@@ -2612,6 +2612,7 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 |---|---|---|
 | `create` (alias `add`) | — | request a new panadapter through the backend's declared lifecycle control. |
 | `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. Optimistic receive controls also clamp to a declared pan-centre range, where present; confirmed receive controls retain backend validation. The low edge of the display stays at or above 0 Hz. Without a declared range, an unguarded out-of-range centre can still be stored and advertised over TCI (`dds:`) even though the radio rejects it. |
+| `range` | `<panId\|index\|active> <center MHz> <width MHz>` | request an atomic native center/width change through the normal model geometry path. Re-poll radio-reported geometry; admission is not confirmation. |
 | `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | request removal of owned pan(s). Flex requests cleanup of the original paired waterfall too. A single target preserves the last pan; `all` allows requesting its removal but never overrides a native refusal or foreign ownership. |
 
 Replies describe request admission, not observed completion — re-poll `get pans`.
@@ -2786,6 +2787,9 @@ Bare-line forms are also accepted:
 
 ```text
 connect list
+connect profiles
+connect profile stations <station-id>
+connect profile operators <operator-id>
 connect show
 connect hide
 connect local first
@@ -2795,6 +2799,17 @@ connect ip 192.168.1.21 hl2
 connect wait 30000
 disconnect
 ```
+
+`connect profiles` returns the versioned connection workspace: saved locations and
+their connection paths, operator audio/layout preferences, account labels and
+references, and the selected IDs. The API retains the `stations` collection name
+for compatibility with saved documents; the UI calls these **Locations**.
+It never contains passwords or refresh tokens.
+It is available in Observe-only mode. `connect profile stations|operators <id>`
+persists a selection for the next connection, including while a radio is live;
+it neither connects nor applies audio or radio state. This mutation is refused
+in Observe-only mode. Profile creation and editing are exercised through the
+normal `connectionProfileEditor` widgets with `invoke`.
 
 `connect show` and `connect hide` idempotently show/raise or hide the
 modeless **Connect to Radio** dialog for visual debugging; they do not toggle,
@@ -3280,16 +3295,17 @@ use QWidget window operations; they do **not** prove a native traffic-light
 click, native hover menu, or Windows Snap Layouts. Those require native UI
 testing on the target OS.
 
-The radio switcher is also drivable with existing generic bridge verbs:
-`invoke radioSwitcherSearch setText <query>`,
-`invoke radioSwitcherActions_<radio-id> click`, then invoke the visible menu's
-`radioSwitcher_disconnect_<radio-id>`, `radioSwitcher_rename_<radio-id>`,
-`radioSwitcher_setup_<radio-id>`, or `radioSwitcher_remove_<radio-id>` action.
-Removed tabs offer `radioSwitcher_restore_<radio-id>`. These are widget/action
-targets, not new bridge verbs. `radioNicknameEditor` and `saveRadioNickname`
-exercise client-owned naming. Radio-owned naming uses Radio Setup instead.
-`connectManuallyRow` opens the IP connection page, and `radioSwitcherRescan`
-requests discovery without connecting. Inspect enabled states before invoking.
+Open a tab's real context menu with `titlebar showRadioMenu <id>`, then use generic `invoke` on
+`radioSwitcher_connect_<id>`, `radioSwitcher_disconnect_<id>`, `radioSwitcher_cancel_<id>`,
+`radioSwitcher_rename_<id>`, `radioSwitcher_settings_<id>`, or `radioSwitcher_remove_<id>`.
+Inspect enabled states and status tips before invoking. Opening a menu never activates its radio.
+`radioSwitchConfirm` accepts a replacement; `radioSwitchRetry` and `radioSwitchReconnectPrevious`
+exercise failure recovery. Rename uses `connectionProfileName` and the existing profile editor.
+
+`titlebar showDiscovery` retains the searchable saved/discovered picker for inspection and restoration;
+its menus use the same actions. `connectManuallyRow` now opens Locations. The title-bar **+** also opens
+Locations, preserving the browsed context. In the connection dialog, `connectionRadioRestoreTab`
+restores a saved tab and `connectionBackToStation` returns from IP recovery to Locations.
 
 ```json
 → {"cmd":"titlebar","action":"selectRadio","target":"1234-5678-9012-3456"}
@@ -3299,8 +3315,9 @@ requests discovery without connecting. Inspect enabled states before invoking.
 
 | Action | Effect |
 |---|---|
-| `selectRadio <id>` | Clicks the radio tab whose `id` matches; errors if there is no such tab. |
-| `showDiscovery` | Opens the "Discovered radios" popover the `+` button owns. |
+| `selectRadio <id>` | Clicks the visible tab matching its workspace ID (or hardware serial). Requests connect/switch; the active highlight follows successful connection. |
+| `showRadioMenu <id>` | Opens the visible tab’s context menu without selecting or connecting it. |
+| `showDiscovery` | Opens the searchable saved/discovered radio picker. |
 | `minimize` / `maximize` / `close` | Activates the matching caption control. |
 
 Every action is validated synchronously — an unknown action or a missing tab
@@ -4230,6 +4247,50 @@ Icom CI-V and RS-BA1 session diagnostics. The read-only actions work in an
 observe-only bridge; raw injection remains TX-gated because arbitrary CI-V can
 key or retune the radio.
 
+For MAIN/SUB profiles, `civ profile` includes receiver-bound `scopeFrames`,
+`scopeAgeMs`, `audioFrames` and `audioRms`. Scope counters count accepted native
+sweeps; audio frames count processed input sample frames before monitor gain
+or mute, including any transport loss-concealment silence. These are separate
+from repaint/FPS counters and do not establish exact received sample time or
+loss-free network replay.
+
+MAIN/SUB profiles also report `visible`, `scopeEdgeSlot`, `borrowedEdgeSlot`,
+`borrowedScopePresets` (original range/slot contents), `subOpening`, `subClosing`
+and `dualWatchOwned`. Use `pan create` / `pan close` through the normal model
+path to test MAIN-only connection, confirmed SUB enable and retirement. Closed
+SUB scope frames must not recreate its pane. Background drag and zoom must
+change radio-reported window edges, preserve both dial frequencies and leave
+the other receiver's window unchanged, including when both use the same band.
+
+`modulationInputs` reports separate DATA OFF/D1/D2/D3 menu numbers and
+radio-read source values/names. Missing values mean no readback yet. These
+are global menus, selected by the TX receiver's DATA variant, not local focus.
+`txReceiver` and `txFrequencyHz` expose split and actual `1C 03` readback;
+`pendingTxReceiver` is present while a VFO TX selection is unconfirmed.
+
+MAIN/SUB profiles also report radio-read `dualWatch` (null until known).
+`civ dualwatch on` / `civ dualwatch off` explicitly request the documented
+`07 C2` RX setting. Confirm the resulting boolean with `civ profile`; acceptance
+of the request is not readback. These commands preserve receiver frequencies,
+editing focus, split and TX routing, are unavailable in observe-only mode, and
+do not enable TX automation. Connection startup reads Dualwatch without setting it.
+
+`civ scopepreset <range> <slot>` requests a preset read; adding `<lower-Hz>
+<upper-Hz>` explicitly writes whole-kHz edges inside that range, up to 1 MHz
+wide. `civ scopeslot <receiver> <slot>` selects a physical scope's edge slot.
+Both are narrow RX/configuration actions, not arbitrary CI-V injection. Confirm
+`scopePresetValues` / receiver `scopeEdgeSlot` in `civ profile`. These actions
+support exact restore checks without enabling TX automation. `scopeRestoring`
+marks the bounded disconnect phase, which serializes saved preset/selection
+writes and waits for matching readbacks before deauthenticating.
+
+`civ session` also exposes `transport.media`: `receivedPackets`,
+`receivedFrames`, `concealedFrames`, `concealmentBlocks`, `rxChannels` and
+`sampleRateHz`. Frame counts are per channel at the negotiated source rate.
+Received frames exclude inserted silence; outer UDP idles do not add media
+frames. Compare counter deltas within one connection, and report concealment
+separately from speaker underruns or renderer FPS.
+
 **`civ session`** reports the media lease and each independent UDP stream:
 
 ```json
@@ -4962,7 +5023,7 @@ audio devices require separate hardware validation.
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
 | `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
 | `meterwindow` | — | meterwindow <start [duration_ms]\|status\|stop> — bounded meter ages and unrounded peaks; never keys TX |
-| `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
+| `connect` | — | connect <list\|profiles\|profile stations\|operators <id>\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
@@ -4981,7 +5042,7 @@ audio devices require separate hardware validation.
 | `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — demo fault injection (RFC #4288; only valid when the demo is connected) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
-| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|autorfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864); autorfgain takes on\|off, 'mode <bandscope\|ramp\|probe\|binary>' for which control law, or 'floor <dB>' for how far below the operator's own RF gain an automatic control may go |
+| `pan` | — | pan <create\|add\|remove\|close\|center\|range\|rfgain\|autorfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864); autorfgain takes on\|off, 'mode <bandscope\|ramp\|probe\|binary>' for which control law, or 'floor <dB>' for how far below the operator's own RF gain an automatic control may go |
 | `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|pan-layout\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
@@ -4997,7 +5058,7 @@ audio devices require separate hardware validation.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|session\|scheduler\|incident> — CI-V inject, frame trace, lease/scheduler health, or last incident (Icom; send is TX-gated) |
+| `civ` | — | civ <wake <model-id-hex> <address-hex>\|send <hex>\|trace [all]\|profile\|dualwatch on\|off\|scopepreset <range> <slot> [lower-Hz upper-Hz]\|scopeslot <receiver> <slot>\|session\|scheduler\|incident> — CI-V inject, frame trace, receiver profile, lease/scheduler health, or last incident (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all\|persist> [freqMhz] [sql=<MHz>] — bring-up diagnostic; sql= is the steady carrier the meters squelch-scale stage measures; persist is a read-only snapshot for tools/radiocert_persist.py (tx/meters key) |
 | `transmit` | — | transmit <rfpower\|tunepower> <0..100> — transmit drive (TX-gated) |
@@ -5005,7 +5066,7 @@ audio devices require separate hardware validation.
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |
 | `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
-| `titlebar` | — | titlebar <selectRadio <id>\|showDiscovery\|minimize\|maximize\|close> — drive the unified title bar's own controls |
+| `titlebar` | — | titlebar <selectRadio <id>\|showRadioMenu <id>\|showDiscovery\|minimize\|maximize\|close> — drive the unified title bar's own controls |
 | `applet` | — | applet <dock <left\|right>\|float <on\|off>\|show\|hide\|state> — drive the applet panel's dock side, floating and visibility |
 | `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
 | `keyevent` | — | keyevent <press\|release> <action-id\|key-seq> — inject a real key edge through the app event filter (momentary shortcuts only — PTT hold, and the CW keys once bound: their ids ship unbound, so KeyInjectUnbound until the operator binds them in Configure Shortcuts; press is TX-gated; a literal Tab/Backtab moves focus yet reports consumed) |

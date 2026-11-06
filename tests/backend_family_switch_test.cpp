@@ -394,6 +394,20 @@ int main(int argc, char** argv)
                   QStringLiteral("latch: the stale value survives, unvouched-for"));
         }
 
+        // SmartLink preparation uses the real production family switch, without dialling.
+        switchTo(model, QStringLiteral("sim"), rebuilt);
+        model.connectToRadio(demoInfo());
+        check(waitForConnected(model, true), QStringLiteral("WAN preparation: simulator is live"));
+        check(!model.prepareWanConnection() && model.family() == QStringLiteral("sim"),
+              QStringLiteral("WAN preparation refuses to replace a live session"));
+        model.disconnectFromRadio();
+        check(waitForConnected(model, false), QStringLiteral("WAN preparation waits for source teardown"));
+        const int beforeWan = rebuilt.count();
+        check(model.prepareWanConnection() && model.family() == QStringLiteral("flex") && model.panStream(),
+              QStringLiteral("WAN preparation replaces the simulator with the real stream transport"));
+        check(rebuilt.count() == beforeWan + 1, QStringLiteral("WAN preparation announces exactly one backend replacement"));
+        check(model.prepareWanConnection() && rebuilt.count() == beforeWan + 1,
+              QStringLiteral("WAN preparation reuses an already prepared transport"));
         // 6c. SmartLink after a non-Flex session. startWanRadioConnect() needs a
         //     PanadapterStream for the UDP pre-bind, and only the Flex backend
         //     owns one; a session that last ran another family must be switched
