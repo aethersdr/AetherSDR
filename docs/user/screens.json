@@ -1977,7 +1977,7 @@
         "target": "ThemeEditorDialog"
       },
       "caption": "The Theme Editor, editing the built-in Default Dark theme.",
-      "alt": "Theme Editor window for Profile: Default Dark. A colour picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colours fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of colour tokens with their values, such as color.accent #00b4d8. Theme actions, Save As… and Close buttons run along the bottom."
+      "alt": "Theme Editor window for Profile: Default Dark, with a round close button in its top-right corner. A colour picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colours fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of colour tokens with their values, such as color.accent #00b4d8. Theme actions and Save As… buttons run along the bottom."
     },
     {
       "id": "support-diagnostics-dialog",
