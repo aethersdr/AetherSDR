@@ -222,6 +222,20 @@ private:
     double m_keyedFwdWattsMax = -1.0;
     int m_keyedRfSamples = 0;        // fresh forward-power reads inside a key
     int m_keyedWindows = 0;          // keyed windows that reached a measurement
+
+    // The BACKEND's own gate on a derived meter, and the highest raw reading
+    // seen against it (#7063). The keyed-RF precondition above answers "did
+    // this run radiate" with MeterModel's consumer floor, which is a different
+    // and much lower threshold than a producer may apply before it publishes a
+    // derived value at all — on the Hermes-Lite 2, 1.1 mW against 320 counts
+    // (~74 mW). Between the two, a run radiates, the precondition passes, and
+    // a correctly suppressed meter is reported as DEFINED BUT NEVER FED with
+    // no mention of the gate that silenced it.
+    //
+    // Negative means "the backend declares no such gate", which is NOT the
+    // same as a gate that was cleared, and must not collapse into it.
+    int m_swrGateCounts = -1;        // declared by the backend; -1 = none declared
+    int m_keyedFwdCountsMax = -1;    // highest raw forward count seen while keyed
     bool m_fwdPowerMeterDefined = false;
 
     // The consumer-side reading taken while the radio was actually keyed.

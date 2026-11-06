@@ -6617,6 +6617,48 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
         t.reversePowerRaw
             ? QVariant(directionalWatts(*t.reversePowerRaw)) : QVariant());
+    // The gate TX:SWR is suppressed below, published alongside the reading it
+    // gates (#7063). A consumer that only sees "no SWR" cannot tell a
+    // deliberately suppressed ratio from a dead meter, and `radiocert` reported
+    // a healthy TX:SWR as DEFINED BUT NEVER FED for exactly that reason. The
+    // VALUE is published, not just the comparison, so a reader can say how far
+    // below the gate a run sat rather than only that it was below it.
+    //
+    // Gated on the SAME optional as the reading below, so the two are genuinely
+    // present or absent together. forwardPowerRaw would be the wrong one:
+    // Hl2Telemetry::apply() takes it from every RADDR-1 response while the peak
+    // window skips the non-measurement ones, so a unit whose temperature word
+    // always reads 0 has forwardPowerRaw and no peak (MetisProtocol.h:515-517).
+    // Gating on that would publish a known threshold beside an absent reading —
+    // a half-state a consumer cannot act on, and on that unit class it would
+    // leave radiocert reporting the very "DEFINED BUT NEVER FED" verdict this
+    // change exists to remove.
+    put(HealthSnapshot::kSwrGateCounts,
+        QStringLiteral("Forward counts required for SWR"),
+        t.forwardPowerPeakRaw ? QVariant(kMinForwardCountsForSwr) : QVariant());
+    // THE WINDOW'S PEAK, for anyone asking whether a run ever cleared that gate.
+    //
+    // Be precise about what this is and is not. The gate above is applied to
+    // *t.forwardPowerRaw — the LAST value of each publish window (:8314 and
+    // :6659), at kTelemetryMinIntervalMs, not to every one of the ~190/s
+    // responses the radio sends. So the strictly comparable quantity would be
+    // the last value, and the peak reported here can exceed it: the SWR meter
+    // can stay unpublished for a whole run whose peak cleared the gate.
+    //
+    // The peak is still the right thing to publish, because the question a
+    // diagnostic asks is "did this run ever reach the level where SWR becomes
+    // meaningful", not "what did the last sample of some window read". Sampling
+    // the last value a handful of times per run answers neither: it is one
+    // arbitrary point on a signal moving with the modulation envelope (#7063).
+    // A consumer comparing this peak against the gate must therefore read a
+    // below-gate peak as conclusive (nothing in the run came close) and an
+    // above-gate peak as NOT conclusive on its own — hence radiocert only uses
+    // it to withhold a negative verdict, never to assert one.
+    //
+    // FWDPWR already takes the peak while keyed for the same reason (:8325).
+    put(HealthSnapshot::kForwardWindowPeakRaw,
+        QStringLiteral("Forward (raw counts, window peak)"),
+        opt(t.forwardPowerPeakRaw));
     // SWR from linearized counts (#4578), absent below kMinForwardCountsForSwr
     // like the TX:SWR meter, where the ratio would be noise.
     {
