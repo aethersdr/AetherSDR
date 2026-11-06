@@ -79,6 +79,17 @@ void MqttApplet::buildUI()
     ctrlRow->addWidget(m_enableBtn);
 
     m_statusLabel = new QLabel("Disconnected");
+    // Broker errors arrive as free text of unbounded length — a rejected
+    // connection reports e.g. "Connection refused: Connection Refused: not
+    // authorised" (53 chars). An unwrapped QLabel's minimumSizeHint() is its
+    // full single-line width, which propagates out as this applet's minimum
+    // and, through the shared QVBoxLayout, becomes the whole applet panel's
+    // minimum — squeezing EVERY other applet and clipping their right edge
+    // (#7077). Wrapping plus a width-independent minimum keeps a long status
+    // string inside the 260 px panel instead of widening it.
+    m_statusLabel->setWordWrap(true);
+    m_statusLabel->setMinimumWidth(0);
+    m_statusLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
     ctrlRow->addWidget(m_statusLabel, 1);
     vbox->addLayout(ctrlRow);
@@ -198,6 +209,9 @@ void MqttApplet::restoreConnectionState()
 void MqttApplet::updateStatus(const QString& text, bool ok)
 {
     m_statusLabel->setText(text);
+    // The label wraps and may be elided by its narrow column; keep the full
+    // broker message reachable on hover.
+    m_statusLabel->setToolTip(text);
     m_statusLabel->setStyleSheet(
         ok ? "QLabel { color: #00c040; font-size: 10px; }"
            : "QLabel { color: #8aa8c0; font-size: 10px; }");

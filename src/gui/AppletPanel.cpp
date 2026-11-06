@@ -309,7 +309,18 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     setFixedWidth(260);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
+    // 6 px on the right, not 0: this panel is the last widget in the splitter,
+    // and every layout above it runs flush to the window edge —
+    // MainWindow's central widget is margin-free (MainWindow.cpp), the splitter
+    // adds none, and ContainerWidget's own layouts are 0 all round. The only
+    // right-hand gutter in the whole chain was ContainerTitleBar's 2 px, so an
+    // applet whose content reached its own right edge was drawn hard against
+    // the window border: the S-Meter's dBm readout lost its trailing "m" and
+    // the "+40" arc label rendered as "+4", while every applet's x close
+    // button sat on the boundary. Qt was clipping nothing — paintEvent()
+    // reported the full widget width with a complete visibleRegion — there was
+    // simply no space reserved for the content to end in. (#7077)
+    root->setContentsMargins(0, 0, 6, 0);
     root->setSpacing(0);
 
     // Top button bar: kFavoriteCount (5) favourite buttons in one row plus a
