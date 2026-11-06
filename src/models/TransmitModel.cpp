@@ -1511,6 +1511,25 @@ void TransmitModel::cancelPendingTxOffDelay()
         m_txOffDelayTimer->deleteLater();
         m_txOffDelayTimer = nullptr;
     }
+    cancelTxOffDelayMicTimer();
+    setTxOffDelayMicMuted(false);
+}
+
+void TransmitModel::cancelTxOffDelayMicTimer()
+{
+    if (m_txOffDelayMicTimer) {
+        m_txOffDelayMicTimer->stop();
+        m_txOffDelayMicTimer->deleteLater();
+        m_txOffDelayMicTimer = nullptr;
+    }
+}
+
+void TransmitModel::setTxOffDelayMicMuted(bool muted)
+{
+    if (m_txOffDelayMicMuted != muted) {
+        m_txOffDelayMicMuted = muted;
+        emit txOffDelayMicMuteChanged(muted);
+    }
 }
 
 void TransmitModel::expireTxOffDelayNow()
@@ -1692,6 +1711,24 @@ void TransmitModel::requestPttOff(PttSource /*source*/, PttRelease scopedRelease
         return;
     }
 
+    // A radio-side mic (MIC, BAL, LINE, ACC) never passes through this client,
+    // so it cannot be muted here: staying keyed would leave it live on the air.
+    // Those holds end with the audio window. A PC mic is muted when it passes.
+    const bool micIsLocal = m_micSelection == QLatin1String("PC");
+    const int holdMs = micIsLocal
+        ? m_txOffDelayMs
+        : std::min(m_txOffDelayMs, TxOffDelaySettings::kAudioWindowMs);
+    if (micIsLocal && holdMs > TxOffDelaySettings::kAudioWindowMs) {
+        m_txOffDelayMicTimer = new QTimer(this);
+        m_txOffDelayMicTimer->setSingleShot(true);
+        m_txOffDelayMicTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_txOffDelayMicTimer, &QTimer::timeout, this, [this] {
+            cancelTxOffDelayMicTimer();
+            setTxOffDelayMicMuted(true);
+        });
+        m_txOffDelayMicTimer->start(TxOffDelaySettings::kAudioWindowMs);
+    }
+
     // The timer only ever completes a release; it cannot key. A stale release
     // (re-key, reset, stop, disconnect) is dropped by the current() check.
     m_txOffDelayTimer = new QTimer(this);
@@ -1708,7 +1745,7 @@ void TransmitModel::requestPttOff(PttSource /*source*/, PttRelease scopedRelease
             continuePttOff(release);
         }
     });
-    m_txOffDelayTimer->start(m_txOffDelayMs);
+    m_txOffDelayTimer->start(holdMs);
 }
 
 void TransmitModel::continuePttOff(const PttRelease& release)

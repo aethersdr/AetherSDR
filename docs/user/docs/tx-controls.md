@@ -270,6 +270,13 @@ the value on this computer, not on the radio.
   at the radio and is not delayed. To use the delay with a footswitch, connect
   it to a computer serial port instead.
 - Pressing PTT again during the delay continues the same transmission.
+- Your microphone stays live for only the first 300 ms after release, so
+  anything you say later does not go on the air.
+  - With the **PC** mic source, the rest of the delay is silent. The radio stays
+    keyed, and **MOX** stays lit, until the delay ends.
+  - With a mic on the radio (**MIC**, **BAL**, **LINE** or **ACC**), AetherSDR
+    cannot mute it, so the radio unkeys at 300 ms even if the delay is set
+    longer.
 - Disconnecting, or anything that stops transmit, ends the delay at once.
 - With **QUIN** on, the delay runs first and the outro tone follows it.
 

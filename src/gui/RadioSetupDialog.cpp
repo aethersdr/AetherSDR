@@ -2939,11 +2939,15 @@ QWidget* RadioSetupDialog::buildTxTab()
             const QString tip = tr(
                 "Keeps transmitting this many ms (0-%1) after you release PTT in "
                 "voice modes, so the end of your last word is not cut off. 0 = off.\n"
+                "Your mic stays live for the first %2 ms only. With the PC mic, the "
+                "rest of the delay is silent. With a mic on the radio (MIC, BAL, LINE, "
+                "ACC), AetherSDR cannot mute it, so the radio unkeys at %2 ms instead.\n"
                 "Applies to PTT handled by AetherSDR: MOX, keyboard, serial-port "
                 "footswitch, RC-28 and TCI hardware PTT. A footswitch or mic PTT wired to the radio "
                 "unkeys at the radio and cannot be delayed from here.\n"
                 "Stored on this computer, not on the radio.")
-                .arg(TxOffDelaySettings::kMaxMs);
+                .arg(TxOffDelaySettings::kMaxMs)
+                .arg(TxOffDelaySettings::kAudioWindowMs);
             edit->setToolTip(tip);
             edit->setAccessibleDescription(tip);
             grid->addWidget(edit, 2, 3);
