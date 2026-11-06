@@ -35,7 +35,7 @@ int TciRoutingState::currentTxSlice(const QVector<TciSliceEndpoint>& endpoints)
 }
 
 TciRoutingState::RouteDecision TciRoutingState::resolveVfoB(
-    int rxSliceId, const QVector<TciSliceEndpoint>& endpoints)
+    int rxSliceId, const QVector<TciSliceEndpoint>& endpoints, bool vfoBEqualsRx)
 {
     if (!contains(endpoints, rxSliceId)) {
         return {};
@@ -81,6 +81,15 @@ TciRoutingState::RouteDecision TciRoutingState::resolveVfoB(
         && !operatedByAnotherClient(endpoints, m_txSliceId)) {
         m_rxSliceId = rxSliceId;
         return { RouteAction::PromoteExisting, m_txSliceId, m_owner };
+    }
+
+    // Nothing to tune and nothing asked for: VFO B equal to the RX frequency
+    // with split off is a client restating simplex, not asking for a TX slice.
+    // Creating one here is how a client's state replay on connect opened a
+    // slice per trx index (each new slice made the next trx resolvable).
+    // A different frequency still creates: WSJT-X sets VFO B with split off.
+    if (vfoBEqualsRx && !m_splitRequested) {
+        return { RouteAction::EchoOnly, -1, TxRouteOwner::None };
     }
 
     // A non-TX slice may be an operator's independent receiver. Without an

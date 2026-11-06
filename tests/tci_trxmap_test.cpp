@@ -291,6 +291,27 @@ int main()
                "unflagged endpoints keep the pre-#5193 adoption (caller without requester)");
     }
 
+    // A client replaying its state on connect sends `vfo:<trx>,1,<A>` with
+    // split off. VFO B equal to the RX frequency names no TX frequency, so it
+    // echoes instead of creating a slice; a different VFO B (WSJT-X) and a
+    // requested split still create.
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> oneSlice { { 0, true, true } };
+        const auto decision = routing.resolveVfoB(0, oneSlice, true);
+        expect(decision.action == Action::EchoOnly && decision.txSliceId < 0,
+               "VFO B == A without split echoes, creates no slice");
+        expect(routing.rxSliceId() < 0 && routing.txSliceId() < 0
+                   && routing.owner() == Owner::None,
+               "VFO B == A without split records no route");
+        expect(routing.resolveVfoB(0, oneSlice, false).action == Action::Create,
+               "VFO B != A without split still creates (WSJT-X)");
+        TciRoutingState split;
+        split.setSplitRequested(true);
+        expect(split.resolveVfoB(0, oneSlice, true).action == Action::Create,
+               "split requested: VFO B == A still creates the TX slice");
+    }
+
     std::cout << (failures ? "FAILED" : "PASSED") << " (" << failures
               << " failures)\n";
     return failures ? 1 : 0;
