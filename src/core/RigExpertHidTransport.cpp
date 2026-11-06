@@ -20,6 +20,28 @@
 
 namespace AetherSDR {
 
+const QList<RigExpertModelInfo>& RigExpertHidTransport::models()
+{
+    // RigExpert AntScope2 analyzerparameters.h defines both normal-mode
+    // serial revisions and frequency limits. See docs/rigexpert-usb-poc.md.
+    static const QList<RigExpertModelInfo> models{
+        {QStringLiteral("Stick 230"), {QStringLiteral("4230"), QStringLiteral("4231")}, 100000, 230000000, true},
+        {QStringLiteral("Stick 500"), {QStringLiteral("4500"), QStringLiteral("4501")}, 100000, 500000000, true},
+        {QStringLiteral("Stick Pro"), {QStringLiteral("4600"), QStringLiteral("4601")}, 100000, 600000000, false},
+        {QStringLiteral("Stick XPro"), {QStringLiteral("4999"), QStringLiteral("4998")}, 100000, 1000000000, true}};
+    return models;
+}
+
+RigExpertModelInfo RigExpertHidTransport::modelForSerial(const QString& serial)
+{
+    for (const RigExpertModelInfo& model : models()) {
+        for (const QString& prefix : model.serialPrefixes) {
+            if (serial.startsWith(prefix)) { return model; }
+        }
+    }
+    return {};
+}
+
 bool RigExpertHidTransport::available()
 {
 #ifdef HAVE_HIDAPI
@@ -37,10 +59,8 @@ QList<RigExpertUsbDevice> RigExpertHidTransport::enumerate()
     hid_device_info* list = HidDiscovery::enumerate(0x0483, 0xa1de);
     for (const hid_device_info* d = list; d; d = d->next) {
         const QString serial = d->serial_number ? QString::fromWCharArray(d->serial_number) : QString();
-        // This PoC deliberately excludes other RigExpert models and bootloaders.
-        if (!serial.startsWith(QLatin1String("4600")) && !serial.startsWith(QLatin1String("4601"))) {
-            continue;
-        }
+        // Keep the allow-list narrow; the PID above excludes bootloaders.
+        if (modelForSerial(serial).name.isEmpty()) { continue; }
         devices.append({QString::fromUtf8(d->path), serial,
                         d->product_string ? QString::fromWCharArray(d->product_string) : QString()});
     }
@@ -72,18 +92,18 @@ public:
         const QDir lockDirectory(QDir(lockRoot).filePath(QStringLiteral("aethersdr-rigexpert")));
         if (lockRoot.isEmpty() || !QDir().mkpath(lockDirectory.path())
             || !QFile::setPermissions(lockDirectory.path(), QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner)) {
-            fail(QStringLiteral("Cannot create the private Stick Pro lock directory"));
+            fail(QStringLiteral("Cannot create the private RigExpert Stick lock directory"));
             return;
         }
         m_lock = std::make_unique<QLockFile>(lockDirectory.filePath(
             QStringLiteral("%1.lock").arg(QString::fromLatin1(key))));
-        if (!m_lock->tryLock(0)) { fail(QStringLiteral("Stick Pro is claimed by another AetherSDR instance")); return; }
+        if (!m_lock->tryLock(0)) { fail(QStringLiteral("RigExpert Stick is claimed by another AetherSDR instance")); return; }
         if (m_cancelled->load()) { finish({}); return; }
         if (HidDiscovery::init() != 0) { fail(QStringLiteral("HID initialization failed")); return; }
         std::wstring openError;
         m_handle = HidDiscovery::openPath(path.toUtf8().constData(), &openError);
         if (!m_handle) {
-            fail(QStringLiteral("Cannot open Stick Pro: %1").arg(QString::fromStdWString(openError)));
+            fail(QStringLiteral("Cannot open RigExpert Stick: %1").arg(QString::fromStdWString(openError)));
             return;
         }
         if (hid_set_nonblocking(m_handle, 1) != 0) { fail(QStringLiteral("Cannot enable nonblocking HID reads")); return; }
@@ -93,7 +113,7 @@ public:
             const int n = hid_read(m_handle, buffer.data(), buffer.size());
             if (n < 0) { fail(QStringLiteral("Initial HID drain failed: %1").arg(error())); return; }
             if (n == 0) { break; }
-            if (i == 63) { fail(QStringLiteral("Stick Pro is still streaming; stop AntScope and reconnect")); return; }
+            if (i == 63) { fail(QStringLiteral("RigExpert Stick is still streaming; stop AntScope and reconnect")); return; }
         }
         m_timer = new QTimer(this);
         m_timer->setInterval(5);
