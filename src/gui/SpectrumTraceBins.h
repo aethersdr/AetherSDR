@@ -70,7 +70,11 @@ public:
     using Encoder = FrameEncoder;
 
     // Every change of the displayed or requested centre or bandwidth.
-    void noteGeometryChange() { m_framesAtGeometryChange = m_framesIngested; }
+    void noteGeometryChange()
+    {
+        m_framesAtGeometryChange = m_framesIngested;
+        m_heldResetSettle = false;
+    }
 
     // The display was cleared: no frame until the next one arrives.
     void clear() { *this = FrameCapture{}; }
@@ -98,10 +102,13 @@ public:
     }
 
     // rebasedForDisplay: the widget judged this frame encoded with a dBm
-    // range other than the one it was decoded with.
+    // range other than the one it was decoded with. heldForPresentation: Receive
+    // Sync queued the frame, so the geometry at delivery need not be its own;
+    // it restarts the settle count and only unheld frames can settle it.
     void ingest(const QVector<float>& bins, quint64 fftFrameSequence,
                 double centerMhz, double bandwidthMhz, bool rebasedForDisplay,
-                const FrameEncoder& encoder = FrameEncoder())
+                const FrameEncoder& encoder = FrameEncoder(),
+                bool heldForPresentation = false)
     {
         if (bins.isEmpty()) {
             return;
@@ -118,6 +125,10 @@ public:
         m_rebasedForDisplay = rebasedForDisplay;
         m_encoder = encoder;
         m_received.start();
+        if (heldForPresentation) {
+            noteGeometryChange();
+            m_heldResetSettle = true;
+        }
     }
 
     quint64 settledFrames() const { return m_framesIngested - m_framesAtGeometryChange; }
@@ -141,6 +152,15 @@ public:
         const QString wait = QStringLiteral("; wait for %1 settled frames").arg(kSettledFrames);
         if (centerMhzNow != m_centerMhz || bandwidthMhzNow != m_bandwidthMhz) {
             return QStringLiteral("geometry changed after the last frame") + wait;
+        }
+        if (m_heldResetSettle && settledFrames() == 0) {
+            return QStringLiteral("the frame was held by Receive Sync; no age or geometry "
+                                  "can be established");
+        }
+        if (m_heldResetSettle && settledFrames() < kSettledFrames) {
+            return QStringLiteral("a frame held by Receive Sync arrived %1 frames ago; "
+                                  "wait for %2 unheld frames")
+                .arg(settledFrames()).arg(kSettledFrames);
         }
         if (settledFrames() < kSettledFrames) {
             return QStringLiteral("geometry changed %1 frames ago").arg(settledFrames()) + wait;
@@ -176,6 +196,7 @@ private:
     FrameEncoder m_encoder;
     quint64 m_framesIngested{0};
     quint64 m_framesAtGeometryChange{0};
+    bool m_heldResetSettle{false};
     QElapsedTimer m_received;
     double m_requestCenterMhz{0.0};
     double m_requestBandwidthMhz{0.0};

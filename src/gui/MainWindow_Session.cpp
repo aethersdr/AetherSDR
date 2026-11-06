@@ -1842,10 +1842,18 @@ void MainWindow::wirePanLifecycle()
                 static_cast<double>(PerfTelemetry::nowNs() - emittedNs) / 1000000.0);
         }
         const PanFrameGuard frameGuard = capturePanFrame(streamId, false);
+        // A held frame reaches the widget after its pan may have moved, so
+        // `get tracedebug <pan> bins` refuses it (#6720). Every backend's
+        // spectrum (HL2 too) arrives here as the Flex source.
+        const bool heldForPresentation =
+            receivePresentationDelayMs(ReceivePresentationSource::Flex,
+                                       ReceivePresentationSurface::Spectrum,
+                                       QString::number(streamId)) > 0;
         deferReceivePresentation(
             ReceivePresentationSource::Flex,
             ReceivePresentationSurface::Spectrum,
-            [this, profileLoadFrameReady, streamId, bins, decodeScale, frameGuard]() {
+            [this, profileLoadFrameReady, streamId, bins, decodeScale, frameGuard,
+             heldForPresentation]() {
                 if (m_shuttingDown || !m_panStack || !frameGuard.isCurrent()) {
                     return;
                 }
@@ -1856,7 +1864,7 @@ void MainWindow::wirePanLifecycle()
                                                        bins.size())) {
                                 return;
                             }
-                            sw->updateSpectrum(bins, decodeScale);
+                            sw->updateSpectrum(bins, decodeScale, heldForPresentation);
                             finishPanadapterConnectionAnimation();
                         }
                         return;
@@ -1870,7 +1878,7 @@ void MainWindow::wirePanLifecycle()
                 if (m_radioModel.panadapters().isEmpty()
                     && !profileLoadRadioStateWritesHeld()) {
                     if (auto* sw = spectrum()) {
-                        sw->updateSpectrum(bins, decodeScale);
+                        sw->updateSpectrum(bins, decodeScale, heldForPresentation);
                         finishPanadapterConnectionAnimation();
                     }
                 } else {

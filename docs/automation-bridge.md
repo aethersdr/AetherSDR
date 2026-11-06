@@ -1131,8 +1131,11 @@ selector, the reply carries that pan's last decoded frame instead of statistics:
   requested pan or zoom is not yet confirmed by the radio` (on a radio that
   confirms geometry: from the request until its echo, at most 2 s);
   `geometry changed after the last frame` and `geometry changed N frames ago`
-  (any change of centre or bandwidth, shown or requested); and `the last frame
-  was decoded across a dBm range change`. A refused client retries after a
+  (any change of centre or bandwidth, shown or requested); `the last frame
+  was decoded across a dBm range change`; and, while Receive Sync delays the
+  spectrum, `the frame was held by Receive Sync; no age or geometry can be
+  established` (a held frame may arrive after the pan moved; after one, 3
+  unheld frames must follow). Turn Receive Sync off to measure. A refused client retries after a
   frame interval, or up to 2 s for an unconfirmed request. A
   retune the widget has not been told about yet (made elsewhere, before its
   status arrives) cannot be seen here.

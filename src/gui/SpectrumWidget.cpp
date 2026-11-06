@@ -8663,7 +8663,8 @@ void SpectrumWidget::setSliceInfo(int sliceId, bool isTxSlice)
     if (idx >= 0) { m_sliceOverlays[idx].isTxSlice = isTxSlice; markOverlayDirty(); }
 }
 
-void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale)
+void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale,
+                                    bool heldForPresentation)
 {
     ++m_fftFrameSequence;
     PerfUpdateScope perfScope(PerfUpdateScope::Kind::Panadapter);
@@ -8742,7 +8743,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const Spectru
         : SpectrumTraceBins::FrameCapture::Encoder{m_encoderRangeValid, m_encoderMinDbm,
                                                    m_encoderMaxDbm, m_encoderYPixels};
     m_traceCapture.ingest(binsDbm, m_fftFrameSequence, m_centerMhz, m_bandwidthMhz,
-                          spectrumBins == &adjustedBins, traceEncoder);
+                          spectrumBins == &adjustedBins, traceEncoder, heldForPresentation);
 
     if (m_resetFftSmoothingOnNextFrame || !m_clientFftSmoothing) {
         m_smoothed = *spectrumBins;

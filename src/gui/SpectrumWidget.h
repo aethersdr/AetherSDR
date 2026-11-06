@@ -260,8 +260,10 @@ public:
                         const QString& id,
                         int durationMs = 5000);
 
-    // Feed a new FFT frame. bins are scaled dBm values.
-    void updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale = {});
+    // Feed a new FFT frame. bins are scaled dBm values. heldForPresentation:
+    // Receive Sync queued it; `get tracedebug <pan> bins` refuses it.
+    void updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale = {},
+                        bool heldForPresentation = false);
 
     // Feed a single waterfall row from a VITA-49 waterfall tile.
     // lowFreqMhz/highFreqMhz describe the tile's frequency span.

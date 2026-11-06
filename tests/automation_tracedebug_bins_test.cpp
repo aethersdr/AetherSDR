@@ -177,6 +177,20 @@ int main(int argc, char** argv)
     const qsizetype observed = internalBody.indexOf("m_traceCapture.noteRangeObserved(");
     check(observed >= 0 && observed < internalBody.indexOf("return;"),
           "every range echo is offered to the unconfirmed request before any early return");
+    check(functionBody(widget_cpp, "void SpectrumWidget::updateSpectrum(")
+              .contains("traceEncoder, heldForPresentation);"),
+          "updateSpectrum passes heldForPresentation to the capture");
+    // #6720: the Receive Sync enqueue site marks the frames it holds.
+    const QByteArray session_src = readSource("/src/gui/MainWindow_Session.cpp");
+    const qsizetype heldAt = session_src.indexOf(
+        "const bool heldForPresentation =\n            receivePresentationDelayMs(ReceivePresentationSource::Flex,\n"
+        "                                       ReceivePresentationSurface::Spectrum,");
+    const qsizetype deferAt = session_src.indexOf("deferReceivePresentation(", heldAt);
+    const QByteArray deferred = session_src.mid(deferAt, 4000);
+    check(heldAt >= 0 && deferAt > heldAt
+              && deferred.count("sw->updateSpectrum(bins, decodeScale, heldForPresentation);") == 2
+              && !deferred.contains("sw->updateSpectrum(bins, decodeScale);"),
+          "the Receive Sync spectrum site reads the delay and passes heldForPresentation");
     const QList<int> unhooked = unhookedGeometryWrites(widget_cpp);
     for (int line : unhooked) {
         std::fprintf(stderr,

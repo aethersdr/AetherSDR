@@ -315,6 +315,46 @@ int runTraceBins()
               && nearHz(m.value(QStringLiteral("centerHz")).toDouble(), w.centerMhz() * 1e6),
           "trace bins (c): returned after the animation at the landed centre");
 
+    // (d) rfoust's probe (#6720): frames queued by Receive Sync before a pan
+    // and delivered after it. Unflagged, as on 3c71caffb, they pass at the new
+    // centre; flagged as held they are refused until kSettledFrames unheld.
+    {
+        SpectrumWidget q;
+        q.resize(1000, 600);
+        q.setFrequencyRangeImmediate(14.100, 0.200);
+        for (int i = 0; i < kSettled; ++i) {
+            q.updateSpectrum(frame());
+        }
+        QList<QVector<float>> queued;
+        for (int i = 0; i < kSettled; ++i) {
+            queued.append(frame());
+        }
+        q.setFrequencyRangeImmediate(14.160, 0.200);
+        for (const auto& f : queued) {
+            q.updateSpectrum(f);
+        }
+        QVariantMap qm = q.traceBinsSnapshot();
+        check(refusal(qm).isEmpty()
+                  && nearHz(qm.value(QStringLiteral("centerHz")).toDouble(), 14'160'000.0),
+              "trace bins (d): unflagged queued frames pass at the new centre (the defect)");
+        q.setFrequencyRangeImmediate(14.220, 0.200);
+        for (const auto& f : queued) {
+            q.updateSpectrum(f, {}, true);
+        }
+        check(refusal(q.traceBinsSnapshot()).contains(QLatin1String("held by Receive Sync")),
+              "trace bins (d): held frames are refused");
+        for (int i = 0; i < kSettled - 1; ++i) {
+            q.updateSpectrum(frame());
+        }
+        check(!refusal(q.traceBinsSnapshot()).isEmpty(),
+              "trace bins (d): the count restarts after held frames");
+        last = frame();
+        q.updateSpectrum(last);
+        qm = q.traceBinsSnapshot();
+        check(refusal(qm).isEmpty() && sameBins(qm, last),
+              "trace bins (d): unheld frames are accepted after kSettledFrames");
+    }
+
     // The encoder fields are the frame's, not the widget's current range.
     {
         SpectrumWidget e;

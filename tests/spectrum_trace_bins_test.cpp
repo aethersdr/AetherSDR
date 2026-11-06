@@ -138,6 +138,40 @@ int main()
         QThread::msleep(static_cast<unsigned long>(Capture::kRequestEchoGuardMs + 100));
         check(!c.requestUnconfirmed(), "capture: a lost echo stops refusing after kRequestEchoGuardMs");
 
+        // rfoust's probe (#6720): frames Receive Sync queued before a pan are
+        // delivered after it, and stamped with the new centre at ingest.
+        {
+            Capture d;
+            for (quint64 i = 1; i <= k; ++i)
+                d.ingest(frame(70.0f), i, 14.1, 0.2, false);
+            d.noteGeometryChange();  // the pan to 14.16
+            for (quint64 i = 1; i <= k; ++i)
+                d.ingest(frame(80.0f), k + i, 14.16, 0.2, false);
+            check(d.refusal(14.16, 0.2, false, false).isEmpty(),
+                  "held (#6720): without the flag the queued frames pass at the new centre");
+        }
+        {
+            Capture d;
+            for (quint64 i = 1; i <= k; ++i)
+                d.ingest(frame(70.0f), i, 14.1, 0.2, false);
+            d.noteGeometryChange();
+            for (quint64 i = 1; i <= k; ++i)
+                d.ingest(frame(80.0f), k + i, 14.16, 0.2, false, {}, true);
+            check(d.refusal(14.16, 0.2, false, false).contains(QLatin1String("held by Receive Sync")),
+                  "held (#6720): queued frames are refused at any count");
+            for (quint64 i = 1; i < k; ++i) {
+                d.ingest(frame(90.0f), 2 * k + i, 14.16, 0.2, false);
+                check(d.refusal(14.16, 0.2, false, false).contains(QLatin1String("unheld frames")),
+                      "held (#6720): the count restarts after a held frame");
+            }
+            d.ingest(frame(95.0f), 3 * k, 14.16, 0.2, false);
+            check(d.refusal(14.16, 0.2, false, false).isEmpty() && binsOf(d.snapshot()) == frame(95.0f),
+                  "held (#6720): the kSettledFrames-th unheld frame is accepted");
+            d.ingest(frame(96.0f), 3 * k + 1, 14.16, 0.2, false, {}, true);
+            check(!d.refusal(14.16, 0.2, false, false).isEmpty(),
+                  "held (#6720): a held frame after settling is refused again");
+        }
+
         c.clear();
         check(c.refusal(14.2, 0.1, false, false).contains(QLatin1String("no frame")),
               "capture: cleared, it is refused as no frame decoded yet");
