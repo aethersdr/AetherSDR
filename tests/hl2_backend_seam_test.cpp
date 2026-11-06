@@ -25,6 +25,7 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QSignalSpy>
+#include <QTest>
 #include <QStringList>
 
 #include <algorithm>
@@ -858,13 +859,24 @@ static void suppressedSwrCertification()
               "counts include all producer windows, not only the final certification poll");
     }
     {
+        AetherSDR::RadioCertification cert(&radio, nullptr);
+        Access::setKeyedFlag(*backend, false);
+        feed(2000, 2000);
+        Access::setKeyedFlag(*backend, true);
+        feed(76, 76);
+        check(verdict(cert) == QStringLiteral("SUPPRESSED"),
+              "an unkeyed update cannot hide intentional suppression in keyed windows");
+    }
+    {
         Access::pastKeyOn(*backend);
         AetherSDR::RadioCertification cert(&radio, nullptr);
         feed(76, 2000);
         const QJsonObject stage = inventory(cert);
-        check(swrRow(stage).value(QStringLiteral("fedDuringRun")).toBool()
+        check(swrRow(stage).value(QStringLiteral("fedWhileKeyedThisRun")).toBool()
                   && swrRow(stage).value(QStringLiteral("verdict")).toString().isEmpty(),
               "a qualifying peak publishes despite a last sample below the gate");
+        check(swrRow(stage).value(QStringLiteral("keyedUpdatesReceived")).toInteger() == 1,
+              "forward-power notifications do not duplicate an SWR receipt");
         check(backend->healthSnapshot().values.value(QStringLiteral("swrMeterInput")).toString()
                   == QStringLiteral("window peaks")
                   && backend->healthSnapshot().values.value(QStringLiteral("swrMeterForwardRaw")).toInt() == 2000,
@@ -877,7 +889,7 @@ static void suppressedSwrCertification()
               "speech-pause windows suppress even above the minimum forward threshold");
         const QJsonObject row = swrRow(inventory(cert));
         check(row.value(QStringLiteral("everFed")).toBool()
-                  && !row.value(QStringLiteral("fedDuringRun")).toBool(),
+                  && !row.value(QStringLiteral("fedWhileKeyedThisRun")).toBool(),
               "a reading from an earlier run is not current-run delivery evidence");
         AetherSDR::RadioCertificationTestAccess::restartObservation(cert);
         check(verdict(cert) == QStringLiteral("INCONCLUSIVE"),
@@ -898,6 +910,10 @@ static void suppressedSwrCertification()
     }
     {
         AetherSDR::RadioCertification cert(&radio, nullptr);
+        QTest::qWait(2);
+        Access::setKeyedFlag(*backend, false);
+        feed(2000, 2000);
+        Access::setKeyedFlag(*backend, true);
         QObject::disconnect(backend, &AetherSDR::IRadioBackend::meterUpdate, &radio, nullptr);
         // With a missing maximum, the real producer falls back to the last pair.
         feed(2000, 76, std::nullopt);

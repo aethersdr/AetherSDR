@@ -6,7 +6,9 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QMetaObject>
 #include <QPointer>
+#include <QObject>
 #include <QString>
 #include <QVariantMap>
 
@@ -188,7 +190,10 @@ private:
     QJsonObject swrPublicationEvidence() const;
     QPointer<IRadioBackend> m_meterBackend;
     QVariantMap m_swrPublicationBaseline;
-    qint64 m_swrUpdatedAtStartMs = 0;
+    QObject m_meterObservationContext;
+    QMetaObject::Connection m_meterObservationConnection;
+    quint64 m_swrSeenSequence = 0;
+    quint64 m_swrKeyedDelivered = 0;
 
     // Was a transmission ever CONFIRMED to have produced RF during this run?
     //

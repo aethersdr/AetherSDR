@@ -963,10 +963,12 @@ invisible today, and the inverse — a consumer with no producer — is exactly 
 counters through the health snapshot, subtracting a baseline captured at the
 start of the run. It reports `SUPPRESSED` for low forward power, key-on settling
 or speech-pause windows; missing/invalid samples or a changed session produce
-`INCONCLUSIVE`. Eligible windows without a new meter update produce
+`INCONCLUSIVE`. Eligible windows without a new keyed meter update produce
 `NOT DELIVERED`, even if the meter retains an earlier run's value. Eligibility
 is recorded before signal emission, so a disconnected delivery path cannot
-masquerade as suppression. The producer owns the threshold and selected input;
+masquerade as suppression. Model receipt sequences distinguish SWR updates from
+forward-power notifications even within one millisecond; unkeyed tail readings
+do not satisfy keyed delivery. The producer owns the threshold and selected input;
 neither peak-held FWDPWR nor the raw last-pair health row substitutes for it.
 Other backend gate declarations remain part of the radio-profile work.
 

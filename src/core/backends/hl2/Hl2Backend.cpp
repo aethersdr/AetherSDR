@@ -6634,6 +6634,7 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
 
     section("swrMeterState", QStringLiteral("SWR meter publication"));
     put("swrMeterState", QStringLiteral("Latest SWR publication decision"), m_swrMeterState);
+    put("swrMeterKeyed", QStringLiteral("Latest SWR decision was keyed"), m_swrMeterKeyed);
     put("swrMeterInput", QStringLiteral("SWR input selection"), m_swrMeterInput);
     put("swrMeterForwardRaw", QStringLiteral("SWR selected forward (counts)"), opt(m_swrMeterForward));
     put("swrMeterReverseRaw", QStringLiteral("SWR selected reverse (counts)"), opt(m_swrMeterReverse));
@@ -8191,6 +8192,7 @@ void Hl2Backend::pushInitialState()
     m_swrGate.reset();
     m_swrMeterState = QStringLiteral("unobserved");
     m_swrMeterInput.clear();
+    m_swrMeterKeyed = false;
     m_swrMeterForward.reset();
     m_swrMeterReverse.reset();
     m_swrKeyedEligible = m_swrKeyedLowPower = m_swrKeyedSettling = 0;
@@ -8310,6 +8312,7 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     const bool swrModulated = !windowPair || m_swrGate.accept(*swrFwd);
     std::optional<double> swr;
     m_swrMeterInput = windowPair ? QStringLiteral("window peaks") : QStringLiteral("last pair");
+    m_swrMeterKeyed = m_keyed;
     m_swrMeterForward = swrFwd;
     m_swrMeterReverse = swrRev;
     if (!swrFwd || !swrRev) {

@@ -1155,6 +1155,7 @@ private:
     // Owner-thread publication evidence, independent of meter signal delivery.
     QString m_swrMeterState = QStringLiteral("unobserved");
     QString m_swrMeterInput;
+    bool m_swrMeterKeyed = false;
     std::optional<int> m_swrMeterForward;
     std::optional<int> m_swrMeterReverse;
     quint64 m_swrKeyedEligible = 0;

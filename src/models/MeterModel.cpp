@@ -1094,6 +1094,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
         } else if (idx == m_swrIdx) {
             m_lastTxMeterUpdateMs = packetUpdatedMs;
             m_lastSwrUpdateMs = m_lastTxMeterUpdateMs;
+            ++m_swrUpdateSequence;
             m_swr = v;
             txChanged = true;
             directionalChanged = true;

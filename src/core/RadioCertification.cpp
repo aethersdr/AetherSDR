@@ -301,9 +301,33 @@ QJsonObject RadioCertification::renderedSnapshot() const
 
 void RadioCertification::beginMeterObservation()
 {
+    QObject::disconnect(m_meterObservationConnection);
     m_meterBackend = m_radio ? m_radio->backend() : nullptr;
     m_swrPublicationBaseline = m_meterBackend ? m_meterBackend->healthSnapshot().values : QVariantMap{};
-    m_swrUpdatedAtStartMs = m_radio ? m_radio->meterModel().swrUpdatedAtMs() : 0;
+    m_swrKeyedDelivered = 0;
+    m_swrSeenSequence = m_radio ? m_radio->meterModel().swrUpdateSequence() : 0;
+    if (!m_radio) {
+        return;
+    }
+    // Observe receipts at the model, not merely the backend's emitted signal.
+    // FWDPWR also emits txMetersChanged; the sequence identifies a new SWR value.
+    m_meterObservationConnection = QObject::connect(
+        &m_radio->meterModel(), &MeterModel::txMetersChanged, &m_meterObservationContext,
+        [this] {
+            if (!m_radio) { return; }
+            const quint64 sequence = m_radio->meterModel().swrUpdateSequence();
+            if (sequence == m_swrSeenSequence) { return; }
+            m_swrSeenSequence = sequence;
+            if (!m_meterBackend || m_radio->backend() != m_meterBackend) { return; }
+            const QVariantMap state = m_meterBackend->healthSnapshot().values;
+            const QString session = QStringLiteral("swrMeterSession");
+            if (state.contains(session) && m_swrPublicationBaseline.contains(session)
+                && state.value(session) == m_swrPublicationBaseline.value(session)
+                && state.value(QStringLiteral("swrMeterKeyed")).toBool()
+                && state.value(QStringLiteral("swrMeterState")).toString() == QStringLiteral("eligible")) {
+                ++m_swrKeyedDelivered;
+            }
+        });
 }
 
 QJsonObject RadioCertification::swrPublicationEvidence() const
@@ -1232,8 +1256,8 @@ void RadioCertification::stageMeterInventory()
     QStringList definedNeverFed, expectedButMissing, unitMismatches, inconclusive;
     QStringList gatedConcerns;
     const QJsonObject swrEvidence = swrPublicationEvidence();
-    const bool swrFedDuringRun = swrEvidence.value(QStringLiteral("available")).toBool()
-        && meters.swrUpdatedAtMs() > m_swrUpdatedAtStartMs;
+    const bool swrFedWhileKeyed = swrEvidence.value(QStringLiteral("available")).toBool()
+        && m_swrKeyedDelivered > 0;
 
     // kMeterTable's `expectedOnHl2` column is a fact about ONE radio class.
     const bool tableAppliesToThisRadio =
@@ -1332,10 +1356,11 @@ void RadioCertification::stageMeterInventory()
         // modulation gate from the display's peak-held forward-power meter.
         const bool gatedSwr = tableAppliesToThisRadio && key == QStringLiteral("TX:SWR");
         if (gatedSwr) {
-            row[QStringLiteral("fedDuringRun")] = swrFedDuringRun;
+            row[QStringLiteral("fedWhileKeyedThisRun")] = swrFedWhileKeyed;
+            row[QStringLiteral("keyedUpdatesReceived")] = static_cast<qint64>(m_swrKeyedDelivered);
             row[QStringLiteral("publicationEvidence")] = swrEvidence;
         }
-        if (gatedSwr && idx >= 0 && !swrFedDuringRun && anyKeyedWindow) {
+        if (gatedSwr && idx >= 0 && !swrFedWhileKeyed && anyKeyedWindow) {
             const qint64 eligible = swrEvidence.value(QStringLiteral("swrKeyedEligible")).toInteger();
             const qint64 low = swrEvidence.value(QStringLiteral("swrKeyedLowPower")).toInteger();
             const qint64 settling = swrEvidence.value(QStringLiteral("swrKeyedSettling")).toInteger();
