@@ -108,7 +108,10 @@ constexpr MeterSpec kMeterTable[] = {
 
 RadioCertification::RadioCertification(RadioModel* radio, AudioEngine* audio,
                                        std::shared_ptr<TxController> controller)
-    : m_radio(radio), m_audio(audio), m_txController(std::move(controller)) {}
+    : m_radio(radio), m_audio(audio), m_txController(std::move(controller))
+{
+    beginMeterObservation();
+}
 
 void RadioCertification::spin(int ms)
 {
@@ -293,6 +296,45 @@ QJsonObject RadioCertification::renderedSnapshot() const
     out[QStringLiteral("alcUnit")] = meters.alcUnit();
     out[QStringLiteral("alcAgeMs")] = static_cast<double>(alcAge);
     out[QStringLiteral("alcLive")] = alcLive;
+    return out;
+}
+
+void RadioCertification::beginMeterObservation()
+{
+    m_meterBackend = m_radio ? m_radio->backend() : nullptr;
+    m_swrPublicationBaseline = m_meterBackend ? m_meterBackend->healthSnapshot().values : QVariantMap{};
+    m_swrUpdatedAtStartMs = m_radio ? m_radio->meterModel().swrUpdatedAtMs() : 0;
+}
+
+QJsonObject RadioCertification::swrPublicationEvidence() const
+{
+    QJsonObject out{{QStringLiteral("available"), false}};
+    if (!m_radio || !m_meterBackend || m_radio->backend() != m_meterBackend) {
+        return out;
+    }
+    const QVariantMap current = m_meterBackend->healthSnapshot().values;
+    const QString session = QStringLiteral("swrMeterSession");
+    if (!current.contains(session) || !m_swrPublicationBaseline.contains(session)
+        || current.value(session) != m_swrPublicationBaseline.value(session)) {
+        return out;
+    }
+    // Session counters cover every telemetry window, including ones between
+    // certification's polling points. Subtraction excludes previous overs/runs.
+    for (const char* key : {"swrKeyedEligible", "swrKeyedLowPower", "swrKeyedSettling",
+                            "swrKeyedPause", "swrKeyedMissing"}) {
+        const QString name = QString::fromLatin1(key);
+        bool beforeOk = false;
+        bool afterOk = false;
+        const quint64 before = m_swrPublicationBaseline.value(name).toULongLong(&beforeOk);
+        const quint64 after = current.value(name).toULongLong(&afterOk);
+        if (!beforeOk || !afterOk || after < before) {
+            return QJsonObject{{QStringLiteral("available"), false}};
+        }
+        out[name] = static_cast<qint64>(after - before);
+    }
+    out[QStringLiteral("available")] = true;
+    out[QStringLiteral("minimumForwardCounts")] =
+        QJsonValue::fromVariant(current.value(QStringLiteral("swrMeterMinForwardCounts")));
     return out;
 }
 
@@ -1188,6 +1230,10 @@ void RadioCertification::stageMeterInventory()
     const auto& meters = m_radio->meterModel();
     QJsonObject m;
     QStringList definedNeverFed, expectedButMissing, unitMismatches, inconclusive;
+    QStringList gatedConcerns;
+    const QJsonObject swrEvidence = swrPublicationEvidence();
+    const bool swrFedDuringRun = swrEvidence.value(QStringLiteral("available")).toBool()
+        && meters.swrUpdatedAtMs() > m_swrUpdatedAtStartMs;
 
     // kMeterTable's `expectedOnHl2` column is a fact about ONE radio class.
     const bool tableAppliesToThisRadio =
@@ -1281,6 +1327,44 @@ void RadioCertification::stageMeterInventory()
             // three characters in the report.
             {QStringLiteral("note"), QString::fromUtf8(spec.note)},
         };
+        // The HL2 expectation already applies here. Read the producer's cached
+        // diagnostics through the neutral health seam; never infer its ADC or
+        // modulation gate from the display's peak-held forward-power meter.
+        const bool gatedSwr = tableAppliesToThisRadio && key == QStringLiteral("TX:SWR");
+        if (gatedSwr) {
+            row[QStringLiteral("fedDuringRun")] = swrFedDuringRun;
+            row[QStringLiteral("publicationEvidence")] = swrEvidence;
+        }
+        if (gatedSwr && idx >= 0 && !swrFedDuringRun && anyKeyedWindow) {
+            const qint64 eligible = swrEvidence.value(QStringLiteral("swrKeyedEligible")).toInteger();
+            const qint64 low = swrEvidence.value(QStringLiteral("swrKeyedLowPower")).toInteger();
+            const qint64 settling = swrEvidence.value(QStringLiteral("swrKeyedSettling")).toInteger();
+            const qint64 pause = swrEvidence.value(QStringLiteral("swrKeyedPause")).toInteger();
+            const qint64 missing = swrEvidence.value(QStringLiteral("swrKeyedMissing")).toInteger();
+            const bool available = swrEvidence.value(QStringLiteral("available")).toBool();
+            QString verdict;
+            QString reason;
+            if (available && eligible > 0) {
+                verdict = QStringLiteral("NOT DELIVERED");
+                reason = QStringLiteral("%1 keyed windows were eligible, but no new SWR update reached the meter")
+                             .arg(eligible);
+            } else if (available && missing == 0 && low + settling + pause > 0) {
+                verdict = QStringLiteral("SUPPRESSED");
+                reason = QStringLiteral("%1 low-forward-power, %2 key-on-settling, %3 speech-pause windows; "
+                                        "the producer requires at least %4 forward counts")
+                             .arg(low).arg(settling).arg(pause)
+                             .arg(swrEvidence.value(QStringLiteral("minimumForwardCounts")).toInt());
+            } else {
+                verdict = QStringLiteral("INCONCLUSIVE");
+                reason = QStringLiteral("no complete same-session SWR publication evidence; "
+                                        "telemetry was missing, invalid, unobserved, or the session changed");
+            }
+            row[QStringLiteral("verdict")] = verdict;
+            row[QStringLiteral("reason")] = reason;
+            m[key] = row;
+            gatedConcerns << key + QStringLiteral(" — ") + verdict + QStringLiteral(": ") + reason;
+            continue;
+        }
         const bool untested = !untestedBecause.isEmpty();
         if (untested && idx >= 0 && age < 0) {
             row[QStringLiteral("verdict")] = QStringLiteral("INCONCLUSIVE");
@@ -1378,6 +1462,11 @@ void RadioCertification::stageMeterInventory()
             + QStringLiteral(". ") + why
             + QStringLiteral(". Re-run with drive up and into a load before "
                              "concluding anything about them");
+        concern = concern.isEmpty() ? lead : lead + QStringLiteral(". ") + concern;
+    }
+
+    if (!gatedConcerns.isEmpty()) {
+        const QString lead = gatedConcerns.join(QStringLiteral(". "));
         concern = concern.isEmpty() ? lead : lead + QStringLiteral(". ") + concern;
     }
 
@@ -2345,6 +2434,7 @@ void RadioCertification::stageLifecycle(const Options&)
 QJsonObject RadioCertification::run(const Options& o)
 {
     m_stages = QJsonArray{};
+    beginMeterObservation();
     // Per-run evidence, cleared with the stages it is reported beside. Carrying
     // a previous run's keyed-RF confirmation forward would make the second run
     // of a session inherit the first one's transmission.

@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QPointer>
 #include <QString>
+#include <QVariantMap>
 
 #include <functional>
 #include <optional>
@@ -16,6 +17,7 @@ namespace AetherSDR {
 
 class RadioModel;
 class AudioEngine;
+class IRadioBackend;
 
 // Transmit bring-up instrument: drives the whole TX chain against one radio
 // (no simulator, no second receiver) and reports what every stage did.
@@ -182,6 +184,11 @@ private:
     // every transmit-meter verdict and cannot be answered from the meter whose
     // silence is being judged (CERTIFICATION.md 1.37).
     void observeKeyedRf();
+    void beginMeterObservation();
+    QJsonObject swrPublicationEvidence() const;
+    QPointer<IRadioBackend> m_meterBackend;
+    QVariantMap m_swrPublicationBaseline;
+    qint64 m_swrUpdatedAtStartMs = 0;
 
     // Was a transmission ever CONFIRMED to have produced RF during this run?
     //
@@ -193,13 +200,9 @@ private:
 
     // The floor forward power must clear for a keyed window to count as RF.
     //
-    // Deliberately MeterModel's own SWR-qualifying floor rather than a number
-    // chosen here. The finding this precondition exists to suppress is "TX:SWR
-    // defined but never fed", and SWR is fed exactly when forward power clears
-    // that floor — so any other constant would make the precondition answer a
-    // slightly different question from the gate it is reasoning about, which is
-    // §1.1 one level up. Zero drive on the HL2 reads 0.001 W; a real key at
-    // 50 % read 2.0 W.
+    // This is only a consumer-side RF presence floor. Gated meters also need
+    // their producer's publication evidence; this floor cannot establish that
+    // an SWR measurement was eligible for publication.
     static constexpr double kKeyedRfFloorWatts = MeterModel::kMinForwardWattsForSwr;
 
     // QPointer, not raw: run() holds these across nested event loops for minutes

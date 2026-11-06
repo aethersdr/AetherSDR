@@ -6632,6 +6632,19 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
         put("swr", QStringLiteral("SWR"), swr);
     }
 
+    section("swrMeterState", QStringLiteral("SWR meter publication"));
+    put("swrMeterState", QStringLiteral("Latest SWR publication decision"), m_swrMeterState);
+    put("swrMeterInput", QStringLiteral("SWR input selection"), m_swrMeterInput);
+    put("swrMeterForwardRaw", QStringLiteral("SWR selected forward (counts)"), opt(m_swrMeterForward));
+    put("swrMeterReverseRaw", QStringLiteral("SWR selected reverse (counts)"), opt(m_swrMeterReverse));
+    put("swrMeterMinForwardCounts", QStringLiteral("SWR minimum forward (counts)"), kMinForwardCountsForSwr);
+    put("swrMeterSession", QStringLiteral("SWR publication session"), QVariant::fromValue(m_connectGeneration));
+    put("swrKeyedEligible", QStringLiteral("Keyed SWR eligible windows"), QVariant::fromValue(m_swrKeyedEligible));
+    put("swrKeyedLowPower", QStringLiteral("Keyed SWR low-power windows"), QVariant::fromValue(m_swrKeyedLowPower));
+    put("swrKeyedSettling", QStringLiteral("Keyed SWR settling windows"), QVariant::fromValue(m_swrKeyedSettling));
+    put("swrKeyedPause", QStringLiteral("Keyed SWR speech-pause windows"), QVariant::fromValue(m_swrKeyedPause));
+    put("swrKeyedMissing", QStringLiteral("Keyed SWR missing/invalid sample windows"), QVariant::fromValue(m_swrKeyedMissing));
+
     // Telemetry attribution. Published here and winning the merge over
     // Hl2TelemetryService's same key, so both inputs must be asked here
     // (the service is injected for that), or `port-1025` would be
@@ -8176,6 +8189,12 @@ void Hl2Backend::pushInitialState()
     m_keyed = false;
     m_radioPtt = false;
     m_swrGate.reset();
+    m_swrMeterState = QStringLiteral("unobserved");
+    m_swrMeterInput.clear();
+    m_swrMeterForward.reset();
+    m_swrMeterReverse.reset();
+    m_swrKeyedEligible = m_swrKeyedLowPower = m_swrKeyedSettling = 0;
+    m_swrKeyedPause = m_swrKeyedMissing = 0;
     publishTransmitState();
     m_tuning = false;
     m_tuneOperation = {};
@@ -8287,10 +8306,35 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     const bool windowPair = m_keyed && t.forwardPowerPeakRaw && t.reversePowerPeakRaw;
     const std::optional<int> swrFwd = windowPair ? t.forwardPowerPeakRaw : t.forwardPowerRaw;
     const std::optional<int> swrRev = windowPair ? t.reversePowerPeakRaw : t.reversePowerRaw;
+    const bool settling = windowPair && m_swrGate.keyOnWindowsLeft > 0;
     const bool swrModulated = !windowPair || m_swrGate.accept(*swrFwd);
-    if (swrFwd && swrRev && *swrFwd >= kMinForwardCountsForSwr && swrModulated) {
-        if (const auto swr = swrFromRaw(*swrFwd, *swrRev))
-            emit meterUpdate(QStringLiteral("TX:SWR"), *swr);
+    std::optional<double> swr;
+    m_swrMeterInput = windowPair ? QStringLiteral("window peaks") : QStringLiteral("last pair");
+    m_swrMeterForward = swrFwd;
+    m_swrMeterReverse = swrRev;
+    if (!swrFwd || !swrRev) {
+        m_swrMeterState = QStringLiteral("missing samples");
+        if (m_keyed) { ++m_swrKeyedMissing; }
+    } else if (settling) {
+        m_swrMeterState = QStringLiteral("key-on settling");
+        if (m_keyed) { ++m_swrKeyedSettling; }
+    } else if (*swrFwd < kMinForwardCountsForSwr) {
+        m_swrMeterState = QStringLiteral("low forward power");
+        if (m_keyed) { ++m_swrKeyedLowPower; }
+    } else if (!swrModulated) {
+        m_swrMeterState = QStringLiteral("speech pause");
+        if (m_keyed) { ++m_swrKeyedPause; }
+    } else if ((swr = swrFromRaw(*swrFwd, *swrRev))) {
+        m_swrMeterState = QStringLiteral("eligible");
+        if (m_keyed) { ++m_swrKeyedEligible; }
+    } else {
+        m_swrMeterState = QStringLiteral("invalid samples");
+        if (m_keyed) { ++m_swrKeyedMissing; }
+    }
+    // Eligibility is recorded before emission so a broken delivery path cannot
+    // turn a missing update into evidence of intentional suppression.
+    if (swr) {
+        emit meterUpdate(QStringLiteral("TX:SWR"), *swr);
     }
     // Forward/reverse power through directionalWatts()'s uncalibrated reference
     // curve; raw counts are logged too, for future per-unit calibration.

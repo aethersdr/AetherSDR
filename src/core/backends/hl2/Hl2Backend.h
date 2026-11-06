@@ -1152,6 +1152,17 @@ private:
     double m_fwdPeakWatts = 0.0;
     // Drops keyed SWR from speech-pause windows; see KeyedSwrGate.
     KeyedSwrGate m_swrGate;
+    // Owner-thread publication evidence, independent of meter signal delivery.
+    QString m_swrMeterState = QStringLiteral("unobserved");
+    QString m_swrMeterInput;
+    std::optional<int> m_swrMeterForward;
+    std::optional<int> m_swrMeterReverse;
+    quint64 m_swrKeyedEligible = 0;
+    quint64 m_swrKeyedLowPower = 0;
+    quint64 m_swrKeyedSettling = 0;
+    quint64 m_swrKeyedPause = 0;
+    quint64 m_swrKeyedMissing = 0;
+
 
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.

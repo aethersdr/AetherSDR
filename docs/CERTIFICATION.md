@@ -959,9 +959,16 @@ by the Icom backend and consumed by nobody. That is not a bug, but it is
 invisible today, and the inverse — a consumer with no producer — is exactly the
 §1.8 orphan. The phase already knows both sides; it should print the join.
 
-**Draw the dependency.** SWR was suppressed by forward power, and no output in
-the run said so. When a meter is gated on another meter, a suppressed reading
-must name its gate rather than reporting as merely stale.
+**Draw the dependency.** HL2 SWR inventory reads the producer's keyed-window
+counters through the health snapshot, subtracting a baseline captured at the
+start of the run. It reports `SUPPRESSED` for low forward power, key-on settling
+or speech-pause windows; missing/invalid samples or a changed session produce
+`INCONCLUSIVE`. Eligible windows without a new meter update produce
+`NOT DELIVERED`, even if the meter retains an earlier run's value. Eligibility
+is recorded before signal emission, so a disconnected delivery path cannot
+masquerade as suppression. The producer owns the threshold and selected input;
+neither peak-held FWDPWR nor the raw last-pair health row substitutes for it.
+Other backend gate declarations remain part of the radio-profile work.
 
 **Finish the family table.** `expectationsApplied: false` on anything that is
 not an HL2 (§2.1). Until that lands, every per-meter reading is measured and

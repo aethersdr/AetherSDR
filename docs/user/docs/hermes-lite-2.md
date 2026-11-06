@@ -178,7 +178,8 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
 - AX.25 packet with AetherModem (APRS, KISS TNC, terminal and mailbox).
 - **Memory channels**, stored on this computer in the bank shared by radios without memory slots. See [Memory Channels](./memory-channels.md).
-- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware and the transmit voice chain.
+- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware and the transmit voice chain. Its **SWR meter publication** section shows the selected forward/reflected counts, the minimum forward count, the latest publication decision, and keyed-window counters. These describe the meter's actual input; the separate raw SWR row remains the latest-pair diagnostic.
+- **Certification reports:** `radiocert meters` reports **SUPPRESSED** when this run's SWR windows were withheld for low forward power, key-on settling, or speech pauses. **INCONCLUSIVE** means publication evidence is missing or the radio session changed. **NOT DELIVERED** means the backend had eligible keyed windows but no new SWR update reached the meter. A reading retained from an earlier run does not count as delivery in this run.
 - Connection health in the title bar, status bar and network statistics.
 
 ## Reference
