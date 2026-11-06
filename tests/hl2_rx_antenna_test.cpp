@@ -1,0 +1,124 @@
+// HL2 receive antenna (#4954, the RX half). The HL2 has one receive input, ANT.
+// The claims under test:
+//   - every slice publishes rxAntennaList {ANT} and rxAntenna ANT, so the RX
+//     menus have a real port and no longer fall back to invented ANT1/ANT2;
+//   - RF1, a transmit-only output, is never in the RX list;
+//   - a request for ANT is accepted with nothing to send, anything else is
+//     refused, and both republish ANT so the button cannot keep a refused label.
+// Socket-free: a constructed backend; nothing is keyed.
+
+#include "TestSettingsProfile.h"
+#include "core/backends/IRadioBackend.h"
+#include "core/backends/SliceDelta.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "gui/AntennaChoiceGate.h"
+#include "models/SliceModel.h"
+
+#include <QCoreApplication>
+#include <QStringList>
+
+#include <cstdio>
+#include <map>
+#include <optional>
+
+namespace AetherSDR::hl2 {
+
+struct Hl2RxAntennaTestAccess {
+    static void receivers(Hl2Backend& b, int n)
+    {
+        b.m_ids.reset(n);
+        b.m_rx.assign(static_cast<std::size_t>(n), Hl2Backend::Receiver{});
+    }
+    static void publishAll(Hl2Backend& b) { b.emitAllSliceState(); }
+};
+
+} // namespace AetherSDR::hl2
+
+using namespace AetherSDR;
+using namespace AetherSDR::hl2;
+using A = Hl2RxAntennaTestAccess;
+
+static int g_failures = 0;
+static void check(bool cond, const char* what)
+{
+    std::printf("  %s  %s\n", cond ? "ok  " : "FAIL", what);
+    if (!cond) {
+        ++g_failures;
+    }
+}
+
+namespace {
+
+struct Heard {
+    std::map<int, QStringList> list;
+    std::map<int, QString> current;
+    std::optional<SliceDelta> last;
+};
+
+void listen(Hl2Backend& b, Heard& h)
+{
+    QObject::connect(&b, &IRadioBackend::sliceChanged, &b, [&h](int id, const SliceDelta& d) {
+        if (d.rxAntennaList) {
+            h.list[id] = *d.rxAntennaList;
+        }
+        if (d.rxAntenna) {
+            h.current[id] = *d.rxAntenna;
+        }
+        h.last = d;
+    });
+}
+
+const QStringList kAntOnly{QStringLiteral("ANT")};
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile(QStringLiteral("hl2-rx-antenna-test"));
+    if (!profile.isValid()) {
+        std::fprintf(stderr, "Cannot create isolated settings profile\n");
+        return 1;
+    }
+    QCoreApplication app(argc, argv);
+    std::printf("\n  HL2 receive antenna: ANT only (#4954)\n");
+
+    Hl2Backend b;
+    A::receivers(b, 2);
+    Heard h;
+    listen(b, h);
+    A::publishAll(b);
+    check(h.list.size() == 2 && h.list[0] == kAntOnly && h.list[1] == kAntOnly,
+          "every slice publishes rxAntennaList {ANT}");
+    check(h.current[0] == QLatin1String("ANT") && h.current[1] == QLatin1String("ANT"),
+          "every slice publishes rxAntenna ANT");
+    check(!h.list[0].contains(QStringLiteral("RF1")) && !h.list[1].contains(QStringLiteral("RF1")),
+          "RF1 is never offered for receive");
+
+    // The menus (VfoWidget, RxApplet, SpectrumOverlayMenu) fall back to ANT1/ANT2
+    // and the gate refuses only when the slice's published list is empty.
+    SliceModel s(0);
+    s.applyChanges(*h.last);
+    check(s.rxAntennaList() == kAntOnly && s.rxAntenna() == QLatin1String("ANT"),
+          "the slice model holds {ANT} and ANT");
+    check(!rxAntennaChoiceRefused(true, !s.rxAntennaList().isEmpty(), false),
+          "the RX antenna button opens on a real port instead of refusing");
+
+    h = Heard{};
+    check(b.requestSliceRxAntenna(1, QStringLiteral("ANT")) == ReceiveDispatch::LocalOnly
+              && h.current[1] == QLatin1String("ANT"),
+          "ANT is accepted with nothing to send and republished");
+    bool refused = true;
+    for (const char* token : {"ANT1", "ANT2", "RF1", "RX_A", ""}) {
+        h = Heard{};
+        refused = refused
+            && b.requestSliceRxAntenna(0, QString::fromLatin1(token)) == ReceiveDispatch::Unsupported
+            && h.current[0] == QLatin1String("ANT") && h.list[0] == kAntOnly;
+    }
+    check(refused, "ANT1, ANT2, RF1 and junk are refused and ANT is republished");
+    check(b.requestSliceRxAntenna(7, QStringLiteral("ANT")) == ReceiveDispatch::Unsupported,
+          "a slice that does not exist is refused");
+
+    std::printf("\n  %s (%d failure%s)\n\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,
+                g_failures == 1 ? "" : "s");
+    return g_failures == 0 ? 0 : 1;
+}

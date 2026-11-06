@@ -7,11 +7,10 @@
 // publishes -- a slice's rxant/txant list, the panadapter's ant_list -- and,
 // when that is empty, FALL BACK TO "ANT1"/"ANT2" so the menu is never blank.
 // On a Flex the fallback is a placeholder for a list that is about to arrive.
-// On a Hermes-Lite 2 no list ever arrives: the HL2 has one antenna port,
-// Hl2Backend publishes none, and IRadioBackend::setSliceRxAntenna() is the base
-// no-op. So the operator was offered two ports the radio does not have, picked
-// ANT2, watched the label change to ANT2, and nothing moved -- a control that
-// looks like it succeeded. The TX pick is worse off still: SliceModel's
+// On a radio that publishes no list (the Hermes-Lite 2 did, until it published
+// {ANT}, #4954) no list ever arrives. So the operator was offered two ports the
+// radio does not have, picked ANT2, watched the label change to ANT2, and
+// nothing moved -- a control that looks like it succeeded. The TX pick is worse off still: SliceModel's
 // txant= wire text never leaves a non-Flex slice at all.
 //
 // The rule these predicates encode: a choice is REFUSED -- and the refusal is

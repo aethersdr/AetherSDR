@@ -108,6 +108,9 @@ public:
         TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
+    // One receive input, ANT (#4954): ANT is accepted with nothing to send, any
+    // other token is refused; both republish the slice so the button shows ANT.
+    ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
@@ -282,6 +285,7 @@ private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PanCreateTestAccess;
     friend struct Hl2PcmTestAccess;
+    friend struct Hl2RxAntennaTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
     // Hands receiver 0 a configured Hl2RxDsp so the APF and AGC-off verbs can
