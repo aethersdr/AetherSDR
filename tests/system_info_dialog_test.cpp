@@ -14,11 +14,16 @@
 #include "core/LogManager.h"
 #include "core/ThreadCpuRing.h"
 #include "core/ThemeManager.h"
+#include "gui/CanonWindow.h"
 #include "gui/SparklineDelegate.h"
 #include "gui/SystemInfoDialog.h"
 #include "gui/TimeSeriesGraphWidget.h"
 
 #include <QApplication>
+#include <QImage>
+#include <QKeySequence>
+#include <QPointer>
+#include <QTest>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QLabel>
@@ -36,6 +41,10 @@
 #include <QPixmap>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QThread>
+#include <QToolButton>
+#include <QAbstractScrollArea>
+#include <QDialog>
 
 #include <cstdio>
 
@@ -51,6 +60,23 @@ void report(const char* what, bool ok)
     if (!ok) {
         ++g_failures;
     }
+}
+
+// The canon palette the window gives its charts (#7035), for a reference chart
+// drawn the same way.
+TimeSeriesGraphWidget::ChartColors canonChartColors(const QWidget* scope)
+{
+    auto& tm = ThemeManager::instance();
+    TimeSeriesGraphWidget::ChartColors colors;
+    colors.ground = tm.color(scope, QStringLiteral("color.canon.nested"));
+    colors.line = tm.color(scope, QStringLiteral("color.canon.line"));
+    colors.title = tm.color(scope, QStringLiteral("color.canon.ink"));
+    colors.text = tm.color(scope, QStringLiteral("color.canon.muted"));
+    colors.legendOff = colors.text;
+    colors.legendLineOff = colors.line;
+    colors.radius = 12.0;
+    colors.roundGround = true;
+    return colors;
 }
 
 }  // namespace
@@ -479,9 +505,10 @@ int main(int argc, char** argv)
                    view->toPlainText().contains(QLatin1String("Log file was reset")));
         }
 
-        report("the dialog has a Close button",
+        // A CanonWindow: the corner ✕, Esc and Ctrl+W close it (#7035).
+        report("the footer Close button is gone",
                tailing.findChild<QPushButton*>(
-                   QStringLiteral("systemInfoCloseButton")) != nullptr);
+                   QStringLiteral("systemInfoCloseButton")) == nullptr);
 
         tailing.hide();
         QCoreApplication::processEvents();
@@ -525,6 +552,7 @@ int main(int argc, char** argv)
                     if (graph != nullptr) {
                         const QImage actual = caption(graph);
                         TimeSeriesGraphWidget reference{QString(), QString()};
+                        reference.setChartColors(canonChartColors(graph));
                         reference.setFont(graph->font());
                         reference.resize(graph->size());
                         reference.setSeries({}, range->currentData().toInt());
@@ -719,7 +747,8 @@ int main(int argc, char** argv)
             const char* tokens[] = {"color.accent", "color.accent.success", "color.accent.warning",
                                     "color.accent.bright", "color.accent.danger"};
             for (const char* token : tokens) {
-                const QRgb color = ThemeManager::instance().color(token).rgb();
+                // Resolved in the window's scope, as the dialog resolves them.
+                const QRgb color = ThemeManager::instance().color(graph, QLatin1String(token)).rgb();
                 int count = 0;
                 for (int y = 0; y < pixels.height(); ++y) {
                     for (int x = 0; x < pixels.width(); ++x) {
@@ -876,6 +905,139 @@ int main(int argc, char** argv)
         auto* summaryOwn = own.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
         report("a dialog given no history starts with its own empty ring",
                summaryOwn != nullptr && summaryOwn->text() == QStringLiteral("Sampling…"));
+    }
+
+    // A CanonWindow workspace in the canon/runtimeMonitor scope (#7035), whose
+    // charts take the canon palette in each theme (they painted a fixed dark
+    // ground before, even in Default Light).
+    {
+        auto& tm = ThemeManager::instance();
+        const QString before = tm.activeTheme();
+        for (const char* theme : {"Default Dark", "Default Light"}) {
+            std::printf("  %s\n", theme);
+            report("the theme switches", tm.setActiveTheme(QLatin1String(theme)));
+            SystemInfoDialog canon;
+            report("Runtime Monitor is a CanonWindow", qobject_cast<CanonWindow*>(&canon) != nullptr);
+            report("it is a frameless workspace window",
+                   canon.windowType() == Qt::Window
+                       && canon.windowFlags().testFlag(Qt::FramelessWindowHint));
+            report("the title and the name the screenshot recipes wait for are kept",
+                   canon.windowTitle() == QLatin1String("Runtime Monitor")
+                       && canon.objectName() == QLatin1String("SystemInfoDialog"));
+            report("it uses the canon/runtimeMonitor scope",
+                   canon.property("themeContainer").toString() == QLatin1String("canon/runtimeMonitor"));
+            report("it carries the canon header",
+                   canon.findChild<QLabel*>(QStringLiteral("canonHeaderTitle")) != nullptr);
+            const QString sheet = canon.bodyWidget()->styleSheet();
+            report("no token in the sheet resolved empty", !sheet.contains(QLatin1String(": ;")));
+            report("the sheet gives menus a panel and selections an ink",
+                   sheet.contains(QLatin1String("QMenu")) && sheet.contains(QLatin1String("selection-color")));
+
+            canon.resize(canon.minimumSize().expandedTo(QSize(900, 640)));
+            canon.show();
+            QTest::qWaitForWindowExposed(&canon);
+            const QColor ground = tm.color(&canon, QStringLiteral("color.canon.nested"));
+            int charts = 0;
+            int onGround = 0;
+            for (QWidget* w : canon.findChildren<QWidget*>()) {
+                auto* graph = dynamic_cast<TimeSeriesGraphWidget*>(w);
+                if (!graph || !graph->isVisible()) continue;
+                ++charts;
+                const QImage image = graph->grab().toImage();
+                qint64 match = 0;
+                for (int y = 0; y < image.height(); y += 2)
+                    for (int x = 0; x < image.width(); x += 2)
+                        match += QColor(image.pixel(x, y)).rgb() == ground.rgb();
+                const qint64 sampled = qint64((image.width() + 1) / 2) * ((image.height() + 1) / 2);
+                onGround += sampled > 0 && match * 3 > sampled;   // a third of the chart is ground
+            }
+            report("the Overview charts are shown", charts == 4);
+            report("every chart paints the canon ground of this theme", charts > 0 && onGround == charts);
+
+            // At the smallest size the shown window allows, on every tab, each
+            // control outside a scroll area keeps the height it needs (a
+            // wrapped label: its height for its width). Measured shown: the
+            // constructor's hint comes before the canon sheet.
+            auto* canonTabs = canon.findChild<QTabWidget*>();
+            bool legible = canonTabs != nullptr;
+            for (int t = 0; canonTabs && t < canonTabs->count(); ++t) {
+                canonTabs->setCurrentIndex(t);
+                canon.resize(QSize(1, 1));
+                QTest::qWait(30);
+                for (QWidget* w : canon.bodyWidget()->findChildren<QWidget*>()) {
+                    if (!w->isVisible()) continue;
+                    bool scrolled = false;
+                    for (QWidget* p = w->parentWidget(); p && p != &canon; p = p->parentWidget())
+                        scrolled = scrolled || qobject_cast<QAbstractScrollArea*>(p) != nullptr;
+                    if (scrolled) continue;
+                    int need = w->minimumSizeHint().height();
+                    if (auto* label = qobject_cast<QLabel*>(w); label && label->wordWrap())
+                        need = label->heightForWidth(label->width());
+                    if (w->height() < need) {
+                        legible = false;
+                        std::printf("  tab %d: %s %s h=%d need=%d\n", t, w->metaObject()->className(),
+                                    qPrintable(w->objectName()), w->height(), need);
+                    }
+                }
+            }
+            std::printf("  shown minimum %dx%d\n", canon.width(), canon.height());
+            report("every control keeps its height at the smallest size", legible);
+            report("the shown minimum height fits a 768 px screen", canon.height() <= 700);
+            canonTabs->setCurrentIndex(0);
+            canon.hide();
+        }
+        tm.setActiveTheme(before);
+    }
+
+    // Every way out destroys the WA_DeleteOnClose window showOrRaiseCanon()
+    // makes, and the hide on the way stops the collector thread.
+    for (int path = 0; path < 3; ++path) {
+        QPointer<SystemInfoDialog> closing = new SystemInfoDialog;
+        closing->setAttribute(Qt::WA_DeleteOnClose);
+        closing->show();
+        const bool exposed = QTest::qWaitForWindowExposed(closing);
+        const bool sampling = closing->findChild<QThread*>() != nullptr;
+        if (path == 0) QTest::keyClick(closing, Qt::Key_Escape);
+        if (path == 1) {
+            // A window shortcut: it needs the window active, which a desktop
+            // gives a newly shown window but a background test process may not.
+            closing->activateWindow();
+            QTest::qWaitForWindowActive(closing);
+            QTest::keySequence(closing, QKeySequence::Close);
+        }
+        if (path == 2) {
+            // Press the corner ✕ itself, so its connection is pinned too.
+            QToolButton* corner = nullptr;
+            for (QToolButton* b : closing->findChildren<QToolButton*>())
+                if (b->accessibleName() == QLatin1String("Close")) corner = b;
+            report("the corner close button exists", corner != nullptr);
+            if (corner) QTest::mouseClick(corner, Qt::LeftButton);
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        report(path == 0 ? "Esc closes and destroys the window, sampling while open"
+               : path == 1 ? "Ctrl+W / Cmd+W closes and destroys the window, sampling while open"
+                           : "the corner close button closes and destroys the window, sampling while open",
+               exposed && sampling && closing.isNull());
+        delete closing.data();
+    }
+
+    // Size and position persist under SystemInfoDialogGeometry, the key the
+    // old dialog wrote, including its base64 rectangles.
+    {
+        static const QString kKey = QStringLiteral("SystemInfoDialogGeometry");
+        auto& settings = AppSettings::instance();
+        settings.remove(kKey);
+        SystemInfoDialog restored;
+        const QSize chosen(restored.minimumWidth() + 30, restored.minimumHeight() + 20);
+        QDialog legacy;
+        legacy.resize(chosen);
+        settings.setValue(kKey, QString::fromLatin1(legacy.saveGeometry().toBase64()));
+        restored.show();
+        QTest::qWaitForWindowExposed(&restored);
+        for (int i = 0; i < 50 && restored.size() != chosen; ++i)
+            QTest::qWait(20);
+        report("geometry saved by the old dialog restores under its key", restored.size() == chosen);
+        restored.hide();
     }
 
     std::printf("%s\n", g_failures == 0 ? "system_info_dialog_test: all passed"
