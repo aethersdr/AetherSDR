@@ -14,6 +14,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "models/MeterModel.h"
 #include "models/RadioModel.h"
+#include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -128,7 +129,13 @@ QJsonObject inventoryOf(const RadioCertification& cert)
 
 int main(int argc, char** argv)
 {
+    // The real Hl2Backend constructor reaches AutomationBridgeSettings::txAllowed()
+    // -> AppSettings::instance(), which would open the developer's or CI user's
+    // own settings store. Isolate it, as every sibling test that constructs an
+    // Hl2Backend does.
+    TestSettingsProfile profile(QStringLiteral("radiocert-gated-meter-test"));
     QCoreApplication app(argc, argv);
+    check(profile.isValid(), "settings are isolated");
 
     // ---- below the gate: a run that radiated, a meter the backend withheld ----
     {

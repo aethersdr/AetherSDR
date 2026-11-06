@@ -528,6 +528,66 @@ static void forwardPowerSkippedHealthRow()
           "skipped row: reported when every response so far was skipped");
 }
 
+// #7063: the SWR count gate and the window peak a diagnostic compares against
+// it are published together or not at all, and BOTH key on forwardPowerPeakRaw.
+//
+// Keying the gate row on forwardPowerRaw instead would look equivalent and is
+// not: apply() takes that from every RADDR-1 response while the peak window
+// skips the non-measurement ones, so a unit whose temperature word reads 0 has
+// forwardPowerRaw and no peak (MetisProtocol.h:515-517). The gate would then be
+// published beside an absent reading, radiocert's count would stay at its -1
+// sentinel, its gate branch could never fire, and TX:SWR would be reported
+// DEFINED BUT NEVER FED on that unit class — the exact verdict #7063 removes.
+// The consumer half is pinned in radiocert_gated_meter_test; this is the
+// producer half, which that test cannot reach because it stubs the snapshot.
+static void swrGateHealthRows()
+{
+    using HS = IRadioBackend::HealthSnapshot;
+    static const char* const kGate = HS::kSwrGateCounts;
+    static const char* const kPeak = HS::kForwardWindowPeakRaw;
+
+    Hl2Backend b;
+    const QStringList order = b.healthSnapshot().order;
+    check(order.contains(QString::fromLatin1(kGate))
+              && order.contains(QString::fromLatin1(kPeak)),
+          "swr gate: both rows are declared");
+
+    // DECLARED ADJACENTLY, which is the structural half of "published together".
+    // A later edit that moves one row out of the directional block — the shape
+    // that would let the gate publish while the reading does not — separates
+    // them here.
+    check(order.indexOf(QString::fromLatin1(kPeak))
+              == order.indexOf(QString::fromLatin1(kGate)) + 1,
+          "swr gate: the reading is declared immediately after its gate");
+
+    // Both rows live behind the directional block's `inBandLive`, so without a
+    // Streaming link neither reports a value. That is the state a diagnostic
+    // must read as NOT MEASURED, and it is the only snapshot state this seam
+    // can reach: telemetryLinkState() needs a live session clock, which
+    // Access::publish() does not fake. The VALUES are pinned on the consumer
+    // side in radiocert_gated_meter_test; what matters here is that no
+    // telemetry shape makes one row appear without the other.
+    const auto neitherReported = [&](const char* why) {
+        check(!health(b, kGate).isValid() && !health(b, kPeak).isValid(), why);
+    };
+    hl2::Hl2Telemetry noPeak;
+    noPeak.forwardPowerRaw = 76;          // the zero-temperature unit: raw, no peak
+    Access::publish(b, noPeak);
+    neitherReported("swr gate: forwardPowerRaw alone reports neither row");
+
+    hl2::Hl2Telemetry withPeak;
+    withPeak.forwardPowerRaw = 76;
+    withPeak.forwardPowerPeakRaw = 76;
+    Access::publish(b, withPeak);
+    neitherReported("swr gate: a window peak reports neither row off-stream");
+
+    hl2::Hl2Telemetry cleared;
+    cleared.forwardPowerRaw = 90;
+    cleared.forwardPowerPeakRaw = 400;    // peak clears the gate, last value does not
+    Access::publish(b, cleared);
+    neitherReported("swr gate: a gate-clearing peak reports neither row off-stream");
+}
+
 // What one key-on replay published, window by window.
 struct KeyOnReplay {
     int windows = 0;
@@ -761,6 +821,7 @@ int main(int argc, char** argv)
     notchIdsAreNeverReused();
     forwardPowerWindowPeakWhileKeyed();
     forwardPowerSkippedHealthRow();
+    swrGateHealthRows();
     forwardPowerKeyOnReplay();
     panAveragingSeam();
 

@@ -2476,6 +2476,13 @@ QJsonObject RadioCertification::run(const Options& o)
     m_keyedRfSamples = 0;
     m_keyedWindows = 0;
     m_fwdPowerMeterDefined = false;
+    // Negative is "not measured", and that must be true at the start of a run
+    // as well as when a backend declares no gate. Unreachable today — each
+    // bridge request builds a fresh RadioCertification — but the sentinel's
+    // meaning is stated in the header, so nothing should depend on the object
+    // being new for it to hold.
+    m_swrGateCounts = -1;
+    m_keyedFwdCountsMax = -1;
     m_renderedWhileKeyed = QJsonObject{};
     m_keyRefusals = 0;
 
