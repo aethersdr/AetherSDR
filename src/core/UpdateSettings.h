@@ -60,6 +60,12 @@ public:
     static int quitSwitchTries(const QString& version);
     static void setQuitSwitchTries(const QString& version, int tries);
 
+    // The release Install for updates installed from the AppImage and
+    // restarted into (RFC #5304 Phase 6), until that start reports it.
+    // Empty: none.
+    static QString installedFromAppImage();
+    static void setInstalledFromAppImage(const QString& version);
+
     // Whether an automatic check may run at nowUtc: enabled, and the last
     // answer is missing, older than the interval, or in the future (the
     // clock moved backward).

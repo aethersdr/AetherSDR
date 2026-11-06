@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.10.4 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -146,9 +146,10 @@ endif()
 # Build libaethercore as one shared library instead of a static archive. The
 # ~250 test executables that link the core each absorb a full static copy
 # (~200 MB in a Debug ASan build), which exhausts a hosted runner's disk;
-# shared, they average ~13 MB. For the sanitizer lane and local review builds,
-# never for releases: the shipped app links the core statically.
-option(AETHER_SHARED_CORE "Build libaethercore as a shared library (sanitizer and review builds only)" OFF)
+# shared, they average ~13 MB. For the sanitizer lanes, the Linux CI and
+# full-suite builds, and local review builds; never for releases: the shipped
+# app links the core statically.
+option(AETHER_SHARED_CORE "Build libaethercore as a shared library (CI, sanitizer and review builds only)" OFF)
 if(AETHER_SHARED_CORE)
     if(WIN32)
         message(FATAL_ERROR "AETHER_SHARED_CORE is not supported on Windows")
@@ -909,6 +910,9 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexSetupControls.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexCwxControls.cpp
+    src/core/backends/flex/FlexWaveformEnvControls.cpp
+    src/core/backends/flex/FlexNtpSourceControls.cpp
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
     src/core/backends/flex/FlexPanControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
@@ -1037,6 +1041,8 @@ set(CORE_SOURCES
     src/core/RigctlProtocol.cpp
     src/core/ByteRelay.cpp
     src/core/TcpByteProxy.cpp
+    src/core/RigExpertHidTransport.cpp
+    src/models/AntennaAnalyzerModel.cpp
     src/core/Ctr2FirmwareUpdater.cpp
     src/core/Ctr2MaxRegistration.cpp
     src/core/CappedDownload.cpp
@@ -1053,6 +1059,7 @@ set(CORE_SOURCES
     src/core/Ctr2UsbRelay.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
+    src/core/OtrspProtocol.cpp
     src/core/CatPort.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
@@ -1065,7 +1072,6 @@ set(CORE_SOURCES
     src/core/DxSpotLineParser.cpp
     src/core/GoClusterSettings.cpp
     src/core/WsjtxClient.cpp
-    src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
     src/core/EibiClient.cpp
     src/core/EibiCodeMaps.cpp
@@ -1125,6 +1131,9 @@ set(CORE_SOURCES
     src/core/TailnetShimClient.cpp    # in-radio tailnet shim provisioning API (prototype)
     src/core/TailnetShimTokenStore.cpp
     src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
+    src/core/RadioHealthClient.cpp    # radio health agent readout (tools/radio-health)
+    src/core/WsprAgent.cpp            # WSPR receiver on the radio (tools/wspr-agent)
+    src/core/WsprAgentClient.cpp
     src/core/TailnetLinkTelemetry.cpp   # link telemetry from the shim, for Network Diagnostics
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp
@@ -1155,6 +1164,7 @@ set(CORE_SOURCES
     src/core/UpdateInstaller.cpp
     src/core/UpdateController.cpp
     src/core/LinuxInstall.cpp
+    src/core/MacInstall.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
@@ -1180,6 +1190,7 @@ set(CORE_SOURCES
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
     src/core/SupportBundle.cpp
+    src/core/ExternalFilePath.cpp
     src/core/IssueReport.cpp
     src/core/SystemInfo.cpp
     src/core/SystemInfoCollector.cpp
@@ -1255,8 +1266,11 @@ set(MODEL_SOURCES
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
     src/models/RadioModel_Setup.cpp
+    src/models/RadioModel_Administration.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
+    src/models/RadioModel_WaveformEnv.cpp
+    src/models/RadioModel_NtpSources.cpp
     src/models/RadioModel_SliceLifecycle.cpp
     src/models/RadioModel_PanControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
@@ -1370,6 +1384,7 @@ set(GUI_SOURCES
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NtpSourcesPage.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
@@ -1401,7 +1416,10 @@ set(GUI_SOURCES
     src/gui/NrGainStrip.cpp
     src/gui/UpdatesWindow.cpp
     src/gui/WaveformsDialog.cpp
+    src/gui/WaveformEnvironmentDialog.cpp
     src/gui/TailnetShimDialog.cpp
+    src/gui/WsprConfigureWindow.cpp
+    src/gui/QrCodeImage.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/DspParamPopup.cpp
@@ -1437,6 +1455,7 @@ set(GUI_SOURCES
     src/gui/RadeApplet.cpp
     src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp
+    src/gui/AetherLabWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/CanonMessageBox.cpp
     src/gui/CanonSurface.cpp
@@ -1710,6 +1729,19 @@ else()
     target_compile_options(aether_monocypher PRIVATE -w)
 endif()
 
+# Bundled Nayuki QR Code generator (MIT): draws the Remote Access sign-in
+# link as a QR code to scan with a phone.
+add_library(aether_qrcodegen STATIC
+    ${CMAKE_SOURCE_DIR}/third_party/qrcodegen/qrcodegen.cpp
+)
+target_include_directories(aether_qrcodegen PUBLIC ${CMAKE_SOURCE_DIR}/third_party/qrcodegen)
+set_target_properties(aether_qrcodegen PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(aether_qrcodegen PRIVATE /w)
+else()
+    target_compile_options(aether_qrcodegen PRIVATE -w)
+endif()
+
 # Bundled zstd 1.5.7 (BSD), decompressor only: applies the in-app update's
 # per-file --patch-from deltas (RFC #5304, docs/architecture/update-manifest.md)
 # on every platform alike. Symbols are hidden so this copy can never interpose
@@ -1900,6 +1932,7 @@ add_executable(AetherSDR
 )
 target_link_libraries(AetherSDR PRIVATE
     aetherdesktop_support
+    aether_qrcodegen   # QrCodeImage: the Remote Access sign-in QR code
 )
 
 add_executable(aetherd
@@ -1915,7 +1948,8 @@ target_link_libraries(aetherd PRIVATE
 if(WIN32)
     # ole32/oleaut32: WindowsFirewall reads the firewall policy over COM;
     # shell32: its Fix runs netsh through a UAC prompt.
-    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32)
+    # uuid: ExternalFilePath's Windows known-folder identifiers.
+    target_link_libraries(aethercore PRIVATE advapi32 ole32 oleaut32 shell32 uuid)
 endif()
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------
@@ -3576,7 +3610,8 @@ endif()
 
 if(HAVE_PIPEWIRE_NATIVE)
     target_compile_definitions(aethercore PUBLIC HAVE_PIPEWIRE_NATIVE)
-    target_include_directories(aethercore PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
+    # SYSTEM: the SPA headers use GNU C extensions -Wpedantic flags in C++.
+    target_include_directories(aethercore SYSTEM PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
     target_link_libraries(aethercore PRIVATE ${PIPEWIRE_NATIVE_LIBRARIES})
     target_compile_options(aethercore PRIVATE ${PIPEWIRE_NATIVE_CFLAGS_OTHER})
     message(STATUS "Linux DAX RX uses native pw_stream (libpipewire-0.3 ${PIPEWIRE_NATIVE_VERSION})")

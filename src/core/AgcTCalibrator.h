@@ -70,6 +70,10 @@ signals:
     void recommendation(int value, bool isKnee);
     void quietSpotStatus(bool quiet, float marginDb); // S-meter vs noise floor
     void finished(bool applied);
+    // The auto sweep stopped and restored the original value because no audio
+    // level arrived while a step settled (PC Audio off: nothing to measure).
+    // Emitted after finished(false).
+    void noAudio();
 
 private:
     int   currentValue() const;          // read the active knob from the slice
@@ -100,6 +104,10 @@ private:
     // Audio RMS smoothing (fed from the audio thread via a queued signal).
     float  m_rmsEma{0.0f};
     bool   m_haveRms{false};
+    // Levels received, and the count when the sweep last applied a value: a
+    // step that settles with no new level would record a stale reading.
+    quint64 m_levelCount{0};
+    quint64 m_levelCountAtApply{0};
     static constexpr float kRmsAlpha = 0.30f;
     static constexpr float kRmsFloor = 1.0e-6f; // avoid log10(0)
 

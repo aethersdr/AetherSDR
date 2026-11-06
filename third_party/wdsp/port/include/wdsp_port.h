@@ -110,6 +110,14 @@ uint64_t wdspPortOutstandingAllocations(void);
 #define _aligned_malloc(size, alignment) wdspAlignedAllocate((size), (alignment))
 #define _aligned_free(pointer) wdspAlignedFree((pointer))
 
+// WDSP 2.11's wdsp_align.h defines static inline _aligned_malloc/_aligned_free
+// over posix_memalign for non-Windows builds. Behind the two macros above those
+// definitions expand to malformed redefinitions of the port functions, and
+// they would also bypass the allocation counters the real-time tests rely on.
+// This header is force-included into every WDSP TU, so claiming that header's
+// include guard here leaves the port as the only allocator.
+#define _wdsp_align_h 1
+
 void wdspEnableFlushToZero(void);
 #define _MM_FLUSH_ZERO_ON 1
 #define _MM_SET_FLUSH_ZERO_MODE(mode) do { (void)(mode); wdspEnableFlushToZero(); } while (0)

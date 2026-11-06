@@ -27,6 +27,8 @@ The Help menu starts with **AetherSDR Documentation** (this site), **Printable M
 
 **Help → Support & Diagnostics...** has two parts, followed by two buttons that open these docs in your browser: **Troubleshooting Guide** opens [Troubleshooting](./troubleshooting.md) and **Log Analyzer** opens the [Log Analyzer](/log-analyzer).
 
+Choosing **Support & Diagnostics...** while it is open brings the window to the front. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). The log path can be selected and copied into a report.
+
 <img src="/img/screens/support-diagnostics-dialog.png" width="680" alt="Support &amp; Diagnostics window. Diagnostic Logging lists modules in three columns with checkboxes, Discovery, Connection / Commands, Protocol / Status, Audio Summary, KiwiSDR and System Info ticked. Below are the log file path (blacked out) and size, a log tail, Refresh, Clear Log and Open Log Folder buttons, and four numbered steps for reporting an issue." />
 
 *Support & Diagnostics: per-module diagnostic logging and the log file. The log path is blacked out.*
@@ -51,6 +53,8 @@ Below the grid, the dialog shows the path of the current log file, its size, and
 2. **Copies an AI prompt** to your clipboard, pre-filled with your AetherSDR version, Qt version, OS and radio, and opens a dialog with buttons for **Claude**, **ChatGPT**, **Gemini**, **Grok** and **Perplexity**. Paste the prompt into the AI, describe what went wrong, and it writes a structured bug report.
 3. **Submit Bug Report** opens GitHub's bug-report form, pre-filled with your system and radio details and a redacted tail of the recent log. If the log tail is too long for the link, it is put on your clipboard instead.
 4. Drag the support bundle into the GitHub form.
+
+When connected to a Hermes-Lite 2, the pre-filled form also includes a **Hermes-Lite 2** section: gateware, the configured board variant, IQ sample rate, receiver count, TX modulator, open-slice modes, packet-loss and DSP counters, and the TX pacing fault state. Values the backend has not reported are omitted. The board variant is your configured hardware choice; it is not detected from the radio. These extra details appear in the issue form; the support-email bundle uses its existing fields.
 
 ### Reporting a crash
 
@@ -141,9 +145,15 @@ For a crash, also attach the crash report your operating system kept: `coredumpc
 |---|---|
 | **Linux** | `~/.config/AetherSDR/logs/` |
 | **macOS** | `~/Library/Preferences/AetherSDR/logs/` |
-| **Windows** | `%LOCALAPPDATA%\AetherSDR\logs\` |
+| **Windows (installer or portable)** | `%LOCALAPPDATA%\AetherSDR\logs\` |
+| **Windows (Microsoft Store)** | Usually `%LOCALAPPDATA%\Packages\<package-family>\LocalCache\Local\AetherSDR\logs\` |
 
-- Every launch starts a new file named `aethersdr-<date>-<time>.log`. Attach the newest one. On Linux and macOS, `aethersdr.log` in the same folder is a link to it; on Windows it is a `.lnk` shortcut.
+For the Microsoft Store build, use the path shown in **Support & Diagnostics**
+or **Open Log Folder** to find the current file. Windows can keep older files
+from an installer or portable build in the original location. **File an
+Issue** opens the folder that holds the support bundle it just saved.
+
+- Every launch starts a new file named `aethersdr-<date>-<time>.log`. Attach the newest one. On Linux and macOS, `aethersdr.log` in the same folder is a link to it. Windows keeps only the timestamped files; **Help → Support & Diagnostics...** shows the current log.
 - A log that grows past 100 MB is rotated to a new file.
 - Old logs are pruned at startup after 7 days or once they total more than 500 MB; the two most recent are always kept.
 - Logging is buffered and written in the background, so it does not slow the app down.

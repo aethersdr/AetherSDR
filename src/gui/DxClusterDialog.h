@@ -10,7 +10,6 @@
 #include "core/DxClusterClient.h"
 #include "core/DxccColorProvider.h"
 #include "core/WsjtxClient.h"
-#include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
 #include "core/EibiClient.h"
 #include "core/N1MMSpotClient.h"
@@ -31,6 +30,7 @@ namespace AetherSDR {
 
 class DxClusterClient;
 class RadioModel;
+class WsprSpotFeed;
 
 // ── Spot list table model ───────────────────────────────────────────────────
 
@@ -89,9 +89,10 @@ class DxClusterDialog : public CanonWindow {
 
 public:
     explicit DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
-                             WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
+                             WsjtxClient* wsjtxClient,
                              PotaClient* potaClient, EibiClient* eibiClient,
                              N1MMSpotClient* n1mmSpotClient,
+                             WsprSpotFeed* wsprFeed,
 #ifdef HAVE_WEBSOCKETS
                              FreeDvClient* freedvClient,
 #endif
@@ -117,8 +118,6 @@ signals:
     void rbnDisconnectRequested();
     void wsjtxStartRequested(const QString& address, quint16 port);
     void wsjtxStopRequested();
-    void spotCollectorStartRequested(quint16 port);
-    void spotCollectorStopRequested();
     void potaStartRequested(int intervalSec);
     void potaStopRequested();
     void eibiStartRequested();
@@ -155,6 +154,9 @@ private:
     void buildWsjtxTab(QTabWidget* tabs);
     void buildSpotCollectorTab(QTabWidget* tabs);
     void buildPotaTab(QTabWidget* tabs);
+    // The WSPR receiver on the radio (tools/wspr-agent).
+    void buildWsprTab(QTabWidget* tabs);
+    void updateWsprControls();
     void buildEiBiTab(QTabWidget* tabs);
     void updateEibiTimestamps();
     void buildN1mmTab(QTabWidget* tabs);
@@ -187,13 +189,11 @@ private:
     QString m_potaLogPath;
     QString m_eibiLogPath;
     QString m_freedvLogPath;
-    QString m_scLogPath;
     QString m_n1mmLogPath;
 
     DxClusterClient*      m_client;
     DxClusterClient*      m_rbnClient;
     WsjtxClient*          m_wsjtxClient;
-    SpotCollectorClient*  m_spotCollectorClient;
     PotaClient*           m_potaClient;
     EibiClient*           m_eibiClient;
     N1MMSpotClient*       m_n1mmSpotClient;
@@ -235,19 +235,20 @@ private:
     QCheckBox*      m_wsjtxFilterPOTA;
     QCheckBox*      m_wsjtxFilterCallingMe;
 
-    // SpotCollector tab
-    QSpinBox*       m_scPortSpin;
-    QPushButton*    m_scStartBtn;
-    QPushButton*    m_scAutoStartBtn;
-    QLabel*         m_scStatusLabel;
-    QPlainTextEdit* m_scConsole;
-
     // POTA tab
     QSpinBox*       m_potaIntervalSpin;
     QPushButton*    m_potaStartBtn;
     QPushButton*    m_potaAutoStartBtn;
     QLabel*         m_potaStatusLabel;
     QPlainTextEdit* m_potaConsole;
+
+    // WSPR tab
+    WsprSpotFeed*   m_wsprFeed{nullptr};
+    QPushButton*    m_wsprStartBtn{nullptr};
+    QPushButton*    m_wsprAutoStartBtn{nullptr};
+    QPushButton*    m_wsprConfigureBtn{nullptr};
+    QLabel*         m_wsprStatusLabel{nullptr};
+    QPlainTextEdit* m_wsprConsole{nullptr};
 
     // EiBi tab
     QPushButton*    m_eibiStartBtn{nullptr};

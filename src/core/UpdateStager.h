@@ -52,11 +52,14 @@ struct UpdateManifest {
         QList<Op> ops;
     };
     struct Payload {
-        QString platform;   // "windows", "linux"
+        QString platform;   // "windows", "linux", "macos"
         QString arch;       // QSysInfo::buildCpuArchitecture()'s name
         Asset full;
         QList<File> files;
         QList<Patch> patches;
+        // macOS: the DAX driver's source, the git tree hash of hal-plugin/ at
+        // the tag (40 hex digits); empty when the manifest names none.
+        QString daxDriverSource;
     };
 
     int schema{0};
@@ -184,6 +187,12 @@ public:
     static StagedRelease stagedRelease(const QString& stagingRoot, const QString& runningVersion,
                                        const QString& installRoot, const QString& githubLatestTag,
                                        const QString& rolledBackVersion);
+    // The DAX driver source the staged version's manifest names for this
+    // platform and arch (UpdateManifest::Payload::daxDriverSource); empty
+    // when nothing is staged or it names none. Reads the manifest kept with
+    // the staged release, which was verified when it was staged.
+    static QString stagedDaxDriverSource(const QString& stagingRoot, const QString& version,
+                                         const QString& platform, const QString& arch);
     // Before the swap: the staged tree's signed manifest still verifies and
     // every file still matches it.
     // Removes a staged release and its record: skipped, or its files no

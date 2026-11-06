@@ -13,6 +13,7 @@
 
 #include "gui/AccessoryPanelWidgets.h"
 #include "gui/HGauge.h"
+#include "gui/SharedTxMeterSelection.h"
 #include "gui/TunerApplet.h"
 #include "models/TunerModel.h"
 #include "core/TgxlConnection.h"
@@ -23,6 +24,7 @@
 #include <QLabel>
 #include <QMetaObject>
 #include <QFontMetrics>
+#include <QImage>
 #include <QPushButton>
 
 #include <cstdio>
@@ -79,6 +81,7 @@ bool aVisibleKeyReads(QWidget* applet, const QString& caption)
 
 int main(int argc, char** argv)
 {
+    qputenv("AETHER_AUTOMATION", "1");  // HGauge publishes its range for assertions.
     QApplication app(argc, argv);
 
     TunerModel model;
@@ -91,6 +94,26 @@ int main(int argc, char** argv)
     settle();
 
     CHECK(!applet.isFloating());
+
+    // A tuner sees its own RF path; selecting KXPA100 readings for the
+    // shared meters must not shrink a 500 W radio's tuner range.
+    QWidget* forwardGauge = nullptr;
+    for (QWidget* widget : applet.findChildren<QWidget*>()) {
+        if (widget->accessibleName() == QStringLiteral("Forward power")) {
+            forwardGauge = widget;
+            break;
+        }
+    }
+    CHECK(forwardGauge != nullptr);
+    if (forwardGauge) {
+        for (const int radioWatts : {100, 500, 100}) {
+            const SharedTxMeterSelection selected = selectSharedTxMeters(
+                radioWatts, false, false, false, true);
+            applet.setPowerScale(tunerMaxWatts(radioWatts, selected), selected.highPowerAmplifier);
+            CHECK(forwardGauge->property("gaugeMax").toInt() == (radioWatts == 500 ? 600 : 200));
+            CHECK(selected.maxWatts == 100);
+        }
+    }
 
     // The indicator follows the direct connection's authenticated state,
     // while the radio relay can keep the rest of the tuner panel live.
@@ -478,6 +501,36 @@ int main(int argc, char** argv)
             // follows it straight down, with no timer left to expire here.
             applet.setDeviceMeters(10.0f, 1.2f, 10.0f);
             CHECK(spin([&] { return gauge->peakValue() < 90.0f; }, 3000));
+        }
+    }
+    {
+        // Both presentations draw the idle SWR bar on the same flat track as
+        // PWR. A track painted with the SWR scale reads as a pegged bar.
+        TunerApplet applet;
+        HGauge* swr = nullptr;
+        HGauge* pwr = nullptr;
+        for (auto* w : applet.findChildren<QWidget*>()) {
+            if (auto* g = dynamic_cast<HGauge*>(w)) {
+                if (g->accessibleName() == QLatin1String("SWR")) swr = g;
+                if (g->accessibleName() == QLatin1String("Forward power")) pwr = g;
+            }
+        }
+        CHECK(swr != nullptr && pwr != nullptr);
+        if (swr && pwr) {
+            for (bool floating : {false, true}) {
+                applet.setFloating(floating);
+                const QImage swrImg = swr->grab().toImage();
+                const QImage pwrImg = pwr->grab().toImage();
+                // Sample fractions of the laid-out width: QImage::pixel()
+                // returns 0 off the image, so a sample past the edge would
+                // match on both gauges.
+                CHECK(swrImg.size() == pwrImg.size() && swrImg.width() >= 40);
+                for (int x : {swrImg.width() / 10, swrImg.width() / 2,
+                              swrImg.width() * 9 / 10}) {
+                    const QPoint at(x, swrImg.height() - 6);
+                    CHECK(swrImg.pixel(at) == pwrImg.pixel(at));
+                }
+            }
         }
     }
 
