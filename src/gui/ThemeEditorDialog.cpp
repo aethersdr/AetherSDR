@@ -1029,6 +1029,11 @@ void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint localPos)
     if (!target) return;
     auto& tm = ThemeManager::instance();
 
+    // The pick click activates the main window, and a Workspace is not
+    // kept above it, so bring the editor back to show the result.
+    raise();
+    activateWindow();
+
     // Auto-select the picked widget's container scope so any subsequent
     // edit lands at the right level of the inheritance chain.  Walks
     // `target`'s Qt parent chain to the nearest declared `themeContainer`

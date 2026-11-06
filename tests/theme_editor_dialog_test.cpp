@@ -8,6 +8,7 @@
 #include "core/ThemeManager.h"
 #include "gui/CanonWindow.h"
 #include "gui/ThemeEditorDialog.h"
+#include "gui/ThemeInspector.h"
 
 #include <QAbstractScrollArea>
 #include <QApplication>
@@ -22,6 +23,7 @@
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QWidget>
 #include <cstdio>
 #include <functional>
 
@@ -222,6 +224,28 @@ void geometryCarriesOver()
     again.hide();
 }
 
+// A pick click activates the main window; a Workspace is not kept above it,
+// so the editor must come back to show the picked token.
+void inspectorPickReturnsToEditor()
+{
+    QWidget mainWindow;
+    mainWindow.resize(400, 300);
+    mainWindow.show();
+    ThemeEditorDialog d;
+    d.show();
+    const bool exposed = QTest::qWaitForWindowExposed(&d)
+        && QTest::qWaitForWindowExposed(&mainWindow);
+    mainWindow.activateWindow();
+    const bool mainActive = QTest::qWaitForWindowActive(&mainWindow);
+    auto* inspector = d.findChild<ThemeInspector*>();
+    check(inspector != nullptr, "the editor owns an inspector");
+    if (inspector) emit inspector->widgetPicked(&mainWindow, QPoint(10, 10));
+    const bool editorActive = QTest::qWaitForWindowActive(&d);
+    check(exposed && mainActive && editorActive, "a pick brings the editor back in front");
+    d.hide();
+    mainWindow.hide();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -236,6 +260,7 @@ int main(int argc, char** argv)
     closePaths();
     legibleAtMinimum();
     geometryCarriesOver();
+    inspectorPickReturnsToEditor();
 
     return g_failures ? 1 : 0;
 }
