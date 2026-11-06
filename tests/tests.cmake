@@ -2491,7 +2491,6 @@ add_executable(reset_settings_prompts_test
     tests/reset_settings_prompts_test.cpp
     src/gui/ResetSettingsPrompts.cpp
     src/gui/CanonMessageBox.cpp
-    src/gui/CanonMessageBox.cpp
     src/gui/CanonWindow.cpp
     src/gui/ModemChrome.cpp
     src/core/ThemeManager.cpp
