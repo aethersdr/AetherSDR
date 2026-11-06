@@ -6644,27 +6644,13 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
     put(HealthSnapshot::kSwrGateCounts,
         QStringLiteral("Forward counts required for SWR"),
         t.forwardPowerPeakRaw ? QVariant(kMinForwardCountsForSwr) : QVariant());
-    // HOW MANY KEYED WINDOWS CLEARED THAT GATE — the key a consumer should
-    // reason with, and the reason the peak below is not it.
-    //
-    // publishTelemetry() applies the gate to *t.forwardPowerRaw, the LAST value
-    // of each publish window, at kTelemetryMinIntervalMs — not to every one of
-    // the ~190/s responses the radio sends, and NOT to the peak. So a peak and
-    // a gate are not comparable quantities, and "peak above gate" does not mean
-    // the gate was ever cleared: a whole over can publish no SWR while its
-    // peaks sat well above the threshold. This counter is incremented by
-    // publishTelemetry() on the very value it gates, so it answers the question
-    // exactly and in both directions:
-    //   0        the gate was never cleared; an absent SWR is explained.
-    //   above 0  the gate WAS cleared; an absent SWR is a real defect, and a
-    //            diagnostic must still be free to say so.
-    // It is deliberately counted outside the reverse-reading and swrFromRaw()
-    // conditions, so "cleared the gate but published nothing" stays visible
-    // rather than being defined away (#7063, and w5jwp's review of #7064).
-    //
-    // Per-over: zeroed on key-down by setKeying(), so a reader sees this
-    // transmission. Reported while keyed OR after, since a diagnostic samples
-    // the snapshot at both points.
+    // HOW MANY KEYED WINDOWS CLEARED THAT GATE — the key a consumer reasons
+    // with, and the reason the peak below is not. publishTelemetry() gates
+    // *t.forwardPowerRaw, each window's LAST value at kTelemetryMinIntervalMs, not
+    // the peak and not each of the ~190/s responses: "peak above gate" therefore
+    // does not mean the gate was ever cleared. Counted outside the reverse-reading
+    // and swrFromRaw() conditions so "cleared the gate but published nothing" stays
+    // visible rather than being defined away. Per-over; see m_keyedSwrGateClears.
     put(HealthSnapshot::kSwrGateClearsWhileKeyed,
         QStringLiteral("Keyed windows clearing the SWR gate"),
         t.forwardPowerPeakRaw ? QVariant(m_keyedSwrGateClears) : QVariant());

@@ -353,7 +353,7 @@ void RadioCertification::observeKeyedRf()
     // so reading it when the verdict is written reads the wrong number. It
     // changes the REMEDY, not the verdict — "raise drive" is useless advice at
     // 100 %, where a forward reading stuck below the gate points at the
-    // detector or its scaling instead (the #5369 class; w5jwp's nit 4).
+    // detector or its scaling instead (the #5369 class).
     m_keyedDrivePercentMax = std::max(m_keyedDrivePercentMax,
                                       m_radio->transmitModel().rfPower());
 
@@ -370,29 +370,14 @@ void RadioCertification::observeKeyedRf()
         if (ok)
             m_swrGateCounts = counts;
     }
-    // HOW MANY KEYED WINDOWS CLEARED THE GATE — what the verdict turns on.
-    //
-    // The backend counts this on the same value it applies the gate to, so it
-    // is exact in BOTH directions and this consumer need not reason about which
-    // sample a threshold met:
-    // - 0 is conclusive that the gate was never cleared, so a silent derived
-    //   meter is explained and must not be called dead.
-    // - ABOVE 0 is conclusive that it WAS cleared, so a still-absent meter is a
-    //   real defect and the negative verdict must stand.
-    // An earlier revision derived this from the window peak instead, which is
-    // conclusive in one direction only: the backend does not gate on the peak,
-    // so a whole over could publish no SWR with its peaks above the threshold
-    // and be reported as a defect anyway. That is the §1.37 error one level in,
-    // and it is why the verdict now reads a count the producer computes rather
-    // than a comparison this side invents (w5jwp's review of #7064).
-    //
-    // Sampling is a non-issue for the same reason: the count is cumulative in
-    // the backend over the whole over, so reading it a handful of times per run
-    // cannot miss a window, where sampling an instantaneous value would.
-    //
-    // A negative count means the backend declares no such gate, which is NOT a
-    // gate that was cleared and must not collapse into it — the branch below
-    // then declines and leaves the verdict this run would have reached anyway.
+    // HOW MANY KEYED WINDOWS CLEARED THE GATE — what the verdict turns on,
+    // because the producer counts it on the value it gates, so it is exact in BOTH
+    // directions: 0 means the gate was never cleared and a silent meter is
+    // explained, above 0 means it was cleared and a silent meter is a real defect.
+    // The window peak cannot say the second thing — the gate is not applied to
+    // it. The count is cumulative in the backend over the whole over, so sampling
+    // it a few times per run cannot miss a window. A negative count means no gate
+    // was declared, which is NOT a cleared gate: the branch below then declines.
     const QVariant clears =
         health.values.value(
             QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed));

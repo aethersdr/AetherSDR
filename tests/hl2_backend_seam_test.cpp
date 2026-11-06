@@ -91,16 +91,10 @@ struct Hl2TxGateTestAccess {
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
     static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
-    // Streaming as telemetryLinkState() judges it, with no socket: connected,
-    // and the EP6 counter "just advanced" (hl2LinkStateFor() consults only
-    // those two while connected, and the held-by-other branch is reachable
-    // only when disconnected). Reset before the backend dies.
-    //
-    // This lives in the TEST's own friend struct, not in production: the
-    // snapshot rows the reviewer of #7064 asked to pin sit behind the
-    // directional block's `inBandLive`, so without a Streaming link they are
-    // absent whatever telemetry is fed — and a test that cannot tell the rows
-    // apart pins nothing. Suggested, built and run by w5jwp on that review.
+    // Streaming as telemetryLinkState() judges it, with no socket: connected, and
+    // the EP6 counter "just advanced" (hl2LinkStateFor() consults only those two
+    // while connected; the held-by-other branch needs disconnected). Nothing in
+    // production widens for this — it is the test's own friend struct.
     static void fakeStreamingLink(Hl2Backend& b, bool on)
     {
         b.m_connected = on;
@@ -564,13 +558,11 @@ static void forwardPowerSkippedHealthRow()
 //    on whether SWR was published. That is what makes it exact in both
 //    directions, which is the whole basis of radiocert's verdict.
 //
-// Checked ON-STREAM via Access::fakeStreamingLink(): these rows sit behind the
-// directional block's `inBandLive`, so off-stream they are absent whichever
-// optional they key on, and an off-stream check passes for the right reason and
-// the wrong one alike. An earlier revision of this test checked only
-// off-stream and therefore pinned nothing — caught by w5jwp reviewing #7064,
-// who wrote the seam. The consumer half is in radiocert_gated_meter_test,
-// which stubs the snapshot; this is the producer half.
+// Checked ON-STREAM via Access::fakeStreamingLink(), which is load-bearing: these
+// rows sit behind the directional block's `inBandLive`, so off-stream they are
+// absent whichever optional they key on and no check here can tell them apart.
+// The consumer half is in radiocert_gated_meter_test, which stubs the snapshot;
+// this is the producer half.
 static void swrGateHealthRows()
 {
     using HS = IRadioBackend::HealthSnapshot;
@@ -630,7 +622,7 @@ static void swrGateHealthRows()
     // 400 against a gate of 320 while the gated value is 90, SWR stays
     // withheld, and the clears count must stay 0. A consumer reading the peak
     // would call this a defect; reading the count it correctly calls it
-    // suppressed (w5jwp's finding 2 on #7064).
+    // suppressed (#7063).
     Access::setKeyed(b, true);
     hl2::Hl2Telemetry peakOnly;
     peakOnly.forwardPowerRaw = 90;

@@ -241,8 +241,8 @@ private:
     int m_swrGateClears = -1;
     // Highest window peak seen while keyed, for the REPORT ONLY — it says how
     // far below a gate a run sat. It is NOT the quantity the gate is applied
-    // to, so no verdict may be derived from it (that was the §1.37 error one
-    // level in: w5jwp's review of #7064).
+    // to, so no verdict may be derived from it — deriving one would be the
+    // §1.37 error one level in (#7063).
     int m_keyedFwdCountsMax = -1;
     // Highest RF drive observed while keyed, 0..100. Shapes the REMEDY only:
     // "raise drive" cannot be the advice at full drive. -1 = never sampled.
