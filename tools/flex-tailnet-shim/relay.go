@@ -43,6 +43,11 @@ type Relay struct {
 	ClientTX    net.PacketConn
 	ClientPrime net.PacketConn
 	ClientOut   net.PacketConn
+	// Inject, when set, sends radio -> client datagrams straight to the
+	// tailnet device as packets from InjectSrc (udp4.go); ClientOut stays
+	// the path for anything that doesn't fit the tailnet MTU.
+	Inject    func(pkt []byte) error
+	InjectSrc netip.AddrPort
 
 	// Authorize decides whether a tailnet peer may connect. It returns a
 	// human-readable identity for logs.
@@ -514,7 +519,7 @@ func (s *Session) radioToClientUDP() {
 		if dst == nil {
 			continue // radio is early; the client hasn't registered yet
 		}
-		if _, err := s.relay.ClientOut.WriteTo(buf[:n], net.UDPAddrFromAddrPort(*dst)); err == nil {
+		if err := s.relay.toClient(buf[:n], *dst); err == nil {
 			s.rxPackets.Add(1)
 		} else {
 			s.toClientErrs.Add(1)
@@ -522,6 +527,18 @@ func (s *Session) radioToClientUDP() {
 			s.lastSendErr.Store(&msg)
 		}
 	}
+}
+
+// toClient sends one radio datagram to the client: injected into the tailnet
+// device when the relay can (udp4.go), otherwise through ClientOut.
+func (r *Relay) toClient(p []byte, dst netip.AddrPort) error {
+	if r.Inject != nil && r.InjectSrc.Addr().Is4() && dst.Addr().Is4() && 28+len(p) <= injectMaxPacket {
+		if err := r.Inject(buildUDP4(r.InjectSrc, dst, p)); err == nil {
+			return nil
+		}
+	}
+	_, err := r.ClientOut.WriteTo(p, net.UDPAddrFromAddrPort(dst))
+	return err
 }
 
 // fromRadio reports whether a host-socket datagram's source is the radio:
