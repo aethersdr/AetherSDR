@@ -787,7 +787,7 @@ connects).
 | `flags` (or `vfoFlags`) | `all` (default) / `<sliceId>` | VFO flag attachment snapshot: each flag’s slice id, expected radio pan id, attached UI pan id/index, geometry, visibility, and `attachedToExpectedPan`; also reports `missingSlices`. |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 | `eqstats` | Client EQ canvas objectName (default: all) | analyzer paint/cache counters — see [`get eqstats`](#get-eqstats) |
-| `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
+| `tracedebug` | `<panIndex>` / `<objectName>` (default: all; property `bins` needs one) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
 | `display` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter **Display panel** settings — see [`get display`](#get-display) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
@@ -1095,6 +1095,64 @@ used by the stacked trace renderer.
    "flexBins":{"count":768,"finiteCount":768},
    "kiwiBins":{"count":768,"finiteCount":768}}]}
 ```
+
+**The bins themselves** (#5806). With `property` `bins` and one pan as the
+selector, the reply carries that pan's last decoded frame instead of statistics:
+
+```json
+→ {"cmd":"get","model":"tracedebug","selector":"0","property":"bins"}
+← {"ok":true,"model":"tracedebug","property":"bins","pan":{
+   "panIndex":0,"name":"SpectrumWidget","kiwiWaterfallActive":false,
+   "count":1024,"finiteCount":1024,"fftFrameSequence":5120,"ageMs":31,"settledFrames":12,
+   "centerHz":3775000,"spanHz":384000,"lowHz":3583000,"binHz":375,
+   "encoderRangeValid":true,"encoderMinDbm":-140,"encoderMaxDbm":-20,"encoderYPixels":700,
+   "bins":[-121.4,-121.9,...]}}
+```
+
+- `bins` is the last radio frame exactly as the widget decoded it: never
+  smoothed, never reprojected after a pan or zoom, never cropped. It runs from
+  `lowHz` in steps of `binHz` (`spanHz` / `count`), the pan geometry the
+  widget showed when the frame arrived. It is the whole computed frame: on a
+  radio that declares `hasDdcPanEdgeRolloff` (ANAN) the display shows only its
+  central part, over a narrower span. A non-finite bin is `null`.
+- `ageMs` is the time since that frame arrived (monotonic clock).
+  `fftFrameSequence` tells two reads of the same frame apart. `settledFrames`
+  counts the frames received since the geometry last changed.
+- A frame carries no frequency geometry of its own, so the widget only pairs it
+  with the geometry it is showing once that geometry has been steady for 3
+  frames. Until then the reply is a refusal, `ok:false` with the reason:
+
+  ```json
+  ← {"ok":false,"error":"tracedebug bins: geometry changed 1 frames ago; wait for 3 settled frames"}
+  ```
+
+  The refusals: `no frame decoded yet` (also after the display was cleared,
+  on disconnect or a profile load); `pan animation running`; `a pan or zoom is
+  in progress` (a drag, or a zoom still settling or waiting to be sent); `a
+  requested pan or zoom is not yet confirmed by the radio` (on a radio that
+  confirms geometry: from the request until its echo, at most 2 s);
+  `geometry changed after the last frame` and `geometry changed N frames ago`
+  (any change of centre or bandwidth, shown or requested); `the last frame
+  was decoded across a dBm range change`; and, while Receive Sync delays the
+  spectrum, `the frame was held by Receive Sync; no age or geometry can be
+  established` (a held frame may arrive after the pan moved; after one, 3
+  unheld frames must follow). Turn Receive Sync off to measure. A refused client retries after a
+  frame interval, or up to 2 s for an unconfirmed request. A
+  retune the widget has not been told about yet (made elsewhere, before its
+  status arrives) cannot be seen here.
+- The values are in the units the backend delivered; nothing here calibrates
+  them. On Flex they are decoded from the radio's pixel encoding, so one
+  amplitude step is `(encoderMaxDbm - encoderMinDbm) / (encoderYPixels - 1)`.
+  These fields belong to the returned frame: `encoderMinDbm`/`encoderMaxDbm`
+  are the dBm range that frame was decoded with (the stream's decode scale
+  when it reports one, else the widget's encoder range as the frame arrived),
+  and `encoderYPixels` is the y-pixel count the widget held as it arrived.
+  On HL2 they come from a host-side FFT, absolute only once a full-scale
+  reference has been measured (`Hl2DbReference::isCalibrated()`).
+- When `kiwiWaterfallActive` is true, the pan is showing a KiwiSDR source and
+  `bins` is still the radio's frame, not the trace on screen.
+- A selector is required: `bins` without one is an error, and so is a selector
+  that matches no pan.
 
 `selector` filters by pan index (`get tracedebug 0`) or objectName. Key fields:
 
