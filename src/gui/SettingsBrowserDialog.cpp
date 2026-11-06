@@ -850,6 +850,10 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
     layout->addLayout(buttons);
     viewer.resize(620, 520);
     viewer.setMinimumSize(QSize(520, 460).expandedTo(viewer.minimumSizeHint()));
+    // A separate frameless top-level: CanonWindow only moves it, and the
+    // browser's own resizer does not own this window, so the viewer installs
+    // its own to keep its edges draggable, as the framed QDialog's were.
+    FramelessResizer::install(&viewer);
 
     connect(editBtn, &QPushButton::clicked, &viewer, [text, saveBtn, editBtn] {
         text->setReadOnly(false);
@@ -952,6 +956,9 @@ void SettingsBrowserDialog::addKey()
     buttonRow->addWidget(okBtn);
     addLayout->addLayout(buttonRow);
     dlg.setMinimumWidth(qMax(420, dlg.minimumSizeHint().width()));
+    // The canon header's ✕ comes first in the focus chain; without this the
+    // operator's first keystrokes land on it instead of the key name.
+    keyEdit->setFocus();
     const int result = dlg.exec();
     if (!self || !dialogOwner || result != QDialog::Accepted) {
         return;

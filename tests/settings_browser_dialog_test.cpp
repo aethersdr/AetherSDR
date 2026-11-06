@@ -16,10 +16,12 @@
 #include "gui/CanonMessageBox.h"
 #include "gui/CanonWindow.h"
 #include "gui/FramelessMessageBox.h"
+#include "gui/FramelessResizer.h"
 #include "gui/SettingsBrowserDialog.h"
 
 #include <QAbstractScrollArea>
 #include <QApplication>
+#include <QCursor>
 #include <QDialog>
 #include <QKeySequence>
 #include <QLineEdit>
@@ -38,6 +40,7 @@
 #include <QTest>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QWindow>
 
 #include <cstdio>
 
@@ -817,6 +820,93 @@ void testAddKeyAndCreateRawKey()
     d.hide();
 }
 
+// Add Key opens with the key name focused: typing straight away names the key.
+// (The canon header's ✕ is first in the focus chain, so without an explicit
+// focus the keystrokes went to it and were lost.)
+void testAddKeyFocusesKeyName()
+{
+    SettingsBrowserDialog d;
+    d.resize(900, 600);
+    d.show();
+    QTest::qWaitForWindowExposed(&d);
+    QTreeWidget* tree = treeOf(d);
+    QPushButton* add = buttonByAccessibleName(&d, QStringLiteral("Add settings key"));
+    if (!tree || !add || !selectScope(tree, QStringLiteral("App Settings"))) {
+        expect(false, "the browser shows App Settings and Add Key");
+        return;
+    }
+    settle();
+    QString focusName;
+    QString typed;
+    Driver<CanonWindow> addKey([](CanonWindow* w) { return w->objectName() == "settingsAddKeyDialog"; },
+        [&](CanonWindow* w) {
+            QWidget* focus = w->focusWidget();
+            focusName = focus ? focus->accessibleName() : QStringLiteral("<none>");
+            if (focus) QTest::keyClicks(focus, QStringLiteral("TypedKey"));
+            for (QLineEdit* e : w->findChildren<QLineEdit*>())
+                if (e->accessibleName() == "New key name") typed = e->text();
+            w->reject();
+        });
+    add->click();
+    settle();
+    std::printf("       (Add Key focus: %s, typed: %s)\n", qPrintable(focusName), qPrintable(typed));
+    expect(addKey.seen, "Add Key opens");
+    expect(focusName == "New key name", "Add Key opens with the key name field focused");
+    expect(typed == "TypedKey", "typing straight after opening Add Key fills in the key name");
+    d.hide();
+}
+
+// The document viewer is its own frameless top-level, so it needs its own
+// FramelessResizer: dragging its bottom-right corner makes it bigger.
+void testViewerResizesFromItsEdges()
+{
+    SettingsBrowserDialog d;
+    d.resize(900, 600);
+    d.show();
+    QTest::qWaitForWindowExposed(&d);
+    QTreeWidget* tree = treeOf(d);
+    QTableWidget* table = tableOf(d);
+    if (!tree || !table || !selectScope(tree, QStringLiteral("AA:BB:CC:DD:EE:01"))) {
+        expect(false, "the browser shows the seeded radio scope");
+        return;
+    }
+    settle();
+    const int row = rowForKey(table, QStringLiteral("CleanDoc"));
+    if (row < 0) {
+        expect(false, "the seeded document is listed");
+        return;
+    }
+    bool hasResizer = false;
+    QSize before, after;
+    Driver<CanonWindow> viewer([](CanonWindow* w) { return w->objectName() == "settingsDocumentViewer"; },
+        [&](CanonWindow* w) {
+            hasResizer = w->findChild<FramelessResizer*>() != nullptr;
+            QWindow* handle = w->windowHandle();
+            before = w->size();
+            if (handle) {
+                const QPoint corner(w->width() - 2, w->height() - 2);
+                QCursor::setPos(w->mapToGlobal(corner));
+                QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, corner);
+                const QPoint to = corner + QPoint(100, 80);
+                QCursor::setPos(w->mapToGlobal(corner) + QPoint(100, 80));
+                QTest::mouseMove(handle, to);
+                QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, to);
+                QApplication::processEvents();
+            }
+            after = w->size();
+            w->reject();
+        });
+    sendDoubleClick(table, row, 2);
+    settle();
+    std::printf("       (viewer drag: %dx%d -> %dx%d)\n", before.width(), before.height(),
+                after.width(), after.height());
+    expect(viewer.seen, "the document viewer opens");
+    expect(hasResizer, "the document viewer installs FramelessResizer");
+    expect(after.width() > before.width() && after.height() > before.height(),
+           "dragging the viewer's corner makes it bigger");
+    d.hide();
+}
+
 // The browser deletes itself on close, and closing it while Delete Setting? or
 // Create Raw Key? is up destroys the question with it. confirmCanon() then
 // answers no without touching the dead box, so neither path writes the store.
@@ -1022,6 +1112,8 @@ int main(int argc, char** argv)
     testCanonWindow();
     testDeleteDefaultsToCancel();
     testAddKeyAndCreateRawKey();
+    testAddKeyFocusesKeyName();
+    testViewerResizesFromItsEdges();
     testQuestionsSurviveBrowserDeletion();
     testClosePaths();
     testLegibleAtMinimum();
