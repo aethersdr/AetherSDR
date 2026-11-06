@@ -89,6 +89,9 @@ struct Hl2TxGateTestAccess {
     static bool panWeighted(const Hl2Backend& b) { return b.m_rx[0].panWeightedAverage; }
     static int receiverCeiling(const Hl2Backend& b) { return b.receiverCeiling(); }
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
+    // The set the next DSP build arms its tap from (openReceiverDsp) and the
+    // iqReady guard reads: what a slice's IQ tap is, as far as the session goes.
+    static bool iqTapHeld(const Hl2Backend& b, int ui) { return b.m_iqTapUis.contains(ui); }
     static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
     static double fwdPeakReleaseAlpha() { return Hl2Backend::kFwdPeakReleaseAlpha; }
@@ -244,6 +247,30 @@ static void linkLifecycle()
     b.disconnectRadio();
     Access::drainIo(b);
     check(disconnectedSpy.count() == 1, "a link already down never reports disconnected() twice");
+}
+
+// #6859: IQ taps belong to the session. A tap held when the link drops must
+// not be armed by the next session's DSP build: its subscriber may have left
+// during the outage, and a subscriber that stayed re-arms it through
+// TciServer. TciHostIqTest covers TciServer's half with a fake backend; this
+// pins the real backend's half.
+static void iqTapEndsWithTheSession()
+{
+    Hl2Backend b;
+    Access::metisEdge(b, "linkUp");
+    check(b.setSliceIqTap(0, true) && Access::iqTapHeld(b, 0),
+          "#6859: a slice's IQ tap is held while the link is up");
+    check(!b.setSliceIqTap(7, true) && !Access::iqTapHeld(b, 7),
+          "#6859: a tap for a receiver that is not running is refused");
+    Access::metisEdge(b, "linkDown");
+    check(!Access::iqTapHeld(b, 0),
+          "#6859: link loss releases the tap, so the next DSP build does not arm it");
+    Access::metisEdge(b, "linkUp");
+    check(!Access::iqTapHeld(b, 0),
+          "#6859: the next session starts with no tap until a subscriber asks again");
+    check(b.setSliceIqTap(0, true) && Access::iqTapHeld(b, 0),
+          "#6859: control: a fresh request in the new session holds the tap");
+    Access::metisEdge(b, "linkDown");
 }
 
 static void connectWithoutEp6()
@@ -753,6 +780,7 @@ int main(int argc, char** argv)
 
     capabilitiesSeam();
     linkLifecycle();
+    iqTapEndsWithTheSession();
     connectWithoutEp6();
     spanPolicy();
     manualMoxCancelsCwHang();
