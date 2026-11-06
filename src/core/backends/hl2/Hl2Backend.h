@@ -1080,7 +1080,7 @@ private:
     // last handed to MetisClient; negative = never written, row absent. The "gated"
     // row is derived from m_txAllowed at read time.
     int m_txDriveRegister = -1;
-    // The transmit output (#4954). Not persisted: every connect starts on ANT.
+    // The transmit output (#4954), per radio: txSetpoints.txRoute, absent reads ANT.
     hl2::TxRoute m_txRoute = hl2::TxRoute::Ant;
     // RF1's drive, set to the starting value at every change to RF1 and never
     // stored. The starting value is 0 % (gateware nibble 0) until RF1's level
@@ -1115,6 +1115,8 @@ private:
     bool recordTunePower(int percent);
     // The band's remembered TUNE power, echoed to TransmitModel; nothing when unknown.
     void applyTuneMemoryFor(const QString& bandKey);
+    // The start band's drive (ANT) or RF1's own, echoed before linkUp (#4954).
+    void seedConnectDrive();
 
     // The operator's TX passband and whether they have set one.
     // defaultTxPassbandForMode() is re-pushed on every mode set and TX-slice move

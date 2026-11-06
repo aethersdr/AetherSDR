@@ -9,12 +9,16 @@
 //   - a change is refused while keyed, under radio PTT, tuning or in the tail,
 //     and every refusal republishes the actual route and warns;
 //   - RF1 has its own drive and never reads or writes the band maps;
+//   - the route is this radio's own: stored per MAC, restored on reconnect,
+//     never carried to another radio, and a restored RF1 seeds RF1's drive;
 //   - SliceModel's listeners hear the route in force last, not the refused one.
 // Socket-free: constructed objects, packets from the transport's own builder.
 // Nothing is keyed on any radio.
 
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
+#include "core/RadioSettingsScope.h"
+#include "core/RadioStateMemory.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2HardwareOptions.h"
@@ -24,6 +28,7 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QJsonObject>
 #include <QStringList>
 #include <QThread>
 
@@ -113,6 +118,24 @@ struct Hl2TxRouteTestAccess {
     static int rfPower(const Hl2Backend& b) { return b.m_rfPowerPercent; }
     static TxRoute backendRoute(const Hl2Backend& b) { return b.m_txRoute; }
     static void clientRefused(Hl2Backend& b, int actual) { b.onMetisTxRouteRefused(actual); }
+    static void setBandKey(Hl2Backend& b, const QString& band) { b.m_currentBandKey = band; }
+    static void seedConnectDrive(Hl2Backend& b) { b.seedConnectDrive(); }
+    static void emitAllSliceState(Hl2Backend& b) { b.emitAllSliceState(); }
+    // What start() does with Params.txRoute, which connectRadio() fills from m_txRoute.
+    static void startSessionOnBackendRoute(Hl2Backend& b)
+    {
+        QMetaObject::invokeMethod(b.m_metis, [m = b.m_metis, r = b.m_txRoute] {
+            MetisClientTestAccess::beginSession(*m, r);
+        }, Qt::BlockingQueuedConnection);
+    }
+    static Cc clientStoredBank(Hl2Backend& b)
+    {
+        Cc cc{};
+        QMetaObject::invokeMethod(b.m_metis, [&cc, m = b.m_metis] {
+            cc = MetisClientTestAccess::storedDriveBank(*m);
+        }, Qt::BlockingQueuedConnection);
+        return cc;
+    }
 };
 
 } // namespace AetherSDR::hl2
@@ -508,6 +531,96 @@ void testBackendAtu()
     check(!A::clientAtu(b), "RT13: clearing clears");
 }
 
+QString storedRoute(const RestoredRadioState& state)
+{
+    return state.extension.value(QStringLiteral("txSetpoints")).toObject()
+        .value(QStringLiteral("txRoute")).toString();
+}
+
+RestoredRadioState routeDocument(const QJsonValue& route)
+{
+    RestoredRadioState state;
+    state.extensionSchemaVersion = 1;
+    state.extension.insert(QStringLiteral("txSetpoints"),
+                           QJsonObject{{QStringLiteral("txRoute"), route}});
+    return state;
+}
+
+void testPersistence()
+{
+    std::printf("\n  Hl2Backend: the route is this radio's own\n");
+    const RadioSettingsScope scopeA(QStringLiteral("hl2"), QStringLiteral("00:1C:C0:4E:54:01"));
+    const RadioSettingsScope scopeB(QStringLiteral("hl2"), QStringLiteral("00:1C:C0:4E:54:02"));
+    const QString b20 = QStringLiteral("20m");
+
+    {   // Radio A: ANT drive 100 % on 20 m, then RF1.
+        Hl2Backend b;
+        A::twoReceivers(b);
+        A::prepare(b);
+        b.setSliceMode(0, QStringLiteral("USB"));
+        b.setSliceFrequency(0, 14'074'000.0);
+        b.setTxPower(100);
+        check(storedRoute(b.currentOperatingState()) == QLatin1String("ANT"),
+              "RT7: the capture carries txRoute ANT by default");
+        int asks = 0;
+        QObject::connect(&b, &IRadioBackend::operatingStateChanged, &b, [&asks] { ++asks; });
+        route(b, QStringLiteral("RF1"));
+        check(asks > 0, "RT7: selecting RF1 asks for a capture");
+        const RestoredRadioState captured = b.currentOperatingState();
+        check(storedRoute(captured) == QLatin1String("RF1"), "RT7: the capture carries txRoute RF1");
+        check(RadioStateMemory::store(scopeA, b.capabilities(), captured), "RT7: stored under radio A");
+    }
+    {   // Radio B: never left ANT.
+        Hl2Backend b;
+        A::twoReceivers(b);
+        A::prepare(b);
+        check(RadioStateMemory::store(scopeB, b.capabilities(), b.currentOperatingState()),
+              "RT7: radio B stored on ANT");
+    }
+
+    Hl2Backend b;
+    A::twoReceivers(b);
+    A::prepare(b);
+    Published p;
+    watch(b, p);
+    const RadioCapabilities caps = b.capabilities();
+
+    b.applyRestoredState(RadioStateMemory::load(scopeA, caps));
+    check(A::backendRoute(b) == TxRoute::Rf1, "RT7: radio A comes back on RF1");
+    check(A::bandDrive(b, b20) == 100, "premise: radio A's 20 m ANT drive is 100 %");
+    A::setBandKey(b, b20);
+    p.clearRfPower();
+    A::seedConnectDrive(b);
+    check(!p.rfPower.empty() && p.rfPower.back() == 0,
+          "RT7: a restored RF1 seeds the slider with RF1's drive, 0 %, not ANT's 100 %");
+    A::startSessionOnBackendRoute(b);
+    check(A::clientRoute(b) == TxRoute::Rf1 && A::clientStoredBank(b) == ccTxDrive(0, false),
+          "RT7: the session starts on RF1 at drive 0, PA off");
+    b.setTxPower(p.rfPower.back());   // RadioModel's connect-time push of the seeded value
+    std::optional<Cc> d = drainBackend(b);
+    check(d && (*d)[1] == 0 && !paOn(*d) && A::bandDrive(b, b20) == 100,
+          "RT7: the connect push leaves RF1 at drive 0, PA off, and ANT's band drive alone");
+    A::emitAllSliceState(b);
+    check(bothSay(p, "RF1"), "RT7: every slice publishes the restored RF1");
+
+    b.applyRestoredState(RadioStateMemory::load(scopeB, caps));
+    check(A::backendRoute(b) == TxRoute::Ant,
+          "RT7: radio B on the same backend comes back on ANT: the route is not shared");
+    b.applyRestoredState(RadioStateMemory::load(scopeA, caps));
+    check(A::backendRoute(b) == TxRoute::Rf1, "RT7: and radio A is still RF1");
+    b.applyRestoredState(RestoredRadioState{});
+    check(A::backendRoute(b) == TxRoute::Ant, "RT7: a radio with no memory reads ANT");
+
+    bool junkIsAnt = true;
+    for (const QJsonValue& junk : {QJsonValue(QStringLiteral("rf1")), QJsonValue(QStringLiteral("ANT2")),
+                                   QJsonValue(QString()), QJsonValue(1), QJsonValue(true)}) {
+        b.applyRestoredState(routeDocument(QStringLiteral("RF1")));
+        b.applyRestoredState(routeDocument(junk));
+        junkIsAnt = junkIsAnt && A::backendRoute(b) == TxRoute::Ant;
+    }
+    check(junkIsAnt, "RT7: an unknown stored route reads ANT");
+}
+
 void testSliceModelOrdering()
 {
     std::printf("\n  SliceModel: the last txAntennaChanged is the route in force\n");
@@ -551,6 +664,7 @@ int main(int argc, char** argv)
     testBackendRequest();
     testBackendDrive(authority);
     testBackendAtu();
+    testPersistence();
     testSliceModelOrdering();
 
     std::printf("\n  %s (%d failure%s)\n\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,

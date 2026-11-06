@@ -2288,17 +2288,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // A new connect re-derives the passband from the mode; a mid-session linkUp
     // (EP6 silence then resume) does not. See m_passbandDerivedThisConnect.
     m_passbandDerivedThisConnect = false;
-    // Every connect starts on ANT: the route is not persisted (#4954). Leaving RF1
-    // hands ANT's drive back to the model first, so the connect-time power push
-    // cannot carry RF1's value onto ANT as an operator change.
-    const bool leavingRf1 = m_txRoute == hl2::TxRoute::Rf1;
-    m_txRoute = hl2::TxRoute::Ant;
-    m_rf1DrivePercent = kRf1StartDrivePercent;
-    if (leavingRf1) {
-        TransmitDelta delta;
-        delta.rfPower = m_rfPowerPercent;
-        emit transmitChanged(delta);
-    }
+    // The TX route is this radio's own, restored by applyRestoredState() (#4954):
+    // a transverter on RF1 must not come back to up to 5 W out of ANT.
 
     // Load this radio's frequency calibration first, before any frequency is
     // computed. Keyed by MAC (one crystal per radio); an empty serial gets the
@@ -2413,24 +2404,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
                           << m_lnaDbByBand.value(m_currentBandKey) << "dB";
         }
     }
-    // Seed the DRIVE from the start band's memory and echo it upward NOW —
-    // before linkUp — so TransmitModel carries the restored value when its
-    // connect-time push fires (PR #4619 bench, nigelfenton: the push arrived
-    // as apparent operator intent at the model default of 100 and overwrote
-    // the stored per-band drive on every reconnect; Ozy311 traced the same
-    // seam). With the model seeded, that push becomes a value-identical echo
-    // — which setTxPower() now recognizes and declines to record.
-    if (m_haveRestoredState) {
-        const int drive =
-            m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
-        if (drive >= 0 && m_txRoute == hl2::TxRoute::Ant) {
-            m_rfPowerPercent = drive;
-            TransmitDelta delta;
-            delta.rfPower = drive;
-            emit transmitChanged(delta);
-        }
-        applyTuneMemoryFor(m_currentBandKey);
-    }
+    seedConnectDrive();
 
     // Receiver count: the smallest of what the operator asked for, what the
     // board has (discovery byte 0x13: hl2b5up_main reports 4, skimmer variants
@@ -5578,6 +5552,7 @@ void Hl2Backend::applyTxRoute(hl2::TxRoute next)
     for (int ddc = 0; ddc < static_cast<int>(m_rx.size()); ++ddc) {
         emitSliceState(ddc);
     }
+    notifyOperatingStateChanged();
 }
 
 void Hl2Backend::refuseTxRoute(const QString& why)
@@ -5599,6 +5574,7 @@ void Hl2Backend::onMetisTxRouteRefused(int actual)
         TransmitDelta delta;
         delta.rfPower = operatorDrivePercent();
         emit transmitChanged(delta);
+        notifyOperatingStateChanged();
     }
     refuseTxRoute(QStringLiteral("HL2: the radio was transmitting; the transmit output "
                                  "stays %1").arg(txRouteToken(m_txRoute)));
@@ -7028,6 +7004,11 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // cannot leak radio A's state into radio B.
     m_restoredState = RestoredRadioState{};
     m_haveRestoredState = false;
+    // The TX route is per radio (#4954): radio B starts on ANT unless its own
+    // document says RF1, and RF1's drive always starts at its start value.
+    const bool wasRf1 = m_txRoute == hl2::TxRoute::Rf1;
+    m_txRoute = hl2::TxRoute::Ant;
+    m_rf1DrivePercent = kRf1StartDrivePercent;
     m_lnaDbByBand.clear();
     m_driveByBand.clear();
     m_lnaGainDb = hl2::kLnaDefaultGainDb;
@@ -7219,6 +7200,27 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         txSetpoints.value(QStringLiteral("tuneByBand")).toObject();
     for (auto it = tuneByBand.constBegin(); it != tuneByBand.constEnd(); ++it)
         m_tuneByBand.insert(it.key(), qBound(0, it.value().toInt(), 100));
+
+    // TX route: exactly "ANT" or "RF1"; absent or anything else reads ANT, the
+    // radio's own default. Reaches the client in Params at start(), before the
+    // first non-zero drive.
+    if (txSetpoints.contains(QStringLiteral("txRoute"))) {
+        const QString route = txSetpoints.value(QStringLiteral("txRoute")).toString();
+        if (route == txRouteRf1Token()) {
+            m_txRoute = hl2::TxRoute::Rf1;
+        } else if (route != txRouteAntToken()) {
+            qCInfo(lcHl2) << "HL2 restore: dropping unknown TX route"
+                          << txSetpoints.value(QStringLiteral("txRoute")).toVariant()
+                          << "- ANT";
+        }
+    }
+    // Leaving RF1 hands ANT's drive back to the model, so the connect-time
+    // power push cannot carry RF1's value onto ANT as an operator change.
+    if (wasRf1 && m_txRoute == hl2::TxRoute::Ant) {
+        TransmitDelta delta;
+        delta.rfPower = m_rfPowerPercent;
+        emit transmitChanged(delta);
+    }
 
     // Mic level is dropped, not clamped, when out of range: the floor is mute,
     // so a clamped bad value would silently take the operator off the air.
@@ -7626,6 +7628,9 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         txSetpoints.insert(QStringLiteral("tuneByBand"), tuneByBand);
     if (m_tuneDefaultPercent >= 0)
         txSetpoints.insert(QStringLiteral("tuneDefaultPercent"), m_tuneDefaultPercent);
+    // The TX route, per radio (#4954). RF1's drive is not stored: it starts at
+    // its start value on every connect, like every selection of RF1.
+    txSetpoints.insert(QStringLiteral("txRoute"), txRouteToken(m_txRoute));
 
     // The TX passband is flat, not per band or mode: it is one pair of
     // sliders, and per-band memory would move them on their own. Written only
@@ -8122,6 +8127,38 @@ void Hl2Backend::applyPerBandStateFor(double freqHz, const char* reason)
                   << newBand << "lna" << m_lnaGainDb << "dB drive"
                   << m_rfPowerPercent << "% tune" << m_tunePowerPercent << '%';
     notifyOperatingStateChanged();
+}
+
+// The connect-time drive seed, before linkUp. Called from connectRadio() only.
+void Hl2Backend::seedConnectDrive()
+{
+    // Seed the DRIVE from the start band's memory and echo it upward NOW —
+    // before linkUp — so TransmitModel carries the restored value when its
+    // connect-time push fires (PR #4619 bench, nigelfenton: the push arrived
+    // as apparent operator intent at the model default of 100 and overwrote
+    // the stored per-band drive on every reconnect; Ozy311 traced the same
+    // seam). With the model seeded, that push becomes a value-identical echo
+    // — which setTxPower() now recognizes and declines to record.
+    if (m_haveRestoredState) {
+        const int drive =
+            m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
+        if (drive >= 0) {
+            m_rfPowerPercent = drive;
+            if (m_txRoute == hl2::TxRoute::Ant) {
+                TransmitDelta delta;
+                delta.rfPower = drive;
+                emit transmitChanged(delta);
+            }
+        }
+        applyTuneMemoryFor(m_currentBandKey);
+    }
+    // On a restored RF1 the model is seeded with RF1's drive instead, so the
+    // connect-time power push is RF1's own value and never ANT's band drive.
+    if (m_txRoute == hl2::TxRoute::Rf1) {
+        TransmitDelta delta;
+        delta.rfPower = m_rf1DrivePercent;
+        emit transmitChanged(delta);
+    }
 }
 
 void Hl2Backend::notifyOperatingStateChanged()
