@@ -2511,16 +2511,7 @@ void serialFootswitchUsesProducerPttPaths()
     SerialPortController source;
     const TxCoordinator::Producer producer = f.radio.registerTxProducer(&source);
     source.setTxProducer(producer);
-    // Mirrors MainWindow_Controllers' serial wiring: both edges go through
-    // the normal PTT-on / PTT-off paths (Quindar, RADE end-of-over).
-    QObject::connect(&source, &SerialPortController::externalPttChanged, &f.radio,
-        [&](bool down, const TxCoordinator::Request& input) {
-            if (down) {
-                (void)f.radio.requestProducerPttOn(input, TransmitModel::PttSource::Mox);
-            } else {
-                f.radio.requestProducerPttOff(input, TransmitModel::PttSource::Mox);
-            }
-        }, Qt::QueuedConnection);
+    f.radio.connectSerialPttInput(&source);
     const auto drain = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall); };
     TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
     drain();
@@ -2537,16 +2528,7 @@ void serialFootswitchGetsTxOffDelay()
     SerialPortController source;
     const TxCoordinator::Producer producer = f.radio.registerTxProducer(&source);
     source.setTxProducer(producer);
-    // Mirrors MainWindow_Controllers' serial wiring: both edges go through
-    // the normal PTT-on / PTT-off paths.
-    QObject::connect(&source, &SerialPortController::externalPttChanged, &f.radio,
-        [&](bool down, const TxCoordinator::Request& input) {
-            if (down) {
-                (void)f.radio.requestProducerPttOn(input, TransmitModel::PttSource::Mox);
-            } else {
-                f.radio.requestProducerPttOff(input, TransmitModel::PttSource::Mox);
-            }
-        }, Qt::QueuedConnection);
+    f.radio.connectSerialPttInput(&source);
     const auto drain = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall); };
     TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
     drain();
