@@ -17,16 +17,14 @@
 //     takes the baseline rather than a neighbour's value.
 //
 //  3. A second receiver's own frequency, mode and passband across a restart,
-//     reopened by the link-up replay as a restart does.
+//     reopened by the link-up replay as a restart does, and opened AT the
+//     connect by the automation-only numRx param.
 //
 // No socket: see Hl2PersistHarness.h. The radio is never keyed (the drive is a
 // setpoint; the transmit gate stays shut). The settings profile is isolated.
 //
 // NOT COVERED: the wire. That the restored mode, passband, drive and gain
-// reach a real radio is the bench half. Nor a second receiver opened AT the
-// connect by the automation-only numRx param: pushInitialState() re-derives
-// its passband from its mode and restores only the transmit receiver's pair,
-// so it comes back on the mode's default today.
+// reach a real radio is the bench half.
 
 #include "Hl2PersistHarness.h"
 
@@ -298,6 +296,14 @@ int main(int argc, char** argv)
                 throughDisk(RadioSettingsScope(QStringLiteral("hl2"), serialFor(202)), caps, captured);
             Session next(serialFor(202), back, k20m);
             checkB(next, QStringLiteral("replay"));
+        }
+        {
+            // numRx=2 opens B at the connect, before the link-up derivation
+            // runs; the replay then has nothing left to reopen.
+            const RestoredRadioState back =
+                throughDisk(RadioSettingsScope(QStringLiteral("hl2"), serialFor(203)), caps, captured);
+            Session next(serialFor(203), back, k20m, {{QStringLiteral("numRx"), 2}});
+            checkB(next, QStringLiteral("numRx"));
         }
     }
 

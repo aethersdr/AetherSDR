@@ -8040,6 +8040,18 @@ void Hl2Backend::pushInitialState()
                         static_cast<int>(m_restoredState.filterHighHz);
                 }
             }
+            // The other receivers a numRx param opened at this connect take
+            // their own remembered pair, on the same rule: only over the mode
+            // it was saved with. The replay's receivers open after this.
+            const std::size_t count = std::min(m_rx.size(), m_restoredReceivers.size());
+            for (std::size_t i = 0; i < count; ++i) {
+                Receiver& r = m_rx[i];
+                const Receiver& memory = m_restoredReceivers[i];
+                if (&r == rx(m_txDdc) || r.mode != memory.mode)
+                    continue;
+                r.filterLowHz = memory.filterLowHz;
+                r.filterHighHz = memory.filterHighHz;
+            }
             // The start band's remembered drive, as a SETPOINT (never keys —
             // applyDrive() stays behind the TX gate). Echoed upward as a
             // normalized delta so TransmitModel and the UI agree with the
