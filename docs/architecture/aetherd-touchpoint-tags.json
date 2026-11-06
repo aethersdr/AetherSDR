@@ -1,4 +1,10 @@
 {
+ "core/AutomationIsolationPolicy.h": {
+  "tag": "universal",
+  "note": "Immutable process-only radio admission policy shared by UI, models and transports. Simulator identity matching is implemented below the backend boundary; no vendor wire types or persisted state cross this interface.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/NtpSourceRequest.h": {
   "tag": "universal",
   "note": "Seam vocabulary for a radio-held NTP time source list: the definition and request types with the firmware's id/address/description allowlists, the reported source state and its present-only delta. No wire text; FlexBackend encodes and decodes it (SmartSDR 4.3.16) and capabilities().ntpSourceControl gates it.",

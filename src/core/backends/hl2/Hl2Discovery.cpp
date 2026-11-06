@@ -1,3 +1,4 @@
+#include "core/AutomationIsolationPolicy.h"
 #include "core/backends/hl2/Hl2Discovery.h"
 
 #include "core/AppSettings.h"
@@ -231,6 +232,8 @@ bool Hl2Discovery::isRunning() const noexcept
 
 void Hl2Discovery::start(int intervalMs)
 {
+    if (AutomationIsolationPolicy::demoOnly()) { return; }
+
     m_timer->start(intervalMs);
     sweepNow();   // don't make the operator wait a full interval for the first sweep
 }
@@ -262,6 +265,8 @@ void Hl2Discovery::setDirectedTargets(const QList<QHostAddress>& targets)
 
 void Hl2Discovery::sweepNow()
 {
+    if (AutomationIsolationPolicy::demoOnly()) { return; }
+
     // Interfaces can come up after the application starts (common with a
     // directly attached HL2 link). Refreshing here also mirrors Thetis's
     // per-sweep NIC walk instead of freezing the initial adapter list.
