@@ -19,6 +19,7 @@
 
 #include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
+#include "core/TxOffDelaySettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
@@ -26,7 +27,6 @@
 #include "core/MqttAntennaAlias.h"
 #include "core/MqttRadioState.h"
 #include "core/MqttSettings.h"
-#include "core/TxOffDelaySettings.h"
 #endif
 #include "ConnectionPanel.h"
 #include "Theme.h"
