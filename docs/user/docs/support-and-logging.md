@@ -27,6 +27,8 @@ The Help menu starts with **AetherSDR Documentation** (this site), **Printable M
 
 **Help → Support & Diagnostics...** has two parts, followed by two buttons that open these docs in your browser: **Troubleshooting Guide** opens [Troubleshooting](./troubleshooting.md) and **Log Analyzer** opens the [Log Analyzer](/log-analyzer).
 
+Choosing **Support & Diagnostics...** while it is open brings the window to the front. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). The log path can be selected and copied into a report.
+
 <img src="/img/screens/support-diagnostics-dialog.png" width="680" alt="Support &amp; Diagnostics window. Diagnostic Logging lists modules in three columns with checkboxes, Discovery, Connection / Commands, Protocol / Status, Audio Summary, KiwiSDR and System Info ticked. Below are the log file path (blacked out) and size, a log tail, Refresh, Clear Log and Open Log Folder buttons, and four numbered steps for reporting an issue." />
 
 *Support & Diagnostics: per-module diagnostic logging and the log file. The log path is blacked out.*
@@ -151,7 +153,7 @@ or **Open Log Folder** to find the current file. Windows can keep older files
 from an installer or portable build in the original location. **File an
 Issue** opens the folder that holds the support bundle it just saved.
 
-- Every launch starts a new file named `aethersdr-<date>-<time>.log`. Attach the newest one. On Linux and macOS, `aethersdr.log` in the same folder is a link to it; on Windows it is a `.lnk` shortcut.
+- Every launch starts a new file named `aethersdr-<date>-<time>.log`. Attach the newest one. On Linux and macOS, `aethersdr.log` in the same folder is a link to it. Windows keeps only the timestamped files; **Help → Support & Diagnostics...** shows the current log.
 - A log that grows past 100 MB is rotated to a new file.
 - Old logs are pruned at startup after 7 days or once they total more than 500 MB; the two most recent are always kept.
 - Logging is buffered and written in the background, so it does not slow the app down.

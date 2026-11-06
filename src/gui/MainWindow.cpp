@@ -2314,6 +2314,8 @@ MainWindow::MainWindow(QWidget* parent)
     // by luck rather than by wiring.
     connect(&m_radioModel.transmitModel(), &TransmitModel::stateChanged,
             this, [this]() { updatePaTempLabel(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::atuAvailabilityChanged,
+            this, &MainWindow::updateToolsMenuState);
 
     auto normalizeOscillatorValue = [](QString value) {
         value = value.trimmed().toLower();
@@ -5710,60 +5712,15 @@ void MainWindow::buildUI()
             m_radioModel.settingsScope(), m_bandPlanMgr);
     });
     connect(bsPanel, &BandStackPanel::recallRequested, this,
-            [this](const BandStackEntry& e) {
-        auto* slice = activeSlice();
-        if (!slice) return;
-        int id = slice->sliceId();
-
-        // Mode first (affects filter ranges). The HL2's data-mode AGC relies
-        // on this order; hl2_bandstack_digital_agc_test replays it.
-        if (slice->mode() != e.mode) {
-            slice->setMode(e.mode);
-        }
-        applyTuneRequest(slice, e.frequencyMhz,
-                         TuneIntent::AbsoluteJump, "bandstack-recall");
-        // Filter
-        if (e.filterLow != 0 || e.filterHigh != 0) {
-            slice->setFilterWidth(e.filterLow, e.filterHigh);
-        }
-        // Antennas
-        if (!e.rxAntenna.isEmpty() && e.rxAntenna != slice->rxAntenna()) {
-            m_radioModel.sendCommand(QString("slice set %1 rxant=%2").arg(id).arg(e.rxAntenna));
-        }
-        if (!e.txAntenna.isEmpty() && e.txAntenna != slice->txAntenna()) {
-            m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
-        }
-        // AGC while KiwiSDR external receive audio replaces the slice: the
-        // bookmark holds the RADIO's AGC, which the SliceModel setters would
-        // write into the KiwiSDR AGC, so it goes as wire text here and
-        // recallBandStackReceiveDsp() below leaves the AGC alone.
-        if (slice->externalReceiveReplacementActive()) {
-            if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
-                m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
-            }
-            if (!slice->automaticAgcThresholdActiveOrPending()
-                && e.agcThreshold != slice->agcThreshold()) {
-                m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
-            }
-        }
-        // Volume
-        if (static_cast<int>(slice->audioGain()) != e.audioGain) {
-            slice->setAudioGain(static_cast<float>(e.audioGain));
-        }
-        // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
-        // setters, so they reach every backend, not only a command plane.
-        m_radioModel.recallBandStackReceiveDsp(slice, e);
-        // Stored WNB values are optional replay, not individual control actions.
-        if (auto* pan = m_radioModel.activePanadapter()) {
-            if (e.wnbOn != pan->wnbActive()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn},
-                    {}, /*announce=*/false);
-            }
-            if (e.wnbLevel != pan->wnbLevel()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel},
-                    {}, /*announce=*/false);
-            }
-        }
+            [this](const BandStackEntry& entry) {
+        const QPointer<MainWindow> owner(this);
+        m_radioModel.recallBandStack(activeSlice(), entry,
+            [owner](SliceModel* slice, double mhz) {
+                if (owner) {
+                    owner->applyTuneRequest(slice, mhz,
+                        TuneIntent::AbsoluteJump, "bandstack-recall");
+                }
+            });
     });
     connect(bsPanel, &BandStackPanel::removeRequested, this,
             [this](int index) {
@@ -10501,16 +10458,11 @@ void MainWindow::updateToolsMenuState()
         && m_radioModel.txOwnedByUs() && idle;
     const bool hasTxApplet = m_appletPanel && m_appletPanel->txApplet();
 
-    // An external TunerGenius XL in OPERATE puts the internal ATU out of the
-    // line, and TxApplet::updateAtuAvailability() greys the ATU and MEM buttons
-    // for exactly that reason (#443). The ATU right-click menu rides the
-    // disabled ATU button, so before Tools existed that gate was also the only
-    // route to these two actions — lifting them to the menu bar without the same
-    // condition would make Tools the one way left to pre-tune through a tuner
-    // that is in OPERATE.
+    // Tools and the applet share the internal-ATU path gate: neither TGXL
+    // Operate nor a transverter output can use the radio's tuner.
     const bool tgxlOperate = tuner.isPresent() && tuner.isOperate()
         && !tuner.isBypass();
-    const bool memories = caps.hasTunerMemories && !tgxlOperate;
+    const bool memories = caps.hasTunerMemories && !tgxlOperate && tx.atuAvailable();
 
     if (m_addPanAction) {
         m_addPanAction->setEnabled(connected && m_panStack
@@ -10545,7 +10497,7 @@ void MainWindow::updateToolsMenuState()
     }
 
     // Every disabling condition names itself. A greyed control with no stated
-    // reason reads as broken (#5510), and Pre-tune now has five of them.
+    // reason reads as broken (#5510).
     if (m_preTuneAction) {
         m_preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
             && hasTxApplet);
@@ -10554,6 +10506,8 @@ void MainWindow::updateToolsMenuState()
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
                 ? tr("Disabled — TGXL is in OPERATE mode")
+            : !tx.atuAvailable()
+                ? tr("Disabled — the internal ATU is not in the transverter TX path")
             : !hasTxApplet
                 ? tr("The transmit applet is unavailable in this build")
             : !tx.memoriesEnabled()
@@ -10572,6 +10526,8 @@ void MainWindow::updateToolsMenuState()
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
                 ? tr("Disabled — TGXL is in OPERATE mode")
+            : !tx.atuAvailable()
+                ? tr("Disabled — the internal ATU is not in the transverter TX path")
             : !hasTxApplet
                 ? tr("The transmit applet is unavailable in this build")
             : !connected
