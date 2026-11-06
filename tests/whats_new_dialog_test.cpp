@@ -20,6 +20,7 @@
 #include <QTextFragment>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QTest>
 #include <QTextBrowser>
 #include <QTextDocument>
@@ -144,6 +145,34 @@ void upgradePath()
     auto* header = upgrade->findChild<QLabel*>("canonHeaderTitle");
     check(header && header->text() == "Welcome!", "an unseen version is welcomed");
     delete upgrade.data();
+}
+
+// A theme change while the notes are scrolled keeps the reader's place.
+void themeChangeKeepsScroll()
+{
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    tm.setActiveTheme(QStringLiteral("Default Dark"));
+    QPointer<WhatsNewDialog> d = make();
+    d->show();
+    QTest::qWaitForWindowExposed(d);
+    QString md;
+    for (int i = 0; i < 400; ++i)
+        md += QStringLiteral("## Section %1\n\nA line of release notes, number %1.\n\n").arg(i);
+    WhatsNewDialogTestAccess::notes(*d, md);
+    auto* browser = d->findChild<QTextBrowser*>("whatsNewNotes");
+    QScrollBar* bar = browser ? browser->verticalScrollBar() : nullptr;
+    if (!bar) { check(false, "the notes scroll"); delete d.data(); return; }
+    QCoreApplication::processEvents();
+    const int target = bar->maximum() * 3 / 4;
+    bar->setValue(target);
+    check(target > 0 && bar->value() == target, "control: the long notes scroll deep");
+    tm.setActiveTheme(QStringLiteral("Default Light"));
+    check(bar->value() == target, "a theme change keeps the notes' scroll position");
+    QCoreApplication::processEvents();
+    check(bar->value() == target, "the scroll position holds once events settle");
+    delete d.data();
+    tm.setActiveTheme(before);
 }
 
 // Find is a canon prompt with Find the default: Cancel and Esc search for
@@ -302,6 +331,7 @@ int main(int argc, char** argv)
 
     canonWindow();
     upgradePath();
+    themeChangeKeepsScroll();
     findPrompt();
     closePaths();
     legibleAtMinimum();
