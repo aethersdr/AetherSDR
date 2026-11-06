@@ -64,6 +64,18 @@ struct MeterSpec {
     // records — and its own concern text recommends deleting the meter.
     bool needsForwardPower;
 
+    // Derived from the directional readings rather than measured directly, so
+    // the producer may withhold it where the ratio would be noise even though
+    // the radio is plainly transmitting (#7063). A meter marked here is
+    // reported INCONCLUSIVE, naming the gate, when the run stayed below it —
+    // never "defined but never fed", which reads as a defect and in this exact
+    // case recommended deleting a working meter.
+    //
+    // Only the ratio carries this. TX:FWDPWR and TX:REFPWR are the inputs to
+    // the gate, not subjects of it: they publish at any level, and a genuine
+    // silence from either IS a defect worth reporting as one.
+    bool gatedOnForwardCounts;
+
     const char* note;
 };
 
@@ -72,21 +84,21 @@ struct MeterSpec {
 // that are both defined and fed, and were marked expectedOnHl2 = false while
 // being present — which switched off the one check (`expectedButMissing`) that
 // could notice them regressing.
-//                              hl2   key    rf
+//                              hl2   key    rf     gated
 constexpr MeterSpec kMeterTable[] = {
-    {"SLC", "LEVEL",    true,  false, false, "receive signal level"},
-    {"TX",  "MICPEAK",  true,  true,  false, "pre-ALC microphone peak; host-side, so a "
+    {"SLC", "LEVEL",    true,  false, false, false, "receive signal level"},
+    {"TX",  "MICPEAK",  true,  true,  false, false, "pre-ALC microphone peak; host-side, so a "
                                              "zero-drive key still feeds it"},
-    {"TX",  "SWR",      true,  true,  true,  "ratio - meaningful uncalibrated, but only "
+    {"TX",  "SWR",      true,  true,  true,  true,  "ratio - meaningful uncalibrated, but only "
                                              "published above the forward-power floor"},
-    {"TX",  "FWDPWR",   true,  true,  true,  "published in dBm as wattsToDbm(directional"
+    {"TX",  "FWDPWR",   true,  true,  true,  false,  "published in dBm as wattsToDbm(directional"
                                              "Watts(raw)) through the peak hold; the "
                                              "reference curve is uncalibrated, the meter "
                                              "is not absent"},
-    {"TX",  "REFPWR",   true,  true,  true,  "published in dBm as wattsToDbm(directional"
+    {"TX",  "REFPWR",   true,  true,  true,  false,  "published in dBm as wattsToDbm(directional"
                                              "Watts(raw)); same uncalibrated curve as "
                                              "FWDPWR"},
-    {"TX",  "ALC",      true,  true,  false, "host ALC; MeterModel::swAlc() consumes it "
+    {"TX",  "ALC",      true,  true,  false, false, "host ALC; MeterModel::swAlc() consumes it "
                                              "and the Phone/CW ALC gauges render it"},
     // Host ALC gain, distinct from TX:ALC (post-ALC peak, which sits near target):
     // this moves with how hard the stage works. Host-side, so a zero-drive key
@@ -94,15 +106,30 @@ constexpr MeterSpec kMeterTable[] = {
     // here or its unit verdict is lost (CERTIFICATION.md 1.38);
     // tests/meter_surfaces_test.cpp checks the join but is not in the PR CI gate
     // (.github/ci-test-gate.txt) — it runs on main pushes and weekly sanitizers.
-    {"TX",  "ALCGAIN",  true,  true,  false, "gain the host ALC is applying, in dB; "
+    {"TX",  "ALCGAIN",  true,  true,  false, false, "gain the host ALC is applying, in dB; "
                                              "MeterModel::alcGainDb() consumes it and "
                                              "no GUI surface renders it yet (#5636)"},
-    {"TX",  "COMPPEAK", true,  true,  false, "host speech processor, polled onto the "
+    {"TX",  "COMPPEAK", true,  true,  false, false, "host speech processor, polled onto the "
                                              "meter at 20 Hz; reads 0 with PROC off, "
                                              "which is a value and not a silence"},
-    {"RAD", "PATEMP",   true,  false, false, "rise under key is the check, not the value"},
-    {"RAD", "+13.8A",   false, false, false, "no supply telemetry on this radio"},
+    {"RAD", "PATEMP",   true,  false, false, false, "rise under key is the check, not the value"},
+    {"RAD", "+13.8A",   false, false, false, false, "no supply telemetry on this radio"},
 };
+
+// A gated meter MUST also need forward power, because stageMeterInventory()
+// reaches the gate branch only after the needsForwardPower branch has declined
+// — i.e. only on a run that radiated. A row with gated=true and
+// needsForwardPower=false would take the gate branch on a run where the PA
+// never enabled and tell the operator "the backend suppressed this meter, raise
+// drive", which is CERTIFICATION.md 1.37 re-created one level in: a confident
+// statement about a meter from a run that transmitted nothing. The ordering is
+// load-bearing, so the invariant is checked rather than described.
+static_assert([] {
+    for (const MeterSpec& spec : kMeterTable)
+        if (spec.gatedOnForwardCounts && !spec.needsForwardPower)
+            return false;
+    return true;
+}(), "a gatedOnForwardCounts meter must also set needsForwardPower");
 
 }  // namespace
 
@@ -319,6 +346,62 @@ void RadioCertification::observeKeyedRf()
     ++m_keyedRfSamples;
     m_keyedFwdWattsMax = std::max(m_keyedFwdWattsMax,
                                   static_cast<double>(meters.fwdPowerInstant()));
+
+    // THE DRIVE THIS RUN ACTUALLY KEYED AT, captured here because here is the
+    // only place it is still true: the keyed stages restore the operator's
+    // power on exit, and the run may have clamped it to an automation ceiling,
+    // so reading it when the verdict is written reads the wrong number. It
+    // changes the REMEDY, not the verdict — "raise drive" is useless advice at
+    // 100 %, where a forward reading stuck below the gate points at the
+    // detector or its scaling instead (the #5369 class).
+    m_keyedDrivePercentMax = std::max(m_keyedDrivePercentMax,
+                                      m_radio->transmitModel().rfPower());
+
+    // Ask the BACKEND what it gates a derived meter on, and sample the raw
+    // reading against it (#7063). Read from the health snapshot by key rather
+    // than from any family header: a backend that publishes neither key leaves
+    // both at -1 and nothing below changes for it.
+    const IRadioBackend::HealthSnapshot health = m_radio->backendHealthSnapshot();
+    const QVariant gate = health.values.value(
+        QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateCounts));
+    if (gate.isValid() && !gate.isNull()) {
+        bool ok = false;
+        const int counts = gate.toInt(&ok);
+        if (ok)
+            m_swrGateCounts = counts;
+    }
+    // HOW MANY KEYED WINDOWS CLEARED THE GATE — what the verdict turns on,
+    // because the producer counts it on the value it gates, so it is exact in BOTH
+    // directions: 0 means the gate was never cleared and a silent meter is
+    // explained, above 0 means it was cleared and a silent meter is a real defect.
+    // The window peak cannot say the second thing — the gate is not applied to
+    // it. The count is cumulative in the backend over the whole over, so sampling
+    // it a few times per run cannot miss a window. A negative count means no gate
+    // was declared, which is NOT a cleared gate: the branch below then declines.
+    const QVariant clears =
+        health.values.value(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed));
+    if (clears.isValid() && !clears.isNull()) {
+        bool ok = false;
+        const int n = clears.toInt(&ok);
+        if (ok)
+            m_swrGateClears = std::max(m_swrGateClears, n);
+    }
+    // THE WINDOW PEAK — reported, never judged on. It tells an operator how far
+    // below the gate the run sat, which is the actionable half of the message
+    // ("peaked at 76 against 320" says raise drive a lot, not a little). The
+    // peak is the backend's own maximum over every measuring response in a
+    // publish window, so a max of sampled window peaks is a max of what was
+    // sampled — and since no verdict rests on it, that is enough.
+    const QVariant fwdPeak =
+        health.values.value(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw));
+    if (fwdPeak.isValid() && !fwdPeak.isNull()) {
+        bool ok = false;
+        const int counts = fwdPeak.toInt(&ok);
+        if (ok)
+            m_keyedFwdCountsMax = std::max(m_keyedFwdCountsMax, counts);
+    }
 }
 
 bool RadioCertification::keyedRfConfirmed() const
@@ -1218,6 +1301,23 @@ void RadioCertification::stageMeterInventory()
         {QStringLiteral("floorWatts"), static_cast<double>(kKeyedRfFloorWatts)},
         {QStringLiteral("forwardPowerMeterDefined"), fwdMeterDefined},
         {QStringLiteral("keyRefusals"), m_keyRefusals},
+        // The producer's own gate beside the consumer floor above, so a reader
+        // can see WHY a derived meter stayed silent in a run that radiated
+        // (#7063). Null where the backend declares no gate — which is not the
+        // same as a gate that was cleared.
+        {QStringLiteral("backendSwrGateCounts"),
+         m_swrGateCounts >= 0 ? QJsonValue(m_swrGateCounts) : QJsonValue()},
+        // THE FIELD THE VERDICT TURNS ON: windows that cleared that gate,
+        // counted by the producer on the value it gates. 0 explains a silent
+        // meter; above 0 means a silent meter is a defect.
+        {QStringLiteral("backendSwrGateClearsWhileKeyed"),
+         m_swrGateClears >= 0 ? QJsonValue(m_swrGateClears) : QJsonValue()},
+        // Reported for scale only — how far below the gate the run sat. No
+        // verdict rests on it; the gate is not applied to a peak.
+        {QStringLiteral("maxForwardCountsWhileKeyed"),
+         m_keyedFwdCountsMax >= 0 ? QJsonValue(m_keyedFwdCountsMax) : QJsonValue()},
+        {QStringLiteral("maxDrivePercentWhileKeyed"),
+         m_keyedDrivePercentMax >= 0 ? QJsonValue(m_keyedDrivePercentMax) : QJsonValue()},
     };
 
     for (const MeterSpec& spec : kMeterTable) {
@@ -1261,6 +1361,50 @@ void RadioCertification::stageMeterInventory()
                 "no keyed stage in this run produced forward power above %1 W, so "
                 "this meter had nothing to report")
                 .arg(static_cast<double>(kKeyedRfFloorWatts), 0, 'g', 3);
+        } else if (spec.gatedOnForwardCounts && m_swrGateCounts > 0
+                   && m_swrGateClears == 0) {
+            // THE RUN RADIATED, AND THE PRODUCER STILL WITHHELD THIS METER.
+            // rfConfirmed is true here: the keyed-RF precondition is satisfied
+            // at MeterModel's consumer floor, which on the HL2 is ~67x below
+            // the counts gate the backend applies before it publishes SWR at
+            // all. Reporting "never fed" in that band condemns a meter that is
+            // working exactly as designed (#7063), which is the failure
+            // docs/CERTIFICATION.md 2.3 describes: "when a meter is gated on
+            // another meter, a suppressed reading must name its gate rather
+            // than reporting as merely stale".
+            //
+            // == 0, NOT "the peak was below the gate". The producer counts the
+            // windows that cleared its gate on the value it gates, so 0 is a
+            // fact about every window of the over rather than an inference from
+            // a quantity the gate was never applied to. Above 0 is equally
+            // conclusive the other way, which is why this branch declines then
+            // and lets the real-defect verdict stand.
+            //
+            // THE REMEDY DEPENDS ON DRIVE. At less than full drive, "raise it"
+            // is both true and actionable. At full drive it is neither: a
+            // forward reading that cannot reach the gate with the slider at
+            // maximum is a forward-detector or scaling fault (the #5369 class),
+            // and excusing it with "raise drive" would be a softer verdict than
+            // this diagnostic gave before the change.
+            const bool atFullDrive = m_keyedDrivePercentMax >= 100;
+            untestedBecause = QStringLiteral(
+                "the backend suppressed this meter: it publishes it only above "
+                "%1 forward counts, and no keyed window in this run cleared "
+                "that gate (the sampled window peak reached %2). %3")
+                .arg(m_swrGateCounts)
+                .arg(m_keyedFwdCountsMax)
+                .arg(atFullDrive
+                     ? QStringLiteral(
+                           "DRIVE WAS ALREADY AT 100%, so this is not a drive "
+                           "problem — a forward reading that cannot clear the "
+                           "gate at full drive points at the forward detector "
+                           "or its scaling, not at this meter. Check forward "
+                           "power against a known load before trusting either")
+                     : QStringLiteral(
+                           "That is the backend working as designed, not a dead "
+                           "meter — raise drive (this run keyed at %1%) until "
+                           "the forward reading clears the gate to exercise it")
+                       .arg(m_keyedDrivePercentMax));
         }
 
         QJsonObject row{
@@ -1361,6 +1505,21 @@ void RadioCertification::stageMeterInventory()
             why = QStringLiteral(
                 "forward power was never fresh inside a keyed window across %1 "
                 "keyed stage(s)").arg(m_keyedWindows);
+        } else if (rfConfirmed) {
+            // THE RUN RADIATED. Every branch above describes a run that did not,
+            // and so does the lead below, so a gated meter reaching this list
+            // needs its own sentence — otherwise the stage asserts "no confirmed
+            // RF" about a run whose forward power it just reported, and then
+            // blames a slider, an interlock, a band limit and a dead PA, none of
+            // which apply (#7063). A concern that contradicts its own
+            // measurement is the §1.40 failure this stage exists to avoid.
+            why = QStringLiteral(
+                "the backend withheld them: this run DID produce RF (forward "
+                "power peaked at %1 W across %2 keyed stage(s)), but a meter "
+                "derived from the directional readings is published only above "
+                "its own threshold, and this run stayed below it")
+                .arg(m_keyedFwdWattsMax, 0, 'g', 3)
+                .arg(m_keyedWindows);
         } else {
             why = QStringLiteral(
                 "forward power peaked at %1 W across %2 keyed stage(s), below the "
@@ -1371,9 +1530,17 @@ void RadioCertification::stageMeterInventory()
                 .arg(m_keyedWindows)
                 .arg(static_cast<double>(kKeyedRfFloorWatts), 0, 'g', 3);
         }
-        const QString lead = QStringLiteral(
-            "INCONCLUSIVE — this run produced no confirmed RF, so nothing here is "
-            "a verdict on these meters: ")
+        // The lead states WHY the run cannot judge these meters, and the two
+        // reasons are different: the run never produced confirmed RF, or it did
+        // and the producer withheld a derived meter anyway. Asserting the first
+        // when the second is true states a fact about the run that the same
+        // report contradicts two fields away (#7063).
+        const QString lead = QStringLiteral("INCONCLUSIVE — %1, so nothing here "
+                                            "is a verdict on these meters: ")
+                .arg(rfConfirmed
+                         ? QStringLiteral("this run produced RF but could not "
+                                          "exercise every meter below")
+                         : QStringLiteral("this run produced no confirmed RF"))
             + inconclusive.join(QStringLiteral(", "))
             + QStringLiteral(". ") + why
             + QStringLiteral(". Re-run with drive up and into a load before "
@@ -2352,6 +2519,15 @@ QJsonObject RadioCertification::run(const Options& o)
     m_keyedRfSamples = 0;
     m_keyedWindows = 0;
     m_fwdPowerMeterDefined = false;
+    // Negative is "not measured", and that must be true at the start of a run
+    // as well as when a backend declares no gate. Unreachable today — each
+    // bridge request builds a fresh RadioCertification — but the sentinel's
+    // meaning is stated in the header, so nothing should depend on the object
+    // being new for it to hold.
+    m_swrGateCounts = -1;
+    m_swrGateClears = -1;
+    m_keyedFwdCountsMax = -1;
+    m_keyedDrivePercentMax = -1;
     m_renderedWhileKeyed = QJsonObject{};
     m_keyRefusals = 0;
 

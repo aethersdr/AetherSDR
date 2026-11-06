@@ -222,6 +222,31 @@ private:
     double m_keyedFwdWattsMax = -1.0;
     int m_keyedRfSamples = 0;        // fresh forward-power reads inside a key
     int m_keyedWindows = 0;          // keyed windows that reached a measurement
+
+    // The BACKEND's own gate on a derived meter, and the highest raw reading
+    // seen against it (#7063). The keyed-RF precondition above answers "did
+    // this run radiate" with MeterModel's consumer floor, which is a different
+    // and much lower threshold than a producer may apply before it publishes a
+    // derived value at all — on the Hermes-Lite 2, 1.1 mW against 320 counts
+    // (~74 mW). Between the two, a run radiates, the precondition passes, and
+    // a correctly suppressed meter is reported as DEFINED BUT NEVER FED with
+    // no mention of the gate that silenced it.
+    //
+    // Negative means "the backend declares no such gate", which is NOT the
+    // same as a gate that was cleared, and must not collapse into it.
+    int m_swrGateCounts = -1;        // declared by the backend; -1 = none declared
+    // How many of the backend's publish windows cleared that gate while keyed,
+    // judged by the backend on the value it gates. THIS is what the verdict
+    // turns on, because it is exact in both directions. -1 = not declared.
+    int m_swrGateClears = -1;
+    // Highest window peak seen while keyed, for the REPORT ONLY — it says how
+    // far below a gate a run sat. It is NOT the quantity the gate is applied
+    // to, so no verdict may be derived from it — deriving one would be the
+    // §1.37 error one level in (#7063).
+    int m_keyedFwdCountsMax = -1;
+    // Highest RF drive observed while keyed, 0..100. Shapes the REMEDY only:
+    // "raise drive" cannot be the advice at full drive. -1 = never sampled.
+    int m_keyedDrivePercentMax = -1;
     bool m_fwdPowerMeterDefined = false;
 
     // The consumer-side reading taken while the radio was actually keyed.

@@ -1151,6 +1151,14 @@ private:
     static constexpr double kFwdPeakReleaseAlpha = 0.05;
     double m_fwdPeakWatts = 0.0;
 
+    // Keyed publish windows that cleared the SWR gate, counted on the SAME value
+    // publishTelemetry() gates (*t.forwardPowerRaw, the window's last reading) and
+    // not on the window peak, which the gate is never applied to. That is what
+    // makes it exact in both directions for a consumer (#7063). Per-over: reset on
+    // key-down by setKeying(), not on key-up, since a diagnostic samples the
+    // snapshot after unkeying as well as during.
+    int m_keyedSwrGateClears = 0;
+
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.
     int m_micLevel = 50;

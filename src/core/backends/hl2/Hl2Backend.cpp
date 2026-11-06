@@ -4577,6 +4577,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     if (keyChanged && !key) {
         m_sinceUnkey.start();
     }
+    // Per-over, so a reader of healthSnapshot() is told about THIS transmission
+    // rather than about every one since connect. Zeroed on key-DOWN and left
+    // alone on key-up, because a diagnostic reads the snapshot after unkeying
+    // as often as during (radiocert samples it per keyed stage).
+    if (keyChanged && key) {
+        m_keyedSwrGateClears = 0;
+    }
     m_keyed = key;
     // Manual PTT is already mirrored optimistically by RadioModel, but CW
     // break-in keys inside this backend. Publish that edge so the TX
@@ -6617,6 +6624,42 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
         t.reversePowerRaw
             ? QVariant(directionalWatts(*t.reversePowerRaw)) : QVariant());
+    // The gate TX:SWR is suppressed below, published alongside the reading it
+    // gates (#7063). A consumer that only sees "no SWR" cannot tell a
+    // deliberately suppressed ratio from a dead meter, and `radiocert` reported
+    // a healthy TX:SWR as DEFINED BUT NEVER FED for exactly that reason. The
+    // VALUE is published, not just the comparison, so a reader can say how far
+    // below the gate a run sat rather than only that it was below it.
+    //
+    // All THREE rows are gated on the SAME optional, so they are genuinely
+    // present or absent together. forwardPowerRaw would be the wrong one:
+    // Hl2Telemetry::apply() takes it from every RADDR-1 response while the peak
+    // window skips the non-measurement ones, so a unit whose temperature word
+    // always reads 0 has forwardPowerRaw and no peak (MetisProtocol.h:515-517).
+    // Gating on that would publish a known threshold beside an absent reading —
+    // a half-state a consumer cannot act on, and on that unit class it would
+    // leave radiocert reporting the very "DEFINED BUT NEVER FED" verdict this
+    // change exists to remove. Pinned by hl2_backend_seam_test's
+    // swrGateHealthRows().
+    put(HealthSnapshot::kSwrGateCounts,
+        QStringLiteral("Forward counts required for SWR"),
+        t.forwardPowerPeakRaw ? QVariant(kMinForwardCountsForSwr) : QVariant());
+    // HOW MANY KEYED WINDOWS CLEARED THAT GATE — the key a consumer reasons
+    // with, and the reason the peak below is not. publishTelemetry() gates
+    // *t.forwardPowerRaw, each window's LAST value at kTelemetryMinIntervalMs, not
+    // the peak and not each of the ~190/s responses: "peak above gate" therefore
+    // does not mean the gate was ever cleared. Counted outside the reverse-reading
+    // and swrFromRaw() conditions so "cleared the gate but published nothing" stays
+    // visible rather than being defined away. Per-over; see m_keyedSwrGateClears.
+    put(HealthSnapshot::kSwrGateClearsWhileKeyed,
+        QStringLiteral("Keyed windows clearing the SWR gate"),
+        t.forwardPowerPeakRaw ? QVariant(m_keyedSwrGateClears) : QVariant());
+    // THE WINDOW'S PEAK, for a human reading HOW FAR below the gate a run sat.
+    // Not a gate verdict — see the counter above for why. FWDPWR already takes
+    // the peak while keyed for the same display reason (publishTelemetry()).
+    put(HealthSnapshot::kForwardWindowPeakRaw,
+        QStringLiteral("Forward (raw counts, window peak)"),
+        opt(t.forwardPowerPeakRaw));
     // SWR from linearized counts (#4578), absent below kMinForwardCountsForSwr
     // like the TX:SWR meter, where the ratio would be noise.
     {
@@ -8276,8 +8319,20 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // detectorVolts(), #4578), and only meaningful with real forward power:
     // below kMinForwardCountsForSwr (MetisProtocol.h, shared with Radio Health)
     // noise drives the ratio to 255.99:1.
-    if (t.forwardPowerRaw && t.reversePowerRaw
-        && *t.forwardPowerRaw >= kMinForwardCountsForSwr) {
+    //
+    // THE GATE IS COUNTED SEPARATELY FROM THE RATIO, and the split is the point.
+    // A window that cleared the forward gate but published no SWR — no reverse
+    // reading, or swrFromRaw() declining — is a REAL defect, and a consumer
+    // cannot tell it from a correctly suppressed window unless the gate's own
+    // verdict is reported apart from the ratio's. So the counter below sits
+    // outside the reverse/swrFromRaw conditions deliberately; narrowing it to
+    // "windows that published SWR" would make it tautological and would hide
+    // exactly the fault radiocert must still be able to call (#7063 review).
+    const bool swrGateCleared =
+        t.forwardPowerRaw && *t.forwardPowerRaw >= kMinForwardCountsForSwr;
+    if (m_keyed && swrGateCleared)
+        ++m_keyedSwrGateClears;
+    if (swrGateCleared && t.reversePowerRaw) {
         if (const auto swr = swrFromRaw(*t.forwardPowerRaw, *t.reversePowerRaw))
             emit meterUpdate(QStringLiteral("TX:SWR"), *swr);
     }
