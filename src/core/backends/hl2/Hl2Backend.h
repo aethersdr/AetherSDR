@@ -307,6 +307,7 @@ private:
     // Feeds EP6 status frames to the backend's own MetisClient on its I/O thread,
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
+    friend struct Hl2TxRouteTestAccess;
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
     void onRadioPttChanged(bool keyed);
@@ -429,6 +430,17 @@ private:
     // Clamp 0..100, map onto the drive register, honour the transmit gate.
     // Shared by setTxPower() and setTune() so the mapping exists exactly once.
     void applyDrive(int percent);
+    // 0..100 onto the register, with the transmit gate; what applyDrive() writes.
+    [[nodiscard]] int driveLevelFor(int percent) const noexcept;
+    // The drive in force for the route: RF1's own value there, ANT's band drive
+    // otherwise. RF1 never reads or writes the band maps (#4954).
+    [[nodiscard]] int operatorDrivePercent() const noexcept;
+    // Field::TxAntenna: "ANT" or "RF1". Every outcome republishes the actual
+    // route on every slice; a refusal also raises configurationWarning.
+    ReceiveDispatch requestTxRoute(const QString& token);
+    void applyTxRoute(hl2::TxRoute next);
+    void refuseTxRoute(const QString& why);
+    void onMetisTxRouteRefused(int actual);
     void beginTxTail();
     void cancelTxTail();
     void finishTxTail();
@@ -1068,6 +1080,13 @@ private:
     // last handed to MetisClient; negative = never written, row absent. The "gated"
     // row is derived from m_txAllowed at read time.
     int m_txDriveRegister = -1;
+    // The transmit output (#4954). Not persisted: every connect starts on ANT.
+    hl2::TxRoute m_txRoute = hl2::TxRoute::Ant;
+    // RF1's drive, set to the starting value at every change to RF1 and never
+    // stored. The starting value is 0 % (gateware nibble 0) until RF1's level
+    // against drive has been measured.
+    static constexpr int kRf1StartDrivePercent = 0;
+    int m_rf1DrivePercent = kRf1StartDrivePercent;
     // RFC #4603 state memory. m_restoredState is the validated pre-connect snapshot;
     // the per-band maps (Hl2Bands.h keys) are the session's working copies, with
     // defaults for unvisited bands. m_currentBandKey says which band live edits

@@ -166,6 +166,9 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
 - **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
 - **TX drive and LNA gain** are remembered per band.
+- **TX output, ANT or RF1:** the slice's TX antenna button chooses where transmit leaves the board. **ANT**, the default, uses the onboard PA. **RF1** is the low-power output with the PA off. Every connect starts on ANT, and the choice cannot change while the radio transmits.
+- **RF power on RF1** is a separate setting. It starts at 0 % each time you select RF1 and is not remembered per band; your ANT drive for each band is kept and returns when you select ANT. TUNE on RF1 runs at the RF1 setting, and Tune Power has no effect there.
+- **On RF1 the power and SWR gauges read about 0.** That is expected, not a fault. An amplifier keyed from EXTTR still keys on RF1, the IO board still receives the TX frequency, and the gateware tuner request is not raised. A CAT program's antenna command (`set_ant`) changes only the receive antenna, and recalling a band-stack entry leaves the TX output where it is.
 - **MON** and its volume slider, and **VOX** and its level slider, are disabled because these controls are unavailable on the HL2. Their tooltips and accessible descriptions explain why.
 
 > **Upgrading from an older version:** CW keys at the same carrier level as TUNE, about 6 dB (four times the power) above earlier versions at the same RF power setting. Check your RF power before you key CW into an amplifier or a low-power load.
@@ -177,7 +180,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
 - AX.25 packet with AetherModem (APRS, KISS TNC, terminal and mailbox).
 - **Memory channels**, stored on this computer in the bank shared by radios without memory slots. See [Memory Channels](./memory-channels.md).
-- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware and the transmit voice chain.
+- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware, the TX output and the transmit voice chain.
 - Connection health in the title bar, status bar and network statistics.
 
 ## Reference
@@ -195,6 +198,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 - Only one Hermes-Lite 2 (gateware 74) on macOS, transmitting into a dummy load, has been tested for this page. Linux, Windows and other HL2 boards have not. If you run an HL2 there, reports of what works and what does not are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)).
 - Keying with the HL2's hardware PTT jack shows as transmit in AetherSDR and mutes the receiver, but does not carry host audio: only the radio is keyed, and AetherSDR sends no modulation ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
+- RF1's output level against the RF power slider, and its harmonics, have not been measured ([#4954](https://github.com/aethersdr/AetherSDR/issues/4954)). Start low and use a fixed attenuator before any receiver or analyzer.
 - Each over starts with about 100 ms of keyed silence before your audio is transmitted ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
 
 ## Troubleshooting

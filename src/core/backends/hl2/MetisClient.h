@@ -99,6 +99,10 @@ public:
         // the operator from one radio to the next. Empty when the serial is
         // not known yet, which the latch treats as "do not act".
         QString radioSerial;
+
+        // The transmit output (#4954). Authoritative at start(): the session's
+        // first route bank and whether 0x09 joins the rotation follow from it.
+        TxRoute txRoute = TxRoute::Ant;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -366,6 +370,12 @@ public:
     [[nodiscard]] bool isKeyed() const noexcept { return m_mox; }
     Q_INVOKABLE void setTxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setTxDriveLevel(int level);
+    // Route and drive as ONE 0x09 bank, so a key right after the change cannot go
+    // out at the old level on the new route. `route` is a TxRoute as int (queued
+    // invoke). Refused while keyed, under radio PTT or inside the unkey tail; a
+    // refusal is answered by txRouteRefused() and changes nothing.
+    Q_INVOKABLE void setTxRoute(int route, int level);
+    [[nodiscard]] TxRoute txRoute() const noexcept { return m_txRoute; }
 
     // Software CW for a PC/USB/MIDI keyer. The carrier is generated in the EP2
     // packet builder so its envelope is sample-paced by the radio's fixed
@@ -477,6 +487,8 @@ signals:
     // it. An observation, per edge and unthrottled; false is also emitted when the
     // stream ends or goes silent with the bit set.
     void radioPttChanged(bool keyed);
+    // setTxRoute() refused; `actual` is the route still in force (TxRoute as int).
+    void txRouteRefused(int actual);
     // One accepted bandscope block: 2048 contiguous converter samples merged from the
     // four in-phase EP4 packets the gate kept (never per packet). Uncalibrated and
     // pre-DDC, on the AD9866's own scale: nothing downstream may treat these as
@@ -793,6 +805,22 @@ private:
     bool    m_cl1BankOnBuiltPacket = false;
 
     Cc m_ccTxDrive{};
+    // 0x09 from its parts; the one builder every site uses (gate applied inside).
+    [[nodiscard]] Cc txDriveBank() const noexcept;
+    [[nodiscard]] bool txRouteChangeBlocked() const noexcept;
+    // start()'s share of the above: route from m_params, drive 0, rotation flag.
+    void resetTxDriveForSession();
+    // The drive as last commanded, already gated at that time and clamped.
+    int m_txDriveLevel = 0;
+    TxRoute m_txRoute = TxRoute::Ant;
+    // 0x09 has no readback and is otherwise a one-shot, so once a session's route
+    // has left ANT the bank rides the round robin until the session ends: a lost
+    // bank, or the change back, is re-sent within one rotation.
+    bool m_txRouteInRotation = false;
+    // The radio radiates 40-54 ms past the MOX-off frame (measured, one unit) and
+    // the route bit moves the RF switch. Below Hl2Backend::kTxTailHoldMs (70), so
+    // a change the backend accepts after its own hold is not refused here.
+    static constexpr int kTxRouteUnkeyHoldMs = 60;
     // The ATU tune request's standing state, held because it shares 0x09 with
     // the drive level: setTxDriveLevel() has to re-assert it or a drive change
     // mid-tune would drop the request.
