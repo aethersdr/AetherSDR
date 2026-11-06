@@ -2033,7 +2033,7 @@
         "target": "SettingsBrowserDialog"
       },
       "caption": "The Settings Browser, filtered to keys that contain Spot.",
-      "alt": "Settings Browser window. An amber warning reads Advanced, edits apply immediately and bypass each feature's own validation. The left list holds App Settings (selected) and Station: AetherSDR. The right side has a filter box containing Spot and a Key and Value table with IsSpotsEnabled True, PassiveSpotsMode False, SpotFontSize 16 and SpotsMaxLevel 3. Add Key…, Delete, Refresh, Export Sanitized… and Close buttons run along the bottom."
+      "alt": "Settings Browser window, with a round close button in its top-right corner. An amber warning reads Advanced, edits apply immediately and bypass each feature's own validation. The left list holds App Settings (selected) and Station: AetherSDR. The right side has a filter box containing Spot and a Key and Value table with IsSpotsEnabled True, PassiveSpotsMode False, SpotFontSize 16 and SpotsMaxLevel 3. Add Key…, Delete, Refresh and Export Sanitized… buttons run along the bottom."
     },
     {
       "id": "aethercontrol-window",
