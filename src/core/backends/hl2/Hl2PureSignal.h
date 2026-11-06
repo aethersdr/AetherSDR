@@ -53,6 +53,7 @@ struct Hl2PureSignalStatus {
     bool autoCalibrate = false;
     bool autoAttenuate = true;
     bool calibrating = false;    // a calibration is armed (auto or single)
+    bool singleCalibrating = false;  // a single calibration is requested or running
     bool correcting = false;     // info[14]: correction applied to TX
     int feedbackLevel = 0;       // info[4]; 128..181 is the target window
     int calibrationCount = 0;    // info[5]
@@ -124,6 +125,11 @@ public:
     {
         return m_cmd == Cmd::Auto || m_cmd == Cmd::TurnOnAuto
             || m_cmd == Cmd::Single || m_cmd == Cmd::TurnOnSingle;
+    }
+    // From the press of Single until that calibration ends, retries included.
+    [[nodiscard]] bool singleCalibrating() const noexcept
+    {
+        return m_singleCalOn || m_cmd == Cmd::Single || m_cmd == Cmd::TurnOnSingle;
     }
 
     [[nodiscard]] static int clampAtt(int att) noexcept

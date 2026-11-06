@@ -218,10 +218,14 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     buttons->addWidget(m_auto, 2);
     m_single = new QPushButton(tr("Single"), this);
     m_single->setObjectName(QStringLiteral("pureSignalSingle"));
+    // Lit from the press until that one calibration is done, so the press is
+    // visible while nothing is keyed yet. The backend decides; a click only
+    // asks.
+    m_single->setCheckable(true);
     m_single->setFixedHeight(22);
     m_single->setAccessibleName(tr("PureSignal single calibration"));
     m_single->setToolTip(tr("Calibrate once on the next transmission"));
-    styleButton(m_single);
+    applyToggleButtonStyle(m_single, ToggleTribe::Warning);
     buttons->addWidget(m_single, 2);
     root->addLayout(buttons);
 
@@ -323,6 +327,8 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     });
     connect(m_single, &QPushButton::clicked, this, [this] {
         send(QStringLiteral("single"));
+        QSignalBlocker block(m_single);
+        m_single->setChecked(m_status.singleCalibrating);
     });
     connect(m_autoAttenuate, &QCheckBox::toggled, this, [this](bool on) {
         m_attenuation->setEnabled(!on);
@@ -403,6 +409,7 @@ PureSignalView PureSignalView::fromFields(const QVariantMap& f, PureSignalView v
     b("autoCalibrate", v.autoCalibrate);
     b("autoAttenuate", v.autoAttenuate);
     b("calibrating", v.calibrating);
+    b("singleCalibrating", v.singleCalibrating);
     b("correcting", v.correcting);
     i("feedbackLevel", v.feedbackLevel);
     i("calibrationCount", v.calibrationCount);
@@ -529,8 +536,9 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
     m_restore->setEnabled(bound && s.enabled);
     {
         // Follow the backend without echoing it back.
-        const QSignalBlocker b1(m_auto), b2(m_autoAttenuate), b3(m_attenuation);
+        const QSignalBlocker b1(m_auto), b2(m_autoAttenuate), b3(m_attenuation), b4(m_single);
         m_auto->setChecked(s.autoCalibrate);
+        m_single->setChecked(s.enabled && s.singleCalibrating);
         m_autoAttenuate->setChecked(s.autoAttenuate);
         m_autoAttenuate->setEnabled(bound);
         m_attenuation->setEnabled(bound && !s.autoAttenuate);

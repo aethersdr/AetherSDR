@@ -188,7 +188,7 @@ When one of these is missing, the PureSignal button is dimmed, and the line unde
 
 - **PureSignal** turns it on and off. It starts off on every connect. You can turn it on or off only while you are not transmitting.
 - **Auto** calibrates again and again while you transmit.
-- **Single** calibrates once, on your next transmission, then holds that correction.
+- **Single** calibrates once, on your next transmission, then holds that correction. It stays lit from the press until that calibration is done.
 - **FB** is the feedback level. A calibration needs it inside the marked window (128–181).
 - The line under the meter shows the attenuation, the number of calibrations and the engine state. The state line says what PureSignal is doing, for example "Armed — key into a load to calibrate".
 

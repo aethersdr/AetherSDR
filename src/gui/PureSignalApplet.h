@@ -34,6 +34,7 @@ struct PureSignalView {
     bool autoCalibrate = false;
     bool autoAttenuate = true;
     bool calibrating = false;
+    bool singleCalibrating = false;
     bool correcting = false;
     int feedbackLevel = 0;
     int calibrationCount = 0;

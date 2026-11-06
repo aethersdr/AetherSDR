@@ -140,19 +140,23 @@ void singleAndRestoreEndAuto()
     check(l.command() == Cmd::Auto && l.autoCalibrate(), "auto armed");
     l.setAutoCalibrate(false);
     l.requestSingleCalibration();
+    check(l.singleCalibrating(), "Single lit from the press");
     l.tick({});
     check(l.command() == Cmd::TurnOff, "Auto + Single -> TurnOff first");
+    check(l.singleCalibrating(), "Single lit through TurnOff");
     auto o = l.tick({});
     check(o.controls.size() == 1 && o.controls[0] == kReset
               && l.command() == Cmd::TurnOnSingle,
           "TurnOff resets, then -> TurnOnSingle");
     l.tick({});
     check(l.command() == Cmd::Single && !l.autoCalibrate(), "-> Single, Auto off");
+    check(l.singleCalibrating(), "Single lit while calibrating");
     Info done;
     done.correcting = true;
     done.feedbackLevel = 150;
     l.tick(done);
     check(l.command() == Cmd::StayOn, "single calibration done -> StayOn, not TurnOnAuto");
+    check(!l.singleCalibrating(), "Single unlit once done");
 
     Hl2PureSignalLogic r;
     r.setAutoAttenuate(false);
@@ -182,10 +186,12 @@ void controllerAutoSwitch()
     // these paths never reach the channel.
     Hl2PureSignal ps(nullptr);
     bool autoReported = false;
+    bool singleReported = false;
     int reports = 0;
     QObject::connect(&ps, &Hl2PureSignal::statusChanged,
                      [&](const hl2::Hl2PureSignalStatus& s) {
                          autoReported = s.autoCalibrate;
+                         singleReported = s.singleCalibrating;
                          ++reports;
                      });
     ps.setAvailability(true, QString());
@@ -194,6 +200,7 @@ void controllerAutoSwitch()
     const int before = reports;
     ps.calibrateOnce();
     check(reports > before && !autoReported, "Single reports Auto off");
+    check(!singleReported, "PureSignal off: Single not reported lit");
     ps.setAutoCalibrate(true);
     ps.resetCorrection();
     check(!autoReported, "Reset reports Auto off");
