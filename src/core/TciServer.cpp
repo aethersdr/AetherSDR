@@ -308,11 +308,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // TX passband → `tx_filter_band_ex:` broadcast, whoever moved it: a
         // TCI client's SET, the Phone applet, or a TX profile. This is also
         // the reply to a client's SET (see TciProtocol::cmdTxFilterBandEx).
+        // Coalesced and rate-limited, see queueTxFilterBroadcast().
         connect(&m_model->transmitModel(), &TransmitModel::txFilterCutoffChanged,
-                this, [this](int lowHz, int highHz) {
-            if (m_clients.isEmpty()) return;
-            broadcast(QStringLiteral("tx_filter_band_ex:%1,%2;")
-                          .arg(lowHz).arg(highHz));
+                this, [this](int, int) {
+            m_txFilterPending = true;
+            queueTxFilterBroadcast();
         });
 
         // `tune:` follows the model whatever started the tune: the TX applet,
@@ -650,6 +650,15 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         m_powerRateTimer->start();
     });
 
+    // Rate limiter for tx_filter_band_ex: -- see queueTxFilterBroadcast().
+    m_txFilterRateTimer = new QTimer(this);
+    m_txFilterRateTimer->setSingleShot(true);
+    m_txFilterRateTimer->setInterval(kPowerRateLimitMs);
+    connect(m_txFilterRateTimer, &QTimer::timeout, this, [this]() {
+        if (m_txFilterPending && broadcastTxFilter())
+            m_txFilterRateTimer->start();
+    });
+
     // Debounced DAX RX teardown — see scheduleDaxRelease(). Single-shot; a
     // reconnecting audio client cancels it before it fires.
     m_daxReleaseTimer = new QTimer(this);
@@ -794,6 +803,45 @@ void TciServer::broadcastMasterVolume(int pct)
     // 0-100 amplitude from the title bar slider / applyMasterVolume.
     broadcast(QStringLiteral("volume:%1;")
                   .arg(TciProtocol::volumeDbFromPercent(pct)));
+}
+
+// tx_filter_band_ex: relay. The leading send is posted rather than made in
+// the signal, so the two signals of one ClientEq drag step (low, then high)
+// go out as one final pair instead of an intermediate new-low/old-high pair
+// and then the real one. After a send, the same 100 ms window as drive: holds
+// further changes for one trailing send of the latest pair.
+void TciServer::queueTxFilterBroadcast()
+{
+    if (m_txFilterSendPosted || m_txFilterRateTimer->isActive())
+        return;
+    m_txFilterSendPosted = true;
+    QMetaObject::invokeMethod(this, [this]() {
+        m_txFilterSendPosted = false;
+        if (broadcastTxFilter())
+            m_txFilterRateTimer->start();
+    }, Qt::QueuedConnection);
+}
+
+bool TciServer::broadcastTxFilter()
+{
+    m_txFilterPending = false;
+    if (m_clients.isEmpty() || !m_model) {
+        // No one holds the last value, so forget it (as broadcastPower does).
+        m_lastTxFilterLowSent = -1;
+        m_lastTxFilterHighSent = -1;
+        return false;
+    }
+    if (!TciProtocol::txFilterControlsAvailable(m_model))
+        return false;
+    const auto& tx = m_model->transmitModel();
+    const int low = tx.txFilterLow();
+    const int high = tx.txFilterHigh();
+    if (low == m_lastTxFilterLowSent && high == m_lastTxFilterHighSent)
+        return false;
+    m_lastTxFilterLowSent = low;
+    m_lastTxFilterHighSent = high;
+    broadcast(QStringLiteral("tx_filter_band_ex:%1,%2;").arg(low).arg(high));
+    return true;
 }
 
 // Rate-limited entry point for TransmitModel's power signals (#4161).

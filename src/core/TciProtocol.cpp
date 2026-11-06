@@ -487,8 +487,10 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("mic_level:%1;").arg(tx.micLevel());
         // TX passband, so a client seeds its TX filter control from the
         // radio instead of assuming one (Thetis sends it in its burst too).
-        burst += QStringLiteral("tx_filter_band_ex:%1,%2;")
-                     .arg(tx.txFilterLow()).arg(tx.txFilterHigh());
+        if (txFilterControlsAvailable(m_model)) {
+            burst += QStringLiteral("tx_filter_band_ex:%1,%2;")
+                         .arg(tx.txFilterLow()).arg(tx.txFilterHigh());
+        }
         burst += QStringLiteral("trx:%1,%2;").arg(txTrxIndex).arg(isTx ? "true" : "false");
         burst += QStringLiteral("tune:%1,%2;").arg(txTrxIndex).arg(tx.isTuning() ? "true" : "false");
 
@@ -985,9 +987,20 @@ QString TciProtocol::cmdTxGain(const QStringList& args, bool /*isSet*/)
 // direct reply: TciServer broadcasts the passband the model actually adopted
 // on txFilterCutoffChanged, so a clamped request reads back as clamped, and an
 // unchanged one stays quiet, as in Thetis.
+// GET returns the operator setpoint held by TransmitModel, the value a SET
+// writes, not the passband a backend may derive from it (on HL2 in CW the
+// modulator runs Hl2Backend::effectiveTxPassband()).
+// A radio without TX cutoff controls gets none of this: see
+// txFilterControlsAvailable().
+bool TciProtocol::txFilterControlsAvailable(const RadioModel* model)
+{
+    return model
+        && (!model->isConnected() || model->backendCapabilities().hasTxFilterControls);
+}
+
 QString TciProtocol::cmdTxFilterBandEx(const QStringList& args)
 {
-    if (!m_model) return {};
+    if (!m_model || !txFilterControlsAvailable(m_model)) return {};
     if (args.isEmpty() || (args.size() == 1 && args.first().isEmpty())) {
         const auto& tx = m_model->transmitModel();
         return QStringLiteral("tx_filter_band_ex:%1,%2;")
@@ -997,11 +1010,18 @@ QString TciProtocol::cmdTxFilterBandEx(const QStringList& args)
     int low = 0;
     int high = 0;
     if (!argToInt(args, 0, low) || !argToInt(args, 1, high)) return {};
-    low = std::abs(low);
-    high = std::abs(high);
+    // Bound before abs() and the +100: argToInt takes the whole int range, and
+    // std::abs(INT_MIN) or INT_MAX + 100 is undefined. setTxFilter() clamps to
+    // the same range afterwards.
+    constexpr int kMax = TransmitModel::kTxFilterMaxHz;
+    low = std::abs(qBound(-kMax, low, kMax));
+    high = std::abs(qBound(-kMax, high, kMax));
     if (low > high) std::swap(low, high);
     if (high < low + 100) high = low + 100;
     QMetaObject::invokeMethod(m_model, [model = m_model, low, high]() {
+        // Checked again here: the capability can change between the parse on
+        // the TCI thread and this call on the model's thread.
+        if (!txFilterControlsAvailable(model)) return;
         model->transmitModel().setTxFilter(low, high);
     }, Qt::QueuedConnection);
     return {};

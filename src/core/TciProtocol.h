@@ -96,6 +96,13 @@ public:
     static int volumeDbFromPercent(int pct);
     static int volumePercentFromDb(double db);
 
+    // Whether tx_filter_band_ex is offered: the same rule MainWindow and the
+    // automation bridge apply. A connected radio without independent TX
+    // cutoffs (RadioCapabilities::hasTxFilterControls false) gets no burst
+    // line, no GET reply, no SET and no broadcast; with no radio connected
+    // the value is the operator's setpoint and stays available.
+    static bool txFilterControlsAvailable(const RadioModel* model);
+
     // After handleCommand(), if the command was a `tx_gain:N;` SET, this
     // returns the requested TCI TX gain (0-100); -1 means no change. TciServer
     // reads it and applies it via setTxGain() — TciProtocol can't reach

@@ -520,10 +520,94 @@ public:
                  .isEmpty()) {
             return false;
         }
-        QCoreApplication::processEvents();
-        return model.transmitModel().txFilterLow() == 100
-            && model.transmitModel().txFilterHigh() == 2900
-            && sent.contains(QStringLiteral("tx_filter_band_ex:100,2900;"));
+        // The SET is queued to the model and the broadcast posted from its
+        // signal: two rounds of posted events.
+        const auto settle = []() {
+            for (int i = 0; i < 3; ++i)
+                QCoreApplication::processEvents();
+        };
+        settle();
+        if (model.transmitModel().txFilterLow() != 100
+            || model.transmitModel().txFilterHigh() != 2900
+            || !sent.contains(QStringLiteral("tx_filter_band_ex:100,2900;"))) {
+            std::printf("      reversed SET did not read back as 100,2900\n");
+            return false;
+        }
+
+        // Too narrow: widened to 100 Hz. Past the 100 ms send window first.
+        server.m_txFilterRateTimer->stop();
+        if (!protocol.handleCommand(QStringLiteral("tx_filter_band_ex:1000,1020")).isEmpty())
+            return false;
+        settle();
+        if (model.transmitModel().txFilterLow() != 1000
+            || model.transmitModel().txFilterHigh() != 1100
+            || !sent.contains(QStringLiteral("tx_filter_band_ex:1000,1100;"))) {
+            std::printf("      a 20 Hz SET was not widened to 1000,1100\n");
+            return false;
+        }
+
+        // The full int range: bounded before abs() and +100, no UB.
+        server.m_txFilterRateTimer->stop();
+        protocol.handleCommand(QStringLiteral("tx_filter_band_ex:-2147483648,500"));
+        settle();
+        if (model.transmitModel().txFilterLow() != 500
+            || model.transmitModel().txFilterHigh() != TransmitModel::kTxFilterMaxHz) {
+            std::printf("      INT_MIN,500 did not read back as 500,max\n");
+            return false;
+        }
+        protocol.handleCommand(QStringLiteral("tx_filter_band_ex:2147483647,2147483647"));
+        settle();
+
+        // One ClientEq drag step is low, then high: one pair on the wire.
+        server.m_txFilterRateTimer->stop();
+        sent.clear();
+        model.transmitModel().setTxFilterLow(300);
+        model.transmitModel().setTxFilterHigh(2400);
+        settle();
+        if (sent.filter(QStringLiteral("tx_filter_band_ex:")).size() != 1
+            || !sent.contains(QStringLiteral("tx_filter_band_ex:300,2400;"))) {
+            std::printf("      a low+high step did not go out as one 300,2400 pair\n");
+            return false;
+        }
+        return true;
+    }
+
+    // A connected radio without TX cutoff controls (Sim, an Icom with no
+    // bandwidth profile) is offered no tx_filter_band_ex at all, as the GUI
+    // and the automation bridge already do: otherwise a SET is adopted by the
+    // model and confirmed to the client while the backend refuses it.
+    static bool txFilterBandExFollowsCapability()
+    {
+        RadioModel model;
+        auto backendOwner = std::make_unique<TxCapableBackend>();
+        TxCapableBackend* backend = backendOwner.get();
+        backend->caps.hasTxFilterControls = false;
+        model.setBackendForTest(std::move(backendOwner), QStringLiteral("test"));
+        TciServer server(&model);
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+        if (!model.isConnected()) {
+            std::printf("      the test backend did not report connected\n");
+            return false;
+        }
+        const int low = model.transmitModel().txFilterLow();
+        const int high = model.transmitModel().txFilterHigh();
+        if (protocol.generateInitBurst().contains(QStringLiteral("tx_filter_band_ex:"))
+            || !protocol.handleCommand(QStringLiteral("tx_filter_band_ex")).isEmpty()) {
+            std::printf("      burst or GET offered a passband the radio lacks\n");
+            return false;
+        }
+        protocol.handleCommand(QStringLiteral("tx_filter_band_ex:100,2900"));
+        for (int i = 0; i < 3; ++i)
+            QCoreApplication::processEvents();
+        if (model.transmitModel().txFilterLow() != low
+            || model.transmitModel().txFilterHigh() != high) {
+            std::printf("      a SET changed the model on a radio without the control\n");
+            return false;
+        }
+
+        backend->caps.hasTxFilterControls = true;
+        return protocol.generateInitBurst().contains(QStringLiteral("tx_filter_band_ex:"))
+            && !protocol.handleCommand(QStringLiteral("tx_filter_band_ex")).isEmpty();
     }
 
     static bool chronoStallSnapshotIsIdle()
@@ -3403,6 +3487,10 @@ int main(int argc, char** argv)
     const bool txFilterBandEx = AetherSDR::TciServerReviewTest::txFilterBandExRoundTrips();
     std::printf("%s  tx_filter_band_ex seeds, reads, sets and broadcasts the TX passband\n",
                 txFilterBandEx ? "PASS" : "FAIL");
+    const bool txFilterBandExCaps =
+        AetherSDR::TciServerReviewTest::txFilterBandExFollowsCapability();
+    std::printf("%s  tx_filter_band_ex is not offered by a radio without TX cutoffs\n",
+                txFilterBandExCaps ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -3411,7 +3499,7 @@ int main(int argc, char** argv)
     std::printf("%s  worker streams and revokes TX while owner is stalled\n", workerStall ? "PASS" : "FAIL");
     std::printf("%s  late key abort runs on model owner\n", lateKeyAbort ? "PASS" : "FAIL");
 
-    return txFilterBandEx && workerStall && lateKeyAbort && inputFence && validProfile && freeDvModeAliases
+    return txFilterBandEx && txFilterBandExCaps && workerStall && lateKeyAbort && inputFence && validProfile && freeDvModeAliases
         && deferredAbort && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap && ownershipJoin
