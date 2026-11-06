@@ -17,6 +17,7 @@
 
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
+#include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
 #include "core/RadioStateMemory.h"
 #include "core/backends/IRadioBackend.h"
@@ -596,7 +597,8 @@ void testPersistence()
     A::startSessionOnBackendRoute(b);
     check(A::clientRoute(b) == TxRoute::Rf1 && A::clientStoredBank(b) == ccTxDrive(0, false),
           "RT7: the session starts on RF1 at drive 0, PA off");
-    b.setTxPower(p.rfPower.back());   // RadioModel's connect-time push of the seeded value
+    // RadioModel's connect-time push of the seeded value (100 if nothing was seeded).
+    b.setTxPower(p.rfPower.empty() ? 100 : p.rfPower.back());
     std::optional<Cc> d = drainBackend(b);
     check(d && (*d)[1] == 0 && !paOn(*d) && A::bandDrive(b, b20) == 100,
           "RT7: the connect push leaves RF1 at drive 0, PA off, and ANT's band drive alone");
@@ -655,6 +657,7 @@ int main(int argc, char** argv)
         return 1;
     }
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();   // the per-radio documents RT7 stores and loads
     std::printf("\n  HL2 transmit output, ANT or RF1 (#4954)\n");
     TxTestAuthority authority;
 
