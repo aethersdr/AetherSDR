@@ -53,7 +53,11 @@ public:
     // "the live TX slice" rather than a second copy that can drift from it.
     static int currentTxSlice(const QVector<TciSliceEndpoint>& endpoints);
 
-    RouteDecision resolveVfoB(int rxSliceId, const QVector<TciSliceEndpoint>& endpoints);
+    // vfoBEqualsRx: the requested VFO B frequency is the RX slice's own. With
+    // no split requested that names no TX frequency of its own, so it must not
+    // create a slice (a client replaying `vfo:<trx>,1,<A>` on connect).
+    RouteDecision resolveVfoB(int rxSliceId, const QVector<TciSliceEndpoint>& endpoints,
+                              bool vfoBEqualsRx = false);
     int resolvePttSlice(int rxSliceId, const QVector<TciSliceEndpoint>& endpoints);
 
     bool setSplitRequested(bool enabled);
