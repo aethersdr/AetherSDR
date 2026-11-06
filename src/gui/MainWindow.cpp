@@ -7527,15 +7527,15 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
                 m_audio, &AudioEngine::feedPcmFrame);
     }
 
-    // HL2 only: opening its client-side WDSP chains measures FFTW plans, ~20 s
-    // without cached wisdom, so the operator needs a visible explanation. The
-    // panadapter animation is hidden behind ConnectionPanel (parented
-    // Qt::Dialog, shown until connected), hence a dialog (#5052, #4775).
     // PureSignal binds through the seam: the applet checks the backend's
     // advertised hl2/puresignal extension and unbinds from anything else.
     if (m_appletPanel && m_appletPanel->pureSignalApplet())
         m_appletPanel->pureSignalApplet()->setBackend(backend);
 
+    // HL2 only: opening its client-side WDSP chains measures FFTW plans, ~20 s
+    // without cached wisdom, so the operator needs a visible explanation. The
+    // panadapter animation is hidden behind ConnectionPanel (parented
+    // Qt::Dialog, shown until connected), hence a dialog (#5052, #4775).
     if (auto* hl2Backend = dynamic_cast<hl2::Hl2Backend*>(backend)) {
         // Disconnected first, like every other lambda connect in this function:
         // the helper promises to be idempotent for the same live backend, and

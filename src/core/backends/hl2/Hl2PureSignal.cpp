@@ -1,5 +1,5 @@
 // Ported from Thetis' PSForm.cs (MI0BOT's HL2 fork). Attribution and
-// license: see Hl2PureSignal.h and THIRD_PARTY_LICENSES entry 36.
+// license: see Hl2PureSignal.h and THIRD_PARTY_LICENSES entry 37.
 
 #include "core/backends/hl2/Hl2PureSignal.h"
 
@@ -300,9 +300,24 @@ void Hl2PureSignal::setAutoCalibrate(bool on)
     publish();
 }
 
+void Hl2PureSignal::forceAutoOff()
+{
+    // Console.ForcePureSignalAutoCalDisable(), which PSForm's Single, Reset and
+    // Restore buttons call first: untick Auto, which asks for OFF, so the
+    // machine runs Auto -> TurnOff -> the button's own step. Clearing the
+    // switch also keeps a rebuilt channel or the next enable from arming Auto
+    // again on top of the correction the operator chose.
+    if (!m_wantAuto && !m_logic.autoCalibrate())
+        return;
+    m_wantAuto = false;
+    m_logic.setAutoCalibrate(false);
+}
+
 void Hl2PureSignal::calibrateOnce()
 {
+    forceAutoOff();
     m_logic.requestSingleCalibration();
+    publish();
 }
 
 void Hl2PureSignal::resetCorrection()
@@ -349,8 +364,10 @@ void Hl2PureSignal::restoreCorrection(const QString& path)
     }
     if (WdspChannel* ch = channel()) {
         ch->pureSignalRestore(p.constData());
+        forceAutoOff();
         m_logic.requestRestore();
         qCInfo(lcHl2Ps) << "HL2 PureSignal: restoring correction from" << path;
+        publish();
     }
 }
 

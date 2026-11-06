@@ -285,6 +285,8 @@ public:
     bool setPureSignalEnabled(bool on);
     void setPureSignalAutoCalibrate(bool on);
     void pureSignalCalibrateOnce();
+    // Single, Reset and Restore end Auto: drops and persists the switch.
+    void clearPureSignalAutoCalibrate();
     void pureSignalResetCorrection();
     void setPureSignalAutoAttenuate(bool on);
     void setPureSignalAttenuationDb(int att);

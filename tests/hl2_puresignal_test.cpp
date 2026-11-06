@@ -7,10 +7,21 @@
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
+#include <QCoreApplication>
+
 #include <cstdio>
 
+namespace AetherSDR::hl2 {
+struct MetisClientTestAccess {
+    // The board's receiver count arrives with start()'s Params; set it alone.
+    static void setBoardMaxRx(MetisClient& c, int n) { c.m_params.boardMaxRx = n; }
+};
+}  // namespace AetherSDR::hl2
+
+using AetherSDR::hl2::Hl2PureSignal;
 using AetherSDR::hl2::Hl2PureSignalLogic;
 using AetherSDR::hl2::MetisClient;
+using AetherSDR::hl2::MetisClientTestAccess;
 namespace hl2 = AetherSDR::hl2;
 
 namespace {
@@ -115,6 +126,102 @@ void restore()
     on.correcting = true;
     l.tick(on);
     check(l.command() == Cmd::StayOn, "restored correction -> StayOn");
+}
+
+void singleAndRestoreEndAuto()
+{
+    // PSForm's Single and Restore untick Auto first (what the controller's
+    // forceAutoOff() does), and Auto must not come back on its own after them.
+    Hl2PureSignalLogic l;
+    l.setAutoAttenuate(false);
+    l.setAutoCalibrate(true);
+    l.tick({});
+    l.tick({});
+    check(l.command() == Cmd::Auto && l.autoCalibrate(), "auto armed");
+    l.setAutoCalibrate(false);
+    l.requestSingleCalibration();
+    l.tick({});
+    check(l.command() == Cmd::TurnOff, "Auto + Single -> TurnOff first");
+    auto o = l.tick({});
+    check(o.controls.size() == 1 && o.controls[0] == kReset
+              && l.command() == Cmd::TurnOnSingle,
+          "TurnOff resets, then -> TurnOnSingle");
+    l.tick({});
+    check(l.command() == Cmd::Single && !l.autoCalibrate(), "-> Single, Auto off");
+    Info done;
+    done.correcting = true;
+    done.feedbackLevel = 150;
+    l.tick(done);
+    check(l.command() == Cmd::StayOn, "single calibration done -> StayOn, not TurnOnAuto");
+
+    Hl2PureSignalLogic r;
+    r.setAutoAttenuate(false);
+    r.setAutoCalibrate(true);
+    r.tick({});
+    r.tick({});
+    r.setAutoCalibrate(false);
+    r.requestRestore();
+    r.tick({});
+    check(r.command() == Cmd::TurnOff, "Auto + Restore -> TurnOff first");
+    r.tick({});
+    check(r.command() == Cmd::Restore, "TurnOff -> Restore");
+    o = r.tick({});
+    check(o.controls.size() == 1 && o.controls[0] == Ctl{false, false, false, true}
+              && !r.autoCalibrate(),
+          "Restore sends turnon, Auto off");
+    Info on;
+    on.state = Hl2PureSignalLogic::LStayOn;
+    on.correcting = true;
+    r.tick(on);
+    check(r.command() == Cmd::StayOn, "restored correction -> StayOn, not TurnOnAuto");
+}
+
+void controllerAutoSwitch()
+{
+    // The switch the controller reports follows Single and Reset. No TX DSP:
+    // these paths never reach the channel.
+    Hl2PureSignal ps(nullptr);
+    bool autoReported = false;
+    int reports = 0;
+    QObject::connect(&ps, &Hl2PureSignal::statusChanged,
+                     [&](const hl2::Hl2PureSignalStatus& s) {
+                         autoReported = s.autoCalibrate;
+                         ++reports;
+                     });
+    ps.setAvailability(true, QString());
+    ps.setAutoCalibrate(true);
+    check(autoReported, "Auto reported on");
+    const int before = reports;
+    ps.calibrateOnce();
+    check(reports > before && !autoReported, "Single reports Auto off");
+    ps.setAutoCalibrate(true);
+    ps.resetCorrection();
+    check(!autoReported, "Reset reports Auto off");
+}
+
+void receiverCountUnderFloor()
+{
+    // PureSignal's floor keeps four DDCs on the wire; a receiver change made
+    // under it must still be the count once PureSignal turns off.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setBoardMaxRx(c, 4);
+        c.setPureSignal(true);
+        check(c.effectiveNumRx() == 4, "PS on: four DDCs");
+        c.setReceiverCount(2);
+        check(c.effectiveNumRx() == 4, "second receiver under the floor: still four");
+        c.setPureSignal(false);
+        check(c.effectiveNumRx() == 2, "PS off keeps the receiver added under it");
+    }
+    {
+        MetisClient c;
+        MetisClientTestAccess::setBoardMaxRx(c, 4);
+        c.setReceiverCount(2);
+        c.setPureSignal(true);
+        c.setReceiverCount(1);
+        c.setPureSignal(false);
+        check(c.effectiveNumRx() == 1, "PS off keeps the receiver removed under it");
+    }
 }
 
 void autoAttenuate()
@@ -226,12 +333,16 @@ void statusFields()
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    QCoreApplication app(argc, argv);
     attenuationStep();
     autoCalibrateOnAndOff();
     singleCalibration();
     restore();
+    singleAndRestoreEndAuto();
+    controllerAutoSwitch();
+    receiverCountUnderFloor();
     autoAttenuate();
     wire();
     statusFields();

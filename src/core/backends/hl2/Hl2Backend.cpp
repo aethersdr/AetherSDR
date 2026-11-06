@@ -1944,6 +1944,10 @@ void Hl2Backend::loadPureSignalPreferences()
     const QJsonObject doc = scope.feature(QLatin1String(kPureSignalFeature), &version);
     m_psAutoCalibrate = true;
     m_psAutoAttenuate = true;
+    // Only a manual attenuation is stored. What auto-attenuate reaches depends
+    // on the band, the drive and the coupler of the moment, so it is not
+    // persisted: each session starts at kAttMax and auto-attenuate finds its
+    // level again on the first calibration.
     m_psAttenuationDb = Hl2PureSignalLogic::kAttMax;
     if (!doc.isEmpty() && version <= kPureSignalSchemaVersion) {
         m_psAutoCalibrate = doc.value(QStringLiteral("autoCalibrate")).toBool(m_psAutoCalibrate);
@@ -2005,6 +2009,11 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
     } else if (verb == QLatin1String("puresignal.enable")) {
         if (!boolArg(on))
             return refuse(QStringLiteral("puresignal.enable: expects a bool"));
+        // Claiming or releasing DDC 2/3 can change the receiver count on the
+        // wire, which restarts EP6: not in the middle of an over. A loss of
+        // availability still turns it off while keyed (refreshPureSignalAvailability).
+        if (on != m_psEnabled && m_keyed)
+            return refuse(tr("Unkey to change PureSignal"));
         if (!setPureSignalEnabled(on))
             return refuse(m_psUnavailableReason);
     } else if (verb == QLatin1String("puresignal.auto")) {
@@ -2042,6 +2051,7 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
                || verb == QLatin1String("puresignal.reset")) {
         if (!m_psEnabled)
             return refuse(QStringLiteral("PureSignal is off"));
+        clearPureSignalAutoCalibrate();
         if (verb == QLatin1String("puresignal.single"))
             pureSignalCalibrateOnce();
         else
@@ -2056,10 +2066,12 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
                               .arg(kPureSignalMaxPathBytes - 1));
         if (!m_psEnabled)
             return refuse(QStringLiteral("PureSignal is off"));
-        if (verb == QLatin1String("puresignal.save"))
+        if (verb == QLatin1String("puresignal.save")) {
             savePureSignalCorrection(path);
-        else
+        } else {
+            clearPureSignalAutoCalibrate();
             restorePureSignalCorrection(path);
+        }
     } else {
         return refuse(QStringLiteral("hl2: unknown verb %1").arg(verb));
     }
@@ -2068,6 +2080,17 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
     // extensionStatus once it has acted.
     if (requestId != 0)
         emit extensionResult(requestId, pureSignalFields());
+}
+
+void Hl2Backend::clearPureSignalAutoCalibrate()
+{
+    // Single, Reset and Restore switch Auto off; Hl2PureSignal does the same
+    // on the I/O thread. Persisted, so the next session starts with the switch
+    // the operator last saw.
+    if (!m_psAutoCalibrate)
+        return;
+    m_psAutoCalibrate = false;
+    savePureSignalPreferences();
 }
 
 void Hl2Backend::setPureSignalAutoCalibrate(bool on)
@@ -2147,6 +2170,12 @@ Hl2Backend::~Hl2Backend()
         // Stop the wire on its own thread and wait: a queued stop() would never
         // run after quit(). Blocks on the GUI thread for an in-flight DSP build
         // (docs/HERMES.md §22.4); beginDspSetup()'s QPointer relies on this.
+        // PureSignal goes off first, on its own thread: that stops its tick
+        // timer there (a QTimer cannot be stopped from another thread) and
+        // takes the correction off the TXA channel before the wire stops.
+        if (m_pureSignal)
+            QMetaObject::invokeMethod(m_pureSignal, "setEnabled", Qt::BlockingQueuedConnection,
+                                      Q_ARG(bool, false));
         if (m_metis)
             QMetaObject::invokeMethod(m_metis, "stop", Qt::BlockingQueuedConnection);
         m_ioThread->quit();

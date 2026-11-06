@@ -513,6 +513,15 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
         m_enable->setChecked(s.enabled);
     }
     m_enable->setEnabled(usable);
+    {
+        // A dimmed button says why to a screen reader too, not only in the
+        // state line below it.
+        const QString why = bound && !s.available && !s.enabled
+            ? (s.unavailableReason.isEmpty() ? tr("Unavailable") : s.unavailableReason)
+            : tr("Adaptive pre-distortion from the HL2's own feedback receiver");
+        if (m_enable->accessibleDescription() != why)
+            m_enable->setAccessibleDescription(why);
+    }
     m_auto->setEnabled(bound);
     m_single->setEnabled(bound && s.enabled);
     m_reset->setEnabled(bound && s.enabled);

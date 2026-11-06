@@ -761,10 +761,14 @@ void MetisClient::setReceiverCount(int count)
     Params next = m_params;
     next.numRx = count;
     const int after = effectiveNumRx(next);
+    // Keep the request even when the DDC count on the wire does not move:
+    // under PureSignal's four-DDC floor a change from 1 to 2 receivers sends
+    // the same four, and dropping it here would bring the old count back when
+    // PureSignal turns off.
+    m_params.numRx = count;
     if (after == before)
         return;                       // nothing to do; do NOT restart for a no-op
 
-    m_params.numRx = count;
     relayoutReceivers(before);
 }
 
