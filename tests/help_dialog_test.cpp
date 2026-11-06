@@ -312,26 +312,63 @@ void testCanonWindow()
 void testLinksAreCanonCyan()
 {
     QTemporaryFile file;
-    if (!file.open()) { report("temp help document created", false); return; }
+    if (!file.open()) {
+        report("temp help document created", false);
+        return;
+    }
     file.write("See [the docs](https://docs.aethersdr.com) for more.\n");
     file.close();
     auto& tm = AetherSDR::ThemeManager::instance();
     const QString before = tm.activeTheme();
-    for (const char* theme : {"Default Dark", "Default Light"}) {
-        tm.setActiveTheme(QLatin1String(theme));
-        HelpDialog dialog("Links", file.fileName());
-        auto* browser = dialog.findChild<QTextBrowser*>("helpBrowser");
+    tm.setActiveTheme(QStringLiteral("Default Dark"));
+    HelpDialog dialog("Links", file.fileName());
+    dialog.show();
+    report("link guide is exposed", QTest::qWaitForWindowExposed(&dialog));
+    auto* browser = dialog.findChild<QTextBrowser*>("helpBrowser");
+    QColor previousCyan;
+    for (const char* theme : {"Default Dark", "Default Light", "Default Dark"}) {
+        report("switch theme while the guide stays open", tm.setActiveTheme(QLatin1String(theme)));
         const QColor cyan = tm.color(browser, QStringLiteral("color.canon.cyan"));
-        int links = 0, cyanLinks = 0;
-        for (QTextBlock b = browser->document()->begin(); b.isValid(); b = b.next())
-            for (auto it = b.begin(); !it.atEnd(); ++it)
+        if (previousCyan.isValid()) {
+            report("the theme switch changes the expected link colour", cyan != previousCyan);
+        }
+        int links = 0;
+        int cyanLinks = 0;
+        for (QTextBlock b = browser->document()->begin(); b.isValid(); b = b.next()) {
+            for (auto it = b.begin(); !it.atEnd(); ++it) {
                 if (it.fragment().charFormat().isAnchor()) {
                     ++links;
                     cyanLinks += it.fragment().charFormat().foreground().color() == cyan;
                 }
-        report("links are drawn in this theme's canon cyan", links > 0 && cyanLinks == links);
+            }
+        }
+        report("open guide links follow this theme's canon cyan", links > 0 && cyanLinks == links);
+        previousCyan = cyan;
     }
     tm.setActiveTheme(before);
+}
+
+void testReopenMinimizedGuide()
+{
+    QTemporaryFile file;
+    if (!writeTempHelp(file)) {
+        report("temp help document created", false);
+        return;
+    }
+    HelpDialog dialog("Reopen Test", file.fileName());
+    dialog.showAndActivate();
+    report("reopened guide is exposed", QTest::qWaitForWindowExposed(&dialog));
+    for (const Qt::WindowStates retained : {Qt::WindowStates(),
+                                          Qt::WindowStates(Qt::WindowMaximized),
+                                          Qt::WindowStates(Qt::WindowFullScreen)}) {
+        dialog.setWindowState(retained | Qt::WindowMinimized);
+        report("guide is minimized before reopening", dialog.isMinimized());
+        dialog.showAndActivate();
+        report("reopening clears the minimized state", !dialog.isMinimized());
+        report("reopening preserves maximized/fullscreen state",
+               (dialog.windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen)) == retained);
+        report("reopened guide stays visible", dialog.isVisible());
+    }
 }
 
 void testClosePaths()
@@ -438,6 +475,7 @@ int main(int argc, char** argv)
     testExternalLinksOpenInSystemBrowser();
     testCanonWindow();
     testLinksAreCanonCyan();
+    testReopenMinimizedGuide();
     testClosePaths();
     testLegibleAtMinimum();
     testGeometryCarriesOver();

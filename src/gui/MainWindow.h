@@ -2438,9 +2438,7 @@ bool MainWindow::showOrRaiseCanon(QPointer<T>& slot, Create&& create)
         window->setAttribute(Qt::WA_DeleteOnClose);
         slot = window;
     }
-    slot->show();
-    slot->raise();
-    slot->activateWindow();
+    slot->showAndActivate();
     return created;
 }
 
