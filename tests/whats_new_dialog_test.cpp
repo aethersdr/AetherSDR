@@ -122,6 +122,30 @@ void canonWindow()
     tm.setActiveTheme(before);
 }
 
+// The upgrade path, which no menu reaches today, keeps its buttons and its
+// welcome heading: Upgrade and Skip this version appear only with showUpgrade,
+// and an unseen version without currentVersionOnly says Welcome!.
+void upgradePath()
+{
+    const auto hasButton = [](WhatsNewDialog* d, const char* text) {
+        for (QPushButton* b : d->findChildren<QPushButton*>())
+            if (b->text() == QLatin1String(text)) return true;
+        return false;
+    };
+    QPointer<WhatsNewDialog> help = make();
+    check(!hasButton(help, "Upgrade") && !hasButton(help, "Skip this version"),
+          "Help -> What's New shows no Upgrade or Skip this version");
+    delete help.data();
+
+    QPointer<WhatsNewDialog> upgrade =
+        new WhatsNewDialog(QString(), QStringLiteral("1.2.3"), nullptr, true, false);
+    check(hasButton(upgrade, "Upgrade") && hasButton(upgrade, "Skip this version"),
+          "the upgrade path keeps Upgrade and Skip this version");
+    auto* header = upgrade->findChild<QLabel*>("canonHeaderTitle");
+    check(header && header->text() == "Welcome!", "an unseen version is welcomed");
+    delete upgrade.data();
+}
+
 // Find is a canon prompt with Find the default: Cancel and Esc search for
 // nothing; Find with text moves the selection to a match.
 void findPrompt()
@@ -277,6 +301,7 @@ int main(int argc, char** argv)
     WhatsNewDialogTestAccess::noFetch();
 
     canonWindow();
+    upgradePath();
     findPrompt();
     closePaths();
     legibleAtMinimum();

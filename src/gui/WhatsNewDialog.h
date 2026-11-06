@@ -11,14 +11,10 @@ class QTextBrowser;
 
 namespace AetherSDR {
 
-// "What's New" dialog shown on first launch after a version change.
-// Displays release notes between lastSeenVersion and currentVersion,
-// rendered as styled HTML in a scrollable text browser.
-//
-// Also accessible via Help → What's New (#483).
-// The release notes for this version, fetched from GitHub, in a short-lived
-// canon window (RFC #6226, #7045). The notes' colours come from canon tokens
-// in this window's scope and are rebuilt on a theme change.
+// Help -> What's New (#483): the release notes for this version, fetched
+// from GitHub, in a short-lived canon window (RFC #6226, #7045). The notes'
+// colours come from canon tokens in this window's scope and are rebuilt on a
+// theme change.
 class WhatsNewDialog : public CanonWindow {
     Q_OBJECT
     friend class WhatsNewDialogTestAccess;
@@ -33,9 +29,6 @@ public:
                             QWidget* parent = nullptr,
                             bool showUpgrade = false,
                             bool currentVersionOnly = false);
-
-    // Show all entries for the current version (for Help menu).
-    static WhatsNewDialog* showAll(QWidget* parent);
 
 private:
     void buildUI(const QString& lastSeenVersion, const QString& currentVersion,

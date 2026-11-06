@@ -9,7 +9,6 @@
 #include "core/VersionNumber.h"
 #include "core/AppSettings.h"
 
-#include <QCoreApplication>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QHBoxLayout>
@@ -310,14 +309,6 @@ WhatsNewDialog::WhatsNewDialog(const QString& lastSeenVersion,
     applyCanonSheet(bodyWidget(), [] { return whatsNewSheet(); });
     buildUI(lastSeenVersion, currentVersion, showUpgrade, currentVersionOnly);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, &WhatsNewDialog::rerender);
-}
-
-WhatsNewDialog* WhatsNewDialog::showAll(QWidget* parent)
-{
-    auto* dlg = new WhatsNewDialog("", QCoreApplication::applicationVersion(), parent,
-                                   false, true);
-    dlg->show();
-    return dlg;
 }
 
 void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
