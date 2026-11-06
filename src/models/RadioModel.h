@@ -2358,6 +2358,12 @@ private:
     // Last mox a RadioCapabilities::radioPttObservation backend published; ORed
     // into the command-edge fallback. Always false for every other backend.
     bool        m_backendObservedTransmit{false};
+    // The host key followRadioPtt() took for the radio's own PTT, released on the
+    // radio's falling edge. m_radioPttKeyed is false when the host was already
+    // keyed or the key was refused, so that path never releases another's key.
+    TxCoordinator::Producer m_radioPttProducer;
+    TxCoordinator::Request  m_radioPttInput;
+    bool                    m_radioPttKeyed{false};
     bool        m_operatorTransmitting{false}; // owned MOX/PTT/VOX (not tune/ATU/TCI/DAX)
     // TGXL autotune keys over the interlock line, so no PttSource tags it: arm a
     // short window on `tgxl autotune` and latch the cycle as a tune carrier.
@@ -2521,6 +2527,8 @@ private:
     // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
     // Flex, where the edge is decoded from `interlock` status instead.
     void publishBackendTransmitEdge(bool tx);
+    // Key or release the host for a radioPttObservation backend's own PTT edge.
+    void followRadioPtt(bool down);
     // Command-edge fallback for a backend with no radio TX readback. One that
     // declares RadioCapabilities::hasRadioPttReadback (Icom) waits for the
     // decoded backend edge instead.

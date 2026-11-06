@@ -883,10 +883,13 @@ struct RadioCapabilities {
     bool hasRadioPttReadback = false;
 
     // The backend also publishes on transmitChanged the keying the radio did by
-    // itself (its PTT or key input), which setKeying() never commanded. Observed
-    // state: it reaches radioTransmittingChanged and nothing that keys. setKeying()
-    // stays the authority for host keying, so RadioModel keeps the command-edge
-    // fallback and ORs the two. HL2: EP6 ptt_resp, which host MOX never raises.
+    // itself (its PTT or key input), which setKeying() never commanded: ORed into
+    // mox, and on its own as TransmitDelta::radioPtt. The backend keys nothing
+    // from it. setKeying() stays the authority for host keying, so RadioModel
+    // keeps the command-edge fallback and ORs the two. A host-modulated radio
+    // sends silence unless the host keys too, so RadioModel follows a radioPtt
+    // edge with a host key through the gated producer path (followRadioPtt).
+    // HL2: EP6 ptt_resp, which host MOX never raises.
     struct RadioPttObservation {};
     std::optional<RadioPttObservation> radioPttObservation;
 

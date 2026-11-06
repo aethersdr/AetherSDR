@@ -310,8 +310,9 @@ private:
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
     void onRadioPttChanged(bool keyed);
-    // Emit transmitChanged{mox} when m_keyed || m_radioPtt changes, and only then.
-    void publishTransmitState();
+    // Emit transmitChanged{mox} when m_keyed || m_radioPtt changes. A radio PTT
+    // edge passes radioPtt, which is published with or without a mox change.
+    void publishTransmitState(std::optional<bool> radioPtt = std::nullopt);
     // Reads the snapshot at a chosen instant, so hl2_adc_age_gate_test puts a
     // held slice peak on either side of kSliceStaleMs without waiting.
     friend struct Hl2AdcAgeTestAccess;
