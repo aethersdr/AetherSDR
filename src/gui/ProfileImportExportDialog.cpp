@@ -20,12 +20,12 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayout>
-#include <QShowEvent>
 #include <QLineEdit>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QTabWidget>
