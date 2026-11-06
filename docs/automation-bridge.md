@@ -4696,13 +4696,21 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 
 ---
 
-## Stick Pro analyzer bring-up
+## RigExpert Stick analyzer bring-up
 
 `lab status|devices|connect <index>|sweep <startHz> <stopHz> <intervals> isolated|stop|disconnect`
 controls the AetherLab USB proof of concept (RFC #6471). `status`
 returns identity, all accepted raw/derived samples, count hypothesis, terminal
 state and the last 128 HID reports. `devices` explicitly scans normal-mode
-Stick Pro interfaces. `connect` queries VER/FULLINFO and never starts RF.
+Stick 230, 500, Pro and XPro interfaces. `connect` queries VER/FULLINFO and
+requires an identity matching the USB model; it never starts RF.
+
+`model`, `experimental`, `minFrequencyHz` and `maxFrequencyHz` are included in
+session and device metadata. `identityVerified` reports whether the session
+received a matching VER identity. `supportedModels` lists all four profiles.
+Stick 230, 500 and XPro are experimental with hardware testing pending. Limits
+are 0.1–230, 0.1–500, 0.1–600 and 0.1–1000 MHz respectively. A Pro profile does
+not imply full qualification; the existing limited bench evidence still applies.
 
 Acquisition requires `AETHER_AUTOMATION_ALLOW_LAB_RF=1` on the app process and
 an explicit `isolated` token. This permission is separate from radio TX.
@@ -4988,7 +4996,7 @@ audio devices require separate hardware validation.
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
-| `lab` | — | lab <status\|devices\|connect index\|sweep startHz stopHz intervals isolated\|stop\|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1) |
+| `lab` | — | lab <status\|devices\|connect index\|sweep startHz stopHz intervals isolated\|stop\|disconnect> — RigExpert Stick USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1) |
 | `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod profile, TXDELAY, RX tap, WIDE1-1 fill-in digipeater, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
