@@ -1321,7 +1321,8 @@ void MainWindow::buildMenuBar()
     // one instance at a time, cleaned up via WA_DeleteOnClose.
     auto* themeEditorAct = viewMenu->addAction("Theme Editor…");
     connect(themeEditorAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_themeEditorDialog);
+        showOrRaiseCanon(m_themeEditorDialog,
+                         [this] { return new ThemeEditorDialog(this); });
     });
 
     // Global defaults for new slices. Existing VFO flag controls remain
@@ -1775,20 +1776,10 @@ void MainWindow::buildMenuBar()
     // ── Learn & news ──────────────────────────────────────────────────────
     // Orientation first: how to get going, the full manual, and what changed.
     helpMenu->addAction("Getting Started...", this, [this]() {
-        auto* dlg = new HelpDialog("Getting Started", ":/help/getting-started.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Getting Started"), QStringLiteral(":/help/getting-started.md"));
     });
     helpMenu->addAction("AetherSDR Help...", this, [this]() {
-        auto* dlg = new HelpDialog("AetherSDR Help", ":/help/aethersdr-help.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("AetherSDR Help"), QStringLiteral(":/help/aethersdr-help.md"));
     });
     helpMenu->addAction("What's New...", this, [this]() {
         if (m_whatsNewDialog) {
@@ -1807,29 +1798,14 @@ void MainWindow::buildMenuBar()
     // ── Feature guides ────────────────────────────────────────────────────
     // Deeper topic walkthroughs for specific parts of the app.
     helpMenu->addAction("Understanding Noise Cancellation...", this, [this]() {
-        auto* dlg = new HelpDialog("Understanding Noise Cancellation", ":/help/understanding-noise-cancellation.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Understanding Noise Cancellation"), QStringLiteral(":/help/understanding-noise-cancellation.md"));
     });
     auto* controlsHelpAction = helpMenu->addAction("Configuring AetherSDR Controls...", this, [this]() {
-        auto* dlg = new HelpDialog("Configuring AetherSDR Controls", ":/help/configuring-aethersdr-controls.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Configuring AetherSDR Controls"), QStringLiteral(":/help/configuring-aethersdr-controls.md"));
     });
     controlsHelpAction->setMenuRole(QAction::NoRole); // prevent macOS auto-reparenting (#883)
     auto* dataModesAction = helpMenu->addAction("Configuring Data Modes...", this, [this]() {
-        auto* dlg = new HelpDialog("Configuring Data Modes", ":/help/understanding-data-modes.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Configuring Data Modes"), QStringLiteral(":/help/understanding-data-modes.md"));
     });
     dataModesAction->setMenuRole(QAction::NoRole); // prevent macOS auto-reparenting (#883)
     helpMenu->addSeparator();
@@ -1853,12 +1829,7 @@ void MainWindow::buildMenuBar()
         SupportDialog::fileIssue(this, &m_radioModel);
     });
     helpMenu->addAction("Contributing to AetherSDR...", this, [this]() {
-        auto* dlg = new HelpDialog("Contributing to AetherSDR", ":/help/contributing-to-aethersdr.md", this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showHelpGuide(QStringLiteral("Contributing to AetherSDR"), QStringLiteral(":/help/contributing-to-aethersdr.md"));
     });
     helpMenu->addSeparator();
 
@@ -1866,12 +1837,11 @@ void MainWindow::buildMenuBar()
     // Tools for capturing logs, chasing slice problems, resetting local
     // settings, and staying up to date.
     helpMenu->addAction("Support && Diagnostics...", this, [this]() {
-        auto* dlg = new SupportDialog(this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setRadioModel(&m_radioModel);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
+        showOrRaiseCanon(m_supportDialog, [this] {
+            auto* dlg = new SupportDialog(this);
+            dlg->setRadioModel(&m_radioModel);
+            return dlg;
+        });
     });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         auto* dlg = new SliceTroubleshootingDialog(
@@ -2449,4 +2419,14 @@ void MainWindow::setAutomaticUpdateCheck(bool on)
         restoreKnownUpdate();
     }
 }
+// One canon window per guide: a second click on the same Help entry raises
+// the open window rather than stacking another copy on top of it (#7049).
+void MainWindow::showHelpGuide(const QString& title, const QString& resourcePath)
+{
+    QPointer<HelpDialog>& slot = m_helpDialogs[resourcePath];
+    showOrRaiseCanon(slot, [this, title, resourcePath] {
+        return new HelpDialog(title, resourcePath, this);
+    });
+}
+
 } // namespace AetherSDR
