@@ -577,20 +577,11 @@ struct ForwardPowerWindow {
     }
 };
 
-// Keyed SWR is only published from a window that carries real modulation.
-// In speech, a window that falls in a pause still clears
-// kMinForwardCountsForSwr on the carrier's tail, but its forward and reverse
-// maxima no longer sit on the same syllable, and the ratio reads 3:1 to 6:1
-// on a matched load. The gate follows the forward peak with a decaying
-// envelope and passes a window only when its forward peak is within
-// kMinFraction of that envelope (counts follow detector volts, so about half
-// the envelope's power). A steady carrier (tune, CW, digital) always passes.
-// The first kKeyOnWindows windows of an over are dropped as well: #6229 found
-// the slow-ADC words of RADDR 1 and 2 are not measurements for about 2 ms
-// after the T/R switch-over, and a window maximum would keep a junk reverse
-// word that the forward-side skip (isNonMeasurementRaddr1) cannot see. Two
-// windows, because the switch-over can fall in the second one when the key
-// comes late in the first. They still set the envelope.
+// Keyed SWR is published only from windows that carry modulation: a speech
+// pause, whose maxima fall on different syllables, reads 3:1 to 6:1 on a
+// matched load. A window passes when its forward peak is within kMinFraction
+// of a decaying envelope, so a steady carrier passes. The first two windows
+// of each over are dropped: they can hold the key-on junk words (#6229).
 struct KeyedSwrGate {
     // Per 100 ms telemetry window: half-life about 0.66 s, so the envelope
     // still remembers the last syllable through a normal pause.

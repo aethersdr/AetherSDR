@@ -532,13 +532,51 @@ static void swrFromWindowPairWhileKeyed()
           "SWR keyed without a reverse maximum: falls back to the last pair");
     Access::pastKeyOn(b);
     check(std::isnan(swrOf(true, 3000, 150, 200, 10)),
-          "SWR keyed: the gate applies to the forward maximum");
+          "SWR keyed: the forward-count threshold reads the forward maximum");
     Access::pastKeyOn(b);
     check(swrOf(true, 400, 150, 3000, 150) == matched,
           "SWR keyed: past the key-on windows, a fresh over publishes");
     check(std::isnan(swrOf(true, 3000, 150, 1000, 50)),
           "SWR keyed: a speech-pause window well below the envelope publishes none");
     Access::setKeyedFlag(b, false);
+}
+
+// The key-on drop holds for every over, not only a session's first: each key
+// through applyKeying() restarts the gate. Keyed through the real seam.
+static void swrKeyOnWindowsEveryOver()
+{
+    TxTestAuthority authority;
+    Hl2Backend b;
+    Access::startSession(b);
+    Access::parkTxTail(b);
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    auto publishesSwr = [&](int fwd, int rev) {
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = fwd;
+        t.reversePowerRaw = rev;
+        t.forwardPowerPeakRaw = fwd;
+        t.reversePowerPeakRaw = rev;
+        meters.clear();
+        Access::publish(b, t);
+        for (const auto& args : meters) {
+            if (args.at(0).toString() == QStringLiteral("TX:SWR"))
+                return true;
+        }
+        return false;
+    };
+    for (int over = 1; over <= 2; ++over) {
+        b.setKeying(true, authority.operation);
+        check(Access::keyed(b), "the over keys");
+        // 2900 reverse stands in for a key-on junk word: a very high SWR if let through.
+        for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+            check(!publishesSwr(3000, 2900),
+                  over == 1 ? "first over: a key-on window publishes no SWR"
+                            : "second over: a key-on window publishes no SWR");
+        check(publishesSwr(3000, 150), "past its key-on windows, the over publishes SWR");
+        b.setKeying(false, authority.operation);
+        Access::expireTxTail(b);
+        check(!Access::keyed(b), "the over unkeys");
+    }
 }
 
 // The Radio Health row for responses the peak window skipped: a session total,
@@ -814,6 +852,7 @@ int main(int argc, char** argv)
     notchIdsAreNeverReused();
     forwardPowerWindowPeakWhileKeyed();
     swrFromWindowPairWhileKeyed();
+    swrKeyOnWindowsEveryOver();
     forwardPowerSkippedHealthRow();
     forwardPowerKeyOnReplay();
     panAveragingSeam();
