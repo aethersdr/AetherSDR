@@ -2281,7 +2281,7 @@
         "target": "ProfileImportExportDialog"
       },
       "caption": "The Import/Export Profiles window, on the Export tab. The destination path is blacked out.",
-      "alt": "Import/Export Profiles window on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and Cancel and Close buttons."
+      "alt": "Import/Export Profiles window, with a round close button in its top-right corner, on the Export tab. A note explains that export is radio-driven. Radio Database Categories has Select All and checkboxes for Global Profiles, TX Profiles and MIC Profiles (ticked), and Memories, Preferences, TNF, XVTR and USB Cables. The Destination field is blacked out beside Browse…, with an Export button below, a status line, a 0% progress bar and a Cancel button."
     },
     {
       "id": "runtime-monitor-overview",

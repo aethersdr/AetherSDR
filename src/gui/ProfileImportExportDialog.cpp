@@ -1,12 +1,15 @@
 #include "ProfileImportExportDialog.h"
 
+#include "CanonIndicators.h"
+#include "CanonMessageBox.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "ScopedChildWidget.h"
 
-#include <QCloseEvent>
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDir>
@@ -16,12 +19,13 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
-#include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QTabWidget>
@@ -31,29 +35,79 @@ namespace AetherSDR {
 
 namespace {
 
-static const QString kDialogStyle =
-    "QDialog { background: #0f0f1a; color: #c8d8e8; }"
-    "QTabWidget::pane { border: 1px solid #203040; background: #0f0f1a; }"
-    "QTabBar::tab { background: #1a2a3a; color: #8898a8; padding: 6px 14px;"
-    "  border: 1px solid #203040; border-bottom: none; border-top-left-radius: 4px;"
-    "  border-top-right-radius: 4px; margin-right: 2px; }"
-    "QTabBar::tab:selected { background: #0f0f1a; color: #c8d8e8; }"
-    "QGroupBox { border: 1px solid #203040; border-radius: 4px; margin-top: 10px;"
-    "  padding: 10px 8px 8px 8px; color: #c8d8e8; }"
-    "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
-    "QLineEdit { background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  padding: 4px 6px; color: #c8d8e8; }"
-    "QPushButton { background: #1a2a3a; border: 1px solid #203040;"
-    "  border-radius: 3px; padding: 4px 12px; color: #c8d8e8; }"
-    "QPushButton:hover { background: #2a3a4a; }"
-    "QPushButton:disabled { color: #607080; background: #101824; }"
-    "QCheckBox { color: #c8d8e8; spacing: 8px; }"
-    "QCheckBox::indicator { width: 16px; height: 16px;"
-    "  border: 1px solid #406080; border-radius: 3px; background: #0a0a18; }"
-    "QCheckBox::indicator:checked { background: #00b4d8; }"
-    "QProgressBar { background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  color: #c8d8e8; text-align: center; }"
-    "QProgressBar::chunk { background: #00b4d8; }";
+// What the shared canon dialog sheet (ModemChrome::Look::Canon: fields,
+// buttons, the canon check box, the progress bar) leaves out: tabs and group
+// boxes as MQTT Settings has them; selection ink on the path fields (#6917);
+// the intro and status lines; and the path fields' right-click menus,
+// children of the fields that the sheet's transparent rule would otherwise
+// leave with no panel.
+constexpr const char* kProfileIoRules = R"(
+QTabWidget::pane {
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 10px;
+    top: -1px;
+}
+QTabBar::tab {
+    color: {{color.canon.muted}};
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 12px;
+    font-weight: 600;
+}
+QTabBar::tab:hover {
+    color: {{color.canon.ink}};
+}
+QTabBar::tab:selected {
+    color: {{color.canon.cyan}};
+    border-bottom-color: {{color.canon.cyan}};
+}
+QGroupBox {
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+    margin-top: 14px;
+    padding: 10px 8px 8px 8px;
+    font-weight: 700;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: {{color.canon.cyan}};
+}
+QLineEdit {
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QLabel#profileIoIntro {
+    color: {{color.canon.muted}};
+}
+QLabel#profileIoStatus {
+    color: {{color.canon.inkSoft}};
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+)";
 
 QString profileTransferDirectory()
 {
@@ -85,16 +139,24 @@ QString sanitizedVersion(QString version)
 } // namespace
 
 ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget* parent)
-    : PersistentDialog(QStringLiteral("Import/Export Profiles"),
-                       QStringLiteral("ProfileImportExportDialogGeometry"), parent),
+    : CanonWindow(QStringLiteral("Import/Export Profiles"), parent, Kind::Workspace),
       m_model(model)
 {
-    theme::setContainer(this, QStringLiteral("dialog/profileIO"));
-    setMinimumSize(560, 430);
-    setStyleSheet(kDialogStyle);
+    setObjectName(QStringLiteral("ProfileImportExportDialog"));
+    theme::setContainer(this, QStringLiteral("canon/profileIO"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("ProfileImportExportDialogGeometry"));
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+             + QString::fromLatin1(kProfileIoRules);
+    });
 
     auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(9);
+    root->addWidget(makeCanonHeader(QStringLiteral("Import/Export Profiles")));
 
     m_transfer = new ProfileTransfer(model, this);
     m_tabs = new QTabWidget(this);
@@ -103,11 +165,13 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
     root->addWidget(m_tabs, 1);
 
     m_statusLabel = new QLabel(this);
+    m_statusLabel->setObjectName(QStringLiteral("profileIoStatus"));
     m_statusLabel->setWordWrap(true);
-    m_statusLabel->setStyleSheet(QStringLiteral("QLabel { color: #9fb0c0; }"));
+    m_statusLabel->setTextFormat(Qt::PlainText);
     root->addWidget(m_statusLabel);
 
     m_progress = new QProgressBar(this);
+    m_progress->setAccessibleName(QStringLiteral("Transfer progress"));
     m_progress->setRange(0, 100);
     m_progress->setValue(0);
     root->addWidget(m_progress);
@@ -115,14 +179,17 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
     auto* buttonRow = new QHBoxLayout;
     buttonRow->addStretch();
     m_cancelButton = new QPushButton(QStringLiteral("Cancel"), this);
+    m_cancelButton->setObjectName(QStringLiteral("profileIoCancel"));
+    m_cancelButton->setAccessibleName(QStringLiteral("Cancel transfer"));
     m_cancelButton->setEnabled(false);
-    m_closeButton = new QPushButton(QStringLiteral("Close"), this);
     buttonRow->addWidget(m_cancelButton);
-    buttonRow->addWidget(m_closeButton);
     root->addLayout(buttonRow);
 
+    // 40 px taller than before for the canon header, and never smaller than
+    // the layout needs at this theme's font.
+    setMinimumSize(QSize(560, 470).expandedTo(minimumSizeHint()));
+
     connect(m_cancelButton, &QPushButton::clicked, m_transfer, &ProfileTransfer::cancel);
-    connect(m_closeButton, &QPushButton::clicked, this, &QDialog::accept);
 
     connect(m_transfer, &ProfileTransfer::started, this, [this](ProfileTransfer::Operation) {
         setTransferring(true);
@@ -147,26 +214,33 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
             : QStringLiteral("Import sent. The radio accepted the package and profile lists are being refreshed.");
         setStatus(message);
         rememberProfileTransferDirectory(path);
-        ScopedChildWidget<QMessageBox> boxOwner(this);
-        QMessageBox& box = *boxOwner.get();
-        box.setIcon(QMessageBox::Information);
-        box.setWindowTitle(windowTitle());
-        box.setText(message);
-        box.setStandardButtons(QMessageBox::Ok);
+        ScopedChildWidget<CanonMessageBox> boxOwner(
+            operation == ProfileTransfer::Operation::ExportDatabase
+                ? QStringLiteral("Export Complete") : QStringLiteral("Import Sent"),
+            message, this);
+        CanonMessageBox& box = *boxOwner.get();
+        box.setDefaultButton(box.addButton(QStringLiteral("OK"), CanonMessageBox::Role::Accept));
         box.exec();
     });
     connect(m_transfer, &ProfileTransfer::failed, this,
-            [this](ProfileTransfer::Operation, const QString& error) {
+            [this](ProfileTransfer::Operation operation, const QString& error) {
         setTransferring(false);
         m_progress->setRange(0, 100);
         m_progress->setValue(0);
         setStatus(error);
-        ScopedChildWidget<QMessageBox> boxOwner(this);
-        QMessageBox& box = *boxOwner.get();
-        box.setIcon(QMessageBox::Warning);
-        box.setWindowTitle(windowTitle());
-        box.setText(error);
-        box.setStandardButtons(QMessageBox::Ok);
+        // The operator just chose Cancel Transfer to close the window; a
+        // notice that it stopped would only stand in the way of the close.
+        if (m_closingAfterCancel)
+            return;
+        // A canon box has no warning icon, so the title says what happened;
+        // the text says why (a failure, or the operator's own Cancel).
+        ScopedChildWidget<CanonMessageBox> boxOwner(
+            operation == ProfileTransfer::Operation::ExportDatabase
+                ? QStringLiteral("Export Did Not Complete")
+                : QStringLiteral("Import Did Not Complete"),
+            error, this);
+        CanonMessageBox& box = *boxOwner.get();
+        box.setDefaultButton(box.addButton(QStringLiteral("OK"), CanonMessageBox::Role::Accept));
         box.exec();
     });
 
@@ -185,29 +259,56 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
     updateControls();
 }
 
-void ProfileImportExportDialog::closeEvent(QCloseEvent* event)
+void ProfileImportExportDialog::showEvent(QShowEvent* event)
 {
+    CanonWindow::showEvent(event);
+    // The constructor's minimumSizeHint() is taken before the canon sheet has
+    // polished anything, and a layout's minimum ignores height-for-width, so
+    // the word-wrapped intros were not counted: the window could be shrunk
+    // until the category check boxes were crushed. Measure the shown layout
+    // at the minimum width instead, wrapped text included.
+    if (QLayout* l = layout()) {
+        l->activate();
+        const int width = qMax(minimumWidth(), l->totalMinimumSize().width());
+        const int needed = l->hasHeightForWidth() ? l->totalHeightForWidth(width)
+                                                  : l->totalMinimumSize().height();
+        setMinimumSize(QSize(width, qMax(minimumHeight(), needed)));
+    }
+}
+
+void ProfileImportExportDialog::done(int result)
+{
+    if (m_confirmingClose)
+        return;                        // the question is already up
     if (m_transfer && m_transfer->isBusy()) {
         const QPointer<ProfileImportExportDialog> self(this);
         const QPointer<ProfileTransfer> transferGuard(m_transfer);
-        ScopedChildWidget<QMessageBox> boxOwner(this);
-        QMessageBox& box = *boxOwner.get();
-        box.setIcon(QMessageBox::Question);
-        box.setWindowTitle(windowTitle());
-        box.setText(QStringLiteral("A profile transfer is still running. Cancel it and close this window?"));
-        box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-        const int choice = box.exec();
-        if (!self || !transferGuard || self->m_transfer != transferGuard.data() || !boxOwner) {
-            event->ignore();
+        m_confirmingClose = true;
+        // Keep Transferring is the default: Return, Esc or the ✕ on the
+        // question leave the transfer running and the window open.
+        ScopedChildWidget<CanonMessageBox> boxOwner(
+            windowTitle(),
+            QStringLiteral("A profile transfer is still running. Cancel it and close this window?"),
+            this);
+        CanonMessageBox& box = *boxOwner.get();
+        auto* keep = box.addButton(QStringLiteral("Keep Transferring"), CanonMessageBox::Role::Reject);
+        auto* stop = box.addButton(QStringLiteral("Cancel Transfer"), CanonMessageBox::Role::Destructive);
+        box.setDefaultButton(keep);
+        box.exec();
+        if (!self)
             return;
-        }
-        if (choice != QMessageBox::Yes) {
-            event->ignore();
+        self->m_confirmingClose = false;
+        if (!boxOwner || box.clickedButton() != stop)
             return;
+        // The transfer may have ended while the question was up.
+        if (transferGuard && self->m_transfer == transferGuard.data() && transferGuard->isBusy()) {
+            self->m_closingAfterCancel = true;
+            transferGuard->cancel();      // emits failed() synchronously
+            if (self)
+                self->m_closingAfterCancel = false;
         }
-        transferGuard->cancel();
     }
-    PersistentDialog::closeEvent(event);
+    CanonWindow::done(result);
 }
 
 QWidget* ProfileImportExportDialog::buildExportPage()
@@ -219,8 +320,8 @@ QWidget* ProfileImportExportDialog::buildExportPage()
     auto* intro = new QLabel(
         QStringLiteral("Export is radio-driven: AetherSDR tells the radio which categories you selected, then saves the .ssdr_cfg backup package the radio creates. The package is not edited locally."),
         page);
+    intro->setObjectName(QStringLiteral("profileIoIntro"));
     intro->setWordWrap(true);
-    intro->setStyleSheet(QStringLiteral("QLabel { color: #9fb0c0; }"));
     root->addWidget(intro);
 
     auto* options = new QGroupBox(QStringLiteral("Radio Database Categories"), page);
@@ -256,7 +357,10 @@ QWidget* ProfileImportExportDialog::buildExportPage()
     auto* fileGroup = new QGroupBox(QStringLiteral("Destination"), page);
     auto* fileRow = new QHBoxLayout(fileGroup);
     m_exportPath = new QLineEdit(defaultExportPath(), fileGroup);
+    m_exportPath->setObjectName(QStringLiteral("profileIoExportPath"));
+    m_exportPath->setAccessibleName(QStringLiteral("Export destination path"));
     auto* browse = new QPushButton(QStringLiteral("Browse..."), fileGroup);
+    browse->setAccessibleName(QStringLiteral("Browse for export destination"));
     fileRow->addWidget(m_exportPath, 1);
     fileRow->addWidget(browse);
     root->addWidget(fileGroup);
@@ -301,14 +405,17 @@ QWidget* ProfileImportExportDialog::buildImportPage()
     auto* intro = new QLabel(
         QStringLiteral("Import is radio-driven too: AetherSDR uploads the .ssdr_cfg package, then the radio unpacks it and applies the database contents."),
         page);
+    intro->setObjectName(QStringLiteral("profileIoIntro"));
     intro->setWordWrap(true);
-    intro->setStyleSheet(QStringLiteral("QLabel { color: #9fb0c0; }"));
     root->addWidget(intro);
 
     auto* fileGroup = new QGroupBox(QStringLiteral("Configuration Package"), page);
     auto* fileRow = new QHBoxLayout(fileGroup);
     m_importPath = new QLineEdit(fileGroup);
+    m_importPath->setObjectName(QStringLiteral("profileIoImportPath"));
+    m_importPath->setAccessibleName(QStringLiteral("Import package path"));
     auto* browse = new QPushButton(QStringLiteral("Browse..."), fileGroup);
+    browse->setAccessibleName(QStringLiteral("Browse for import package"));
     fileRow->addWidget(m_importPath, 1);
     fileRow->addWidget(browse);
     root->addWidget(fileGroup);
@@ -395,11 +502,10 @@ bool ProfileImportExportDialog::confirmImport()
 
     const QPointer<ProfileImportExportDialog> self(this);
     const QPointer<RadioModel> modelGuard(m_model);
-    ScopedChildWidget<QMessageBox> boxOwner(this);
-    QMessageBox& box = *boxOwner.get();
-    box.setIcon(QMessageBox::Warning);
-    box.setWindowTitle(QStringLiteral("Confirm Profile Import"));
-    box.setText(QStringLiteral("Import this .ssdr_cfg backup to the radio?"));
+    ScopedChildWidget<CanonMessageBox> boxOwner(
+        QStringLiteral("Confirm Profile Import"),
+        QStringLiteral("Import this .ssdr_cfg backup to the radio?"), this);
+    CanonMessageBox& box = *boxOwner.get();
     box.setInformativeText(
         QStringLiteral("AetherSDR will upload the backup package, but the radio does the actual import. AetherSDR does not rewrite the database inside the package.\n\n"
                        "Profiles, memories, and other included settings can replace matching items already on the radio, including defaults.\n"
@@ -407,18 +513,20 @@ bool ProfileImportExportDialog::confirmImport()
                        "Packages that include Preferences can close or reopen slices, panadapters, and other saved radio state.\n\n"
                        "Export a backup first if you have not already done so.\n%1")
             .arg(versionLine));
-    auto* importButton = box.addButton(QStringLiteral("Import"), QMessageBox::DestructiveRole);
+    // Cancel is the default: Return, Esc or the ✕ import nothing.
+    auto* cancelButton = box.addButton(QStringLiteral("Cancel"), CanonMessageBox::Role::Reject);
     auto* backupButton = canTransfer() && m_transfer && !m_transfer->isBusy()
-        ? box.addButton(QStringLiteral("Export Backup First"), QMessageBox::ActionRole)
+        ? box.addButton(QStringLiteral("Export Backup First"), CanonMessageBox::Role::Accept)
         : nullptr;
-    box.addButton(QMessageBox::Cancel);
+    auto* importButton = box.addButton(QStringLiteral("Import"), CanonMessageBox::Role::Destructive);
+    box.setDefaultButton(cancelButton);
     box.exec();
 
     if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner) {
         return false;
     }
 
-    if (box.clickedButton() == backupButton) {
+    if (backupButton && box.clickedButton() == backupButton) {
         m_tabs->setCurrentIndex(0);
         startExport();
         return false;
@@ -494,8 +602,6 @@ void ProfileImportExportDialog::setTransferring(bool transferring)
         m_importPath->setEnabled(controlsEnabled);
     if (m_cancelButton)
         m_cancelButton->setEnabled(transferring);
-    if (m_closeButton)
-        m_closeButton->setEnabled(!transferring);
     updateControls();
 }
 
