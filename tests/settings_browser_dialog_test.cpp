@@ -452,8 +452,8 @@ void testEditableRowShowsStoredBytes()
 
 void testAddKeyNestedDialogSurvivesPersistentParentClose()
 {
-    // Match MainWindow::showOrRaisePersistent(): the browser is a top-level
-    // persistent dialog that deletes itself on close, then opens Add Key.
+    // Match MainWindow::showOrRaiseCanon(): the browser is a top-level canon
+    // workspace that deletes itself on close, then opens Add Key.
     QPointer<SettingsBrowserDialog> parent(new SettingsBrowserDialog);
     parent->setAttribute(Qt::WA_DeleteOnClose);
     parent->show();
@@ -748,12 +748,15 @@ void testDeleteDefaultsToCancel()
     };
     expect(run(clickText<CanonMessageBox>("Cancel")) == "Cancel", "Delete asks a canon question, Cancel the default");
     expect(s.contains(QStringLiteral("CanonDeleteMe")), "Cancel deletes nothing");
-    run(pressKey<CanonMessageBox>(Qt::Key_Return));
-    expect(s.contains(QStringLiteral("CanonDeleteMe")), "Return on the question deletes nothing");
-    run(pressKey<CanonMessageBox>(Qt::Key_Escape));
-    expect(s.contains(QStringLiteral("CanonDeleteMe")), "Esc on the question deletes nothing");
-    run([](CanonMessageBox* b) { b->close(); });
-    expect(s.contains(QStringLiteral("CanonDeleteMe")), "closing the question deletes nothing");
+    expect(run(pressKey<CanonMessageBox>(Qt::Key_Return)) == "Cancel"
+               && s.contains(QStringLiteral("CanonDeleteMe")),
+           "Return on the question deletes nothing");
+    expect(run(pressKey<CanonMessageBox>(Qt::Key_Escape)) == "Cancel"
+               && s.contains(QStringLiteral("CanonDeleteMe")),
+           "Esc on the question deletes nothing");
+    expect(run([](CanonMessageBox* b) { b->close(); }) == "Cancel"
+               && s.contains(QStringLiteral("CanonDeleteMe")),
+           "closing the question deletes nothing");
     run(clickText<CanonMessageBox>("Delete"));
     expect(!s.contains(QStringLiteral("CanonDeleteMe")), "Delete deletes the setting");
     d.hide();
@@ -804,13 +807,91 @@ void testAddKeyAndCreateRawKey()
     expect(canon && addDefault == "OK", "Add Key is a canon dialog with OK the default");
     expect(asked && questionDefault == "Cancel", "a new raw key asks first, with Cancel the default");
     expect(!s.contains(QStringLiteral("CanonNewKey")), "Cancel writes nothing");
-    run(pressKey<CanonMessageBox>(Qt::Key_Return));
-    expect(!s.contains(QStringLiteral("CanonNewKey")), "Return on the question writes nothing");
+    const bool askedOnReturn = std::get<2>(run(pressKey<CanonMessageBox>(Qt::Key_Return)));
+    expect(askedOnReturn && !s.contains(QStringLiteral("CanonNewKey")),
+           "Return on the question writes nothing");
     run(clickText<CanonMessageBox>("Create"));
     expect(s.value(QStringLiteral("CanonNewKey")).toString() == "7", "Create writes the key");
     s.remove(QStringLiteral("CanonNewKey"));
     s.save();
     d.hide();
+}
+
+// The browser deletes itself on close, and closing it while Delete Setting? or
+// Create Raw Key? is up destroys the question with it. confirmCanon() then
+// answers no without touching the dead box, so neither path writes the store.
+void testQuestionsSurviveBrowserDeletion()
+{
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("CanonDeleteMe"), QStringLiteral("1"));
+    s.remove(QStringLiteral("CanonNewKey"));
+    s.save();
+
+    // Opens the browser on App Settings, starts `ask` and closes the browser
+    // from inside the question titled `title`.
+    const auto closeDuring = [&](const QString& title, const QString& buttonName,
+                                 const std::function<void(SettingsBrowserDialog*)>& select,
+                                 std::function<void(CanonWindow*)> addKeyAnswer) {
+        QPointer<SettingsBrowserDialog> browser(new SettingsBrowserDialog);
+        browser->setAttribute(Qt::WA_DeleteOnClose);
+        browser->resize(900, 600);
+        browser->show();
+        QTest::qWaitForWindowExposed(browser);
+        QTreeWidget* tree = treeOf(*browser);
+        QPushButton* button = buttonByAccessibleName(browser, buttonName);
+        if (!tree || !button || !selectScope(tree, QStringLiteral("App Settings"))) {
+            browser->close();
+            settle();
+            return std::make_tuple(false, false);
+        }
+        settle();
+        select(browser);
+        QPointer<QWidget> question;
+        Driver<CanonWindow> addKey([](CanonWindow* w) { return w->objectName() == "settingsAddKeyDialog"; },
+                                   std::move(addKeyAnswer));
+        Driver<CanonMessageBox> driver([title](CanonMessageBox* b) { return b->windowTitle() == title; },
+                                       [&](CanonMessageBox* b) {
+                                           question = b;
+                                           if (browser) browser->close();
+                                       });
+        button->click();
+        settle();
+        return std::make_tuple(driver.seen, browser.isNull() && question.isNull());
+    };
+
+    const auto [deleteAsked, deleteGone] = closeDuring(
+        QStringLiteral("Delete Setting?"), QStringLiteral("Delete selected setting"),
+        [](SettingsBrowserDialog* b) {
+            QTableWidget* table = tableOf(*b);
+            const int row = rowForKey(table, QStringLiteral("CanonDeleteMe"));
+            if (row >= 0) table->selectRow(row);
+        },
+        [](CanonWindow* w) { w->close(); });
+    expect(deleteAsked && deleteGone,
+           "closing the browser during Delete Setting? deletes the browser and the question");
+    expect(s.contains(QStringLiteral("CanonDeleteMe")),
+           "a Delete Setting? whose browser dies mid-question deletes nothing");
+
+    const auto [createAsked, createGone] = closeDuring(
+        QStringLiteral("Create Raw Key?"), QStringLiteral("Add settings key"),
+        [](SettingsBrowserDialog*) {},
+        [](CanonWindow* w) {
+            for (QLineEdit* e : w->findChildren<QLineEdit*>()) {
+                if (e->accessibleName() == "New key name") e->setText("CanonNewKey");
+                if (e->accessibleName() == "New key value") {
+                    e->setText("7");
+                    e->setFocus();
+                    QTest::keyClick(e, Qt::Key_Return);
+                }
+            }
+        });
+    expect(createAsked && createGone,
+           "closing the browser during Create Raw Key? deletes the browser and the question");
+    expect(!s.contains(QStringLiteral("CanonNewKey")),
+           "a Create Raw Key? whose browser dies mid-question writes nothing");
+
+    s.remove(QStringLiteral("CanonDeleteMe"));
+    s.save();
 }
 
 void testClosePaths()
@@ -941,6 +1022,7 @@ int main(int argc, char** argv)
     testCanonWindow();
     testDeleteDefaultsToCancel();
     testAddKeyAndCreateRawKey();
+    testQuestionsSurviveBrowserDeletion();
     testClosePaths();
     testLegibleAtMinimum();
     testGeometryCarriesOver();
