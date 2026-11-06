@@ -592,8 +592,8 @@ void testPersistence()
     A::setBandKey(b, b20);
     p.clearRfPower();
     A::seedConnectDrive(b);
-    check(!p.rfPower.empty() && p.rfPower.back() == 0,
-          "RT7: a restored RF1 seeds the slider with RF1's drive, 0 %, not ANT's 100 %");
+    check(p.rfPower == std::vector<int>{0},
+          "RT7: a restored RF1 seeds the slider with RF1's drive, 0 %, and never echoes ANT's 100 %");
     A::startSessionOnBackendRoute(b);
     check(A::clientRoute(b) == TxRoute::Rf1 && A::clientStoredBank(b) == ccTxDrive(0, false),
           "RT7: the session starts on RF1 at drive 0, PA off");
