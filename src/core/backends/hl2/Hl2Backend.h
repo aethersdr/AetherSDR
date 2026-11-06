@@ -1150,6 +1150,8 @@ private:
     // tracks the gauge fill on an HL2.
     static constexpr double kFwdPeakReleaseAlpha = 0.05;
     double m_fwdPeakWatts = 0.0;
+    // Drops keyed SWR from speech-pause windows; see KeyedSwrGate.
+    KeyedSwrGate m_swrGate;
 
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.
