@@ -2448,6 +2448,33 @@ void txOffDelayProducerCancellation()
           "a radio-reported TX end completes the held release without waiting out the delay");
 }
 
+void txOffDelayRadioReportedStop()
+{
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+    tx.setTxOffDelayMs(5000);
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+    const TxCoordinator::Request request = producer.request();
+    check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
+          "producer PTT keys for the backend readback case");
+    f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
+    check(tx.txOffDelayPending(), "the release is held before any readback");
+
+    TransmitDelta stillKeyed;
+    stillKeyed.mox = true;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, stillKeyed);
+    waitMs(30);
+    check(tx.txOffDelayPending() && f.commands == QStringList({"mox:on"}),
+          "a keyed backend readback leaves the hold running");
+
+    TransmitDelta stopped;
+    stopped.mox = false;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, stopped);
+    waitMs(60);
+    check(!tx.txOffDelayPending() && f.commands == QStringList({"mox:on", "mox:off"}),
+          "a backend RX readback completes the held release without waiting out the delay");
+}
+
 void txOffDelayScope()
 {
     Fixture f;
@@ -3235,6 +3262,7 @@ int main(int argc, char** argv)
     serialFootswitchUsesProducerPttPaths();
     serialFootswitchGetsTxOffDelay();
     txOffDelayProducerCancellation();
+    txOffDelayRadioReportedStop();
     testInjectionReopensAdmission();
     grantedModelBindingAndHandoff();
     grantedModelWireStopIdentity();
