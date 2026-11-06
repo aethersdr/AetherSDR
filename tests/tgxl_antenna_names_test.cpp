@@ -176,6 +176,71 @@ int main(int argc, char** argv)
     settle();
     CHECK(b1->text() == QStringLiteral("Vertical"));
 
+    // ── TX coloring: active button turns red while transmitting ──────────
+    //
+    // The TGXL hardware interlock is not always wired (TCI-only setups).
+    // TX is detected via forward power crossing 5 W, the same threshold
+    // the meter labels use. Status frames with antA=0 seat the selection;
+    // fwd=22.0 dBm (~160 mW) is below the threshold (RX noise floor in
+    // typical captures); fwd=50.0 dBm (100 W) is well above it.
+    //
+    // antA=0 in the status frame keeps the selection at ANT 1 without
+    // re-emitting antennaAChanged (change-gated — already 0 from the
+    // earlier applyChanges); the threshold crossing in updateMeters is
+    // what drives the colour change.
+
+    // RX: inject a low-power status frame to seat antA=0 and confirm green.
+    CHECK(inject(&direct, QStringLiteral(
+        "S100|status fwd=22.0 peak=22.0 max=63.00 swr=-60.0000 "
+        "pttA=0 bandA=9 modeA=1 flexA= freqA=24915.000 "
+        "bypassA=0 bypassRxA=0 antA=0 "
+        "pttB=0 bandB=0 modeB=0 flexB= freqB=0.000 "
+        "bypassB=0 bypassRxB=0 antB=0 "
+        "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
+    settle();
+    CHECK(b1->styleSheet().contains(QLatin1String("#006030")));   // active = green
+    CHECK(b2->styleSheet().contains(QLatin1String("#1a2a3a")));   // inactive = dark
+    CHECK(b3->styleSheet().contains(QLatin1String("#1a2a3a")));
+
+    // TX: fwd=50 dBm (100 W) crosses the 5 W threshold — active button goes red.
+    CHECK(inject(&direct, QStringLiteral(
+        "S101|status fwd=50.0 peak=50.0 max=63.00 swr=-20.0000 "
+        "pttA=0 bandA=9 modeA=1 flexA= freqA=24915.000 "
+        "bypassA=0 bypassRxA=0 antA=0 "
+        "pttB=0 bandB=0 modeB=0 flexB= freqB=0.000 "
+        "bypassB=0 bypassRxB=0 antB=0 "
+        "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
+    settle();
+    CHECK(b1->styleSheet().contains(QLatin1String("#ff4d4d")));   // active TX = color.accent.danger
+    CHECK(b2->styleSheet().contains(QLatin1String("#1a2a3a")));   // inactive still dark
+    CHECK(b3->styleSheet().contains(QLatin1String("#1a2a3a")));
+
+    // Back to RX: power drops below threshold — 800 ms label hold keeps the
+    // button red until the timer fires; check inside the hold, then after it.
+    CHECK(inject(&direct, QStringLiteral(
+        "S102|status fwd=22.0 peak=22.0 max=63.00 swr=-60.0000 "
+        "pttA=0 bandA=9 modeA=1 flexA= freqA=24915.000 "
+        "bypassA=0 bypassRxA=0 antA=0 "
+        "pttB=0 bandB=0 modeB=0 flexB= freqB=0.000 "
+        "bypassB=0 bypassRxB=0 antB=0 "
+        "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
+    settle(120);
+    CHECK(b1->styleSheet().contains(QLatin1String("#ff4d4d")));  // hold: still red inside 800 ms window
+    settle(780);
+    CHECK(b1->styleSheet().contains(QLatin1String("#006030")));   // back to green
+    CHECK(!b1->styleSheet().contains(QLatin1String("#ff4d4d")));  // not red
+
+    // PTT fallback: pttA=1 at low power also reddens the button (interlock cable present).
+    CHECK(inject(&direct, QStringLiteral(
+        "S103|status fwd=22.0 peak=22.0 max=63.00 swr=-60.0000 "
+        "pttA=1 bandA=9 modeA=1 flexA= freqA=24915.000 "
+        "bypassA=0 bypassRxA=0 antA=0 "
+        "pttB=0 bandB=0 modeB=0 flexB= freqB=0.000 "
+        "bypassB=0 bypassRxB=0 antB=0 "
+        "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
+    settle();
+    CHECK(b1->styleSheet().contains(QLatin1String("#ff4d4d")));  // pttA=1 at low power → red
+
     CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
     settle();
 
