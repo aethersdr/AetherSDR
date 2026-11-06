@@ -7439,7 +7439,7 @@ QStringList VfoWidget::rxAntennaOptions() const
     }
 
     if (m_radioModel) {
-        for (const QString& ant : m_radioModel->knownAntennaTokens()) {
+        for (const QString& ant : m_radioModel->rxAntennaMenuTokens()) {
             append(ant);
         }
     }

@@ -98,6 +98,40 @@ void setAntAndRecall(bool independent)
         check(sentTxAnt, "RT9: without the record a recall restores the TX antenna, as before");
     }
 }
+// RT10: the RX antenna menus (VfoWidget, RxApplet, SpectrumOverlayMenu) take
+// RadioModel::rxAntennaMenuTokens(). With the record a TX-only output (the HL2's
+// RF1) is not a receive choice; without it the list is knownAntennaTokens().
+void rxMenuTokens(bool independent)
+{
+    RadioModel radio;
+    auto owned = std::make_unique<Backend>();
+    owned->independentTx = independent;
+    radio.setBackendForTest(std::move(owned), QStringLiteral("flex"));
+    PanadapterModel* pan = RadioSetupControlTestAccess::addPan(radio, QStringLiteral("0x40000000"));
+    SliceModel* slice = RadioSetupControlTestAccess::addSlice(radio, 0);
+    SliceDelta d;
+    d.panId = pan->panId(); d.mode = QStringLiteral("USB"); d.frequency = 7.1;
+    d.rxAntenna = QStringLiteral("ANT"); d.txAntenna = QStringLiteral("RF1");
+    d.rxAntennaList = QStringList{"ANT"};
+    d.txAntennaList = QStringList{"ANT", "RF1"};
+    slice->applyChanges(d);
+    radio.setAntennaAlias(QStringLiteral("RF1"), QStringLiteral("Transverter"));
+
+    const QStringList known = radio.knownAntennaTokens();
+    const QStringList rx = radio.rxAntennaMenuTokens();
+    check(known.contains(QStringLiteral("RF1")), "RT10: knownAntennaTokens still lists RF1 (alias editor)");
+    if (independent) {
+        check(!rx.contains(QStringLiteral("RF1")), "RT10: with the record RF1 is not an RX menu token");
+        check(rx.contains(QStringLiteral("ANT")), "RT10: ANT, published for receive, stays an RX menu token");
+        // A stale RX label naming the TX output does not vouch for itself.
+        SliceDelta stale; stale.rxAntenna = QStringLiteral("RF1");
+        slice->applyChanges(stale);
+        check(!radio.rxAntennaMenuTokens().contains(QStringLiteral("RF1")),
+              "RT10: an RX label reading RF1 does not put RF1 back in the RX tokens");
+    } else {
+        check(rx == known, "RT10: without the record the RX tokens are knownAntennaTokens(), unchanged");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -110,6 +144,8 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     setAntAndRecall(false);
     setAntAndRecall(true);
+    rxMenuTokens(false);
+    rxMenuTokens(true);
     std::printf("%s (%d failure%s)\n", failures == 0 ? "PASS" : "FAIL", failures,
                 failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

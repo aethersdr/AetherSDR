@@ -246,6 +246,9 @@ public:
     void setAntennaAlias(const QString& token, const QString& alias);
     void clearAntennaAlias(const QString& token);
     QStringList knownAntennaTokens() const;
+    // knownAntennaTokens() for an RX antenna menu. With IndependentTxAntenna
+    // declared (#4954) a token only the TX side publishes is not a receive input.
+    QStringList rxAntennaMenuTokens() const;
     QString serial()       const;
     QString chassisSerial() const { return m_chassisSerial; }
     // The operator's callsign, from the radio when it has one and from the
