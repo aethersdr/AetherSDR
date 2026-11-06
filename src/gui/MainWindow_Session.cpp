@@ -72,6 +72,8 @@
 #include "core/AutomationServer.h"
 
 #include <QDialogButtonBox>
+#include <QMediaDevices>
+#include <QAudioDevice>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -520,6 +522,33 @@ void MainWindow::wireDiscovery()
         }
     });
 
+    connect(m_connPanel, &ConnectionPanel::operatorPreferencesRequested, this,
+            [this](const QJsonObject& preferences) {
+        const auto deviceFor = [](const QList<QAudioDevice>& devices, const QString& encoded) {
+            const QByteArray id = QByteArray::fromBase64(encoded.toLatin1());
+            for (const QAudioDevice& device : devices) {
+                if (!id.isEmpty() && device.id() == id) { return device; }
+            }
+            return QAudioDevice{};
+        };
+        const QAudioDevice input = deviceFor(QMediaDevices::audioInputs(), preferences.value("inputDeviceId").toString());
+        const QAudioDevice output = deviceFor(QMediaDevices::audioOutputs(), preferences.value("outputDeviceId").toString());
+        const bool missingInput = input.isNull() && !preferences.value("inputDeviceId").toString().isEmpty();
+        const bool missingOutput = output.isNull() && !preferences.value("outputDeviceId").toString().isEmpty();
+        auto& settings = AppSettings::instance();
+        if (missingInput) { settings.setValue("AudioInputDeviceId", QByteArray::fromBase64(preferences.value("inputDeviceId").toString().toLatin1())); }
+        if (missingOutput) { settings.setValue("AudioOutputDeviceId", QByteArray::fromBase64(preferences.value("outputDeviceId").toString().toLatin1())); }
+        applyAudioDeviceSelection(input, output,
+            missingInput ? AudioDeviceSelection::Fallback : AudioDeviceSelection::OperatorChoice,
+            missingOutput ? AudioDeviceSelection::Fallback : AudioDeviceSelection::OperatorChoice, false);
+        if (missingInput || missingOutput) {
+            statusBar()->showMessage(tr("Saved audio device unavailable; using the system default temporarily. Saved preferences are kept."), 10000);
+        }
+        const QString layout = preferences.value("layout").toString("1");
+        settings.setValue("PanadapterLayout", layout);
+        settings.save();
+        if (m_panStack) { m_panStack->rearrangeLayout(layout); }
+    });
     connect(m_connPanel, &ConnectionPanel::connectRequested,
             this, [this](const RadioInfo& info){
         QList<quint32> disconnectHandles;
@@ -746,6 +775,8 @@ void MainWindow::wireDiscovery()
 
         m_wanReconnectTimer.stop();
         m_wanReconnectAttemptInProgress = false;
+        m_smartLink.setAccountLocked(false);
+        m_pendingWanRadio = {};
         m_connPanel->setStatusText("SmartLink sign-in required");
         statusBar()->showMessage("SmartLink reconnect stopped: " + err, 5000);
         setPanadapterConnectionAnimation(false);
@@ -838,14 +869,21 @@ void MainWindow::wireDiscovery()
     });
     connect(&m_wanConnection, &WanConnection::errorOccurred, this, [this](const QString& err) {
         m_connPanel->setStatusText("SmartLink error: " + err);
-        if (!m_reconnectDlg)
+        if (!m_reconnectDlg) {
             setPanadapterConnectionAnimation(false);
+            if (!m_radioModel.isConnected()) {
+                m_smartLink.setAccountLocked(false);
+                m_pendingWanRadio = {};
+            }
+        }
     });
 
 }
 
 void MainWindow::disconnectFromRadioByUser()
 {
+    m_smartLink.setAccountLocked(false);
+    m_pendingWanRadio = {};
     m_userDisconnected = true;
     m_wanReconnectTimer.stop();
     m_wanReconnectAttemptInProgress = false;
@@ -1196,6 +1234,8 @@ void MainWindow::wireRadioModel()
         m_wanReconnectTimer.stop();
         m_wanReconnectAttemptInProgress = false;
         m_terminalConnectionError = message;
+        m_smartLink.setAccountLocked(false);
+        m_pendingWanRadio = {};
         setPanadapterConnectionAnimation(false);
         if (m_reconnectDlg) {
             QDialog* reconnectDialog = m_reconnectDlg;
