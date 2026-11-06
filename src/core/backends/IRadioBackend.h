@@ -1080,11 +1080,25 @@ public:
         //
         // kSwrGateCounts: the forward-count threshold below which the backend
         // withholds a derived SWR, so a consumer can report "suppressed" rather
-        // than "never fed". kForwardWindowPeakRaw: the maximum forward count
-        // over the backend's own publish window — the only reading comparable
-        // to a gate the backend applies per sample. Publish them together or
-        // not at all; a known gate beside an absent reading names no state.
+        // than "never fed".
+        //
+        // kSwrGateClearsWhileKeyed: how many of the backend's own publish
+        // windows in THIS over cleared that threshold, judged on the value the
+        // backend actually applies the gate to. This is the key a consumer
+        // should reason with, because it is exact in both directions — 0 means
+        // the gate was never cleared and an absent ratio is explained, above 0
+        // means it was cleared and an absent ratio is a defect.
+        //
+        // kForwardWindowPeakRaw: the maximum forward count over the backend's
+        // own publish window, for a human reading how far below a gate a run
+        // sat. NOT the quantity a gate is applied to, so a consumer must not
+        // conclude "the gate was cleared" from it; that is what the clears
+        // count is for.
+        //
+        // Publish the gate with at least one of the other two, never alone; a
+        // known gate beside an absent reading names no state.
         static constexpr char kSwrGateCounts[] = "forwardPowerSwrGateCounts";
+        static constexpr char kSwrGateClearsWhileKeyed[] = "forwardPowerSwrGateClears";
         static constexpr char kForwardWindowPeakRaw[] = "forwardPowerWindowPeakRaw";
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }

@@ -347,6 +347,16 @@ void RadioCertification::observeKeyedRf()
     m_keyedFwdWattsMax = std::max(m_keyedFwdWattsMax,
                                   static_cast<double>(meters.fwdPowerInstant()));
 
+    // THE DRIVE THIS RUN ACTUALLY KEYED AT, captured here because here is the
+    // only place it is still true: the keyed stages restore the operator's
+    // power on exit, and the run may have clamped it to an automation ceiling,
+    // so reading it when the verdict is written reads the wrong number. It
+    // changes the REMEDY, not the verdict — "raise drive" is useless advice at
+    // 100 %, where a forward reading stuck below the gate points at the
+    // detector or its scaling instead (the #5369 class; w5jwp's nit 4).
+    m_keyedDrivePercentMax = std::max(m_keyedDrivePercentMax,
+                                      m_radio->transmitModel().rfPower());
+
     // Ask the BACKEND what it gates a derived meter on, and sample the raw
     // reading against it (#7063). Read from the health snapshot by key rather
     // than from any family header: a backend that publishes neither key leaves
@@ -360,31 +370,44 @@ void RadioCertification::observeKeyedRf()
         if (ok)
             m_swrGateCounts = counts;
     }
-    // THE WINDOW PEAK, never a single instantaneous reading. This function runs
-    // a handful of times per run, so one reading is one arbitrary point on a
-    // signal moving with the modulation envelope, and a maximum over those is a
-    // sketch rather than a maximum. The backend's peak is its own maximum over
-    // every measuring response in a publish window, so a max of peaks IS a max.
+    // HOW MANY KEYED WINDOWS CLEARED THE GATE — what the verdict turns on.
     //
-    // USED ONLY TO WITHHOLD A NEGATIVE VERDICT, never to assert one, and the
-    // asymmetry is deliberate:
-    // - BELOW the gate is conclusive. Nothing in the run came close, so a
-    //   silent derived meter is explained and must not be called dead.
-    // - ABOVE the gate is NOT conclusive. The backend applies its gate to the
-    //   last value of each publish window, not to this peak (Hl2Backend.cpp:8314),
-    //   so a run whose peak cleared the gate can still have had every published
-    //   last value below it. Treating "peak above gate" as "the gate was
-    //   cleared" would be the §1.37 error one level in — telling an operator to
-    //   raise drive on a run that already reached the stated threshold.
+    // The backend counts this on the same value it applies the gate to, so it
+    // is exact in BOTH directions and this consumer need not reason about which
+    // sample a threshold met:
+    // - 0 is conclusive that the gate was never cleared, so a silent derived
+    //   meter is explained and must not be called dead.
+    // - ABOVE 0 is conclusive that it WAS cleared, so a still-absent meter is a
+    //   real defect and the negative verdict must stand.
+    // An earlier revision derived this from the window peak instead, which is
+    // conclusive in one direction only: the backend does not gate on the peak,
+    // so a whole over could publish no SWR with its peaks above the threshold
+    // and be reported as a defect anyway. That is the §1.37 error one level in,
+    // and it is why the verdict now reads a count the producer computes rather
+    // than a comparison this side invents (w5jwp's review of #7064).
     //
-    // Two further limits, both bounded, both safe:
-    // - A publish window is not aligned to key-down, so one window can mix
-    //   unkeyed and keyed samples. Unkeyed forward counts are the documented
-    //   idle-ADC artefact (single digits) against a gate of 320, so this cannot
-    //   fabricate a cleared gate.
-    // - An absent peak means NOT MEASURED, never "below the gate". The count
-    //   then stays negative and the branch below declines, leaving whatever
-    //   verdict the run would have reached without this change.
+    // Sampling is a non-issue for the same reason: the count is cumulative in
+    // the backend over the whole over, so reading it a handful of times per run
+    // cannot miss a window, where sampling an instantaneous value would.
+    //
+    // A negative count means the backend declares no such gate, which is NOT a
+    // gate that was cleared and must not collapse into it — the branch below
+    // then declines and leaves the verdict this run would have reached anyway.
+    const QVariant clears =
+        health.values.value(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed));
+    if (clears.isValid() && !clears.isNull()) {
+        bool ok = false;
+        const int n = clears.toInt(&ok);
+        if (ok)
+            m_swrGateClears = std::max(m_swrGateClears, n);
+    }
+    // THE WINDOW PEAK — reported, never judged on. It tells an operator how far
+    // below the gate the run sat, which is the actionable half of the message
+    // ("peaked at 76 against 320" says raise drive a lot, not a little). The
+    // peak is the backend's own maximum over every measuring response in a
+    // publish window, so a max of sampled window peaks is a max of what was
+    // sampled — and since no verdict rests on it, that is enough.
     const QVariant fwdPeak =
         health.values.value(
             QLatin1StringView(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw));
@@ -1299,8 +1322,17 @@ void RadioCertification::stageMeterInventory()
         // same as a gate that was cleared.
         {QStringLiteral("backendSwrGateCounts"),
          m_swrGateCounts >= 0 ? QJsonValue(m_swrGateCounts) : QJsonValue()},
+        // THE FIELD THE VERDICT TURNS ON: windows that cleared that gate,
+        // counted by the producer on the value it gates. 0 explains a silent
+        // meter; above 0 means a silent meter is a defect.
+        {QStringLiteral("backendSwrGateClearsWhileKeyed"),
+         m_swrGateClears >= 0 ? QJsonValue(m_swrGateClears) : QJsonValue()},
+        // Reported for scale only — how far below the gate the run sat. No
+        // verdict rests on it; the gate is not applied to a peak.
         {QStringLiteral("maxForwardCountsWhileKeyed"),
          m_keyedFwdCountsMax >= 0 ? QJsonValue(m_keyedFwdCountsMax) : QJsonValue()},
+        {QStringLiteral("maxDrivePercentWhileKeyed"),
+         m_keyedDrivePercentMax >= 0 ? QJsonValue(m_keyedDrivePercentMax) : QJsonValue()},
     };
 
     for (const MeterSpec& spec : kMeterTable) {
@@ -1345,8 +1377,7 @@ void RadioCertification::stageMeterInventory()
                 "this meter had nothing to report")
                 .arg(static_cast<double>(kKeyedRfFloorWatts), 0, 'g', 3);
         } else if (spec.gatedOnForwardCounts && m_swrGateCounts > 0
-                   && m_keyedFwdCountsMax >= 0
-                   && m_keyedFwdCountsMax < m_swrGateCounts) {
+                   && m_swrGateClears == 0) {
             // THE RUN RADIATED, AND THE PRODUCER STILL WITHHELD THIS METER.
             // rfConfirmed is true here: the keyed-RF precondition is satisfied
             // at MeterModel's consumer floor, which on the HL2 is ~67x below
@@ -1356,12 +1387,39 @@ void RadioCertification::stageMeterInventory()
             // docs/CERTIFICATION.md 2.3 describes: "when a meter is gated on
             // another meter, a suppressed reading must name its gate rather
             // than reporting as merely stale".
+            //
+            // == 0, NOT "the peak was below the gate". The producer counts the
+            // windows that cleared its gate on the value it gates, so 0 is a
+            // fact about every window of the over rather than an inference from
+            // a quantity the gate was never applied to. Above 0 is equally
+            // conclusive the other way, which is why this branch declines then
+            // and lets the real-defect verdict stand.
+            //
+            // THE REMEDY DEPENDS ON DRIVE. At less than full drive, "raise it"
+            // is both true and actionable. At full drive it is neither: a
+            // forward reading that cannot reach the gate with the slider at
+            // maximum is a forward-detector or scaling fault (the #5369 class),
+            // and excusing it with "raise drive" would be a softer verdict than
+            // this diagnostic gave before the change.
+            const bool atFullDrive = m_keyedDrivePercentMax >= 100;
             untestedBecause = QStringLiteral(
                 "the backend suppressed this meter: it publishes it only above "
-                "%1 forward counts and this run peaked at %2. That is the "
-                "backend working as designed, not a dead meter — raise drive "
-                "until the forward reading clears the gate to exercise it")
-                .arg(m_swrGateCounts).arg(m_keyedFwdCountsMax);
+                "%1 forward counts, and no keyed window in this run cleared "
+                "that gate (the sampled window peak reached %2). %3")
+                .arg(m_swrGateCounts)
+                .arg(m_keyedFwdCountsMax)
+                .arg(atFullDrive
+                     ? QStringLiteral(
+                           "DRIVE WAS ALREADY AT 100%, so this is not a drive "
+                           "problem — a forward reading that cannot clear the "
+                           "gate at full drive points at the forward detector "
+                           "or its scaling, not at this meter. Check forward "
+                           "power against a known load before trusting either")
+                     : QStringLiteral(
+                           "That is the backend working as designed, not a dead "
+                           "meter — raise drive (this run keyed at %1%) until "
+                           "the forward reading clears the gate to exercise it")
+                       .arg(m_keyedDrivePercentMax));
         }
 
         QJsonObject row{
@@ -2482,7 +2540,9 @@ QJsonObject RadioCertification::run(const Options& o)
     // meaning is stated in the header, so nothing should depend on the object
     // being new for it to hold.
     m_swrGateCounts = -1;
+    m_swrGateClears = -1;
     m_keyedFwdCountsMax = -1;
+    m_keyedDrivePercentMax = -1;
     m_renderedWhileKeyed = QJsonObject{};
     m_keyRefusals = 0;
 

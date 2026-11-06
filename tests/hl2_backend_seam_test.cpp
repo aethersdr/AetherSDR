@@ -91,6 +91,26 @@ struct Hl2TxGateTestAccess {
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
     static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
+    // Streaming as telemetryLinkState() judges it, with no socket: connected,
+    // and the EP6 counter "just advanced" (hl2LinkStateFor() consults only
+    // those two while connected, and the held-by-other branch is reachable
+    // only when disconnected). Reset before the backend dies.
+    //
+    // This lives in the TEST's own friend struct, not in production: the
+    // snapshot rows the reviewer of #7064 asked to pin sit behind the
+    // directional block's `inBandLive`, so without a Streaming link they are
+    // absent whatever telemetry is fed — and a test that cannot tell the rows
+    // apart pins nothing. Suggested, built and run by w5jwp on that review.
+    static void fakeStreamingLink(Hl2Backend& b, bool on)
+    {
+        b.m_connected = on;
+        if (on)
+            b.m_rxAdvanceClock.start();
+        else
+            b.m_rxAdvanceClock.invalidate();
+    }
+    static void setKeyed(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
+    static int swrGateClears(const Hl2Backend& b) { return b.m_keyedSwrGateClears; }
     static double fwdPeakReleaseAlpha() { return Hl2Backend::kFwdPeakReleaseAlpha; }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
     // Stops the timer first, so this proves what the callback decides, not
@@ -528,64 +548,134 @@ static void forwardPowerSkippedHealthRow()
           "skipped row: reported when every response so far was skipped");
 }
 
-// #7063: the SWR count gate and the window peak a diagnostic compares against
-// it are published together or not at all, and BOTH key on forwardPowerPeakRaw.
+// #7063: the three SWR-gate health rows, and the two properties a diagnostic
+// reading them depends on.
 //
-// Keying the gate row on forwardPowerRaw instead would look equivalent and is
-// not: apply() takes that from every RADDR-1 response while the peak window
-// skips the non-measurement ones, so a unit whose temperature word reads 0 has
-// forwardPowerRaw and no peak (MetisProtocol.h:515-517). The gate would then be
-// published beside an absent reading, radiocert's count would stay at its -1
-// sentinel, its gate branch could never fire, and TX:SWR would be reported
-// DEFINED BUT NEVER FED on that unit class — the exact verdict #7063 removes.
-// The consumer half is pinned in radiocert_gated_meter_test; this is the
-// producer half, which that test cannot reach because it stubs the snapshot.
+// 1. ALL THREE KEY ON forwardPowerPeakRaw, so they are present or absent
+//    together. forwardPowerRaw would look equivalent and is not: apply() takes
+//    that from every RADDR-1 response while the peak window skips the
+//    non-measurement ones, so a unit whose temperature word reads 0 has
+//    forwardPowerRaw and no peak (MetisProtocol.h:515-517). The gate would then
+//    be published beside an absent reading, radiocert's sentinel would never
+//    clear, its gate branch could never fire, and TX:SWR would be reported
+//    DEFINED BUT NEVER FED on that unit class — the verdict #7063 removes.
+//
+// 2. THE CLEARS COUNT IS COUNTED ON THE GATED VALUE, not on the peak and not
+//    on whether SWR was published. That is what makes it exact in both
+//    directions, which is the whole basis of radiocert's verdict.
+//
+// Checked ON-STREAM via Access::fakeStreamingLink(): these rows sit behind the
+// directional block's `inBandLive`, so off-stream they are absent whichever
+// optional they key on, and an off-stream check passes for the right reason and
+// the wrong one alike. An earlier revision of this test checked only
+// off-stream and therefore pinned nothing — caught by w5jwp reviewing #7064,
+// who wrote the seam. The consumer half is in radiocert_gated_meter_test,
+// which stubs the snapshot; this is the producer half.
 static void swrGateHealthRows()
 {
     using HS = IRadioBackend::HealthSnapshot;
     static const char* const kGate = HS::kSwrGateCounts;
+    static const char* const kClears = HS::kSwrGateClearsWhileKeyed;
     static const char* const kPeak = HS::kForwardWindowPeakRaw;
 
     Hl2Backend b;
     const QStringList order = b.healthSnapshot().order;
     check(order.contains(QString::fromLatin1(kGate))
+              && order.contains(QString::fromLatin1(kClears))
               && order.contains(QString::fromLatin1(kPeak)),
-          "swr gate: both rows are declared");
+          "swr gate: all three rows are declared");
 
     // DECLARED ADJACENTLY, which is the structural half of "published together".
     // A later edit that moves one row out of the directional block — the shape
     // that would let the gate publish while the reading does not — separates
     // them here.
-    check(order.indexOf(QString::fromLatin1(kPeak))
-              == order.indexOf(QString::fromLatin1(kGate)) + 1,
-          "swr gate: the reading is declared immediately after its gate");
+    check(order.indexOf(QString::fromLatin1(kClears))
+              == order.indexOf(QString::fromLatin1(kGate)) + 1
+          && order.indexOf(QString::fromLatin1(kPeak))
+              == order.indexOf(QString::fromLatin1(kGate)) + 2,
+          "swr gate: the clears count and the reading follow their gate");
 
-    // Both rows live behind the directional block's `inBandLive`, so without a
-    // Streaming link neither reports a value. That is the state a diagnostic
-    // must read as NOT MEASURED, and it is the only snapshot state this seam
-    // can reach: telemetryLinkState() needs a live session clock, which
-    // Access::publish() does not fake. The VALUES are pinned on the consumer
-    // side in radiocert_gated_meter_test; what matters here is that no
-    // telemetry shape makes one row appear without the other.
-    const auto neitherReported = [&](const char* why) {
-        check(!health(b, kGate).isValid() && !health(b, kPeak).isValid(), why);
-    };
+    // ON-STREAM, because off-stream proves nothing. All three rows sit behind
+    // the directional block's `inBandLive`, so without a Streaming link they
+    // are absent whichever optional they are keyed on — an off-stream check
+    // passes for the right reason and the wrong one alike. fakeStreamingLink()
+    // reaches Streaming with no socket, which is what makes the rest testable.
+    Access::fakeStreamingLink(b, true);
+
+    // THE ZERO-TEMPERATURE UNIT CLASS, which is the regression this pins.
+    // Hl2Telemetry::apply() takes forwardPowerRaw from every RADDR-1 response
+    // while the peak window skips the non-measurement ones, so this unit has
+    // the raw value and no peak (MetisProtocol.h:515-517). Keying the gate row
+    // on forwardPowerRaw would publish a known threshold beside an absent
+    // reading here, and radiocert would report TX:SWR DEFINED BUT NEVER FED on
+    // that unit — the exact verdict #7063 removes.
     hl2::Hl2Telemetry noPeak;
-    noPeak.forwardPowerRaw = 76;          // the zero-temperature unit: raw, no peak
+    noPeak.forwardPowerRaw = 76;
     Access::publish(b, noPeak);
-    neitherReported("swr gate: forwardPowerRaw alone reports neither row");
+    check(!health(b, kGate).isValid() && !health(b, kClears).isValid()
+              && !health(b, kPeak).isValid(),
+          "swr gate: on-stream, forwardPowerRaw alone reports none of the rows");
 
     hl2::Hl2Telemetry withPeak;
     withPeak.forwardPowerRaw = 76;
     withPeak.forwardPowerPeakRaw = 76;
     Access::publish(b, withPeak);
-    neitherReported("swr gate: a window peak reports neither row off-stream");
+    check(health(b, kGate).toInt() == hl2::kMinForwardCountsForSwr
+              && health(b, kPeak).toInt() == 76
+              && health(b, kClears).isValid(),
+          "swr gate: a peak publishes the gate, the clears count and the peak");
 
-    hl2::Hl2Telemetry cleared;
-    cleared.forwardPowerRaw = 90;
-    cleared.forwardPowerPeakRaw = 400;    // peak clears the gate, last value does not
-    Access::publish(b, cleared);
-    neitherReported("swr gate: a gate-clearing peak reports neither row off-stream");
+    // THE CASE THE VERDICT TURNS ON. The gate is applied to the window's LAST
+    // value, so a peak above it does NOT mean it was cleared: here the peak is
+    // 400 against a gate of 320 while the gated value is 90, SWR stays
+    // withheld, and the clears count must stay 0. A consumer reading the peak
+    // would call this a defect; reading the count it correctly calls it
+    // suppressed (w5jwp's finding 2 on #7064).
+    Access::setKeyed(b, true);
+    hl2::Hl2Telemetry peakOnly;
+    peakOnly.forwardPowerRaw = 90;
+    peakOnly.reversePowerRaw = 5;
+    peakOnly.forwardPowerPeakRaw = 400;
+    Access::publish(b, peakOnly);
+    check(health(b, kClears).toInt() == 0
+              && health(b, kPeak).toInt() == 400
+              && !health(b, "swr").isValid(),
+          "swr gate: a gate-clearing PEAK with a below-gate last value "
+          "counts no clears and publishes no SWR");
+
+    // The gated value clears it: the count moves, and a missing SWR from here
+    // on is a real defect rather than a suppression.
+    hl2::Hl2Telemetry gated;
+    gated.forwardPowerRaw = hl2::kMinForwardCountsForSwr;
+    gated.reversePowerRaw = 10;
+    gated.forwardPowerPeakRaw = 500;
+    Access::publish(b, gated);
+    check(health(b, kClears).toInt() == 1 && health(b, "swr").isValid(),
+          "swr gate: a last value AT the gate counts a clear and feeds SWR");
+
+    // COUNTED ON THE GATE, NOT ON THE RATIO. A window that cleared the gate
+    // with no reverse reading publishes no SWR, and must still count — that is
+    // the fault a diagnostic has to stay free to call, so defining the counter
+    // as "windows that published SWR" would hide it.
+    hl2::Hl2Telemetry noReverse;
+    noReverse.forwardPowerRaw = hl2::kMinForwardCountsForSwr + 50;
+    noReverse.forwardPowerPeakRaw = 500;
+    Access::publish(b, noReverse);
+    check(health(b, kClears).toInt() == 2 && !health(b, "swr").isValid(),
+          "swr gate: a cleared gate with no reverse reading still counts");
+
+    // UNKEYED WINDOWS DO NOT COUNT. The count answers "did this transmission
+    // reach the level where SWR is meaningful", and the idle ADC artefact must
+    // not be able to answer it yes.
+    Access::setKeyed(b, false);
+    Access::publish(b, gated);
+    check(health(b, kClears).toInt() == 2,
+          "swr gate: an unkeyed window clearing the gate does not count");
+
+    Access::fakeStreamingLink(b, false);
+    check(!health(b, kGate).isValid() && !health(b, kClears).isValid()
+              && !health(b, kPeak).isValid(),
+          "swr gate: off-stream reports none of the rows");
 }
 
 // What one key-on replay published, window by window.

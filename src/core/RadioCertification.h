@@ -235,7 +235,18 @@ private:
     // Negative means "the backend declares no such gate", which is NOT the
     // same as a gate that was cleared, and must not collapse into it.
     int m_swrGateCounts = -1;        // declared by the backend; -1 = none declared
-    int m_keyedFwdCountsMax = -1;    // highest raw forward count seen while keyed
+    // How many of the backend's publish windows cleared that gate while keyed,
+    // judged by the backend on the value it gates. THIS is what the verdict
+    // turns on, because it is exact in both directions. -1 = not declared.
+    int m_swrGateClears = -1;
+    // Highest window peak seen while keyed, for the REPORT ONLY — it says how
+    // far below a gate a run sat. It is NOT the quantity the gate is applied
+    // to, so no verdict may be derived from it (that was the §1.37 error one
+    // level in: w5jwp's review of #7064).
+    int m_keyedFwdCountsMax = -1;
+    // Highest RF drive observed while keyed, 0..100. Shapes the REMEDY only:
+    // "raise drive" cannot be the advice at full drive. -1 = never sampled.
+    int m_keyedDrivePercentMax = -1;
     bool m_fwdPowerMeterDefined = false;
 
     // The consumer-side reading taken while the radio was actually keyed.

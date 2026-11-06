@@ -1151,6 +1151,20 @@ private:
     static constexpr double kFwdPeakReleaseAlpha = 0.05;
     double m_fwdPeakWatts = 0.0;
 
+    // How many keyed publish windows cleared the SWR gate, counted on the SAME
+    // value publishTelemetry() applies the gate to (*t.forwardPowerRaw, the
+    // window's last reading) rather than on the window peak. That makes the
+    // published count exact in BOTH directions for a consumer: 0 means the gate
+    // was never cleared and the absent ratio is explained, above 0 means it was
+    // cleared and a still-absent ratio is a real defect. The peak alone cannot
+    // say the second thing, because the gate is not applied to it (#7063, and
+    // w5jwp's review of #7064).
+    //
+    // Cumulative for the life of the keyed state: reset on each key-down, so a
+    // reader sees this over, not the session. Not reset on key-up — a diagnostic
+    // samples the snapshot after unkeying as well as during.
+    int m_keyedSwrGateClears = 0;
+
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.
     int m_micLevel = 50;

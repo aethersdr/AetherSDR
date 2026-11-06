@@ -39,16 +39,20 @@ public:
     // the test states the radiated/gated condition directly instead of
     // simulating a transmitter.
     static void seedKeyedRf(RadioCertification& cert, int samples, double wattsMax,
-                            int gateCounts, int fwdCountsMax)
+                            int gateCounts, int gateClears, int fwdCountsMax,
+                            int drivePercent = 10)
     {
         cert.m_keyedWindows = 1;
         cert.m_keyedRfSamples = samples;
         cert.m_keyedFwdWattsMax = wattsMax;
         cert.m_swrGateCounts = gateCounts;
+        cert.m_swrGateClears = gateClears;
         cert.m_keyedFwdCountsMax = fwdCountsMax;
+        cert.m_keyedDrivePercentMax = drivePercent;
         cert.m_fwdPowerMeterDefined = true;
     }
     static int swrGateCounts(const RadioCertification& c) { return c.m_swrGateCounts; }
+    static int swrGateClears(const RadioCertification& c) { return c.m_swrGateClears; }
     static int keyedFwdCountsMax(const RadioCertification& c) { return c.m_keyedFwdCountsMax; }
 };
 
@@ -145,14 +149,17 @@ int main(int argc, char** argv)
         owned_->m_health.values.insert(
             QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateCounts), 320);
         owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed), 0);
+        owned_->m_health.values.insert(
             QLatin1StringView(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw), 76);
         radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
         defineAndFeedMeters(radio.meterModel());
 
         RadioCertification cert(&radio, nullptr);
-        // Radiated by the consumer floor (1.1 mW), below the producer's gate:
-        // the exact band the bug lives in. 76 counts is the hardware reading.
-        RadioCertificationTestAccess::seedKeyedRf(cert, 3, 0.0075, 320, 76);
+        // Radiated by the consumer floor (1.1 mW), no window clearing the
+        // producer's gate: the exact band the bug lives in. 76 counts is the
+        // hardware reading, at the 10 percent drive the bench run used.
+        RadioCertificationTestAccess::seedKeyedRf(cert, 3, 0.0075, 320, 0, 76, 10);
         RadioCertificationTestAccess::meterInventory(cert);
 
         const QJsonObject stage = inventoryOf(cert);
@@ -195,15 +202,37 @@ int main(int argc, char** argv)
               "the reason names the gate the backend applies");
         check(reason.contains(QLatin1String("76")),
               "the reason names how far below the gate this run sat");
+        // The REASON must rest on the windows, not on the peak: "no keyed
+        // window cleared that gate" is the exact statement, where "the peak
+        // was below the gate" would be an inference from a quantity the gate
+        // is not applied to.
+        check(reason.contains(QLatin1String("no keyed window")),
+              "the reason states that no window cleared the gate");
+        // Below full drive, raising it is the actionable remedy, and the
+        // report says where the run keyed so the operator knows by how much.
+        check(reason.contains(QLatin1String("raise drive")),
+              "below full drive, the remedy is to raise drive");
+        check(reason.contains(QLatin1String("10%")),
+              "and the remedy says what drive the run used");
 
         const QJsonObject keyed = measured.value(QStringLiteral("keyedRf")).toObject();
         check(keyed.value(QStringLiteral("backendSwrGateCounts")).toInt() == 320,
               "the report carries the backend's declared gate");
+        check(keyed.value(QStringLiteral("backendSwrGateClearsWhileKeyed")).toInt() == 0,
+              "the report carries the count of windows that cleared the gate");
         check(keyed.value(QStringLiteral("maxForwardCountsWhileKeyed")).toInt() == 76,
               "the report carries the peak forward counts seen while keyed");
+        check(keyed.value(QStringLiteral("maxDrivePercentWhileKeyed")).toInt() == 10,
+              "the report carries the drive the run keyed at");
     }
 
-    // ---- above the gate: silence here IS a defect and must still be reported ----
+    // ---- THE CASE AN EARLIER REVISION GOT WRONG: peak above the gate, no
+    // window actually cleared it. The producer gates on each window's LAST
+    // value, so this state is real on hardware (w5jwp's finding 2 on #7064):
+    // peak 900, gate 320, zero clears, SWR correctly withheld. Judging on the
+    // peak called this a defect and recommended deleting a working meter --
+    // #7063 all over again, one revision in. The clears count is what makes
+    // the verdict exact, so this must read INCONCLUSIVE.
     {
         RadioModel radio;
         std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(new GatedBackend()));
@@ -211,12 +240,84 @@ int main(int argc, char** argv)
         owned_->m_health.values.insert(
             QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateCounts), 320);
         owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed), 0);
+        owned_->m_health.values.insert(
             QLatin1StringView(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw), 900);
         radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
         defineAndFeedMeters(radio.meterModel());
 
         RadioCertification cert(&radio, nullptr);
-        RadioCertificationTestAccess::seedKeyedRf(cert, 3, 2.0, 320, 900);
+        RadioCertificationTestAccess::seedKeyedRf(cert, 3, 2.0, 320, 0, 900, 10);
+        RadioCertificationTestAccess::meterInventory(cert);
+
+        const QJsonObject stage = inventoryOf(cert);
+        const QJsonObject measured = stage.value(QStringLiteral("measured")).toObject();
+        const QJsonObject swr = measured.value(QStringLiteral("TX:SWR")).toObject();
+        const QString concern = stage.value(QStringLiteral("concern")).toString();
+
+        check(swr.value(QStringLiteral("verdict")).toString() == QLatin1String("INCONCLUSIVE"),
+              "an above-gate PEAK with zero clears is INCONCLUSIVE, not a defect");
+        check(!concern.contains(QLatin1String("stop defining them"))
+                  || !concern.contains(QLatin1String("TX:SWR")),
+              "and the report does not recommend deleting the meter");
+    }
+
+    // ---- NIT 4: at full drive, "raise drive" is not a remedy. A forward
+    // reading that cannot clear the gate with the slider at maximum is a
+    // detector or scaling fault (the #5369 class), and before this change the
+    // run at least produced a negative finding. The verdict stays INCONCLUSIVE
+    // -- the meter really is suppressed -- but the remedy must point at the
+    // forward chain instead of asking for drive that does not exist.
+    {
+        RadioModel radio;
+        std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(new GatedBackend()));
+        auto* owned_ = static_cast<GatedBackend*>(owned.get());
+        owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateCounts), 320);
+        owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed), 0);
+        owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw), 40);
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        defineAndFeedMeters(radio.meterModel());
+
+        RadioCertification cert(&radio, nullptr);
+        RadioCertificationTestAccess::seedKeyedRf(cert, 3, 0.0075, 320, 0, 40, 100);
+        RadioCertificationTestAccess::meterInventory(cert);
+
+        const QJsonObject measured =
+            inventoryOf(cert).value(QStringLiteral("measured")).toObject();
+        const QString reason = measured.value(QStringLiteral("TX:SWR")).toObject()
+                                   .value(QStringLiteral("inconclusiveReason")).toString();
+
+        check(!reason.contains(QLatin1String("raise drive")),
+              "at full drive the remedy does not ask for more drive");
+        check(reason.contains(QLatin1String("100%")),
+              "the reason states that drive was already at maximum");
+        check(reason.contains(QLatin1String("forward detector")),
+              "and it points at the forward detector instead");
+    }
+
+    // ---- the gate WAS cleared: silence here IS a defect and must still be
+    // reported. This is the other half of what makes the clears count exact,
+    // and the mutation that matters most -- a fix that excused every silent
+    // gated meter would pass every check above and destroy the diagnostic.
+    {
+        RadioModel radio;
+        std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(new GatedBackend()));
+        auto* owned_ = static_cast<GatedBackend*>(owned.get());
+        owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateCounts), 320);
+        // 7 windows cleared the gate and SWR was still never fed.
+        owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed), 7);
+        owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw), 900);
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        defineAndFeedMeters(radio.meterModel());
+
+        RadioCertification cert(&radio, nullptr);
+        RadioCertificationTestAccess::seedKeyedRf(cert, 3, 2.0, 320, 7, 900, 10);
         RadioCertificationTestAccess::meterInventory(cert);
 
         const QJsonObject stage = inventoryOf(cert);
@@ -227,9 +328,9 @@ int main(int argc, char** argv)
         // The fix must not silence a REAL defect. Cleared the gate and still
         // nothing: that is the finding the original code existed to make.
         check(swr.value(QStringLiteral("verdict")).toString() != QLatin1String("INCONCLUSIVE"),
-              "a meter silent ABOVE its gate is not excused as inconclusive");
+              "a meter silent after its gate CLEARED is not excused as inconclusive");
         check(concern.contains(QLatin1String("DEFINED BUT NEVER FED")),
-              "a meter silent above its gate is still reported as never fed");
+              "a meter silent after its gate cleared is still reported as never fed");
         check(concern.contains(QLatin1String("TX:SWR")),
               "and it is named");
     }
@@ -243,7 +344,7 @@ int main(int argc, char** argv)
         defineAndFeedMeters(radio.meterModel());
 
         RadioCertification cert(&radio, nullptr);
-        RadioCertificationTestAccess::seedKeyedRf(cert, 3, 2.0, -1, -1);
+        RadioCertificationTestAccess::seedKeyedRf(cert, 3, 2.0, -1, -1, -1, 10);
         RadioCertificationTestAccess::meterInventory(cert);
 
         const QJsonObject stage = inventoryOf(cert);
@@ -267,6 +368,8 @@ int main(int argc, char** argv)
         owned_->m_health.values.insert(
             QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateCounts), 320);
         owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed), 4);
+        owned_->m_health.values.insert(
             QLatin1StringView(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw), 212);
         radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
         defineAndFeedMeters(radio.meterModel());
@@ -278,6 +381,8 @@ int main(int argc, char** argv)
 
         check(RadioCertificationTestAccess::swrGateCounts(cert) == 320,
               "observeKeyedRf reads the gate from the health snapshot");
+        check(RadioCertificationTestAccess::swrGateClears(cert) == 4,
+              "observeKeyedRf reads the clears count from the health snapshot");
         check(RadioCertificationTestAccess::keyedFwdCountsMax(cert) == 212,
               "observeKeyedRf reads the window peak from the health snapshot");
     }
@@ -292,12 +397,14 @@ int main(int argc, char** argv)
     {
         const QString gateKey =
             QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateCounts);
+        const QString clearsKey =
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed);
         const QString peakKey =
             QLatin1StringView(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw);
-        check(!gateKey.isEmpty() && !peakKey.isEmpty(),
-              "both diagnostic health keys are named");
-        check(gateKey != peakKey,
-              "the gate and the reading it gates have distinct keys");
+        check(!gateKey.isEmpty() && !clearsKey.isEmpty() && !peakKey.isEmpty(),
+              "all three diagnostic health keys are named");
+        check(gateKey != peakKey && gateKey != clearsKey && clearsKey != peakKey,
+              "the gate, its clears count and the reading have distinct keys");
     }
 
 
