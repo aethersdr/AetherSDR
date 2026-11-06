@@ -2260,7 +2260,7 @@
         "target": "ProfileManagerDialog"
       },
       "caption": "The Profile Manager, listing the global profiles stored in the radio.",
-      "alt": "Profile Manager window with tabs Global, Transmit, Microphone and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF. A Close button sits at the bottom."
+      "alt": "Profile Manager window with a round close button in its top-right corner and tabs Global, Transmit, Microphone, CW and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF."
     },
     {
       "id": "profile-import-export",

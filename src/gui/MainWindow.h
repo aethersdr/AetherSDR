@@ -999,7 +999,7 @@ private:
     // propagate the frameless toggle without an explicit qobject_cast branch.
     //
     // Slot must be typed QPointer<ConcreteDialog> so the ctor args match.
-    // Example: showOrRaisePersistent(m_profileManagerDialog, &m_radioModel);
+    // Example: showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
     template <class T, class... Args>
     void showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs);
 

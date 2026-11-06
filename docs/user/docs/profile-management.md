@@ -49,11 +49,11 @@ CW settings, kept as named profiles on radios running SmartSDR v4.3.16 or later.
 
 ## Using the Profile Manager
 
-**Profiles → Profile Manager...** opens a non-modal window that remembers its size and position. Tabs: **Global**, **Transmit**, **Microphone**, **CW**, **Auto-Save**.
+**Profiles → Profile Manager...** opens a window of its own that stays open while you operate and remembers its size and position. Drag any empty part of it to move it, or an edge to resize it. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux); choosing **Profile Manager...** while it is open brings it to the front. Tabs: **Global**, **Transmit**, **Microphone**, **CW**, **Auto-Save**.
 
 On each profile tab:
 
-<img src="/img/screens/profile-manager.png" width="460" alt="Profile Manager window with tabs Global, Transmit, Microphone and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF. A Close button sits at the bottom." />
+<img src="/img/screens/profile-manager.png" width="460" alt="Profile Manager window with a round close button in its top-right corner and tabs Global, Transmit, Microphone, CW and Auto-Save, on Global. A New Profile Name field sits above Load, Save and Delete buttons, and a list of the radio's global profiles: 20m CW, 20m Phone, 40m Phone, 80m Phone, BCSO, macOS_default_Profile, NIRG, SO2RDefault and VHF." />
 
 *The Profile Manager, listing the global profiles stored in the radio.*
 
@@ -62,8 +62,8 @@ On each profile tab:
 - **Save** (Global tab): save the current state to the selected profile, or to a new one using the name field
 - **Create** (Transmit and Microphone tabs): create a new profile. The radio cannot overwrite an existing TX or Mic profile directly; changes to the active one are captured by Auto-Save. If you try to create a name that already exists, AetherSDR tells you so and, if Auto-Save is off, offers **Enable Auto-Save**.
 - **Create** (CW tab): create a new CW profile. A name that already exists is refused with a status line.
-- **Reset** (CW tab): after confirmation, return the selected CW profile to the radio's built-in CW values. It does not copy the settings of the `Default` profile.
-- **Delete**: remove the selected profile, after confirmation
+- **Reset** (CW tab): after you confirm with **Reset**, return the selected CW profile to the radio's built-in CW values. It does not copy the settings of the `Default` profile.
+- **Delete**: remove the selected profile after you confirm with **Delete**. **Cancel** is the default in both confirmations, so pressing Return, **Esc** or the **✕** leaves the profile alone.
 
 When the radio reports edits to the active CW profile that are not saved yet, the CW tab shows **The active CW profile has unsaved changes.** The line clears when the profile is saved, or when the changed settings are put back to their saved values.
 
