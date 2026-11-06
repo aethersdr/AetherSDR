@@ -1320,7 +1320,8 @@ void MainWindow::buildMenuBar()
     // one instance at a time, cleaned up via WA_DeleteOnClose.
     auto* themeEditorAct = viewMenu->addAction("Theme Editor…");
     connect(themeEditorAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_themeEditorDialog);
+        showOrRaiseCanon(m_themeEditorDialog,
+                         [this] { return new ThemeEditorDialog(this); });
     });
 
     // Global defaults for new slices. Existing VFO flag controls remain

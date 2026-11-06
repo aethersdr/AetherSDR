@@ -22,11 +22,13 @@ The change applies immediately across the whole application.
 
 ## Using the Theme Editor
 
-**View → Theme Editor…** opens the editor for the active theme. It is a normal window, so you can keep it open while you look at the result. The controls are listed under [Reference](#reference).
+**View → Theme Editor…** opens the editor for the active theme. It is a window of its own, so you can keep it open while you look at the result, and choosing **Theme Editor…** again brings it to the front. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). The controls are listed under [Reference](#reference).
+
+The editor's own frame and buttons use the AetherSDR window style and do not change as you edit; the swatches and values always show the theme you are editing. **Delete** and overwriting an existing theme ask first, with **Cancel** as the default.
 
 Edits are saved as you make them.
 
-<img src="/img/screens/theme-editor.png" width="622" alt="Theme Editor window for Profile: Default Dark. A color picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colors fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of color tokens with their values, such as color.accent #00b4d8. Theme actions, Save As… and Close buttons run along the bottom." />
+<img src="/img/screens/theme-editor.png" width="622" alt="Theme Editor window for Profile: Default Dark, with a round close button in its top-right corner. A color picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colors fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of color tokens with their values, such as color.accent #00b4d8. Theme actions and Save As… buttons run along the bottom." />
 
 *The Theme Editor, editing the built-in Default Dark theme.*
 

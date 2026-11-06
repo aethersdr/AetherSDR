@@ -13,12 +13,19 @@
 #include <QAbstractScrollArea>
 #include <QApplication>
 #include <QCheckBox>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QList>
+#include <QPoint>
 #include <QPointer>
 #include <QPushButton>
+#include <QRect>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QSize>
 #include <QStringList>
 #include <QTest>
 #include <QToolButton>
@@ -147,6 +154,59 @@ void legibleAtMinimum()
     tm.setActiveTheme(before);
 }
 
+// The category page may be taller than its viewport, but each complete
+// checkbox must fit horizontally and be reachable by vertical scrolling.
+void categoriesRemainLegible()
+{
+    ThemeManager& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        tm.setActiveTheme(QLatin1String(theme));
+        SupportDialog dialog;
+        dialog.show();
+        check(QTest::qWaitForWindowExposed(&dialog), "category window is exposed");
+        dialog.resize(QSize(1, 1));
+        QTest::qWait(50);
+
+        auto* scroll = dialog.findChild<QScrollArea*>("supportCategoryScroll");
+        check(scroll && scroll->widget(), "categories have a scrollable page");
+        if (!scroll || !scroll->widget()) {
+            continue;
+        }
+        const QList<QCheckBox*> boxes = scroll->widget()->findChildren<QCheckBox*>();
+        check(!boxes.isEmpty()
+                  && boxes.size() == LogManager::instance().categories().size(),
+              "every category is on the scrolling page");
+
+        bool fullSize = true;
+        bool reachable = true;
+        for (QCheckBox* box : boxes) {
+            const QSize need = box->sizeHint();
+            if (box->width() < need.width() || box->height() < need.height()) {
+                fullSize = false;
+                std::printf("  %s: %s size=%dx%d need=%dx%d\n", theme,
+                            qPrintable(box->text()), box->width(), box->height(),
+                            need.width(), need.height());
+            }
+            scroll->ensureWidgetVisible(box, 0, 0);
+            QCoreApplication::processEvents();
+            const QRect visibleBox(box->mapTo(scroll->viewport(), QPoint(0, 0)),
+                                   box->size());
+            if (!box->isVisible() || !scroll->viewport()->rect().contains(visibleBox)) {
+                reachable = false;
+                std::printf("  %s: %s is clipped in the viewport\n",
+                            theme, qPrintable(box->text()));
+            }
+        }
+        check(fullSize, "all category labels and indicators keep their full width and height");
+        check(reachable, "every category, including the first and last rows, scrolls fully into view");
+        check(scroll->horizontalScrollBar()->maximum() == 0,
+              "all category columns fit without horizontal scrolling");
+        dialog.hide();
+    }
+    tm.setActiveTheme(before);
+}
+
 void geometryCarriesOver()
 {
     static const QString kKey = QStringLiteral("SupportDialogGeometry");
@@ -178,6 +238,7 @@ int main(int argc, char** argv)
     canonWindow();
     closePaths();
     legibleAtMinimum();
+    categoriesRemainLegible();
     geometryCarriesOver();
 
     qInstallMessageHandler(g_previous);
