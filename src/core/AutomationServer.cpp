@@ -3588,7 +3588,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("lab", {},
-            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
+            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — RigExpert Stick USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doLab(a.action, a.value);
