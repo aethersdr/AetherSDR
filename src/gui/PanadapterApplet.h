@@ -103,7 +103,9 @@ public:
     void  setRttyInputHint(const QString& hint, const QString& reason);
     void  clearRttyText();
     int   rttyMarkHz()  const;
-    int   rttyShiftHz() const;
+    // Shows the slice's shift without emitting rttyShiftHzChanged. A value
+    // off the preset list gets its own entry, replacing any earlier one.
+    void  setRttyShiftHz(int hz);
     float rttyBaud()    const;
     bool  rttyReverse() const;
     // Per-character confidence below which appendRttyText() drops the

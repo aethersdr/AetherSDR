@@ -53,8 +53,9 @@ SSTV and other modes.
 
 Stats bar updates ~2×/second: `M:xx% S:xx% SNR:xxdB  LOCKED/UNLOCK`
 
-Mark/Shift/Baud/REV persist to AppSettings as flat key names (grandfathered —
-see bug #4 below); Sens persists as one nested JSON object under the root key
+Mark/Baud/REV persist to AppSettings as flat key names (grandfathered —
+see bug #4 below); Shift is the slice's `rtty_shift` and the client does not
+store it; Sens persists as one nested JSON object under the root key
 `RttyDecoder` per Constitution Principle V.
 
 ---
