@@ -111,6 +111,12 @@ public:
     // The WDSP-allocated channel id, or -1 when this build has none.
     [[nodiscard]] int wdspChannelId() const noexcept;
     [[nodiscard]] const WdspChannel::Config* channelConfig() const noexcept;
+    // The TXA channel PureSignal calibrates and corrects (Hl2PureSignal), or
+    // null in the phasing build and before the first configure(). Same thread
+    // as this object only; configure() may replace it, which bumps
+    // modulatorGeneration() so the controller can re-seed the new one.
+    [[nodiscard]] WdspChannel* pureSignalChannel() noexcept;
+    [[nodiscard]] unsigned long long modulatorGeneration() const noexcept { return m_modulatorGeneration; }
 
 #if AETHER_HL2_TX_TXA
     // The TXA channel config buildModulator() opens, as a pure function of
@@ -225,6 +231,7 @@ private:
     bool m_sourceChangeWarned = false;   // one warning per transmission
     int m_upsample = 2;
     Hl2TxAlc m_alc;              // level chain; its gain carries across blocks
+    unsigned long long m_modulatorGeneration = 0;
 
     std::vector<float> m_inBuffer;      // pending input audio
     // Levelled audio for one call: the hand-off point between the shared level
