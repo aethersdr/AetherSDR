@@ -27,6 +27,7 @@
 #include "EqApplet.h"
 #include "AetherClockApplet.h"
 #include "WfmApplet.h"
+#include "PureSignalApplet.h"
 #include "MiniPanApplet.h"
 #include "WaveApplet.h"
 #include "ClientEqApplet.h"
@@ -168,7 +169,7 @@ constexpr int kStackBottomMargin = 8;
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "PWR", "RX", "WFM", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
+    "PWR", "RX", "WFM", "TUN", "AMP", "TX", "PS", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -775,6 +776,15 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     connect(m_wfmApplet, &WfmApplet::availabilityChanged,
             this, &AppletPanel::setWfmAvailable);
 
+    // HL2 PureSignal: present only while a Hermes-Lite 2 backend is bound,
+    // with the same presentation gate as WFM.
+    m_pureSignalApplet = new PureSignalApplet;
+    m_appletOrder.append(makeEntry("PS", "PureSignal", m_pureSignalApplet, true,
+                                   m_drawer, m_drawerLayout));
+    markHardwareConditional("PS");
+    connect(m_pureSignalApplet, &PureSignalApplet::availabilityChanged,
+            this, &AppletPanel::setPureSignalAvailable);
+
     // Tuner / Amp entries use makeEntry like everything else;
     // MainWindow toggles tray-button visibility via setTunerVisible /
     // setAmpVisible once the hardware reports its presence.  Until
@@ -1209,6 +1219,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // saved (or default) favorites layout to populate both strips.
     loadButtonLayout();
     setWfmAvailable(m_wfmApplet->isAvailable());
+    setPureSignalAvailable(m_pureSignalApplet->isAvailable());
     applyBarLayout();
 
     // Restore drawer open/closed state (default closed).  Signals blocked
@@ -1822,12 +1833,22 @@ void AppletPanel::applyCapabilityVisibility(const QString& id,
 
 void AppletPanel::setWfmAvailable(bool available)
 {
+    setPresentationAvailable(QStringLiteral("WFM"), available);
+}
+
+void AppletPanel::setPureSignalAvailable(bool available)
+{
+    setPresentationAvailable(QStringLiteral("PS"), available);
+}
+
+void AppletPanel::setPresentationAvailable(const QString& id, bool available)
+{
     // Availability suppresses presentation, never workspace membership or the
     // requested open state. Generic capability hiding emits visibilityChanged
     // and would incorrectly mark this temporarily unavailable tile as closed
     // in the active workspace. The container/window gate also survives recall.
     for (BarButton& button : m_barButtons) {
-        if (button.id != QLatin1String("WFM")) {
+        if (button.id != id) {
             continue;
         }
         button.hardwareAvailable = available;
@@ -1838,7 +1859,7 @@ void AppletPanel::setWfmAvailable(bool available)
         }
         break;
     }
-    if (ContainerWidget* container = m_containerMgr->container(QStringLiteral("WFM"))) {
+    if (ContainerWidget* container = m_containerMgr->container(id)) {
         container->setPresentationAvailable(available);
     }
     applyBarLayout();

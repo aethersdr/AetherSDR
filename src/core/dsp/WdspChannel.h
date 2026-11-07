@@ -560,6 +560,34 @@ public:
     // After output-count readiness, wait for the last hook and DSP body before
     // arming another hold. Test/control only; NEVER call while a hold is armed.
     void synchronizeWorkerForTest() const noexcept;
+    // ---- PureSignal (TX channels; calcc.c) ---------------------------------
+    // Thin wrappers over WDSP's PS API for the Hermes-Lite 2 controller
+    // (Hl2PureSignal). None takes the control fence: calcc guards its own state
+    // with cs_update, and its API is meant to be called from a GUI thread against a
+    // running channel. The caller keeps every call on one thread with the
+    // channel's lifetime (the HL2 I/O thread) so none can outlive the channel.
+    // All return false on a receive channel.
+    struct PureSignalInfo {
+        int feedbackLevel = 0;    // info[4]: feedback peak, 256 = hardware peak
+        bool feedbackFresh = false; // info[0] bit 0 clear: info[4] measured last attempt
+        int calibrationCount = 0; // info[5]: successful calculations
+        int attempts = 0;         // info[7]: finished calculations, good or not
+        bool correcting = false;  // info[14]
+        int state = 0;            // info[15]: LRESET .. LTURNON
+        double maxTx = 0.0;       // GetPSMaxTX
+    };
+    // One block of time-aligned pairs: `tx` the TX DAC reference, `rx` the
+    // feedback, both interleaved I/Q doubles of `size` complex samples.
+    bool pureSignalFeed(int size, double* tx, double* rx) noexcept;
+    bool pureSignalControl(bool reset, bool mancal, bool automode, bool turnon) noexcept;
+    bool pureSignalMox(bool mox) noexcept;
+    bool pureSignalRunCal(bool run) noexcept;
+    bool pureSignalConfigure(double hwPeak, int feedbackRateHz, double moxDelaySec,
+                             double loopDelaySec, double txDelaySec) noexcept;
+    bool pureSignalInfo(PureSignalInfo* out) const noexcept;
+    bool pureSignalSave(const char* path) noexcept;
+    bool pureSignalRestore(const char* path) noexcept;
+
     // Test only (#6179, WDSP patch 22): queue PSRestoreCorr(path) on this TX
     // channel's PureSignal correction thread, on the WDSP the core drives.
     void restorePureSignalCorrectionForTest(const char* path) const noexcept;

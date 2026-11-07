@@ -114,6 +114,7 @@ bool Hl2TxDsp::buildModulator(std::string* error)
         return false;
     }
 
+    ++m_modulatorGeneration;
     m_zeroQ.assign(c.inputBlockSize, 0.0f);
     m_outI.assign(m_channel->outputBlockSize(), 0.0f);
     m_outQ.assign(m_channel->outputBlockSize(), 0.0f);
@@ -360,6 +361,11 @@ int Hl2TxDsp::wdspChannelId() const noexcept
     return m_channel ? m_channel->channelIdForTest() : -1;
 }
 
+WdspChannel* Hl2TxDsp::pureSignalChannel() noexcept
+{
+    return m_channel.get();
+}
+
 const WdspChannel::Config* Hl2TxDsp::channelConfig() const noexcept
 {
     return m_channel ? &m_channel->config() : nullptr;
@@ -501,6 +507,7 @@ bool Hl2TxDsp::isLowerSideband() const
 
 const char* Hl2TxDsp::modulatorName() noexcept { return "phasing"; }
 int Hl2TxDsp::wdspChannelId() const noexcept { return -1; }
+WdspChannel* Hl2TxDsp::pureSignalChannel() noexcept { return nullptr; }
 const WdspChannel::Config* Hl2TxDsp::channelConfig() const noexcept { return nullptr; }
 // Arithmetic cannot starve. Always zero, so a health snapshot reports the same
 // field in both builds rather than omitting it in one.
