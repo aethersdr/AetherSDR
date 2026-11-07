@@ -569,8 +569,8 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
         text = tr("Off — uses DDC 2 and 3 for feedback");
     } else if (s.feedbackLimit > 0) {
         // Before everything else: the HL2's receive input is overdriven.
-        text = tr("Feedback too strong at maximum attenuation — add an attenuator "
-                  "in the feedback path");
+        text = tr("WARNING: too much RF feedback — this can damage your transceiver. "
+                  "Add an attenuator in the feedback path.");
         token = QStringLiteral("color.accent.danger");
     } else if (s.feedbackLimit < 0) {
         text = tr("Feedback too weak at full gain — check the coupler or sampler");

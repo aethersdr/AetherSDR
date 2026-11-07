@@ -197,7 +197,7 @@ PureSignal never keys the radio. It calibrates on transmissions you make yoursel
 **Settings** (under **▸ Settings**):
 
 - **Auto-attenuate feedback** moves the receive attenuation while keyed, so the feedback level stays in the window. Turn it off to set **TX att** by hand (−28 to 31 dB).
-- If the attenuation reaches its maximum (31 dB) and the feedback is still too strong, the state line turns red: "Feedback too strong at maximum attenuation". The HL2's receive input is then overdriven. This happens with an external amplifier's RF sampler at high power. Put a fixed attenuator (for example an SMA attenuator) in the feedback line until the level settles inside the range. At the other end, "Feedback too weak at full gain" means the coupler or sampler gives too little signal.
+- If the attenuation reaches its maximum (31 dB) and the feedback is still too strong, the state line turns red: "WARNING: too much RF feedback — this can damage your transceiver". The HL2's receive input is then overdriven, and this can damage it. Stop transmitting at that power. This happens with an external amplifier's RF sampler at high power. Put a fixed attenuator (for example an SMA attenuator) in the feedback line until the level settles inside the range. At the other end, "Feedback too weak at full gain" means the coupler or sampler gives too little signal.
 - **Reset** drops the correction.
 - **Save…** writes the current correction to a file. **Restore…** loads one. The file path must be shorter than 256 bytes.
 
