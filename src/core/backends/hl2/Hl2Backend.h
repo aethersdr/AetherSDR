@@ -309,7 +309,9 @@ private:
     friend struct Hl2HardwarePttTestAccess;
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
-    void onRadioPttChanged(bool keyed);
+    // A rising edge is offered to RadioModel as TransmitDelta::radioPtt only when
+    // keyRequest is set; a PTT held since the stream began rides mox alone.
+    void onRadioPttChanged(bool keyed, bool keyRequest = false);
     // Emit transmitChanged{mox} when m_keyed || m_radioPtt changes. A radio PTT
     // edge passes radioPtt, which is published with or without a mox change.
     void publishTransmitState(std::optional<bool> radioPtt = std::nullopt);

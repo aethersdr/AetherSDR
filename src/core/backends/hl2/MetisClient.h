@@ -476,7 +476,12 @@ signals:
     // gateware 74), the PTT/key jack or the internal keyer. Host MOX never raises
     // it. An observation, per edge and unthrottled; false is also emitted when the
     // stream ends or goes silent with the bit set.
-    void radioPttChanged(bool keyed);
+    //
+    // keyRequest is true only on a rising edge that follows a released level
+    // seen on the wire since the last start(), stop() or silence. A PTT that is
+    // already held when the stream starts or resumes is shown (keyed) but is not
+    // an operator action, so it must not key the host (#7067 review, Principle VI).
+    void radioPttChanged(bool keyed, bool keyRequest);
     // One accepted bandscope block: 2048 contiguous converter samples merged from the
     // four in-phase EP4 packets the gate kept (never per packet). Uncalibrated and
     // pre-DDC, on the AD9866's own scale: nothing downstream may treat these as
@@ -1008,6 +1013,10 @@ private:
     // 384 kHz this path runs ~10 000 times a second.
     std::vector<std::vector<std::complex<float>>> m_blocks;
     Hl2Telemetry m_telemetry;                   // accumulated across RADDR cycles
+    // A frame with ptt_resp clear has been seen since start(), stop() or
+    // silence. Cleared in clearRadioPtt(), set only by a real frame: a synthetic
+    // release at link loss must not arm the next press (see radioPttChanged).
+    bool m_radioPttArmed = false;
     // Telemetry rides the C&C bytes of every EP6 frame, so it parses ~3000x/s at
     // 384 kHz. The meters only need ~10 Hz; rate-limit the cross-thread emit so
     // publishTelemetry() does not flood the GUI thread. (#4449 review)

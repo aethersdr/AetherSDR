@@ -1550,14 +1550,17 @@ void Hl2Backend::publishTransmitState(std::optional<bool> radioPtt)
     emit transmitChanged(delta);
 }
 
-void Hl2Backend::onRadioPttChanged(bool keyed)
+void Hl2Backend::onRadioPttChanged(bool keyed, bool keyRequest)
 {
     hl2RequireBackendThread(this, "onRadioPttChanged");
     if (m_radioPtt == keyed) {
         return;
     }
     m_radioPtt = keyed;
-    publishTransmitState(keyed);
+    // A release is always offered: RadioModel only ever drops the key it took.
+    // A press is offered only when MetisClient saw a release before it, so a
+    // PTT held across a connect or a recovery shows transmit and keys nothing.
+    publishTransmitState(keyed && !keyRequest ? std::nullopt : std::optional<bool>(keyed));
     // While the host is keyed its own key owns the mute and, at its unkey, the
     // release. Nothing here reaches MetisClient: the radio keyed itself. The
     // edge rides transmitChanged as radioPtt, and RadioModel decides whether

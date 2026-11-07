@@ -2001,6 +2001,10 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
                 m_telemetry.apply(*resp);
                 if (m_telemetry.ptt != wasRadioPtt)
                     onRadioPttEdge(m_telemetry.ptt);
+                // After the edge, so the frame that releases arms the NEXT
+                // press, and a level held since the stream began never does.
+                if (!m_telemetry.ptt)
+                    m_radioPttArmed = true;
                 telemetryChanged = true;
                 m_fwdWindow.observe(*resp);
                 // Read back from apply() rather than re-decoding DATA[24], so the layout has one
@@ -2070,6 +2074,15 @@ void MetisClient::onReadyRead()
 
     while (m_socket && m_socket->hasPendingDatagrams()) {
         const QNetworkDatagram dg = m_socket->receiveDatagram();
+        // Only the radio this session started against. EP6 carries the radio's
+        // own PTT, which can key the host (#5998), so a datagram from anywhere
+        // else on the network is dropped before it is parsed. Tolerant: a
+        // dual-stack socket reports an IPv4 sender as ::ffff:a.b.c.d.
+        if (!m_host.isNull()
+            && (!dg.senderAddress().isEqual(m_host, QHostAddress::TolerantConversion)
+                || dg.senderPort() != m_port)) {
+            continue;
+        }
         // The local address the kernel actually delivered on, which a wildcard
         // bind cannot tell us (see start()). Latched once: it is a routing fact
         // about this socket, and re-testing it per datagram would cost a string
@@ -2277,7 +2290,7 @@ bool MetisClient::bandscopeInterlocked() const noexcept
 // ptt_resp rather than by anything this client asked for.
 void MetisClient::onRadioPttEdge(bool keyed)
 {
-    emit radioPttChanged(keyed);
+    emit radioPttChanged(keyed, keyed && m_radioPttArmed);
     if (keyed) {
         if (m_bsState != BandscopeState::Idle)
             bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
@@ -2293,6 +2306,9 @@ void MetisClient::onRadioPttEdge(bool keyed)
 
 void MetisClient::clearRadioPtt()
 {
+    // Unconditional: a new stream must see a release before a press can key,
+    // whether or not the bit happened to be set when the old one ended.
+    m_radioPttArmed = false;
     if (!m_telemetry.ptt) {
         return;
     }
