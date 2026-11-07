@@ -2461,17 +2461,19 @@ void txOffDelayMicWindow()
         Fixture f;
         TransmitModel& tx = f.radio.transmitModel();
         useTxOffDelayMic(f, QStringLiteral("BAL"));
-        tx.setTxOffDelayMs(5000);
+        tx.setTxOffDelayMs(800);
         const TxCoordinator::Producer producer = f.radio.registerTxProducer();
         const TxCoordinator::Request request = producer.request();
         check(f.radio.requestProducerPttOn(request, TransmitModel::PttSource::Mox),
               "the mic window case keys through the producer path");
         f.radio.requestProducerPttOff(request, TransmitModel::PttSource::Mox);
-        check(tx.txOffDelayPending(), "a radio-side mic still holds through the audio window");
         waitMs(TxOffDelaySettings::kAudioWindowMs + 150);
-        check(!tx.txOffDelayPending() && f.commands == QStringList({"mox:on", "mox:off"}),
-              "a radio-side mic unkeys at the audio window, not the longer delay");
+        check(tx.txOffDelayPending() && f.commands == QStringList({"mox:on"}),
+              "a radio-side mic stays keyed for the operator's delay, past the audio window");
         check(!tx.txOffDelayMicMuted(), "a radio-side mic hold never reports a client mute");
+        waitMs(600);
+        check(!tx.txOffDelayPending() && f.commands == QStringList({"mox:on", "mox:off"}),
+              "a radio-side mic unkeys when the operator's delay ends");
     }
     {
         Fixture f;

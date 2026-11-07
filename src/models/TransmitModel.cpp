@@ -1711,14 +1711,11 @@ void TransmitModel::requestPttOff(PttSource /*source*/, PttRelease scopedRelease
         return;
     }
 
-    // A radio-side mic (MIC, BAL, LINE, ACC) never passes through this client,
-    // so it cannot be muted here: staying keyed would leave it live on the air.
-    // Those holds end with the audio window. A PC mic is muted when it passes.
-    const bool micIsLocal = m_micSelection == QLatin1String("PC");
-    const int holdMs = micIsLocal
-        ? m_txOffDelayMs
-        : std::min(m_txOffDelayMs, TxOffDelaySettings::kAudioWindowMs);
-    if (micIsLocal && holdMs > TxOffDelaySettings::kAudioWindowMs) {
+    // A PC mic is muted when the audio window passes. A radio-side mic (MIC, BAL,
+    // LINE, ACC) never passes through this client, so it stays live for the whole
+    // hold; the operator chooses that length, and the setting's tooltip says so.
+    if (m_micSelection == QLatin1String("PC")
+        && m_txOffDelayMs > TxOffDelaySettings::kAudioWindowMs) {
         m_txOffDelayMicTimer = new QTimer(this);
         m_txOffDelayMicTimer->setSingleShot(true);
         m_txOffDelayMicTimer->setTimerType(Qt::PreciseTimer);
@@ -1745,7 +1742,7 @@ void TransmitModel::requestPttOff(PttSource /*source*/, PttRelease scopedRelease
             continuePttOff(release);
         }
     });
-    m_txOffDelayTimer->start(holdMs);
+    m_txOffDelayTimer->start(m_txOffDelayMs);
 }
 
 void TransmitModel::continuePttOff(const PttRelease& release)
