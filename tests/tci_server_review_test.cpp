@@ -505,6 +505,16 @@ public:
             return false;
         }
 
+        const auto settle = []() {
+            for (int i = 0; i < 3; ++i)
+                QCoreApplication::processEvents();
+        };
+        // The seed above posted a send of its own. Let it run while no
+        // client is attached: with a client it would go out and open the
+        // 100 ms window, and the SET's echo below would wait for the
+        // trailing send instead of leading.
+        settle();
+
         TciClient socket;
         TciServer::ClientState client;
         client.socket = &socket;
@@ -522,10 +532,6 @@ public:
         }
         // The SET is queued to the model and the broadcast posted from its
         // signal: two rounds of posted events.
-        const auto settle = []() {
-            for (int i = 0; i < 3; ++i)
-                QCoreApplication::processEvents();
-        };
         settle();
         if (model.transmitModel().txFilterLow() != 100
             || model.transmitModel().txFilterHigh() != 2900
