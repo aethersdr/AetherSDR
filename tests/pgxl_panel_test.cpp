@@ -36,6 +36,13 @@
 #include <cstdio>
 #include <functional>
 
+// The docked rail gives a stacked applet less than its own 260 px: the panel's
+// outer gutter (6) and, when it shows, the scrollbar track (12) come off it.
+// AppletPanel::kStackedApplet is the authority (AppletPanel.h); it is restated
+// here because that header pulls in AudioEngine.h, which this test does not
+// link. A fit check at 260 can pass while the real docked width clips. (#7081)
+static constexpr int kDockedAppletWidth = 242;   // AppletPanel::kStackedApplet
+
 using namespace AetherSDR;
 
 namespace {
@@ -554,10 +561,11 @@ int main(int argc, char** argv)
             CHECK(floatInset >= 6);
             CHECK(floatInset < 20);
 
-            // Docked, at the rail's own width (AppletPanel is 260 px wide):
-            // the indicator ends the HL/Vdd row.
+            // Docked, at the width a stacked applet actually gets — the rail
+            // is 260 px but the outer gutter and scrollbar come off it, so 260
+            // here passed while the real docked width clipped (#7081).
             applet.setFloating(false);
-            settle(QSize(260, 380));
+            settle(QSize(kDockedAppletWidth, 380));
             gridHolds();
             CHECK(abreast(vdd, source));
             CHECK(applet.width() - at(source).x() - source->width() < 20);

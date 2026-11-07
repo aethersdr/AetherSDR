@@ -87,6 +87,21 @@ class AppletPanel : public QWidget {
 public:
     explicit AppletPanel(QWidget* parent = nullptr);
 
+    // The docked rail's outer gutter follows the wall it is docked to, so the
+    // 6 px always sits against the window edge (#7081 review finding 1).
+    // MainWindow::setAppletPanelDockedLeft() is the only caller.
+    void setDockedLeft(bool left);
+
+    // The width a stacked applet actually gets when docked: the rail's fixed
+    // width, less the outer gutter, less the scrollbar track when it shows.
+    // Tests that check an applet fits the rail must lay out at this, not at
+    // kRailWidth — see pgxl_panel_test / amp_applet_test.
+    static constexpr int kRailWidth        = 260;
+    static constexpr int kRailOuterGutter  = 6;
+    static constexpr int kRailScrollBarW   = 12;
+    static constexpr int kStackedApplet    =
+        kRailWidth - kRailOuterGutter - kRailScrollBarW;   // 242
+
     void setSlice(SliceModel* slice);
     void setAntennaList(const QStringList& ants);
     void setMaxSlices(int maxSlices);
@@ -488,6 +503,8 @@ private:
     QPushButton* m_agBtn{nullptr};
     QPushButton* m_ssBtn{nullptr};
     QVBoxLayout* m_stack{nullptr};
+    QVBoxLayout* m_root{nullptr};
+    bool m_dockedLeft{false};
     QScrollArea* m_scrollArea{nullptr};
     QTimer*      m_scrollDimTimer{nullptr};
     QWidget*     m_dropIndicator{nullptr};

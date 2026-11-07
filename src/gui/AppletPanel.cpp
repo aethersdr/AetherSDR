@@ -306,11 +306,32 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         this,
         QStringLiteral("QWidget#appletPanel { background: {{color.background.app}}; }"));
 
-    setFixedWidth(260);
+    setFixedWidth(kRailWidth);
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(0);
+    m_root = new QVBoxLayout(this);
+    // A gutter on whichever side faces the window edge, because every layout
+    // between this panel and that edge is margin-free: MainWindow's central
+    // widget (MainWindow.cpp), the splitter, and ContainerWidget's own layouts
+    // are 0 all round, leaving only ContainerTitleBar's 2 px.
+    //
+    // WHAT WAS MEASURED (#7077), rather than a mechanism: applet content was
+    // landing within about 1 px of the window edge, and a 6 px inset fixes it
+    // on Windows. The S-Meter's dBm readout lost its trailing "m", the "+40"
+    // arc label rendered as "+4", and every applet's x close button sat on the
+    // boundary. Qt clips none of this — paintEvent() reported the full 260 px
+    // width with a complete visibleRegion — so the pixels were being covered
+    // at the window boundary, outside Qt's clipping. On Windows the whole
+    // window is client area and that edge is hit-tested as a resize border
+    // (MainWindow::isSystemMoveAreaAt and the WM_NCHITTEST path), with DWM
+    // drawing a frame border over it; that is consistent with the measurement
+    // but was not itself measured, so it is not asserted here.
+    //
+    // The side is set by setDockedLeft(), since the panel is NOT always the
+    // splitter's last widget — setAppletPanelDockedLeft() inserts it before
+    // the pan when docked left (MainWindow.cpp).
+    m_root->setContentsMargins(0, 0, kRailOuterGutter, 0);
+    m_root->setSpacing(0);
+    auto* root = m_root;
 
     // Top button bar: kFavoriteCount (5) favourite buttons in one row plus a
     // drawer toggle (▾/▴) revealing every other button; right-click opens the
@@ -482,11 +503,17 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     // Override sizeHint/minimumSizeHint so QScrollArea::setWidgetResizable
     // always sizes this container to the viewport width rather than "sticking"
-    // at the AppletPanel's fixed width (260px).  Without this, the VBox layout's
-    // sizeHint stays at 260px after the initial layout pass, and the 12px
-    // scrollbar track (always visible) pushes the viewport to 248px — but Qt
-    // keeps the container at max(248, sizeHint=260)=260px, silently clipping
-    // the right 12px of every applet header (including the × close button).
+    // at the rail's fixed width (kRailWidth, 260 px). Without this, the VBox
+    // layout's sizeHint stays at 260 after the initial layout pass — but Qt
+    // keeps the container at max(viewport, sizeHint=260) = 260, silently
+    // clipping the right edge of every applet header (the × close button).
+    //
+    // The viewport is narrower than the rail by the outer gutter and, WHEN IT
+    // SHOWS, the scrollbar track: 260 − 6 − 12 = kStackedApplet (242). The
+    // policy is ScrollBarAsNeeded, so the bar is NOT always visible and the
+    // viewport is 254 without it. An earlier version of this comment said
+    // "always visible" and "248", and that wrong premise cost two wrong
+    // theories on #7077 — take the width from the constants, not from here.
     struct FlexContainer : QWidget {
         using QWidget::QWidget;
         QSize sizeHint() const override
@@ -2451,6 +2478,24 @@ void AppletPanel::openFavoritesPicker()
     m_favoritesPicker->show();
     m_favoritesPicker->raise();
     m_favoritesPicker->activateWindow();
+}
+
+void AppletPanel::setDockedLeft(bool left)
+{
+    // The gutter exists to keep applet content off the WINDOW edge, so it has
+    // to move with the wall the rail is docked to: docked left, the outer side
+    // is the panel's left. Without this the 6 px sat between the panel and the
+    // panadapter — where nothing was being lost — while the window edge it was
+    // meant to protect went back to 0 (#7081 review finding 1).
+    //
+    // Whether a left-docked rail clips at all is not established: #7077 was
+    // reported and measured right-docked only. This keeps the one invariant we
+    // can state — the gutter faces the window — and costs nothing if it does not.
+    if (!m_root || m_dockedLeft == left)
+        return;
+    m_dockedLeft = left;
+    m_root->setContentsMargins(left ? kRailOuterGutter : 0, 0,
+                               left ? 0 : kRailOuterGutter, 0);
 }
 
 } // namespace AetherSDR

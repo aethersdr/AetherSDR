@@ -9859,6 +9859,12 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
         else      m_splitter->addWidget(m_appletPanel);
     }
 
+    // Move the rail's outer gutter to the wall it is now docked to. Told
+    // unconditionally, not only when the slot changed: the persisted side and
+    // the live slot can already agree on entry (alreadyOnWall), and the panel
+    // still has to be given the side it was built without. (#7081)
+    m_appletPanel->setDockedLeft(left);
+
     // Re-apply stretch/collapse rules by widget identity (indices shifted).
     for (int i = 0; i < m_splitter->count(); ++i) {
         QWidget* w = m_splitter->widget(i);
