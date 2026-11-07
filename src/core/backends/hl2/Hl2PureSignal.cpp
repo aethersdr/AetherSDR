@@ -193,6 +193,7 @@ void Hl2PureSignal::startController()
 {
     m_ctl.reset();
     m_lastInfo = {};
+    m_measured.reset();
     if (m_wantAuto)
         m_ctl.selectAuto();
 }
@@ -254,6 +255,7 @@ void Hl2PureSignal::setEnabled(bool on)
         }
         m_ctl.reset();
         m_lastInfo = {};
+        m_measured.reset();
         if (m_timer)
             m_timer->stop();
         qCInfo(lcHl2Ps) << "HL2 PureSignal: off";
@@ -426,6 +428,8 @@ void Hl2PureSignal::onTick()
     WdspChannel::PureSignalInfo info;
     ch->pureSignalInfo(&info);
     m_lastInfo = info;
+    // Before the step: the attempt that just finished ran at this attenuation.
+    m_measured.observe(info.feedbackFresh, info.attempts, m_ctl.attenuationDb());
     const auto out = m_ctl.step({info.state, info.correcting, info.feedbackLevel,
                                  info.feedbackFresh, info.attempts});
     if (out.attenuationDb) {
@@ -460,7 +464,21 @@ void Hl2PureSignal::publish()
         s.calibrationCount = info.calibrationCount;
         s.engineState = info.state;
         s.maxTx = info.maxTx;
-        s.feedbackLimit = Hl2PsGain::limit(s.attenuationDb, s.feedbackLevel);
+        s.feedbackLimit = m_measured.limit(s.attenuationDb, s.feedbackLevel);
+    }
+    if (s.feedbackLimit != m_last.feedbackLimit || !m_havePublished) {
+        // In the log as well as the applet: the PS tile need not be open, and
+        // a support bundle should show that the feedback path was overdriven.
+        if (s.feedbackLimit > 0) {
+            qCWarning(lcHl2Ps).nospace()
+                << "HL2 PureSignal: feedback " << s.feedbackLevel << " still too strong at "
+                << s.attenuationDb << " dB, the most attenuation; add an attenuator in the "
+                   "feedback path";
+        } else if (s.feedbackLimit < 0) {
+            qCWarning(lcHl2Ps).nospace()
+                << "HL2 PureSignal: feedback " << s.feedbackLevel << " too weak at "
+                << s.attenuationDb << " dB, full gain; check the coupler or sampler";
+        }
     }
     const bool same = m_havePublished && s.available == m_last.available
         && s.unavailableReason == m_last.unavailableReason && s.enabled == m_last.enabled
@@ -470,7 +488,8 @@ void Hl2PureSignal::publish()
         && s.fileError == m_last.fileError
         && s.feedbackLevel == m_last.feedbackLevel
         && s.calibrationCount == m_last.calibrationCount && s.engineState == m_last.engineState
-        && s.attenuationDb == m_last.attenuationDb && s.keyed == m_last.keyed
+        && s.attenuationDb == m_last.attenuationDb && s.feedbackLimit == m_last.feedbackLimit
+        && s.keyed == m_last.keyed
         && std::abs(s.maxTx - m_last.maxTx) < 1e-4;
     m_last = s;
     m_havePublished = true;
