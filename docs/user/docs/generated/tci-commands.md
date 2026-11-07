@@ -88,6 +88,7 @@ Handled per client connection: audio and IQ streams, stream format, and sensor r
 | `xit_offset` |
 | `split_enable` |
 | `rx_filter_band` |
+| `tx_filter_band_ex` |
 | `cw_macros_speed` |
 | `lock` |
 | `sql_enable` |

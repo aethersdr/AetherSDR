@@ -218,6 +218,12 @@ private:
     // entry point; broadcast* does the de-duped send.
     void queuePowerBroadcast();
     void broadcastPower();
+    // Coalesced tx_filter_band_ex: relay. A ClientEq drag sets low and then
+    // high, so each mouse step is two txFilterCutoffChanged signals; the send
+    // is posted, so both collapse into one pair, and then rate-limited like
+    // drive:. broadcastTxFilter() returns whether anything went out.
+    void queueTxFilterBroadcast();
+    bool broadcastTxFilter();
 
     void sendInitBurst(TciClient* client);
     // Diagnostic: log + send a text reply to one client (per-command echoes
@@ -483,6 +489,12 @@ private:
     bool              m_tuneDrivePending{false};  // tunePowerChanged since last flush
     int               m_lastDriveSent{-1};
     int               m_lastTuneDriveSent{-1};
+    // Same limiter for tx_filter_band_ex: (see queueTxFilterBroadcast()).
+    QTimer*           m_txFilterRateTimer{nullptr};
+    bool              m_txFilterPending{false};     // change since last send
+    bool              m_txFilterSendPosted{false};  // leading send queued
+    int               m_lastTxFilterLowSent{-1};
+    int               m_lastTxFilterHighSent{-1};
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
