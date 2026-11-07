@@ -82,9 +82,7 @@ void gainStep()
 
 void limitNeedsALevelMeasuredHere()
 {
-    std::printf("
-  the limit belongs to the attenuation the level was measured at
-");
+    std::printf("\n  the limit belongs to the attenuation the level was measured at\n");
     AetherSDR::hl2::Hl2PsMeasuredAt m;
     check(m.limit(31, 220) == 0, "nothing measured yet: no limit");
     // Auto-attenuate at 28 reads 220; the controller steps to 31.
