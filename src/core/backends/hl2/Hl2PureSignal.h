@@ -68,7 +68,7 @@ struct Hl2PureSignalStatus {
     int calibrationCount = 0;    // info[5]: successful calibrations
     int engineState = 0;         // info[15]: calcc's state
     int attenuationDb = 31;      // keyed feedback attenuation; gain = 19 - att
-    int feedbackLimit = 0;       // Hl2PsGain::limit: +1 too strong, -1 too weak
+    int feedbackLimit = 0;       // +1 too strong, -1 too weak, at the att it was measured at
     double maxTx = 0.0;          // GetPSMaxTX
     bool keyed = false;
 };
@@ -127,6 +127,35 @@ struct Hl2PsGain {
     }
     // 0x0a C4 while keyed: ccRxGain(19 - att).
     [[nodiscard]] static int lnaGainDbForAtt(int att) noexcept { return 19 - att; }
+};
+
+// The attenuation calcc's feedback level was measured at. info[4] keeps the
+// last attempt's level until the next attempt finishes, so right after a gain
+// move, and for as long as Hold lasts after a manual one, it describes another
+// attenuation. limit() is only answered for a level measured at the
+// attenuation in force now; otherwise 0 until a fresh attempt (#7087 review).
+class Hl2PsMeasuredAt {
+public:
+    // One GetPSInfo read. attNow is the attenuation in force while that
+    // attempt ran, i.e. before this tick's controller step moves it.
+    void observe(bool feedbackFresh, int attempts, int attNow) noexcept
+    {
+        if (feedbackFresh && attempts != m_attempts) { m_att = attNow; }
+        m_attempts = attempts;
+    }
+    [[nodiscard]] int limit(int attNow, int fb) const noexcept
+    {
+        return m_att && *m_att == attNow ? Hl2PsGain::limit(attNow, fb) : 0;
+    }
+    void reset() noexcept
+    {
+        m_att.reset();
+        m_attempts = -1;
+    }
+
+private:
+    std::optional<int> m_att;
+    int m_attempts = -1;
 };
 
 class Hl2PsController {
@@ -286,6 +315,7 @@ private:
     bool m_wantAuto = false;
     bool m_keyed = false;
     WdspChannel::PureSignalInfo m_lastInfo;
+    Hl2PsMeasuredAt m_measured;   // which attenuation m_lastInfo's level belongs to
     bool m_available = false;
     QString m_unavailableReason;
     int m_feedbackRateHz = 48000;

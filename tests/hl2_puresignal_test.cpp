@@ -77,6 +77,32 @@ void gainStep()
           "gain is 19 - att, inside the LNA's -12..+48 dB");
 }
 
+void limitNeedsALevelMeasuredHere()
+{
+    std::printf("
+  the limit belongs to the attenuation the level was measured at
+");
+    AetherSDR::hl2::Hl2PsMeasuredAt m;
+    check(m.limit(31, 220) == 0, "nothing measured yet: no limit");
+    // Auto-attenuate at 28 reads 220; the controller steps to 31.
+    m.observe(true, 1, 28);
+    check(m.limit(28, 220) == 0, "at 28 a hot level is not yet a limit");
+    check(m.limit(31, 220) == 0, "stepped onto 31: the 28 dB level is no +1");
+    m.observe(true, 1, 31);
+    check(m.limit(31, 220) == 0, "the same attempt read again does not count as measured at 31");
+    m.observe(true, 2, 31);
+    check(m.limit(31, 220) == 1, "a fresh attempt at 31 still too strong: +1");
+    // Hold: calcc measures no more; the operator drags the slider.
+    check(m.limit(30, 220) == 0, "a manual move away drops the warning");
+    check(m.limit(31, 220) == 1, "and back to where it was measured restores it");
+    m.observe(false, 3, 31);
+    check(m.limit(31, 220) == 1, "an attempt that measured nothing keeps the last level's att");
+    m.observe(true, 4, -28);
+    check(m.limit(-28, 100) == -1, "a fresh weak level at full gain: -1");
+    m.reset();
+    check(m.limit(-28, 100) == 0, "reset forgets it");
+}
+
 void autoOnAndOff()
 {
     Hl2PsController c;
@@ -338,6 +364,7 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     gainStep();
+    limitNeedsALevelMeasuredHere();
     autoOnAndOff();
     singleCalibration();
     singleGivesUp();
