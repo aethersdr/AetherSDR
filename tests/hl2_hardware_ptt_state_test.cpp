@@ -447,9 +447,7 @@ void testLinkLossFailsToReceive()
 
 void testHeldPttIsNotAKeyRequest()
 {
-    std::printf("
-  a PTT held when the stream starts or resumes
-");
+    std::printf("\n  a PTT held when the stream starts or resumes\n");
     Hl2Backend backend;
     Access::prepare(backend);
     Access::setHoldMs(backend, 0);
