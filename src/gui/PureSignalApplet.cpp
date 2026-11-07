@@ -640,12 +640,19 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
     QString token = QStringLiteral("color.text.secondary");
     if (!bound) {
         text = tr("Hermes-Lite 2 only");
-    } else if (s.enabled && s.feedbackLimit > 0) {
+    } else if (s.enabled && s.feedbackLimit > 1) {
         // Before everything else, a leftover request error included: the
-        // HL2's receive input is overdriven. Only computed while enabled.
+        // level is at or above the scale, so the HL2's receive input is
+        // overdriven. Only computed while enabled.
         text = tr("WARNING: too much RF feedback — this can damage your transceiver. "
                   "Add an attenuator in the feedback path.");
         token = QStringLiteral("color.accent.danger");
+    } else if (s.enabled && s.feedbackLimit > 0) {
+        // Above the window at the most attenuation: no calibration until an
+        // attenuator brings it down, but still inside the scale.
+        text = tr("Feedback too strong to calibrate at 31 dB — add an attenuator in the "
+                  "feedback path");
+        token = QStringLiteral("color.accent.warning");
     } else if (!m_error.isEmpty()) {
         text = m_error;
         token = QStringLiteral("color.accent.danger");

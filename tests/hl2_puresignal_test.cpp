@@ -69,8 +69,11 @@ void gainStep()
           "window is 128 < fb <= 181");
     check(Gain::clampAtt(-40) == -28 && Gain::clampAtt(40) == 31,
           "attenuation clamps to -28..31");
-    check(Gain::limit(31, 200) == 1 && Gain::limit(31, 181) == 0 && Gain::limit(30, 250) == 0,
+    check(Gain::limit(31, 200) == 1 && Gain::limit(31, 255) == 1 && Gain::limit(31, 181) == 0
+              && Gain::limit(30, 250) == 0,
           "too strong only at the most attenuation with the level above the window");
+    check(Gain::limit(31, 256) == 2 && Gain::limit(31, 400) == 2 && Gain::limit(30, 300) == 0,
+          "at or above the scale at the most attenuation: clipped, +2");
     check(Gain::limit(-28, 100) == -1 && Gain::limit(-28, 0) == 0 && Gain::limit(-27, 100) == 0,
           "too weak only at full gain with a measured level below the window");
     check(Gain::lnaGainDbForAtt(31) == -12 && Gain::lnaGainDbForAtt(-28) == 47,
@@ -92,6 +95,7 @@ void limitNeedsALevelMeasuredHere()
     check(m.limit(31, 220) == 0, "the same attempt read again does not count as measured at 31");
     m.observe(true, 2, 31);
     check(m.limit(31, 220) == 1, "a fresh attempt at 31 still too strong: +1");
+    check(m.limit(31, 300) == 2, "and clipped there: +2");
     // Hold: calcc measures no more; the operator drags the slider.
     check(m.limit(30, 220) == 0, "a manual move away drops the warning");
     check(m.limit(31, 220) == 1, "and back to where it was measured restores it");

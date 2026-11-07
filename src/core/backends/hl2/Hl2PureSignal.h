@@ -68,7 +68,7 @@ struct Hl2PureSignalStatus {
     int calibrationCount = 0;    // info[5]: successful calibrations
     int engineState = 0;         // info[15]: calcc's state
     int attenuationDb = 31;      // keyed feedback attenuation; gain = 19 - att
-    int feedbackLimit = 0;       // +1 too strong, -1 too weak, at the att it was measured at
+    int feedbackLimit = 0;       // Hl2PsGain::limit, at the att it was measured at
     double maxTx = 0.0;          // GetPSMaxTX
     bool keyed = false;
 };
@@ -114,13 +114,16 @@ struct Hl2PsGain {
     [[nodiscard]] static int stepDb(int fb) noexcept;
     // Whether the attenuation range has run out with the level still outside
     // the window. +1: the most attenuation the HL2 has and the feedback is
-    // still too strong. The receive input is overdriven, and only an
-    // attenuator in the feedback path (e.g. after an amplifier's sampler)
-    // fixes it. -1: full gain and a measured level still too weak (coupler
+    // still above the window: too strong to calibrate, and only an attenuator
+    // in the feedback path (e.g. after an amplifier's sampler) brings it in.
+    // +2: the same with the level at or above the scale (kScale, the hardware
+    // peak), so it is clipped, not measured, and the receive input is
+    // overdriven. -1: full gain and a measured level still too weak (coupler
     // or sampler missing or too loose). 0: within range. fb <= 0 is no
     // measurement yet, so it never reads as too weak.
     [[nodiscard]] static int limit(int att, int fb) noexcept
     {
+        if (att >= kAttMax && fb >= kScale) { return 2; }
         if (att >= kAttMax && fb > kWindowHigh) { return 1; }
         if (att <= kAttMin && fb > 0 && fb <= kWindowLow) { return -1; }
         return 0;
