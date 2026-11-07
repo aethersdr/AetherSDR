@@ -1857,16 +1857,14 @@ public:
         server.handleVfoRequest(&sock, TciProtocol::VfoRequest{0, 1, a});
 
         if (model.slices().size() != slicesBefore) {
-            std::printf("      a simplex restate created a slice (%d -> %d)
-",
+            std::printf("      a simplex restate created a slice (%d -> %d)\n",
                         slicesBefore, int(model.slices().size()));
             return false;
         }
         // No route recorded: a later bare PTT must not find a TX slice here.
         if (server.m_routingState.txSliceId() >= 0
             || server.m_routingState.rxSliceId() >= 0) {
-            std::printf("      a simplex restate recorded a route (rx=%d tx=%d)
-",
+            std::printf("      a simplex restate recorded a route (rx=%d tx=%d)\n",
                         server.m_routingState.rxSliceId(),
                         server.m_routingState.txSliceId());
             return false;
@@ -3373,8 +3371,7 @@ int main(int argc, char** argv)
                 "(#5086)\n",
                 vfoChannelZeroOnce ? "PASS" : "FAIL");
     std::printf("%s  vfo: VFO B at VFO A without split creates no slice or "
-                "route (#7071)
-",
+                "route (#7071)\n",
                 vfoBRestateNoSlice ? "PASS" : "FAIL");
     std::printf("%s  PTT route log shows the cache disagreeing with live TX "
                 "(#4547)\n",
