@@ -341,15 +341,18 @@ qint64 TciIoWorker::sendBinary(quint64 id, const QByteArray& message)
 }
 
 // IQ is a picture, not a conversation: a frame the socket cannot take now is
-// dropped and the client stays. It may fill only half the backlog, so text and
-// RX audio, which still close on overrun, always find room behind it. A 384 kHz
-// stream is ~3 MB/s; over Wi-Fi that used to retire the client within minutes.
+// dropped and the client stays. It may fill only a quarter of the backlog, so
+// text and RX audio, which still close on overrun, always find room behind it.
+// A stream the link cannot carry keeps the socket at its IQ share all the time,
+// and that share is what audio loses: at half, 48 kHz float32 stereo audio had
+// ~0.3 s of slack, and one Wi-Fi stall that long closed the client. A frame
+// larger than the share (384 kHz) still goes out when the socket is empty.
 qint64 TciIoWorker::sendStreamFrame(quint64 id, const QByteArray& message)
 {
     const auto it = m_clients.find(id);
     if (it == m_clients.end() || !it->socket || !it->lifetime->live.load()) { return -1; }
     const qint64 pending = it->socket->bytesToWrite();
-    if (pending > kMaxRxBacklogBytes / 2 - message.size()) {
+    if (pending > 0 && pending + message.size() > kMaxStreamBacklogBytes) {
         ++it->droppedStreamFrames;
         // Logged by time, not by count: the frame cadence depends on the rate.
         if (!it->streamDropLog.isValid() || it->streamDropLog.elapsed() >= kStreamDropLogMs) {
