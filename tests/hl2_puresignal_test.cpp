@@ -69,6 +69,10 @@ void gainStep()
           "window is 128 < fb <= 181");
     check(Gain::clampAtt(-40) == -28 && Gain::clampAtt(40) == 31,
           "attenuation clamps to -28..31");
+    check(Gain::limit(31, 200) == 1 && Gain::limit(31, 181) == 0 && Gain::limit(30, 250) == 0,
+          "too strong only at the most attenuation with the level above the window");
+    check(Gain::limit(-28, 100) == -1 && Gain::limit(-28, 0) == 0 && Gain::limit(-27, 100) == 0,
+          "too weak only at full gain with a measured level below the window");
     check(Gain::lnaGainDbForAtt(31) == -12 && Gain::lnaGainDbForAtt(-28) == 47,
           "gain is 19 - att, inside the LNA's -12..+48 dB");
 }
@@ -305,6 +309,7 @@ void statusFields()
     s.calibrationCount = 3;
     s.engineState = Hl2PsController::LStayOn;
     s.attenuationDb = 12;
+    s.feedbackLimit = 1;
     s.keyed = true;
     const QVariantMap f = hl2::pureSignalStatusFields(s);
     check(f.value(QStringLiteral("available")).toBool()
@@ -314,7 +319,8 @@ void statusFields()
     check(f.value(QStringLiteral("feedbackLevel")).toInt() == 150
           && f.value(QStringLiteral("calibrationCount")).toInt() == 3
           && f.value(QStringLiteral("engineState")).toInt() == 8
-          && f.value(QStringLiteral("attenuationDb")).toInt() == 12, "values reach the map");
+          && f.value(QStringLiteral("attenuationDb")).toInt() == 12
+          && f.value(QStringLiteral("feedbackLimit")).toInt() == 1, "values reach the map");
     check(f.value(QStringLiteral("attMin")).toInt() == -28
           && f.value(QStringLiteral("attMax")).toInt() == 31, "the map carries the att range");
     check(f.value(QStringLiteral("feedbackWindowLow")).toInt() == 128

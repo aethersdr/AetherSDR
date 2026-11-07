@@ -415,6 +415,7 @@ PureSignalView PureSignalView::fromFields(const QVariantMap& f, PureSignalView v
     i("calibrationCount", v.calibrationCount);
     i("engineState", v.engineState);
     i("attenuationDb", v.attenuationDb);
+    i("feedbackLimit", v.feedbackLimit);
     i("attMin", v.attMin);
     i("attMax", v.attMax);
     b("keyed", v.keyed);
@@ -566,6 +567,14 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
         token = QStringLiteral("color.accent.warning");
     } else if (!s.enabled) {
         text = tr("Off — uses DDC 2 and 3 for feedback");
+    } else if (s.feedbackLimit > 0) {
+        // Before everything else: the HL2's receive input is overdriven.
+        text = tr("Feedback too strong at maximum attenuation — add an attenuator "
+                  "in the feedback path");
+        token = QStringLiteral("color.accent.danger");
+    } else if (s.feedbackLimit < 0) {
+        text = tr("Feedback too weak at full gain — check the coupler or sampler");
+        token = QStringLiteral("color.accent.warning");
     } else if (s.correcting) {
         text = s.keyed ? tr("Correcting") : tr("Correction held — ready");
         token = QStringLiteral("color.accent.success");

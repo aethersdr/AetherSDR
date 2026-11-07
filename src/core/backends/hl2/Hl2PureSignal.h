@@ -68,6 +68,7 @@ struct Hl2PureSignalStatus {
     int calibrationCount = 0;    // info[5]: successful calibrations
     int engineState = 0;         // info[15]: calcc's state
     int attenuationDb = 31;      // keyed feedback attenuation; gain = 19 - att
+    int feedbackLimit = 0;       // Hl2PsGain::limit: +1 too strong, -1 too weak
     double maxTx = 0.0;          // GetPSMaxTX
     bool keyed = false;
 };
@@ -111,6 +112,19 @@ struct Hl2PsGain {
     // level (fb <= 0) needs all the gain one step gives; a level above the
     // scale is clipped, not measured, and needs as much less.
     [[nodiscard]] static int stepDb(int fb) noexcept;
+    // Whether the attenuation range has run out with the level still outside
+    // the window. +1: the most attenuation the HL2 has and the feedback is
+    // still too strong. The receive input is overdriven, and only an
+    // attenuator in the feedback path (e.g. after an amplifier's sampler)
+    // fixes it. -1: full gain and a measured level still too weak (coupler
+    // or sampler missing or too loose). 0: within range. fb <= 0 is no
+    // measurement yet, so it never reads as too weak.
+    [[nodiscard]] static int limit(int att, int fb) noexcept
+    {
+        if (att >= kAttMax && fb > kWindowHigh) { return 1; }
+        if (att <= kAttMin && fb > 0 && fb <= kWindowLow) { return -1; }
+        return 0;
+    }
     // 0x0a C4 while keyed: ccRxGain(19 - att).
     [[nodiscard]] static int lnaGainDbForAtt(int att) noexcept { return 19 - att; }
 };

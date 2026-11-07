@@ -428,6 +428,7 @@ void Hl2PureSignal::publish()
         s.calibrationCount = info.calibrationCount;
         s.engineState = info.state;
         s.maxTx = info.maxTx;
+        s.feedbackLimit = Hl2PsGain::limit(s.attenuationDb, s.feedbackLevel);
     }
     const bool same = m_havePublished && s.available == m_last.available
         && s.unavailableReason == m_last.unavailableReason && s.enabled == m_last.enabled
@@ -459,6 +460,7 @@ QVariantMap pureSignalStatusFields(const Hl2PureSignalStatus& s)
         {QStringLiteral("calibrationCount"), s.calibrationCount},
         {QStringLiteral("engineState"), s.engineState},
         {QStringLiteral("attenuationDb"), s.attenuationDb},
+        {QStringLiteral("feedbackLimit"), s.feedbackLimit},
         {QStringLiteral("attMin"), Hl2PsGain::kAttMin},
         {QStringLiteral("attMax"), Hl2PsGain::kAttMax},
         {QStringLiteral("feedbackWindowLow"), Hl2PsGain::kWindowLow},
