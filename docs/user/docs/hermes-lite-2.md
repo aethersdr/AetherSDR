@@ -192,7 +192,7 @@ PureSignal corrects the transmitter's distortion with adaptive pre-distortion. T
 
 When one of these is missing, the PureSignal button is dimmed, and the line under it says why.
 
-**Controls.**
+**Controls.** Hover over any control in the applet for a short explanation.
 
 - **PureSignal** turns it on and off. You can turn it on or off only while you are not transmitting. If you left it on, it comes back on when you connect again, including when the link recovers from a watchdog interruption. If the HL2 cannot run it at that moment, for example because three receivers are open, it stays off and the line under the button says why. Its remembered preference stays on; to change it, first restore a configuration where PureSignal is available.
 - **Auto** calibrates again and again while you transmit. Unticking **Auto** stops new calibrations and keeps the last good correction, until you press **Reset** or turn PureSignal off.
