@@ -2331,8 +2331,10 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
             return;
         }
 
-        const TciRoutingState::RouteDecision route
-            = m_routingState.resolveVfoB(rxSlice->sliceId(), routingEndpoints(client));
+        // vfoBEqualsRx is false on purpose: split is already latched above,
+        // so the simplex-restate gate in resolveVfoB() cannot apply here.
+        const TciRoutingState::RouteDecision route = m_routingState.resolveVfoB(
+            rxSlice->sliceId(), routingEndpoints(client), /*vfoBEqualsRx=*/false);
         if (route.action == TciRoutingState::RouteAction::UseExisting) {
             broadcast(confirmation);
             return;
