@@ -30,6 +30,13 @@
 #include <cstdio>
 #include <limits>
 
+// The docked rail gives a stacked applet less than its own 260 px: the panel's
+// outer gutter (6) and, when it shows, the scrollbar track (12) come off it.
+// AppletPanel::kStackedApplet is the authority (AppletPanel.h); it is restated
+// here because that header pulls in AudioEngine.h, which this test does not
+// link. A fit check at 260 can pass while the real docked width clips. (#7081)
+static constexpr int kDockedAppletWidth = 242;   // AppletPanel::kStackedApplet
+
 using namespace AetherSDR;
 
 namespace {
@@ -1038,7 +1045,7 @@ void testDockedCaptionsFitTheRail()
         return std::make_pair(fits, detail);
     };
 
-    for (int railWidth : {260, 300}) {
+    for (int railWidth : {kDockedAppletWidth, 260, 300}) {
         {
             // A fresh applet: nothing reported yet, every control disabled.
             AmpApplet fresh;
