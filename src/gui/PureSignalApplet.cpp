@@ -81,6 +81,25 @@ QString defaultCorrectionDir()
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
 }
+
+// Hover help: a bold title, then plain sentences. Rich text, so Qt wraps it.
+QString tip(const QString& title, const QString& body)
+{
+    return QStringLiteral("<b>") + title + QStringLiteral("</b><br><br>") + body;
+}
+
+QString enableTip()
+{
+    return tip(PureSignalApplet::tr("PureSignal"), PureSignalApplet::tr(
+        "Makes your transmitted signal cleaner. The HL2 listens to its own "
+        "transmit signal, compares it with what it should be, and corrects it "
+        "in advance. The splatter next to your signal drops.<br><br>"
+        "Turn it on while you are not transmitting. Then press <b>Auto</b> or "
+        "<b>Single</b> and transmit into your antenna or a dummy load. "
+        "PureSignal never keys the radio by itself.<br><br>"
+        "It uses two of the HL2's four receivers, so at most two receivers can "
+        "be open. It starts off on every connect."));
+}
 } // namespace
 
 // ---------------------------------------------------------------- meter
@@ -207,6 +226,7 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     m_enable->setAccessibleName(tr("PureSignal on"));
     m_enable->setAccessibleDescription(
         tr("Adaptive pre-distortion from the HL2's own feedback receiver"));
+    m_enable->setToolTip(enableTip());
     applyToggleButtonStyle(m_enable, ToggleTribe::Success);
     buttons->addWidget(m_enable, 3);
     m_auto = new QPushButton(tr("Auto"), this);
@@ -214,6 +234,10 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     m_auto->setCheckable(true);
     m_auto->setFixedHeight(22);
     m_auto->setAccessibleName(tr("PureSignal automatic calibration"));
+    m_auto->setToolTip(tip(tr("Auto"), tr(
+        "Keeps calibrating while you transmit, so the correction follows "
+        "changes in power and band. This is the normal choice.<br><br>"
+        "<b>Single</b>, <b>Reset</b> and <b>Restore</b> turn Auto off.")));
     applyToggleButtonStyle(m_auto, ToggleTribe::Accent);
     buttons->addWidget(m_auto, 2);
     m_single = new QPushButton(tr("Single"), this);
@@ -224,7 +248,11 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     m_single->setCheckable(true);
     m_single->setFixedHeight(22);
     m_single->setAccessibleName(tr("PureSignal single calibration"));
-    m_single->setToolTip(tr("Calibrate once on the next transmission"));
+    m_single->setToolTip(tip(tr("Single"), tr(
+        "Calibrates once, on your next transmission, and then keeps that "
+        "correction. The button stays lit until it is done. If it fails, it "
+        "tries again, three times in all, and then turns off.<br><br>"
+        "Turns <b>Auto</b> off.")));
     applyToggleButtonStyle(m_single, ToggleTribe::Warning);
     buttons->addWidget(m_single, 2);
     root->addLayout(buttons);
@@ -233,10 +261,19 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     meterRow->setSpacing(5);
     auto* fbLabel = new QLabel(tr("FB"), this);
     secondary(fbLabel);
-    fbLabel->setToolTip(tr("Feedback level. Keep it inside the marked window (128–181)."));
+    const QString fbTip = tip(tr("Feedback level (FB)"), tr(
+        "How strongly the HL2 hears its own transmit signal. PureSignal can "
+        "only calibrate when the bar is inside the marked window "
+        "(128–181).<br><br>"
+        "Left of the window: too weak. Check the coupler or sampler.<br>"
+        "Right of the window: too strong. More attenuation is needed.<br><br>"
+        "With <b>Auto-attenuate feedback</b> on (under Settings), this is "
+        "adjusted for you while you transmit."));
+    fbLabel->setToolTip(fbTip);
     meterRow->addWidget(fbLabel);
     m_meter = new PureSignalFeedbackMeter(this);
     fbLabel->setBuddy(m_meter);
+    m_meter->setToolTip(fbTip);
     meterRow->addWidget(m_meter, 1);
     root->addLayout(meterRow);
 
@@ -244,18 +281,31 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     m_readout->setObjectName(QStringLiteral("pureSignalReadout"));
     m_readout->setTextFormat(Qt::PlainText);
     secondary(m_readout);
+    m_readout->setToolTip(tip(tr("Numbers"), tr(
+        "<b>Att</b>: how much the feedback is turned down, in dB.<br>"
+        "<b>Cal</b>: how many calibrations succeeded since PureSignal was "
+        "turned on.<br>"
+        "The last word is what PureSignal is doing at this moment.")));
     root->addWidget(m_readout);
 
     m_state = new QLabel(this);
     m_state->setObjectName(QStringLiteral("pureSignalState"));
     m_state->setTextFormat(Qt::PlainText);
     m_state->setWordWrap(true);
+    m_state->setToolTip(tip(tr("What PureSignal is doing"), tr(
+        "Read this line first: it says in words what is happening and what "
+        "to do next.<br><br>"
+        "A <b>red</b> line means stop and act, for example when there is too "
+        "much RF feedback.")));
     root->addWidget(m_state);
 
     m_settingsToggle = new QPushButton(tr("▸ Settings"), this);
     m_settingsToggle->setObjectName(QStringLiteral("pureSignalSettingsToggle"));
     m_settingsToggle->setCheckable(true);
     m_settingsToggle->setAccessibleName(tr("PureSignal settings"));
+    m_settingsToggle->setToolTip(tip(tr("Settings"), tr(
+        "Shows or hides the feedback attenuation and the Reset, Save and "
+        "Restore buttons. Most of the time you do not need them.")));
     styleButton(m_settingsToggle);
     root->addWidget(m_settingsToggle);
 
@@ -267,18 +317,31 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     m_autoAttenuate = new QCheckBox(tr("Auto-attenuate feedback"), m_settingsDrawer);
     m_autoAttenuate->setObjectName(QStringLiteral("pureSignalAutoAttenuate"));
     m_autoAttenuate->setAccessibleName(tr("PureSignal automatic feedback attenuation"));
+    m_autoAttenuate->setToolTip(tip(tr("Auto-attenuate feedback"), tr(
+        "Sets the feedback attenuation for you while you transmit, so the "
+        "feedback level stays inside the window. Leave it on.<br><br>"
+        "Turn it off only if you want to set <b>TX att</b> by hand.<br><br>"
+        "If it reaches the maximum (31 dB) and the feedback is still too "
+        "strong, the status line turns red. Then put an attenuator in the "
+        "feedback cable.")));
     drawer->addWidget(m_autoAttenuate);
 
     auto* attRow = new QHBoxLayout;
     attRow->setSpacing(5);
     auto* attLabel = new QLabel(tr("TX att"), m_settingsDrawer);
     secondary(attLabel);
-    attLabel->setToolTip(tr("Receive attenuation while keyed; the LNA runs at 19 − att dB"));
+    const QString attTip = tip(tr("TX att"), tr(
+        "How much the feedback is turned down while you transmit, from −28 "
+        "to 31 dB. A higher number means weaker feedback. A number below 0 "
+        "adds gain, for a weak sampler.<br><br>"
+        "You can only move it when <b>Auto-attenuate feedback</b> is off."));
+    attLabel->setToolTip(attTip);
     attRow->addWidget(attLabel);
     auto* slider = new GuardedSlider(Qt::Horizontal, m_settingsDrawer);
     m_attenuation = slider;
     m_attenuation->setObjectName(QStringLiteral("pureSignalAttenuation"));
     m_attenuation->setAccessibleName(tr("PureSignal TX attenuation"));
+    m_attenuation->setToolTip(attTip);
     m_attenuation->setRange(kAttMin, kAttMax);
     m_attenuation->setSingleStep(1);
     m_attenuation->setPageStep(5);
@@ -297,12 +360,24 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     m_reset = new QPushButton(tr("Reset"), m_settingsDrawer);
     m_reset->setObjectName(QStringLiteral("pureSignalReset"));
     m_reset->setAccessibleName(tr("Reset PureSignal correction"));
+    m_reset->setToolTip(tip(tr("Reset"), tr(
+        "Throws the current correction away. Your signal goes out "
+        "uncorrected until the next calibration.<br><br>"
+        "Turns <b>Auto</b> off.")));
     m_save = new QPushButton(tr("Save…"), m_settingsDrawer);
     m_save->setObjectName(QStringLiteral("pureSignalSave"));
     m_save->setAccessibleName(tr("Save PureSignal correction"));
+    m_save->setToolTip(tip(tr("Save…"), tr(
+        "Saves the current correction to a file, so you can load it later "
+        "without calibrating again. Only available while a correction is "
+        "active.")));
     m_restore = new QPushButton(tr("Restore…"), m_settingsDrawer);
     m_restore->setObjectName(QStringLiteral("pureSignalRestore"));
     m_restore->setAccessibleName(tr("Restore PureSignal correction"));
+    m_restore->setToolTip(tip(tr("Restore…"), tr(
+        "Loads a correction you saved before. It fits best on the band and "
+        "at the power where you saved it.<br><br>"
+        "Turns <b>Auto</b> off.")));
     for (QPushButton* b : {m_reset, m_save, m_restore}) {
         b->setFixedHeight(22);
         styleButton(b);
@@ -527,8 +602,14 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
         const QString why = bound && !s.available && !s.enabled
             ? (s.unavailableReason.isEmpty() ? tr("Unavailable") : s.unavailableReason)
             : tr("Adaptive pre-distortion from the HL2's own feedback receiver");
-        if (m_enable->accessibleDescription() != why)
+        if (m_enable->accessibleDescription() != why) {
             m_enable->setAccessibleDescription(why);
+            const bool dimmed = bound && !s.available && !s.enabled;
+            m_enable->setToolTip(dimmed
+                ? enableTip() + QStringLiteral("<br><br><b>") + tr("Not available now:")
+                      + QStringLiteral("</b> ") + why.toHtmlEscaped()
+                : enableTip());
+        }
     }
     m_auto->setEnabled(bound);
     m_single->setEnabled(bound && s.enabled);

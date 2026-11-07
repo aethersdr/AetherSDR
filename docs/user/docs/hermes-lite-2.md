@@ -184,7 +184,7 @@ PureSignal corrects the transmitter's distortion with adaptive pre-distortion. T
 
 When one of these is missing, the PureSignal button is dimmed, and the line under it says why.
 
-**Controls.**
+**Controls.** Hover over any control in the applet for a short explanation.
 
 - **PureSignal** turns it on and off. It starts off on every connect. You can turn it on or off only while you are not transmitting.
 - **Auto** calibrates again and again while you transmit.
