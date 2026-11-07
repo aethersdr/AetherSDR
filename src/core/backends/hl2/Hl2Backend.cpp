@@ -8031,6 +8031,9 @@ void Hl2Backend::pushInitialState()
                         defaultPassbandForMode(txRx->mode);
                     txRx->filterLowHz = pbLowHz;
                     txRx->filterHighHz = pbHighHz;
+                    // connectRadio() opened the modulator on the pre-restore
+                    // mode's passband, and setMode() below keeps it (#7091).
+                    pushTxPassband(txRx->mode);
                 }
                 if (m_restoredState.filterLowHz != 0.0
                     || m_restoredState.filterHighHz != 0.0) {

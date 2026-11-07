@@ -7,6 +7,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2Settings.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 #include "gui/ClientFftSmoothingGate.h"
@@ -132,6 +133,27 @@ struct Hl2TxGateTestAccess {
     {
         b.m_txTailTimer->stop();
         b.finishTxTail();
+    }
+    // What connectRadio() hands the modulator before linkUp, done by hand: the
+    // TX receiver's mode and effectiveTxPassband() for it. Socket-free rules
+    // out connectRadio() itself, whose DSP opens start the wire.
+    static QString seedConnectTxConfig(Hl2Backend& b)
+    {
+        const QString mode = b.rx(b.m_txDdc)->mode;
+        const auto [lo, hi] = b.effectiveTxPassband(mode);
+        QMetaObject::invokeMethod(b.m_txDsp, [dsp = b.m_txDsp, lo, hi] {
+            dsp->setMode(WdspChannel::Mode::Usb);
+            dsp->setFilter(lo, hi);
+        }, Qt::BlockingQueuedConnection);
+        return mode;
+    }
+    // The modulator's Config after every call queued to it has landed.
+    static hl2::Hl2TxDsp::Config txDspConfig(Hl2Backend& b)
+    {
+        hl2::Hl2TxDsp::Config c;
+        QMetaObject::invokeMethod(b.m_txDsp, [&c, dsp = b.m_txDsp] { c = dsp->config(); },
+                                  Qt::BlockingQueuedConnection);
+        return c;
     }
     // The last drive level carried by the EP2 packets MetisClient would send
     // next, after every queued call has landed; -1 when none carries one.
@@ -737,6 +759,45 @@ static void panAveragingSeam()
           "an unknown pan id changes nothing");
 }
 
+// #7091: an app restart that restores into DIGU must not run the modulator on
+// the operator's SSB voice cut. connectRadio() opens it on the constructed
+// receiver's USB, so the restore on linkUp has to send DIGU's passband too.
+static void restoredDiguTxPassband()
+{
+    RestoredRadioState saved;
+    {
+        Hl2Backend before;
+        before.setTxFilter(300, 2650);
+        before.setSliceMode(0, QStringLiteral("DIGU"));
+        saved = before.currentOperatingState();
+    }
+    check(saved.mode == QStringLiteral("DIGU"), "#7091: the saved session is DIGU");
+
+    Hl2Backend b;
+    b.applyRestoredState(saved);
+    check(Access::seedConnectTxConfig(b) == QStringLiteral("USB"),
+          "#7091 control: before linkUp the TX receiver is still the constructed USB");
+    const hl2::Hl2TxDsp::Config opened = Access::txDspConfig(b);
+    check(opened.filterLowHz == 300.0 && opened.filterHighHz == 2650.0,
+          "#7091 control: the modulator opens on USB's operator cut 300..2650");
+
+    QSignalSpy txSpy(&b, &IRadioBackend::transmitChanged);
+    Access::metisEdge(b, "linkUp");
+    const hl2::Hl2TxDsp::Config live = Access::txDspConfig(b);
+    check(live.mode == WdspChannel::Mode::Digu, "#7091: the restore puts the modulator in DIGU");
+    check(live.filterLowHz == 150.0 && live.filterHighHz == 3000.0,
+          "#7091: and on DIGU's 150..3000, not the operator's SSB cut");
+    std::optional<std::pair<int, int>> echoed;
+    for (const QList<QVariant>& args : txSpy) {
+        const auto d = args.at(0).value<TransmitDelta>();
+        if (d.txFilterLow && d.txFilterHigh)
+            echoed = std::pair{*d.txFilterLow, *d.txFilterHigh};
+    }
+    check(echoed == std::pair{150, 3000},
+          "#7091: the Phone applet is echoed 150..3000");
+    Access::metisEdge(b, "linkDown");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-backend-seam-test"));
@@ -763,6 +824,7 @@ int main(int argc, char** argv)
     forwardPowerSkippedHealthRow();
     forwardPowerKeyOnReplay();
     panAveragingSeam();
+    restoredDiguTxPassband();
 
     std::fprintf(stderr, "hl2_backend_seam_test: %s\n",
                  g_failures == 0 ? "all checks passed" : "FAILED");
