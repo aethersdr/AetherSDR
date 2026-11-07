@@ -141,6 +141,8 @@ struct Hl2TxGateTestAccess {
     {
         const QString mode = b.rx(b.m_txDdc)->mode;
         const auto [lo, hi] = b.effectiveTxPassband(mode);
+        b.m_txPassbandSentLowHz = lo;
+        b.m_txPassbandSentHighHz = hi;
         QMetaObject::invokeMethod(b.m_txDsp, [dsp = b.m_txDsp, lo, hi] {
             dsp->setMode(WdspChannel::Mode::Usb);
             dsp->setFilter(lo, hi);
@@ -780,6 +782,8 @@ static void restoredDiguTxPassband()
     const hl2::Hl2TxDsp::Config opened = Access::txDspConfig(b);
     check(opened.filterLowHz == 300.0 && opened.filterHighHz == 2650.0,
           "#7091 control: the modulator opens on USB's operator cut 300..2650");
+    check(health(b, "txPassbandHz").toString() == QStringLiteral("300 .. 2650"),
+          "#7091 control: the health row reports that cut before linkUp");
 
     QSignalSpy txSpy(&b, &IRadioBackend::transmitChanged);
     Access::metisEdge(b, "linkUp");
@@ -795,6 +799,8 @@ static void restoredDiguTxPassband()
     }
     check(echoed == std::pair{150, 3000},
           "#7091: the Phone applet is echoed 150..3000");
+    check(health(b, "txPassbandHz").toString() == QStringLiteral("150 .. 3000"),
+          "#7091: the health row reports the passband the modulator was sent");
     Access::metisEdge(b, "linkDown");
 }
 
