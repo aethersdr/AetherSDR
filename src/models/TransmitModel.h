@@ -346,6 +346,17 @@ public:
     void setTxModeGetter(TxModeGetter getter);
     using PttPreflight = std::function<QString(PttSource)>;
     void setPttPreflight(PttPreflight preflight);
+    // Phone-mode PTT release holds the unkey this long so the speech tail
+    // still airs. 0 = off. Clamped to TxOffDelaySettings' range. Applies only
+    // to releases routed through requestPttOff() (not CAT/DAX producers, which
+    // release directly); hardware PTT wired to the radio unkeys at the radio.
+    void setTxOffDelayMs(int ms);
+    [[nodiscard]] int txOffDelayMs() const { return m_txOffDelayMs; }
+    [[nodiscard]] bool txOffDelayPending() const { return m_txOffDelayTimer != nullptr; }
+    // PC mic only: true once the audio window has passed in a longer hold.
+    [[nodiscard]] bool txOffDelayMicMuted() const { return m_txOffDelayMicMuted; }
+    // The radio reported it is no longer transmitting: end a pending hold now.
+    void expireTxOffDelayNow();
     // TUNE admission (#5422). RadioModel returns a non-empty message while a
     // client CW source is keying (key edge down, paddle held, CWX in flight);
     // startTune()/startTwoToneTune() are then refused and pttBlocked() carries
@@ -498,6 +509,7 @@ public:
     void setHoldBreakInDelay(bool on);
 
 signals:
+    void txOffDelayMicMuteChanged(bool muted);
     void stateChanged();
     // The answer to requestVoxEnable(): which request, what it asked for, and
     // whether the radio applied it. current is false when a VOX change was
@@ -649,6 +661,11 @@ private:
     bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
     bool tuneAdmitted();   // #5422: false (pttBlocked emitted, toggle resynced) while CW is keyed
     void cancelPendingQuindarOff();
+    void cancelPendingTxOffDelay();
+    bool txOffDelayApplies() const;
+    void cancelTxOffDelayMicTimer();
+    void setTxOffDelayMicMuted(bool muted);
+    void continuePttOff(const PttRelease& release);
     void dispatchMoxOff(const PttRelease& release);
     PttRelease capturePttRelease(PttRelease release);
 
@@ -660,6 +677,12 @@ private:
     KeyingAdmission          m_keyingAdmission;
     QTimer*                  m_pendingMoxOffTimer{nullptr};
     bool                     m_quindarOutroInFlight{false};
+    int                      m_txOffDelayMs{0};
+    // Non-null exactly while a held release is waiting; invalidatePttRelease()
+    // clears it, so a re-key, reset or stop always drops the pending unkey.
+    QTimer*                  m_txOffDelayTimer{nullptr};
+    QTimer*                  m_txOffDelayMicTimer{nullptr};
+    bool                     m_txOffDelayMicMuted{false};
     PttOffHook               m_pttOffHook;
     std::shared_ptr<std::atomic<bool>> m_pttReleaseFence;
     std::function<void()> m_pttReleaseAbandoned;

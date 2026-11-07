@@ -28,6 +28,7 @@
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
 #include "core/NetworkSettings.h"
+#include "core/TxOffDelaySettings.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
 #include "KiwiPublicReceiverPicker.h"
@@ -2925,6 +2926,47 @@ QWidget* RadioSetupDialog::buildTxTab()
 
         auto* tx3Edit = addTimingField(3, 0, "RCA TX3:", tx.tx3Delay());
         connectTimingField(tx3Edit, SetupField::Tx3DelayMs);
+
+        // Client-side, so deliberately not in timingEdits: it never depends on
+        // the radio accepting setup fields and stays enabled while disconnected.
+        {
+            auto* lbl = new QLabel(tr("TX Off Delay (ms):"));
+            applyLabelStyle(lbl);
+            grid->addWidget(lbl, 2, 2);
+            auto* edit = new QLineEdit(QString::number(tx.txOffDelayMs()));
+            edit->setFixedWidth(60);
+            edit->setAccessibleName(tr("TX Off Delay (milliseconds)"));
+            const QString tip = tr(
+                "Keeps transmitting this many ms (0-%1) after you release PTT in "
+                "voice modes, so the end of your last word is not cut off. 0 = off.\n"
+                "With the PC mic, your mic stays live for the first %2 ms and the rest "
+                "of the delay is silent.\n"
+                "With a mic on the radio (MIC, BAL, LINE, ACC), AetherSDR cannot mute it: "
+                "your mic stays live for the whole delay, and anything you say during it "
+                "goes on the air.\n"
+                "Applies to PTT handled by AetherSDR: MOX, keyboard, serial-port "
+                "footswitch, RC-28 and TCI hardware PTT. A footswitch or mic PTT wired to the radio "
+                "unkeys at the radio and cannot be delayed from here.\n"
+                "Stored on this computer, not on the radio.")
+                .arg(TxOffDelaySettings::kMaxMs)
+                .arg(TxOffDelaySettings::kAudioWindowMs);
+            edit->setToolTip(tip);
+            edit->setAccessibleDescription(tip);
+            grid->addWidget(edit, 2, 3);
+            connect(edit, &QLineEdit::editingFinished, this, [this, edit] {
+                bool valid = false;
+                const int parsed = edit->text().toInt(&valid);
+                TransmitModel& model = m_model->transmitModel();
+                if (!valid) {
+                    edit->setText(QString::number(model.txOffDelayMs()));
+                    return;
+                }
+                const int ms = TxOffDelaySettings::clampMs(parsed);
+                edit->setText(QString::number(ms));
+                model.setTxOffDelayMs(ms);
+                TxOffDelaySettings::setDelayMs(ms);
+            });
+        }
 
         // TX Band Settings button
         bandSetBtn = new QPushButton("TX Band Settings");

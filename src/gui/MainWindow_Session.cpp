@@ -1721,6 +1721,13 @@ void MainWindow::wireRadioModel()
 #endif
     });
 
+    connect(&m_radioModel.transmitModel(), &TransmitModel::txOffDelayMicMuteChanged,
+            this, [this](bool muted) {
+        if (m_audio) {
+            m_audio->setTxMicHeld(muted);
+        }
+    });
+
     // Interlock fallback gate:
     // we only consume TX-off here, as a safety net if local edge updates
     // are missed while interlock transitions.

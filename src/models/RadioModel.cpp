@@ -2081,6 +2081,7 @@ void reconcileInterlockTx(TransmitModel& transmit, bool& audioGate, bool& cwxAct
 {
     if (!keepLocalTx) {
         transmit.setTransmitting(false);
+        transmit.expireTxOffDelayNow();
         if (audioGate) {
             audioGate = false;
             publishAudioGate(false);
@@ -2096,6 +2097,7 @@ void reconcileInterlockTx(TransmitModel& transmit, bool& audioGate, bool& cwxAct
             state.contains(QStringLiteral("REQUESTED")) || state.contains(QStringLiteral("DELAY"));
         if (!transitioningToTx) {
             transmit.setTransmitting(false);
+            transmit.expireTxOffDelayNow();
             cwxActive = false;
         }
         if (!transitioningToTx && audioGate) {
@@ -4963,6 +4965,11 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
         m_backendObservedTransmit = *delta.mox && m_backend
             && m_backend->capabilities().radioPttObservation.has_value();
         publishBackendTransmitEdge(*delta.mox);
+        // The host still keys through a hold, so a false here means the radio
+        // really left TX. Same reconciliation as the Flex interlock path.
+        if (!*delta.mox) {
+            m_transmitModel.expireTxOffDelayNow();
+        }
     }
     m_transmitModel.applyChanges(delta);
     if (delta.atuStatusRaw && operation.sameOperation(m_txOperation)

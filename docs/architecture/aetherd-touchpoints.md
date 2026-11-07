@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 282 touchpoint headers (230 core, 52 models) — 282/282 tagged, 0/282 converted.
+**Totals:** 283 touchpoint headers (231 core, 52 models) — 283/283 tagged, 0/283 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -176,6 +176,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
+| `core/TxOffDelaySettings.h` | 2 | ui-support — Client-side persistence for the phone-mode TX off delay (one nested AppSettings object, Principle V). The radio interlock stores key-on delays only, so there is no radio-owned value to defer to; no wire commands or vendor coupling. | unconverted |
 | `core/UlanziDialBackend.h` | 4 | ui-support — Platform alias for Ulanzi Dial HID knob backend (evdev/hidapi); physical input device for client, not radio state | unconverted |
 | `core/UlanziDialMacOSManager.h` | 1 | ui-support — macOS IOKit implementation of the Ulanzi Dial client input surface. Desktop hardware plumbing, not radio state. | unconverted |
 | `core/UlanziDialMappings.h` | 3 | ui-support — Owner of the Ulanzi Dial's pill→action bindings in one feature-owned document (Principle V). A control surface's own configuration — it belongs to the peripheral, not to any radio — same home decision as the FlexControl USB knob. | unconverted |

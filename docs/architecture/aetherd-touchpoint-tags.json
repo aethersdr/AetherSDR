@@ -1451,6 +1451,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/TxOffDelaySettings.h": {
+  "tag": "ui-support",
+  "note": "Client-side persistence for the phone-mode TX off delay (one nested AppSettings object, Principle V). The radio interlock stores key-on delays only, so there is no radio-owned value to defer to; no wire commands or vendor coupling.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/ShutdownTrace.h": {
   "tag": "ui-support",
   "note": "Process-local shutdown diagnostics and support-log breadcrumbs; lifecycle plumbing, not radio state.",

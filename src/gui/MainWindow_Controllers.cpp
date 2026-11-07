@@ -2792,10 +2792,7 @@ void MainWindow::wireExternalControllers()
     connect(m_serialPort, &SerialPortController::txInputsCancelled, this, [this, serialProducer] {
         m_radioModel.abortTxProducerInputs(serialProducer, TransmitModel::PttSource::Mox);
     });
-    connect(m_serialPort, &SerialPortController::externalPttChanged,
-            this, [this](bool active, const TxCoordinator::Request& input) {
-        (void)m_radioModel.setProducerTransmit(input, active, TransmitModel::PttSource::Mox);
-    });
+    m_radioModel.connectSerialPttInput(m_serialPort);
     connect(m_serialPort, &SerialPortController::cwKeyChanged,
             this, [this](bool down, const TxCoordinator::Request& input) {
         (void)m_radioModel.requestProducerCw(input, down, false, true, {}, QStringLiteral("serial:cwkey"));
