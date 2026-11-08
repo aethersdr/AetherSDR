@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CanonWindow.h"
 #include "PersistentDialog.h"
 
 class QLabel;
@@ -10,11 +11,12 @@ namespace AetherSDR {
 
 class CallsignCard;
 
-// View → Callsign Lookup: type a callsign, get the large contact card.
+// Tools → Callsign Lookup: type a callsign, get the large contact card.
 // Results ride CallsignLookupService (same QRZ client + 7-day cache the
 // live CW contacts window uses), so repeated lookups cost nothing and the two
-// surfaces always agree.
-class CallsignLookupDialog : public PersistentDialog {
+// surfaces always agree. A CanonWindow tool window (style guide, RFC #6226),
+// like AetherRX and AetherTX.
+class CallsignLookupDialog : public CanonWindow {
     Q_OBJECT
 
 public:

@@ -84,6 +84,9 @@ public:
     // A newer AetherSDR release, or empty to clear. Non-empty shows the
     // UPDATE pill after the wordmark; clicking it emits updateBadgeClicked().
     void setUpdateAvailable(const QString& latestVersion);
+    // An update downloaded and ready to install (empty: none). The pill
+    // then reads RESTART TO UPDATE, whatever setUpdateAvailable() says.
+    void setUpdateStaged(const QString& version);
 
     // Status-bar transmit timer (left of the PC Audio button). Driven by
     // RadioModel::operatorTransmitChanged — runs only for operator MOX/PTT/VOX
@@ -104,7 +107,7 @@ public:
     void setMinimalMode(bool on);
     bool isMinimalMode() const { return m_minimalMode; }
     void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
-    // Set the flash color used while adaptive throttle is active (empty = restore green).
+    // Set the cap's heartbeat tint; empty uses the dot's own colour.
     // Ignored while the disconnected-alarm blink is running.
     void setThrottleFlashColor(const QString& hexColor);
 
@@ -118,6 +121,10 @@ public:
     void setAppletFloating(bool floating);
 
     bool isSystemMoveAreaAt(const QPoint& globalPos) const;
+
+    // Windows caption subset: interactive controls and tooltipped handles
+    // stay client so their input and Qt tooltip delivery remain available.
+    bool isCaptionMoveAreaAt(const QPoint& globalPos) const;
 
     // ── Radio tabs ──────────────────────────────────────────────────────────
     // The strip of per-radio tabs plus the "+" discovered-radios popover.
@@ -203,6 +210,7 @@ private:
     RadioTabBar* m_radioTabs{nullptr};
     QLabel*      m_experimentalRadioLabel{nullptr};
     QPushButton* m_updateBadge{nullptr};
+    QString m_stagedVersion;
     QString      m_updateVersion;
     void refreshUpdateBadge();
     QLabel*      m_otherTxLabel{nullptr};
@@ -246,7 +254,7 @@ private:
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
     QList<QString> m_connectedRadioIds;
     bool         m_discovering{false};  // solid amber while waiting for connection
-    QString      m_throttleFlashColor; // empty = default green; set while adaptive throttle is active
+    QString      m_throttleFlashColor; // empty = glow in the dot's own colour; set while adaptive throttle is active
     QString      m_pcAudioInputDevice;
     QString      m_pcAudioOutputDevice;
 

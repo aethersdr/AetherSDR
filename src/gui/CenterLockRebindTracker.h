@@ -123,7 +123,7 @@ public:
 
     bool cancel(const QString& panId)
     {
-        return m_pending.remove(panId) > 0;
+        return m_pending.remove(panId);
     }
 
     bool hasPending(const QString& panId) const

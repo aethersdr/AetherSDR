@@ -1,4 +1,6 @@
-// FreeDV Reporter status-message row (#4231).
+// FreeDV Reporter status-message row (#4231), and the canon window it sits
+// in: the resizer and saved geometry of a tool window, an opaque menu in the
+// message field, and band buttons that take focus from Tab only.
 //
 // Covers the dialog-side logic only — no network. The send path stops at
 // the messageChanged() signal; MainWindow is what forwards it to
@@ -7,13 +9,20 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "gui/CanonWindow.h"
+#include "gui/FramelessResizer.h"
 #include "gui/FreeDvReporterDialog.h"
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QDialog>
 #include <QFile>
+#include <QImage>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QTest>
 
 #include <cstdio>
 
@@ -207,6 +216,121 @@ void testReloadFromSettings()
            edit->text() == QStringLiteral("changed again"), edit->text());
 }
 
+// A canon workspace that still resizes like the PersistentDialog it replaced,
+// and restores the rectangle that dialog saved under the same key.
+void testCanonToolWindow()
+{
+    resetSettings();
+    static const QString kKey = QStringLiteral("FreeDvReporterGeometry");
+    auto& settings = AppSettings::instance();
+    {
+        FreeDvReporterDialog dlg;
+        report("FreeDV Reporter is a CanonWindow",
+               qobject_cast<CanonWindow*>(&dlg) != nullptr);
+        report("the window installs FramelessResizer",
+               dlg.findChild<FramelessResizer*>() != nullptr);
+    }
+
+    // A rectangle saved before the migration: QWidget::saveGeometry() in base64.
+    FreeDvReporterDialog dlg;
+    // Taller than the minimum, at the minimum width: the offscreen platform's
+    // screen is 800x600 and restoreGeometry() fits a larger rectangle to it.
+    const QSize chosen = dlg.minimumSize() + QSize(0, 60);
+    QDialog legacy;
+    legacy.resize(chosen);
+    settings.setValue(kKey, QString::fromLatin1(legacy.saveGeometry().toBase64()));
+    report("control: a fresh window is not born at the saved size", dlg.size() != chosen);
+    dlg.show();
+    report("the window is exposed", QTest::qWaitForWindowExposed(&dlg));
+    for (int i = 0; i < 50 && dlg.size() != chosen; ++i)
+        QTest::qWait(20);
+    report("geometry saved by the old dialog restores under its key",
+           dlg.size() == chosen,
+           QStringLiteral("%1x%2").arg(dlg.width()).arg(dlg.height()));
+
+    const QSize resized = chosen + QSize(40, 20);
+    dlg.resize(resized);
+    QCoreApplication::processEvents();
+    dlg.hide();
+    const QString saved = settings.value(kKey).toString();
+    report("hiding the window saves its size under the same key",
+           saved.endsWith(QStringLiteral(",%1,%2").arg(resized.width()).arg(resized.height())),
+           saved);
+}
+
+// The message field's standard right-click menu is a child of the field, so
+// the canon sheet's transparent-everything rule reaches it unless QMenu gets
+// its panel.
+void testMessageMenuIsOpaque()
+{
+    resetSettings();
+
+    FreeDvReporterDialog dlg;
+    dlg.show();
+    report("the window is exposed", QTest::qWaitForWindowExposed(&dlg));
+    auto* edit = msgEdit(dlg);
+    if (!edit) { report("message edit exists", false); return; }
+
+    QMenu* menu = edit->createStandardContextMenu();
+    report("control: the field's menu is parented inside the canon body",
+           menu->parentWidget() == edit);
+    menu->popup(dlg.mapToGlobal(QPoint(40, 40)));
+    QTest::qWait(100);
+    const QImage image = menu->grab().toImage();
+    report("the message field's right-click menu has an opaque background",
+           !image.isNull() && qAlpha(image.pixel(image.width() / 2, image.height() / 2)) == 255);
+    menu->close();
+    delete menu;
+}
+
+// The explicit minimum must not let the window shrink below what the band
+// row needs, or the Track / Band labels clip. Checked on the shown window at
+// its minimum size, after the canon sheet has polished every control.
+void testMinimumFitsBandRow()
+{
+    resetSettings();
+
+    FreeDvReporterDialog dlg;
+    report("minimum width fits the layout",
+           dlg.minimumWidth() >= dlg.minimumSizeHint().width(),
+           QStringLiteral("min %1 hint %2").arg(dlg.minimumWidth()).arg(dlg.minimumSizeHint().width()));
+
+    dlg.resize(dlg.minimumSize());
+    dlg.show();
+    report("the window is exposed", QTest::qWaitForWindowExposed(&dlg));
+    QTest::qWait(50);
+    QStringList clipped;
+    for (QAbstractButton* b : dlg.findChildren<QAbstractButton*>()) {
+        if (!b->isVisible() || b->text().isEmpty())
+            continue;
+        if (b->width() < b->minimumSizeHint().width())
+            clipped << QStringLiteral("%1 %2<%3").arg(b->text()).arg(b->width())
+                                                     .arg(b->minimumSizeHint().width());
+    }
+    report("at minimum size no labelled control is narrower than it needs",
+           clipped.isEmpty(), clipped.join(QStringLiteral(", ")));
+}
+
+// A band clicked off must not keep the focus border, which matches the
+// checked border; keyboard users still reach the buttons with Tab.
+
+void testBandButtonsTakeTabFocusOnly()
+{
+    resetSettings();
+
+    FreeDvReporterDialog dlg;
+    int bands = 0;
+    bool tabOnly = true;
+    for (QPushButton* b : dlg.findChildren<QPushButton*>()) {
+        if (!b->property("fdvBand").toBool()) continue;
+        ++bands;
+        tabOnly = tabOnly && b->focusPolicy() == Qt::TabFocus;
+    }
+    report("the window has every band button",
+           bands == FreeDvReporterDialog::BandCount, QString::number(bands));
+    report("band buttons take focus from Tab, not from a click", tabOnly);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -229,6 +353,10 @@ int main(int argc, char** argv)
     testSendCommitsMessage();
     testLengthCap();
     testReloadFromSettings();
+    testCanonToolWindow();
+    testMessageMenuIsOpaque();
+    testMinimumFitsBandRow();
+    testBandButtonsTakeTabFocusOnly();
 
     std::printf("\n%s\n",
                 g_failed == 0

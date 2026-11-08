@@ -36,6 +36,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QColor>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QImage>
@@ -202,6 +203,257 @@ int main(int argc, char** argv)
                   && WindowChrome::expandedFrameHit(QPoint(600, 53), win, 8, 4) == Hit::Top
                   && WindowChrome::expandedFrameHit(QPoint(600, 55), win, 8, 4) == Hit::Client,
               "the left/right band and the top/bottom band follow their own widths");
+    }
+
+    // ── The title bar answers as the caption so Windows offers Snap (#6825) ──
+    {
+        using Hit = WindowChrome::FrameHit;
+        const QRect win(100, 50, 1000, 600);
+        const int band = 8;
+        const int caption = 52;
+
+        // Without a caption height nothing changes: every existing caller
+        // (and every window that is not the main window) keeps the old answer.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, band, band) == Hit::Client,
+              "the title bar is client area when no caption height is given");
+
+        // The bar's background drags the window, which is what Windows needs
+        // before it offers drag-to-edge Snap and the Snap Assist picker.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, band, band, caption)
+                  == Hit::Caption,
+              "the title bar's background is the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 101), win, band, band, caption)
+                  == Hit::Caption,
+              "the last pixel of the caption strip still drags");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 102), win, band, band, caption)
+                  == Hit::Client,
+              "the first pixel below the caption is client area");
+
+        // The resize band wins over the caption, or the top edge and the top
+        // corners would stop resizing the moment the caption was introduced.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 50), win, band, band, caption) == Hit::Top,
+              "the top resize band still wins over the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(101, 51), win, band, band, caption)
+                  == Hit::TopLeft
+                  && WindowChrome::expandedFrameHit(QPoint(1098, 51), win, band, band, caption)
+                      == Hit::TopRight,
+              "the top corners still resize under the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(101, 70), win, band, band, caption)
+                  == Hit::Left,
+              "the side band still resizes alongside the caption");
+
+        // Maximized: no resize band, but the caption must still answer or the
+        // window cannot be dragged back down off the top of the screen.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, 0, 0, caption) == Hit::Caption,
+              "the caption answers while maximized, so the window can be dragged free");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 350), win, 0, 0, caption) == Hit::Client,
+              "the body is still client area while maximized");
+
+        // A point outside the window is never the caption.
+        check(WindowChrome::expandedFrameHit(QPoint(20, 20), win, band, band, caption)
+                  == Hit::Client,
+              "a point outside the window is not the caption");
+    }
+
+    // ── WM_NCHITTEST answers for the point it carries, not the cursor (#6825) ──
+    {
+        // The message's coordinate is physical; isSystemMoveAreaAt() needs Qt's
+        // logical global space. The conversion anchors on the CLIENT origin,
+        // because GetWindowRect carries the invisible DWM resize border that
+        // Qt's frame geometry does not.
+        //
+        // Real Windows 11 geometry measured on this PR, 100% scale: a window
+        // rect of x=253 w=1414 around a client at x=259 w=1401 — 6 px of
+        // border on the left. The widget origin is the same corner as Qt sees
+        // it, so these two describe the same area and cannot skew.
+        const QPoint clientOrigin(259, 300);
+        const QPoint widgetOrigin(259, 300);
+
+        check(WindowChrome::logicalScreenPoint(clientOrigin, clientOrigin, widgetOrigin, 1.0)
+                  == widgetOrigin,
+              "the client origin maps to the widget origin");
+
+        // The regression this replaces: scaling GetWindowRect onto Qt's frame
+        // geometry shifted every point by the border inset, so a press on the
+        // right of the ☰ glyph answered HTCAPTION and started a window move.
+        // Anchored on the client, a point 36 px into the client stays 36 px in.
+        check(WindowChrome::logicalScreenPoint(QPoint(259 + 36, 326), clientOrigin,
+                                               widgetOrigin, 1.0)
+                  == QPoint(259 + 36, 326),
+              "a point inside the client keeps its offset, with no border skew");
+
+        // The window rect's own left edge is 6 px outside the client, and must
+        // map to a negative offset rather than to the widget origin.
+        check(WindowChrome::logicalScreenPoint(QPoint(253, 300), clientOrigin, widgetOrigin, 1.0)
+                  == QPoint(253, 300),
+              "a point in the resize border maps outside the widget, not onto its origin");
+
+        // DPR 2: offsets halve, and the origin still anchors the result.
+        const QPoint hiClient(400, 200);
+        const QPoint hiWidget(200, 100);
+        check(WindowChrome::logicalScreenPoint(QPoint(400, 200), hiClient, hiWidget, 2.0)
+                  == hiWidget,
+              "at DPR 2 the client origin still maps to the widget origin");
+        check(WindowChrome::logicalScreenPoint(QPoint(600, 400), hiClient, hiWidget, 2.0)
+                  == QPoint(300, 200),
+              "a point at DPR 2 halves its offset from the client origin");
+
+        // A fractional ratio (150% scaling) must not drift.
+        const QPoint p150 = WindowChrome::logicalScreenPoint(QPoint(400 + 150, 200),
+                                                             hiClient, hiWidget, 1.5);
+        check(p150.x() == 300 && p150.y() == 100,
+              "a non-integer scale divides the offset without drifting");
+
+        // A zero or negative ratio must not divide by zero.
+        check(WindowChrome::logicalScreenPoint(QPoint(7, 9), clientOrigin, widgetOrigin, 0.0)
+                  == QPoint(7, 9),
+              "a zero device pixel ratio returns the point unchanged");
+
+        // The whole point of the conversion: two different physical points in
+        // the same message stream map to two different logical points, so the
+        // caption test can distinguish them while the cursor sits elsewhere.
+        const QPoint a = WindowChrome::logicalScreenPoint(QPoint(400, 160), clientOrigin,
+                                                          widgetOrigin, 1.0);
+        const QPoint b = WindowChrome::logicalScreenPoint(QPoint(1800, 160), clientOrigin,
+                                                          widgetOrigin, 1.0);
+        check(a != b && a.y() == b.y(),
+              "two queried points stay distinct after conversion");
+
+        // ── The gate itself, not just the conversion ───────────────────────
+        // Real Windows 11 maximized geometry: the window rect starts 6 px
+        // above and left of the client and overhangs the screen.
+        const int windowTop = 294;              // GetWindowRect top
+        const QPoint maxClient(259, 300);       // client origin, 6 px inside
+        const QPoint maxWidget(259, 300);
+        const int barHeight = 52;
+
+        // Which point the gate asks about: record it, so a revert to the live
+        // cursor (or to the window rect) is visible as a different answer.
+        QPoint asked(-1, -1);
+        auto recording = [&asked](const QPoint& p) {
+            asked = p;
+            return true;
+        };
+        const int h = WindowChrome::captionHeightForHitTest(
+            QPoint(259 + 36, 326), windowTop, maxClient, maxWidget, barHeight, 1.0, recording);
+        check(asked == QPoint(259 + 36, 326),
+              "the gate asks about the message's own point, client-anchored");
+        checkEqual(h, (300 - 294) + 52,
+                   "the caption spans the frame inset plus the bar, measured from the client top");
+
+        // A point the move-area test rejects yields no caption at all.
+        auto never = [](const QPoint&) { return false; };
+        checkEqual(WindowChrome::captionHeightForHitTest(QPoint(300, 326), windowTop, maxClient,
+                                                         maxWidget, barHeight, 1.0, never),
+                   0, "a point outside the move area gives no caption");
+
+        // No bar (or a hidden one) must never produce a caption, and must not
+        // consult the move-area test at all.
+        bool consulted = false;
+        auto noting = [&consulted](const QPoint&) {
+            consulted = true;
+            return true;
+        };
+        checkEqual(WindowChrome::captionHeightForHitTest(QPoint(300, 326), windowTop, maxClient,
+                                                         maxWidget, 0, 1.0, noting),
+                   0, "a hidden title bar gives no caption");
+        check(!consulted, "a hidden title bar does not consult the move-area test");
+    }
+
+    // ── A tooltipped drag handle stays client, so its tooltip survives ──────
+    // Over a caption Windows sends WM_NCMOUSEMOVE, which Qt delivers as
+    // NonClientAreaMouseMove; that never starts the tooltip timer. Measured on
+    // Windows 11: every HTCAPTION point suppressed its tooltip, every HTCLIENT
+    // point showed it. So isCaptionMoveAreaAt() excludes the drag handles that
+    // carry one, while isSystemMoveAreaAt() — the bar's own drag, shared with
+    // Linux — still accepts them. (#6830 review)
+    {
+        QWidget tipHost;
+        auto* tipBar = new TitleBar(&tipHost);
+        tipHost.resize(1400, 200);
+        tipHost.show();
+        app.processEvents();
+
+        tipBar->setOperatorTransmitting(true);
+        app.processEvents();
+
+        auto* timer = tipBar->findChild<QLabel*>(QStringLiteral("txTimerLabel"));
+        auto* gutter = tipBar->findChild<QWidget*>(QStringLiteral("titleBarDragGutter"));
+        check(timer && gutter, "tooltip probe finds the transmit timer and the drag gutter");
+        // Assert visibility rather than folding it into the guard: if the timer
+        // ever stops showing while transmitting, these checks must fail loudly
+        // instead of quietly not running.
+        check(timer && timer->isVisible(), "the transmit timer shows while transmitting");
+        if (timer && gutter && timer->isVisible()) {
+            check(!timer->toolTip().isEmpty(), "the transmit timer carries a tooltip");
+            check(gutter->toolTip().isEmpty(), "the drag gutter carries no tooltip");
+
+            const QPoint onTimer = timer->mapToGlobal(timer->rect().center());
+            const QPoint onGutter = gutter->mapToGlobal(gutter->rect().center());
+
+            // Both are drag handles: the bar's own drag accepts either.
+            check(tipBar->isSystemMoveAreaAt(onTimer),
+                  "the transmit timer is still a drag handle for the bar's own move");
+            check(tipBar->isSystemMoveAreaAt(onGutter),
+                  "the drag gutter is a drag handle");
+
+            // Only the tooltip-free one may answer HTCAPTION.
+            check(!tipBar->isCaptionMoveAreaAt(onTimer),
+                  "a tooltipped drag handle does not become the caption, so its tooltip shows");
+            check(tipBar->isCaptionMoveAreaAt(onGutter),
+                  "the bare drag gutter still becomes the caption, so Snap works");
+        }
+        const QPoint origin = tipHost.mapToGlobal(QPoint(0, 0));
+        const QRect nativeWindow(origin, tipHost.size());
+        const auto checkClientControl = [&](QWidget* control) {
+            const QPoint samples[] = {
+                QPoint(0, control->height() / 2),
+                control->rect().center(),
+                QPoint(control->width() - 1, control->height() / 2),
+            };
+            for (const QPoint& local : samples) {
+                const QPoint point = control->mapToGlobal(local);
+                check(!tipBar->isCaptionMoveAreaAt(point),
+                      "interactive audio controls stay outside the caption move area");
+                const int captionHeight = WindowChrome::captionHeightForHitTest(
+                    point, nativeWindow.top(), origin, origin, tipBar->height(), 1.0,
+                    [tipBar](const QPoint& logical) {
+                        return tipBar->isCaptionMoveAreaAt(logical);
+                    });
+                check(WindowChrome::expandedFrameHit(point, nativeWindow, 8, 8, captionHeight)
+                          == WindowChrome::FrameHit::Client,
+                      "restored-window audio controls answer client across their width");
+                check(WindowChrome::expandedFrameHit(point, nativeWindow, 0, 0, captionHeight)
+                          == WindowChrome::FrameHit::Client,
+                      "maximized-window audio controls answer client across their width");
+            }
+        };
+
+        for (const char* name : {"Master volume", "Headphone volume"}) {
+            QSlider* slider = nullptr;
+            for (QSlider* candidate : tipBar->findChildren<QSlider*>()) {
+                if (candidate->accessibleName() == QLatin1String(name)) {
+                    slider = candidate;
+                }
+            }
+            check(slider && slider->isVisible(), "caption probe finds each visible volume slider");
+            if (slider && slider->isVisible()) {
+                const QString tooltip = slider->toolTip();
+                slider->setToolTip(QString());
+                checkClientControl(slider);
+                slider->setToolTip(tooltip);
+            }
+        }
+
+        auto* pcAudio = tipBar->findChild<QPushButton*>(QStringLiteral("pcAudioBtn"));
+        check(pcAudio && pcAudio->isVisible(), "caption probe finds the PC Audio button");
+        if (pcAudio && pcAudio->isVisible()) {
+            const QString tooltip = pcAudio->toolTip();
+            pcAudio->setToolTip(QString());
+            checkClientControl(pcAudio);
+            pcAudio->setToolTip(tooltip);
+        }
+        tipBar->setOperatorTransmitting(false);
     }
 
     // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──
@@ -456,6 +708,23 @@ int main(int argc, char** argv)
         bar->setUpdateAvailable(QString());
         app.processEvents();
         check(!updateState().value(QStringLiteral("visible")).toBool(), "empty version clears the badge");
+        // Staged: RESTART TO UPDATE, shown whatever the check says (Check
+        // daily off clears the available version, not a staged release).
+        bar->setUpdateStaged(QStringLiteral("26.10.3"));
+        app.processEvents();
+        check(updateState().value(QStringLiteral("staged")).toString() == QLatin1String("26.10.3")
+                  && updateState().value(QStringLiteral("visible")).toBool(),
+              "a staged release shows the badge");
+        check(badge && badge->text() == QLatin1String("RESTART TO UPDATE")
+                  && badge->accessibleName() == QLatin1String("AetherSDR update ready to install")
+                  && badge->accessibleDescription().contains(QLatin1String("26.10.3")),
+              "the staged badge says so, to a screen reader too");
+        bar->setUpdateAvailable(QStringLiteral("26.10.3"));
+        bar->setUpdateStaged(QString());
+        app.processEvents();
+        check(badge && badge->text() == QLatin1String("UPDATE") && badge->isVisible(),
+              "discarded, the badge is UPDATE again");
+        bar->setUpdateAvailable(QString());
     }
 
     // ── Radio tabs ──────────────────────────────────────────────────────────
@@ -658,6 +927,30 @@ int main(int argc, char** argv)
         bar->setActiveRadio(connected.id);
     }
 
+    {
+        RadioTabEntry lab;
+        lab.kind = RadioTabEntry::Kind::Workspace;
+        lab.id = QStringLiteral("aetherlab");
+        lab.name = QStringLiteral("AetherLab");
+        lab.detail = QStringLiteral("Antenna Analyzer · USB");
+        bar->setRadioTabs({connected, inUse, lab});
+        bar->setActiveRadio(connected.id);
+        bar->setActiveRadio(lab.id);
+        RadioTab* labTab = tabWithId(*bar, lab.id);
+        check(labTab && labTab->isChecked(), "workspace can be selected independently of the radio");
+        check(labTab && !labTab->isLinkCarrier(), "workspace never carries the radio heartbeat");
+        check(tabWithId(*bar, connected.id)->isLinkCarrier(), "radio retains heartbeat while lab is selected");
+        check(labTab && labTab->statusLine() == lab.detail, "workspace has its own status description");
+        bar->radioTabBar()->setLinkIndicator(QColor(Qt::red), true);
+        check(labTab && !labTab->accessibleName().contains(QStringLiteral("Link lost")), "radio loss never labels the analyzer as lost");
+        bar->radioTabBar()->setLinkIndicator(QColor(), false);
+        bar->setRadioTabs({lab});
+        bar->setActiveRadio(lab.id);
+        check(!tabWithId(*bar, lab.id)->isLinkCarrier(), "workspace-only strip has no fake radio carrier");
+        bar->setRadioTabs({connected, inUse});
+        bar->setActiveRadio(connected.id);
+    }
+
     // ── Discovered-radios popover ───────────────────────────────────────────
     RadioTabBar* tabs = bar->radioTabBar();
     check(tabs != nullptr, "the bar owns a radio tab strip");
@@ -676,6 +969,9 @@ int main(int argc, char** argv)
             QLabel* heading = popover->findChild<QLabel*>(
                 QStringLiteral("discoveredRadiosHeading"));
             check(manual != nullptr, "the popover exposes its manual-connect row");
+            QPushButton* lab = popover->findChild<QPushButton*>(QStringLiteral("radioSwitcherAetherLab"));
+            QPushButton* rescan = popover->findChild<QPushButton*>(QStringLiteral("radioSwitcherRescan"));
+            check(lab && rescan && lab->y() > rescan->y(), "AetherLab is offered below Rescan radios");
             check(heading != nullptr, "the popover exposes its heading");
             if (manual) {
                 check(manual->text() == QStringLiteral("Connect manually\u2026"),
@@ -966,6 +1262,155 @@ int main(int argc, char** argv)
         bar->clearLinkAlarm();
         check(!tabs->state().value(QStringLiteral("linkAlarm")).toBool(),
               "an operator disconnect clears the link alarm");
+
+        // Link quality colours the session's dot, and the AT chip marks an
+        // armed adaptive throttle — both on that tab only, both in words.
+        {
+            RadioTabEntry session;
+            session.id = QStringLiteral("QUALITY-SESSION");
+            session.name = QStringLiteral("NW8S-Bam");
+            session.status = RadioTabStatus::Connected;
+            RadioTabEntry idle;
+            idle.id = QStringLiteral("QUALITY-IDLE");
+            idle.name = QStringLiteral("FLEX-8600");
+            idle.status = RadioTabStatus::Available;
+            bar->setRadioTabs({session, idle});
+            bar->setActiveRadio(session.id);
+            app.processEvents();
+            RadioTab* sessionTab = tabWithId(*bar, session.id);
+            RadioTab* idleTab = tabWithId(*bar, idle.id);
+            check(sessionTab && idleTab, "quality test radios have tabs");
+            if (sessionTab && idleTab) {
+                // The dot is a solid-filled ellipse at kTabPadX (14) with
+                // kDotDiameter 7, so its centre pixel is font-independent.
+                const auto dotPixel = [](RadioTab* tab) {
+                    const QImage img = tab->grab().toImage();
+                    const qreal dpr = img.devicePixelRatio();
+                    return img.pixelColor(int(17.5 * dpr), int(tab->height() / 2.0 * dpr)).rgb();
+                };
+                const QRgb fair = QColor(QStringLiteral("#cc9900")).rgb();
+                const QRgb plainDot = dotPixel(sessionTab);
+                const int plainWidth = sessionTab->sizeHint().width();
+                tabs->setLinkQuality(QColor(QStringLiteral("#cc9900")), QStringLiteral("Fair"));
+                check(tabs->state().value(QStringLiteral("linkQuality")).toString()
+                          == QLatin1String("Fair"),
+                      "link quality is published to the bridge");
+                // Without AT the dot stays plain "connected": a colour change
+                // must always come with the AT chip that explains it.
+                check(!sessionTab->toolTip().contains(QLatin1String("Network")),
+                      "without AT the tab does not take the quality");
+                check(plainDot != fair && dotPixel(sessionTab) == plainDot,
+                      "without AT the dot keeps its plain connected colour");
+
+                tabs->setAdaptiveThrottle(true, 0, QColor());
+                check(sessionTab->toolTip().contains(QLatin1String("Network Fair")),
+                      "with AT the quality is shown, spelled out not colour-only");
+                check(dotPixel(sessionTab) == fair, "with AT the dot takes the quality colour");
+                // Link state still speaks first (dotColor()): an override such
+                // as the amber discovery pulse wins over the quality colour,
+                // and a lost link stops announcing the old grade.
+                tabs->setLinkIndicator(QColor(QStringLiteral("#e0a020")), /*alarm=*/false);
+                check(dotPixel(sessionTab) == QColor(QStringLiteral("#e0a020")).rgb(),
+                      "a link override still speaks over the quality colour");
+                tabs->setLinkIndicator(QColor(QStringLiteral("#cc3333")), /*alarm=*/true);
+                check(!sessionTab->toolTip().contains(QLatin1String("Network Fair")),
+                      "a lost link does not keep announcing the old quality");
+                tabs->setLinkIndicator(QColor(), /*alarm=*/false);
+                check(dotPixel(sessionTab) == fair, "the quality colour returns once the link state clears");
+                check(!idleTab->toolTip().contains(QLatin1String("Network")),
+                      "another radio's tab does not claim this session's quality");
+                check(sessionTab->isThrottleChipShown(), "an armed throttle shows the AT chip");
+                check(!idleTab->isThrottleChipShown(), "the AT chip rides the session's tab only");
+                check(sessionTab->sizeHint().width() > plainWidth,
+                      "the tab widens to fit the AT chip");
+                check(sessionTab->toolTip().contains(QLatin1String("Adaptive throttle on")),
+                      "the AT chip is spelled out");
+                const QImage armedChip = sessionTab->grab().toImage();
+                tabs->setAdaptiveThrottle(true, 8, QColor(QStringLiteral("#cc9900")));
+                check(sessionTab->toolTip().contains(QLatin1String("8 fps cap")),
+                      "an engaged cap names its frame rate");
+                checkEqual(tabs->state().value(QStringLiteral("adaptiveFpsCap")).toInt(), 8,
+                           "the cap is published to the bridge");
+
+                check(sessionTab->grab().toImage() != armedChip,
+                      "engaging a cap changes the painted chip");
+
+                // With no session (disconnected), no tab may keep the chip or
+                // the quality, even while the throttle is still armed.
+                bar->setActiveRadio(QString());
+                app.processEvents();
+                check(!sessionTab->isThrottleChipShown(), "no session, no AT chip");
+                check(!sessionTab->toolTip().contains(QLatin1String("Network")),
+                      "no session, no quality on the tab");
+                bar->setActiveRadio(session.id);
+                app.processEvents();
+                check(sessionTab->isThrottleChipShown(), "the chip returns with the session");
+
+                tabs->setAdaptiveThrottle(false, 0, QColor());
+                check(!sessionTab->isThrottleChipShown(), "disabling the throttle removes the chip");
+                check(!sessionTab->toolTip().contains(QLatin1String("Network")),
+                      "disabling the throttle returns the dot to plain connected");
+                check(dotPixel(sessionTab) == plainDot,
+                      "disabling the throttle repaints the plain connected dot");
+                tabs->setLinkQuality(QColor(), QStringLiteral("Off"));
+                checkEqual(sessionTab->sizeHint().width(), plainWidth,
+                           "the tab returns to its plain width");
+            }
+        }
+
+        // The scroll host has a fixed width; chip changes must resize the
+        // actual widgets, not only their preferred sizes.
+        {
+            RadioTabBar strip;
+            RadioTabEntry session;
+            session.id = QStringLiteral("CHIP-GEOMETRY");
+            session.name = QStringLiteral("Review radio with a deliberately long name");
+            session.status = RadioTabStatus::Connected;
+            strip.setRadios({session});
+            strip.setActiveRadio(session.id);
+            strip.resize(1000, 36);
+            strip.show();
+            app.processEvents();
+            RadioTab* tab = strip.findChild<RadioTab*>();
+            QWidget* tabHost = strip.findChild<QWidget*>(QStringLiteral("radioTabHost"));
+            check(tab && tabHost, "chip geometry has a tab and scroll host");
+            if (tab && tabHost) {
+                const int plainWidth = tab->sizeHint().width();
+                const auto checkWidth = [&](const char* message) {
+                    app.processEvents();
+                    checkEqual(tab->width(), tab->sizeHint().width(), message);
+                    checkEqual(tabHost->width(), tab->sizeHint().width(),
+                               "the scroll host fits its one tab");
+                };
+                strip.setAdaptiveThrottle(true, 0, QColor());
+                checkWidth("arming AT expands the actual tab");
+                check(tab->width() > plainWidth, "AT gets room without eliding the name");
+                strip.setAdaptiveThrottle(false, 0, QColor());
+                checkWidth("disabling AT shrinks the actual tab");
+                checkEqual(tab->width(), plainWidth, "AT off restores the plain width");
+                strip.setAdaptiveThrottle(true, 0, QColor());
+                checkWidth("arming AT again expands the actual tab");
+                strip.setActiveRadio(QString());
+                checkWidth("disconnect removes the chip's actual width");
+                strip.setActiveRadio(session.id);
+                checkWidth("reconnect restores the chip's actual width");
+                strip.resize(150, 36);
+                checkWidth("a narrow viewport preserves the tab's full width");
+                check(strip.state().value(QStringLiteral("overflowing")).toBool(),
+                      "a narrow strip scrolls rather than squeezing the chip");
+
+                strip.setAdaptiveThrottle(false, 0, QColor());
+                session.name = QStringLiteral("Rig");
+                session.model = QStringLiteral("AetherSDR Demo");
+                strip.setRadios({session});
+                checkWidth("a short name lets the status line determine width");
+                strip.setLinkIndicator(ThemeManager::instance().color(
+                    QStringLiteral("color.accent.danger")), true);
+                checkWidth("the link-loss status resizes the actual tab");
+                strip.setLinkIndicator(QColor(), false);
+                checkWidth("clearing the link alarm restores the actual width");
+            }
+        }
 
         // After an unexpected drop the alarm stays on the radio that dropped,
         // not on whichever tab comes first (LAN radios are listed first, so on

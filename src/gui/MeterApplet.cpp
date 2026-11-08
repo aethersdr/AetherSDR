@@ -280,13 +280,13 @@ void MeterApplet::setTransmitting(bool transmitting)
     }
 }
 
-void MeterApplet::setSupplyVoltageTelemetryState(bool connected)
+void MeterApplet::setSupplyVoltageTelemetryState(bool connected, bool available)
 {
     // A reading belongs to one extant meter in one radio session.
     // MeterModel::clear() and removeMeter() drop the sample-validity sentinel
     // without a telemetry update, so restore the neutral label when the shared
     // capability lifecycle reports either transition.
-    if (!connected || !m_model || !m_model->hasSupplyVoltage()) {
+    if (!connected || !available || !m_model || !m_model->hasSupplyVoltage()) {
         resetSupplyVoltageDisplay();
     }
 }

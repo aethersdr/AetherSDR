@@ -422,6 +422,10 @@ private:
     void updateFilterLabel();
     void updateModeTab();
     void rebuildFilterButtons();
+    void updateCwAutoTuneControls();
+    bool m_cwLoopRequested{false};
+    QPointer<QPushButton> m_registeredCwOnce;
+    QPointer<QPushButton> m_registeredCwLoop;
     void updateFilterHighlight();
     void applyFilterPreset(int widthHz);
     void saveFilterPresets();
@@ -610,7 +614,7 @@ private:
     void syncSqlVisuals();
 public:
     void setDiversityAllowed(bool allowed);
-    void setSmartSdrPlus(bool has);
+    void setCwAutotuneLicensed(bool licensed);
     void setHasExtendedDsp(bool has);
     // Whether the RADIO owns its noise reduction / blanking / auto-notch
     // (RadioCapabilities::hasRadioSideDsp). False hides NR, NB, ANF, NRL,
@@ -811,7 +815,7 @@ private:
     QPushButton* m_autotuneOnceBtn{nullptr};
     QPushButton* m_autotuneLoopBtn{nullptr};
     QPushButton* m_zeroBeatBtn{nullptr};
-    bool         m_hasSmartSdrPlus{false};
+    bool         m_cwAutotuneLicensed{false};
     bool         m_hasExtendedDsp{false};
     // Whether the RADIO runs its own NR/NB/ANF (RadioCapabilities::
     // hasRadioSideDsp). Defaults TRUE so a widget built before any backend has

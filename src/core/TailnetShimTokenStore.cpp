@@ -17,9 +17,11 @@ namespace AetherSDR {
 
 namespace {
 
-QString keyFor(const QString& radioSerial)
+QString keyFor(const QString& radioSerial, TailnetShimTokenStore::Entry entry)
 {
-    return QStringLiteral("TailnetShim/AdminToken/") + radioSerial;
+    return (entry == TailnetShimTokenStore::Entry::Wspr ? QStringLiteral("AetherWSPR/AdminToken/")
+                                                        : QStringLiteral("TailnetShim/AdminToken/"))
+        + radioSerial;
 }
 
 // Session copy: always written, so a save followed at once by a load never
@@ -28,6 +30,14 @@ QHash<QString, QString>& sessionTokens()
 {
     static QHash<QString, QString> tokens;
     return tokens;
+}
+
+// Bumped by every save, per entry: a keychain read that started before a
+// save finishes after it, and must not put the older token back.
+QHash<QString, quint64>& saveGenerations()
+{
+    static QHash<QString, quint64> generations;
+    return generations;
 }
 
 #ifdef HAVE_KEYCHAIN
@@ -47,7 +57,8 @@ bool TailnetShimTokenStore::persistentStoreAvailable()
 
 void TailnetShimTokenStore::save(const QString& radioSerial, const QString& token,
                                  QObject* context,
-                                 std::function<void(bool persisted, const QString& error)> done)
+                                 std::function<void(bool persisted, const QString& error)> done,
+                                 Entry entry)
 {
     // Without a serial every radio would share one entry, and one radio's
     // token would be offered to another. Refuse, and say why.
@@ -60,7 +71,8 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
         }
         return;
     }
-    const QString key = keyFor(radioSerial);
+    const QString key = keyFor(radioSerial, entry);
+    ++saveGenerations()[key];
     if (token.isEmpty()) {
         sessionTokens().remove(key);
     } else {
@@ -100,7 +112,7 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
 }
 
 void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
-                                 std::function<void(const QString&)> callback)
+                                 std::function<void(const QString&)> callback, Entry entry)
 {
     // As save() does: with no context the callback still runs, on the app.
     if (!context) {
@@ -111,22 +123,25 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
         QTimer::singleShot(0, context, [callback = std::move(callback)] { callback(QString()); });
         return;
     }
-    const QString key = keyFor(radioSerial);
+    const QString key = keyFor(radioSerial, entry);
     const QString session = sessionTokens().value(key);
 #ifdef HAVE_KEYCHAIN
     if (session.isEmpty()) {
+        const quint64 startedAt = saveGenerations().value(key);
         auto* job = new QKeychain::ReadPasswordJob(QString::fromLatin1(kKeychainService));
         job->setKey(key);
         job->setAutoDelete(true);
         QPointer<QObject> guard(context);
         QObject::connect(job, &QKeychain::Job::finished, context,
-                         [guard, key, callback = std::move(callback)](QKeychain::Job* finished) {
-            QString token;
+                         [guard, key, startedAt, callback = std::move(callback)](QKeychain::Job* finished) {
+            QString read;
             if (finished->error() == QKeychain::NoError) {
-                token = static_cast<QKeychain::ReadPasswordJob*>(finished)->textData();
-                if (!token.isEmpty()) {
-                    sessionTokens().insert(key, token);
-                }
+                read = static_cast<QKeychain::ReadPasswordJob*>(finished)->textData();
+            }
+            const bool savedSince = saveGenerations().value(key) != startedAt;
+            const QString token = pickLoadedToken(savedSince, read, sessionTokens().value(key));
+            if (!savedSince && !token.isEmpty()) {
+                sessionTokens().insert(key, token);
             }
             if (guard) {
                 callback(token);
@@ -136,9 +151,16 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
         return;
     }
 #endif
-    QTimer::singleShot(0, context, [session, callback = std::move(callback)] {
-        callback(session);
+    // Read when it runs, not now: a save in between is the newer token.
+    QTimer::singleShot(0, context, [key, callback = std::move(callback)] {
+        callback(sessionTokens().value(key));
     });
+}
+
+QString TailnetShimTokenStore::pickLoadedToken(bool savedSinceReadStarted, const QString& read,
+                                               const QString& sessionNow)
+{
+    return savedSinceReadStarted ? sessionNow : read;
 }
 
 }  // namespace AetherSDR
