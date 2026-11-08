@@ -645,8 +645,10 @@ void Kpa1500Connection::setFollowTx(bool on)
     }
 }
 
-void Kpa1500Connection::setTxFrequency(std::optional<int> khz, bool transmitting)
+void Kpa1500Connection::setTxFrequency(std::optional<int> khz, bool localTransmitting,
+                                     bool radioTransmitting)
 {
+    const bool transmitting = localTransmitting || radioTransmitting;
     const bool txEnded = m_transmitting && !transmitting;
     const bool txStarted = !m_transmitting && transmitting;
     m_transmitting = transmitting;
@@ -666,6 +668,17 @@ void Kpa1500Connection::setTxFrequency(std::optional<int> khz, bool transmitting
     }
     if (khz && (*khz < Kpa1500::kMinTrackKhz || *khz > Kpa1500::kMaxTrackKhz)) {
         khz.reset();  // a slice outside the amp's coverage (e.g. 2 m) is not tracked
+    }
+    if (!khz) {
+        m_trackTimer.stop();
+        m_pending.erase(std::remove_if(m_pending.begin(), m_pending.end(),
+                                       [](const PendingControl& p) {
+                                           return p.group == QLatin1String("FR");
+                                       }),
+                        m_pending.end());
+        m_trackWantKhz.reset();
+        m_trackSentKhz.reset();
+        return;
     }
     if (khz == m_trackWantKhz && !txEnded) {
         return;

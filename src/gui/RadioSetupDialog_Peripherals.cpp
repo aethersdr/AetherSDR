@@ -1735,11 +1735,14 @@ void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stack
            "on the port above, over UDP, and fills in the address of the amplifier that "
            "answers. Sends queries only."));
     auto* discovery = new Kpa1500Discovery(findButton);
-    auto updateFindAvailability = [findButton, u]() {
+    const QString findDescription = findButton->accessibleDescription();
+    auto updateFindAvailability = [findButton, u, findDescription]() {
         const bool connected = u->isConnected();
         findButton->setEnabled(!connected);
-        findButton->setToolTip(connected ? tr("Disconnect to search for a different amplifier")
-                                         : QString());
+        const QString reason = connected ? tr("Disconnect to search for a different amplifier")
+                                         : QString();
+        findButton->setToolTip(reason);
+        findButton->setAccessibleDescription(connected ? reason : findDescription);
     };
     updateFindAvailability();
     connect(m_kpa1500, &Kpa1500Connection::connected, findButton, updateFindAvailability);

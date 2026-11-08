@@ -393,9 +393,10 @@ The **Elecraft KPA1500** applet (button **KPA1500**):
   changes band and recalls its tuner setting without a transmission. It follows
   whichever slice has the TX flag, including split, XIT and the FM repeater
   offset, and coalesces fast tuning into a few updates a second. Band changes
-  wait until the radio stops transmitting, so the amplifier never switches
-  bands under RF. Slices outside 160–6 m are not tracked. **TRACK** is off by
-  default and is remembered; turn it off if the amplifier already gets
+  wait until the radio stops transmitting, including transmissions owned by
+  another client. Losing the transmit slice or disconnecting the radio cancels
+  pending frequency updates. Slices outside 160–6 m are not tracked. **TRACK**
+  is off by default and is remembered; turn it off if the amplifier already gets
   frequency from a radio cable.
 
 The amplifier is keyed by its KEY IN line from the radio (for a Flex, an RCA

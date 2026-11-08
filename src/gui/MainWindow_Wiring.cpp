@@ -1797,7 +1797,7 @@ void MainWindow::refreshTunerPortFrequency()
     }
     // The KPA1500 follows whichever slice holds the TX flag (split, XIT and
     // FM offset included); band changes are held while transmitting.
-    m_kpa1500Conn.setTxFrequency(kpa1500Khz, transmitting);
+    m_kpa1500Conn.setTxFrequency(kpa1500Khz, transmitting, m_radioModel.isRadioTransmitting());
     m_kpa500Conn.setTxContext(kpaBand, kpaSource, transmitting);
     if (m_appletPanel && m_appletPanel->kpa500Applet()) {
         m_appletPanel->kpa500Applet()->setRadioTransmitting(transmitting);
@@ -7620,6 +7620,8 @@ void MainWindow::wireMeters()
     connect(&m_kpa500Conn, &Kpa500Connection::telemetryReceived, kpa, &Kpa500Applet::recordTelemetry);
     connect(&m_kpa500Conn, &Kpa500Connection::bandTrackingChanged, kpa, &Kpa500Applet::setBandTrackingText);
     connect(&m_radioModel.transmitModel(), &TransmitModel::transmittingChanged,
+            this, [this](bool) { refreshTunerPortFrequency(); });
+    connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool) { refreshTunerPortFrequency(); });
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool) { refreshTunerPortFrequency(); });

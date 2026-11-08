@@ -12,6 +12,7 @@
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QStyle>
+#include <QVariant>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -104,11 +105,16 @@ QJsonObject preferences()
         AppSettings::instance().value("Kpa1500Applet").toString().toUtf8()).object();
 }
 
-// Enables or dims a control; a dimmed control states why in its tooltip.
+// Restore the control's description when it becomes available again.
 void setAvailable(QWidget* w, bool enabled, const QString& reason)
 {
+    constexpr const char* kDescriptionProperty = "kpa1500AvailableDescription";
+    if (!w->property(kDescriptionProperty).isValid()) {
+        w->setProperty(kDescriptionProperty, w->accessibleDescription());
+    }
     w->setEnabled(enabled);
     w->setToolTip(enabled ? QString() : reason);
+    w->setAccessibleDescription(enabled ? w->property(kDescriptionProperty).toString() : reason);
 }
 
 const QString& telemetryLabelStyle()
