@@ -31,6 +31,7 @@
 
 #include "DssRenderer.h"
 #include "SpectrumPreviewLogic.h"
+#include "SpectrumTraceBins.h"
 #include "WaterfallHistoryBuffer.h"
 #include "WaterfallTimeMarkers.h"
 #include "WaterfallTimeScaleLock.h"
@@ -217,6 +218,8 @@ public:
     Q_INVOKABLE QVariantMap automationDssSetScrollback(bool live,
                                                        int offsetRows);
     Q_INVOKABLE QVariantMap traceDebugSnapshot();
+    // The trace's bins themselves, for `get tracedebug <pan> bins` (#5806).
+    Q_INVOKABLE QVariantMap traceBinsSnapshot() const;
     // Every value the Display panel owns, as one flat map keyed by the panel's
     // own control names. Exists so "Clone to all Pans" (and any future
     // display-preference change) is provable field-by-field over the automation
@@ -257,8 +260,10 @@ public:
                         const QString& id,
                         int durationMs = 5000);
 
-    // Feed a new FFT frame. bins are scaled dBm values.
-    void updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale = {});
+    // Feed a new FFT frame. bins are scaled dBm values. heldForPresentation:
+    // Receive Sync queued it; `get tracedebug <pan> bins` refuses it.
+    void updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale = {},
+                        bool heldForPresentation = false);
 
     // Feed a single waterfall row from a VITA-49 waterfall tile.
     // lowFreqMhz/highFreqMhz describe the tile's frequency span.
@@ -1676,6 +1681,9 @@ private:
     std::function<bool()> m_dbmRangeCommandEligible;
     qint64 m_encoderRangeChangedMs{0};
     quint64 m_fftFrameSequence{0};
+    // The last frame as received, for `get tracedebug <pan> bins`; only
+    // updateSpectrum() writes it. See noteTraceGeometryChange().
+    SpectrumTraceBins::FrameCapture m_traceCapture;
     quint64 m_renderedFftFrameSequence{0};
     quint64 m_renderedEncoderRangeGeneration{0};
     qint64 m_renderedTraceMs{0};
@@ -2551,6 +2559,12 @@ private:
                             double newCenterMhz, double newBandwidthMhz);
     bool reprojectSpectrum(double oldCenterMhz, double oldBandwidthMhz,
                            double newCenterMhz, double newBandwidthMhz);
+    // Called wherever the displayed or requested centre/bandwidth changes, so
+    // traceBinsSnapshot() refuses until the new geometry has settled frames.
+    void noteTraceGeometryChange() { m_traceCapture.noteGeometryChange(); }
+    // A range, centre or edge-pan request the widget sent to the radio.
+    void noteTraceGeometryRequest(double centerMhz, double bandwidthMhz);
+    bool traceGeometryInFlight() const;
 };
 
 } // namespace AetherSDR
