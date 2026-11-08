@@ -482,6 +482,14 @@ public:
     // MainWindow's gate and must ask here, returning an error when absent.
     // Says nothing about CW keying itself, which works without a text buffer.
     bool hasRadioSideCwKeyer() const;
+    // Whether THIS HOST can key CW text on the connected radio: no radio-side
+    // buffer, but a transmit-capable backend that keys host-timed elements
+    // (hasHostCwKeying). False when disconnected, unlike hasRadioSideCwKeyer().
+    bool hasHostCwTextKeyer() const;
+    // Send-time preflight for host-keyed text, as pure reads with no interlock
+    // notice. Each element still passes the per-edge gates of a paddle.
+    enum class HostCwTextRefusal { None, Unsupported, NoTxSlice, NotCwMode, ReceiveOnlyMode, Inhibited };
+    HostCwTextRefusal hostCwTextRefusal() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;
     int cwTextMinWpm() const;

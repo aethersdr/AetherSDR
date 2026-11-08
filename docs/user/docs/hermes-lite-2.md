@@ -157,6 +157,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **The ALC gauge shows the audio peak after the ALC, before the modulator.** It sits at the ALC target while the ALC is reducing. It is not the transmitted envelope, which can stand above it when the audio is limited or compressed.
 - **Data:** WSJT-X and similar programs work over the [TCI Server](./tci-server.md). Their power slider changes RF output, and the speech ALC does not raise client audio. The WSPR beacon defaults to −3 dBFS and is not moved by the mic slider.
 - **CW** is keyed with host-timed edges, with sidetone, at the same carrier level as TUNE. CW settings are restored after a restart.
+- **CW text from a logger:** rigctld `send_morse` is keyed by AetherSDR when the transmit slice is in CW, at the CW speed and break-in setting in AetherSDR, without local sidetone. TCI and FlexCAT CW text are not keyed. See [CAT Control](./cat-control.md).
 - **A key or PTT on the radio's own jack** shows as transmit and mutes the receiver for as long as the radio reports it. AetherSDR does not key or modulate because of it.
 - **TUNE** keys at **Tune Power**, and moving Tune Power during a tune changes the carrier. Tune Power is remembered per band.
 - **Session safety:** MOX, CW PTT and TUNE requests are refused while the radio session is stopped. Stopping the session clears a held software key; reconnecting requires a fresh transmit request.
@@ -185,7 +186,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 ### Not available on the HL2
 
 - DAX, SmartLink or Multi-Flex.
-- The status-bar **CWX**, **DVK** and **FDX** toggles are hidden: the HL2 has no radio-side CW text keyer, voice keyer or full duplex.
+- The status-bar **CWX**, **DVK** and **FDX** toggles are hidden: the HL2 has no radio-side CW text keyer, voice keyer or full duplex. rigctld CW text is keyed by AetherSDR instead.
 - FM repeater duplex and CTCSS encode.
 - Line out and headphone controls: the **Line Out:** and **Headphone:** rows under **Settings → Radio Setup... → Audio → Radio Audio Outputs** are dimmed. A codec board's speaker level is under **HL2 Hardware**.
 - Transmit timings. The fields under **Settings → Radio Setup... → Transmit → Timings (in ms)** are dimmed: "Unavailable: this radio does not accept transmit timings from here. No delay or timeout set here is applied."

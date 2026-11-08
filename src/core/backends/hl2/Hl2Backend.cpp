@@ -2162,6 +2162,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // deliberately NOT gated — see the note in RadioCapabilities.h.
     c.hasRadioSideCwKeyer = false;
     c.cwTextControl = std::nullopt;
+    // setCwKeying() shapes each host-timed element into IQ.
+    c.hasHostCwKeying = true;
     c.hasVoiceKeyer = false;
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface

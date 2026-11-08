@@ -1,6 +1,7 @@
 #include "RigctlProtocol.h"
 #include <utility>
 #include "LogManager.h"
+#include "models/HostCwTextKeyer.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -274,9 +275,13 @@ RigctlProtocol::~RigctlProtocol()
 {
     m_txProducer.invalidate(); // fences queued key-on before any teardown callback
     if (m_model) {
-        QMetaObject::invokeMethod(m_model, [model = m_model, request = m_pttRequest, cwx = m_cwxRequest] {
+        QMetaObject::invokeMethod(m_model, [model = m_model, request = m_pttRequest, cwx = m_cwxRequest,
+                                            hostCwText = std::move(m_hostCwText)] {
             (void)model->setProducerTransmit(request, false);
             model->abortProducerCwx(cwx);
+            if (hostCwText) {
+                hostCwText->stop();
+            }
         }, Qt::QueuedConnection);
     }
     // Client dropped without a clean set_split_vfo 0 (e.g. WSJT-X quit): best-effort
@@ -1812,13 +1817,12 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
         m_pendingMorseLine = true;
         return {};
     }
-    // A radio with no radio-side CW text buffer would swallow every `cwx send`
-    // this produces, and RPRT 0 would tell Not1MM/N1MM the contest exchange
-    // went out. RIG_ENAVAIL is the file's established answer for a control this
-    // radio does not have. Direct read, on the CAT thread — the same posture as
-    // the isConnected() checks above; only the MUTATION needs the queued hop.
+    // A radio with no radio-side CW text buffer would swallow every `cwx send`,
+    // and RPRT 0 would tell Not1MM/N1MM the exchange went out: the host keys it
+    // or the answer is an error. Direct read, on the CAT thread — the same
+    // posture as the isConnected() checks above; only the MUTATION is queued.
     if (!m_model->hasRadioSideCwKeyer()) {
-        return rprt(-11);
+        return sendHostMorse(text);
     }
     if (!m_model->cwTextValidationError(text).isEmpty()) {
         return rprt(-1);
@@ -1837,13 +1841,45 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
     return rprt(0);
 }
 
+// No radio-side buffer: this host keys the text (#7105). RIG_ENAVAIL where it
+// cannot either; RIG_ERJCTED when it can but the TX slice refuses now (no TX
+// slice, not CW, receive-only mode, inhibited). The model re-checks on its
+// thread, and every element still meets the paddle's per-edge gates.
+QString RigctlProtocol::sendHostMorse(const QString& text)
+{
+    if (!m_model->hasHostCwTextKeyer()) {
+        return rprt(-11);
+    }
+    if (!m_model->cwTextValidationError(text).isEmpty()) {
+        return rprt(-1);
+    }
+    if (m_model->hostCwTextRefusal() != RadioModel::HostCwTextRefusal::None) {
+        return rprt(-9);
+    }
+    if (!m_hostCwText) {
+        m_hostCwText = std::make_shared<HostCwTextKeyer>(m_model, QStringLiteral("rigctl:send_morse"));
+    }
+    QMetaObject::invokeMethod(m_model, [keyer = m_hostCwText, text] {
+        (void)keyer->send(text);
+    }, Qt::QueuedConnection);
+    return rprt(0);
+}
+
 QString RigctlProtocol::cmdStopMorse()
 {
     if (!m_model) return rprt(-1);
-    // Nothing to stop on a radio that could never have been started — same
-    // RIG_ENAVAIL as send_morse, so a client that probes with stop_morse gets
-    // one consistent answer about this radio rather than two.
-    if (!m_model->hasRadioSideCwKeyer()) return rprt(-11);
+    // Same RIG_ENAVAIL as send_morse where neither keyer exists, so a client
+    // that probes with stop_morse gets one consistent answer about this radio.
+    if (!m_model->hasRadioSideCwKeyer()) {
+        if (!m_model->hasHostCwTextKeyer()) {
+            return rprt(-11);
+        }
+        if (m_hostCwText) {
+            QMetaObject::invokeMethod(m_model, [keyer = m_hostCwText] { keyer->stop(); },
+                                      Qt::QueuedConnection);
+        }
+        return rprt(0);
+    }
     // CwxModel::clearBuffer emits transmissionCancelled, which cuts any
     // in-flight local sidetone in addition to sending "cwx clear". (#2909)
     const TxCoordinator::Request request = m_cwxRequest;
