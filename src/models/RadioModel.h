@@ -484,7 +484,7 @@ public:
     bool hasRadioSideCwKeyer() const;
     // Whether THIS HOST can key CW text on the connected radio: no radio-side
     // buffer, but a transmit-capable backend that keys host-timed elements
-    // (hasHostCwKeying). False when disconnected, unlike hasRadioSideCwKeyer().
+    // (hostCwKeyingControl engaged). False when disconnected, unlike hasRadioSideCwKeyer().
     bool hasHostCwTextKeyer() const;
     // Send-time preflight for host-keyed text, as pure reads with no interlock
     // notice. Each element still passes the per-edge gates of a paddle.

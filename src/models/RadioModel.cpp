@@ -4613,7 +4613,7 @@ bool RadioModel::hasHostCwTextKeyer() const
         return false;
     }
     const RadioCapabilities caps = backendCapabilities();
-    return !caps.hasRadioSideCwKeyer && caps.hasHostCwKeying && caps.canTransmit;
+    return !caps.hasRadioSideCwKeyer && caps.hostCwKeyingControl.has_value() && caps.canTransmit;
 }
 
 RadioModel::HostCwTextRefusal RadioModel::hostCwTextRefusal() const

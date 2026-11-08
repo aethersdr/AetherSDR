@@ -2163,7 +2163,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasRadioSideCwKeyer = false;
     c.cwTextControl = std::nullopt;
     // setCwKeying() shapes each host-timed element into IQ.
-    c.hasHostCwKeying = true;
+    c.hostCwKeyingControl = RadioCapabilities::HostCwKeyingControl{};
     c.hasVoiceKeyer = false;
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
