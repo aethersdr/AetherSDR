@@ -3,7 +3,8 @@
 **Status:** Proposal. Not approved, not scheduled. Queued behind the backend
 freeze recorded on #5554 (2026-09-11: "no new radio backends until aetherd is
 complete"), in the same position as #5355 and #5474. The capture program in §6
-is research, not code, and can run during the freeze.
+is research, not code: the maintainer cleared it, and tester recruitment, to
+start during the freeze (2026-11-08).
 **Family string:** `flex1500` (proposed)
 **Transport:** local USB 1.1 Full Speed, through libusb
 **Phase 1 scope:** receive only, `canTransmit = false`
@@ -581,7 +582,7 @@ That phase would add `SET_TR`, the TX tuning word, the PA filter table from
 `Set1500Filters` (TX side), QSE enable and TX I/Q on the downstream stream,
 each behind the coordinator. It would be its own RFC.
 
-## 9. HL2 scaffolding (#5554 §2.5) — options for the maintainer
+## 9. HL2 scaffolding (#5554 §2.5)
 
 #5554 §2.5 records that ANAN copied about 600 lines of HL2 host-DSP scaffolding
 (spectrum framing, DSP-chain setup, sample-rate selection). The backend freeze
@@ -606,7 +607,7 @@ Three options:
   adopting those hooks must justify that separately, and the registry is built
   for multi-receiver ownership that the FLEX-1500 does not need.
 
-**Recommendation: B**, unless the maintainer is about to do A for its own sake.
+**Decision: B** (maintainer, 2026-11-08).
 The FLEX-1500 is the simplest host-DSP radio the project would support: one
 receiver at a fixed rate. A from-scratch receiver of that size is smaller than
 the slice of HL2 that would be shared, so it does not raise the cost of a later
@@ -686,20 +687,20 @@ first, then the tuning-accuracy check against §5.1.
 
 ### 11.2 Maintainer decisions
 
-1. **The freeze.** Does this stay queued behind the backend freeze, or does
-   the maintainer want phase 1 sooner? Either way, may the capture program
-   (§6) and tester recruitment start now?
-2. **Scaffolding:** option A, B or C in §9. The recommendation is B.
-3. **Allowlist encoder** as the Principle VI mechanism for phase 1 (§8). The
+Decided 2026-11-08: the backend stays queued behind the freeze, the capture
+program (§6) and tester recruitment start now, and scaffolding is option B
+(§9). Still open:
+
+1. **Allowlist encoder** as the Principle VI mechanism for phase 1 (§8). The
    recommendation is yes.
-4. **EEPROM calibration:** should phase 1 read the RX level and image tables
+2. **EEPROM calibration:** should phase 1 read the RX level and image tables
    (§5.3) for a calibrated dBm axis and I/Q balance, or ship uncalibrated?
-5. **Radio-side audio:** should PowerSDR's routing of RX audio back to the
+3. **Radio-side audio:** should PowerSDR's routing of RX audio back to the
    radio's headphone/speaker ever be supported? It shares the TX downstream
    path, so it stays out of phase 1 regardless.
-6. **libusb as a new direct dependency** under the GOVERNANCE dependency rule,
+4. **libusb as a new direct dependency** under the GOVERNANCE dependency rule,
    and whether Windows and AppImage builds carry it.
-7. **Experimental landing:** is a backend verified on one tester's radio
+5. **Experimental landing:** is a backend verified on one tester's radio
    landable as experimental, as ANAN and RTL were?
 
 ### 11.3 Risks
