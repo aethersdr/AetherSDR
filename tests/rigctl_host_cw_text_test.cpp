@@ -312,19 +312,67 @@ void testRefusals()
     }
 }
 
-void testInhibitMidMessageStopsKeyDown()
+// A key-down refused mid-message ends the message (the keyer stops, as
+// stop_morse does). The refusal is lifted ten units later, after the next
+// element (T then E: the next key-down is six units in): a keyer still
+// running would key the rest of the text from then on.
+void runMidMessageRefusal(const char* label, const std::function<void(Fixture&)>& refuse,
+                          const std::function<void(Fixture&)>& lift, const QString& noticeKey)
 {
     Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
     RigctlProtocol port(&f.radio);
     port.setSliceIndex(0);
+    int notices = 0;
+    QObject::connect(&f.radio, &RadioModel::interlockNotificationRequested,
+                     [&](const QString&, const QString& key, const QString&) {
+                         notices += key.contains(noticeKey) ? 1 : 0;
+                     });
     (void)cat(port, QStringLiteral("L KEYSPD 30"));
-    check("send_morse accepted", cat(port, QStringLiteral("b TEST TEST")).endsWith(QLatin1String("RPRT 0")));
-    check("the first key-down arrives", pumpUntil([&] { return f.downs() >= 1; }, 2000));
-    f.radio.setPanTransmitInhibited(f.radio.slice(0)->panId(), true, QStringLiteral("test inhibit"));
-    const int downsAtInhibit = f.downs();
+    const double unitMs = 1200.0 / f.radio.transmitModel().cwSpeed();
+    const QString prefix = QString::fromLatin1(label) + QStringLiteral(": ");
+    const auto name = [&](const char* what) { return (prefix + QLatin1String(what)).toUtf8(); };
+
+    check(name("send_morse accepted").constData(),
+          cat(port, QStringLiteral("b TEST TEST")).endsWith(QLatin1String("RPRT 0")));
+    check(name("the first key-down arrives").constData(),
+          pumpUntil([&] { return f.downs() >= 1; }, 2000));
+    refuse(f);
+    const int downsAtRefusal = f.downs();
+    pumpFor(static_cast<int>(10 * unitMs));
+    lift(f);
     pumpFor(2000);
-    check("per-edge gate: no key-down after the inhibit", f.downs() == downsAtInhibit);
-    check("and the key ends up", !f.edges.empty() && !f.edges.back().down);
+    check(name("no key-down after the refusal").constData(), f.downs() == downsAtRefusal);
+    check(name("and the key ends up").constData(), !f.edges.empty() && !f.edges.back().down);
+    check(name("the keyer stopped: nothing keys once the refusal is lifted").constData(),
+          f.downs() == downsAtRefusal);
+    std::printf("       %s notices: %d\n", label, notices);
+    check(name("one refusal notice").constData(), notices == 1);
+    // The message was ended, not the keyer: a new send keys.
+    f.edges.clear();
+    (void)cat(port, QStringLiteral("b E"));
+    check(name("a later send keys again").constData(),
+          pumpUntil([&] { return f.edges.size() >= 2; }, 2000) && f.edges.size() == 2);
+}
+
+void setMode(Fixture& f, const QString& mode)
+{
+    SliceDelta delta;
+    delta.mode = mode;
+    f.radio.emitBackendSliceChangedForTest(0, delta);
+}
+
+void testMidMessageRefusalsEndTheMessage()
+{
+    runMidMessageRefusal("mode change",
+        [](Fixture& f) { setMode(f, QStringLiteral("USB")); },
+        [](Fixture& f) { setMode(f, QStringLiteral("CW")); },
+        QStringLiteral("cw-text-mode:"));
+    runMidMessageRefusal("inhibit",
+        [](Fixture& f) {
+            f.radio.setPanTransmitInhibited(f.radio.slice(0)->panId(), true, QStringLiteral("test inhibit"));
+        },
+        [](Fixture& f) { f.radio.setPanTransmitInhibited(f.radio.slice(0)->panId(), false); },
+        QStringLiteral(":cw-key"));   // the key-down refusal, not the pan notice
 }
 
 void testRadioSideKeyerStillUsesCwx()
@@ -360,7 +408,7 @@ int main(int argc, char** argv)
     testHl2KeysTextInMorseTiming();
     testStopMorseKeysUpAtOnce();
     testRefusals();
-    testInhibitMidMessageStopsKeyDown();
+    testMidMessageRefusalsEndTheMessage();
     testRadioSideKeyerStillUsesCwx();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
     return g_failed == 0 ? 0 : 1;

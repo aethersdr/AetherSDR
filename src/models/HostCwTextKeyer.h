@@ -16,7 +16,8 @@ class RadioModel;
 // (RadioModel::hasHostCwTextKeyer). CwxLocalKeyer times the elements on its
 // worker; every edge goes through RadioModel::queueProducerCwKeyEdge, so each
 // element passes the same per-edge transmit gates as a paddle. The producer is
-// this keyer's own, so stop() fences and releases only its elements.
+// this keyer's own, so stop() fences and releases only its elements. A
+// key-down refused at admission, or with the TX slice out of CW, ends the message.
 // Construct anywhere; every other member function runs on the model's thread.
 class HostCwTextKeyer {
 public:
@@ -38,6 +39,7 @@ private:
     TxCoordinator::Producer m_producer;
     TxCoordinator::Request m_input;
     std::unique_ptr<CwxLocalKeyer> m_keyer;
+    std::shared_ptr<char> m_run;   // this run's identity for refusal callbacks
 };
 
 } // namespace AetherSDR
