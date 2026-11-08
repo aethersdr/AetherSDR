@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "ModeVocabulary.h"
 #include "TxController.h"
 #include "core/LogManager.h"
 
@@ -1109,13 +1110,34 @@ void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceI
 
 void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                        const QString& source, quint64 traceId, quint64 sourceMs,
-                                       std::chrono::steady_clock::time_point scheduledAt)
+                                       std::chrono::steady_clock::time_point scheduledAt,
+                                       bool requireCwMode, std::function<void()> onDownRefused)
 {
-    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt] {
+    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt,
+                                     requireCwMode, onDownRefused = std::move(onDownRefused)] {
+        const auto refused = [down, &onDownRefused] {
+            if (down && onDownRefused) {
+                onDownRefused();
+            }
+        };
         if (m_txSessionClosing || scheduledAt < m_cwInputNotBefore) {
+            refused();
             return;
         }
-        (void)sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request);
+        if (down && requireCwMode) {
+            SliceModel* tx = txSlice();
+            if (!tx || !isCwMode(tx->mode())) {
+                emitInterlockNotification(
+                    tr("CW text stopped: the transmit slice is not in a CW mode."),
+                    QStringLiteral("cw-text-mode:%1").arg(tx ? tx->mode() : QString()),
+                    tx ? tx->panId() : QString());
+                refused();
+                return;
+            }
+        }
+        if (!sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request)) {
+            refused();
+        }
     }, Qt::QueuedConnection);
 }
 

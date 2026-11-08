@@ -5,6 +5,7 @@
 #include "models/TransmitModel.h"
 
 #include <chrono>
+#include <functional>
 #include <utility>
 
 namespace AetherSDR {
@@ -38,14 +39,25 @@ bool HostCwTextKeyer::send(const QString& text)
             return false;
         }
         m_keyer = std::make_unique<CwxLocalKeyer>();
+        m_run = std::make_shared<char>();
+        // A refused key-down ends the message, once, and only for the run it
+        // belongs to: the token dies with stop(), so a stale refusal is inert.
+        // Runs on the model thread; `this` outlives every live token.
+        const std::function<void()> refused = [this, run = std::weak_ptr<char>(m_run)] {
+            if (run.lock()) {
+                stop();
+            }
+        };
         // Worker thread: derive() and the queued hop take no model state.
         m_keyer->setOnKeyDownChange(
-            [model = m_model.data(), input = m_input, source = m_source, element = TxCoordinator::Request{}](
+            [model = m_model.data(), input = m_input, source = m_source, refused,
+             element = TxCoordinator::Request{}](
                 bool down, std::chrono::steady_clock::time_point when) mutable {
                 if (down) {
                     element = input.derive();
                 }
-                model->queueProducerCwKeyEdge(element, down, source, 0, 0, when);
+                model->queueProducerCwKeyEdge(element, down, source, 0, 0, when,
+                                              /*requireCwMode=*/true, down ? refused : std::function<void()>{});
             });
     }
     m_keyer->start(text, m_model->transmitModel().cwSpeed());
@@ -57,6 +69,7 @@ void HostCwTextKeyer::stop()
     // Fence first: an element the worker emits from here on derives from a
     // dead input and is refused at admission.
     m_producer.discardInputs();
+    m_run.reset();
     m_input = {};
     m_keyer.reset();   // joins the worker; its final key-up finds a closed request
     if (m_model) {
