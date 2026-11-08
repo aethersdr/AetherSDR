@@ -200,7 +200,14 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     root->addWidget(m_relay);
     root->addSpacing(6);
 
-    root->addWidget(makeCanonHeader(tr("CTR2-Max Firmware")));
+    // The CTR2-Max's own sections, in one part the window hides while only
+    // another kind of controller is selected.
+    m_maxPart = new QWidget;
+    auto* maxBox = new QVBoxLayout(m_maxPart);
+    maxBox->setContentsMargins(0, 0, 0, 0);
+    maxBox->setSpacing(8);
+    root->addWidget(m_maxPart);
+    maxBox->addWidget(makeCanonHeader(tr("CTR2-Max Firmware")));
 
     // One tab per firmware: AetherCTR2 from the release list, or the
     // CTR2-Max's own (Lynovation's) from a file the operator downloaded.
@@ -208,7 +215,7 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     m_tabs = new QTabWidget;
     m_tabs->setObjectName(QStringLiteral("firmwareInstallTabs"));
     m_tabs->setAccessibleName(tr("Firmware to install"));
-    root->addWidget(m_tabs);
+    maxBox->addWidget(m_tabs);
 
     const auto rowOf = [](QBoxLayout* layout) {
         auto* row = new QHBoxLayout;
@@ -280,7 +287,7 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     lynBox->addStretch(1);
     m_tabs->addTab(lyn, tr("Lynovation"));
 
-    root->addWidget(section(tr("Device")));
+    maxBox->addWidget(section(tr("Device")));
     // The device's mode as a badge of its own; details in its tooltip.
     auto* statusRow = new QHBoxLayout;
     statusRow->setSpacing(10);
@@ -294,12 +301,12 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     m_badge->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     statusRow->addWidget(m_badge);
     statusRow->addStretch(1);
-    root->addSpacing(4);
-    root->addLayout(statusRow);
-    root->addSpacing(4);
+    maxBox->addSpacing(4);
+    maxBox->addLayout(statusRow);
+    maxBox->addSpacing(4);
     // What the unit starts: the one it runs now is dimmed. The way there is
     // the cheapest the unit allows (see FirmwareInstallModel::restartInto).
-    QHBoxLayout* restartRow = rowOf(root);
+    QHBoxLayout* restartRow = rowOf(maxBox);
     auto* restartLabel = new QLabel(tr("Restart into"));
     restartLabel->setObjectName(QStringLiteral("SectionLabel"));
     restartRow->addWidget(restartLabel);
@@ -317,7 +324,7 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     m_step = wrapped();
     m_step->setObjectName(QStringLiteral("firmwareInstallStep"));
     m_step->setAccessibleName(tr("Install status"));
-    root->addWidget(m_step);
+    maxBox->addWidget(m_step);
     m_bar = new QProgressBar;
     m_bar->setObjectName(QStringLiteral("firmwareInstallProgress"));
     m_bar->setAccessibleName(tr("Install progress"));
@@ -325,7 +332,7 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     m_bar->setTextVisible(false);
     m_bar->setFixedHeight(8);
     m_bar->hide();
-    root->addWidget(m_bar);
+    maxBox->addWidget(m_bar);
     root->addStretch(1);
 
     auto* closeRow = new QHBoxLayout;
@@ -408,6 +415,11 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     if (m_model)
         connect(m_model, &Ctr2ProxyModel::firmwareVersionChanged, this,
                 &FirmwareInstallDialog::syncDevice);
+    // Its device list and selection decide whether the CTR2-Max part shows.
+    if (m_model) {
+        connect(m_model, &Ctr2ProxyModel::configurationChanged, this,
+                &FirmwareInstallDialog::syncMaxPart);
+    }
 
     // Every button at its full height: squeezed, the sheet's fixed padding
     // clips its label. The window's minimum height follows, so it opens (and
@@ -642,6 +654,40 @@ void FirmwareInstallDialog::syncDevice()
         break;
     }
     syncLists();   // the unit's backups
+    syncMaxPart();
+}
+
+void FirmwareInstallDialog::syncMaxPart()
+{
+    const bool show = !m_fw->otherControllerOnly();
+    if (m_maxPart->isVisibleTo(this) == show) {
+        return;
+    }
+    m_maxPart->setVisible(show);
+    if (isVisible()) {
+        fitHeight();
+    }
+}
+
+// Shorter with the CTR2-Max part hidden; with it, tall enough for all of it.
+// The body's layout first: until it settles, the body keeps the minimum height
+// it had with the part shown, and that would hold the window at its old size.
+void FirmwareInstallDialog::fitHeight()
+{
+    if (QLayout* body = bodyWidget()->layout()) {
+        body->activate();
+    }
+    if (QLayout* window = layout()) {
+        window->activate();
+    }
+    const int fit = sizeHint().height();
+    resize(width(), m_maxPart->isVisibleTo(this) ? qMax(height(), fit) : fit);
+}
+
+void FirmwareInstallDialog::showEvent(QShowEvent* event)
+{
+    CanonWindow::showEvent(event);   // restores the saved size
+    fitHeight();
 }
 
 namespace {
@@ -695,6 +741,7 @@ void FirmwareInstallDialog::sync()
     m_tabs->tabBar()->setEnabled(!running);
     m_cancel->setVisible(running);
     m_bar->setVisible(running && !m_fw->waitingForDownloadMode());
+    syncMaxPart();
 }
 
 bool FirmwareInstallDialog::offerAccessFirst(std::function<void()> again)

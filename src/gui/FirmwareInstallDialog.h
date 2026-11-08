@@ -42,6 +42,7 @@ protected:
     // Not while a job runs: the device would be left part-written.
     void closeEvent(QCloseEvent* event) override;
     void reject() override;   // Escape
+    void showEvent(QShowEvent* event) override;
 
 private:
     // The two firmware lists: each tab's firmware, then the unit's backups.
@@ -50,6 +51,10 @@ private:
     QString selectedBackup(const QListWidget* list) const;
     QString backupText(const QString& path) const;
     void syncDevice();
+    // The CTR2-Max sections, hidden while only another kind of controller is
+    // selected (FirmwareInstallModel::otherControllerOnly()).
+    void syncMaxPart();
+    void fitHeight();
     void onInstall();
     void installOverLink();
     // Lynovation's CTR2-Max firmware, from a file the operator downloaded.
@@ -106,6 +111,7 @@ private:
     QPushButton* m_toBootloader{nullptr};
     QPushButton* m_cancel{nullptr};
     QTabWidget* m_tabs{nullptr};   // AetherCTR2, Lynovation
+    QWidget* m_maxPart{nullptr};   // everything below the relay but Close
     QPushButton* m_openFile{nullptr};
     QListWidget* m_fileList{nullptr};   // the opened file's firmware, as m_product
     QLabel* m_fileText{nullptr};

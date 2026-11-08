@@ -1017,7 +1017,7 @@ void PanadapterStack::finishPanTopLevelMove(const QString& panId)
     // Deferred like floatPanadapter(): the graphics API binds to the new
     // native surface before the first render, never during the turn that
     // moved it.
-    QTimer::singleShot(0, this, [this, sw]() {
+    QTimer::singleShot(0, this, [sw]() {
         refreshAfterReparent(sw);
         sw->show();
     });

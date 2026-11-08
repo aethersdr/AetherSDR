@@ -187,8 +187,11 @@ void ClientDeEssApplet::buildUI()
 
     auto wire = [this](ClientCompKnob* k, auto setter) {
         connect(k, &ClientCompKnob::valueChanged, this, [this, setter](float v) {
-            if (!m_audio || !m_audio->clientDeEssTx()) return;
-            (m_audio->clientDeEssTx()->*setter)(v);
+            if (!m_audio) return;
+            // Local object operand: see VfoWidget::buildTabContent (#6724).
+            auto* const target = m_audio->clientDeEssTx();
+            if (!target) return;
+            (target->*setter)(v);
             m_audio->saveClientDeEssSettings();
         });
     };

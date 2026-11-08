@@ -258,6 +258,17 @@ QString redactPii(const QString& msg)
         QRegularExpression::CaseInsensitiveOption);
     out.replace(*digestRe, QStringLiteral("\\1***REDACTED***"));
 
+    // A Flex waveform container environment (SmartSDR 4.3.16) can hold an API key
+    // or password under ANY variable name, so no keyword table can know it. Both
+    // wire shapes are scrubbed whole: the staged value runs to the end of the line
+    // because it may contain spaces, and the reported env= is base64 JSON.
+    static const QRegularExpression* waveformEnvStageRe = new QRegularExpression(
+        R"((\bwaveform env [A-Za-z_][A-Za-z0-9_]*=)[^\r\n]*)");
+    out.replace(*waveformEnvStageRe, QStringLiteral("\\1***REDACTED***"));
+    static const QRegularExpression* waveformEnvReportRe = new QRegularExpression(
+        R"((\bwaveform container\b[^\r\n]*?\benv=)[^\s"]+)");
+    out.replace(*waveformEnvReportRe, QStringLiteral("\\1***REDACTED***"));
+
     // Every keyword rule, generated once from the one table (#5480).
     for (const FieldRule& rule : fieldRules())
         out = redactField(std::move(out), rule);
@@ -343,11 +354,13 @@ AsyncLogWriter::~AsyncLogWriter()
     shutdown();
 }
 
-void AsyncLogWriter::setRotationConfig(qint64 maxFileBytes, RotationCallback cb)
+void AsyncLogWriter::setRotationConfig(qint64 maxFileBytes, RotationCallback cb,
+                                       RotatedCallback rotated)
 {
     std::lock_guard lock(m_mutex);
     m_maxFileBytes = maxFileBytes;
     m_rotationCallback = std::move(cb);
+    m_rotatedCallback = std::move(rotated);
 }
 
 bool AsyncLogWriter::start(const QString& path, bool mirrorToStderr)
@@ -553,13 +566,16 @@ void AsyncLogWriter::run(std::promise<bool> opened)
     bool mirrorToStderr = false;
     qint64 maxFileBytes = 0;
     RotationCallback rotationCb;
+    RotatedCallback rotatedCb;
     {
         std::lock_guard lock(m_mutex);
         path = m_filePath;
         mirrorToStderr = m_mirrorToStderr;
         maxFileBytes = m_maxFileBytes;
         rotationCb = m_rotationCallback;
+        rotatedCb = m_rotatedCallback;
     }
+    qint64 rotateAtBytes = maxFileBytes;
 
     QDir().mkpath(QFileInfo(path).absolutePath());
 
@@ -606,10 +622,28 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         return true;
     };
 
+    // Rotation runs between batches with the buffer drained, so a warning
+    // about it is written and flushed on its own.
+    auto writeRotationWarning = [&](const QString& message) {
+        const QByteArray line = formatLine(QtWarningMsg, QTime::currentTime(),
+                                           QStringLiteral("aether.logging"), message);
+        if (file.isOpen()) {
+            buffer.append(line);
+            ++bufferedLineCount;
+            flushBuffer();
+            file.flush();
+            hasUnflushedWrites = false;
+        }
+        if (mirrorToStderr) {
+            fwrite(line.constData(), 1, static_cast<size_t>(line.size()), stderr);
+            fflush(stderr);
+        }
+    };
+
     auto maybeRotate = [&]() {
         if (maxFileBytes <= 0 || !rotationCb)
             return;
-        if (file.size() < maxFileBytes)
+        if (file.size() < rotateAtBytes)
             return;
 
         const QString oldPath = file.fileName();
@@ -628,18 +662,30 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         QDir().mkpath(QFileInfo(newPath).absolutePath());
         file.setFileName(newPath);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            const QString reason = file.errorString();
             if (!reopenForAppendOrMirrorToStderr(oldPath)) {
                 maxFileBytes = 0;
+                writeRotationWarning(
+                    QStringLiteral("Log rotation could not open %1: %2; could not reopen %3, logging to stderr only")
+                        .arg(newPath, reason, oldPath));
                 return;
             }
-            maxFileBytes = 0;
+            rotateAtBytes = file.size() + maxFileBytes;
+            writeRotationWarning(
+                QStringLiteral("Log rotation could not open %1: %2; still logging to %3, retrying after another size limit")
+                    .arg(newPath, reason, oldPath));
             return;
         }
         file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        rotateAtBytes = maxFileBytes;
 
-        std::lock_guard lock(m_mutex);
-        m_filePath = newPath;
-        ++m_counters.rotationCount;
+        {
+            std::lock_guard lock(m_mutex);
+            m_filePath = newPath;
+            ++m_counters.rotationCount;
+        }
+        if (rotatedCb)
+            rotatedCb(newPath);
     };
 
     auto makeDropSummary = [](QtMsgType type, const QString& message) {

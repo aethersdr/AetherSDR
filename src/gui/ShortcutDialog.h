@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDialog>
+#include "CanonWindow.h"
 
 class QComboBox;
 class QLabel;
@@ -12,13 +12,12 @@ namespace AetherSDR {
 class ShortcutManager;
 class KeyboardMapWidget;
 
-class ShortcutDialog : public QDialog {
+// The shortcut editor: a resizable CanonWindow dialog (style guide, RFC
+// #6226), modal over the main window, whose questions are CanonMessageBoxes.
+class ShortcutDialog : public CanonWindow {
     Q_OBJECT
 public:
     explicit ShortcutDialog(ShortcutManager* mgr, QWidget* parent = nullptr);
-
-protected:
-    void keyPressEvent(QKeyEvent* ev) override;
 
 private:
     void buildUI();

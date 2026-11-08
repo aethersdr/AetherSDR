@@ -172,7 +172,7 @@ FT8/WSJT-X users who want exact tones can choose NaN guard or Measure only.
 
 ### Server identity
 
-The init burst announces `device:AetherSDR;` and `protocol:ExpertSDR3,1.5;`, followed by the full radio state and `ready;`.
+The init burst announces `device:AetherSDR;` and `protocol:ExpertSDR3,2.1;`, followed by the full radio state and `ready;`.
 
 ### Protocol coverage
 
@@ -195,7 +195,9 @@ AetherSDR implements the TCI 2.0 command set, including:
 
 Notes:
 
+- `rx_ctun_ex:<trx>,<bool>;` is accepted as a Thetis extension. It switches center lock on that receiver's slice, inverted: `true` (click-tune on) turns center lock off, `false` turns it on. TCI Remote sends `rx_ctun_ex:0,true;` on connect.
 - `volume` is in dB, as the spec defines it; the older percent form is still accepted. It is the same master level as the title-bar slider: the computer's level with PC Audio on, the radio's Line Out level with it off. `mic_level` is a global 0–100 %.
+- `sql_level` is a threshold in dB, −140 to 0, as the spec defines it. A positive value (the 0–100 level older builds took) is ignored. −140 dB, or any value at or below what the lowest level is reported as, opens the squelch fully. The slice stores a 0–100 level, so the reply states the threshold that level really gives: on a Flex the top of the scale is −60 dB, and any higher value is answered as −60.
 - The server also broadcasts which slice has focus in the GUI, plus DSP, squelch, RIT/XIT and TX power when they change.
 - Opening a slice announces `rx_enable:<trx>,true;` and its `tx_enable` permission. Closing a slice sends `tx_enable:<trx>,false;` and `rx_enable:<trx>,false;` after approximately 500 ms. A band-change recreation within that window keeps its receiver number and sends no close notifications; surviving receivers keep their numbers. TX permission still follows ownership, mode, and panadapter inhibits. `trx_count` is not re-sent.
 - Malformed arguments (for example to `volume:` or `modulation:`) are rejected, never applied to slice 0.

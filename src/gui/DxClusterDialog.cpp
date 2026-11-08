@@ -18,7 +18,9 @@
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
+#include "core/WsprAgentClient.h"
 #include "models/RadioModel.h"
+#include "WsprConfigureWindow.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -41,6 +43,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSlider>
+#include <QDateTime>
+#include <QPointer>
+#include <QTimeZone>
 #include <QColorDialog>
 #include <QFile>
 #include <QFileDialog>
@@ -501,9 +506,10 @@ QScrollArea {
 )";
 
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
-                                   WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
+                                   WsjtxClient* wsjtxClient,
                                    PotaClient* potaClient, EibiClient* eibiClient,
                                    N1MMSpotClient* n1mmSpotClient,
+                                   WsprSpotFeed* wsprFeed,
 #ifdef HAVE_WEBSOCKETS
                                    FreeDvClient* freedvClient,
 #endif
@@ -512,7 +518,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
                                    QWidget* parent)
     : CanonWindow(QStringLiteral("SpotHub"), parent, Kind::Workspace),
       m_client(clusterClient), m_rbnClient(rbnClient),
-      m_wsjtxClient(wsjtxClient), m_spotCollectorClient(spotCollectorClient),
+      m_wsjtxClient(wsjtxClient),
       m_potaClient(potaClient), m_eibiClient(eibiClient),
       m_n1mmSpotClient(n1mmSpotClient),
 #ifdef HAVE_WEBSOCKETS
@@ -546,7 +552,6 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     m_rbnLogPath     = rbnClient->logFilePath();
     m_wsjtxLogPath   = wsjtxClient->logFilePath();
     m_potaLogPath    = potaClient->logFilePath();
-    m_scLogPath      = spotCollectorClient->logFilePath();
     m_n1mmLogPath    = n1mmSpotClient->logFilePath();
 #ifdef HAVE_WEBSOCKETS
     m_freedvLogPath  = freedvClient->logFilePath();
@@ -557,8 +562,9 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     root->setContentsMargins(14, 12, 14, 14);
     root->addWidget(makeCanonHeader(QStringLiteral("SpotHub")));
 
-    auto* tabs = new QTabWidget;
+    auto* tabs = new QTabWidget(bodyWidget());
 
+    m_wsprFeed = wsprFeed;
     buildClusterTab(tabs);
     buildRbnTab(tabs);
     buildWsjtxTab(tabs);
@@ -566,6 +572,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     buildPotaTab(tabs);
     buildEiBiTab(tabs);
     buildN1mmTab(tabs);
+    buildWsprTab(tabs);
 #ifdef HAVE_WEBSOCKETS
     buildFreeDvTab(tabs);
 #endif
@@ -743,34 +750,6 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
 
     // WSJT-X log loaded in deferred loadLogFiles() (#748)
-
-    // ── Live updates from SpotCollector client ───────────────────────
-    connect(spotCollectorClient, &SpotCollectorClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
-        bool follow = isAtBottom(m_scConsole);
-        m_scConsole->appendPlainText(line);
-        if (follow) {
-            auto* sb = m_scConsole->verticalScrollBar();
-            sb->setValue(sb->maximum());
-        }
-    });
-
-    connect(spotCollectorClient, &SpotCollectorClient::spotReceived, this, [this](DxSpot spot) {
-        spot.source = "SpotCollector";
-        m_spotBatch.append(spot);
-    });
-
-    connect(spotCollectorClient, &SpotCollectorClient::listening, this, [this] {
-        m_scStatusLabel->setText(QString("Listening on port %1").arg(m_scPortSpin->value()));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
-        m_scStartBtn->setText("Stop");
-        m_scConsole->appendPlainText("--- Listening ---");
-    });
-    connect(spotCollectorClient, &SpotCollectorClient::stopped, this, [this] {
-        m_scStatusLabel->setText("Stopped");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-        m_scStartBtn->setText("Start");
-        m_scConsole->appendPlainText("--- Stopped ---");
-    });
 
     // ── Live updates from POTA client ─────────────────────────────────
     connect(potaClient, &PotaClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
@@ -1627,96 +1606,62 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
 void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
 {
-    auto* page = new QWidget;
+    // Commander adds SpotCollector's spots through the FlexRadio spot API.
+    // This tab documents that route instead of offering a nonexistent UDP feed.
+    auto* page = new QWidget(tabs);
     auto* layout = new QVBoxLayout(page);
     layout->setSpacing(8);
 
-    auto& s = AppSettings::instance();
+    auto* group = new QGroupBox("DXLab SpotCollector", page);
+    auto* groupLayout = new QVBoxLayout(group);
+    groupLayout->setSpacing(6);
 
-    // ── Connection settings ─────────────────────────────────────────────
-    auto* connGroup = new QGroupBox("SpotCollector UDP Listener");
-    auto* connLayout = new QVBoxLayout(connGroup);
-    connLayout->setSpacing(4);
+    // Rich-text link colors are baked into the HTML, so the text is rebuilt
+    // when the theme changes while SpotHub is open.
+    auto* guide = new QLabel(group);
+    guide->setObjectName(QStringLiteral("spotCollectorGuide"));
+    auto setGuideText = [guide] {
+        auto& tm = AetherSDR::ThemeManager::instance();
+        guide->setText(QStringLiteral(
+            "<p>SpotCollector doesn't provide a UDP spot broadcast for AetherSDR to receive. "
+            "For FlexRadio radios, its companion "
+            "program, <b>DXLab Commander</b>, puts SpotCollector's spots on the radio's "
+            "panadapter, and AetherSDR shows them automatically. There's nothing to start "
+            "on this tab.</p>"
+            "<p><b>Set up Commander</b></p>"
+            "<ol>"
+            "<li>In Commander, select your FlexRadio Signature radio and connect Commander to "
+            "it over the network. Commander must be able to reach the radio on TCP port 4992.</li>"
+            "<li>In Commander's <b>Configuration</b> window, on the <b>Bandspread</b> tab, check "
+            "<b>Display calls on panadaptor</b>.</li>"
+            "<li>Click <b>Bandspread</b> in Commander's main window once to open its "
+            "Bandspread window. You can then minimize or close that window.</li>"
+            "<li>Keep SpotCollector running and connected to its spot sources.</li>"
+            "</ol>"
+            "<p>To see Commander's colors, turn <b>Override Colors</b> and "
+            "<b>Override Background</b> off on this window's <b>Display</b> tab. A red callsign "
+            "is one you need for an award you track, and the background shows LoTW and eQSL "
+            "participation.</p>"
+            "<p>Clicking a spot sends it to the radio as a spot trigger, the same as clicking "
+            "it in SmartSDR, so the click settings on Commander's <b>Bandspread</b> tab "
+            "apply.</p>"
+            "<p><a href='https://dxlabsuite.com/dxlabwiki/FlexSignatureDisplayCallsigns' "
+            "style='color:%1;'>DXLab's guide to showing callsigns on the panadaptor</a></p>")
+            .arg(tm.color(guide, QStringLiteral("color.accent")).name()));
+    };
+    setGuideText();
+    connect(&AetherSDR::ThemeManager::instance(), &AetherSDR::ThemeManager::themeChanged,
+            guide, setGuideText);
+    guide->setTextFormat(Qt::RichText);
+    guide->setWordWrap(true);
+    guide->setOpenExternalLinks(true);
+    guide->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    guide->setAccessibleName(QStringLiteral("DXLab SpotCollector setup"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(guide, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    groupLayout->addWidget(guide);
 
-    auto* grid = new QGridLayout;
-    grid->setColumnStretch(1, 1);
-
-    grid->addWidget(new QLabel("UDP Port:"), 0, 0);
-    m_scPortSpin = new QSpinBox;
-    m_scPortSpin->setRange(1, 65535);
-    m_scPortSpin->setValue(s.value("SpotCollectorPort", 9999).toInt());
-    grid->addWidget(m_scPortSpin, 0, 1);
-
-    connLayout->addLayout(grid);
-
-    auto* helpLabel = new QLabel(
-        "Receives DX spots from DXLab SpotCollector via UDP push.\n"
-        "In SpotCollector, enable UDP broadcast to this port (default 9999).\n"
-        "Alternatively, use the DX Cluster tab to connect to SpotCollector's telnet interface.");
-    helpLabel->setWordWrap(true);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(helpLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-    connLayout->addWidget(helpLabel);
-
-    // Button row
-    auto* btnRow = new QHBoxLayout;
-    m_scAutoStartBtn = new QPushButton(
-        s.value("SpotCollectorAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
-    m_scAutoStartBtn->setCheckable(true);
-    m_scAutoStartBtn->setChecked(s.value("SpotCollectorAutoStart", "False").toString() == "True");
-    connect(m_scAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
-        m_scAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
-        auto& s = AppSettings::instance();
-        s.setValue("SpotCollectorAutoStart", on ? "True" : "False");
-        s.save();
-    });
-    btnRow->addWidget(m_scAutoStartBtn);
-    btnRow->addStretch();
-
-    m_scStatusLabel = new QLabel("Stopped");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-    btnRow->addWidget(m_scStatusLabel);
-    btnRow->addStretch();
-
-    m_scStartBtn = new QPushButton(m_spotCollectorClient->isListening() ? "Stop" : "Start");
-    m_scStartBtn->setFixedWidth(100);
-    m_scStartBtn->setProperty("spotHubPrimary", true);
-    connect(m_scStartBtn, &QPushButton::clicked, this, [this] {
-        if (m_spotCollectorClient->isListening()) {
-            emit spotCollectorStopRequested();
-            return;
-        }
-        quint16 port = static_cast<quint16>(m_scPortSpin->value());
-        auto& s = AppSettings::instance();
-        s.setValue("SpotCollectorPort", port);
-        s.save();
-        emit spotCollectorStartRequested(port);
-    });
-    btnRow->addWidget(m_scStartBtn);
-    connLayout->addLayout(btnRow);
-
-    layout->addWidget(connGroup);
-
-    // ── Console output ──────────────────────────────────────────────────
-    auto* consoleLabel = new QLabel("SpotCollector Spots");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
-    layout->addWidget(consoleLabel);
-
-    m_scConsole = new QPlainTextEdit;
-    m_scConsole->setReadOnly(true);
-    m_scConsole->setMaximumBlockCount(2000);
-    layout->addWidget(m_scConsole, 1);
-
-    auto* scBtnRow = new QHBoxLayout;
-    scBtnRow->addStretch();
-    scBtnRow->addWidget(makeConsoleClearButton(m_scConsole, &m_scLogPath, "scClearBtn"));
-    layout->addLayout(scBtnRow);
-
-    // Update status if already listening
-    if (m_spotCollectorClient->isListening()) {
-        m_scStatusLabel->setText(QString("Listening on port %1").arg(m_scPortSpin->value()));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
-        m_scStartBtn->setText("Stop");
-    }
+    layout->addWidget(group);
+    layout->addStretch();
 
     tabs->addTab(page, "SpotCollector");
 }
@@ -1841,6 +1786,203 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     layout->addLayout(potaBtnRow);
 
     tabs->addTab(page, "POTA");
+}
+
+void DxClusterDialog::buildWsprTab(QTabWidget* tabs)
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setSpacing(8);
+    const WsprSpotHubSettings settings = wspr::loadSpotHubSettings();
+
+    auto* group = new QGroupBox(tr("WSPR Receiver"));
+    auto* groupLayout = new QVBoxLayout(group);
+    groupLayout->setSpacing(4);
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+    grid->addWidget(new QLabel(tr("Source:")), 0, 0);
+    auto* source = new QLabel(tr("The WSPR receiver on the radio (Waveforms → Install → WSPR Receiver)"));
+    ThemeManager::instance().applyStyleSheet(source, "QLabel { color: {{color.canon.muted}}; }");
+    grid->addWidget(source, 0, 1);
+    grid->addWidget(new QLabel(tr("Lifetime:")), 1, 0);
+    auto* lifetime = new QSpinBox;
+    lifetime->setRange(1, 1440);
+    lifetime->setValue(settings.lifetimeMinutes);
+    lifetime->setSuffix(tr(" min"));
+    lifetime->setAccessibleName(tr("How long WSPR spots stay on the panadapter"));
+    connect(lifetime, &QSpinBox::valueChanged, this, [](int v) {
+        WsprSpotHubSettings s = wspr::loadSpotHubSettings();
+        s.lifetimeMinutes = v;
+        wspr::saveSpotHubSettings(s);
+    });
+    grid->addWidget(lifetime, 1, 1, Qt::AlignLeft);
+    groupLayout->addLayout(grid);
+
+    auto* btnRow = new QHBoxLayout;
+    m_wsprAutoStartBtn = new QPushButton(settings.autoStart ? tr("Auto-Start: ON") : tr("Auto-Start: OFF"));
+    m_wsprAutoStartBtn->setCheckable(true);
+    m_wsprAutoStartBtn->setChecked(settings.autoStart);
+    m_wsprAutoStartBtn->setAccessibleDescription(
+        tr("Start reading the WSPR receiver when a radio that has it connects."));
+    connect(m_wsprAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_wsprAutoStartBtn->setText(on ? tr("Auto-Start: ON") : tr("Auto-Start: OFF"));
+        WsprSpotHubSettings s = wspr::loadSpotHubSettings();
+        s.autoStart = on;
+        wspr::saveSpotHubSettings(s);
+    });
+    btnRow->addWidget(m_wsprAutoStartBtn);
+    m_wsprConfigureBtn = new QPushButton(tr("Configure…"));
+    m_wsprConfigureBtn->setAccessibleName(tr("Configure the WSPR receiver"));
+    connect(m_wsprConfigureBtn, &QPushButton::clicked, this, [this] {
+        static QPointer<WsprConfigureWindow> open;
+        if (open) {
+            open->raise();
+            open->activateWindow();
+            return;
+        }
+        auto* window = new WsprConfigureWindow(m_radioModel, this);
+        window->setAttribute(Qt::WA_DeleteOnClose);
+        open = window;
+        window->show();
+    });
+    btnRow->addWidget(m_wsprConfigureBtn);
+    btnRow->addStretch();
+    m_wsprStatusLabel = new QLabel(tr("Stopped"));
+    m_wsprStatusLabel->setAccessibleName(tr("WSPR receiver status"));
+    ThemeManager::instance().applyStyleSheet(m_wsprStatusLabel,
+                                             "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+    btnRow->addWidget(m_wsprStatusLabel);
+    btnRow->addStretch();
+    m_wsprStartBtn = new QPushButton(tr("Start"));
+    m_wsprStartBtn->setFixedWidth(100);
+    m_wsprStartBtn->setProperty("spotHubPrimary", true);
+    connect(m_wsprStartBtn, &QPushButton::clicked, this, [this] {
+        if (!m_wsprFeed) {
+            return;
+        }
+        if (m_wsprFeed->isRunning()) {
+            m_wsprFeed->stop();
+        } else if (m_radioModel) {
+            m_wsprFeed->start(m_radioModel->radioAddress());
+        }
+    });
+    btnRow->addWidget(m_wsprStartBtn);
+    groupLayout->addLayout(btnRow);
+    layout->addWidget(group);
+
+    // ── Console ──────────────────────────────────────────────────────────
+    auto* consoleRow = new QHBoxLayout;
+    auto* consoleLabel = new QLabel(tr("WSPR Decodes"));
+    ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
+    consoleRow->addWidget(consoleLabel);
+    consoleRow->addStretch();
+    auto* colorLabel = new QLabel(tr("Spot Color:"));
+    ThemeManager::instance().applyStyleSheet(colorLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
+    consoleRow->addWidget(colorLabel);
+    auto* colorBtn = new QPushButton;
+    colorBtn->setFixedSize(18, 18);
+    colorBtn->setAccessibleName(tr("WSPR spot color"));
+    auto paintSwatch = [colorBtn](const QString& c) {
+        ThemeManager::instance().applyStyleSheet(colorBtn, QString(
+            "QPushButton { background: %1; border: 2px solid {{color.canon.lineHi}}; border-radius: 3px; }"
+            "QPushButton:hover { border-color: {{color.canon.ink}}; }").arg(c));
+    };
+    const auto swatchColor = [](const WsprSpotHubSettings& s) {
+        return s.color.isEmpty() ? ThemeManager::instance().value(QString::fromLatin1(kWsprDefaultColorToken))
+                                 : s.color;
+    };
+    paintSwatch(swatchColor(settings));
+    connect(colorBtn, &QPushButton::clicked, this, [this, paintSwatch, swatchColor] {
+        WsprSpotHubSettings s = wspr::loadSpotHubSettings();
+        const QColor c = getColorForLiveParent(QColor(swatchColor(s)), this, tr("WSPR Spot Color"));
+        if (c.isValid()) {
+            s.color = c.name();
+            wspr::saveSpotHubSettings(s);
+            paintSwatch(s.color);
+        }
+    });
+    consoleRow->addWidget(colorBtn);
+    layout->addLayout(consoleRow);
+
+    m_wsprConsole = new QPlainTextEdit;
+    m_wsprConsole->setReadOnly(true);
+    m_wsprConsole->setMaximumBlockCount(2000);
+    m_wsprConsole->setAccessibleName(tr("WSPR decodes"));
+    layout->addWidget(m_wsprConsole, 1);
+    auto* clearRow = new QHBoxLayout;
+    clearRow->addStretch();
+    clearRow->addWidget(makeConsoleClearButton(m_wsprConsole, nullptr, "wsprClearBtn"));
+    layout->addLayout(clearRow);
+
+    if (m_wsprFeed) {
+        connect(m_wsprFeed, &WsprSpotFeed::started, this, [this] {
+            m_wsprStatusLabel->setText(tr("Reading the receiver…"));
+            updateWsprControls();
+        });
+        connect(m_wsprFeed, &WsprSpotFeed::stopped, this, [this] {
+            m_wsprStatusLabel->setText(tr("Stopped"));
+            updateWsprControls();
+        });
+        connect(m_wsprFeed, &WsprSpotFeed::failed, this, [this](const QString& message) {
+            m_wsprStatusLabel->setText(message);
+        });
+        connect(m_wsprFeed, &WsprSpotFeed::statusReceived, this, [this](const WsprStatus& st) {
+            QString line = st.band.isEmpty() ? tr("Starting") : tr("On %1").arg(st.band);
+            if (!st.hopPeriod.isEmpty()) {
+                line += tr(", hopping (%1)").arg(st.hopPeriod);
+            }
+            if (!st.cycles.isEmpty()) {
+                line += tr(" · %n spot(s) last cycle", nullptr, st.cycles.last().spots);
+            }
+            if (!st.clockSynced) {
+                line = tr("Waiting for the radio's clock");
+            }
+            m_wsprStatusLabel->setText(line);
+        });
+        connect(m_wsprFeed, &WsprSpotFeed::spotReceived, this, [this](const DxSpot& spot) {
+            m_spotBatch.append(spot);   // the Spot List tab
+        });
+        connect(m_wsprFeed, &WsprSpotFeed::decoded, this, [this](const WsprSpot& s, const QString& here) {
+            const int km = wspr::distanceKm(here, s.grid);
+            const QString when = QDateTime::fromSecsSinceEpoch(s.cycleStart, QTimeZone::UTC).toString("HH:mm");
+            m_wsprConsole->appendPlainText(
+                QStringLiteral("%1  %2  %3  %4  %5 dB  %6 dBm  %7")
+                    .arg(when, s.band.leftJustified(5), (s.call.isEmpty() ? tr("<hashed>") : s.call).leftJustified(10),
+                         s.grid.leftJustified(6))
+                    .arg(s.snr, 3)
+                    .arg(s.dbm, 2)
+                    .arg(km < 0 ? QString() : tr("%L1 km").arg(km)));
+        });
+    }
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool) { updateWsprControls(); });
+    }
+    updateWsprControls();
+    tabs->addTab(page, tr("WSPR"));
+}
+
+void DxClusterDialog::updateWsprControls()
+{
+    if (!m_wsprStartBtn) {
+        return;
+    }
+    const bool running = m_wsprFeed && m_wsprFeed->isRunning();
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    m_wsprStartBtn->setText(running ? tr("Stop") : tr("Start"));
+    const bool runsWaveforms = connected && m_radioModel->backendCapabilities().hasWaveforms;
+    const bool reachable = runsWaveforms
+        && wspr::reachableRadio(m_radioModel->isWan(), m_radioModel->radioAddress());
+    m_wsprStartBtn->setEnabled(m_wsprFeed && (running || reachable));
+    const QString why = !connected        ? tr("Connect to a radio first.")
+                        : !runsWaveforms  ? tr("This radio doesn't run waveforms.")
+                        : !reachable      ? tr("The WSPR receiver can be reached only on the radio's local "
+                                               "network or through Remote Access.")
+                                          : QString();
+    m_wsprStartBtn->setToolTip(why);
+    m_wsprStartBtn->setAccessibleDescription(why);
+    m_wsprConfigureBtn->setEnabled(reachable);
+    m_wsprConfigureBtn->setToolTip(why);
+    m_wsprConfigureBtn->setAccessibleDescription(why);
 }
 
 void DxClusterDialog::updateEibiTimestamps()
@@ -2817,11 +2959,10 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             truncateLogFile(m_rbnLogPath);
             truncateLogFile(m_wsjtxLogPath);
             truncateLogFile(m_potaLogPath);
-            truncateLogFile(m_scLogPath);
             truncateLogFile(m_freedvLogPath);
             truncateLogFile(m_n1mmLogPath);
             for (QPlainTextEdit* console : {m_console, m_rbnConsole, m_wsjtxConsole,
-                                            m_scConsole, m_potaConsole, m_n1mmConsole}) {
+                                            m_potaConsole, m_n1mmConsole}) {
                 if (console)
                     console->clear();
             }

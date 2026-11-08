@@ -260,7 +260,7 @@ type SessionReport struct {
 }
 
 func (n *Node) sessionReport(caller netip.Addr) SessionReport {
-	rep := SessionReport{Version: shimVersion, RTTMs: -1, Sessions: []SessionInfo{}, MTUClamp: n.MaxMTU}
+	rep := SessionReport{Version: version(), RTTMs: -1, Sessions: []SessionInfo{}, MTUClamp: n.MaxMTU}
 	n.mu.Lock()
 	relay := n.relay
 	n.mu.Unlock()

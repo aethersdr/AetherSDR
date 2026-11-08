@@ -45,9 +45,10 @@ AetherSDR (tailnet peer)                       radio container (host network nam
   limits access to listed logins or tags, on the radio, station devices and
   side channels alike. Each announced side channel admits one connection,
   from the computer whose transfer opened it. Saving a narrower list ends the
-  open sessions, transfers and device connections it no longer admits. The shim listens only on its own tailnet ports, so the
-  radio's other services, such as its SSH, are not exposed, and a shared
-  route never splices into the radio's own addresses.
+  open sessions, transfers and device connections it no longer admits. The shim listens only on its own tailnet ports and on
+  ports an app on the radio published (see Published ports), so the radio's
+  other services, such as its SSH, are not exposed, and a shared route never
+  splices into the radio's own addresses.
 - **Teardown (Principle VI):** when either side ends, the shim closes the radio
   connection at once. The radio drops the GUI client and unkeys anything that
   client owned. The shim never keeps a radio session alive for a client it
@@ -74,18 +75,39 @@ The image is generic and contains no secret.
 
 1. **Install:** in AetherSDR, open File → Waveforms → Install… and pick
    `flex-tailnet-shim-<version>.tar.gz`. The radio starts the container. It
-   stays unprovisioned until it receives an auth key.
+   stays unprovisioned until it is signed in to a tailnet.
 2. **Provision:** the container's row in the Waveforms list has a
-   **Configure…** button. Paste a single-use Tailscale auth key, choose a
-   machine name and, optionally, who may connect, then press **Join Tailnet**.
-   AetherSDR sends the key to the container over the LAN and does not keep it.
-   The container joins the tailnet and returns an admin token, which AetherSDR
-   stores in the OS keychain, one entry per radio.
+   **Configure…** button. Choose a machine name and, optionally, who may
+   connect, then sign in with a QR code: scan it with a phone, sign in to
+   Tailscale and approve the radio, and the dialog turns to connected. Under
+   Advanced, a single-use Tailscale auth key works instead; AetherSDR sends it
+   to the container over the LAN and does not keep it. Either way the
+   container returns an admin token, which AetherSDR stores in the OS
+   keychain, one entry per radio.
 3. **Connect remotely:** from anywhere on the tailnet, use Connect → Manual
    with the address shown in the dialog.
 
-The node's tailnet state survives radio reboots, so the key is needed only
-once. Removing or reinstalling the container wipes that state.
+The node's tailnet state survives radio reboots, so the sign-in is needed
+only once. Removing or reinstalling the container wipes that state.
+
+**Sign-in by URL** (version 0.5.0): without an auth key, tsnet starts an
+interactive login and the control plane sends a sign-in URL, which AetherSDR
+draws as a QR code. Whoever opens that URL first claims the radio for their
+tailnet, so it goes only to the caller that started the join or holds the
+admin token: the provision reply and `GET /v1/login`, never `/v1/status` or a
+log. The join then waits for the sign-in without a timeout, since starting
+over would mint a new URL under the code being scanned. A node signed in this
+way belongs to the user, not a tag, and its key expires (180 days by default)
+unless key expiry is turned off for it in the admin console; `key_expiry` in
+the status says when. Once expired, the shim asks the control plane for a new
+URL, and the dialog shows it as a new QR code (from the LAN only, since the
+expired node is off the tailnet). A tagged auth key, under Advanced, makes a
+node that never expires.
+
+**Access** (0.5.0): who may connect is decided by the tailnet's own access
+rules. Versions before 0.5.0 kept a Who may connect list and enforced it;
+0.5.0 drops a saved list at start-up (and logs it), ignores one sent with a
+provision, and refuses to set one.
 
 ## Provisioning API
 
@@ -96,10 +118,50 @@ are refused.
 
 | Method | Path | Token needed | Does |
 |---|---|---|---|
-| GET | `/v1/status` | no | State, tailnet IP and DNS name, allowlist, session count, version, last error. Never a secret. |
-| POST | `/v1/provision` | only once provisioned | `{auth_key, hostname, allow[]}`: joins (or, with the token, re-joins) the tailnet and returns `{admin_token, status}` |
-| PUT | `/v1/allow` | yes | `{allow[]}`: changes who may connect without leaving the tailnet |
+| GET | `/v1/status` | no | State (`needs_login` and `needs_approval` while waiting on a person), tailnet IP and DNS name, allowlist, session count, version, key expiry, last error. Never a secret. |
+| POST | `/v1/provision` | only once provisioned | `{auth_key, hostname, allow[]}`: joins (or, with the token, re-joins) the tailnet and returns `{admin_token, status}`. Without `auth_key` it signs in by URL and also returns `auth_url` once the control plane sends it (within 30 s); the join goes on in the background |
+| GET | `/v1/login` | yes | `{state, auth_url, key_expiry}`: the sign-in URL while one is wanted (a new join, or an expired key) |
+| PUT | `/v1/allow` | yes | `{allow: []}` clears a list an older version kept; from 0.5.0 a non-empty list is refused (400): who may connect is the tailnet's access rules |
 | POST | `/v1/signout` | yes | Logs out, deletes the node state and forgets the token |
+
+### Published ports
+
+An app running on the radio itself, such as another container or a legacy
+waveform, can make one of its TCP ports reachable on the tailnet:
+`POST /v1/local/expose {"port": 48995, "name": "AetherWSPR"}` on TCP 48992.
+This is the one path open to callers the table above refuses, and only to
+them: loopback and the radio's own addresses. An 8000-series container
+shares the radio's network, so it calls from these too. Anyone else,
+including other 172.30.x hosts, gets 403.
+
+- Only a port bound where the LAN could reach it can be published (400
+  otherwise), read from `/proc/net/tcp`: the wildcard, or a LAN address. On
+  an 8000-series radio that excludes 172.30.0.0/16, its internal container
+  network; on a FLEX-6000 that range is plain LAN and any address but
+  loopback qualifies. The shim reads binds, not firewall rules, so a wildcard
+  listener a firewall keeps from the LAN qualifies too.
+- This is checked again for each connection, against the socket the app
+  registered. If the service goes away, or anything else takes the port, new
+  callers are refused until the app that owns the name renews, and a renewal
+  that finds nothing listening withdraws the publication.
+- The shim listens on that port on its own tailnet addresses, IPv4 and IPv6,
+  and splices each caller the tailnet admits (the same `WhoIs` check as the
+  radio) to the app's listener, at most 32 at a time per port. A wildcard
+  listener is dialed at the radio's LAN address, so callers reach the app as
+  a LAN caller does, never as loopback. The reply's `listening` is false while the tailnet
+  node is down; the port opens when it comes up. If the shim can't listen
+  (for example, a radio file transfer holds the port), the reply is 503.
+  Each port has one owner: a transfer the radio announces on a published
+  port fails the same way, until the publication ends.
+- The registration is a 10-minute lease (`expires_in_s`), renewed by posting
+  again. The app's `name` owns the port: the same name renews it, another
+  gets 409. When the lease lapses, the port and its open connections close.
+- Ports 1024-65535 only, never 22, 4991-4995, 42607, 48992 or 48993, and at
+  most 8. `/v1/status` lists them as `exposed_ports`. They survive the
+  tailnet node restarting, but not the shim.
+- Anything running on the radio is trusted to publish: names are
+  self-asserted, and any wildcard listener can be published. That matches a
+  radio that lets any LAN host install containers.
 
 **Trust model:** the first provisioning is open to the LAN. That matches the
 radio itself: its API on 4992 and its image upload on 42607 are
@@ -112,6 +174,18 @@ tailnet login within seconds; it is never stored or logged.
 
 Keys are changed in-process (logout, then a new tsnet server with the same
 state directory). Nothing is known to restart a container whose process exits.
+
+## FLEX-6000: the native build (experimental)
+
+FLEX-6000 radios have no container feature, so `native/` packages the same
+shim as a legacy waveform, `AetherTailnet.ssdr_waveform`, for their ARMv7
+CPU. `-run-dir` / `SHIM_RUN_DIR` keeps tsnet's logs and caches on volatile
+storage while the node's identity stays in the state directory: the
+FLEX-6300 we measured persists only to a 60 MB flash
+partition (19 MB on a FLEX-6700), so the shim ships gzipped and a small
+unpacker (`native/unpack`) puts it in `/tmp` at each start. `native/TESTING.md` is the test protocol, with a prompt for a
+tester's AI assistant; `native/tool.py` installs, provisions and watches it
+from the LAN.
 
 ## Build
 

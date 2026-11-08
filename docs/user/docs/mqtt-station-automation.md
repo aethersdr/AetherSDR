@@ -122,6 +122,8 @@ For any MQTT-connected antenna switch (Node-RED, ESP32, Raspberry Pi, …):
 
 **Publish Buttons**: a table of **Label**, **Topic** and **Payload** with **Add** / **Remove**, up to 12 buttons, shown three per row in the applet. Below it, **Internal AetherSDR Topics** lists the built-in publish topics with an enable for each.
 
+**OK** saves and closes; **Apply** saves and keeps the window open. **Cancel**, the corner ✕, Esc and Ctrl+W (⌘W on macOS) close it without saving.
+
 ### Built-in topics
 
 Published by AetherSDR:

@@ -47,6 +47,45 @@ Hl2TxDsp::~Hl2TxDsp() = default;
 
 #if AETHER_HL2_TX_TXA
 
+WdspChannel::Config Hl2TxDsp::modulatorChannelConfig(const Config& config)
+{
+    // One input block of dspBlockSize audio samples is `upsample` times that
+    // at the DSP rate, so the channel consumes exactly one input block per
+    // pass (mirror of Hl2RxDsp::configure). configure() has already refused a
+    // zero or non-integral rate ratio.
+    const int upsample = config.inputSampleRateHz > 0
+        ? config.outputSampleRateHz / config.inputSampleRateHz : 0;
+    WdspChannel::Config c;
+    c.direction = WdspChannel::Direction::Transmit;
+    c.inputSampleRate = config.inputSampleRateHz;
+    c.dspSampleRate = config.outputSampleRateHz;
+    c.outputSampleRate = config.outputSampleRateHz;
+    c.inputBlockSize = static_cast<std::size_t>(config.dspBlockSize);
+    c.dspBlockSize = c.inputBlockSize * static_cast<std::size_t>(upsample);
+    c.mode = config.mode;
+    // No delay before the up-ramp on transmit (see kTxMuteDelayUpSec); the
+    // 25 ms up-slew, the de-click, keeps WdspChannel::Config's default.
+    c.muteDelayUpSec = kTxMuteDelayUpSec;
+    // The bandpass: create_txa's length, explicit, and minimum phase in the
+    // voice modes. See kTxFilterTaps and txMinimumPhaseFor().
+    c.filterTaps = kTxFilterTaps;
+    c.minimumPhase = txMinimumPhaseFor(config.mode);
+    // blockForOutput = false (the default, and what the figures above were
+    // measured at). Setting it true would block the audio I/O thread and make
+    // fexchange2's underrun report unreachable; fix underruns by pacing.
+    c.blockForOutput = false;
+
+    // Signed, from the mode. See txaPassband().
+    const auto [signedLow, signedHigh] =
+        txaPassband(config.mode, config.filterLowHz, config.filterHighHz);
+    c.filterLowHz = signedLow;
+    c.filterHighHz = signedHigh;
+    // WdspChannel::open() pushes both, and turns TXA's default-on CTCSS off.
+    c.txAmCarrierLevel = config.amCarrierLevel;
+    c.txFmDeviationHz = config.fmDeviationHz;
+    return c;
+}
+
 bool Hl2TxDsp::buildModulator(std::string* error)
 {
     m_channel.reset();
@@ -61,30 +100,7 @@ bool Hl2TxDsp::buildModulator(std::string* error)
     m_txFaultBlocks = 0;
     m_txStallDrops = 0;
 
-    // One input block of dspBlockSize audio samples is m_upsample times that
-    // at the DSP rate, so the channel consumes exactly one input block per
-    // pass (mirror of Hl2RxDsp::configure).
-    WdspChannel::Config c;
-    c.direction = WdspChannel::Direction::Transmit;
-    c.inputSampleRate = m_config.inputSampleRateHz;
-    c.dspSampleRate = m_config.outputSampleRateHz;
-    c.outputSampleRate = m_config.outputSampleRateHz;
-    c.inputBlockSize = static_cast<std::size_t>(m_config.dspBlockSize);
-    c.dspBlockSize = c.inputBlockSize * static_cast<std::size_t>(m_upsample);
-    c.mode = m_config.mode;
-    // blockForOutput = false (the default, and what the figures above were
-    // measured at). Setting it true would block the audio I/O thread and make
-    // fexchange2's underrun report unreachable; fix underruns by pacing.
-    c.blockForOutput = false;
-
-    // Signed, from the mode. See txaPassband().
-    const auto [signedLow, signedHigh] =
-        txaPassband(m_config.mode, m_config.filterLowHz, m_config.filterHighHz);
-    c.filterLowHz = signedLow;
-    c.filterHighHz = signedHigh;
-    // WdspChannel::open() pushes both, and turns TXA's default-on CTCSS off.
-    c.txAmCarrierLevel = m_config.amCarrierLevel;
-    c.txFmDeviationHz = m_config.fmDeviationHz;
+    const WdspChannel::Config c = modulatorChannelConfig(m_config);
 
     std::string err;
     m_channel = WdspChannel::create(c, &err);
@@ -123,6 +139,11 @@ void Hl2TxDsp::applyModeAndFilter()
 
     if (!m_channel->setMode(m_config.mode)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: mode change refused";
+    }
+    // The phase mode follows the operating mode (txMinimumPhaseFor); a no-op
+    // when it already matches.
+    if (!m_channel->setMinimumPhase(txMinimumPhaseFor(m_config.mode))) {
+        qCWarning(lcTxMod) << "HL2 TXA modulator: phase-mode change refused";
     }
     if (!m_channel->setFilter(lowHz, highHz)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: passband change refused,"
@@ -327,6 +348,7 @@ void Hl2TxDsp::onExchangeTimer()
     m_iq.clear();
     exchangeDueBlocks();
     if (!m_iq.empty()) {
+        noteFilterOutput(m_iq);
         emit iqReady(m_iq, m_txContext);
     }
 }
@@ -556,6 +578,9 @@ void Hl2TxDsp::reset()
     // first sample that needs reduction has it, with no attack constant.
     m_alc.reset();
     m_inBuffer.clear();
+    m_filterInPeak = m_filterOutPeak = 0.0f;
+    m_filterWindowSamples = 0;
+    m_filterWindowFaultMark = modulatorFaultBlocks();
     // Re-arm the mid-buffer source-change warning for the next transmission.
     m_sourceChangeWarned = false;
     // The modulator's own state, per build. In the phasing build this is the
@@ -674,14 +699,42 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     m_inBuffer.erase(m_inBuffer.begin(),
                      m_inBuffer.begin() + static_cast<std::ptrdiff_t>(consumed));
 
-    if (!m_iq.empty())
+    if (!m_iq.empty()) {
+        noteFilterOutput(m_iq);
         emit iqReady(m_iq, context);
+    }
     // PRE-modulation level: this is what a mic-gain control acts on, so it is
     // the number that tells an operator whether they are overdriving.
     emit micPeak(peak > 0.0f ? 20.0f * std::log10(peak) : -140.0f);
     // POST-ALC audio peak, before the modulator: it sits at the ALC target while
     // the ALC reduces. The envelope of the modulated IQ is not measured here.
     emit alcPeak(postAlcPeak > 0.0f ? 20.0f * std::log10(postAlcPeak) : -140.0f);
+
+    // TX filter taps, once per ~100 ms of input. TXA's output lags its input
+    // by a few blocks, so a per-block pair would read a loss at every key-down;
+    // a held window keeps that lag inside one report.
+    m_filterInPeak = std::max(m_filterInPeak, postAlcPeak);
+    m_filterWindowSamples += consumed;
+    if (m_filterWindowSamples
+        >= static_cast<std::size_t>(m_config.inputSampleRateHz / 10)) {
+        // A window with a dropped block has audio in and no IQ out for it: a
+        // stalled or underrunning worker, not a filter. Publish nothing then,
+        // so the card cannot name the passband for a loss it did not measure.
+        const unsigned long long faults = modulatorFaultBlocks();
+        if (faults == m_filterWindowFaultMark) {
+            const auto db = [](float v) { return v > 0.0f ? 20.0f * std::log10(v) : -140.0f; };
+            emit filterLevels(db(m_filterInPeak), db(m_filterOutPeak));
+        }
+        m_filterInPeak = m_filterOutPeak = 0.0f;
+        m_filterWindowSamples = 0;
+        m_filterWindowFaultMark = faults;
+    }
+}
+
+void Hl2TxDsp::noteFilterOutput(const std::vector<std::complex<float>>& iq)
+{
+    for (const auto& v : iq)
+        m_filterOutPeak = std::max(m_filterOutPeak, std::abs(v));
 }
 
 }  // namespace AetherSDR::hl2

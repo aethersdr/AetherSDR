@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/anan/P2Protocol.h"
+#include "core/backends/anan/AnanReceiverRoutes.h"
 #include "core/backends/anan/AnanSpeakerPacing.h"
 
 #include <QByteArray>
@@ -41,15 +42,15 @@ public:
 
     struct Params {
         QString host;
-        // Valid rates: 48/96/192/384/768/1536 (spec p.24). Not validated here
+        // RX1's rate. Valid rates: 48/96/192/384/768/1536 (spec p.24). Not validated here
         // -- P2Protocol::buildDdcSpecific() is the single place that would
         // reject or clamp one, and it does neither yet; an invalid value is
         // simply sent as-is and the radio's own reaction is the feedback.
-        int ddc0RateKsps = 48;
+        int rx1RateKsps = 48;
         // Connect-time-only options: no live setter; a change takes a reconnect.
         bool ditherEnabled = true;
         bool randomEnabled = true;
-        int ddc0AdcIndex = 0;          // 0 = ADC0, 1 = ADC1/RX2
+        int rx1AdcIndex = kRx1Route.adc;   // 0 = ADC0, 1 = ADC1/RX2
         bool bypassAdc0Filters = true;
         bool bypassAdc1Filters = true;
         // Receive step attenuators, 0-31 dB (buildHighPriority()). Unlike the
@@ -71,9 +72,13 @@ public:
         // Mute the radio's speaker amplifier (byte 1400 bit 1).
         bool speakerAmpMuted = false;
 
-        // Multi-DDC session. EMPTY (default) = single DDC0 built from ddc0RateKsps/
-        // ddc0AdcIndex. Non-empty is authoritative and those two fields are ignored;
-        // entry n configures DDC n, capped at kMaxDdcs by the packet builders.
+        // Multi-DDC session. EMPTY (default) = RX1 alone on its routed DDC
+        // (kRx1Route), built from rx1RateKsps/rx1AdcIndex. Non-empty is
+        // authoritative and those two fields are ignored. Each entry names its DDC;
+        // one outside 0..kMaxDdcs-1, or repeating an earlier entry's DDC, is
+        // dropped, and start() returns false if none is left. The FIRST entry is
+        // the session's link DDC: linkUp(), the connect timeout and the band
+        // filters key on it.
         std::vector<DdcConfig> activeDdcs;
     };
 
@@ -84,13 +89,14 @@ public:
     Q_INVOKABLE bool start(const Params& params, int connectTimeoutMs = kConnectTimeoutMs);
     Q_INVOKABLE void stop();
 
-    // Retune DDC0. No frequency is set by start() itself (see the class
+    // Retune one DDC. No frequency is set by start() itself (see the class
     // comment on connectRadio()/setSliceFrequency() being separate seam
     // calls) -- a caller retunes immediately after a successful start if it
     // wants a specific frequency, the same connect-then-tune shape used
     // above this seam. Takes effect immediately (not on the next keepalive
-    // tick) and is what the keepalive resends from then on.
-    Q_INVOKABLE void setDdc0FrequencyHz(double hz);
+    // tick) and is what the keepalive resends from then on. Ignored for a DDC
+    // this session did not enable.
+    Q_INVOKABLE void setDdcFrequencyHz(int ddcIndex, double hz);
 
     // Set one ADC's receive step attenuator (0 = ADC0, 1 = ADC1), clamped to
     // 0-31 dB by the encoder. Sent at once when running, and carried by every
@@ -160,27 +166,21 @@ public:
         quint64 txBytes = 0;
         quint64 drops = 0;
         // "ip:port" of the bound local socket, empty when not bound. The port
-        // is the one the radio streams DDC0 to (see the class comment).
+        // is the one the radio streams IQ to (see the class comment).
         QString localEndpoint;
     };
 
 signals:
-    void linkUp();       // first valid DDC0 frame seen
+    void linkUp();       // first valid frame from the session's link DDC
     void linkDown();     // stop() called, or a link failure once that exists
-    // No DDC0 frame arrived within the connect-timeout window -- the radio
-    // is off, unreachable, or the port never saw a genuine DDC0 frame (only
-    // Mic Data / Status traffic, which onReadyRead() rejects and does not
-    // count as a connection).
+    // No frame from the link DDC arrived within the connect-timeout window --
+    // the radio is off, unreachable, or the port never saw a genuine frame
+    // from it (only Mic Data / Status traffic, which onReadyRead() rejects and
+    // does not count as a connection).
     void connectionError(const QString& reason);
-    // DDC0's decoded IQ. Kept as its own signal because DDC0 is the one
-    // receiver every session always has, and it is what linkUp()/the connect
-    // timeout are keyed on. Emitted for ddcIndex 0 only; ddcIqReady() below
-    // fires for the same block as well.
-    void ddc0IqReady(const std::vector<std::complex<float>>& block);
-    // Decoded IQ for ANY active DDC, demultiplexed by the datagram's sender
-    // port (see P2Protocol::ddcIndexForSenderPort()). This is the general
-    // form; a multi-receiver consumer routes on ddcIndex rather than
-    // connecting per-DDC signals.
+    // Decoded IQ for any active DDC, demultiplexed by the datagram's sender
+    // port (see P2Protocol::ddcIndexForSenderPort()). This client knows DDCs,
+    // not receivers: the consumer routes on ddcIndex.
     void ddcIqReady(int ddcIndex, const std::vector<std::complex<float>>& block);
     void dropsUpdated(quint64 totalDrops);
     // A transport snapshot, on a FIXED cadence while running rather than when
@@ -190,7 +190,7 @@ signals:
     // I/O thread; cross-thread consumers get it queued.
     void linkCountersUpdated(const P2Client::LinkCounters& counters);
     // This DDC's next IQ block is discontinuous, including accepted rewinds
-    // and duplicates. Emitted before ddcIqReady/ddc0IqReady in the same
+    // and duplicates. Emitted before ddcIqReady in the same
     // handleDatagram() call so direct consumers can clear partial FFTs first.
     // Other DDCs have independent sequence counters and are unaffected.
     void ddcSequenceGap(int ddcIndex);
@@ -223,7 +223,7 @@ private:
     // radio in RUN drops to standby; buildGeneral() leaves that watchdog enabled.
     // Same cadence as anan/spike/phase1a.py's CC_KEEPALIVE_INTERVAL.
     static constexpr int kKeepaliveMs = 100;
-    // No packet ever arrived from a genuine DDC0 frame within this long of
+    // No genuine frame from the link DDC arrived within this long of
     // start() -- mirrors MetisClient's kConnectTimeoutMs.
     static constexpr int kConnectTimeoutMs = 2000;
 
@@ -263,7 +263,10 @@ private:
     bool m_discoveryInfoSent = false;
 
     QHostAddress m_host;
-    std::uint32_t m_ddc0FreqWord = 0;   // last value sent; the keepalive resends this
+    // Per DDC, indexed by DDC number: the last phase word sent, which the
+    // keepalive resends. Zero for a DDC this session does not run, so the High
+    // Priority packet leaves that DDC's word at zero.
+    std::array<std::uint32_t, kMaxDdcs> m_ddcFreqWords{};
     // Set once from Params at start(), since there is no live setter for
     // either (see Params' own comment on why these are connect-time-only).
     // While m_bandFiltersEnabled is set, a run=1 packet's band filter
@@ -275,11 +278,11 @@ private:
     int m_adc0AttenuationDb = 0;
     int m_adc1AttenuationDb = 0;
     // The two live options, seeded from Params at start() and changed by their
-    // setters. m_ddc0FreqHz moves with m_ddc0FreqWord: the filter is chosen in
+    // setters. m_ddcFreqHz moves with m_ddcFreqWords: the filter is chosen in
     // hertz, which the phase word cannot give back without the sample clock.
     bool m_bandFiltersEnabled = false;
     bool m_speakerAmpMuted = false;
-    double m_ddc0FreqHz = 0.0;
+    std::array<double, kMaxDdcs> m_ddcFreqHz{};
 
     // The session's resolved DDC list and the dither/random flags that went
     // with it, RETAINED (rather than consumed and dropped in start()) so
@@ -314,26 +317,30 @@ private:
     void publishLinkCounters();
     [[nodiscard]] QString localEndpoint() const;
 
-    // How many DDCs this session enabled, so onReadyRead() knows which
-    // sender ports belong to it. Kept alongside m_activeDdcs (rather than
-    // read from its size) because onReadyRead() consults it per datagram.
-    int m_activeDdcCount = 1;
-
-    // One shared phase word per active DDC. Every High Priority sender uses
-    // this, so the keepalive (100 ms) can never contradict what start() sent:
-    // a single-DDC overload on that path would pin DDC1..N-1 at word 0
-    // regardless. Per-DDC tuning has no setter yet, so one word for all of
-    // them is the honest encoding -- see start()'s own comment.
-    [[nodiscard]] std::vector<std::uint32_t> sharedFreqWords() const
+    // Which DDCs this session enabled (bit n = DDC n), so onReadyRead() knows
+    // which sender ports belong to it, and the link DDC (the first entry of
+    // the session's list). Kept alongside m_activeDdcs because onReadyRead()
+    // consults them per datagram. Before any start() they describe the default
+    // session: RX1 alone on its routed DDC.
+    static_assert(kMaxDdcs <= 8, "m_enabledDdcs holds one bit per DDC");
+    std::uint8_t m_enabledDdcs = static_cast<std::uint8_t>(1u << kRx1Route.ddc);
+    int m_linkDdc = kRx1Route.ddc;
+    [[nodiscard]] bool isEnabledDdc(int ddcIndex) const noexcept
     {
-        return std::vector<std::uint32_t>(
-            static_cast<std::size_t>(m_activeDdcCount), m_ddc0FreqWord);
+        return ddcIndex >= 0 && ddcIndex < kMaxDdcs
+            && (m_enabledDdcs & (1u << ddcIndex)) != 0;
     }
 
     // The live options every run=1 High Priority packet carries, built from the
     // members above in one place so the four senders (start, retune,
     // attenuator, keepalive) cannot disagree.
     [[nodiscard]] HighPriorityOptions highPriorityOptions() const;
+
+    // The two packets the session keeps re-sending, each built in one place:
+    // start() and setDdcRateLive() send the DDC-Specific packet, every run=1
+    // sender the High Priority one.
+    [[nodiscard]] std::array<std::uint8_t, 1444> ddcSpecificPacket() const;
+    [[nodiscard]] std::array<std::uint8_t, 1444> runningHighPriorityPacket() const;
 
     // Send one run=1 High Priority packet from the current members. Callers
     // check m_running and m_socket.

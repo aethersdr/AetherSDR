@@ -20,6 +20,7 @@ class BandPlanManager;
 class RadioModel;
 class TransmitModel;
 class TunerModel;
+enum class ATUStatus;
 
 // TX applet: transmit controls matching the SmartSDR TX panel (power/SWR
 // gauges, RF and Tune power, TX profile, TUNE/MOX/ATU/MEM, APD).
@@ -65,14 +66,10 @@ private:
     void requestMox(bool on, const TxController::Input& input);
     void requestAtu(const TxController::Input& input);
     void syncFromModel();
+    void syncAtuState();
     void syncAtuIndicators();
-    // Single owner of the ATU/MEM enabled state.
-    //
-    // Two independent reasons exist to grey these out — the radio has no tuner
-    // at all, and a TunerGenius XL is in Operate — and they arrive from
-    // different models at different times. Before this they each called
-    // setEnabled() directly, so whichever fired last won and a TGXL state change
-    // could re-enable an ATU button on a radio that has no ATU.
+    // Combines tuner capabilities, TX-path availability and TGXL Operate;
+    // no individual input may re-enable controls another input withdrew.
     void updateAtuAvailability();
     // Right-click menu on the ATU button — exposes Pre-tune Bands and
     // Clear ATU Memories. Pre-tune is grayed when MEM is off. (#2624)
@@ -95,6 +92,7 @@ private:
     // current TX frequency still matches the freq we tuned at.  Any freq
     // change between clicks falls back to "atu start". (#1993)
     double m_atuTunedFreqMhz{-1.0};
+    ATUStatus m_lastAtuStatus{};
 
     // Capability inputs to updateAtuAvailability(). Matching and Flex-style
     // memory operations are separate claims; both default permissive so an

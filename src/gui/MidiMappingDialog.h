@@ -63,6 +63,7 @@ private:
     QComboBox*    m_paramCombo;
     QComboBox*    m_categoryCombo;
     QComboBox*    m_profileCombo;
+    bool          m_savesBlockedNoticeShown{false};
 };
 
 } // namespace AetherSDR

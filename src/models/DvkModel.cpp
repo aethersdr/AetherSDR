@@ -178,7 +178,7 @@ QString DvkModel::dvkErrorString(uint code)
     // Labels come from the SmartSDR API wiki (TCPIP-dvk) and FlexLib. Codes
     // documented in neither render as bare hex so the user can report them.
     switch (code) {
-    case kNotLicensed:  return QStringLiteral("DVK requires an active SmartSDR+ subscription");
+    case kNotLicensed:  return QStringLiteral("DVK is not licensed on this radio (SmartSDR+)");
     case 0x50001000u:   return QStringLiteral("radio could not parse the command");
     case 0xE2000000u:   return QStringLiteral("no such slot, or an upload is already pending");
     case 0x50000053u:   return QStringLiteral("radio file server busy, try again in a moment");

@@ -5,6 +5,8 @@
 // is in MainWindow.cpp.
 
 #include "MainWindow.h"
+#include "AetherLabWidget.h"
+#include "models/AntennaAnalyzerModel.h"
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
@@ -21,6 +23,10 @@
 #include "core/UlanziDialBackend.h"
 #include "core/UlanziDialMappings.h"
 #include "AppletPanel.h"
+#include "ConnectionPanel.h"
+#include <QStackedWidget>
+#include <QSplitter>
+#include <QVBoxLayout>
 #include "core/IambicKeyer.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
@@ -266,17 +272,8 @@ QString flexControlButtonAction(int button, int action)
 void MainWindow::showFlexControlDialog()
 {
     // No capability check: the knob is a host serial device (#5778).
-    // A canon workspace window: created directly rather than through
-    // showOrRaisePersistent(), which would apply View → Frameless Window.
-    const bool wasFresh = !m_flexControlDialog;
-    if (wasFresh) {
-        auto* dialog = new FlexControlDialog(this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        m_flexControlDialog = dialog;
-    }
-    m_flexControlDialog->show();
-    m_flexControlDialog->raise();
-    m_flexControlDialog->activateWindow();
+    const bool wasFresh = showOrRaiseCanon(m_flexControlDialog,
+                                           [this] { return new FlexControlDialog(this); });
     if (wasFresh && m_flexControlDialog) {
         connect(m_flexControlDialog, &FlexControlDialog::virtualWheelSteps,
                 this, &MainWindow::handleVirtualFlexControlWheel);
@@ -1979,7 +1976,8 @@ bool MainWindow::dispatchScopedMidiTx(const QString& id, float value,
     return dispatchMidiTxInput(id, value, m_radioModel, controller,
         [this](const QString& action, bool press, const std::shared_ptr<TxController>& source) {
             (void)handleScopedCwMomentaryShortcut(action, press, source, false);
-        });
+        },
+        [this](const QString& why) { statusBar()->showMessage(why, 6000); });
 }
 
 void MainWindow::registerMidiParams()
@@ -2193,7 +2191,14 @@ void MainWindow::registerMidiParams()
         [this]() -> float { return m_radioModel.transmitModel().micLevel(); });
 
     reg("phone.monGain", "Monitor Volume", "Phone/CW", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.transmitModel().setMonGainSb(static_cast<int>(v)); },
+        [this](float v) {
+            if (!m_radioModel.transmitMonitorAvailable()) {
+                qCDebug(lcDevices) << "phone.monGain refused: this radio has no transmit monitor";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setMonGainSb(static_cast<int>(v));
+        },
         [this]() -> float { return m_radioModel.transmitModel().monGainSb(); });
 
     reg("phone.procEnable", "Speech Processor", "Phone/CW", P::Toggle, 0, 1,
@@ -2215,15 +2220,36 @@ void MainWindow::registerMidiParams()
         [this]() -> float { return m_radioModel.transmitModel().daxOn() ? 1 : 0; });
 
     reg("phone.monEnable", "Monitor", "Phone/CW", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.transmitModel().setSbMonitor(v > 0.5f); },
+        [this](float v) {
+            if (!m_radioModel.transmitMonitorAvailable()) {
+                qCWarning(lcDevices) << "phone.monEnable refused: this radio has no transmit monitor";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setSbMonitor(v > 0.5f);
+        },
         [this]() -> float { return m_radioModel.transmitModel().sbMonitor() ? 1 : 0; });
 
     reg("phone.voxEnable", "VOX Enable", "Phone/CW", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.transmitModel().setVoxEnable(v > 0.5f); },
+        [this](float v) {
+            if (!m_radioModel.voxAvailable()) {
+                qCWarning(lcDevices) << "phone.voxEnable refused: this radio has no VOX";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setVoxEnable(v > 0.5f);
+        },
         [this]() -> float { return m_radioModel.transmitModel().voxEnable() ? 1 : 0; });
 
     reg("phone.voxLevel", "VOX Level", "Phone/CW", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.transmitModel().setVoxLevel(static_cast<int>(v)); },
+        [this](float v) {
+            if (!m_radioModel.voxAvailable()) {
+                qCDebug(lcDevices) << "phone.voxLevel refused: this radio has no VOX";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setVoxLevel(static_cast<int>(v));
+        },
         [this]() -> float { return m_radioModel.transmitModel().voxLevel(); });
 
     // Gated on the same capability that dims the Phone applet's AM carrier
@@ -2932,7 +2958,9 @@ void MainWindow::wireExternalControllers()
     });
 
     MidiSettings::instance().load();
-    auto savedBindings = MidiSettings::instance().loadBindings();
+    // A damaged or unreadable midi.settings blocks binding saves for the
+    // session; the MIDI mapping window tells the operator. (#6683)
+    auto savedBindings = MidiSettings::instance().loadStartupBindings();
     for (const auto& b : savedBindings)
         m_midiControl->addBinding(b);
 #endif
@@ -3462,6 +3490,43 @@ void MainWindow::wireExternalControllers()
         });
     }
 #endif
+}
+
+AntennaAnalyzerModel* MainWindow::antennaAnalyzerModel()
+{
+    if (!m_antennaAnalyzer) { m_antennaAnalyzer = new AntennaAnalyzerModel(this); }
+    return m_antennaAnalyzer;
+}
+
+void MainWindow::showAetherLab()
+{
+    if (m_minimalMode) { toggleMinimalMode(false); }
+    if (!m_labWorkspaceStack) {
+        auto* layout = qobject_cast<QVBoxLayout*>(centralWidget()->layout());
+        if (!layout) { return; }
+        m_labWorkspaceStack = new QStackedWidget(centralWidget());
+        m_labWorkspaceStack->setObjectName(QStringLiteral("mainWorkspaceStack"));
+        layout->removeWidget(m_splitter);
+        layout->addWidget(m_labWorkspaceStack, 1);
+        m_labWorkspaceStack->addWidget(m_splitter);
+        m_aetherLabWidget = new AetherLabWidget(antennaAnalyzerModel(), m_labWorkspaceStack);
+        m_labWorkspaceStack->addWidget(m_aetherLabWidget);
+        connect(m_aetherLabWidget, &AetherLabWidget::returnRequested, this, &MainWindow::returnFromAetherLab);
+    }
+    m_aetherLabActive = true;
+    if (m_connPanel) { m_connPanel->hide(); }
+    m_labWorkspaceStack->setCurrentWidget(m_aetherLabWidget);
+    refreshRadioTabs();
+    m_aetherLabWidget->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::returnFromAetherLab()
+{
+    if (!m_aetherLabActive) { return; }
+    if (m_antennaAnalyzer) { m_antennaAnalyzer->stop(); }
+    m_aetherLabActive = false;
+    m_labWorkspaceStack->setCurrentWidget(m_splitter);
+    refreshRadioTabs();
 }
 
 } // namespace AetherSDR

@@ -24,12 +24,14 @@
 //      brightens its border to color.canon.aqua, and losing the radio closes
 //      the window.
 //
-// No radio: the model is bare and never connected, so the button's toggle
-// changes only the model's local state.
+// No radio or sockets: control tests inject a recording backend and explicit
+// observations. Requested state stays separate from confirmed radio state.
 
+#include "RadioSetupControlFixture.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
+#include "core/backends/RadioDelta.h"
 #include "gui/CanonWindow.h"
 #include "gui/MultiFlexDialog.h"
 #include "models/RadioModel.h"
@@ -52,6 +54,15 @@ const char* const kGeometryKey = "MultiFlexDialogGeometry";
 QPushButton* findEnableButton(QWidget& window)
 {
     return window.findChild<QPushButton*>(QStringLiteral("multiFlexEnableButton"));
+}
+
+RadioSetupTestBackend* installObservedMultiFlexBackend(RadioModel& model)
+{
+    RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+    RadioDelta observation;
+    observation.multiFlexEnabled = true;
+    emit backend->radioChanged(observation);
+    return backend;
 }
 
 // Pixels within `slack` of `color` on every channel.
@@ -201,6 +212,30 @@ private slots:
         settings.remove(QLatin1String(kGeometryKey));
     }
 
+    void enableButtonRequiresConnectedObservedState()
+    {
+        RadioModel model;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+        MultiFlexDialog window(&model);
+        QPushButton* button = findEnableButton(window);
+        QVERIFY(button);
+        QVERIFY(!button->isEnabled());
+        QVERIFY(!button->accessibleDescription().isEmpty());
+
+        RadioDelta observation;
+        observation.multiFlexEnabled = false;
+        emit backend->radioChanged(observation);
+        QVERIFY(button->isEnabled());
+        QCOMPARE(button->text(), QStringLiteral("Disabled"));
+
+        backend->live = false;
+        emit model.infoChanged();
+        QVERIFY(!button->isEnabled());
+        button->click();
+        QVERIFY(!model.multiFlexRequested());
+        QVERIFY(backend->commands.isEmpty());
+    }
+
     void enableButtonIsGreenOnAndRedOff()
     {
         auto& tm = ThemeManager::instance();
@@ -209,20 +244,25 @@ private slots:
         for (const char* theme : {"Default Dark", "Default Light"}) {
             QVERIFY2(tm.setActiveTheme(QLatin1String(theme)), theme);
             RadioModel model;
+            installObservedMultiFlexBackend(model);
             MultiFlexDialog window(&model);
             window.show();
             QVERIFY(QTest::qWaitForWindowExposed(&window));
             QPushButton* button = findEnableButton(window);
             QVERIFY(button);
+            QVERIFY(button->isEnabled());
             const QColor success = tm.color(button, QStringLiteral("color.toggle.success.border.checked"));
             const QColor danger = tm.color(button, QStringLiteral("color.accent.danger"));
             // CONTROL: the two states must be told apart by color at all.
             QVERIFY(success != danger);
 
             auto measure = [&](bool on) {
-                if (model.multiFlexEnabled() != on)
+                if (model.multiFlexRequested() != on) {
                     QTest::mouseClick(button, Qt::LeftButton);
+                }
                 QCoreApplication::processEvents();
+                QCOMPARE(model.multiFlexRequested(), on);
+                QVERIFY(model.multiFlexEnabled());
                 const QImage image = button->grab().toImage();
                 const QString state = on ? QStringLiteral("Enabled") : QStringLiteral("Disabled");
                 if (button->text() != state)
@@ -248,6 +288,7 @@ private slots:
     void returnInTheTableDoesNotToggleMultiFlex()
     {
         RadioModel model;
+        RadioSetupTestBackend* backend = installObservedMultiFlexBackend(model);
         MultiFlexDialog window(&model);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
@@ -255,25 +296,35 @@ private slots:
         auto* table = window.findChild<QTableWidget*>();
         QPushButton* button = findEnableButton(window);
         QVERIFY(table && button);
-        // CONTROL: the toggle is the dialog's default button, and a station
-        // row is current, so the table passes Return up to the dialog.
+        QVERIFY(button->isEnabled());
+        // The toggle is the dialog's default button while a station row has focus.
         QVERIFY(button->isDefault());
         table->setFocus();
         table->setCurrentCell(1, 1);
         QTRY_VERIFY(table->hasFocus());
-        const bool before = model.multiFlexEnabled();
+        const bool before = model.multiFlexRequested();
 
         // Each key checked on its own: two clicks would toggle it back.
         QTest::keyClick(table, Qt::Key_Return);
-        QCOMPARE(model.multiFlexEnabled(), before);
+        QCOMPARE(model.multiFlexRequested(), before);
         QTest::keyClick(table, Qt::Key_Enter);
-        QCOMPARE(model.multiFlexEnabled(), before);
+        QCOMPARE(model.multiFlexRequested(), before);
+        // Some platform styles consume Return in the table. Exercise the
+        // dialog fallback too, with the table still focused.
+        QTest::keyClick(&window, Qt::Key_Return);
+        QCOMPARE(model.multiFlexRequested(), before);
+        QTest::keyClick(&window, Qt::Key_Enter);
+        QCOMPARE(model.multiFlexRequested(), before);
+        QCoreApplication::processEvents();
+        QVERIFY(backend->commands.isEmpty());
 
         // CONTROL: the button itself still takes the keyboard when focused.
         button->setFocus();
         QTRY_VERIFY(button->hasFocus());
         QTest::keyClick(button, Qt::Key_Space);
-        QCOMPARE(model.multiFlexEnabled(), !before);
+        QCOMPARE(model.multiFlexRequested(), !before);
+        QCOMPARE(model.multiFlexEnabled(), before);
+        QTRY_COMPARE(backend->commands.size(), 1);
     }
 
     void selectedRowsKeepTheirColors()
@@ -360,15 +411,19 @@ private slots:
         for (const char* theme : {"Default Dark", "Default Light"}) {
             QVERIFY2(tm.setActiveTheme(QLatin1String(theme)), theme);
             RadioModel model;
+            installObservedMultiFlexBackend(model);
             MultiFlexDialog window(&model);
             window.show();
             QVERIFY(QTest::qWaitForWindowExposed(&window));
             QPushButton* button = findEnableButton(window);
             QVERIFY(button);
+            QVERIFY(button->isEnabled());
             const QColor aqua = tm.color(button, QStringLiteral("color.canon.aqua"));
             for (bool on : {true, false}) {
-                if (model.multiFlexEnabled() != on)
+                if (model.multiFlexRequested() != on) {
                     QTest::mouseClick(button, Qt::LeftButton);
+                }
+                QCOMPARE(model.multiFlexRequested(), on);
                 QTest::mouseMove(&window, QPoint(4, window.height() - 4));
                 QCoreApplication::processEvents();
                 const int rest = pixelsNear(button->grab().toImage(), aqua, 6);

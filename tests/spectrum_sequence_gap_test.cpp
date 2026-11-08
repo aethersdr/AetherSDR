@@ -100,7 +100,7 @@ struct MetisClientTestAccess {
 
 namespace AetherSDR::anan {
 struct P2ClientTestAccess {
-    static void enableDdcs(P2Client& client, int count) { client.m_activeDdcCount = count; }
+    static void enableDdcs(P2Client& client, std::uint8_t mask) { client.m_enabledDdcs = mask; }
     static void feedDatagram(P2Client& client, std::span<const std::uint8_t> bytes, quint16 port)
     {
         client.handleDatagram(bytes, port);
@@ -589,15 +589,17 @@ int main(int argc, char** argv)
         const auto ananWire = [](anan::P2Client& client, anan::AnanRxDsp& dsp, std::string& order) {
             QObject::connect(&client, &anan::P2Client::ddcSequenceGap, &dsp,
                 [&dsp, &order](int ddc) {
-                    if (ddc == 0) { order += 'G'; dsp.onSequenceGap(); }
+                    if (ddc == anan::kRx1Route.ddc) { order += 'G'; dsp.onSequenceGap(); }
                 });
-            QObject::connect(&client, &anan::P2Client::ddc0IqReady, &dsp,
-                [&dsp, &order](const std::vector<std::complex<float>>& block) {
-                    order += 'B'; dsp.processIqBlock(block);
+            QObject::connect(&client, &anan::P2Client::ddcIqReady, &dsp,
+                [&dsp, &order](int ddc, const std::vector<std::complex<float>>& block) {
+                    if (ddc == anan::kRx1Route.ddc) { order += 'B'; dsp.processIqBlock(block); }
                 });
         };
         const auto ananFeed = [](anan::P2Client& client, std::uint32_t seq, bool post) {
-            anan::P2ClientTestAccess::feedDatagram(client, makeDdc(seq, post), anan::kDdc0DefaultPort);
+            anan::P2ClientTestAccess::feedDatagram(
+                client, makeDdc(seq, post),
+                static_cast<quint16>(anan::kDdc0DefaultPort + anan::kRx1Route.ddc));
         };
         struct Case {
             const char* name;
@@ -627,31 +629,31 @@ int main(int argc, char** argv)
     {
         using namespace AetherSDR::anan;
         P2Client client;
-        P2ClientTestAccess::enableDdcs(client, 2);
+        // RX1's DDC2, the link DDC, plus DDC3; DDC0 stays off.
+        P2ClientTestAccess::enableDdcs(client, 0b1100);
+        const auto port = [](int ddc) { return static_cast<quint16>(kDdc0DefaultPort + ddc); };
         std::vector<int> gaps;
         std::vector<int> blocks;
-        int ddc0Blocks = 0;
         int links = 0;
         QObject::connect(&client, &P2Client::ddcSequenceGap, &client,
                          [&](int ddc) { gaps.push_back(ddc); });
         QObject::connect(&client, &P2Client::ddcIqReady, &client,
                          [&](int ddc, const std::vector<std::complex<float>>&) { blocks.push_back(ddc); });
-        QObject::connect(&client, &P2Client::ddc0IqReady, &client,
-                         [&](const std::vector<std::complex<float>>&) { ++ddc0Blocks; });
         QObject::connect(&client, &P2Client::linkUp, &client, [&] { ++links; });
-        P2ClientTestAccess::feedDatagram(client, makeDdc(0), kDdc0DefaultPort + 1);
-        P2ClientTestAccess::feedDatagram(client, makeDdc(4), kDdc0DefaultPort + 1);
-        check(gaps == std::vector<int>{1}, "DDC1 gap is attributed only to DDC1");
-        check(links == 0 && ddc0Blocks == 0, "DDC1 cannot connect or feed DDC0");
-        P2ClientTestAccess::feedDatagram(client, makeDdc(99), kDdc0DefaultPort);
-        P2ClientTestAccess::feedDatagram(client, makeDdc(100), kDdc0DefaultPort);
-        check(gaps.size() == 1 && links == 1 && ddc0Blocks == 2, "DDC0 has its own first/next sequence");
+        P2ClientTestAccess::feedDatagram(client, makeDdc(0), port(3));
+        P2ClientTestAccess::feedDatagram(client, makeDdc(4), port(3));
+        check(gaps == std::vector<int>{3}, "DDC3 gap is attributed only to DDC3");
+        check(links == 0 && blocks == std::vector<int>{3, 3}, "DDC3 cannot raise the link DDC2 owns");
+        P2ClientTestAccess::feedDatagram(client, makeDdc(99), port(2));
+        P2ClientTestAccess::feedDatagram(client, makeDdc(100), port(2));
+        check(gaps.size() == 1 && links == 1 && blocks == std::vector<int>{3, 3, 2, 2},
+              "DDC2 has its own first/next sequence and raises the link");
         const auto before = blocks.size();
-        P2ClientTestAccess::feedDatagram(client, makeDdc(110), kDdc0DefaultPort + 2);
+        P2ClientTestAccess::feedDatagram(client, makeDdc(110), port(0));
         std::vector<std::uint8_t> malformed{0, 0, 0};
-        P2ClientTestAccess::feedDatagram(client, malformed, kDdc0DefaultPort);
-        check(blocks.size() == before && gaps.size() == 1, "invalid port and malformed payload deliver nothing");
-        P2ClientTestAccess::feedDatagram(client, makeDdc(101), kDdc0DefaultPort);
+        P2ClientTestAccess::feedDatagram(client, malformed, port(2));
+        check(blocks.size() == before && gaps.size() == 1, "DDC0's port and a malformed payload deliver nothing");
+        P2ClientTestAccess::feedDatagram(client, makeDdc(101), port(2));
         check(gaps.size() == 1 && client.droppedPackets() == 1, "rejected datagrams do not advance sequence state");
     }
 

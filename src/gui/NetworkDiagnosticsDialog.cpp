@@ -7,6 +7,7 @@
 #include "TimeSeriesGraphWidget.h"
 #include "core/AudioEngine.h"
 #include "core/DigitalVoiceModeRegistry.h"
+#include "core/ExternalFilePath.h"
 #include "core/LogManager.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"   // self-guards on HAVE_WEBSOCKETS
@@ -21,6 +22,7 @@
 
 #include <QComboBox>
 #include <QDateTime>
+#include <QDir>
 #include <QFileInfo>
 #include <QFont>
 #include <QFrame>
@@ -636,7 +638,8 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     row = 0;
     dropGrid->addWidget(makeNote(
         "Inferred packet loss from missing VITA sequence numbers. Zero loss here does "
-        "not rule out jitter or late bursts."), row++, 0, 1, 2);
+        "not rule out jitter or late bursts. Late counts FFT and waterfall packets "
+        "that arrived after their frame was replaced and were discarded."), row++, 0, 1, 2);
     dropGrid->addWidget(new QLabel("Audio:"), row, 0);
     m_audioDropLabel = makeDim();
     dropGrid->addWidget(m_audioDropLabel, row++, 1);
@@ -1867,7 +1870,8 @@ void NetworkDiagnosticsDialog::initializeLogTail()
 {
     const QString logPath = LogManager::instance().logFilePath();
     if (m_logPathLabel) {
-        m_logPathLabel->setText(QString("Log: %1").arg(logPath));
+        m_logPathLabel->setText(QString("Log: %1").arg(
+            QDir::toNativeSeparators(ExternalFilePath::resolve(logPath))));
     }
 
     m_logFile.close();
@@ -1895,7 +1899,8 @@ bool NetworkDiagnosticsDialog::reopenLogFile(bool keepExistingLines)
 {
     const QString logPath = LogManager::instance().logFilePath();
     if (m_logPathLabel) {
-        m_logPathLabel->setText(QString("Log: %1").arg(logPath));
+        m_logPathLabel->setText(QString("Log: %1").arg(
+            QDir::toNativeSeparators(ExternalFilePath::resolve(logPath))));
     }
 
     m_logFile.close();
@@ -3046,7 +3051,12 @@ void NetworkDiagnosticsDialog::refresh()
             rateKbps = sample.meterKbps;
         }
         rateLabels[i]->setText(QString("%1 kbps").arg(static_cast<int>(rateKbps)));
-        dropLabels[i]->setText(formatDrop(cs));
+        QString drop = formatDrop(cs);
+        if (cats[i] == PanadapterStream::CatFFT
+            || cats[i] == PanadapterStream::CatWaterfall) {
+            drop += QStringLiteral(" \u00b7 %1 late").arg(cs.late);
+        }
+        dropLabels[i]->setText(drop);
     }
 
     // DAX traffic

@@ -18,6 +18,7 @@
 #include <QEvent>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
@@ -53,6 +54,11 @@ public:
     static bool openSink(AudioEngine& engine, int rate) { return engine.openRxSink(rate); }
     static bool hasSink(const AudioEngine& engine) { return engine.m_audioDevice != nullptr; }
     static void drain(AudioEngine& engine, qsizetype bytes) { engine.drainRxAudio(bytes); }
+    static void timerTick(AudioEngine& engine) { QMetaObject::invokeMethod(engine.m_rxTimer, "timeout", Qt::DirectConnection); }
+    static void restartLineOutDrainClock(AudioEngine& engine)
+    {
+        engine.m_lineOutDrainClock.restart();
+    }
     static qsizetype rawBytes(const AudioEngine& engine)
     {
         qsizetype result = engine.m_rxBuffer.size();
@@ -248,8 +254,80 @@ void feed(AudioEngine& engine, PcmProducer& producer, QVector<float> samples)
 void rateMatrix()
 {
     for (int producerRate : {24000, 48000}) {
+        Fixture fixture(48000);
+        AudioEngineRatesTestAccess::detach(fixture.engine);
+        fixture.engine.setLineOutCaptureEnabled(true);
+        fixture.engine.setRxVolume(0.0f);
+        QByteArray captured;
+        QObject::connect(&fixture.engine, &AudioEngine::lineOutPcmReady, &fixture.engine,
+            [&captured](const PcmFrame& frame, bool) { captured += bytes(frame.samples()); });
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo});
+        for (int tick = 0; tick < 100; ++tick) {
+            if (tick == 50) {
+                fixture.engine.setMuted(true);
+                fixture.engine.stopRxStream();
+            }
+            feed(fixture.engine, producer, tone(producerRate, producerRate / 100, tick * (producerRate / 100)));
+            AudioEngineRatesTestAccess::timerTick(fixture.engine);
+        }
+        check(!captured.isEmpty() && finite(captured), "Line Out records without any PC playback device");
+        check(amplitude(captured, 48000, 0, 1000) > 0.27
+            && amplitude(captured, 48000, 1, 2300) > 0.15,
+            "device-free Line Out preserves the radio stereo mix");
+        check(fixture.output.data().isEmpty(), "device-free recording does not write to PC playback");
+        const qsizetype capturedSize = captured.size();
+        fixture.engine.setLineOutCaptureEnabled(false);
+        feed(fixture.engine, producer, tone(producerRate, producerRate / 100, producerRate));
+        AudioEngineRatesTestAccess::timerTick(fixture.engine);
+        check(captured.size() == capturedSize, "recording timer stops producing PCM after the last listener leaves");
+    }
+    {
+        Fixture fixture(48000);
+        QList<PcmFrame> frames;
+        QObject::connect(&fixture.engine, &AudioEngine::lineOutPcmReady, &fixture.engine,
+            [&frames](const PcmFrame& frame, bool transmitting) {
+                check(!transmitting, "Line Out capture reports receive state");
+                frames.append(frame);
+            });
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
+        feed(fixture.engine, producer, tone(48000, 480));
+        fixture.tick();
+        check(frames.isEmpty(), "Line Out capture is disabled until requested");
+        fixture.engine.setLineOutCaptureEnabled(true);
+        fixture.engine.setRxVolume(0.5f);
+        fixture.output.buffer().clear();
+        fixture.output.seek(0);
+        feed(fixture.engine, producer, tone(48000, 480, 480));
+        fixture.tick();
+        check(!frames.isEmpty(), "final playback emits Line Out without Kiwi or telemetry subscribers");
+        if (!frames.isEmpty()) {
+            const auto* rendered = reinterpret_cast<const float*>(fixture.output.data().constData());
+            check(frames.last().samples().size() * static_cast<qsizetype>(sizeof(float)) == fixture.output.data().size(),
+                  "Line Out captures exactly the stereo frames accepted by the output device");
+            for (qsizetype index = 0; index < frames.last().samples().size(); ++index) {
+                check(std::abs(frames.last().samples()[index] - rendered[index]) < 1e-7f,
+                      "Line Out preserves rendered stereo independently of PC master gain");
+            }
+        }
+        fixture.engine.setMuted(true);
+        feed(fixture.engine, producer, tone(48000, 480, 960));
+        fixture.tick();
+        check(!frames.isEmpty() && std::ranges::any_of(frames.last().samples(), [](float sample) { return sample != 0.0f; }),
+              "Line Out remains audible while PC playback is muted");
+        fixture.engine.setLineOutCaptureEnabled(false);
+        check(std::ranges::none_of(frames, [](const PcmFrame& frame) { return frame.current(); }),
+              "disabling Line Out revokes queued captured frames");
+    }
+    for (int producerRate : {24000, 48000}) {
         for (int deviceRate : {24000, 44100, 48000}) {
             Fixture fixture(deviceRate);
+            QByteArray lineOut;
+            fixture.engine.setLineOutCaptureEnabled(true);
+            fixture.engine.setRxVolume(1.0f);
+            QObject::connect(&fixture.engine, &AudioEngine::lineOutPcmReady, &fixture.engine,
+                [&lineOut](const PcmFrame& frame, bool) { lineOut += bytes(frame.samples()); });
             fixture.capture();
             PcmProducer producer;
             check(producer.start(PcmPurpose::Speaker, -1, {producerRate, PcmLayout::Stereo}),
@@ -270,6 +348,12 @@ void rateMatrix()
             check(frames == deviceRate,
                   "one second producer input yields one second device output");
             check(finite(output), "matrix output is finite aligned stereo");
+            const int lineOutRate = deviceRate == 24000 ? 24000 : 48000;
+            check(!lineOut.isEmpty() && finite(lineOut), "Line Out supports every negotiated playback device rate");
+            check(amplitude(lineOut, lineOutRate, 0, 1000) > 0.27
+                && amplitude(lineOut, lineOutRate, 1, 2300) > 0.15
+                && amplitude(lineOut, lineOutRate, 1, 1000) < 0.002,
+                "Line Out preserves independent stereo frequencies and levels including 44.1k devices");
             check(amplitude(output, deviceRate, 0, 1000) > 0.27,
                   "matrix preserves left frequency and amplitude");
             check(amplitude(output, deviceRate, 1, 2300) > 0.15,
@@ -294,6 +378,42 @@ void rateMatrix()
             }
         }
     }
+}
+
+void lineOutDrainCatchUp()
+{
+    Fixture fixture(48000);
+    AudioEngineRatesTestAccess::detach(fixture.engine);
+    fixture.engine.setLineOutCaptureEnabled(true);
+    fixture.engine.setRxVolume(1.0f);
+
+    PcmProducer producer;
+    check(producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo}),
+          "Line Out catch-up producer starts");
+    qsizetype capturedFrames = 0;
+    QObject::connect(&fixture.engine, &AudioEngine::lineOutPcmReady, &fixture.engine,
+        [&capturedFrames](const PcmFrame& frame, bool) {
+            capturedFrames += frame.samples().size() / 2;
+        });
+    for (int tick = 0; tick < 20; ++tick) {
+        feed(fixture.engine, producer, tone(48000, 480, tick * 480));
+    }
+
+    AudioEngineRatesTestAccess::restartLineOutDrainClock(fixture.engine);
+    QThread::msleep(35);
+    AudioEngineRatesTestAccess::timerTick(fixture.engine);
+    check(capturedFrames >= 48000 * 20 / 1000
+              && capturedFrames <= 48000 * 50 / 1000,
+          "late Line Out ticks catch up by elapsed time within the bounded drain");
+
+    const qsizetype beforeBoundedTick = capturedFrames;
+    AudioEngineRatesTestAccess::restartLineOutDrainClock(fixture.engine);
+    QThread::msleep(80);
+    AudioEngineRatesTestAccess::timerTick(fixture.engine);
+    const qsizetype boundedFrames = capturedFrames - beforeBoundedTick;
+    check(boundedFrames > 48000 * 10 / 1000
+              && boundedFrames <= 48000 * 50 / 1000,
+          "Line Out catch-up caps each delayed drain at 50 ms");
 }
 
 void bandwidthAndMono()
@@ -803,6 +923,11 @@ Rendered renderSources(int mainRate, Effect effect, bool mainEnabled, bool kiwiE
     fixture.output.buffer().clear();
     fixture.output.seek(0);
     fixture.capture();
+    QByteArray lineOut;
+    fixture.engine.setRxVolume(1.0f);
+    fixture.engine.setLineOutCaptureEnabled(true);
+    QObject::connect(&fixture.engine, &AudioEngine::lineOutPcmReady, &fixture.engine,
+        [&lineOut](const PcmFrame& frame, bool) { lineOut += bytes(frame.samples()); });
     quint64 kiwiOffset = 0;
     if (kiwiEnabled) {
         // Exercise the real 360 ms Kiwi prebuffer instead of defeating it.
@@ -828,6 +953,7 @@ Rendered renderSources(int mainRate, Effect effect, bool mainEnabled, bool kiwiE
     result.main = fixture.captured(QStringLiteral("post"));
     result.kiwi = fixture.captured(QStringLiteral("post"), QStringLiteral("kiwi"), kKiwiId);
     result.final = fixture.output.data();
+    check(lineOut == result.final, "Line Out matches the final mixed main/Kiwi/effects playback sample for sample");
     return result;
 }
 
@@ -1105,7 +1231,8 @@ void printUsage(const char* program)
     std::fprintf(stderr,
         "usage: %s [--case=rateMatrix|bandwidthAndMono|negotiatedSpeakerOutput|"
         "negotiationOpenFailure|negotiationLifetimeAndCoalescing|auxiliaryAcrossNegotiation|"
-        "transitionsAndRejection|queueBudgetsAndDeviceTransitions|concurrentSourcesAndEffects|"
+        "transitionsAndRejection|queueBudgetsAndDeviceTransitions|lineOutDrainCatchUp|"
+        "concurrentSourcesAndEffects|"
         "effects-bypass|effects-EQ|effects-NR2|effects-RN2|effects-NR4|"
         "effects-DFNR|effects-MNR|kiwiDeviceRateMatrix|processingStateReset|"
         "legacyReplacementAndKiwiReset|fixedProcessingDomains]\n", program);
@@ -1131,6 +1258,7 @@ std::optional<AudioCase> parseCase(int argc, char** argv, bool& valid)
              AudioCase{"auxiliaryAcrossNegotiation", std::nullopt},
              AudioCase{"transitionsAndRejection", std::nullopt},
              AudioCase{"queueBudgetsAndDeviceTransitions", std::nullopt},
+             AudioCase{"lineOutDrainCatchUp", std::nullopt},
              AudioCase{"concurrentSourcesAndEffects", std::nullopt},
              AudioCase{"effects-bypass", Effect::None},
              AudioCase{"effects-EQ", Effect::Eq},
@@ -1200,6 +1328,9 @@ int main(int argc, char** argv)
     }
     if (selected("queueBudgetsAndDeviceTransitions")) {
         runStage("queueBudgetsAndDeviceTransitions", queueBudgetsAndDeviceTransitions);
+    }
+    if (selected("lineOutDrainCatchUp")) {
+        runStage("lineOutDrainCatchUp", lineOutDrainCatchUp);
     }
     if (selected("concurrentSourcesAndEffects")
         || (selectedCase && selectedCase->effect)) {

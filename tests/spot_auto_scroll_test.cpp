@@ -11,7 +11,7 @@
 // This four-branch sort-state decision is exercised here as a pure function,
 // pulled out of DxClusterDialog specifically so it doesn't need that
 // dialog's dependency graph (DxClusterClient, WsjtxClient,
-// SpotCollectorClient, PotaClient, EibiClient, N1MMSpotClient, FreeDvClient,
+// PotaClient, EibiClient, N1MMSpotClient, FreeDvClient,
 // RadioModel, DxccColorProvider) just to construct.
 
 #include "gui/SpotAutoScroll.h"

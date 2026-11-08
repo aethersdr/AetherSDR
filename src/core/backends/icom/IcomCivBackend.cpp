@@ -361,6 +361,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.broadcastFmReceive = std::nullopt;
     c.fmDtcsCodes = {};
     c.family = QStringLiteral("icom");
+    c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
     c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
@@ -407,6 +408,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
+    c.cwTextControl = std::nullopt;
     c.cwTextKeyerName = QStringLiteral("CWK");
     c.cwTextMinWpm = profile.cwTextKeyer ? profile.cwTextKeyer->minWpm : 6;
     c.cwTextMaxWpm = profile.cwTextKeyer ? profile.cwTextKeyer->maxWpm : 48;

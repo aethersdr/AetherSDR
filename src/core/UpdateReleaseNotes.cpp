@@ -132,6 +132,8 @@ int UpdateChecker::pickAsset(const QList<ReleaseAsset>& assets, const QString& o
                           : QStringLiteral("-Windows-x64-setup.exe");
     } else if (os == QLatin1String("macos") && arm64) {
         suffix = QStringLiteral("-macOS-apple-silicon.dmg");
+    } else if (os == QLatin1String("macos") && x64) {
+        suffix = QStringLiteral("-macOS-intel.dmg");
     } else if (os == QLatin1String("linux") && x64) {
         suffix = QStringLiteral("-x86_64.AppImage");
     } else if (os == QLatin1String("linux") && arm64) {

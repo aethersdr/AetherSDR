@@ -39,7 +39,7 @@ The canvas is **off by default**. If you never turn it on, the Classic layout is
 In edit posture:
 
 - **Move** an item by dragging its title bar; it follows the cursor.
-- **Resize** with the eight grips on the item's 8 px border. The contents stay clickable.
+- **Resize** with the eight grips on the item's 8 px border. The contents stay clickable. On macOS, where the panadapter's display is a native view, a selected panadapter's display steps in by the border width so its grips can be grabbed, and returns to full size when you deselect it.
 - **Snapping:** edges and centers snap to other items and to the canvas edges within 8 px, with guide lines drawn while you drag. **Snap to grid** adds an optional 96 × 54 grid with a gentler pull; edges of other items win over the grid.
 
 Positions are stored as fractions of the canvas, so a layout made on a 3840 × 1600 screen comes back in proportion on 1920 × 1080.

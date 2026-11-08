@@ -619,7 +619,7 @@ void DvkPanel::onStatusChanged(int status, int id)
         for (auto* bar : m_progressBars) bar->hide();
 
         switch (s) {
-        case VoiceKeyer::Disabled: announceStatus("Disabled · SmartSDR+ required"); break;
+        case VoiceKeyer::Disabled: announceStatus("Disabled · not licensed (SmartSDR+)"); break;
         default:                 announceStatus("Idle"); break;
         }
     }

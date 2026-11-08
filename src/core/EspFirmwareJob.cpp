@@ -187,7 +187,7 @@ void EspFirmwareJob::run(const Request& request)
         case Ctr2MaxRegistration::Result::Registered:
             return true;
         case Ctr2MaxRegistration::Result::NotRegistered:
-            problem = tr("This CTR2-Max is not registered with CTR2-Max firmware v1.02.00m or "
+            problem = tr("This CTR2-Max is not registered with CTR2-Max firmware v2.00.00 or "
                          "later. Update its CTR2-Max firmware if it is older (Open File…), "
                          "make sure it is registered, then install again. Nothing was "
                          "written.");

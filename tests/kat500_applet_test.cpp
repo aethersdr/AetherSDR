@@ -7,6 +7,8 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QFileDialog>
+#include <QFontDatabase>
+#include <QFontMetrics>
 #include <QPointer>
 #include <QPlainTextEdit>
 #include <QLabel>
@@ -17,6 +19,7 @@
 #include <QSpinBox>
 #include <QTest>
 #include <cstdio>
+#include <optional>
 #define CHECK(x)                                                                                             \
     do {                                                                                                     \
         if (!(x)) {                                                                                          \
@@ -84,7 +87,7 @@ class Kat500ModelTest
     }
     static void blocked(Kat500Model& model, int condition)
     {
-        model.m_status.forwardAdc = condition == 0 ? 1 : 0;
+        model.m_status.forwardAdc = condition == 0 ? std::nullopt : std::optional<int>(0);
         model.m_operation = condition == 1 ? QStringLiteral("Test maintenance") : QString();
         model.m_status.tuning = condition == 2;
         emit model.availabilityChanged();
@@ -94,6 +97,83 @@ class Kat500ModelTest
         model.m_lastReply = -10000;
         emit model.availabilityChanged();
     }
+
+    static int smallIdleOffsetIsReady()
+    {
+        Kat500Model model;
+        ready(model);
+        model.m_status.forwardAdc = 2;
+        antennas(model);
+        Kat500Applet widget;
+        widget.setModel(&model);
+        CHECK(widget.findChild<QLabel*>("katReadiness")->text() == "READY");
+        for (const char* name : {"katTune", "katAuto", "katAntenna1", "katBypassedStatus",
+                                 "katAttenuatorStatus", "katAmpInterruptStatus"}) {
+            CHECK(widget.findChild<QPushButton*>(name)->isEnabled());
+        }
+        CHECK(!widget.findChild<QPushButton*>("katAntenna2")->isEnabled());
+        stale(model);
+        CHECK(!widget.findChild<QPushButton*>("katTune")->isEnabled());
+        return 0;
+    }
+
+    static int cancelBeforeSearchReadback()
+    {
+        Kat500Model model;
+        ready(model);
+        qint64 now = 100;
+        model.m_now = [&] { return now; };
+        model.m_lastIo = now;
+        QList<QByteArray> wire;
+        model.m_write = [&](const QByteArray& bytes) { wire.append(bytes); return true; };
+        Kat500Applet widget;
+        widget.setModel(&model);
+        auto* tune = widget.findChild<QPushButton*>("katTune");
+        CHECK(tune && tune->isEnabled() && tune->text() == "Tune");
+        tune->click();
+        CHECK(tune->isEnabled() && tune->text() == "Cancel");
+        CHECK(model.status().tuning == false); // Pending intent is not a hardware state.
+        tune->click();
+        now += 2100;
+        model.m_lastIo = now;
+        model.tick();
+        CHECK(wire.count("CT;TP;") == 1 && !wire.contains("T;TP;"));
+        model.receiveBytes("TP0;");
+        CHECK(!model.operationBusy() && tune->text() == "Tune");
+        return 0;
+    }
+
+    static int cancelWhileRequestDrains()
+    {
+        for (bool pending : {false, true}) {
+            Kat500Model model;
+            ready(model);
+            qint64 now = 100;
+            model.m_now = [&] { return now; };
+            model.m_lastIo = now;
+            model.m_status.tuning = true;
+            if (pending) { model.m_operation = QStringLiteral("Request tuner search"); }
+            else { model.m_quarantineUntil = now + 2000; }
+            QList<QByteArray> wire;
+            model.m_write = [&](const QByteArray& bytes) { wire.append(bytes); return true; };
+            Kat500Applet widget;
+            widget.setModel(&model);
+            auto* tune = widget.findChild<QPushButton*>("katTune");
+            CHECK(tune && tune->isEnabled() && tune->text() == "Cancel");
+            tune->click();
+            CHECK(!tune->isEnabled() && tune->text() == "Cancel");
+            CHECK(tune->accessibleDescription().contains("pending"));
+            now += 2100;
+            model.m_lastIo = now;
+            model.tick();
+            CHECK(wire.count("CT;TP;") == 1);
+            CHECK(model.status().tuning == true); // Sending CT cannot claim idle.
+            model.receiveBytes("TP0;");
+            CHECK(!model.operationBusy() && model.status().tuning == false);
+        }
+        return 0;
+    }
+
     static int signalPathToggles()
     {
         Kat500Model model;
@@ -242,11 +322,20 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile("kat500-applet-test");
     QApplication app(argc, argv);
+    // Standalone widget tests bypass main.cpp's bundled-font registration.
+    // Windows offscreen can otherwise measure missing-glyph boxes as text.
+    for (const char* font : {":/fonts/Inter-Regular.ttf", ":/fonts/Inter-Bold.ttf"}) {
+        CHECK(QFontDatabase::addApplicationFont(QString::fromLatin1(font)) >= 0);
+    }
+    CHECK(QFontMetrics(QApplication::font()).inFontUcs4(U'A'));
     AetherSDR::AppSettings::instance().load();
     const int debugResult = AetherSDR::Kat500ModelTest::debugScrolling();
     const int historyResult = AetherSDR::Kat500ModelTest::historyResizing();
     CHECK(debugResult == 0 && historyResult == 0);
+    CHECK(AetherSDR::Kat500ModelTest::smallIdleOffsetIsReady() == 0);
     CHECK(AetherSDR::Kat500ModelTest::signalPathToggles() == 0);
+    CHECK(AetherSDR::Kat500ModelTest::cancelWhileRequestDrains() == 0);
+    CHECK(AetherSDR::Kat500ModelTest::cancelBeforeSearchReadback() == 0);
     AetherSDR::Kat500Applet widget;
     widget.resize(310, 300);
     widget.show();

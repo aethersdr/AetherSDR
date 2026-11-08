@@ -3,9 +3,12 @@
 #include <QObject>
 #include <QString>
 #include <QVector>
+#include <QList>
 #include <atomic>
 #include <functional>
 #include <memory>
+#include "core/backends/CwTextRequest.h"
+#include "core/backends/ReceiveCommand.h"
 
 namespace AetherSDR {
 
@@ -66,13 +69,15 @@ public:
     // sidetone notification; the radio-specific command path stays separate.
     using TextSender = std::function<bool(const QString&, int)>;
     void setTextSender(TextSender sender) { m_textSender = std::move(sender); }
+    using RequestSender = std::function<ReceiveDispatch(const CwTextRequest&, int, int, TransmissionPermit)>;
+    void setRequestSender(RequestSender sender) { m_requestSender = std::move(sender); }
     // Explicit synchronous route for an engine producer. Every command keeps
     // the request captured by that controller; no temporary ambient identity
     // is installed around UI signals or a nested event loop.
     struct TransmissionRoute {
         TransmissionAdmission admit;
         TextSender text;
-        std::function<void(const QString&, int, int)> command; // nChars < 0: no reply
+        RequestSender command; // nChars < 0: no drain-index reply
         std::function<void(int, bool)> dispatched;
     };
 
@@ -106,12 +111,9 @@ public:
 
     // Status parsing (from radio)
     void applyStatus(const QMap<QString, QString>& kvs);
-    // Reply to the final cwx send: body "<radio_index>,<block>" (FlexLib
-    // CWX.cs:54-83). radio_index is the batch's first-char queue position, so the
-    // batch-end index is radio_index + nChars - 1 (FLEX-6500 fw 4.2.20.41343;
-    // nChars counts spaces). A reply whose epoch no longer matches drainEpoch()
-    // belongs to an aborted batch and is ignored (#3949).
-    void handleSendReply(int resultCode, const QString& body, int epoch, int nChars);
+    // A queued reply names the first character, not the last. An old batch's
+    // response cannot re-arm a replacement watch; handoff is not radio idle.
+    void handleSendReply(const CwTextReply& reply, int epoch, int nChars);
 
     // Parses text for leading +/- speed modifiers on words.
     // A +/- run at word-start (after space or string-start) immediately
@@ -123,17 +125,12 @@ public:
         const QString& text, int baseWpm, int step);
 
 signals:
-    void commandReady(const QString& cmd);
-    // Emitted for the final cwx send of a macro/send block, and for every
-    // live-mode char, so RadioModel can capture the radio_index from the reply
-    // and know when that block is fully transmitted.  epoch is snapshotted at
-    // emit time (stale-batch guard) and nChars is the char count of this send
-    // (spaces included) — handleSendReply() watches radio_index + nChars - 1
-    // because radio_index is the batch's first-char position, not its last.
-    // See handleSendReply(). (#3949)
-    void replyCommandReady(const QString& cmd, int epoch, int nChars);
+    // Intent notifications only. The synchronous sender owns actual dispatch
+    // and its receipt; a signal observer must never send the request again.
+    void controlRequested(const AetherSDR::CwTextRequest& request);
+    void replyControlRequested(const AetherSDR::CwTextRequest& request, int epoch, int nChars);
     void speedChanged(int wpm);
-    void speedCommandIssued(int wpm);
+    void requestRejected(const QString& reason);
     void speedStepChanged(int step);
     void delayChanged(int ms);
     void qskChanged(bool on);
@@ -158,28 +155,31 @@ private:
                           const TransmissionRoute& route = {});
     bool notifyTransmission(const QString& text, int wpm, const TransmissionPermit& permit,
                             const TransmissionRoute& route = {});
-    void dispatchCommand(const QString& command, int epoch, int nChars,
-                         const TransmissionRoute& route);
+    ReceiveDispatch dispatchRequest(const CwTextRequest& request, int epoch, int nChars,
+                                    const TransmissionRoute& route = {});
+    bool dispatchSpeed(int wpm, CwTextRequest::Origin origin, int epoch,
+                       const TransmissionRoute& route);
+    void retireSpeedIntent(bool retainEchoes = false);
     SendAvailability m_sendAvailability;
     TransmissionAdmission m_transmissionAdmission;
     TextSender m_textSender;
+    RequestSender m_requestSender;
     bool m_clearing{false}; // synchronous abort notifications cannot replace the queue being cleared
     std::shared_ptr<std::atomic<bool>> m_queueValid{std::make_shared<std::atomic<bool>>(true)};
 
     int     m_speed{20};
     int     m_delay{5};
     int     m_speedStep{3};
-    // Count of self-originated transient `cwx wpm` commands (per-word speed
-    // modifiers) whose radio echoes must be swallowed in applyStatus so they
-    // can't clobber the authoritative base speed or flicker the Speed spinbox.
-    // Reset on user setSpeed / clearBuffer so a dropped echo can't permanently
-    // suppress a real speed update. (#272)
-    int     m_pendingWpmEchoes{0};
+    // Bounded expected speed echoes. New edits revoke old queued writes but
+    // retain their possible echoes; refusal removes its ticket. Session reset
+    // or uncorrelated radio state retires both writes and echo suppression.
+    QList<std::shared_ptr<const int>> m_pendingWpmEchoes;
+    std::shared_ptr<std::atomic<bool>> m_speedIntentValid{std::make_shared<std::atomic<bool>>(true)};
     bool    m_qsk{false};
     bool    m_live{false};
     bool    m_speedModifiersEnabled{true};
     int     m_sentIndex{-1};
-    int     m_nextBlock{1};
+    quint64 m_nextBlock{1};
     int     m_cwxEndIndex{-1};   // radio_index to watch for; -1 = not tracking
     int     m_drainEpoch{0};     // bumped on ESC/clear/disconnect (#3949)
     QString m_macros[12];

@@ -595,6 +595,7 @@ void WorkspaceCanvas::updateFrame()
     if (!m_frame) {
         return;
     }
+    updateGripInset();
     if (m_selectedId.isEmpty() || !m_layout.contains(m_selectedId)) {
         m_frame->hide();
         return;
@@ -602,6 +603,41 @@ void WorkspaceCanvas::updateFrame()
     m_frame->followItem(displayRectFor(m_selectedId));
     m_frame->show();
     m_frame->raise();
+}
+
+void WorkspaceCanvas::updateGripInset()
+{
+    // A native child view (the macOS Metal spectrum) wins the platform's hit
+    // test over the alien frame, so grips drawn on top of it take no presses.
+    // While such an item is selected its contents step in by the band. The
+    // check runs once per selection and holds until the selection changes,
+    // since updateFrame() also runs on every gesture move.
+    if (m_selectedId == m_gripInsetCheckedId) {
+        return;
+    }
+    m_gripInsetCheckedId = m_selectedId;
+    QWidget* target = nullptr;
+    if (QWidget* w = m_widgets.value(m_selectedId).data()) {
+        const QList<QWidget*> kids = w->findChildren<QWidget*>();
+        const bool hasNative = std::any_of(kids.begin(), kids.end(), [](QWidget* c) {
+            return c->testAttribute(Qt::WA_NativeWindow);
+        });
+        if (hasNative) {
+            target = w;
+        }
+    }
+    if (target == m_gripInsetWidget.data()) {
+        return;
+    }
+    if (m_gripInsetWidget) {
+        m_gripInsetWidget->setContentsMargins(m_gripInsetSavedMargins);
+    }
+    m_gripInsetWidget = target;
+    if (target) {
+        m_gripInsetSavedMargins = target->contentsMargins();
+        const int g = CanvasItemFrame::kGripPx;
+        target->setContentsMargins(m_gripInsetSavedMargins + QMargins(g, g, g, g));
+    }
 }
 
 // ── The gesture session (phase 5) ────────────────────────────────────────

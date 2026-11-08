@@ -81,10 +81,10 @@ int main()
     // ── Tooltip names the missing subscription ──────────────────────────────
     // The whole point of the gate: a dimmed button has to say what it needs, or
     // it is just as mute as the silently-refused command it replaced.
-    report("unlicensed tooltip names an active SmartSDR+ subscription",
+    report("unlicensed tooltip names SmartSDR+, not an active subscription",
            dvkIndicatorTooltip(B::NotLicensed)
-               == QStringLiteral("Digital Voice Keyer — requires an active "
-                                 "SmartSDR+ subscription"));
+               == QStringLiteral("Digital Voice Keyer — not licensed on this "
+                                 "radio (SmartSDR+)"));
     report("mode-gated tooltip stays the normal one",
            dvkIndicatorTooltip(B::TxModeNotVoice)
                == QStringLiteral("Digital Voice Keyer — click to toggle"));

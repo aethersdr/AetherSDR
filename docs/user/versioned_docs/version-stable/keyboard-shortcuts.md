@@ -9,7 +9,7 @@ AetherSDR has two kinds of keyboard shortcut:
 - **Operating shortcuts** drive the radio: tuning, MOX, push-to-talk, AF gain, band and mode changes and so on. They are **off by default**.
 - **Application shortcuts** belong to menus and windows (Minimal Mode, UI scale, Full Screen). They always work.
 
-<img src="/img/screens/keyboard-shortcuts.png" width="1100" alt="Keyboard shortcuts editor. A full keyboard map fills the top half, with bound keys colored by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A color legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons." />
+<img src="/img/screens/keyboard-shortcuts.png" width="1100" alt="Keyboard shortcuts editor. A full keyboard map fills the upper part of the window, with bound keys colored by category, for example T for MOX and Space for PTT in red, G for go to frequency, and the arrow keys for tuning. A color legend lists the categories. Below are Key and Action fields with Clear and Reset to Default buttons, a filter box and category selector, and a table of actions with their category, current key and default key, starting with Tune Up (1 step) on Right, and Import…, Export…, Reset All to Defaults and Close buttons." />
 
 *The keyboard shortcuts editor. Bound keys are colored by category on the keyboard map; the table below lists every action.*
 
@@ -28,8 +28,10 @@ With shortcuts on, AetherSDR still backs off while you type in a text field, doe
 **Settings → Configure Shortcuts...** opens the editor:
 
 1. Click a key on the on-screen keyboard map.
-2. Pick the action for that key. If the key is already in use, AetherSDR asks before reassigning it.
-3. **Clear** removes the selected key's action; **Reset to Default** restores one shortcut; **Reset All to Defaults** starts over.
+2. Pick the action for that key. If the key is already in use, AetherSDR asks before reassigning it; **Reassign** moves the key, **Cancel** keeps it where it was.
+3. **Clear** removes the selected key's action; **Reset to Default** restores one shortcut; **Reset All to Defaults** starts over after you confirm with **Reset All** (Return and Esc cancel).
+
+Close the editor with **Close**, the round button in its top-right corner, Esc, or Ctrl+W (Cmd+W on macOS). Drag any empty part of it to move it, or an edge to resize it.
 
 The editor works one key at a time, so it is easiest for single-key bindings. Cleared bindings stay cleared after a restart.
 

@@ -73,6 +73,7 @@ QString setupOperationLabel(const RadioSetupRequest& request)
         return QStringLiteral("front speaker mute %1").arg(int(std::get<bool>(request.value)));
     case Field::ShowTxInWaterfall:
         return QStringLiteral("show TX in waterfall %1").arg(int(std::get<bool>(request.value)));
+    case Field::RemoteOnEnabled: case Field::MultiFlexEnabled:
     case Field::Callsign: case Field::ClientStation: case Field::PrivateIpPolicy:
     case Field::NetworkMtu: case Field::Dhcp: case Field::StaticNetwork:
     case Field::AccTxDelayMs: case Field::TxDelayMs: case Field::Tx1DelayMs:
@@ -95,6 +96,9 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
 {
     using Field = RadioSetupRequest::Field;
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
+    if (request.field == RadioSetupField::RemoteOnEnabled || request.field == RadioSetupField::MultiFlexEnabled) {
+        return requestAdministrationSetting(request, replyContext, completion);
+    }
     const QPointer<RadioModel> alive(this);
     const QPointer<QObject> owner(replyContext ? replyContext : this);
     const RadioControlSession session = controlSession();

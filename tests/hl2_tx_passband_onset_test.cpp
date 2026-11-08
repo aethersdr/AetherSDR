@@ -331,9 +331,9 @@ Onset onset(const char* what, bool warm)
     return o;
 }
 
-// Key-up: WdspChannel's mute envelope (10 ms held at zero, then a 25 ms
-// raised-cosine slew) sets the shape. It is the anti-click ramp, so its rise
-// is bounded from both sides. Mid-over: the 2048-tap bandpass sets the shape,
+// Key-up: WdspChannel's mute envelope (a 25 ms raised-cosine slew; the HL2
+// TX channel has no up-delay held at zero) sets the shape. It is the
+// anti-click ramp, so its rise is bounded from both sides. Mid-over: the 2048-tap bandpass sets the shape,
 // so its pre-ringing lead is bounded. Each 50 % point is held within half a
 // 1024-sample DSP block of today's figure: another buffer or more taps fails.
 constexpr double kMaxKeyUpHalfMs = 106.0;

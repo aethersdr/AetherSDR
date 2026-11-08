@@ -44,6 +44,11 @@ public:
     void setPitchRange(int minHz, int maxHz);
     void setSpeedRange(int minWpm, int maxWpm);
 
+    // Half-width of the pitch search window centred on a known CW pitch.
+    // setKnownParameters() and the RX panel's CwDecodeSettings::pitchRangeAround()
+    // both use it; each applies its own edge clamping.
+    static constexpr int kPitchHalfWidthHz = 150;
+
     // Force pitch + speed to specific values and lock both — used by the
     // TX-side decoder (#2417) where the operator's keying parameters are
     // known from PhoneCwApplet rather than detected from the audio.

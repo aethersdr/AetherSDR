@@ -37,6 +37,13 @@ int main()
     // ── mode helpers ────────────────────────────────────────────────────────
     ok &= expect(isKnownMode("usb"), "isKnownMode is case-insensitive for USB");
     ok &= expect(isKnownMode("NFM"), "isKnownMode accepts NFM");
+    for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL"),
+                                QStringLiteral("FDV")}) {
+        ok &= expect(modes().contains(mode), "memory editor offers modern and legacy FreeDV modes");
+        ok &= expect(isKnownMode(mode.toLower()), "FreeDV mode validation is case-insensitive");
+        ok &= expect(modeToWire(" " + mode.toLower() + " ") == mode,
+                     "FreeDV wire normalization preserves the mode token");
+    }
     ok &= expect(!isKnownMode("FOO"), "isKnownMode rejects an unknown mode");
     ok &= expect(modeToWire(" digu ") == "DIGU",
                  "modeToWire trims and upper-cases");

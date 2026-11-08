@@ -25,6 +25,12 @@ namespace AetherSDR
 {
 class Kat500ModelTest {
 public:
+    static void idleOffset(Kat500Model& model) {
+        futureFirmware(model);
+        model.m_status.firmware = "02.16";
+        model.m_status.forwardAdc = 2;
+        emit model.statusUpdated(model.m_status);
+    }
     static void futureFirmware(Kat500Model& model) {
         model.m_connected = true; model.m_detected = true; model.m_now=[] {return qint64(100);};
         model.m_lastReply=100; model.m_status.identity="KAT500"; model.m_status.firmware="02.17";
@@ -81,6 +87,11 @@ class Kat500AdvancedWidgetTest
         }
         widget.findChild<QPushButton*>("katDiscardConfiguration")->click();
         CHECK(widget.m_staged.isEmpty());
+        Kat500ModelTest::idleOffset(model);
+        widget.m_eraseConfirm->setChecked(true);
+        CHECK(!erase->isEnabled());
+        CHECK(erase->accessibleDescription().contains("requires zero"));
+        CHECK(widget.findChild<QPushButton*>("katReadConfiguration")->isEnabled());
         Kat500ModelTest::futureFirmware(model);
         CHECK(!widget.findChild<QPushButton*>("katReadConfiguration")->isEnabled());
         CHECK(widget.findChild<QPushButton*>("katReadConfiguration")->accessibleDescription().contains("02.16"));

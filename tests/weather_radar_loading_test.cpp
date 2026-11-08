@@ -127,7 +127,7 @@ private:
     QByteArray m_bytes;
 };
 
-class ControlledRadarNetwork final : public QNetworkAccessManager {
+class ControlledRadarNetwork : public QNetworkAccessManager {
 public:
     QList<QPointer<ControlledRadarReply>> exports;
     QList<QPointer<ControlledRadarReply>> allReplies;
@@ -164,6 +164,17 @@ protected:
         }
         return reply;
     }
+};
+
+// QGeoView's network manager is process-wide. A map built while it is null
+// installs the real tile manager and fetches live OSM tiles, whose unjoined
+// network thread then races ~QApplication under TSan (#6156, #6726). Every
+// case that builds a map declares one of these first; it installs the stub for
+// the case's whole scope, early returns and failed checks included.
+class InstalledRadarNetwork final : public ControlledRadarNetwork {
+public:
+    InstalledRadarNetwork() { QGV::setNetworkManager(this); }
+    ~InstalledRadarNetwork() override { QGV::setNetworkManager(nullptr); }
 };
 
 class WeatherRadarLoadingTest final : public QObject {
@@ -208,8 +219,7 @@ private:
 private slots:
     void coverageTooltipClearsWhenLeavingOrDisabling()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         GlobeMapView globe;
         globe.resize(600, 400);
         RadarSite site;
@@ -229,13 +239,11 @@ private slots:
         QVERIFY(!globe.m_hoverCard->isHidden());
         globe.setRadarSites({site}, false);
         QVERIFY(globe.m_hoverCard->isHidden());
-        QGV::setNetworkManager(nullptr);
     }
 
     void playbackCoverageRemainsPinnedDuringRebuffer()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         map.m_weatherRadar->m_weatherRadarNetwork = &network;
         map.m_weatherRadar->m_weatherRadarSource = WeatherRadarSource::composite(15);
@@ -293,7 +301,6 @@ private slots:
         const QSize size = globe.weatherRadarPlaybackSize(QRectF(0, 0, 3000000, 3000000));
         QVERIFY(qint64(size.width()) * size.height() <= kMaximumWeatherRadarPixels);
         map.stopWeatherRadarAnimation();
-        QGV::setNetworkManager(nullptr);
     }
 
     void globeCoverageMovesWithRenderedSurface()
@@ -301,8 +308,7 @@ private slots:
         if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {
             QSKIP("Opt in with AETHERSDR_TEST_RADAR_GL=1 and a native GUI platform");
         }
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         GlobeMapView globe;
         globe.resize(600, 400);
         globe.show();
@@ -354,7 +360,6 @@ private slots:
         globe.setRadarSites({site}, false);
         frame = globe.grabFramebuffer();
         QCOMPARE(shade(frame.pixelColor(center)), 0);
-        QGV::setNetworkManager(nullptr);
     }
 
     void globeAdmitsNativeRegionalLiveTiles_data()
@@ -367,8 +372,7 @@ private slots:
     {
         QFETCH(int,providers);
         const int tileSize=512;
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         GlobeMapView globe;
         globe.setWeatherRadarSource(WeatherRadarSource::composite(providers));
         globe.setWeatherRadarVisible(true);
@@ -389,7 +393,6 @@ private slots:
             }
             if (!completed) { break; }
         }
-        QGV::setNetworkManager(nullptr);
         QVERIFY2(sawNativeTile,"The globe must dispatch its in-process radar tile requests");
         QCOMPARE(globe.m_weatherRadarAtlas.size(),QSize(tileSize*4,tileSize*4));
         QCOMPARE(globe.m_weatherRadarAtlas.pixelColor(128,128),QColor(Qt::green));
@@ -398,15 +401,13 @@ private slots:
 
     void globePlaybackOverviewKeepsFullAtlasResolution()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         GlobeMapView globe;
         const QRectF world(-kRadarMercatorExtent,-kRadarMercatorExtent,kRadarWorldWidth,kRadarWorldWidth);
         globe.resize(640,480);
         QCOMPARE(globe.weatherRadarPlaybackSize(world),QSize(2048,2048));
         globe.resize(3840,2160);
         QCOMPARE(globe.weatherRadarPlaybackSize(world),QSize(2048,2048));
-        QGV::setNetworkManager(nullptr);
     }
 
     void regionalCompositeKeepsIndependentCoverage()
@@ -477,7 +478,10 @@ private slots:
         QVERIFY(!legend.isHidden());
         legend.setProviders(0);
         QVERIFY(legend.isHidden());
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
+        // The coverage is bundled; the base map stays on the stub too.
+        QCOMPARE(QGV::getNetworkManager(), static_cast<QNetworkAccessManager*>(&network));
         map.setRadarCoverageVisible(true);
         QVERIFY(map.m_weatherRadar->m_radarSites.size() == 389);
         const int count = map.m_weatherRadar->m_radarSites.size();
@@ -497,10 +501,7 @@ private slots:
 
     void legendPositionTracksMapAndSourceSize()
     {
-        // Like every other map-building case here: without it MapView installs
-        // the real tile manager and this test fetched live OSM tiles (#6156).
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         map.resize(800, 600);
         map.show();
@@ -523,7 +524,6 @@ private slots:
         QTRY_COMPARE(map.m_radarLegend->y(), map.height() - map.m_radarLegend->height() - 12);
         map.m_radarLegend->setProviders(0);
         QVERIFY(map.m_radarLegend->isHidden());
-        QGV::setNetworkManager(nullptr);
     }
 
     void compositeObservationNeverUsesFutureOrStaleWeather()
@@ -540,8 +540,7 @@ private slots:
 
     void changingRegionsRetiresPreviousProduct()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         map.setWeatherRadarRegions(7);
         map.m_weatherRadar->m_weatherRadarTimelineCache = QByteArrayLiteral("old catalog");
@@ -553,7 +552,6 @@ private slots:
         QVERIFY(WeatherRadarSource::composite(7).frameId() != WeatherRadarSource::composite(4).frameId());
         QCOMPARE(map.m_weatherRadar->m_weatherRadarSource.latestFrame().enabledProviders(),4);
         QCOMPARE(map.m_weatherRadar->m_weatherRadarSource.historicalFrame(QDateTime::currentDateTimeUtc()).enabledProviders(),4);
-        QGV::setNetworkManager(nullptr);
     }
 
     void noRegionsReturnsTransparentPixelsWithoutNetwork()
@@ -576,8 +574,7 @@ private slots:
         if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {
             QSKIP("Opt in with AETHERSDR_TEST_RADAR_GL=1 and a native GUI platform");
         }
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         GlobeMapView globe;
         globe.resize(600, 400);
         globe.show();
@@ -666,13 +663,11 @@ private slots:
         const QDateTime observation = QDateTime::currentDateTimeUtc();
         QTRY_VERIFY(globe.showWeatherRadarPlaybackFrame(rain, observation, world));
         QTRY_VERIFY(center().blue() > 180 && center().green() < 80);
-        QGV::setNetworkManager(nullptr);
     }
 
     void cityLightsFlatWrapAndOpacity()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapView map(nullptr, MapView::ViewportMode::Raster);
         map.resize(600, 400);
         map.show();
@@ -699,7 +694,6 @@ private slots:
         QTRY_VERIFY(centerGreen() > 240);
         map.setCityLightsVisible(false);
         QTRY_VERIFY(centerGreen() < 200);
-        QGV::setNetworkManager(nullptr);
     }
 
     void partialHistoryRetriesMissingOriginal_data()
@@ -712,8 +706,7 @@ private slots:
     void partialHistoryRetriesMissingOriginal()
     {
         QFETCH(int, failedIndex);
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         prepare(map, network);
         const QVector<QDateTime> originalFrames = map.m_weatherRadar->frameValues(&WeatherRadarFrame::time);
@@ -754,13 +747,11 @@ private slots:
         QVERIFY(map.m_weatherRadar->m_weatherRadarRetryFrames.isEmpty());
         QVERIFY(map.m_weatherRadar->m_weatherRadarDownloadFailed.isEmpty());
         map.stopWeatherRadarAnimation();
-        QGV::setNetworkManager(nullptr);
     }
 
     void completedLiveTilesSurviveSmallPan()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         QGVMap map;
         map.resize(600, 400);
         map.show();
@@ -791,13 +782,11 @@ private slots:
             .moveTo(QPointF(-1.05e7 + 40000, -4.0e6)), false);
         QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 2, 1500);
         layer->setEnabled(false);
-        QGV::setNetworkManager(nullptr);
     }
 
     void liveTilesRetryWithoutCameraMovement()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         QGVMap map;
         map.resize(600, 400);
         map.show();
@@ -828,13 +817,11 @@ private slots:
         QVERIFY(!layer->loadFailed());
         QCOMPARE(layer->pendingRequestCount(), 0);
         layer->setEnabled(false);
-        QGV::setNetworkManager(nullptr);
     }
 
     void liveTilesRetryDuringCameraMovement()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         QGVMap map;
         map.resize(600, 400);
         map.show();
@@ -865,13 +852,11 @@ private slots:
         network.allReplies.last()->complete();
         QTRY_COMPARE(ready.size(), 1);
         layer->setEnabled(false);
-        QGV::setNetworkManager(nullptr);
     }
 
     void completedCoverageDoesNotWaitForOldFailures()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         QGVMap map;
         map.resize(600, 400);
         map.show();
@@ -900,7 +885,6 @@ private slots:
         layer->checkReadiness(300, 0);
         QCOMPARE(ready.size(), 1);
         layer->setEnabled(false);
-        QGV::setNetworkManager(nullptr);
     }
 
     void liveRadarAtCloseZoom_data()
@@ -913,8 +897,7 @@ private slots:
 
     void liveTileFailureReportsOnceAndRecovers()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         QGVMap map;
         map.resize(600, 400);
         map.show();
@@ -957,14 +940,12 @@ private slots:
         const int count = network.allReplies.size();
         QTest::qWait(100);
         QCOMPARE(network.allReplies.size(), count);
-        QGV::setNetworkManager(nullptr);
     }
 
     void liveRadarAtCloseZoom()
     {
         QFETCH(double, scale);
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         QGVMap map;
         map.resize(600, 400);
         map.show();
@@ -986,13 +967,11 @@ private slots:
             QDateTime::currentDateTimeUtc().addSecs(300)));
         QTRY_VERIFY(network.allReplies.size() > initialRequests); // Refresh also works.
         layer->setEnabled(false);
-        QGV::setNetworkManager(nullptr);
     }
 
     void catalogRetiresExpiredFramesWithoutANewObservation()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         prepare(map, network);
         finishAll(map, network);
@@ -1015,7 +994,6 @@ private slots:
         QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes), bytes.mid(1));
         QCOMPARE(network.requests.size(), downloads);
         map.stopWeatherRadarAnimation();
-        QGV::setNetworkManager(nullptr);
     }
 
     void emptyExportRequiresAvailableRasters_data()
@@ -1034,8 +1012,7 @@ private slots:
     {
         QFETCH(bool, globe);
         QFETCH(int, result);
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         prepare(map, network);
         finishAll(map, network);
@@ -1083,7 +1060,6 @@ private slots:
             QVERIFY(!map.m_weatherRadar->m_weatherRadarPlaybackRequested);
             QVERIFY(map.m_weatherRadar->m_frames.isEmpty());
             QVERIFY(!map.m_weatherRadar->m_weatherRadarFrameCache.contains(key));
-            QGV::setNetworkManager(nullptr);
             return;
         }
         if (result == 2) {
@@ -1129,7 +1105,6 @@ private slots:
             }
         }
         map.stopWeatherRadarAnimation();
-        QGV::setNetworkManager(nullptr);
     }
 
     void flatControllerLoopRetainsEveryPaint()
@@ -1148,8 +1123,7 @@ private slots:
         if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {
             QSKIP("Opt in with AETHERSDR_TEST_RADAR_GL=1 and a native GUI platform");
         }
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         map.m_weatherRadar->m_weatherRadarHistoryHours = 4;
         prepare(map, network, 18, true);
@@ -1195,7 +1169,6 @@ private slots:
         QVERIFY(paints > 30);
         QCOMPARE(blanks, 0);
         map.stopWeatherRadarAnimation();
-        QGV::setNetworkManager(nullptr);
     }
 
     void globeControllerLoopRetainsEveryPaint()
@@ -1203,8 +1176,7 @@ private slots:
         if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {
             QSKIP("Opt in with AETHERSDR_TEST_RADAR_GL=1 and a native GUI platform");
         }
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         map.setProjectionMode(MapDisplayWidget::ProjectionMode::Globe);
         map.m_weatherRadar->m_weatherRadarHistoryHours = 4;
@@ -1258,7 +1230,6 @@ private slots:
         QVERIFY(paints > 30);
         QCOMPARE(blanks, 0);
         map.stopWeatherRadarAnimation();
-        QGV::setNetworkManager(nullptr);
     }
 
     void conciseLoadingLifecycle()
@@ -1287,8 +1258,7 @@ private slots:
 
     void initialFailureRetriesWithoutLosingIntent()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         map.m_weatherRadar->m_weatherRadarNetwork = &network;
         map.m_weatherRadar->m_weatherRadarVisible = true;
@@ -1310,13 +1280,11 @@ private slots:
         QVERIFY(!map.m_weatherRadar->m_weatherRadarRebufferTimer->isActive());
         QVERIFY(!map.m_weatherRadar->m_weatherRadarTimelineReply);
         QVERIFY(!map.weatherRadarAnimating());
-        QGV::setNetworkManager(nullptr);
     }
 
     void speedChangesRetainFramesAndFinalHold()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         prepare(map, network);
         map.m_flatView->setWeatherRadarVisible(true);
@@ -1364,7 +1332,6 @@ private slots:
             QCOMPARE(map.m_weatherRadar->m_weatherRadarFrameIndex, 0);
         }
         map.stopWeatherRadarAnimation();
-        QGV::setNetworkManager(nullptr);
     }
 
     void globeRadarAboveDetailGeometry()
@@ -1372,8 +1339,7 @@ private slots:
         if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {
             QSKIP("Opt in with AETHERSDR_TEST_RADAR_GL=1 and a native GUI platform");
         }
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         GlobeMapView globe;
         globe.resize(600, 400);
         globe.show();
@@ -1448,13 +1414,11 @@ private slots:
         QTRY_VERIFY(globe.showWeatherRadarPlaybackFrame(rain, time.addSecs(300), bounds));
         globe.acknowledgeWeatherRadarPlaybackFrame(2);
         QCOMPARE(greenSamples(), 0);
-        QGV::setNetworkManager(nullptr);
     }
 
     void failedLiveAtlasRetainsPixels()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         GlobeMapView globe;
         globe.cancelTileRequests();
         QImage retained = globe.m_weatherRadarAtlas;
@@ -1473,7 +1437,6 @@ private slots:
         QCOMPARE(globe.m_weatherRadarAtlas, retained);
         QCOMPARE(globe.m_loadedWeatherRadarFrameId, QStringLiteral("retained-good-observation"));
         QVERIFY(globe.weatherRadarLoadFailed());
-        QGV::setNetworkManager(nullptr);
     }
 
     void globePlaybackResidency()
@@ -1481,8 +1444,7 @@ private slots:
         if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {
             QSKIP("Opt in with AETHERSDR_TEST_RADAR_GL=1 and a native GUI platform");
         }
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         GlobeMapView globe;
         globe.resize(600, 400);
         globe.setWeatherRadarVisible(true);
@@ -1535,13 +1497,11 @@ private slots:
         clear.fill(Qt::transparent);
         QTRY_VERIFY(globe.showWeatherRadarPlaybackFrame(clear, start.addSecs(2100), bounds));
         QCOMPARE(pixels(), clear); // Genuine no-rain observations are not suppressed.
-        QGV::setNetworkManager(nullptr);
     }
 
     void projectionAndRollingHistory()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         prepare(map, network);
         finishAll(map, network);
@@ -1597,7 +1557,6 @@ private slots:
         QVERIFY(!map.m_weatherRadar->m_weatherRadarPlaybackRequested);
         map.setProjectionMode(MapDisplayWidget::ProjectionMode::Flat);
         QVERIFY(!map.m_weatherRadar->m_weatherRadarPlaybackRequested);
-        QGV::setNetworkManager(nullptr);
     }
 
     void geometryAndPriority()
@@ -1623,8 +1582,7 @@ private slots:
 
     void queuedExportRetainsItsGeometryAfterCacheEviction()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         prepare(map, network);
         // A covering cached view selected earlier can disappear from the RAM
@@ -1644,7 +1602,6 @@ private slots:
         QTRY_VERIFY(!map.m_weatherRadar->m_frames.at(index).bytes.isEmpty());
         QCOMPARE(map.m_weatherRadar->m_weatherRadarDecodedImages.value(index).size(), selected.size);
         QCOMPARE(map.m_weatherRadar->m_frames.at(index).bounds, selected.bounds);
-        QGV::setNetworkManager(nullptr);
     }
 
     void retainedTransparentTiles()
@@ -1690,8 +1647,7 @@ private slots:
 
     void overlayLoadingMessagesCoexist()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         map.resize(800, 500);
         map.show();
@@ -1722,13 +1678,11 @@ private slots:
         emit map.cityLightsStatusChanged(QString());
         QTest::qWait(400);
         QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
-        QGV::setNetworkManager(nullptr);
     }
 
     void progressiveZoomAndFailures()
     {
-        ControlledRadarNetwork network;
-        QGV::setNetworkManager(&network);
+        InstalledRadarNetwork network;
         MapDisplayWidget map;
         prepare(map, network);
         QSignalSpy frames(&map, &MapDisplayWidget::weatherRadarFrameChanged);
@@ -1828,7 +1782,6 @@ private slots:
         map.m_weatherRadar->m_weatherRadarVisible = false;
         map.m_weatherRadar->updateWeatherRadarLoadingStatus();
         QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
-        QGV::setNetworkManager(nullptr);
     }
 };
 

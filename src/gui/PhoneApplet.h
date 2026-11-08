@@ -35,6 +35,9 @@ public:
     void setDexpVisible(bool visible);
     void setAmCarrierAvailable(bool available);
     void setVoxDelayAvailable(bool available);
+    // Dim VOX and its level slider, with the reason, on a radio that declares
+    // no VOX (RadioCapabilities::voxControl empty). True restores them.
+    void setVoxAvailable(bool available);
 
     // The TX passband edges the connected radio can actually reach, ascending
     // (RadioCapabilities::txFilterLowEdgesHz / txFilterHighEdgesHz). Empty
@@ -100,6 +103,7 @@ private:
     [[nodiscard]] static int steppedEdgeHz(const QList<int>& edges, int currentHz, int dir);
 
     bool m_updatingFromModel{false};
+    bool m_voxAvailable{true};
 };
 
 } // namespace AetherSDR

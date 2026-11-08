@@ -135,6 +135,10 @@
 
 namespace AetherSDR::hl2 {
 
+struct MetisClientTestAccess {
+    static void setStreaming(MetisClient& client) { client.m_running = true; }
+};
+
 struct Hl2UnkeyHoldTestAccess {
     // Open the transmit gate without a socket, a peer or a discovery cycle —
     // the same preparation hl2_tx_gate_test.cpp uses.
@@ -143,6 +147,8 @@ struct Hl2UnkeyHoldTestAccess {
         backend.m_txAllowed = true;
         QMetaObject::invokeMethod(backend.m_metis, [metis = backend.m_metis] {
             metis->enableTransmit(true);
+            // A session without a socket: a key needs a running session.
+            MetisClientTestAccess::setStreaming(*metis);
         }, Qt::BlockingQueuedConnection);
     }
 

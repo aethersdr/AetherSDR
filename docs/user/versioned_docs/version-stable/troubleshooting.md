@@ -190,9 +190,9 @@ If nothing here or on the feature's own page fixes the problem, use **Help → F
 | | Linux | macOS | Windows |
 |---|---|---|---|
 | **Settings** (`AetherSDR.db`) | `~/.config/AetherSDR/` | `~/Library/Preferences/AetherSDR/` | `%LOCALAPPDATA%\AetherSDR\` |
-| **Logs** | `~/.config/AetherSDR/logs/` | `~/Library/Preferences/AetherSDR/logs/` | `%LOCALAPPDATA%\AetherSDR\logs\` |
+| **Logs** | `~/.config/AetherSDR/logs/` | `~/Library/Preferences/AetherSDR/logs/` | `%LOCALAPPDATA%\AetherSDR\logs\` (installer or portable); Microsoft Store: usually `%LOCALAPPDATA%\Packages\<package-family>\LocalCache\Local\AetherSDR\logs\` |
 
-Each launch writes a new timestamped log; attach the newest one. See [Support and Logging](./support-and-logging.md) and [Settings and Backups](./settings-and-backups.md).
+Each launch writes a new timestamped log; attach the newest one. On the Microsoft Store build, use the path **Support & Diagnostics** shows. See [Support and Logging](./support-and-logging.md) and [Settings and Backups](./settings-and-backups.md).
 
 ## By feature
 

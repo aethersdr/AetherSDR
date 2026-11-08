@@ -31,6 +31,10 @@ public:
     // Narrow the mic-source dropdown to PC on a radio whose input this client
     // cannot choose (capability hasSelectableMicInputs). Idempotent.
     void setSelectableMicInputs(bool selectable);
+    // Dim MON and its volume slider, with the reason, on a radio that declares
+    // no transmit monitor (RadioCapabilities::txMonitorControl empty). True
+    // restores them. Idempotent.
+    void setMonitorAvailable(bool available);
     // Show or hide the mic-level gauge. False on a radio that defines no
     // microphone-peak meter at all — the face would be permanently at its floor
     // and read as a fault rather than as an absence.
@@ -221,6 +225,7 @@ private:
     // ── Shared state ─────────────────────────────────────────────────────
 
     bool m_transmitControlsAvailable{true};
+    bool m_monitorAvailable{true};
     bool m_updatingFromModel{false};
     bool m_radeActive{false};
 

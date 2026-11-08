@@ -39,13 +39,22 @@ public:
     static MidiSettings& instance();
 
     // Load/save the default settings file. Saves replace the file atomically
-    // and return false on open, serialization, or commit failure. (#5160)
+    // and return false on open, serialization, or commit failure. Preference
+    // saves also refuse to replace existing bindings after a read/parse failure.
     void load();
     bool save();
 
     // Binding saves use the same atomic write and failure reporting. (#5160)
     QVector<MidiBinding> loadBindings() const;
     bool saveBindings(const QVector<MidiBinding>& bindings);
+
+    // Startup hydration. Returns the bindings that could be read. When an
+    // existing midi.settings cannot be read or parsed, every save() and
+    // saveBindings() after it is refused, so the damaged file stays on disk
+    // for the operator to restore instead of being replaced by the partial
+    // set. Each call re-evaluates the file; the app calls it once. (#6683)
+    QVector<MidiBinding> loadStartupBindings();
+    bool savesBlocked() const { return m_savesBlocked; }
 
     // Device preferences
     QString lastDevice() const { return m_lastDevice; }
@@ -99,7 +108,9 @@ private:
     MidiSettings() = default;
     QString settingsFilePath() const;
 
-    static QVector<MidiBinding> parseBindingsFromXml(const QString& filePath);
+    enum class ReadOutcome { Absent, Parsed, Failed };
+    static QVector<MidiBinding> parseBindingsFromXml(const QString& filePath,
+                                                    ReadOutcome* outcome = nullptr);
     static bool writeBindingsToXml(const QString& filePath,
                                    const QVector<MidiBinding>& bindings);
     bool writeSettingsDocument(const QString& filePath,
@@ -107,6 +118,7 @@ private:
 
     QString m_lastDevice;
     bool    m_autoConnect{true};
+    bool    m_savesBlocked{false};
 };
 
 } // namespace AetherSDR

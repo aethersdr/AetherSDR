@@ -19,6 +19,7 @@
 #include <QMetaMethod>
 #include <QMetaObject>
 #include <QSignalSpy>
+#include <QTest>
 
 #include <algorithm>
 #include <cmath>
@@ -274,6 +275,85 @@ void testCalibratorClimbsToTheTarget()
     cal.stop();
 }
 
+void testSweepStopsWithoutAudio()
+{
+    std::printf("\n  7. A sweep with no audio stops\n");
+    // PC Audio off stops AudioEngine, so levelChanged never fires. The curve
+    // was then flat at the last reading, the AGC-off pass climbed to 100
+    // (120 dB on ANAN's line out) and the target solve applied 0.
+    SliceModel s(0);
+    s.setAgcMode(QStringLiteral("off"));
+    s.setAgcOffLevel(47);
+    AgcTCalibrator cal;
+    cal.setSlice(&s);
+    cal.setSettleMs(1);
+    std::vector<int> applied;
+    int audibleBelow = -1;   // levels arrive only for off levels under this
+    QObject::connect(&s, &SliceModel::agcOffLevelChanged, &cal, [&](int level) {
+        applied.push_back(level);
+        if (level < audibleBelow) {
+            for (int i = 0; i < 40; ++i)
+                cal.onAudioLevel(0.001f);
+        }
+    });
+    // As the dialog wires them: a value that settles outside a sweep is
+    // recorded as a manual point, 120 ms later.
+    QObject::connect(&s, &SliceModel::agcOffLevelChanged, &cal, &AgcTCalibrator::onValueChanged);
+    QObject::connect(&s, &SliceModel::agcThresholdChanged, &cal, &AgcTCalibrator::onValueChanged);
+    const auto nothingRecordedOnceSettled = [&] {
+        QTest::qWait(400);
+        return cal.curve().isEmpty() && !cal.hasRecommendation();
+    };
+    QSignalSpy finished(&cal, &AgcTCalibrator::finished);
+    QSignalSpy noAudio(&cal, &AgcTCalibrator::noAudio);
+
+    cal.startAutoSweep();
+    check(finished.wait(5000), "with no audio at all the sweep ends");
+    check(noAudio.size() == 1 && !finished.constFirst().constFirst().toBool(),
+          "and says it stopped for no audio");
+    check(applied == std::vector<int>{0, 47},
+          "at its first step, before climbing, putting the off level back");
+    check(!cal.isRunning() && !cal.hasRecommendation(), "with nothing to recommend");
+    check(nothingRecordedOnceSettled(), "and the put-back value is not recorded as a point");
+
+    // Audio that stops part-way: levels for 0, 4 and 8, none from 12.
+    applied.clear();
+    finished.clear();
+    noAudio.clear();
+    audibleBelow = 12;
+    cal.startAutoSweep();
+    check(finished.wait(5000) && noAudio.size() == 1, "audio that stops mid-sweep stops it");
+    check(applied == std::vector<int>{0, 4, 8, 12, 47},
+          "at the first silent step, putting the off level back");
+    check(!cal.hasRecommendation(), "with no recommendation from a part curve");
+    check(nothingRecordedOnceSettled(),
+          "nor once the put-back value settles: the part curve is dropped");
+
+    // Audio from before the sweep, none during it: the smoothed reading is
+    // stale, not absent. The knee sweep (AGC on) stops the same way.
+    s.setAgcMode(QStringLiteral("med"));
+    s.setAgcThreshold(47);
+    std::vector<int> thresholds;
+    QObject::connect(&s, &SliceModel::agcThresholdChanged, &cal,
+                     [&](int value) { thresholds.push_back(value); });
+    cal.onAudioLevel(0.2f);
+    finished.clear();
+    noAudio.clear();
+    cal.startAutoSweep();
+    check(finished.wait(5000) && noAudio.size() == 1,
+          "a level from before the sweep does not count for its first step");
+    check(thresholds == std::vector<int>{100, 47},
+          "so the knee sweep stops at 100 and puts AGC-T back");
+    check(nothingRecordedOnceSettled(), "recording nothing once AGC-T settles");
+
+    // The stop has already said finished. A session change that leaves the
+    // calibrator unable to write cancels it, and must not say so again: the
+    // dialog would replace the no-audio line with "Calibration stopped."
+    finished.clear();
+    s.invalidateFrequencyObservation();
+    check(finished.isEmpty(), "and a later session change does not end it a second time");
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -286,6 +366,7 @@ int main(int argc, char** argv)
     testRoutedThroughTheSeam();
     testBaseVerbsAreNoOps();
     testCalibratorClimbsToTheTarget();
+    testSweepStopsWithoutAudio();
     std::printf("\n  %s — %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

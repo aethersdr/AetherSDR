@@ -219,6 +219,9 @@ Drag an applet by its title bar (⋮⋮ grip) to reorder it. The order is rememb
 - **Band plan** — colored strip along the bottom of the spectrum
 - **Overlay menu** — the button column at the left: **+RX**, **+TNF**, **Band**, **ANT**, **Display**, **Memory**, **DAX** (the DAX flyout holds the **IQ Ch** selector and the **WFM** demodulator, and only appears on radios with DAX)
 
+Clicks inside an open overlay panel stay in that panel. Right-clicking a label
+or double-clicking empty panel space does not tune the spectrum behind it.
+
 ### Display panel
 
 Click **Display** in the overlay menu. The panel is divided into sections and scrolls when the window is short. Settings apply to the panadapter you opened it from.

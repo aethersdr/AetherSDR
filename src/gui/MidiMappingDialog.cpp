@@ -691,6 +691,22 @@ void MidiMappingDialog::showEvent(QShowEvent* event)
                        : QStringLiteral("Disconnected"),
                   open ? QStringLiteral("{{color.accent.success}}")
                        : QStringLiteral("{{color.text.label}}"));
+
+    // Every edit here saves to midi.settings, and those saves are refused
+    // after a failed startup read. Say so once per open, after the window is
+    // up, rather than letting each edit fail silently. (#6683)
+    if (!m_savesBlockedNoticeShown && MidiSettings::instance().savesBlocked()) {
+        m_savesBlockedNoticeShown = true;
+        QTimer::singleShot(0, this, [this] {
+            FramelessMessageBox::warning(
+                this, QStringLiteral("MIDI Changes Not Saved"),
+                QStringLiteral("AetherSDR couldn't read midi.settings at startup, so "
+                               "MIDI binding and device preference changes won't be "
+                               "saved this session. The file was left unchanged. "
+                               "Restore read access or a valid backup, then restart "
+                               "AetherSDR."));
+        });
+    }
 }
 
 void MidiMappingDialog::refreshBindingTable()

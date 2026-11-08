@@ -2,6 +2,8 @@
 #include "CanonIndicators.h"
 #include "core/ThemeManager.h"
 
+#include <QAbstractSpinBox>
+#include <QLineEdit>
 #include <QRegularExpression>
 #include <QWidget>
 
@@ -437,6 +439,14 @@ QColor colour(const char* placeholder)
         token = token.mid(2, token.size() - 4);
     }
     return AetherSDR::ThemeManager::instance().color(token);
+}
+
+void insetSpinText(QWidget* root, int left)
+{
+    for (auto* spin : root->findChildren<QAbstractSpinBox*>()) {
+        if (auto* editor = spin->findChild<QLineEdit*>())
+            editor->setTextMargins(left, 0, 0, 0);
+    }
 }
 
 } // namespace AetherSDR::ModemChrome

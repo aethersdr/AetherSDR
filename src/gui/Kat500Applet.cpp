@@ -536,8 +536,8 @@ Kat500Applet::Kat500Applet(QWidget* parent) : CanonApplet(parent)
     });
     connect(m_tune, &QPushButton::clicked, this, [this] {
         if (m_model) {
-            if (m_model->status().tuning.value_or(false)) {
-                m_model->cancelTune();
+            if (m_model->tuneSearchPending()) {
+                m_model->cancelTuneAfterPendingOperation();
             } else {
                 m_model->startTune();
             }
@@ -722,10 +722,15 @@ void Kat500Applet::refresh()
                               ? QString()
                               : tr("Wait for confirmed tuner identity, power and an idle operation."),
                  tr("Turn the KAT500 on or off. The button shows confirmed tuner power, not radio power."));
-    m_tune->setText(tuning ? tr("Cancel") : tr("Tune"));
+    const bool searchPending = m_model && m_model->tuneSearchPending();
+    const bool cancelPending = m_model && m_model->tuneCancellationPending();
+    m_tune->setText(searchPending ? tr("Cancel") : tr("Tune"));
     m_tune->setAccessibleName(m_tune->text());
-    availability(m_tune, tuning && m_model && m_model->isResponding() ? QString() : reason,
-                 tuning ? tr("Cancel the KAT500's current tuning search. This does not stop a radio carrier.")
+    const bool canCancel = searchPending && m_model->isConnected() && m_model->isDetected()
+        && s.identity == QStringLiteral("KAT500");
+    availability(m_tune, cancelPending ? tr("Cancellation is pending; waiting for tuner idle confirmation.")
+                                      : canCancel ? QString() : reason,
+                 searchPending ? tr("Cancel the KAT500's current tuning search. The request waits for pending replies to drain. This does not stop a radio carrier.")
                         : tr("Start a full KAT500 tuning search and save the match. Supply RF separately; "
                              "this button does not start a radio carrier."));
     const QStringList modeHelp{

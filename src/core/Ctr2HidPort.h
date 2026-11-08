@@ -39,7 +39,7 @@ public:
         QString shortName() const;
         // A recognized device whose firmware relays over USB: AetherKnob,
         // firmware that names itself (AetherCTR2), or a CTR2-Max / Nano on
-        // Lynovation's firmware (v1.02.00 on; earlier versions never answer).
+        // Lynovation's firmware (v2.00.00 on; earlier versions never answer).
         bool usbLink() const;
     };
 

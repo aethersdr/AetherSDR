@@ -3,7 +3,10 @@
 #include "core/AppSettings.h"
 #include "core/MemoryCsvCompat.h"
 #include "gui/ProfileManagerDialog.h"
+#include "gui/CanonMessageBox.h"
+#include "gui/CanonWindow.h"
 #include "gui/MemoryDialog.h"
+#include "core/ThemeManager.h"
 
 #include <QApplication>
 #include <QByteArray>
@@ -11,7 +14,7 @@
 #include <QLabel>
 #include <QList>
 #include <QLineEdit>
-#include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QString>
 #include <QTableWidget>
@@ -19,6 +22,7 @@
 #include <QTimer>
 #include <QWidget>
 #include <cstdio>
+#include <utility>
 
 using namespace AetherSDR;
 
@@ -114,8 +118,12 @@ void stoppedImport()
     QTimer driver;
     QObject::connect(&driver, &QTimer::timeout, &dialog, [&] {
         for (QWidget* widget : QApplication::topLevelWidgets()) {
-            if (QMessageBox* box = qobject_cast<QMessageBox*>(widget); box && box->isVisible()) {
-                summary = box->informativeText(); details = box->detailedText(); box->accept();
+            if (auto* box = qobject_cast<CanonMessageBox*>(widget); box && box->isVisible()) {
+                const auto* info = box->findChild<QLabel*>(QStringLiteral("canonMessageInfo"));
+                const auto* list = box->findChild<QPlainTextEdit*>(QStringLiteral("canonMessageDetails"));
+                summary = info ? info->text() : QString();
+                details = list ? list->toPlainText() : QString();
+                box->accept();
             }
         }
     });
@@ -141,6 +149,117 @@ void stoppedImport()
     check(summary.startsWith("2 rows were skipped") && details.contains("Second row") && details.contains("Third row"),
           "queued import reports every unattempted row after session replacement");
 }
+
+// The window is a canon workspace with its old geometry key, and its sheet is
+// canon: every token it uses resolves in its canon/memory scope, under Default
+// Dark and Default Light, and the old literal selection blue is gone.
+void memoryCanonWindow()
+{
+    RadioModel model;
+    installRadioSetupBackend(model);
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        check(tm.setActiveTheme(QLatin1String(theme)), theme);
+        MemoryDialog dialog(&model);
+        check(qobject_cast<CanonWindow*>(&dialog) != nullptr, "memory window is a CanonWindow");
+        check(dialog.windowTitle() == "Memory Channels", "memory window keeps its title");
+        check(dialog.windowType() == Qt::Window, "memory window is a workspace, not a dialog");
+        check(dialog.property("themeContainer").toString() == "canon/memory",
+              "memory window uses the canon/memory scope");
+        bool header = false;
+        for (QLabel* label : dialog.findChildren<QLabel*>())
+            header = header || (label->objectName() == "canonHeaderTitle" && label->text() == "Memory Channels");
+        check(header, "canon header carries the title");
+        const QString sheet = dialog.bodyWidget()->styleSheet();
+        for (const char* token : {"color.canon.ink", "color.canon.inkSoft", "color.canon.muted",
+                                  "color.canon.nested", "color.canon.raised", "color.canon.control",
+                                  "color.canon.line", "color.canon.lineHi", "color.canon.cyan",
+                                  "color.canon.aqua", "color.canon.onAccent"}) {
+            const QString value = tm.cssFragment(dialog.bodyWidget(), QLatin1String(token));
+            check(!value.isEmpty() && sheet.contains(value), token);
+        }
+        check(!sheet.contains(": ;"), "no token in the memory sheet resolved empty");
+        check(!sheet.contains("#2060a0", Qt::CaseInsensitive)
+                  && !StoredDialogsTestAccess::table(dialog)->styleSheet().contains("#2060a0", Qt::CaseInsensitive),
+              "old literal selection blue is gone");
+    }
+    tm.setActiveTheme(before);
+}
+
+// Remove asks a CanonMessageBox: Cancel (the default) and closing it send
+// nothing; Delete sends the removal.
+void memoryRemoveConfirm()
+{
+    RadioModel model;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(model);
+    MemoryDelta delta; delta.index = 7; delta.name = "Doomed"; delta.mode = "FM";
+    delta.freq = 146.52; delta.group = "Test";
+    StoredControlTestAccess::memory(model, delta);
+    MemoryDialog dialog(&model);
+    StoredDialogsTestAccess::populate(dialog);
+    QTableWidget* table = StoredDialogsTestAccess::table(dialog);
+    QPushButton* remove = nullptr;
+    for (QPushButton* button : dialog.findChildren<QPushButton*>())
+        if (button->text() == "Remove") remove = button;
+    if (!table || table->rowCount() != 1 || !remove) { check(false, "memory row and Remove button exist"); return; }
+    table->clearSelection();
+    check(!remove->isEnabled()
+              && remove->accessibleDescription() == "Select one or more memories to remove.",
+          "a disabled Remove says why, to screen readers too");
+
+    // answer: "Cancel", "Delete", or "" to close the box without a button.
+    // A repeating driver answers once the box is up, however late exec()
+    // shows it; a safety timer closes any box left open so a miss fails a
+    // check instead of hanging.
+    auto run = [&](const QString& answer) {
+        QString seenTitle;
+        QString seenDefault;
+        bool answered = false;
+        QTimer driver;
+        QObject::connect(&driver, &QTimer::timeout, &dialog, [&] {
+            if (answered) return;
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                auto* box = qobject_cast<CanonMessageBox*>(widget);
+                if (!box || !box->isVisible()) continue;
+                answered = true;
+                seenTitle = box->windowTitle();
+                for (QPushButton* button : box->findChildren<QPushButton*>())
+                    if (button->isDefault()) seenDefault = button->text();
+                if (answer.isEmpty()) { box->reject(); return; }
+                for (QPushButton* button : box->findChildren<QPushButton*>())
+                    if (button->text() == answer) { button->click(); return; }
+                box->reject();
+                return;
+            }
+        });
+        driver.start(20);
+        QTimer safety;
+        safety.setSingleShot(true);
+        QObject::connect(&safety, &QTimer::timeout, &dialog, [] {
+            for (QWidget* widget : QApplication::topLevelWidgets())
+                if (auto* box = qobject_cast<CanonMessageBox*>(widget); box && box->isVisible())
+                    box->reject();
+        });
+        safety.start(10000);
+        table->selectRow(0);
+        remove->click();
+        QTest::qWait(20);
+        return std::make_pair(seenTitle, seenDefault);
+    };
+
+    const auto [title, defaultButton] = run(QStringLiteral("Cancel"));
+    check(title == "Delete Memory", "Remove asks in a CanonMessageBox");
+    check(defaultButton == "Cancel", "Cancel is the delete question's default");
+    check(backend->commands.isEmpty(), "Cancel sends nothing");
+    run(QString());
+    check(backend->commands.isEmpty(), "closing the question sends nothing");
+    run(QStringLiteral("Delete"));
+    check(backend->commands.size() == 1 && backend->commands.value(0).startsWith("memory remove 7"),
+          "Delete sends the removal");
+    if (backend->commands.size() != 1)
+        std::fprintf(stderr, "commands: %s\n", qPrintable(backend->commands.join(" | ")));
+}
 }
 
 int main(int argc, char** argv)
@@ -150,6 +269,6 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     if (!profile.isValid()) { return 2; }
     AppSettings::instance().load();
-    profileDialog(); memoryDialog(); stoppedImport();
+    profileDialog(); memoryDialog(); stoppedImport(); memoryCanonWindow(); memoryRemoveConfirm();
     return failures == 0 ? 0 : 1;
 }

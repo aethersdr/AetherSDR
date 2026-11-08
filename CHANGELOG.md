@@ -8,6 +8,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.11.1] — 2026-11-01
+
+### Install update on Windows, macOS and Linux · Remote Access on FLEX-6000 radios with QR sign-in · AetherLab, an experimental vector network analyzer · eight more canon windows and TCI 2.1
+
+44 merged changes from 11 human contributors. AetherSDR now installs its own updates: the Updates window downloads the newest release and swaps it in as AetherSDR exits, on Windows, on macOS and on Linux from an install that `AetherSDR --install` or **Install for updates** makes, and every release carries the signed tarballs the update manifest names. Remote Access signs a radio in to a tailnet with a QR code and reaches FLEX-6000 radios as a legacy waveform, and the Waveforms window edits a SmartSDR 4.3 container's environment and shows the radio's free storage, memory and CPU. AetherLab drives a RigExpert Stick Pro as an experimental vector network analyzer. Eight more windows move to the canon, the TCI server speaks protocol 2.1 for sample types, squelch and split, and a lapsed SmartSDR+ subscription keeps the features released before it expired.
+
+### In-app updates
+
+- **Install update on Windows (#6777).** RFC #5304 Phase 3. The Updates window's primary button becomes **Install update**, with an inline progress bar and Cancel, then **Restart to update**; an update that is ready also installs when AetherSDR quits, and the title-bar badge reads **RESTART TO UPDATE** until it does. On the next launch the status bar says for 10 seconds whether it updated or rolled back, and a rolled-back release is never downloaded again. **Skip this version** discards a downloaded update. Nothing is handed over while radio firmware is being written. **Get AetherSDR** stays wherever an in-place update is not possible: Store installs, running as administrator, a folder the user cannot write to, or no `AetherSDRUpdater.exe` beside the app. The first in-place update runs from this release to the next one, because earlier releases predate the helper's self-test.
+- **Install update on macOS (#6927, #6930).** RFC #5304 Phase 4. A Mac running AetherSDR from a writable folder gets Install update: the new bundle is checked with `codesign` against the running app's Developer ID team, swapped in as AetherSDR exits, and the previous bundle is kept. A copy running from the DMG, a translocated copy, or a non-administrator's copy in `/Applications` keeps Get AetherSDR and says why. Get AetherSDR now offers the Intel DMG to Intel Macs. The DAX audio driver stays a manual install; when a release changes it, the Updates window says to install it from the release's disk image. Every release now carries signed Apple Silicon and Intel `.app.tar.zst` tarballs, and the update manifest lists them (#6930).
+- **Install update on Linux (#6810, #6891, #6925).** RFC #5304 Phases 5 and 6. `AetherSDR --install`, run from an unpacked release, installs a copy under `~/.local/share/AetherSDR/install/` with its menu entry, icons and `~/.local/bin/aethersdr`, and that copy updates in-app: the staged release must pass a self-test before it becomes current, one previous release is kept, and a third failed self-test at quit is final (#6810). Every release carries GPG-signed x86_64 and aarch64 `.tar.zst` tarballs, which the signed manifest names as Linux's full update (#6891). An AppImage user gets **Install for updates** in the Updates window: one click moves them to the install that updates itself, optionally moving the AppImage to the trash, and never replaces an existing install (#6925). `./AetherSDR-<version>-x86_64.AppImage --install` does the same from a terminal and does install over an existing one.
+
+### Remote access and waveforms
+
+- **QR sign-in for Remote Access (#6932).** Configure… on a radio that is not on a tailnet shows a QR code at once: scan it with a phone, sign in to Tailscale and approve the radio, and the window turns to "On your tailnet". The auth key and machine name move under Advanced. Access now follows the tailnet's own rules, so the window's access list is gone; Disconnect replaces Sign Out of Tailnet, and Reset reinstalls the container. The Waveforms window's install, result and removal notices are canon windows. Shim 0.5.0.
+- **Remote Access on FLEX-6000 radios (#6945).** FLEX-6000 owners get the same Install…, QR sign-in, station-device sharing and remote connection as FLEX-8000 and Aurora owners, installed as the `AetherTailnet` legacy waveform with no container support needed. The shim 0.5.1 native package keeps its logs in RAM, runs at `nice 10` and ships compressed to fit the 13–17 MB free in a 6400/6700's `/user`. A finished download installs only to the radio it was chosen for. The install, Configure and Reset path has not yet been run against a FLEX-6000 from AetherSDR.
+- **Update for older Remote Access installs (#6951).** The container moves to shim 0.5.1. When the radio's shim is older than that, the status reads, for example, `container 0.5.0 · 0.5.1 available` and an **Update** button reinstalls it after a confirmation that the radio will need signing in again; the FLEX-6000 waveform gets the same. Earlier cached shim downloads, about 8 MB each, are deleted.
+- **Container environment variables (#6949).** On SmartSDR 4.3.16 and later, on radios with a Waveform Processor, each Docker row in the Waveforms window gets **Environment…**, which edits the container's variables and applies them with **Apply & Recreate**. Values are plain text in the window but hidden in bridge dumps, screenshots, logs and support bundles. Names follow POSIX rules up to 64 characters, and values are one line up to 512.
+- **Radio health tools (#6950).** An optional checkbox at the foot of the Waveforms window installs a 63 KB package (about 110 KB on the radio) as the hidden `AetherHealth` legacy waveform, and the bar then shows the radio's free storage, memory and CPU, refreshed every 5 seconds. The agent accepts no commands and answers only private, link-local and loopback addresses. It is available on the LAN, not over SmartLink, and has not yet run on a FLEX-6000.
+
+### AetherLab
+
+- **AetherLab — an experimental vector network analyzer for the RigExpert Stick Pro (#6481).** A USB proof of concept: a new workspace, opened from **+ → AetherLab** or **Tools → AetherLab…**, sweeps a Stick Pro over USB from 100 kHz to 600 MHz in up to 1001 points and shows SWR, return loss, |Z|, reflection, and series and parallel R, X, L and C, with markers and **Save session…** to JSON. Each sweep needs an explicit Connect and confirmation that the analyzer is isolated. Each acquisition, cancellation or error attempts an analyzer stop command and closes USB; physical RF silence remains unverified. Hardware USB sweeps are qualified on one Stick Pro 108 on macOS. The radio connection stays live and radio TX is not inhibited; a radio tab returns to it. The automation bridge gains `lab` verbs behind `AETHER_AUTOMATION_ALLOW_LAB_RF=1`. RFC #6471, first milestone.
+
+### Canon windows
+
+- Callsign Lookup, FreeDV Reporter, Net Scheduler and Memory Channels are canon workspaces in windows of their own; MQTT Settings, Keyboard Shortcuts, Ulanzi Dial — Control Mapping and the Reset Settings confirmation are canon dialogs, and their questions are canon message boxes (#6753, #6757, #6762, #6931, #6751, #6759, #6749, #6733). RFC #6226.
+- Destructive questions default to Cancel: Reset Settings (Return never confirms it), Reset All shortcuts, Remove Net and memory delete. In Keyboard Shortcuts, Return in the Filter field no longer clears the selected key's binding (#6759). Return in FreeDV Reporter's message field only sends, and Return in a Ulanzi Dial pill no longer presses Reset to Defaults (#6757, #6749).
+- The Reset Settings file list can be selected and copied into a bug report (#6733). MQTT Settings' Display check boxes are visible (#6751). FreeDV Reporter's band buttons keep room for their labels at the window's minimum width (#6813). Canon windows open through one path that raises the window already open (#6931).
+
+### SmartSDR and FlexRadio
+
+- **A lapsed SmartSDR+ subscription keeps what it bought (#6924).** CW Autotune's Once and Loop buttons follow the radio's `auto_tune` feature record instead of an active subscription, so they no longer turn into Zero Beat when a subscription lapses. Radio Setup → License Info shows **SmartSDR+ (expired)** with its date, and license state no longer carries over to the next radio. Not yet verified on a radio.
+- A late FFT packet or waterfall tile from a frame already replaced is dropped instead of restarting the frame in progress, and Network Diagnostics counts them as `late`; pan teardown no longer races the decoder (#6886).
+- The adaptive frame-rate cap is no longer saved on the radio: disconnecting, closing AetherSDR, closing a pan or choosing a band from AetherSDR's band menu restores your FFT FPS and waterfall rate first (#6793).
+- SmartLink connects to a Flex after a session on another radio family instead of spinning forever, and says so if no stream arrives (#6822).
+- The ggmorse CW decoder's pitch range follows the radio's CW pitch, re-centering on it when the range misses it (#6650).
+- The memory and Net Scheduler editors keep FDVU and FDVL instead of saving FM (#6502).
+- A saved DAX channel is no longer restored onto a radio without DAX, such as an IC-705, so it raises no notice there and the Flex DAX assignments survive the session (#6824).
+
+### TCI
+
+- The server announces `protocol:ExpertSDR3,2.1;` (#6861).
+- `audio_stream_sample_type` replies with the format's name, `int16` or `float32`, and an unknown format keeps the current one instead of switching to int16; numeric input is still accepted (#6860).
+- `sql_level` takes and reports dB, −140 to 0, and squelch changes in the GUI reach TCI clients. A client that sends the old 0–100 level is no longer understood (#6857).
+- GUI split, RIT/XIT and AGC changes reach TCI clients, DSB has a TCI name (`dsb`, an extension outside TCI 2.1), and `rx_ctun_ex` switches center lock for the session (#6858).
+
+### Hermes-Lite 2
+
+- The receive filter works in DSB, CW, CWL and FM, and FM shows its eight filter presets; WBFM shows the passband as unavailable. A saved CW or CWL preset in the old form that does not straddle the carrier, such as `300:800`, is dropped when the preset row loads (#6897).
+
+### Accessories, controllers and Windows
+
+- **KAT500 Tune, Cancel and WAIT recover (#6695).** A tuner whose idle forward reading is not exactly zero is operable, Cancel stays available during a search, and stuck operations end with the reading that blocked them. AetherSDR adds no relay lockout during transmit, matching the KAT500's front panel.
+- A `midi.settings` that cannot be read at startup is left untouched, and the MIDI Controller Mapping window says why saves are refused for the session (#6846).
+- Clicks inside an open panadapter overlay panel no longer reach the spectrum behind it (#6835).
+- On macOS, the workspace canvas's resize grips work over a panadapter (#6730).
+- In the Microsoft Store build, the log and support-bundle paths open in Explorer and other apps (#6848).
+- Touch press-and-hold builds without hidapi (#6784).
+
+### Project and packaging
+
+- Tests: the sanitizer lanes' firmware-install, update-controller and NR findings (#6847, #6852), the four TSan failures from the weekly run (#6952), and `linux_install_test` in CI's noexec `/dev/shm` (#6908).
+- CI: the sanitizer lanes and the TSan image build are pinned to `ubuntu-24.04`, so TSan builds again (#6948).
+
+### Contributors
+
+Thanks to **@ten9876** (17 commits — maintainer; Install update on every platform, the release tarballs, Remote Access QR sign-in and FLEX-6000 support, container environments, radio health tools, licensing, late-packet handling, Memory Channels and test repairs), **@w5jwp** (8 commits — Callsign Lookup, FreeDV Reporter, Net Scheduler, MQTT Settings, Keyboard Shortcuts, Ulanzi Dial and Reset Settings canon windows, macOS canvas grips), **@Ozy311** (6 commits — KAT500 recovery, MIDI settings protection, overlay clicks, Store log paths and sanitizer fixes), **@oz457** (4 commits — TCI 2.1 protocol, sample type, squelch in dB, split, RIT/XIT and AGC events), **@NF0T** (2 commits — FreeDV Reporter band buttons and the no-hidapi build), **@vu2cpl** (2 commits — SmartLink after another radio family and DAX restore on radios without DAX), **@chibondking** (1 commit — the adaptive frame-rate cap), **@jensenpat** (1 commit — AetherLab), **@on8st** (1 commit — HL2 receive filters), **@rfoust** (1 commit — FDVU/FDVL in the editors) and **@skerker** (1 commit — the ggmorse pitch range). Counts cover primary commit authors; co-author credit remains in the commit history.
+
+Welcome to first-time contributors **@oz457**, **@vu2cpl**!
+
+73, Jeremy KK7GWY & Claude (AI dev partner)
+
 ## [v26.10.4] — 2026-10-25
 
 ### The Updates window and an automatic update check · SmartSDR 4.3 Noise Floor Range, CW profiles, APD and meter fixes · RF-KIT RF2K-S, the Icom SCROLL-F panadapter and ANAN-G2 band-pass filters · typed slice and panadapter lifecycle

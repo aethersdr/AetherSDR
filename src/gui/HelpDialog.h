@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include <QString>
 
 class QLabel;
@@ -10,7 +10,9 @@ class QTextBrowser;
 
 namespace AetherSDR {
 
-class HelpDialog : public PersistentDialog {
+// One bundled offline guide, in a canon workspace window (RFC #6226, #7049),
+// with a find row over the rendered Markdown.
+class HelpDialog : public CanonWindow {
     Q_OBJECT
 
 public:

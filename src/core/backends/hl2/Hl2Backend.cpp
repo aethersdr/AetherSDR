@@ -36,6 +36,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -55,6 +56,15 @@ static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
 // shared object is better than two with separate enabled flags.
 
 namespace AetherSDR::hl2 {
+
+namespace {
+std::atomic<bool> g_hostOffersTransmit{true};
+}
+
+void Hl2Backend::setHostOffersTransmit(bool offers)
+{
+    g_hostOffersTransmit.store(offers);
+}
 
 // Declared incomplete in the header so it keeps its forward declarations of
 // MetisClient/Hl2RxDsp/Hl2TxDsp; the async connect is the only thing that needs
@@ -246,6 +256,12 @@ constexpr double kTuningMaxHz = 38'400'000.0;
     return hz >= kTuningMinHz && hz <= kTuningMaxHz;
 }
 
+// Where a pan centre request lands: inside that range, at its nearest edge.
+[[nodiscard]] double tunablePanCenterHz(double hz) noexcept
+{
+    return std::clamp(hz, kTuningMinHz, kTuningMaxHz);
+}
+
 // A remembered passband is kept only as a sane pair inside the 12 kHz audio
 // ceiling; a CW pair must also contain the carrier (pre-#4914 pairs do not).
 [[nodiscard]] bool restorablePassband(double lowHz, double highHz, bool cw) noexcept
@@ -329,11 +345,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     const bool automationAllowsTx =
         qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
         || AutomationBridgeSettings::txAllowed();
-    m_txAllowed = !automation || automationAllowsTx;
+    m_txAllowed = g_hostOffersTransmit.load() && (!automation || automationAllowsTx);
     if (m_txAllowed) {
         m_metis->enableTransmit(true);
         qInfo() << "Hl2Backend: transmit available"
                 << (automation ? "(automation, ALLOW_TX)" : "(interactive)");
+    } else if (!g_hostOffersTransmit.load()) {
+        qInfo() << "Hl2Backend: receive only — this host has no HL2 transmit path";
     } else {
         qInfo() << "Hl2Backend: transmit BLOCKED — automation bridge active "
                    "without AETHER_AUTOMATION_ALLOW_TX";
@@ -559,6 +577,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_txDsp, &Hl2TxDsp::alcPeak, this, [this](float dbfs) {
         m_alcPeakDbfs = dbfs;
         emit meterUpdate(QStringLiteral("TX:ALC"), dbfs);
+    });
+    // Both sides of the TX passband, for the TX-filter-loss check (#6605).
+    // SC_FILT_2 last: MeterModel evaluates the pair when it arrives.
+    connect(m_txDsp, &Hl2TxDsp::filterLevels, this, [this](float in, float out) {
+        emit meterUpdate(QStringLiteral("TX:SC_FILT_1"), in);
+        emit meterUpdate(QStringLiteral("TX:SC_FILT_2"), out);
     });
         // The gain the ALC applies, a separate meter from TX:ALC (a level):
         // they move in opposite directions. Mirrored into m_alcGainDb for
@@ -1872,6 +1896,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {};
     c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
+    c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
@@ -1931,10 +1956,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     amplitude.clientPersistsDbmRange = true;
     c.panAmplitude = amplitude;
 
-    // radioOwnsDbmScale is not declared: this radio cannot be commanded a dBm
-    // range, so it would be false, but declaring that is its own change.
-    // binsAbsolute already keeps noiseFloorAutoAdjustAllowed() open (bench run
-    // d101: the loop settles, 0.307 dB in 74 s quiescent).
+    // No dBm range can be commanded or echoed, so a scale drag stays local
+    // instead of dispatching a request this backend refuses. binsAbsolute keeps
+    // noiseFloorAutoAdjustAllowed() open (bench run d101: the loop settles).
+    c.radioOwnsDbmScale = false;
     // Tuning range: the AD9866 samples at 76.8 MHz, so the first Nyquist zone is
     // DC to 38.4 MHz; below 100 kHz the input transformer rolls off.
     c.tuningMinHz = kTuningMinHz;
@@ -1954,18 +1979,32 @@ RadioCapabilities Hl2Backend::capabilities() const
          QStringLiteral("SAM"), QStringLiteral("CW"), QStringLiteral("CWL"),
          QStringLiteral("FM")}};
     // Conservative carrier-relative subdomains of the existing WDSP passband.
+    // Every mode below has its cuts applied by the NBP stage ahead of the
+    // detector (WdspChannel::setFilter -> RXANBPSetFreqs; nbp0 runs in every
+    // non-WBFM mode, third_party/wdsp/upstream/RXA.c SetRXAMode) and read back
+    // unchanged (Receiver::filterLowHz/HighHz, carrier-relative). DSB and FM are
+    // symmetric-about-the-carrier like AM, so they take AM's range; the straddle
+    // keeps the carrier inside the passband. CW/CWL add the BFO to the cuts in
+    // dspFilterHz(), whose pitch reaches 6000 Hz (setCwPitch), so their cuts stop
+    // at 6000 Hz and the demodulator's edges stay inside +-12000 Hz. Unlike a
+    // Flex, whose pitch is radio-owned and so not guessed, the host DSP owns the
+    // BFO here (cwBfoOffsetHz), which is why CW and FM can be declared at all.
     c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine, {
         {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},
         {QStringLiteral("DIGU"), 0, 11990, 10, 12000, 10, 12000},
         {QStringLiteral("LSB"), -12000, -10, -11990, 0, 10, 12000},
         {QStringLiteral("DIGL"), -12000, -10, -11990, 0, 10, 12000},
         {QStringLiteral("AM"), -12000, -10, 10, 12000, 20, 24000},
-        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000}}};
+        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("DSB"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("FM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
+        {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
-                                                      100'000, 38'400'000};
+        static_cast<qint64>(kTuningMinHz), static_cast<qint64>(kTuningMaxHz)};
     c.receivePanBandwidthControl = std::nullopt; // radio-wide rate can retire other receivers
     // Power class for every forward-power gauge, via the band-table seam
     // (RadioModel::refreshTxPowerLimit; TxApplet scales from a non-empty
@@ -2122,6 +2161,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // CW, and this client's own noise modules are the only DSP it has. TNF is
     // deliberately NOT gated — see the note in RadioCapabilities.h.
     c.hasRadioSideCwKeyer = false;
+    c.cwTextControl = std::nullopt;
     c.hasVoiceKeyer = false;
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
@@ -3848,8 +3888,11 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     // Moving the window means moving the DDC. The slice does NOT move with it —
     // that is the point of keeping the two separate — so its offset from the new
     // centre is recomputed and re-applied as a shift.
-    if (hz <= 0.0)
+    if (!std::isfinite(hz) || hz <= 0.0)
         return;
+    // Outside receivePanCenterControl the window stops at the edge, as an Icom
+    // pan drag does (nearestSupportedFrequency); the echo below reports it.
+    hz = tunablePanCenterHz(hz);
     const int ddc = ddcForPan(panId);
     Receiver* r = rx(ddc);
     if (!r)
@@ -4433,6 +4476,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         if (key)
             qWarning() << "Hl2Backend: key refused — automation bridge is active "
                           "without AETHER_AUTOMATION_ALLOW_TX";
+        return;
+    }
+    // A key with no running session is refused here too, so this backend never
+    // records or publishes a key that MetisClient::setMoxImpl() refuses at the
+    // wire. An unkey always goes through.
+    if (key && (!m_metis || !m_metis->isRunning())) {
+        qWarning() << "Hl2Backend: key refused — the radio session is not running";
         return;
     }
     // A manual PTT/MOX asserted while Break-In owns the current key transfers
@@ -5290,6 +5340,15 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     // The RF power restore lives in setKeying(false), where all unkey paths
     // converge, so m_tuning is set here only on the way up and setKeying()
     // clears it.
+    if (on && (!m_txAllowed || !m_metis || !m_metis->isRunning())) {
+        // Refused before any tune state is set, so nothing is left behind for
+        // an unkey that will never come. Not routed through setKeying(): a
+        // session that starts in between would key without the tune carrier.
+        qWarning() << "Hl2Backend: tune refused —"
+                   << (m_txAllowed ? "the radio session is not running"
+                                   : "transmit is not allowed");
+        return;
+    }
     if (on) {
         m_tuning = true;
         m_tuneOperation = operation;
@@ -8202,6 +8261,12 @@ void Hl2Backend::defineMeters()
     // on a full-scale block). sourceIndex 0 as for COMPPEAK: one transmitter.
     def(9, QStringLiteral("TX"),  QStringLiteral("ALCGAIN"), QStringLiteral("dB"),
         -20.0, 0.0,    QStringLiteral("Gain the ALC is applying"));
+    // Peaks either side of the TX passband (Hl2TxDsp::filterLevels): the names
+    // RadioModel's TX-filter-loss check reads (#4651). sourceIndex 0 as above.
+    def(10, QStringLiteral("TX"), QStringLiteral("SC_FILT_1"), QStringLiteral("dBFS"),
+        -140.0, 0.0,   QStringLiteral("Transmit audio after the ALC, into the modulator"));
+    def(11, QStringLiteral("TX"), QStringLiteral("SC_FILT_2"), QStringLiteral("dBFS"),
+        -140.0, 0.0,   QStringLiteral("Modulated transmit IQ, the modulator's output"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)

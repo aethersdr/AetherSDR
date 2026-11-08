@@ -1,7 +1,5 @@
 /*  nnr.h
 
-Neural Noise Reduction (NNR) - streaming framework
-
 This file is part of a program that implements a Software-Defined Radio.
 
 Copyright (C) 2026 Warren Pratt, NR0V
@@ -22,7 +20,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 The author can be reached by email at
 
-warren@wpratt.com
+warren@pratt.one
 
 */
 
@@ -39,10 +37,6 @@ extern NNR create_nnr
 	double* in_buff,				// pointer to input buffer
 	double* out_buff,				// pointer to output buffer
 	int rate,						// dsp sample rate, Hz
-	int nrate,						// network sample rate, Hz (e.g. 16000)
-	int fftsize,					// STFT size at nrate (e.g. 512)
-	int overlap,					// 2 => 50% overlap, 4 => 75% overlap
-	int lookahead,					// network lookahead, in frames (0, 1, 2 ...)
 	double mask_floor,				// minimum mask magnitude, dB (e.g. -20.0)
 	int cmode						// I/Q handling; see notes in nnr.c
 	);
@@ -63,10 +57,15 @@ extern void setSamplerate_nnr (NNR a, int rate);
 
 extern void setSize_nnr (NNR a, int size);
 
-// diagnostics - returns algorithmic delay through the block, in dsp_rate samples
 extern int getDelay_nnr (NNR a);
 
-extern int getRun_nnr(NNR a);
+extern int getRun_nnr (NNR a);
+
+extern int getPosition_nnr(NNR a);
+
+extern int getNNRTrainingBand (NNR a, double* band_low, double* band_high);
+
+extern void setNNRbypassRun(int channel);
 
 // Standalone control surface -- the RXA properties below without the channel.
 // Locking is the caller's; see the note in nnr.c.

@@ -276,6 +276,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = familyName();
+    caps.cwReceiveControl = std::nullopt;
     caps.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry}, {PanGeometryComponent::Center}};
     caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
@@ -357,6 +358,7 @@ RadioCapabilities SimBackend::capabilities() const
     // No command plane at all: no radio-side CW text keyer, no voice keyer, and
     // a simulator that cannot key has nothing to be full duplex about.
     caps.hasRadioSideCwKeyer = false;
+    caps.cwTextControl = std::nullopt;
     caps.hasVoiceKeyer = false;
     caps.hasFullDuplex = false;
     caps.hasWaveforms = false;

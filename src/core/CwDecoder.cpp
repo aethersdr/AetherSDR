@@ -155,7 +155,7 @@ void CwDecoder::setKnownParameters(float pitchHz, float speedWpm)
     // Widen pitch range to comfortably include the known value (default
     // is 500–700 Hz but operators commonly use 700 / 750 / 800).  Also
     // drives ggmorse's internal HPF cutoff.
-    constexpr float kPitchRangePad = 150.0f;
+    constexpr float kPitchRangePad = static_cast<float>(kPitchHalfWidthHz);
     m_pendingParameters.pitchRangeMin = std::max(100.0f, pitchHz - kPitchRangePad);
     m_pendingParameters.pitchRangeMax = pitchHz + kPitchRangePad;
 

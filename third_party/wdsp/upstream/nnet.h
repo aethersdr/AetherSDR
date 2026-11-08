@@ -22,7 +22,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 The author can be reached by email at
 
-warren@wpratt.com
+warren@pratt.one
 
 */
 
@@ -38,10 +38,8 @@ typedef struct _nnet* NNET;
 #define NNET_MODE_LOWPASS	2
 
 #ifndef NNET_NSLOTS
-#define NNET_NSLOTS 2
+#define NNET_NSLOTS 4
 #endif
-
-extern NNET create_nnet (int nbins, int lookahead, double floor_db);
 
 extern void destroy_nnet (NNET n);
 
@@ -268,7 +266,13 @@ extern void reset_profile_nnet (void);
 
 extern int ok_nnet (NNET n);
 
+extern int getTrainingBand(NNET n, double* band_low, double* band_high);
+
 extern NNET create_nnet_slot (int slot, int nbins, int lookahead,
-                              double floor_db);
+                              double floor_db, double frame_rate,
+	                          double band_low, double band_high);
+
+extern int nnet_probe_slot (int slot, int* nbins, int* nrate, int* nfft,
+	int* hop, int* lookahead, double* band_lo, double* band_hi);
 
 #endif

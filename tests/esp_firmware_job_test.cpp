@@ -99,11 +99,11 @@ QString makeBackup(const QTemporaryDir& dir, const QByteArray& mac)
     const QByteArray flash(kFlash, '\x11');
     const QString path = dir.filePath(QStringLiteral("backup.bin"));
     QFile f(path);
-    f.open(QIODevice::WriteOnly);
+    check(f.open(QIODevice::WriteOnly), "the fixture backup can be written");
     f.write(flash);
     f.close();
     QFile json(path + QStringLiteral(".json"));
-    json.open(QIODevice::WriteOnly);
+    check(json.open(QIODevice::WriteOnly), "the fixture backup record can be written");
     json.write(QJsonDocument(QJsonObject{
                                  {"chip", "ESP32-S3"},
                                  {"mac", QString::fromLatin1(mac.toHex(':'))},

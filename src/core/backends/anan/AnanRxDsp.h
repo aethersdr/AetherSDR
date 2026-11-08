@@ -24,7 +24,7 @@
 
 namespace AetherSDR::anan {
 
-// The ANAN-G2 receive DSP stage: raw DDC0 IQ blocks (P2Client::ddc0IqReady) in;
+// The ANAN-G2 receive DSP stage: raw IQ blocks of RX1's DDC (P2Client::ddcIqReady) in;
 // demodulated audio (WdspChannel), panadapter spectrum (AnanPanAnalyzer) and an
 // uncalibrated raw signal-peak reading (no dBFS-to-dBm calibration yet) out.
 // Runs on AnanBackend's I/O thread; same shape as Hl2RxDsp, scoped to the
@@ -43,13 +43,13 @@ public:
     explicit AnanRxDsp(QObject* parent = nullptr);
     ~AnanRxDsp() override;
 
-    // WDSP's internal DSP rate. Constant regardless of the DDC0 IQ rate or
+    // WDSP's internal DSP rate. Constant regardless of the IQ rate or
     // the audio rate -- see the note in configure() (mirrors Hl2RxDsp's
     // kWdspDspSampleRateHz exactly; this is a WDSP fact, not a radio fact).
     static constexpr int kWdspDspSampleRateHz = 48000;
 
     struct Config {
-        int inputSampleRateHz = 48000;   // DDC0 IQ sample rate
+        int inputSampleRateHz = 48000;   // the receiver's IQ sample rate
         // Demodulated-audio rate. 24 kHz because that is AudioEngine's
         // native RX rate; every valid DDC0 rate (48/96/192/384/768/1536 kHz)
         // divides evenly into it.
@@ -280,7 +280,7 @@ public:
 
     // ── Panadapter integrity across a transport gap ───────────────────────
     //
-    // Partial FFT windows discarded at DDC0 discontinuities, including
+    // Partial FFT windows discarded at IQ discontinuities, including
     // accepted rewinds and duplicates. Same lifetime/empty-window semantics
     // as Hl2RxDsp::spectrumGapDiscards(). AnanBackend does not expose health
     // rows yet; this counter is currently available only at the DSP stage.
@@ -295,7 +295,7 @@ public slots:
     // audioReady/meterUpdate per completed WdspChannel block.
     void processIqBlock(const std::vector<std::complex<float>>& iq);
 
-    // A DDC0 sequence gap precedes the NEXT block (DirectConnection on this I/O
+    // A sequence gap on RX1's DDC precedes the NEXT block (DirectConnection on this I/O
     // thread, same call chain). Drops and counts the staged analyzer block that would
     // straddle the gap (spectrumGapDiscards()); the analyzer history and audio path
     // are left alone, as the openHPSDR clients do (~250 ms averaging makes a gap

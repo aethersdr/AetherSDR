@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QChar>
+#include <QList>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 
@@ -74,6 +76,15 @@ public:
     // May a slice add apply its last-session DAX key?
     bool restoreAllowed() const { return m_windowOpen; }
 
+    // Should a slice add restore `savedDax` (0 = no saved key)? The saved
+    // channel is app-wide, so after a Flex session it is still set when a
+    // radio without DAX streams (Icom, HL2) connects; that radio would refuse
+    // the write and raise the "not supported by this radio" notice.
+    bool shouldRestore(int savedDax, bool hasDaxStreams) const
+    {
+        return savedDax > 0 && hasDaxStreams && restoreAllowed();
+    }
+
     // ── The quit-time key space ────────────────────────────────────────────
 
     // Highest index the letter key space ever used. Bounds the historical
@@ -102,6 +113,34 @@ public:
             keys << keyForIndex(i);
         }
         return keys;
+    }
+
+    // The whole quit-time write: which keys to set (key -> channel) and which
+    // to remove, given the live slices' channels in list order. A radio
+    // without DAX streams (Icom, HL2) reports channel 0 on every slice, which
+    // would read as "unassigned" and delete the saved Flex keys, so its quit
+    // writes nothing and the next DAX-capable session still restores them.
+    struct QuitWrite {
+        QList<QPair<QString, int>> set;
+        QStringList remove;
+    };
+    static QuitWrite quitWrite(bool hasDaxStreams, bool connected,
+                               const QList<int>& sliceChannels)
+    {
+        QuitWrite w;
+        if (!hasDaxStreams) {
+            return w;
+        }
+        for (int i = 0; i < sliceChannels.size(); ++i) {
+            const QString key = keyForIndex(i);
+            if (sliceChannels[i] > 0) {
+                w.set.append({key, sliceChannels[i]});
+            } else {
+                w.remove << key;
+            }
+        }
+        w.remove << staleKeysToPrune(connected, int(sliceChannels.size()));
+        return w;
     }
 
 private:

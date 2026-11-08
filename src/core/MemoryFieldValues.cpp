@@ -24,7 +24,7 @@ const QStringList& modes()
     static const QStringList kModes = {
         "USB", "LSB", "CW", "AM", "SAM", "DSB",
         "FM", "NFM", "DFM", "DIGU", "DIGL", "RTTY",
-        "FDV", "DSTR", "AME"
+        "FDVU", "FDVL", "FDV", "DSTR", "AME"
     };
     return kModes;
 }

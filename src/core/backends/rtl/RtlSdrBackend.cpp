@@ -215,6 +215,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // Receiver admission is an explicitly qualified profile. Settings-domain
     // ownership changes only after a successful accepted-state migration.
     RadioCapabilities c;
+    c.cwTextControl = std::nullopt;
     // THE dBm AXIS IS UNCALIBRATED, and on this backend that is not a nuance:
     // RtlSdrDdc's FFT path computes `20 * log10(mag / kFftSize)` on raw ADC
     // magnitudes and emits that straight out as the spectrum frame. There is no
@@ -242,6 +243,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
         tr("Spectrum averaging time: 10 ms per step; 0 is off and 100 is one second. Higher values smooth changes but blur short signals. The decay time stays the same when FPS changes."),
         tr("Off averages signal power. On averages dB levels for a smoother trace, but varying signals and noise read lower. Both modes use the FFT AVG time setting.")};
     c.family = QStringLiteral("rtl");
+    c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
@@ -2019,7 +2021,7 @@ void RtlSdrBackend::drainAudio()
     const QPointer<RtlSdrWorker> worker(m_worker.get());
     RtlReceivePipeline::RfObservation rf;
     while (worker && worker.data() == m_worker.get() && worker->takeRfObservation(rf)) {
-        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
         if (!m_receiveMetersEnabled || !acceptsFrame(rf.token.session, rf.token.revision) || !rf.producedMs
             || rf.producedMs > now || now - rf.producedMs > 500) { continue; }
         for (int id = 0; id < 8; ++id) {

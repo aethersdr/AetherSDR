@@ -166,6 +166,8 @@ void testRecordsAccumulateAcrossReads()
         case RecordType::SwitchAdd:    types.append(QStringLiteral("Add")); break;
         case RecordType::SwitchUpdate: types.append(QStringLiteral("Update")); break;
         case RecordType::SwitchLocks:  types.append(QStringLiteral("Locks")); break;
+        case RecordType::DeviceAdd:    types.append(QStringLiteral("DeviceAdd")); break;
+        case RecordType::Point:        types.append(QStringLiteral("Point")); break;
         case RecordType::Unknown:      types.append(QStringLiteral("Unknown")); break;
         }
     }

@@ -209,6 +209,9 @@ public:
     QString txSliceMode()     const { return m_txSliceMode; }
     bool tuneAvailable() const { return m_tuneAvailable; }
     void setTuneAvailable(bool available);
+    // Whether the selected TX antenna passes through the internal ATU.
+    bool atuAvailable() const { return m_atuAvailable; }
+    void setAtuAvailable(bool available);
     bool    showTxInWaterfall() const { return m_showTxInWaterfall; }
 
     // ── APD getters ─────────────────────────────────────────────────────────
@@ -518,6 +521,7 @@ signals:
     void hasTunerMemoriesChanged(bool present);
     void tuneChanged(bool tuning);
     void tuneAvailabilityChanged(bool available);
+    void atuAvailabilityChanged(bool available);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
     // OR from setTransmitting() (interlock-driven: CW break-in, VOX, footswitch).
@@ -565,6 +569,12 @@ signals:
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).
     void cwPitchChanged(int hz);
+    // Fires on every applied delta that carries the CW pitch (a radio report,
+    // or a host-DSP backend's restored state), changed or not, before that
+    // delta's cwPitchChanged: the first report after a connect often repeats
+    // the value already held, so cwPitchChanged stays silent there. The local
+    // setter never emits it.
+    void cwPitchReported(int hz);
     void cwSpeedChanged(int wpm);
     // Compatibility CW-intent notifications for test observers; radio
     // observations never emit them. Backend dispatch uses controlRequested.
@@ -746,6 +756,7 @@ private:
     int     m_maxPowerLevel{100};
     QString m_tuneMode{"single_tone"};
     bool m_tuneAvailable = true;
+    bool m_atuAvailable = true;
     QString m_txSliceMode;   // empty until first transmit status; "FDVU", "FDVL", "USB", etc.
     bool    m_showTxInWaterfall{false};
 

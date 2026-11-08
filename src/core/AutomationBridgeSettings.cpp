@@ -178,6 +178,7 @@ void AutomationBridgeSettings::loadToken(QObject* ctx,
     });
     job->start();
 #else
+    Q_UNUSED(ctx);
     // No keychain: the token is session-only (RFC #4603 — credentials never
     // persist in the settings store). The XML import parks a legacy token in
     // the session vault; consume it from there, else fall back to any

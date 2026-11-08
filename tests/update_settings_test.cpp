@@ -65,6 +65,14 @@ int main(int argc, char** argv)
     UpdateSettings::setSkippedVersion(QString());
     check(!UpdateSettings::isSkipped(QStringLiteral("26.10.4")), "clearing the skip");
 
+    check(UpdateSettings::installedFromAppImage().isEmpty(), "nothing installed from an AppImage by default");
+    UpdateSettings::setInstalledFromAppImage(QStringLiteral("v26.10.4"));
+    settings.load();
+    check(UpdateSettings::installedFromAppImage() == QLatin1String("26.10.4"),
+          "the release installed from the AppImage survives reload, as digits");
+    UpdateSettings::setInstalledFromAppImage({});
+    check(UpdateSettings::installedFromAppImage().isEmpty(), "and clears once reported");
+
     // A known update survives a restart inside the throttle (no new request),
     // and the badge rule drops it once skipped or once the running version
     // catches up. The store branch needs a packaged build; not reachable here.

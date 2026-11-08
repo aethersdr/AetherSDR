@@ -787,12 +787,13 @@ connects).
 | `flags` (or `vfoFlags`) | `all` (default) / `<sliceId>` | VFO flag attachment snapshot: each flag’s slice id, expected radio pan id, attached UI pan id/index, geometry, visibility, and `attachedToExpectedPan`; also reports `missingSlices`. |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 | `eqstats` | Client EQ canvas objectName (default: all) | analyzer paint/cache counters — see [`get eqstats`](#get-eqstats) |
-| `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
+| `tracedebug` | `<panIndex>` / `<objectName>` (default: all; property `bins` needs one) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
 | `display` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter **Display panel** settings — see [`get display`](#get-display) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
-| `waveforms` | — | installed legacy/Docker waveforms, WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
+| `waveforms` | — | installed legacy/Docker waveforms (each container with `environmentKeys`: its environment variable names, never their values), WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
+| `ntp` | — (optional property) | the radio's own NTP time sources (SmartSDR 4.3.16, BigBend platform): `available` (the radio has them), `maxSources`, and `sources`, each with `id`, `address`, `directive` (server/pool/peer), `description`, `enabled`, `selected`, `inUse` (selected, or chrony state `selected`), `prefer`, `state` (raw chrony state), `stratum` and `reach` (−1 while unknown), and `updating` (an edit's remove-and-create is in flight; `enabled` is the radio's live value). Read-only; edits go through Radio Setup ▸ Time. |
 
 Read-only Flex metadata is available as `get radio` → `iaruRegion` (1–3 or
 `null`) and `get slice` / `get slices` → `chainMode` (bounded radio-reported
@@ -1094,6 +1095,64 @@ used by the stacked trace renderer.
    "flexBins":{"count":768,"finiteCount":768},
    "kiwiBins":{"count":768,"finiteCount":768}}]}
 ```
+
+**The bins themselves** (#5806). With `property` `bins` and one pan as the
+selector, the reply carries that pan's last decoded frame instead of statistics:
+
+```json
+→ {"cmd":"get","model":"tracedebug","selector":"0","property":"bins"}
+← {"ok":true,"model":"tracedebug","property":"bins","pan":{
+   "panIndex":0,"name":"SpectrumWidget","kiwiWaterfallActive":false,
+   "count":1024,"finiteCount":1024,"fftFrameSequence":5120,"ageMs":31,"settledFrames":12,
+   "centerHz":3775000,"spanHz":384000,"lowHz":3583000,"binHz":375,
+   "encoderRangeValid":true,"encoderMinDbm":-140,"encoderMaxDbm":-20,"encoderYPixels":700,
+   "bins":[-121.4,-121.9,...]}}
+```
+
+- `bins` is the last radio frame exactly as the widget decoded it: never
+  smoothed, never reprojected after a pan or zoom, never cropped. It runs from
+  `lowHz` in steps of `binHz` (`spanHz` / `count`), the pan geometry the
+  widget showed when the frame arrived. It is the whole computed frame: on a
+  radio that declares `hasDdcPanEdgeRolloff` (ANAN) the display shows only its
+  central part, over a narrower span. A non-finite bin is `null`.
+- `ageMs` is the time since that frame arrived (monotonic clock).
+  `fftFrameSequence` tells two reads of the same frame apart. `settledFrames`
+  counts the frames received since the geometry last changed.
+- A frame carries no frequency geometry of its own, so the widget only pairs it
+  with the geometry it is showing once that geometry has been steady for 3
+  frames. Until then the reply is a refusal, `ok:false` with the reason:
+
+  ```json
+  ← {"ok":false,"error":"tracedebug bins: geometry changed 1 frames ago; wait for 3 settled frames"}
+  ```
+
+  The refusals: `no frame decoded yet` (also after the display was cleared,
+  on disconnect or a profile load); `pan animation running`; `a pan or zoom is
+  in progress` (a drag, or a zoom still settling or waiting to be sent); `a
+  requested pan or zoom is not yet confirmed by the radio` (on a radio that
+  confirms geometry: from the request until its echo, at most 2 s);
+  `geometry changed after the last frame` and `geometry changed N frames ago`
+  (any change of centre or bandwidth, shown or requested); `the last frame
+  was decoded across a dBm range change`; and, while Receive Sync delays the
+  spectrum, `the frame was held by Receive Sync; no age or geometry can be
+  established` (a held frame may arrive after the pan moved; after one, 3
+  unheld frames must follow). Turn Receive Sync off to measure. A refused client retries after a
+  frame interval, or up to 2 s for an unconfirmed request. A
+  retune the widget has not been told about yet (made elsewhere, before its
+  status arrives) cannot be seen here.
+- The values are in the units the backend delivered; nothing here calibrates
+  them. On Flex they are decoded from the radio's pixel encoding, so one
+  amplitude step is `(encoderMaxDbm - encoderMinDbm) / (encoderYPixels - 1)`.
+  These fields belong to the returned frame: `encoderMinDbm`/`encoderMaxDbm`
+  are the dBm range that frame was decoded with (the stream's decode scale
+  when it reports one, else the widget's encoder range as the frame arrived),
+  and `encoderYPixels` is the y-pixel count the widget held as it arrived.
+  On HL2 they come from a host-side FFT, absolute only once a full-scale
+  reference has been measured (`Hl2DbReference::isCalibrated()`).
+- When `kiwiWaterfallActive` is true, the pan is showing a KiwiSDR source and
+  `bins` is still the radio's frame, not the trace on screen.
+- A selector is required: `bins` without one is an error, and so is a selector
+  that matches no pan.
 
 `selector` filters by pan index (`get tracedebug 0`) or objectName. Key fields:
 
@@ -2610,7 +2669,7 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 | `action` | `value` | effect |
 |---|---|---|
 | `create` (alias `add`) | — | request a new panadapter through the backend's declared lifecycle control. |
-| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. It matters more on this verb — `setPanCenter()` clamps only the low edge, so an unguarded out-of-range centre is stored and advertised over TCI (`dds:`) even though the radio rejects it. |
+| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. Optimistic receive controls also clamp to a declared pan-centre range, where present; confirmed receive controls retain backend validation. The low edge of the display stays at or above 0 Hz. Without a declared range, an unguarded out-of-range centre can still be stored and advertised over TCI (`dds:`) even though the radio rejects it. |
 | `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | request removal of owned pan(s). Flex requests cleanup of the original paired waterfall too. A single target preserves the last pan; `all` allows requesting its removal but never overrides a native refusal or foreign ownership. |
 
 Replies describe request admission, not observed completion — re-poll `get pans`.
@@ -3197,7 +3256,7 @@ the radio tabs, the audio cluster, and the window controls on every platform.
 ← {"ok":true,"model":"titlebar","present":true,"height":52,"expectedHeight":52,
    "offsetInWindow":0,"screenRect":[103,40,1402,52],"minimalMode":false,
    "brand":{"wordmark":"AetherSDR","logoLoaded":true,"visible":true},
-   "update":{"version":"","visible":false},
+   "update":{"version":"","staged":"","visible":false},
    "radios":{"activeId":"DEMO-0001","width":291,"maximumWidth":16777215,
              "contentWidth":257,"overflowing":false,
              "popoverVisible":false,"pulseEnabled":true,
@@ -3228,8 +3287,10 @@ is `shared`; Linux uses it when custom chrome is enabled. `qtVersion` is the
 actual runtime version, not the build-machine SDK version.
 `brand.rect` is `[x, y, width, height]` in title-bar coordinates.
 `update.version` is the newer release the UPDATE badge announces (empty when
-none, or when the operator skipped it); `update.visible` is false in minimal
-mode even when a version is set.
+none, or when the operator skipped it); `update.staged` is the release
+downloaded and ready to install, when the badge reads RESTART TO UPDATE
+(empty otherwise); `update.visible` is false in minimal mode even when a
+version is set.
 On macOS, `chrome.nativeCaptionRect` is the union of visible native caption
 buttons in window-content coordinates (empty outside Cocoa or in fullscreen).
 With expanded chrome, check that the brand begins 16 logical pixels after the
@@ -3240,15 +3301,23 @@ discovery beat and decays in ~850 ms), `radios.linkAlarm` (link lost: three
 missed beats) and `radios.linkOverrideColor` (the colour speaking over the
 active tab's status dot: amber while discovering, red on loss, empty when the
 link is healthy) are the heartbeat as data — assert on these rather than on
-the dot's pixels. `radios.discovered[].canRename` says whether the switcher
+the dot's pixels. `radios.linkQuality` / `radios.linkQualityColor` are the
+network grade and resolved theme color (empty when off or disconnected), which the session's dot shows
+only while the AT chip does;
+`radios.adaptiveThrottle` (the throttle is armed for this client: ticked, or a
+cap still in force after it was unticked, which lasts until disconnect; it
+stays `true` with nothing connected) and `radios.adaptiveFpsCap` (0 = no cap
+in force) drive the "AT" chip, and `radios.tabs[].throttleChip` says whether a
+tab is actually showing it. `radios.discovered[].canRename` says whether the switcher
 offers Rename… for that radio (client-owned nickname) or routes to Radio
 Setup instead.
 `radios.overflowing` reports whether the bounded tab viewport is
 currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
 retained tab preference and `visible` is current widget visibility (which can
 also change in minimal mode). `radios.tabs[].linkCarrier` identifies
-the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected` / `available` /
-`in use` — a lower-case, untranslated token, and the field to match on.
+the one tab carrying discovery/heartbeat state. `radios.tabs[].kind` distinguishes `radio` from `workspace`. Radio `status` is
+one of `connected` / `available` / `in use`, lower-case and untranslated.
+AetherLab has `status: "workspace"` and never carries the radio link indicator.
 The text the tab *renders* is sentence case and translated (`Connected`,
 `Available`, `In use`, and `Link lost` while the link alarm is up), so
 `statusLine` and `accessibleName` deliberately disagree with `status` on
@@ -4685,6 +4754,51 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 
 ---
 
+## RigExpert Stick analyzer bring-up
+
+`lab status|devices|connect <index>|sweep <startHz> <stopHz> <intervals> isolated|stop|disconnect`
+controls the AetherLab USB proof of concept (RFC #6471). `status`
+returns identity, all accepted raw/derived samples, count hypothesis, terminal
+state and the last 128 HID reports. `devices` explicitly scans normal-mode
+Stick 230, 500, Pro and XPro interfaces. `connect` queries VER/FULLINFO and
+requires an identity matching the USB model; it never starts RF.
+
+`model`, `experimental`, `minFrequencyHz` and `maxFrequencyHz` are included in
+session and device metadata. `identityVerified` reports whether the session
+received a matching VER identity. `supportedModels` lists all four profiles.
+Stick 230, 500 and XPro are experimental with hardware testing pending. Limits
+are 0.1–230, 0.1–500, 0.1–600 and 0.1–1000 MHz respectively. A Pro profile does
+not imply full qualification; the existing limited bench evidence still applies.
+
+Acquisition requires `AETHER_AUTOMATION_ALLOW_LAB_RF=1` on the app process and
+an explicit `isolated` token. This permission is separate from radio TX.
+Generic invoke/pointer/coordinate automation refuses the Sweep button; use the typed `lab sweep` request. Status, device enumeration and
+stop work in observe-only mode; connect, sweep and disconnect are blocked.
+Every acquisition attempts `off` and closes USB; reconnect explicitly for the
+next sweep. RF-off and station TX interlock remain unproven/unimplemented.
+
+Through MCP, use `bridge_command` with e.g.
+`{"request":{"cmd":"lab","action":"status"}}` or
+`{"request":{"cmd":"lab","action":"sweep","value":"14000000 14350000 200 isolated"}}`.
+The app must be connected to the instrument on the MCP server's host.
+See [the implementation and qualification guide](./rigexpert-usb-poc.md).
+
+AetherLab is embedded in the main window. Invoke `aetherLabAction` to open it,
+`radioSwitcherAetherLab` in the open **+** popover, or `radioTab_aetherlab`
+after first use. Invoke `aetherLabReturn` to stop the analyzer session and
+restore the radio workspace. The `titlebar` tab model distinguishes
+`kind: "workspace"` / `status: "workspace"` from radio entries, and the radio
+retains `linkCarrier` while AetherLab is selected. Discovery lists contain only
+radios. Marker labels use stable `aetherLabValue_<sampleField>` object names.
+
+Samples also contain `impedanceMagnitudeOhm`, `impedancePhaseDeg`,
+`reflectionMagnitude`, `reflectionPhaseDeg`, `seriesInductanceH`,
+`seriesCapacitanceF`, `parallelResistanceOhm`, `parallelReactanceOhm`,
+`parallelInductanceH` and `parallelCapacitanceF`. Units are SI in JSON;
+non-finite or undefined results are null. The UI formats engineering prefixes.
+Raw CSV and device R/X are preserved. Reflection phase and impedance phase are
+separate quantities; reflection phase is null at a perfect match.
+
 ## Targeting a widget
 
 `grab` and `invoke` resolve a `target` string in this order. Within each match
@@ -4884,7 +4998,7 @@ socket-free production-router tests; live firmware, visible GUI meters and
 audio devices require separate hardware validation.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 80 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 81 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4940,6 +5054,7 @@ audio devices require separate hardware validation.
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
+| `lab` | — | lab <status\|devices\|connect index\|sweep startHz stopHz intervals isolated\|stop\|disconnect> — RigExpert Stick USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1) |
 | `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod profile, TXDELAY, RX tap, WIDE1-1 fill-in digipeater, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |

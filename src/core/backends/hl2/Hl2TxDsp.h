@@ -112,6 +112,31 @@ public:
     [[nodiscard]] int wdspChannelId() const noexcept;
     [[nodiscard]] const WdspChannel::Config* channelConfig() const noexcept;
 
+#if AETHER_HL2_TX_TXA
+    // The TXA channel config buildModulator() opens, as a pure function of
+    // Config, so tests/hl2_tx_latency_test.cpp opens the same channel offline.
+    [[nodiscard]] static WdspChannel::Config modulatorChannelConfig(const Config& config);
+
+    // No delay before the TX mute up-ramp (WdspChannel::Config's default is
+    // 10 ms). WDSP's upslew0 zeroes delay x rate samples of real audio after
+    // the first non-zero input, i.e. the start of every over (#6052). Thetis
+    // and pihpsdr both open TX with 0; the 25 ms up-slew (de-click) is kept.
+    static constexpr double kTxMuteDelayUpSec = 0.0;
+
+    // TX bandpass length: create_txa's own 2048, made explicit. 1024 would save
+    // 10.7 ms but drops the DIGU 150 Hz opposite-sideband image from 174.6 to
+    // 135.6 dB, below hl2_txdsp_test's 140 dB floor (#6052).
+    static constexpr int kTxFilterTaps = 2048;
+
+    // Minimum phase in USB and LSB only: same |H|, impulse peak 19.2 ms earlier
+    // on {300, 2700}, but group delay varies 4.78 ms across the passband. Data
+    // modes, CW (#5498 ruling), AM, DSB and FM keep linear phase.
+    [[nodiscard]] static constexpr bool txMinimumPhaseFor(WdspChannel::Mode mode) noexcept
+    {
+        return mode == WdspChannel::Mode::Usb || mode == WdspChannel::Mode::Lsb;
+    }
+#endif
+
     // Blocks the modulator could not place on the wire since configure(): each
     // non-Ok WdspChannel::processIq in the TXA build, always 0 in the phasing
     // build. Surfaced in the log and health snapshot. Read on the I/O thread,
@@ -164,6 +189,13 @@ signals:
     // moves opposite to alcGain (the harder the ALC works on a quiet mic, the
     // closer to full scale this sits).
     void alcPeak(float dbfs);
+    // Peak levels either side of the TX passband, in dBFS, once per ~100 ms of
+    // input: the post-ALC audio handed to the modulator, and the modulated IQ
+    // it produced. Published as TX:SC_FILT_1/SC_FILT_2, the taps RadioModel's
+    // TX-filter-loss check reads (#4651, #6605). In FM the IQ envelope is
+    // constant, so the pair cannot show a loss there. Not emitted for a window
+    // in which the modulator dropped a block.
+    void filterLevels(float inDbfs, float outDbfs);
     // Echoed from setMicGain so a readout reports the gain this object holds,
     // not the caller's copy of the request.
     void micGainChanged(double linear);
@@ -200,6 +232,13 @@ private:
     // across calls so the real-time path does not allocate per block.
     std::vector<float> m_levelled;
     std::vector<std::complex<float>> m_iq;
+
+    // filterLevels(): peaks held over one reporting window.
+    void noteFilterOutput(const std::vector<std::complex<float>>& iq);
+    float m_filterInPeak = 0.0f;
+    float m_filterOutPeak = 0.0f;
+    std::size_t m_filterWindowSamples = 0;
+    unsigned long long m_filterWindowFaultMark = 0;   // modulatorFaultBlocks() at window start
 
 #if AETHER_HL2_TX_TXA
     std::unique_ptr<WdspChannel> m_channel;

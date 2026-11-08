@@ -1,13 +1,16 @@
 #include "DiscoveryStartup.h"
 #include "CredentialStartup.h"
 #include "GrantAdminClient.h"
+#include "core/backends/hl2/Hl2Backend.h"
 #include "core/control/LocalControlServer.h"
 #include "core/control/RadioResourceAdapter.h"
 #include "core/control/RadioCatalogue.h"
+#include "core/discovery/DirectedDiscoveryAddress.h"
 #include "models/RadioSession.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QHostAddress>
 #include <QLockFile>
 #include <QTextStream>
 
@@ -57,6 +60,12 @@ int main(int argc, char* argv[])
         QStringLiteral("discover-sim"),
         QStringLiteral("Publish the simulator discovery identity without accessing radio hardware."));
     parser.addOption(localDiscoveryOption);
+    const QCommandLineOption hl2AddressOption(
+        QStringLiteral("hl2-address"),
+        QStringLiteral("With --discover-local, also probe this IPv4 address for a Hermes-Lite 2 "
+                       "(an HL2 on another subnet; repeatable). Discovery only; never connects."),
+        QStringLiteral("ipv4"));
+    parser.addOption(hl2AddressOption);
     parser.addOption(simDiscoveryOption);
     const QCommandLineOption controlOption(
         QStringLiteral("allow-local-control"),
@@ -68,6 +77,17 @@ int main(int argc, char* argv[])
     AetherSDR::aetherd::addCredentialOptions(parser);
     AetherSDR::aetherd::addGrantAdminOptions(parser);
     parser.process(app);
+    const QStringList hl2Addresses = parser.values(hl2AddressOption);
+    for (const QString& text : hl2Addresses) {
+        if (!AetherSDR::discovery::isDirectedDiscoveryAddress(QHostAddress(text))) {
+            QTextStream(stderr) << "aetherd: --hl2-address '" << text
+                                << "' must be a unicast IPv4 literal\n";
+            return 1;
+        }
+    }
+    if (!hl2Addresses.isEmpty() && !parser.isSet(localDiscoveryOption)) {
+        QTextStream(stderr) << "aetherd: --hl2-address has no effect without --discover-local\n";
+    }
     if (parser.isSet(QStringLiteral("tx-admin"))) {
         return AetherSDR::aetherd::runGrantAdmin(parser);
     }
@@ -126,9 +146,13 @@ int main(int argc, char* argv[])
     // Constructors/settings imports can pump nested event loops. Reserving
     // the endpoint closes early arrivals without admitting sessions, so no
     // client can race the one-shot target binding or see partial resources.
+    // No HL2 TX grant can exist here (independentTxReady), so the HL2 is
+    // receive only, and its receive controls qualify without idle readback.
+    AetherSDR::hl2::Hl2Backend::setHostOffersTransmit(false);
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
-            {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)});
+            {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption),
+             hl2Addresses});
     AetherSDR::RadioSession radioSession;
     radioSession.setSessionId(1);
     std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;

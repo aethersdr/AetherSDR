@@ -7,21 +7,21 @@
 #include "GpuSelector.h"
 #include "ZipArchive.h"
 #include "models/RadioModel.h"
+#include "core/backends/IRadioBackend.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
-#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QObject>
+#include <QVariant>
 #include <QSaveFile>
 #include <QStringList>
 #include <QSysInfo>
 #include <QTemporaryDir>
-#include <QUrl>
-#include <QUrlQuery>
 
 namespace AetherSDR {
 
@@ -94,6 +94,94 @@ SupportBundle::RadioInfo SupportBundle::collectRadioInfo(const RadioModel* model
     return info;
 }
 
+SupportBundle::Hl2Info SupportBundle::collectHl2Info(RadioModel* model)
+{
+    Hl2Info info;
+    if (!model || !model->isConnected()
+        || !model->backendDeclaresExtension(QStringLiteral("hl2"))) {
+        return info;
+    }
+    IRadioBackend* backend = model->backend();
+    if (!backend) {
+        return info;
+    }
+    info.present = true;
+
+    // Board variant: the operator's declared board, through hw.get like the
+    // Radio Setup page (the vendor header stays below the seam). hw.get
+    // completes synchronously, so the handler is armed before the invoke and
+    // dies with `guard`.
+    QVariantMap hw;
+    {
+        // 0x03.. is Radio Setup's hw.get, 0x04.. its calibration read, 0x05.. its
+        // calibration set: a fourth decade, so a report made with the dialog open
+        // cannot answer, or be answered by, one of its requests.
+        constexpr quint64 kRequestId = 0x0600000000000000ull;
+        QObject guard;
+        QObject::connect(backend, &IRadioBackend::extensionResult, &guard,
+                         [&hw](quint64 id, const QVariant& result) {
+                             if (id == kRequestId) {
+                                 hw = result.toMap();
+                             }
+                         });
+        model->invokeBackendExtension(QStringLiteral("hl2"),
+                                      QStringLiteral("hw.get"), kRequestId);
+    }
+    if (hw.contains(QStringLiteral("codec"))) {
+        switch (hw.value(QStringLiteral("codec")).toInt()) {
+        case 0: info.boardVariant = QStringLiteral("plain Hermes-Lite 2"); break;
+        case 1: info.boardVariant = QStringLiteral("AK4951 (HL2+ companion board)"); break;
+        case 2: info.boardVariant = QStringLiteral("SquareSDR 2"); break;
+        default: break;
+        }
+    }
+
+    const IRadioBackend::HealthSnapshot h = backend->healthSnapshot();
+    info.sampleRateHz = h.values.value(QStringLiteral("sampleRateHz")).toInt();
+    info.receivers    = h.values.value(QStringLiteral("receivers")).toInt();
+    if (h.values.contains(QStringLiteral("droppedPackets"))) {
+        info.droppedPackets = h.values.value(QStringLiteral("droppedPackets")).toLongLong();
+    }
+    if (h.values.contains(QStringLiteral("ep4Drops"))) {
+        info.ep4Drops = h.values.value(QStringLiteral("ep4Drops")).toLongLong();
+    }
+    if (h.values.contains(QStringLiteral("txFifoRecovery"))) {
+        info.txFifoFault = h.values.value(QStringLiteral("txFifoRecovery")).toBool() ? 1 : 0;
+    }
+    // Per-receiver rows are keyed dspUnderruns<N> / dspFaultCount<N>; sum them,
+    // and leave the total unreported when no receiver has reported at all.
+    for (auto it = h.values.constBegin(); it != h.values.constEnd(); ++it) {
+        if (it.key().startsWith(QLatin1String("dspUnderruns"))) {
+            info.dspUnderruns = qMax<qlonglong>(info.dspUnderruns, 0) + it.value().toLongLong();
+        } else if (it.key().startsWith(QLatin1String("dspFaultCount"))) {
+            info.dspFaults = qMax<qlonglong>(info.dspFaults, 0) + it.value().toLongLong();
+        }
+    }
+
+    // Which TX modulator this build carries, and the blocks it could not place.
+    const QVariantList chains = backend->dspChains();
+    for (const QVariant& c : chains) {
+        const QVariantMap m = c.toMap();
+        if (m.value(QStringLiteral("chain")).toString() != QLatin1String("hl2-tx")) {
+            continue;
+        }
+        info.txModulator = m.value(QStringLiteral("modulator")).toString();
+        if (m.contains(QStringLiteral("modulatorFaultBlocks"))) {
+            info.txModulatorFaultBlocks =
+                m.value(QStringLiteral("modulatorFaultBlocks")).toLongLong();
+        }
+    }
+
+    QStringList modes;
+    for (const SliceModel* slice : model->slices()) {
+        if (slice && !slice->mode().isEmpty() && !modes.contains(slice->mode())) {
+            modes << slice->mode();
+        }
+    }
+    info.mode = modes.join(QStringLiteral(", "));
+    return info;
+}
+
 namespace {
 
 // Stream a log file through redactPii() line by line. Bounded memory: a log
@@ -145,12 +233,12 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
     const QString tmp = tmpDir.path();
 
     // 1. Copy log files — grab the 3 most recent timestamped logs.
-    // On Windows, aethersdr.log can be a .lnk shortcut (binary garbage).
-    // Bypasses symlink issues entirely by scanning for actual log files.
+    // Scan timestamped files so stale aliases from older Windows builds
+    // cannot be copied as binary shortcut content.
     {
         QDir logDir(QFileInfo(logMgr.logFilePath()).absolutePath());
         QStringList logs = logDir.entryList(
-            {"aethersdr-*.log", "aethersdr.log"}, QDir::Files, QDir::Time);
+            {"aethersdr-*.log"}, QDir::Files, QDir::Time);
         int copied = 0;
         for (const auto& name : logs) {
             if (copied >= 3) break;
@@ -275,43 +363,6 @@ QString SupportBundle::recentLogTail(int lines)
     if (all.size() > lines)
         all = all.mid(all.size() - lines);
     return all.join('\n').trimmed();
-}
-
-void SupportBundle::openEmailClient(const QString& bundlePath,
-                                    const SystemInfo& sys,
-                                    const RadioInfo& radio)
-{
-    QString subject = QString("AetherSDR Support - %1 v%2")
-        .arg(radio.connected ? radio.model : "No Radio", sys.aetherVersion);
-
-    QString body;
-    body += "AetherSDR Support Bundle\n\n";
-    body += QString("App: AetherSDR v%1\n").arg(sys.aetherVersion);
-    body += QString("Qt: %1\n").arg(sys.qtVersion);
-    body += QString("OS: %1 (kernel %2)\n").arg(sys.osName, sys.kernelVersion);
-    body += QString("CPU: %1\n").arg(sys.cpu);
-    body += QString("RAM: %1\n").arg(sys.ram);
-    body += QString("GPU: %1\n").arg(sys.gpu);
-    body += QString("Build: %1\n").arg(sys.buildDate);
-
-    if (radio.connected) {
-        body += QString("Radio: %1 (serial %2, fw %3, protocol %4)\n")
-            .arg(radio.model, radio.serial, radio.firmware, radio.protocolVersion);
-        body += QString("Callsign: %1\n").arg(radio.callsign);
-    } else {
-        body += "Radio: not connected\n";
-    }
-
-    body += QString("\nPlease attach the support bundle saved at:\n  %1\n").arg(bundlePath);
-    body += "\nDescribe the issue below:\n---\n\n";
-
-    QUrl url("mailto:support@aethersdr.com");
-    QUrlQuery query;
-    query.addQueryItem("subject", subject);
-    query.addQueryItem("body", body);
-    url.setQuery(query);
-
-    QDesktopServices::openUrl(url);
 }
 
 } // namespace AetherSDR

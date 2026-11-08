@@ -67,6 +67,12 @@ public:
     explicit Hl2Backend(QObject* parent = nullptr);
     ~Hl2Backend() override;
 
+    // Whether this process has a transmit path for the HL2. The desktop does;
+    // aetherd does not (no HL2 TX grant exists), so it sets false and the HL2
+    // declares itself receive only, which its receive controls require.
+    // Read once, at construction.
+    static void setHostOffersTransmit(bool offers);
+
     RadioCapabilities capabilities() const override;
     // Demodulates in-process (Hl2RxDsp); there is no VITA-49 stream at all.
     bool ownsRxAudio() const override { return true; }

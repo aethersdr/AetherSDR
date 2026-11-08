@@ -66,7 +66,8 @@ There is no built-in DAX audio driver on Windows. The DAX applet says so: "No bu
 | What | Location |
 |---|---|
 | Settings database (`AetherSDR.db`), backups, quarantine | `%LOCALAPPDATA%\AetherSDR\` |
-| Application logs and support bundles | `%LOCALAPPDATA%\AetherSDR\logs\` (newest log also linked as an `aethersdr.log` shortcut) |
+| Application logs and support bundles (installer or portable) | `%LOCALAPPDATA%\AetherSDR\logs\` (newest log also linked as an `aethersdr.log` shortcut) |
+| Application logs and support bundles (Microsoft Store) | Usually `%LOCALAPPDATA%\Packages\<package-family>\LocalCache\Local\AetherSDR\logs\`; use the path **Support & Diagnostics** shows |
 | NR2 FFTW wisdom | `%APPDATA%\AetherSDR\aethersdr_fftw_wisdom` |
 | BNR NVIDIA runtime | `%LOCALAPPDATA%\AetherSDR\AetherSDR\nvidia-afx\current\` |
 | Crash dumps (once enabled, below) | `%LOCALAPPDATA%\CrashDumps\` |

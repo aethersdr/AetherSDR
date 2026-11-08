@@ -52,11 +52,14 @@ struct UpdateManifest {
         QList<Op> ops;
     };
     struct Payload {
-        QString platform;   // "windows", "linux"
+        QString platform;   // "windows", "linux", "macos"
         QString arch;       // QSysInfo::buildCpuArchitecture()'s name
         Asset full;
         QList<File> files;
         QList<Patch> patches;
+        // macOS: the DAX driver's source, the git tree hash of hal-plugin/ at
+        // the tag (40 hex digits); empty when the manifest names none.
+        QString daxDriverSource;
     };
 
     int schema{0};
@@ -97,9 +100,10 @@ public:
         QString stagingRoot;       // per-user app data, outside the install
         QUrl manifestUrl;          // kManifestUrl unless a test says otherwise
         // When no patch applies (or one fails), stage the full release
-        // instead: the signed portable zip's files plus the installer's own
-        // (unins*). Windows: its full download is that tree. Otherwise
-        // fullDownloadNeeded() is emitted, as before.
+        // instead: on Windows the signed portable zip's files plus the
+        // installer's own (unins*), on Linux the signed .tar.zst's. A full
+        // download that is neither (the AppImage) ends in
+        // fullDownloadNeeded(), as without it.
         bool fullFallback = false;
     };
 
@@ -160,6 +164,14 @@ public:
                           const QList<UpdateManifest::File>& files, const QString& stagingDir,
                           QString* problem, const std::atomic_bool* cancelled = nullptr);
 
+    // The full release from its .tar.zst (Linux) into stagingDir, streamed:
+    // exactly the files and links manifest lists, then every file checked.
+    // Nothing is taken from the install. On any failure, or once cancelled
+    // is set, stagingDir is removed.
+    static bool applyFullTar(const QByteArray& tarZst, const QList<UpdateManifest::File>& files,
+                             const QString& stagingDir, QString* problem,
+                             const std::atomic_bool* cancelled = nullptr);
+
     // The release staged in stagingRoot, if it is still the one to install:
     // staged for runningVersion, from installRoot, it is GitHub's latest
     // (githubLatestTag) and not the release that was rolled back. Otherwise
@@ -167,14 +179,25 @@ public:
     // (other versions' trees and records, half-written records, the work
     // folders a crashed run left); nothing else in the folder is touched,
     // since it is the swap helper's state folder too. Never call it while a
-    // stager isBusy(), whose work folder it would remove.
+    // stager isBusy(), whose work folder it would remove. Just after
+    // cancel() is fine: isBusy() is false then, and a worker still finishing
+    // only removes its own work folder, which may already be gone.
     // An empty githubLatestTag (not known yet) discards nothing on that
     // ground. Cheap: reads the record only. revalidate() checks every file.
     static StagedRelease stagedRelease(const QString& stagingRoot, const QString& runningVersion,
                                        const QString& installRoot, const QString& githubLatestTag,
                                        const QString& rolledBackVersion);
+    // The DAX driver source the staged version's manifest names for this
+    // platform and arch (UpdateManifest::Payload::daxDriverSource); empty
+    // when nothing is staged or it names none. Reads the manifest kept with
+    // the staged release, which was verified when it was staged.
+    static QString stagedDaxDriverSource(const QString& stagingRoot, const QString& version,
+                                         const QString& platform, const QString& arch);
     // Before the swap: the staged tree's signed manifest still verifies and
     // every file still matches it.
+    // Removes a staged release and its record: skipped, or its files no
+    // longer match. Nothing else in stagingRoot is touched.
+    static void discard(const QString& stagingRoot, const QString& version);
     static bool revalidate(const QString& stagingRoot, const StagedRelease& staged,
                            const QString& platform, const QString& arch, QString* problem);
 

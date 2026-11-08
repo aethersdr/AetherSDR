@@ -76,7 +76,7 @@ ctr2max_reg_t ctr2max_registration(ctr2max_reg_read_fn read, void *ctx, uint32_t
         while (lfs_dir_read(&lfs, &dir, &info) > 0) {
             if (info.type == LFS_TYPE_REG && name_is_reg(info.name)) {
                 memcpy(path + 1, info.name, strlen(info.name) + 1);   // at most LFS_NAME_MAX
-                // A call in plain text, as before v1.02.00m, is not taken.
+                // A plain-text call, as before v2.00.00 (v1.02.00m test builds), is not taken.
                 result = info.size > CTR2MAX_REG_MIN_SIZE ? CTR2MAX_REGISTERED
                                                           : CTR2MAX_NOT_REGISTERED;
                 break;

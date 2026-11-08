@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 #include <QMap>
 
 class QCheckBox;
@@ -11,7 +11,10 @@ namespace AetherSDR {
 
 class RadioModel;
 
-class SupportDialog : public PersistentDialog {
+// Help → Support & Diagnostics: per-module diagnostic logging and the log
+// file, in a short-lived canon window (RFC #6226, #7051). The static
+// fileIssue() / resetSettings() flows live here too but open their own boxes.
+class SupportDialog : public CanonWindow {
     Q_OBJECT
 
 public:
@@ -30,7 +33,6 @@ private slots:
     void openLogFolder();
     void enableAll();
     void disableAll();
-    void sendToSupport();
 
 private:
     void buildUI();

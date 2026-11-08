@@ -166,13 +166,11 @@ int main(int argc, char** argv)
               "so an accessor that answered true for everyone would still fail "
               "the Flex and Icom rows");
         check(c.panBinsAbsolute(), "HL2: and the accessor agrees");
+        check(!c.radioOwnsDbmScale,
+              "HL2: no echo — the radio cannot be commanded a dBm range");
         check(gateOpen(c),
-              "HL2: loop runs — UNCHANGED today (radioOwnsDbmScale is still true "
-              "by omission), and this is what makes #5725's other half safe: the "
-              "gate stays open on the second term when the first goes false");
-        check(noiseFloorAutoAdjustAllowed(false, c.panBinsAbsolute()),
-              "HL2: and it stays open with the echo declared FALSE — the "
-              "measurement d101 made, held as a standing assertion");
+              "HL2: loop runs on the second term alone — the measurement d101 "
+              "made, held as a standing assertion");
     }
     {
         AetherSDR::anan::AnanBackend anan;

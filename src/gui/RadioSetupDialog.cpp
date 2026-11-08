@@ -6,6 +6,8 @@
 // header rather than from the wire code.
 #include "core/backends/anan/AnanSettings.h"
 #include "RadioSetupDialog.h"
+#include <utility>
+#include "NtpSourcesPage.h"
 #include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
@@ -134,7 +136,6 @@
 #include "CanonIndicators.h"
 #include "CanonScrollBarStyle.h"
 #include "FramelessResizer.h"
-#include "ThemedImageCache.h"
 
 namespace AetherSDR {
 using SetupField = RadioSetupRequest::Field;
@@ -696,13 +697,6 @@ static void showCopiedPopup(QWidget* anchor)
     QTimer::singleShot(1000, popup, &QLabel::close);
 }
 
-// A status line that takes no room while it has nothing to say.
-static void setShownText(QLabel* label, const QString& text)
-{
-    label->setText(text);
-    label->setVisible(!text.isEmpty());
-}
-
 static QWidget* makeInfoField(const QString& labelText, QWidget* valueWidget,
                               int labelWidth = kInfoLeftLabelWidth)
 {
@@ -1180,55 +1174,6 @@ QSplitter::handle {
 }
 )";
 
-// A spin box with a styled frame draws its steppers from the sheet or not at
-// all: without these rules Qt falls back to two specks. Each stepper is a
-// column at the field's right with a painted triangle in the canon ink,
-// regenerated per theme like the combo arrow (ComboStyle.h). Left out if an
-// arrow could not be written, so the field keeps Qt's own.
-static QString spinArrowRules()
-{
-    const QColor color = ThemeManager::instance().color(QStringLiteral("color.canon.inkSoft"));
-    const QString key = color.name(QColor::HexRgb).remove(QLatin1Char('#'));
-    auto arrow = [&](const QString& name, bool up) {
-        return themedImagePath(QStringLiteral("spin-arrows"), name, key, QSize(8, 5), 1,
-                               [color, up](QPainter& p) {
-            p.setRenderHint(QPainter::Antialiasing);
-            p.setPen(Qt::NoPen);
-            p.setBrush(color);
-            const QPointF upTri[] = {{0, 5}, {8, 5}, {4, 0}};
-            const QPointF downTri[] = {{0, 0}, {8, 0}, {4, 5}};
-            p.drawPolygon(up ? upTri : downTri, 3);
-        });
-    };
-    const QString up = arrow(QStringLiteral("up"), true);
-    const QString down = arrow(QStringLiteral("down"), false);
-    if (up.isEmpty() || down.isEmpty()) {
-        return {};
-    }
-    return QStringLiteral(
-        "QSpinBox, QDoubleSpinBox { padding-right: 16px; }"
-        "QSpinBox::up-button, QDoubleSpinBox::up-button,"
-        " QSpinBox::down-button, QDoubleSpinBox::down-button {"
-        " subcontrol-origin: border; width: 16px; border: none;"
-        " border-left: 1px solid {{color.canon.line}}; background: transparent; }"
-        "QSpinBox::up-button, QDoubleSpinBox::up-button {"
-        " subcontrol-position: top right; border-top-right-radius: 4px; }"
-        "QSpinBox::down-button, QDoubleSpinBox::down-button {"
-        " subcontrol-position: bottom right; border-bottom-right-radius: 4px; }"
-        "QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,"
-        " QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {"
-        " background: {{color.canon.nested}}; }"
-        "QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {"
-        " image: url(\"%1\"); width: 8px; height: 5px; }"
-        "QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {"
-        " image: url(\"%2\"); width: 8px; height: 5px; }"
-        "QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled,"
-        " QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled,"
-        " QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:off,"
-        " QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:off { image: none; }")
-        .arg(up, down);
-}
-
 
 RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    TgxlConnection* tgxl, PgxlConnection* pgxl,
@@ -1247,7 +1192,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
       m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter),
-      m_kpa1500(kpa1500), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100), m_rfkit(rfkit)
+      m_kpa1500(kpa1500), m_rfkit(rfkit), m_kpa500(kpa500), m_kat500(kat500), m_kxpa100(kxpa100)
 {
     theme::setContainer(this, QStringLiteral("canon/radioSetup"));
     // Size and position persist under the key it used as a PersistentDialog,
@@ -1261,7 +1206,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("radioSetupBody"));
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kRadioSetupStyle) + canonScrollBarRules() + spinArrowRules() + canonIndicatorRules();
+        return QString::fromLatin1(kRadioSetupStyle) + canonScrollBarRules() + canonSpinArrowRules() + canonIndicatorRules();
     });
 
     auto* layout = new QVBoxLayout(bodyWidget());
@@ -1357,6 +1302,11 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(radioCategory, QStringLiteral("GPS"),
         QStringLiteral("gpsdo satellite location oscillator time"), [this] { return buildGpsTab(); });
     m_gpsPageIndex = m_pageIndexes.value(QStringLiteral("GPS"));
+    // Shown on every radio; dimmed with the reason where the radio keeps no NTP
+    // sources of its own (#6953).
+    addPage(radioCategory, QStringLiteral("Time"),
+        QStringLiteral("ntp time server clock pool chrony sync"),
+        [this] { return new NtpSourcesPage(*m_model); });
     addPage(signalCategory, QStringLiteral("Audio"),
         QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
     addPage(signalCategory, QStringLiteral("Transmit"),
@@ -1690,7 +1640,9 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
         m_flexControlInfoField->setVisible(!connected || caps.hasFlexControlIntegration);
     }
     if (m_multiFlexInfoField) {
-        m_multiFlexInfoField->setVisible(!connected || caps.hasMultiClientSessions);
+        applyCapabilitySurfaceAvailability(m_multiFlexInfoField, connected,
+            caps.radioSetupControl && caps.radioSetupControl->supports(RadioSetupField::MultiFlexEnabled),
+            tr("Not supported by this radio"));
     }
     if (m_remoteOnInfoField) {
         applyCapabilitySurfaceAvailability(
@@ -1881,7 +1833,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                               m_hwVersionLabel),
                         1, 0);
 
-        m_remoteOnBtn = makeToggle(m_model->remoteOnEnabled());
+        m_remoteOnBtn = makeToggle(m_model->remoteOnRequested());
+        m_remoteOnBtn->setObjectName(QStringLiteral("remoteOnEnabledButton"));
         connect(m_remoteOnBtn, &QPushButton::toggled, this, [this](bool on) {
             m_remoteOnBtn->setText(on ? "Enabled" : "Disabled");
             m_model->setRemoteOnEnabled(on);
@@ -1911,11 +1864,32 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                                kInfoRightLabelWidth);
         grid->addWidget(m_flexControlInfoField, 2, 1);
 
-        auto* mfBtn = makeToggle(m_model->multiFlexEnabled());
+        auto* mfBtn = makeToggle(m_model->multiFlexRequested());
+        mfBtn->setObjectName(QStringLiteral("radioSetupMultiFlexButton"));
         connect(mfBtn, &QPushButton::toggled, this, [this, mfBtn](bool on) {
             mfBtn->setText(on ? "Enabled" : "Disabled");
             m_model->setMultiFlexEnabled(on);
         });
+        const auto syncAdministration = [this, mfBtn] {
+            const QSignalBlocker remoteBlock(m_remoteOnBtn);
+            const QSignalBlocker multiBlock(mfBtn);
+            m_remoteOnBtn->setChecked(m_model->remoteOnRequested());
+            m_remoteOnBtn->setText(m_model->remoteOnRequested() ? "Enabled" : "Disabled");
+            mfBtn->setChecked(m_model->multiFlexRequested());
+            mfBtn->setText(m_model->multiFlexRequested() ? "Enabled" : "Disabled");
+            const QString reason = tr("Requires a connected radio with confirmed setting status.");
+            for (const auto& entry : {std::pair{m_remoteOnBtn, RadioSetupField::RemoteOnEnabled},
+                                      std::pair{mfBtn, RadioSetupField::MultiFlexEnabled}}) {
+                const bool available = m_model->administrationSettingAvailable(entry.second);
+                entry.first->setEnabled(available);
+                entry.first->setToolTip(available ? QString() : reason);
+                entry.first->setAccessibleDescription(available ? QString() : reason);
+            }
+        };
+        connect(m_model, &RadioModel::infoChanged, this, syncAdministration);
+        connect(m_model, &RadioModel::connectionStateChanged, this, syncAdministration);
+        connect(m_model, &RadioModel::capabilitiesChanged, this, syncAdministration);
+        syncAdministration();
         m_multiFlexInfoField = makeInfoField(QStringLiteral("multiFLEX:"), mfBtn,
                                              kInfoRightLabelWidth);
         grid->addWidget(m_multiFlexInfoField, 3, 1);
@@ -1935,6 +1909,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
             rebootBtn->setEnabled(connected && m_model->backendCapabilities().canReboot);
         });
         connect(rebootBtn, &QPushButton::clicked, this, [this] {
+            const RadioControlSession rebootSession = m_model->controlSession();
             const bool wan = m_model->isWan();
             const QString body = wan
                 ? QStringLiteral("Reboot the connected radio now?\n\n"
@@ -1955,8 +1930,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 || ret != QMessageBox::Ok) {
                 return;
             }
-            model->rebootRadio();
-            self->close();
+            if (model->rebootRadio(rebootSession)) { self->close(); }
         });
         m_rebootInfoField = makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
                                           kInfoLeftLabelWidth);
@@ -2184,17 +2158,21 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 applyLabelStyle(lbl);
         }
 
-        // Update labels live if license status arrives after dialog opens
-        connect(m_model, &RadioModel::infoChanged, this, [this] {
-            if (!m_model->licenseSubscription().isEmpty())
-                m_licSubscriptionLabel->setText(m_model->licenseSubscription());
-            if (!m_model->licenseExpirationDate().isEmpty())
-                m_licExpirationLabel->setText(m_model->licenseExpirationDate());
-            if (!m_model->licenseRadioId().isEmpty())
-                m_licRadioIdLabel->setText(m_model->licenseRadioId());
-            if (!m_model->licenseMaxVersion().isEmpty())
-                m_licMaxVersionLabel->setText(m_model->licenseMaxVersion());
-        });
+        // Update labels live if license status arrives after dialog opens.
+        // Unconditional: a radio switch clears the license records
+        // (licenseFeaturesChanged), and the previous radio's values must not
+        // linger.
+        const auto refreshLicenseLabels = [this] {
+            const auto orDash = [](const QString& value) {
+                return value.isEmpty() ? QStringLiteral("—") : value;
+            };
+            m_licSubscriptionLabel->setText(orDash(m_model->licenseSubscription()));
+            m_licExpirationLabel->setText(orDash(m_model->licenseExpirationDate()));
+            m_licRadioIdLabel->setText(orDash(m_model->licenseRadioId()));
+            m_licMaxVersionLabel->setText(orDash(m_model->licenseMaxVersion()));
+        };
+        connect(m_model, &RadioModel::infoChanged, this, refreshLicenseLabels);
+        connect(m_model, &RadioModel::licenseFeaturesChanged, this, refreshLicenseLabels);
 
         vbox->addWidget(group);
     }
@@ -4029,7 +4007,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     };
 
     connect(calBtn, &QPushButton::clicked, this,
-            [this, apply, referenceHz, activeSliceHz, setStatus] {
+            [apply, referenceHz, activeSliceHz, setStatus] {
         const double ref = referenceHz();
         if (!(ref > 0.0)) {
             setStatus(QStringLiteral("Enter a reference frequency."), Tone::Warn);

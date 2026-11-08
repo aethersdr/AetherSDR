@@ -243,11 +243,13 @@ void ClientReverbApplet::buildUI()
     auto wire = [this, viz](ClientCompKnob* k, auto engineSetter, auto vizSetter) {
         connect(k, &ClientCompKnob::valueChanged, this,
                 [this, viz, engineSetter, vizSetter](float v) {
-            if (m_audio && m_audio->clientReverbTx()) {
-                (m_audio->clientReverbTx()->*engineSetter)(v);
+            // Local object operands: see VfoWidget::buildTabContent (#6724).
+            if (auto* const engine = m_audio ? m_audio->clientReverbTx() : nullptr) {
+                (engine->*engineSetter)(v);
                 m_audio->saveClientReverbSettings();
             }
-            (viz->*vizSetter)(v);
+            auto* const display = viz;
+            (display->*vizSetter)(v);
         });
     };
     wire(m_size,    &ClientReverb::setSize,        &ReverbVizBox::setSize);

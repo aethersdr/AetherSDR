@@ -1,7 +1,5 @@
 /*  nnr_model_1.c
 
-Neural Noise Reduction - the built-in trained model.
-
 This file is part of a program that implements a Software-Defined Radio.
 
 Copyright (C) 2026 Warren Pratt, NR0V
@@ -22,7 +20,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 The author can be reached by email at
 
-warren@wpratt.com
+warren@pratt.one
 
 */
 
@@ -31,7 +29,7 @@ warren@wpratt.com
 	GENERATED FILE - do not edit.  Produced by:
 	    python export_model.py --checkpoint <ckpt> --emit-c nnr_model_1.c
 
-	source       E:\Documents\Ham Radio\1 HPSDR\1 NNR\Master Tool\runs\nnr_big48_la1\best_sdr.pt
+	source       \1 NNR\Master Tool\runs\nnr_big48_la1\best_sdr.pt
 	step         96000
 	val_loss     0.027339477247248094
 	val_si_sdr   8.244172811508179

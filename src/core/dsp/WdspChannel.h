@@ -155,10 +155,10 @@ public:
         // Channel mute envelope, in seconds. WDSP applies these when a channel
         // starts and stops, and they are the anti-click mechanism: an abrupt DSP
         // mute clicks on every transition, which on a full-duplex radio means
-        // every T/R change. Values match both reference clients (Thetis
-        // cmaster.c, pihpsdr receiver.c) — leaving them at zero, as this did,
-        // disables the ramp entirely and is invisible until you go hunting for
-        // the click.
+        // every T/R change. Leaving them at zero disables the ramp entirely.
+        // These are RECEIVE values (Thetis cmaster.c RX). Both Thetis and
+        // pihpsdr open TX with no up-delay, and so does the HL2 transmit
+        // channel (Hl2TxDsp::kTxMuteDelayUpSec).
         double muteDelayUpSec = 0.010;
         double muteSlewUpSec = 0.025;
         double muteDelayDownSec = 0.000;
@@ -169,6 +169,7 @@ public:
         // own default (max(2048, dsp_size)), so this changes nothing on its own
         // — it makes the value explicit and tunable instead of implicit.
         // pihpsdr runs 8192 by comparison.
+        // Both apply to a transmit channel too (TXASetNC/TXASetMP in open()).
         int filterTaps = 2048;
         bool minimumPhase = false;
         // FM detector deviation in Hz: the assumed incoming deviation, not a filter.
@@ -381,7 +382,9 @@ public:
     // callers are on the control thread.
     // setMinimumPhase(): same magnitude response, collapsed group delay; RXASetMP
     // rebuilds all six masks without stopping.
-    // Both RX-only, control-path (not from processIq()), idempotent in WDSP.
+    // setFilterTaps() is RX-only. setMinimumPhase() also works on TX (TXASetMP,
+    // which likewise does not stop the channel). Both control-path (not from
+    // processIq()), idempotent in WDSP.
     bool setFilterTaps(int taps) noexcept;
     bool setMinimumPhase(bool on) noexcept;
 

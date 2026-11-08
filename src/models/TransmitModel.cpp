@@ -70,6 +70,7 @@ void TransmitModel::resetState()
     resetPttMicOverrideReport();
     m_txSliceMode.clear();
     setTuneAvailable(true);
+    setAtuAvailable(true);
 
     // The held break-in delay belonged to the ending session; drop it so
     // setCwSpeed() never re-asserts it in the next one (#5288). Runs on every
@@ -248,6 +249,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (micChanged) emit micStateChanged();
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
+    if (d.cwPitch) emit cwPitchReported(m_cwPitch);
     if (cwPitchChanged_) emit cwPitchChanged(m_cwPitch);
     if (cwSpeedChanged_) emit cwSpeedChanged(m_cwSpeed);
 
@@ -521,6 +523,15 @@ void TransmitModel::setTuneAvailable(bool available)
     emit tuneAvailabilityChanged(available);
 }
 
+void TransmitModel::setAtuAvailable(bool available)
+{
+    if (m_atuAvailable == available) {
+        return;
+    }
+    m_atuAvailable = available;
+    emit atuAvailabilityChanged(available);
+}
+
 void TransmitModel::startTune(PttSource source)
 {
     requestTune(source, false, {});
@@ -674,9 +685,17 @@ void TransmitModel::atuBypass()
 
 void TransmitModel::requestAtu(bool start, const KeyingRoute& route)
 {
+    if (start && !m_atuAvailable) {
+        return;
+    }
     const KeyingPermit permit = route.admit ? route.admit(start)
         : start && m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Atu, true) : KeyingPermit{};
     if ((route.admit || (start && m_keyingAdmission)) && (!permit || !permit())) {
+        return;
+    }
+    // Admission can notify synchronous consumers that change the TX path.
+    if (start && !m_atuAvailable) {
+        requestAtu(false, route);
         return;
     }
     // Track a deliberate operator bypass of a running tune so applyChanges
@@ -698,6 +717,7 @@ void TransmitModel::requestAtu(bool start, const KeyingRoute& route)
 void TransmitModel::setAtuMemories(bool on)
 {
     if (refuseControlOffThread()) { return; }
+    if (!m_atuAvailable) { return; }
     const auto field = TransmitControlRequest::Field::AtuMemories;
     captureControlIntent(field);
     emit controlRequested({field, on});
@@ -706,6 +726,7 @@ void TransmitModel::setAtuMemories(bool on)
 void TransmitModel::atuClearMemories()
 {
     if (refuseControlOffThread()) { return; }
+    if (!m_atuAvailable) { return; }
     const auto field = TransmitControlRequest::Field::AtuClear;
     captureControlIntent(field);
     // FlexLib Radio.cs:11055-11060 confirms "atu clear" wipes the entire

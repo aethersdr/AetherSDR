@@ -134,6 +134,12 @@ bool CwRxModel::selectBackend(const QString& key)
     queueState();
     return true;
 }
+void CwRxModel::releaseLocks()
+{
+    m_ggmorse->lockPitch(false);
+    m_ggmorse->lockSpeed(false);
+    if (!isRunning()) { queueState(); }
+}
 void CwRxModel::bind()
 {
     const quint64 generation = ++m_generation;

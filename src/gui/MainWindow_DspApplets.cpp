@@ -273,7 +273,7 @@ void MainWindow::wirePooDooTiles()
                  dfnr{false}, mnr{false}, bnr{false}, nnr{false};
         };
         auto dspState = std::make_shared<DspState>();
-        auto pushDsp = [this, chain, dspState]() {
+        auto pushDsp = [chain, dspState]() {
             // Priority order picks the most "specific" / most-recent
             // module if more than one is somehow on at once.  Same
             // order as the audio-thread dispatcher so the displayed
@@ -306,7 +306,7 @@ void MainWindow::wirePooDooTiles()
 
         // SPEAK — AudioEngine emits mutedChanged on every setMuted() flip.
         connect(m_audio, &AudioEngine::mutedChanged, this,
-                [this, chain](bool muted) {
+                [chain](bool muted) {
             chain->setRxOutputUnmuted(!muted);
         });
 

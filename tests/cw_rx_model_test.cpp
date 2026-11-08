@@ -128,6 +128,24 @@ bool retainLockedEstimates()
                    "Unlocked stopped decoder kept old estimates");
 }
 
+bool releaseLocksUnderAnotherBackend()
+{
+    CwRxModel decoder;
+    PcmProducer producer;  // the lease must stay current while locking
+    if (!establishEstimates(decoder, producer)) { return false; }
+    decoder.lockPitch(true);
+    decoder.lockSpeed(true);
+    // ggmorse keeps its locks while another backend is selected (see
+    // retainLockedEstimates), so the release must reach it from there.
+    // Stopped and unlocked, ggmorse reports no estimate.
+    if (!require(decoder.selectBackend("stub"), "Stub backend selection failed")) { return false; }
+    decoder.releaseLocks();
+    return require(decoder.selectBackend("ggmorse") && !decoder.isRunning(),
+                   "GGMorse selection started an inactive worker")
+        && require(decoder.estimatedPitch() == 0 && decoder.estimatedSpeed() == 0,
+                   "Releasing locks under another backend left ggmorse locked");
+}
+
 bool sameRange(CwDecodeSettings::Range got, int low, int high)
 {
     return got.low == low && got.high == high;
@@ -194,6 +212,40 @@ bool unlockAfterStopClearsReadout()
     return require(shownPitch == 0 && shownSpeed == 0,
                    "Unlocking speed on a stopped decoder left it on screen");
 }
+
+bool sameRange(std::optional<CwDecodeSettings::Range> got, int low, int high)
+{
+    return got && sameRange(*got, low, high);
+}
+
+// The pitch range follows the radio's CW pitch: kept when it contains the
+// pitch, re-centred on the pitch when it misses it.
+bool pitchRangeFollowsTheRadioPitch()
+{
+    using S = CwDecodeSettings;
+    // CONSTRUCTED pitches: they exercise the centring and the span edges only.
+    if (!require(sameRange(S::pitchRangeAround(800), 650, 950)
+                 && sameRange(S::pitchRangeAround(250), 300, 600)
+                 && sameRange(S::pitchRangeAround(1150), 900, 1200)
+                 && sameRange(S::pitchRangeAround(1500), 900, 1200),
+                 "The range around a pitch is not 300 Hz inside the slider span")) { return false; }
+
+    const S::Range fixedDefault = S::kPitchDefault;
+    // MEASURED (#6158, reporter's support bundle 2026-10-04: `transmit … pitch=710`,
+    // no saved range) — the radio's pitch sits outside the 500-700 default.
+    if (!require(sameRange(S::pitchRangeFor(710, fixedDefault), 560, 860),
+                 "A pitch outside the range did not re-centre on it")) { return false; }
+    // MEASURED (#6650 review, NF0T, FLEX-8400 fw 4.3.16, 2026-10-23): range set by
+    // hand to 545-700, then CW pitch 600 -> 610 — the hand-set range must stay.
+    if (!require(!S::pitchRangeFor(610, S::Range{545, 700}),
+                 "A pitch change inside a hand-set range replaced it")) { return false; }
+    // CONSTRUCTED values from here: the range edges only.
+    if (!require(!S::pitchRangeFor(500, fixedDefault) && !S::pitchRangeFor(700, fixedDefault),
+                 "A pitch on the range edge replaced it")) { return false; }
+    return require(sameRange(S::pitchRangeFor(499, fixedDefault), 349, 649)
+                   && sameRange(S::pitchRangeFor(701, fixedDefault), 551, 851),
+                   "A pitch just outside the range did not re-centre on it");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -202,6 +254,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
     if (!savedRangesStayInsideTheSliders()) { return 1; }
+    if (!pitchRangeFollowsTheRadioPitch()) { return 1; }
     CwDecodeSettings::setBackend(QStringLiteral("unknown"));
     if (!require(!CwDecodeSettings::neuralSelected(),
                  "Unknown saved backend disables ggmorse controls")) { return 1; }
@@ -287,5 +340,5 @@ int main(int argc, char** argv)
     if (!require(posts == settled + 1,
                  "Stale queued statusChanged survived the backend switch")) { return 1; }
     return require(!decoder.isRunning(), "Stopped decoder restarted") && retainLockedEstimates()
-        && unlockAfterStopClearsReadout() ? 0 : 1;
+        && releaseLocksUnderAnotherBackend() && unlockAfterStopClearsReadout() ? 0 : 1;
 }

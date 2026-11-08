@@ -137,8 +137,11 @@ void ClientTubeApplet::buildUI()
 
     auto wire = [this](ClientCompKnob* k, auto setter) {
         connect(k, &ClientCompKnob::valueChanged, this, [this, setter](float v) {
-            if (!m_audio || !tube()) return;
-            (tube()->*setter)(v);
+            if (!m_audio) return;
+            // Local object operand: see VfoWidget::buildTabContent (#6724).
+            auto* const target = tube();
+            if (!target) return;
+            (target->*setter)(v);
             saveTubeSettings();
         });
     };

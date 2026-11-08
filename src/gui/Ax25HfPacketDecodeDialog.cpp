@@ -126,12 +126,6 @@ constexpr auto kPmsBeaconTextSetting = "AetherModemPmsBeaconText";
 // TNC Terminal settings live as ONE nested-JSON object under this key — see
 // TerminalSettings in the header (Principle V). The seven legacy flat keys it
 // replaced are read once by TerminalSettings::migrateLegacy() and then unused.
-// TXDELAY override in HDLC flags, 0 = the profile default. Exposed because the
-// preamble is the largest single term in the HF airtime budget (2.13 s of every
-// 5.07 s data frame and 3.30 s acknowledgement at 80 flags) and the only way to
-// find the right value is to sweep it on the air against measured frame error
-// rate. A knob rather than a constant so a sweep needs no rebuild per step.
-constexpr auto kTxPreambleFlagsSetting = "AetherModemTxPreambleFlags";
 constexpr auto kTerminalSettingsKey = "AetherModemTerminal";
 
 // 0 = Auto: derive T1 and paclen from the modem profile via Ax25LinkTiming.h.

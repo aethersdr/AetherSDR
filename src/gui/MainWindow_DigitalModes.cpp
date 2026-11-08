@@ -1698,7 +1698,7 @@ void MainWindow::showPskReporterMapDialog()
 {
     if (!m_pskReporterMapDialog) {
         auto* dlg = new PskReporterMapDialog(
-            m_audio, &m_radioModel, m_propForecast, this);
+            m_audio, &m_radioModel, m_propForecast, m_wsprFeed, this);
         m_pskReporterMapDialog = dlg;
     }
     m_pskReporterMapDialog->show();

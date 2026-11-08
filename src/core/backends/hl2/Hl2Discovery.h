@@ -71,6 +71,15 @@ public:
     // Broadcast one discovery datagram now (also called by the interval timer).
     void sweepNow();
 
+    // IPv4 host destinations probed on every bound interface in each sweep.
+    // Unlike broadcasts, these probes can reach a routed subnet. Unspecified,
+    // limited-broadcast, multicast and repeated targets are omitted.
+    // Empty by default; replies share the broadcast parser and identity.
+    void setDirectedTargets(const QList<QHostAddress>& targets);
+    // Accepted host addresses after filtering and de-duplication. The value
+    // copy keeps callers from mutating a running sweep's target policy.
+    [[nodiscard]] QList<QHostAddress> directedTargets() const { return m_directedTargets; }
+
     [[nodiscard]] bool isRunning() const noexcept;
 
     // Canonical "AA:BB:CC:DD:EE:FF" rendering of a discovery reply's MAC, which
@@ -138,6 +147,7 @@ private:
     QList<QUdpSocket*> m_sockets;
     QTimer* m_timer = nullptr;
     QHash<QString, Seen> m_seen;   // keyed by serial (the MAC string)
+    QList<QHostAddress> m_directedTargets;
     DiscoveryNotices m_notices;
     bool m_answered = false;       // an HL2 replied since the last sweep
 };

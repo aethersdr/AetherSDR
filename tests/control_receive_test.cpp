@@ -452,6 +452,68 @@ void productionCapabilityContracts()
     check(hl2Caps.receiveModeControl && hl2Caps.receiveFilterControl && hl2Caps.receiveAudioControl
         && hl2Caps.receivePanCenterControl && !hl2Caps.receivePanBandwidthControl,
         "HL2 exposes receive controls but not topology-changing bandwidth");
+    hl2::Hl2Backend::setHostOffersTransmit(false);
+    {
+        hl2::Hl2Backend headless;
+        check(!headless.capabilities().canTransmit,
+            "an HL2 in a host without an HL2 transmit path (aetherd) declares itself receive only");
+    }
+    hl2::Hl2Backend::setHostOffersTransmit(true);
+    // The HL2's adjustable filters: every mode whose cuts reach the NBP stage
+    // and are read back. WBFM/WFM/DRM never appear (not receive-controllable).
+    QStringList hl2FilterModes;
+    const auto hl2Filter = [&](const QString& mode) -> const ReceiveFilterMode* {
+        for (const ReceiveFilterMode& filter : hl2Caps.receiveFilterControl->modes) {
+            if (filter.mode == mode) { return &filter; }
+        }
+        return nullptr;
+    };
+    for (const ReceiveFilterMode& filter : hl2Caps.receiveFilterControl->modes) {
+        hl2FilterModes.append(filter.mode);
+    }
+    hl2FilterModes.sort();
+    check(hl2FilterModes == QStringList{"AM", "CW", "CWL", "DIGL", "DIGU", "DSB", "FM", "LSB", "SAM", "USB"},
+        "HL2 declares adjustable filters for exactly its sideband, data, AM, DSB, CW and FM modes");
+    bool filterModesRequestable = true;
+    for (const QString& mode : hl2FilterModes) {
+        filterModesRequestable &= hl2Caps.receiveModeControl->modes.contains(mode);
+    }
+    check(filterModesRequestable, "every HL2 filter mode is also a requestable receive mode");
+    const ReceiveFilterMode* hl2Dsb = hl2Filter(QStringLiteral("DSB"));
+    const ReceiveFilterMode* hl2Fm = hl2Filter(QStringLiteral("FM"));
+    const ReceiveFilterMode* hl2Cw = hl2Filter(QStringLiteral("CW"));
+    const ReceiveFilterMode* hl2Cwl = hl2Filter(QStringLiteral("CWL"));
+    check(hl2Dsb && hl2Fm && hl2Cw && hl2Cwl, "HL2 DSB, FM, CW and CWL filter records exist");
+    if (hl2Dsb && hl2Fm && hl2Cw && hl2Cwl) {
+        // Carrier-straddling modes: the carrier stays inside every accepted
+        // passband, so a low cut is always negative and a high cut positive.
+        bool straddles = true;
+        for (const ReceiveFilterMode* range : {hl2Dsb, hl2Fm, hl2Cw, hl2Cwl}) {
+            straddles &= range->maximumLowHz < 0 && range->minimumHighHz > 0;
+        }
+        check(straddles, "HL2 DSB/FM/CW/CWL filters always straddle the carrier");
+        // The default passbands the backend adopts on a mode change fit.
+        check(hl2Dsb->minimumLowHz <= -3000 && hl2Dsb->maximumHighHz >= 3000
+                && hl2Fm->minimumLowHz <= -8000 && hl2Fm->maximumHighHz >= 8000
+                && hl2Cw->minimumLowHz <= -250 && hl2Cw->maximumHighHz >= 250
+                && hl2Cwl->minimumLowHz <= -250 && hl2Cwl->maximumHighHz >= 250,
+            "HL2 default DSB, FM and CW passbands lie inside their declared ranges");
+        // CW cuts stop at 6000 Hz: the BFO (pitch up to 6000 Hz) is added on top.
+        check(hl2Cw->minimumLowHz == -6000 && hl2Cw->maximumHighHz == 6000
+                && hl2Cwl->minimumLowHz == -6000 && hl2Cwl->maximumHighHz == 6000,
+            "HL2 CW and CWL cuts leave room for the maximum CW pitch");
+    }
+    check(!hl2Filter(QStringLiteral("WBFM")) && !hl2Filter(QStringLiteral("WFM"))
+            && !hl2Filter(QStringLiteral("DRM")) && !hl2Filter(QStringLiteral("NFM"))
+            && !hl2Filter(QStringLiteral("CWU")),
+        "HL2 offers no filter for modes it cannot be asked to enter or that are aliases");
+    QStringList flexFilterModes;
+    for (const ReceiveFilterMode& filter : flexCaps.receiveFilterControl->modes) {
+        flexFilterModes.append(filter.mode);
+    }
+    flexFilterModes.sort();
+    check(flexFilterModes == QStringList{"AM", "DIGL", "DIGU", "DSB", "LSB", "SAM", "USB"},
+        "Flex filter modes are unchanged by the HL2 declaration");
     SliceDelta observed;
     int gainReports = 0;
     QObject::connect(&hl2, &IRadioBackend::sliceChanged, &hl2, [&](int, const SliceDelta& delta) {
@@ -685,6 +747,57 @@ void productionCapabilityContracts()
 #endif
 }
 
+void hl2DeclaredFiltersDriveTheControlPlane()
+{
+    hl2::Hl2Backend hl2;
+    const RadioCapabilities caps = hl2.capabilities();
+    const auto expect = [&](const char* mode, int low, int high, const char* expected) {
+        Fixture f;
+        f.backend->caps.receiveModeControl = caps.receiveModeControl;
+        f.backend->caps.receiveFilterControl = caps.receiveFilterControl;
+        f.report(QString::fromLatin1(mode), -250, 250);
+        QJsonObject values = f.params(ReceiveOperation::Filter);
+        values.insert(QStringLiteral("lowHz"), low);
+        values.insert(QStringLiteral("highHz"), high);
+        const QJsonObject response = f.send(ReceiveOperation::Filter, values);
+        const QString actual = response.contains(QStringLiteral("result"))
+            ? QStringLiteral("result") : error(response);
+        if (actual != QString::fromLatin1(expected)) {
+            std::printf("%s filter %d:%d: expected %s, got %s\n",
+                        mode, low, high, expected, qPrintable(actual));
+        }
+        check(actual == QString::fromLatin1(expected),
+              "HL2 production filter record controls daemon admission");
+        if (QString::fromLatin1(expected) == QStringLiteral("result")) {
+            check(response.value("result").toObject().value("accepted").toBool()
+                      && f.backend->intents == 1 && f.backend->method == QStringLiteral("filter")
+                      && f.backend->args.value("low").toInt() == low
+                      && f.backend->args.value("high").toInt() == high
+                      && f.backend->filterOrigin == SliceFilterRequest::Origin::Operator,
+                  "accepted HL2 passband dispatches exactly one unchanged operator intent");
+        } else {
+            check(f.backend->intents == 0, "refused HL2 passband dispatches no backend intent");
+        }
+        check(f.backend->keys == 0, "HL2 filter admission never dispatches keying");
+    };
+    expect("CW", -250, 250, "result");
+    expect("CWL", -250, 250, "result");
+    expect("FM", -8000, 8000, "result");
+    expect("DSB", -3000, 3000, "result");
+    expect("CW", -6000, 6000, "result");
+    expect("CWL", -6000, 6000, "result");
+    expect("FM", -12000, 12000, "result");
+    expect("DSB", -10, 10, "result");
+    expect("CW", -6001, 250, "request.out_of_range");
+    expect("CWL", 100, 500, "request.out_of_range");
+    expect("FM", -12001, 8000, "request.out_of_range");
+    expect("DSB", -5, 5, "request.out_of_range");
+    expect("CW", -250, 0, "request.out_of_range");
+    expect("CWL", -250, 6001, "request.out_of_range");
+    expect("WBFM", -8000, 8000, "capability.unavailable");
+    expect("DRM", -3000, 3000, "capability.unavailable");
+}
+
 // THE STRANDING ITSELF, driven through the target that does the stranding.
 //
 // productionCapabilityContracts() above reads the HL2's receiveModeControl
@@ -833,6 +946,7 @@ int main(int argc, char** argv)
     delayedIdleCannotAuthorizeReceive();
     rangesAndBudget();
     productionCapabilityContracts();
+    hl2DeclaredFiltersDriveTheControlPlane();
     hl2DeclaredModesDriveTheControlPlane();
     return failures == 0 ? 0 : 1;
 }

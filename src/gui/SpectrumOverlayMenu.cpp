@@ -243,9 +243,17 @@ static constexpr int BAND_BTN_H = 26;
 // to silently un-style the panel with no compile error). Routed through
 // ThemeManager so the border stays theme-aware instead of pinning the dark
 // theme's #304050 literal.
+//
+// Panels are siblings of the menu and children of the spectrum, so a mouse
+// event a panel or its descendants ignore (a right press on a label or button,
+// a double-click on empty space) would otherwise propagate to the spectrum's
+// tuning handlers (#6802). WA_NoMousePropagation stops it at the panel. Every
+// QWidget panel is built and rebuilt through this helper; MemoryBrowsePanel,
+// which styles itself, sets the attribute at its creation site.
 static void applyPanelStyle(QWidget* panel, const QString& objectName)
 {
     panel->setObjectName(objectName);
+    panel->setAttribute(Qt::WA_NoMousePropagation);
     AetherSDR::ThemeManager::instance().applyStyleSheet(
         panel,
         QStringLiteral("QWidget#%1 { background: rgba(15, 15, 26, 220); "
@@ -505,12 +513,6 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     if (parentWidget()) {
         parentWidget()->installEventFilter(this);
     }
-
-    // Mouse presses on panel backgrounds must not fall through to the
-    // spectrum. Wheel ownership is handled for every descendant above.
-    for (auto* panel : {m_bandPanel, m_antPanel, m_daxPanel, m_displayPanel,
-                        static_cast<QWidget*>(m_memoryPanel)})
-        if (panel) panel->installEventFilter(this);
 
     updateLayout();
 
@@ -1551,6 +1553,8 @@ void SpectrumOverlayMenu::toggleDaxPanel()
 void SpectrumOverlayMenu::buildMemoryPanel()
 {
     m_memoryPanel = new MemoryBrowsePanel(parentWidget());
+    // Not styled through applyPanelStyle(), so it sets the same boundary.
+    m_memoryPanel->setAttribute(Qt::WA_NoMousePropagation);
     m_memoryPanel->hide();
     connect(m_memoryPanel, &MemoryBrowsePanel::memoryActivated, this,
             [this](int memoryIndex) {
@@ -3578,7 +3582,6 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     m_bandPanel = new QWidget(parentWidget());
     applyPanelStyle(m_bandPanel, QStringLiteral("bandPanel"));
     m_bandPanel->hide();
-    m_bandPanel->installEventFilter(this);
 
     auto* grid = new QGridLayout(m_bandPanel);
     grid->setContentsMargins(2, 2, 2, 2);
@@ -3757,7 +3760,6 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     m_xvtrPanel = new QWidget(parentWidget());
     applyPanelStyle(m_xvtrPanel, QStringLiteral("xvtrPanel"));
     m_xvtrPanel->hide();
-    m_xvtrPanel->installEventFilter(this);
     m_xvtrPanelVisible = false;
 
     auto* xvGrid = new QGridLayout(m_xvtrPanel);
@@ -3935,28 +3937,6 @@ bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
     if (obj == parentWidget() && event->type() == QEvent::Resize
         && m_displayPanelVisible) {
         layoutDisplayPanel();
-    }
-
-    if (event->type() == QEvent::MouseButtonDblClick) {
-        if (auto* slider = qobject_cast<QSlider*>(obj)) {
-            slider->setValue(50);
-            return true;
-        }
-    }
-    // Consume panel-background mouse events so they don't reach the spectrum.
-    // SpectrumOverlayWheelGuard owns wheel routing for panels and descendants.
-    if (obj == m_bandPanel || obj == m_antPanel
-        || obj == m_daxPanel || obj == m_displayPanel || obj == m_memoryPanel) {
-        if (event->type() == QEvent::MouseButtonPress
-            || event->type() == QEvent::MouseButtonRelease) {
-            if (auto* panel = qobject_cast<QWidget*>(obj)) {
-                if (auto* mouseEvent = dynamic_cast<QMouseEvent*>(event);
-                    mouseEvent && panel->childAt(mouseEvent->pos())) {
-                    return QWidget::eventFilter(obj, event);
-                }
-            }
-            return true;  // consumed
-        }
     }
     return QWidget::eventFilter(obj, event);
 }

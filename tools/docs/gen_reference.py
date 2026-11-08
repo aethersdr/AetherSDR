@@ -279,16 +279,21 @@ def unescape(body: str, where: str) -> str:
     return "".join(out)
 
 
-STRING_WRAPPERS = ("QStringLiteral", "QLatin1String", "QString", "tr", "QObject::tr")
+STRING_WRAPPERS = ("QStringLiteral", "QLatin1String", "QString", "tr", "QObject::tr",
+                   "QT_TR_NOOP")
+# QT_TRANSLATE_NOOP("context", text): the text is the second argument.
+QT_TRANSLATE_NOOP_RE = r'QT_TRANSLATE_NOOP\s*\(\s*"(?:[^"\\\n]|\\.)*"\s*,(.*)\)'
 
 
 def literal(expr: str, where: str):
     """The value of a string literal expression (adjacent literals joined,
-    an optional QStringLiteral()/tr()/... wrapper), or None if ``expr`` is not
-    one."""
+    an optional QStringLiteral()/tr()/QT_TRANSLATE_NOOP()/... wrapper), or
+    None if ``expr`` is not one."""
     e = expr.strip()
     m = re.fullmatch(r"(?:%s)\s*\((.*)\)" % "|".join(
         re.escape(w) for w in STRING_WRAPPERS), e, re.S)
+    if not m:
+        m = re.fullmatch(QT_TRANSLATE_NOOP_RE, e, re.S)
     if m:
         e = m.group(1).strip()
     if not e.startswith('"'):

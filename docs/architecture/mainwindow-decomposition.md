@@ -25,7 +25,7 @@ Read this before adding code to anything named `MainWindow*`. The one rule:
 | `MainWindow_Wiring.cpp` | 1d | Per-object signal wiring: the `wirePanadapter()` / `wireSlice()` / `wireVfoWidget()` / `wireDsp…()` methods that connect each dynamically-created radio object to the UI. |
 | `MainWindow_DigitalModes.cpp` | 1e | Demod / mode subsystems and their activate/deactivate lifecycles: RADE, FreeDV, DAX, AX.25 / KISS TNC, RTTY, **WFM**. |
 | `MainWindow_SwrSweep.cpp` | 1e | The AetherSweep SWR-sweep engine (lock → step → state machine → pan overlay). |
-| `MainWindow_Spots.cpp` | 2b | `wireSpotSubsystem()` — DX Cluster / RBN / WSJT-X / SpotCollector / POTA clients and their UI plumbing. |
+| `MainWindow_Spots.cpp` | 2b | `wireSpotSubsystem()` — DX Cluster / RBN / WSJT-X / POTA clients and their UI plumbing. |
 | `MainWindow_Session.cpp` | 2c | `wireDiscovery()` / `wireRadioModel()` / `wirePanLifecycle()` — LAN + SmartLink discovery, heartbeat/disconnect detection, connection-state routing, and pan-stream lifecycle: the wiring that constitutes "a connected radio". Seed of the future `RadioSession` aggregate (#3445). |
 | `MainWindow_DspApplets.cpp` | 2d | `wirePooDooTiles()` + `wireDspApplets()` — PooDoo RX status tiles and the client-DSP applet family (Compressor / Gate / De-esser / Tube / Reverb / AetherDSP / PUDU TX+RX) plus TX signal-chain wiring. |
 | `MainWindowHelpers.{h,cpp}` | 0 | Stateless formatters / value transforms with **no** `MainWindow` dependency (tooltip builders, spot-ID math, client-list parsing, small pixmap painters). |

@@ -38,9 +38,14 @@ public:
     // Invoked from the writer thread when the active file exceeds the
     // size cap. The callback must return the path of the new file to
     // open (a fresh timestamp under the same directory); returning an
-    // empty string disables further rotation. The callback is also the
-    // right place to update LogManager's active path and any symlinks.
+    // empty string disables further rotation. The file is not open yet,
+    // so the callback must not publish the path.
     using RotationCallback = std::function<QString(const QString& currentPath)>;
+    // Invoked from the writer thread once the new file is open: the place
+    // to publish the active path and any aliases. When the open fails it is
+    // not called; the writer keeps appending to the old file, writes a
+    // warning into it and tries again after another maxFileBytes.
+    using RotatedCallback = std::function<void(const QString& newPath)>;
 
     AsyncLogWriter();
     ~AsyncLogWriter();
@@ -50,7 +55,8 @@ public:
 
     // Configure size-based rotation. Must be called before start().
     // maxFileBytes <= 0 disables rotation.
-    void setRotationConfig(qint64 maxFileBytes, RotationCallback cb);
+    void setRotationConfig(qint64 maxFileBytes, RotationCallback cb,
+                           RotatedCallback rotated = {});
 
     bool start(const QString& path, bool mirrorToStderr);
     void shutdown();
@@ -111,6 +117,7 @@ private:
 
     qint64 m_maxFileBytes{0};
     RotationCallback m_rotationCallback;
+    RotatedCallback m_rotatedCallback;
 
     Counters m_counters;
     quint64 m_pendingDroppedDebugInfo{0};

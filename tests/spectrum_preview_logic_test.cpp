@@ -758,6 +758,30 @@ int testWaterfallScrollProgress()
             waterfallScrollSampleOffsetUnit(0.5f, 1.0f, 0), 0.0, 1.0e-6)) {
         return fail("waterfall sample offset should preserve the row handoff");
     }
+    // While FFT frames present (25 fps: one every 40 ms), they carry the
+    // scroll, rows and labels; a 1.5-period gap hands back to the timer (#6883).
+    if (presentNeededBesideFft(0, 25)
+        || presentNeededBesideFft(40, 25)
+        || presentNeededBesideFft(60, 25)
+        || !presentNeededBesideFft(61, 25)
+        || presentNeededBesideFft(16, 60)
+        || !presentNeededBesideFft(26, 60)) {
+        return fail("a live FFT stream should carry the waterfall scroll");
+    }
+    if (!presentNeededBesideFft(-1, 25)
+        || !presentNeededBesideFft(10, 0)
+        || !presentNeededBesideFft(10, -5)) {
+        return fail("with no FFT stream the scroll timer must keep presenting");
+    }
+    // A deferred present is made anyway the moment the stream stops being live.
+    if (fftLivenessRemainingMs(0, 25) != 61
+        || fftLivenessRemainingMs(42, 25) != 19
+        || fftLivenessRemainingMs(60, 25) != 1
+        || fftLivenessRemainingMs(61, 25) != 0
+        || fftLivenessRemainingMs(-1, 25) != 0
+        || fftLivenessRemainingMs(10, 0) != 0) {
+        return fail("a deferred present must be woken when the FFT stops");
+    }
     return 0;
 }
 

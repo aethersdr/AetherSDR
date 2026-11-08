@@ -4,11 +4,14 @@
 
 #ifdef HAVE_WEBSOCKETS
 #include "MeterSlider.h"
+#include "ControlAvailabilityRegistry.h"
+#include "CanonIndicators.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QCheckBox>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -17,6 +20,7 @@
 #include <QMenu>
 #include <QActionGroup>
 #include <algorithm>
+#include <cmath>
 #endif
 
 namespace AetherSDR {
@@ -92,10 +96,13 @@ void TciApplet::buildUI()
 
         m_rxMeter[i] = new MeterSlider;
         m_rxMeter[i]->setAccessibleName(tr("TCI RX %1 gain").arg(i + 1));
+        m_rxMeter[i]->setAccessibleDescription(tr("Receive attenuation from 0 to 100 percent; meter shows output from -60 to 0 dBFS RMS"));
+        m_rxMeter[i]->setToolTip(tr("RX gain: 0-100% (100% is unity)\nMeter: -60 to 0 dBFS RMS"));
+        m_rxMeter[i]->setLogarithmicLevelEnabled(true);
         {
             auto key = QStringLiteral("TciRxGain%1").arg(i + 1);
             float saved = settings.value(key, "0.5").toString().toFloat();
-            m_rxMeter[i]->setGain(std::clamp(saved, 0.0f, 1.0f));
+            m_rxMeter[i]->setGain(std::isfinite(saved) ? std::clamp(saved, 0.0f, 1.0f) : 0.5f);
         }
         connect(m_rxMeter[i], &MeterSlider::gainChanged, this, [this, i](float g) {
             auto& ss = AppSettings::instance();
@@ -201,6 +208,50 @@ void TciApplet::buildUI()
         outer->addLayout(row);
     }
 
+    auto* lineOutRow = new QHBoxLayout;
+    lineOutRow->setContentsMargins(4, 2, 4, 2);
+    m_lineOutIncludeTx = new QCheckBox(tr("Include TX (Line Out)"), this);
+    m_lineOutIncludeTx->setObjectName(QStringLiteral("tciLineOutIncludeTx"));
+    m_lineOutIncludeTx->setAccessibleName(tr("TCI Include TX (Line Out)"));
+    m_lineOutIncludeTx->setAccessibleDescription(tr(
+        "Include TX monitor audio present in the radio speaker mix in Line Out. "
+        "Does not enable MON or add a separate transmit feed. When off, Line Out is silent "
+        "during radio transmit, including simultaneous receive audio."));
+    m_lineOutIncludeTx->setToolTip(m_lineOutIncludeTx->accessibleDescription());
+    m_lineOutIncludeTx->setEnabled(false);
+    applyCanonSheet(m_lineOutIncludeTx, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    lineOutRow->addWidget(m_lineOutIncludeTx);
+    lineOutRow->addStretch();
+    outer->addLayout(lineOutRow);
+    connect(m_lineOutIncludeTx, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_tciServer) { m_tciServer->setLineOutIncludeTx(enabled); }
+    });
+    auto* lineOutConsentRow = new QHBoxLayout;
+    lineOutConsentRow->setContentsMargins(4, 1, 4, 2);
+    m_lineOutPcAudioOffConsent = new QCheckBox(
+        tr("Line Out with PC Audio off\n(mutes radio outputs)"), this);
+    m_lineOutPcAudioOffConsent->setObjectName(QStringLiteral("tciLineOutPcAudioOffConsent"));
+    m_lineOutPcAudioOffConsent->setAccessibleName(
+        tr("Allow Line Out with PC Audio off; mutes radio outputs"));
+    m_lineOutPcAudioOffConsent->setAccessibleDescription(tr(
+        "When PC Audio is off, Line Out is silent by default. When enabled, Line Out keeps "
+        "the radio audio stream open and mutes the radio speaker, headphone and line-out "
+        "outputs while a TCI client is recording. Off by default."));
+    m_lineOutPcAudioOffConsent->setToolTip(m_lineOutPcAudioOffConsent->accessibleDescription());
+    m_lineOutPcAudioOffConsent->setEnabled(false);
+    applyCanonSheet(m_lineOutPcAudioOffConsent, [] {
+        return QStringLiteral("QCheckBox { color: {{color.canon.inkSoft}}; font-size: 11px; }")
+            + canonIndicatorRules();
+    });
+    lineOutConsentRow->addWidget(m_lineOutPcAudioOffConsent);
+    lineOutConsentRow->addStretch();
+    outer->addLayout(lineOutConsentRow);
+    connect(m_lineOutPcAudioOffConsent, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (m_tciServer) { m_tciServer->setLineOutPcAudioOffConsent(enabled); }
+    });
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
     enableRow->setContentsMargins(4, 2, 4, 2);
@@ -319,9 +370,33 @@ void TciApplet::setRadioModel(RadioModel* model)
 {
 #ifdef HAVE_WEBSOCKETS
     m_model = model;
+    delete m_lineOutAvailability;
+    m_lineOutAvailability = nullptr;
+    delete m_lineOutPcAudioOffAvailability;
+    m_lineOutPcAudioOffAvailability = nullptr;
     if (!model) {
+        m_lineOutIncludeTx->setEnabled(false);
+        m_lineOutIncludeTx->setAccessibleDescription(
+            tr("Line Out requires a connected radio and a TCI server, not PC Audio."));
+        m_lineOutPcAudioOffConsent->setEnabled(false);
+        m_lineOutPcAudioOffConsent->setAccessibleDescription(
+            tr("Line Out consent requires a connected radio and a TCI server."));
         return;
     }
+    m_lineOutAvailability = new ControlAvailabilityRegistry(*model, this);
+    m_lineOutAvailability->registerWidget(m_lineOutIncludeTx,
+        tr("Line Out requires a connected radio and a TCI server, not PC Audio."),
+        [this](bool connected, const RadioCapabilities&) { return connected && m_tciServer; },
+        [this] { return m_tciServer && m_tciServer->lineOutIncludeTx(); }, false);
+    m_lineOutPcAudioOffAvailability = new ControlAvailabilityRegistry(*model, this);
+    m_lineOutPcAudioOffAvailability->registerWidget(m_lineOutPcAudioOffConsent,
+        tr("Line Out consent requires a connected radio and a TCI server."),
+        [this](bool connected, const RadioCapabilities&) { return connected && m_tciServer; },
+        [this] { return m_tciServer && m_tciServer->lineOutPcAudioOffConsent(); }, false);
+    connect(model, &RadioModel::capabilitiesChanged, this,
+        [this](bool, const RadioCapabilities&) {
+            if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
+        });
 
     // Slice → DAX channel mapping drives both DAX and TCI RX indicators.
     // TCI RX1-8 carry the same DAX channels (PanadapterStream::daxPcmReady
@@ -387,8 +462,35 @@ void TciApplet::setRadioModel(RadioModel* model)
 void TciApplet::setTciServer(TciServer* tci)
 {
 #ifdef HAVE_WEBSOCKETS
+    if (m_tciServer) {
+        disconnect(m_tciServer, &TciServer::lineOutIncludeTxChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::lineOutPcAudioOffConsentChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::clientCountChanged, this, nullptr);
+    }
     m_tciServer = tci;
+    {
+        const QSignalBlocker blocker(m_lineOutIncludeTx);
+        m_lineOutIncludeTx->setChecked(tci && tci->lineOutIncludeTx());
+    }
+    {
+        const QSignalBlocker blocker(m_lineOutPcAudioOffConsent);
+        m_lineOutPcAudioOffConsent->setChecked(tci && tci->lineOutPcAudioOffConsent());
+    }
+    if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
+    if (m_lineOutPcAudioOffAvailability) { m_lineOutPcAudioOffAvailability->refreshEngaged(); }
     if (tci) {
+        connect(tci, &TciServer::lineOutIncludeTxChanged, this, [this](bool enabled) {
+            const QSignalBlocker blocker(m_lineOutIncludeTx);
+            m_lineOutIncludeTx->setChecked(enabled);
+            if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
+        });
+        connect(tci, &TciServer::lineOutPcAudioOffConsentChanged, this, [this](bool enabled) {
+            const QSignalBlocker blocker(m_lineOutPcAudioOffConsent);
+            m_lineOutPcAudioOffConsent->setChecked(enabled);
+            if (m_lineOutPcAudioOffAvailability) {
+                m_lineOutPcAudioOffAvailability->refreshEngaged();
+            }
+        });
         connect(tci, &TciServer::clientCountChanged,
                 this, [this]() { updateTciStatus(); });
     }
@@ -437,13 +539,8 @@ void TciApplet::setTciRxLevel(int channel, float rms)
     if (channel < 1 || channel > kChannels) {
         return;
     }
-    // Exponential smoothing: fast attack (α=0.4), slow decay (α=0.08)
-    static float smoothed[kChannels]{};
-    float& s = smoothed[channel - 1];
-    float alpha = (rms > s) ? 0.4f : 0.08f;
-    s = alpha * rms + (1.0f - alpha) * s;
     if (m_rxMeter[channel - 1]) {
-        m_rxMeter[channel - 1]->setLevel(std::clamp(s * 2.0f, 0.0f, 1.0f));
+        m_rxMeter[channel - 1]->setLevel(rms);
     }
 #else
     (void)channel;
