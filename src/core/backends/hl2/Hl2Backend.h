@@ -315,6 +315,8 @@ private:
     // Reads the snapshot at a chosen instant, so hl2_adc_age_gate_test puts a
     // held slice peak on either side of kSliceStaleMs without waiting.
     friend struct Hl2AdcAgeTestAccess;
+    // Runs loadHardwareOptions() without a socket (hl2_hardware_document_test).
+    friend struct Hl2BoardIdentityTestAccess;
     // The snapshot at `nowNs`, on steadyNowNs()'s timeline. The converter rows
     // take their age from it and read no clock, so the age row and the pairing
     // gate describe one instant.
@@ -495,6 +497,13 @@ private:
     // a SquareSDR 2 look identical on the wire and the dither bit means different
     // things on each. See Hl2HardwareOptions.
     Hl2HardwareOptions m_hw;
+    // The board this radio's gateware names, and whether m_hw.codec is the
+    // suggestion for it rather than a stored choice. A suggested codec is not
+    // persisted until a hw.set names a codec (#6806).
+    hl2::GatewareBoard m_gatewareBoard = hl2::GatewareBoard::Unknown;
+    bool m_hwCodecSuggested = false;
+    // Load m_hw for m_radioSerial at connect, applying sessionCodec().
+    void loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor);
     // Adopt a new set: persist (or not), push every field that changed to the
     // wire, and re-evaluate the band filter. The single path for a hardware
     // change whoever asked for it (setup dialog, automation bridge, connect).

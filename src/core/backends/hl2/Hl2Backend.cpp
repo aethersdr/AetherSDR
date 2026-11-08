@@ -2305,8 +2305,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // fields are start() parameters — the dither bit rides the config register
     // the very first frame carries, and the codec decides whether that frame's
     // audio slot may hold anything at all.
-    m_hw = Hl2HardwareOptions::load(
-        RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial));
+    loadHardwareOptions(
+        hl2::gatewareMinorFromVersionText(request.version.toStdString()));
     // AND RECONCILE THE TWO DOCUMENTS BEFORE ANYTHING IS COMPUTED FROM THEM.
     // The calibration and the hardware options are separate rows, loaded by the
     // two independent calls above and written by two independent operations, so
@@ -5065,6 +5065,20 @@ void Hl2Backend::applyAtuTuneRequest(bool tuning)
                               Q_ARG(bool, request));
 }
 
+void Hl2Backend::loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor)
+{
+    std::optional<Hl2HardwareOptions::Codec> storedCodec;
+    m_hw = Hl2HardwareOptions::load(
+        RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), &storedCodec);
+    m_gatewareBoard = hl2::boardForGatewareMinor(gatewareMinor);
+    m_hw.codec = Hl2HardwareOptions::sessionCodec(storedCodec, m_gatewareBoard);
+    m_hwCodecSuggested = !storedCodec && m_hw.codec != Hl2HardwareOptions::Codec::None;
+    if (const char* board = hl2::gatewareBoardName(m_gatewareBoard)) {
+        qCInfo(lcHl2) << "HL2: gateware identifies the board as" << board
+                      << "— codec suggested, not stored:" << m_hwCodecSuggested;
+    }
+}
+
 void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persist)
 {
     const Hl2HardwareOptions before = m_hw;
@@ -5080,7 +5094,8 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
                              << "no radio identity yet; applying for this session only";
         } else {
             Hl2HardwareOptions::save(
-                RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), m_hw);
+                RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), m_hw,
+                /*writeCodec=*/!m_hwCodecSuggested);
         }
     }
     if (!m_metis)
@@ -5904,6 +5919,9 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
                     {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
+                    {QStringLiteral("codecSuggested"), m_hwCodecSuggested},
+                    {QStringLiteral("detectedBoard"),
+                     QString::fromLatin1(hl2::gatewareBoardName(m_gatewareBoard))},
                 });
             }
             return;
@@ -5920,6 +5938,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                 return it == in.constEnd() ? current : it->toBool();
             };
             if (in.contains(QStringLiteral("codec"))) {
+                m_hwCodecSuggested = false;
                 next.codec = Hl2HardwareOptions::clampCodec(
                     in.value(QStringLiteral("codec")).toInt());
                 // A board change re-seeds the dither bit, because 0x00[11] means
@@ -5955,6 +5974,9 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
                     {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
+                    {QStringLiteral("codecSuggested"), m_hwCodecSuggested},
+                    {QStringLiteral("detectedBoard"),
+                     QString::fromLatin1(hl2::gatewareBoardName(m_gatewareBoard))},
                 });
             }
             return;

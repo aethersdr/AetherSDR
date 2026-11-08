@@ -294,6 +294,30 @@ int main()
         const auto cut = parseDiscoveryReply(std::span<const std::uint8_t>(reply.data(), 0x15));
         check(cut && !cut->gatewareMinor && gatewareVersionText(*cut) == "74",
               "a reply ending before 0x15 shows the major version alone");
+        reply[0x15] = 52;
+        check(gatewareVersionLabel(*parseDiscoveryReply(reply)) == "SQUARE SDR 2 gateware",
+              "minor 52 labels the version with the board's name");
+        reply[0x15] = 3;
+        check(gatewareVersionLabel(*parseDiscoveryReply(reply)) == "Gateware",
+              "stock minor 3 keeps the plain label");
+        check(gatewareVersionLabel(*cut) == "Gateware", "no minor keeps the plain label");
+        // The connect path recovers the minor from the version text.
+        check(gatewareMinorFromVersionText("75.52") == std::optional<std::uint8_t>(52),
+              "\"75.52\" -> minor 52");
+        check(!gatewareMinorFromVersionText("74"), "\"74\" -> no minor");
+        check(!gatewareMinorFromVersionText(""), "empty version -> no minor");
+        check(!gatewareMinorFromVersionText("74.256"), "minor above 255 rejected");
+        check(!gatewareMinorFromVersionText("74."), "empty minor rejected");
+        check(!gatewareMinorFromVersionText("74.5x"), "non-digit minor rejected");
+        check(!gatewareMinorFromVersionText("4.2.20.41343"), "a Flex version is not a minor");
+        bool roundTrips = true;
+        for (int m = 0; m <= 0xFF; ++m) {
+            reply[0x15] = static_cast<std::uint8_t>(m);
+            const auto parsed = parseDiscoveryReply(reply);
+            roundTrips = roundTrips
+                && gatewareMinorFromVersionText(gatewareVersionText(*parsed)) == parsed->gatewareMinor;
+        }
+        check(roundTrips, "every minor 0..255 round-trips through the version text");
         std::array<std::uint8_t, 4> junk{0x00, 0x11, 0x22, 0x33};
         check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
     }

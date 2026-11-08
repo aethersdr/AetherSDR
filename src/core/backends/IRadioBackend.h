@@ -63,6 +63,7 @@ struct RadioConnectRequest {
     QString host;
     quint16 port = 0;
     QString serial;         // when a family identifies radios by serial
+    QString version;        // RadioInfo::version from discovery; empty when not reported
     QVariantMap params;     // family-specific extras (namespaced by the backend)
     RadioSerialIdentity serialIdentity;
     // Local IPv4 address that reached the radio; null lets the OS choose.

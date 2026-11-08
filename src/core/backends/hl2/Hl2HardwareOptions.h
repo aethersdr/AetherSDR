@@ -3,14 +3,16 @@
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace AetherSDR {
 
 class RadioSettingsScope;
 
 // What hardware is attached to this Hermes-Lite 2. Protocol 1 has no board ID
-// or capability word, so a bare HL2, HL2+ (AK4951), SquareSDR 2 and an HL2 with
-// an N2ADR board on J16 look identical; the operator declares it. Stored per
+// or capability word, so a bare HL2, HL2+ (AK4951) and an HL2 with an N2ADR
+// board on J16 look identical; the operator declares it. A SQUARE SDR 2 names
+// itself in VERSION_MINOR, which only suggests its codec (sessionCodec). Stored per
 // radio (feature document keyed by MAC, like Hl2FreqCal) because the dither
 // bit means different things on different boards. Defaults are the bare board,
 // except filterBoard (see FilterBoard).
@@ -182,6 +184,19 @@ struct Hl2HardwareOptions {
                                                 : hl2::ocFilterByteForHz(hz);
     }
 
+    // The codec for this session. A stored choice always wins, None included.
+    // With nothing stored, a SQUARE SDR 2 gets its own codec as a suggestion
+    // the caller does not write (#6806). SQUARE 3 is named but suggests
+    // nothing until its specification is final.
+    [[nodiscard]] static constexpr Codec sessionCodec(std::optional<Codec> stored,
+                                                      hl2::GatewareBoard board) noexcept
+    {
+        if (stored) {
+            return *stored;
+        }
+        return board == hl2::GatewareBoard::SquareSdr2 ? Codec::SquareSdr2 : Codec::None;
+    }
+
     [[nodiscard]] bool operator==(const Hl2HardwareOptions&) const = default;
 
     // Per-radio feature document like Hl2FreqCal, read-modify-written whole so
@@ -193,8 +208,14 @@ struct Hl2HardwareOptions {
     // written by an older build gains new fields at their defaults rather than
     // at zero, which for filterBoard would be "no board" and would silently
     // release the relays.
-    static Hl2HardwareOptions load(const RadioSettingsScope& scope);
-    static void save(const RadioSettingsScope& scope, const Hl2HardwareOptions& opts);
+    // `storedCodec`, when given, receives the codec the document carries, or
+    // nullopt when it carries none; a present key of any value is a choice.
+    static Hl2HardwareOptions load(const RadioSettingsScope& scope,
+                                   std::optional<Codec>* storedCodec = nullptr);
+    // `writeCodec` false leaves the document's codec key as it is, so a
+    // suggested codec is never persisted by a change to another field.
+    static void save(const RadioSettingsScope& scope, const Hl2HardwareOptions& opts,
+                     bool writeCodec = true);
 
     // Clamp a round-tripped enum from the settings store. The fallbacks differ:
     // unknown codec -> None (bare board), unknown filter board -> N2adrRxTx,

@@ -37,7 +37,7 @@ Across a VPN or another subnet, use **Connect by IP** with **Radio type:** set t
 - **Connect to last radio on start up** works with the HL2.
 - **Nickname:** right-click the radio in the list → **Set Nickname…** / **Clear Nickname** (no need to connect), or **Settings → Radio Setup... → Radio → Nickname:** while connected. HL2 nicknames are stored on this computer, keyed by the radio's MAC address.
 - The very first connect on a computer spends a while planning its DSP filters; the app stays responsive while it does. The result is saved, so later connects are quick.
-- The status bar shows the gateware version as major.minor, such as **74.3** for stock Hermes-Lite 2 gateware. Boards built on the HL2 can report their own minor version: a SQUARE SDR 2 reads **xx.52**.
+- The status bar shows the gateware version as major.minor, such as **Gateware 74.3** for stock Hermes-Lite 2 gateware. A SQUARE SDR 2 (minor version 52) and a SQUARE 3 (53) are named: **SQUARE SDR 2 gateware 75.52**. A first-generation SQUARE SDR runs stock HL2 gateware and shows as a Hermes-Lite 2.
 
 On Linux and macOS, the WDSP filter-planning cache uses `XDG_CACHE_HOME` when
 nonempty, otherwise `$HOME/.cache`. If both variables are unset or empty,
@@ -51,7 +51,7 @@ with the same temporary-directory fallback. The cache file is
 
 | Group | Controls |
 |-------|----------|
-| **Local Audio** | **Codec:** **None — plain Hermes-Lite 2**, **AK4951 — HL2+ companion board**, or **SquareSDR 2 — codec on the mainboard**. A board with a codec can play receive audio on the radio's own speaker; **Speaker level:** sets it. |
+| **Local Audio** | **Codec:** **None — plain Hermes-Lite 2**, **AK4951 — HL2+ companion board**, or **SquareSDR 2 — codec on the mainboard**. A board with a codec can play receive audio on the radio's own speaker; **Speaker level:** sets it. A SQUARE SDR 2 with no codec chosen yet starts with **SquareSDR 2** selected; that is stored only once you choose a codec, and any choice you have made, **None** included, is kept. |
 | **Dither Bit** | **Dither bit** and **Random bit**. On some variants the first box is relabeled to what that board uses the line for (internal loudspeaker or band-voltage output). |
 | **Companion Filter Board** | **Board:** **None — nothing on J16**, **N2ADR — receive and transmit**, or **N2ADR — transmit only**. **Receive through the N2ADR 3 MHz high-pass** adds the AM-broadcast high-pass on receive (80 m to 10 m). Choose **None** only when nothing is fitted, because then nothing filters the transmitter's harmonics. |
 | **Reference Clock and Tuner** | **External 10 MHz reference at CL1** locks the radio to a reference such as a GPSDO instead of its crystal. CL1 expects a 3.3 V logic-level clock: pad a typical 5 V GPSDO output with at least 6 dB of 50 Ω attenuation. Lock is not read back. **Antenna tuner driven by the HL2 gateware** raises the tune request during TUNE for an AH-4-protocol ATU; leave it off for a tuner on the N2ADR IO board. |
