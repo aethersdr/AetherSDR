@@ -40,6 +40,9 @@ public:
     // ReserveEndpoint claims the private endpoint but closes early arrivals.
     // Startup code must finish binding targets before calling startServing().
     [[nodiscard]] bool listen(const QString& name, ListenMode mode = ListenMode::Serve);
+    // Why the last listen() failed, when the cause is one an operator can fix;
+    // empty otherwise.
+    [[nodiscard]] QString listenError() const { return m_listenError; }
     [[nodiscard]] bool startServing();
     // Startup-only binding; never changes grants or replaces a lost target.
     [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
@@ -76,6 +79,7 @@ private:
     const SessionAuthorization m_localAuthorization;
     std::unordered_map<QLocalSocket*, std::unique_ptr<Client>> m_clients;
     std::unique_ptr<QLockFile> m_lock;
+    QString m_listenError;
     bool m_serving{false};
     bool m_closing{false};
 };

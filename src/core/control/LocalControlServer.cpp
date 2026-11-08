@@ -1,6 +1,7 @@
 #include "LocalControlServer.h"
 #include "ControlInputPump.h"
 #include "ControlCredentialVault.h"
+#include "LocalSocketPath.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -130,9 +131,14 @@ bool LocalControlServer::listen(const QString& name, ListenMode mode)
         return false;
     }
 
+    m_listenError.clear();
     QString endpointName;
     QString lockPath;
     if (!resolveEndpoint(name, &endpointName, &lockPath)) {
+        return false;
+    }
+    m_listenError = localSocketPathTooLong(endpointName, localSocketPathLimit());
+    if (!m_listenError.isEmpty()) {
         return false;
     }
 

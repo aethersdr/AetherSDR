@@ -763,6 +763,12 @@ target_include_directories(control_receive_test PRIVATE src tests)
 target_link_libraries(control_receive_test PRIVATE aethercore Qt6::Core)
 add_test(NAME control_receive_test COMMAND control_receive_test)
 
+# Socket-free length check for the local control endpoint path (sun_path).
+add_executable(local_socket_path_test tests/local_socket_path_test.cpp)
+target_include_directories(local_socket_path_test PRIVATE src)
+target_link_libraries(local_socket_path_test PRIVATE Qt6::Core)
+add_test(NAME local_socket_path_test COMMAND local_socket_path_test)
+
 # Socket-free bounded telemetry and transmit observation. The test injects
 # samples and a monotonic clock, with no sockets, peers, timers waited on or TX.
 add_executable(control_telemetry_test tests/control_telemetry_test.cpp)
