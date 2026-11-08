@@ -1,0 +1,367 @@
+// rigctl send_morse / stop_morse on a radio with no radio-side text buffer
+// (#7105). The HL2 fixture takes its capabilities from a real, unconnected
+// Hl2Backend; only canTransmit is set, as a connected HL2 that granted TX
+// declares it. The text is timed by the real CwxLocalKeyer worker and every edge
+// is recorded where RadioModel hands it to IRadioBackend::setCwKeying().
+// Socket-free: an injected stub backend; nothing is opened and nothing is keyed.
+
+#include "TestSettingsProfile.h"
+#include "core/RigctlProtocol.h"
+#include "core/backends/IRadioBackend.h"
+#include "core/backends/SliceDelta.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "models/CwxModel.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#include "models/TransmitModel.h"
+
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
+#include <QString>
+#include <QStringList>
+#include <QTimer>
+
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <memory>
+#include <vector>
+
+using namespace AetherSDR;
+using Clock = std::chrono::steady_clock;
+
+namespace {
+
+int g_failed = 0;
+
+void check(const char* name, bool ok)
+{
+    std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", name);
+    if (!ok) {
+        ++g_failed;
+    }
+}
+
+struct Edge {
+    bool down;
+    Clock::time_point at;
+};
+
+class KeyingStub final : public IRadioBackend {
+public:
+    RadioCapabilities caps;
+    bool connected{false};
+    std::vector<Edge>* edges{nullptr};
+    QStringList* cwText{nullptr};
+
+    RadioCapabilities capabilities() const override { return caps; }
+    bool isConnected() const override { return connected; }
+    void connectRadio(const RadioConnectRequest&) override {}
+    void disconnectRadio() override { connected = false; }
+    void setSliceFrequency(int, double) override {}
+    void setSliceMode(int, const QString&) override {}
+    void setSliceFilter(int, int, int) override {}
+    void setSliceAgc(int, const QString&, int) override {}
+    void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    void setKeying(bool, const TxCoordinator::Operation&,
+                   const TxCoordinator::Completion&) override {}
+    void setCwKeying(bool down, bool, int, const TxCoordinator::Operation&,
+                     const TxCoordinator::Completion&) override
+    {
+        edges->push_back({down, Clock::now()});
+    }
+    QString sendCwText(const QString& text, const TxCoordinator::Operation&,
+                       const TxCoordinator::Completion&) override
+    {
+        *cwText << text;
+        return {};
+    }
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+};
+
+RadioCapabilities hl2Capabilities(bool canTransmit)
+{
+    hl2::Hl2Backend real;
+    RadioCapabilities caps = real.capabilities();
+    caps.canTransmit = canTransmit;
+    return caps;
+}
+
+struct Fixture {
+    std::vector<Edge> edges;   // outlives the model's backend
+    QStringList cwText;
+    RadioModel radio;
+    KeyingStub* backend{nullptr};
+
+    Fixture(const RadioCapabilities& caps, const QString& family, const QString& mode,
+            bool txSlice = true)
+    {
+        auto owned = std::make_unique<KeyingStub>();
+        backend = owned.get();
+        backend->caps = caps;
+        backend->edges = &edges;
+        backend->cwText = &cwText;
+        radio.setBackendForTest(std::move(owned), family);
+        SliceDelta slice;
+        slice.frequency = 7.020;
+        slice.mode = mode;
+        slice.panId = QStringLiteral("0x40000000");   // the model maps it to its own pan id
+        slice.txSlice = txSlice;
+        radio.emitBackendSliceChangedForTest(0, slice);
+        if (!radio.slice(0)) {
+            std::fprintf(stderr, "FATAL: the slice was not materialised\n");
+            std::exit(2);
+        }
+        backend->connected = true;
+    }
+
+    int downs() const
+    {
+        int n = 0;
+        for (const Edge& e : edges) {
+            n += e.down ? 1 : 0;
+        }
+        return n;
+    }
+};
+
+QString cat(RigctlProtocol& port, const QString& line)
+{
+    const QString reply = port.handleLine(line).trimmed();
+    QCoreApplication::processEvents();
+    return reply;
+}
+
+// Runs the event loop (where the keyer's queued edges are forwarded) until
+// `done` holds or `ms` passes.
+bool pumpUntil(const std::function<bool()>& done, int ms)
+{
+    QElapsedTimer t;
+    t.start();
+    QEventLoop loop;
+    QTimer poll;
+    QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
+        if (done() || t.elapsed() >= ms) {
+            loop.quit();
+        }
+    });
+    poll.start(1);
+    loop.exec();
+    return done();
+}
+
+void pumpFor(int ms)
+{
+    (void)pumpUntil([] { return false; }, ms);
+}
+
+double ms(Clock::duration d)
+{
+    return std::chrono::duration<double, std::milli>(d).count();
+}
+
+// Element pattern of the recorded keying: '.'/'-' for a down shorter/longer
+// than two units, ' ' between characters (an up of two units or more).
+QString pattern(const std::vector<Edge>& edges, double unitMs)
+{
+    QString out;
+    for (size_t i = 0; i + 1 < edges.size(); ++i) {
+        const double len = ms(edges[i + 1].at - edges[i].at);
+        if (edges[i].down) {
+            out += len < 2.0 * unitMs ? QLatin1Char('.') : QLatin1Char('-');
+        } else if (len >= 2.0 * unitMs) {
+            out += QLatin1Char(' ');
+        }
+    }
+    return out;
+}
+
+bool alternates(const std::vector<Edge>& edges)
+{
+    for (size_t i = 0; i < edges.size(); ++i) {
+        if (edges[i].down != (i % 2 == 0)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void testHl2KeysTextInMorseTiming()
+{
+    Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
+    RigctlProtocol port(&f.radio);
+    port.setSliceIndex(0);
+
+    check("HL2 fixture: real Hl2Backend declares no radio-side buffer but host CW keying",
+          !f.backend->caps.hasRadioSideCwKeyer && f.backend->caps.hasHostCwKeying);
+    check("HL2: hasHostCwTextKeyer() is true", f.radio.hasHostCwTextKeyer());
+
+    check("L KEYSPD 30 accepted", cat(port, QStringLiteral("L KEYSPD 30")) == QLatin1String("RPRT 0"));
+    check("the model's CW speed is 30 WPM", f.radio.transmitModel().cwSpeed() == 30);
+    // ITU timing: one unit is 1.2 s / WPM.
+    const double unitMs = 1200.0 / f.radio.transmitModel().cwSpeed();
+
+    const QString reply = cat(port, QStringLiteral("+b TEST"));
+    check("+b TEST answers RPRT 0", reply.endsWith(QLatin1String("RPRT 0")));
+
+    // T E S T = 6 elements, 12 edges.
+    const bool done = pumpUntil([&] { return f.edges.size() >= 12; }, 5000);
+    pumpFor(static_cast<int>(10 * unitMs));
+    check("twelve edges reach setCwKeying", done && f.edges.size() == 12);
+    check("edges alternate down/up, starting down", alternates(f.edges));
+    check("the elements spell T E S T", pattern(f.edges, unitMs) == QLatin1String("- . ... -"));
+    if (f.edges.size() == 12) {
+        // T(3) 3 E(1) 3 S(1+1+1+1+1) 3 T(3) = 21 units from first down to last up.
+        const double total = ms(f.edges.back().at - f.edges.front().at);
+        std::printf("       total %.1f ms, expected %.1f ms at %d WPM\n",
+                    total, 21 * unitMs, f.radio.transmitModel().cwSpeed());
+        check("the message lasts 21 units at the configured speed (within 15 %)",
+              total > 21 * unitMs * 0.85 && total < 21 * unitMs * 1.15);
+    }
+
+    // The two-line form: a bare `b`, the text on the next line.
+    f.edges.clear();
+    check("bare b arms the next line", cat(port, QStringLiteral("b")).isEmpty());
+    check("the next line is sent: RPRT 0", cat(port, QStringLiteral("E")).endsWith(QLatin1String("RPRT 0")));
+    check("and keys one dit", pumpUntil([&] { return f.edges.size() >= 2; }, 2000)
+                                  && f.edges.size() == 2 && f.edges[0].down && !f.edges[1].down);
+}
+
+void testStopMorseKeysUpAtOnce()
+{
+    Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
+    RigctlProtocol port(&f.radio);
+    port.setSliceIndex(0);
+    (void)cat(port, QStringLiteral("L KEYSPD 20"));
+
+    // M: two dahs, so the key is down for 180 ms at a time.
+    check("send_morse accepted",
+          cat(port, QStringLiteral("\\send_morse MMMMMMMMMM")).endsWith(QLatin1String("RPRT 0")));
+    check("the first key-down arrives", pumpUntil([&] { return !f.edges.empty(); }, 2000));
+    pumpFor(20);
+    check("precondition: the key is down mid-element", !f.edges.empty() && f.edges.back().down);
+
+    const size_t before = f.edges.size();
+    check("stop_morse answers RPRT 0",
+          cat(port, QStringLiteral("\\stop_morse")).endsWith(QLatin1String("RPRT 0")));
+    check("the key is up as soon as the stop is processed",
+          f.edges.size() == before + 1 && !f.edges.back().down);
+    pumpFor(800);
+    check("and no further edge follows", f.edges.size() == before + 1);
+
+    // A later send starts a fresh run.
+    f.edges.clear();
+    check("send after stop accepted", cat(port, QStringLiteral("b E")).endsWith(QLatin1String("RPRT 0")));
+    check("and keys again", pumpUntil([&] { return f.edges.size() >= 2; }, 2000) && f.edges.size() == 2);
+}
+
+void testRefusals()
+{
+    {
+        Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("USB"));
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        check("not CW: send_morse refused with RIG_ERJCTED",
+              cat(port, QStringLiteral("b TEST")) == QLatin1String("RPRT -9"));
+        pumpFor(300);
+        check("not CW: no edge", f.edges.empty());
+    }
+    {
+        // An unconnected Hl2Backend reports canTransmit=false: receive-only.
+        Fixture f(hl2Capabilities(false), QStringLiteral("hl2"), QStringLiteral("CW"));
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        check("receive-only: send_morse refused with RIG_ENAVAIL",
+              cat(port, QStringLiteral("b TEST")) == QLatin1String("RPRT -11"));
+        check("receive-only: stop_morse refused with RIG_ENAVAIL",
+              cat(port, QStringLiteral("\\stop_morse")) == QLatin1String("RPRT -11"));
+        pumpFor(300);
+        check("receive-only: no edge", f.edges.empty());
+    }
+    {
+        Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
+        f.radio.setPanTransmitInhibited(f.radio.slice(0)->panId(), true, QStringLiteral("test inhibit"));
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        check("inhibited: send_morse refused with RIG_ERJCTED",
+              cat(port, QStringLiteral("b TEST")) == QLatin1String("RPRT -9"));
+        pumpFor(300);
+        check("inhibited: no edge", f.edges.empty());
+    }
+    {
+        Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"), /*txSlice=*/false);
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        check("no TX slice: send_morse refused with RIG_ERJCTED",
+              cat(port, QStringLiteral("b TEST")) == QLatin1String("RPRT -9"));
+        pumpFor(300);
+        check("no TX slice: no edge", f.edges.empty());
+    }
+    {
+        // A radio that transmits but declares no host CW keying (the default
+        // setCwKeying is a no-op) keeps the old answer.
+        RadioCapabilities caps;
+        caps.canTransmit = true;
+        Fixture f(caps, QStringLiteral("test"), QStringLiteral("CW"));
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        check("no host CW keying: send_morse refused with RIG_ENAVAIL",
+              cat(port, QStringLiteral("b TEST")) == QLatin1String("RPRT -11"));
+    }
+}
+
+void testInhibitMidMessageStopsKeyDown()
+{
+    Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
+    RigctlProtocol port(&f.radio);
+    port.setSliceIndex(0);
+    (void)cat(port, QStringLiteral("L KEYSPD 30"));
+    check("send_morse accepted", cat(port, QStringLiteral("b TEST TEST")).endsWith(QLatin1String("RPRT 0")));
+    check("the first key-down arrives", pumpUntil([&] { return f.downs() >= 1; }, 2000));
+    f.radio.setPanTransmitInhibited(f.radio.slice(0)->panId(), true, QStringLiteral("test inhibit"));
+    const int downsAtInhibit = f.downs();
+    pumpFor(2000);
+    check("per-edge gate: no key-down after the inhibit", f.downs() == downsAtInhibit);
+    check("and the key ends up", !f.edges.empty() && !f.edges.back().down);
+}
+
+void testRadioSideKeyerStillUsesCwx()
+{
+    RadioCapabilities caps;
+    caps.canTransmit = true;
+    caps.hasRadioSideCwKeyer = true;
+    Fixture f(caps, QStringLiteral("test"), QStringLiteral("CW"));
+    RigctlProtocol port(&f.radio);
+    port.setSliceIndex(0);
+    QStringList requested;
+    QObject::connect(&f.radio.cwxModel(), &CwxModel::transmissionRequested,
+                     [&](const QString& text, int) { requested << text; });
+
+    check("radio-side keyer: hasHostCwTextKeyer() is false", !f.radio.hasHostCwTextKeyer());
+    check("radio-side keyer: send_morse RPRT 0",
+          cat(port, QStringLiteral("b CQ TEST")).endsWith(QLatin1String("RPRT 0")));
+    pumpFor(300);
+    check("the text goes through CWX", requested == QStringList{QStringLiteral("CQ TEST")});
+    check("and to the radio's text keyer", f.cwText == QStringList{QStringLiteral("CQ TEST")});
+    check("and no host-timed element is keyed", f.edges.empty());
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile(QStringLiteral("rigctl-host-cw-text"));
+    QCoreApplication app(argc, argv);
+    if (!profile.isValid()) {
+        return 1;
+    }
+    testHl2KeysTextInMorseTiming();
+    testStopMorseKeysUpAtOnce();
+    testRefusals();
+    testInhibitMidMessageStopsKeyDown();
+    testRadioSideKeyerStillUsesCwx();
+    std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
+    return g_failed == 0 ? 0 : 1;
+}
