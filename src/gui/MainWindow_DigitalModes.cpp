@@ -398,8 +398,8 @@ void MainWindow::refreshRttyDecodeState()
         return;
     }
 
-    // Can't push params or start without the applet — the panel combos
-    // hold the user's choices and we have no fallback source for them.
+    // Can't push params or start without the applet — Baud and REV live in
+    // its combos. Mark and Shift come from the slice.
     if (!m_rttyDecoderApplet) return;
 
     m_rttyDecoder.setMarkFreqHz(s->rttyMark());

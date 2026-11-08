@@ -2378,7 +2378,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     });
 
     // Update RTTY mark/space lines on spectrum when mark/shift changes;
-    // also push new params to the decoder when Auto mark is selected.
+    // the active slice's new mark and shift also go to the decoder and its combos.
     connect(s, &SliceModel::rttyMarkChanged, this, [this, s](int) {
         pushSliceOverlay(s);
         if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
