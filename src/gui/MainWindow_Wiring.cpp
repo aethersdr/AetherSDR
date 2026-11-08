@@ -4030,9 +4030,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // routeRttyDecoderOutput() may already have selected this same applet,
     // and its unchanged-target fast path cannot restore a connection removed
     // by the bulk disconnect above. Every close must persist dismissal (#5353),
-    // and every Shift choice must reach the slice (#6968).
+    // and every Mark and Shift choice must reach the slice (#7094, #6968).
     connect(applet, &PanadapterApplet::rttyPanelCloseRequested,
             this, &MainWindow::onRttyPanelCloseRequested);
+    connect(applet, &PanadapterApplet::rttyMarkHzChanged,
+            this, &MainWindow::onRttyDecoderMarkChosen);
     connect(applet, &PanadapterApplet::rttyShiftHzChanged,
             this, &MainWindow::onRttyDecoderShiftChosen);
     QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
