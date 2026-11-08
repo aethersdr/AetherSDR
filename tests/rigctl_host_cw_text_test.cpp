@@ -195,7 +195,7 @@ void testHl2KeysTextInMorseTiming()
     port.setSliceIndex(0);
 
     check("HL2 fixture: real Hl2Backend declares no radio-side buffer but host CW keying",
-          !f.backend->caps.hasRadioSideCwKeyer && f.backend->caps.hasHostCwKeying);
+          !f.backend->caps.hasRadioSideCwKeyer && f.backend->caps.hostCwKeyingControl.has_value());
     check("HL2: hasHostCwTextKeyer() is true", f.radio.hasHostCwTextKeyer());
 
     check("L KEYSPD 30 accepted", cat(port, QStringLiteral("L KEYSPD 30")) == QLatin1String("RPRT 0"));
@@ -300,13 +300,16 @@ void testRefusals()
         check("no TX slice: no edge", f.edges.empty());
     }
     {
-        // A radio that transmits but declares no host CW keying (the default
-        // setCwKeying is a no-op) keeps the old answer.
+        // A radio that transmits but leaves hostCwKeyingControl absent (the
+        // default setCwKeying is a no-op) keeps the old answer.
         RadioCapabilities caps;
         caps.canTransmit = true;
+        check("default capabilities: hostCwKeyingControl is absent",
+              !caps.hostCwKeyingControl.has_value());
         Fixture f(caps, QStringLiteral("test"), QStringLiteral("CW"));
         RigctlProtocol port(&f.radio);
         port.setSliceIndex(0);
+        check("no host CW keying: hasHostCwTextKeyer() is false", !f.radio.hasHostCwTextKeyer());
         check("no host CW keying: send_morse refused with RIG_ENAVAIL",
               cat(port, QStringLiteral("b TEST")) == QLatin1String("RPRT -11"));
     }
