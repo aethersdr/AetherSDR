@@ -76,13 +76,14 @@ public:
     //
     // Feeds the amp the TX slice's frequency so it changes band and recalls
     // ATU memories without a transmission. Rapid tuning is coalesced to one
-    // ^FR per kTrackIntervalMs, and nothing is sent while `transmitting`:
+    // ^FR per kTrackIntervalMs, and nothing is sent while local or observed
+    // radio transmit is active (including a transmission owned by another client):
     // a band change under RF would switch the amp's relays hot. A held
     // frequency goes out as soon as transmit ends. `khz` empty means there
     // is no TX slice; the last frequency sent stays on the amp.
     void setFollowTx(bool on);
     bool followTx() const { return m_followTx; }
-    void setTxFrequency(std::optional<int> khz, bool transmitting);
+    void setTxFrequency(std::optional<int> khz, bool localTransmitting, bool radioTransmitting);
 
     // ── Network keying ───────────────────────────────────────────────────
     //
@@ -127,6 +128,8 @@ private slots:
     void onUdpReadyRead();
 
 private:
+    friend struct Kpa1500TrackingTestAccess;
+
     void onTransportUp();
     void onTransportDown();
     void onTransportError(const QString& errorString);

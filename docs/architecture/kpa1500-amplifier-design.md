@@ -11,7 +11,7 @@ exempts a standalone accessory's transport (`peripheral(...)`) from the
 `IRadioBackend`-design-doc requirement that gates a *new radio family*.
 
 **Scope of the implementation this note accompanies:** a dedicated
-`Kpa1500Applet` driven by `Kpa1500Connection` over TCP, plus a Peripherals
+`Kpa1500Applet` driven by `Kpa1500Connection` over TCP or UDP, plus a Peripherals
 settings row. Telemetry (forward/reflected power, SWR, temperature, band,
 fault), operate/standby, internal-ATU tune (start, progress, cancel) and
 in-line/bypass, and antenna select between ANT1 and ANT2. **Network keying (`^TX`/`^RX`) is implemented in the protocol and
@@ -128,10 +128,12 @@ command whose delivery matters and UDP gives no delivery signal. So on UDP:
 fed from `MainWindow::refreshTunerPortFrequency()`, the same effective-TX
 frequency (TX-flagged slice, FM offset, XIT) the KAT500 and KPA500 follow.
 Fast tuning is coalesced to one `^FR` per 300 ms; nothing is sent while the
-radio transmits, and an unconfirmed `^FR` is dropped (not resent) when TX
-starts, then sent again after unkey, because a band change under RF would
-hot-switch the amp's relays. Off by default (applet **TRACK**), since an amp
+radio transmits, including another client's transmission. An unconfirmed `^FR`
+is dropped (not resent) when TX starts, then sent again after unkey, because
+a band change under RF would hot-switch the amp's relays. Off by default (applet **TRACK**), since an amp
 fed by a radio cable already has a frequency source.
+Losing the TX slice, disconnecting the radio, or moving outside the amplifier's
+coverage cancels queued and unconfirmed frequency commands.
 
 **Sleep.** `^ON`, `^RV` and `^SN` answer while the amp sleeps. When `^ON0` is
 read back, polling drops to `^ON` alone, which also keeps the UDP link alive.
