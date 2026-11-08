@@ -5639,6 +5639,19 @@ target_include_directories(kpa1500_protocol_test PRIVATE src)
 target_link_libraries(kpa1500_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kpa1500_protocol_test COMMAND kpa1500_protocol_test)
 
+# Socket-free state injection; production socket members remain unopened.
+add_executable(kpa1500_tracking_state_test
+    tests/kpa1500_tracking_state_test.cpp
+    src/core/Kpa1500Connection.cpp
+    src/core/Kpa1500Protocol.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+)
+target_include_directories(kpa1500_tracking_state_test PRIVATE src tests)
+target_link_libraries(kpa1500_tracking_state_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME kpa1500_tracking_state_test COMMAND kpa1500_tracking_state_test)
+
 add_executable(spe_legacy_protocol_test
     tests/spe_legacy_protocol_test.cpp
     src/core/SpeLegacyProtocol.cpp
@@ -10895,6 +10908,7 @@ set(AETHER_SETTINGS_CONSUMERS
     bandplan_voice_labels_test
     bandplan_usage_resource_test
     vkamp_connection_test
+    kpa1500_tracking_state_test
     rfkit_connection_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test

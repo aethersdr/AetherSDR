@@ -461,9 +461,15 @@
   "split": "",
   "confidence": "high"
  },
+ "core/Kpa1500Discovery.h": {
+  "tag": "peripheral(kpa1500)",
+  "note": "Read-only UDP discovery for the standalone Elecraft KPA1500 amplifier. The Peripherals settings page owns its bounded query sweep; no radio-family wire, backend access or TX authority.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/Kpa1500Connection.h": {
   "tag": "peripheral(kpa1500)",
-  "note": "Direct TCP control/status client (port 1500, ^CP-configurable) for the Elecraft KPA1500 amplifier \u2014 a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h and core/VkampConnection.h. Unlike PGXL/TGXL the Flex radio neither discovers it nor proxies its telemetry, so port 1500 is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/kpa1500-amplifier-design.md.",
+  "note": "Direct TCP/UDP control/status client (port 1500, ^CP-configurable) for the Elecraft KPA1500 amplifier \u2014 a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h and core/VkampConnection.h. Unlike PGXL/TGXL the Flex radio neither discovers it nor proxies its telemetry, so port 1500 is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/kpa1500-amplifier-design.md.",
   "split": "",
   "confidence": "high"
  },

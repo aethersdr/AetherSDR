@@ -1,5 +1,7 @@
 #include "Kpa1500Protocol.h"
 
+#include <QStringList>
+
 #include <algorithm>
 
 namespace AetherSDR {
@@ -124,6 +126,47 @@ std::optional<bool> decodeKeyState(const QString& arg)
         return std::nullopt;
     }
     return *n != 0;
+}
+
+// ^VIvvv iii: supply voltage in tenths, PA current in whole amps.
+bool decodeVoltsAmps(const QString& arg, std::optional<float>& volts, std::optional<int>& amps)
+{
+    const QStringList parts = arg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() != 2) {
+        return false;
+    }
+    const auto v = decodeInt(parts.at(0));
+    const auto a = decodeInt(parts.at(1));
+    if (!v || !a || *v < 0 || *a < 0) {
+        return false;
+    }
+    volts = static_cast<float>(*v) / 10.0f;
+    amps = *a;
+    return true;
+}
+
+std::optional<int> decodeRange(const QString& arg, int lo, int hi)
+{
+    const auto n = decodeInt(arg);
+    if (!n || *n < lo || *n > hi) {
+        return std::nullopt;
+    }
+    return n;
+}
+
+// Free-text payloads (^DA, ^RV, ^SN): printable ASCII only, trimmed.
+std::optional<QString> decodeText(const QString& arg)
+{
+    const QString t = arg.trimmed();
+    if (t.isEmpty()) {
+        return std::nullopt;
+    }
+    for (QChar c : t) {
+        if (c.unicode() < 0x20 || c.unicode() > 0x7E) {
+            return std::nullopt;
+        }
+    }
+    return t;
 }
 
 // Assigns and reports whether the value actually moved, so applyMessage()
@@ -294,11 +337,105 @@ bool applyMessage(const Message& message, Status& status)
     if (cmd == QLatin1String("TQ")) {
         return assignIfChanged(status.keyed, decodeKeyState(arg));
     }
+    if (cmd == QLatin1String("ON")) {
+        return assignIfChanged(status.powerOn, decodeBool(arg));
+    }
+    if (cmd == QLatin1String("PWI")) {
+        return assignIfChanged(status.inputWatts, decodeScaled(arg, kPowerDivisor));
+    }
+    if (cmd == QLatin1String("VI")) {
+        std::optional<float> volts;
+        std::optional<int> amps;
+        if (!decodeVoltsAmps(arg, volts, amps)) {
+            return false;
+        }
+        const bool v = assignIfChanged(status.paVolts, volts);
+        const bool a = assignIfChanged(status.paAmps, amps);
+        return v || a;
+    }
+    if (cmd == QLatin1String("FC")) {
+        return assignIfChanged(status.fanMinimum, decodeRange(arg, kMinFan, kMaxFan));
+    }
+    if (cmd == QLatin1String("FS")) {
+        return assignIfChanged(status.fanSpeed, decodeRange(arg, kMinFan, kMaxFan));
+    }
+    if (cmd == QLatin1String("AS")) {
+        return assignIfChanged(status.attenuatorCode, decodeFault(arg));
+    }
+    if (cmd == QLatin1String("FR")) {
+        // ^FR00000; is "no frequency yet", not 0 kHz.
+        const auto khz = decodeInt(arg);
+        if (!khz || *khz <= 0 || *khz > 99999) {
+            return false;
+        }
+        return assignIfChanged(status.frequencyKhz, khz);
+    }
+    if (cmd == QLatin1String("DA")) {
+        return assignIfChanged(status.atuSetting, decodeText(arg));
+    }
+    if (cmd == QLatin1String("RV")) {
+        return assignIfChanged(status.firmware, decodeText(arg));
+    }
+    if (cmd == QLatin1String("SN")) {
+        return assignIfChanged(status.serialNumber, decodeText(arg));
+    }
     // Unrecognized command — deliberately not an error. The amp answers
     // several queries this integration does not send (and future firmware
     // will add more); dropping them keeps the parser forward-compatible
     // instead of desynchronizing on the first unknown token.
     return false;
+}
+
+QString attenuatorReason(int code)
+{
+    switch (code) {
+        case 0x00: return {};
+        case 0x20: return QStringLiteral("PA CURRENT");
+        case 0x60: return QStringLiteral("INPUT POWER");
+        case 0x90: return QStringLiteral("REFLECTED POWER");
+        case 0xC0: return QStringLiteral("FORWARD POWER");
+        case 0xC1: return QStringLiteral("POWER HIGH FOR ATU SETTING");
+        default: break;
+    }
+    return QStringLiteral("%1").arg(code, 2, 16, QLatin1Char('0')).toUpper();
+}
+
+QByteArray buildSetPower(bool on)
+{
+    return buildMessage(QStringLiteral("ON"), on ? QStringLiteral("1") : QStringLiteral("0"));
+}
+
+QByteArray buildSetFanMinimum(int level)
+{
+    if (level < kMinFan || level > kMaxFan) {
+        return {};
+    }
+    return buildMessage(QStringLiteral("FC"), QString::number(level));
+}
+
+QByteArray buildSetFrequency(int khz)
+{
+    if (khz < kMinTrackKhz || khz > kMaxTrackKhz) {
+        return {};
+    }
+    return buildMessage(QStringLiteral("FR"), QStringLiteral("%1").arg(khz, 5, 10, QLatin1Char('0')));
+}
+
+QString transportSettingValue(Transport transport)
+{
+    return transport == Transport::Udp ? QStringLiteral("udp") : QStringLiteral("tcp");
+}
+
+Transport transportFromSettingValue(const QString& value)
+{
+    return value.trimmed().compare(QLatin1String("udp"), Qt::CaseInsensitive) == 0
+        ? Transport::Udp
+        : Transport::Tcp;
+}
+
+QString transportLabel(Transport transport)
+{
+    return transport == Transport::Udp ? QStringLiteral("UDP") : QStringLiteral("TCP");
 }
 
 QString bandName(int code)
