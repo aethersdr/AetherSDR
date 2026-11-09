@@ -55,6 +55,30 @@ func validRoutes(routes []string) error {
 	return nil
 }
 
+type announceRequest struct {
+	Announce   string   `json:"announce"`
+	AnnounceTo []string `json:"announce_to"`
+}
+
+var nodeIDRe = regexp.MustCompile(`^[A-Za-z0-9]{1,64}$`)
+
+func validAnnounce(req announceRequest) error {
+	switch req.Announce {
+	case announceAll, announceOnly, announceOff:
+	default:
+		return errors.New(`announce must be "all", "only" or "off"`)
+	}
+	if len(req.AnnounceTo) > maxAnnounceTargets {
+		return errors.New("too many devices to announce to")
+	}
+	for _, id := range req.AnnounceTo {
+		if !nodeIDRe.MatchString(id) {
+			return errors.New("announce_to lists tailnet node IDs")
+		}
+	}
+	return nil
+}
+
 type allowRequest struct {
 	Allow []string `json:"allow"`
 }
@@ -237,6 +261,26 @@ func NewAPI(n *Node) http.Handler {
 			return
 		}
 		if err := n.SetSharing(bearer(r), req.Routes, req.ShareDiscovered); errors.Is(err, errUnauthorized) {
+			unauthorized(w)
+			return
+		} else if err != nil {
+			writeJSON(w, http.StatusInternalServerError, apiError{err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, n.Status())
+	})
+
+	mux.HandleFunc("PUT /v1/announce", func(w http.ResponseWriter, r *http.Request) {
+		var req announceRequest
+		if err := decode(r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{"malformed request"})
+			return
+		}
+		if err := validAnnounce(req); err != nil {
+			writeJSON(w, http.StatusBadRequest, apiError{err.Error()})
+			return
+		}
+		if err := n.SetAnnounce(bearer(r), req.Announce, req.AnnounceTo); errors.Is(err, errUnauthorized) {
 			unauthorized(w)
 			return
 		} else if err != nil {

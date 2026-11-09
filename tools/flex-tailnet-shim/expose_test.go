@@ -32,7 +32,7 @@ func anyService(int) (service, error) { return service{addr: loop4}, nil }
 
 func TestExposeValidates(t *testing.T) {
 	e := exposer{listening: anyService}
-	for _, port := range []int{0, 80, 1023, 4991, 4992, 4993, 4994, 4995, 42607, ProvisionPort, TelemetryPort, 65536} {
+	for _, port := range []int{0, 80, 1023, 4991, 4992, 4993, 4994, 4995, 42607, ProvisionPort, TelemetryPort, AnnounceFeedPort, 65536} {
 		if _, _, err := e.register(port, "app"); err != errExposePort {
 			t.Errorf("port %d: got %v, want errExposePort", port, err)
 		}

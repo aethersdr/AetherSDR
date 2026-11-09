@@ -53,6 +53,11 @@ type provisionConfig struct {
 	// ShareDiscovered shares every 4O3A device the container hears on the LAN
 	// (nil means the default: on).
 	ShareDiscovered *bool `json:"share_discovered,omitempty"`
+	// Announce says which tailnet devices are sent the radio's announcement
+	// (announce.go): "" (every device), "only" (those in AnnounceTo, by
+	// stable node ID) or "off".
+	Announce   string   `json:"announce,omitempty"`
+	AnnounceTo []string `json:"announce_to,omitempty"`
 	// PendingSignIn: provisioned for a sign-in by URL that hasn't completed.
 	// The node belongs to no tailnet yet, so, like first use, a LAN caller
 	// may start it over without the token (whoever began it may have lost
@@ -62,6 +67,13 @@ type provisionConfig struct {
 
 func (c provisionConfig) shareDiscovered() bool {
 	return c.ShareDiscovered == nil || *c.ShareDiscovered
+}
+
+func (c provisionConfig) announceMode() string {
+	if c.Announce == "" {
+		return announceAll
+	}
+	return c.Announce
 }
 
 // Node owns the tailnet membership and the relay that runs on it. Keys are
@@ -77,6 +89,7 @@ type Node struct {
 	RadioAddr string
 	MaxMTU    int
 	Discovery *Discovery
+	Announcer *Announcer
 
 	opMu sync.Mutex // serializes provision / sign-out / start
 	// The background boot loop, while one runs (under mu). Operator requests
@@ -544,6 +557,33 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 	gen := n.joinGen
 	n.mu.Unlock()
 	go n.keepSignedIn(kctx, gen, read, lc.StartLoginInteractive)
+	if a := n.Announcer; a != nil {
+		a.Attach(ip4, func(b []byte, to netip.AddrPort) error {
+			_, err := prime.WriteTo(b, net.UDPAddrFromAddrPort(to))
+			return err
+		}, func(ctx context.Context) ([]tailPeer, error) {
+			st, err := lc.Status(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return peersFromStatus(st), nil
+		}, func() (string, []string) {
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			return n.cfg.announceMode(), append([]string(nil), n.cfg.AnnounceTo...)
+		})
+		n.mu.Lock()
+		n.closers = append(n.closers, a.Detach)
+		n.mu.Unlock()
+		if hl, err := srv.Listen("tcp", fmt.Sprintf(":%d", AnnounceFeedPort)); err != nil {
+			log.Printf("announce: no discovery helper port: %v", err)
+		} else {
+			n.mu.Lock()
+			n.closers = append(n.closers, hl.Close)
+			n.mu.Unlock()
+			go a.ServeHelpers(hl, n.authorizer(lc))
+		}
+	}
 	return nil
 }
 
@@ -646,6 +686,34 @@ func (n *Node) SetSharing(presented string, routes []string, shareDiscovered *bo
 	n.mu.Unlock()
 	end()
 	n.RefreshRoutes()
+	return nil
+}
+
+// SetAnnounce changes which tailnet devices are sent the radio's
+// announcement, without leaving the tailnet.
+func (n *Node) SetAnnounce(presented, mode string, only []string) error {
+	end, err := n.beginOp(presented, false)
+	if err != nil {
+		return err
+	}
+	n.mu.Lock()
+	cfg := n.cfg
+	n.mu.Unlock()
+	cfg.Announce, cfg.AnnounceTo = mode, only
+	if mode == announceAll {
+		cfg.Announce = ""
+	}
+	if err := n.save(cfg); err != nil {
+		end()
+		return err
+	}
+	n.mu.Lock()
+	n.cfg = cfg
+	n.mu.Unlock()
+	end()
+	if n.Announcer != nil {
+		n.Announcer.Refresh()
+	}
 	return nil
 }
 
@@ -978,11 +1046,21 @@ type Status struct {
 	RecentCommands []string `json:"recent_commands"`
 	// Exposed: TCP ports apps on the radio published to the tailnet.
 	Exposed []ExposedPort `json:"exposed_ports"`
+	// Which tailnet devices are sent the radio's announcement: the setting
+	// ("all", "only", "off"), the devices chosen for "only", and what is
+	// being done (announce.go).
+	Announce     string         `json:"announce"`
+	AnnounceTo   []string       `json:"announce_to"`
+	Announcement AnnounceStatus `json:"announcement"`
 }
 
 func (n *Node) Status() Status {
 	st := n.statusLocked()
 	st.Approved = n.approvedRoutes()
+	st.Announcement = AnnounceStatus{Devices: []AnnouncePeer{}}
+	if n.Announcer != nil {
+		st.Announcement = n.Announcer.Status()
+	}
 	return st
 }
 
@@ -1067,6 +1145,8 @@ func (n *Node) statusLocked() Status {
 	st.Exposed = n.exposed.list()
 	st.Routes = append([]string{}, n.cfg.Routes...)
 	st.ShareDiscovered = n.cfg.shareDiscovered()
+	st.Announce = n.cfg.announceMode()
+	st.AnnounceTo = append([]string{}, n.cfg.AnnounceTo...)
 	st.Discovered = []Device{}
 	if n.Discovery != nil {
 		st.Discovered = n.Discovery.Devices()
