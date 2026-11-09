@@ -822,14 +822,21 @@ static int spot_from_message(const ftx_message_t *msg, long long t, long long di
     else
         snprintf(s->msg, sizeof s->msg, "%s", call_de);
 
-    /* The grid is taken only when the library typed that field as a grid, and
-     * only when it also passes our own grid check. */
-    for (int i = 0; i < FTX_MAX_MESSAGE_FIELDS; i++) {
-        if (types[i] == FTX_FIELD_GRID && extra[0] && valid_grid(extra)) {
-            snprintf(s->grid, sizeof s->grid, "%s", extra);
-            break;
-        }
-    }
+    /* The grid comes from the THIRD field, so it is types[2] that must say
+     * FTX_FIELD_GRID -- not "any of the three fields is a grid".
+     *
+     * Scanning all three let a sign-off through. Measured on the air: the
+     * first live decode on 20 m was "W0SJE 9Z4BM RR73" and was logged with
+     * grid "RR73". RR73 is a sign-off, not a grid, and it passes a structural
+     * two-letters-two-digits check, which is why valid_grid() alone cannot
+     * catch it. The library types it correctly (2 = report, where a real grid
+     * such as FN42 is 5); the bug was reading the wrong index.
+     *
+     * A type-4 non-standard message has no grid field at all, and
+     * ftx_message_decode_nonstd does not fill types[] the way decode_std
+     * does, so the explicit index also stops a stale value being trusted. */
+    if (types[2] == FTX_FIELD_GRID && extra[0] && valid_grid(extra))
+        snprintf(s->grid, sizeof s->grid, "%s", extra);
     return 1;
 }
 
@@ -1471,6 +1478,14 @@ static int selftest_spots(void)
         /* A reply carries a report, which must NOT be read as a grid --
          * "R-09" and "FN42" are both four characters. */
         {"W9XYZ", "K1ABC", "-11",  "K1ABC", ""},
+        /* ⛔ The real one, off the air on 20 m: the first live decode was
+         * "W0SJE 9Z4BM RR73" and the agent logged grid "RR73". A sign-off is
+         * structurally two letters and two digits, so valid_grid() passes it;
+         * only the library's field type distinguishes it (2 = report, where
+         * a grid is 5). Caught in production, not by this test, which is why
+         * the exact message is pinned here. */
+        {"W0SJE", "9Z4BM", "RR73", "9Z4BM", ""},
+        {"W9XYZ", "K1ABC", "RRR",  "K1ABC", ""},
         {"W9XYZ", "K1ABC", "R-09", "K1ABC", ""},
         {"W9XYZ", "K1ABC", "RR73", "K1ABC", ""},
         {"W9XYZ", "K1ABC", "73",   "K1ABC", ""},
