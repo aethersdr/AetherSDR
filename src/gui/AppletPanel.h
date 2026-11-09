@@ -2,6 +2,7 @@
 
 #include "core/AudioEngine.h"
 #include "core/backends/RadioCapabilities.h"
+#include "AppletRailMetrics.h"
 
 #include <QWidget>
 #include <QMap>
@@ -87,20 +88,14 @@ class AppletPanel : public QWidget {
 public:
     explicit AppletPanel(QWidget* parent = nullptr);
 
-    // The docked rail's outer gutter follows the wall it is docked to, so the
-    // 6 px always sits against the window edge (#7081 review finding 1).
-    // MainWindow::setAppletPanelDockedLeft() is the only caller.
+    // The outer gutter faces the wall the rail is docked to; the panel is not
+    // always the splitter's last widget.
     void setDockedLeft(bool left);
 
-    // The width a stacked applet actually gets when docked: the rail's fixed
-    // width, less the outer gutter, less the scrollbar track when it shows.
-    // Tests that check an applet fits the rail must lay out at this, not at
-    // kRailWidth — see pgxl_panel_test / amp_applet_test.
-    static constexpr int kRailWidth        = 260;
-    static constexpr int kRailOuterGutter  = 6;
-    static constexpr int kRailScrollBarW   = 12;
-    static constexpr int kStackedApplet    =
-        kRailWidth - kRailOuterGutter - kRailScrollBarW;   // 242
+    static constexpr int kRailWidth       = AppletRailMetrics::kRailWidth;
+    static constexpr int kRailOuterGutter = AppletRailMetrics::kRailOuterGutter;
+    static constexpr int kRailScrollBarW  = AppletRailMetrics::kRailScrollBarW;
+    static constexpr int kStackedApplet   = AppletRailMetrics::kStackedApplet;
 
     void setSlice(SliceModel* slice);
     void setAntennaList(const QStringList& ants);

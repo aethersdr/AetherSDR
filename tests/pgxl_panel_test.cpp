@@ -35,13 +35,11 @@
 
 #include <cstdio>
 #include <functional>
+#include "gui/AppletRailMetrics.h"
 
-// The docked rail gives a stacked applet less than its own 260 px: the panel's
-// outer gutter (6) and, when it shows, the scrollbar track (12) come off it.
-// AppletPanel::kStackedApplet is the authority (AppletPanel.h); it is restated
-// here because that header pulls in AudioEngine.h, which this test does not
-// link. A fit check at 260 can pass while the real docked width clips. (#7081)
-static constexpr int kDockedAppletWidth = 242;   // AppletPanel::kStackedApplet
+// A fit check at the rail's own 260 px can pass while the real docked width
+// clips: the outer gutter and the scrollbar track come off it.
+static constexpr int kDockedAppletWidth = AetherSDR::AppletRailMetrics::kStackedApplet;
 
 using namespace AetherSDR;
 

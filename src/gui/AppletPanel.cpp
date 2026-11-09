@@ -309,26 +309,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     setFixedWidth(kRailWidth);
 
     m_root = new QVBoxLayout(this);
-    // A gutter on whichever side faces the window edge, because every layout
-    // between this panel and that edge is margin-free: MainWindow's central
-    // widget (MainWindow.cpp), the splitter, and ContainerWidget's own layouts
-    // are 0 all round, leaving only ContainerTitleBar's 2 px.
-    //
-    // WHAT WAS MEASURED (#7077), rather than a mechanism: applet content was
-    // landing within about 1 px of the window edge, and a 6 px inset fixes it
-    // on Windows. The S-Meter's dBm readout lost its trailing "m", the "+40"
-    // arc label rendered as "+4", and every applet's x close button sat on the
-    // boundary. Qt clips none of this — paintEvent() reported the full 260 px
-    // width with a complete visibleRegion — so the pixels were being covered
-    // at the window boundary, outside Qt's clipping. On Windows the whole
-    // window is client area and that edge is hit-tested as a resize border
-    // (MainWindow::isSystemMoveAreaAt and the WM_NCHITTEST path), with DWM
-    // drawing a frame border over it; that is consistent with the measurement
-    // but was not itself measured, so it is not asserted here.
-    //
-    // The side is set by setDockedLeft(), since the panel is NOT always the
-    // splitter's last widget — setAppletPanelDockedLeft() inserts it before
-    // the pan when docked left (MainWindow.cpp).
+    // Every layout between this panel and the window edge is margin-free, so
+    // the rail reserves the gutter itself. setDockedLeft() moves it to the
+    // facing side; the panel is not always the splitter's last widget.
     m_root->setContentsMargins(0, 0, kRailOuterGutter, 0);
     m_root->setSpacing(0);
     auto* root = m_root;
@@ -486,10 +469,12 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_scrollArea->setWidgetResizable(true);
     // Handle dims to #2a3a4a at rest, brightens to #4a6880 on hover/drag.
     // 500 ms delay before dimming back so quick drags don't flicker.
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scrollArea, "QScrollBar:vertical { background: {{color.background.0}}; width: 12px; }"
-        "QScrollBar::handle:vertical { background: {{color.background.1}}; border-radius: 4px; min-height: 20px; }"
-        "QScrollBar::handle:vertical[active=\"true\"] { background: #4a6880; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scrollArea,
+        QStringLiteral("QScrollBar:vertical { background: {{color.background.0}}; width: %1px; }"
+                       "QScrollBar::handle:vertical { background: {{color.background.1}}; border-radius: 4px; min-height: 20px; }"
+                       "QScrollBar::handle:vertical[active=\"true\"] { background: #4a6880; }"
+                       "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
+            .arg(kRailScrollBarW));
 
     if (auto* sb = m_scrollArea->verticalScrollBar()) {
         sb->setProperty("active", false);
@@ -501,19 +486,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     connect(m_scrollDimTimer, &QTimer::timeout, this,
             [this]() { setScrollHandleActive(false); });
 
-    // Override sizeHint/minimumSizeHint so QScrollArea::setWidgetResizable
-    // always sizes this container to the viewport width rather than "sticking"
-    // at the rail's fixed width (kRailWidth, 260 px). Without this, the VBox
-    // layout's sizeHint stays at 260 after the initial layout pass — but Qt
-    // keeps the container at max(viewport, sizeHint=260) = 260, silently
-    // clipping the right edge of every applet header (the × close button).
-    //
-    // The viewport is narrower than the rail by the outer gutter and, WHEN IT
-    // SHOWS, the scrollbar track: 260 − 6 − 12 = kStackedApplet (242). The
-    // policy is ScrollBarAsNeeded, so the bar is NOT always visible and the
-    // viewport is 254 without it. An earlier version of this comment said
-    // "always visible" and "248", and that wrong premise cost two wrong
-    // theories on #7077 — take the width from the constants, not from here.
+    // sizeHint of 0 width lets QScrollArea::setWidgetResizable size this
+    // container to the viewport. Reporting kRailWidth instead pins it at
+    // max(viewport, 260) and clips each applet header's close button.
+    // Viewport width: kStackedApplet with the scrollbar showing, kRailWidth
+    // less the gutter without it (the policy is ScrollBarAsNeeded).
     struct FlexContainer : QWidget {
         using QWidget::QWidget;
         QSize sizeHint() const override
@@ -2482,15 +2459,9 @@ void AppletPanel::openFavoritesPicker()
 
 void AppletPanel::setDockedLeft(bool left)
 {
-    // The gutter exists to keep applet content off the WINDOW edge, so it has
-    // to move with the wall the rail is docked to: docked left, the outer side
-    // is the panel's left. Without this the 6 px sat between the panel and the
-    // panadapter — where nothing was being lost — while the window edge it was
-    // meant to protect went back to 0 (#7081 review finding 1).
-    //
-    // Whether a left-docked rail clips at all is not established: #7077 was
-    // reported and measured right-docked only. This keeps the one invariant we
-    // can state — the gutter faces the window — and costs nothing if it does not.
+    // The gutter keeps applet content off the WINDOW edge, so it follows the
+    // wall the rail is docked to. The early return is safe because the
+    // constructor's margin (right) matches the m_dockedLeft default (false).
     if (!m_root || m_dockedLeft == left)
         return;
     m_dockedLeft = left;
