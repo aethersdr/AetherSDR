@@ -120,8 +120,9 @@ int main(int argc, char** argv)
         check(rs->txAntenna() == QLatin1String("ANT"), "the slice's TX label reads ANT, not ANT1");
         check(!tokens.contains(QStringLiteral("ANT1")) && !tokens.contains(QStringLiteral("ANT2")),
               "knownAntennaTokens() (the RX menu tokens) holds no ANT1 or ANT2");
-        check(tokens.contains(QStringLiteral("ANT")) && !tokens.contains(QStringLiteral("RF1")),
-              "knownAntennaTokens() holds ANT and no RF1");
+        // Not "no RF1": it is a TX token there once the TX route publishes it,
+        // and rxAntennaMenuTokens() is what keeps it out of the RX menus.
+        check(tokens.contains(QStringLiteral("ANT")), "knownAntennaTokens() holds ANT");
     }
 
     h = Heard{};
