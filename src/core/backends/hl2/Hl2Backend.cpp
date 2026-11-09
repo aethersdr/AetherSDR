@@ -8679,6 +8679,9 @@ void Hl2Backend::emitSliceState(int ddc)
     // invented ANT1/ANT2. RF1 is transmit-only and is never in this list.
     d.rxAntennaList = QStringList{QStringLiteral("ANT")};
     d.rxAntenna = QStringLiteral("ANT");
+    // The label only: the HL2 transmits on ANT. Without it the slice keeps its
+    // "ANT1" default, which knownAntennaTokens() adds to every RX menu.
+    d.txAntenna = QStringLiteral("ANT");
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;

@@ -4,14 +4,18 @@
 //     menus have a real port and no longer fall back to invented ANT1/ANT2;
 //   - RF1, a transmit-only output, is never in the RX list;
 //   - a request for ANT is accepted with nothing to send, anything else is
-//     refused, and both republish ANT so the button cannot keep a refused label.
+//     refused, and both republish ANT so the button cannot keep a refused label;
+//   - every slice publishes txAntenna ANT, so a slice in a RadioModel puts no
+//     ANT1 into knownAntennaTokens(), which all three RX menus merge in.
 // Socket-free: a constructed backend; nothing is keyed.
 
+#include "RadioSetupControlFixture.h"
 #include "TestSettingsProfile.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "gui/AntennaChoiceGate.h"
+#include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
@@ -102,6 +106,23 @@ int main(int argc, char** argv)
           "the slice model holds {ANT} and ANT");
     check(!rxAntennaChoiceRefused(true, !s.rxAntennaList().isEmpty(), false),
           "the RX antenna button opens on a real port instead of refusing");
+
+    // The RX menus merge RadioModel::knownAntennaTokens(), which adds every
+    // slice's txAntenna(). Unpublished, that is SliceModel's "ANT1" default: a
+    // pick the dispatcher refuses before the backend can republish ANT.
+    check(h.last->txAntenna && *h.last->txAntenna == QLatin1String("ANT"),
+          "the published slice state carries txAntenna ANT");
+    {
+        RadioModel radio;
+        SliceModel* rs = RadioSetupControlTestAccess::addSlice(radio, 0);
+        rs->applyChanges(*h.last);
+        const QStringList tokens = radio.knownAntennaTokens();
+        check(rs->txAntenna() == QLatin1String("ANT"), "the slice's TX label reads ANT, not ANT1");
+        check(!tokens.contains(QStringLiteral("ANT1")) && !tokens.contains(QStringLiteral("ANT2")),
+              "knownAntennaTokens() (the RX menu tokens) holds no ANT1 or ANT2");
+        check(tokens.contains(QStringLiteral("ANT")) && !tokens.contains(QStringLiteral("RF1")),
+              "knownAntennaTokens() holds ANT and no RF1");
+    }
 
     h = Heard{};
     check(b.requestSliceRxAntenna(1, QStringLiteral("ANT")) == ReceiveDispatch::LocalOnly
