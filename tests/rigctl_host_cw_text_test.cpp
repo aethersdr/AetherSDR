@@ -95,9 +95,12 @@ struct Fixture {
     RadioModel radio;
     KeyingStub* backend{nullptr};
 
+    // Break-in on by default: the HL2 then raises MOX itself. The break-in-off
+    // cases (TransmitModel's default) pass false.
     Fixture(const RadioCapabilities& caps, const QString& family, const QString& mode,
-            bool txSlice = true)
+            bool txSlice = true, bool breakIn = true)
     {
+        radio.transmitModel().setCwBreakIn(breakIn);
         auto owned = std::make_unique<KeyingStub>();
         backend = owned.get();
         backend->caps = caps;
@@ -315,6 +318,41 @@ void testRefusals()
     }
 }
 
+// Break-in off (TransmitModel's default): the HL2 keys CW only under an MOX/PTT
+// already held, so without one the text is refused rather than answered RPRT 0
+// with nothing on air. With `T 1` first it keys.
+void testBreakInOff()
+{
+    {
+        Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"),
+                  /*txSlice=*/true, /*breakIn=*/false);
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        check("break-in off: precondition, break-in is off and nothing is keyed",
+              !f.radio.transmitModel().cwBreakIn() && !f.radio.transmitModel().isTransmitting());
+        check("break-in off, not keyed: preflight refuses",
+              f.radio.hostCwTextRefusal() == RadioModel::HostCwTextRefusal::BreakInOffUnkeyed);
+        check("break-in off, not keyed: send_morse refused with RIG_ERJCTED",
+              cat(port, QStringLiteral("b TEST")) == QLatin1String("RPRT -9"));
+        pumpFor(300);
+        check("break-in off, not keyed: no edge", f.edges.empty());
+    }
+    {
+        Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"),
+                  /*txSlice=*/true, /*breakIn=*/false);
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        check("break-in off: T 1 accepted", cat(port, QStringLiteral("T 1")) == QLatin1String("RPRT 0"));
+        check("break-in off: MOX/PTT is held", f.radio.transmitModel().isTransmitting());
+        check("break-in off, PTT held: send_morse RPRT 0",
+              cat(port, QStringLiteral("b E")).endsWith(QLatin1String("RPRT 0")));
+        check("break-in off, PTT held: keys one dit",
+              pumpUntil([&] { return f.edges.size() >= 2; }, 2000)
+                  && f.edges.size() == 2 && f.edges[0].down && !f.edges[1].down);
+        (void)cat(port, QStringLiteral("T 0"));
+    }
+}
+
 // A key-down refused mid-message ends the message (the keyer stops, as
 // stop_morse does). The refusal is lifted ten units later, after the next
 // element (T then E: the next key-down is six units in): a keyer still
@@ -376,6 +414,10 @@ void testMidMessageRefusalsEndTheMessage()
         },
         [](Fixture& f) { f.radio.setPanTransmitInhibited(f.radio.slice(0)->panId(), false); },
         QStringLiteral(":cw-key"));   // the key-down refusal, not the pan notice
+    runMidMessageRefusal("break-in turned off",
+        [](Fixture& f) { f.radio.transmitModel().setCwBreakIn(false); },
+        [](Fixture& f) { f.radio.transmitModel().setCwBreakIn(true); },
+        QStringLiteral("cw-text-unkeyed"));
 }
 
 void testRadioSideKeyerStillUsesCwx()
@@ -411,6 +453,7 @@ int main(int argc, char** argv)
     testHl2KeysTextInMorseTiming();
     testStopMorseKeysUpAtOnce();
     testRefusals();
+    testBreakInOff();
     testMidMessageRefusalsEndTheMessage();
     testRadioSideKeyerStillUsesCwx();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");

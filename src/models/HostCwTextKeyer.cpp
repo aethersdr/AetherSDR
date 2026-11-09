@@ -57,7 +57,7 @@ bool HostCwTextKeyer::send(const QString& text)
                     element = input.derive();
                 }
                 model->queueProducerCwKeyEdge(element, down, source, 0, 0, when,
-                                              /*requireCwMode=*/true, down ? refused : std::function<void()>{});
+                                              /*hostTextGates=*/true, down ? refused : std::function<void()>{});
             });
     }
     m_keyer->start(text, m_model->transmitModel().cwSpeed());
