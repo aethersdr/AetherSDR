@@ -5,6 +5,8 @@
 #include "HGauge.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "models/RadioModel.h"
+#include "ControlAvailabilityRegistry.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
 
@@ -596,9 +598,11 @@ void PhoneCwApplet::setSpeechProcessorPresentation(const QString& label, int max
 // ── CW sub-panel ─────────────────────────────────────────────────────────────
 
 void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
-                                      int maxPitchHz, int pitchStepHz)
+                                      int maxPitchHz, int pitchStepHz,
+                                      int maxDelayMs, int delayStepMs)
 {
-    if (minWpm > maxWpm || minPitchHz > maxPitchHz || pitchStepHz < 1) {
+    if (minWpm > maxWpm || minPitchHz > maxPitchHz || pitchStepHz < 1
+        || maxDelayMs < 0 || maxDelayMs > 2000 || delayStepMs < 1 || delayStepMs > 2000) {
         return;
     }
     // Changing sessions must not turn a range clamp into a radio command.
@@ -632,6 +636,32 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     m_pitchEdit->setAccessibleDescription(
         tr("CW sidetone pitch in Hz, %1 to %2").arg(minPitchHz).arg(maxPitchHz));
     m_pitchSlider->setAccessibleDescription(m_pitchEdit->accessibleDescription());
+    m_delayMaxMs = maxDelayMs;
+    m_delayStepMs = delayStepMs;
+    const QSignalBlocker delayBlocker(m_delaySlider);
+    m_delaySlider->setRange(0, maxDelayMs);
+    m_delaySlider->setSingleStep(qMax(10, delayStepMs));
+    auto* delayValidator = qobject_cast<QIntValidator*>(
+        const_cast<QValidator*>(m_delayEdit->validator()));
+    delayValidator->setRange(0, maxDelayMs);
+    if (!m_delayEdit->hasFocus() || !m_delayEdit->hasAcceptableInput()) {
+        m_delayEdit->setText(QString::number(m_delaySlider->value()));
+    }
+    const QString description = tr("CW break-in delay in milliseconds, 0 to %1, in steps of %2")
+        .arg(maxDelayMs).arg(delayStepMs);
+    m_delayEdit->setAccessibleDescription(description);
+    m_delaySlider->setAccessibleDescription(description);
+}
+
+void PhoneCwApplet::commitCwDelay(int value)
+{
+    if (m_updatingFromModel) { return; }
+    const int bounded = qBound(0, value, m_delayMaxMs);
+    const int ms = qMin(m_delayMaxMs, qRound(bounded / static_cast<double>(m_delayStepMs)) * m_delayStepMs);
+    const QSignalBlocker blocker(m_delaySlider);
+    m_delaySlider->setValue(ms);
+    m_delayEdit->setText(QString::number(ms));
+    if (m_model) { m_model->setCwDelay(ms); }
 }
 
 void PhoneCwApplet::commitCwPitch(int value)
@@ -710,15 +740,11 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(m_delayEdit);
 
         connect(m_delaySlider, &QSlider::valueChanged, this, [this](int v) {
-            if (!m_delayEdit->hasFocus())
-                m_delayEdit->setText(QString::number(v));
-            if (!m_updatingFromModel && m_model)
-                m_model->setCwDelay(v);
+            commitCwDelay(v);
         });
         connect(m_delayEdit, &QLineEdit::editingFinished, this, [this]() {
-            int v = qBound(0, m_delayEdit->text().toInt(), 2000);
-            m_delayEdit->setText(QString::number(v));
-            m_delaySlider->setValue(v);
+            const int value = qBound(0, m_delayEdit->text().toInt(), m_delayMaxMs);
+            if (value != m_delaySlider->value()) { commitCwDelay(value); }
         });
 
         vbox->addLayout(row);
@@ -974,8 +1000,6 @@ void PhoneCwApplet::buildCwPanel()
     // the other keying controls (#4879).  Same SliceModel as the DSP-tab pair,
     // so the two surfaces mirror each other with no bridging.
     {
-        // The row lives in its own container so the capability gate can hide it
-        // whole — see setHasAudioPeakingFilter().
         m_apfRow = new QWidget;
         m_apfRow->setObjectName(QStringLiteral("cwApfRow"));
         auto* row = new QHBoxLayout(m_apfRow);
@@ -1024,16 +1048,25 @@ void PhoneCwApplet::buildCwPanel()
         // setChecked() still reach the signal — and a verb this radio's
         // firmware cannot execute must not leave the client on any path.
         connect(m_apfBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice)
+            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice && m_apfBtn->isEnabled())
                 m_slice->setApf(on);
         });
         connect(m_apfSlider, &QSlider::valueChanged, this, [this](int v) {
-            if (!m_apfEdit->hasFocus())
+            if (!sharedApfLevelSupported()) {
+                m_apfEdit->setText(QStringLiteral("--"));
+                return;
+            }
+            if (!m_apfEdit->hasFocus()) {
                 m_apfEdit->setText(QString::number(v));
-            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice)
+            }
+            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice && m_apfSlider->isEnabled())
                 m_slice->setApfLevel(v);
         });
         connect(m_apfEdit, &QLineEdit::editingFinished, this, [this]() {
+            if (!sharedApfLevelSupported()) {
+                m_apfEdit->setText(QStringLiteral("--"));
+                return;
+            }
             const int v = qBound(0, m_apfEdit->text().toInt(), 100);
             m_apfEdit->setText(QString::number(v));
             m_apfSlider->setValue(v);
@@ -1058,9 +1091,78 @@ void PhoneCwApplet::buildCwPanel()
 
 // ── Mode switching ───────────────────────────────────────────────────────────
 
+PhoneCwApplet::~PhoneCwApplet() { m_settingAvailability.reset(); }
+
+void PhoneCwApplet::setRadioModel(RadioModel* model)
+{
+    if (m_availabilitySource == model && (model || !m_settingAvailability)) { return; }
+    disconnect(m_availabilityDestroyed);
+    disconnect(m_apfCapabilitiesChanged);
+    m_settingAvailability.reset();
+    m_availabilitySource = model;
+    if (!model) { setSlice(nullptr); return; }
+    m_availabilityDestroyed = connect(model, &QObject::destroyed, this, [this] {
+        m_settingAvailability.reset();
+        m_availabilitySource = nullptr;
+        setSlice(nullptr);
+    });
+    rebuildSettingAvailability();
+    m_apfCapabilitiesChanged = connect(model, &RadioModel::capabilitiesChanged,
+        this, &PhoneCwApplet::syncApfFromSlice);
+}
+
+void PhoneCwApplet::rebuildSettingAvailability()
+{
+    if (!m_availabilitySource) { return; }
+    m_settingAvailability = std::make_unique<ControlAvailabilityRegistry>(*m_availabilitySource, this);
+    using Field = TransmitControlRequest::Field;
+    const QList<QPair<QWidget*, Field>> controls{
+        {m_micProfileCombo, Field::MicProfile}, {m_micSourceCombo, Field::MicInput},
+        {m_micLevelSlider, Field::MicGain}, {m_accBtn, Field::MicAccessory},
+        {m_procBtn, Field::ProcessorEnabled}, {m_procSlider, Field::ProcessorLevel},
+        {m_daxBtn, Field::Dax}, {m_monBtn, Field::MonitorEnabled}, {m_monSlider, Field::MonitorLevel},
+        {m_delaySlider, Field::CwDelay}, {m_delayEdit, Field::CwDelay},
+        {m_speedSlider, Field::CwSpeed}, {m_speedEdit, Field::CwSpeed},
+        {m_pitchSlider, Field::CwPitch}, {m_pitchEdit, Field::CwPitch},
+        {m_sidetoneBtn, Field::CwSidetone}, {m_sidetoneSlider, Field::CwMonitorGain},
+        {m_sidetoneEdit, Field::CwMonitorGain}, {m_cwPanSlider, Field::CwMonitorPan},
+        {m_breakinBtn, Field::CwBreakIn}, {m_iambicBtn, Field::CwIambic}};
+    for (const auto& [widget, field] : controls) {
+        m_settingAvailability->registerRestriction(widget,
+            tr("This setting is not implemented by the connected radio backend"),
+            [field](bool, const RadioCapabilities& caps) {
+                return !caps.radioTransmitSettings || caps.radioTransmitSettings->fields.contains(field);
+            });
+    }
+    m_settingAvailability->registerRestriction(m_holdDelayBtn,
+        tr("Client delay hold is not implemented for this radio's native keyer"),
+        [](bool, const RadioCapabilities& caps) { return !caps.radioTransmitSettings; });
+    const auto apfAvailable = [this](bool, const RadioCapabilities& caps) {
+        return m_hasAudioPeakingFilter && m_slice
+            && (!caps.receiveDspControl || caps.receiveDspControl->supports(
+                ReceiveDspControl::Feature::Apf, m_slice->mode()));
+    };
+    m_settingAvailability->registerWidget(m_apfBtn,
+        tr("Requires supported native APF and confirmed receive settings for the current mode."),
+        apfAvailable, [this] { return m_slice && m_slice->apfOn(); }, false);
+    for (QWidget* control : {static_cast<QWidget*>(m_apfSlider), static_cast<QWidget*>(m_apfEdit)}) {
+        m_settingAvailability->registerWidget(control,
+            tr("Requires APF on and a supported shared 0–100 APF adjustment. Native settings may use a different scale."),
+            [this, apfAvailable](bool connected, const RadioCapabilities& caps) {
+                return apfAvailable(connected, caps) && m_slice->apfOn()
+                    && (!caps.receiveDspControl || caps.receiveDspControl->supportsLevel(
+                        ReceiveDspControl::Feature::Apf, m_slice->mode()));
+            }, {}, false);
+    }
+    syncApfFromSlice();
+}
+
 void PhoneCwApplet::setTransmitControlsAvailable(bool available)
 {
     if (m_transmitControlsAvailable == available) { return; }
+    // Restore field restrictions before the parent availability layer changes;
+    // the fresh registry captures that new base rather than reviving an old one.
+    m_settingAvailability.reset();
     m_transmitControlsAvailable = available;
     // Pitch and APF are receive controls too, so their CW face remains usable.
     const QList<QWidget*> controls{m_phonePanel, m_delaySlider, m_delayEdit,
@@ -1079,6 +1181,7 @@ void PhoneCwApplet::setTransmitControlsAvailable(bool available)
             ? control->property("transmitAvailableDescription").toString()
             : tr("Transmit controls are unavailable on this receive-only radio"));
     }
+    rebuildSettingAvailability();
 }
 
 void PhoneCwApplet::setMode(const QString& mode)
@@ -1097,6 +1200,14 @@ void PhoneCwApplet::setTransmitModel(TransmitModel* model)
 {
     m_model = model;
     if (!m_model) return;
+    const QPointer<TransmitModel> source(m_model);
+    connect(source, &TransmitModel::controlRequested, this,
+        [this, source](const TransmitControlRequest&) {
+            if (source && source == m_model && source->radioOwnsSettings()) {
+                syncPhoneFromModel();
+                syncCwFromModel();
+            }
+        }, Qt::QueuedConnection);
 
     // "Hold break-in delay" is a client-side opt-in (default off): seed the
     // model and the button from AppSettings once, at bind time. syncCwFromModel
@@ -1219,45 +1330,51 @@ void PhoneCwApplet::setSlice(SliceModel* slice)
 
 void PhoneCwApplet::setHasAudioPeakingFilter(bool has)
 {
-    // APF's ONLY effect is `slice set <n> apf=`. That is a Flex firmware verb,
-    // not "any radio-side DSP" — Icom declares hasRadioSideDsp for NR/NB/notch
-    // and has no APF register, which is why this row is behind
-    // hasAudioPeakingFilter rather than hasRadioSideDsp (HERMES §17).
-    //
-    // Rides capabilitiesChanged, which repeats on every edge, so bail on no-op.
     if (m_hasAudioPeakingFilter == has)
         return;
     m_hasAudioPeakingFilter = has;
     syncApfFromSlice();
 }
 
+bool PhoneCwApplet::sharedApfLevelSupported() const
+{
+    if (!m_availabilitySource) { return true; }
+    const RadioCapabilities caps = m_availabilitySource->backendCapabilities();
+    return !caps.receiveDspControl
+        || !caps.receiveDspControl->unavailableLevels.contains(ReceiveDspControl::Feature::Apf);
+}
+
 void PhoneCwApplet::syncApfFromSlice()
 {
     if (!m_apfBtn) return;
 
-    // Hidden, not merely disabled, on a radio with no audio peaking filter —
-    // matching VfoWidget::applyRadioSideDspVisibility(), which hides rather
-    // than greys the DSP grid's buttons. A disabled control still claims the
-    // feature exists here and is simply unavailable right now, which is the
-    // wrong thing to tell someone on an Icom.
-    if (m_apfRow)
-        m_apfRow->setVisible(m_hasAudioPeakingFilter);
-
     const bool bound = m_hasAudioPeakingFilter && !m_slice.isNull();
-    const bool on    = bound && m_slice->apfOn();
-    const int  level = bound ? m_slice->apfLevel() : 50;
+    const bool on    = m_slice && m_slice->apfOn();
+    const int  level = m_slice ? m_slice->apfLevel() : 50;
 
     m_updatingFromModel = true;
-    m_apfBtn->setEnabled(bound);
+    if (!m_settingAvailability) { m_apfBtn->setEnabled(bound); }
     m_apfBtn->setChecked(on);
     // The level row follows the filter's engagement, radio echo included — a
     // slider that talks to a disengaged filter reads as "APF is broken" (#4658).
-    m_apfSlider->setEnabled(bound && on);
-    m_apfEdit->setEnabled(bound && on);
+    if (!m_settingAvailability) {
+        m_apfSlider->setEnabled(bound && on);
+        m_apfEdit->setEnabled(bound && on);
+        if (!bound) {
+            const QString reason = tr("Requires a bound slice and supported native audio peaking filter.");
+            m_apfBtn->setAccessibleDescription(reason);
+            m_apfSlider->setAccessibleDescription(reason);
+            m_apfEdit->setAccessibleDescription(reason);
+        }
+    }
     m_apfSlider->setValue(level);
-    if (!m_apfEdit->hasFocus() || (m_slice && m_slice->receiveControlsConfirmed()))
+    if (!sharedApfLevelSupported()) {
+        m_apfEdit->setText(QStringLiteral("--"));
+    } else if (!m_apfEdit->hasFocus() || (m_slice && m_slice->receiveControlsConfirmed())) {
         m_apfEdit->setText(QString::number(level));
+    }
     m_updatingFromModel = false;
+    if (m_settingAvailability) { m_settingAvailability->refreshEngaged(); }
 }
 
 // ── Phone sync ───────────────────────────────────────────────────────────────

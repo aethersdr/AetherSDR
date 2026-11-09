@@ -13,6 +13,10 @@
 #include "TestSettingsProfile.h"
 #include "gui/RadioSetupDialog.h"
 #include "models/RadioModel.h"
+#include "models/TransmitModel.h"
+#include "core/backends/TransmitDelta.h"
+#include <memory>
+#include <variant>
 #include "models/Kat500Model.h"
 #include "core/PeripheralSettings.h"
 #include <QListWidget>
@@ -30,6 +34,21 @@
 using namespace AetherSDR;
 
 namespace {
+class NativeSettingsBackend final : public IRadioBackend {
+public:
+    RadioCapabilities caps;
+    RadioCapabilities capabilities() const override { return caps; }
+    bool isConnected() const override { return true; }
+    void connectRadio(const RadioConnectRequest&) override {}
+    void disconnectRadio() override {}
+    void setSliceFrequency(int, double) override {}
+    void setSliceMode(int, const QString&) override {}
+    void setSliceFilter(int, int, int) override {}
+    void setSliceAgc(int, const QString&, int) override {}
+    void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    void setKeying(bool, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override {}
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+};
 
 QLabel* caption(QWidget* root, const char* text)
 {
@@ -83,6 +102,59 @@ void grab(QWidget* dialog, const char* name)
 class RadioSetupPairGridTest : public QObject {
     Q_OBJECT
 private slots:
+    void nativeCwBfoSidebandWaitsForReadback()
+    {
+        AppSettings::instance().load();
+        RadioModel model;
+        auto owned = std::make_unique<NativeSettingsBackend>();
+        NativeSettingsBackend* source = owned.get();
+        source->caps.canTransmit = true;
+        source->caps.radioTransmitSettings = RadioTransmitSettings{};
+        model.setBackendForTest(std::move(owned), QStringLiteral("native-settings-test"));
+        model.transmitModel().setRadioTransmitSettings(source->caps.radioTransmitSettings);
+        TransmitDelta initial;
+        initial.cwlEnabled = false;
+        model.transmitModel().applyChanges(initial);
+        RadioSetupDialog dialog(&model);
+        dialog.selectTab(QStringLiteral("Phone & CW"));
+        dialog.show();
+        QApplication::processEvents();
+        const auto button = [&dialog](const QString& text) -> QPushButton* {
+            for (QPushButton* candidate : dialog.findChildren<QPushButton*>()) {
+                if (candidate->text() == text) { return candidate; }
+            }
+            return nullptr;
+        };
+        QPushButton* upper = button(QStringLiteral("CWU"));
+        QPushButton* lower = button(QStringLiteral("CWL"));
+        QVERIFY(upper && lower);
+        QVERIFY(!upper->isEnabled() && !lower->isEnabled());
+        QVERIFY(!lower->accessibleDescription().isEmpty());
+        source->caps.radioTransmitSettings->fields.insert(TransmitControlRequest::Field::CwlEnabled);
+        model.transmitModel().setRadioTransmitSettings(source->caps.radioTransmitSettings);
+        emit model.capabilitiesChanged(true, source->caps);
+        QVERIFY(upper->isEnabled() && lower->isEnabled());
+        int requests = 0;
+        bool requestedLower = false;
+        connect(&model.transmitModel(), &TransmitModel::controlRequested, &dialog,
+            [&](const TransmitControlRequest& request) {
+                if (request.field == TransmitControlRequest::Field::CwlEnabled) { ++requests; requestedLower = std::get<bool>(request.value); }
+            });
+        lower->click();
+        QApplication::processEvents();
+        QCOMPARE(requests, 1);
+        QVERIFY(requestedLower && !model.transmitModel().cwlEnabled());
+        QVERIFY(upper->isChecked() && !lower->isChecked());
+        TransmitDelta observed;
+        observed.cwlEnabled = true;
+        model.transmitModel().applyChanges(observed);
+        QCOMPARE(requests, 1);
+        QVERIFY(!upper->isChecked() && lower->isChecked());
+        source->caps.radioTransmitSettings.reset();
+        model.transmitModel().setRadioTransmitSettings(std::nullopt);
+        emit model.capabilitiesChanged(true, source->caps);
+        QVERIFY(upper->isEnabled() && lower->isEnabled());
+    }
 
     void kat500AdvancedShortcutSelectsAndReveals()
     {

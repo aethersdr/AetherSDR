@@ -9,7 +9,10 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QThread>
 #include <QSignalSpy>
+#include <QPointer>
+#include <QPointer>
 #include <QStringList>
 #include <QtLogging>
 #include <cstdio>
@@ -17,6 +20,7 @@
 #include <thread>
 #include <array>
 #include <limits>
+#include <memory>
 
 namespace AetherSDR {
 class RadioModelSliceLifecycleTestAccess {
@@ -25,6 +29,10 @@ public:
     static void wire(RadioModel& radio, SliceModel* slice)
     {
         radio.wireSliceReceiveIntentsToBackend(slice);
+    }
+    static void refreshPolicy(RadioModel& radio, SliceModel* slice)
+    {
+        radio.wireSliceObservationsAndTxIntentToBackend(slice);
     }
     // Bypass the live handshake; exercise the production WAN predicate.
     static void setWanConnection(RadioModel& radio, WanConnection* wan)
@@ -86,6 +94,15 @@ public:
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override { connected = true; }
     void disconnectRadio() override { connected = false; }
+    bool tuneAccepted = true;
+    bool requestReceiveTune(int id, double hz, ReceiveTuneView view) override
+    {
+        if (!tuneAccepted) { return false; }
+        requestSliceTune(id, {hz, view == ReceiveTuneView::Center
+            ? SliceTuneRequest::PanIntent::AllowRecenter
+            : SliceTuneRequest::PanIntent::PreservePan});
+        return true;
+    }
     void requestSliceTune(int id, const SliceTuneRequest& request) override
     {
         tunes.append(request);
@@ -188,6 +205,380 @@ struct Fixture {
     }
     SliceModel* slice() { return radio.slice(0); }
 };
+
+void confirmedReceiveAntennaAuthority()
+{
+    {
+        Fixture f(false, true); SliceModel* slice = f.slice();
+        const QString initialDisplay = slice->rxAntenna();
+        slice->setRxAntenna(initialDisplay);
+        check(f.backend->antennas == QStringList{initialDisplay} && slice->rxAntenna() == initialDisplay,
+                "unknown default-matching antenna request is intent, not invented confirmed readback or a dropped request");
+        SliceDelta readback; readback.rxAntenna = initialDisplay; emit f.backend->sliceChanged(0, readback);
+        const int confirmed = f.backend->antennas.size(); slice->setRxAntenna(initialDisplay);
+        check(f.backend->antennas.size() == confirmed, "same-value request is idempotent only after an actual antenna report");
+        SliceDelta source; source.receiveTuneContextChanged = true; emit f.backend->sliceChanged(0, source);
+        slice->setRxAntenna(initialDisplay);
+        check(f.backend->antennas.size() == confirmed + 1 && slice->rxAntenna() == initialDisplay,
+                "new physical source retires antenna knowledge without fabricating another live value");
+        emit f.backend->sliceChanged(0, readback); slice->invalidateFrequencyObservation();
+        emit f.backend->sliceChanged(0, report());
+        slice->setRxAntenna(initialDisplay);
+        check(f.backend->antennas.size() == confirmed + 2, "whole observation retirement clears same-default antenna knowledge");
+    }
+    {
+        Fixture f(false, true); SliceModel* slice = f.slice();
+        SliceDelta initial; initial.rxAntenna = QStringLiteral("ANT1"); emit f.backend->sliceChanged(0, initial);
+        QSignalSpy notifications(slice, &SliceModel::rxAntennaChanged);
+        slice->setRxAntenna(QStringLiteral("ANT2"));
+        check(slice->rxAntenna() == QStringLiteral("ANT1") && f.backend->antennas == QStringList{"ANT2"}
+            && notifications.size() == 1 && notifications[0][0].toString() == QStringLiteral("ANT1"),
+            "confirmed antenna setter restores observed UI value and emits intent without optimistic live state");
+        f.backend->receiveResult = ReceiveDispatch::Unsupported;
+        slice->setRxAntenna(QStringLiteral("RX-ANT"));
+        check(slice->rxAntenna() == QStringLiteral("ANT1"), "backend refusal cannot change confirmed antenna property");
+        const int before = f.backend->antennas.size();
+        SliceDelta observed; observed.rxAntenna = QStringLiteral("ANT2"); emit f.backend->sliceChanged(0, observed);
+        check(slice->rxAntenna() == QStringLiteral("ANT2") && f.backend->antennas.size() == before,
+            "actual antenna report alone adopts live value without echoing another request");
+    }
+    {
+        Fixture f(false, true); SliceModel* slice = f.slice();
+        for (const QString& invalid : {QString{}, QString(129, QLatin1Char('X'))}) {
+            SliceDelta actual; actual.rxAntenna = QStringLiteral("ANT1"); emit f.backend->sliceChanged(0, actual);
+            SliceDelta malformed; malformed.rxAntenna = invalid; emit f.backend->sliceChanged(0, malformed);
+            const int before = f.backend->antennas.size(); slice->setRxAntenna(QStringLiteral("ANT1"));
+            check(slice->rxAntenna() == QStringLiteral("ANT1") && f.backend->antennas.size() == before + 1,
+                    "invalid antenna observation cannot fabricate known state or replace last display");
+        }
+    }
+    for (bool cancelToObserved : {false, true}) {
+        Fixture f(false, true); SliceModel* slice = f.slice();
+        SliceDelta initial; initial.rxAntenna = QStringLiteral("ANT1"); emit f.backend->sliceChanged(0, initial);
+        bool nested = false;
+        QObject::connect(slice, &SliceModel::rxAntennaChanged, &f.radio, [&](const QString&) {
+            if (!nested) { nested = true; slice->setRxAntenna(cancelToObserved ? QStringLiteral("ANT1") : QStringLiteral("RX-ANT")); }
+        });
+        slice->setRxAntenna(QStringLiteral("ANT2"));
+        check(nested && slice->rxAntenna() == QStringLiteral("ANT1")
+            && f.backend->antennas == (cancelToObserved ? QStringList{} : QStringList{QStringLiteral("RX-ANT")}),
+            "reentrant newer antenna intent including observed-value cancellation retires outer producer");
+    }
+    for (int context = 0; context < 4; ++context) {
+        Fixture f(false, true); SliceModel* slice = f.slice();
+        SliceDelta initial; initial.rxAntenna = QStringLiteral("ANT1"); emit f.backend->sliceChanged(0, initial);
+        bool retired = false;
+        QObject::connect(slice, &SliceModel::rxAntennaChanged, &f.radio, [&](const QString&) {
+            if (!retired) {
+                retired = true; SliceDelta change;
+                if (context == 0) { change.receiveTuneContextChanged = true; }
+                if (context == 1) { change.mode = QStringLiteral("AM"); }
+                if (context == 2) { change.panId = QStringLiteral("other-source"); }
+                if (context == 3) { change.rxAntenna = QStringLiteral("RX-ANT"); }
+                emit f.backend->sliceChanged(0, change);
+            }
+        });
+        slice->setRxAntenna(QStringLiteral("ANT2"));
+        check(retired && f.backend->antennas.isEmpty(), "reentrant source/mode/pan or newer antenna observation prevents stale antenna dispatch");
+    }
+    {
+        auto f = std::make_unique<Fixture>(false, true);
+        SliceModel* slice = f->slice(); SliceDelta initial; initial.rxAntenna = QStringLiteral("ANT1"); emit f->backend->sliceChanged(0, initial);
+        QPointer<SliceModel> alive(slice); QObject context; int intents = 0;
+        QObject::connect(slice, &SliceModel::receiveRxAntennaRequested, &context, [&](const QString&) { ++intents; });
+        QObject::connect(slice, &SliceModel::rxAntennaChanged, &context, [&](const QString&) { f.reset(); });
+        slice->setRxAntenna(QStringLiteral("ANT2"));
+        check(!alive && intents == 0, "deletion during confirmed old-value antenna notification prevents stale intent");
+    }
+    {
+        Fixture legacy; SliceModel* slice = legacy.slice();
+        slice->setRxAntenna(QStringLiteral("ANT2"));
+        check(slice->rxAntenna() == QStringLiteral("ANT2") && legacy.backend->antennas == QStringList{"ANT2"},
+            "legacy optimistic antenna behavior remains unchanged");
+    }
+}
+
+void confirmedIncrementalTuneCursor()
+{
+    Fixture f(false, true);
+    SliceModel* s = f.slice();
+    const double initial = s->frequency();
+    QSignalSpy changed(s, &SliceModel::frequencyChanged);
+    const double first = s->incrementalTuneTarget(0.0001);
+    s->setFrequency(first);
+    const double second = s->incrementalTuneTarget(0.0001);
+    s->setFrequency(second);
+    check(f.backend->tunes.size() == 2
+              && std::abs(f.backend->tunes.last().frequencyHz - (initial * 1e6 + 200)) < 0.01,
+          "production dispatch sends both accumulated wheel requests");
+    check(std::abs(second - initial - 0.0002) < 1e-9,
+          "two delayed-readback ticks accumulate two frequency steps");
+    check(s->frequency() == initial && changed.isEmpty(),
+          "pending tune cursor never publishes optimistic live frequency");
+    emit f.backend->sliceChanged(0, report(initial));
+    check(std::abs(s->incrementalTuneTarget(0.0) - second) < 1e-9,
+          "unchanged polling report preserves outstanding tune cursor");
+    emit f.backend->sliceChanged(0, report(first));
+    check(std::abs(s->incrementalTuneTarget(0.0001) - initial - 0.0003) < 1e-9,
+          "intermediate readback preserves the newer tune target");
+    emit f.backend->sliceChanged(0, report(second));
+    check(std::abs(s->incrementalTuneTarget(0.0) - second) < 1e-9,
+          "latest acknowledgment reconciles pending intent with radio truth");
+    const quint64 olderToken = s->recordTuneIntent(second + 0.0001);
+    s->recordTuneIntent(second + 0.0002);
+    s->retireTuneIntent(olderToken);
+    check(std::abs(s->incrementalTuneTarget(0.0) - second - 0.0002) < 1e-9,
+          "an older rejected dispatch cannot retire a newer nested intent");
+    s->recordTuneIntent(second + 0.0001);
+    emit f.backend->sliceChanged(0, report(7.1));
+    check(std::abs(s->incrementalTuneTarget(0.0001) - 7.1001) < 1e-9,
+          "unsolicited radio tuning retires the outstanding cursor");
+    s->recordTuneIntent(7.2);
+    SliceDelta roleChanged;
+    roleChanged.receiveTuneContextChanged = true;
+    roleChanged.frequency = 7.1;
+    emit f.backend->sliceChanged(0, roleChanged);
+    check(std::abs(s->incrementalTuneTarget(0.0001) - 7.1001) < 1e-9,
+          "same-frequency receiver-role switch retires the previous tune cursor");
+    s->recordTuneIntent(7.2);
+    SliceDelta moved;
+    moved.panId = QStringLiteral("another-receiver");
+    emit f.backend->sliceChanged(0, moved);
+    check(std::abs(s->incrementalTuneTarget(0.0001) - 7.1001) < 1e-9,
+          "pan reassignment retires the previous tune cursor");
+    s->recordTuneIntent(7.2);
+    f.backend->tuneAccepted = false;
+    s->setFrequency(7.3);
+    check(std::abs(s->incrementalTuneTarget(0.0) - 7.1) < 1e-9,
+          "dispatch rejection retires pending tune intent");
+    s->recordTuneIntent(7.2);
+    s->invalidateFrequencyObservation();
+    check(std::abs(s->incrementalTuneTarget(0.0) - s->frequency()) < 1e-9,
+          "disconnect invalidation retires pending tune intent");
+    s->recordTuneIntent(7.2);
+    QThread::msleep(1010);
+    check(std::abs(s->incrementalTuneTarget(0.0) - s->frequency()) < 1e-9,
+          "expired pending intent cannot seed a later operator gesture");
+}
+
+void confirmedRecenterPreservesBackendViewport()
+{
+    Fixture f(false, true);
+    SliceModel* s = f.slice();
+    const double observed = s->frequency();
+    QSignalSpy changed(s, &SliceModel::frequencyChanged);
+    s->tuneAndRecenter(observed + 0.01);
+    check(f.backend->tunes.size() == 1
+              && f.backend->tunes.last().panIntent == SliceTuneRequest::PanIntent::PreservePan,
+          "confirmed generic recenter retains the prior backend-preserve viewport semantics");
+    check(s->frequency() == observed && changed.isEmpty(),
+          "confirmed recenter leaves live frequency radio-authoritative");
+}
+
+void confirmedFilterContextRetirement()
+{
+    for (const bool panChanged : {false, true}) {
+        Fixture f(false, true);
+        SliceModel* slice = f.slice();
+        QSignalSpy observations(slice, &SliceModel::receiveObservationChanged);
+        const quint64 epoch = slice->receiveSessionGeneration();
+        SliceDelta changed;
+        if (panChanged) { changed.panId = QStringLiteral("new-receiver"); }
+        else { changed.receiveTuneContextChanged = true; }
+        emit f.backend->sliceChanged(0, changed);
+        check(!slice->receiveObservation().filterLowHz && !slice->receiveObservation().filterHighHz
+                  && observations.size() == 1 && slice->receiveSessionGeneration() > epoch,
+              "confirmed source change retires both accepted filter edges before publication");
+        SliceDelta low;
+        low.filterLow = 200;
+        emit f.backend->sliceChanged(0, low);
+        check(slice->receiveObservation().filterLowHz == 200 && !slice->receiveObservation().filterHighHz,
+              "new-source low edge cannot qualify an old-source high edge");
+        SliceDelta high;
+        high.filterHigh = 2600;
+        emit f.backend->sliceChanged(0, high);
+        check(slice->receiveObservation().filterLowHz == 200 && slice->receiveObservation().filterHighHz == 2600,
+              "fresh complete new-source edges restore the accepted filter observation");
+    }
+    for (const bool modeChanged : {false, true}) {
+        Fixture f(false, true);
+        SliceModel* slice = f.slice();
+        QSignalSpy requested(slice, &SliceModel::receiveFilterRequested);
+        QObject::connect(slice, &SliceModel::filterCommandIssued, slice, [&](int, int) {
+            SliceDelta changed;
+            if (modeChanged) { changed.mode = QStringLiteral("CW"); }
+            else { changed.receiveTuneContextChanged = true; }
+            emit f.backend->sliceChanged(0, changed);
+        });
+        slice->setFilterWidth(200, 2600);
+        check(requested.isEmpty() && f.backend->filters.isEmpty(),
+              "reentrant source or mode change retires the outer confirmed filter intent before dispatch");
+    }
+    Fixture optimistic;
+    SliceDelta optimisticSource;
+    optimisticSource.receiveTuneContextChanged = true;
+    emit optimistic.backend->sliceChanged(0, optimisticSource);
+    check(optimistic.slice()->receiveObservation().filterLowHz == 100
+              && optimistic.slice()->receiveObservation().filterHighHz == 2800,
+          "optimistic legacy source handling retains its established filter policy");
+}
+
+void filterOnlyContextOwnership()
+{
+    Fixture f(false, true);
+    SliceModel* slice = f.slice();
+    const double observed = slice->frequency();
+    slice->setFrequency(slice->incrementalTuneTarget(0.0001));
+    slice->setFrequency(slice->incrementalTuneTarget(0.0001));
+    const double pending = slice->incrementalTuneTarget(0.0);
+    const quint64 receiverEpoch = slice->receiveSessionGeneration();
+    const quint64 filterEpoch = slice->receiveFilterContextGeneration();
+    QSignalSpy frequencyChanged(slice, &SliceModel::frequencyChanged);
+    QSignalSpy observations(slice, &SliceModel::receiveObservationChanged);
+    SliceDelta boundary;
+    boundary.receiveFilterContextChanged = true;
+    emit f.backend->sliceChanged(0, boundary);
+    check(slice->receiveSessionGeneration() == receiverEpoch
+              && slice->receiveFilterContextGeneration() > filterEpoch,
+          "filter-only boundary advances filter ownership without changing the receiver epoch");
+    check(!slice->receiveObservation().filterLowHz && !slice->receiveObservation().filterHighHz
+              && observations.size() == 1 && slice->receiveObservation().mode == QStringLiteral("USB"),
+          "filter-only boundary removes accepted edges while preserving observed mode");
+    check(std::abs(slice->incrementalTuneTarget(0.0) - pending) < 1e-9
+              && slice->frequency() == observed && frequencyChanged.isEmpty(),
+          "filter-bank boundary preserves the accumulated delayed-readback tune cursor without optimistic frequency");
+    slice->setFrequency(slice->incrementalTuneTarget(0.0001));
+    check(f.backend->tunes.size() == 3
+              && std::abs(f.backend->tunes.last().frequencyHz - (observed * 1e6 + 300)) < 0.01,
+          "next production wheel intent continues the existing burst across a filter-only boundary");
+    const quint64 currentFilterEpoch = slice->receiveFilterContextGeneration();
+    slice->setFilterWidth(200, 2600);
+    slice->setFilterWidth(300, 2500);
+    check(f.backend->filters.size() == 2 && slice->receiveFilterContextGeneration() == currentFilterEpoch,
+          "ordinary operator filter A then B both dispatch without advancing filter context generation");
+    SliceDelta low; low.filterLow = 300;
+    SliceDelta high; high.filterHigh = 2500;
+    emit f.backend->sliceChanged(0, low);
+    check(slice->receiveObservation().filterLowHz == 300 && !slice->receiveObservation().filterHighHz,
+          "new filter low readback cannot recover an old-context high edge");
+    emit f.backend->sliceChanged(0, high);
+    check(slice->receiveFilterContextGeneration() == currentFilterEpoch
+              && slice->receiveObservation().filterHighHz == 2500,
+          "ordinary partial filter readbacks restore authority without creating another context boundary");
+    const quint64 beforeModeReceiver = slice->receiveSessionGeneration();
+    SliceDelta mode; mode.mode = QStringLiteral("CW");
+    emit f.backend->sliceChanged(0, mode);
+    check(slice->receiveSessionGeneration() > beforeModeReceiver
+              && slice->receiveFilterContextGeneration() > currentFilterEpoch,
+          "observed mode transition advances receiver and filter contexts together");
+    const quint64 beforeSourceReceiver = slice->receiveSessionGeneration();
+    const quint64 beforeSourceFilter = slice->receiveFilterContextGeneration();
+    SliceDelta source; source.receiveTuneContextChanged = true;
+    emit f.backend->sliceChanged(0, source);
+    check(slice->receiveSessionGeneration() > beforeSourceReceiver
+              && slice->receiveFilterContextGeneration() > beforeSourceFilter
+              && std::abs(slice->incrementalTuneTarget(0.0) - observed) < 1e-9,
+          "physical-source transition still retires tune cursor and both queue contexts");
+    const quint64 beforeReset = slice->receiveFilterContextGeneration();
+    slice->invalidateFrequencyObservation();
+    check(slice->receiveFilterContextGeneration() > beforeReset,
+          "whole-observation reset retires the filter context");
+    const quint64 beforePolicy = slice->receiveFilterContextGeneration();
+    f.backend->confirmed = false;
+    RadioModelSliceLifecycleTestAccess::refreshPolicy(f.radio, slice);
+    check(slice->receiveFilterContextGeneration() > beforePolicy,
+          "actual receive-policy replacement fences old filter ownership");
+    const quint64 samePolicy = slice->receiveFilterContextGeneration();
+    RadioModelSliceLifecycleTestAccess::refreshPolicy(f.radio, slice);
+    check(slice->receiveFilterContextGeneration() == samePolicy,
+          "reapplying the same control policy does not manufacture a filter boundary");
+
+    Fixture reentrant(false, true);
+    SliceModel* target = reentrant.slice();
+    QSignalSpy requested(target, &SliceModel::receiveFilterRequested);
+    QObject::connect(target, &SliceModel::filterCommandIssued, target, [&](int, int) {
+        SliceDelta changed; changed.receiveFilterContextChanged = true;
+        emit reentrant.backend->sliceChanged(0, changed);
+    });
+    target->setFilterWidth(200, 2600);
+    check(requested.isEmpty() && reentrant.backend->filters.isEmpty(),
+          "filter-only boundary during notification retires the outer filter intent before dispatch");
+
+    Fixture optimistic;
+    const quint64 optimisticEpoch = optimistic.slice()->receiveFilterContextGeneration();
+    emit optimistic.backend->sliceChanged(0, boundary);
+    check(optimistic.slice()->receiveFilterContextGeneration() == optimisticEpoch
+              && optimistic.slice()->receiveObservation().filterLowHz == 100
+              && optimistic.slice()->receiveObservation().filterHighHz == 2800,
+          "filter-only metadata preserves established optimistic receive behavior");
+}
+
+void receivePublicationLifetime()
+{
+    for (int event = 0; event < 7; ++event) {
+        auto slice = std::make_unique<SliceModel>(0);
+        slice->applyChanges(report());
+        QPointer<SliceModel> alive(slice.get());
+        QObject context;
+        bool notified = false;
+        const auto retire = [&] { notified = true; slice.reset(); };
+        SliceDelta changed;
+        if (event == 0) {
+            QObject::connect(slice.get(), &SliceModel::filterChanged, &context, retire);
+            changed.filterHigh = 2900;
+        } else if (event == 1) {
+            QObject::connect(slice.get(), &SliceModel::receiveObservationChanged, &context, retire);
+            changed.filterHigh = 2900;
+            changed.mode = QStringLiteral("USB");
+        } else if (event == 2) {
+            QObject::connect(slice.get(), &SliceModel::frequencyReported, &context, retire);
+            changed.frequency = 14.2;
+        } else if (event == 3) {
+            QObject::connect(slice.get(), &SliceModel::frequencyChanged, &context, retire);
+            changed.frequency = 14.3;
+        } else if (event == 4) {
+            QObject::connect(slice.get(), &SliceModel::frequencyStatusReported, &context, retire);
+            changed.frequency = 14.3;
+            changed.mode = QStringLiteral("CW");
+        } else if (event == 5) {
+            QObject::connect(slice.get(), &SliceModel::rxAntennaChanged, &context, retire);
+            changed.rxAntenna = QStringLiteral("RX-ANT");
+            changed.locked = true;
+        } else {
+            QObject::connect(slice.get(), &SliceModel::txAntennaChanged, &context, retire);
+            changed.txAntenna = QStringLiteral("ANT2");
+            changed.locked = true;
+        }
+        slice->applyChanges(changed);
+        check(notified && !alive && !slice,
+              "receive publication may retire its standalone slice without continuing on freed state");
+    }
+}
+
+void receiveResetLifetime()
+{
+    for (const bool deleteAtAgc : {true, false}) {
+        std::unique_ptr<SliceModel> slice = std::make_unique<SliceModel>(0);
+        slice->applyChanges(report());
+        const QPointer<SliceModel> alive(slice.get());
+        QObject context;
+        bool retired = false;
+        int laterNotifications = 0;
+        const auto retire = [&] { retired = true; slice.reset(); };
+        if (deleteAtAgc) {
+            QObject::connect(slice.get(), &SliceModel::agcThresholdModeChanged, &context, retire);
+            QObject::connect(slice.get(), &SliceModel::receiveObservationChanged, &context,
+                [&] { ++laterNotifications; });
+        } else {
+            QObject::connect(slice.get(), &SliceModel::receiveObservationChanged, &context, retire);
+        }
+        QObject::connect(slice.get(), &SliceModel::frequencyReported, &context,
+            [&] { ++laterNotifications; });
+        slice->invalidateFrequencyObservation();
+        check(retired && !alive && !slice && laterNotifications == 0,
+              "public receive reset returns after synchronous standalone slice deletion without later publication");
+    }
+}
 
 void confirmedReceiveControls()
 {
@@ -838,7 +1229,14 @@ int main(int argc, char** argv)
     qputenv("AETHER_AUTOMATION", "1");
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 1; }
+    confirmedReceiveAntennaAuthority();
+    confirmedIncrementalTuneCursor();
+    confirmedRecenterPreservesBackendViewport();
     confirmedReceiveControls();
+    confirmedFilterContextRetirement();
+    filterOnlyContextOwnership();
+    receivePublicationLifetime();
+    receiveResetLifetime();
     ritLifecycle();
     notchReadbackLifecycle();
     creationPaths();

@@ -31,6 +31,12 @@ using namespace AetherSDR;
 
 namespace AetherSDR {
 struct SpectrumOffscreenTestAccess {
+    static QString scaleToolTip(const SpectrumWidget& widget, bool is3D) {
+        return widget.amplitudeScaleToolTip(is3D);
+    }
+    static QString floorLabel(const SpectrumWidget& widget, float floor) {
+        return widget.noiseFloorLabel(floor);
+    }
     static QImage sqlImage(SpectrumWidget& widget) {
         QImage image(800, 300, QImage::Format_ARGB32);
         image.fill(Qt::black);
@@ -196,6 +202,31 @@ int main(int argc, char** argv)
         std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
         failures += !ok;
     };
+    {
+        SpectrumWidget spectrum;
+        spectrum.setSquelchScale(legacyDbmSquelchScale());
+        spectrum.setAutoSquelchEnable(true);
+        SpectrumOffscreenTestAccess::sqlBins(spectrum);
+        const QString calibrated2D = SpectrumOffscreenTestAccess::scaleToolTip(spectrum, false);
+        const QString calibrated3D = SpectrumOffscreenTestAccess::scaleToolTip(spectrum, true);
+        const QImage calibratedFloor = SpectrumOffscreenTestAccess::sqlImage(spectrum);
+        check(calibrated2D.startsWith(QStringLiteral("<b>dBm scale</b>"))
+            && calibrated3D.startsWith(QStringLiteral("<b>3D dBm scale</b>"))
+            && SpectrumOffscreenTestAccess::floorLabel(spectrum, -110) == QStringLiteral("Floor -110 dBm"),
+            "amplitude units: legacy calibrated tooltip and painted-floor text remain dBm");
+        spectrum.setDbmAxisCalibrated(false);
+        check(SpectrumOffscreenTestAccess::scaleToolTip(spectrum, false).startsWith(QStringLiteral("<b>relative dB scale</b>"))
+            && SpectrumOffscreenTestAccess::scaleToolTip(spectrum, true).startsWith(QStringLiteral("<b>3D relative dB scale</b>"))
+            && SpectrumOffscreenTestAccess::floorLabel(spectrum, -110) == QStringLiteral("Floor -110 dB (relative)"),
+            "amplitude units: both tooltip modes and visible-floor text identify relative dB");
+        check(SpectrumOffscreenTestAccess::sqlImage(spectrum) != calibratedFloor,
+            "amplitude units: the production floor painter consumes the relative label");
+        spectrum.setDbmAxisCalibrated(true);
+        check(SpectrumOffscreenTestAccess::scaleToolTip(spectrum, false) == calibrated2D
+            && SpectrumOffscreenTestAccess::scaleToolTip(spectrum, true) == calibrated3D
+            && SpectrumOffscreenTestAccess::sqlImage(spectrum) == calibratedFloor,
+            "amplitude units: returning to calibrated defaults restores tooltip and rendered label");
+    }
     {
         SpectrumWidget sql;
         sql.setSquelchScale(legacyDbmSquelchScale());

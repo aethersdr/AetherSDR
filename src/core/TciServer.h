@@ -200,9 +200,11 @@ private slots:
     void onTextMessage(const QString& msg);
     void onBinaryMessage(const QByteArray& data);
     void broadcastStatus();
+    void broadcastReceiveModulations();
 
 private:
     struct ClientState;
+    std::optional<float> calibratedReceiveLevel(const SliceModel* slice) const;
 
     // Controller-side cleanup plus a one-way barrier that destroys worker
     // sockets on their owning thread. Never asks the worker to access a model.
@@ -525,7 +527,13 @@ private:
     int m_tuneClientTrx { 0 };
     bool m_tuneBroadcastQueued { false };
     QList<QPair<QPointer<TciClient>, int>> m_tuneRequesters;  // owed an answer
-    float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
+    struct ReceiveMeterEpoch {
+        RadioControlSession session{};
+        quint64 receiverSession{0};
+        QPointer<SliceModel> slice;
+    };
+    QMap<int, ReceiveMeterEpoch> m_receiveMeterEpochs;
+    QString m_lastReceiveModulations;
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
     float             m_cachedMicLevel{-50.0f};

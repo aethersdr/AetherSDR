@@ -2,6 +2,7 @@
 
 #include <QMetaType>
 #include <QString>
+#include <QSet>
 #include <cmath>
 #include <cstdlib>
 #include <variant>
@@ -63,6 +64,13 @@ struct TransmitControlRequest {
     quint64 answerTicket{0};
     bool valid() const;
     QString label() const;
+};
+
+// An exhaustive set of non-keying settings whose live state comes from radio
+// readback. Absence preserves the existing optimistic desktop behavior.
+struct RadioTransmitSettings {
+    QSet<TransmitControlRequest::Field> fields;
+    bool operator==(const RadioTransmitSettings&) const = default;
 };
 
 // Text is a value, never a fragment of command grammar. Vendor-specific token

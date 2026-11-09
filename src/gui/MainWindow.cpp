@@ -8085,6 +8085,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         for (SpectrumWidget* spectrum : spectra) {
             spectrum->setRadioOwnsDbmScale(radioOwnsScale);
             spectrum->setPanBinsAbsolute(binsAbsolute);
+            spectrum->setDbmAxisCalibrated(!connected || caps.dbmAxisIsCalibrated());
         }
     }
     syncSquelchScaleToUi();
@@ -8209,7 +8210,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_appletPanel->phoneCwApplet()->setAlcMeterUnit(cwCaps.alcMeterUnit);
         m_appletPanel->phoneCwApplet()->setCwControlLimits(
             cwCaps.cwSpeedMinWpm, cwCaps.cwSpeedMaxWpm,
-            cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz);
+            cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz,
+            cwCaps.cwDelayControl ? cwCaps.cwDelayControl->maximumMs : 2000,
+            cwCaps.cwDelayControl ? cwCaps.cwDelayControl->stepMs : 1);
         m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
             m_radioModel.hasAudioPeakingFilter());
         // The ALC Gain gauge, on the meter EXISTING rather than on a
@@ -8446,6 +8449,8 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
         return;
     }
     sw->setPanGeometryConfirmationRequired(m_radioModel.confirmsReceiveControls());
+    sw->setDbmAxisCalibrated(!m_radioModel.isConnected()
+        || m_radioModel.backendCapabilities().dbmAxisIsCalibrated());
     auto* menu = sw->overlayMenu();
     if (menu) {
         menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());

@@ -1,4 +1,7 @@
 #include "ConnectionPanel.h"
+#include "models/NetworkRadioLogin.h"
+#include "models/NetworkRadioLookup.h"
+#include <utility>
 #include "core/AppSettings.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with MainWindow_Session
 #include "core/backends/anan/AnanDiscovery.h" // shared nickname + MAC->serial helpers
@@ -261,6 +264,7 @@ QString familyFromProfile(const QJsonObject& profile)
 {
     const QString family =
         profile.value("identity").toObject().value("family").toString().trimmed().toLower();
+    if (networkRadioProfile(family)) { return family; }
     if (family == QLatin1String(ConnectionPanel::kFamilyHl2))
         return QString::fromLatin1(ConnectionPanel::kFamilyHl2);
     if (family == QLatin1String(ConnectionPanel::kFamilyAnan))
@@ -353,6 +357,13 @@ QString normalizedStatus(QString status)
 ConnectionPanel::ConnectionPanel(QWidget* parent)
     : CanonWindow(QStringLiteral("Connect to Radio"), parent)
 {
+    m_networkLoginLoader = [](const QString& family, QObject* context,
+                              std::function<void(NetworkRadioLogin)> callback) {
+        loadNetworkRadioLogin(family, context, std::move(callback));
+    };
+    m_icomPasswordLoader = [](QObject* context, std::function<void(const QString&)> callback) {
+        IcomCredentials::load(context, std::move(callback));
+    };
     setObjectName(QStringLiteral("connectionPanel"));
     setAccessibleName(tr("Connect to Radio"));
     // MainWindow anchors it above the status bar before showing it, and Return
@@ -774,6 +785,9 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_manualRadioTypeCombo->addItem(tr("Hermes-Lite 2"), QString::fromLatin1(kFamilyHl2));
     m_manualRadioTypeCombo->addItem(tr("ANAN-G2"), QString::fromLatin1(kFamilyAnan));
     m_manualRadioTypeCombo->addItem(tr("Icom (network)"), QString::fromLatin1(kFamilyIcom));
+    for (const NetworkRadioProfile& profile : networkRadioProfiles()) {
+        m_manualRadioTypeCombo->addItem(profile.label, profile.family);
+    }
 #ifdef AETHER_BACKEND_RTL
     m_manualRadioTypeCombo->addItem(tr("RTL-SDR (USB)"), QString::fromLatin1(kFamilyRtl));
 #endif
@@ -826,6 +840,84 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_manualIcomPassEdit->setPlaceholderText(tr("Radio network password"));
     ThemeManager::instance().applyStyleSheet(m_manualIcomPassEdit, lineEditStyle);
     m_manualIcomPassRow = addManualRow(QStringLiteral("Icom password:"), m_manualIcomPassEdit);
+
+    m_manualNetworkUser = new QLineEdit(manualGroup);
+    m_manualNetworkUser->setObjectName(QStringLiteral("connectionNetworkUsername"));
+    m_manualNetworkUser->setAccessibleName(tr("Network radio username"));
+    m_manualNetworkUser->setMaxLength(32);
+    m_manualNetworkPassword = new QLineEdit(manualGroup);
+    m_manualNetworkPassword->setObjectName(QStringLiteral("connectionNetworkPassword"));
+    m_manualNetworkPassword->setAccessibleName(tr("Network radio password"));
+    m_manualNetworkPassword->setAccessibleDescription(tr("Used only for this session unless you select Save password in keychain."));
+    m_manualNetworkPassword->setEchoMode(QLineEdit::Password);
+    m_manualNetworkPassword->setMaxLength(32);
+    m_manualNetworkSavePassword = new QCheckBox(tr("Save password in keychain"), manualGroup);
+    m_manualNetworkSavePassword->setObjectName(QStringLiteral("connectionNetworkSavePassword"));
+    m_manualNetworkSavePassword->setAccessibleName(tr("Save password in keychain"));
+    m_manualNetworkSavePassword->setAccessibleDescription(networkRadioPasswordStoreAvailable()
+        ? tr("Off by default. Select to save this endpoint's password in the operating system keychain after successful login. Existing saved passwords are not deleted when off.")
+        : tr("This build has no keychain support. The password is kept only for this session."));
+    m_manualNetworkSavePassword->setEnabled(networkRadioPasswordStoreAvailable());
+    connect(m_manualNetworkSavePassword, &QCheckBox::toggled, this, [this] {
+        m_manualNetworkSavePassword->setProperty("networkLoginEdited", true);
+        cancelNetworkAttempt();
+    });
+    m_manualNetworkControlPort = new QSpinBox(manualGroup);
+    m_manualNetworkControlPort->setObjectName(QStringLiteral("connectionNetworkControlPort"));
+    m_manualNetworkControlPort->setAccessibleName(tr("Network radio TCP control port"));
+    m_manualNetworkControlPort->setRange(1, 65535);
+    m_manualNetworkControlPort->setValue(60000);
+    m_manualNetworkAudioPort = new QSpinBox(manualGroup);
+    m_manualNetworkAudioPort->setObjectName(QStringLiteral("connectionNetworkAudioPort"));
+    m_manualNetworkAudioPort->setAccessibleName(tr("Network radio UDP audio port"));
+    m_manualNetworkAudioPort->setRange(1, 65535);
+    m_manualNetworkAudioPort->setValue(60001);
+    m_manualNetworkAdministrator = new QCheckBox(tr("KNS administrator account"), manualGroup);
+    m_manualNetworkAdministrator->setObjectName(QStringLiteral("connectionNetworkAdministrator"));
+    m_manualNetworkAdministrator->setAccessibleName(tr("KNS administrator account"));
+    m_manualNetworkAdministrator->setAccessibleDescription(tr("Select only when the credentials belong to the radio's KNS administrator."));
+    m_manualNetworkVariant = new QComboBox(manualGroup);
+    m_manualNetworkVariant->setObjectName(QStringLiteral("connectionNetworkVariant"));
+    m_manualNetworkVariant->setAccessibleName(tr("Regional model variant"));
+    m_manualNetworkVariant->setAccessibleDescription(tr("Choose the radio's regional model type. Unspecified keeps the conservative tuning range."));
+    AetherSDR::applyComboStyle(m_manualNetworkVariant, comboExtraRules);
+    connect(m_manualNetworkVariant, &QComboBox::activated, this, [this] {
+        m_networkVariantEdited = true;
+        cancelNetworkAttempt();
+    });
+    for (QLineEdit* field : {m_manualNetworkUser, m_manualNetworkPassword}) {
+        connect(field, &QLineEdit::textEdited, this, [this, field] {
+            field->setProperty("networkLoginEdited", true);
+            if (field == m_manualNetworkUser) { resetNetworkPasswordConsent(); }
+            else { m_autofilledNetworkIdentity.clear(); }
+            cancelNetworkAttempt();
+        });
+    }
+    connect(m_manualNetworkUser, &QLineEdit::textChanged, this, [this] {
+        if (!m_autofilledNetworkIdentity.isEmpty()
+            && m_autofilledNetworkIdentity != currentNetworkCredentialIdentity()) {
+            resetNetworkPasswordConsent();
+        }
+    });
+    connect(m_manualNetworkControlPort, &QSpinBox::valueChanged, this, [this] {
+        m_manualNetworkControlPort->setProperty("networkLoginEdited", true);
+        resetNetworkPasswordConsent();
+        cancelNetworkAttempt();
+    });
+    connect(m_manualNetworkAdministrator, &QCheckBox::toggled, this, [this] {
+        m_manualNetworkAdministrator->setProperty("networkLoginEdited", true);
+        resetNetworkPasswordConsent();
+        cancelNetworkAttempt();
+    });
+    ThemeManager::instance().applyStyleSheet(m_manualNetworkUser, lineEditStyle);
+    ThemeManager::instance().applyStyleSheet(m_manualNetworkPassword, lineEditStyle);
+    m_manualNetworkRows.append(addManualRow(tr("Network user:"), m_manualNetworkUser));
+    m_manualNetworkRows.append(addManualRow(tr("Password:"), m_manualNetworkPassword));
+    m_manualNetworkRows.append(addManualRow(tr("Password storage:"), m_manualNetworkSavePassword));
+    m_manualNetworkRows.append(addManualRow(tr("TCP port:"), m_manualNetworkControlPort));
+    m_manualNetworkRows.append(addManualRow(tr("UDP audio port:"), m_manualNetworkAudioPort));
+    m_manualNetworkRows.append(addManualRow(tr("Account:"), m_manualNetworkAdministrator));
+    m_manualNetworkRows.append(addManualRow(tr("Radio variant:"), m_manualNetworkVariant));
 
     // The RS-BA1 transport is always three UDP ports: control, CI-V and audio.
     // NAT deployments commonly forward several radios through one public IP,
@@ -1184,6 +1276,10 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // the asynchronous startup credential read is still pending.
     connect(m_manualIpEdit, &QLineEdit::textEdited, this, [this] {
         m_startupProbe = false;
+        if (networkRadioProfile(currentManualFamily())) {
+            resetNetworkPasswordConsent();
+            cancelNetworkAttempt();
+        }
     });
     connect(m_manualRadioTypeCombo, &QComboBox::activated, this, [this] {
         m_startupProbe = false;
@@ -1214,6 +1310,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
             });
     connect(m_manualSourceCombo, &QComboBox::activated, this, [this](int) {
         m_manualSourcePick = currentManualBindSettings();
+        if (networkRadioProfile(currentManualFamily())) { cancelNetworkAttempt(); }
     });
 
     const auto doLogin = [this] {
@@ -1417,6 +1514,16 @@ void ConnectionPanel::clearPendingIcomCredentials()
 
 void ConnectionPanel::setConnected(bool connected)
 {
+    // Authenticated network radios cannot be probed anonymously. Retain the
+    // chosen endpoint and source path only after that connection succeeds.
+    const std::optional<PendingNetworkProfile> pendingProfile = std::exchange(m_pendingNetworkProfile, std::nullopt);
+    if (connected && pendingProfile && currentManualFamily() == pendingProfile->radio.family) {
+        const RadioInfo& info = pendingProfile->radio;
+        saveManualProfile(pendingProfile->host, info.bindSettings, info.sessionBindAddress, 0, info.port, pendingProfile->savePassword, pendingProfile->username, pendingProfile->administrator);
+        if (pendingProfile->host != info.address.toString()) {
+            saveManualProfile(info.address.toString(), info.bindSettings, info.sessionBindAddress, 0, info.port, pendingProfile->savePassword, pendingProfile->username, pendingProfile->administrator);
+        }
+    }
     // Credentials staged by probeRadio() are persisted only here, so a wrong
     // password never overwrites a working one. Scoped to the staged family: a
     // failed Icom attempt followed by a Flex connect must not write the unproven
@@ -1635,11 +1742,11 @@ bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp,
 
 bool ConnectionPanel::automationDisconnect(QString* error)
 {
-    if (!m_connected) {
-        setAutomationError(error, QStringLiteral("not connected to a radio"));
-        return false;
-    }
-
+    if (error) { error->clear(); }
+    ++m_connectionIntentEpoch;
+    m_startupProbe = false;
+    cancelNetworkAttempt();
+    clearPendingIcomCredentials();
     emit disconnectRequested();
     return true;
 }
@@ -2082,6 +2189,9 @@ void ConnectionPanel::onLocalConnectClicked()
         return;
     }
 
+    ++m_connectionIntentEpoch;
+    cancelNetworkAttempt();
+
     // Low bandwidth mode is a slow-link concession, and for a Flex on the LAN it
     // is meaningless — so a local Flex connect clears it. Do NOT clear it for
     // other families: on the HL2 the same preference caps the panadapter span
@@ -2105,6 +2215,8 @@ void ConnectionPanel::onWanConnectClicked()
     if (m_connected || row < 0 || row >= m_wanRadios.size())
         return;
 
+    ++m_connectionIntentEpoch;
+    cancelNetworkAttempt();
     saveLowBandwidthPreference(m_lowBwCheck->isChecked());
     emit wanConnectRequested(m_wanRadios[row]);
 }
@@ -2243,6 +2355,7 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreF
     if (trimmedIp.isEmpty()) {
         refreshManualSourceOptions();
         updateManualAdvancedVisibility();
+        applyLoadedNetworkPassword();
         return;
     }
 
@@ -2251,6 +2364,7 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreF
     if (profile.isEmpty()) {
         refreshManualSourceOptions();
         updateManualAdvancedVisibility();
+        applyLoadedNetworkPassword();
         return;
     }
 
@@ -2264,6 +2378,28 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreF
     // address's VPN source path is a property of the address either way.
     if (restoreFamily)
         setManualFamily(familyFromProfile(profile));
+
+    if (restoreFamily && networkRadioProfile(familyFromProfile(profile)) && m_manualNetworkControlPort) {
+        const QJsonObject network = profile.value(QStringLiteral("network")).toObject();
+        const QJsonValue value = network.value(QStringLiteral("control_port"));
+        const int port = value.toInt();
+        const bool validPort = value.isDouble() && value.toDouble() == port && port >= 1 && port <= 65535;
+        if (validPort) {
+            const QSignalBlocker blocker(m_manualNetworkControlPort);
+            m_manualNetworkControlPort->setValue(port);
+            // An explicitly chosen endpoint outranks a pending family-wide
+            // credential loader, just as an operator's port edit does.
+            m_manualNetworkControlPort->setProperty("networkLoginEdited", true);
+        }
+        const QSignalBlocker consentBlocker(m_manualNetworkSavePassword);
+        m_manualNetworkSavePassword->setChecked(validPort
+            && network.value(QStringLiteral("save_password")).toBool(false)
+            && network.value(QStringLiteral("username")).isString()
+            && network.value(QStringLiteral("username")).toString() == m_manualNetworkUser->text()
+            && network.value(QStringLiteral("administrator")).isBool()
+            && network.value(QStringLiteral("administrator")).toBool() == m_manualNetworkAdministrator->isChecked());
+        m_manualNetworkSavePassword->setProperty("networkLoginEdited", true);
+    }
 
     // The external port triplet belongs to the routed endpoint, not to the
     // physical Icom model. Restore it only when the operator chose a saved
@@ -2304,6 +2440,7 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreF
     updateManualAdvancedVisibility();
     if (restoreFamily)
         m_manualSourcePick = settings;   // a chosen address brings its own path
+    applyLoadedNetworkPassword();
 }
 
 RadioBindSettings ConnectionPanel::currentManualBindSettings(bool* staleSelection) const
@@ -2334,7 +2471,7 @@ void ConnectionPanel::setManualFamily(const QString& family)
         return;
 
     const QString lowered = family.trimmed().toLower();
-    const QString wanted =
+    const QString wanted = networkRadioProfile(lowered) ? lowered :
         lowered == QLatin1String(kFamilyHl2)  ? QString::fromLatin1(kFamilyHl2)
       : lowered == QLatin1String(kFamilyAnan) ? QString::fromLatin1(kFamilyAnan)
       : lowered == QLatin1String(kFamilyIcom) ? QString::fromLatin1(kFamilyIcom)
@@ -2461,9 +2598,144 @@ quint16 ConnectionPanel::selectedIcomBasePort() const
     return IcomSettings::defaultBasePort();
 }
 
+QString ConnectionPanel::currentNetworkCredentialIdentity() const
+{
+    const auto profile = networkRadioProfile(currentManualFamily());
+    if (!profile) { return {}; }
+    NetworkRadioLogin login;
+    login.host = m_manualIpEdit->text().trimmed();
+    login.username = m_manualNetworkUser->text();
+    login.controlPort = static_cast<quint16>(m_manualNetworkControlPort->value());
+    login.administrator = m_manualNetworkAdministrator->isChecked();
+    return networkRadioCredentialKey(*profile, login);
+}
+
+void ConnectionPanel::applyLoadedNetworkPassword()
+{
+    const auto profile = networkRadioProfile(currentManualFamily());
+    if (!profile || !m_loadedNetworkLogin || m_loadedNetworkLogin->host.isEmpty()) { return; }
+    const bool matching = currentNetworkCredentialIdentity()
+        == networkRadioCredentialKey(*profile, *m_loadedNetworkLogin);
+    if (!m_autofilledNetworkIdentity.isEmpty() && !matching) { resetNetworkPasswordConsent(); }
+    if (!matching) { return; }
+    if (!m_manualNetworkPassword->property("networkLoginEdited").toBool()
+        && m_manualNetworkPassword->text().isEmpty() && !m_loadedNetworkLogin->password.isEmpty()) {
+        m_manualNetworkPassword->setText(m_loadedNetworkLogin->password);
+        m_autofilledNetworkIdentity = currentNetworkCredentialIdentity();
+    }
+    if (!m_manualNetworkSavePassword->property("networkLoginEdited").toBool()) {
+        const QSignalBlocker blocker(m_manualNetworkSavePassword);
+        m_manualNetworkSavePassword->setChecked(m_loadedNetworkLogin->savePassword);
+    }
+}
+
+void ConnectionPanel::resetNetworkPasswordConsent()
+{
+    if (!m_autofilledNetworkIdentity.isEmpty()) {
+        const QSignalBlocker blocker(m_manualNetworkPassword);
+        m_manualNetworkPassword->clear();
+        m_manualNetworkPassword->setProperty("networkLoginEdited", false);
+        m_autofilledNetworkIdentity.clear();
+    }
+    const QSignalBlocker blocker(m_manualNetworkSavePassword);
+    m_manualNetworkSavePassword->setChecked(false);
+    m_manualNetworkSavePassword->setProperty("networkLoginEdited", true);
+}
+
+void ConnectionPanel::cancelNetworkAttempt()
+{
+    invalidateNetworkRadioLoginRevision(currentManualFamily());
+    m_pendingNetworkProfile.reset();
+    ++m_networkProbeGeneration;
+    if (m_manualFlexProbe) {
+        QTcpSocket* socket = m_manualFlexProbe.data();
+        m_manualFlexProbe.clear();
+        socket->abort();
+        socket->deleteLater();
+    }
+    if (m_networkHostLookup) { m_networkHostLookup->cancel(); }
+    m_networkLoginPendingHost.clear();
+    resetManualConnectButton();
+    setManualMessage(QString());
+}
+
 void ConnectionPanel::updateManualFamilyHints()
 {
     const QString family = currentManualFamily();
+    if (m_pendingNetworkProfile && m_pendingNetworkProfile->radio.family != family) {
+        m_pendingNetworkProfile.reset();
+    }
+    const std::optional<NetworkRadioProfile> networkProfile = networkRadioProfile(family);
+    for (QWidget* row : m_manualNetworkRows) { row->setVisible(networkProfile.has_value()); }
+    if (!networkProfile && !m_networkLoginFamily.isEmpty()) {
+        invalidateNetworkRadioLoginRevision(m_networkLoginFamily);
+        resetNetworkPasswordConsent();
+        m_loadedNetworkLogin.reset();
+        m_networkLoginFamily.clear();
+        ++m_networkProbeGeneration;
+        if (m_networkHostLookup) { m_networkHostLookup->cancel(); }
+        ++m_networkLoginLoadGeneration;
+        m_networkLoginReady = false;
+        if (!m_networkLoginPendingHost.isEmpty()) { resetManualConnectButton(); }
+        m_networkLoginPendingHost.clear();
+    }
+    if (networkProfile) {
+        const QSignalBlocker blocker(m_manualNetworkVariant);
+        const QString previous = m_manualNetworkVariant->currentData().toString();
+        if (m_manualNetworkVariant->property("profileFamily").toString() != family) {
+            m_networkVariantEdited = false;
+            m_manualNetworkVariant->setProperty("profileFamily", family);
+        }
+        m_manualNetworkVariant->clear();
+        for (const NetworkRadioVariant& variant : networkProfile->variants) {
+            m_manualNetworkVariant->addItem(variant.label, variant.id);
+        }
+        const int selected = m_manualNetworkVariant->findData(previous);
+        if (selected >= 0) { m_manualNetworkVariant->setCurrentIndex(selected); }
+        m_manualNetworkAudioPort->setRange(networkProfile->audioPort, networkProfile->audioPort);
+        m_manualNetworkAudioPort->setEnabled(false);
+        m_manualNetworkAudioPort->setToolTip(tr("The radio requires this fixed UDP audio port."));
+        m_manualNetworkAudioPort->setAccessibleDescription(tr("The radio requires this fixed UDP audio port."));
+    }
+    if (networkProfile && m_networkLoginFamily != family) {
+        invalidateNetworkRadioLoginRevision(m_networkLoginFamily);
+        resetNetworkPasswordConsent();
+        m_loadedNetworkLogin.reset();
+        m_networkLoginFamily = family;
+        m_networkLoginReady = false;
+        const quint64 generation = ++m_networkLoginLoadGeneration;
+        for (QWidget* field : QList<QWidget*>{m_manualNetworkUser, m_manualNetworkPassword,
+                 m_manualNetworkControlPort, m_manualNetworkAdministrator, m_manualNetworkSavePassword}) {
+            field->setProperty("networkLoginEdited", false);
+        }
+        QPointer<ConnectionPanel> panel(this);
+        m_networkLoginLoader(family, this, [panel, family, generation](NetworkRadioLogin login) {
+            if (!panel || generation != panel->m_networkLoginLoadGeneration
+                || panel->currentManualFamily() != family) { return; }
+            if (!panel->m_manualNetworkUser->property("networkLoginEdited").toBool() && panel->m_manualNetworkUser->text().isEmpty()) { panel->m_manualNetworkUser->setText(login.username); }
+            if (!panel->m_manualNetworkControlPort->property("networkLoginEdited").toBool()) {
+                const QSignalBlocker blocker(panel->m_manualNetworkControlPort);
+                panel->m_manualNetworkControlPort->setValue(login.controlPort);
+            }
+            if (!panel->m_manualNetworkAdministrator->property("networkLoginEdited").toBool()) {
+                const QSignalBlocker blocker(panel->m_manualNetworkAdministrator);
+                panel->m_manualNetworkAdministrator->setChecked(login.administrator);
+            }
+            panel->m_loadedNetworkLogin = std::make_shared<const NetworkRadioLogin>(std::move(login));
+            panel->applyLoadedNetworkPassword();
+            if (!panel->m_networkVariantEdited) {
+                const int variant = panel->m_manualNetworkVariant->findData(panel->m_loadedNetworkLogin->variant);
+                if (variant >= 0) { panel->m_manualNetworkVariant->setCurrentIndex(variant); }
+            }
+            panel->m_networkLoginReady = true;
+            const QString pending = panel->m_networkLoginPendingHost;
+            panel->m_networkLoginPendingHost.clear();
+            if (!pending.isEmpty()) {
+                if (panel->m_manualIpEdit->text().trimmed() == pending) { panel->probeRadio(pending); }
+                else { panel->resetManualConnectButton(); }
+            }
+        });
+    }
     const bool hl2  = family == QLatin1String(kFamilyHl2);
     const bool anan = family == QLatin1String(kFamilyAnan);
     const bool icom = family == QLatin1String(kFamilyIcom);
@@ -2511,8 +2783,11 @@ void ConnectionPanel::updateManualFamilyHints()
             m_manualIpEdit->setText(IcomSettings::lastHost());
         if (m_manualIcomPassEdit && m_manualIcomPassEdit->text().isEmpty()) {
             QPointer<QLineEdit> field(m_manualIcomPassEdit);
-            IcomCredentials::load(this, [field](const QString& password) {
-                if (field && field->text().isEmpty())
+            const quint64 generation = m_networkProbeGeneration;
+            QPointer<ConnectionPanel> panel(this);
+            m_icomPasswordLoader(this, [field, panel, generation](const QString& password) {
+                if (panel && panel->m_networkProbeGeneration == generation
+                    && field && field->text().isEmpty())
                     field->setText(password);
             });
         }
@@ -2527,7 +2802,9 @@ void ConnectionPanel::updateManualFamilyHints()
                   "This build has no QtKeychain support, so the password is kept for this "
                   "session only.");
         m_manualHintLabel->setText(
-            icom
+            networkProfile
+                ? tr("Connect directly over Ethernet using the radio's KNS account. Control uses TCP and audio uses UDP. Experimental support; hardware validation is pending.")
+                : icom
                 ? QStringLiteral(
                       "Enter the radio address and the network user name and password "
                       "configured for network control. Standard UDP ports are used unless "
@@ -2596,7 +2873,11 @@ void ConnectionPanel::rememberManualIp(const QString& ip)
 void ConnectionPanel::saveManualProfile(const QString& targetIp,
                                         const RadioBindSettings& settings,
                                         const QHostAddress& lastSuccessfulLocalIp,
-                                        quint16 icomBasePort)
+                                        quint16 icomBasePort,
+                                        quint16 networkControlPort,
+                                        bool saveNetworkPassword,
+                                        const QString& networkUsername,
+                                        bool networkAdministrator)
 {
     if (targetIp.trimmed().isEmpty())
         return;
@@ -2617,6 +2898,13 @@ void ConnectionPanel::saveManualProfile(const QString& targetIp,
     bind["last_successful_ipv4"] = lastSuccessfulLocalIp.toString();
     profile["bind"] = bind;
 
+    if (networkRadioProfile(currentManualFamily()) && networkControlPort != 0) {
+        profile["network"] = QJsonObject{{QStringLiteral("control_port"), int(networkControlPort)},
+            {QStringLiteral("save_password"), saveNetworkPassword},
+            {QStringLiteral("username"), networkUsername}, {QStringLiteral("administrator"), networkAdministrator}};
+        profile["schema_version"] = 3;
+    }
+
     if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
         QJsonObject icom;
         const quint16 basePort = icomBasePort != 0
@@ -2636,6 +2924,10 @@ void ConnectionPanel::onManualIpChanged(const QString& ip)
     const QString trimmed = ip.trimmed();
     m_manualConnectPending = false;
     if (trimmed != m_manualProfileIp) {
+        if (networkRadioProfile(currentManualFamily())) {
+            resetNetworkPasswordConsent();
+            invalidateNetworkRadioLoginRevision(currentManualFamily());
+        }
         // Typing an address must not discard a source path the operator has
         // already selected. The saved profile is useful for startup and for
         // choosing a recent address, but it must not silently turn an
@@ -2656,6 +2948,7 @@ void ConnectionPanel::onManualConnectClicked()
     if (m_connected || ip.isEmpty())
         return;
 
+    ++m_connectionIntentEpoch;
     m_manualConnectPending = true;
     m_startupProbe = false;
     setManualMessage(QStringLiteral("Checking %1…").arg(ip));
@@ -2689,6 +2982,9 @@ void ConnectionPanel::reportStartupProbeFailure(const QString& reason)
 
 void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
 {
+    m_pendingNetworkProfile.reset();
+    const quint64 networkProbeGeneration = ++m_networkProbeGeneration;
+    if (m_networkHostLookup) { m_networkHostLookup->cancel(); }
     const QString trimmedIp = ip.trimmed();
     if (trimmedIp.isEmpty())
         return;
@@ -2744,6 +3040,99 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
     // Metis discovery datagram — so there is nothing to gain from trying both,
     // and trying HL2 first (as this used to) charged every Flex connect the HL2
     // timeout before it started.
+    if (const std::optional<NetworkRadioProfile> profile = networkRadioProfile(currentManualFamily())) {
+        if (!m_networkLoginReady && m_manualNetworkPassword->text().isEmpty()) {
+            m_networkLoginPendingHost = trimmedIp;
+            return;
+        }
+        NetworkRadioLogin login;
+        login.username = m_manualNetworkUser->text();
+        login.password = m_manualNetworkPassword->text();
+        login.savePassword = m_manualNetworkSavePassword->isChecked();
+        login.administrator = m_manualNetworkAdministrator->isChecked();
+        login.controlPort = static_cast<quint16>(m_manualNetworkControlPort->value());
+        login.audioPort = static_cast<quint16>(m_manualNetworkAudioPort->value());
+        login.variant = m_manualNetworkVariant->currentData().toString();
+        if (login.username.isEmpty() || login.password.isEmpty()) {
+            resetManualConnectButton();
+            setManualMessage(tr("Enter the network radio username and password."), true);
+            reportStartupProbeFailure(tr("Network radio credentials are missing."));
+            return;
+        }
+        const QString family = profile->family;
+        const QString model = profile->model;
+        const QString inheritedIdentity = m_autofilledNetworkIdentity;
+        if (!m_networkHostLookup) { m_networkHostLookup = new NetworkRadioLookup(this); }
+        m_networkHostLookup->start(trimmedIp,
+            [this, trimmedIp, bindSettings, family, model, login, inheritedIdentity, networkProbeGeneration](NetworkRadioLookup::Result result) mutable {
+                if (networkProbeGeneration != m_networkProbeGeneration) { return; }
+                if (currentManualFamily() != family || m_manualIpEdit->text().trimmed() != trimmedIp) {
+                    resetManualConnectButton();
+                    return;
+                }
+                bool staleSource = false;
+                const RadioBindSettings selectedSource = currentManualBindSettings(&staleSource);
+                if (m_manualNetworkUser->text() != login.username
+                    || m_manualNetworkPassword->text() != login.password
+                    || m_manualNetworkAdministrator->isChecked() != login.administrator
+                    || m_manualNetworkSavePassword->isChecked() != login.savePassword
+                    || m_manualNetworkControlPort->value() != login.controlPort
+                    || m_manualNetworkVariant->currentData().toString() != login.variant
+                    || staleSource || selectedSource.mode != bindSettings.mode
+                    || selectedSource.bindAddress != bindSettings.bindAddress
+                    || selectedSource.interfaceId != bindSettings.interfaceId
+                    || selectedSource.interfaceName != bindSettings.interfaceName) {
+                    resetManualConnectButton();
+                    setManualMessage(tr("Connection details changed. Select Connect by IP again."), true);
+                    reportStartupProbeFailure(tr("Network radio connection details changed during address lookup."));
+                    return;
+                }
+                if (result.error == NetworkRadioLookup::Error::TimedOut) {
+                    resetManualConnectButton();
+                    setManualMessage(tr("Radio hostname lookup timed out. Enter an IPv4 address or try again."), true);
+                    reportStartupProbeFailure(tr("Network radio address lookup timed out."));
+                    return;
+                }
+                const QHostAddress address = result.address;
+                if (result.error != NetworkRadioLookup::Error::None || address.isNull()) {
+                    resetManualConnectButton();
+                    setManualMessage(tr("Could not resolve an IPv4 address for this radio."), true);
+                    reportStartupProbeFailure(tr("Network radio address resolution failed."));
+                    return;
+                }
+                login.host = address.toString();
+                if (!inheritedIdentity.isEmpty()) {
+                    const auto profile = networkRadioProfile(family);
+                    if (!profile || networkRadioCredentialKey(*profile, login) != inheritedIdentity) {
+                        resetNetworkPasswordConsent();
+                        resetManualConnectButton();
+                        setManualMessage(tr("The resolved endpoint differs from the saved login. Enter the password for this endpoint."), true);
+                        reportStartupProbeFailure(tr("Saved network credentials do not match the resolved endpoint."));
+                        return;
+                    }
+                }
+                stageNetworkRadioLogin(family, login);
+                RadioInfo info;
+                info.family = family;
+                info.address = address;
+                info.port = login.controlPort;
+                info.model = model;
+                info.name = model;
+                info.nickname = model;
+                info.serial = family + QLatin1Char(':') + address.toString()
+                    + QLatin1Char(':') + QString::number(login.controlPort);
+                info.maxSlices = 1;
+                info.maxPanadapters = 1;
+                info.isRouted = true;
+                info.bindSettings = bindSettings;
+                if (bindSettings.mode == RadioBindMode::Explicit) { info.sessionBindAddress = bindSettings.bindAddress; }
+                m_pendingNetworkProfile = PendingNetworkProfile{trimmedIp, info, login.savePassword, login.username, login.administrator};
+                rememberManualIp(trimmedIp);
+                resetManualConnectButton();
+                finishManualProbe(info);
+            });
+        return;
+    }
     if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
         // NO ANONYMOUS PROBE. A Flex answers TCP/4992 and an HL2 answers a
         // Metis datagram without credentials, so both can be probed before
@@ -2781,8 +3170,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             const QString requestedHost = trimmedIp;
             setManualMessage(QStringLiteral("Loading the saved Icom password…"));
             QPointer<ConnectionPanel> panel(this);
-            IcomCredentials::load(this, [panel, requestedHost](const QString& password) {
-                if (!panel) {
+            m_icomPasswordLoader(this, [panel, requestedHost, networkProbeGeneration](const QString& password) {
+                if (!panel || panel->m_networkProbeGeneration != networkProbeGeneration) {
                     return;
                 }
                 if (panel->currentManualFamily() != QLatin1String(kFamilyIcom)
@@ -3430,7 +3819,18 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
 
 void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSettings& bindSettings)
 {
+    if (m_manualFlexProbe) {
+        QTcpSocket* old = m_manualFlexProbe.data();
+        m_manualFlexProbe.clear();
+        old->abort();
+        old->deleteLater();
+    }
+    const quint64 generation = m_networkProbeGeneration;
     auto* sock = new QTcpSocket(this);
+    m_manualFlexProbe = sock;
+    const auto ownsProbe = [this, sock, generation] {
+        return m_networkProbeGeneration == generation && m_manualFlexProbe == sock;
+    };
     if (bindSettings.mode == RadioBindMode::Explicit
         && !sock->bind(bindSettings.bindAddress, 0)) {
         m_manualSourceWarningLabel->setText(
@@ -3450,7 +3850,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
 
     sock->connectToHost(trimmedIp, 4992);
 
-    QTimer::singleShot(3000, sock, [this, sock, trimmedIp] {
+    QTimer::singleShot(3000, sock, [this, sock, trimmedIp, ownsProbe] {
+        if (!ownsProbe()) { return; }
         if (sock->state() != QAbstractSocket::ConnectedState) {
             sock->abort();
             sock->deleteLater();
@@ -3467,7 +3868,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         }
     });
 
-    connect(sock, &QTcpSocket::connected, this, [this, sock, trimmedIp, bindSettings] {
+    connect(sock, &QTcpSocket::connected, this, [this, sock, trimmedIp, bindSettings, ownsProbe] {
+        if (!ownsProbe()) { return; }
         // Shared state across readyRead calls and the peek timer.
         auto buffer      = std::make_shared<QByteArray>();
         auto version     = std::make_shared<QString>();
@@ -3482,7 +3884,9 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         peekTimer->setInterval(400);
 
         // Build RadioInfo from collected status and emit the connect signal.
-        auto finishProbe = [this, sock, trimmedIp, bindSettings, version, statusLines, localSrc] {
+        auto finishProbe = [this, sock, trimmedIp, bindSettings, version, statusLines, localSrc, ownsProbe] {
+            if (!ownsProbe()) { return; }
+            m_manualFlexProbe.clear();
             QHostAddress targetAddress(trimmedIp);
             if (targetAddress.isNull()) {
                 targetAddress = sock->peerAddress();
@@ -3584,7 +3988,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         connect(peekTimer, &QTimer::timeout, this, [finishProbe] { finishProbe(); });
 
         connect(sock, &QTcpSocket::readyRead, this,
-                [sock, buffer, version, statusLines, localSrc, seenHandle, peekTimer] {
+                [sock, buffer, version, statusLines, localSrc, seenHandle, peekTimer, ownsProbe] {
+            if (!ownsProbe()) { return; }
             buffer->append(sock->readAll());
 
             while (buffer->contains('\n')) {
@@ -3613,7 +4018,9 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
     });
 
     connect(sock, &QTcpSocket::errorOccurred, this,
-            [this, sock, trimmedIp](QAbstractSocket::SocketError) {
+            [this, sock, trimmedIp, ownsProbe](QAbstractSocket::SocketError) {
+        if (!ownsProbe()) { return; }
+        m_manualFlexProbe.clear();
         const QString reason =
             QStringLiteral("Could not reach %1: %2").arg(trimmedIp, sock->errorString());
         setManualMessage(reason, true);

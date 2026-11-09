@@ -2,6 +2,8 @@
 
 #include <QWidget>
 #include <QPointer>
+#include <QMetaObject>
+#include <memory>
 
 class QPushButton;
 class QLabel;
@@ -15,6 +17,8 @@ namespace AetherSDR {
 class HGauge;
 class SliceModel;
 class TransmitModel;
+class RadioModel;
+class ControlAvailabilityRegistry;
 
 enum class MicMeterSessionState {
     Disconnected,
@@ -38,11 +42,14 @@ public:
     void setDaxVisible(bool visible);
     void setCompressionMaximumDb(float maximum);
     void setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
-                           int maxPitchHz, int pitchStepHz);
+                           int maxPitchHz, int pitchStepHz,
+                           int maxDelayMs = 2000, int delayStepMs = 1);
     void setSpeechProcessorPresentation(const QString& label, int maximum);
     explicit PhoneCwApplet(QWidget* parent = nullptr);
+    ~PhoneCwApplet() override;
 
     void setTransmitModel(TransmitModel* model);
+    void setRadioModel(RadioModel* model);
     void setTransmitControlsAvailable(bool available);
 
     // Bind the active slice.  TransmitModel is radio-global TX state; APF is a
@@ -54,12 +61,10 @@ public:
     void setSlice(SliceModel* slice);
 
     // Does the attached radio run a CW audio peaking filter in firmware?
-    // Gates the APF row, whose only effect is `slice set <n> apf=` — a Flex
-    // verb, not "any radio-side DSP". hasRadioSideDsp is too coarse: Icom
-    // declares that true for NR/NB/notch and has no APF register. Pushed from
+    // Gates native APF separately from generic radio-side DSP. Pushed from
     // MainWindow::applyCapabilitiesToUi off RadioModel::hasAudioPeakingFilter(),
-    // which is permissive while disconnected so the row does not blink off
-    // on a Flex unplug.
+    // which is permissive while disconnected. Unsupported controls stay
+    // visible with an availability reason.
     void setHasAudioPeakingFilter(bool has);
 
     // Whether this session's radio publishes an ALCGAIN meter (only HL2 does);
@@ -119,6 +124,7 @@ private:
     void syncPhoneFromModel();
     void syncCwFromModel();
     void syncApfFromSlice();
+    bool sharedApfLevelSupported() const;
     void applyLevelMeterReceiveGate();
     void resetLevelMeter();
 
@@ -153,6 +159,11 @@ private:
 
     QComboBox*   m_micSourceCombo{nullptr};
     bool          m_selectableMicInputs{true};
+    QPointer<RadioModel> m_availabilitySource;
+    QMetaObject::Connection m_availabilityDestroyed;
+    QMetaObject::Connection m_apfCapabilitiesChanged;
+    std::unique_ptr<ControlAvailabilityRegistry> m_settingAvailability;
+    void rebuildSettingAvailability();
     QSlider*     m_micLevelSlider{nullptr};
     QLabel*      m_micLevelLabel{nullptr};
     QPushButton* m_accBtn{nullptr};
@@ -202,6 +213,9 @@ private:
     int m_pitchMinHz{100};
     int m_pitchMaxHz{6000};
     int m_pitchStepHz{10};
+    int m_delayMaxMs{2000};
+    int m_delayStepMs{1};
+    void commitCwDelay(int value);
     void commitCwPitch(int value);
     QSlider*     m_pitchSlider{nullptr};
     QLineEdit*   m_pitchEdit{nullptr};

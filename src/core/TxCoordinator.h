@@ -23,6 +23,7 @@ class TxCoordinator final {
     struct ProducerState;
     struct RequestState;
     struct StopState;
+    struct LocalRetirementState;
 
 public:
     enum class Activity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
@@ -30,6 +31,8 @@ public:
     class Operation;
     class Context;
     class Request;
+    class Intent;
+    enum class LocalIntentEnd { BeforeKeying, MayHaveKeyed };
     // Opaque stop-attempt identity for qualified backend readback. Echoing a
     // token is not itself evidence: only a backend with a documented causal
     // stop/readback contract may return it. Teardown uses the operation API.
@@ -96,14 +99,21 @@ public:
     class Operation {
     public:
         Operation() = default;
-        // Transport workers may only read this cancellation fence. Admission,
-        // completion and all model access remain on the engine owning thread.
+        // Transport workers read cancellation fences. Admission and all model
+        // access remain on the engine owning thread.
         [[nodiscard]] bool permitsDispatch(qint64 monotonicMs) const;
         // A queued key-up may outlive normal completion, but never a new
         // operation, connection reset, or coordinator destruction.
         [[nodiscard]] bool permitsCleanup() const;
+        [[nodiscard]] bool permitsCleanupOf(const Operation& operation) const;
         [[nodiscard]] bool sameOperation(const Operation& other) const;
         [[nodiscard]] bool sameAuthority(const Operation& other) const;
+        [[nodiscard]] bool sameLocalIntent(const Operation& other) const;
+        [[nodiscard]] bool hasLocalIntentRetirement() const;
+        // Ends only the bound local contribution. No queue consumption or
+        // radio-idle evidence is implied; cleanup authority is unchanged. The
+        // trusted creator marshals this callback to its owner when necessary.
+        void retireLocalIntent(LocalIntentEnd phase) const;
         [[nodiscard]] bool independent() const;
         // Restrict an existing grant with a producer's immutable cancellation
         // predicate. The trusted caller captures only worker-safe state; the
@@ -125,6 +135,7 @@ public:
         std::shared_ptr<ProducerState> m_producer;
         std::shared_ptr<IntentState> m_intent;
         std::shared_ptr<const std::function<bool()>> m_keyingPermit;
+        std::shared_ptr<LocalRetirementState> m_localRetirement;
     };
 
     // Local queue bookkeeping, never radio-idle evidence. Every copy shares a
@@ -297,6 +308,8 @@ public:
     // request then gets a distinct handle while this one's queued tail drains.
     [[nodiscard]] bool requestIntentEnd(const Intent& intent);
     [[nodiscard]] bool endIntent(const Intent& intent);
+    [[nodiscard]] Operation bindLocalIntentRetirement(const Operation& operation, const Intent& intent,
+        std::function<void(LocalIntentEnd)> retired);
     [[nodiscard]] bool hasIntents(const Operation& operation) const;
     [[nodiscard]] unsigned activeActivities(const Operation& operation) const;
     // Every live contribution to this operation of the given activities.
@@ -375,6 +388,7 @@ private:
         qint64 startedMs{0};
         qint64 maximumMs{0};
         quint64 generation{0};
+        bool cleanupOnly{false}; // immutable before a cleanup fence is published
         // Immutable bounded snapshot, published by the owner. Weak entries
         // avoid an operation/intent ownership cycle. Read only by TX workers.
         std::shared_ptr<const std::vector<std::weak_ptr<IntentState>>> holds;
@@ -387,6 +401,11 @@ private:
         std::function<bool()> inputPermit; // immutable before worker publication
         quint64 producerEpoch{0};
         bool finishing{false}; // owner-thread only; not the worker dispatch fence
+    };
+    struct LocalRetirementState {
+        std::shared_ptr<IntentState> intent;
+        std::function<void(LocalIntentEnd)> callback;
+        std::atomic<bool> retired{false};
     };
     struct RequestState {
         ~RequestState() { identity->requests.fetch_sub(1, std::memory_order_release); }

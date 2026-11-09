@@ -30,6 +30,8 @@ public:
                                        const QString& family = QString(),
                                        QString* error = nullptr) = 0;
     virtual bool automationDisconnect(QString* error = nullptr) = 0;
+    // Explicit operator intents advance this epoch; backend retries do not.
+    virtual quint64 automationConnectionIntentEpoch() const { return 0; }
 
     // Connect-dialog visibility (fallback when no invokable dialog host is set).
     virtual bool automationDialogVisible() const = 0;

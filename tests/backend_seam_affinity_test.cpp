@@ -23,7 +23,7 @@
 //           the assertions cannot pass vacuously. Forcing the sim's
 //           audioFrameReady forward to Qt::DirectConnection fails this test.
 //
-//   flex, hl2, anan, icom, rtl — rule 1 (the backend is constructed on its
+//   flex, hl2, anan, icom, rtl, kenwood — rule 1 (the backend is constructed on its
 //           owner's thread) plus "construction and the synchronous getters
 //           emit nothing they should not". These are never connected, so they
 //           emit nothing and rules 2 and 6 are NOT exercised for them here;
@@ -204,7 +204,7 @@ void constructedFamilies()
     RadioModel model;
     const QStringList families = {QStringLiteral("flex"), QStringLiteral("hl2"),
                                   QStringLiteral("anan"), QStringLiteral("icom"),
-                                  QStringLiteral("rtl")};
+                                  QStringLiteral("rtl"), QStringLiteral("kenwood")};
     for (const QString& family : families) {
         std::printf("-- %s: constructed, never connected\n", qPrintable(family));
         if (!model.rebuildBackendForTest(family)) {

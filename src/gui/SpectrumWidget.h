@@ -418,6 +418,8 @@ public:
         }
     }
     bool panBinsAbsolute() const { return m_panBinsAbsolute; }
+    // Display units are independent of whether bins follow the reference level.
+    void setDbmAxisCalibrated(bool calibrated);
     // The active slice's squelch mapping (RadioCapabilities::squelchLevelScale,
     // filtered by mode), pushed in like the two flags above. nullopt: no SQL
     // line and no Auto SQL level, except on Kiwi's own path.
@@ -1018,7 +1020,7 @@ signals:
     void kiwiSpotClicked(double freqMhz, const QString& mode, int loOffsetHz, int hiOffsetHz);
     // Emitted when the user makes an incremental tuning gesture such as
     // wheel tuning or VFO drag.
-    void incrementalTuneRequested(double mhz);
+    void incrementalTuneDeltaRequested(double deltaMhz, int snapStepHz);
     // Edge auto-pan step: pan the view to newCenterMhz AND tune the slice to
     // sliceFreqMhz in one shot, WITHOUT triggering pan-follow/reveal (which is
     // already accounted for by the explicit center).  Keeps the dragged slice
@@ -1161,6 +1163,8 @@ private:
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
+    QString amplitudeScaleToolTip(bool is3D) const;
+    QString noiseFloorLabel(float floorDbm) const;
     void drawSquelchLine(QPainter& p, const QRect& specRect);
     void updateAutoSquelchFromBins(const QVector<float>& binsDbm);
     QRect leftOccludedRect() const;
@@ -1708,6 +1712,7 @@ private:
     // same reason it does there: the gate is an OR and m_radioOwnsDbmScale
     // above already defaults true, so this default changes nothing on its own.
     bool  m_panBinsAbsolute{false};
+    bool  m_dbmAxisCalibrated{true};
     int   m_noiseFloorPosition{75};  // 1=top, 99=bottom
     int   m_flexNoiseFloorPosition{75};
     int   m_kiwiNoiseFloorPosition{75};

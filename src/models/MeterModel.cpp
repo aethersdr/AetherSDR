@@ -171,7 +171,11 @@ void MeterModel::defineMeter(const MeterDef& def)
         m_manifestSliceContext = sliceContext;
     }
     if (redefinition && def.source == QStringLiteral("SLC")
-        && def.name == QStringLiteral("LEVEL") && previous->unit != def.unit) {
+        && def.name == QStringLiteral("LEVEL")
+        && (previous->unit != def.unit
+            || (def.unit == QStringLiteral("dot")
+                && (previous->low != def.low || previous->high != def.high
+                    || previous->unavailableReason != def.unavailableReason)))) {
         m_values.remove(def.index);
         m_valueUpdatedMs.remove(def.index);
     }
@@ -910,6 +914,29 @@ std::optional<float> MeterModel::swrIfLive() const
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     return swrSampleLive(now, kTxMeterStaleMs) ? std::optional<float>(m_swr)
                                                : std::nullopt;
+}
+
+std::optional<DisplayDeflectionReading> MeterModel::displayDeflectionForSlice(int sliceIndex) const
+{
+    if (sliceIndex < 0) { return std::nullopt; }
+    const int index = findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"), sliceIndex);
+    const MeterDef* def = meterDef(index);
+    if (!def || def->unit != QStringLiteral("dot")) { return std::nullopt; }
+    DisplayDeflectionReading reading;
+    reading.unit = def->unit;
+    reading.low = def->low;
+    reading.high = def->high;
+    reading.description = def->description;
+    reading.unavailableReason = def->unavailableReason;
+    reading.sampleAgeMs = valueAgeMs(index);
+    const float sample = m_values.value(index);
+    if (reading.unavailableReason.isEmpty() && std::isfinite(def->low)
+        && std::isfinite(def->high) && def->high > def->low
+        && vitalIsFresh(true, reading.sampleAgeMs) && std::isfinite(sample)
+        && sample >= def->low && sample <= def->high) {
+        reading.value = sample;
+    }
+    return reading;
 }
 
 std::optional<float> MeterModel::relativeLevelForSlice(int sliceIndex) const

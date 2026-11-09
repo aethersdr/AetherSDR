@@ -6,7 +6,9 @@
 #include "core/IConnectionAutomation.h"
 
 #include <QWidget>
+#include <QPointer>
 #include <QMargins>
+#include <QPair>
 #include <QPoint>
 #include <QRect>
 #include <QSize>
@@ -21,12 +23,19 @@
 #include <QStackedWidget>
 #include <QToolButton>
 
+#include <functional>
+#include <memory>
+#include <optional>
+
 class QVBoxLayout;
 class QScreen;
 class QScrollArea;
 class QSpinBox;
+class QTcpSocket;
 
 namespace AetherSDR {
+class NetworkRadioLookup;
+struct NetworkRadioLogin;
 
 // Novice-first dialog for local, SmartLink, and manual/VPN radio connections:
 // a CanonWindow dialog (style guide, RFC #6226) that MainWindow places itself,
@@ -93,6 +102,7 @@ public:
                                const QString& family = QString(),
                                QString* error = nullptr) override;
     bool automationDisconnect(QString* error = nullptr) override;
+    quint64 automationConnectionIntentEpoch() const override { return m_connectionIntentEpoch; }
     bool automationDialogVisible() const override { return isVisible(); }
     void automationSetDialogVisible(bool visible) override
     {
@@ -250,7 +260,11 @@ private:
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
                            const QHostAddress& lastSuccessfulLocalIp,
-                           quint16 icomBasePort = 0);
+                           quint16 icomBasePort = 0,
+                           quint16 networkControlPort = 0,
+                           bool saveNetworkPassword = false,
+                           const QString& networkUsername = {},
+                           bool networkAdministrator = false);
     void saveLowBandwidthPreference(bool enabled);
     void setManualMessage(const QString& text, bool error = false);
     QString formatLocalRadioLabel(const RadioInfo& radio) const;
@@ -305,6 +319,31 @@ private:
     // as a unit for every other family — hiding only the field would leave two
     // orphan labels behind.
     QWidget*     m_manualIcomUserRow{nullptr};
+    QList<QWidget*> m_manualNetworkRows;
+    QLineEdit*   m_manualNetworkUser{nullptr};
+    QLineEdit*   m_manualNetworkPassword{nullptr};
+    QCheckBox*   m_manualNetworkSavePassword{nullptr};
+    QSpinBox*    m_manualNetworkControlPort{nullptr};
+    QSpinBox*    m_manualNetworkAudioPort{nullptr};
+    QCheckBox*   m_manualNetworkAdministrator{nullptr};
+    QComboBox*   m_manualNetworkVariant{nullptr};
+    bool         m_networkVariantEdited{false};
+    void cancelNetworkAttempt();
+    void resetNetworkPasswordConsent();
+    QString currentNetworkCredentialIdentity() const;
+    void applyLoadedNetworkPassword();
+    std::shared_ptr<const NetworkRadioLogin> m_loadedNetworkLogin;
+    QString m_autofilledNetworkIdentity;
+    QString      m_networkLoginFamily;
+    std::function<void(const QString&, QObject*, std::function<void(NetworkRadioLogin)>)> m_networkLoginLoader;
+    quint64      m_networkLoginLoadGeneration{0};
+    quint64      m_networkProbeGeneration{0};
+    quint64 m_connectionIntentEpoch{0};
+    QPointer<QTcpSocket> m_manualFlexProbe;
+    std::function<void(QObject*, std::function<void(const QString&)>)> m_icomPasswordLoader;
+    NetworkRadioLookup* m_networkHostLookup{nullptr};
+    bool         m_networkLoginReady{false};
+    QString      m_networkLoginPendingHost;
     QWidget*     m_manualIcomPassRow{nullptr};
     QWidget*     m_manualIcomPortRow{nullptr};
     QWidget*     m_manualIcomPortCustomRow{nullptr};
@@ -345,6 +384,14 @@ private:
     quint16      m_pendingIcomBasePort{0};
     RadioBindSettings m_pendingIcomBindSettings;
     QHostAddress m_pendingIcomSessionBindAddress;
+    struct PendingNetworkProfile {
+        QString host;
+        RadioInfo radio;
+        bool savePassword = false;
+        QString username;
+        bool administrator = false;
+    };
+    std::optional<PendingNetworkProfile> m_pendingNetworkProfile;
     QLineEdit*   m_manualIpEdit{nullptr};
     QLabel*      m_manualResultLabel{nullptr};
     QToolButton* m_manualAdvancedToggle{nullptr};

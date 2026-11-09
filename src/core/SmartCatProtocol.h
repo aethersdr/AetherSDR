@@ -57,6 +57,8 @@ private:
     // ── Frequency / Mode ────────────────────────────────────────────────────
     QString cmdFA(const QString& arg);
     QString cmdFB(const QString& arg);
+    QString encodeReceiveMode(const SliceModel* slice, bool zz) const;
+    QString decodeReceiveMode(const SliceModel* slice, const QString& code, bool zz) const;
     QString cmdMD(const QString& arg);
     QString cmdZZMD(const QString& arg);
     QString cmdZZME(const QString& arg);

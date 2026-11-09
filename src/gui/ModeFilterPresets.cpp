@@ -59,6 +59,11 @@ bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Ed
 bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control,
                         bool radioPublishesWidths)
 {
+    if (control && control->modePolicy == ReceiveFilterControl::ModePolicy::ListedOnly
+        && std::none_of(control->modes.cbegin(), control->modes.cend(),
+            [&mode](const ReceiveFilterMode& range) { return canonicalFmMode(range.mode) == canonicalFmMode(mode); })) {
+        return false;
+    }
     if (!isFmMode(mode) || radioPublishesWidths || fmControlFor(mode, control)) {
         return true;
     }
@@ -76,6 +81,8 @@ bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control
 bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
                         bool radioPublishesWidths, Edges edges)
 {
+    if (control && control->modePolicy == ReceiveFilterControl::ModePolicy::ListedOnly
+        && !fmFilterAdjustable(mode, control, radioPublishesWidths)) { return false; }
     if (!isFmMode(mode)) {
         if (control) {
             for (const ReceiveFilterMode& range : control->modes) {
@@ -108,6 +115,7 @@ bool squelchAvailableInMode(const QString& mode, const SquelchLevelScale* scale,
 
 QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* control)
 {
+    if (!fmFilterAdjustable(mode, control, false)) { return {}; }
     if (!isFmMode(mode)) {
         return widthsForMode(mode);
     }

@@ -1,4 +1,5 @@
 #include "SMeterWidget.h"
+#include "models/MeterModel.h"
 #include "SMeterWidgetAccessible.h"
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
@@ -161,6 +162,7 @@ QString SMeterWidget::accessibleValueText() const
     }
     const float displayDbm =
         m_rxMode == RxMode::SMeterPeak ? m_peakDbm : m_levelDbm;
+    if (m_displayDeflection) { return tr("Radio display deflection, %1 dots, uncalibrated").arg(displayDbm, 0, 'f', 0); }
     if (m_relativeLevel) { return tr("Relative RF, %1 dBFS, uncalibrated").arg(displayDbm, 0, 'f', 0); }
     return tr("%1, %2 dBm")
         .arg(sUnitsTextFor(displayDbm))
@@ -183,6 +185,11 @@ void SMeterWidget::setLevel(float dbm) // a11y-check: skip -- settled update is 
     if (m_relativeLevel) {
         setAccessibleDescription(tr("Signal strength meter, shows S-units or TX power"));
     }
+    if (m_displayDeflection) {
+        m_peakDbm = m_peakHoldDbm = dbm;
+        m_peakHoldTimerRunning = false;
+    }
+    m_displayDeflection = false;
     m_relativeLevel = false;
     if (!m_peakReset.isActive()) { m_peakReset.start(); }
     m_receiveMeterReadingActive = false;
@@ -221,14 +228,15 @@ void SMeterWidget::updateReceiveLevel(float dbm)
 void SMeterWidget::setRelativeLevel(std::optional<float> dbfs, int receiverId, const QString& unavailableReason)
 {
     const bool valid = unavailableReason.isEmpty() && dbfs && std::isfinite(*dbfs);
-    if (m_relativeLevel && !m_relativeValid && !valid && receiverId == m_relativeReceiver
+    if (m_relativeLevel && !m_displayDeflection && !m_relativeValid && !valid && receiverId == m_relativeReceiver
         && unavailableReason == m_relativeUnavailableReason) { return; }
     m_relativeUnavailableReason = unavailableReason;
-    const bool reset = !m_relativeLevel || receiverId != m_relativeReceiver || !valid;
+    const bool reset = !m_relativeLevel || m_displayDeflection || receiverId != m_relativeReceiver || !valid;
     const float value = valid ? *dbfs : -120.0f;
     if (reset) { m_peakDbm = value; m_peakHoldDbm = value; m_peakHoldTimerRunning = false; }
     setAccessibleDescription(unavailableReason.isEmpty()
         ? tr("Relative RF peak FFT bin in dBFS; uncalibrated, not dBm or audio level") : unavailableReason);
+    m_displayDeflection = false;
     m_relativeLevel = true; m_relativeValid = valid; m_relativeReceiver = receiverId;
     m_receiveMeterReadingActive = false;
     if (!valid) {
@@ -242,12 +250,59 @@ void SMeterWidget::setRelativeLevel(std::optional<float> dbfs, int receiverId, c
     updateReceiveLevel(value);
 }
 
+void SMeterWidget::setDisplayDeflection(const DisplayDeflectionReading& reading, int receiverId)
+{
+    const bool valid = reading.unit == QStringLiteral("dot") && reading.value
+        && std::isfinite(*reading.value) && std::isfinite(reading.low)
+        && std::isfinite(reading.high) && reading.high > reading.low
+        && *reading.value >= reading.low && *reading.value <= reading.high
+        && reading.unavailableReason.isEmpty();
+    const bool reset = !m_displayDeflection || receiverId != m_relativeReceiver
+        || reading.low != m_deflectionLow || reading.high != m_deflectionHigh || !valid;
+    m_displayDeflection = true;
+    m_relativeLevel = true;
+    m_relativeValid = valid;
+    m_relativeReceiver = receiverId;
+    m_deflectionLow = reading.low;
+    m_deflectionHigh = reading.high;
+    m_relativeUnavailableReason = reading.unavailableReason;
+    m_receiveMeterReadingActive = false;
+    setAccessibleDescription(reading.unavailableReason.isEmpty()
+        ? reading.description : reading.unavailableReason);
+    const float value = valid ? *reading.value : 0;
+    if (reset) {
+        m_peakDbm = m_peakHoldDbm = value;
+        m_peakHoldTimerRunning = false;
+    }
+    if (!valid) {
+        m_levelDbm = value;
+        m_peakDecay.stop();
+        m_peakReset.stop();
+        if (m_transmitting) {
+            updateNeedleTarget();
+        } else {
+            m_needleFraction = m_targetNeedleFraction = 0;
+            m_needleAnimation.stop();
+        }
+        update();
+        scheduleAccessibleValue();
+        return;
+    }
+    if (!m_peakReset.isActive()) { m_peakReset.start(); }
+    updateReceiveLevel(value);
+}
+
 void SMeterWidget::setReceiveMeterReading(
     const KiwiSdrProtocol::MeterReading& reading)
 {
     if (m_relativeLevel) {
         setAccessibleDescription(tr("Signal strength meter, shows S-units or TX power"));
     }
+    if (m_displayDeflection) {
+        m_peakDbm = m_peakHoldDbm = static_cast<float>(m_geometry.rxScale.minimumDbm);
+        m_peakHoldTimerRunning = false;
+    }
+    m_displayDeflection = false;
     m_relativeLevel = false;
     if (!m_peakReset.isActive()) { m_peakReset.start(); }
     m_receiveMeterReading = reading;
@@ -488,6 +543,8 @@ bool SMeterWidget::usesUnavailableRxMeter() const
 
 QString SMeterWidget::unavailableRxMeterLabel() const
 {
+    if (m_displayDeflection) { return m_relativeUnavailableReason.isEmpty()
+        ? tr("Display deflection — unavailable") : m_relativeUnavailableReason; }
     if (m_relativeLevel) { return m_relativeUnavailableReason.isEmpty()
         ? tr("Relative RF — unavailable") : m_relativeUnavailableReason; }
     if (!m_receiveMeterReadingActive) {
@@ -552,6 +609,7 @@ QString SMeterWidget::sUnitsText() const
 
 QString SMeterWidget::sUnitsTextFor(float dbm) const
 {
+    if (m_displayDeflection) { return tr("Display deflection"); }
     if (m_relativeLevel) { return tr("Relative RF"); }
     const SMeterGeometry::RxScale& scale = m_geometry.rxScale;
     if (dbm <= scale.minimumDbm) {
@@ -568,6 +626,12 @@ QString SMeterWidget::sUnitsTextFor(float dbm) const
 
 float SMeterWidget::dbmToFraction(float dbm) const
 {
+    if (m_displayDeflection) {
+        if (!std::isfinite(m_deflectionLow) || !std::isfinite(m_deflectionHigh)
+            || m_deflectionHigh <= m_deflectionLow) { return 0; }
+        return static_cast<float>(std::clamp((dbm - m_deflectionLow)
+            / (m_deflectionHigh - m_deflectionLow), 0.0, 1.0));
+    }
     if (m_relativeLevel) { return std::clamp((dbm + 120.0f) / 120.0f, 0.0f, 1.0f); }
     return static_cast<float>(m_geometry.rxFraction(dbm));
 }
@@ -756,7 +820,7 @@ void SMeterWidget::paintEvent(QPaintEvent*)
         const QRectF outerArc(cx - radius, cy - radius, radius * 2, radius * 2);
         // RX face always uses the existing Flex-style S scale. Uncalibrated
         // Kiwi fallback readings do not move the needle or show fake dBm.
-        const float s9Deg = qRadiansToDegrees(
+        const float s9Deg = m_displayDeflection ? arcStartDeg : qRadiansToDegrees(
             fractionToAngle(static_cast<float>(m_geometry.rxScale.s9Fraction)));
 
         QPen whitePen(rxNormal, m_geometry.arc.lineWidthPixels);
@@ -888,7 +952,16 @@ void SMeterWidget::paintEvent(QPaintEvent*)
     const QColor labelColor = physicalTheme ? physicalPalette->text : whiteColor;
 
     // -- Outside ticks (RX) ---------------------------------------------------
-    if (m_relativeLevel) {
+    if (m_displayDeflection) {
+        if (std::isfinite(m_deflectionLow) && std::isfinite(m_deflectionHigh)
+            && m_deflectionHigh > m_deflectionLow) {
+            for (int tick = 0; tick <= 7; ++tick) {
+                const float fraction = tick / 7.0f;
+                const double value = m_deflectionLow + fraction * (m_deflectionHigh - m_deflectionLow);
+                drawOutsideTick(fraction, QString::number(value, 'g', 3), whiteColor, true);
+            }
+        }
+    } else if (m_relativeLevel) {
         for (int db = -120; db <= 0; db += 20) {
             drawOutsideTick((db + 120.0f) / 120.0f, QString::number(db), whiteColor, true);
         }
@@ -1156,7 +1229,8 @@ void SMeterWidget::paintEvent(QPaintEvent*)
 
         p.setFont(srcFont);
         p.setPen(sourceColor);
-        const QString source = m_relativeLevel ? tr("RF peak bin") : m_source;
+        const QString source = m_displayDeflection ? tr("Display deflection")
+            : m_relativeLevel ? tr("RF peak bin") : m_source;
         p.drawText(qRound(faceCenterX - sfm.horizontalAdvance(source) / 2.0),
                    sourceBaseline, source);
 
@@ -1165,11 +1239,12 @@ void SMeterWidget::paintEvent(QPaintEvent*)
         p.setFont(valFont);
         p.setPen(accentColor);
         // Show S-units based on the displayed value
-        const QString sText = sUnitsTextFor(displayDbm);
+        const QString sText = m_displayDeflection ? QString() : sUnitsTextFor(displayDbm);
         p.drawText(qRound(faceLeft) + m_geometry.readout.sideMarginPixels,
                    valueBaseline, sText);
 
-        const QString dbmText = QString(m_relativeLevel ? "%1 dBFS" : "%1 dBm").arg(displayDbm, 0, 'f', 0);
+        const QString dbmText = QString(m_displayDeflection ? "%1 dots"
+            : m_relativeLevel ? "%1 dBFS" : "%1 dBm").arg(displayDbm, 0, 'f', 0);
         p.setPen(valueColor);
         p.drawText(qRound(faceRight) - vfm.horizontalAdvance(dbmText)
                        - m_geometry.readout.sideMarginPixels,

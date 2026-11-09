@@ -48,6 +48,7 @@ inline constexpr DocFieldCredential kDocFieldCredentials[] = {
     // protocol obfuscates rather than encrypts the password (icom-oracle §2.5),
     // so a copy leaking into an exported settings file is a real exposure.
     {"Icom", "Password", "icom_password"},
+    {"KenwoodConnection", "Password", "kenwood_password"},
 };
 
 // Exact-name check: is `key` one of the known flat credential keys?

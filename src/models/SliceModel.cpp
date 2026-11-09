@@ -114,6 +114,45 @@ bool SliceModel::refuseOffThread(const char* setter) const
     return true;
 }
 
+double SliceModel::incrementalTuneTarget(double deltaMhz, int snapStepHz)
+{
+    if (refuseOffThread(__func__)) { return m_frequency; }
+    if (m_pendingTuneClock.isValid() && m_pendingTuneClock.elapsed() >= 1000) {
+        retireTuneIntent();
+    }
+    double base = confirmsControls() && !m_pendingTuneTargets.isEmpty()
+        ? m_pendingTuneTargets.constLast() : m_frequency;
+    if (snapStepHz > 0) {
+        base = std::round(base * 1.0e6 / snapStepHz) * snapStepHz / 1.0e6;
+    }
+    return base + deltaMhz;
+}
+
+quint64 SliceModel::recordTuneIntent(double mhz)
+{
+    if (refuseOffThread(__func__)) { return 0; }
+    if (!confirmsControls() || !std::isfinite(mhz) || mhz <= 0.0
+        || mhz > kMaximumReportedFrequencyMhz) {
+        retireTuneIntent();
+        return 0;
+    }
+    if ((m_pendingTuneClock.isValid() && m_pendingTuneClock.elapsed() >= 1000)
+        || m_pendingTuneTargets.size() >= 32) {
+        retireTuneIntent();
+    }
+    m_pendingTuneTargets.append(mhz);
+    m_pendingTuneClock.start();
+    return ++m_pendingTuneEpoch;
+}
+
+void SliceModel::retireTuneIntent(quint64 token)
+{
+    if (token != 0 && token != m_pendingTuneEpoch) { return; }
+    ++m_pendingTuneEpoch;
+    m_pendingTuneTargets.clear();
+    m_pendingTuneClock.invalidate();
+}
+
 void SliceModel::setFrequency(double mhz)
 {
     if (refuseOffThread(__func__)) { return; }
@@ -381,7 +420,21 @@ void SliceModel::notifyReceiveFilterIntent(SliceFilterRequest::Origin origin)
 
 void SliceModel::setRxAntenna(const QString& ant)
 {
-    if (m_rxAntenna == ant) return;
+    if (refuseOffThread(__func__)) { return; }
+    if (confirmsControls()) {
+        const QPointer<SliceModel> alive(this);
+        const quint64 revision = ++m_rxAntennaIntentRevision;
+        const quint64 generation = m_receiveSessionGeneration;
+        const QString observed = m_rxAntenna;
+        const bool known = m_rxAntennaKnown;
+        if (known && observed == ant) { return; }
+        emit rxAntennaChanged(observed);
+        if (!alive || revision != m_rxAntennaIntentRevision || generation != m_receiveSessionGeneration
+            || !confirmsControls() || m_rxAntenna != observed || m_rxAntennaKnown != known) { return; }
+        emit receiveRxAntennaRequested(ant);
+        return;
+    }
+    if (m_rxAntenna == ant) { return; }
     m_rxAntenna = ant;
     publishReceiveIntent(m_rxAntennaIntentRevision,
                          [this, ant] { emit rxAntennaChanged(ant); },
@@ -1840,12 +1893,32 @@ void SliceModel::emitLetterRefresh()
 
 void SliceModel::applyChanges(const SliceDelta& d)
 {
+    const ReceiveObservation previousObservation = m_receiveObservation;
+    const bool sourceChanged = d.receiveTuneContextChanged || (d.panId && *d.panId != m_panId);
+    const std::optional<QString> incomingMode = d.mode && !d.mode->isEmpty() && d.mode->size() <= 32
+        ? d.mode : std::nullopt;
+    const bool modeContextChanged = d.mode && incomingMode != m_receiveObservation.mode;
+    if (confirmsControls()) {
+        if (sourceChanged || modeContextChanged) {
+            ++m_receiveSessionGeneration;
+            m_rxAntennaKnown = false;
+            ++m_rxAntennaIntentRevision;
+        }
+        if (sourceChanged || modeContextChanged || d.receiveFilterContextChanged) {
+            ++m_receiveFilterContextGeneration;
+            ++m_filterIntentRevision;
+        }
+        if (sourceChanged || d.receiveFilterContextChanged) {
+            m_receiveObservation.filterLowHz.reset();
+            m_receiveObservation.filterHighHz.reset();
+        }
+    }
+    if (sourceChanged) { retireTuneIntent(); }
     const QPointer<SliceModel> alive(this);
     const bool chainChanged = d.chainMode && m_chainMode != *d.chainMode;
     if (chainChanged) {
         m_chainMode = *d.chainMode;
     }
-    const ReceiveObservation previousObservation = m_receiveObservation;
     if (d.mode) {
         m_squelchRecoveryAwaitingModeReport = false;
         // A mode change invalidates the old mode's passband. Partial filter
@@ -1903,6 +1976,24 @@ void SliceModel::applyChanges(const SliceDelta& d)
 
     if (d.frequency.has_value()) {
         const double f = *d.frequency;
+        if (!m_pendingTuneTargets.isEmpty()) {
+            if (!m_pendingTuneClock.isValid() || m_pendingTuneClock.elapsed() >= 1000) {
+                retireTuneIntent();
+            } else {
+                qsizetype matched = -1;
+                for (qsizetype i = 0; i < m_pendingTuneTargets.size(); ++i) {
+                    if (std::abs(m_pendingTuneTargets.at(i) - f) < 0.5e-6) {
+                        matched = i;
+                    }
+                }
+                if (matched >= 0) {
+                    m_pendingTuneTargets.remove(0, matched + 1);
+                    if (m_pendingTuneTargets.isEmpty()) { retireTuneIntent(); }
+                } else if (std::abs(m_frequency - f) > 0.5e-6) {
+                    retireTuneIntent();
+                }
+            }
+        }
         m_frequencyReportedKnown = std::isfinite(f)
             && f > 0.0 && f <= kMaximumReportedFrequencyMhz;
         m_reportedFrequency = m_frequencyReportedKnown ? f : 0.0;
@@ -2150,12 +2241,18 @@ void SliceModel::applyChanges(const SliceDelta& d)
         }
     }
     if (d.rxAntenna.has_value()) {
-        m_rxAntenna = *d.rxAntenna;
-        emit rxAntennaChanged(m_rxAntenna);
+        const bool valid = !d.rxAntenna->isEmpty() && d.rxAntenna->size() <= 128;
+        m_rxAntennaKnown = valid;
+        if (!confirmsControls() || valid) {
+            m_rxAntenna = *d.rxAntenna;
+            emit rxAntennaChanged(m_rxAntenna);
+            if (!alive) { return; }
+        }
     }
     if (d.txAntenna.has_value()) {
         m_txAntenna = *d.txAntenna;
         emit txAntennaChanged(m_txAntenna);
+        if (!alive) { return; }
     }
     if (d.locked.has_value()) {
         m_locked = *d.locked;
@@ -2518,11 +2615,15 @@ void SliceModel::applyChanges(const SliceDelta& d)
         // Also report a same-value echo following an optimistic desktop tune.
         // A changed value already notifies observation consumers below.
         emit frequencyReported();
+        if (!alive) { return; }
     }
-    if (freqChanged)
+    if (freqChanged) {
         emit frequencyChanged(m_frequency);
+        if (!alive) { return; }
+    }
     if (d.frequency.has_value() && m_frequencyReportedKnown) {
         emit frequencyStatusReported(m_reportedFrequency);
+        if (!alive) { return; }
     }
     if (modeChanged_)   emit modeChanged(m_mode);
     if (!alive) { return; }
@@ -2531,9 +2632,13 @@ void SliceModel::applyChanges(const SliceDelta& d)
         restoreManualSquelchAfterModeChange();
         if (!alive) { return; }
     }
-    if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
+    if (filterChanged_) {
+        emit filterChanged(m_filterLow, m_filterHigh);
+        if (!alive) { return; }
+    }
     if (previousObservation != m_receiveObservation) {
         emit receiveObservationChanged();
+        if (!alive) { return; }
     }
     if (d.mode) {
         emit receiveModeReported();
@@ -2548,10 +2653,14 @@ void SliceModel::applyChanges(const SliceDelta& d)
 
 void SliceModel::invalidateFrequencyObservation()
 {
+    const QPointer<SliceModel> alive(this);
+    retireTuneIntent();
     ++m_receiveSessionGeneration;
+    ++m_receiveFilterContextGeneration;
     m_agcThresholdMode.reset();
     m_automaticAgcThresholdPending = false;
     emit agcThresholdModeChanged();
+    if (!alive) { return; }
     for (auto& feature : m_dspIntentRevisions) {
         for (quint64& revision : feature) {
             ++revision;
@@ -2564,6 +2673,7 @@ void SliceModel::invalidateFrequencyObservation()
     m_squelchEnableIntentPending = false;
     m_squelchLevelIntentPending = false;
     ++m_rxAntennaIntentRevision;
+    m_rxAntennaKnown = false;
     ++m_lockIntentRevision;
     ++m_tuneIntentRevision;
     ++m_modeIntentRevision;
@@ -2574,11 +2684,13 @@ void SliceModel::invalidateFrequencyObservation()
     if (m_receiveObservation != ReceiveObservation{}) {
         m_receiveObservation = {};
         emit receiveObservationChanged();
+        if (!alive) { return; }
     }
     if (m_frequencyReportedKnown) {
         m_frequencyReportedKnown = false;
         m_reportedFrequency = 0.0;
         emit frequencyReported();
+        if (!alive) { return; }
     }
 }
 

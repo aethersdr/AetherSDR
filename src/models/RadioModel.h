@@ -2145,6 +2145,8 @@ private:
     bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request);
     TransmitModel::KeyingRoute producerKeyingRoute(const TxCoordinator::Request& request,
                                                   TxActivity activity, bool& dispatched);
+    TxCoordinator::Operation bindBackendTxIntentRetirement(const TxCoordinator::Operation& operation,
+        const TxCoordinator::Intent& intent);
     bool dispatchTuneIntent(bool on, const TxCoordinator::Request* request = nullptr);
     bool dispatchAtuIntent(bool start, const TxCoordinator::Request* request = nullptr);
     bool setTransmitImpl(bool tx, TransmitModel::PttSource source,

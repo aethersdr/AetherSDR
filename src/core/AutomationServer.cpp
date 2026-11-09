@@ -6559,7 +6559,6 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     // describe THIS one — so retire the previous failure here as well as on a
     // successful connect. A caller that wants the older failure has already had
     // it reported once.
-    clearLastConnectError();
 
     if (a == QLatin1String("local")) {
         const QList<RadioInfo> radios = conn->automationLocalRadios();
@@ -6578,12 +6577,18 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
             QPointer<QObject> guard(conn->asQObject());
             QPointer<AutomationServer> self(this);
-            QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, selectedSerial] {
-                if (!guard) {
+            const quint64 revision = ++m_connectionIntentRevision;
+            const quint64 intentEpoch = conn->automationConnectionIntentEpoch();
+            clearLastConnectError();
+            QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, selectedSerial, revision, intentEpoch] {
+                if (!guard || !self || self->connection() != conn
+                    || self->m_connectionIntentRevision != revision
+                    || conn->automationConnectionIntentEpoch() != intentEpoch) {
                     return;
                 }
                 QString error;
-                if (!conn->automationConnectLocalSerial(selectedSerial, &error) && self) {
+                if (!conn->automationConnectLocalSerial(selectedSerial, &error) && self
+                    && self->m_connectionIntentRevision == revision && self->connection() == conn) {
                     self->noteConnectFailure(QStringLiteral("connect local first"), error);
                 }
             });
@@ -6608,12 +6613,18 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
                 QPointer<QObject> guard(conn->asQObject());
                 QPointer<AutomationServer> self(this);
-                QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, serial] {
-                    if (!guard) {
+                const quint64 revision = ++m_connectionIntentRevision;
+                const quint64 intentEpoch = conn->automationConnectionIntentEpoch();
+                clearLastConnectError();
+                QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, serial, revision, intentEpoch] {
+                    if (!guard || !self || self->connection() != conn
+                        || self->m_connectionIntentRevision != revision
+                        || conn->automationConnectionIntentEpoch() != intentEpoch) {
                         return;
                     }
                     QString error;
-                    if (!conn->automationConnectLocalSerial(serial, &error) && self) {
+                    if (!conn->automationConnectLocalSerial(serial, &error) && self
+                        && self->m_connectionIntentRevision == revision && self->connection() == conn) {
                         self->noteConnectFailure(QStringLiteral("connect local serial"),
                                                  error);
                     }
@@ -6695,12 +6706,18 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
         QPointer<QObject> guard(conn->asQObject());
         QPointer<AutomationServer> self(this);
-        QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, target, family] {
-            if (!guard) {
+        const quint64 revision = ++m_connectionIntentRevision;
+        const quint64 intentEpoch = conn->automationConnectionIntentEpoch();
+        clearLastConnectError();
+        QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, target, family, revision, intentEpoch] {
+            if (!guard || !self || self->connection() != conn
+                || self->m_connectionIntentRevision != revision
+                || conn->automationConnectionIntentEpoch() != intentEpoch) {
                 return;
             }
             QString error;
-            if (!conn->automationConnectByIp(target, family, &error) && self) {
+            if (!conn->automationConnectByIp(target, family, &error) && self
+                && self->m_connectionIntentRevision == revision && self->connection() == conn) {
                 self->noteConnectFailure(QStringLiteral("connect ip ") + target, error);
             }
         });
@@ -6774,18 +6791,22 @@ QJsonObject AutomationServer::doDisconnect()
     if (!conn) {
         return err(QStringLiteral("connection panel unavailable"));
     }
-    if (!m_radioModel || !m_radioModel->isConnected()) {
-        return err(QStringLiteral("not connected to a radio"));
-    }
-
     QPointer<QObject> guard(conn->asQObject());
     QPointer<AutomationServer> self(this);
-    QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn] {
-        if (!guard) {
+    const QPointer<RadioModel> model(m_radioModel);
+    const bool hadModel = !model.isNull();
+    const quint64 revision = ++m_connectionIntentRevision;
+    const quint64 intentEpoch = conn->automationConnectionIntentEpoch();
+    QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, model, hadModel, intentEpoch, revision] {
+        if (!guard || !self || self->connection() != conn
+            || (hadModel && !model) || self->m_radioModel.data() != model.data()
+            || conn->automationConnectionIntentEpoch() != intentEpoch
+            || self->m_connectionIntentRevision != revision) {
             return;
         }
         QString error;
-        if (!conn->automationDisconnect(&error) && self) {
+        if (!conn->automationDisconnect(&error) && self
+            && self->m_connectionIntentRevision == revision && self->connection() == conn) {
             self->noteConnectFailure(QStringLiteral("disconnect"), error,
                                      /*answerPendingWaits=*/false);
         }

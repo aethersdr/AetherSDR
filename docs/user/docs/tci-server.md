@@ -73,6 +73,11 @@ audio_stop:0;            # stop it
 
 ## Using TCI with other programs
 
+On the TS-890S, receive control requests wait for radio readback before TCI
+announces a changed setting. An unsupported or refused request does not announce
+the requested value as live state. Advertised tuning limits follow the selected
+radio variant.
+
 When a VFO-B request needs a new receiver, AetherSDR waits for its acknowledged
 identity and radio status before selecting it for TX. A delayed reply cannot
 adopt another client's receiver. Disconnecting, stopping TCI, or closing the
@@ -221,7 +226,9 @@ rx_sensors_enable:true;    # S-meter updates
 tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting
 ```
 
-RX sensors broadcast each receiver's S-meter in dBm:
+RX sensors broadcast each receiver's S-meter in dBm when a fresh calibrated
+reading is available. Native relative readings, such as TS-890S display dots,
+are not converted into dBm; unavailable or stale readings are omitted.
 
 ```
 rx_channel_sensors:0,0,-97.3;

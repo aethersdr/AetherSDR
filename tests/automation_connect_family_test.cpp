@@ -35,6 +35,7 @@
 #include <QString>
 
 #include <cstdio>
+#include <memory>
 
 using namespace AetherSDR;
 
@@ -45,6 +46,7 @@ namespace AetherSDR {
 class AutomationServerTestAccess
 {
 public:
+    static QJsonObject disconnect(AutomationServer& server) { return server.doDisconnect(); }
     static QJsonObject connect(AutomationServer& server,
                                const QString& action,
                                const QString& arg)
@@ -100,19 +102,23 @@ public:
                                const QString& family = QString(),
                                QString* = nullptr) override
     {
+        ++epoch;
         ++byIpCalls;
         lastTarget = hostOrIp;
         lastFamily = family;
         return true;
     }
 
-    bool automationDisconnect(QString* = nullptr) override { return true; }
+    bool automationDisconnect(QString* = nullptr) override { ++disconnectCalls; ++epoch; return true; }
+    quint64 automationConnectionIntentEpoch() const override { return epoch; }
     bool automationDialogVisible() const override { return false; }
     void automationSetDialogVisible(bool) override {}
     QObject* asQObject() override { return this; }
 
     void setRadios(QList<RadioInfo> radios) { m_radios = std::move(radios); }
 
+    int disconnectCalls = 0;
+    quint64 epoch = 0;
     int byIpCalls = 0;
     QString lastTarget;
     QString lastFamily;
@@ -273,6 +279,84 @@ int main(int argc, char** argv)
               "an undiscovered address reports familySource=dialog");
         check(conn.lastFamily.isEmpty(),
               "the connection panel is handed an empty family, i.e. the selector");
+    }
+
+    {
+        const int connectsBefore = conn.byIpCalls;
+        const int disconnectsBefore = conn.disconnectCalls;
+        AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        AutomationServerTestAccess::disconnect(server);
+        settle();
+        check(conn.byIpCalls == connectsBefore && conn.disconnectCalls == disconnectsBefore + 1,
+              "newer queued Disconnect retires older queued Connect");
+        AutomationServerTestAccess::disconnect(server);
+        AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        settle();
+        check(conn.byIpCalls == connectsBefore + 1 && conn.disconnectCalls == disconnectsBefore + 1,
+              "newer queued Connect retires older queued Disconnect");
+        AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        AutomationServerTestAccess::connect(server, QStringLiteral("list"), QString());
+        AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral(""));
+        settle();
+        check(conn.byIpCalls == connectsBefore + 2,
+              "read-only and invalid requests do not retire accepted queued intent");
+        AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        ++conn.epoch;
+        settle();
+        check(conn.byIpCalls == connectsBefore + 2,
+              "newer direct operator intent retires queued bridge Connect");
+    }
+
+    // A disconnect owns the explicit intent it observed, even between retries.
+    {
+        const int before = conn.disconnectCalls;
+        const QJsonObject reply = AutomationServerTestAccess::disconnect(server);
+        check(reply.value("ok").toBool() && reply.value("deferred").toBool(),
+              "disconnected model accepts deferred cancellation");
+        check(conn.disconnectCalls == before, "disconnect remains deferred");
+        settle();
+        check(conn.disconnectCalls == before + 1, "between-attempt cancellation reaches panel");
+        AutomationServerTestAccess::disconnect(server);
+        settle();
+        check(conn.disconnectCalls == before + 2, "idle cancellation is idempotently dispatched");
+        AutomationServerTestAccess::disconnect(server);
+        ++conn.epoch; // A newer explicit Connect, unlike an automatic backend retry.
+        settle();
+        check(conn.disconnectCalls == before + 2, "old cancellation cannot stop newer explicit intent");
+        AutomationServerTestAccess::disconnect(server);
+        FakeConnectionAutomation replacement;
+        server.setConnectionAutomation(&replacement);
+        settle();
+        check(conn.disconnectCalls == before + 2 && replacement.disconnectCalls == 0,
+              "panel replacement retires queued cancellation");
+        server.setConnectionAutomation(&conn);
+        AutomationServerTestAccess::disconnect(server);
+        RadioModel replacementModel;
+        server.setRadioModel(&replacementModel);
+        settle();
+        check(conn.disconnectCalls == before + 2, "model replacement retires queued cancellation");
+        server.setRadioModel(&radio);
+        auto temporary = std::make_unique<FakeConnectionAutomation>();
+        server.setConnectionAutomation(temporary.get());
+        AutomationServerTestAccess::disconnect(server);
+        temporary.reset();
+        settle();
+        check(conn.disconnectCalls == before + 2, "destroyed panel retires queued cancellation");
+        server.setConnectionAutomation(&conn);
+        auto transientModel = std::make_unique<RadioModel>();
+        server.setRadioModel(transientModel.get());
+        AutomationServerTestAccess::disconnect(server);
+        transientModel.reset();
+        settle();
+        check(conn.disconnectCalls == before + 2, "destroyed model retires queued cancellation");
+        server.setRadioModel(&radio);
+        auto transientServer = std::make_unique<AutomationServer>();
+        transientServer->setConnectionAutomation(&conn);
+        transientServer->setRadioModel(&radio);
+        AutomationServerTestAccess::disconnect(*transientServer);
+        transientServer.reset();
+        settle();
+        check(conn.disconnectCalls == before + 2, "destroyed bridge retires queued cancellation");
     }
 
     if (failures > 0) {

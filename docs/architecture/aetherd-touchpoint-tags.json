@@ -1780,5 +1780,47 @@
   "note": "Explicit per-radio amplifier telemetry association; no radio or tuner commands.",
   "split": "",
   "confidence": "high"
+ },
+ "core/backends/kenwood/KnsProtocol.h": {
+  "tag": "vendor(kenwood)",
+  "note": "TS-890S KNS framing, authentication, scope and RTP audio codecs; below the backend seam.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/kenwood/KenwoodBackend.h": {
+  "tag": "vendor(kenwood)",
+  "note": "TS-890S backend implementation; constructed below the seam.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/AdditionalRadioBackends.h": {
+  "tag": "universal",
+  "note": "Neutral backend construction entry point; no vendor protocol types.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/NetworkRadioLookup.h": {
+  "tag": "ui-support",
+  "note": "Bounded asynchronous IPv4 name lookup for connection forms, with cancellation and generation retirement. Generic Qt DNS only; no radio wire, credentials or GUI dependencies.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/NetworkRadioLogin.h": {
+  "tag": "ui-support",
+  "note": "Network radio connection descriptors and secure login staging; no wire commands.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/kenwood/KenwoodPowerLimits.h": {
+  "tag": "vendor(kenwood)",
+  "note": "TS-890S LP1 configuration codec and documented row/band vocabulary. No frequency inference, TX authorization or carrier keying. Kept below IRadioBackend.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/kenwood/KenwoodFilter.h": {
+  "tag": "vendor(kenwood)",
+  "note": "TS-890S filter register and passband mapping using the official command reference; backend-private.",
+  "split": "",
+  "confidence": "high"
  }
 }

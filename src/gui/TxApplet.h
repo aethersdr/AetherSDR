@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QMetaObject>
+#include <memory>
 #include "models/TxController.h"
 
 class QMenu;
@@ -19,6 +20,7 @@ class AtuPreTuneDialog;
 class BandPlanManager;
 class RadioModel;
 class TransmitModel;
+class ControlAvailabilityRegistry;
 class TunerModel;
 
 // TX applet: transmit controls matching the SmartSDR TX panel (power/SWR
@@ -28,6 +30,7 @@ class TxApplet : public QWidget {
 
 public:
     explicit TxApplet(QWidget* parent = nullptr);
+    ~TxApplet() override;
 
     void setTransmitModel(TransmitModel* model);
     void setTunerModel(TunerModel* tuner);
@@ -85,6 +88,7 @@ private:
 
     TransmitModel* m_model{nullptr};
     RadioModel*       m_radioModel{nullptr};
+    std::unique_ptr<ControlAvailabilityRegistry> m_settingAvailability;
     std::shared_ptr<TxController> m_txController;
     BandPlanManager*  m_bandPlanMgr{nullptr};
     AtuPreTuneDialog* m_preTuneDialog{nullptr};

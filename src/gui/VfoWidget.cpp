@@ -33,6 +33,7 @@
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
 #include "models/RadioModel.h"
+#include "models/MeterModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "Theme.h"
@@ -707,7 +708,7 @@ void VfoWidget::wheelEvent(QWheelEvent* ev)
 
     if (steps != 0) {
         if (reverseMouseWheel()) steps = -steps;  // #3302
-        double newMhz = m_slice->frequency() + steps * stepHz / 1e6;
+        double newMhz = m_slice->incrementalTuneTarget(steps * stepHz / 1e6);
         emit stepTuneRequested(newMhz);
     }
     ev->accept();
@@ -855,19 +856,31 @@ void VfoWidget::buildUI()
             act->setToolTip(ant);
             act->setStatusTip(ant);
         }
-        connect(menu, &QMenu::triggered, this, [this, slice](QAction* sel) {
-            if (!sel || !slice) {
+        const QPointer<VfoWidget> self(this);
+        const QPointer<RadioModel> model(m_radioModel);
+        const bool confirmed = slice->receiveControlsConfirmed();
+        const quint64 receiverEpoch = slice->receiveSessionGeneration();
+        const RadioControlSession session = model ? model->controlSession() : RadioControlSession{};
+        const auto current = [self, model, slice, confirmed, receiverEpoch, session] {
+            if (!self || !slice || self->m_slice != slice || slice->receiveControlsConfirmed() != confirmed) { return false; }
+            if (!confirmed) { return true; }
+            return model && self->m_radioModel == model && model->isConnected()
+                && model->slice(slice->sliceId()) == slice && model->controlSessionCurrent(session)
+                && slice->receiveSessionGeneration() == receiverEpoch;
+        };
+        connect(menu, &QMenu::triggered, this, [self, slice, confirmed, current](QAction* sel) {
+            if (!sel || !current()) {
                 return;
             }
             const QString token = sel->data().toString();
-            const QString profileId = m_kiwiSdrManager
-                ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
+            const QString profileId = self->m_kiwiSdrManager
+                ? self->m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
                 : QString();
             if (!profileId.isEmpty()) {
-                emit kiwiRxAntennaSelected(slice->sliceId(), profileId);
+                emit self->kiwiRxAntennaSelected(slice->sliceId(), profileId);
             } else {
-                emit flexRxAntennaSelected(slice->sliceId());
-                if (slice->rxAntenna() != token) { slice->setRxAntenna(token); }
+                emit self->flexRxAntennaSelected(slice->sliceId());
+                if (current() && (confirmed || slice->rxAntenna() != token)) { slice->setRxAntenna(token); }
             }
         });
         menu->popup(m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())));
@@ -2288,14 +2301,21 @@ void VfoWidget::buildTabContent()
             m_apfSlider->setToolTip("Adjusts APF bandwidth. Higher values narrow the peak for better CW selectivity. Enabled when APF is on in the DSP grid.");
             apfVb->addWidget(m_apfSlider, 1);
             m_apfValueLbl = new QLabel("50");
+            m_apfValueLbl->setObjectName(QStringLiteral("apfLevelValue"));
             m_apfValueLbl->setStyleSheet(kLabelStyle);
             m_apfValueLbl->setFixedWidth(20);
             m_apfValueLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             apfVb->addWidget(m_apfValueLbl);
 
             connect(m_apfSlider, &QSlider::valueChanged, this, [this](int v) {
+                if (!sharedApfLevelSupported()) {
+                    m_apfValueLbl->setText(QStringLiteral("--"));
+                    return;
+                }
                 m_apfValueLbl->setText(QString::number(v));
-                if (!m_updatingFromModel && m_slice) m_slice->setApfLevel(v);
+                if (!m_updatingFromModel && m_slice && m_apfSlider->isEnabled()) {
+                    m_slice->setApfLevel(v);
+                }
             });
 
             // Level is only reachable while the filter is engaged — same rule
@@ -3669,6 +3689,8 @@ bool VfoWidget::acceptsFilterEdges(int low, int high) const
 
 QVector<int> VfoWidget::defaultFilterWidths(const QString& mode) const
 {
+    if (!ModeFilters::fmFilterAdjustable(mode,
+        m_receiveFilterControl ? &*m_receiveFilterControl : nullptr, !m_radioFilterWidths.isEmpty())) { return {}; }
     return ModeFilters::widthsForMode(mode,
         m_receiveFilterControl ? &*m_receiveFilterControl : nullptr);
 }
@@ -4204,6 +4226,18 @@ void VfoWidget::paintEvent(QPaintEvent* event)
         p.setPen(ThemeManager::instance().color(this, "color.text.secondary"));
         p.drawLine(barX, scaleY, barX + barW, scaleY);
         QFont font = p.font(); font.setPixelSize(7); p.setFont(font);
+        if (m_displayDeflection) {
+            if (std::isfinite(m_deflectionLow) && std::isfinite(m_deflectionHigh)
+                && m_deflectionHigh > m_deflectionLow) {
+                for (int tick = 0; tick <= 4; ++tick) {
+                    const int x = barX + tick * barW / 4;
+                    const double value = m_deflectionLow + tick * (m_deflectionHigh - m_deflectionLow) / 4;
+                    p.drawLine(x, scaleY, x, scaleY + tickH);
+                    p.drawText(x - 8, scaleY + tickH + 7, QString::number(value, 'g', 3));
+                }
+            }
+            return;
+        }
         for (int db = -120; db <= 0; db += 30) {
             const int x = barX + (db + 120) * barW / 120;
             p.drawLine(x, scaleY, x, scaleY + tickH);
@@ -4439,6 +4473,7 @@ void VfoWidget::setSignalLevel(float dbm)
 {
     if (m_relativeSignal) { m_dbmLabel->setAccessibleDescription({}); }
     m_relativeSignal = false;
+    m_displayDeflection = false;
     m_receiveMeterReadingActive = false;
     m_signalDbm = dbm;
     m_signalHasDbm = true; // FLEX always delivers a calibrated dBm reading
@@ -4451,10 +4486,11 @@ void VfoWidget::setSignalLevel(float dbm)
 void VfoWidget::setRelativeSignalLevel(std::optional<float> dbfs, const QString& unavailableReason)
 {
     const bool valid = unavailableReason.isEmpty() && dbfs && std::isfinite(*dbfs);
-    if (m_relativeSignal && !m_relativeSignalValid && !valid
+    if (m_relativeSignal && !m_displayDeflection && !m_relativeSignalValid && !valid
         && m_relativeUnavailableReason == unavailableReason) { return; }
     m_relativeUnavailableReason = unavailableReason;
     m_relativeSignal = true;
+    m_displayDeflection = false;
     m_relativeSignalValid = valid;
     m_receiveMeterReadingActive = false;
     m_signalHasDbm = false;
@@ -4466,6 +4502,31 @@ void VfoWidget::setRelativeSignalLevel(std::optional<float> dbfs, const QString&
         ? tr("Peak FFT bin in the receive passband, uncalibrated; not dBm or audio level") : unavailableReason);
     updateSignalMeterTarget();
     pushSmartMtrInput();
+}
+
+void VfoWidget::setDisplayDeflection(const DisplayDeflectionReading& reading)
+{
+    m_displayDeflection = true;
+    m_relativeSignal = true;
+    m_receiveMeterReadingActive = false;
+    m_signalHasDbm = false;
+    m_deflectionLow = reading.low;
+    m_deflectionHigh = reading.high;
+    m_relativeSignalValid = reading.unit == QStringLiteral("dot")
+        && reading.value && std::isfinite(*reading.value)
+        && std::isfinite(reading.low) && std::isfinite(reading.high)
+        && reading.high > reading.low && *reading.value >= reading.low
+        && *reading.value <= reading.high && reading.unavailableReason.isEmpty();
+    m_signalDbm = m_relativeSignalValid ? *reading.value : 0;
+    m_relativeUnavailableReason = reading.unavailableReason;
+    m_dbmLabel->setText(m_relativeSignalValid
+        ? tr("%1 dots").arg(m_signalDbm, 0, 'f', 0) : tr("— dots"));
+    m_dbmLabel->setAccessibleName(tr("Relative radio display deflection in dots"));
+    m_dbmLabel->setAccessibleDescription(reading.unavailableReason.isEmpty()
+        ? reading.description : reading.unavailableReason);
+    updateSignalMeterTarget();
+    pushSmartMtrInput();
+    update();
 }
 
 // SmartMTR feed: choose signal vs mic by TX state and push the input. The
@@ -4548,7 +4609,13 @@ void VfoWidget::pushSmartMtrInput()
             in.min = -120; in.max = 0; in.hasValue = m_relativeSignalValid;
         }
     }
-    m_smartMtrWidget->setMeterInput(in, m_relativeSignal ? m_relativeUnavailableReason : QString());
+    QString unavailableReason = m_relativeSignal ? m_relativeUnavailableReason : QString();
+    if (m_displayDeflection && !(txActive && txMeter != DisplaySettings::TxMeter::None)) {
+        in.kind = MeterKind::Signal;
+        in.hasValue = false;
+        unavailableReason = tr("SmartMTR does not support the radio's uncalibrated display-deflection scale; use the signal bar for dots.");
+    }
+    m_smartMtrWidget->setMeterInput(in, unavailableReason);
 }
 
 void VfoWidget::pushSmartMtrOptions()
@@ -4782,6 +4849,7 @@ void VfoWidget::setReceiveMeterReading(
 {
     if (m_relativeSignal) { m_dbmLabel->setAccessibleDescription({}); }
     m_relativeSignal = false;
+    m_displayDeflection = false;
     m_receiveMeterReading = reading;
     m_receiveMeterReadingActive = true;
     const bool hasDisplayDbm =
@@ -4829,7 +4897,10 @@ void VfoWidget::updateSignalMeterTarget()
 {
     if (m_relativeSignal) {
         m_targetSignalMeterFraction = m_relativeSignalValid
-            ? std::clamp((m_signalDbm + 120.0f) / 120.0f, 0.0f, 1.0f) : 0.0f;
+            ? (m_displayDeflection
+                ? static_cast<float>(std::clamp((m_signalDbm - m_deflectionLow)
+                    / (m_deflectionHigh - m_deflectionLow), 0.0, 1.0))
+                : std::clamp((m_signalDbm + 120.0f) / 120.0f, 0.0f, 1.0f)) : 0.0f;
     } else if (usesUnavailableSignalMeter()) {
         m_targetSignalMeterFraction = 0.0f;
     } else {
@@ -5265,7 +5336,7 @@ void VfoWidget::setSlice(SliceModel* slice)
     connect(m_slice, &SliceModel::apfLevelChanged, this, [this](int v) {
         m_updatingFromModel = true;
         m_apfSlider->setValue(v);
-        m_apfValueLbl->setText(QString::number(v));
+        m_apfValueLbl->setText(sharedApfLevelSupported() ? QString::number(v) : QStringLiteral("--"));
         m_updatingFromModel = false;
     });
     // Squelch.  When mirrored against an RxApplet, the slider represents
@@ -5756,7 +5827,8 @@ void VfoWidget::syncFromSlice()
     {
         QSignalBlocker sb(m_apfSlider);
         m_apfSlider->setValue(m_slice->apfLevel());
-        m_apfValueLbl->setText(QString::number(m_slice->apfLevel()));
+        m_apfValueLbl->setText(sharedApfLevelSupported()
+            ? QString::number(m_slice->apfLevel()) : QStringLiteral("--"));
         m_apfContainer->setEnabled(m_slice->apfOn());   // slice-switch sync (#4658)
     }
 
@@ -6225,6 +6297,21 @@ void VfoWidget::rebuildFilterButtons()
                                        .arg(preset.label));
         }
         btn->setCheckable(true);
+        if (m_filterAvailability && m_receiveFilterControl
+            && m_receiveFilterControl->modePolicy == ReceiveFilterControl::ModePolicy::ListedOnly) {
+            const bool hasCustom = i < m_filterCustomLo.size() && i < m_filterCustomHi.size()
+                && m_filterCustomLo[i] != INT_MIN;
+            const ModeFilters::Edges custom{hasCustom ? m_filterCustomLo[i] : 0,
+                                            hasCustom ? m_filterCustomHi[i] : 0};
+            m_filterAvailability->registerWidget(btn,
+                tr("This filter preset is outside the receiver's supported passband range"),
+                [this, w, hasCustom, custom](bool, const RadioCapabilities&) {
+                    if (!m_slice) { return false; }
+                    const ModeFilters::Edges edges = hasCustom ? custom : ModeFilters::edgesForWidth(
+                        m_slice->mode(), w, {m_slice->diguOffset(), m_slice->diglOffset(), m_slice->rttyShift()});
+                    return acceptsFilterEdges(edges.lo, edges.hi);
+                });
+        }
         connect(btn, &QPushButton::clicked, this,
                 [this, i, stablePresets, preset](bool) {
             if (!m_slice) {
@@ -6987,6 +7074,14 @@ void VfoWidget::updateDspParameterResetControls()
     m_dspResetTarget->setAccessibleDescription(description + tr(" Selecting a target does not reset it; press Reset to apply."));
 }
 
+bool VfoWidget::sharedApfLevelSupported() const
+{
+    if (!m_radioModel) { return true; }
+    const RadioCapabilities caps = m_radioModel->backendCapabilities();
+    return !caps.receiveDspControl
+        || !caps.receiveDspControl->unavailableLevels.contains(ReceiveDspControl::Feature::Apf);
+}
+
 void VfoWidget::setRadioModel(RadioModel* radioModel)
 {
     if (m_radioModel) {
@@ -7032,6 +7127,11 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         ? exclusiveSquelchScaleValue(m_radioModel->backendCapabilities().squelchLevelScale) : std::nullopt;
     if (m_radioModel) {
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
+        m_filterAvailability->registerRestriction(m_modeCombo,
+            tr("Receive mode changes are unavailable in the current radio state"),
+            [](bool connected, const RadioCapabilities& caps) {
+                return !connected || !caps.receiveModeControl || !caps.receiveModeControl->modes.isEmpty();
+            });
         m_filterAvailability->registerRestriction(m_txAntBtn,
             tr("This radio is receive-only; no transmit antenna is available"),
             [](bool connected, const RadioCapabilities& caps) {
@@ -7062,17 +7162,22 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         registerSignalControl(m_anfBtn, Feature::Anf);
         registerSignalControl(m_mnBtn, Feature::ManualNotch);
         registerSignalControl(m_apfBtn, Feature::Apf);
-        registerSignalControl(m_apfSlider, Feature::Apf);
+        m_filterAvailability->registerRestriction(m_apfSlider,
+            tr("This radio does not support the shared 0–100 APF adjustment; use native receive DSP settings."),
+            [this](bool, const RadioCapabilities& caps) {
+                return !caps.receiveDspControl || (m_slice
+                    && caps.receiveDspControl->supportsLevel(Feature::Apf, m_slice->mode()));
+            });
         registerSignalControl(m_nbFillCombo, Feature::Nb);
         m_filterAvailability->registerRestriction(m_dspLevelSlider,
-            tr("This DSP parameter is unavailable in the current receive mode"),
-            [this, signalAvailable](bool connected, const RadioCapabilities& caps) {
+            tr("This DSP level is unavailable in the current receive mode or radio algorithm"),
+            [this](bool connected, const RadioCapabilities& caps) {
                 if (!connected || !caps.receiveDspControl) { return true; }
                 switch (m_dspLevelTarget) {
-                case LvlNB: return signalAvailable(connected, caps, Feature::Nb);
-                case LvlNR: return signalAvailable(connected, caps, Feature::Nr);
-                case LvlAnf: return signalAvailable(connected, caps, Feature::Anf);
-                case LvlMn: return signalAvailable(connected, caps, Feature::ManualNotch);
+                case LvlNB: return caps.receiveDspControl->supportsLevel(Feature::Nb, m_slice ? m_slice->mode() : QString());
+                case LvlNR: return caps.receiveDspControl->supportsLevel(Feature::Nr, m_slice ? m_slice->mode() : QString());
+                case LvlAnf: return caps.receiveDspControl->supportsLevel(Feature::Anf, m_slice ? m_slice->mode() : QString());
+                case LvlMn: return caps.receiveDspControl->supportsLevel(Feature::ManualNotch, m_slice ? m_slice->mode() : QString());
                 default: return true; // Client-chain targets have their own availability rules.
                 }
             });
@@ -7139,6 +7244,10 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     configureFmToneControls();
     updateAgcSliderFromSlice();
     syncAutoAgcThreshold();
+    if (m_apfValueLbl) {
+        m_apfValueLbl->setText(sharedApfLevelSupported()
+            ? QString::number(m_slice ? m_slice->apfLevel() : 50) : QStringLiteral("--"));
+    }
     if (m_slice) {
         updateModeTab();
     }

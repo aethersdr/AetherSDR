@@ -1112,6 +1112,12 @@ subset of those modes: RTL declares APF only for CW/CWR while its other receive
 controls cover AM/SAM/USB/LSB/CW/CWR. A missing entry preserves the common mode
 list; an empty entry makes the feature unavailable. A restriction cannot add a
 mode or feature absent from the common lists.
+`unavailableLevels` narrows only level editing, through `supportsLevel`; an
+empty list preserves existing level support. Kenwood uses it for NR2 and
+unqualified NR state, retaining the NR enable switch while withholding an
+unmapped level. Native algorithm readback republishes capabilities, so existing
+and newly constructed VFO widgets dim the level with an accessible reason.
+`requestSliceDsp` enforces the same field qualification at dispatch.
 The VFO and RX applet retain accepted state while a confirmed engine prepares a
 request. AGC/DSP requests identify the changed field: a confirmed backend merges
 that field into its pending recipe rather than overwriting independent pending
@@ -1127,3 +1133,129 @@ keeps moves, widths, removals and global bypass at accepted state until
 optimistic sessions retain their existing behavior. Notch capability limits
 remain the existing `maxNotchFilters`, width bounds and `notchHasDepth` fields;
 a single relative MN control does not imply a tracking-notch bank.
+
+## Direct network audio routing and mode-qualified TUNE
+
+`pcAudioRoutingControl` is an optional record consumed by `RadioModel` when
+selecting or observing PC audio. Its paired verbs are `requestPcAudioRouting`
+(operator write) and `observePcAudioRouting` (client intent without changing a
+radio-persisted input). Kenwood declares the record; other backends retain their
+existing routes through the absent-record fallback.
+
+`tuneCarrierControl` optionally qualifies TUNE by a list of native modes and an
+unavailable reason. `RadioModel::updateTuneAvailability` consumes it and
+`TransmitModel` carries the reason to `TxApplet`'s tooltip and accessible
+description. Absence preserves existing behavior. Kenwood currently declares an
+empty mode list because requested TUNE power is unresolved; no TX2 is emitted.
+
+The experimental Kenwood backend's implemented controls and omissions are
+tracked in [its command matrix](./kenwood-ts890-network.md#capability-and-command-verification-matrix).
+The optional `networkAudioLevelsVersion = 1` extension metadata pairs with
+`audio.levels.get` / `audio.levels.set` and confirmed `audio.levels` status.
+It exposes native VoIP levels independently of `MicGain` and the client sound
+device. Namespace discovery, readback, session fencing and administrator write
+permission are consumed by the Network Audio Levels settings page. It grants
+no transmit authority and declares no new capability boolean.
+Its TX capability additionally requires confirmed TS-890S identity, account
+transmit permission, enabled account status and an audio transport. That
+capability never substitutes for the terminal TxCoordinator gate.
+
+## Native CW delay shape
+
+`cwDelayControl` carries `maximumMs` and `stepMs` for the existing typed
+`TransmitControlRequest::Field::CwDelay` verb. Kenwood declares 1000 ms / 50 ms.
+The existing capability fan-out passes these limits to P/CW; the slider and text
+entry share quantization and an accessible range description. Absence retains
+0–2000 ms continuous requests and the existing 10 ms keyboard step. Changing
+capability limits blocks widget signals and cannot write a keyer setting.
+
+Kenwood also declares the existing `txMonitorControl` record, implemented by
+`setTxMonitor` and field-specific typed requests. The MON switch and monitor
+level have separate native registers; changing one never rewrites the other.
+
+`ReceiveFilterControl::modePolicy` defaults to `LegacyFallback`. `ListedOnly`
+marks an exhaustive set of native mode mappings, including the state in which
+SSB style has not been read yet. Kenwood uses that policy; other backends keep
+the existing fallback. The VFO and RX applet share the mode qualification and
+show an accessible unavailable-filter control for unmapped modes. The backend
+publishes revised SSB/data bounds when their native filter styles arrive.
+
+The versioned `nativeFilterControlVersion = 1` extension separately exposes
+native audio cuts and widths through `filter.get` / `filter.set`. It does not
+declare shared RF-edge control. The Native Filters page discovers its namespace
+from capability metadata, consumes bounded indexed axes and confirmed values,
+and submits one context-bound axis change at a time. The Kenwood command matrix
+documents the supported tables and wire verbs.
+
+For exhaustive mode lists, individual VFO/RX presets outside the declared edge
+and width bounds also use ControlAvailabilityRegistry with an accessible reason.
+`modePolicy` is a desktop presentation qualifier; the receive-control target
+already validates requests against the declared mode rows.
+
+## Radio-owned transmit settings
+
+`radioTransmitSettings` optionally carries an exhaustive `RadioTransmitSettings`
+field set from the typed, non-keying `TransmitControlRequest::Field` vocabulary.
+Presence also declares readback authority: `RadioModel::publishCapabilities`
+passes it to `TransmitModel`, which emits intent without replacing observed
+values or RF-power provenance. Absence preserves existing model behavior.
+This record grants no keying authority and does not alter TxCoordinator.
+
+Kenwood declares only its implemented fields, withdrawing RF power until normal
+output is confirmed and processor level until the companion output level is
+known. P/CW, the TX applet and Radio Setup consume the set through availability
+restrictions with accessible reasons. Unsupported fields still reach the usual
+refusal reporting path if invoked directly, without creating optimistic state.
+P/CW and native keyer setup selections reconcile to model readback after a
+request. Client delay hold is not implemented for this native keyer and is dimmed.
+
+Kenwood enables the existing `hasTxFilterControls` flag and independent native
+edge lists only for a confirmed physical SSB/AM transmit mode (normal or data)
+and both observed menu edges. It adds `RadioTransmitSettings::Filter` under the
+same conditions. Tagged EX reads keep the two groups separate; the typed
+TxPassband verb writes changed edges and waits for readback. Unknown or
+unsupported TX modes withdraw availability, and the PHONE editor stays visible
+and dimmed with an accessible reason. See the [native TX filter contract](./kenwood-ts890-network.md#native-transmit-filter-controls).
+
+For Kenwood, `ReceiveModeControl.modes` is the current settable vocabulary:
+unknown TF-SET/RX state, active TF-SET/TX, local keying or a retired physical
+receive mode publishes an empty list while authority remains Radio. The native
+mode verb rechecks the same state at dispatch. VFO and RX mode selectors keep
+their entries and dim with a reason while the declared choices are empty.
+This does not change the representation of observed physical receive mode.
+
+Kenwood adds `RadioTransmitSettings::CwSidetone` only after native EX00102
+readback. The existing typed boolean verb selects Off or monitor-linked volume;
+an already-enabled native fixed volume is preserved. This switch does not
+imply `CwMonitorGain` or `CwMonitorPan`; those controls remain unavailable.
+
+Kenwood declares `RadioTransmitSettings::CwlEnabled` after EX00505 readback,
+using the existing CWU/CWL controls for native USB/LSB BFO preference. It does
+not normalize or overwrite the physical CW/CWR VFO mode. Startup/reconnect and
+periodic CW preference refresh are read-only.
+
+Native transmit audio input combinations use version-1 extension metadata
+(`transmitInputControlVersion`, `transmitInputChoices`) and `inputs.get` /
+`inputs.set` / `inputs` status, rather than claiming Flex's single microphone
+selector. The two paths retain separate confirmed selections and a session
+context; writes require known receive operation and wait for native readback.
+See the [native input contract](./kenwood-ts890-network.md#native-send-and-data-send-audio-inputs).
+
+
+Kenwood declares `RadioTransmitSettings::TunePower` only for a qualified physical
+TX band and confirmed native TX-tuning power row. Addressing uses documented
+transmitter ranges; transverter/drive output, memory TX, unknown XIT offset and
+cross-band offsets withdraw it. Its typed receive-only setter waits for native
+readback and grants no carrier or live power authority. See the
+[tuning-power readback contract](./kenwood-ts890-network.md#physical-transmit-band-tuning-power-readback).
+
+
+Kenwood's native TUNE preflight refreshes target and tuning power through its
+original TX operation before TX2. TuneCarrierControl::IntentLifetime::Backend
+opts into an exact local-intent retirement receipt; the default Caller retains
+other backends' existing routing. Pending/active keying withdraws receive-only
+TunePower editing. TX/RX status declares `hasRadioPttReadback`, so command handoff
+cannot synthesize observed transmit. The
+[carrier contract](./kenwood-ts890-network.md#native-tune-carrier-preflight)
+separates local retirement, queue completion and RF idle; hardware validation
+and live power edits remain pending.

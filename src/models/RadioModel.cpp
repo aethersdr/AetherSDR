@@ -1,4 +1,6 @@
 #include "RadioModel.h"
+#include "core/backends/AdditionalRadioBackends.h"
+#include "models/NetworkRadioLogin.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include <QScopedValueRollback>
 #include "TxController.h"
@@ -596,6 +598,10 @@ void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
 
 void RadioModel::setPcAudioEnabled(bool on)
 {
+    if (m_backend && backendCapabilities().pcAudioRoutingControl) {
+        m_backend->requestPcAudioRouting(on);
+        return;
+    }
     // Gated on the DECLARED NAMESPACE, not on the family string (#5262 M1).
     // The question this asks is "will this backend answer the icom namespace?",
     // and extensionNamespaces is the handshake that states it — a backend
@@ -613,6 +619,10 @@ void RadioModel::setPcAudioEnabled(bool on)
 
 void RadioModel::notePcAudioEnabled(bool on)
 {
+    if (m_backend && backendCapabilities().pcAudioRoutingControl) {
+        m_backend->observePcAudioRouting(on);
+        return;
+    }
     // Same rule as setPcAudioEnabled above: the namespace is the contract.
     if (!backendDeclaresExtension(QStringLiteral("icom"))) {
         return;
@@ -718,6 +728,7 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     // parameter. Keep it neutral so each backend can use the route without
     // adding a family-string branch above the backend seam.
     req.localBindAddress = usableUnicastAddress(sessionBindAddress);
+    populateNetworkRadioParams(req, family);
 
     // The DDC0 rate and the front-end options are preferences the operator sets
     // in Radio Setup's "ANAN Front End" page. READ FROM AnanSettings, NOT FROM
@@ -787,6 +798,9 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
 
 std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
 {
+    if (std::unique_ptr<IRadioBackend> backend = makeAdditionalRadioBackend(family)) {
+        return backend;
+    }
     if (family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0)
         return std::make_unique<hl2::Hl2Backend>();
     // ANAN-G2 (openHPSDR Protocol 2). Like HL2 this is a pure seam backend —
@@ -4658,6 +4672,12 @@ void RadioModel::updateTuneAvailability()
 {
     const SliceModel* slice = txSlice();
     const bool cwMode = slice && slice->mode().startsWith(QLatin1String("CW"));
+    const RadioCapabilities caps = backendCapabilities();
+    if (isConnected() && caps.tuneCarrierControl) {
+        m_transmitModel.setTuneAvailable(slice && caps.tuneCarrierControl->modes.contains(slice->mode()),
+                                         caps.tuneCarrierControl->unavailableReason);
+        return;
+    }
     m_transmitModel.setTuneAvailable(!isConnected() || !cwMode
                                      || backendCapabilities().hasCwTune);
 }
@@ -4665,6 +4685,10 @@ void RadioModel::updateTuneAvailability()
 void RadioModel::publishCapabilities(bool connected)
 {
     const RadioCapabilities caps = backendCapabilities();
+    const QPointer<RadioModel> alive(this);
+    const quint64 settingsGeneration = m_backendReceiverGeneration;
+    m_transmitModel.setRadioTransmitSettings(connected ? caps.radioTransmitSettings : std::nullopt);
+    if (!alive || settingsGeneration != m_backendReceiverGeneration) { return; }
     m_tnfModel.setControlPolicy(connected && m_backend
         ? m_backend->receiveControlPolicy() : ReceiveControlPolicy::Optimistic);
     const int nrsMaximum = connected && caps.nrsLevelControl
@@ -6084,15 +6108,25 @@ bool RadioModel::confirmsReceiveControls() const
 
 bool RadioModel::requestConfirmedReceiveTune(int sliceId, double mhz, IRadioBackend::ReceiveTuneView view)
 {
-    if (QThread::currentThread() != thread() || !confirmsReceiveControls() || !isConnected()
-        || !std::isfinite(mhz)) { return false; }
-    const auto* receiver = slice(sliceId);
+    if (QThread::currentThread() != thread()) { return false; }
+    auto* receiver = slice(sliceId);
+    const auto reject = [receiver]() {
+        if (receiver) { receiver->retireTuneIntent(); }
+        return false;
+    };
+    if (!confirmsReceiveControls() || !isConnected() || !std::isfinite(mhz)) {
+        return reject();
+    }
     if (!receiver || receiver->isLocked() || !sliceMayBelongToUs(sliceId)
-        || !receiveControlPanId(receiver->panId())) { return false; }
+        || !receiveControlPanId(receiver->panId())) { return reject(); }
     const auto control = backendCapabilities().sliceFrequencyControl;
     if (control.authority == SliceFrequencyControl::Authority::Unknown
-        || mhz * 1e6 < control.minimumHz || mhz * 1e6 > control.maximumHz) { return false; }
-    return m_backend->requestReceiveTune(sliceId, mhz * 1e6, view);
+        || mhz * 1e6 < control.minimumHz || mhz * 1e6 > control.maximumHz) { return reject(); }
+    const QPointer<SliceModel> alive(receiver);
+    const quint64 token = receiver->recordTuneIntent(mhz);
+    const bool dispatched = m_backend->requestReceiveTune(sliceId, mhz * 1e6, view);
+    if (!dispatched && alive) { alive->retireTuneIntent(token); }
+    return dispatched;
 }
 
 bool RadioModel::requestReceiveCaptureRecenter(const QString& panId)
@@ -10366,7 +10400,17 @@ SliceModel* RadioModel::receiveCommandSource() const
 void RadioModel::dispatchSliceTune(const SliceTuneRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
-        m_backend->requestSliceTune(source->sliceId(), request);
+        if (source->receiveControlsConfirmed()) {
+            const QPointer<SliceModel> alive(source);
+            const quint64 token = source->recordTuneIntent(request.frequencyHz / 1.0e6);
+            const bool dispatched = m_backend->requestReceiveTune(
+                source->sliceId(), request.frequencyHz, IRadioBackend::ReceiveTuneView::Preserve);
+            if (!dispatched && alive) { alive->retireTuneIntent(token); }
+        } else {
+            m_backend->requestSliceTune(source->sliceId(), request);
+        }
+    } else if (auto* source = qobject_cast<SliceModel*>(sender())) {
+        source->retireTuneIntent();
     }
 }
 
@@ -12447,6 +12491,10 @@ void RadioModel::publishRadioReportedCapacity()
 void RadioModel::applyRadioChanges(const RadioDelta& d)
 {
     bool changed = false;
+    if (d.softwareVersion && *d.softwareVersion != m_version) {
+        adoptSoftwareVersion(*d.softwareVersion);
+        changed = true;
+    }
     if (d.model) {
         m_model = *d.model;
         // #5594 item 3: the table is the fallback, never an override. A radio

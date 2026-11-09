@@ -6,6 +6,13 @@
 #include "gui/MeterViewController.h"
 #include "gui/SmartMtrWidget.h"
 #include "gui/VfoWidget.h"
+#include "models/MeterModel.h"
+#include "models/SliceModel.h"
+#include "core/backends/SliceDelta.h"
+#include <QScopeGuard>
+#include <QLabel>
+#include <QImage>
+#include <cmath>
 
 #include <QApplication>
 #include <QSignalSpy>
@@ -34,6 +41,115 @@ private slots:
         MeterViewController::instance().setSmartMtr(true);
         MeterViewController::instance().setShowExtremes(false);
         MeterViewController::instance().setShowValues(DisplaySettings::MeterValues::None);
+    }
+
+    void radioDisplayDeflectionUsesNativeUnitsAndLinearBar()
+    {
+        MeterViewController::instance().setSmartMtr(false);
+        VfoWidget vfo;
+        vfo.show();
+        DisplayDeflectionReading reading;
+        reading.unit = QStringLiteral("dot");
+        reading.low = 0;
+        reading.high = 70;
+        reading.description = QStringLiteral("Radio display deflection; uncalibrated");
+        reading.value = 0;
+        vfo.setDisplayDeflection(reading);
+        QTest::qWait(60);
+        QLabel* label = nullptr;
+        for (QLabel* candidate : vfo.findChildren<QLabel*>()) {
+            if (candidate->accessibleName() == QStringLiteral("Relative radio display deflection in dots")) {
+                label = candidate;
+                break;
+            }
+        }
+        QVERIFY(label);
+        QCOMPARE(label->text(), QStringLiteral("0 dots"));
+        QCOMPARE(label->accessibleDescription(), reading.description);
+        const auto barPixels = [&vfo, label]() {
+            const QImage image = vfo.grab().toImage().scaled(
+                vfo.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
+            const int y = label->mapTo(&vfo, QPoint(0, label->height() / 2)).y();
+            // Inspect only the left signal-bar portion; numeric label changes
+            // cannot make this assertion pass when the fill is stuck.
+            return image.copy(6, y, (vfo.width() - 12) * 3 / 4, 1);
+        };
+        const QImage empty = barPixels();
+        reading.value = 70;
+        vfo.setDisplayDeflection(reading);
+        QTest::qWait(400);
+        const QImage full = barPixels();
+        reading.value = 35;
+        vfo.setDisplayDeflection(reading);
+        QTest::qWait(1400);
+        const QImage half = barPixels();
+        int fullPixels = 0;
+        int halfPixels = 0;
+        for (int x = 0; x < empty.width(); ++x) {
+            fullPixels += full.pixel(x, 0) != empty.pixel(x, 0);
+            halfPixels += half.pixel(x, 0) != empty.pixel(x, 0);
+        }
+        QVERIFY(fullPixels >= empty.width() - 2);
+        QVERIFY(std::abs(2 * halfPixels - fullPixels) <= 4);
+        QCOMPARE(label->text(), QStringLiteral("35 dots"));
+        QVERIFY(!label->text().contains(QStringLiteral("dBm")));
+        QVERIFY(!label->text().contains(QStringLiteral("dBFS")));
+
+        reading.high = reading.low;
+        vfo.setDisplayDeflection(reading);
+        QCOMPARE(label->text(), QStringLiteral("— dots"));
+        QCOMPARE(barPixels(), empty); // Invalid range cannot divide by zero or fill.
+        reading.high = 70;
+        reading.value.reset(); // The model's stale/removed sample representation.
+        vfo.setDisplayDeflection(reading);
+        QCOMPARE(label->text(), QStringLiteral("— dots"));
+        QCOMPARE(barPixels(), empty);
+        vfo.setDisplayDeflection(DisplayDeflectionReading{});
+        QCOMPARE(label->text(), QStringLiteral("— dots"));
+        QCOMPARE(barPixels(), empty);
+
+        MeterViewController::instance().setSmartMtr(true);
+        reading.value = 35;
+        vfo.setDisplayDeflection(reading);
+        SmartMtrWidget* smart = vfo.findChild<SmartMtrWidget*>();
+        QVERIFY(smart);
+        smart->grab();
+        QVERIFY(smart->extremeLabels().isEmpty());
+        QVERIFY(smart->accessibleDescription().contains(QStringLiteral("does not support")));
+        QVERIFY(smart->accessibleDescription().contains(QStringLiteral("dots")));
+
+        const DisplaySettings::TxMeter previousTxMeter = MeterViewController::instance().txMeter();
+        const auto restoreTxMeter = qScopeGuard([previousTxMeter] {
+            MeterViewController::instance().setTxMeter(previousTxMeter);
+        });
+        MeterViewController::instance().setTxMeter(DisplaySettings::TxMeter::None);
+        vfo.setTransmitting(true);
+        smart->grab();
+        QVERIFY(smart->extremeLabels().isEmpty());
+        QVERIFY(smart->accessibleDescription().contains(QStringLiteral("does not support")));
+        // A transmitting flag with TX meter=None still selects the RX scale;
+        // the raw sample must never be relabelled as ADC-relative dBFS.
+        SliceModel slice(0);
+        SliceDelta delta;
+        delta.txSlice = true;
+        slice.applyChanges(delta);
+        vfo.setSlice(&slice);
+        vfo.setDisplayDeflection(reading);
+        smart->grab();
+        QVERIFY(smart->extremeLabels().isEmpty());
+        QVERIFY(smart->accessibleDescription().contains(QStringLiteral("does not support")));
+        vfo.setTransmitting(false);
+        vfo.setSlice(nullptr);
+
+        // Switching an unavailable raw scale to unavailable ADC-relative RF
+        // must still change the unit, even when both samples are absent.
+        vfo.setDisplayDeflection(DisplayDeflectionReading{});
+        vfo.setRelativeSignalLevel(std::nullopt);
+        QVERIFY(!vfo.displayDeflection());
+        QCOMPARE(label->text(), QStringLiteral("— dBFS"));
+        vfo.setSignalLevel(-73);
+        QVERIFY(!vfo.relativeSignalLevel());
+        QCOMPARE(label->text(), QStringLiteral("-73 dBm"));
     }
 
     void barWithoutValueLabelsDoesNotInvalidateOverlay_data()

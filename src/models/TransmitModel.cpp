@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QTimer>
 #include <QThread>
+#include <QPointer>
 #include <cmath>
 #include <utility>
 
@@ -25,6 +26,23 @@ bool TransmitModel::refuseControlOffThread() const
     return true;
 }
 
+void TransmitModel::setRadioTransmitSettings(const std::optional<RadioTransmitSettings>& settings)
+{
+    if (m_radioTransmitSettings == settings) { return; }
+    m_radioTransmitSettings = settings;
+    invalidateControlIntents();
+    emit settingSupportChanged();
+}
+
+bool TransmitModel::dispatchRadioSetting(const TransmitControlRequest& request)
+{
+    if (!m_radioTransmitSettings) { return false; }
+    // Unsupported settings still reach the normal refusal/reporting route,
+    // but neither they nor pending radio writes replace observed state.
+    emit controlRequested(request);
+    return true;
+}
+
 void TransmitModel::resetDaxSessionState()
 {
     // Observations and unanswered requests belong to one session. Keep ticket
@@ -38,6 +56,7 @@ void TransmitModel::resetDaxSessionState()
 void TransmitModel::resetState()
 {
     m_confirmReceiveCwPitch = false;
+    m_radioTransmitSettings.reset();
     for (quint64& revision : m_controlIntentRevisions) { ++revision; }
     // A request of the ending session is answered, if at all, by a dead link.
     m_pendingVoxAnswers.clear();
@@ -372,6 +391,7 @@ void TransmitModel::setApdEnabled(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::ApdEnabled;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     if (m_apdEnabled != on) {
         m_apdEnabled = on;
         emit apdStateChanged();
@@ -457,6 +477,7 @@ void TransmitModel::setRfPower(int power)
     const auto field = TransmitControlRequest::Field::RfPower;
     const auto current = captureControlIntent(field);
     power = qBound(0, power, 100);
+    if (dispatchRadioSetting({field, power})) { return; }
     // This is a REQUEST until the radio echoes it back (#5733 review). Recorded
     // before the emit so any listener that reads rfPowerIsFromRadio() off
     // rfPowerChanged sees the request, not the previous confirmed answer.
@@ -489,6 +510,7 @@ void TransmitModel::setTunePower(int power)
     const auto field = TransmitControlRequest::Field::TunePower;
     const auto current = captureControlIntent(field);
     power = qBound(0, power, 100);
+    if (dispatchRadioSetting({field, power})) { return; }
     if (m_tunePower != power) {
         m_tunePower = power;
         emit tunePowerChanged(power);
@@ -513,12 +535,24 @@ void TransmitModel::setTuneMode(const QString& mode)
     emit controlRequested({field, mode});
 }
 
-void TransmitModel::setTuneAvailable(bool available)
+void TransmitModel::retirePendingTuneIntent()
 {
-    if (m_tuneAvailable == available) {
+    if (!m_tune) { return; }
+    const QPointer<TransmitModel> alive(this);
+    const quint64 epoch = ++m_tuneIntentEpoch;
+    m_tune = false;
+    emit stateChanged();
+    if (alive && epoch == m_tuneIntentEpoch && !m_tune) { emit tuneChanged(false); }
+}
+
+void TransmitModel::setTuneAvailable(bool available, const QString& reason)
+{
+    const QString currentReason = available ? QString() : reason;
+    if (m_tuneAvailable == available && m_tuneUnavailableReason == currentReason) {
         return;
     }
     m_tuneAvailable = available;
+    m_tuneUnavailableReason = currentReason;
     emit tuneAvailabilityChanged(available);
 }
 
@@ -701,6 +735,7 @@ void TransmitModel::setAtuMemories(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::AtuMemories;
     captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     emit controlRequested({field, on});
 }
 
@@ -782,6 +817,7 @@ void TransmitModel::setMicSelection(const QString& input)
     const auto field = TransmitControlRequest::Field::MicInput;
     const auto current = captureControlIntent(field);
     const QString normalized = input.toUpper();
+    if (dispatchRadioSetting({field, normalized})) { return; }
     if (m_micSelection != normalized) {
         m_micSelection = normalized;
         emit micStateChanged();
@@ -796,6 +832,7 @@ void TransmitModel::setMicLevel(int level)
     const auto field = TransmitControlRequest::Field::MicGain;
     const auto current = captureControlIntent(field);
     level = qBound(0, level, 100);
+    if (dispatchRadioSetting({field, level})) { return; }
     if (m_micLevel != level) {
         m_micLevel = level;
         emit micStateChanged();  // PhoneCwApplet's mic slider binds to this
@@ -824,6 +861,7 @@ void TransmitModel::setSpeechProcessorEnable(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::ProcessorEnabled;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, ProcessorSetting{on, m_speechProcLevel}})) { return; }
     // Pcap confirmed: SmartSDR uses speech_processor_enable (not compander).
     // Optimistic update: radio does not echo speech_processor_enable in
     // incremental status — only in the initial full dump on connect.
@@ -845,6 +883,7 @@ void TransmitModel::setSpeechProcessorLevel(int level)
     // widen the normalized domain for an evidenced continuous control.
     // Optimistic update: Flex does not echo in incremental status.
     level = qBound(0, level, m_speechProcLevelMaximum);
+    if (dispatchRadioSetting({field, ProcessorSetting{m_speechProcEnable, level}})) { return; }
     m_speechProcLevel = level;
     emit micStateChanged();
     if (!current()) { return; }
@@ -894,6 +933,7 @@ void TransmitModel::setDax(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::Dax;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     // Optimistic local update mirroring the sibling mic setters; the radio's
     // dax= status echo (parsed above, under the micChanged path) supersedes.
     if (m_daxOn != on) {
@@ -916,6 +956,7 @@ void TransmitModel::setSbMonitor(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::MonitorEnabled;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, MonitorSetting{on, m_monGainSb}})) { return; }
     // Optimistic update — radio status echo (sb_monitor) supersedes. micStateChanged
     // is the signal the MON button's model->widget sync (syncPhoneFromModel) binds to,
     // matching the sibling setMonGainSb; the sync is guarded by m_updatingFromModel so
@@ -936,6 +977,7 @@ void TransmitModel::setMonGainSb(int gain)
     const auto field = TransmitControlRequest::Field::MonitorLevel;
     const auto current = captureControlIntent(field);
     gain = qBound(0, gain, 100);
+    if (dispatchRadioSetting({field, MonitorSetting{m_sbMonitor, gain}})) { return; }
     m_monGainSb = gain;
     emit micStateChanged();
     if (!current()) { return; }
@@ -959,6 +1001,7 @@ void TransmitModel::setVoxEnable(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::VoxEnabled;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, VoxSetting{on, m_voxLevel, m_voxDelay}})) { return; }
     m_voxEnable = on;  // optimistic update — radio may not echo
     // ...so until the radio confirms it, the model says what was ASKED for.
     m_voxUnconfirmed = true;
@@ -1010,6 +1053,7 @@ void TransmitModel::setVoxLevel(int level)
     const auto field = TransmitControlRequest::Field::VoxLevel;
     const auto current = captureControlIntent(field);
     level = qBound(0, level, 100);
+    if (dispatchRadioSetting({field, VoxSetting{m_voxEnable, level, m_voxDelay}})) { return; }
     m_voxLevel = level;
     emit phoneStateChanged();
     if (!current()) { return; }
@@ -1024,6 +1068,7 @@ void TransmitModel::setVoxDelay(int delay)
     const auto field = TransmitControlRequest::Field::VoxDelay;
     const auto current = captureControlIntent(field);
     delay = qBound(0, delay, 100);
+    if (dispatchRadioSetting({field, VoxSetting{m_voxEnable, m_voxLevel, delay}})) { return; }
     m_voxDelay = delay;
     emit phoneStateChanged();
     if (!current()) { return; }
@@ -1037,6 +1082,7 @@ void TransmitModel::setMicBoost(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::MicBoost;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     m_micBoost = on;  // optimistic — radio sends no status echo (#1045)
     emit phoneStateChanged();
     if (!current()) { return; }
@@ -1048,6 +1094,7 @@ void TransmitModel::setMicBias(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::MicBias;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     m_micBias = on;  // optimistic — radio sends no status echo (#1045)
     emit phoneStateChanged();
     if (!current()) { return; }
@@ -1070,6 +1117,7 @@ void TransmitModel::setAmCarrierLevel(int level)
     const auto field = TransmitControlRequest::Field::AmCarrier;
     const auto current = captureControlIntent(field);
     level = qBound(0, level, 100);
+    if (dispatchRadioSetting({field, level})) { return; }
     if (m_amCarrierLevel != level) {
         m_amCarrierLevel = level;  // optimistic — radio status echo supersedes
         emit phoneStateChanged();
@@ -1083,6 +1131,7 @@ void TransmitModel::setDexp(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::ExpanderEnabled;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     // FlexLib v4.2.18 and a SmartSDR v4.2.20 capture show DEXP is the
     // radio's compander control; older dexp/noise_gate keys are rejected.
     m_dexpOn = on;
@@ -1100,6 +1149,7 @@ void TransmitModel::setDexpLevel(int level)
     const auto field = TransmitControlRequest::Field::ExpanderLevel;
     const auto current = captureControlIntent(field);
     level = qBound(0, level, 100);
+    if (dispatchRadioSetting({field, level})) { return; }
     // See setDexp(): SmartSDR backs DEXP level with compander_level.
     m_dexpLevel = level;
     m_companderLevel = level;
@@ -1132,6 +1182,7 @@ void TransmitModel::setTxFilter(int lowHz, int highHz)
     const auto current = captureControlIntent(field);
     lowHz  = qBound(kTxFilterMinHz, lowHz, kTxFilterMaxHz - kTxFilterMinWidthHz);
     highHz = qBound(lowHz + kTxFilterMinWidthHz, highHz, kTxFilterMaxHz);
+    if (dispatchRadioSetting({field, TxPassband{lowHz, highHz}})) { return; }
     if (m_txFilterLow != lowHz || m_txFilterHigh != highHz) {
         m_txFilterLow = lowHz;
         m_txFilterHigh = highHz;
@@ -1153,6 +1204,7 @@ void TransmitModel::setCwSpeed(int wpm)
     const auto field = TransmitControlRequest::Field::CwSpeed;
     const auto current = captureControlIntent(field);
     wpm = qBound(5, wpm, 100);
+    if (dispatchRadioSetting({field, wpm})) { return; }
     const bool speedChanged = (m_cwSpeed != wpm);
     if (speedChanged) {
         m_cwSpeed = wpm;
@@ -1199,6 +1251,7 @@ void TransmitModel::setCwPitch(int hz)
     const auto field = TransmitControlRequest::Field::CwPitch;
     const auto current = captureControlIntent(field);
     hz = qBound(100, hz, 6000);
+    if (dispatchRadioSetting({field, hz})) { return; }
     if (m_confirmReceiveCwPitch) {
         emit cwPitchCommandIssued(hz);
         return;
@@ -1220,6 +1273,7 @@ void TransmitModel::setCwBreakIn(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::CwBreakIn;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     if (m_cwBreakIn != on) {
         m_cwBreakIn = on;
         emit phoneStateChanged();
@@ -1236,6 +1290,7 @@ void TransmitModel::setCwDelay(int ms)
     const auto field = TransmitControlRequest::Field::CwDelay;
     const auto current = captureControlIntent(field);
     ms = qBound(0, ms, 2000);
+    if (dispatchRadioSetting({field, ms})) { return; }
     // The operator's explicit word on the break-in delay — the value the "hold"
     // opt-in (#5288) re-asserts after a speed change. Recorded even when hold is
     // off so enabling it later picks up the current delay with no surprise; a
@@ -1274,6 +1329,7 @@ void TransmitModel::setCwSidetone(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::CwSidetone;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     if (m_cwSidetone != on) {
         m_cwSidetone = on;  // optimistic — radio status echo supersedes
         emit phoneStateChanged();
@@ -1287,6 +1343,7 @@ void TransmitModel::setCwIambic(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::CwIambic;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     // Optimistic update — radio firmware v1.4.0.0 doesn't echo `iambic`
     // back in subsequent transmit statuses, so without this our local
     // state goes stale after every user toggle.
@@ -1304,6 +1361,7 @@ void TransmitModel::setCwIambicMode(int mode)
     const auto field = TransmitControlRequest::Field::CwIambicMode;
     const auto current = captureControlIntent(field);
     mode = qBound(0, mode, 1);
+    if (dispatchRadioSetting({field, mode})) { return; }
     if (m_cwIambicMode != mode) {
         m_cwIambicMode = mode;
         emit phoneStateChanged();
@@ -1317,6 +1375,7 @@ void TransmitModel::setCwSwapPaddles(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::CwSwap;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     if (m_cwSwapPaddles != on) {
         m_cwSwapPaddles = on;
         emit phoneStateChanged();
@@ -1330,6 +1389,7 @@ void TransmitModel::setCwlEnabled(bool on)
     if (refuseControlOffThread()) { return; }
     const auto field = TransmitControlRequest::Field::CwlEnabled;
     const auto current = captureControlIntent(field);
+    if (dispatchRadioSetting({field, on})) { return; }
     if (m_cwlEnabled != on) {
         m_cwlEnabled = on;
         emit phoneStateChanged();
@@ -1344,6 +1404,7 @@ void TransmitModel::setMonGainCw(int gain)
     const auto field = TransmitControlRequest::Field::CwMonitorGain;
     const auto current = captureControlIntent(field);
     gain = qBound(0, gain, 100);
+    if (dispatchRadioSetting({field, gain})) { return; }
     if (m_monGainCw != gain) {
         m_monGainCw = gain;
         emit phoneStateChanged();
@@ -1358,6 +1419,7 @@ void TransmitModel::setMonPanCw(int pan)
     const auto field = TransmitControlRequest::Field::CwMonitorPan;
     const auto current = captureControlIntent(field);
     pan = qBound(0, pan, 100);
+    if (dispatchRadioSetting({field, pan})) { return; }
     if (m_monPanCw != pan) {
         m_monPanCw = pan;
         emit phoneStateChanged();

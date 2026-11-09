@@ -214,7 +214,9 @@ See [DSP Noise Mitigation](./dsp-noise-mitigation.md) and [Aetherial Audio](./ae
 
 - **APF** (audio peaking filter) toggle and level are in the **P/CW** applet in
   CW modes, as well as on the VFO flag. The level slider is inactive until APF
-  is switched on.
+  is switched on and the radio supports that shared adjustment scale.
+  Unsupported controls remain visible and dimmed with a reason. TS-890S native
+  APF bandwidth, shift and gain are configured in **Native Receive DSP** instead.
 - The CW decoder panel appears below the waterfall in CW modes. See
   [CW Decoder](./cw-decoder.md).
 

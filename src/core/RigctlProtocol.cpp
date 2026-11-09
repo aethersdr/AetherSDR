@@ -1,4 +1,5 @@
 #include "RigctlProtocol.h"
+#include "ReceiveModeVocabulary.h"
 #include <utility>
 #include "LogManager.h"
 #include "models/PanadapterModel.h"
@@ -8,15 +9,49 @@
 
 #include <QLocale>
 #include <QMetaObject>
+#include <QPointer>
 #include <QStringList>
 #include <QtGlobal>
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <limits>
+#include <functional>
 
 namespace AetherSDR {
 
 namespace {
+
+void queueReceiveModeChange(RadioModel* model, SliceModel* slice, std::function<void()> change, bool bindFilterContext = false)
+{
+    if (!slice->receiveControlsConfirmed()) {
+        QMetaObject::invokeMethod(slice, std::move(change), Qt::QueuedConnection);
+        return;
+    }
+    const QPointer<RadioModel> owner(model);
+    const QPointer<SliceModel> target(slice);
+    const RadioControlSession session = model->controlSession();
+    const quint64 epoch = slice->receiveSessionGeneration();
+    const quint64 filterContext = slice->receiveFilterContextGeneration();
+    QMetaObject::invokeMethod(slice, [owner, target, session, epoch, filterContext, bindFilterContext, change = std::move(change)] {
+        if (owner && target && owner->controlSessionCurrent(session)
+            && owner->slice(target->sliceId()) == target
+            && target->receiveSessionGeneration() == epoch
+            && (!bindFilterContext || target->receiveFilterContextGeneration() == filterContext)) { change(); }
+    }, Qt::QueuedConnection);
+}
+
+std::optional<int> confirmedReceiveFilterWidth(const RadioModel* model, const SliceModel* slice)
+{
+    if (!model || !slice || model->slice(slice->sliceId()) != slice
+        || !model->controlSessionCurrent(model->controlSession())) { return {}; }
+    const SliceModel::ReceiveObservation& observed = slice->receiveObservation();
+    if (!observed.mode || *observed.mode != slice->mode() || !observed.filterLowHz || !observed.filterHighHz) { return {}; }
+    const qint64 width = qint64(*observed.filterHighHz) - qint64(*observed.filterLowHz);
+    if (width <= 0 || width > std::numeric_limits<int>::max()) { return {}; }
+    return static_cast<int>(width);
+}
 
 static bool isVfoName(const QString& s)
 {
@@ -327,10 +362,53 @@ QString RigctlProtocol::smartsdrToHamlib(const QString& mode)
     return map.value(mode.toUpper(), "USB");
 }
 
+QString RigctlProtocol::receiveModeToHamlib(const SliceModel* slice) const
+{
+    if (!slice) { return {}; }
+    if (!usesDeclaredReceiveModes(m_model, slice)) { return smartsdrToHamlib(slice->mode()); }
+    if (!declaredReceiveModes(m_model, slice, false).contains(slice->mode())) { return {}; }
+    static const QMap<QString, QString> modes{
+        {"LSB", "LSB"}, {"USB", "USB"}, {"CW", "CW"}, {"CWR", "CWR"},
+        {"FM", "FM"}, {"AM", "AM"}, {"RTTY", "RTTY"}, {"RTTYR", "RTTYR"},
+        {"PSK", "PSK"}, {"PSKR", "PSKR"}, {"DIGL", "PKTLSB"}, {"DIGU", "PKTUSB"},
+        {"DFM", "PKTFM"}, {"DAM", "PKTAM"}, {"SAM", "AMS"}, {"NFM", "FMN"}};
+    const QString mapped = modes.value(slice->mode());
+    return !mapped.isEmpty() ? mapped : (hamlibModeFlag(slice->mode()) != 0 ? slice->mode() : QString());
+}
+
+QString RigctlProtocol::receiveModeFromHamlib(const SliceModel* slice, const QString& mode) const
+{
+    if (!usesDeclaredReceiveModes(m_model, slice)) { return hamlibToSmartSDR(mode); }
+    if (hamlibModeFlag(mode) == 0) { return {}; }
+    const QStringList modes = declaredReceiveModes(m_model, slice, true);
+    if (modes.contains(mode)) { return mode; }
+    static const QMap<QString, QString> aliases{
+        {"PKTLSB", "DIGL"}, {"PKTUSB", "DIGU"}, {"PKTFM", "DFM"},
+        {"PKTAM", "DAM"}, {"AMS", "SAM"}, {"FMN", "NFM"}};
+    const QString native = aliases.value(mode, mode);
+    return modes.contains(native) ? native : QString();
+}
+
+QString RigctlProtocol::receiveModeTokens(const SliceModel* slice) const
+{
+    if (!usesDeclaredReceiveModes(m_model, slice)) {
+        return QStringLiteral("USB LSB CW CWR AM AMS FM PKTUSB PKTLSB RTTY");
+    }
+    QStringList tokens;
+    const QStringList modes = declaredReceiveModes(m_model, slice, false);
+    for (const QString& mode : modes) {
+        static const QMap<QString, QString> aliases{{"DIGL", "PKTLSB"}, {"DIGU", "PKTUSB"},
+            {"DFM", "PKTFM"}, {"DAM", "PKTAM"}, {"SAM", "AMS"}, {"NFM", "FMN"}};
+        const QString token = aliases.value(mode, mode);
+        if (hamlibModeFlag(token) != 0 && !tokens.contains(token)) { tokens.append(token); }
+    }
+    return tokens.join(' ');
+}
+
 std::pair<int, int> RigctlProtocol::passbandEdges(const QString& m, int passband)
 {
-    if (m == "CW" || m == "CWL"
-        || m == "AM" || m == "SAM" || m == "DSB"
+    if (m == "CW" || m == "CWL" || m == "CWR"
+        || m == "AM" || m == "DAM" || m == "SAM" || m == "DSB"
         || m == "FM" || m == "NFM" || m == "DFM") {
         // Symmetric around 0 — CW BFO offset and AM/FM carrier are at audio DC.
         return {-passband / 2, passband / 2};
@@ -364,18 +442,19 @@ QString RigctlProtocol::hamlibToSmartSDR(const QString& mode)
 }
 
 // Hamlib mode flag values (from hamlib/rig.h RIG_MODE_*)
-int RigctlProtocol::hamlibModeFlag(const QString& mode)
+quint64 RigctlProtocol::hamlibModeFlag(const QString& mode)
 {
-    static const QMap<QString, int> map = {
+    static const QMap<QString, quint64> map = {
         {"AM",     0x1},    {"CW",     0x2},
         {"USB",    0x4},    {"LSB",    0x8},
         {"RTTY",   0x10},   {"FM",     0x20},
         {"WFM",    0x40},   {"CWR",    0x80},
         {"RTTYR",  0x100},  {"AMS",    0x200},
         {"PKTLSB", 0x400},  {"PKTUSB", 0x800},
-        {"PKTFM",  0x1000},
+        {"DSB", (1ULL << 19)}, {"PKTFM",  0x1000}, {"PKTAM", (1ULL << 22)},
+        {"PSK", (1ULL << 30)}, {"PSKR", (1ULL << 31)}, {"FMN", (1ULL << 21)},
     };
-    return map.value(mode, 0x4);
+    return map.value(mode, 0);
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -638,8 +717,7 @@ QString RigctlProtocol::processCommand(const QString& cmd)
             return vfoList + '\n';
         }
         if (name == "get_modes") {
-            static const QString kModes =
-                QStringLiteral("USB LSB CW CWR AM AMS FM PKTUSB PKTLSB RTTY");
+            const QString kModes = receiveModeTokens(currentSlice());
             if (m_extended)
                 return QStringLiteral("get_modes:\nModes: %1\n").arg(kModes) + rprt(0);
             return kModes + "\n";
@@ -867,9 +945,17 @@ QString RigctlProtocol::cmdGetMode(const QString& vfo)
     auto* slice = takeVfoPrefix(parts);
     if (!slice) return rprt(-8);
 
-    QString hamlibMode = smartsdrToHamlib(slice->mode());
-    int passband = slice->filterHigh() - slice->filterLow();
-    if (passband < 0) passband = -passband;
+    QString hamlibMode = receiveModeToHamlib(slice);
+    if (hamlibMode.isEmpty()) { return rprt(-8); }
+    int passband = 0;
+    if (slice->receiveControlsConfirmed()) {
+        const std::optional<int> width = confirmedReceiveFilterWidth(m_model, slice);
+        if (!width) { return rprt(-11); }
+        passband = *width;
+    } else {
+        passband = slice->filterHigh() - slice->filterLow();
+        if (passband < 0) { passband = -passband; }
+    }
 
     if (m_extended) {
         return QStringLiteral("get_mode:\nMode: %1\nPassband: %2\n").arg(hamlibMode).arg(passband)
@@ -890,8 +976,7 @@ QString RigctlProtocol::cmdSetMode(const QString& args)
     QString hamlibMode = parts[0].toUpper();
 
     if (hamlibMode == "?") {
-        static const QString kModes =
-            QStringLiteral("USB LSB CW CWR AM AMS FM PKTUSB PKTLSB RTTY");
+        const QString kModes = receiveModeTokens(slice);
         if (m_extended)
             return QStringLiteral("set_mode:\nModes: %1\nPassbands: 0\n").arg(kModes) + rprt(0);
         return kModes + "\n";
@@ -906,16 +991,42 @@ QString RigctlProtocol::cmdSetMode(const QString& args)
     }
     if (!slice) return rprt(-8);
 
-    QString sdrMode = hamlibToSmartSDR(hamlibMode);
+    QString sdrMode = receiveModeFromHamlib(slice, hamlibMode);
+    if (sdrMode.isEmpty()) { return rprt(-1); }
+    std::optional<std::pair<int, int>> nativeEdges;
+    if (usesDeclaredReceiveModes(m_model, slice) && parts.size() >= 2) {
+        bool validWidth = false;
+        const int width = parts[1].toInt(&validWidth);
+        if (!validWidth || width < 0 || width > std::numeric_limits<int>::max() - 95) { return rprt(-1); }
+        // A mode handoff needs actual readback before its filter bank is known.
+        // Refuse an inseparable mode+width request rather than use old geometry.
+        if (width > 0) {
+            if (sdrMode != slice->mode()) { return rprt(-8); }
+            const auto filters = m_model->backendCapabilities().receiveFilterControl;
+            bool qualified = false;
+            if (filters) {
+                std::pair<int, int> edges = passbandEdges(sdrMode, width);
+                if (sdrMode == "LSB" || sdrMode == "DIGL") { edges = {-95 - width, -95}; }
+                else if (sdrMode == "USB" || sdrMode == "DIGU") { edges = {95, 95 + width}; }
+                const auto [low, high] = edges;
+                for (const ReceiveFilterMode& range : filters->modes) {
+                    if (range.mode == sdrMode && width >= range.minimumWidthHz && width <= range.maximumWidthHz
+                        && low >= range.minimumLowHz && low <= range.maximumLowHz
+                        && high >= range.minimumHighHz && high <= range.maximumHighHz) { qualified = true; nativeEdges = edges; }
+                }
+            }
+            if (!qualified) { return rprt(-8); }
+        }
+    }
     // A FreeDV slice reports as PKTUSB/PKTLSB; the same mode coming back must
     // not switch the slice out of FreeDV.
     if (slice->mode().startsWith(QLatin1String("FDV"))
         && smartsdrToHamlib(slice->mode()) == hamlibMode)
         sdrMode = slice->mode();
 
-    QMetaObject::invokeMethod(slice, [slice, sdrMode]() {
+    queueReceiveModeChange(m_model, slice, [slice, sdrMode]() {
         slice->setMode(sdrMode);
-    }, Qt::QueuedConnection);
+    });
 
     // Set passband if provided and > 0. Hamlib's passband is the filter
     // *width* in Hz; SmartSDR's `filt` command takes absolute lo/hi audio
@@ -925,10 +1036,11 @@ QString RigctlProtocol::cmdSetMode(const QString& args)
         bool ok;
         int passband = parts[1].toInt(&ok);
         if (ok && passband > 0) {
-            QMetaObject::invokeMethod(slice, [slice, passband]() {
-                const auto [lo, hi] = passbandEdges(slice->mode(), passband);
+            queueReceiveModeChange(m_model, slice, [slice, passband, nativeEdges, sdrMode]() {
+                if (nativeEdges && slice->mode() != sdrMode) { return; }
+                const auto [lo, hi] = nativeEdges ? *nativeEdges : passbandEdges(slice->mode(), passband);
                 slice->setFilterWidth(lo, hi);
-            }, Qt::QueuedConnection);
+            }, true);
         }
     }
 
@@ -1726,6 +1838,23 @@ QString RigctlProtocol::cmdDumpState()
     //             CWR=0x80, AMS=0x200, PKTLSB=0x400, PKTUSB=0x800
     // Combined: 0x4|0x8|0x2|0x80|0x1|0x20|0x10|0x200|0x800|0x400 = 0xEBF
 
+    const SliceModel* receiver = currentSlice();
+    const bool declared = usesDeclaredReceiveModes(m_model, receiver);
+    QString receiveMask = QStringLiteral("0xebf");
+    QString receiveRange = QStringLiteral("30000.000000 54000000.000000");
+    if (declared) {
+        const RadioCapabilities caps = m_model->backendCapabilities();
+        const double minimum = caps.tuningMinHz;
+        const double maximum = caps.tuningMaxHz;
+        if (!m_model->isConnected() || !std::isfinite(minimum) || !std::isfinite(maximum)
+            || minimum < 0 || maximum <= minimum || maximum >= std::ldexp(1.0, 63)) { return rprt(-8); }
+        quint64 flags = 0;
+        for (const QString& mode : receiveModeTokens(receiver).split(' ', Qt::SkipEmptyParts)) { flags |= hamlibModeFlag(mode); }
+        if (flags == 0) { return rprt(-8); }
+        receiveMask = QStringLiteral("0x%1").arg(flags, 0, 16);
+        receiveRange = QStringLiteral("%1 %2").arg(minimum, 0, 'f', 6).arg(maximum, 0, 'f', 6);
+    }
+
     // Protocol v1 dump_state matching Hamlib 4.6.5 netrigctl_open().
     // Every field must be present or WSJT-X times out waiting for data.
     QString dump;
@@ -1733,24 +1862,43 @@ QString RigctlProtocol::cmdDumpState()
     dump += "2\n";                       // rig model = NET rigctl
     dump += "0\n";                       // ITU region
     // RX range
-    dump += "30000.000000 54000000.000000 0xebf -1 -1 0x40000003 0x3\n";
+    dump += receiveRange + " " + receiveMask + " -1 -1 0x40000003 0x3\n";
     dump += "0 0 0 0 0 0 0\n";          // end RX range
     // TX range
     dump += "30000.000000 54000000.000000 0xebf 1 100000 0x40000003 0x3\n";
     dump += "0 0 0 0 0 0 0\n";          // end TX range
     // Tuning steps
-    dump += "0xebf 1\n";
-    dump += "0xebf 10\n";
-    dump += "0xebf 100\n";
-    dump += "0xebf 1000\n";
+    dump += receiveMask + " 1\n";
+    dump += receiveMask + " 10\n";
+    dump += receiveMask + " 100\n";
+    dump += receiveMask + " 1000\n";
     dump += "0 0\n";                     // end tuning steps
     // Filters
-    dump += "0x2 500\n";
-    dump += "0x2 200\n";
-    dump += "0xc 2400\n";
-    dump += "0xc 1800\n";
-    dump += "0x1 6000\n";
-    dump += "0x20 12000\n";
+    if (declared) {
+        const auto filters = m_model->backendCapabilities().receiveFilterControl;
+        if (filters) {
+            const QStringList advertised = receiveModeTokens(receiver).split(' ', Qt::SkipEmptyParts);
+            for (const ReceiveFilterMode& range : filters->modes) {
+                QString token = range.mode;
+                if (token == "DIGL") { token = "PKTLSB"; }
+                else if (token == "DIGU") { token = "PKTUSB"; }
+                if (!advertised.contains(token)) { continue; }
+                const quint64 flag = hamlibModeFlag(token);
+                for (const int width : {200, 500, 1800, 2400}) {
+                    if (width >= range.minimumWidthHz && width <= range.maximumWidthHz) {
+                        dump += QStringLiteral("0x%1 %2\n").arg(flag, 0, 16).arg(width);
+                    }
+                }
+            }
+        }
+    } else {
+        dump += "0x2 500\n";
+        dump += "0x2 200\n";
+        dump += "0xc 2400\n";
+        dump += "0xc 1800\n";
+        dump += "0x1 6000\n";
+        dump += "0x20 12000\n";
+    }
     dump += "0 0\n";                     // end filters
     // Max RIT/XIT/IF shift/announces
     dump += "9999\n";
@@ -2276,8 +2424,16 @@ QString RigctlProtocol::cmdGetVfoInfo(const QString& arg)
     if (!slice) return rprt(-8);
 
     const long long hz      = static_cast<long long>(std::round(slice->frequency() * 1e6));
-    const QString hamlibMode = smartsdrToHamlib(slice->mode());
-    const int passband      = qAbs(slice->filterHigh() - slice->filterLow());
+    const QString hamlibMode = receiveModeToHamlib(slice);
+    if (hamlibMode.isEmpty()) { return rprt(-8); }
+    int passband = 0;
+    if (slice->receiveControlsConfirmed()) {
+        const std::optional<int> width = confirmedReceiveFilterWidth(m_model, slice);
+        if (!width) { return rprt(-11); }
+        passband = *width;
+    } else {
+        passband = qAbs(slice->filterHigh() - slice->filterLow());
+    }
 
     // Split only when THIS client engaged it (see clientSplitActive), keeping
     // independent per-slice ports simplex for multi-instance WSJT-X (#4851).

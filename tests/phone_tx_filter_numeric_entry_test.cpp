@@ -112,11 +112,13 @@ int main(int argc, char** argv)
     QWidget* txFilterControls = applet.findChild<QWidget*>(QStringLiteral("txFilterControls"));
     check(txFilterControls != nullptr, "TX filter controls have one capability-gated container");
     applet.setTxFilterControlsAvailable(false);
-    check(txFilterControls && txFilterControls->isHidden(),
-          "an unsupported TX cutoff editor is hidden as a complete section");
+    check(txFilterControls && !txFilterControls->isHidden() && !txFilterControls->isEnabled()
+              && !txFilterControls->accessibleDescription().isEmpty(),
+          "an unavailable TX cutoff editor stays visible and dimmed with an accessible reason");
     applet.setTxFilterControlsAvailable(true);
-    check(txFilterControls && !txFilterControls->isHidden(),
-          "a supported TX cutoff editor is restored without rebuilding the applet");
+    check(txFilterControls && !txFilterControls->isHidden() && txFilterControls->isEnabled()
+              && txFilterControls->accessibleDescription().isEmpty(),
+          "a supported TX cutoff editor is enabled without rebuilding the applet");
 
     // This target intentionally does not link the whole MainWindow. Inspect
     // the owning fan-out so deleting the capability-to-widget call still fails

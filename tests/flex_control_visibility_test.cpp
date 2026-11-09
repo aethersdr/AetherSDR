@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QGroupBox>
 #include <QLabel>
+#include <QPushButton>
 #include <QtTest>
 #include <memory>
 
@@ -14,6 +15,7 @@ class RadioSetupDialogTestAccess {
 public:
     static QWidget* infoField(RadioSetupDialog& dialog) { return dialog.m_flexControlInfoField; }
     static QGroupBox* knobGroup(RadioSetupDialog& dialog) { return dialog.m_flexControlGroup; }
+    static QWidget* phonePage(RadioSetupDialog& dialog) { return dialog.buildPhoneCwTab(); }
 };
 }
 using namespace AetherSDR;
@@ -42,6 +44,39 @@ public:
 class FlexControlVisibilityTest : public QObject {
     Q_OBJECT
 private slots:
+    void nativeKeyerSettingsUseSupportAndReadback()
+    {
+        RadioModel model;
+        auto owned = std::make_unique<CapabilityBackend>();
+        CapabilityBackend* source = owned.get();
+        source->connected = true;
+        using Field = TransmitControlRequest::Field;
+        source->caps.radioTransmitSettings = RadioTransmitSettings{{Field::CwIambicMode, Field::CwSwap}};
+        model.setBackendForTest(std::move(owned), QStringLiteral("native-settings"));
+        model.transmitModel().setRadioTransmitSettings(source->caps.radioTransmitSettings);
+        RadioSetupDialog dialog(&model);
+        std::unique_ptr<QWidget> page(RadioSetupDialogTestAccess::phonePage(dialog));
+        QPushButton* modeA = page->findChild<QPushButton*>(QStringLiteral("radioCwModeA"));
+        QPushButton* modeB = page->findChild<QPushButton*>(QStringLiteral("radioCwModeB"));
+        QPushButton* swap = page->findChild<QPushButton*>(QStringLiteral("radioCwPaddleSwap"));
+        QPushButton* bias = page->findChild<QPushButton*>(QStringLiteral("radioMicBias"));
+        QPushButton* iambic = page->findChild<QPushButton*>(QStringLiteral("radioCwIambicEnabled"));
+        QVERIFY(modeA && modeB && swap && bias && iambic);
+        QVERIFY(modeA->isEnabled() && modeB->isEnabled() && swap->isEnabled());
+        QVERIFY(!bias->isEnabled() && !iambic->isEnabled());
+        QVERIFY(!iambic->accessibleDescription().isEmpty());
+        model.transmitModel().applyChanges(TransmitDelta{.cwIambicMode = 0, .cwSwapPaddles = false});
+        modeB->click();
+        QCoreApplication::processEvents();
+        QVERIFY(modeA->isChecked() && !modeB->isChecked());
+        model.transmitModel().applyChanges(TransmitDelta{.cwIambicMode = 1, .cwSwapPaddles = true});
+        QVERIFY(!modeA->isChecked() && modeB->isChecked() && swap->isChecked());
+        source->caps.radioTransmitSettings.reset();
+        model.transmitModel().setRadioTransmitSettings(std::nullopt);
+        emit model.capabilitiesChanged(true, source->caps);
+        QVERIFY(bias->isEnabled() && iambic->isEnabled());
+    }
+
     void hostSettings_data()
     {
         QTest::addColumn<bool>("radioSupport");
