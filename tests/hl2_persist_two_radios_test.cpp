@@ -159,7 +159,7 @@ int main(int argc, char** argv)
         Session s(kMacA, RadioStateMemory::load(scopeFor(kMacA), caps), k80m);
         check(Session::driveOf(s.backend.currentOperatingState(), "40m") == 45,
               "setup: the shared backend starts as radio A");
-        s.backend.disconnectRadio();
+        s.disconnect();
         s.connect(kMacB, RadioStateMemory::load(scopeFor(kMacB), caps), k80m);
         const RestoredRadioState swapped = s.backend.currentOperatingState();
         check(!Session::hasDrive(swapped, "40m") && !Session::hasLna(swapped, "40m"),

@@ -74,6 +74,14 @@ struct Hl2PersistTestAccess {
         QMetaObject::invokeMethod(b.m_metis, "linkUp", Qt::BlockingQueuedConnection);
         QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
     }
+    // The edge MetisClient::stop() would emit had a stream been up: the
+    // stand-in never sets m_linkUp, so a stop alone stays silent. Queued
+    // behind the stop() disconnectRadio() posted, as on a live link.
+    static void linkDown(Hl2Backend& b)
+    {
+        QMetaObject::invokeMethod(b.m_metis, "linkDown", Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
+    }
     static bool buildsSettled(const Hl2Backend& b)
     {
         for (const Hl2Backend::Receiver& r : b.m_rx) {
@@ -170,6 +178,19 @@ public:
         settle();
         panId = Access::panIdOf(backend, 0);
         checkNoSocket(serial);
+    }
+
+    // disconnectRadio() -> stop() -> linkDown, so the backend's linkDown
+    // handler runs and disconnected() is emitted once, as RadioModel sees it.
+    void disconnect()
+    {
+        QSignalSpy disconnected(&backend, &hl2::Hl2Backend::disconnected);
+        backend.disconnectRadio();
+        Access::linkDown(backend);
+        check(!backend.isConnected(), QStringLiteral("harness: the backend is disconnected"));
+        check(disconnected.count() == 1,
+              QStringLiteral("harness: disconnected() was emitted once (%1)")
+                  .arg(disconnected.count()));
     }
 
     // Receivers B.. open asynchronously (the replay and createPanadapter()).
