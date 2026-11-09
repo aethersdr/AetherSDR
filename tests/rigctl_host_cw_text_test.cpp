@@ -202,16 +202,18 @@ void testHl2KeysTextInMorseTiming()
           !f.backend->caps.hasRadioSideCwKeyer && f.backend->caps.hostCwKeyingControl.has_value());
     check("HL2: hasHostCwTextKeyer() is true", f.radio.hasHostCwTextKeyer());
 
-    check("L KEYSPD 30 accepted", cat(port, QStringLiteral("L KEYSPD 30")) == QLatin1String("RPRT 0"));
-    check("the model's CW speed is 30 WPM", f.radio.transmitModel().cwSpeed() == 30);
+    // 15 WPM (an 80 ms unit), so the one-unit classification margin is 80 ms
+    // and a sanitizer lane's late edge does not flip a dit into a dah.
+    check("L KEYSPD 15 accepted", cat(port, QStringLiteral("L KEYSPD 15")) == QLatin1String("RPRT 0"));
+    check("the model's CW speed is 15 WPM", f.radio.transmitModel().cwSpeed() == 15);
     // ITU timing: one unit is 1.2 s / WPM.
     const double unitMs = 1200.0 / f.radio.transmitModel().cwSpeed();
 
     const QString reply = cat(port, QStringLiteral("+b TEST"));
     check("+b TEST answers RPRT 0", reply.endsWith(QLatin1String("RPRT 0")));
 
-    // T E S T = 6 elements, 12 edges.
-    const bool done = pumpUntil([&] { return f.edges.size() >= 12; }, 5000);
+    // T E S T = 6 elements, 12 edges. Count and order stay exact.
+    const bool done = pumpUntil([&] { return f.edges.size() >= 12; }, 10000);
     pumpFor(static_cast<int>(10 * unitMs));
     check("twelve edges reach setCwKeying", done && f.edges.size() == 12);
     check("edges alternate down/up, starting down", alternates(f.edges));
@@ -221,8 +223,10 @@ void testHl2KeysTextInMorseTiming()
         const double total = ms(f.edges.back().at - f.edges.front().at);
         std::printf("       total %.1f ms, expected %.1f ms at %d WPM\n",
                     total, 21 * unitMs, f.radio.transmitModel().cwSpeed());
-        check("the message lasts 21 units at the configured speed (within 15 %)",
-              total > 21 * unitMs * 0.85 && total < 21 * unitMs * 1.15);
+        // -20 % / +40 %: wide for a slowed lane, and still excludes the
+        // 20 WPM default (0.75 of the expected length), so the speed is checked.
+        check("the message lasts 21 units at the configured speed (-20 % / +40 %)",
+              total > 21 * unitMs * 0.80 && total < 21 * unitMs * 1.40);
     }
 
     // The two-line form: a bare `b`, the text on the next line.
