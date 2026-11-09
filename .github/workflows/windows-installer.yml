@@ -920,9 +920,8 @@ jobs:
   # repository VARIABLE is set. The plan rejects manual tag dispatches and
   # forks for this path; manual flight requests have their own job below.
   #
-  # AETHERSDR_STORE_AUTO_PUBLISH=true arms production commit and Immediate
-  # publication. Without it, only a draft is uploaded. The armed path verifies
-  # ingestion before succeeding; Microsoft certifies and publishes it.
+  # AETHERSDR_STORE_AUTO_PUBLISH=true arms the existing direct publish call.
+  # Microsoft handles submission processing; an unset secret keeps draft mode.
   #
   # Free-product only (AetherSDR qualifies). The app must already be live in
   # the Store. One-time Entra/Partner Center setup is in
@@ -934,7 +933,6 @@ jobs:
     if: needs.build-windows.outputs.production-submission == 'true'
     runs-on: windows-latest
     environment: release
-    timeout-minutes: 45
     permissions:
       contents: read
     concurrency:
@@ -957,7 +955,7 @@ jobs:
         with:
           version: v0.4.2
 
-      - name: Upload, commit and verify Microsoft Store ingestion
+      - name: Publish Microsoft Store package
         env:
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
@@ -965,7 +963,6 @@ jobs:
           SELLER_ID: ${{ secrets.SELLER_ID }}
           AETHERSDR_STORE_PRODUCT_ID: ${{ vars.AETHERSDR_STORE_PRODUCT_ID }}
           AETHERSDR_STORE_AUTO_PUBLISH: ${{ secrets.AETHERSDR_STORE_AUTO_PUBLISH }}
-          EXPECTED_STORE_VERSION: ${{ needs.build-windows.outputs.msix-version }}
         run: |
           msstore --version
           if ($LASTEXITCODE -ne 0) { throw "Microsoft Store CLI version check failed." }
@@ -975,7 +972,7 @@ jobs:
             --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
             --clientSecret $env:AZURE_AD_APPLICATION_SECRET
           if ($LASTEXITCODE -ne 0) { throw "Microsoft Store CLI authentication failed." }
-          & .\packaging\windows\invoke-store-production.ps1 -ExpectedVersion $env:EXPECTED_STORE_VERSION
+          & .\packaging\windows\invoke-store-production.ps1
 
       # msstore keeps the client secret in Windows Credential Manager and its
       # settings under LocalAppData; `msstore reconfigure --reset` needs an

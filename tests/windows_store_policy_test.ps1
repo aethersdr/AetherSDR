@@ -85,7 +85,7 @@ try {
         $plan = & $planScript @inputs
         Assert-True ($plan.msixVersion -eq '26.9.2.0') 'Production version must ignore run number and flight ID'
         Assert-True ($plan.storeEligible -and $plan.storeSkipReason -eq '') 'Supported production release is Store eligible'
-        Assert-True ($plan.productionSubmission -and -not $plan.publishFlight) 'Production submission remains selected independently of flight'
+        Assert-True ($plan.productionSubmission -and -not $plan.publishFlight) 'Production submission is independent of flight'
     }
     $inputs.RunNumber = 205
     # Tag and source are compared by version value, not spelling.
@@ -153,20 +153,21 @@ try {
     Assert-True ($call[$call.IndexOf('--flightId') + 1] -eq 'FLIGHT') 'Flight ID must reach CLI'
     & $publishScript @publishInputs -FlightId 'FLIGHT'
     Assert-True ($global:aetherStoreCalls[2] -contains '--noCommit') 'Flight draft remains possible'
-    Assert-Throws { & $publishScript @publishInputs -Commit -CommitProduction } 'requires ExpectedVersion'
+    & $publishScript @publishInputs -Commit -CommitProduction
+    Assert-True ($global:aetherStoreCalls[3] -notcontains '--noCommit') 'Explicit production override must work'
     foreach ($blank in @('', ' ')) {
         Assert-Throws { & $publishScript @publishInputs -FlightId $blank -Commit } 'certify PRODUCTION'
     }
     Assert-Throws { & $publishScript @publishInputs -CommitProduction } 'requires -Commit'
     Assert-Throws { & $publishScript @publishInputs -Commit -CommitProduction -FlightId 'FLIGHT' } 'must not be combined'
     Assert-Throws { & $publishScript @publishInputs -UploadTimeoutSeconds 99 } 'UploadTimeoutSeconds'
-    Assert-True ($global:aetherStoreCalls.Count -eq 3) 'Refusals must occur before any CLI invocation'
+    Assert-True ($global:aetherStoreCalls.Count -eq 4) 'Refusals must occur before any CLI invocation'
     $global:aetherStoreExitCode = 9
     Assert-Throws { & $publishScript @publishInputs } 'exit code 9'
     $global:aetherStoreExitCode = 0
     New-Item -ItemType File -Path (Join-Path $scratch 'AetherSDR-extra.msixupload') | Out-Null
     Assert-Throws { & $publishScript @publishInputs } 'Expected exactly one'
-    Assert-True ($global:aetherStoreCalls.Count -eq 4) 'Ambiguous upload must not call CLI'
+    Assert-True ($global:aetherStoreCalls.Count -eq 5) 'Ambiguous upload must not call CLI'
 
     # Fail on Store-invalid versions before touching deploy files or SDK tools.
     Assert-Throws { & $packageScript -Version '26.9.1.203' -CreateUpload -DeployDir (Join-Path $scratch 'absent') } 'fourth version component'

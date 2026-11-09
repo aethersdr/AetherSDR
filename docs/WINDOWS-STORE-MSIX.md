@@ -248,30 +248,20 @@ environment. `invoke-store-production.ps1` reads the arming secret there and
 passes `-Commit -CommitProduction` to `publish-store.ps1` when it is exactly
 `true`. If the secret is unset or disabled, the upload remains draft-only.
 
-The armed path uses the pinned Microsoft Store CLI v0.4.2 to:
+The armed path makes one call with the pinned Microsoft Store CLI v0.4.2:
 
-1. Upload the `.msixupload` with `msstore publish --noCommit`.
-2. Set the new submission's `TargetPublishMode` to `Immediate` and disable any
-   inherited gradual rollout, preserving its other metadata.
-3. Commit with `msstore submission publish`.
-4. Read back the same submission until its x64 package has the expected build
-   version and `FileStatus: Uploaded`. Record the submission ID and verified
-   version in the Actions summary.
+```powershell
+msstore publish <package>.msixupload -id <ProductId> --uploadTimeout 300
+```
 
-The temporary draft in step 1 is internal: the workflow immediately updates
-and commits it. It is needed because `msstore publish` recreates the draft from
-the last published submission and would otherwise inherit a manual release
-hold. Microsoft owns validation, certification, and automatic publication.
-CI verifies ingestion, not certification approval or public Store availability.
-It does not add another approval or policy check.
+There is no `--noCommit`, separate metadata update, version readback, or ingestion
+polling. Microsoft handles package validation, submission processing,
+certification and publication using the app's existing Store configuration.
+The CLI's exit status determines success or failure.
 
 Production submissions run one at a time without cancelling an active upload.
-The existing routing still limits production to upstream tag pushes with a
+The existing routing limits production to upstream release tag pushes with the
 configured product ID; manual dispatches and forks do not publish production.
-The ingestion readback runs once a minute for up to 30 minutes. Microsoft
-errors and CLI failures fail the job; a timeout means Microsoft may still be
-processing, not that the package needs another manual upload. Missing packages
-fail an armed commit rather than falsely reporting success.
 
 The upload timeout is deliberately explicit, and stays that way — but it is no
 longer a bug workaround. `msstore` CLI v0.4.0 and v0.4.1 had a regression where
@@ -344,10 +334,9 @@ credential secrets + one product variable in GitHub, plus the arming secret belo
      automatic publication. Set it at repository scope or in `release`; an
      environment secret overrides the repository secret.
 
-4. **First run.** Push the next release tag. The **Upload, commit and verify
-   Microsoft Store ingestion** step records the ingested version and submission
-   ID in the Actions summary. Microsoft completes certification and publication
-   automatically; no Store-side action is required for a successful submission.
+4. **First run.** Push the next release tag. **Publish Microsoft Store package**
+   uploads and commits the binary directly. Microsoft handles the remaining
+   submission process.
 
 ### Version discipline
 
@@ -394,8 +383,7 @@ The single operational switch is the Actions secret
 `-CommitProduction` automatically; no operator needs to pass these flags for a
 release. Removing the secret or setting it to `false` restores draft uploads.
 The publisher retains its existing explicit production/flight distinction:
-`-Commit` alone requires a flight, and production uses both switches plus the
-expected package version from the build plan.
+`-Commit` alone requires a flight, while production uses both switches.
 
 ### Manually triggered developer package flight
 
@@ -448,9 +436,8 @@ pwsh -NoProfile -File tests\windows_store_policy_test.ps1
 ```
 
 It exercises the actual build-plan script with tag/branch dispatches and the
-publisher with an in-process CLI substitute, including secret arming, Immediate
-publication, metadata preservation, ingestion readback and Microsoft error
-propagation. It performs no Store requests.
+publisher with an in-process CLI substitute, including secret arming, a single
+direct publish call, and CLI error propagation. It performs no Store requests.
 Windows Installer runs it before packaging; CTest registers
 `windows_store_policy` when PowerShell is installed, for the unfiltered full
 suite. It is not added to the frozen per-PR CTest gate. A passing test does not
