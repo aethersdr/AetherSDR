@@ -698,6 +698,8 @@ RadioCapabilities FlexBackend::capabilities() const
         setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
     }
     caps.radioSetupControl = setup;
+    caps.cwReceiveControl = CwReceiveControl{{CwAutoTuneAction::Once,
+        CwAutoTuneAction::Start, CwAutoTuneAction::Stop}};
     caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
                                     SpotAction::Clear, SpotAction::Trigger}};
     caps.panControl = PanControl{{PanControlField::BandZoom, PanControlField::SegmentZoom,
@@ -778,6 +780,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // SmartSDR+ entitlement gate.
     caps.hasRadioSideCwKeyer = true;
     caps.cwTextKeyerName = QStringLiteral("CWX");
+    using CwField = CwTextRequest::Field;
+    caps.cwTextControl = CwTextControl{{CwField::Send, CwField::SendMacro,
+        CwField::SaveMacro, CwField::Speed, CwField::Delay, CwField::Qsk,
+        CwField::Erase, CwField::Clear}, CwTextControl::Completion::RadioCharacterIndex};
     caps.cwTextMinWpm = 5;
     caps.cwTextMaxWpm = 100;
     caps.cwTextMaxMessageChars = 0;
@@ -919,6 +925,7 @@ ReceiveDispatch FlexBackend::requestSliceAgcThresholdMode(int sliceId, AgcThresh
 
 void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
 {
+    if (sliceId < 0 || !request.valid()) { return; }
     // FlexLib 4.2.18 Slice: each AGC setter writes only its own field.
     switch (request.field) {
     case SliceAgcRequest::Field::Mode:
@@ -1472,7 +1479,8 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
     }
 
     for (int index : meterOrder) {
-        const QMap<QString, QString>& f = grouped.constFind(index).value();
+        const auto group = grouped.constFind(index);
+        const QMap<QString, QString>& f = group.value();
         // Build the typed MeterDef directly (#4070). Present-only: a field the
         // wire didn't report keeps its MeterDef default. The carry() ok-guard is
         // defensive/consistency only here — a plain MeterDef field's default IS

@@ -112,7 +112,8 @@ class WdspReceiver final : public Registry::Receiver, private RtlRfExtractor::Si
 public:
     WdspReceiver(std::unique_ptr<WdspChannel> channel, const Registry::ReceiverSpec& spec)
         : m_channel(std::move(channel)), m_left(m_channel->outputBlockSize()),
-          m_right(m_channel->outputBlockSize()), m_spec(spec)
+          m_right(m_channel->outputBlockSize()), m_spec(spec),
+          m_initialOutputSamples(m_channel->outputSamplesReadyForTest())
     {
         if (spec.conjugateIq) { m_conjugatedQ.resize(spec.dsp.inputBlockSize); }
         if (spec.extractRf) {
@@ -175,12 +176,22 @@ public:
     std::span<const float> left() const noexcept override { return m_left; }
     std::span<const float> right() const noexcept override { return m_right; }
     std::optional<Registry::ProcessingFailure> processingFailure() const noexcept override { return m_failure; }
+    bool outputSettledForTest() const noexcept override
+    {
+        // Whole input/DSP blocks have balanced consumption and publication.
+        // Partial DSP input would need more input before restoring this count.
+        return !m_failure && m_initialOutputSamples > 0
+            && m_spec.dsp.inputBlockSize * m_spec.dsp.dspSampleRate
+                == m_spec.dsp.dspBlockSize * m_spec.dsp.inputSampleRate
+            && m_channel->outputSamplesReadyForTest() == m_initialOutputSamples;
+    }
 private:
     std::unique_ptr<WdspChannel> m_channel;
     std::vector<float> m_conjugatedQ;
     std::vector<float> m_left;
     std::vector<float> m_right;
     const Registry::ReceiverSpec m_spec;
+    const int m_initialOutputSamples;
     std::unique_ptr<RtlRfExtractor> m_extractor;
     Registry::AudioSink* m_sink = nullptr;
     bool m_first = true;
@@ -839,6 +850,16 @@ bool RtlReceiverRegistry::SampleReader::adoptPrepared(std::uint64_t session, con
 std::uint64_t RtlReceiverRegistry::SampleReader::activeRevision() const noexcept
 {
     return m_state && m_active >= 0 ? m_state->banks[static_cast<std::size_t>(m_active)].request.revision : 0;
+}
+
+bool RtlReceiverRegistry::SampleReader::outputSettledForTest() const noexcept
+{
+    if (!m_state || m_active < 0) { return false; }
+    const BankSlot& active = m_state->banks[static_cast<std::size_t>(m_active)];
+    for (std::size_t i = 0; i < active.request.count; ++i) {
+        if (!active.bank->receivers[i]->outputSettledForTest()) { return false; }
+    }
+    return true;
 }
 
 bool RtlReceiverRegistry::SampleReader::processBlock(const SampleBlock& block, BlockProcessor& processor,

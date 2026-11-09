@@ -137,7 +137,7 @@ int main(int argc, char** argv)
         bool closed = false;
         QObject::connect(port, &AetherSDR::RigExpertHidTransport::failed, &loop, [&failures](const QString& error) {
             ++failures;
-            if (error != QLatin1String("Cannot open Stick Pro: path error")) { ++g_errors; }
+            if (error != QLatin1String("Cannot open RigExpert Stick: path error")) { ++g_errors; }
         });
         QObject::connect(port, &AetherSDR::RigExpertHidTransport::closed, &loop, [&] {
             closed = true;

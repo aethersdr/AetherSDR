@@ -83,6 +83,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/WsprAgent.h": {
+  "tag": "peripheral(wspr-agent)",
+  "note": "The WSPR receiver's status, spots and settings (types, bounded JSON parsing, the settings body, the SpotHub DxSpot) and its pinned package. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/WsprAgentClient.h": {
+  "tag": "peripheral(wspr-agent)",
+  "note": "Polls the WSPR receiver's /v1/status and reads and saves its /v1/config at the radio's LAN or tailnet-shim address. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/TailnetShimTokenStore.h": {
   "tag": "peripheral(tailnet-shim)",
   "note": "OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",
@@ -583,7 +595,7 @@
  },
  "core/NnrControls.h": {
   "tag": "ui-support",
-  "note": "Compile-time NNR control ranges and default-marker positions read out of WDSP 2.10; no state and no WDSP include, shared by the ADSP tab and the filter",
+  "note": "Compile-time NNR control ranges and default-marker positions read out of WDSP 2.11; no state and no WDSP include, shared by the ADSP tab and the filter",
   "split": "",
   "confidence": "high"
  },
@@ -703,7 +715,7 @@
  },
  "core/RfkitConnection.h": {
   "tag": "peripheral(rfkit)",
-  "note": "Direct HTTP/JSON REST client (default port 8080) for the RF-KIT amplifier — a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h, core/VkampConnection.h and core/Kpa1500Connection.h. The Flex radio neither discovers it nor proxies its telemetry, so its REST API is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/rfkit-amplifier-design.md.",
+  "note": "Direct HTTP/JSON REST client (default port 8080) for the RF-KIT amplifier \u2014 a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h, core/SpeConnection.h, core/VkampConnection.h and core/Kpa1500Connection.h. The Flex radio neither discovers it nor proxies its telemetry, so its REST API is the only control channel. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/rfkit-amplifier-design.md.",
   "split": "",
   "confidence": "high"
  },
@@ -764,12 +776,6 @@
  "core/SpectrogramBuffer.h": {
   "tag": "universal",
   "note": "Ring buffer of FFT frames per panadapter feeding CNN classifier patches; pure spectrum data, radio-agnostic.",
-  "split": "",
-  "confidence": "high"
- },
- "core/SpotCollectorClient.h": {
-  "tag": "ui-support",
-  "note": "UDP listener for DXLab SpotCollector desktop app; external integration feeding DxSpot, not radio state",
   "split": "",
   "confidence": "high"
  },
@@ -1021,7 +1027,7 @@
  },
  "models/CwxModel.h": {
   "tag": "universal",
-  "note": "CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name.",
+  "note": "Plain-text CW keyer intent: typed WPM/delay/QSK, macro and send/erase requests, batch cancellation and bounded speed-echo bookkeeping. Command encoding and queue-reply decoding live below the seam; legacy CWX status parsing remains.",
   "split": "",
   "confidence": "high"
  },
@@ -1778,6 +1784,18 @@
  "models/Kxpa100RadioAssociation.h": {
   "tag": "peripheral(elecraft)",
   "note": "Explicit per-radio amplifier telemetry association; no radio or tuner commands.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/CwTextRequest.h": {
+  "tag": "universal",
+  "note": "Typed desktop buffered-keyer intents, capability fields and normalized queue replies. Plain text and original caller identity; no vendor command grammar or daemon TX permission.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/flex/FlexCwxControls.h": {
+  "tag": "vendor(flex)",
+  "note": "FlexLib-authoritative CWX command encoding and bounded queue-reply decoding. Only backend implementations and socket-free wire fixtures consume it.",
   "split": "",
   "confidence": "high"
  },

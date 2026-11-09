@@ -122,8 +122,9 @@ QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* cont
     // Broadcast FM uses RF channel widths, not the narrow-FM audio ladder.
     // These are choices only; observed and saved valid edges remain intact.
     static const QVector<int> broadcast{100000, 120000, 140000, 160000, 180000, 200000};
+    static const QString narrowFm = QStringLiteral("DFM");
     const QVector<int>& candidates = canonicalFmMode(mode) == "WFM"
-        ? broadcast : widthsForMode(QStringLiteral("DFM"));
+        ? broadcast : widthsForMode(narrowFm);
     QVector<int> widths;
     for (int width : candidates) {
         if (acceptsFmEdges(mode, control, edgesForWidth(mode, width, {}))) {

@@ -64,12 +64,14 @@
 #include <QSet>
 #include <functional>
 #include <memory>
+#include "core/backends/SessionCommandGuard.h"
 
 #include <QTimer>
 #include <QElapsedTimer>
 
 namespace AetherSDR {
 class TxController;
+class WanConnection;
 class IAutoRfGainControl;
 
 
@@ -491,6 +493,13 @@ public:
     // nothing to be honest about, and blanking the controls on unplug would look
     // like a fault rather than a fact about the radio.
     bool hasDaxStreams() const;
+    // Whether the connected radio declares a transmit monitor (MON on/volume)
+    // or voice-operated transmit (VOX on/level/delay): RadioCapabilities::
+    // txMonitorControl / voxControl. Same permissive disconnected rule as
+    // hasDaxStreams(). Where false, the TCI, CAT, shortcut and MIDI roads to
+    // those controls refuse instead of flipping a model value nothing consumes.
+    bool transmitMonitorAvailable() const;
+    bool voxAvailable() const;
 
     // True for 2-SCU radios that support diversity RX, from the FlexLib-sourced
     // ModelCapabilities table (Principle I).  Replaces the hand-maintained
@@ -508,19 +517,11 @@ public:
     // instead of 4.  Examples: FLEX-6700 -> 8; 6600/6500/8600/AU-520/ML/CL -> 4;
     // 6300/6400/8400/AU-510/RT-2122 -> 2.
     int maxPanadapters() const {
-        // A backend that reports its own capability is the AUTHORITY for its
-        // radio. capabilitiesFor() is a FlexLib platform table keyed by model
-        // string (Principle I) and has nothing true to say about a non-Flex
-        // radio — "Hermes-Lite 2" simply falls through it to the 2-pan default,
-        // which then refused a third receiver on a board that reported four.
-        //
-        // This is consulted by more than one caller (the GUI's Add Panadapter,
-        // the automation bridge's `pan create`), which is exactly why it is
-        // fixed here rather than at either call site.
+        // Non-Flex capacity comes from the backend, including zero for a
+        // radio with no scope. The FlexLib model table is not a fallback for
+        // another family's declared capacity.
         if (!m_flexBackend && m_backend) {
-            const int reported = m_backend->capabilities().maxPanadapters;
-            if (reported > 0)
-                return reported;
+            return m_backend->capabilities().maxPanadapters;
         }
         // What the radio said in its discovery packet beats a per-model
         // estimate: the table is keyed off the model string and is the same for
@@ -667,10 +668,10 @@ public:
     bool requestRadioAutoNotch(SliceModel* slice, bool on);
     bool requestAmCarrierLevel(int level);
 
-    // A band-stack bookmark's AGC, NB and NR through the SliceModel setters,
-    // so they reach every backend. NR only where radio-side NR exists; AGC not
-    // while KiwiSDR external receive replaces the slice (the caller sends it).
-    void recallBandStackReceiveDsp(SliceModel* slice, const BandStackEntry& entry);
+    // The caller supplies its tuning policy; the engine owns the remaining
+    // recall sequence and fences it to the original slice, pan and session.
+    void recallBandStack(SliceModel* slice, BandStackEntry entry,
+                         const std::function<void(SliceModel*, double)>& tune);
 
     // Radio-side recording is `slice set <n> record=/play=` on the slice's
     // command plane. Without one there is no radio-side recorder to reach, so
@@ -925,7 +926,7 @@ public:
     // Send `radio reboot` (FlexLib Radio.cs:2575), surface a notification to
     // the operator, then trigger forceDisconnect so the standard reconnect
     // timer brings the link back when the radio finishes booting.
-    void rebootRadio();
+    bool rebootRadio(std::optional<RadioControlSession> expectedSession = {});
     bool isWan() const { return m_wanConn != nullptr; }
 
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forward the user's
@@ -1024,6 +1025,12 @@ public:
                        std::chrono::steady_clock::time_point scheduledAt);
     void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
+    void requestCwAutoTune(SliceModel* source, CwAutoTuneAction action);
+    bool cwAutoTuneLoopRequested(int sliceId) const;
+    QString cwAutoTuneUnavailableReason(SliceModel* source, CwAutoTuneAction action) const;
+    bool remoteOnRequested() const;
+    bool multiFlexRequested() const;
+    bool administrationSettingAvailable(RadioSetupField field) const;
     bool addSlice();           // Create a new slice on the active panadapter
     bool addSliceOnPan(const QString& panId); // Create a new slice on a specific pan
     bool addSliceOnPan(const QString& panId, double freqMhz);
@@ -1105,7 +1112,8 @@ public:
     void flushQueuedSpots(int limit);
     void clearQueuedSpots();
     ReceiveDispatch requestPanControl(PanadapterModel* pan, const PanControlRequest& request);
-    ReceiveDispatch requestSlicePreset(SliceModel* slice, const SlicePresetRequest& request);
+    ReceiveDispatch requestSlicePreset(SliceModel* slice, const SlicePresetRequest& request,
+                                      std::optional<RadioControlSession> expectedSession = {});
     std::optional<RadioStationOverride> requestTemporaryStation(const QString& name);
     bool restoreTemporaryStation(const RadioStationOverride& owner);
     quint64 stationIdentityRevision() const { return m_stationIntentRevision; }
@@ -1262,6 +1270,7 @@ public:
     void setPanNoiseFloorEnable(bool on);
 
 signals:
+    void cwAutoTuneIntentChanged(int sliceId);
     // RFC #5535's visibility condition, republished for the GUI. See
     // core/backends/FrontEndOverload.h.
     void frontEndOverloadChanged(const AetherSDR::FrontEndOverload& state);
@@ -1625,9 +1634,13 @@ public:
     // an optimistic update in case the radio doesn't echo the state change.
     void requestLocalPtt();
 
-    // PC Audio: create/remove remote_audio_rx stream
+    // Speaker mix shared by PC playback and independent Line Out demand.
     void createRxAudioStream();
     void removeRxAudioStream();
+    void setLineOutAudioRequested(bool requested);
+    bool lineOutAudioRequested() const { return m_lineOutAudioRequested; }
+    bool lineOutAudioStreamDemanded() const;
+    void setLineOutPcAudioOffConsent(bool enabled);
 
     // True only when dispatched; the callback reports the later radio reply.
     bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
@@ -1855,6 +1868,7 @@ private:
     // whenever the backend revises its own capabilities.
     void publishCapabilities(bool connected);
     void updateTuneAvailability();
+    void updateAtuAvailability();
     // Apply a backend's band-dependent PA ceiling to TransmitModel. Backends
     // without per-band data leave the existing radio-reported limit alone.
     void refreshTxPowerLimit();
@@ -2011,6 +2025,41 @@ private:
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
+    friend class RadioAdministrationTestAccess;
+    struct PendingAdministrationWrite {
+        RadioControlSession session{};
+        SessionCommandGuard guard;
+        RadioControlFence current;
+        RadioControlCompletion completion;
+        std::function<void()> written;
+        QPointer<QTimer> deadline;
+        QPointer<WanConnection> wan;
+        quint64 wireGeneration{0};
+        quint32 sequence{0};
+        bool delivered{false};
+    };
+    struct CwAutoTuneOperation;
+    bool dispatchAdministrationCommand(const QString& command,
+        const RadioControlCompletion& completion, const RadioControlFence& current,
+        const std::function<void()>& written);
+    void finishAdministrationWrite(quint64 ticket, const RadioControlReply& reply);
+    void administrationWriteResult(quint64 ticket, bool written);
+    void forgetAdministrationReply(const PendingAdministrationWrite& operation);
+    void reconcileAdministration();
+    void resetAdministration(bool notify = true);
+    ReceiveDispatch requestAdministrationSetting(const RadioSetupRequest& request,
+        QObject* context, const RadioControlCompletion& completion);
+    QHash<quint64, std::shared_ptr<PendingAdministrationWrite>> m_administrationWrites;
+    QHash<int, std::shared_ptr<CwAutoTuneOperation>> m_cwAutoTuneOperations;
+    quint64 m_administrationTicket{0};
+    std::array<quint64, 2> m_administrationRevisions{};
+    std::array<std::optional<bool>, 2> m_administrationPending{};
+    std::array<bool, 2> m_administrationObserved{};
+    quint64 m_rebootRevision{0};
+    bool m_rebootQueued{false};
+    QString m_rebootRadioSerial;
+    bool m_reconcilingAdministration{false};
+    bool m_resettingAdministration{false};
     friend class WaveformEnvTestAccess;
     friend class NtpSourcesTestAccess;
     friend class StoredControlTestAccess;
@@ -2031,6 +2080,7 @@ private:
     quint64 m_spotRequestEpoch{0};
     SpotRequestQueue m_spotRequests;
     bool m_flushingSpotRequests{false};
+    quint64 m_bandStackRecallRevision{0};
     quint64 m_stationIntentRevision{0};
     quint64 m_stationOverrideOwner{0};
     std::array<quint64, 5> m_outputIntentRevisions{};
@@ -2139,6 +2189,7 @@ private:
     TxCoordinator::Operation m_cwxCommandOperation;
     unsigned m_cwxPendingDeliveries{0};
     bool m_cwxHandoffComplete{false};
+    std::shared_ptr<std::atomic<bool>> m_cwxSessionValid{std::make_shared<std::atomic<bool>>(true)};
     std::atomic<quint64> m_cwInputSession{0};
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
@@ -2165,11 +2216,10 @@ private:
     void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
-    void sendCwxCommand(const QString& command, bool keying,
-                        const TxCoordinator::Operation& operation, ResponseCallback reply = {});
-    void dispatchCwxCommand(const QString& command, TxCoordinator::Operation operation,
-                            int epoch = -1, int nChars = -1);
+    ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
+                                       int epoch, int nChars, RadioControlFence current);
     bool dispatchCwxText(const QString& text, TxCoordinator::Operation operation);
+    bool sendCwxConfigurationCommand(const QString& command, RadioControlFence current);
     void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
     TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
@@ -2596,6 +2646,8 @@ private:
     bool        m_profileDatabaseExporting{false};
     bool        m_cwProfilesRequested{false};   // this session asked for "profile cw info"
     RadioStatusOwnership::RemoteAudioRxTracking m_rxAudio;
+    bool m_lineOutAudioRequested{false};
+    bool m_lineOutPcAudioOffConsent{false};
     struct DaxStreamDebugState {
         QString type;
         quint32 clientHandle{0};

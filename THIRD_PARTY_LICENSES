@@ -230,14 +230,14 @@ vendored, translated, or linked.
   SOFTWARE.
 
 
-1. WDSP 2.10 — engine-side SDR DSP
+1. WDSP 2.11 — engine-side SDR DSP
 ----------------------------------
 Bundled as an isolated static library at third_party/wdsp/ from the exact
 TAPR/OpenHPSDR-wdsp revision below. AetherSDR uses the complete WDSP channel
-API behind src/core/dsp/WdspChannel for raw-IQ radio backends. Five local
+API behind src/core/dsp/WdspChannel for raw-IQ radio backends. Local
 changes are documented in third_party/wdsp/AETHERSDR-PATCHES.md. The
-snapshot includes the two trained Neural Noise Reduction networks upstream
-compiles in (upstream/nnr_model_0.c, upstream/nnr_model_1.c).
+snapshot includes the four trained Neural Noise Reduction networks upstream
+compiles in (upstream/nnr_model_0.c through upstream/nnr_model_3.c).
 
 The SpectralNR module (src/core/SpectralNR.h, SpectralNR.cpp) additionally
 derives its OSMS, MMSE, and NSTAT noise estimators and Gaussian/Gamma gain
@@ -248,9 +248,9 @@ Source/calculus binary.
   Copyright (C) 2011-2026 Warren Pratt, NR0V, and named contributors
   License: GPL-2.0-or-later
   Source:  https://github.com/TAPR/OpenHPSDR-wdsp
-  Pinned commit: b02d5bac675dd2f33ec2bab2b339f79a597c47dd
+  Pinned commit: e69de50d1d702216098019013899ad87534c64e0
   Calculus source:
-    https://raw.githubusercontent.com/TAPR/OpenHPSDR-wdsp/b02d5bac675dd2f33ec2bab2b339f79a597c47dd/Source/calculus
+    https://raw.githubusercontent.com/TAPR/OpenHPSDR-wdsp/e69de50d1d702216098019013899ad87534c64e0/wdsp%202.11/Source/calculus
   Calculus SHA-256:
     de43a4b9c7db4445997e6452852980d58d2558d635ab3c63e6423a347ba326c3
 
@@ -376,10 +376,13 @@ Pre-built binaries at third_party/fftw3/ (Windows only; Linux uses system pkg)
 13. TCI Protocol Specification — Transceiver Control Interface
 ---------------------------------------------------------------
 The TCI server (src/core/TciProtocol.cpp, TciServer.cpp) implements the
-TCI v2.0 protocol specification published by Expert Electronics. The binary
+TCI 2.1 protocol specification published by Expert Electronics. The binary
 audio frame header follows the spec's Stream struct definition. No code was
 copied from ExpertSDR3; this is an independent implementation of the published
-protocol.
+protocol. An unmodified copy of the specification, "TCI Protocol 2.1.pdf"
+(sha256 e60833985619ca6a1c7b5c4c48bdbff59e694924589c238d06557e011e18c074,
+upstream commit 6cbccdd7004858152b4b5b463f9b087432d81a21), is kept with its
+MIT license at docs/specs/tci/.
 
   Copyright (c) 2021 Expert Electronics (EE)
   License: MIT
@@ -823,14 +826,32 @@ in third_party/qrcodegen/LICENSE.
   License:   MIT
   Source:    https://github.com/nayuki/QR-Code-generator/tree/v1.8.0
 
-35. musl libc — linked into the radio health tools
+35. musl libc — linked into the radio health tools and the WSPR receiver
 -------------------------------------------------------------------------------
 Statically linked into the AetherHealth agent binaries
 (resources/waveforms/AetherHealth.ssdr_waveform, built from tools/radio-health
 by zig 0.17, which bundles musl). AetherSDR installs that package on a radio
-when "Install radio health tools" is ticked. The full license text ships in
-the package as LICENSES.
+when "Install radio health tools" is ticked. The same applies to the AetherWSPR
+binaries (resources/waveforms/AetherWSPR.ssdr_waveform, built from
+tools/wspr-agent), installed from Waveforms → Install → WSPR Receiver. The full
+license text ships in each package as LICENSES.
 
   Copyright: Copyright (c) 2005-2020 Rich Felker, et al.
   License:   MIT
   Source:    https://musl.libc.org/
+
+36. wsprd — the WSPR decoder from WSJT-X
+-------------------------------------------------------------------------------
+tools/wspr-agent/wsprd holds the C sources of wsprd from WSJT-X (lib/wsprd,
+identical in 2.7.0 and 3.0.2), built into the AetherWSPR binaries
+(resources/waveforms/AetherWSPR.ssdr_waveform). main() is renamed and FFTW is
+replaced by a small FFT (fftw_compat.c). wsprd/osdwspr.c and grayline.c are C
+translations of WSJT-X's Fortran (osdwspr.f90, indexx.f90, grayline.f90,
+sun.f90, grid2deg.f90). The GPL text is at tools/wspr-agent/wsprd/COPYING.
+
+  Copyright: Copyright 2001-2018 Joe Taylor, K1JT
+             Copyright 2014-2018 Steven Franke, K9AN
+             Copyright 1994 Phil Karn, KA9Q (the Fano decoder, fano.c)
+             Bob Jenkins (the lookup3 hash, nhash.c, public domain)
+  License:   GPL-3.0-or-later
+  Source:    https://github.com/WSJTX/wsjtx

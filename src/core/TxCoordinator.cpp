@@ -476,11 +476,12 @@ bool TxCoordinator::onThread() const
 
 bool TxCoordinator::validActor(const Actor& actor) const
 {
-    return m_identity->alive.load(std::memory_order_acquire)
+    const Identity& identity = *m_identity;
+    return identity.alive.load(std::memory_order_acquire)
         && actor.m_state && !actor.m_state->revoked.load(std::memory_order_acquire)
         && actor.m_state->coordinator.lock() == m_identity
         && (!actor.m_state->policy.independent
-            || actor.m_state->session == m_identity->session.load(std::memory_order_acquire));
+            || actor.m_state->session == identity.session.load(std::memory_order_acquire));
 }
 
 TxCoordinator::Actor TxCoordinator::registerActor(ActorPolicy policy)

@@ -944,8 +944,8 @@
           "optional": true
         }
       ],
-      "caption": "The TCI Server applet in the applet panel.",
-      "alt": "TCI Server applet. Level bars for RX1, assigned to Slice A, RX2 to RX4, unassigned, and TX, assigned to Slice A, sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server."
+      "caption": "The TCI Server applet with separate Line Out TX inclusion and PC Audio-off consent controls.",
+      "alt": "TCI Server applet with RX1 and TX level meters, unchecked Include TX (Line Out) and Line Out with PC Audio off controls, a visible mutes radio outputs warning, port 50001, and a Disabled button."
     },
     {
       "id": "dax-applet",
@@ -1935,7 +1935,7 @@
         "target": "MemoryDialog"
       },
       "caption": "The Memory Channels window, listing the memories stored in the radio.",
-      "alt": "Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KK7GWY, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected."
+      "alt": "Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KI4TTZ, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected."
     },
     {
       "id": "keyboard-shortcuts",
@@ -1977,7 +1977,7 @@
         "target": "ThemeEditorDialog"
       },
       "caption": "The Theme Editor, editing the built-in Default Dark theme.",
-      "alt": "Theme Editor window for Profile: Default Dark. A colour picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colours fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of colour tokens with their values, such as color.accent #00b4d8. Theme actions, Save As… and Close buttons run along the bottom."
+      "alt": "Theme Editor window for Profile: Default Dark, with a round close button in its top-right corner. A colour picker with Flat color and Gradient types, a hue strip, RGB and hex fields and recent colours fills the top, beside a gradient stops preview. Font controls sit below, then a Scope selector with Inspect and Reset to default, a token filter, and a list of colour tokens with their values, such as color.accent #00b4d8. Theme actions and Save As… buttons run along the bottom."
     },
     {
       "id": "support-diagnostics-dialog",

@@ -80,6 +80,17 @@ constexpr int kIcomTciUnkeySettleMs = 500;
 // publishes the settled state again.
 constexpr int kSplitSettleMs = 450;
 
+void writeRecordingSetting(const QString& key, const QJsonValue& value)
+{
+    auto& settings = AppSettings::instance();
+    QJsonObject recording = QJsonDocument::fromJson(
+        settings.value("TciRecording", "{}").toString().toUtf8()).object();
+    recording.insert(key, value);
+    settings.setValue("TciRecording", QString::fromUtf8(
+        QJsonDocument(recording).toJson(QJsonDocument::Compact)));
+    settings.save();
+}
+
 QString tciCommandName(const QString& message)
 {
     const QString trimmed = message.trimmed().toLower();
@@ -161,7 +172,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     : QObject(parent)
     , m_model(model)
 {
+    const QJsonObject recording = QJsonDocument::fromJson(
+        AppSettings::instance().value("TciRecording", "{}").toString().toUtf8())
+        .object();
+    m_lineOutIncludeTx = recording.value("lineOutIncludeTx").toBool(false);
+    m_lineOutPcAudioOffConsent = recording.value("lineOutPcAudioOffConsent").toBool(false);
+    if (m_model) { m_model->setLineOutPcAudioOffConsent(m_lineOutPcAudioOffConsent); }
     m_io = std::make_unique<TciIoWorker>();
+    m_io->setLineOutIncludeTx(m_lineOutIncludeTx);
     m_pcmIngress->worker = m_io.get();
     connect(m_io.get(), &TciIoWorker::rxLevel, this, [this](int channel, float rms) {
         m_io->post([io = m_io.get(), channel] { io->acknowledgeLevel(channel); });
@@ -179,6 +197,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         }
     });
     connect(m_io.get(), &TciIoWorker::clientOpened, this, &TciServer::onClientOpened);
+    connect(m_io.get(), &TciIoWorker::lineOutStopped, this, [this](quint64 id, quint64 generation) {
+        if (ClientState* client = clientStateFor(clientById(id)); client && client->lineOutGeneration == generation) {
+            client->lineOutReceivers.clear();
+            ++client->lineOutGeneration;
+            updateLineOutCapture();
+            emit clientsChanged();
+        }
+    });
     connect(m_io.get(), &TciIoWorker::textReceived, this,
             [this](quint64 id, const QString& text, const TxCoordinator::Request& input) {
         QPointer<TciServer> self(this);
@@ -219,8 +245,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 const QString legacy = s.value(QStringLiteral("DaxRxGain%1").arg(ch), "0.5").toString();
                 s.setValue(key, legacy);
             }
-            m_rxChannelGain[ch - 1] = std::clamp(
-                s.value(key, "0.5").toString().toFloat(), 0.0f, 1.0f);
+            const float saved = s.value(key, "0.5").toString().toFloat();
+            m_rxChannelGain[ch - 1] = std::isfinite(saved)
+                ? std::clamp(saved, 0.0f, 1.0f) : 0.5f;
         }
         s.save();
     }
@@ -310,6 +337,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::connectionStateChanged,
                 this, [this](bool connected) {
             broadcastReceiveModulations();
+            updateLineOutCapture();
             if (!connected) {
                 m_receiveMeterEpochs.clear();
                 // A backend may retain its capabilities while disconnected.
@@ -534,6 +562,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::capabilitiesChanged, this,
                 [this](bool, const RadioCapabilities&) {
             broadcastReceiveModulations();
+            updateLineOutCapture();
             broadcastTxPermissions();
             announceEffectiveIqSampleRate();
             reconcileIqStreams();
@@ -744,6 +773,7 @@ void TciServer::stop()
     teardownTciRoute();
     releaseAllIqStreams();
     stopIo();
+    updateLineOutCapture();
     if (hadResources) { releaseDaxForTci(); }
 }
 
@@ -894,6 +924,7 @@ void TciServer::setOverflowMode(int mode)
 void TciServer::setRxChannelGain(int channel, float gain)
 {
     if (channel < 1 || channel > 8) return;
+    if (!std::isfinite(gain)) return;
     const float clamped = std::clamp(gain, 0.0f, 1.0f);
     if (m_rxChannelGain[channel - 1] == clamped) return;
     m_rxChannelGain[channel - 1] = clamped;
@@ -1070,9 +1101,11 @@ void TciServer::onClientDisconnected()
             for (int trx : iqReceivers) {
                 releaseIqStreamIfUnused(trx);
             }
+            m_clients[i].lineOutReceivers.clear();
             delete m_clients[i].protocol;
             resetClientRx(m_clients[i]);
             m_clients.removeAt(i);
+            updateLineOutCapture();
 
             // Release DAX if no remaining clients want audio (#1331)
             bool anyAudio = false;
@@ -1632,10 +1665,37 @@ void TciServer::onTextMessage(const QString& msg)
             replyText(ws,cmd.trimmed() + ";");
             continue;
         }
-        if (trimmed.startsWith("line_out_start") ||
-            trimmed.startsWith("line_out_stop") ||
-            trimmed.startsWith("line_out_recorder")) {
-            // Line-out recording — not applicable to FlexRadio, acknowledge
+        if (trimmed.startsWith("line_out_start:") || trimmed.startsWith("line_out_stop:")) {
+            const bool starting = trimmed.startsWith("line_out_start:");
+            bool valid = false;
+            const int receiver = trimmed.section(QLatin1Char(':'), 1).toInt(&valid);
+            if (!valid || receiver < 0 || receiver >= 8
+                || (starting && (!m_model || receiver >= m_trxMap.trxCount(m_model)))) {
+                qCWarning(lcCat) << "TCI: invalid Line Out receiver";
+                continue;
+            }
+            const bool changed = starting ? !client.lineOutReceivers.contains(receiver)
+                                          : client.lineOutReceivers.contains(receiver);
+            if (changed) {
+                const bool noAudioWithoutConsent = starting
+                    && client.lineOutReceivers.isEmpty()
+                    && AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True"
+                    && !m_lineOutPcAudioOffConsent;
+                if (starting) { client.lineOutReceivers.insert(receiver); }
+                else { client.lineOutReceivers.remove(receiver); }
+                ++client.lineOutGeneration;
+                syncLineOutClient(client);
+                if (noAudioWithoutConsent) {
+                    qCInfo(lcCat) << "TCI: Line Out subscription accepted without audio frames;"
+                                     " PC Audio is disabled and PC Audio-off Line Out consent is off";
+                }
+            }
+            replyText(socket, cmd.trimmed() + ";");
+            if (!self || !socket || !socket->live()) { return; }
+            emit clientsChanged();
+            continue;
+        }
+        if (trimmed.startsWith("line_out_recorder")) {
             replyText(ws,cmd.trimmed() + ";");
             continue;
         }
@@ -2834,12 +2894,72 @@ TciClient* TciServer::clientById(quint64 id) const
 
 void TciServer::setAudioEngine(AudioEngine* audio)
 {
-    if (m_audio) { disconnect(m_io.get(), nullptr, m_audio, nullptr); }
+    if (m_audio) {
+        disconnect(m_io.get(), nullptr, m_audio, nullptr);
+        disconnect(m_audio, nullptr, this, nullptr);
+        QMetaObject::invokeMethod(m_audio, [previous = m_audio] { previous->setLineOutCaptureEnabled(false); }, Qt::AutoConnection);
+    }
     m_audio = audio;
+    m_lineOutCaptureWanted = false;
     if (audio) {
         connect(m_io.get(), &TciIoWorker::txPcmReady, audio,
                 &AudioEngine::feedDaxTxAudio, Qt::QueuedConnection);
+        connect(audio, &QObject::destroyed, this, [this] {
+            m_audio = nullptr;
+            m_lineOutCaptureWanted = false;
+            updateLineOutCapture();
+        });
+        connect(audio, &AudioEngine::lineOutPcmReady, this,
+            [ingress = m_pcmIngress](const PcmFrame& frame, bool transmitting) {
+                QMutexLocker lock(&ingress->mutex);
+                TciIoWorker* io = ingress->worker;
+                if (!io || !frame.current()) { return; }
+                io->post([io, frame, transmitting] { io->receiveLineOutPcm(frame, transmitting); },
+                         frame.samples().size() * sizeof(float));
+            }, Qt::DirectConnection);
     }
+    updateLineOutCapture();
+}
+
+void TciServer::setLineOutIncludeTx(bool enabled)
+{
+    if (m_lineOutIncludeTx == enabled) { return; }
+    m_lineOutIncludeTx = enabled;
+    writeRecordingSetting(QStringLiteral("lineOutIncludeTx"), enabled);
+    m_io->post([io = m_io.get(), enabled] { io->setLineOutIncludeTx(enabled); });
+    emit lineOutIncludeTxChanged(enabled);
+}
+
+void TciServer::setLineOutPcAudioOffConsent(bool enabled)
+{
+    if (m_lineOutPcAudioOffConsent == enabled) { return; }
+    m_lineOutPcAudioOffConsent = enabled;
+    writeRecordingSetting(QStringLiteral("lineOutPcAudioOffConsent"), enabled);
+    if (m_model) { m_model->setLineOutPcAudioOffConsent(enabled); }
+    updateLineOutCapture();
+    emit lineOutPcAudioOffConsentChanged(enabled);
+}
+
+void TciServer::syncLineOutClient(const ClientState& client)
+{
+    const TciLineOutConfig config{client.socket->lifetime, client.lineOutReceivers, client.lineOutGeneration};
+    m_io->post([io = m_io.get(), config] { io->configureLineOut(config); });
+    updateLineOutCapture();
+}
+
+void TciServer::updateLineOutCapture()
+{
+    bool wanted = false;
+    for (const ClientState& client : m_clients) { wanted |= !client.lineOutReceivers.isEmpty(); }
+    wanted = wanted && m_audio && isRunning() && m_model && m_model->isConnected();
+    if (m_model) { m_model->setLineOutAudioRequested(wanted); }
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    const bool captureWanted = wanted && (pcAudio || m_lineOutPcAudioOffConsent);
+    if (!m_audio || captureWanted == m_lineOutCaptureWanted) { return; }
+    m_lineOutCaptureWanted = captureWanted;
+    QMetaObject::invokeMethod(m_audio, [audio = m_audio, captureWanted] {
+        audio->setLineOutCaptureEnabled(captureWanted);
+    }, Qt::AutoConnection);
 }
 
 void TciServer::syncClient(const ClientState& client)
@@ -2848,6 +2968,7 @@ void TciServer::syncClient(const ClientState& client)
         client.audioReceiver, client.audioSampleRate, client.audioChannels,
         client.audioFormat, client.rxGeneration};
     m_io->post([io = m_io.get(), config] { io->configureClient(config); });
+    syncLineOutClient(client);
 }
 
 void TciServer::resetClientRx(ClientState& client)
@@ -3160,14 +3281,19 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         publishActiveTrx();
     }
 
-    // Per-slice audioGain → `rx_volume:trx,N;` broadcast. Without this,
+    // Per-slice audioGain → `rx_volume:trx,0,dB;` broadcast. Without this,
     // a GUI change to a slice's audio level was invisible to TCI clients;
     // remote controllers would drift out of sync. Part of issue #1764 fix.
+    // Same spec form and dB scale as the cmdRxVolume echo.
     connect(slice, &SliceModel::audioGainChanged, this, [this, slice](float gain) {
         if (m_clients.isEmpty()) return;
         const int trx = m_trxMap.trxForSlice(m_model, slice);
-        broadcast(QStringLiteral("rx_volume:%1,%2;")
-                      .arg(trx).arg(static_cast<int>(gain)));
+        if (usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) {
+            broadcast(QStringLiteral("rx_volume:%1,%2;").arg(trx).arg(static_cast<int>(gain)));
+        } else {
+            broadcast(QStringLiteral("rx_volume:%1,0,%2;")
+                          .arg(trx).arg(TciProtocol::volumeDbFromPercent(qRound(gain))));
+        }
     });
 
     // Squelch level → `sql_level:trx,dB;`, since the sql_enable relay below
@@ -3309,6 +3435,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
             }
             announce(guard);
         });
+        return announce;
     };
     wireValue(&SliceModel::ritChanged, "rit_offset",
               [slice] { return QString::number(slice->ritFreq()); });
@@ -3316,8 +3443,10 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
               [slice] { return QString::number(slice->xitFreq()); });
     wireValue(&SliceModel::agcModeChanged, "agc_mode",
               [slice] { return slice->receiveAgcMode().toLower(); });
-    wireValue(&SliceModel::agcThresholdChanged, "agc_gain",
-              [slice] { return QString::number(slice->receiveAgcThreshold()); });
+    const auto announceAgcGain = wireValue(&SliceModel::agcThresholdChanged, "agc_gain",
+        [this, slice] { return QString::number(usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications) ? slice->receiveAgcThreshold() : TciProtocol::agcGainDb(slice)); });
+    connect(slice, &SliceModel::externalReceiveAgcThresholdChanged, this,
+            [slice, announceAgcGain] { announceAgcGain(slice); });
     wireValue(&SliceModel::audioPanChanged, "rx_balance",
               [slice] { return QString::number(slice->audioPan() - 50); }, confirmedReceiver);
     wireValue(&SliceModel::nbLevelChanged, "rx_nb_param",

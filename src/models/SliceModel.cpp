@@ -1528,9 +1528,9 @@ void SliceModel::applyRecalledFmRepeater(const QString& direction, double offset
 {
     if (refuseOffThread(__func__)) { return; }
     const QPointer<SliceModel> alive(this);
-    const auto field = SliceControlRequest::Field::RepeaterRecall;
+    constexpr auto field = SliceControlRequest::Field::RepeaterRecall;
     const quint64 revision = ++m_controlIntentRevisions[static_cast<size_t>(field)];
-    const auto current = [alive, field, revision] {
+    const auto current = [alive, revision] {
         return alive && alive->m_controlIntentRevisions[static_cast<size_t>(field)] == revision;
     };
     // Local-memory radios have no vendor memory command to decode back through

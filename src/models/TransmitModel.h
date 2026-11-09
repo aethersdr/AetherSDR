@@ -215,6 +215,9 @@ public:
     bool tuneAvailable() const { return m_tuneAvailable; }
     QString tuneUnavailableReason() const { return m_tuneUnavailableReason; }
     void setTuneAvailable(bool available, const QString& reason = {});
+    // Whether the selected TX antenna passes through the internal ATU.
+    bool atuAvailable() const { return m_atuAvailable; }
+    void setAtuAvailable(bool available);
     bool    showTxInWaterfall() const { return m_showTxInWaterfall; }
 
     // ── APD getters ─────────────────────────────────────────────────────────
@@ -524,6 +527,7 @@ signals:
     void hasTunerMemoriesChanged(bool present);
     void tuneChanged(bool tuning);
     void tuneAvailabilityChanged(bool available);
+    void atuAvailabilityChanged(bool available);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
     // OR from setTransmitting() (interlock-driven: CW break-in, VOX, footswitch).
@@ -763,6 +767,7 @@ private:
     QString m_tuneMode{"single_tone"};
     bool m_tuneAvailable = true;
     QString m_tuneUnavailableReason;
+    bool m_atuAvailable = true;
     QString m_txSliceMode;   // empty until first transmit status; "FDVU", "FDVL", "USB", etc.
     bool    m_showTxInWaterfall{false};
 

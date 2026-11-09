@@ -7,6 +7,7 @@
 #include "TestSettingsProfile.h"
 
 #include <QApplication>
+#include <QFile>
 
 #include <cstdio>
 
@@ -72,13 +73,13 @@ int main(int argc, char** argv)
               == QStringLiteral("+13.50V"),
           "a real telemetry sample replaces the neutral label");
 
-    applet.setSupplyVoltageTelemetryState(true);
+    applet.setSupplyVoltageTelemetryState(true, true);
     check(supplyGauge->property("gaugeLabel").toString()
               == QStringLiteral("+13.50V"),
           "a live sample survives a mid-session capability republish");
 
     model.removeMeter(2);
-    applet.setSupplyVoltageTelemetryState(true);
+    applet.setSupplyVoltageTelemetryState(true, true);
     check(supplyGauge->property("gaugeLabel").toString()
               == QStringLiteral("Supply Voltage"),
           "removing the voltage meter clears its stale reading");
@@ -86,17 +87,40 @@ int main(int argc, char** argv)
     model.defineMeter(supply);
     model.updateValues({2}, {static_cast<qint16>(13.5f * 256.0f)});
     model.clear();
-    applet.setSupplyVoltageTelemetryState(false);
+    applet.setSupplyVoltageTelemetryState(false, true);
     check(supplyGauge->property("gaugeLabel").toString()
               == QStringLiteral("Supply Voltage"),
           "disconnect clears the previous radio's voltage");
     check(supplyGauge->value() == 0.0f,
           "disconnect clears the previous radio's gauge value");
 
-    applet.setSupplyVoltageTelemetryState(true);
+    applet.setSupplyVoltageTelemetryState(true, true);
     check(supplyGauge->property("gaugeLabel").toString()
               == QStringLiteral("Supply Voltage"),
           "a new session waits for its own telemetry sample");
+
+    // The state call drops a held reading on a radio with no supply rail; it
+    // never hides the gauge (dimming is the registry's job, see
+    // meter_applet_supply_availability_test).
+    model.defineMeter(supply);
+    model.updateValues({2}, {static_cast<qint16>(13.5f * 256.0f)});
+    check(supplyGauge->property("gaugeLabel").toString()
+              == QStringLiteral("+13.50V"),
+          "precondition: the gauge holds a reading");
+    applet.setSupplyVoltageTelemetryState(true, false);
+    check(!supplyGauge->isHidden(),
+          "a radio that reports no supply rail (HL2) does not hide the gauge");
+    check(supplyGauge->property("gaugeLabel").toString()
+              == QStringLiteral("Supply Voltage")
+              && supplyGauge->value() == 0.0f,
+          "and drops any reading it held");
+
+    QFile mainWindowSource(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
+    check(mainWindowSource.open(QIODevice::ReadOnly)
+              && mainWindowSource.readAll().contains(
+                  "setSupplyVoltageTelemetryState(\n"
+                  "            connected, caps.hasSupplyVoltageTelemetry)"),
+          "MainWindow passes the radio's supply-telemetry capability to the applet");
 
     return failures == 0 ? 0 : 1;
 }

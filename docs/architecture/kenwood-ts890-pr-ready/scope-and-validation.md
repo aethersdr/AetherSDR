@@ -2,6 +2,27 @@
 
 This bounded delivery supersedes exhaustive reference parity as the first-PR gate. Historical research stays preserved locally. Status below reflects executed evidence, not planned work.
 
+## Upstream integration — November 9
+
+PR #7118 merges upstream `505b9172cf240db3ce017299005b4b2a9474db92` into
+the feature branch. Conflict resolution retains upstream CW text control, ATU
+availability and test additions alongside the TS-890S integration. Upstream TCI
+volume/AGC units remain the default; Kenwood's existing client dialect stays
+behind its explicit receive-client opt-in. Generated touchpoint and log-rule
+locations were refreshed without weakening the architecture checks.
+
+The merged source builds the native M5 app and daemon. Seven backend/TCI suites
+passed in 49.49 s and both affected applet suites passed in 4.88 s. Documentation
+and static checks pass. All four architecture gates pass on both current
+upstream and merged source, with no added warning records after line-number
+normalization. The proposal retains the same 220 changed paths against upstream.
+Existing whitespace in upstream WSPR sources was preserved; the proposal's
+whitespace check against upstream passes.
+
+The earlier hardware results below apply to the pre-merge tested head. A new
+owned RX candidate and bounded live rerun are being prepared; post-merge
+hardware qualification is not yet claimed.
+
 | Function group | Scope | Qualification / remaining gate |
 |---|---|---|
 | KNS identification, login and scoped credentials | Included | November 9 exact-candidate bounded endurance completed, with two owned reconnects and clean process teardown |

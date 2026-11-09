@@ -33,6 +33,7 @@ const sidebars = {
         "supported-radios",
         "flexradio",
         "radio-health-tools",
+        "wspr-receiver",
         "hermes-lite-2",
         "networked-icom",
         "kenwood-ts890",
