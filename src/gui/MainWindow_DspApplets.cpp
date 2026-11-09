@@ -35,6 +35,7 @@
 #include "core/ClientEq.h"
 #include "core/HostVoiceChainPolicy.h"
 #include "core/LogManager.h"
+#include "models/EqualizerModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -1070,6 +1071,31 @@ void MainWindow::wireHostModulatedVoiceChain()
     connect(&m_hostVoiceChainTimer, &QTimer::timeout, this, [this] {
         if (!m_audio || !hostModulatesTxAudio())
             return;
+
+        // Mirror the shared ClientEq enables back onto the graphic EQ, so an
+        // EQ toggled in the Aetherial strip, the chain tiles or the CEQ applet
+        // does not leave the EQ applet's ON button lying. Only while the
+        // graphic EQ may own the ClientEq bands; the reload guard keeps the
+        // silent restore from writing the bands back into ClientEq.
+        if (m_hostVoiceChainOwned) {
+            EqualizerModel& eqModel = m_radioModel.equalizerModel();
+            EqualizerModel::State mirrored = eqModel.state();
+            if (const ClientEq* eqTx = m_audio->clientEqTx())
+                mirrored.txEnabled = eqTx->isEnabled();
+            if (const ClientEq* eqRx = m_audio->clientEqRx())
+                mirrored.rxEnabled = eqRx->isEnabled();
+            if (mirrored != eqModel.state()) {
+                m_graphicEqReloading = true;
+                eqModel.restoreState(mirrored);
+                m_graphicEqReloading = false;
+                if (graphicEqPersistAllowed(m_radioModel.isConnected(),
+                                            hostModulatesTxAudio(),
+                                            m_graphicEqFromRadio)) {
+                    EqualizerModel::savePersistedState(mirrored);
+                }
+            }
+        }
+
         ClientComp* comp = m_audio->clientCompTx();
         if (!comp)
             return;
