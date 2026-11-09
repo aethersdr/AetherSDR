@@ -139,12 +139,29 @@ static double mono_s(void)
 
 /* The kernel's view of the clock: synchronized (by the radio's GPS-fed NTP,
  * or NTP over the internet) or not. WSPR needs the cycle start within ~1 s. */
+/* The radio told us an NTP source is selected (SmartSDR 4.3.16 publishes
+ * `ntp_sources ... state=selected`). Set from the API thread, read here. */
+static volatile int g_ntp_selected = 0;
+
 static int clock_synced(void)
 {
     struct timex tx;
     memset(&tx, 0, sizeof tx);
     int state = adjtimex(&tx);
-    return state != TIME_ERROR && !(tx.status & STA_UNSYNC);
+    if (state != TIME_ERROR && !(tx.status & STA_UNSYNC))
+        return 1;
+    /* A FLEX-6000 runs kernel 2.6.37, where chronyd disciplines the clock but
+     * never clears STA_UNSYNC: measured on a 6300 whose selected pool source
+     * reported stratum 3 and reach 255 while the kernel still said UNSYNC, and
+     * whose wall clock matched UTC to well under a second. The radio's own
+     * report that a source is selected is the better evidence on that
+     * hardware, so accept it. Radios that do set the kernel flag never reach
+     * this line.
+     *
+     * FT8 needs this MORE than WSPR does: a 15 s cycle leaves far less slack
+     * for a clock that is merely close, and without this the agent on a 6000
+     * sits in waiting_clock forever. */
+    return g_ntp_selected;
 }
 
 static int lan_caller(const struct sockaddr_in *a)
@@ -888,6 +905,18 @@ static void status_json(buf_t *b, long long since)
     effective_call_grid(call, grid);
     bprintf(b, "{\"agent\":\"AetherFT8\",\"version\":\"%s\",\"state\":", AGENT_VERSION);
     bjson_str(b, G.state);
+    /* clock_source says WHY: the kernel's own flag, the radio's selected NTP
+     * source where the kernel never clears STA_UNSYNC, or none at all. A UI
+     * that only has a bool cannot tell an operator which of those applies. */
+    {
+        struct timex ctx;
+        memset(&ctx, 0, sizeof ctx);
+        int cst = adjtimex(&ctx);
+        const char *src = (cst != TIME_ERROR && !(ctx.status & STA_UNSYNC)) ? "kernel"
+                        : g_ntp_selected ? "radio_ntp" : "none";
+        bputs(b, ",\"clock_source\":");
+        bjson_str(b, src);
+    }
     bprintf(b, ",\"clock_synced\":%s,\"uptime_s\":%lld,\"callsign\":", clock_synced() ? "true" : "false",
             (long long)(mono_s() - G.started));
     bjson_str(b, call);
@@ -1179,6 +1208,10 @@ static int api_connect(api_t *a, int udp_port)
     a->want_info = api_send(a, "info");
     api_send(a, "sub gps all");
     api_send(a, "sub slice all");
+    /* 4.3.16 and later; older firmware answers with an error and we simply
+     * never see an ntp_sources status, leaving the kernel flag as the only
+     * evidence, exactly as before. */
+    api_send(a, "sub ntp_sources all");
     return 1;
 }
 
@@ -1262,6 +1295,12 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             snprintf(G.gps_grid, sizeof G.gps_grid, "%s", grid);
             pthread_mutex_unlock(&G.mu);
         }
+    } else if (!strncmp(body, "ntp_sources ", 12)) {
+        /* One status per source. A source the radio has settled on reports
+         * state=selected; that is enough to trust the clock on a radio whose
+         * kernel never clears STA_UNSYNC. */
+        if (strstr(body, " state=selected"))
+            g_ntp_selected = 1;
     } else if (!strncmp(body, "slice ", 6)) {
         int index = atoi(body + 6);
         if (index >= 0 && index < MAX_SLICES) {
@@ -1534,6 +1573,26 @@ static int selftest_budget_flagged(void)
         printf("selftest FAIL: capture sample count disagrees with the rate\n");
         return 1;
     }
+    /* The cycle boundary must be computed from CYCLE_SECONDS.
+     *
+     * This caught a real bug on the radio. AetherWSPR hardcodes 120 in its
+     * main loop, and defining CYCLE_SECONDS 15 did not change it, so the FT8
+     * agent kept WSPR's two-minute rhythm while every constant said 15. It
+     * still decoded, and the decode times looked plausible, so nothing
+     * failed -- it simply missed seven of every eight transmissions. Measured
+     * cycle starts were 120 s apart on a live FLEX-6300. */
+    {
+        const long long now = 1794192687LL;      /* a real observed timestamp */
+        const long long cyc = now / CYCLE_SECONDS * CYCLE_SECONDS;
+        if (cyc % CYCLE_SECONDS != 0 || now - cyc >= CYCLE_SECONDS) {
+            printf("selftest FAIL: cycle boundary %lld for %lld\n", cyc, now);
+            return 1;
+        }
+        if (CYCLE_SECONDS != 15) {
+            printf("selftest FAIL: FT8 cycle is 15 s, not %d\n", CYCLE_SECONDS);
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -1650,7 +1709,7 @@ static int selftest(void)
         long long t0 = 1793836800; /* 2026-11-04 00:00 UTC */
         for (int k = 0; k < 720; k++) {
             int period;
-            long long t = t0 + 120LL * k;
+            long long t = t0 + (long long)CYCLE_SECONDS * k;
             const char *b = band_for_cycle(&c, "DN18pg", t, "", &period);
             const char *want = COORDINATED[((t / 60) % 60 % 20) / 2];
             if (strcmp(b, want) || period < 0) { printf("selftest FAIL: hop %d gave %s, want %s\n", k, b, want); return 1; }
@@ -1660,7 +1719,7 @@ static int selftest(void)
         int seen6 = 0;
         for (int k = 0; k < 720; k++) {
             int period;
-            const char *b = band_for_cycle(&c, "DN18pg", t0 + 120LL * k, "", &period);
+            const char *b = band_for_cycle(&c, "DN18pg", t0 + (long long)CYCLE_SECONDS * k, "", &period);
             if (strcmp(b, "40m") && strcmp(b, "6m")) { printf("selftest FAIL: subset hop gave %s\n", b); return 1; }
             seen6 += !strcmp(b, "6m");
         }
@@ -1991,8 +2050,12 @@ int main(int argc, char *argv[])
             if (capture_t) logf_("cycle %lld abandoned: the slice was removed mid-cycle", capture_t);
             capture_t = 0;
         }
-        long long cyc = (long long)now / 120 * 120;
-        long long next = cyc + 120;
+        /* FT8 cycles start every 15 s on the UTC second, not every 120 s as
+         * WSPR does. This was the one place the cycle length stayed a literal
+         * in AetherWSPR, so CYCLE_SECONDS must be used here or the agent
+         * silently keeps WSPR's two-minute rhythm. */
+        long long cyc = (long long)now / CYCLE_SECONDS * CYCLE_SECONDS;
+        long long next = cyc + CYCLE_SECONDS;
         int synced = clock_synced();
 
         /* Slice for the next cycle: made or retuned once the capture has
