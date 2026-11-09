@@ -17,8 +17,12 @@ delivers only to a separate computer on its LAN.
   removes headless slices when its last GUI client disconnects; the agent
   remakes the slice at once and loses that one cycle.
 - **Capture:** each even UTC minute, 114 s, timed by the system clock. It
-  waits until the kernel reports the clock synchronized; on an 8000-series
-  radio the clock comes from its GPS-disciplined stratum-1 NTP. Lost VITA
+  waits for a trusted clock; on an 8000-series radio that comes from its
+  GPS-disciplined stratum-1 NTP. A FLEX-6000 runs kernel 2.6.37, where
+  chronyd disciplines the clock but never clears `STA_UNSYNC`, so the kernel
+  flag alone would leave the agent waiting forever; there the radio's own
+  `ntp_sources ... state=selected` is accepted instead. `clock_source` in the
+  status says which applies — `kernel`, `radio_ntp` or `none`. Lost VITA
   packets become silence so the timing holds.
 - **DSP:** mix 1500 Hz to 0, then two FIR decimators: 24 kHz to 1500 Hz to
   375 Hz complex, in the scale and sign wsprd's own `.wav` reader produces.
