@@ -10800,6 +10800,7 @@ set_tests_properties(tx_applet_power_reconciliation_test PROPERTIES
 add_executable(two_tone_tune_gate_test
     tests/two_tone_tune_gate_test.cpp
     src/gui/TxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/AtuPreTuneDialog.cpp
     src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp
