@@ -4,6 +4,7 @@
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <utility>
@@ -21,9 +22,21 @@ HostCwTextKeyer::~HostCwTextKeyer()
     m_producer.invalidate();
 }
 
+bool HostCwTextKeyer::admitsLength(int chars) const
+{
+    const int pending = m_queuedChars + (m_keyer ? m_keyer->pendingChars() : 0);
+    return chars <= kMaxMessageChars && pending + chars <= kMaxPendingChars;
+}
+
+void HostCwTextKeyer::noteQueued(int chars)
+{
+    m_queuedChars += chars;
+}
+
 bool HostCwTextKeyer::send(const QString& text)
 {
-    if (!m_model || text.isEmpty()
+    m_queuedChars = std::max(0, m_queuedChars - static_cast<int>(text.size()));
+    if (!m_model || text.isEmpty() || !admitsLength(static_cast<int>(text.size()))
         || m_model->hostCwTextRefusal() != RadioModel::HostCwTextRefusal::None) {
         return false;
     }

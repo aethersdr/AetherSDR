@@ -1860,6 +1860,12 @@ QString RigctlProtocol::sendHostMorse(const QString& text)
     if (!m_hostCwText) {
         m_hostCwText = std::make_shared<HostCwTextKeyer>(m_model, QStringLiteral("rigctl:send_morse"));
     }
+    // One line on an unauthenticated listener must not become an unbounded
+    // keyed run: refuse a message, or a queue, past Hamlib's own bounds.
+    if (!m_hostCwText->admitsLength(static_cast<int>(text.size()))) {
+        return rprt(-9);
+    }
+    m_hostCwText->noteQueued(static_cast<int>(text.size()));
     QMetaObject::invokeMethod(m_model, [keyer = m_hostCwText, text] {
         (void)keyer->send(text);
     }, Qt::QueuedConnection);

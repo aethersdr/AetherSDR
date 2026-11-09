@@ -28,8 +28,23 @@ public:
     HostCwTextKeyer(const HostCwTextKeyer&) = delete;
     HostCwTextKeyer& operator=(const HostCwTextKeyer&) = delete;
 
+    // Bounds on host-keyed text, from Hamlib: rigctld reads one command
+    // argument into MAXARGSZ = 511 characters (tests/rigctl_parse.c), and its
+    // own send_morse queue is HAMLIB_FIFO_SIZE = 1024 (src/fifo.h). No
+    // rigctld client sends more in one line, and Hamlib never holds more.
+    static constexpr int kMaxMessageChars = 511;
+    static constexpr int kMaxPendingChars = 1024;
+    // Whether `chars` more may be queued: at most kMaxMessageChars in one
+    // message, and at most kMaxPendingChars with the text already pending
+    // (queued, playing, or noted as handed to a queued send()).
+    bool admitsLength(int chars) const;
+    // Text handed to a send() still waiting in the event queue; send() takes
+    // it off again, so a pipelined burst counts before it is delivered.
+    void noteQueued(int chars);
+
     // Queues text at the TransmitModel CW speed. False, with no edge, when
-    // RadioModel::hostCwTextRefusal() refuses or no producer is available.
+    // RadioModel::hostCwTextRefusal() refuses, the text is past the bounds
+    // above, or no producer is available.
     bool send(const QString& text);
     // Drops pending text, fences queued elements and keys up now.
     void stop();
@@ -41,6 +56,7 @@ private:
     TxCoordinator::Request m_input;
     std::unique_ptr<CwxLocalKeyer> m_keyer;
     std::shared_ptr<char> m_run;   // this run's identity for refusal callbacks
+    int m_queuedChars{0};          // noteQueued() text not yet through send()
 };
 
 } // namespace AetherSDR
