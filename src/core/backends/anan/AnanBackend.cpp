@@ -435,6 +435,7 @@ RadioCapabilities AnanBackend::capabilities() const
 {
     RadioCapabilities c;
     c.cwTextControl = std::nullopt;
+    c.hostCwKeyingControl = std::nullopt;   // setCwKeying() is the default no-op
     c.broadcastFmReceive = std::nullopt;
     c.family = QStringLiteral("anan");
     c.cwReceiveControl = std::nullopt;

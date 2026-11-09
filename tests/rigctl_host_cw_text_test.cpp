@@ -9,6 +9,7 @@
 #include "core/RigctlProtocol.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/TransmitDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "models/HostCwTextKeyer.h"
 #include "models/CwxModel.h"
@@ -331,6 +332,23 @@ void testRefusals()
               cat(port, QStringLiteral("b TEST")) == QLatin1String("RPRT -9"));
         pumpFor(300);
         check("no TX slice: no edge", f.edges.empty());
+    }
+    {
+        // TUNE active: every key-down would be refused at the edge, so the send
+        // is refused up front instead of answering RPRT 0 with nothing keyed.
+        Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
+        TransmitDelta tune;
+        tune.tune = true;
+        f.radio.transmitModel().applyChanges(tune);
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        check("TUNE: precondition, TUNE is active", f.radio.transmitModel().isTuning());
+        check("TUNE: preflight refuses",
+              f.radio.hostCwTextRefusal() == RadioModel::HostCwTextRefusal::Tuning);
+        check("TUNE: send_morse refused with RIG_ERJCTED",
+              cat(port, QStringLiteral("b TEST")) == QLatin1String("RPRT -9"));
+        pumpFor(300);
+        check("TUNE: no edge", f.edges.empty());
     }
     {
         // A radio that transmits but leaves hostCwKeyingControl absent (the

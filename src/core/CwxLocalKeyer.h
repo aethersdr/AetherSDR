@@ -14,7 +14,8 @@
 namespace AetherSDR {
 
 // Local Morse keyer: dit/dah events from CWX text for the sidetone, at the same
-// WPM as the radio's keyer (informational; the radio makes the on-air CW).
+// WPM as the radio's keyer (informational; the radio makes the on-air CW), or,
+// through HostCwTextKeyer, the host-keyed elements on a radio with no text buffer.
 // The schedule runs on a worker thread waiting on absolute steady_clock deadlines
 // via an interruptible condition_variable, not a QTimer, whose event-loop
 // coalescing clips elements (#3623), as IambicKeyer does.

@@ -490,9 +490,10 @@ public:
     // notice. Each element still passes the per-edge gates of a paddle.
     // BreakInOffUnkeyed: break-in is off and this host holds no MOX/PTT
     // (TransmitModel::isTransmitting()), so the backend would not raise MOX
-    // and the text would play to an unkeyed radio.
+    // and the text would play to an unkeyed radio. Tuning: TUNE is active, and a
+    // CW key-down is refused while tuning (TransmitModel::admitsCwxSend()).
     enum class HostCwTextRefusal { None, Unsupported, NoTxSlice, NotCwMode, ReceiveOnlyMode, Inhibited,
-                                   BreakInOffUnkeyed };
+                                   Tuning, BreakInOffUnkeyed };
     HostCwTextRefusal hostCwTextRefusal() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;

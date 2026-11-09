@@ -359,6 +359,7 @@ RadioCapabilities SimBackend::capabilities() const
     // a simulator that cannot key has nothing to be full duplex about.
     caps.hasRadioSideCwKeyer = false;
     caps.cwTextControl = std::nullopt;
+    caps.hostCwKeyingControl = std::nullopt;   // setCwKeying() is the default no-op
     caps.hasVoiceKeyer = false;
     caps.hasFullDuplex = false;
     caps.hasWaveforms = false;

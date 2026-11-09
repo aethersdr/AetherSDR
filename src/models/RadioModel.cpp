@@ -4636,6 +4636,10 @@ RadioModel::HostCwTextRefusal RadioModel::hostCwTextRefusal() const
     if (!transmitInhibitMessageForSlice(tx).isEmpty()) {
         return HostCwTextRefusal::Inhibited;
     }
+    // Every key-down would be refused while TUNE is active (admitsCwKeyEdge).
+    if (!m_transmitModel.admitsCwxSend()) {
+        return HostCwTextRefusal::Tuning;
+    }
     // Break-in off: the backend keys CW only under an MOX/PTT already held
     // (Hl2Backend::setCwKeying), so without one the text would not go out.
     if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
