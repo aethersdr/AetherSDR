@@ -39,7 +39,7 @@ jobs:
     outputs:
       publish-flight: ${{ steps.store-plan.outputs.publishFlight }}
       release-artifacts: ${{ steps.store-plan.outputs.releaseArtifacts }}
-      production-submission: ${{ steps.store-plan.outputs.productionSubmission }}
+      production-submission: ${{ steps.store-plan.outputs.productionDraft }}
       store-eligible: ${{ steps.store-plan.outputs.storeEligible }}
       msix-version: ${{ steps.store-plan.outputs.msixVersion }}
       sign: ${{ steps.sign-plan.outputs.sign }}
@@ -83,7 +83,7 @@ jobs:
             -RequestFlight ($env:STORE_REQUESTED_FLIGHT -eq 'true') `
             -DevOverrides ($env:STORE_DEV_OVERRIDES -eq 'true') `
             -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -FlightId $env:AETHERSDR_STORE_FLIGHT_ID
-          foreach ($name in @('releaseArtifacts', 'productionSubmission', 'publishFlight', 'storeEligible')) {
+          foreach ($name in @('releaseArtifacts', 'productionDraft', 'publishFlight', 'storeEligible')) {
             "$name=$($plan.$name.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           }
           "msixVersion=$($plan.msixVersion)" >> $env:GITHUB_OUTPUT

@@ -436,8 +436,7 @@ pwsh -NoProfile -File tests\windows_store_policy_test.ps1
 ```
 
 It exercises the actual build-plan script with tag/branch dispatches and the
-publisher with an in-process CLI substitute, including secret arming, a single
-direct publish call, and CLI error propagation. It performs no Store requests.
+publisher with an in-process CLI substitute. It performs no Store requests.
 Windows Installer runs it before packaging; CTest registers
 `windows_store_policy` when PowerShell is installed, for the unfiltered full
 suite. It is not added to the frozen per-PR CTest gate. A passing test does not
