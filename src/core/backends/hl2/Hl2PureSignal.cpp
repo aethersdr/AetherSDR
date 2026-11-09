@@ -437,13 +437,7 @@ void Hl2PureSignal::publish()
     if (s.feedbackLimit != m_last.feedbackLimit || !m_havePublished) {
         // In the log as well as the applet: the PS tile need not be open, and
         // a support bundle should show that the feedback path was overdriven.
-        if (s.feedbackLimit > 1) {
-            qCWarning(lcHl2Ps).nospace()
-                << "HL2 PureSignal: feedback " << s.feedbackLevel << " at or above the scale ("
-                << Hl2PsGain::kScale << ") at " << s.attenuationDb
-                << " dB, the most attenuation: receive input overdriven; add an attenuator "
-                   "in the feedback path";
-        } else if (s.feedbackLimit > 0) {
+        if (s.feedbackLimit > 0) {
             qCWarning(lcHl2Ps).nospace()
                 << "HL2 PureSignal: feedback " << s.feedbackLevel << " too strong to calibrate at "
                 << s.attenuationDb << " dB, the most attenuation; add an attenuator in the "

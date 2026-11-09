@@ -40,7 +40,7 @@ struct PureSignalView {
     int calibrationCount = 0;
     int engineState = 0;
     int attenuationDb = 31;
-    int feedbackLimit = 0;      // +2 clipped / +1 too strong at max att, -1 too weak at full gain
+    int feedbackLimit = 0;      // +2 ADC overload keyed / +1 too strong at max att, -1 too weak at full gain
     int attMin = -28;
     int attMax = 31;
     bool keyed = false;

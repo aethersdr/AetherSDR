@@ -283,8 +283,8 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
     secondary(m_readout);
     m_readout->setToolTip(tip(tr("Numbers"), tr(
         "<b>Att</b>: how much the feedback is turned down, in dB.<br>"
-        "<b>Cal</b>: how many calibrations succeeded since PureSignal was "
-        "turned on.<br>"
+        "<b>Cal</b>: how many calibrations succeeded this session; turning "
+        "PureSignal off does not reset it.<br>"
         "The last word is what PureSignal is doing at this moment.")));
     root->addWidget(m_readout);
 
@@ -322,7 +322,7 @@ PureSignalApplet::PureSignalApplet(QWidget* parent) : QWidget(parent)
         "feedback level stays inside the window. Leave it on.<br><br>"
         "Turn it off only if you want to set <b>TX att</b> by hand.<br><br>"
         "If it reaches the maximum (31 dB) and the feedback is still too "
-        "strong, the status line turns red. Then put an attenuator in the "
+        "strong, the status line warns you. Then put an attenuator in the "
         "feedback cable.")));
     drawer->addWidget(m_autoAttenuate);
 
@@ -642,16 +642,16 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
         text = tr("Hermes-Lite 2 only");
     } else if (s.enabled && s.feedbackLimit > 1) {
         // Before everything else, a leftover request error included: the
-        // level is at or above the scale, so the HL2's receive input is
-        // overdriven. Only computed while enabled.
-        text = tr("WARNING: too much RF feedback — this can damage your transceiver. "
-                  "Add an attenuator in the feedback path.");
+        // HL2 reported ADC overload while keyed with PureSignal on, so the
+        // feedback overdrives its receive input. Only set while enabled.
+        text = tr("WARNING: ADC overload while transmitting — the feedback overdrives "
+                  "the receive input. Add an attenuator in the feedback path.");
         token = QStringLiteral("color.accent.danger");
     } else if (s.enabled && s.feedbackLimit > 0) {
         // Above the window at the most attenuation: no calibration until an
-        // attenuator brings it down, but still inside the scale.
-        text = tr("Feedback too strong to calibrate at 31 dB — add an attenuator in the "
-                  "feedback path");
+        // attenuator brings it down.
+        text = tr("Feedback too strong to calibrate at %1 dB — add an attenuator in the "
+                  "feedback path").arg(s.attMax);
         token = QStringLiteral("color.accent.warning");
     } else if (!m_error.isEmpty()) {
         text = m_error;

@@ -1924,6 +1924,10 @@ QVariantMap Hl2Backend::pureSignalFields() const
     // setting is this thread's to report.
     if (!m_psAutoAttenuate)
         s.attenuationDb = m_psAttenuationDb;
+    // The receive input overdriven is the gateware's report, not a feedback
+    // level, and it outranks the controller's +1/-1.
+    if (m_psEnabled && m_psAdcOverload)
+        s.feedbackLimit = 2;
     return pureSignalStatusFields(s);
 }
 
@@ -4938,6 +4942,9 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     // gain control reads this; nothing else does.
     if (keyChanged && !key) {
         m_sinceUnkey.start();
+    }
+    if (keyChanged && key) {
+        m_keyedClock.start();
     }
     m_keyed = key;
     // PureSignal collects only while keyed (calcc's MOX). Queued to the I/O
@@ -8545,6 +8552,7 @@ void Hl2Backend::pushInitialState()
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
     m_radioPtt = false;
+    m_psAdcOverload = false;
     publishTransmitState();
     m_tuning = false;
     m_tuneOperation = {};
@@ -8782,6 +8790,29 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
             m_adcOverloadClock.start();
         }
         m_adcOverloadAssertions = 0;
+    }
+
+    // PureSignal: while keyed the converter sees the feedback, so an overload
+    // then means the feedback overdrives the receive input (Hl2PsOverload).
+    const bool keyedWholeWindow = m_keyed && t.adcSamples > 0 && m_keyedClock.isValid()
+        && m_keyedClock.elapsed() >= t.adcWindowMs;
+    const bool overloadInWindow = t.adcOverloadSamples > 0 || t.adcOverload.value_or(false);
+    const bool psOverload = AetherSDR::hl2::Hl2PsOverload::next(
+        m_psAdcOverload, m_psEnabled, keyedWholeWindow, overloadInWindow);
+    if (psOverload != m_psAdcOverload) {
+        m_psAdcOverload = psOverload;
+        if (psOverload) {
+            qWarning().noquote()
+                << QStringLiteral("HL2 PureSignal: ADC overload while transmitting (%1 of %2 "
+                                  "responses) at %3 dB feedback attenuation: the feedback "
+                                  "overdrives the receive input; add an attenuator in the "
+                                  "feedback path")
+                       .arg(t.adcOverloadSamples)
+                       .arg(t.adcSamples)
+                       .arg(m_psAutoAttenuate ? m_psStatus.attenuationDb : m_psAttenuationDb);
+        }
+        emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"),
+                             pureSignalFields());
     }
 }
 

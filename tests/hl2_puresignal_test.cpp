@@ -72,8 +72,8 @@ void gainStep()
     check(Gain::limit(31, 200) == 1 && Gain::limit(31, 255) == 1 && Gain::limit(31, 181) == 0
               && Gain::limit(30, 250) == 0,
           "too strong only at the most attenuation with the level above the window");
-    check(Gain::limit(31, 256) == 2 && Gain::limit(31, 400) == 2 && Gain::limit(30, 300) == 0,
-          "at or above the scale at the most attenuation: clipped, +2");
+    check(Gain::limit(31, 256) == 1 && Gain::limit(31, 400) == 1 && Gain::limit(30, 300) == 0,
+          "a level above the scale is a measurement too: +1, never +2");
     check(Gain::limit(-28, 100) == -1 && Gain::limit(-28, 0) == 0 && Gain::limit(-27, 100) == 0,
           "too weak only at full gain with a measured level below the window");
     check(Gain::lnaGainDbForAtt(31) == -12 && Gain::lnaGainDbForAtt(-28) == 47,
@@ -93,7 +93,7 @@ void limitNeedsALevelMeasuredHere()
     check(m.limit(31, 220) == 0, "the same attempt read again does not count as measured at 31");
     m.observe(true, 2, 31);
     check(m.limit(31, 220) == 1, "a fresh attempt at 31 still too strong: +1");
-    check(m.limit(31, 300) == 2, "and clipped there: +2");
+    check(m.limit(31, 300) == 1, "a level above the scale there: still +1");
     // Hold: calcc measures no more; the operator drags the slider.
     check(m.limit(30, 220) == 0, "a manual move away drops the warning");
     check(m.limit(31, 220) == 1, "and back to where it was measured restores it");
@@ -103,6 +103,30 @@ void limitNeedsALevelMeasuredHere()
     check(m.limit(-28, 100) == -1, "a fresh weak level at full gain: -1");
     m.reset();
     check(m.limit(-28, 100) == 0, "reset forgets it");
+
+    // PureSignal off and on: calcc's info[] survives LRESET, so the first
+    // read after the enable carries the previous session's attempt.
+    AetherSDR::hl2::Hl2PsMeasuredAt offOn;
+    offOn.observe(true, 4, 25);
+    offOn.observe(true, 5, 25);
+    offOn.reset();
+    offOn.observe(true, 5, 31);
+    check(offOn.limit(31, 240) == 0, "off/on: the previous session's level is no +1 at 31");
+    offOn.observe(true, 6, 31);
+    check(offOn.limit(31, 240) == 1, "off/on: the first fresh attempt at 31 is");
+}
+
+void overloadState()
+{
+    std::printf("\n  the red state is the ADC overload report while keyed\n");
+    using O = AetherSDR::hl2::Hl2PsOverload;
+    check(O::next(false, true, true, true), "keyed window with overload: on");
+    check(!O::next(false, true, false, true),
+          "a window not keyed from start to end does not set it");
+    check(O::next(true, true, false, false), "it holds through unkey");
+    check(!O::next(true, true, true, false), "a clean keyed window clears it");
+    check(!O::next(true, false, false, false) && !O::next(false, false, true, true),
+          "PureSignal off: never");
 }
 
 void autoOnAndOff()
@@ -367,6 +391,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     gainStep();
     limitNeedsALevelMeasuredHere();
+    overloadState();
     autoOnAndOff();
     singleCalibration();
     singleGivesUp();
