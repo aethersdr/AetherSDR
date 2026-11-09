@@ -90,7 +90,7 @@ else {
 
 [pscustomobject]@{
     releaseArtifacts = $release
-    productionDraft = $release -and $storeEligible -and -not [string]::IsNullOrWhiteSpace($ProductId)
+    productionSubmission = $release -and $storeEligible -and -not [string]::IsNullOrWhiteSpace($ProductId)
     publishFlight = $flight
     storeEligible = $storeEligible
     storeSkipReason = $storeSkipReason

@@ -42,7 +42,7 @@ try {
                 $plan = & $planScript @inputs -RequestFlight $requested
                 $releaseExpected = $eventName -eq 'push' -and $ref -eq 'refs/tags/v26.9.1'
                 Assert-True ($plan.releaseArtifacts -eq $releaseExpected) "Release routing: $eventName $ref $requested"
-                Assert-True ($plan.productionDraft -eq $releaseExpected) "Production routing: $eventName $ref $requested"
+                Assert-True ($plan.productionSubmission -eq $releaseExpected) "Production routing: $eventName $ref $requested"
                 Assert-True ($plan.publishFlight -eq ($eventName -eq 'workflow_dispatch' -and $requested)) 'Flight routing'
                 $expectedVersion = if ($releaseExpected) { '26.9.1.0' } else { '26.9.203.0' }
                 Assert-True ($plan.storeEligible) 'Supported production and development plans stay Store eligible'
@@ -67,10 +67,10 @@ try {
     $inputs.FlightId = 'FLIGHT'; $inputs.ProductId = ' '
     Assert-Throws { & $planScript @inputs -RequestFlight $true } 'PRODUCT_ID is required'
     $inputs.EventName = 'push'
-    Assert-True (-not (& $planScript @inputs).productionDraft) 'Unset product must keep production dormant'
+    Assert-True (-not (& $planScript @inputs).productionSubmission) 'Unset product must keep production dormant'
     $inputs.ProductId = 'PRODUCT'; $inputs.Repository = 'example/fork'
     Assert-True (-not (& $planScript @inputs).releaseArtifacts) 'Fork must not publish a release'
-    Assert-True (-not (& $planScript @inputs).productionDraft) 'Fork must not stage production'
+    Assert-True (-not (& $planScript @inputs).productionSubmission) 'Fork must not stage production'
     $inputs.EventName = 'workflow_dispatch'
     Assert-Throws { & $planScript @inputs -RequestFlight $true } 'require workflow_dispatch'
     $inputs.Repository = 'aethersdr/AetherSDR'
@@ -85,7 +85,7 @@ try {
         $plan = & $planScript @inputs
         Assert-True ($plan.msixVersion -eq '26.9.2.0') 'Production version must ignore run number and flight ID'
         Assert-True ($plan.storeEligible -and $plan.storeSkipReason -eq '') 'Supported production release is Store eligible'
-        Assert-True ($plan.productionDraft -and -not $plan.publishFlight) 'Production remains draft-only'
+        Assert-True ($plan.productionSubmission -and -not $plan.publishFlight) 'Production submission remains selected independently of flight'
     }
     $inputs.RunNumber = 205
     # Tag and source are compared by version value, not spelling.
@@ -100,7 +100,7 @@ try {
         $inputs.Ref = "refs/tags/$tag"
         $plan = & $planScript @inputs
         Assert-True ($plan.releaseArtifacts) 'Mismatched/suffixed tag keeps release artifacts enabled'
-        Assert-True (-not $plan.storeEligible -and -not $plan.productionDraft -and -not $plan.publishFlight) 'Mismatched/suffixed tag skips only Store paths'
+        Assert-True (-not $plan.storeEligible -and -not $plan.productionSubmission -and -not $plan.publishFlight) 'Mismatched/suffixed tag skips only Store paths'
         Assert-True ($plan.msixVersion -eq '') 'Ineligible release must not invent a Store version'
         Assert-True ($plan.storeSkipReason -match 'does not match') 'Tag mismatch explains Store skip'
     }
@@ -109,7 +109,7 @@ try {
         $inputs.Ref = "refs/tags/v$invalidVersion"
         $plan = & $planScript @inputs
         Assert-True ($plan.releaseArtifacts) 'Unsupported Store version keeps ZIP/EXE enabled'
-        Assert-True (-not $plan.storeEligible -and -not $plan.productionDraft -and -not $plan.publishFlight) 'Unsupported Store version skips Store paths'
+        Assert-True (-not $plan.storeEligible -and -not $plan.productionSubmission -and -not $plan.publishFlight) 'Unsupported Store version skips Store paths'
         Assert-True ($plan.msixVersion -eq '') 'Unsupported Store version has no fallback numbering'
         Assert-True ($plan.storeSkipReason -match 'Production Store versions require') 'Unsupported Store version explains skip'
     }
@@ -121,7 +121,7 @@ try {
     # flag and gate MSIX creation on it, or an ineligible release would fall
     # through to create-msix.ps1's project-version default.
     $workflow = Get-Content -Raw (Join-Path $RepositoryRoot '.github/workflows/windows-installer.yml')
-    Assert-True ($workflow -match "@\('releaseArtifacts', 'productionDraft', 'publishFlight', 'storeEligible'\)") 'Workflow exports storeEligible'
+    Assert-True ($workflow -match "@\('releaseArtifacts', 'productionSubmission', 'publishFlight', 'storeEligible'\)") 'Workflow exports storeEligible'
     Assert-True ($workflow -match "store-eligible: \$\{\{ steps\.store-plan\.outputs\.storeEligible \}\}") 'Workflow passes storeEligible to the packaging job'
     Assert-True ($workflow -match "- name: Create MSIX package\s+if: needs\.build-windows\.outputs\.store-eligible == 'true'") 'Workflow gates MSIX creation on storeEligible'
     Assert-True ($workflow -match 'storeSkipReason') 'Workflow surfaces the Store skip reason'
@@ -153,21 +153,20 @@ try {
     Assert-True ($call[$call.IndexOf('--flightId') + 1] -eq 'FLIGHT') 'Flight ID must reach CLI'
     & $publishScript @publishInputs -FlightId 'FLIGHT'
     Assert-True ($global:aetherStoreCalls[2] -contains '--noCommit') 'Flight draft remains possible'
-    & $publishScript @publishInputs -Commit -CommitProduction
-    Assert-True ($global:aetherStoreCalls[3] -notcontains '--noCommit') 'Explicit production override must work'
+    Assert-Throws { & $publishScript @publishInputs -Commit -CommitProduction } 'requires ExpectedVersion'
     foreach ($blank in @('', ' ')) {
         Assert-Throws { & $publishScript @publishInputs -FlightId $blank -Commit } 'certify PRODUCTION'
     }
     Assert-Throws { & $publishScript @publishInputs -CommitProduction } 'requires -Commit'
     Assert-Throws { & $publishScript @publishInputs -Commit -CommitProduction -FlightId 'FLIGHT' } 'must not be combined'
     Assert-Throws { & $publishScript @publishInputs -UploadTimeoutSeconds 99 } 'UploadTimeoutSeconds'
-    Assert-True ($global:aetherStoreCalls.Count -eq 4) 'Refusals must occur before any CLI invocation'
+    Assert-True ($global:aetherStoreCalls.Count -eq 3) 'Refusals must occur before any CLI invocation'
     $global:aetherStoreExitCode = 9
     Assert-Throws { & $publishScript @publishInputs } 'exit code 9'
     $global:aetherStoreExitCode = 0
     New-Item -ItemType File -Path (Join-Path $scratch 'AetherSDR-extra.msixupload') | Out-Null
     Assert-Throws { & $publishScript @publishInputs } 'Expected exactly one'
-    Assert-True ($global:aetherStoreCalls.Count -eq 5) 'Ambiguous upload must not call CLI'
+    Assert-True ($global:aetherStoreCalls.Count -eq 4) 'Ambiguous upload must not call CLI'
 
     # Fail on Store-invalid versions before touching deploy files or SDK tools.
     Assert-Throws { & $packageScript -Version '26.9.1.203' -CreateUpload -DeployDir (Join-Path $scratch 'absent') } 'fourth version component'
@@ -179,3 +178,5 @@ finally {
     Remove-Variable aetherStoreCalls, aetherStoreExitCode -Scope Global
     Remove-Item -LiteralPath $scratch -Recurse -Force
 }
+
+& (Join-Path $PSScriptRoot 'windows_store_production_test.ps1') -RepositoryRoot $RepositoryRoot

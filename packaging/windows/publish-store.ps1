@@ -10,9 +10,9 @@
 
     By default it stages a DRAFT submission (`--noCommit`): the package is
     uploaded to Partner Center but certification is NOT started. A maintainer
-    reviews the pending submission in Partner Center and clicks "Submit to
-    Store" to begin certification. Pass -Commit to send a flight straight to
-    certification; production also requires -CommitProduction explicitly.
+    can submit that draft manually. The production workflow's arming secret
+    passes -Commit -CommitProduction for automatic certification/publication.
+    Pass -Commit with -FlightId to submit a restricted flight.
     Pass -FlightId to target an existing Partner Center package flight. The
     package identity and ProductId remain those of the production app; the
     flight controls the restricted audience.
@@ -23,10 +23,8 @@
 
     Behavior on a missing package is deliberate: the MSIX build step in CI is
     `continue-on-error`, so a flaky package build leaves no `.msixupload`. In
-    that case this script warns and exits 0 rather than turning an
-    already-completed release red — the missing-package failure is already
-    surfaced by the MSIX step's own annotation. A genuine publish API failure
-    still exits non-zero so it is visible.
+    that case a draft request warns and exits 0. A committed submission fails
+    when its package is missing. Store CLI and ingestion errors also fail.
 
 .PARAMETER ProductId
     The 12-character Microsoft Store product Id for the AetherSDR listing.
@@ -58,7 +56,14 @@
 
 .PARAMETER CommitProduction
     Explicit second opt-in for -Commit without a flight. Cannot be used with a
-    flight or without -Commit; ordinary tag builds pass neither switch.
+    flight or without -Commit. Production uploads, commits and waits for the
+    expected package to be ingested; Microsoft then publishes it automatically.
+
+.PARAMETER ExpectedVersion
+    Required with -CommitProduction: the package version from the build plan.
+
+.PARAMETER IngestionTimeoutSeconds
+    Maximum polling window for production package ingestion (30 minutes).
 #>
 
 [CmdletBinding()]
@@ -70,7 +75,12 @@ param(
     [ValidateRange(100, 100000)]
     [long]$UploadTimeoutSeconds = 300,
     [switch]$Commit,
-    [switch]$CommitProduction
+    [switch]$CommitProduction,
+    [string]$ExpectedVersion,
+    [ValidateRange(1, 1800)]
+    [int]$IngestionTimeoutSeconds = 1800,
+    [ValidateRange(1, 60)]
+    [int]$PollIntervalSeconds = 60
 )
 
 $ErrorActionPreference = "Stop"
@@ -88,11 +98,17 @@ if ($CommitProduction -and (-not $Commit -or $hasFlight)) {
 if ($Commit -and -not $hasFlight -and -not $CommitProduction) {
     throw "-Commit without -FlightId would certify PRODUCTION. Pass -CommitProduction to explicitly authorize it."
 }
+if ($CommitProduction -and $ExpectedVersion -notmatch '^\d+\.\d+\.\d+\.0$') {
+    throw "-CommitProduction requires ExpectedVersion in Store format YY.M.PATCH.0."
+}
 
 $uploads = @(Get-ChildItem -LiteralPath $SearchDir -Filter $UploadGlob -File -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending)
 
 if ($uploads.Count -eq 0) {
+    if ($Commit) {
+        throw "No '$UploadGlob' found in '$SearchDir'; refusing to report a committed Store publication without a package."
+    }
     Write-Warning ("No '$UploadGlob' found in '$SearchDir'; nothing to publish. " +
         "The MSIX packaging step likely did not produce an upload package " +
         "(it is continue-on-error). Skipping Store submission.")
@@ -106,6 +122,13 @@ if ($uploads.Count -gt 1) {
 }
 
 $upload = $uploads[0].FullName
+if ($CommitProduction) {
+    & (Join-Path $PSScriptRoot 'publish-store-production.ps1') `
+        -ProductId $ProductId -UploadPath $upload -ExpectedVersion $ExpectedVersion `
+        -UploadTimeoutSeconds $UploadTimeoutSeconds `
+        -IngestionTimeoutSeconds $IngestionTimeoutSeconds -PollIntervalSeconds $PollIntervalSeconds
+    return
+}
 Write-Host "Store product Id : $ProductId"
 if (-not [string]::IsNullOrWhiteSpace($FlightId)) {
     Write-Host "Store flight Id  : $FlightId"
