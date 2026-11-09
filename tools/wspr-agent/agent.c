@@ -115,12 +115,43 @@ static double mono_s(void)
 
 /* The kernel's view of the clock: synchronized (by the radio's GPS-fed NTP,
  * or NTP over the internet) or not. WSPR needs the cycle start within ~1 s. */
-static int clock_synced(void)
+/* The radio told us an NTP source is selected (SmartSDR 4.3.16 publishes
+ * `ntp_sources ... state=selected`). Set from the API thread, read here. */
+static volatile int g_ntp_selected = 0;
+
+/* Reads the kernel's flag. Separated from the decision below so the decision
+ * can be tested on a host whose own clock is synced, where the kernel branch
+ * would otherwise always win and hide the fallback. */
+static int kernel_clock_synced(void)
 {
     struct timex tx;
     memset(&tx, 0, sizeof tx);
     int state = adjtimex(&tx);
     return state != TIME_ERROR && !(tx.status & STA_UNSYNC);
+}
+
+/* The decision, given the kernel's verdict and the radio's. Pure, so the
+ * selftest can put the kernel in either state. */
+static int clock_synced_from(int kernel_says, int radio_says)
+{
+    return kernel_says || radio_says;
+}
+
+static int clock_synced(void)
+{
+    if (kernel_clock_synced())
+        return 1;
+    /* A FLEX-6000 runs kernel 2.6.37, where chronyd disciplines the clock but
+     * never clears STA_UNSYNC. Measured on a FLEX-6300 whose selected pool
+     * source reported stratum 3 and reach 255 while the kernel still said
+     * UNSYNC, and whose wall clock matched UTC to well under a second.
+     *
+     * Without this the agent never leaves waiting_clock on a 6000 -- the only
+     * hardware it is built for -- so it captures nothing at all. The radio's
+     * own report that it has settled on a source is the better evidence on
+     * that kernel, so accept it. Radios whose kernel does clear the flag
+     * return above and never reach this line. */
+    return clock_synced_from(0, g_ntp_selected);
 }
 
 static int lan_caller(const struct sockaddr_in *a)
@@ -940,6 +971,19 @@ static void status_json(buf_t *b, long long since)
     pthread_mutex_unlock(&U.mu);
     bprintf(b, "{\"agent\":\"AetherWSPR\",\"version\":\"%s\",\"state\":", AGENT_VERSION);
     bjson_str(b, G.state);
+    /* clock_source says WHY the clock is trusted: the kernel's own flag, the
+     * radio's selected NTP source where the kernel never clears STA_UNSYNC,
+     * or neither. An operator looking at a bool cannot tell a GPS-locked
+     * radio from a 6000 running on the fallback. */
+    {
+        struct timex ctx;
+        memset(&ctx, 0, sizeof ctx);
+        int cst = adjtimex(&ctx);
+        const char *csrc = (cst != TIME_ERROR && !(ctx.status & STA_UNSYNC)) ? "kernel"
+                         : g_ntp_selected ? "radio_ntp" : "none";
+        bputs(b, ",\"clock_source\":");
+        bjson_str(b, csrc);
+    }
     bprintf(b, ",\"clock_synced\":%s,\"uptime_s\":%lld,\"callsign\":", clock_synced() ? "true" : "false",
             (long long)(mono_s() - G.started));
     bjson_str(b, call);
@@ -1227,6 +1271,10 @@ static int api_connect(api_t *a, int udp_port)
     a->want_info = api_send(a, "info");
     api_send(a, "sub gps all");
     api_send(a, "sub slice all");
+    /* 4.3.16 and later. Older firmware answers with an error and we simply
+     * never see an ntp_sources status, leaving the kernel flag as the only
+     * evidence, exactly as before this subscription existed. */
+    api_send(a, "sub ntp_sources all");
     return 1;
 }
 
@@ -1310,6 +1358,14 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             snprintf(G.gps_grid, sizeof G.gps_grid, "%s", grid);
             pthread_mutex_unlock(&G.mu);
         }
+    } else if (!strncmp(body, "ntp_sources ", 12)) {
+        /* One status per source. A source the radio has settled on reports
+         * state=selected; that is enough to trust the clock on a radio whose
+         * kernel never clears STA_UNSYNC. Latching is deliberate: chrony can
+         * briefly drop a source while the clock stays disciplined, and losing
+         * the cycle over that would cost two minutes of capture. */
+        if (strstr(body, " state=selected"))
+            g_ntp_selected = 1;
     } else if (!strncmp(body, "slice ", 6)) {
         int index = atoi(body + 6);
         if (index >= 0 && index < MAX_SLICES) {
@@ -1573,6 +1629,170 @@ static int selftest_radio_lines(void)
     return 0;
 }
 
+/* The clock fallback for a radio whose kernel never clears STA_UNSYNC.
+ *
+ * A FLEX-6000 runs kernel 2.6.37: chronyd disciplines the clock, the wall
+ * clock is right, and STA_UNSYNC stays set forever. The agent therefore never
+ * left waiting_clock on the only hardware it is built for. clock_synced() now
+ * accepts the radio's own report that it has settled on a source.
+ *
+ * The first branch of clock_synced() reads the real kernel clock, which on a
+ * synced build host returns 1 and would hide the fallback entirely. So this
+ * drives the API line parser -- the same api_line() the radio feeds -- and
+ * asserts on the latch it sets, which no host clock can influence. */
+static int selftest_ntp_fallback(void)
+{
+    int fail = 0;
+    int p[2];
+    if (pipe(p)) return 1;
+    fcntl(p[1], F_SETFL, O_NONBLOCK);
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = p[1];
+    a.slice = 0;
+    config_t c;
+    config_default(&c);
+    char l[200];
+    const int saved = g_ntp_selected;
+
+    /* Source states a radio reports that are NOT evidence. A candidate or a
+     * source being measured must not be mistaken for a disciplined clock, and
+     * "selected" must be matched as a whole word with its leading space --
+     * `state=selectable` is a real chrony state and starts with "selected"
+     * only if you compare carelessly. */
+    const char *not_evidence[] = {
+        "S1|ntp_sources 0 state=candidate name=0.flex.pool.ntp.org stratum=3 reach=255",
+        "S1|ntp_sources 1 state=selectable name=1.flex.pool.ntp.org stratum=2 reach=255",
+        "S1|ntp_sources 2 state=falseticker name=2.flex.pool.ntp.org stratum=3 reach=255",
+        "S1|ntp_sources 3 state=unreachable name=3.flex.pool.ntp.org stratum=0 reach=0",
+        "S1|ntp_sources 4 name=deselected.example.org stratum=3 reach=255",
+    };
+    for (size_t i = 0; i < sizeof not_evidence / sizeof not_evidence[0]; i++) {
+        g_ntp_selected = 0;
+        snprintf(l, sizeof l, "%s", not_evidence[i]);
+        api_line(&a, l, &c);
+        if (g_ntp_selected) {
+            printf("selftest FAIL: ntp state accepted as synced: %s\n", not_evidence[i]);
+            fail = 1;
+        }
+    }
+
+    /* What the 6300 actually published while its kernel still said UNSYNC:
+     * stratum 3, reach 255, state=selected. That is the evidence we accept. */
+    g_ntp_selected = 0;
+    strcpy(l, "S1|ntp_sources 1 state=selected name=1.flex.pool.ntp.org stratum=3 reach=255");
+    api_line(&a, l, &c);
+    if (!g_ntp_selected) {
+        printf("selftest FAIL: a selected ntp source was not accepted\n");
+        fail = 1;
+    }
+
+    /* The decision itself, with the kernel's answer supplied rather than read.
+     * This is the assertion that actually proves the fix: on a build host
+     * whose own clock is synced, clock_synced() returns at its kernel branch
+     * and the fallback is unreachable, so testing clock_synced() alone would
+     * pass even with the fallback deleted. Measured: WSL reports
+     * STA_UNSYNC=clear, so that is this host.
+     *
+     * Row 2 is the FLEX-6000 case the fix exists for: kernel says no, radio
+     * says a source is selected, and the agent must capture. */
+    {
+        const struct { int kernel, radio, want; const char *what; } cases[] = {
+            {1, 0, 1, "kernel synced, no radio report"},
+            {0, 1, 1, "FLEX-6000: kernel UNSYNC, radio source selected"},
+            {1, 1, 1, "both agree"},
+            {0, 0, 0, "neither: the agent must wait"},
+        };
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            const int got = clock_synced_from(cases[i].kernel, cases[i].radio);
+            if (got != cases[i].want) {
+                printf("selftest FAIL: clock %s gave %d, want %d\n",
+                       cases[i].what, got, cases[i].want);
+                fail = 1;
+            }
+        }
+    }
+
+    /* And the real function, which on any host must never report unsynced
+     * once a source is selected. */
+    if (!clock_synced()) {
+        printf("selftest FAIL: clock_synced() false with an ntp source selected\n");
+        fail = 1;
+    }
+
+    /* The latch holds: chrony can drop a source for one poll while the clock
+     * stays disciplined, and losing waiting_clock over that would cost two
+     * minutes of capture. */
+    strcpy(l, "S1|ntp_sources 1 state=candidate name=1.flex.pool.ntp.org stratum=3 reach=255");
+    api_line(&a, l, &c);
+    if (!g_ntp_selected) {
+        printf("selftest FAIL: the ntp latch dropped on a transient state\n");
+        fail = 1;
+    }
+
+    /* The status carries clock_source so an operator can tell a GPS-locked
+     * radio from a 6000 running on this fallback. */
+    {
+        static char out[512 * 1024];
+        buf_t b = {out, 0, sizeof out, 0};
+        status_json(&b, 0);
+        if (b.full || !strstr(out, "\"clock_source\":")) {
+            printf("selftest FAIL: status has no clock_source\n");
+            fail = 1;
+        }
+    }
+
+    /* The agent must actually ASK the radio for ntp_sources. Injecting status
+     * lines above proves the parser, not the subscription -- and without the
+     * subscription a real radio sends nothing and the agent waits forever.
+     *
+     * api_connect() dials g_radio_addr:4992, and g_radio_addr defaults to
+     * 127.0.0.1, so a listener on loopback:4992 catches the real function's
+     * output. This is what went on the wire, not a grep of the source. */
+    {
+        int srv = socket(AF_INET, SOCK_STREAM, 0);
+        int one = 1;
+        struct sockaddr_in sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons(4992);
+        sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (srv >= 0)
+            setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        if (srv < 0 || bind(srv, (struct sockaddr *)&sa, sizeof sa) || listen(srv, 1)) {
+            /* Port 4992 is busy -- a real SmartSDR or another agent is on this
+             * host. Say so rather than reporting a pass that did not happen. */
+            printf("selftest SKIP: port 4992 busy, subscription not checked\n");
+        } else {
+            api_t s;
+            int ok = api_connect(&s, 0);
+            int c = ok ? accept(srv, NULL, NULL) : -1;
+            char wire[2048] = "";
+            if (c >= 0) {
+                struct timeval tv = {1, 0};
+                setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+                ssize_t n = recv(c, wire, sizeof wire - 1, 0);
+                wire[n > 0 ? n : 0] = 0;
+                close(c);
+            }
+            if (!ok) {
+                printf("selftest FAIL: api_connect to the loopback listener failed\n");
+                fail = 1;
+            } else if (!strstr(wire, "sub ntp_sources all")) {
+                printf("selftest FAIL: the agent never subscribes to ntp_sources\n");
+                fail = 1;
+            }
+            if (ok) api_close(&s);
+        }
+        if (srv >= 0) close(srv);
+    }
+
+    g_ntp_selected = saved;
+    close(p[0]);
+    close(p[1]);
+    return fail;
+}
+
 /* A POST that can't be stored is refused and changes nothing: not the live
  * settings, and not the claim. Driven through the real request handler. */
 static int selftest_save_failure(void)
@@ -1617,7 +1837,8 @@ static const char *BAD_GRIDS[] = {"ZZ99", "AA00zz", "D18P", "DN1", "DN18p", "123
 static int selftest(double snr_db)
 {
     if (selftest_persistence() || selftest_spots() || selftest_upload_off()
-        || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()) return 1;
+        || selftest_busy_cycle() || selftest_radio_lines() || selftest_ntp_fallback()
+        || selftest_save_failure()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
         if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
     if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }
