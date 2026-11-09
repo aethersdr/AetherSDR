@@ -246,7 +246,9 @@ int main(int argc, char** argv)
         pipe.frameArrives(frame());
     }
     widget.setFrequencyRangeImmediate(14.160, 0.100);
-    check(!bins().value("ok").toBool(), "on, zoom: refused right after the zoom");
+    r = bins();
+    check(!heldRefusal(r) && error(r).contains(QLatin1String("geometry changed after the last frame")),
+          "on, zoom: refused for the geometry change right after the zoom");
     pipe.advance(delayMs);
     r = bins();
     check(heldRefusal(r), "on, zoom: frames queued before the zoom are refused as held at the new span");
@@ -284,7 +286,10 @@ int main(int argc, char** argv)
     for (int i = 0; i < kSettled - 1; ++i) {
         pipe.frameArrives(frame());
     }
-    check(!bins().value("ok").toBool(), "off, pan: refused below kSettledFrames frames after the pan");
+    r = bins();
+    check(!heldRefusal(r)
+              && error(r).contains(QStringLiteral("geometry changed %1 frames ago").arg(kSettled - 1)),
+          "off, pan: refused below kSettledFrames frames after the pan, by the ordinary settle count");
     last = frame();
     pipe.frameArrives(last);
     r = bins();
