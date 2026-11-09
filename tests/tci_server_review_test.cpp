@@ -31,6 +31,7 @@
 #include <QUrl>
 #include <QWebSocket>
 
+#include <cmath>
 #include <cstring>
 #include <cstdio>
 #include <memory>
@@ -1945,6 +1946,48 @@ public:
             && fresh.valid() && fresh.sameRequest(client.texts[2].input);
     }
 
+    // tx_sensors' SWR is the TciServer consumer of MeterModel::txMetersChanged.
+    // Drive it through real meter updates, so the forward power the gate sees
+    // is whatever the production hookup reads, and observe the cached value
+    // tx_sensors sends. The 30 mW "pause" is below the filter's 50 mW floor
+    // while MeterModel's smoothed forward power still reads about 4 W, so a
+    // hookup that gated on the smoothed value would let the 4.0 through.
+    static bool tciSwrIsGatedOnInstantForwardPower()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        MeterModel& meters = model.meterModel();
+        meters.defineMeter({1, "TX", 0, "FWDPWR", "Watts", 0, 100, "Forward power"});
+        meters.defineMeter({2, "TX", 0, "SWR", "SWR", 1, 100, "Standing wave ratio"});
+        const auto feed = [&meters](float watts, float swr) {
+            meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("FWDPWR"), watts);
+            meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("SWR"), swr);
+        };
+        bool ok = true;
+        const auto expect = [&](float want, const char* what) {
+            if (std::fabs(server.m_cachedSwr - want) > 0.01f) {
+                std::printf("      %s: tx_sensors SWR %.2f, expected %.2f\n",
+                            what, static_cast<double>(server.m_cachedSwr),
+                            static_cast<double>(want));
+                ok = false;
+            }
+        };
+
+        server.onRadioTransmittingChanged(true);
+        feed(5.0f, 1.3f);
+        expect(1.3f, "reading under carrier");
+        feed(0.03f, 4.0f);
+        expect(1.3f, "reading without measurable carrier holds");
+        feed(5.0f, 2.5f);
+        expect(2.5f, "worsening under carrier passes");
+        server.onRadioTransmittingChanged(false);
+        expect(1.0f, "un-key returns to rest");
+        server.onRadioTransmittingChanged(true);
+        feed(0.03f, 4.0f);
+        expect(1.0f, "no held reading survives into the next over");
+        return ok;
+    }
+
     static bool lateKeyIsAbortedOnModelThread()
     {
         RadioModel model;
@@ -3362,6 +3405,10 @@ int main(int argc, char** argv)
     std::printf("%s  RIT/XIT offset and AGC relays seed once after a re-wire (#2824)\n",
                 valueSeed ? "PASS" : "FAIL");
 
+    const bool tciSwrGated = AetherSDR::TciServerReviewTest::tciSwrIsGatedOnInstantForwardPower();
+    std::printf("%s  tx_sensors SWR is gated on instant forward power and resets on un-key\n",
+                tciSwrGated ? "PASS" : "FAIL");
+
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
     const bool inputFence = AetherSDR::TciServerReviewTest::ingressReleaseFencesEarlierCommands();
@@ -3384,6 +3431,6 @@ int main(int argc, char** argv)
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
         && chronoIdle && chronoCatchUp && daxRestored && initProtocol
-        && dsbMode && rxCtunEx && guiSplit && valueSeed
+        && dsbMode && rxCtunEx && guiSplit && valueSeed && tciSwrGated
         ? 0 : 1;
 }

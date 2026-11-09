@@ -290,6 +290,13 @@ rx_channel_sensors:0,0,-97.3;
 
 TX sensors broadcast during transmit, including ALC.
 
+The SWR field is the same trusted SWR the S-meter shows. A reading taken
+without measurable forward power, for example in a speech pause, does not
+replace it: the last reading taken under carrier is held. A worse SWR under
+carrier is reported at once. When the radio unkeys, the held value is cleared,
+so the next transmission starts again from 1.0. A persistent below-unity
+reading from the radio, which means it cannot measure SWR, is reported as 10.0.
+
 ### CW keying
 
 ```
