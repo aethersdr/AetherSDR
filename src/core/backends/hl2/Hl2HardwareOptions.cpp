@@ -48,11 +48,15 @@ int intField(const QJsonObject& doc, const char* key, int defaultValue)
 }  // namespace
 
 Hl2HardwareOptions Hl2HardwareOptions::load(const RadioSettingsScope& scope,
-                                            std::optional<Codec>* storedCodec)
+                                            std::optional<Codec>* storedCodec,
+                                            std::optional<FilterBoard>* storedFilterBoard)
 {
     Hl2HardwareOptions opts;      // every default already correct
     if (storedCodec) {
         storedCodec->reset();
+    }
+    if (storedFilterBoard) {
+        storedFilterBoard->reset();
     }
     if (!scope.isValid())
         return opts;
@@ -67,6 +71,9 @@ Hl2HardwareOptions Hl2HardwareOptions::load(const RadioSettingsScope& scope,
     opts.randomBit   = boolField(doc, kFieldRandom, opts.randomBit);
     opts.filterBoard = clampFilterBoard(
         intField(doc, kFieldFilterBoard, static_cast<int>(opts.filterBoard)));
+    if (storedFilterBoard && doc.contains(QLatin1String(kFieldFilterBoard))) {
+        *storedFilterBoard = opts.filterBoard;
+    }
     opts.n2adrHpf    = boolField(doc, kFieldN2adrHpf, opts.n2adrHpf);
     opts.cl1RefClock = boolField(doc, kFieldCl1, opts.cl1RefClock);
     opts.atuGateware = boolField(doc, kFieldAtu, opts.atuGateware);
@@ -76,7 +83,8 @@ Hl2HardwareOptions Hl2HardwareOptions::load(const RadioSettingsScope& scope,
 }
 
 void Hl2HardwareOptions::save(const RadioSettingsScope& scope,
-                              const Hl2HardwareOptions& opts, bool writeCodec)
+                              const Hl2HardwareOptions& opts, bool writeCodec,
+                              bool writeFilterBoard)
 {
     if (!scope.isValid())
         return;
@@ -96,7 +104,9 @@ void Hl2HardwareOptions::save(const RadioSettingsScope& scope,
     }
     doc[QLatin1String(kFieldDither)]      = opts.ditherBit;
     doc[QLatin1String(kFieldRandom)]      = opts.randomBit;
-    doc[QLatin1String(kFieldFilterBoard)] = static_cast<int>(opts.filterBoard);
+    if (writeFilterBoard) {
+        doc[QLatin1String(kFieldFilterBoard)] = static_cast<int>(opts.filterBoard);
+    }
     doc[QLatin1String(kFieldN2adrHpf)]    = opts.n2adrHpf;
     doc[QLatin1String(kFieldCl1)]         = opts.cl1RefClock;
     doc[QLatin1String(kFieldAtu)]         = opts.atuGateware;

@@ -497,11 +497,12 @@ private:
     // a SquareSDR 2 look identical on the wire and the dither bit means different
     // things on each. See Hl2HardwareOptions.
     Hl2HardwareOptions m_hw;
-    // The board this radio's gateware names, and whether m_hw.codec is the
-    // suggestion for it rather than a stored choice. A suggested codec is not
-    // persisted until a hw.set names a codec (#6806).
+    // The board this radio's gateware names, and whether m_hw.codec and
+    // m_hw.filterBoard are the suggestion for it rather than a stored choice.
+    // A suggested field is not persisted until a hw.set names it (#6806).
     hl2::GatewareBoard m_gatewareBoard = hl2::GatewareBoard::Unknown;
     bool m_hwCodecSuggested = false;
+    bool m_hwFilterBoardSuggested = false;
     // Load m_hw for m_radioSerial at connect, applying sessionCodec().
     void loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor);
     // Adopt a new set: persist (or not), push every field that changed to the

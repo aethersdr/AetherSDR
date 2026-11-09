@@ -62,10 +62,20 @@ struct Hl2BoardIdentityTestAccess {
 
 namespace {
 
-bool codecKeyStored(const RadioSettingsScope& scope)
+bool keyStored(const RadioSettingsScope& scope, const char* key)
 {
     return scope.featureExact(QLatin1String(Hl2HardwareOptions::kFeature))
-        .contains(QStringLiteral("codec"));
+        .contains(QLatin1String(key));
+}
+
+bool codecKeyStored(const RadioSettingsScope& scope)
+{
+    return keyStored(scope, "codec");
+}
+
+bool filterBoardKeyStored(const RadioSettingsScope& scope)
+{
+    return keyStored(scope, "filterBoard");
 }
 
 // hw.get as a map, through the same verb the setup dialog uses.
@@ -347,6 +357,34 @@ int main(int argc, char** argv)
               "load: a stored None is reported as stored");
     }
 
+    // ---- 4d'. the same split for the filter board (#6806) ------------------
+    {
+        using FilterBoard = Hl2HardwareOptions::FilterBoard;
+        const RadioSettingsScope scope(family, QStringLiteral("AA:BB:CC:DD:EE:20"));
+        std::optional<FilterBoard> stored = FilterBoard::None;
+        Hl2HardwareOptions::load(scope, nullptr, &stored);
+        check(!stored, "load: an empty document reports no stored filter board");
+
+        Hl2HardwareOptions o;
+        o.filterBoard = FilterBoard::N2adrTxOnly;
+        o.speakerLevelPercent = 40;
+        Hl2HardwareOptions::save(scope, o, /*writeCodec=*/true, /*writeFilterBoard=*/false);
+        check(!filterBoardKeyStored(scope),
+              "save without the filter board leaves the key absent");
+        check(codecKeyStored(scope), "while the codec is written independently");
+        const Hl2HardwareOptions back = Hl2HardwareOptions::load(scope, nullptr, &stored);
+        check(back.speakerLevelPercent == 40 && !stored
+                  && back.filterBoard == FilterBoard::N2adrRxTx,
+              "and loads as unstored, at the N2adrRxTx default");
+
+        Hl2HardwareOptions::save(scope, Hl2HardwareOptions{});   // written as before
+        check(filterBoardKeyStored(scope), "a default save still writes the filter board key");
+        check(Hl2HardwareOptions::load(scope, nullptr, &stored).filterBoard
+                      == FilterBoard::N2adrRxTx
+                  && stored == std::optional<FilterBoard>(FilterBoard::N2adrRxTx),
+              "load: a stored N2adrRxTx is reported as stored");
+    }
+
     // ---- 4e. the suggestion at connect, through the backend (#6806) --------
     {
         using Codec = Hl2HardwareOptions::Codec;
@@ -362,6 +400,11 @@ int main(int argc, char** argv)
         check(hw.value(QStringLiteral("detectedBoard")).toString() == QStringLiteral("SQUARE SDR 2"),
               "and names the detected board");
         check(!codecKeyStored(scope), "the suggestion is not written at connect");
+        check(hw.value(QStringLiteral("filterBoard")).toInt()
+                  == static_cast<int>(Hl2HardwareOptions::FilterBoard::N2adrTxOnly),
+              "nothing stored + minor 52: the session filter board is N2adrTxOnly");
+        check(hw.value(QStringLiteral("filterBoardSuggested")).toBool(),
+              "and hw.get reports it as a suggestion");
 
         backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
                                 QVariantMap{{QStringLiteral("speakerLevelPercent"), 40}});
@@ -371,6 +414,8 @@ int main(int argc, char** argv)
               "an unrelated hw.set persists its own field");
         check(!codecKeyStored(scope),
               "and does not persist the suggested codec with it");
+        check(!filterBoardKeyStored(scope),
+              "nor the suggested filter board");
 
         backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
                                 QVariantMap{{QStringLiteral("codec"),
@@ -378,9 +423,23 @@ int main(int argc, char** argv)
         check(codecKeyStored(scope), "a hw.set naming the codec stores it");
         check(!hwGet(backend).value(QStringLiteral("codecSuggested")).toBool(),
               "and it is no longer a suggestion");
+        check(!filterBoardKeyStored(scope)
+                  && hwGet(backend).value(QStringLiteral("filterBoardSuggested")).toBool(),
+              "choosing the codec leaves the filter board suggested and unstored");
+
+        backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
+                                QVariantMap{{QStringLiteral("filterBoard"),
+                                             static_cast<int>(
+                                                 Hl2HardwareOptions::FilterBoard::N2adrTxOnly)}});
+        check(filterBoardKeyStored(scope), "a hw.set naming the filter board stores it");
+        check(!hwGet(backend).value(QStringLiteral("filterBoardSuggested")).toBool(),
+              "and it is no longer a suggestion");
         hl2::Hl2BoardIdentityTestAccess::loadAtConnect(backend, suggested, 52);
-        check(!hwGet(backend).value(QStringLiteral("codecSuggested")).toBool(),
-              "the next connect reads it as stored");
+        hw = hwGet(backend);
+        check(!hw.value(QStringLiteral("codecSuggested")).toBool(),
+              "the next connect reads the codec as stored");
+        check(!hw.value(QStringLiteral("filterBoardSuggested")).toBool(),
+              "and the filter board as stored");
 
         const QString storedNone = QStringLiteral("AA:BB:CC:DD:EE:12");
         Hl2HardwareOptions::save(RadioSettingsScope(family, storedNone), Hl2HardwareOptions{});
@@ -389,6 +448,10 @@ int main(int argc, char** argv)
         check(hw.value(QStringLiteral("codec")).toInt() == static_cast<int>(Codec::None)
                   && !hw.value(QStringLiteral("codecSuggested")).toBool(),
               "stored None + minor 52: None, no suggestion");
+        check(hw.value(QStringLiteral("filterBoard")).toInt()
+                      == static_cast<int>(Hl2HardwareOptions::FilterBoard::N2adrRxTx)
+                  && !hw.value(QStringLiteral("filterBoardSuggested")).toBool(),
+              "stored N2adrRxTx + minor 52: the stored filter board wins, no suggestion");
 
         const QString storedAk = QStringLiteral("AA:BB:CC:DD:EE:13");
         Hl2HardwareOptions ak;
@@ -406,6 +469,15 @@ int main(int argc, char** argv)
                   && !hw.value(QStringLiteral("codecSuggested")).toBool()
                   && hw.value(QStringLiteral("detectedBoard")).toString().isEmpty(),
               "nothing stored + stock minor 3: None, no suggestion, no board");
+        check(hw.value(QStringLiteral("filterBoard")).toInt()
+                      == static_cast<int>(Hl2HardwareOptions::FilterBoard::N2adrRxTx)
+                  && !hw.value(QStringLiteral("filterBoardSuggested")).toBool(),
+              "nothing stored + stock minor 3: the N2adrRxTx default, not a suggestion");
+        backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
+                                QVariantMap{{QStringLiteral("speakerLevelPercent"), 40}});
+        check(codecKeyStored(RadioSettingsScope(family, stock))
+                  && filterBoardKeyStored(RadioSettingsScope(family, stock)),
+              "a stock board writes its codec and filter board defaults as before");
     }
 
     // ---- 5. an invalid scope is inert in both directions -------------------

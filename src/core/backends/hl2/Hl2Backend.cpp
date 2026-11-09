@@ -5068,14 +5068,23 @@ void Hl2Backend::applyAtuTuneRequest(bool tuning)
 void Hl2Backend::loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor)
 {
     std::optional<Hl2HardwareOptions::Codec> storedCodec;
+    std::optional<Hl2HardwareOptions::FilterBoard> storedFilterBoard;
     m_hw = Hl2HardwareOptions::load(
-        RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), &storedCodec);
+        RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), &storedCodec,
+        &storedFilterBoard);
     m_gatewareBoard = hl2::boardForGatewareMinor(gatewareMinor);
     m_hw.codec = Hl2HardwareOptions::sessionCodec(storedCodec, m_gatewareBoard);
+    m_hw.filterBoard =
+        Hl2HardwareOptions::sessionFilterBoard(storedFilterBoard, m_gatewareBoard);
+    // Suggested = differs from what an unstored field defaults to, so a board
+    // the gateware does not name keeps writing its defaults as it always has.
     m_hwCodecSuggested = !storedCodec && m_hw.codec != Hl2HardwareOptions::Codec::None;
+    m_hwFilterBoardSuggested = !storedFilterBoard
+        && m_hw.filterBoard != Hl2HardwareOptions::FilterBoard::N2adrRxTx;
     if (const char* board = hl2::gatewareBoardName(m_gatewareBoard)) {
         qCInfo(lcHl2) << "HL2: gateware identifies the board as" << board
-                      << "— codec suggested, not stored:" << m_hwCodecSuggested;
+                      << "— suggested, not stored: codec" << m_hwCodecSuggested
+                      << "filter board" << m_hwFilterBoardSuggested;
     }
 }
 
@@ -5095,7 +5104,8 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
         } else {
             Hl2HardwareOptions::save(
                 RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), m_hw,
-                /*writeCodec=*/!m_hwCodecSuggested);
+                /*writeCodec=*/!m_hwCodecSuggested,
+                /*writeFilterBoard=*/!m_hwFilterBoardSuggested);
         }
     }
     if (!m_metis)
@@ -5920,6 +5930,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
                     {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
                     {QStringLiteral("codecSuggested"), m_hwCodecSuggested},
+                    {QStringLiteral("filterBoardSuggested"), m_hwFilterBoardSuggested},
                     {QStringLiteral("detectedBoard"),
                      QString::fromLatin1(hl2::gatewareBoardName(m_gatewareBoard))},
                 });
@@ -5951,9 +5962,11 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                         next.codec, m_hw.ditherBit);
                 }
             }
-            if (in.contains(QStringLiteral("filterBoard")))
+            if (in.contains(QStringLiteral("filterBoard"))) {
+                m_hwFilterBoardSuggested = false;
                 next.filterBoard = Hl2HardwareOptions::clampFilterBoard(
                     in.value(QStringLiteral("filterBoard")).toInt());
+            }
             next.ditherBit   = boolOr("ditherBit", next.ditherBit);
             next.randomBit   = boolOr("randomBit", next.randomBit);
             next.n2adrHpf    = boolOr("n2adrHpf", next.n2adrHpf);
@@ -5975,6 +5988,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
                     {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
                     {QStringLiteral("codecSuggested"), m_hwCodecSuggested},
+                    {QStringLiteral("filterBoardSuggested"), m_hwFilterBoardSuggested},
                     {QStringLiteral("detectedBoard"),
                      QString::fromLatin1(hl2::gatewareBoardName(m_gatewareBoard))},
                 });

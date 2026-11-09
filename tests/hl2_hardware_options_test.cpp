@@ -540,7 +540,7 @@ static void testEp2Audio()
 }
 
 // SQUARE SDR 2 and SQUARE 3 name themselves in VERSION_MINOR (#6806). The
-// neighbours of both values and the stock HL2's 3 are the negative controls.
+// neighbors of both values and the stock HL2's 3 are the negative controls.
 static void testBoardIdentity()
 {
     using Board = GatewareBoard;
@@ -560,7 +560,7 @@ static void testBoardIdentity()
 }
 
 // A stored codec always wins, None included; with nothing stored only a
-// SQUARE SDR 2 gets a codec, and SQUARE 3 is a label without behaviour.
+// SQUARE SDR 2 gets a codec, and SQUARE 3 is a label without behavior.
 static void testSessionCodec()
 {
     using Codec = Hl2HardwareOptions::Codec;
@@ -581,10 +581,33 @@ static void testSessionCodec()
           "session: a stored SquareSdr2 holds on any gateware");
 }
 
+// The filter board by the same rule: stored wins, a SQUARE SDR 2 with nothing
+// stored gets N2adrTxOnly, every other board the N2adrRxTx default.
+static void testSessionFilterBoard()
+{
+    using FilterBoard = Hl2HardwareOptions::FilterBoard;
+    const auto session = [](std::optional<FilterBoard> stored, std::uint8_t minor) {
+        return Hl2HardwareOptions::sessionFilterBoard(stored, boardForGatewareMinor(minor));
+    };
+    check(session(std::nullopt, 52) == FilterBoard::N2adrTxOnly,
+          "session: nothing stored + minor 52 suggests N2adrTxOnly");
+    check(session(FilterBoard::N2adrRxTx, 52) == FilterBoard::N2adrRxTx,
+          "session: a stored N2adrRxTx wins over minor 52");
+    check(session(FilterBoard::None, 52) == FilterBoard::None,
+          "session: a stored None wins over minor 52");
+    check(session(std::nullopt, 3) == FilterBoard::N2adrRxTx,
+          "session: nothing stored + stock minor 3 keeps N2adrRxTx");
+    check(session(std::nullopt, 53) == FilterBoard::N2adrRxTx,
+          "session: SQUARE 3 suggests no filter board yet");
+    check(session(FilterBoard::N2adrTxOnly, 3) == FilterBoard::N2adrTxOnly,
+          "session: a stored N2adrTxOnly holds on any gateware");
+}
+
 int main()
 {
     testBoardIdentity();
     testSessionCodec();
+    testSessionFilterBoard();
     testDitherMeaning();
     testCodecChangeSeed();
     testFilterBoard();

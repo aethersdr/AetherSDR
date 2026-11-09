@@ -4445,7 +4445,7 @@ add_test(NAME radio_setup_headphone_output_gate_test COMMAND radio_setup_headpho
 set_tests_properties(radio_setup_headphone_output_gate_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
-# HL2 Hardware page: a suggested codec is labelled, and choosing it stores it (#6806).
+# HL2 Hardware page: a suggested codec or filter board is labeled; choosing stores it (#6806).
 # Injected hl2 extension backend; no socket and no radio.
 add_executable(hl2_codec_suggestion_dialog_test
     tests/hl2_codec_suggestion_dialog_test.cpp

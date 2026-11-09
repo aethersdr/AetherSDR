@@ -4259,7 +4259,8 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         "its internal loudspeaker.\n\n"
         "It is one bit on the wire either way, and it is always yours to set."));
     // The backend's suggestion for a board its gateware names (#6806), shown
-    // so a suggested codec cannot pass for a stored one. Filled by `fill`.
+    // so a suggested codec cannot pass for a stored one. Filled by `fill`; the
+    // filter board below has the same line.
     auto* codecSuggestedLbl = new QLabel;
     codecSuggestedLbl->setObjectName(QStringLiteral("hl2HwCodecSuggested"));
     codecSuggestedLbl->setAccessibleName(QStringLiteral("Codec suggestion"));
@@ -4427,8 +4428,14 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         "SquareSDR 2's arrangement, and also an HL2 whose filter board sits between\n"
         "the PA and the antenna. Receive then sees the bare front end unless you add\n"
         "the 3 MHz high-pass below."));
+    auto* filterSuggestedLbl = new QLabel;
+    filterSuggestedLbl->setObjectName(QStringLiteral("hl2HwFilterBoardSuggested"));
+    filterSuggestedLbl->setAccessibleName(QStringLiteral("Filter board suggestion"));
+    setTone(filterSuggestedLbl, Tone::Hint);
+    filterSuggestedLbl->setVisible(false);
     filterRow->addWidget(filterLbl);
     filterRow->addWidget(filterCombo);
+    filterRow->addWidget(filterSuggestedLbl);
     filterRow->addStretch(1);
     fvb->addLayout(filterRow);
     controls->append(filterCombo);
@@ -4591,9 +4598,9 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     // because this runs from showEvent() and connectionStateChanged.
     const QPointer<QComboBox> codecGuard(codecCombo);
     m_hl2HardwareReseed = [this, codecGuard, codecCombo, codecSuggestedLbl, ditherChk,
-                           randomChk, filterCombo, hpfChk, cl1Chk, atuChk, spkSlider,
-                           noRadioLbl, controls, refreshDither, refreshHpf,
-                           refreshSpeaker] {
+                           randomChk, filterCombo, filterSuggestedLbl, hpfChk, cl1Chk,
+                           atuChk, spkSlider, noRadioLbl, controls, refreshDither,
+                           refreshHpf, refreshSpeaker] {
         if (!codecGuard)
             return;
         // Through the backend's `hw.get`, not Hl2HardwareOptions: including that
@@ -4615,6 +4622,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             if (noRadioLbl)
                 noRadioLbl->setVisible(true);
             codecSuggestedLbl->setVisible(false);
+            filterSuggestedLbl->setVisible(false);
             return;
         }
 
@@ -4637,18 +4645,24 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
                 codecCombo->findData(m.value(QStringLiteral("codec")).toInt()));
             // Suggested = shown for this session, not stored until chosen. The
             // board name is the status bar's ("SQUARE SDR 2 gateware 75.52").
+            // The backend suggests only for a board it names, so a suggestion
+            // always has one.
             const QString board = m.value(QStringLiteral("detectedBoard")).toString();
-            const QString suggestion = !m.value(QStringLiteral("codecSuggested")).toBool()
-                ? QString()
-                : board.isEmpty() ? QStringLiteral("Suggested, not saved")
-                                  : QStringLiteral("Detected: %1 — suggested, not saved").arg(board);
-            codecSuggestedLbl->setText(suggestion);
-            codecSuggestedLbl->setVisible(!suggestion.isEmpty());
-            codecCombo->setAccessibleDescription(suggestion);
+            const auto showSuggestion = [&m, &board](const char* key, QComboBox* combo,
+                                                     QLabel* line) {
+                const QString text = m.value(QLatin1String(key)).toBool()
+                    ? QStringLiteral("Detected: %1 — suggested, not saved").arg(board)
+                    : QString();
+                line->setText(text);
+                line->setVisible(!text.isEmpty());
+                combo->setAccessibleDescription(text);
+            };
+            showSuggestion("codecSuggested", codecCombo, codecSuggestedLbl);
             ditherChk->setChecked(m.value(QStringLiteral("ditherBit")).toBool());
             randomChk->setChecked(m.value(QStringLiteral("randomBit")).toBool());
             filterCombo->setCurrentIndex(
                 filterCombo->findData(m.value(QStringLiteral("filterBoard")).toInt()));
+            showSuggestion("filterBoardSuggested", filterCombo, filterSuggestedLbl);
             hpfChk->setChecked(m.value(QStringLiteral("n2adrHpf")).toBool());
             cl1Chk->setChecked(m.value(QStringLiteral("cl1RefClock")).toBool());
             // THE CALIBRATION PAGE HAS TO LEARN THIS, because §4 requires the
@@ -4711,11 +4725,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     };
     m_hl2HardwareReseed();
 
-    // activated, not currentIndexChanged: it fires for the operator's choice
-    // only, and also when the choice is the entry already shown, so picking a
-    // suggested codec stores it. Programmatic fills never emit it.
-    connect(codecCombo, &QComboBox::activated, this,
-            [this, apply, codecCombo, refreshDither, refreshSpeaker](int) {
+    const auto chooseCodec = [this, apply, codecCombo, refreshDither, refreshSpeaker] {
         const int codec = codecCombo->currentData().toInt();
         refreshDither();
         refreshSpeaker();
@@ -4727,6 +4737,19 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         apply(QVariantMap{{QStringLiteral("codec"), codec}});
         if (m_hl2HardwareReseed)
             m_hl2HardwareReseed();
+    };
+    // currentIndexChanged carries a change from any source, the automation
+    // bridge's setCurrentIndex included; fills are blocked by the QSignalBlocker.
+    // activated adds the one case it cannot see: re-choosing the entry already
+    // shown, which is how a suggested codec gets stored. The reseed is
+    // synchronous, so after a real change the line is already hidden and
+    // activated does not write twice.
+    connect(codecCombo, &QComboBox::currentIndexChanged, this,
+            [chooseCodec](int) { chooseCodec(); });
+    connect(codecCombo, &QComboBox::activated, this,
+            [codecSuggestedLbl, chooseCodec](int) {
+        if (!codecSuggestedLbl->isHidden())
+            chooseCodec();
     });
     connect(ditherChk, &QCheckBox::toggled, this, [apply](bool on) {
         apply(QVariantMap{{QStringLiteral("ditherBit"), on}});
@@ -4734,11 +4757,21 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     connect(randomChk, &QCheckBox::toggled, this, [apply](bool on) {
         apply(QVariantMap{{QStringLiteral("randomBit"), on}});
     });
-    connect(filterCombo, &QComboBox::currentIndexChanged, this,
-            [apply, filterCombo, refreshHpf](int) {
+    // The same pair as the codec: every change writes, and re-choosing a
+    // suggested filter board stores it. The reseed hides the line.
+    const auto chooseFilterBoard = [this, apply, filterCombo, refreshHpf] {
         refreshHpf();
         apply(QVariantMap{
             {QStringLiteral("filterBoard"), filterCombo->currentData().toInt()}});
+        if (m_hl2HardwareReseed)
+            m_hl2HardwareReseed();
+    };
+    connect(filterCombo, &QComboBox::currentIndexChanged, this,
+            [chooseFilterBoard](int) { chooseFilterBoard(); });
+    connect(filterCombo, &QComboBox::activated, this,
+            [filterSuggestedLbl, chooseFilterBoard](int) {
+        if (!filterSuggestedLbl->isHidden())
+            chooseFilterBoard();
     });
     connect(hpfChk, &QCheckBox::toggled, this, [apply](bool on) {
         apply(QVariantMap{{QStringLiteral("n2adrHpf"), on}});
