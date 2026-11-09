@@ -806,6 +806,17 @@ static int spot_from_message(const ftx_message_t *msg, long long t, long long di
         return 0;      /* telemetry, free text, contest exchanges: no plain spot */
     if (rc != FTX_MESSAGE_RC_OK) return 0;
 
+    /* ⛔ A hashed callsign the table could not resolve comes back bracketed,
+     * e.g. "<3E40CDW>". That is the library saying "I don't know who this is",
+     * not a callsign, and logging it as one puts a station that does not exist
+     * into the spot list -- measured on the air on 20 m, where 2 of 7 apparent
+     * stations in one run were the same bracketed hash.
+     *
+     * This guard was lost when the decoder moved to type-based dispatch; it
+     * belongs AFTER the dispatch so it covers the non-standard path too, which
+     * is precisely where hashed callsigns arrive. */
+    if (!call_de[0] || strchr(call_de, '<') || strchr(call_de, '>')) return 0;
+
     memset(s, 0, sizeof *s);
     s->t = t;
     s->snr = snr;
