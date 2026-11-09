@@ -1155,6 +1155,8 @@ set(CORE_SOURCES
     src/core/AetherGpsPackage.cpp     # the bundled AetherGPS packages and their pins
     src/core/WsprAgent.cpp            # WSPR receiver on the radio (tools/wspr-agent)
     src/core/WsprAgentClient.cpp
+    src/core/Ft8Agent.cpp             # FT8 receiver on the radio (tools/ft8-agent), RFC #7114
+    src/core/Ft8AgentClient.cpp
     src/core/TailnetLinkTelemetry.cpp   # link telemetry from the shim, for Network Diagnostics
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp
@@ -1459,6 +1461,7 @@ set(GUI_SOURCES
     src/gui/WaveformEnvironmentDialog.cpp
     src/gui/TailnetShimDialog.cpp
     src/gui/WsprConfigureWindow.cpp
+    src/gui/Ft8ConfigureWindow.cpp
     src/gui/QrCodeImage.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp

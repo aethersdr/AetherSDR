@@ -13,6 +13,7 @@
 #include "core/AetherGpsPackage.h"
 #include "core/WsprAgent.h"
 #include "TailnetShimDialog.h"
+#include "Ft8ConfigureWindow.h"
 #include "WsprConfigureWindow.h"
 #include "WaveformEnvironmentDialog.h"
 #include "FramelessResizer.h"
@@ -2640,6 +2641,26 @@ void WaveformsDialog::refreshWaveformList()
                         }
                     });
                 });
+                open = window;
+                window->show();
+            });
+        }
+
+        // The FT8 receiver: Configure… opens its settings. Narrower than the
+        // WSPR window because the agent takes fewer settings; RFC #7114
+        // proposes one capability-driven window for every shim instead.
+        if (isFt8Waveform(name)) {
+            configureBtn = new QPushButton(tr("Configure…"), actionWidget);
+            configureBtn->setAccessibleName(tr("Configure the FT8 receiver"));
+            connect(configureBtn, &QPushButton::clicked, this, [this]() {
+                static QPointer<Ft8ConfigureWindow> open;
+                if (open) {
+                    open->raise();
+                    open->activateWindow();
+                    return;
+                }
+                auto* window = new Ft8ConfigureWindow(m_radioModel, this);
+                window->setAttribute(Qt::WA_DeleteOnClose);
                 open = window;
                 window->show();
             });
