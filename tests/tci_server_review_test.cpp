@@ -1824,15 +1824,11 @@ public:
         return true;
     }
 
-    // #7071: the server half of the VFO B fix. tci_trxmap_test calls
-    // resolveVfoB(..., true) directly, so it cannot see the comparison in
-    // handleVfoRequest() that decides what "true" means on the wire:
-    // hardcoding vfoBEqualsRx = false there kept every check green. This
-    // drives the real handler with the captured replay (channel 0 sets A,
-    // channel 1 restates A) and asserts no slice and no route. Without a
-    // backend, createTxSliceForVfoB() returns before creating a slice, so the
-    // route assertion is the one that catches a regression; the slice count
-    // only bites with a backend attached. Test by Nigel Fenton (@nigelfenton).
+    // Drives handleVfoRequest() with channel 0 = A then channel 1 = A, split
+    // off: no route may be recorded. Without a backend no slice can be
+    // created, so the route assertion is the one that bites. A differs from
+    // the slice's start frequency, so the comparison must see the frequency
+    // channel 0 just set.
     static bool vfoBAtVfoAWithoutSplitCreatesNoSlice()
     {
         RadioModel model;
@@ -1851,7 +1847,7 @@ public:
         server.m_clients.append(cs);
 
         const int slicesBefore = model.slices().size();
-        const long long a = TciProtocol::mhzToHz(slice->frequency());
+        const long long a = TciProtocol::mhzToHz(slice->frequency()) + 1000;
 
         server.handleVfoRequest(&sock, TciProtocol::VfoRequest{0, 0, a});
         server.handleVfoRequest(&sock, TciProtocol::VfoRequest{0, 1, a});

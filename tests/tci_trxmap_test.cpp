@@ -297,7 +297,7 @@ int main()
     // requested split still create.
     {
         TciRoutingState routing;
-        QVector<TciSliceEndpoint> oneSlice { { 0, true, true } };
+        QVector<TciSliceEndpoint> oneSlice { { 0, true, false } };
         const auto decision = routing.resolveVfoB(0, oneSlice, true);
         expect(decision.action == Action::EchoOnly && decision.txSliceId < 0,
                "VFO B == A without split echoes, creates no slice");
