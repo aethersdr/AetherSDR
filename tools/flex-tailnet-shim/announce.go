@@ -29,7 +29,7 @@ import (
 //
 // A copy addressed to a machine reaches only one of the programs listening
 // on 4992 there, and SmartSDR for Windows runs three (SmartSDR, DAX, CAT).
-// So a Windows PC runs a discovery helper (cmd/discovery-helper) instead:
+// So a Windows PC runs a discovery helper (discovery_helper.py) instead:
 // it connects to the shim over the tailnet, receives each announcement, and
 // broadcasts it on the PC, where every listener gets it. A device with a
 // helper connected is not also sent a copy. The helper opens the
