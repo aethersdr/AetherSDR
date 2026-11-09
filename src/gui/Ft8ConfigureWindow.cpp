@@ -291,8 +291,13 @@ Ft8ConfigureWindow::Ft8ConfigureWindow(RadioModel* model, QWidget* parent)
     m_statusTimer = new QTimer(this);
     m_statusTimer->setInterval(5000);
     connect(m_statusTimer, &QTimer::timeout, this, [this] {
-        // Status only: a since in the future leaves the spots out.
-        m_client->fetchStatus(QDateTime::currentSecsSinceEpoch() + 3600);
+        // ⚠ NOT a `since` in the future, which is what the WSPR window uses
+        // to skip the spots it does not need. That filter drops the CYCLES
+        // too, and this window shows the last decode time against the budget,
+        // so it must see them. One cycle back is enough and keeps the reply
+        // small. (Measured: a future `since` returned 0 cycles and 0 spots,
+        // which is why the decode line never drew.)
+        m_client->fetchStatus(QDateTime::currentSecsSinceEpoch() - kCycleSeconds * 2);
     });
 
     if (m_model) {
@@ -319,7 +324,7 @@ void Ft8ConfigureWindow::load()
     }
     setMessage(tr("Reading the receiver's settings…"));
     m_client->fetchConfig();
-    m_client->fetchStatus(QDateTime::currentSecsSinceEpoch() + 3600);
+    m_client->fetchStatus(QDateTime::currentSecsSinceEpoch() - kCycleSeconds * 2);
     m_statusTimer->start();
 }
 

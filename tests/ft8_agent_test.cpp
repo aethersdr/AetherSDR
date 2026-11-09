@@ -74,6 +74,26 @@ void testStatus()
     check(st->spots.at(0).score == 25, "ft8_lib's candidate score");
 }
 
+// The window shows the last decode time against the cycle budget, so a
+// status poll must come back WITH its cycles.
+//
+// This is here because the window first polled with `since = now + 3600`,
+// copied from the WSPR window where that is a deliberate way to skip the
+// spots. The agent applies that filter to the cycles as well, so every poll
+// returned 0 cycles and the decode line never drew. The window looked
+// perfectly healthy; the line was simply absent.
+void testCyclesSurviveAPoll()
+{
+    auto st = ft8::parseStatus(QByteArray(kStatus));
+    check(st.has_value() && !st->cycles.isEmpty(), "a status poll carries its cycles");
+    if (!st || st->cycles.isEmpty()) {
+        return;
+    }
+    // Whatever the window decides to show, it reads the newest cycle.
+    check(st->cycles.last().start >= st->cycles.first().start, "cycles are in order, newest last");
+    check(st->cycles.last().decodeMs > 0, "the newest cycle has a decode time to show");
+}
+
 void testStatusRefusals()
 {
     check(!ft8::parseStatus(QByteArray("not json")), "garbage is refused");
@@ -179,6 +199,7 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     testStatus();
+    testCyclesSurviveAPoll();
     testStatusRefusals();
     testSpotDropping();
     testConfig();
