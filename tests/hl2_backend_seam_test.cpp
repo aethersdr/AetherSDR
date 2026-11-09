@@ -136,7 +136,9 @@ struct Hl2TxGateTestAccess {
     }
     // What connectRadio() hands the modulator before linkUp, done by hand: the
     // TX receiver's mode and effectiveTxPassband() for it. Socket-free rules
-    // out connectRadio() itself, whose DSP opens start the wire.
+    // out connectRadio() itself, whose DSP opens start the wire. The mode is
+    // written as Usb because modeFromString() has internal linkage in
+    // Hl2Backend.cpp; the caller checks the returned mode is "USB".
     static QString seedConnectTxConfig(Hl2Backend& b)
     {
         const QString mode = b.rx(b.m_txDdc)->mode;
@@ -148,6 +150,11 @@ struct Hl2TxGateTestAccess {
             dsp->setFilter(lo, hi);
         }, Qt::BlockingQueuedConnection);
         return mode;
+    }
+    // The TX receiver's mode changed without any push to the modulator.
+    static void setTxReceiverModeWithoutPush(Hl2Backend& b, const QString& mode)
+    {
+        b.rx(b.m_txDdc)->mode = mode;
     }
     // The modulator's Config after every call queued to it has landed.
     static hl2::Hl2TxDsp::Config txDspConfig(Hl2Backend& b)
@@ -801,6 +808,10 @@ static void restoredDiguTxPassband()
           "#7091: the Phone applet is echoed 150..3000");
     check(health(b, "txPassbandHz").toString() == QStringLiteral("150 .. 3000"),
           "#7091: the health row reports the passband the modulator was sent");
+    Access::setTxReceiverModeWithoutPush(b, QStringLiteral("LSB"));
+    check(health(b, "txPassbandHz").toString() == QStringLiteral("150 .. 3000"),
+          "#7091: the health row is the pair sent, not one recomputed from the mode");
+    Access::setTxReceiverModeWithoutPush(b, QStringLiteral("DIGU"));
     Access::metisEdge(b, "linkDown");
 }
 
