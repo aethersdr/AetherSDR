@@ -21,6 +21,7 @@ import logging
 import socket
 import struct
 import sys
+import threading
 import time
 
 # The shim's discovery helper port (announce.go: AnnounceFeedPort).
@@ -31,6 +32,10 @@ ANNOUNCE_PORT = 4992
 MAX_FRAME = 2048
 RETRY_SECONDS = 5
 CONNECT_TIMEOUT = 10
+# How often the main thread wakes to notice Ctrl+C. On Windows, Ctrl+C can't
+# interrupt a blocked socket call, and the helper waits on one indefinitely
+# while the radio is quiet, so the network side runs in its own thread.
+INTERRUPT_POLL_SECONDS = 0.5
 
 log = logging.getLogger("discovery-helper")
 
@@ -117,11 +122,21 @@ def main(argv=None):
     except OSError as e:
         log.error("broadcast socket: %s", e)
         return 1
-    dst = (args.broadcast, ANNOUNCE_PORT)
-    feed = f"{args.shim}:{FEED_PORT}"
+    worker = threading.Thread(target=serve, args=(args.shim, out, (args.broadcast, ANNOUNCE_PORT)),
+                              name="relay", daemon=True)
+    worker.start()
+    while worker.is_alive():
+        worker.join(INTERRUPT_POLL_SECONDS)
+    return 1
+
+
+def serve(shim, out, dst):
+    """Connect to the shim and relay its announcements, reconnecting for as
+    long as the helper runs."""
+    feed = f"{shim}:{FEED_PORT}"
     while True:
         try:
-            conn = socket.create_connection((args.shim, FEED_PORT), timeout=CONNECT_TIMEOUT)
+            conn = socket.create_connection((shim, FEED_PORT), timeout=CONNECT_TIMEOUT)
         except OSError as e:
             log.warning("cannot reach %s: %s; retrying", feed, e)
             time.sleep(RETRY_SECONDS)

@@ -119,6 +119,45 @@ def test_keepalive_is_on():
               "SO_KEEPALIVE is not set")
 
 
+CTRL_C_WHILE_WAITING = r"""
+import _thread, socket, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+import discovery_helper
+
+shim = socket.socket()
+shim.bind(("127.0.0.1", 0))
+shim.listen(1)
+discovery_helper.FEED_PORT = shim.getsockname()[1]
+held = []
+
+def quiet_shim():
+    held.append(shim.accept()[0])   # connected, and never sends a frame
+    time.sleep(0.5)                 # the helper is now waiting to read
+    # Ctrl+C as Windows delivers it: Python is told, but a blocked socket
+    # call isn't woken. (A POSIX SIGINT would wake it, hiding the problem.)
+    _thread.interrupt_main()
+
+threading.Thread(target=quiet_shim, daemon=True).start()
+try:
+    discovery_helper.main(["--shim", "127.0.0.1", "--broadcast", "127.0.0.1"])
+except KeyboardInterrupt:
+    print("stopped", flush=True)
+"""
+
+
+def test_ctrl_c_stops_a_waiting_helper():
+    """Ctrl+C stops the helper while it waits for an announcement that never
+    comes; on Windows it once had to be killed from Task Manager."""
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        done = subprocess.run([sys.executable, "-c", CTRL_C_WHILE_WAITING, here],
+                              capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        raise AssertionError("Ctrl+C did not stop the helper within 10 s") from None
+    check("stopped" in done.stdout, f"helper output: {done.stdout!r} {done.stderr!r}")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
