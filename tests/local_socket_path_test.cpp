@@ -65,10 +65,14 @@ int main()
     ok &= check(localSocketPathTooLong(deep, limit).contains(QStringLiteral("197 bytes")),
                 "a 197-byte runtime path is refused with its length");
 
-    // 30 two-byte characters: 30 QChars but 60 encoded bytes, as sun_path sees them.
+#if defined(Q_OS_UNIX)
+    // "/r/" plus 30 U+00E9 is 33 QChars. QFile::encodeName makes it 63 bytes on
+    // Linux (UTF-8) and 93 on macOS (NFD: e + U+0301). Windows uses the ANSI code
+    // page, where it is 33 bytes, and has no limit, so the check is Unix-only.
     const QString wide = QStringLiteral("/r/") + QString(30, QChar(0x00e9));
     ok &= check(!localSocketPathTooLong(wide, 50).isEmpty(),
                 "the limit is measured in encoded bytes, not characters");
+#endif
 
     if (ok) {
         std::printf("local_socket_path_test: all checks passed\n");
