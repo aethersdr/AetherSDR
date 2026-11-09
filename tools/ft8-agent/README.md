@@ -64,6 +64,46 @@ The selftest decodes one of ft8_lib's own off-air reference recordings, so it ex
    `CQ PA0SKT/2 JO33` renders as `CQ PA0SKT/2`. A missing grid there is the protocol, not
    a defect.
 
+## Build for the radio
+
+```sh
+PATH=$HOME/zig-x86_64-linux-0.17.0:$PATH python3 -I build.py --output ./out --host
+```
+
+Needs **zig 0.17** (it bundles the linker and musl for both targets); `build.py` checks
+the version and refuses otherwise. `--armv7-only` skips the arm64 container, which needs
+`../flex-tailnet-shim/mkimage.py`.
+
+Produces `AetherFT8.ssdr_waveform` for a FLEX-6000. Measured 2026-11-08:
+
+| | |
+|---|---|
+| package | **93,947 bytes** (bound 512 KB; AetherWSPR is ~142 KB) |
+| ARM binary | 346,952 bytes, ELF 32-bit ARM EABI5, statically linked, stripped |
+| `agent.c` flags | `-Wall -Wextra -Werror` — clean |
+
+⚠ Build on **Linux**. `tools/wspr-agent/build.py` is known to produce a package the radio
+silently refuses when run on Windows, and this script inherits its packaging.
+
+### ARM verified under emulation, not on a radio
+
+```
+qemu-arm-static ./aether-ft8-armv7 selftest
+  -> 20 spot(s) in 445 ms (budget 2000 ms)   selftest PASS
+```
+
+The ARM binary decodes the reference recording to **exactly the same 20 spots, with the
+same callsigns, grids and frequencies** as the x86 build, so the cross-compile is
+behaviourally correct and not merely syntactically valid.
+
+⛔ **The 445 ms is NOT the radio's speed.** It is qemu-arm emulation on an i5-6402P, where
+the same source runs natively in 27-42 ms. A Cortex-A8 at 700 MHz-1 GHz is far slower than
+either number represents. The only figure that settles the budget question is one measured
+on the radio, and the closest available anchor is an earlier timing harness on the same
+FLEX-6300, which took **~1.75 s** for one FT8 decode -- about **73% of the 2.4 s budget**,
+with a **5.2 s outlier while the radio was busy**. Treat the budget as open until this
+agent is timed on real hardware.
+
 ## Known gaps
 
 - **Band hopping is unconverted.** The config still carries WSPR's gray-line hop schedule,
@@ -72,6 +112,7 @@ The selftest decodes one of ft8_lib's own off-air reference recordings, so it ex
 - **`"score"`, not `"snr"`.** ft8_lib reports a candidate correlation score, which is not a
   dB signal-to-noise ratio. The status JSON names it `score` so a consumer cannot plot it
   beside a WSPR spot's real dB figure by mistake.
-- **Never run on a radio.** Built and tested on x86 only; no ARM build, no live capture.
+- **Never run on a radio.** Built for ARMv7 and verified under qemu (identical decodes), but no
+  run on real hardware, no live capture, and therefore **no trustworthy decode-time figure**.
 - Sensitivity is ~73% of WSJT-X with no OSD and no signal subtraction — a property of the
   dependency, documented in `ft8_lib/PROVENANCE.md`.
