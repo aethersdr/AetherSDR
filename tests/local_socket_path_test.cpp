@@ -4,6 +4,16 @@
 
 #include <cstdio>
 
+#if defined(Q_OS_LINUX)
+#include "core/control/LocalControlServer.h"
+
+#include <QByteArray>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
+#endif
+
 using AetherSDR::control::localSocketPathLimit;
 using AetherSDR::control::localSocketPathTooLong;
 
@@ -24,10 +34,62 @@ QString pathOfBytes(qsizetype bytes)
     return prefix + QString(bytes - prefix.size(), QLatin1Char('x'));
 }
 
+#if defined(Q_OS_LINUX)
+// listen() refuses an over-long endpoint before it takes the lock or binds.
+// The runtime directory is a private 0700 one of at least 60 bytes, over
+// Linux's 58-byte budget, so the endpoint is over the 106-byte limit.
+bool listenRefusesLongPath()
+{
+    bool ok = true;
+    QTemporaryDir base;
+    ok &= check(base.isValid(), "a private temporary directory is created");
+    if (!ok) {
+        return false;
+    }
+    const QString runtime = base.path() + QLatin1Char('/')
+        + QString(qMax<qsizetype>(1, 60 - base.path().size() - 1), QLatin1Char('r'));
+    const QFileDevice::Permissions owner =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner;
+    ok &= check(QDir().mkpath(runtime) && QFile::setPermissions(runtime, owner)
+                    && QFile::encodeName(runtime).size() >= 59,
+                "a 0700 runtime directory longer than 58 bytes exists");
+
+    const QByteArray savedXdg = qgetenv("XDG_RUNTIME_DIR");
+    const bool hadXdg = qEnvironmentVariableIsSet("XDG_RUNTIME_DIR");
+    qputenv("XDG_RUNTIME_DIR", QFile::encodeName(runtime));
+    {
+        AetherSDR::control::LocalControlServer server;
+        ok &= check(!server.listen(QStringLiteral("aetherd-v1")),
+                    "listen() refuses an endpoint over the length limit");
+        ok &= check(server.listenError().contains(QStringLiteral("106-byte limit")),
+                    "listenError() names the length limit");
+    }
+    if (hadXdg) {
+        qputenv("XDG_RUNTIME_DIR", savedXdg);
+    } else {
+        qunsetenv("XDG_RUNTIME_DIR");
+    }
+
+    const QDir endpointDir(runtime + QStringLiteral("/aethersdr"));
+    ok &= check(endpointDir.exists(), "the refusal comes after the runtime directory resolved");
+    ok &= check(endpointDir.entryList({QStringLiteral("control-*.lock"),
+                                       QStringLiteral("control-*.sock")},
+                                      QDir::Files | QDir::System | QDir::Hidden).isEmpty(),
+                "no lock file and no socket are left after the refusal");
+    return ok;
+}
+#endif
+
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+#if defined(Q_OS_LINUX)
+    QCoreApplication app(argc, argv);
+#else
+    Q_UNUSED(argc);
+    Q_UNUSED(argv);
+#endif
     bool ok = true;
 
 #if defined(Q_OS_MACOS)
@@ -72,6 +134,10 @@ int main()
     const QString wide = QStringLiteral("/r/") + QString(30, QChar(0x00e9));
     ok &= check(!localSocketPathTooLong(wide, 50).isEmpty(),
                 "the limit is measured in encoded bytes, not characters");
+#endif
+
+#if defined(Q_OS_LINUX)
+    ok &= listenRefusesLongPath();
 #endif
 
     if (ok) {

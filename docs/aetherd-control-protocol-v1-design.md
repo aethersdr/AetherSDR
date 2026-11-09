@@ -65,12 +65,12 @@ A client in another language computes the same path; aetherd's own clients use
 `LocalControlServer::clientEndpoint()`.
 
 **Path length.** A Unix socket path must fit `sockaddr_un.sun_path`: at most
-103 bytes on macOS and 106 on Linux (the array less its NUL, and on Linux one
-byte more that Qt reserves for the abstract namespace). The fixed tail
-`/aethersdr/control-<d>.sock` is 48 bytes, so the runtime directory may be at
-most 55 bytes on macOS and 58 on Linux. A longer path makes `aetherd` exit at
-startup naming the path, its length and the limit; point `XDG_RUNTIME_DIR`
-(Linux) or the home (macOS) at a shorter directory.
+103 bytes on macOS and the BSDs and 106 on Linux (the array less its NUL, and
+on Linux one byte more that Qt reserves for the abstract namespace). The fixed
+tail `/aethersdr/control-<d>.sock` is 48 bytes, so the runtime directory may be
+at most 55 bytes on macOS and the BSDs and 58 on Linux. A longer path makes
+`aetherd` exit at startup naming the path, its length and the limit; point
+`XDG_RUNTIME_DIR` (Linux) or the home (macOS) at a shorter directory.
 
 ## 3. JSON envelope
 

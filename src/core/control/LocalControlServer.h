@@ -40,8 +40,8 @@ public:
     // ReserveEndpoint claims the private endpoint but closes early arrivals.
     // Startup code must finish binding targets before calling startServing().
     [[nodiscard]] bool listen(const QString& name, ListenMode mode = ListenMode::Serve);
-    // Why the last listen() failed, when the cause is one an operator can fix;
-    // empty otherwise.
+    // Why the last listen() failed when the endpoint path is too long for a
+    // Unix socket; empty for every other failure.
     [[nodiscard]] QString listenError() const { return m_listenError; }
     [[nodiscard]] bool startServing();
     // Startup-only binding; never changes grants or replaces a lost target.
