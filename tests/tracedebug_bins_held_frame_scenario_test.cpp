@@ -88,7 +88,9 @@ constexpr quint32 kStreamId = 0x40000000;
 
 // The Flex spectrum path from FFT frame to widget: the held flag is the
 // enqueue-time delay, as MainWindow_Session.cpp computes it, and a frame with
-// a delay goes through the ordered visual queue and is delivered later.
+// a delay goes through the ordered visual queue and is delivered later. dueMs
+// is arrival plus delay; production's strictly-rising per-key bump
+// (MainWindow_ReceiveSync.cpp) is not reproduced.
 class Pipeline
 {
 public:
@@ -206,7 +208,7 @@ int main(int argc, char** argv)
     }
     QJsonObject r = bins();
     check(r.value("ok").toBool() && sameBins(r, last) && panHz(r, "centerHz") == 14'100'000.0,
-          "off: the settled frame is returned as fed, at its centre");
+          "off: the settled frame is returned as fed, at its center");
 
     // Receive Sync on: frames are queued, and held when delivered.
     pipe.setReceiveSyncEnabled(true);
@@ -294,7 +296,7 @@ int main(int argc, char** argv)
     pipe.frameArrives(last);
     r = bins();
     check(r.value("ok").toBool() && sameBins(r, last) && panHz(r, "centerHz") == 14'200'000.0,
-          "off, pan: returned after kSettledFrames frames at the new centre");
+          "off, pan: returned after kSettledFrames frames at the new center");
 
     // On again, then off: the same refusal and the same recovery.
     pipe.setReceiveSyncEnabled(true);
