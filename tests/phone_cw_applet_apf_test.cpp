@@ -312,8 +312,8 @@ int main(int argc, char** argv)
           !apfRow->isHidden());
 
     applet.setHasAudioPeakingFilter(false);
-    check("4.2  an unavailable audio peaking filter keeps the row visible",
-          !apfRow->isHidden());
+    check("4.2  a legacy radio without APF keeps its existing hidden row",
+          apfRow->isHidden());
     check("4.3  the unavailable control is disabled with an accessible reason",
           !apfBtn->isEnabled() && !apfBtn->accessibleDescription().isEmpty());
 

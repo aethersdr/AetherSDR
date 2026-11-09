@@ -6,6 +6,9 @@
 #include "core/backends/SliceDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/kenwood/KenwoodBackend.h"
+#include "core/backends/rtl/RtlSdrBackend.h"
+#include <QWheelEvent>
+#include <cmath>
 #include "gui/ModeFilterPresets.h"
 #include "gui/RxApplet.h"
 #include "gui/FilterPassbandWidget.h"
@@ -93,6 +96,44 @@ QPushButton* button(QWidget& widget, const QString& text)
 class FmFilterControlsTest : public QObject {
     Q_OBJECT
 private slots:
+    void pendingVfoWheelBehaviorRequiresAnExplicitInteractionOptIn()
+    {
+        rtl::RtlSdrBackend rtl;
+        kenwood::KenwoodBackend kenwood;
+        using Feature = ReceiveInteractionControl::Feature;
+        QVERIFY(!rtl.capabilities().receiveInteractionControl);
+        QVERIFY(kenwood.capabilities().receiveInteractionControl
+            && kenwood.capabilities().receiveInteractionControl->supports(Feature::PendingTune));
+        for (const RadioCapabilities& caps : {rtl.capabilities(), kenwood.capabilities()}) {
+            RadioModel model;
+            auto owned = std::make_unique<FilterBackend>();
+            FilterBackend* source = owned.get();
+            source->caps = caps;
+            model.setBackendForTest(std::move(owned), QStringLiteral("interaction-fixture"));
+            SliceDelta state;
+            state.frequency = 14.074;
+            state.mode = QStringLiteral("CW");
+            emit source->sliceChanged(0, state);
+            SliceModel* slice = model.slice(0);
+            QVERIFY(slice);
+            QCOMPARE(slice->stepHz(), 100);
+            const bool pending = slice->supportsReceiveInteraction(Feature::PendingTune);
+            slice->recordTuneIntent(14.0741);
+            VfoWidget widget;
+            widget.setSlice(slice);
+            widget.setCollapsed(true);
+            QSignalSpy requests(&widget, &VfoWidget::stepTuneRequested);
+            const QPointF point(10, 10);
+            QWheelEvent event(point, point, {}, QPoint(0, 120), Qt::NoButton,
+                Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(&widget, &event);
+            QCOMPARE(requests.size(), 1);
+            const double expected = pending ? 14.0742 : 14.0741;
+            QVERIFY(std::abs(requests.at(0).at(0).toDouble() - expected) < 1e-9);
+            QCOMPARE(slice->frequency(), 14.074);
+        }
+    }
+
     void nativeApfHasNoSharedPercentLevel()
     {
         RadioModel model;
@@ -117,7 +158,7 @@ private slots:
         }
         QVERIFY(level);
         QVERIFY(!level->isEnabled());
-        QVERIFY(!level->accessibleDescription().isEmpty());
+        QVERIFY(level->accessibleDescription().contains(QStringLiteral("native receive DSP settings")));
         QLabel* value = widget.findChild<QLabel*>(QStringLiteral("apfLevelValue"));
         QVERIFY(value);
         QCOMPARE(value->text(), QStringLiteral("--"));
@@ -128,6 +169,31 @@ private slots:
         emit model.capabilitiesChanged(true, backend->caps);
         QVERIFY(level->isEnabled());
         QCOMPARE(value->text(), QStringLiteral("37"));
+    }
+    void modeRestrictedApfKeepsLegacyReason()
+    {
+        RadioModel model;
+        auto owned = std::make_unique<FilterBackend>();
+        FilterBackend* backend = owned.get();
+        using Feature = ReceiveDspControl::Feature;
+        backend->caps.hasAudioPeakingFilter = true;
+        backend->caps.receiveDspControl = ReceiveDspControl{{"CW", "CWR"}, {Feature::Apf}, {}, {}};
+        model.setBackendForTest(std::move(owned), QStringLiteral("test"));
+        SliceModel slice(0);
+        SliceDelta delta;
+        delta.mode = QStringLiteral("USB");
+        slice.applyChanges(delta);
+        VfoWidget widget;
+        widget.setSlice(&slice);
+        widget.setRadioModel(&model);
+        QSlider* level = nullptr;
+        for (QSlider* candidate : widget.findChildren<QSlider*>()) {
+            if (candidate->accessibleName() == QStringLiteral("APF bandwidth")) { level = candidate; break; }
+        }
+        QVERIFY(level);
+        QVERIFY(!level->isEnabled());
+        QCOMPARE(level->accessibleDescription(), QStringLiteral("This receive control is unavailable in the current mode"));
+        QCOMPARE(level->toolTip(), level->accessibleDescription());
     }
     void nativeNrAlgorithmControlsLevelAvailability()
     {

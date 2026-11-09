@@ -161,6 +161,15 @@ RadioCapabilities KenwoodBackend::capabilities() const
     caps.family = QStringLiteral("kenwood");
     caps.manufacturer = QStringLiteral("Kenwood");
     caps.model = QStringLiteral("TS-890S");
+    using Interaction = ReceiveInteractionControl::Feature;
+    caps.receiveInteractionControl = ReceiveInteractionControl{{Interaction::PendingTune,
+        Interaction::AntennaReadback, Interaction::ContextRetirement}};
+    using Client = ReceiveClientControl::Feature;
+    caps.receiveClientControl = ReceiveClientControl{{Client::NativeModes, Client::ConfirmedNotifications,
+        Client::FrequencyLimits, Client::QualifiedMeters, Client::QueuedIntentFencing}};
+    caps.scopeModePresentation = ScopeModePresentation{QStringLiteral(
+        "Available modes, dragging behavior and stored-range updates vary by radio.\n"
+        "See the radio-specific user guide for details.")};
     caps.maxSlices = 1;
     caps.maxPanadapters = 1;
     caps.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain},
@@ -284,6 +293,10 @@ RadioCapabilities KenwoodBackend::capabilities() const
         QVariantMap{{QStringLiteral("vfoControlVersion"), 1}, {QStringLiteral("nativeFilterControlVersion"), 1},
             {QStringLiteral("networkAudioLevelsVersion"), 1}});
     QVariantMap extension = caps.extensions.value(QStringLiteral("kenwood")).toMap();
+    extension.insert(QStringLiteral("nativeSettingsPages"), QStringList{
+        "vfo", "filters", "scope", "messages", "memories", "autoMode", "operatingDisplay",
+        "cwReceive", "transverter", "vfoScan", "scanPreferences", "pskReceive", "receiverOptions",
+        "receiveDsp", "receiveRouting", "receiveAgc", "receiveEq", "networkAudio", "transmitInputs", "powerLimits"});
     extension.insert(QStringLiteral("nativeReceiveControlsVersion"), 1);
     extension.insert(QStringLiteral("nativeRelativeTuningVersion"), 1);
     extension.insert(QStringLiteral("nativeRelativeTuningVerbs"), QStringList{"tuning.relative.get", "tuning.relative.read", "tuning.relative.fc", "tuning.relative.ud", "tuning.relative.cancel"});
@@ -332,7 +345,7 @@ RadioCapabilities KenwoodBackend::capabilities() const
     extension.insert(QStringLiteral("transmitInputChoices"), transmitAudioInputChoices());
     caps.extensions.insert(QStringLiteral("kenwood"), extension);
     caps.panSpanModel = PanSpanModel{false, true};
-    caps.panAmplitude = PanAmplitudeModel{false, false, false};
+    caps.panAmplitude = PanAmplitudeModel{false, false, false, PanAmplitudeModel::AxisUnit::RelativeDb};
     caps.clientSettingsDomains = {};
     return caps;
 }
@@ -1622,6 +1635,7 @@ void KenwoodBackend::adopt(const QByteArray& message, quint64 ingressBatch)
             emit sliceChanged(0, delta);
         }
     } else if (message.startsWith("BS3") && message.size() == 4 && message[3] >= '0' && message[3] <= '2') {
+        if (m_scopeMode != message[3] - '0') { m_scopeSpanIntent.reset(); }
         m_scopeMode = message[3] - '0';
         m_fixedRange = -1;
         m_scopeLowHz = m_scopeHighHz = 0;
@@ -1639,6 +1653,7 @@ void KenwoodBackend::adopt(const QByteArray& message, quint64 ingressBatch)
                 && !m_nativeScopeBoundsRefreshPending) { send("BSM0"); }
         }
     } else if (message.startsWith("BSK") && message.size() == 4 && message[3] >= '0' && message[3] <= '8') {
+        if (m_scopeShift != message[3] - '0') { m_scopeSpanIntent.reset(); }
         m_scopeShift = message[3] - '0';
         publishGeometry();
         if (!guard || publicationGeneration != m_generation) { return; }
@@ -1655,6 +1670,7 @@ void KenwoodBackend::adopt(const QByteArray& message, quint64 ingressBatch)
             publishGeometry();
         }
     } else if (message.startsWith("BSO") && message.size() == 4 && (message[3] == '0' || message[3] == '1')) {
+        if (m_scopeExpand != message[3] - '0') { m_scopeSpanIntent.reset(); }
         m_scopeExpand = message[3] - '0';
         if (m_scopeExpand != 0) {
             emit configurationWarning(QStringLiteral("TS-890S expanded scope coverage is not verified; turn EXPAND off on the radio to display the scope."));
@@ -1662,6 +1678,13 @@ void KenwoodBackend::adopt(const QByteArray& message, quint64 ingressBatch)
     } else if (message.startsWith("BS4") && message.size() == 4 && message[3] >= '0'
                && message[3] - '0' < static_cast<int>(kSpans.size())) {
         m_spanHz = kSpans[message[3] - '0'];
+        if (m_scopeSpanIntent) {
+            if (m_spanHz == m_scopeSpanIntent->targetHz) {
+                m_scopeSpanIntent->targetObserved = true;
+            } else if (m_scopeSpanIntent->targetObserved || m_spanHz != m_scopeSpanIntent->sourceHz) {
+                m_scopeSpanIntent.reset();
+            }
+        }
         publishGeometry();
     } else if (message.startsWith("##DD2")) {
         const std::optional<ScopeLine> scope = decodeScope(message);
@@ -2104,6 +2127,7 @@ bool KenwoodBackend::setFixedScope(double centerHz, double widthHz)
         || centerHz - widthHz / 2 < 0 || centerHz + widthHz / 2 > 99999999) { return false; }
     const qint64 low = std::llround(centerHz - widthHz / 2);
     const qint64 high = std::llround(centerHz + widthHz / 2);
+    m_scopeSpanIntent.reset();
     return sendObserved("BSM" + QByteArray::number(m_fixedRange)
         + QByteArray::number(low).rightJustified(8, '0')
         + QByteArray::number(high).rightJustified(8, '0'), "BSM0");
@@ -2156,7 +2180,24 @@ void KenwoodBackend::setPanBandwidth(const QString& panId, double hz)
         if (hz < m_spanHz && nearest != kSpans.cbegin()) { --nearest; }
         else if (hz > m_spanHz && std::next(nearest) != kSpans.cend()) { ++nearest; }
     }
-    sendObserved("BS4" + QByteArray::number(std::distance(kSpans.cbegin(), nearest)), "BS4");
+    const QString context = QStringLiteral("%1:%2:%3:%4:%5")
+        .arg(scopeControlsContextKey())
+        .arg(m_receiveVfo >= 0 && m_receiveVfo <= 1 ? m_frequency[m_receiveVfo] : 0)
+        .arg(m_scopeMode).arg(m_scopeShift).arg(m_scopeExpand);
+    ScopeSpanIntent intent{hz, m_spanHz, *nearest, *nearest == m_spanHz, context, 0};
+    if (m_scopeSpanIntent && m_scopeSpanIntent->context == context
+        && std::abs(m_scopeSpanIntent->requestedHz - hz) <= 0.5) {
+        intent = *m_scopeSpanIntent;
+    }
+    // A gesture's settle request repeats the same absolute width. Retain its
+    // native target across readback instead of reversing its rounding direction.
+    intent.serial = ++m_scopeSpanIntentSerial;
+    m_scopeSpanIntent = intent;
+    const auto target = std::find(kSpans.cbegin(), kSpans.cend(), intent.targetHz);
+    if (!sendObserved("BS4" + QByteArray::number(std::distance(kSpans.cbegin(), target)), "BS4")
+        && guard && m_scopeSpanIntent && m_scopeSpanIntent->serial == intent.serial) {
+        m_scopeSpanIntent.reset();
+    }
 }
 
 void KenwoodBackend::setPanRfGain(const QString& panId, int gain)
@@ -2175,7 +2216,10 @@ void KenwoodBackend::setPanAttenuator(const QString& panId, int step)
 }
 void KenwoodBackend::setPanScopeMode(const QString& panId, int index)
 {
-    if (panId == QLatin1String(kPan) && index >= 0 && index <= 2) { sendObserved("BS3" + QByteArray::number(index), "BS3"); }
+    if (panId == QLatin1String(kPan) && index >= 0 && index <= 2) {
+        m_scopeSpanIntent.reset();
+        sendObserved("BS3" + QByteArray::number(index), "BS3");
+    }
 }
 
 void KenwoodBackend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId, const QVariant& argument)

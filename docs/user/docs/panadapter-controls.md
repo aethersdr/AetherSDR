@@ -100,10 +100,9 @@ Drag the divider between the spectrum and the waterfall to resize them. The spli
 
 ### dBm scale
 
-The amplitude tooltip identifies the source's units. Calibrated sources use
-**dBm scale**; sources without absolute calibration use **relative dB scale**.
-Relative levels show signal differences, not antenna power. The same distinction
-applies to 3D scale tooltips and displayed noise-floor labels.
+The experimental [TS-890S](./kenwood-ts890.md) backend identifies its native
+amplitude as **relative dB scale**, including 3D tooltips and noise-floor labels.
+These levels show signal differences, not calibrated antenna power.
 
 - **Drag** the scale up or down to shift the reference level.
 - **Ctrl+drag** (Cmd+drag on macOS) to zoom the dB span; the bottom stays anchored.

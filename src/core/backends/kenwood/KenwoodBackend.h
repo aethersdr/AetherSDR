@@ -825,6 +825,16 @@ private:
     qint64 m_scopeLowHz = 0;
     qint64 m_scopeHighHz = 0;
     int m_spanHz = 0;
+    struct ScopeSpanIntent {
+        double requestedHz = 0;
+        int sourceHz = 0;
+        int targetHz = 0;
+        bool targetObserved = false;
+        QString context;
+        quint64 serial = 0;
+    };
+    std::optional<ScopeSpanIntent> m_scopeSpanIntent;
+    quint64 m_scopeSpanIntentSerial = 0;
     QString m_mode;
     std::optional<int> m_txFilterLow[2];
     std::optional<int> m_txFilterHigh[2];

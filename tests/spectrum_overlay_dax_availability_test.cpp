@@ -100,10 +100,14 @@ int main(int argc, char* argv[])
         menu.setScopeModeLabels({});
         check(scopeRow->isHidden(), "default Flex without native mode labels keeps the Scope row hidden");
         menu.setRadioFamily(QStringLiteral("kenwood"));
+        menu.setScopeModeHelp(QStringLiteral("Backend-declared native scope help."));
         menu.setScopeModeLabels({QStringLiteral("Center"), QStringLiteral("Fixed"),
                                  QStringLiteral("Auto-scroll")});
         check(!scopeRow->isHidden() && scopeRow->isEnabled(),
               "a backend declaring native mode labels exposes the Scope row for Kenwood");
+        check(scopeRow->toolTip().contains(QStringLiteral("Backend-declared native scope help."))
+                  && !scopeRow->toolTip().contains(QStringLiteral("preset 4")),
+              "native help comes from an explicit descriptor rather than Icom instructions");
         auto* nativeFixed = parent.findChild<QPushButton*>(QStringLiteral("displayScopeMode_fixed"));
         auto* nativeCenter = parent.findChild<QPushButton*>(QStringLiteral("displayScopeMode_center"));
         auto* nativeScroll = parent.findChild<QPushButton*>(QStringLiteral("displayScopeMode_autoscroll"));
@@ -124,7 +128,10 @@ int main(int argc, char* argv[])
                   "native Center readback, rather than the click, updates the checked mode");
             QObject::disconnect(nativeConnection);
         }
+        menu.setScopeModeHelp({});
         menu.setRadioFamily(QStringLiteral("icom"));
+        check(scopeRow->toolTip().contains(QStringLiteral("preset 4; presets 1-3 are left as you set them.")),
+              "undeclared scope help restores the existing Icom preset instructions");
         menu.setScopeModeLabels({QStringLiteral("Center")});
         check(!scopeRow->isHidden() && !scopeRow->isEnabled()
                   && !scopeRow->accessibleDescription().isEmpty(),

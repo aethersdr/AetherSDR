@@ -1068,6 +1068,7 @@ public:
                               IRadioBackend::PanCenterIntent::Range);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
     bool confirmsReceiveControls() const;
+    bool supportsReceiveInteraction(ReceiveInteractionControl::Feature feature) const;
     bool requestConfirmedReceiveTune(int sliceId, double mhz, IRadioBackend::ReceiveTuneView view);
     bool requestReceiveCaptureRecenter(const QString& panId);
     bool requestPanAverage(const QString& panId, int average);

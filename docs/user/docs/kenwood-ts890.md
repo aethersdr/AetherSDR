@@ -247,7 +247,8 @@ stored range. Moving or zooming that scope writes only stored ranges 1–3;
 temporary range 0 remains read-only. Auto-scroll bounds are read without
 changing a stored range.
 In Center and Auto-scroll modes, zoom requests select a supported discrete
-span in the requested direction. The display waits for radio readback.
+span in the requested direction. The display waits for radio readback, and the
+selected native span remains in place when the zoom gesture settles.
 The native spans are 5, 10, 20, 30, 50, 100, 200 and 500 kHz. Their command
 indices were measured on firmware 1.01 in USB/voice and through the application
 in CW. Other firmware and untested mode banks remain unverified.

@@ -12,6 +12,9 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
+#include <QPushButton>
+#include <QImage>
 #include "gui/GuardedSlider.h"
 #include "gui/PhoneApplet.h"
 #include "models/TransmitModel.h"
@@ -112,6 +115,9 @@ int main(int argc, char** argv)
     QWidget* txFilterControls = applet.findChild<QWidget*>(QStringLiteral("txFilterControls"));
     check(txFilterControls != nullptr, "TX filter controls have one capability-gated container");
     applet.setTxFilterControlsAvailable(false);
+    check(txFilterControls && txFilterControls->isHidden(),
+          "legacy unsupported TX cutoff controls retain their hidden region");
+    applet.setTxFilterControlsAvailable(false, true);
     check(txFilterControls && !txFilterControls->isHidden() && !txFilterControls->isEnabled()
               && !txFilterControls->accessibleDescription().isEmpty(),
           "an unavailable TX cutoff editor stays visible and dimmed with an accessible reason");
@@ -119,6 +125,25 @@ int main(int argc, char** argv)
     check(txFilterControls && !txFilterControls->isHidden() && txFilterControls->isEnabled()
               && txFilterControls->accessibleDescription().isEmpty(),
           "a supported TX cutoff editor is enabled without rebuilding the applet");
+    QPushButton* arrow = nullptr;
+    for (QPushButton* candidate : applet.findChildren<QPushButton*>()) {
+        if (candidate->accessibleName() == QStringLiteral("TX low cut decrease")) { arrow = candidate; break; }
+    }
+    check(arrow != nullptr, "TX cutoff arrow is discoverable");
+    if (arrow) {
+        const auto centerColor = [arrow] {
+            const QImage image = arrow->grab().toImage();
+            return image.pixelColor(image.width() / 2, image.height() / 2);
+        };
+        check(centerColor() == QColor(0xc8, 0xd8, 0xe8), "legacy arrow keeps its exact idle color");
+        arrow->setDown(true);
+        check(centerColor() == QColor(0, 0, 0), "legacy arrow keeps its exact pressed color");
+        arrow->setDown(false);
+        applet.setTxFilterControlsAvailable(false, true);
+        check(centerColor() == ThemeManager::instance().color("color.text.disabled"),
+              "native unavailable TX filter arrow uses the unavailable theme token");
+        applet.setTxFilterControlsAvailable(true);
+    }
 
     // This target intentionally does not link the whole MainWindow. Inspect
     // the owning fan-out so deleting the capability-to-widget call still fails
@@ -129,7 +154,7 @@ int main(int argc, char** argv)
           "the capability test can inspect MainWindow's shipping fan-out");
     const QByteArray wiring = mainWindowSource.readAll();
     check(wiring.contains(
-              "phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);"),
+              "phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls,"),
           "MainWindow wires hasTxFilterControls to the complete TX cutoff editor");
     check(wiring.contains(
               "m_radioModel.isConnected() && !caps.hasTxFilterControls"),

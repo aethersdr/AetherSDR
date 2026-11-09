@@ -5327,6 +5327,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             target->setFilterWidth(loHz, hiHz);
         }
     });
+    connect(sw, &SpectrumWidget::incrementalTuneRequested,
+            this, [this, resolveSpectrumTuneTarget](double mhz) {
+        if (auto* target = resolveSpectrumTuneTarget()) {
+            queueActiveSliceForSpectrumTarget(target->sliceId());
+            applyTuneRequest(target, mhz, TuneIntent::IncrementalTune, "spectrum-incremental");
+        }
+    });
     connect(sw, &SpectrumWidget::incrementalTuneDeltaRequested,
             this, [this, resolveSpectrumTuneTarget](double deltaMhz, int snapStepHz) {
         if (auto* target = resolveSpectrumTuneTarget()) {

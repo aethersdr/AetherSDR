@@ -6,11 +6,18 @@
 
 namespace AetherSDR {
 
-// Confirmed profiles must declare their native vocabulary; legacy optimistic CAT
-// aliases retain their established dialect. A disconnected list is no authority.
+// Additional receive-client semantics are opt-in; confirmed authority alone
+// does not change an existing backend's CAT or TCI dialect.
+inline bool usesReceiveClientFeature(const RadioModel* model, ReceiveClientControl::Feature feature)
+{
+    if (!model) { return false; }
+    const auto control = model->backendCapabilities().receiveClientControl;
+    return control && control->supports(feature);
+}
+
 inline bool usesDeclaredReceiveModes(const RadioModel* model, const SliceModel* slice)
 {
-    return model && slice && slice->receiveControlsConfirmed();
+    return slice && usesReceiveClientFeature(model, ReceiveClientControl::Feature::NativeModes);
 }
 
 inline QStringList declaredReceiveModes(const RadioModel* model, const SliceModel* slice, bool writable)

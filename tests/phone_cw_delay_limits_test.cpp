@@ -49,6 +49,7 @@ int main(int argc, char** argv)
                 requestedMs = std::get<int>(request.value);
             }
         });
+    model.setRadioTransmitSettings(RadioTransmitSettings{{TransmitControlRequest::Field::CwDelay}});
     applet.setCwControlLimits(5, 60, 300, 1100, 5, 1000, 50);
     require(delay->maximum() == 1000 && delay->singleStep() == 50
         && editor->accessibleDescription().contains("1000")
@@ -69,9 +70,13 @@ int main(int argc, char** argv)
         "explicit text commit uses the same native step as the slider");
     emit editor->editingFinished();
     require(requests == 2, "unchanged editor focus loss cannot duplicate a radio write");
+    model.setRadioTransmitSettings(std::nullopt);
     applet.setCwControlLimits(5, 100, 100, 6000, 10);
     require(requests == 2 && delay->maximum() == 2000 && delay->singleStep() == 10,
         "absent native delay record restores existing desktop limits without a write");
+    require(delay->accessibleDescription() == QStringLiteral("CW break-in delay in milliseconds")
+        && editor->accessibleDescription() == QStringLiteral("CW break-in delay in milliseconds, 0 to 2000"),
+        "legacy slider and editor retain their distinct original accessible descriptions");
     delay->setValue(527);
     require(requests == 3 && requestedMs == 527,
         "other radio families retain continuous millisecond requests");

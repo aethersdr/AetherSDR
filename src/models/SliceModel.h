@@ -1,5 +1,6 @@
 #pragma once
 #include "core/backends/ModelControlRequest.h"
+#include "core/backends/RadioCapabilities.h"
 
 #include <QObject>
 #include <QString>
@@ -100,6 +101,8 @@ public:
     bool    isActive()   const { return m_active; }
     bool    inCapture()  const { return m_inCapture; }
     bool receiveControlsConfirmed() const { return confirmsControls(); }
+    bool supportsReceiveInteraction(ReceiveInteractionControl::Feature feature) const
+    { return m_receiveInteractionControl && m_receiveInteractionControl->supports(feature); }
     bool    isTxSlice()  const { return m_txSlice; }
     float   rfGain()     const { return m_rfGain; }
     float   audioGain()  const { return m_externalReceiveAudioReplacement
@@ -638,12 +641,23 @@ private:
     {
         if (m_controlPolicy != policy) {
             m_controlPolicy = policy;
-            m_rxAntennaKnown = false;
-            ++m_rxAntennaIntentRevision;
-            ++m_receiveFilterContextGeneration;
-            ++m_filterIntentRevision;
+            if (supportsReceiveInteraction(ReceiveInteractionControl::Feature::AntennaReadback)) {
+                m_rxAntennaKnown = false;
+                ++m_rxAntennaIntentRevision;
+            }
+            if (supportsReceiveInteraction(ReceiveInteractionControl::Feature::ContextRetirement)) {
+                ++m_receiveFilterContextGeneration;
+                ++m_filterIntentRevision;
+            }
         }
     }
+    void setReceiveInteractionControl(const std::optional<ReceiveInteractionControl>& control)
+    {
+        if (m_receiveInteractionControl == control) { return; }
+        retireTuneIntent();
+        m_receiveInteractionControl = control;
+    }
+    std::optional<ReceiveInteractionControl> m_receiveInteractionControl;
     bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
     ReceiveControlPolicy m_controlPolicy = ReceiveControlPolicy::Optimistic;
     // Local notifications can synchronously trigger a newer edit or reconnect.

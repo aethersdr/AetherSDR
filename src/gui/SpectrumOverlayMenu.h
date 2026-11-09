@@ -180,6 +180,7 @@ public:
     // The radio's own scope mode (Display panel, PANADAPTER group). Fewer than
     // two labels: dimmed with a reason; index -1 lights none.
     void setScopeModeLabels(const QStringList& labels);
+    void setScopeModeHelp(const QString& help);
     void setScopeModeIndex(int index);
     // The connected radio's family. The Scope row is shown for "icom" only, a
     // deliberate family exception to dim-never-hide (maintainer ruling).
@@ -498,6 +499,8 @@ private:
     QHBoxLayout*        m_scopeModeLayout{nullptr};
     QList<QPushButton*> m_scopeModeBtns;
     QStringList         m_scopeModeLabels;
+    QString m_scopeModeHelp;
+    QString scopeModeToolTip() const;
     int                 m_scopeModeIndex{-1};
     QString             m_radioFamily;
     void rebuildScopeModeButtons();

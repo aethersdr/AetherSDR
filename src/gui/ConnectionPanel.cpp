@@ -1740,13 +1740,35 @@ bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp,
     return true;
 }
 
+bool ConnectionPanel::automationUsesDeferredNetworkLogin(const QString& family) const
+{
+    return (!family.isEmpty() && networkRadioProfile(family).has_value())
+        || m_nativeConnectionIntent;
+}
+
+void ConnectionPanel::automationReserveIpConnect(const QString& family)
+{
+    if (!m_nativeConnectionIntent
+        && networkRadioProfile(family.isEmpty() ? currentManualFamily() : family)) {
+        m_nativeConnectionIntent = true;
+        cancelNetworkAttempt();
+    }
+}
+
 bool ConnectionPanel::automationDisconnect(QString* error)
 {
-    if (error) { error->clear(); }
-    ++m_connectionIntentEpoch;
-    m_startupProbe = false;
-    cancelNetworkAttempt();
-    clearPendingIcomCredentials();
+    const bool deferredLogin = automationUsesDeferredNetworkLogin();
+    if (!m_connected && !deferredLogin) {
+        setAutomationError(error, QStringLiteral("not connected to a radio"));
+        return false;
+    }
+    if (deferredLogin) {
+        if (error) { error->clear(); }
+        ++m_connectionIntentEpoch;
+        m_startupProbe = false;
+        cancelNetworkAttempt();
+        clearPendingIcomCredentials();
+    }
     emit disconnectRequested();
     return true;
 }
@@ -2191,6 +2213,7 @@ void ConnectionPanel::onLocalConnectClicked()
 
     ++m_connectionIntentEpoch;
     cancelNetworkAttempt();
+    m_nativeConnectionIntent = false;
 
     // Low bandwidth mode is a slow-link concession, and for a Flex on the LAN it
     // is meaningless — so a local Flex connect clears it. Do NOT clear it for
@@ -2217,6 +2240,7 @@ void ConnectionPanel::onWanConnectClicked()
 
     ++m_connectionIntentEpoch;
     cancelNetworkAttempt();
+    m_nativeConnectionIntent = false;
     saveLowBandwidthPreference(m_lowBwCheck->isChecked());
     emit wanConnectRequested(m_wanRadios[row]);
 }
@@ -2644,14 +2668,23 @@ void ConnectionPanel::resetNetworkPasswordConsent()
 
 void ConnectionPanel::cancelNetworkAttempt()
 {
+    if (!automationUsesDeferredNetworkLogin()) { return; }
     invalidateNetworkRadioLoginRevision(currentManualFamily());
     m_pendingNetworkProfile.reset();
     ++m_networkProbeGeneration;
-    if (m_manualFlexProbe) {
-        QTcpSocket* socket = m_manualFlexProbe.data();
-        m_manualFlexProbe.clear();
-        socket->abort();
-        socket->deleteLater();
+    ++m_nativeConnectionEpoch;
+    ++m_connectionIntentEpoch;
+    QList<QPointer<QTcpSocket>> probes = std::exchange(m_manualFlexProbes, {});
+    if (m_manualFlexProbe && !probes.contains(m_manualFlexProbe)) {
+        probes.append(m_manualFlexProbe);
+    }
+    m_manualFlexProbe.clear();
+    for (const QPointer<QTcpSocket>& socket : probes) {
+        if (socket) {
+            QObject::disconnect(socket, nullptr, this, nullptr);
+            socket->abort();
+            socket->deleteLater();
+        }
     }
     if (m_networkHostLookup) { m_networkHostLookup->cancel(); }
     m_networkLoginPendingHost.clear();
@@ -2666,12 +2699,18 @@ void ConnectionPanel::updateManualFamilyHints()
         m_pendingNetworkProfile.reset();
     }
     const std::optional<NetworkRadioProfile> networkProfile = networkRadioProfile(family);
+    if (networkProfile && !m_nativeConnectionIntent) {
+        m_nativeConnectionIntent = true;
+        cancelNetworkAttempt();
+    }
     for (QWidget* row : m_manualNetworkRows) { row->setVisible(networkProfile.has_value()); }
     if (!networkProfile && !m_networkLoginFamily.isEmpty()) {
+        cancelNetworkAttempt();
         invalidateNetworkRadioLoginRevision(m_networkLoginFamily);
         resetNetworkPasswordConsent();
         m_loadedNetworkLogin.reset();
         m_networkLoginFamily.clear();
+        m_nativeConnectionIntent = false;
         ++m_networkProbeGeneration;
         if (m_networkHostLookup) { m_networkHostLookup->cancel(); }
         ++m_networkLoginLoadGeneration;
@@ -2698,6 +2737,7 @@ void ConnectionPanel::updateManualFamilyHints()
         m_manualNetworkAudioPort->setAccessibleDescription(tr("The radio requires this fixed UDP audio port."));
     }
     if (networkProfile && m_networkLoginFamily != family) {
+        cancelNetworkAttempt();
         invalidateNetworkRadioLoginRevision(m_networkLoginFamily);
         resetNetworkPasswordConsent();
         m_loadedNetworkLogin.reset();
@@ -2783,10 +2823,10 @@ void ConnectionPanel::updateManualFamilyHints()
             m_manualIpEdit->setText(IcomSettings::lastHost());
         if (m_manualIcomPassEdit && m_manualIcomPassEdit->text().isEmpty()) {
             QPointer<QLineEdit> field(m_manualIcomPassEdit);
-            const quint64 generation = m_networkProbeGeneration;
+            const quint64 generation = m_nativeConnectionEpoch;
             QPointer<ConnectionPanel> panel(this);
             m_icomPasswordLoader(this, [field, panel, generation](const QString& password) {
-                if (panel && panel->m_networkProbeGeneration == generation
+                if (panel && panel->m_nativeConnectionEpoch == generation
                     && field && field->text().isEmpty())
                     field->setText(password);
             });
@@ -2983,7 +3023,6 @@ void ConnectionPanel::reportStartupProbeFailure(const QString& reason)
 void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
 {
     m_pendingNetworkProfile.reset();
-    const quint64 networkProbeGeneration = ++m_networkProbeGeneration;
     if (m_networkHostLookup) { m_networkHostLookup->cancel(); }
     const QString trimmedIp = ip.trimmed();
     if (trimmedIp.isEmpty())
@@ -3010,6 +3049,16 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         // startup and an explicit recent-address selection restore profiles.
         applySavedSourceSelection(trimmedIp, /*restoreFamily=*/true);
     }
+
+    // Restoring a saved family can retire the previous native context. The
+    // current attempt owns the resulting epochs, not the pre-restore ones.
+    m_nativeConnectionIntent = networkRadioProfile(currentManualFamily()).has_value();
+    if (m_nativeConnectionIntent) {
+        ++m_nativeConnectionEpoch;
+        ++m_connectionIntentEpoch;
+    }
+    const quint64 nativeConnectionEpoch = m_nativeConnectionEpoch;
+    const quint64 networkProbeGeneration = ++m_networkProbeGeneration;
 
     bool staleSelection = false;
     const RadioBindSettings bindSettings = currentManualBindSettings(&staleSelection);
@@ -3170,8 +3219,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
             const QString requestedHost = trimmedIp;
             setManualMessage(QStringLiteral("Loading the saved Icom password…"));
             QPointer<ConnectionPanel> panel(this);
-            m_icomPasswordLoader(this, [panel, requestedHost, networkProbeGeneration](const QString& password) {
-                if (!panel || panel->m_networkProbeGeneration != networkProbeGeneration) {
+            m_icomPasswordLoader(this, [panel, requestedHost, nativeConnectionEpoch](const QString& password) {
+                if (!panel || panel->m_nativeConnectionEpoch != nativeConnectionEpoch) {
                     return;
                 }
                 if (panel->currentManualFamily() != QLatin1String(kFamilyIcom)
@@ -3819,17 +3868,19 @@ ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
 
 void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSettings& bindSettings)
 {
-    if (m_manualFlexProbe) {
-        QTcpSocket* old = m_manualFlexProbe.data();
-        m_manualFlexProbe.clear();
-        old->abort();
-        old->deleteLater();
-    }
-    const quint64 generation = m_networkProbeGeneration;
+    // Only an authenticated network-login transition retires these probes.
+    // Starting another established-radio probe preserves its existing policy.
+    const quint64 generation = m_nativeConnectionEpoch;
     auto* sock = new QTcpSocket(this);
     m_manualFlexProbe = sock;
+    m_manualFlexProbes.removeIf([](const QPointer<QTcpSocket>& probe) { return probe.isNull(); });
+    m_manualFlexProbes.append(sock);
     const auto ownsProbe = [this, sock, generation] {
-        return m_networkProbeGeneration == generation && m_manualFlexProbe == sock;
+        if (m_nativeConnectionEpoch == generation) { return true; }
+        QObject::disconnect(sock, nullptr, this, nullptr);
+        sock->abort();
+        sock->deleteLater();
+        return false;
     };
     if (bindSettings.mode == RadioBindMode::Explicit
         && !sock->bind(bindSettings.bindAddress, 0)) {
@@ -3886,7 +3937,7 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         // Build RadioInfo from collected status and emit the connect signal.
         auto finishProbe = [this, sock, trimmedIp, bindSettings, version, statusLines, localSrc, ownsProbe] {
             if (!ownsProbe()) { return; }
-            m_manualFlexProbe.clear();
+            if (m_manualFlexProbe == sock) { m_manualFlexProbe.clear(); }
             QHostAddress targetAddress(trimmedIp);
             if (targetAddress.isNull()) {
                 targetAddress = sock->peerAddress();

@@ -108,6 +108,7 @@ QString KenwoodBackend::scopeFilterFrameReason() const
 
 void KenwoodBackend::resetScopeControls()
 {
+    m_scopeSpanIntent.reset();
     ++m_nativeScopeRevision;
     m_nativeScopeContext.clear(); m_nativeScopeFrequencyContext.clear();
     m_nativeScopeValues.clear(); m_nativeScopeRanges.clear(); m_nativeScopeCurrentBounds.reset(); m_nativeScopeAi.reset();
@@ -129,6 +130,7 @@ bool KenwoodBackend::refreshScopeControlsContext()
     const bool changed = context != m_nativeScopeContext;
     const bool frequencyChanged = frequencyContext != m_nativeScopeFrequencyContext;
     if (!changed && !frequencyChanged) { return false; }
+    m_scopeSpanIntent.reset();
     m_nativeScopeFrequencyContext = frequencyContext;
     const bool fixedInWindow = !changed && m_scopeMode == 1 && m_scopeHighHz > m_scopeLowHz
         && frequency >= m_scopeLowHz && frequency <= m_scopeHighHz;
@@ -494,6 +496,7 @@ bool KenwoodBackend::handleScopeControlsExtension(const QString& verb, quint64 r
     const quint64 revision = m_nativeScopeRevision, rowRevision = m_nativeScopeRowRevisions.value(id), ticket = ++m_nativeScopeTicket;
     m_nativeScopePending[id] = ticket; m_nativeScopePredispatch[id] = ticket; m_nativeScopeFloors[id] = m_controlIngressSequence;
     if (geometry) {
+        m_scopeSpanIntent.reset();
         m_nativeScopeProjectionPending = true;
         m_nativeScopeGeometryTicket = ticket;
         m_nativeScopeOwnedGeometryFloor = m_nativeScopeGeometryFloor = m_controlIngressSequence;

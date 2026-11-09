@@ -4,6 +4,8 @@
 #include "TestSettingsProfile.h"
 #include "core/backends/flex/WanConnection.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/rtl/RtlSdrBackend.h"
+#include "core/backends/kenwood/KenwoodBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -63,6 +65,8 @@ class Backend final : public IRadioBackend {
 public:
     bool connected = false;
     bool confirmed = false;
+    std::optional<ReceiveInteractionControl> interactions;
+    int receiveTuneCalls = 0;
     QList<int> pitches;
     QList<bool> ritEnables;
     QList<int> ritOffsets;
@@ -89,6 +93,7 @@ public:
     {
         RadioCapabilities caps;
         if (confirmed) { caps.receiveCwPitchControl = ReceiveCwPitchControl{}; }
+        caps.receiveInteractionControl = interactions;
         return caps;
     }
     bool isConnected() const override { return connected; }
@@ -97,6 +102,7 @@ public:
     bool tuneAccepted = true;
     bool requestReceiveTune(int id, double hz, ReceiveTuneView view) override
     {
+        ++receiveTuneCalls;
         if (!tuneAccepted) { return false; }
         requestSliceTune(id, {hz, view == ReceiveTuneView::Center
             ? SliceTuneRequest::PanIntent::AllowRecenter
@@ -189,11 +195,16 @@ SliceDelta report(double frequency = 14.2)
 struct Fixture {
     RadioModel radio;
     Backend* backend;
-    explicit Fixture(bool commandPlaneCreation = false, bool confirmed = false)
+    explicit Fixture(bool commandPlaneCreation = false, bool confirmed = false, bool interactionOptIn = true)
     {
         auto owned = std::make_unique<Backend>();
         backend = owned.get();
         backend->confirmed = confirmed;
+        if (confirmed && interactionOptIn) {
+            using Feature = ReceiveInteractionControl::Feature;
+            backend->interactions = ReceiveInteractionControl{{Feature::PendingTune,
+                Feature::AntennaReadback, Feature::ContextRetirement}};
+        }
         radio.setBackendForTest(std::move(owned), QStringLiteral("receive-intent-test"));
         if (commandPlaneCreation) {
             check(radio.automationApplySliceFixture(0, QStringLiteral("A")),
@@ -205,6 +216,47 @@ struct Fixture {
     }
     SliceModel* slice() { return radio.slice(0); }
 };
+
+void receiveInteractionOptInIsolation()
+{
+    rtl::RtlSdrBackend rtl;
+    kenwood::KenwoodBackend kenwood;
+    const RadioCapabilities rtlCaps = rtl.capabilities();
+    const RadioCapabilities kenwoodCaps = kenwood.capabilities();
+    check(rtl.receiveControlPolicy() == ReceiveControlPolicy::Confirmed
+        && !rtlCaps.receiveInteractionControl && !rtlCaps.receiveClientControl,
+        "RTL's existing confirmed policy does not opt in to new interaction or client behavior");
+    check(kenwoodCaps.receiveInteractionControl && kenwoodCaps.receiveClientControl
+        && kenwoodCaps.receiveInteractionControl->supports(ReceiveInteractionControl::Feature::PendingTune),
+        "Kenwood explicitly declares pending tune and client feature support");
+    check(rtlCaps.panAmplitude && rtlCaps.panAmplitude->axisUnit == PanAmplitudeModel::AxisUnit::Dbm
+        && kenwoodCaps.panAmplitude && kenwoodCaps.panAmplitude->axisUnit == PanAmplitudeModel::AxisUnit::RelativeDb,
+        "legacy RTL amplitude presentation stays dBm while Kenwood explicitly selects relative units");
+    for (bool optIn : {false, true}) {
+        Fixture f(false, true, optIn);
+        SliceModel* slice = f.slice();
+        const double initial = slice->frequency();
+        slice->setFrequency(slice->incrementalTuneTarget(0.0001));
+        slice->setFrequency(slice->incrementalTuneTarget(0.0001));
+        const double expected = initial + (optIn ? 0.0002 : 0.0001);
+        check(std::abs(f.backend->tunes.last().frequencyHz / 1e6 - expected) < 1e-9,
+            "pending tune accumulation requires the explicit feature, not confirmed policy alone");
+        check(f.backend->receiveTuneCalls == (optIn ? 2 : 0),
+            "confirmed legacy dispatch retains requestSliceTune while opt-in uses admitted receive tuning");
+        SliceDelta antenna; antenna.rxAntenna = QStringLiteral("ANT1");
+        emit f.backend->sliceChanged(0, antenna);
+        slice->setRxAntenna(QStringLiteral("ANT2"));
+        check(slice->rxAntenna() == (optIn ? QStringLiteral("ANT1") : QStringLiteral("ANT2")),
+            "antenna readback authority requires its explicit feature; legacy confirmed selection stays optimistic");
+        const quint64 session = slice->receiveSessionGeneration();
+        const quint64 filter = slice->receiveFilterContextGeneration();
+        SliceDelta source; source.receiveTuneContextChanged = true;
+        emit f.backend->sliceChanged(0, source);
+        check((slice->receiveSessionGeneration() > session) == optIn
+            && (slice->receiveFilterContextGeneration() > filter) == optIn,
+            "new source-context retirement requires an explicit opt-in");
+    }
+}
 
 void confirmedReceiveAntennaAuthority()
 {
@@ -1229,6 +1281,7 @@ int main(int argc, char** argv)
     qputenv("AETHER_AUTOMATION", "1");
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 1; }
+    receiveInteractionOptInIsolation();
     confirmedReceiveAntennaAuthority();
     confirmedIncrementalTuneCursor();
     confirmedRecenterPreservesBackendViewport();

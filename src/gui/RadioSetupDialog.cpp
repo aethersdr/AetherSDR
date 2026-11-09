@@ -95,6 +95,7 @@
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QLabel>
+#include <QMetaType>
 #include <QLineEdit>
 #include <QList>
 #include <QPushButton>
@@ -1365,64 +1366,69 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(radioCategory, QStringLiteral("RTL Receiver"),
         QStringLiteral("rtl receiver ppm oscillator frequency correction calibration iq dc suppression serial"),
         [this] { return new RtlReceiverSettingsWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native VFOs"),
+    const auto addNativePage = [&addPage, radioCategory](const QString& id, const QString& name,
+            const QString& keywords, std::function<QWidget*()> builder) {
+        QTreeWidgetItem* item = addPage(radioCategory, name, keywords, std::move(builder));
+        item->setData(0, Qt::UserRole + 2, id);
+    };
+    addNativePage(QStringLiteral("vfo"), QStringLiteral("Native VFOs"),
         QStringLiteral("vfo a b receive transmit split frequency tuning memory kenwood"),
         [this] { return new NativeVfoSettingsWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Filters"),
+    addNativePage(QStringLiteral("filters"), QStringLiteral("Native Filters"),
         QStringLiteral("receive filter width shift low high cut am fm fsk psk native"),
         [this] { return new NativeFilterSettingsWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Scope"),
+    addNativePage(QStringLiteral("scope"), QStringLiteral("Native Scope"),
         QStringLiteral("scope bandscope spectrum waterfall radio display native rf audio fixed range output rate"),
         [this] { return new NativeScopeSettingsWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Radio Messages"),
+    addNativePage(QStringLiteral("messages"), QStringLiteral("Native Radio Messages"),
         QStringLiteral("radio messages notifications popup beep volume native"),
         [this] { return new NativeRadioMessagesWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Memories"),
+    addNativePage(QStringLiteral("memories"), QStringLiteral("Native Memories"),
         QStringLiteral("radio memory channels quick program extended read inventory scan status native"),
         [this] { return new NativeMemoryReadWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Auto Mode"),
+    addNativePage(QStringLiteral("autoMode"), QStringLiteral("Native Auto Mode"),
         QStringLiteral("auto mode automatic frequency divisions boundary policy native radio"),
         [this] { return new NativeAutoModeWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Operating Display"),
+    addNativePage(QStringLiteral("operatingDisplay"), QStringLiteral("Native Operating Display"),
         QStringLiteral("native operating display standard swl screen edit escape kenwood"),
         [this] { return new NativeOperatingDisplayWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native CW Receive"),
+    addNativePage(QStringLiteral("cwReceive"), QStringLiteral("Native CW Receive"),
         QStringLiteral("native cw receive morse decode threshold filter screen characters transcript"),
         [this] { return new NativeCwReceiveWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Transverter"),
+    addNativePage(QStringLiteral("transverter"), QStringLiteral("Native Transverter"),
         QStringLiteral("native transverter xv xo offset direction magnitude frequency if rf display"),
         [this] { return new NativeTransverterWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native VFO Scan"),
+    addNativePage(QStringLiteral("vfoScan"), QStringLiteral("Native VFO Scan"),
         QStringLiteral("native vfo scan speed tone ctcss receive scanning"),
         [this] { return new NativeVfoScanWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Scan Preferences"),
+    addNativePage(QStringLiteral("scanPreferences"), QStringLiteral("Native Scan Preferences"),
         QStringLiteral("native scan hold resume radio preference configuration bank menu"),
         [this] { return new NativeScanPreferencesWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native PSK Receive"),
+    addNativePage(QStringLiteral("pskReceive"), QStringLiteral("Native PSK Receive"),
         QStringLiteral("native psk receive afc tuning range bank radio preference"),
         [this] { return new NativePskReceiveWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Receiver Options"),
+    addNativePage(QStringLiteral("receiverOptions"), QStringLiteral("Native Receiver Options"),
         QStringLiteral("native receiver speaker mute signal blanking busy indicator physical"),
         [this] { return new NativeReceiverOptionsWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Receive DSP"),
+    addNativePage(QStringLiteral("receiveDsp"), QStringLiteral("Native Receive DSP"),
         QStringLiteral("receive noise reduction blanker notch audio peak filter apf nr nb beat cancellation native"),
         [this] { return new NativeReceiveSettingsWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Receive Routing"),
+    addNativePage(QStringLiteral("receiveRouting"), QStringLiteral("Native Receive Routing"),
         QStringLiteral("receive rx ant antenna external receiver routing hf 50 70 native radio"),
         [this] { return new NativeReceiveRoutingWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Receive AGC"),
+    addNativePage(QStringLiteral("receiveAgc"), QStringLiteral("Native Receive AGC"),
         QStringLiteral("receive agc slow mid fast preset quick recovery threshold native radio"),
         [this] { return new NativeReceiveAgcWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Receive EQ"),
+    addNativePage(QStringLiteral("receiveEq"), QStringLiteral("Native Receive EQ"),
         QStringLiteral("receive equalizer eq effect user preset curve bands native radio"),
         [this] { return new NativeReceiveEqWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Network Audio Levels"),
+    addNativePage(QStringLiteral("networkAudio"), QStringLiteral("Network Audio Levels"),
         QStringLiteral("voip network lan audio input output level administrator gain"),
         [this] { return new NetworkAudioLevelsWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Transmit Inputs"),
+    addNativePage(QStringLiteral("transmitInputs"), QStringLiteral("Native Transmit Inputs"),
         QStringLiteral("send ptt data microphone acc usb lan front rear audio input"),
         [this] { return new NativeTransmitInputsWidget(*m_model); });
-    addPage(radioCategory, QStringLiteral("Native Power Limits"),
+    addNativePage(QStringLiteral("powerLimits"), QStringLiteral("Native Power Limits"),
         QStringLiteral("power max po limiter tune ssb cw fsk psk fm am data band"),
         [this] { return new NativePowerLimitsWidget(*m_model); });
     m_rtlReceiverPageIndex = m_pageIndexes.value(QStringLiteral("RTL Receiver"));
@@ -1571,7 +1577,9 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
                     || (droopRow && !droopCalibrationAvailable(m_model->backend()))
                     || (hl2HwRow && !declaresHl2Extension())
-                    || (ananRow && !ananFrontEndAvailable());
+                    || (ananRow && !ananFrontEndAvailable())
+                    || (!item->data(0, Qt::UserRole + 2).toString().isEmpty()
+                        && !isCapabilityPageAvailable(item));
                 if (!gated) {
                     navigationChanged |= setNavigationItemHidden(item, !matches);
                 }
@@ -1683,6 +1691,15 @@ bool RadioSetupDialog::isCapabilityPageAvailable(const QTreeWidgetItem* item) co
         return false;
     }
     const int index = item->data(0, Qt::UserRole).toInt();
+    const QString nativePage = item->data(0, Qt::UserRole + 2).toString();
+    if (!nativePage.isEmpty()) {
+        const RadioCapabilities caps = m_model->backendCapabilities();
+        for (const QString& space : caps.extensionNamespaces) {
+            const QVariant pages = caps.extensions.value(space).toMap().value(QStringLiteral("nativeSettingsPages"));
+            if (pages.typeId() == QMetaType::QStringList && pages.toStringList().contains(nativePage)) { return true; }
+        }
+        return false;
+    }
     if (index == m_rtlReceiverPageIndex) {
         return m_model->backendDeclaresExtension(QStringLiteral("rtl"))
             && m_model->backendCapabilities().extensions.value(QStringLiteral("rtl")).toMap()
@@ -1818,6 +1835,14 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
                             || (!needle.isEmpty()
                                 && !haystack.contains(needle, Qt::CaseInsensitive)));
         }
+    }
+
+    for (QTreeWidgetItem* item : m_pageItems) {
+        if (item->data(0, Qt::UserRole + 2).toString().isEmpty()) { continue; }
+        const QString haystack = item->text(0) + QStringLiteral(" ")
+            + item->data(0, Qt::UserRole + 1).toString();
+        navigationChanged |= setNavigationItemHidden(item, !isCapabilityPageAvailable(item)
+            || (!needle.isEmpty() && !haystack.contains(needle, Qt::CaseInsensitive)));
     }
 
     if (QTreeWidgetItem* gpsItem = m_pageItems.value(m_gpsPageIndex, nullptr)) {

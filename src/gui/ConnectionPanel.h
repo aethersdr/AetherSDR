@@ -103,6 +103,9 @@ public:
                                QString* error = nullptr) override;
     bool automationDisconnect(QString* error = nullptr) override;
     quint64 automationConnectionIntentEpoch() const override { return m_connectionIntentEpoch; }
+    bool automationUsesDeferredNetworkLogin(const QString& family = {}) const override;
+    void automationReserveIpConnect(const QString& family) override;
+    quint64 automationNativeConnectionEpoch() const override { return m_nativeConnectionEpoch; }
     bool automationDialogVisible() const override { return isVisible(); }
     void automationSetDialogVisible(bool visible) override
     {
@@ -339,7 +342,11 @@ private:
     quint64      m_networkLoginLoadGeneration{0};
     quint64      m_networkProbeGeneration{0};
     quint64 m_connectionIntentEpoch{0};
+    quint64 m_nativeConnectionEpoch{0};
+    // Retained manual fields do not own later Local/SmartLink attempts.
+    bool m_nativeConnectionIntent{false};
     QPointer<QTcpSocket> m_manualFlexProbe;
+    QList<QPointer<QTcpSocket>> m_manualFlexProbes;
     std::function<void(QObject*, std::function<void(const QString&)>)> m_icomPasswordLoader;
     NetworkRadioLookup* m_networkHostLookup{nullptr};
     bool         m_networkLoginReady{false};

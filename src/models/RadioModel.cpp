@@ -1715,6 +1715,7 @@ void RadioModel::wireBackendReceiverState()
                 qCDebug(lcProtocol) << "RadioModel: reclaimed non-Flex slice"
                                     << sliceId << "from previous session";
                 m_slices.append(s);
+                s->setReceiveInteractionControl(backendCapabilities().receiveInteractionControl);
                 s->setControlPolicy(m_backend->receiveControlPolicy());
                 s->setNrsLevelMaximum(backendCapabilities().nrsLevelControl
                     .value_or(RadioCapabilities::NrsLevelControl{}).levelMaximum);
@@ -1766,6 +1767,7 @@ void RadioModel::wireBackendReceiverState()
             return;
         }
         if (s) {
+            s->setReceiveInteractionControl(backendCapabilities().receiveInteractionControl);
             s->setControlPolicy(m_backend->receiveControlPolicy());
             s->applyChanges(mapped);
             // The TX slice decides which TX-waveform meters resolve
@@ -4694,6 +4696,7 @@ void RadioModel::publishCapabilities(bool connected)
     const int nrsMaximum = connected && caps.nrsLevelControl
         ? caps.nrsLevelControl->levelMaximum : 100;
     for (SliceModel* slice : m_slices) {
+        slice->setReceiveInteractionControl(connected ? caps.receiveInteractionControl : std::nullopt);
         slice->setNrsLevelMaximum(nrsMaximum);
     }
     m_meterModel.setCompressionMaximumDb(connected ? caps.compressionMaximumDb : 25.0f);
@@ -6101,6 +6104,12 @@ QString describePanWrites(const AetherSDR::PanWrites& writes)
 
 } // namespace
 
+bool RadioModel::supportsReceiveInteraction(ReceiveInteractionControl::Feature feature) const
+{
+    const RadioCapabilities caps = backendCapabilities();
+    return caps.receiveInteractionControl && caps.receiveInteractionControl->supports(feature);
+}
+
 bool RadioModel::confirmsReceiveControls() const
 {
     return m_backend && m_backend->receiveControlPolicy() == ReceiveControlPolicy::Confirmed;
@@ -6123,7 +6132,8 @@ bool RadioModel::requestConfirmedReceiveTune(int sliceId, double mhz, IRadioBack
     if (control.authority == SliceFrequencyControl::Authority::Unknown
         || mhz * 1e6 < control.minimumHz || mhz * 1e6 > control.maximumHz) { return reject(); }
     const QPointer<SliceModel> alive(receiver);
-    const quint64 token = receiver->recordTuneIntent(mhz);
+    const quint64 token = supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune)
+        ? receiver->recordTuneIntent(mhz) : 0;
     const bool dispatched = m_backend->requestReceiveTune(sliceId, mhz * 1e6, view);
     if (!dispatched && alive) { alive->retireTuneIntent(token); }
     return dispatched;
@@ -10400,7 +10410,7 @@ SliceModel* RadioModel::receiveCommandSource() const
 void RadioModel::dispatchSliceTune(const SliceTuneRequest& request)
 {
     if (SliceModel* source = receiveCommandSource()) {
-        if (source->receiveControlsConfirmed()) {
+        if (source->supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune)) {
             const QPointer<SliceModel> alive(source);
             const quint64 token = source->recordTuneIntent(request.frequencyHz / 1.0e6);
             const bool dispatched = m_backend->requestReceiveTune(
@@ -10759,6 +10769,7 @@ void RadioModel::wireSliceObservationsAndTxIntentToBackend(SliceModel* s)
     if (!s)
         return;
 
+    s->setReceiveInteractionControl(backendCapabilities().receiveInteractionControl);
     s->setControlPolicy(m_backend ? m_backend->receiveControlPolicy() : ReceiveControlPolicy::Optimistic);
     s->setNrsLevelMaximum(backendCapabilities().nrsLevelControl
         .value_or(RadioCapabilities::NrsLevelControl{}).levelMaximum);

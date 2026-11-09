@@ -1134,6 +1134,25 @@ optimistic sessions retain their existing behavior. Notch capability limits
 remain the existing `maxNotchFilters`, width bounds and `notchHasDepth` fields;
 a single relative MN control does not imply a tracking-notch bank.
 
+## Receive compatibility and native presentation
+
+`receiveInteractionControl` opts into pending-tune accumulation, antenna
+readback and native receive-context retirement individually. `receiveClientControl`
+separately opts into native mode vocabulary, confirmed notifications, frequency
+limits, qualified meters and queued-intent fencing for receive clients. The records
+are absent on established backends; `ReceiveControlPolicy::Confirmed` alone does
+not enable these additional behaviors. The TS-890S backend declares the features
+it implements. These are desktop routing contracts, not daemon permissions or
+new transmit authority.
+
+`PanAmplitudeModel::axisUnit` describes the displayed unit independently of the
+physical calibration flag. Its default preserves the established dBm presentation;
+TS-890S explicitly chooses relative dB. `scopeModePresentation` supplies native
+help while an absent record retains the existing Scope help. The native setup-page
+catalogue is declared in the extension descriptor; it admits the cohesive page
+cluster only for a backend declaring those pages. Unsupported controls inside an
+admitted page remain dimmed with a reason.
+
 ## Direct network audio routing and mode-qualified TUNE
 
 `pcAudioRoutingControl` is an optional record consumed by `RadioModel` when

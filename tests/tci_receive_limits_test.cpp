@@ -104,6 +104,14 @@ int main(int argc, char** argv)
     for (const Range& range : known) {
         bounds->caps.tuningMinHz = range.low;
         bounds->caps.tuningMaxHz = range.high;
+        require(initLimits(protocol) == "vfo_limits:1000,75000000;"
+            && protocol.handleCommand("vfo_limits") == "vfo_limits:30000,54000000;",
+            "non-opt-in backends retain baseline limits even with a declared native interval");
+    }
+    bounds->caps.receiveClientControl = ReceiveClientControl{{ReceiveClientControl::Feature::FrequencyLimits}};
+    for (const Range& range : known) {
+        bounds->caps.tuningMinHz = range.low;
+        bounds->caps.tuningMaxHz = range.high;
         sameLimits(protocol, QString::fromLatin1(range.expected));
     }
     const double nan = std::numeric_limits<double>::quiet_NaN();

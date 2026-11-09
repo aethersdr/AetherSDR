@@ -128,19 +128,43 @@ int main(int argc, char** argv)
     apfReadback.apfLevel = 37;
     receiveSlice.applyChanges(apfReadback);
     applet.setSlice(&receiveSlice);
+    QPushButton* apf = applet.findChild<QPushButton*>(QStringLiteral("cwApfBtn"));
+    QSlider* apfLevel = applet.findChild<QSlider*>(QStringLiteral("cwApfSlider"));
+    QLineEdit* apfValue = control<QLineEdit>(applet, QStringLiteral("APF bandwidth value"));
+    require(apf && apfLevel && apfValue, "APF controls exist");
+    struct Presentation {
+        QWidget* widget;
+        QString tooltip;
+        QString description;
+        QString style;
+    };
+    const QList<Presentation> legacyPresentation{
+        {apf, apf->toolTip(), apf->accessibleDescription(), apf->styleSheet()},
+        {apfLevel, apfLevel->toolTip(), apfLevel->accessibleDescription(), apfLevel->styleSheet()},
+        {apfValue, apfValue->toolTip(), apfValue->accessibleDescription(), apfValue->styleSheet()}};
+    const auto requireLegacyPresentation = [&] {
+        for (const Presentation& original : legacyPresentation) {
+            require(original.widget->toolTip() == original.tooltip,
+                "native APF tooltip must be released for the legacy backend");
+            require(original.widget->accessibleDescription() == original.description,
+                "native APF accessible description must be released for the legacy backend");
+            require(original.widget->styleSheet() == original.style,
+                "native APF foreground treatment must be released for the legacy backend");
+        }
+    };
     using Dsp = ReceiveDspControl::Feature;
+    applet.setSlice(nullptr);
     source->caps.hasAudioPeakingFilter = true;
     source->caps.receiveDspControl = ReceiveDspControl{{"CW"}, {Dsp::Apf}, {}, {Dsp::Apf}};
     emit radio.capabilitiesChanged(true, source->caps);
     applet.setHasAudioPeakingFilter(true);
-    QPushButton* apf = applet.findChild<QPushButton*>(QStringLiteral("cwApfBtn"));
-    QSlider* apfLevel = applet.findChild<QSlider*>(QStringLiteral("cwApfSlider"));
+    require(!apf->isEnabled(), "native APF waits for a bound slice");
+    applet.setSlice(&receiveSlice);
     QWidget* apfRow = applet.findChild<QWidget*>(QStringLiteral("cwApfRow"));
     require(apf && apfLevel && apfRow && !apfRow->isHidden() && apf->isEnabled() && apf->isChecked(),
         "native APF enable remains visible and follows its confirmed slice value");
     require(!apfLevel->isEnabled() && !apfLevel->accessibleDescription().isEmpty(),
         "native APF without a shared percent adjustment leaves the level unavailable with a reason");
-    QLineEdit* apfValue = control<QLineEdit>(applet, QStringLiteral("APF bandwidth value"));
     require(apfValue && apfValue->text() == QStringLiteral("--"), "unsupported native APF level never displays a fabricated percent value");
     apfLevel->setValue(60);
     require(apfValue->text() == QStringLiteral("--"), "programmatic unsupported level changes keep the unavailable marker");
@@ -151,6 +175,24 @@ int main(int argc, char** argv)
     receiveSlice.applyChanges(apfReadback);
     require(apfLevel->isEnabled() && apfValue->text() == QStringLiteral("38"),
         "a backend supporting the shared adjustment retains its numeric readback");
+    requireLegacyPresentation();
+    apfReadback.apf = false;
+    receiveSlice.applyChanges(apfReadback);
+    source->caps.receiveDspControl->unavailableLevels.append(Dsp::Apf);
+    emit radio.capabilitiesChanged(true, source->caps);
+    require(apf->isEnabled() && !apf->isChecked() && !apfLevel->isEnabled(),
+        "native APF off retains its unavailable level treatment");
+    source->caps.receiveDspControl.reset();
+    emit radio.capabilitiesChanged(true, source->caps);
+    require(apf->isEnabled() && !apf->isChecked() && !apfLevel->isEnabled(),
+        "legacy APF off restores ordinary disabled level behavior");
+    requireLegacyPresentation();
+    apfReadback.apf = true;
+    receiveSlice.applyChanges(apfReadback);
+    require(apf->isChecked() && apfLevel->isEnabled() && apfValue->text() == QStringLiteral("38"),
+        "legacy APF on restores its enabled numeric level");
+    requireLegacyPresentation();
+    source->caps.receiveDspControl = ReceiveDspControl{{"CW"}, {Dsp::Apf}, {}, {Dsp::Apf}};
     source->caps.receiveDspControl->unavailableLevels.append(Dsp::Apf);
     emit radio.capabilitiesChanged(true, source->caps);
     source->caps.hasAudioPeakingFilter = false;

@@ -708,7 +708,9 @@ void VfoWidget::wheelEvent(QWheelEvent* ev)
 
     if (steps != 0) {
         if (reverseMouseWheel()) steps = -steps;  // #3302
-        double newMhz = m_slice->incrementalTuneTarget(steps * stepHz / 1e6);
+        const double deltaMhz = steps * stepHz / 1e6;
+        const double newMhz = m_slice->supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune)
+            ? m_slice->incrementalTuneTarget(deltaMhz) : m_slice->frequency() + deltaMhz;
         emit stepTuneRequested(newMhz);
     }
     ev->accept();
@@ -858,12 +860,14 @@ void VfoWidget::buildUI()
         }
         const QPointer<VfoWidget> self(this);
         const QPointer<RadioModel> model(m_radioModel);
-        const bool confirmed = slice->receiveControlsConfirmed();
+        const bool confirmed = slice->supportsReceiveInteraction(ReceiveInteractionControl::Feature::AntennaReadback);
         const quint64 receiverEpoch = slice->receiveSessionGeneration();
         const RadioControlSession session = model ? model->controlSession() : RadioControlSession{};
         const auto current = [self, model, slice, confirmed, receiverEpoch, session] {
-            if (!self || !slice || self->m_slice != slice || slice->receiveControlsConfirmed() != confirmed) { return false; }
+            if (!self || !slice) { return false; }
             if (!confirmed) { return true; }
+            if (self->m_slice != slice || !slice->supportsReceiveInteraction(
+                    ReceiveInteractionControl::Feature::AntennaReadback)) { return false; }
             return model && self->m_radioModel == model && model->isConnected()
                 && model->slice(slice->sliceId()) == slice && model->controlSessionCurrent(session)
                 && slice->receiveSessionGeneration() == receiverEpoch;
@@ -880,7 +884,7 @@ void VfoWidget::buildUI()
                 emit self->kiwiRxAntennaSelected(slice->sliceId(), profileId);
             } else {
                 emit self->flexRxAntennaSelected(slice->sliceId());
-                if (current() && (confirmed || slice->rxAntenna() != token)) { slice->setRxAntenna(token); }
+                if ((!confirmed || current()) && (confirmed || slice->rxAntenna() != token)) { slice->setRxAntenna(token); }
             }
         });
         menu->popup(m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())));
@@ -2313,7 +2317,7 @@ void VfoWidget::buildTabContent()
                     return;
                 }
                 m_apfValueLbl->setText(QString::number(v));
-                if (!m_updatingFromModel && m_slice && m_apfSlider->isEnabled()) {
+                if (!m_updatingFromModel && m_slice) {
                     m_slice->setApfLevel(v);
                 }
             });
@@ -7163,7 +7167,10 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         registerSignalControl(m_mnBtn, Feature::ManualNotch);
         registerSignalControl(m_apfBtn, Feature::Apf);
         m_filterAvailability->registerRestriction(m_apfSlider,
-            tr("This radio does not support the shared 0–100 APF adjustment; use native receive DSP settings."),
+            m_radioModel->backendCapabilities().receiveDspControl
+                && m_radioModel->backendCapabilities().receiveDspControl->unavailableLevels.contains(Feature::Apf)
+                ? tr("This radio does not support the shared 0–100 APF adjustment; use native receive DSP settings.")
+                : tr("This receive control is unavailable in the current mode"),
             [this](bool, const RadioCapabilities& caps) {
                 return !caps.receiveDspControl || (m_slice
                     && caps.receiveDspControl->supportsLevel(Feature::Apf, m_slice->mode()));

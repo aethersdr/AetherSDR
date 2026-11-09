@@ -554,12 +554,13 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     const auto updateTuneAvailability = [this]() {
         const bool available = m_model->tuneAvailable() || m_model->isTuning();
         m_tuneBtn->setEnabled(available);
-        const QString reason = m_model->tuneUnavailableReason().isEmpty()
+        const QString reason = !m_model->radioOwnsSettings() || m_model->tuneUnavailableReason().isEmpty()
             ? tr("Tune carrier is unavailable in this mode through the current radio backend")
             : m_model->tuneUnavailableReason();
         m_tuneBtn->setToolTip(available ? tr("Start or stop tune carrier")
             : reason);
-        m_tuneBtn->setAccessibleDescription(available ? tr("Start or stop tune carrier") : reason);
+        m_tuneBtn->setAccessibleDescription(available || !m_model->radioOwnsSettings()
+            ? tr("Start or stop tune carrier") : reason);
     };
     connect(m_model, &TransmitModel::tuneAvailabilityChanged, this, updateTuneAvailability);
     connect(m_model, &TransmitModel::tuneChanged, this, updateTuneAvailability);

@@ -9,6 +9,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/rtl/RtlSdrBackend.h"
+#include "core/backends/kenwood/KenwoodBackend.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
 #include "models/BandPlanManager.h"
@@ -202,6 +203,41 @@ int main(int argc, char** argv)
         std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
         failures += !ok;
     };
+    {
+        rtl::RtlSdrBackend rtl;
+        kenwood::KenwoodBackend kenwood;
+        using Feature = ReceiveInteractionControl::Feature;
+        for (const RadioCapabilities& caps : {rtl.capabilities(), kenwood.capabilities()}) {
+            SpectrumWidget spectrum;
+            spectrum.resize(1000, 600);
+            spectrum.setFrequencyRangeImmediate(14.074, 0.2);
+            spectrum.setStepSize(100);
+            const bool pending = caps.receiveInteractionControl
+                && caps.receiveInteractionControl->supports(Feature::PendingTune);
+            spectrum.setPendingTuneInteractionEnabled(pending);
+            spectrum.setDbmAxisCalibrated(!caps.panAmplitude
+                || caps.panAmplitude->axisUnit == PanAmplitudeModel::AxisUnit::Dbm);
+            int absolute = 0;
+            int relative = 0;
+            double absoluteTarget = 0;
+            double deltaHz = 0;
+            QObject::connect(&spectrum, &SpectrumWidget::incrementalTuneRequested,
+                [&](double mhz) { ++absolute; absoluteTarget = mhz; });
+            QObject::connect(&spectrum, &SpectrumWidget::incrementalTuneDeltaRequested,
+                [&](double mhz, int step) { ++relative; deltaHz = mhz * 1e6; check(step == 100, "native delta preserves STEP"); });
+            const QPointF point(400, 150);
+            QWheelEvent event(point, point, {}, QPoint(0, 120), Qt::NoButton,
+                Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(&spectrum, &event);
+            check(pending ? relative == 1 && absolute == 0 && near(deltaHz, 100)
+                          : absolute == 1 && relative == 0 && near(absoluteTarget, 14.0741),
+                "Spectrum retains absolute overlay tuning unless PendingTune is declared");
+            const QString units = SpectrumOffscreenTestAccess::scaleToolTip(spectrum, false);
+            check(pending ? units.startsWith(QStringLiteral("<b>relative dB scale</b>"))
+                          : units.startsWith(QStringLiteral("<b>dBm scale</b>")),
+                "actual RTL retains its legacy dBm help; Kenwood declares relative display units");
+        }
+    }
     {
         SpectrumWidget spectrum;
         spectrum.setSquelchScale(legacyDbmSquelchScale());

@@ -120,7 +120,7 @@ double SliceModel::incrementalTuneTarget(double deltaMhz, int snapStepHz)
     if (m_pendingTuneClock.isValid() && m_pendingTuneClock.elapsed() >= 1000) {
         retireTuneIntent();
     }
-    double base = confirmsControls() && !m_pendingTuneTargets.isEmpty()
+    double base = supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune) && !m_pendingTuneTargets.isEmpty()
         ? m_pendingTuneTargets.constLast() : m_frequency;
     if (snapStepHz > 0) {
         base = std::round(base * 1.0e6 / snapStepHz) * snapStepHz / 1.0e6;
@@ -131,7 +131,7 @@ double SliceModel::incrementalTuneTarget(double deltaMhz, int snapStepHz)
 quint64 SliceModel::recordTuneIntent(double mhz)
 {
     if (refuseOffThread(__func__)) { return 0; }
-    if (!confirmsControls() || !std::isfinite(mhz) || mhz <= 0.0
+    if (!supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune) || !std::isfinite(mhz) || mhz <= 0.0
         || mhz > kMaximumReportedFrequencyMhz) {
         retireTuneIntent();
         return 0;
@@ -421,7 +421,7 @@ void SliceModel::notifyReceiveFilterIntent(SliceFilterRequest::Origin origin)
 void SliceModel::setRxAntenna(const QString& ant)
 {
     if (refuseOffThread(__func__)) { return; }
-    if (confirmsControls()) {
+    if (supportsReceiveInteraction(ReceiveInteractionControl::Feature::AntennaReadback)) {
         const QPointer<SliceModel> alive(this);
         const quint64 revision = ++m_rxAntennaIntentRevision;
         const quint64 generation = m_receiveSessionGeneration;
@@ -1898,7 +1898,7 @@ void SliceModel::applyChanges(const SliceDelta& d)
     const std::optional<QString> incomingMode = d.mode && !d.mode->isEmpty() && d.mode->size() <= 32
         ? d.mode : std::nullopt;
     const bool modeContextChanged = d.mode && incomingMode != m_receiveObservation.mode;
-    if (confirmsControls()) {
+    if (supportsReceiveInteraction(ReceiveInteractionControl::Feature::ContextRetirement)) {
         if (sourceChanged || modeContextChanged) {
             ++m_receiveSessionGeneration;
             m_rxAntennaKnown = false;
@@ -1913,7 +1913,7 @@ void SliceModel::applyChanges(const SliceDelta& d)
             m_receiveObservation.filterHighHz.reset();
         }
     }
-    if (sourceChanged) { retireTuneIntent(); }
+    if (sourceChanged && supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune)) { retireTuneIntent(); }
     const QPointer<SliceModel> alive(this);
     const bool chainChanged = d.chainMode && m_chainMode != *d.chainMode;
     if (chainChanged) {
@@ -2243,7 +2243,7 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.rxAntenna.has_value()) {
         const bool valid = !d.rxAntenna->isEmpty() && d.rxAntenna->size() <= 128;
         m_rxAntennaKnown = valid;
-        if (!confirmsControls() || valid) {
+        if (!supportsReceiveInteraction(ReceiveInteractionControl::Feature::AntennaReadback) || valid) {
             m_rxAntenna = *d.rxAntenna;
             emit rxAntennaChanged(m_rxAntenna);
             if (!alive) { return; }
@@ -2656,7 +2656,9 @@ void SliceModel::invalidateFrequencyObservation()
     const QPointer<SliceModel> alive(this);
     retireTuneIntent();
     ++m_receiveSessionGeneration;
-    ++m_receiveFilterContextGeneration;
+    if (supportsReceiveInteraction(ReceiveInteractionControl::Feature::ContextRetirement)) {
+        ++m_receiveFilterContextGeneration;
+    }
     m_agcThresholdMode.reset();
     m_automaticAgcThresholdPending = false;
     emit agcThresholdModeChanged();

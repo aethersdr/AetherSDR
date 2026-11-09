@@ -61,11 +61,13 @@ public:
     // built after connect is correct without a second push.
     // Pass availableWhenDisconnected=false for controls requiring a live
     // receiver; existing controls retain their permissive disconnected state.
+    // Opt in to releasing presentation when a temporary registration ends.
     void registerWidget(QWidget* widget,
                         QString reason,
                         AvailabilityPredicate available,
                         EngagedPredicate engaged = {},
-                        bool availableWhenDisconnected = true);
+                        bool availableWhenDisconnected = true,
+                        bool releasePresentationOnDestruction = false);
 
     // Same contract for a menu entry or toolbar action.
     void registerAction(QAction* action,
@@ -93,6 +95,7 @@ private:
         EngagedPredicate engaged;
         ControlAvailability state{ControlAvailability::Unavailable};
         bool availableWhenDisconnected = true;
+        bool releasePresentationOnDestruction = false;
         bool restrictionOnly = false;
         bool restricted = false;
         bool previouslyEnabled = true;

@@ -12347,7 +12347,14 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
     // above so zoom direction stays natural; only frequency tuning is flipped.
     if (reverseMouseWheel()) steps = -steps;
 
-    emit incrementalTuneDeltaRequested(steps * m_stepHz / 1e6, m_stepHz);
+    if (m_pendingTuneInteractionEnabled) {
+        emit incrementalTuneDeltaRequested(steps * m_stepHz / 1e6, m_stepHz);
+    } else {
+        const auto* overlay = activeOverlay();
+        const double vfoMhz = overlay ? overlay->freqMhz : m_centerMhz;
+        const double baseMhz = snapToStep(vfoMhz, m_stepHz);
+        emit incrementalTuneRequested(baseMhz + steps * m_stepHz / 1e6);
+    }
     ev->accept();
 }
 

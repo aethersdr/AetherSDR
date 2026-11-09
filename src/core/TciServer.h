@@ -527,6 +527,7 @@ private:
     int m_tuneClientTrx { 0 };
     bool m_tuneBroadcastQueued { false };
     QList<QPair<QPointer<TciClient>, int>> m_tuneRequesters;  // owed an answer
+    float m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     struct ReceiveMeterEpoch {
         RadioControlSession session{};
         quint64 receiverSession{0};

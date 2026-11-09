@@ -647,10 +647,12 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     if (!m_delayEdit->hasFocus() || !m_delayEdit->hasAcceptableInput()) {
         m_delayEdit->setText(QString::number(m_delaySlider->value()));
     }
-    const QString description = tr("CW break-in delay in milliseconds, 0 to %1, in steps of %2")
-        .arg(maxDelayMs).arg(delayStepMs);
+    const QString description = maxDelayMs == 2000 && delayStepMs == 1
+        ? QStringLiteral("CW break-in delay in milliseconds, 0 to 2000")
+        : tr("CW break-in delay in milliseconds, 0 to %1, in steps of %2").arg(maxDelayMs).arg(delayStepMs);
     m_delayEdit->setAccessibleDescription(description);
-    m_delaySlider->setAccessibleDescription(description);
+    m_delaySlider->setAccessibleDescription(maxDelayMs == 2000 && delayStepMs == 1
+        ? QStringLiteral("CW break-in delay in milliseconds") : description);
 }
 
 void PhoneCwApplet::commitCwDelay(int value)
@@ -740,9 +742,20 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(m_delayEdit);
 
         connect(m_delaySlider, &QSlider::valueChanged, this, [this](int v) {
+            if (!m_model || !m_model->radioOwnsSettings()) {
+                if (!m_delayEdit->hasFocus()) { m_delayEdit->setText(QString::number(v)); }
+                if (!m_updatingFromModel && m_model) { m_model->setCwDelay(v); }
+                return;
+            }
             commitCwDelay(v);
         });
         connect(m_delayEdit, &QLineEdit::editingFinished, this, [this]() {
+            if (!m_model || !m_model->radioOwnsSettings()) {
+                const int value = qBound(0, m_delayEdit->text().toInt(), 2000);
+                m_delayEdit->setText(QString::number(value));
+                m_delaySlider->setValue(value);
+                return;
+            }
             const int value = qBound(0, m_delayEdit->text().toInt(), m_delayMaxMs);
             if (value != m_delaySlider->value()) { commitCwDelay(value); }
         });
@@ -1048,7 +1061,8 @@ void PhoneCwApplet::buildCwPanel()
         // setChecked() still reach the signal — and a verb this radio's
         // firmware cannot execute must not leave the client on any path.
         connect(m_apfBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice && m_apfBtn->isEnabled())
+            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice
+                && (sharedApfLevelSupported() || m_apfBtn->isEnabled()))
                 m_slice->setApf(on);
         });
         connect(m_apfSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1059,7 +1073,7 @@ void PhoneCwApplet::buildCwPanel()
             if (!m_apfEdit->hasFocus()) {
                 m_apfEdit->setText(QString::number(v));
             }
-            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice && m_apfSlider->isEnabled())
+            if (!m_updatingFromModel && m_hasAudioPeakingFilter && m_slice)
                 m_slice->setApfLevel(v);
         });
         connect(m_apfEdit, &QLineEdit::editingFinished, this, [this]() {
@@ -1108,7 +1122,7 @@ void PhoneCwApplet::setRadioModel(RadioModel* model)
     });
     rebuildSettingAvailability();
     m_apfCapabilitiesChanged = connect(model, &RadioModel::capabilitiesChanged,
-        this, &PhoneCwApplet::syncApfFromSlice);
+        this, &PhoneCwApplet::rebuildSettingAvailability);
 }
 
 void PhoneCwApplet::rebuildSettingAvailability()
@@ -1137,22 +1151,24 @@ void PhoneCwApplet::rebuildSettingAvailability()
     m_settingAvailability->registerRestriction(m_holdDelayBtn,
         tr("Client delay hold is not implemented for this radio's native keyer"),
         [](bool, const RadioCapabilities& caps) { return !caps.radioTransmitSettings; });
-    const auto apfAvailable = [this](bool, const RadioCapabilities& caps) {
-        return m_hasAudioPeakingFilter && m_slice
-            && (!caps.receiveDspControl || caps.receiveDspControl->supports(
-                ReceiveDspControl::Feature::Apf, m_slice->mode()));
-    };
-    m_settingAvailability->registerWidget(m_apfBtn,
-        tr("Requires supported native APF and confirmed receive settings for the current mode."),
-        apfAvailable, [this] { return m_slice && m_slice->apfOn(); }, false);
-    for (QWidget* control : {static_cast<QWidget*>(m_apfSlider), static_cast<QWidget*>(m_apfEdit)}) {
-        m_settingAvailability->registerWidget(control,
-            tr("Requires APF on and a supported shared 0–100 APF adjustment. Native settings may use a different scale."),
-            [this, apfAvailable](bool connected, const RadioCapabilities& caps) {
-                return apfAvailable(connected, caps) && m_slice->apfOn()
-                    && (!caps.receiveDspControl || caps.receiveDspControl->supportsLevel(
-                        ReceiveDspControl::Feature::Apf, m_slice->mode()));
-            }, {}, false);
+    if (!sharedApfLevelSupported()) {
+        const auto apfAvailable = [this](bool, const RadioCapabilities& caps) {
+            return m_hasAudioPeakingFilter && m_slice
+                && (!caps.receiveDspControl || caps.receiveDspControl->supports(
+                    ReceiveDspControl::Feature::Apf, m_slice->mode()));
+        };
+        m_settingAvailability->registerWidget(m_apfBtn,
+            tr("Requires supported native APF and confirmed receive settings for the current mode."),
+            apfAvailable, [this] { return m_slice && m_slice->apfOn(); }, false, true);
+        for (QWidget* control : {static_cast<QWidget*>(m_apfSlider), static_cast<QWidget*>(m_apfEdit)}) {
+            m_settingAvailability->registerWidget(control,
+                tr("Requires APF on and a supported shared 0–100 APF adjustment. Native settings may use a different scale."),
+                [this, apfAvailable](bool connected, const RadioCapabilities& caps) {
+                    return apfAvailable(connected, caps) && m_slice->apfOn()
+                        && (!caps.receiveDspControl || caps.receiveDspControl->supportsLevel(
+                            ReceiveDspControl::Feature::Apf, m_slice->mode()));
+                }, {}, false, true);
+        }
     }
     syncApfFromSlice();
 }
@@ -1348,24 +1364,20 @@ void PhoneCwApplet::syncApfFromSlice()
 {
     if (!m_apfBtn) return;
 
+    const bool nativeLevelUnavailable = !sharedApfLevelSupported();
+    m_apfRow->setVisible(m_hasAudioPeakingFilter || nativeLevelUnavailable);
     const bool bound = m_hasAudioPeakingFilter && !m_slice.isNull();
-    const bool on    = m_slice && m_slice->apfOn();
-    const int  level = m_slice ? m_slice->apfLevel() : 50;
+    const bool on = (bound || nativeLevelUnavailable) && m_slice && m_slice->apfOn();
+    const int level = (bound || nativeLevelUnavailable) && m_slice ? m_slice->apfLevel() : 50;
 
     m_updatingFromModel = true;
-    if (!m_settingAvailability) { m_apfBtn->setEnabled(bound); }
+    if (!nativeLevelUnavailable) { m_apfBtn->setEnabled(bound); }
     m_apfBtn->setChecked(on);
     // The level row follows the filter's engagement, radio echo included — a
     // slider that talks to a disengaged filter reads as "APF is broken" (#4658).
-    if (!m_settingAvailability) {
+    if (!nativeLevelUnavailable) {
         m_apfSlider->setEnabled(bound && on);
         m_apfEdit->setEnabled(bound && on);
-        if (!bound) {
-            const QString reason = tr("Requires a bound slice and supported native audio peaking filter.");
-            m_apfBtn->setAccessibleDescription(reason);
-            m_apfSlider->setAccessibleDescription(reason);
-            m_apfEdit->setAccessibleDescription(reason);
-        }
     }
     m_apfSlider->setValue(level);
     if (!sharedApfLevelSupported()) {

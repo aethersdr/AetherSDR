@@ -35,6 +35,7 @@
 #include <QString>
 
 #include <cstdio>
+#include <functional>
 #include <memory>
 
 using namespace AetherSDR;
@@ -111,14 +112,23 @@ public:
 
     bool automationDisconnect(QString* = nullptr) override { ++disconnectCalls; ++epoch; return true; }
     quint64 automationConnectionIntentEpoch() const override { return epoch; }
+    bool automationUsesDeferredNetworkLogin(const QString& = {}) const override { return deferredNetworkLogin; }
+    void automationReserveIpConnect(const QString&) override {
+        const std::function<void()> callback = onReserve;
+        if (callback) { callback(); }
+    }
+    quint64 automationNativeConnectionEpoch() const override { return nativeEpoch; }
     bool automationDialogVisible() const override { return false; }
     void automationSetDialogVisible(bool) override {}
     QObject* asQObject() override { return this; }
 
     void setRadios(QList<RadioInfo> radios) { m_radios = std::move(radios); }
 
+    bool deferredNetworkLogin = false;
+    std::function<void()> onReserve;
     int disconnectCalls = 0;
     quint64 epoch = 0;
+    quint64 nativeEpoch = 0;
     int byIpCalls = 0;
     QString lastTarget;
     QString lastFamily;
@@ -282,6 +292,32 @@ int main(int argc, char** argv)
     }
 
     {
+        const int before = conn.byIpCalls;
+        const QJsonObject idle = AutomationServerTestAccess::disconnect(server);
+        check(!idle.value("ok").toBool() && idle.value("error").toString() == QStringLiteral("not connected to a radio"),
+              "existing connection flows retain their disconnected error");
+        AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral("192.0.2.98 flex"));
+        AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        ++conn.epoch;
+        settle();
+        check(conn.byIpCalls == before + 2,
+              "existing queued connect intents preserve baseline dispatch rather than gaining deferred-login ordering");
+        AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        ++conn.nativeEpoch;
+        settle();
+        check(conn.byIpCalls == before + 2,
+              "entering a native authenticated session retires an older legacy queued connect without changing ordinary legacy ordering");
+        AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        FakeConnectionAutomation nativeReplacement;
+        nativeReplacement.deferredNetworkLogin = true;
+        server.setConnectionAutomation(&nativeReplacement);
+        settle();
+        check(conn.byIpCalls == before + 2 && nativeReplacement.byIpCalls == 0,
+              "a replacement native login panel cannot be displaced by an older legacy queued connect");
+        server.setConnectionAutomation(&conn);
+    }
+    conn.deferredNetworkLogin = true;
+    {
         const int connectsBefore = conn.byIpCalls;
         const int disconnectsBefore = conn.disconnectCalls;
         AutomationServerTestAccess::connect(server, QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
@@ -357,6 +393,53 @@ int main(int argc, char** argv)
         transientServer.reset();
         settle();
         check(conn.disconnectCalls == before + 2, "destroyed bridge retires queued cancellation");
+    }
+
+    {
+        auto transientServer = std::make_unique<AutomationServer>();
+        transientServer->setConnectionAutomation(&conn);
+        const int before = conn.byIpCalls;
+        conn.onReserve = [&] { transientServer.reset(); };
+        const QJsonObject reply = AutomationServerTestAccess::connect(*transientServer,
+            QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        conn.onReserve = {};
+        settle();
+        check(!reply.value("ok").toBool() && conn.byIpCalls == before,
+            "synchronous native preparation cannot use a destroyed bridge");
+    }
+    {
+        auto transientPanel = std::make_unique<FakeConnectionAutomation>();
+        server.setConnectionAutomation(transientPanel.get());
+        transientPanel->onReserve = [&] { transientPanel.reset(); };
+        const QJsonObject reply = AutomationServerTestAccess::connect(server,
+            QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        settle();
+        check(!reply.value("ok").toBool(), "synchronous native preparation cannot use a destroyed panel");
+        server.setConnectionAutomation(&conn);
+    }
+    {
+        FakeConnectionAutomation replacement;
+        conn.onReserve = [&] { server.setConnectionAutomation(&replacement); };
+        const int before = conn.byIpCalls;
+        const QJsonObject reply = AutomationServerTestAccess::connect(server,
+            QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        conn.onReserve = {};
+        settle();
+        check(!reply.value("ok").toBool() && conn.byIpCalls == before && replacement.byIpCalls == 0,
+            "synchronous native preparation cannot dispatch through a replaced panel");
+        server.setConnectionAutomation(&conn);
+    }
+    {
+        const int connectsBefore = conn.byIpCalls;
+        const int disconnectsBefore = conn.disconnectCalls;
+        conn.onReserve = [&] { AutomationServerTestAccess::disconnect(server); };
+        const QJsonObject reply = AutomationServerTestAccess::connect(server,
+            QStringLiteral("ip"), QStringLiteral("192.0.2.99 flex"));
+        conn.onReserve = {};
+        settle();
+        check(!reply.value("ok").toBool() && conn.byIpCalls == connectsBefore
+            && conn.disconnectCalls == disconnectsBefore + 1,
+            "a newer synchronous intent supersedes native preparation on the same owner");
     }
 
     if (failures > 0) {

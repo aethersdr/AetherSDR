@@ -226,9 +226,9 @@ rx_sensors_enable:true;    # S-meter updates
 tx_sensors_enable:true;    # power, SWR, mic and ALC while transmitting
 ```
 
-RX sensors broadcast each receiver's S-meter in dBm when a fresh calibrated
-reading is available. Native relative readings, such as TS-890S display dots,
-are not converted into dBm; unavailable or stale readings are omitted.
+RX sensors broadcast each receiver's S-meter in dBm. The TS-890S
+backend reports native display dots instead; these are not converted into dBm
+and do not produce calibrated RX sensor messages.
 
 ```
 rx_channel_sensors:0,0,-97.3;

@@ -136,6 +136,11 @@ The table shows the current TX profile's values and follows the radio while it's
 | **SmartLink** | Pinned SmartLink certificates. See [SmartLink Setup](./smartlink-setup.md). |
 | **QRZ & Callsigns** | QRZ.com account and lookup cache. See [Callsign Lookup](./callsign-lookup.md). |
 
+The native TS-890S setup-page cluster appears only for a backend that declares
+those pages. Other radios retain their existing navigation and search
+entries. Within a declared native page, unavailable controls remain dimmed with
+a reason.
+
 ## Known issues
 
 - On macOS, opening the **Audio** page for the first time can send the Preferences window behind the main window ([#6277](https://github.com/aethersdr/AetherSDR/issues/6277)).

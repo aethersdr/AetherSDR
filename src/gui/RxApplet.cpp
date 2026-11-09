@@ -451,12 +451,14 @@ void RxApplet::buildUI()
             }
             const QPointer<RxApplet> self(this);
             const QPointer<RadioModel> model(m_radioModel);
-            const bool confirmed = slice->receiveControlsConfirmed();
+            const bool confirmed = slice->supportsReceiveInteraction(ReceiveInteractionControl::Feature::AntennaReadback);
             const quint64 receiverEpoch = slice->receiveSessionGeneration();
             const RadioControlSession session = model ? model->controlSession() : RadioControlSession{};
             const auto current = [self, model, slice, confirmed, receiverEpoch, session] {
-                if (!self || !slice || self->m_slice != slice || slice->receiveControlsConfirmed() != confirmed) { return false; }
+                if (!self || !slice) { return false; }
                 if (!confirmed) { return true; }
+                if (self->m_slice != slice || !slice->supportsReceiveInteraction(
+                        ReceiveInteractionControl::Feature::AntennaReadback)) { return false; }
                 return model && self->m_radioModel == model && model->isConnected()
                     && model->slice(slice->sliceId()) == slice && model->controlSessionCurrent(session)
                     && slice->receiveSessionGeneration() == receiverEpoch;
@@ -473,7 +475,7 @@ void RxApplet::buildUI()
                     emit self->kiwiRxAntennaSelected(slice->sliceId(), profileId);
                 } else {
                     emit self->flexRxAntennaSelected(slice->sliceId());
-                    if (current() && (confirmed || slice->rxAntenna() != token)) { slice->setRxAntenna(token); }
+                    if ((!confirmed || current()) && (confirmed || slice->rxAntenna() != token)) { slice->setRxAntenna(token); }
                 }
             });
             menu->popup(
@@ -4003,7 +4005,9 @@ bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
         if (place == 0.0)
             place = m_stepSizes[m_stepIdx] / 1.0e6;
 
-        m_slice->setFrequency(m_slice->incrementalTuneTarget(place * steps));
+        const double target = m_slice->supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune)
+            ? m_slice->incrementalTuneTarget(place * steps) : m_slice->frequency() + place * steps;
+        m_slice->setFrequency(target);
         we->accept();
         return true;
     }

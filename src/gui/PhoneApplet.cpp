@@ -38,9 +38,13 @@ protected:
         QPushButton::paintEvent(ev);
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        const char* token = !isEnabled() ? "color.text.disabled"
-            : isDown() ? "color.canon.onAccent" : "color.text.secondary";
-        p.setBrush(ThemeManager::instance().color(token));
+        if (property("nativeTxFilterAvailability").toBool()) {
+            const char* token = !isEnabled() ? "color.text.disabled"
+                : isDown() ? "color.canon.onAccent" : "color.text.secondary";
+            p.setBrush(ThemeManager::instance().color(token));
+        } else {
+            p.setBrush(isDown() ? QColor(0, 0, 0) : QColor(0xc8, 0xd8, 0xe8));
+        }
         p.setPen(Qt::NoPen);
         const int cx = width() / 2, cy = height() / 2;
         QPolygon tri;
@@ -329,7 +333,7 @@ void PhoneApplet::buildUI()
         lowRow->setSpacing(2);
 
         auto* txLbl = new QLabel("TX");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(txLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; } QLabel:disabled { color: {{color.text.disabled}}; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(txLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; } QLabel[nativeTxFilterAvailability=true]:disabled { color: {{color.text.disabled}}; }");
         txLbl->setFixedWidth(18);
         lowRow->addWidget(txLbl);
 
@@ -371,17 +375,18 @@ void PhoneApplet::buildUI()
         m_lowCutLabel->setFixedWidth(46);
         m_lowCutLabel->setAlignment(Qt::AlignCenter);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_lowCutLabel, "QLabel { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
-            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; } QLabel[nativeTxFilterAvailability=true]:disabled { color: {{color.text.disabled}}; }");
         // Direct numeric entry (#3627). The validator range comes from the
         // model (TransmitModel::txFilterMaxHz), never a literal. No re-sync
         // after commit: the editor overlays the label, and a real model change
         // repaints it via phoneStateChanged → syncFromModel().
         m_lowCutLabel->setEditable(m_model ? m_model->txFilterMinHz() : TransmitModel::kTxFilterMinHz,
                                    m_model ? m_model->txFilterMaxHz() : TransmitModel::kTxFilterMaxHz);
-        m_lowCutLabel->setEditorStyler([](QWidget* editor) {
+        m_lowCutLabel->setEditorStyler([this](QWidget* editor) {
+            editor->setProperty("nativeTxFilterAvailability", m_keepUnavailableTxFilterVisible);
             AetherSDR::ThemeManager::instance().applyStyleSheet(editor,
                 "QLineEdit { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
-                "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; } QLineEdit:disabled { color: {{color.text.disabled}}; }");
+                "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; } QLineEdit[nativeTxFilterAvailability=true]:disabled { color: {{color.text.disabled}}; }");
         });
         connect(m_lowCutLabel, &ScrollableLabel::editCommitted, this, [this](int hz) {
             if (!m_model) return;
@@ -459,14 +464,15 @@ void PhoneApplet::buildUI()
         m_highCutLabel->setFixedWidth(46);
         m_highCutLabel->setAlignment(Qt::AlignCenter);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_highCutLabel, "QLabel { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
-            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; } QLabel:disabled { color: {{color.text.disabled}}; }");
+            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; } QLabel[nativeTxFilterAvailability=true]:disabled { color: {{color.text.disabled}}; }");
         // Direct numeric entry (#3627) — see the low-cut comment above.
         m_highCutLabel->setEditable(m_model ? m_model->txFilterMinHz() : TransmitModel::kTxFilterMinHz,
                                     m_model ? m_model->txFilterMaxHz() : TransmitModel::kTxFilterMaxHz);
-        m_highCutLabel->setEditorStyler([](QWidget* editor) {
+        m_highCutLabel->setEditorStyler([this](QWidget* editor) {
+            editor->setProperty("nativeTxFilterAvailability", m_keepUnavailableTxFilterVisible);
             AetherSDR::ThemeManager::instance().applyStyleSheet(editor,
                 "QLineEdit { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
-                "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; } QLineEdit:disabled { color: {{color.text.disabled}}; }");
+                "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; } QLineEdit[nativeTxFilterAvailability=true]:disabled { color: {{color.text.disabled}}; }");
         });
         connect(m_highCutLabel, &ScrollableLabel::editCommitted, this, [this](int hz) {
             if (!m_model) return;
@@ -540,15 +546,20 @@ void PhoneApplet::setTxFilterEdges(const QList<int>& lowEdgesHz, const QList<int
     m_txHighEdgesHz = highEdgesHz;
 }
 
-void PhoneApplet::setTxFilterControlsAvailable(bool available)
+void PhoneApplet::setTxFilterControlsAvailable(bool available, bool keepUnavailableVisible)
 {
-    if (m_txFilterWidget) {
-        m_txFilterWidget->setEnabled(available);
-        const QString reason = available ? QString()
-            : tr("Transmit filter controls are unavailable for the current radio state or mode.");
-        m_txFilterWidget->setToolTip(reason);
-        m_txFilterWidget->setAccessibleDescription(reason);
+    if (!m_txFilterWidget) { return; }
+    m_keepUnavailableTxFilterVisible = keepUnavailableVisible;
+    for (QWidget* control : m_txFilterWidget->findChildren<QWidget*>()) {
+        control->setProperty("nativeTxFilterAvailability", keepUnavailableVisible);
+        control->update();
     }
+    m_txFilterWidget->setVisible(available || keepUnavailableVisible);
+    m_txFilterWidget->setEnabled(available || !keepUnavailableVisible);
+    const QString reason = keepUnavailableVisible && !available
+        ? tr("Transmit filter controls are unavailable for the current radio state or mode.") : QString{};
+    m_txFilterWidget->setToolTip(reason);
+    m_txFilterWidget->setAccessibleDescription(reason);
 }
 
 void PhoneApplet::setTransmitModel(TransmitModel* model)

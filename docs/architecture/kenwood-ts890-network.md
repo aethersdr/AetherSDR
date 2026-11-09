@@ -26,6 +26,16 @@ connected and PCM authority before notifying observers; teardown retires timers,
 sockets, pending controls and audio producers. Reconnection reads fresh state
 rather than replaying radio-owned settings or local transmit intent.
 
+## Existing-backend compatibility
+
+Pending tuning, receive-client dialect/readback policy and presentation use
+explicit per-feature opt-ins. Only this backend currently declares them;
+established Confirmed-policy backends do not acquire the new behavior. Native
+setup navigation is admitted by an extension page catalogue. Relative axis labels
+and native Scope help are explicit presentation data, preserving other backends'
+existing display. The compatibility contracts are described in the
+[capability map](./radio-capabilities-map.md#receive-compatibility-and-native-presentation).
+
 ## Connection and credentials
 
 KNS uses semicolon-delimited TCP control, normally on port 60000, with

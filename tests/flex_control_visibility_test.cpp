@@ -2,6 +2,11 @@
 #include "core/backends/IRadioBackend.h"
 #include "gui/RadioSetupDialog.h"
 #include "models/RadioModel.h"
+#include "core/backends/rtl/RtlSdrBackend.h"
+#include "core/backends/kenwood/KenwoodBackend.h"
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
+#include <QLineEdit>
 
 #include <QApplication>
 #include <QGroupBox>
@@ -44,6 +49,38 @@ public:
 class FlexControlVisibilityTest : public QObject {
     Q_OBJECT
 private slots:
+    void nativePagesRequireAnExplicitBackendCatalog()
+    {
+        RadioModel model;
+        model.setBackendForTest(std::make_unique<rtl::RtlSdrBackend>(), QStringLiteral("rtl"));
+        RadioSetupDialog dialog(&model);
+        QTreeWidget* navigation = dialog.findChild<QTreeWidget*>();
+        QLineEdit* search = dialog.findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
+        QVERIFY(navigation && search);
+        const auto checkPages = [navigation](bool hidden) {
+            int count = 0;
+            for (QTreeWidgetItemIterator it(navigation); *it; ++it) {
+                QTreeWidgetItem* item = *it;
+                if (item->data(0, Qt::UserRole + 2).toString().isEmpty()) { continue; }
+                ++count;
+                if (item->isHidden() != hidden) { return false; }
+            }
+            return count == 20;
+        };
+        QVERIFY(checkPages(true));
+        search->setText(QStringLiteral("native"));
+        QVERIFY(checkPages(true));
+        search->clear();
+        model.setBackendForTest(std::make_unique<kenwood::KenwoodBackend>(), QStringLiteral("kenwood"));
+        emit model.capabilitiesChanged(false, model.backendCapabilities());
+        QVERIFY(checkPages(false));
+        model.setBackendForTest(std::make_unique<rtl::RtlSdrBackend>(), QStringLiteral("rtl"));
+        emit model.capabilitiesChanged(false, model.backendCapabilities());
+        QVERIFY(checkPages(true));
+        search->setText(QStringLiteral("native"));
+        QVERIFY(checkPages(true));
+    }
+
     void nativeKeyerSettingsUseSupportAndReadback()
     {
         RadioModel model;

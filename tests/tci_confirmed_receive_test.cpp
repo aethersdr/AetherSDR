@@ -12,10 +12,14 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/MeterModel.h"
+#ifdef AETHER_BACKEND_RTL
+#include "core/backends/rtl/RtlSdrBackend.h"
+#endif
 #include <QCoreApplication>
 #include <QEvent>
 #include <QEventLoop>
 #include <QList>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
@@ -40,6 +44,21 @@ struct KenwoodBackendTestAccess {
     { backend.m_maximumFrequencyHz = *maximumFrequencyForVariant(variant); }
 };
 }
+#ifdef AETHER_BACKEND_RTL
+namespace AetherSDR::rtl {
+struct RtlSdrBackendTestAccess {
+    static void announce(RtlSdrBackend& backend, const QString& mode)
+    {
+        backend.m_connected = true;
+        SliceDelta state;
+        state.inUse = true; state.active = true; state.mode = mode; state.panId = "0";
+        state.modeList = backend.capabilities().receiveModeControl->modes;
+        state.frequency = 14.074; state.filterLow = -100; state.filterHigh = 100;
+        emit backend.sliceChanged(0, state);
+    }
+};
+}
+#endif
 namespace AetherSDR {
 class TciServerReviewTest {
 public:
@@ -130,11 +149,17 @@ class OptimisticBackend final : public IRadioBackend {
 public:
     bool connected = true;
     bool confirmed = false;
+    bool clientControls = false;
     QString requestedMode;
     ReceiveControlPolicy receiveControlPolicy() const override { return confirmed ? ReceiveControlPolicy::Confirmed : ReceiveControlPolicy::Optimistic; }
     QStringList modes;
     RadioCapabilities capabilities() const override {
         RadioCapabilities caps;
+        if (clientControls) {
+            using Feature = ReceiveClientControl::Feature;
+            caps.receiveClientControl = ReceiveClientControl{{Feature::NativeModes, Feature::ConfirmedNotifications,
+                Feature::FrequencyLimits, Feature::QualifiedMeters, Feature::QueuedIntentFencing}};
+        }
         if (!modes.isEmpty()) { caps.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Radio, modes}; }
         return caps;
     }
@@ -303,7 +328,7 @@ void checkDeclaredModes()
         f.messages.clear(); f.backend->disconnectRadio(); emit f.model.connectionStateChanged(false);
         require(contains(f.messages, "modulations_list:;"), "disconnect withdraws prior native repertoire for existing client");
         auto replacement = std::make_unique<OptimisticBackend>();
-        OptimisticBackend* other = replacement.get(); other->confirmed = true; other->modes = {"FMN", "WFM"};
+        OptimisticBackend* other = replacement.get(); other->confirmed = true; other->clientControls = true; other->modes = {"FMN", "WFM"};
         f.model.setBackendForTest(std::move(replacement), "fixture"); other->announce("FMN", true);
         require(contains(f.messages, "modulations_list:fmn,wfm;"), "real slice callback publishes replacement native vocabulary");
         RigctlProtocol otherRig(&f.model);
@@ -376,7 +401,7 @@ void checkDeclaredModes()
     require(model.slice(0)->mode() == "CW", "legacy CWR still resolves to existing Flex CW mode");
     RadioModel undeclared;
     auto strict = std::make_unique<OptimisticBackend>();
-    OptimisticBackend* strictBackend = strict.get(); strictBackend->confirmed = true;
+    OptimisticBackend* strictBackend = strict.get(); strictBackend->confirmed = true; strictBackend->clientControls = true;
     undeclared.setBackendForTest(std::move(strict), "fixture"); strictBackend->announce();
     RigctlProtocol strictRig(&undeclared);
     SmartCatProtocol strictCat(&undeclared);
@@ -384,6 +409,110 @@ void checkDeclaredModes()
     require(strictRig.handleLine("m") == "RPRT -8\n" && strictRig.handleLine("M USB 0") == "RPRT -1\n"
         && strictCat.processCommand("MD") == "?;" && strictCat.processCommand("ZZMD01") == "?;"
         && strictTci.handleCommand("modulation:0").isEmpty(), "confirmed receiver without a declared vocabulary stays unavailable, never legacy USB");
+}
+void checkNestedModeRelayPolicy()
+{
+    for (bool optedIn : {false, true}) {
+        QStringList messages;
+        RadioModel model;
+        TciServer server(&model);
+        TciServerReviewTest::capture(server, model, messages);
+        auto owned = std::make_unique<OptimisticBackend>();
+        OptimisticBackend* backend = owned.get();
+        backend->confirmed = true;
+        backend->clientControls = optedIn;
+        backend->modes = {"CW", "USB", "AM"};
+        model.setBackendForTest(std::move(owned), "fixture");
+        backend->announce(QStringLiteral("USB"));
+        SliceModel* slice = model.slice(0);
+        bool nested = false;
+        QObject::connect(slice, &SliceModel::modeChanged, &model, [&](const QString& mode) {
+            if (!nested && mode == QStringLiteral("USB")) {
+                nested = true;
+                backend->announce(QStringLiteral("AM"));
+            }
+        });
+        server.wireSlice(0, slice);
+        messages.clear();
+        // Keep the outer signal argument independent of SliceModel's mutable
+        // member; nested adoption can change that member during delivery.
+        const QString outerMode = QStringLiteral("USB");
+        emit slice->modeChanged(outerMode);
+        require(nested && slice->mode() == QStringLiteral("AM"),
+            "mode relay regression exercises a newer nested observation before the outer relay");
+        QStringList modes;
+        for (const QString& message : messages) {
+            for (const QString& command : message.split(';', Qt::SkipEmptyParts)) {
+                if (command.startsWith(QStringLiteral("modulation:"))) { modes.append(command); }
+            }
+        }
+        const QStringList expected = optedIn
+            ? QStringList{"modulation:0,am", "modulation:0,am"}
+            : QStringList{"modulation:0,am", "modulation:0,usb"};
+        require(modes == expected, optedIn
+            ? "opt-in mode relays retain current-state semantics after nested observations"
+            : "legacy mode relays retain the original emitted-mode argument after nested observations");
+    }
+}
+void checkExistingRtlClientDialect()
+{
+#ifdef AETHER_BACKEND_RTL
+    QStringList messages;
+    RadioModel model;
+    TciServer server(&model);
+    TciClient* client = TciServerReviewTest::capture(server, model, messages);
+    auto owned = std::make_unique<rtl::RtlSdrBackend>();
+    rtl::RtlSdrBackend* backend = owned.get();
+    require(backend->receiveControlPolicy() == ReceiveControlPolicy::Confirmed
+        && !backend->capabilities().receiveClientControl,
+        "actual RTL confirmed authority does not opt into new receive-client behavior");
+    model.setBackendForTest(std::move(owned), "rtl");
+    rtl::RtlSdrBackendTestAccess::announce(*backend, "CWR");
+    SliceModel* slice = model.slice(0);
+    server.wireSlice(0, slice);
+    TciProtocol& tci = TciServerReviewTest::protocol(server, client);
+    SmartCatProtocol cat(&model);
+    RigctlProtocol rig(&model);
+    require(tci.handleCommand("modulation:0") == "modulation:0,usb;"
+        && cat.processCommand("MD") == "MD2;" && cat.processCommand("ZZMD") == "ZZMD01;"
+        && rig.handleLine("m").startsWith("USB\n"),
+        "actual RTL CWR retains baseline TCI CAT and rigctl aliases");
+    const QString init = tci.generateInitBurst();
+    require(init.contains("vfo_limits:1000,75000000;")
+        && tci.handleCommand("vfo_limits") == "vfo_limits:30000,54000000;"
+        && init.contains("modulations_list:usb,lsb,cw,cwr,am,sam,dsb,fm,nfm,digu,digl,rtty;"),
+        "actual RTL retains baseline range and mode-list advertisements");
+    require(tci.handleCommand("rx_bin_enable:0") == "rx_bin_enable:0,false;",
+        "actual RTL retains the baseline acknowledge-only extension query");
+    QString requested;
+    QObject::connect(slice, &SliceModel::modeChangeRequested, &model,
+        [&requested](const QString& mode) { requested = mode; });
+    require(rig.handleLine("M CWR 0") == "RPRT 0\n", "legacy RTL accepts the existing reverse CW alias");
+    rtl::RtlSdrBackendTestAccess::announce(*backend, "WFM");
+    pump();
+    require(requested == "CW", "RTL queued legacy mode edit retains its original CW mapping without new retirement");
+    messages.clear();
+    spin(450);
+    for (const QString& command : messages.join(' ').split(';', Qt::SkipEmptyParts)) {
+        require(!command.trimmed().startsWith("rx_mute:") && !command.trimmed().startsWith("rx_record:")
+            && !command.trimmed().startsWith("rx_play:") && !command.trimmed().startsWith("rx_balance:")
+            && !command.trimmed().startsWith("rx_nb_param:"),
+            "actual RTL does not acquire new receive-state seed relays");
+    }
+    messages.clear();
+    TciServerReviewTest::status(server);
+    require(contains(messages, "rx_smeter:0,-130;"), "actual RTL retains the baseline initial cached TCI meter");
+    MeterDef def;
+    def.index = 501; def.source = "SLC"; def.sourceIndex = 0; def.name = "LEVEL"; def.unit = "dBm";
+    model.meterModel().defineMeter(def);
+    model.meterModel().updateValueByName("SLC", "LEVEL", -73.0f, 0);
+    spin(MeterModel::kVitalsFreshMs + 10);
+    messages.clear(); TciServerReviewTest::status(server);
+    require(contains(messages, "rx_smeter:0,-73;") && contains(messages, "rx_channel_sensors:0,0,-73.0;"),
+        "actual RTL retains baseline cached-meter broadcasts after sample expiry");
+#else
+    std::cerr << "Actual RTL dialect checks unavailable: backend not built\n";
+#endif
 }
 void checkConfirmedOnlyStateRelays()
 {
@@ -399,7 +528,9 @@ void checkConfirmedOnlyStateRelays()
         }
         return false;
     };
-    for (bool confirmed : {false, true}) {
+    for (const QPair<bool, bool>& policy : QList<QPair<bool, bool>>{{false, false}, {true, false}, {true, true}}) {
+        const bool confirmed = policy.first;
+        const bool optedIn = policy.second;
         QStringList messages;
         RadioModel model;
         TciServer server(&model);
@@ -407,6 +538,7 @@ void checkConfirmedOnlyStateRelays()
         auto owned = std::make_unique<OptimisticBackend>();
         OptimisticBackend* backend = owned.get();
         backend->confirmed = confirmed;
+        backend->clientControls = optedIn;
         model.setBackendForTest(std::move(owned), "fixture");
         backend->announce();
         SliceModel* slice = model.slice(0);
@@ -422,7 +554,7 @@ void checkConfirmedOnlyStateRelays()
         server.wireSlice(0, slice);
         spin(450);
         require(contains(messages, "mute:0,false;"), "existing mute seed remains available for both policies");
-        if (confirmed) {
+        if (optedIn) {
             require(contains(messages, "rx_mute:0,false;") && contains(messages, "rx_record:0,false;")
                 && contains(messages, "rx_play:0,false;") && contains(messages, "rx_balance:0,0;")
                 && contains(messages, "rx_nb_param:0,0,0;"),
@@ -441,7 +573,7 @@ void checkConfirmedOnlyStateRelays()
         observation.diguOffset = 1700;
         slice->applyChanges(observation);
         require(contains(messages, "mute:0,true;"), "existing mute change relay remains unchanged");
-        if (confirmed) {
+        if (optedIn) {
             for (const QString& expected : QStringList{"rx_mute:0,true;", "rx_record:0,true;", "rx_play:0,true;",
                     "rx_balance:0,10;", "rx_nb_param:0,0,23;", "digl_offset:1300;", "digu_offset:1700;"}) {
                 require(contains(messages, expected), qPrintable(expected));
@@ -460,6 +592,7 @@ void checkMeters()
     Q_UNUSED(client);
     auto owned = std::make_unique<OptimisticBackend>();
     OptimisticBackend* backend = owned.get();
+    backend->clientControls = true;
     model.setBackendForTest(std::move(owned), "sim");
     backend->announce();
     server.wireSlice(0, model.slice(0));
@@ -491,6 +624,7 @@ void checkMeters()
     model.meterModel().updateValueByName("SLC", "LEVEL", -81.0f, 0);
     auto replacement = std::make_unique<OptimisticBackend>();
     backend = replacement.get();
+    backend->clientControls = true;
     model.setBackendForTest(std::move(replacement), "sim");
     backend->announce();
     server.wireSlice(0, model.slice(0));
@@ -675,6 +809,8 @@ int main(int argc, char** argv)
         require(protocol.handleCommand("modulation:0") == "modulation:0,usb;", "optimistic model behavior remains unchanged");
     }
     checkDeclaredModes();
+    checkNestedModeRelayPolicy();
+    checkExistingRtlClientDialect();
     checkConfirmedOnlyStateRelays();
     checkMeters();
     std::cout << "TCI confirmed receive checks passed\n";

@@ -352,6 +352,26 @@ void verifyMeasuredScopeSpans()
         backend.setPanBandwidth(QStringLiteral("0"), invalid);
     }
     require(commands.isEmpty(), "out-of-range and nonfinite span requests never reach transport");
+    for (int direction : {-1, 1}) {
+        for (int index = 0; index < measuredHz.size(); ++index) {
+            const int target = index + direction;
+            if (target < 0 || target >= measuredHz.size()) { continue; }
+            KenwoodBackendTestAccess::message(backend, "BS4" + QByteArray::number(index));
+            const double requested = measuredHz[index] * (direction > 0 ? 1.5 : 1.0 / 1.5);
+            const QList<QByteArray> expected{"BS4" + QByteArray::number(target) + ';', "BS4;"};
+            commands.clear();
+            backend.setPanBandwidth(QStringLiteral("0"), requested);
+            require(commands == expected, "ordinary zoom reaches the adjacent native span in both directions");
+            KenwoodBackendTestAccess::message(backend, "BS4" + QByteArray::number(index));
+            commands.clear();
+            backend.setPanBandwidth(QStringLiteral("0"), requested);
+            require(commands == expected, "an old source-span echo cannot reverse a pending zoom request");
+            KenwoodBackendTestAccess::message(backend, "BS4" + QByteArray::number(target));
+            commands.clear();
+            backend.setPanBandwidth(QStringLiteral("0"), requested);
+            require(commands == expected, "settle replay after native readback cannot reverse the zoom request");
+        }
+    }
     KenwoodBackendTestAccess::message(backend, "BS42");
     commands.clear();
     backend.setPanBandwidth(QStringLiteral("0"), 25000);
@@ -360,8 +380,33 @@ void verifyMeasuredScopeSpans()
     KenwoodBackendTestAccess::message(backend, "BS43");
     commands.clear();
     backend.setPanBandwidth(QStringLiteral("0"), 25000);
-    require(commands == QList<QByteArray>{"BS42;", "BS4;"} && std::abs(width - 0.03) < 1e-10,
-        "25 kHz halfway request zooms30-to20 in the reverse direction");
+    require(commands == QList<QByteArray>{"BS43;", "BS4;"} && std::abs(width - 0.03) < 1e-10,
+        "an identical25 kHz request retains its chosen30 kHz span after readback");
+    KenwoodBackendTestAccess::message(backend, "BS44");
+    KenwoodBackendTestAccess::message(backend, "BS43");
+    commands.clear();
+    backend.setPanBandwidth(QStringLiteral("0"), 25000);
+    require(commands == QList<QByteArray>{"BS42;", "BS4;"},
+        "external span changes retire the old quantization before a new request");
+    const auto chooseThirty = [&] {
+        KenwoodBackendTestAccess::message(backend, "BS47");
+        KenwoodBackendTestAccess::message(backend, "BS42");
+        backend.setPanBandwidth(QStringLiteral("0"), 25000);
+        KenwoodBackendTestAccess::message(backend, "BS43");
+    };
+    chooseThirty();
+    KenwoodBackendTestAccess::message(backend, "FA00014270000");
+    commands.clear();
+    backend.setPanBandwidth(QStringLiteral("0"), 25000);
+    require(commands == QList<QByteArray>{"BS42;", "BS4;"},
+        "a frequency-context change retires a previous span mapping");
+    chooseThirty();
+    KenwoodBackendTestAccess::message(backend, "BS32");
+    KenwoodBackendTestAccess::message(backend, "BS30");
+    commands.clear();
+    backend.setPanBandwidth(QStringLiteral("0"), 25000);
+    require(commands == QList<QByteArray>{"BS42;", "BS4;"},
+        "leaving and returning to Center mode retires a previous span mapping");
     KenwoodBackendTestAccess::message(backend, "BS31");
     KenwoodBackendTestAccess::message(backend, "BS51");
     KenwoodBackendTestAccess::message(backend, "BSM01400000014500000");

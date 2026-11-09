@@ -58,6 +58,24 @@ struct SliceFrequencyControl {
 // Optional per-feature records (#5262 M2). Absence means no headless verb;
 // neither UI ranges nor an inherited no-op establish support. Authority is
 // configuration provenance, never hardware acknowledgement/DSP completion.
+// Desktop receive behavior is opt-in independently of radio-authoritative state.
+struct ReceiveInteractionControl {
+    enum class Feature { PendingTune, AntennaReadback, ContextRetirement };
+    QList<Feature> features;
+    bool supports(Feature feature) const { return features.contains(feature); }
+    bool operator==(const ReceiveInteractionControl&) const = default;
+};
+struct ReceiveClientControl {
+    enum class Feature { NativeModes, ConfirmedNotifications, FrequencyLimits, QualifiedMeters, QueuedIntentFencing };
+    QList<Feature> features;
+    bool supports(Feature feature) const { return features.contains(feature); }
+    bool operator==(const ReceiveClientControl&) const = default;
+};
+
+struct ScopeModePresentation {
+    QString help;
+};
+
 struct ReceiveModeControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     QStringList modes;
@@ -198,10 +216,12 @@ struct BackendPanAveraging {
 
 // Meaning of the panadapter's vertical axis. Absent means no backend has been
 // read, and the two fields then fall to opposite legacy answers, so consumers use
-// RadioCapabilities::dbmAxisIsCalibrated() / panBinsAbsolute(), never this.
+// RadioCapabilities::dbmAxisIsCalibrated() / panBinsAbsolute() for those facts.
+// Display units are the independent, explicit axisUnit presentation choice.
 struct PanAmplitudeModel {
+    enum class AxisUnit { Dbm, RelativeDb };
     // The axis is absolute dBm at the antenna from a per-unit factory calibration
-    // (Flex). False requires relative-unit labels: level differences hold but the
+    // (Flex). When false, only relative level differences hold and the
     // zero point is arbitrary, so no value may be compared across stations, published as
     // a spot level or used as an absolute threshold. The Icom scope is uncalibrated
     // (IcomScope.h) and its record is absent. A backend sets this from its own
@@ -222,6 +242,10 @@ struct PanAmplitudeModel {
     // limits the operator sets). False preserves a family's existing settings
     // behavior. Read through RadioCapabilities::clientPersistsDbmRange().
     bool clientPersistsDbmRange = false;
+    // Existing profiles retain their established label; native presentations
+    // can explicitly request relative units without changing calibration truth.
+    AxisUnit axisUnit = AxisUnit::Dbm;
+
 };
 
 // Wideband converter view: raw ADC output before the DDC, spanning the
@@ -456,6 +480,9 @@ struct RadioCapabilities {
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
     SliceFrequencyControl sliceFrequencyControl;
+    std::optional<ReceiveInteractionControl> receiveInteractionControl;
+    std::optional<ReceiveClientControl> receiveClientControl;
+    std::optional<ScopeModePresentation> scopeModePresentation;
     std::optional<ReceiveModeControl> receiveModeControl;
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
