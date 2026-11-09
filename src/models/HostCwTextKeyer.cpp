@@ -36,7 +36,7 @@ void HostCwTextKeyer::noteQueued(int chars)
 bool HostCwTextKeyer::send(const QString& text)
 {
     m_queuedChars = std::max(0, m_queuedChars - static_cast<int>(text.size()));
-    if (!m_model || text.isEmpty() || !admitsLength(static_cast<int>(text.size()))
+    if (m_closed || !m_model || text.isEmpty() || !admitsLength(static_cast<int>(text.size()))
         || m_model->hostCwTextRefusal() != RadioModel::HostCwTextRefusal::None) {
         return false;
     }
@@ -88,6 +88,12 @@ void HostCwTextKeyer::stop()
     if (m_model) {
         m_model->abortTxProducerInputs(m_producer, TransmitModel::PttSource::Dax);
     }
+}
+
+void HostCwTextKeyer::close()
+{
+    m_closed = true;
+    stop();
 }
 
 } // namespace AetherSDR

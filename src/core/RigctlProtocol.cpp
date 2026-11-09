@@ -10,6 +10,7 @@
 #include <QLocale>
 #include <QMetaObject>
 #include <QStringList>
+#include <QThread>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -274,13 +275,23 @@ RigctlProtocol::RigctlProtocol(RadioModel* model)
 RigctlProtocol::~RigctlProtocol()
 {
     m_txProducer.invalidate(); // fences queued key-on before any teardown callback
+    // Host CW text stops HERE on the model's thread (CatPort's case):
+    // ~RadioSession deletes the CatPorts and the model destructs with no
+    // event-loop turn between, so a queued stop would be discarded with the
+    // model's posted events and the keyer's last key-up would reach a model
+    // mid-destruction. close() also makes a send() still queued inert. The
+    // queued close below is the fallback for any other thread.
+    if (m_model && m_hostCwText && QThread::currentThread() == m_model->thread()) {
+        m_hostCwText->close();
+        m_hostCwText.reset();
+    }
     if (m_model) {
         QMetaObject::invokeMethod(m_model, [model = m_model, request = m_pttRequest, cwx = m_cwxRequest,
                                             hostCwText = std::move(m_hostCwText)] {
             (void)model->setProducerTransmit(request, false);
             model->abortProducerCwx(cwx);
             if (hostCwText) {
-                hostCwText->stop();
+                hostCwText->close();
             }
         }, Qt::QueuedConnection);
     }

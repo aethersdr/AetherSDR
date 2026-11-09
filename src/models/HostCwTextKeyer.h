@@ -48,6 +48,8 @@ public:
     bool send(const QString& text);
     // Drops pending text, fences queued elements and keys up now.
     void stop();
+    // stop(), and every later send() is refused: the owner is going away.
+    void close();
 
 private:
     QPointer<RadioModel> m_model;   // cleared before a dying model drops queued work
@@ -57,6 +59,7 @@ private:
     std::unique_ptr<CwxLocalKeyer> m_keyer;
     std::shared_ptr<char> m_run;   // this run's identity for refusal callbacks
     int m_queuedChars{0};          // noteQueued() text not yet through send()
+    bool m_closed{false};
 };
 
 } // namespace AetherSDR
