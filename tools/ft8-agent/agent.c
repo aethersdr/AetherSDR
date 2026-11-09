@@ -334,6 +334,95 @@ static int valid_token(const char *s, const char *extra)
 }
 
 /* Maidenhead: field letters A-R, digits, then subsquare letters A-X. */
+/* ⛔ "RR73", "RRR" and "73" are sign-offs, never a grid to report -- and the
+ * field type alone cannot tell them apart from a locator.
+ *
+ * MEASURED on the air 2026-11-09, and this is the part my earlier fix missed:
+ * there are TWO encodings that both render as the text "RR73".
+ *
+ *   igrid4 = 32403 (MAXGRID4+3)  the sign-off token  -> FTX_FIELD_TOKEN
+ *   igrid4 = 32373               the grid square RR73 -> FTX_FIELD_GRID
+ *
+ * 32373 is simply where R,R,7,3 lands in the locator encoding
+ * (((17*18 + 17)*10 + 7)*10 + 3), and it is <= MAXGRID4, so unpackgrid()
+ * takes its grid branch and types it GRID. A guard that trusts the type
+ * therefore passes it, which is why 9 of 81 gridded spots on 40 m carried
+ * grid "RR73" while plain "73" -- not structurally a locator, so only ever a
+ * token -- was always handled correctly.
+ *
+ * ft8_lib's own packgrid() special-cases "RR73" BEFORE its locator branch, so
+ * an encode/decode round trip can never reproduce this; only a real
+ * transmitter whose encoder does not special-case it will. Checking the text
+ * here mirrors the library's own precedence.
+ *
+ * Grid RR73 is at 83.5 N, 175 E -- Arctic Ocean, ~700 km from the pole, no
+ * land and no stations, so nothing real is lost by preferring the sign-off
+ * reading. valid_grid() itself must keep accepting it, because an operator
+ * may legitimately put any square in the config. */
+/* Is a grid-typed field really a locator, or a sign-off?
+ *
+ * Grid RR73 is at 83.5 N, 175 E -- Arctic Ocean, ~700 km from the pole, no
+ * land. A station genuinely there is an expedition with a callsign to
+ * match. Measured on the 15 distinct callsigns that leaked on 40 m: N1ECC,
+ * W2CG, KP4COD (Puerto Rico, 18 N), EA8UP (Canary Islands, 28 N), VE3RUB,
+ * AE1T, K1SM ... every one an ordinary temperate callsign, so for every one
+ * of them "RR73" was the sign-off, not a locator.
+ *
+ * So ask whether the station COULD be up there instead of blacklisting the
+ * string, which would silently discard a genuine polar spot.
+ *                                        -- the discriminator is Nigel's
+ */
+static int polar_grid(const char *g)   /* checked by the selftest */
+{
+    /* Field letter 2 is latitude: 'R' is the top 10-degree band, 'Q' the
+     * one below, i.e. 80 N and above. */
+    const char c = (char)toupper((unsigned char)g[1]);
+    return c == 'R' || c == 'Q';
+}
+
+static int polar_capable_call(const char *call)
+{
+    /* Who really operates above 80 N: Russian Arctic (RI..), Greenland
+     * (OX), Svalbard (JW), Jan Mayen (JX), Antarctic (R1AN), plus maritime-
+     * and aeronautical-mobile, which can be anywhere. Deliberately short --
+     * this only has to cover who could be at 80 N+, not the DXCC list, and
+     * it costs no table on a 1-core radio. */
+    static const char *POLAR_PREFIX[] = { "RI", "OX", "JW", "JX", "R1AN" };
+    for (size_t i = 0; i < sizeof POLAR_PREFIX / sizeof POLAR_PREFIX[0]; i++)
+        if (!strncmp(call, POLAR_PREFIX[i], strlen(POLAR_PREFIX[i]))) return 1;
+    const size_t n = strlen(call);
+    if (n > 3 && (!strcmp(call + n - 3, "/MM") || !strcmp(call + n - 3, "/AM")))
+        return 1;
+    return 0;
+}
+
+/* The sign-off texts. Only "RR73" can also be a locator (igrid4 32373 vs
+ * the token 32403); "RRR" and "73" are not structurally locators and so
+ * only ever arrive typed TOKEN, where the type check already stops them.
+ * They are listed to state the rule, not because they do work here. */
+static int signoff_text(const char *s)
+{
+    return !strcmp(s, "RR73") || !strcmp(s, "RRR") || !strcmp(s, "73");
+}
+
+/* Should `extra`, which the library typed as a GRID, be reported as one? */
+static int grid_is_real(const char *extra, const char *call)
+{
+    if (!signoff_text(extra)) return 1;          /* an ordinary locator */
+    /* A sign-off text in a grid-typed field. Only "RR73" is also a well-formed
+     * locator (igrid4 32373); "RRR" and "73" are not, so they are never a
+     * grid whoever sends them -- and polar_grid() must not be consulted about
+     * them, since it only reads the latitude letter and "RRR" would look
+     * polar. Believe RR73 as a locator only if the station could be up
+     * there. */
+    if (strcmp(extra, "RR73")) return 0;   /* "RRR" and "73" are never grids */
+    /* Only "RR73" reaches here, and RR73 IS a far-north square (83.5 N), so
+     * the latitude is already settled -- the open question is only whether
+     * THIS station could be there. polar_grid() stays because the selftest
+     * pins the latitude rule itself. */
+    return polar_capable_call(call);
+}
+
 static int valid_grid(const char *s)
 {
     size_t n = strlen(s);
@@ -846,7 +935,8 @@ static int spot_from_message(const ftx_message_t *msg, long long t, long long di
      * A type-4 non-standard message has no grid field at all, and
      * ftx_message_decode_nonstd does not fill types[] the way decode_std
      * does, so the explicit index also stops a stale value being trusted. */
-    if (types[2] == FTX_FIELD_GRID && extra[0] && valid_grid(extra))
+    if (types[2] == FTX_FIELD_GRID && extra[0] && valid_grid(extra)
+        && grid_is_real(extra, call_de))
         snprintf(s->grid, sizeof s->grid, "%s", extra);
     return 1;
 }
@@ -1480,6 +1570,118 @@ static const char *const COORDINATED[10];
  * The messages are built with the library's own encoder-free path: we pack a
  * standard message from its fields, then decode it back, which exercises
  * exactly the call the live decoder makes. */
+/* Both encodings of "RR73" reach spot_from_message, and neither may become a
+ * grid.
+ *
+ * This is the assertion the earlier fix lacked. The recording test
+ * (websdr_test6.wav) cannot cover it: its 20 spots contain no sign-off at
+ * all, and it SKIPS entirely unless the binary runs from tools/ft8-agent. A
+ * round trip through ftx_message_encode cannot cover it either, because
+ * packgrid() special-cases "RR73" and only ever emits the token form.
+ *
+ * So build a valid message and patch the 15-bit trailing field directly, to
+ * put each encoding on the wire exactly as a transmitter would. */
+static int selftest_rr73_both_encodings(void)
+{
+    /* unpackgrid()/packgrid() boundary: values above it are tokens. */
+    const uint32_t MAXGRID4 = 32400u;
+    struct { const char *what; uint32_t g; int want_grid; } cases[] = {
+        /* the locator encoding of R,R,7,3 -- typed GRID by the library, and
+         * the one that leaked on the air */
+        {"RR73 as a locator (igrid4=32373)", 32373u, 0},
+        {"RR73 as a token",   MAXGRID4 + 3u, 0},
+        {"RRR as a token",    MAXGRID4 + 2u, 0},
+        {"73 as a token",     MAXGRID4 + 4u, 0},
+        /* a control: an ordinary square must still come through */
+        {"an ordinary locator", 12345u, 1},
+    };
+
+    ftx_message_t base;
+    ftx_message_init(&base);
+    if (ftx_message_encode(&base, &g_hash_if, "KB9RCA N1ECC FN42") != FTX_MESSAGE_RC_OK) {
+        printf("selftest FAIL: could not build the RR73 base message\n");
+        return 1;
+    }
+
+    int fail = 0;
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        ftx_message_t m = base;
+        const uint32_t g = cases[i].g;
+        /* Overwrite ir (1 bit) and igrid4 (15 bits) where decode_std reads
+         * them, leaving both callsign slots and i3 untouched. */
+        m.payload[7] = (uint8_t)((m.payload[7] & 0xC0u) | ((g >> 10) & 0x1Fu));
+        m.payload[8] = (uint8_t)((g >> 2) & 0xFFu);
+        m.payload[9] = (uint8_t)((m.payload[9] & 0x3Fu) | ((g & 0x03u) << 6));
+
+        spot_t s;
+        if (!spot_from_message(&m, 1700000000LL, 14074000LL, 1500.0f, 0.2f, 20, &s)) {
+            printf("selftest FAIL: %s yielded no spot\n", cases[i].what);
+            fail = 1;
+            continue;
+        }
+        if (cases[i].want_grid) {
+            if (!s.grid[0]) {
+                printf("selftest FAIL: %s lost its grid\n", cases[i].what);
+                fail = 1;
+            }
+        } else if (s.grid[0]) {
+            printf("selftest FAIL: %s put \"%s\" in the grid\n",
+                   cases[i].what, s.grid);
+            fail = 1;
+        }
+    }
+
+    /* The polar exception, both ways. Same grid text; only the callsign
+     * differs, so this pins the RULE rather than the string. */
+    {
+        static const struct { const char *call; int want_grid; } POLAR[] = {
+            {"KP4COD", 0},   /* Puerto Rico, 18 N -- cannot be at 83 N */
+            {"N1ECC",  0},   /* New England */
+            {"RI0B",   1},   /* Russian Arctic: a real RR73 is plausible */
+            {"OX3LX",  1},   /* Greenland */
+            {"JW7QIA", 1},   /* Svalbard */
+        };
+        for (size_t i = 0; i < sizeof POLAR / sizeof POLAR[0]; i++) {
+            const int got = grid_is_real("RR73", POLAR[i].call);
+            if (got != POLAR[i].want_grid) {
+                printf("selftest FAIL: RR73 from %s -> grid %s, wanted %s\n",
+                       POLAR[i].call, got ? "kept" : "dropped",
+                       POLAR[i].want_grid ? "kept" : "dropped");
+                fail = 1;
+            }
+        }
+        /* An ordinary locator is never affected by the callsign. */
+        /* An ordinary locator is never affected by the callsign. */
+        if (!grid_is_real("FN42", "KP4COD") || !grid_is_real("FN42", "RI0B")) {
+            printf("selftest FAIL: an ordinary grid was dropped\n");
+            fail = 1;
+        }
+        /* And polar_grid() must actually mean POLAR. A sign-off text whose
+         * latitude band is temperate can never be a real locator, whoever
+         * sends it -- this pins the latitude test itself, which a widened
+         * band would otherwise slip past. */
+        if (!polar_grid("RR73") || !polar_grid("QQ10")) {
+            printf("selftest FAIL: polar_grid() rejected a polar square\n");
+            fail = 1;
+        }
+        if (polar_grid("FN42") || polar_grid("DN18") || polar_grid("JO91")) {
+            printf("selftest FAIL: polar_grid() called a temperate square polar\n");
+            fail = 1;
+        }
+        /* The two tests must BOTH apply. A polar-capable callsign sending a
+         * sign-off that is not a polar square is still a sign-off -- without
+         * this, dropping polar_grid() from grid_is_real() goes unnoticed.
+         * ("RRR" and "73" are not locators at all, so a grid-typed field can
+         * only ever carry the RR73 form; this asserts the conjunction via the
+         * one text that reaches it.) */
+        if (grid_is_real("RRR", "RI0B") || grid_is_real("73", "OX3LX")) {
+            printf("selftest FAIL: a non-polar sign-off was kept for a polar call\n");
+            fail = 1;
+        }
+    }
+    return fail;
+}
+
 static int selftest_spots(void)
 {
     struct { const char *to, *de, *extra, *call, *grid; } want[] = {
@@ -1719,6 +1921,7 @@ static const char *BAD_GRIDS[] = {"ZZ99", "AA00zz", "D18P", "DN1", "DN18p", "123
 
 static int selftest(void)
 {
+    if (selftest_rr73_both_encodings()) return 1;
     if (selftest_persistence() || selftest_spots() || selftest_budget_flagged()
         || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
