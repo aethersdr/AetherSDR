@@ -19,9 +19,16 @@ normalization. The proposal retains the same 220 changed paths against upstream.
 Existing whitespace in upstream WSPR sources was preserved; the proposal's
 whitespace check against upstream passes.
 
-The earlier hardware results below apply to the pre-merge tested head. A new
-owned RX candidate and bounded live rerun are being prepared; post-merge
-hardware qualification is not yet claimed.
+The earlier full hardware results below apply to the pre-merge tested head.
+The merged candidate connected to firmware 1.01 and completed its native-context
+survey on the first acknowledged attempt. It recorded 93 connected RX samples
+over 92.12 seconds, with 93 changing waterfall crops, no unchanged-crop warnings
+and bridge ping maximum 57.38 ms. Three-stage preflight PCM was finite and
+nonzero. The operator then instructed “consider 12min test as passed”; the run
+was stopped and that gate recorded as operator-accepted, not as a newly measured
+12-minute pass. No tuning/reconnect cycles had begun in the new timed run.
+The entry RX baseline was verified unchanged, normal Quit completed with exit 0
+and the owned socket was removed. No transmit or power request was made.
 
 | Function group | Scope | Qualification / remaining gate |
 |---|---|---|
