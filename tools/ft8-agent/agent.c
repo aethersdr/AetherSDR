@@ -1822,6 +1822,25 @@ static int selftest(void)
                 printf("   %-12s %-6s %8lld Hz  score %d  %s\n", dc.spots[i].call,
                        dc.spots[i].grid, dc.spots[i].hz, dc.spots[i].snr, dc.spots[i].msg);
 
+            /* ⛔ A sign-off is NOT a grid, and this is the test that proves it
+             * through the REAL decode path rather than a message we built
+             * ourselves. RR73 is structurally two letters and two digits, so
+             * valid_grid() passes it; only the library's field type separates
+             * them (TOKEN vs GRID). This recording carries three "73"
+             * sign-offs, the same token class.
+             *
+             * Checked over EVERY spot, not the eight printed above: the
+             * failure that put RR73 on 15 spots on 40 m would have hidden
+             * below a top-8 listing. */
+            for (int i = 0; i < dc.nspots; i++) {
+                if (!strcmp(dc.spots[i].grid, "RR73") || !strcmp(dc.spots[i].grid, "RRR")
+                    || !strcmp(dc.spots[i].grid, "73")) {
+                    printf("selftest FAIL: \"%s\" put the sign-off \"%s\" in the grid\n",
+                           dc.spots[i].msg, dc.spots[i].grid);
+                    return 1;
+                }
+            }
+
             if (dc.nspots < 15) {
                 printf("selftest FAIL: only %d spots from a file with 30 reference messages\n",
                        dc.nspots);
