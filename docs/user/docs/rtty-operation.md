@@ -30,7 +30,7 @@ The shift is the frequency difference between the Mark and Space tones. The stan
 
 The shift belongs to the slice (the radio's `rtty_shift`). The decoder's **Shift** and **Shift** on the VFO's **DSP** tab show and set the same value, and the panadapter's space line sits that far below the mark line.
 
-Changing the shift leaves the receive filter as it is, so a filter narrower than the shift does not pass both tones. For a wide shift, choose a filter width wider than the shift, for example **1K** for an 850 Hz shift; AetherSDR centres it between the mark and space tones.
+Changing the shift leaves the receive filter as it is, so a filter narrower than the shift does not pass both tones. For a wide shift, choose a filter width wider than the shift, for example **1K** for an 850 Hz shift; AetherSDR centers it between the mark and space tones.
 
 ## Using RTTY
 

@@ -2437,7 +2437,8 @@ void VfoWidget::buildTabContent()
                 selRow->addWidget(shiftPlus);
 
                 auto shiftDown = [this] {
-                    if (m_slice) m_slice->setRttyShift(m_slice->rttyShift() - SHIFT_STEP);
+                    if (m_slice && m_slice->rttyShift() > SHIFT_STEP)
+                        m_slice->setRttyShift(m_slice->rttyShift() - SHIFT_STEP);
                 };
                 auto shiftUp = [this] {
                     if (m_slice) m_slice->setRttyShift(m_slice->rttyShift() + SHIFT_STEP);
