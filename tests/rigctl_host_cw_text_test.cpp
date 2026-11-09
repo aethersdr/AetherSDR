@@ -10,6 +10,7 @@
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "models/HostCwTextKeyer.h"
 #include "models/CwxModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -353,6 +354,54 @@ void testBreakInOff()
     }
 }
 
+// Length bounds (HostCwTextKeyer, Hamlib's MAXARGSZ 511 and HAMLIB_FIFO_SIZE
+// 1024): a longer message, or one that would take the pending text past 1024
+// characters, is refused with no edge. Counted both once the keyer holds the
+// text and while a send() is still waiting in the event queue.
+void testLengthBounds()
+{
+    const int maxMessage = HostCwTextKeyer::kMaxMessageChars;
+    const QString longest(maxMessage, QLatin1Char('E'));
+    {
+        Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        check("bounds: the message cap is 511 and the pending cap 1024",
+              maxMessage == 511 && HostCwTextKeyer::kMaxPendingChars == 1024);
+        check("bounds: 512 characters refused with RIG_ERJCTED",
+              cat(port, QStringLiteral("b ") + longest + QLatin1Char('E')) == QLatin1String("RPRT -9"));
+        pumpFor(300);
+        check("bounds: no edge for the refused message", f.edges.empty());
+
+        check("bounds: 511 characters accepted",
+              cat(port, QStringLiteral("b ") + longest).endsWith(QLatin1String("RPRT 0")));
+        check("bounds: a second 511 accepted (1022 pending)",
+              cat(port, QStringLiteral("b ") + longest).endsWith(QLatin1String("RPRT 0")));
+        check("bounds: 3 more refused once the keyer holds 1022 (1025 > 1024)",
+              cat(port, QStringLiteral("b EEE")) == QLatin1String("RPRT -9"));
+        check("bounds: 2 more still fit (1024)",
+              cat(port, QStringLiteral("b EE")).endsWith(QLatin1String("RPRT 0")));
+        check("bounds: stop_morse", cat(port, QStringLiteral("\\stop_morse")).endsWith(QLatin1String("RPRT 0")));
+        f.edges.clear();
+        check("bounds: after stop_morse nothing is pending and a send keys",
+              cat(port, QStringLiteral("b E")).endsWith(QLatin1String("RPRT 0"))
+                  && pumpUntil([&] { return f.edges.size() >= 2; }, 2000) && f.edges.size() == 2);
+    }
+    {
+        // Pipelined: three lines handled with no event-loop turn between, so
+        // no send() has run yet; the queued text alone takes the bound.
+        Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
+        RigctlProtocol port(&f.radio);
+        port.setSliceIndex(0);
+        const bool first = port.handleLine(QStringLiteral("b ") + longest).trimmed() == QLatin1String("RPRT 0");
+        const bool second = port.handleLine(QStringLiteral("b ") + longest).trimmed() == QLatin1String("RPRT 0");
+        const QString third = port.handleLine(QStringLiteral("b EEE")).trimmed();
+        check("bounds, pipelined: two 511s accepted before any is delivered", first && second);
+        check("bounds, pipelined: 3 more refused with RIG_ERJCTED", third == QLatin1String("RPRT -9"));
+        (void)cat(port, QStringLiteral("\\stop_morse"));
+    }
+}
+
 // A key-down refused mid-message ends the message (the keyer stops, as
 // stop_morse does). The refusal is lifted ten units later, after the next
 // element (T then E: the next key-down is six units in): a keyer still
@@ -454,6 +503,7 @@ int main(int argc, char** argv)
     testStopMorseKeysUpAtOnce();
     testRefusals();
     testBreakInOff();
+    testLengthBounds();
     testMidMessageRefusalsEndTheMessage();
     testRadioSideKeyerStillUsesCwx();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");

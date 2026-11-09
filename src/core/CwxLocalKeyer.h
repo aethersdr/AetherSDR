@@ -55,6 +55,10 @@ public:
     // cross-thread query. (#3623 review)
     bool isIdle() const { return m_elements.isEmpty() && !m_running; }
 
+    // Characters not yet fully keyed: every queued segment plus the whole of
+    // the one playing, until it ends or is stopped. Thread-safe.
+    int pendingChars() const;
+
 protected:
     // Test seam: a subclass constructed with spawnWorker=false drives the
     // schedule synchronously (no real thread) by calling onTick() itself and
@@ -105,6 +109,7 @@ private:
     mutable std::mutex      m_mu;
     std::condition_variable m_cv;
     QQueue<Pending>         m_queue;
+    int                     m_playingChars{0};   // guarded by m_mu
     std::atomic<bool>       m_workerStarted{false};
     std::atomic<bool>       m_abort{false};
     std::atomic<bool>       m_shutdown{false};
