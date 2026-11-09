@@ -17,7 +17,8 @@ class RadioModel;
 // worker; every edge goes through RadioModel::queueProducerCwKeyEdge, so each
 // element passes the same per-edge transmit gates as a paddle. The producer is
 // this keyer's own, so stop() fences and releases only its elements. A
-// key-down refused at admission, or with the TX slice out of CW, ends the message.
+// key-down refused at admission, with the TX slice out of CW, or with break-in
+// off and no MOX/PTT held, ends the message.
 // Construct anywhere; every other member function runs on the model's thread.
 class HostCwTextKeyer {
 public:

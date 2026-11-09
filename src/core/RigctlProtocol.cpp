@@ -1843,7 +1843,8 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
 
 // No radio-side buffer: this host keys the text (#7105). RIG_ENAVAIL where it
 // cannot either; RIG_ERJCTED when it can but the TX slice refuses now (no TX
-// slice, not CW, receive-only mode, inhibited). The model re-checks on its
+// slice, not CW, receive-only mode, inhibited, or break-in off with no MOX/PTT
+// held: the logger must key PTT first). The model re-checks on its
 // thread, and every element still meets the paddle's per-edge gates.
 QString RigctlProtocol::sendHostMorse(const QString& text)
 {

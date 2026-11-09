@@ -1111,10 +1111,10 @@ void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceI
 void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                        const QString& source, quint64 traceId, quint64 sourceMs,
                                        std::chrono::steady_clock::time_point scheduledAt,
-                                       bool requireCwMode, std::function<void()> onDownRefused)
+                                       bool hostTextGates, std::function<void()> onDownRefused)
 {
     QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt,
-                                     requireCwMode, onDownRefused = std::move(onDownRefused)] {
+                                     hostTextGates, onDownRefused = std::move(onDownRefused)] {
         const auto refused = [down, &onDownRefused] {
             if (down && onDownRefused) {
                 onDownRefused();
@@ -1124,13 +1124,22 @@ void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, b
             refused();
             return;
         }
-        if (down && requireCwMode) {
+        if (down && hostTextGates) {
             SliceModel* tx = txSlice();
             if (!tx || !isCwMode(tx->mode())) {
                 emitInterlockNotification(
                     tr("CW text stopped: the transmit slice is not in a CW mode."),
                     QStringLiteral("cw-text-mode:%1").arg(tx ? tx->mode() : QString()),
                     tx ? tx->panId() : QString());
+                refused();
+                return;
+            }
+            // Break-in turned off, or MOX/PTT released, mid-message: the
+            // backend would not raise MOX, so the element would not go out.
+            if (!m_transmitModel.cwBreakIn() && !m_transmitModel.isTransmitting()) {
+                emitInterlockNotification(
+                    tr("CW text stopped: break-in is off and transmit is not keyed."),
+                    QStringLiteral("cw-text-unkeyed"), tx->panId());
                 refused();
                 return;
             }

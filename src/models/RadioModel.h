@@ -488,7 +488,11 @@ public:
     bool hasHostCwTextKeyer() const;
     // Send-time preflight for host-keyed text, as pure reads with no interlock
     // notice. Each element still passes the per-edge gates of a paddle.
-    enum class HostCwTextRefusal { None, Unsupported, NoTxSlice, NotCwMode, ReceiveOnlyMode, Inhibited };
+    // BreakInOffUnkeyed: break-in is off and this host holds no MOX/PTT
+    // (TransmitModel::isTransmitting()), so the backend would not raise MOX
+    // and the text would play to an unkeyed radio.
+    enum class HostCwTextRefusal { None, Unsupported, NoTxSlice, NotCwMode, ReceiveOnlyMode, Inhibited,
+                                   BreakInOffUnkeyed };
     HostCwTextRefusal hostCwTextRefusal() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;
@@ -986,13 +990,14 @@ public:
                            const QString& debugSource = {}, quint64 debugTraceId = 0,
                            quint64 debugSourceMs = 0);
     bool producerRequestHasWork(const TxCoordinator::Request& request) const;
-    // Host CW text: requireCwMode refuses a key-down unless the TX slice is in
-    // a CW mode; onDownRefused runs on the model thread when a key-down is not
-    // forwarded, so the text keyer can end the message. Paddles pass neither.
+    // Host CW text: hostTextGates refuses a key-down unless the TX slice is in
+    // a CW mode and, with break-in off, this host holds MOX/PTT; onDownRefused
+    // runs on the model thread when a key-down is not forwarded, so the text
+    // keyer can end the message. Paddles pass neither.
     void queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                 const QString& source, quint64 traceId, quint64 sourceMs,
                                 std::chrono::steady_clock::time_point scheduledAt,
-                                bool requireCwMode = false,
+                                bool hostTextGates = false,
                                 std::function<void()> onDownRefused = {});
     bool txProducerHasWork(const TxCoordinator::Producer& producer) const;
     void abortTxProducerInputs(const TxCoordinator::Producer& producer,
