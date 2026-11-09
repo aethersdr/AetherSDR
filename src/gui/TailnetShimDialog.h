@@ -4,13 +4,19 @@
 
 #include <QCoreApplication>
 #include <QHostAddress>
+#include <QMap>
+#include <QMetaObject>
+#include <QPair>
 #include "core/TailnetShimClient.h"
 
+class QButtonGroup;
 class QCheckBox;
 class QFrame;
+class QGridLayout;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QRadioButton;
 class QTimer;
 
 namespace AetherSDR {
@@ -71,6 +77,8 @@ private:
     // radio: never provisioned, or a sign-in abandoned with its token.
     void maybeSignInUnasked();
     void saveSharing();
+    void showAnnouncement(const TailnetShimStatus& status);
+    void saveAnnouncement();
     void signOut();
     void reset();
     void updateRadioShim();   // reinstall at the pinned version, after asking
@@ -98,6 +106,7 @@ private:
     std::optional<TailnetShimStatus> m_status;
 
     QFrame* m_tailnetCard{nullptr};    // shown once the radio has joined a tailnet
+    QFrame* m_announceCard{nullptr};   // likewise
     QFrame* m_devicesCard{nullptr};    // likewise
     QFrame* m_joinCard{nullptr};       // hidden while the radio is on the tailnet
     QLabel* m_statusDot{nullptr};
@@ -134,6 +143,24 @@ private:
     QLineEdit* m_extraDevicesEdit{nullptr};
     QPushButton* m_saveSharingButton{nullptr};
     QLabel* m_sharingNote{nullptr};
+
+    // Radio announcement: who the radio's discovery broadcast is forwarded to.
+    QLabel* m_announceHint{nullptr};
+    QRadioButton* m_announceAll{nullptr};
+    QRadioButton* m_announceOnly{nullptr};
+    QRadioButton* m_announceOff{nullptr};
+    QWidget* m_announceList{nullptr};
+    QGridLayout* m_announceGrid{nullptr};
+    QLabel* m_announceEmpty{nullptr};
+    QLabel* m_announceHeard{nullptr};
+    QPushButton* m_saveAnnounceButton{nullptr};
+    QList<QPair<QString, QString>> m_announceKeys;   // (id, name) of the rows shown
+    QMap<QString, QCheckBox*> m_announceChecks;      // by device id
+    QMap<QString, QLabel*> m_announceStatus;         // by device id
+    // The operator changed the mode or a tick and hasn't saved: a status
+    // must not overwrite them.
+    bool m_announceEdited{false};
+    QMetaObject::Connection m_announceSaved;   // clears the edit state when the save's status arrives
 
     int m_bodyTextWidth{0};   // full-width text in the window body
     int m_cardTextWidth{0};   // full-width text inside a card

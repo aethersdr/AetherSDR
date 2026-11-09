@@ -8,6 +8,7 @@
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QDateTime>
@@ -21,6 +22,8 @@
 #include <QLineEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QRadioButton>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -64,6 +67,8 @@ constexpr const char* kTailnetDialogStyle =
     "QLineEdit:disabled { color: {{color.canon.muted}}; border-color: {{color.canon.line}}; }"
     "QCheckBox { color: {{color.canon.inkSoft}}; background: transparent; font-size: 12px; spacing: 8px; }"
     "QCheckBox:disabled { color: {{color.canon.muted}}; }"
+    "QRadioButton { color: {{color.canon.inkSoft}}; background: transparent; font-size: 12px; spacing: 8px; }"
+    "QRadioButton:disabled { color: {{color.canon.muted}}; }"
     "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}};"
     " border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; padding: 6px 16px;"
     " font-size: 12px; font-weight: bold; }"
@@ -113,6 +118,35 @@ QString stateText(const TailnetShimStatus& st)
         return QObject::tr("Problem");
     }
     return state;
+}
+
+// What the shim reports for one device, in words: whether the radio's
+// announcement reaches it, and if not, why.
+QString announceStatusText(const TailnetShimAnnouncePeer& p)
+{
+    if (p.announced) {
+        return p.via == QLatin1String("helper") ? QObject::tr("Via its discovery helper")
+                                                : QObject::tr("Announced");
+    }
+    if (p.skipped == QLatin1String("offline")) {
+        return QObject::tr("Offline");
+    }
+    if (p.skipped == QLatin1String("at the station")) {
+        return QObject::tr("At the station");
+    }
+    if (p.skipped == QLatin1String("not chosen")) {
+        return QObject::tr("Not ticked");
+    }
+    if (p.skipped == QLatin1String("off")) {
+        return QObject::tr("Off");
+    }
+    if (p.skipped == QLatin1String("over the limit")) {
+        return QObject::tr("Not sent: over the limit of 32 devices");
+    }
+    if (p.skipped == QLatin1String("no IPv4")) {
+        return QObject::tr("No IPv4 address");
+    }
+    return p.skipped;
 }
 
 void repolish(QWidget* w)
@@ -359,6 +393,52 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
     join->addWidget(m_keyPanel);
     setAdvancedOpen(false);
 
+    // Card: where the radio's discovery announcement is forwarded.
+    QVBoxLayout* announce = nullptr;
+    m_announceCard = makeCard(tr("Radio announcement"), body, &announce);
+    layout->addWidget(m_announceCard);
+    m_announceHint = roleLabel(QString(), "hint", body);
+    setWrapped(m_announceHint,
+               tr("Remote access sends the radio's announcement to your devices on the tailnet, "
+                  "so the radio appears under On This Network in AetherSDR and in SmartSDR's "
+                  "radio list, as it does at home."),
+               m_cardTextWidth);
+    announce->addWidget(m_announceHint);
+    m_announceAll = new QRadioButton(tr("Every device away from the station"), body);
+    m_announceAll->setAccessibleName(tr("Announce the radio to every device away from the station"));
+    m_announceOnly = new QRadioButton(tr("Only the devices ticked below"), body);
+    m_announceOnly->setAccessibleName(tr("Announce the radio only to the devices ticked below"));
+    m_announceOff = new QRadioButton(tr("Off"), body);
+    m_announceOff->setAccessibleName(tr("Do not announce the radio over the tailnet"));
+    m_announceAll->setChecked(true);
+    auto* announceGroup = new QButtonGroup(this);
+    for (QRadioButton* r : {m_announceAll, m_announceOnly, m_announceOff}) {
+        announceGroup->addButton(r);
+        announce->addWidget(r);
+        connect(r, &QRadioButton::toggled, this, [this] {
+            m_announceEdited = true;
+            updateControls();
+        });
+    }
+    m_announceList = new QWidget(body);
+    m_announceGrid = new QGridLayout(m_announceList);
+    m_announceGrid->setContentsMargins(0, 0, 0, 0);
+    m_announceGrid->setHorizontalSpacing(16);
+    m_announceGrid->setColumnStretch(1, 1);
+    announce->addWidget(m_announceList);
+    m_announceEmpty = roleLabel(tr("No other devices on the tailnet yet."), "hint", m_announceList);
+    m_announceEmpty->setAccessibleName(tr("Devices on the tailnet"));
+    m_announceGrid->addWidget(m_announceEmpty, 0, 0, 1, 2);
+    m_announceHeard = roleLabel(QString(), "hint", body);
+    m_announceHeard->setAccessibleName(tr("Radio announcement status"));
+    announce->addWidget(m_announceHeard);
+    auto* announceButtons = new QHBoxLayout;
+    announceButtons->addStretch(1);
+    m_saveAnnounceButton = new QPushButton(tr("Save Announcement"), body);
+    m_saveAnnounceButton->setAccessibleName(tr("Save who the radio is announced to"));
+    announceButtons->addWidget(m_saveAnnounceButton);
+    announce->addLayout(announceButtons);
+
     // Card: station devices (4O3A accessories) shared as subnet routes.
     QVBoxLayout* devices = nullptr;
     m_devicesCard = makeCard(tr("Station devices"), body, &devices);
@@ -399,6 +479,7 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
     // The node's details and station-device sharing mean nothing until the
     // radio is on a tailnet: they appear once it has been (showStatus).
     m_tailnetCard->hide();
+    m_announceCard->hide();
     m_devicesCard->hide();
 
     // Messages (always worded; colour only reinforces).
@@ -442,6 +523,8 @@ TailnetShimDialog::TailnetShimDialog(RadioModel* model, bool native, QWidget* pa
     connect(m_joinButton, &QPushButton::clicked, this, &TailnetShimDialog::join);
     connect(&m_client, &TailnetShimClient::loginReceived, this, &TailnetShimDialog::onLogin);
     connect(m_saveSharingButton, &QPushButton::clicked, this, &TailnetShimDialog::saveSharing);
+    connect(m_saveAnnounceButton, &QPushButton::clicked, this,
+            &TailnetShimDialog::saveAnnouncement);
     connect(m_signOutButton, &QPushButton::clicked, this, &TailnetShimDialog::signOut);
     connect(m_resetButton, &QPushButton::clicked, this, &TailnetShimDialog::reset);
     connect(m_updateButton, &QPushButton::clicked, this, &TailnetShimDialog::updateRadioShim);
@@ -630,9 +713,10 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
     // Joining is done once the radio is on the tailnet; an expired sign-in
     // (or any state short of running) brings the card back for its code.
     const bool joining = st.state != QLatin1String("running");
-    if (m_tailnetCard->isVisible() != joined || m_devicesCard->isVisible() != joined
-        || m_joinCard->isVisible() != joining) {
+    if (m_tailnetCard->isVisible() != joined || m_announceCard->isVisible() != joined
+        || m_devicesCard->isVisible() != joined || m_joinCard->isVisible() != joining) {
         m_tailnetCard->setVisible(joined);
+        m_announceCard->setVisible(joined);
         m_devicesCard->setVisible(joined);
         m_joinCard->setVisible(joining);
         if (isVisible()) {
@@ -721,6 +805,7 @@ void TailnetShimDialog::showStatus(const TailnetShimStatus& st)
         setWrapped(m_sharingNote, tr("Devices are shared once the radio is on the tailnet."),
                    m_cardTextWidth);
     }
+    showAnnouncement(st);
     if (st.state == QLatin1String("error") && !st.lastError.isEmpty()) {
         showError(st.lastError);
     }
@@ -791,6 +876,33 @@ void TailnetShimDialog::updateControls()
     }
     m_qrHint->setVisible(known && !qrSupported);
     m_saveSharingButton->setEnabled(provisioned && haveToken && !waiting);
+    // The same inputs as sharing, and a shim that has the feature. Each
+    // disabled control says why: a tooltip alone isn't announced.
+    const bool announceSupported = known && m_status->announceSupported;
+    const bool announceOk = provisioned && haveToken && !waiting && announceSupported;
+    QString announceReason = tr("Remote access on the radio hasn't answered yet.");
+    if (known && !announceSupported) {
+        announceReason = tr("This radio's remote access (version %1) doesn't announce the radio "
+                            "over the tailnet. A newer version does.").arg(m_status->version);
+    } else if (provisioned && !haveToken) {
+        announceReason = tr("Only the computer that set up remote access on this radio can "
+                            "change this.");
+    } else if (waiting) {
+        announceReason = tr("Not while the radio's sign-in is being completed.");
+    }
+    const QString tickReason = announceOk
+        ? tr("Choose Only the devices ticked below to pick devices.") : announceReason;
+    const auto gate = [](QWidget* w, bool enabled, const QString& reason) {
+        w->setEnabled(enabled);
+        w->setAccessibleDescription(enabled ? QString() : reason);
+    };
+    gate(m_announceAll, announceOk, announceReason);
+    gate(m_announceOnly, announceOk, announceReason);
+    gate(m_announceOff, announceOk, announceReason);
+    gate(m_saveAnnounceButton, announceOk, announceReason);
+    for (QCheckBox* c : std::as_const(m_announceChecks)) {
+        gate(c, announceOk && m_announceOnly->isChecked(), tickReason);
+    }
     // Disconnect belongs to a radio on the tailnet; until then there is
     // only the sign-in to finish.
     // A provisioned radio stuck in error can also be signed out, or its
@@ -999,6 +1111,10 @@ void TailnetShimDialog::onRequestFailed(const QString& operation, const QString&
                                         bool unauthorized)
 {
     setBusy(false);
+    if (operation == QLatin1String("announce")) {
+        // The edits are still unsaved: the refresh below must not clear them.
+        disconnect(m_announceSaved);
+    }
     if (unauthorized) {
         // Mid sign-in, a refused token means another computer started the
         // sign-in over, which replaced this window's code and token.
@@ -1039,6 +1155,154 @@ void TailnetShimDialog::saveSharing()
     setBusy(true, tr("Saving…"));
     m_client.setSharing(tailnetshim::splitAllowList(m_extraDevicesEdit->text()),
                         m_shareDiscoveredCheck->isChecked(), m_adminToken);
+}
+
+// Fills the Radio announcement card from a status: the mode and ticks unless
+// the operator has unsaved edits, the per-device status text and the heard
+// line always.
+void TailnetShimDialog::showAnnouncement(const TailnetShimStatus& st)
+{
+    if (!st.announceSupported) {
+        setWrapped(m_announceHint,
+                   tr("This radio's remote access (version %1) doesn't announce the radio over "
+                      "the tailnet. A newer version does.").arg(st.version),
+                   m_cardTextWidth);
+        m_announceHeard->hide();
+        return;
+    }
+    setWrapped(m_announceHint,
+               tr("Remote access sends the radio's announcement to your devices on the tailnet, "
+                  "so the radio appears under On This Network in AetherSDR and in SmartSDR's "
+                  "radio list, as it does at home."),
+               m_cardTextWidth);
+
+    if (!m_announceEdited) {
+        QRadioButton* mode = st.announce == QLatin1String("only") ? m_announceOnly
+            : st.announce == QLatin1String("off") ? m_announceOff : m_announceAll;
+        const QSignalBlocker a(m_announceAll);
+        const QSignalBlocker b(m_announceOnly);
+        const QSignalBlocker c(m_announceOff);
+        mode->setChecked(true);
+    }
+
+    // One row per device, then one per chosen ID the shim no longer lists, so
+    // it can be unticked.
+    struct Row {
+        QString id;
+        QString name;
+        QString status;
+        bool ticked;
+    };
+    QList<Row> rows;
+    QStringList listed;
+    for (const TailnetShimAnnouncePeer& p : st.announceDevices) {
+        listed << p.id;
+        rows.append({p.id, p.name.isEmpty() ? p.id : p.name, announceStatusText(p),
+                     st.announceTo.contains(p.id)});
+    }
+    for (const QString& id : st.announceTo) {
+        if (!listed.contains(id)) {
+            listed << id;
+            rows.append({id, id, tr("Not on the tailnet now"), true});
+        }
+    }
+    // Ticks the operator has set stay while an edit is unsaved.
+    if (m_announceEdited) {
+        for (Row& r : rows) {
+            if (QCheckBox* existing = m_announceChecks.value(r.id)) {
+                r.ticked = existing->isChecked();
+            }
+        }
+    }
+
+    QList<QPair<QString, QString>> keys;
+    for (const Row& r : rows) {
+        keys.append({r.id, r.name});
+    }
+    if (keys != m_announceKeys) {
+        m_announceKeys = keys;
+        m_announceChecks.clear();
+        m_announceStatus.clear();
+        while (QLayoutItem* item = m_announceGrid->takeAt(0)) {
+            if (QWidget* w = item->widget()) {
+                if (w == m_announceEmpty) {
+                    delete item;
+                    continue;
+                }
+                w->deleteLater();
+            }
+            delete item;
+        }
+        int row = 0;
+        for (const Row& r : rows) {
+            auto* check = new QCheckBox(r.name, m_announceList);
+            check->setAccessibleName(tr("Announce the radio to %1").arg(r.name));
+            check->setChecked(r.ticked);
+            connect(check, &QCheckBox::toggled, this, [this] { m_announceEdited = true; });
+            auto* status = roleLabel(QString(), "hint", m_announceList);
+            status->setAccessibleName(tr("Announcement status of %1").arg(r.name));
+            m_announceGrid->addWidget(check, row, 0, Qt::AlignLeft | Qt::AlignVCenter);
+            m_announceGrid->addWidget(status, row, 1, Qt::AlignLeft | Qt::AlignVCenter);
+            m_announceChecks.insert(r.id, check);
+            m_announceStatus.insert(r.id, status);
+            ++row;
+        }
+        if (rows.isEmpty()) {
+            m_announceGrid->addWidget(m_announceEmpty, 0, 0, 1, 2);
+        }
+        m_announceEmpty->setVisible(rows.isEmpty());
+        if (isVisible()) {
+            fitToContents();
+        }
+    }
+    for (const Row& r : rows) {
+        if (!m_announceEdited) {
+            QCheckBox* check = m_announceChecks.value(r.id);
+            const QSignalBlocker block(check);
+            check->setChecked(r.ticked);
+        }
+        setWrapped(m_announceStatus.value(r.id), r.status, m_cardTextWidth / 2);
+    }
+
+    QString heard;
+    if (st.announceHeard.isEmpty()) {
+        if (st.state == QLatin1String("running")) {
+            heard = tr("The radio's announcement hasn't been heard on its network, so nothing "
+                       "is sent.");
+        }
+    } else {
+        const QDateTime when = QDateTime::fromString(st.announceHeard, Qt::ISODate);
+        if (when.isValid()) {
+            heard = tr("Last heard from the radio at %1.")
+                        .arg(QLocale().toString(when.toLocalTime(), QLocale::ShortFormat));
+        }
+    }
+    setWrapped(m_announceHeard, heard, m_cardTextWidth);
+    m_announceHeard->setVisible(!heard.isEmpty());
+}
+
+void TailnetShimDialog::saveAnnouncement()
+{
+    m_messageLabel->hide();
+    setBusy(true, tr("Saving…"));
+    // The status that answers the save is the saved state: edits end there.
+    // A failure disconnects this (onRequestFailed) and keeps them.
+    m_announceSaved = connect(&m_client, &TailnetShimClient::statusReceived, this,
+                              [this](const TailnetShimStatus& st) {
+                                  m_announceEdited = false;
+                                  showAnnouncement(st);
+                                  updateControls();
+                              },
+                              Qt::SingleShotConnection);
+    const QString mode = m_announceOnly->isChecked() ? QStringLiteral("only")
+        : m_announceOff->isChecked() ? QStringLiteral("off") : QStringLiteral("all");
+    QStringList ids;
+    for (const auto& key : std::as_const(m_announceKeys)) {
+        if (m_announceChecks.value(key.first)->isChecked()) {
+            ids << key.first;
+        }
+    }
+    m_client.setAnnounce(mode, ids, m_adminToken);
 }
 
 void TailnetShimDialog::reset()

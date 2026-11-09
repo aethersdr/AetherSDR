@@ -41,6 +41,17 @@ struct TailnetShimDevice {
     int port{0};
 };
 
+// A tailnet device the shim may send the radio's announcement to.
+struct TailnetShimAnnouncePeer {
+    QString id;        // stable tailnet node ID
+    QString name;
+    QString os;
+    bool online{false};
+    bool announced{false};
+    QString via;       // "helper": the device's discovery helper receives it
+    QString skipped;   // why it isn't announced to, when it isn't
+};
+
 // What GET /v1/status returns. Never contains a secret.
 struct TailnetShimStatus {
     QString version;
@@ -62,6 +73,12 @@ struct TailnetShimStatus {
     // No tailnet owns the radio yet (never provisioned, or a QR sign-in that
     // never completed): provisioning needs no admin token.
     bool claimable{false};
+    // False when the shim predates the announcement feature (no "announcement").
+    bool announceSupported{false};
+    QString announce{QStringLiteral("all")};   // all | only | off
+    QStringList announceTo;                    // node IDs kept whatever the mode
+    QString announceHeard;                     // RFC 3339; empty: never heard
+    QList<TailnetShimAnnouncePeer> announceDevices;
 };
 
 // A provisioning reply. authUrl is set for a sign-in by QR code (no auth
@@ -119,6 +136,9 @@ QByteArray provisionBody(const QString& authKey, const QString& hostname,
                          const QStringList& allow, const QStringList& routes = {},
                          bool shareDiscovered = true);
 QByteArray sharingBody(const QStringList& routes, bool shareDiscovered);
+// {"announce", "announce_to"}: a mode other than all/only/off becomes "all";
+// only valid node IDs are kept, deduplicated, at most 32.
+QByteArray announceBody(const QString& mode, const QStringList& ids);
 // "KK7GWY FLEX-8600" -> "kk7gwy-flex-8600": a valid tailnet hostname.
 QString suggestedHostname(const QString& nickname);
 // Splits a comma- or whitespace-separated allowlist into entries.
@@ -144,14 +164,15 @@ public:
                    const QStringList& allow, const QStringList& routes,
                    bool shareDiscovered, const QString& adminToken);
     void setSharing(const QStringList& routes, bool shareDiscovered, const QString& adminToken);
+    void setAnnounce(const QString& mode, const QStringList& ids, const QString& adminToken);
     void signOut(const QString& adminToken);
 
 signals:
     void statusReceived(const AetherSDR::TailnetShimStatus& status);
     void provisioned(const AetherSDR::TailnetShimProvisionReply& reply);
     void loginReceived(const AetherSDR::TailnetShimLogin& login);
-    // operation is "status", "login", "provision", "sharing" or "signout". unauthorized
-    // is true when the shim refused the admin token.
+    // operation is "status", "login", "provision", "sharing", "announce" or
+    // "signout". unauthorized is true when the shim refused the admin token.
     void requestFailed(const QString& operation, const QString& message, bool unauthorized);
 
 private:

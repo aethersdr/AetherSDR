@@ -563,5 +563,77 @@ int main(int argc, char** argv)
                      "oversized status strings and lists are capped");
     }
 
+    // The radio's announcement: modes, devices and what the body carries.
+    {
+        const QByteArray with = R"({"version":"0.7.0","state":"running","provisioned":true,
+            "announce":"only","announce_to":["n2","gone9"],
+            "announcement":{"heard":"2027-04-30T12:00:00Z","devices":[
+              {"id":"n1","name":"laptop","os":"macOS","online":true,"announced":true},
+              {"id":"n2","name":"win","os":"windows","online":true,"announced":true,"via":"helper"},
+              {"id":"n3","name":"phone","os":"iOS","online":false,"skipped":"offline"},
+              {"id":"n4","name":"shack","os":"linux","online":true,"skipped":"at the station"},
+              "junk", 7, {"name":"no id"}]}})";
+        const auto a = tailnetshim::parseStatus(with);
+        ok &= expect(a && a->announceSupported && a->announce == QStringLiteral("only")
+                         && a->announceTo == QStringList({QStringLiteral("n2"), QStringLiteral("gone9")})
+                         && a->announceHeard == QStringLiteral("2027-04-30T12:00:00Z"),
+                     "announcement mode, announce_to and heard parse");
+        ok &= expect(a && a->announceDevices.size() == 4, "malformed device entries are skipped");
+        if (a && a->announceDevices.size() == 4) {
+            const auto& d = a->announceDevices;
+            ok &= expect(d[0].id == QStringLiteral("n1") && d[0].name == QStringLiteral("laptop")
+                             && d[0].os == QStringLiteral("macOS") && d[0].online && d[0].announced
+                             && d[0].via.isEmpty() && d[0].skipped.isEmpty(),
+                         "an announced device's fields");
+            ok &= expect(d[1].announced && d[1].via == QStringLiteral("helper"), "via helper");
+            ok &= expect(!d[2].online && !d[2].announced && d[2].skipped == QStringLiteral("offline"),
+                         "an offline device's skipped reason");
+            ok &= expect(d[3].skipped == QStringLiteral("at the station"), "at the station reason");
+        }
+        const auto none = tailnetshim::parseStatus(running);
+        ok &= expect(none && !none->announceSupported && none->announceDevices.isEmpty()
+                         && none->announce == QStringLiteral("all"),
+                     "a status without announcement is not supported");
+        const auto bad = tailnetshim::parseStatus(
+            R"({"version":"0.7.0","state":"running","announce":"sometimes","announcement":{}})");
+        ok &= expect(bad && bad->announceSupported && bad->announce == QStringLiteral("all")
+                         && bad->announceHeard.isEmpty(),
+                     "an unknown announce mode reads all");
+        QJsonArray many;
+        for (int i = 0; i < 400; ++i) {
+            many.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("n%1").arg(i)}});
+        }
+        const auto big = tailnetshim::parseStatus(QJsonDocument(QJsonObject{
+            {QStringLiteral("version"), QStringLiteral("0.7.0")},
+            {QStringLiteral("state"), QStringLiteral("running")},
+            {QStringLiteral("announcement"), QJsonObject{{QStringLiteral("devices"), many}}}}).toJson());
+        ok &= expect(big && big->announceDevices.size() == 256, "the device list is bounded");
+
+        const QJsonObject b = QJsonDocument::fromJson(tailnetshim::announceBody(
+            QStringLiteral("only"), {QStringLiteral("n1"), QStringLiteral("n1"),
+                                     QStringLiteral("n1; rm"), QString(),
+                                     QString(65, QLatin1Char('a')), QStringLiteral("n2")})).object();
+        ok &= expect(b.keys() == QStringList({QStringLiteral("announce"), QStringLiteral("announce_to")})
+                         && b.value(QStringLiteral("announce")).toString() == QStringLiteral("only"),
+                     "announceBody has just announce and announce_to");
+        ok &= expect(b.value(QStringLiteral("announce_to")).toArray()
+                         == QJsonArray({QStringLiteral("n1"), QStringLiteral("n2")}),
+                     "invalid ids are dropped and duplicates collapsed");
+        const QJsonObject empty = QJsonDocument::fromJson(
+            tailnetshim::announceBody(QStringLiteral("off"), {})).object();
+        ok &= expect(empty.contains(QStringLiteral("announce_to"))
+                         && empty.value(QStringLiteral("announce_to")).toArray().isEmpty(),
+                     "announce_to is sent even when empty");
+        QStringList ids;
+        for (int i = 0; i < 40; ++i) {
+            ids << QStringLiteral("n%1").arg(i);
+        }
+        const QJsonObject capped = QJsonDocument::fromJson(
+            tailnetshim::announceBody(QStringLiteral("sometimes"), ids)).object();
+        ok &= expect(capped.value(QStringLiteral("announce_to")).toArray().size() == 32
+                         && capped.value(QStringLiteral("announce")).toString() == QStringLiteral("all"),
+                     "ids are capped at 32 and a bad mode becomes all");
+    }
+
     return ok ? 0 : 1;
 }

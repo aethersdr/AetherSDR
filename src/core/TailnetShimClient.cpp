@@ -33,6 +33,13 @@ namespace {
 constexpr int kMaxField = 256;
 constexpr int kMaxMessage = 512;
 constexpr int kMaxEntries = 64;
+constexpr int kMaxAnnounceDevices = 256;
+constexpr int kMaxAnnounceIds = 32;
+
+bool isAnnounceMode(const QString& m)
+{
+    return m == QLatin1String("all") || m == QLatin1String("only") || m == QLatin1String("off");
+}
 
 QString field(const QJsonObject& o, const QString& key, int max = kMaxField)
 {
@@ -90,6 +97,36 @@ std::optional<TailnetShimStatus> statusFromObject(const QJsonObject& o)
     st.claimable = o.contains(QStringLiteral("claimable"))
         ? o.value(QStringLiteral("claimable")).toBool()
         : !st.provisioned;
+    const QJsonValue ann = o.value(QStringLiteral("announcement"));
+    if (ann.isObject()) {
+        st.announceSupported = true;
+        const QString mode = field(o, QStringLiteral("announce"));
+        st.announce = isAnnounceMode(mode) ? mode : QStringLiteral("all");
+        st.announceTo = fieldList(o, QStringLiteral("announce_to"));
+        const QJsonObject a = ann.toObject();
+        st.announceHeard = field(a, QStringLiteral("heard"));
+        for (const QJsonValue& v : a.value(QStringLiteral("devices")).toArray()) {
+            if (st.announceDevices.size() == kMaxAnnounceDevices) {
+                break;
+            }
+            if (!v.isObject()) {
+                continue;
+            }
+            const QJsonObject d = v.toObject();
+            TailnetShimAnnouncePeer peer;
+            peer.id = field(d, QStringLiteral("id"));
+            if (peer.id.isEmpty()) {
+                continue;
+            }
+            peer.name = field(d, QStringLiteral("name"));
+            peer.os = field(d, QStringLiteral("os"));
+            peer.online = d.value(QStringLiteral("online")).toBool();
+            peer.announced = d.value(QStringLiteral("announced")).toBool();
+            peer.via = field(d, QStringLiteral("via"));
+            peer.skipped = field(d, QStringLiteral("skipped"));
+            st.announceDevices << peer;
+        }
+    }
     return st;
 }
 
@@ -241,6 +278,24 @@ QByteArray sharingBody(const QStringList& routes, bool shareDiscovered)
     QJsonObject o;
     o.insert(QStringLiteral("routes"), QJsonArray::fromStringList(routes));
     o.insert(QStringLiteral("share_discovered"), shareDiscovered);
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+QByteArray announceBody(const QString& mode, const QStringList& ids)
+{
+    static const QRegularExpression valid(QStringLiteral("^[A-Za-z0-9]{1,64}$"));
+    QStringList kept;
+    for (const QString& id : ids) {
+        if (kept.size() == kMaxAnnounceIds) {
+            break;
+        }
+        if (valid.match(id).hasMatch() && !kept.contains(id)) {
+            kept << id;
+        }
+    }
+    QJsonObject o;
+    o.insert(QStringLiteral("announce"), isAnnounceMode(mode) ? mode : QStringLiteral("all"));
+    o.insert(QStringLiteral("announce_to"), QJsonArray::fromStringList(kept));
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
@@ -398,6 +453,14 @@ void TailnetShimClient::setSharing(const QStringList& routes, bool shareDiscover
     handle(send(QStringLiteral("PUT"), QStringLiteral("/v1/routes"),
                 tailnetshim::sharingBody(routes, shareDiscovered), adminToken),
            QStringLiteral("sharing"));
+}
+
+void TailnetShimClient::setAnnounce(const QString& mode, const QStringList& ids,
+                                    const QString& adminToken)
+{
+    handle(send(QStringLiteral("PUT"), QStringLiteral("/v1/announce"),
+                tailnetshim::announceBody(mode, ids), adminToken),
+           QStringLiteral("announce"));
 }
 
 void TailnetShimClient::signOut(const QString& adminToken)
