@@ -7,6 +7,10 @@
 #include <QStringList>
 #include <QTimer>
 #include <QNetworkAccessManager>
+#include <QPointer>
+#include <QMap>
+
+class QNetworkReply;
 
 namespace AetherSDR {
 
@@ -59,6 +63,12 @@ public:
     void saveCredentials();
     // Clear stored credentials from OS keychain
     void clearCredentials();
+    // Switch identity without forgetting the previous account's credential.
+    void setAccountId(const QString& id);
+    QString accountId() const { return m_accountId; }
+    void setAccountLocked(bool locked) { m_accountLocked = locked; }
+    bool accountLocked() const { return m_accountLocked; }
+    static bool persistentStoreAvailable();
 
     // Request connection to a specific radio (by serial).
     // holePunchPort is the local UDP port we've bound for VITA-49 reception;
@@ -103,6 +113,7 @@ private slots:
 private:
     friend struct SmartLinkClientTestAccess;
     void connectToServer();
+    void resetAuthentication();
     void parseMessage(const QString& msg);
     void parseRadioList(const QString& msg);
     void parseConnectReady(const QString& msg);
@@ -117,6 +128,11 @@ private:
     static constexpr int         SMARTLINK_PORT  = 443;
 
     QNetworkAccessManager m_nam;
+    QString m_accountId{QStringLiteral("legacy")};
+    quint64 m_authGeneration{0};
+    QPointer<QNetworkReply> m_authReply;
+    bool m_accountLocked{false};
+    QMap<QString, QString> m_sessionCredentials;
     QString m_idToken;
     QString m_refreshToken;
     bool    m_authenticated{false};

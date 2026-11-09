@@ -675,6 +675,11 @@ target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::C
 add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
 
 # #5347: injected Icom model profiles, no session/transport/device.
+add_executable(icom_dual_receiver_test tests/icom_dual_receiver_test.cpp)
+target_include_directories(icom_dual_receiver_test PRIVATE src tests)
+target_link_libraries(icom_dual_receiver_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_dual_receiver_test COMMAND icom_dual_receiver_test)
+
 add_executable(icom_panadapter_capacity_test tests/icom_panadapter_capacity_test.cpp)
 target_include_directories(icom_panadapter_capacity_test PRIVATE src tests)
 target_link_libraries(icom_panadapter_capacity_test PRIVATE aethercore Qt6::Core)
@@ -1540,16 +1545,9 @@ add_test(NAME icom_power_clamp_model_test COMMAND icom_power_clamp_model_test)
 #   cmake --build build --target icom_live_probe
 #   ./build/icom_live_probe ic-705.local <user> <password>
 add_executable(icom_live_probe EXCLUDE_FROM_ALL
-    tests/icom_live_probe.cpp
-    src/core/TxCoordinator.cpp
-    src/core/backends/icom/IcomSession.cpp
-    src/core/backends/icom/IcomStream.cpp
-    src/core/backends/icom/IcomProtocol.cpp
-    src/core/backends/icom/CivCodec.cpp
-    src/core/backends/icom/IcomScope.cpp
-    src/core/backends/icom/IcomAudio.cpp)
+    tests/icom_live_probe.cpp)
 target_include_directories(icom_live_probe PRIVATE src)
-target_link_libraries(icom_live_probe PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(icom_live_probe PRIVATE aethercore Qt6::Core Qt6::Network)
 
 # IcomCIV live CI-V ADDRESS probe — also REQUIRES A REAL RADIO, also EXCLUDE_FROM_ALL.
 # Drives IcomCivBackend (not IcomSession) because the address resolution under
@@ -8878,6 +8876,18 @@ add_test(NAME nr2_wisdom_window_test COMMAND nr2_wisdom_window_test)
 set_tests_properties(nr2_wisdom_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(connection_workspace_test
+    tests/connection_workspace_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/FramelessResizer.cpp
+)
+target_include_directories(connection_workspace_test PRIVATE src tests)
+target_link_libraries(connection_workspace_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
+set_target_properties(connection_workspace_test PROPERTIES AUTOMOC ON)
+add_test(NAME connection_workspace_test COMMAND connection_workspace_test)
+set_tests_properties(connection_workspace_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
@@ -8898,8 +8908,7 @@ set_tests_properties(connection_panel_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The VPN source-path picker keeps the operator's own pick across family
-# flips while the address is edited. Socket-free (reads the interface list);
-# exit 77 without an adapter carrying an IPv6 GUA and ULA.
+# flips while the address is edited. Socket-free, with fixed interface snapshots.
 add_executable(connection_panel_source_pick_test
     tests/connection_panel_source_pick_test.cpp
     src/gui/ConnectionPanel.cpp
@@ -8915,7 +8924,7 @@ target_link_libraries(connection_panel_source_pick_test PRIVATE
 set_target_properties(connection_panel_source_pick_test PROPERTIES AUTOMOC ON)
 add_test(NAME connection_panel_source_pick_test COMMAND connection_panel_source_pick_test)
 set_tests_properties(connection_panel_source_pick_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" SKIP_RETURN_CODE 77)
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Leaving minimal mode after a launch in it must not draw the spectrum's first
 # QRhi frame inside the exit's resize cascade (#5915; #4363, #4990). Plain
@@ -10653,12 +10662,15 @@ endif()
 set(AETHER_SETTINGS_CONSUMERS
     bandstack_cat_controls_test
     two_tone_tune_gate_test
+    icom_dual_receiver_test
     update_controller_test
     update_installer_test
     update_stager_test
     ulanzi_dial_mapper_dialog_test
     mqtt_settings_dialog_test
     flex_readonly_metadata_test
+
+    connection_workspace_test
     otrsp_protocol_test
     otrsp_port_test
     otrsp_applet_test

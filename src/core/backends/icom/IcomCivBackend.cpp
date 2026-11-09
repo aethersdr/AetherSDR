@@ -95,7 +95,6 @@ constexpr int kLinkTickMs = 1000;
 constexpr double kPanDragDeadZoneFraction = 0.01;
 // Fixed / SCROLL-F windows are stored presets (27 1E), so gestures write at
 // most this often; the latest target always wins.
-constexpr int kScopeEdgeWriteIntervalMs = 200;
 // How long the view holds a written window, from the moment the write goes on
 // the wire, before believing sweeps again; and the bound while it is queued.
 constexpr int kScopeEdgeHoldMs = 1000;
@@ -120,8 +119,6 @@ constexpr double kScopeFollowZoneFraction = 0.10;
 constexpr double kScopeFollowInsetFraction = 0.25;
 // In SCROLL-F the radio pages straight back when a drag leaves the VFO off
 // screen, so a drag stops with the VFO this far inside the window.
-constexpr double kScopeDragVfoMarginFraction = 0.02;
-constexpr double kScopeDragVfoMarginMinHz = 2000.0;
 // A frequency echo matching one of our tunes this recent is ours, not the dial.
 constexpr qint64 kScopeCommandedTuneMs = 2000;
 // The newest tune's echo can trail a fast spin by seconds on the 03 poll.
@@ -364,16 +361,17 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
-    c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
+    c.panLifecycleControl = hasDualReceivers()
+        ? std::optional{PanLifecycleControl{PanLifecycleControl::Creation::Native,
+            {PanLifecycleAction::Create, PanLifecycleAction::Remove}}} : std::nullopt;
     c.manufacturer = QStringLiteral("Icom");
     c.model = QString::fromUtf8(m.name.data(), static_cast<int>(m.name.size()));
 
     c.canCreateSlices = false;
     c.maxSlices = m.receivers;
-    // The implemented scope path publishes one panId ("0"), even on models
-    // with two receivers. Advertise streams we can supply, not hardware VFOs
-    // (#5347); independent receiver/scope selection remains separate work.
-    c.maxPanadapters = m.hasScope ? 1 : 0;
+    // Capacity follows implemented simultaneous scopes, independently of
+    // hardware receiver count (the IC-9700 still has one selectable scope).
+    c.maxPanadapters = m.hasScope ? (hasDualReceivers() ? 2 : 1) : 0;
     c.tuningMinHz = static_cast<double>(m.tuningMinHz);
     c.tuningMaxHz = static_cast<double>(m.tuningMaxHz);
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio,
@@ -385,6 +383,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.receiveFilterControl = std::nullopt;
     c.receiveAudioControl = std::nullopt;
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
+    if (m_session && m_session->rxChannels() == 2) {
+        c.receiveAudioPlayout = ReceiveAudioPlayout{200, 400};
+    }
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = std::nullopt;
     c.receivePanBandwidthControl = std::nullopt;
@@ -787,6 +788,15 @@ void IcomCivBackend::publishScopeDbmRange()
     // Must match ScopeCalibration::toDbm(), sign included: it maps a sample to
     // `floorDbm + (v/max)*spanDb - referenceDb`, so the axis subtracts
     // referenceDb too.
+    if (hasDualReceivers()) {
+        for (int receiver = 0; receiver < 2; ++receiver) {
+            if (!m_receivers[receiver].visible) { continue; }
+            const ScopeCalibration& calibration = m_receivers[receiver].calibration;
+            const double floor = calibration.floorDbm - calibration.referenceDb;
+            emit panRangeChanged(QString::number(receiver), floor, floor + calibration.spanDb);
+        }
+        return;
+    }
     const double floorDbm = m_scopeCal.floorDbm - m_scopeCal.referenceDb;
     emit panRangeChanged(panId(), floorDbm, floorDbm + m_scopeCal.spanDb);
 }
@@ -929,6 +939,10 @@ int IcomCivBackend::activeTxBandwidthItem() const
 
 void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 {
+    if (m_dualRestoring) {
+        emit connectionError(QStringLiteral("Scope restoration is still completing; connect again after disconnect."));
+        return;
+    }
     disconnectRadio();
 
     // The stable import identity arrives in the authenticated RS-BA1
@@ -973,6 +987,8 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     // LPCM16 unless the peer is a wfview server.
     m_audioRateHz = kRadioAudioRateHz;
     p.sampleRateHz = static_cast<quint32>(m_audioRateHz);
+    p.rxChannels = request.params.value(QStringLiteral("icom.rxChannels"),
+        preferredRxChannelsForModelHint(m_wakeModelId) == 2 ? 2 : 0).toInt();
 
     m_session = std::make_unique<IcomSession>();
     const std::uint64_t sessionGeneration = ++m_sessionGeneration;
@@ -996,6 +1012,16 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    if (m_dualRestoring) { return; }
+    const QPointer<IcomCivBackend> alive(this);
+    const auto generation = m_sessionGeneration;
+    if (hasDualReceivers() && m_session && m_session->isConnected() && m_connected && !m_keyed
+        && (!m_dualWrittenPresets.empty() || m_dualWatchOwned)) {
+        if (!restoreDualScopePresetsConfirmed() && alive) {
+            qCWarning(lcIcomPan) << "scope preset restoration did not confirm before disconnect";
+        }
+        if (!alive || generation != m_sessionGeneration) { return; }
+    }
     retirePcmStreams();
     finishAx25PostResampleCapture();
     finishMemoryRefresh(false);
@@ -1032,7 +1058,7 @@ void IcomCivBackend::disconnectRadio()
         // the bounded teardown burst instead of assuming it will forever have
         // exactly three members (CW abort, unkey, XFC release, optional power
         // restore today).
-        for (int i = 0; i < 8 && !m_civScheduler.idle(); ++i) {
+        for (int i = 0; i < 64 && !m_civScheduler.idle(); ++i) {
             pumpCiv(now);
         }
     }
@@ -1050,6 +1076,26 @@ void IcomCivBackend::disconnectRadio()
     }
     m_rxResampler.reset();
     m_scope.reset();
+    m_receivers = {};
+    m_dualInitialised = false;
+    m_dualPanOpening = m_dualPanClosing = m_dualWatchOwned = m_dualPanHasOpened = false;
+    m_dualMainMonitorPan = 0;
+    m_dualPanWatchRequested = false;
+    m_dualSavedPresets.clear();
+    m_dualWrittenPresets.clear();
+    m_dualPresetReads.clear();
+    m_dualObservedPresets.clear();
+    m_dualRestoreExpected.clear();
+    m_dualRestoreSlots = {};
+    m_dualRestoring = false;
+    m_dualSplit.reset();
+    m_dualRequestedTxReceiver.reset();
+    m_dualTxFrequencyHz.reset();
+    m_dualModInputs.fill(-1);
+    m_dualWatch.reset();
+    m_dualTxReceiver = 0;
+    m_dualFocus = 0;
+    m_lanOutput = -1;
     m_meters.reset();
     terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
                        SchedulerWaiterOutcome::Cancelled);
@@ -1152,7 +1198,7 @@ void IcomCivBackend::sendConnectReadBurst()
     // ASK WHERE THE RADIO TAKES ITS MODULATION FROM, using this model's own
     // guide. The SET-menu numbers and enum values differ even between the
     // IC-705 and IC-7300MK2, so an unknown model is deliberately left unread.
-    if (const auto mod = modulationProfileFor(*m_model)) {
+    if (const auto mod = currentModulationProfile()) {
         for (int item : {mod->dataOffInputItem, mod->dataInputItem,
                          mod->usbLevelItem, mod->accessoryLevelItem,
                          mod->networkLevelItem}) {
@@ -1437,6 +1483,9 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
 
     m_civReported = address;
     m_civModelId = modelId;
+    if (m_civDetectTimer) {
+        m_civDetectTimer->stop();
+    }
     const IcomModel* identified = modelForId(modelId);
     m_model = identified ? identified : &unknownModel();
     // Cancel the identity read and any fallback snapshot before selecting the
@@ -1446,7 +1495,16 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
     m_session->setCivAddress(address);
     m_scopeStarted = false;
     resetScopeEdgeState();
-    sendConnectReadBurst();
+    ScopeGeometry geometry;
+    geometry.points = m_model->scopePoints > 0 ? m_model->scopePoints : kScopePointsIc705;
+    geometry.maxAmplitude = m_model->scopeMaxAmplitude > 0
+        ? m_model->scopeMaxAmplitude : kScopeMaxAmplitude;
+    m_scope = ScopeDecoder(geometry);
+    if (hasDualReceivers()) {
+        initialiseDualReceivers();
+    } else {
+        sendConnectReadBurst();
+    }
     qCInfo(lcIcomAddr) << "CI-V identity: model ID" << Qt::hex << modelId
                      << "at address" << address;
     if (!identified) {
@@ -1526,8 +1584,8 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     m_model = &unknownModel();
     publishIdentity();
 
-    // The radio's audio is 48 kHz mono; the seam's per-slice contract is 24 kHz
-    // interleaved stereo. Built once here rather than per-buffer: r8brain is
+    // LAN audio is 48 kHz PCM; the seam uses 24 kHz interleaved stereo. The
+    // single-receiver converter is built once per session: r8brain is
     // stateful, and a fresh instance per callback restarts its filter history
     // every block, which is audible as a periodic tick.
     m_rxResampler = std::make_unique<Resampler>(
@@ -1704,7 +1762,7 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
 
 void IcomCivBackend::checkModInput()
 {
-    const auto mod = modulationProfileFor(*m_model);
+    const auto mod = currentModulationProfile();
     if (!mod)
         return;
     const auto name = [&mod](int value) {
@@ -1724,15 +1782,18 @@ void IcomCivBackend::checkModInput()
     // is then free to route voice from MIC, USB, ACC or anything else, and
     // asserting an expected value there would be the client telling a working
     // radio it is misconfigured.
-    if (m_pcAudioEnabled && *m_pcAudioEnabled && m_dataOffModInput >= 0
+    if (!m_dataMode && m_pcAudioEnabled && *m_pcAudioEnabled && m_dataOffModInput >= 0
         && m_dataOffModInput != mod->networkOnlyValue) {
         wrong << QStringLiteral("PC Audio is on but DATA OFF MOD is %1")
                      .arg(name(m_dataOffModInput));
     }
     if (m_dataMode && m_dataModInput >= 0
         && m_dataModInput != mod->networkOnlyValue) {
-        wrong << QStringLiteral("DATA MOD is %1, so generated digital audio is ignored")
-                     .arg(name(m_dataModInput));
+        const QString variant = hasDualReceivers()
+            ? QStringLiteral("DATA%1 MOD").arg(m_receivers[m_dualTxReceiver].data)
+            : QStringLiteral("DATA MOD");
+        wrong << QStringLiteral("%1 is %2, so network digital audio is ignored")
+                     .arg(variant, name(m_dataModInput));
     }
     if (wrong.isEmpty()) {
         m_lastModInputWarning.clear();
@@ -1744,7 +1805,11 @@ void IcomCivBackend::checkModInput()
     // the fix has to come from the operator. Without the second sentence the
     // advisory describes a fault and leaves them to guess that the button they
     // already have is what corrects it.
-    const QString warning =
+    const QString warning = hasDualReceivers()
+        ? QStringLiteral("Icom modulation input: %1. Select a DATA variant configured for LAN, "
+                         "or change that variant's MOD Input on the radio. "
+                         "PC Audio selects DATA OFF input only.").arg(wrong.join(QStringLiteral(", ")))
+        :
         QStringLiteral("Icom modulation input: %1. Toggle PC Audio off and on to "
                        "select it, or set it on the radio's front panel "
                        "(MENU > SET > Connectors > MOD Input). Check Radio Health "
@@ -1758,7 +1823,7 @@ void IcomCivBackend::checkModInput()
 
 void IcomCivBackend::publishPhoneModulationLevel()
 {
-    const auto mod = modulationProfileFor(*m_model);
+    const auto mod = currentModulationProfile();
     if (!mod || !mod->phoneLevelFollowsNetworkInput) {
         return;
     }
@@ -1790,6 +1855,13 @@ void IcomCivBackend::applyScopeStartup()
     // switched on at all, and would show the black panadapter this function
     // exists to prevent.
     m_scopeStarted = true;
+    if (hasDualReceivers()) {
+        // Both native scopes share one CI-V stream. 27 11 may be refused on
+        // LAN; that does not invalidate sweeps delivered by the radio.
+        sendUserCommand(cmdScopeOnOff(m_session->civAddress(), true));
+        sendUserCommand(cmdScopeDataOutput(m_session->civAddress(), true));
+        return;
+    }
     // BOTH switches. Enabling only 0x27 0x10 turns the scope on the radio's own
     // screen and sends us nothing — the number-one "black panadapter" cause.
     queueWrite(cmdScopeOnOff(m_session->civAddress(), true), "scope.on",
@@ -1902,6 +1974,7 @@ std::span<const ScopeEdgeRange> IcomCivBackend::scopeEdgeRanges() const
     }
     switch (profileFor(*m_model).scope.edgeTable) {
     case ScopeEdgeTable::Hf:     return kScopeEdgeRangesHf;
+    case ScopeEdgeTable::Hf60:   return std::span{kScopeEdgeRangesHf}.first(12);
     case ScopeEdgeTable::Ic705:  return kScopeEdgeRangesIc705;
     case ScopeEdgeTable::Ic9700: return kScopeEdgeRangesIc9700;
     case ScopeEdgeTable::None:   break;
@@ -2154,8 +2227,24 @@ void IcomCivBackend::publishReportedScopeMode()
     emit panScopeModeChanged(panId(), index);
 }
 
-void IcomCivBackend::setPanScopeMode(const QString&, int index)
+void IcomCivBackend::setPanScopeMode(const QString& id, int index)
 {
+    if (hasDualReceivers()) {
+        bool ok = false;
+        const int receiver = id.toInt(&ok);
+        if (!ok || receiver < 0 || receiver > 1 || index < 0 || index > 2
+            || !m_session || !m_connected) { return; }
+        const std::array<ScopeMode,3> modes{ScopeMode::Centre, ScopeMode::ScrollF, ScopeMode::Fixed};
+        auto& state = m_receivers[receiver];
+        state.viewInitialised = true;
+        state.windowTarget.reset();
+        state.pendingCentreHz.reset();
+        state.windowFlushScheduled = false;
+        ++state.windowEpoch;
+        sendUserCommand(cmdScopeMode(m_session->civAddress(),
+            static_cast<std::uint8_t>(modes[index]), static_cast<std::uint8_t>(receiver)));
+        return;
+    }
     if (!scopeModesOffered()) {
         return;
     }
@@ -2438,10 +2527,18 @@ void IcomCivBackend::onScopeSelectorChanged(std::uint8_t selector)
 // CI-V decode
 // ---------------------------------------------------------------------------
 
-void IcomCivBackend::onCivFrame(const CivFrame& frame,
+void IcomCivBackend::onCivFrame(const CivFrame& incoming,
                                 std::uint64_t sessionGeneration)
 {
     if (!m_connected || sessionGeneration != m_sessionGeneration) {
+        return;
+    }
+    CivFrame frame = incoming;
+    if (hasDualReceivers() && m_civReported != 0 && frame.from != m_civReported
+        && frame.cmd != cmd::kReadId) {
+        return;
+    }
+    if (hasDualReceivers() && handleDualReceiverFrame(frame)) {
         return;
     }
     // Reject invalid/foreign ID replies before they can retire a scheduler
@@ -2473,6 +2570,11 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     const bool recoveryFrequencyCandidate = m_civRecoveryStartedAtMs > 0
         && frame.cmd == cmd::kReadFreq
         && m_session && frame.from == m_session->civAddress();
+    if (hasDualReceivers() && (frame.cmd == cmd::kSetFreqTrx || frame.cmd == cmd::kSetModeTrx
+        || frame.cmd == cmd::kReadFreq || frame.cmd == cmd::kReadMode)) {
+        pollDualReceivers();
+        return;
+    }
     // Scope first: it is by far the highest-rate frame, and the decoder already
     // rejects anything that is not waveform data.
     if (auto sweep = m_scope.feed(frame)) {
@@ -2709,6 +2811,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     }
 
     noteControlSeen(frame.cmd, frame.sub, frame.hasSub);
+
+    // Scheduler matching uses the receiver-tagged frame. Decode MAIN's
+    // whitelisted 29 replies through the established register handlers.
+    if (hasDualReceivers() && frame.cmd == 0x29 && frame.hasSub && frame.sub == 0) {
+        const auto decoded = parseFrame(buildFrame(frame.from, frame.data.front(),
+            std::span<const std::uint8_t>(frame.data).subspan(1)));
+        if (!decoded) { return; }
+        frame = *decoded;
+    }
 
     switch (frame.cmd) {
     case cmd::kReadId: {
@@ -2971,7 +3082,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         case level::kMicGain: {
             m_micGainPercent = pct;
             m_micGainReported = true;
-            const auto mod = modulationProfileFor(*m_model);
+            const auto mod = currentModulationProfile();
             if (mod && mod->phoneLevelFollowsNetworkInput) {
                 // IC-9700 LAN audio has its own radio-owned level register.
                 // Keep this physical-MIC report cached for a later source
@@ -3381,6 +3492,21 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     }
 
     case cmd::kSetting: {
+        if (hasDualReceivers() && frame.hasSub && frame.sub == settingSub::kMenu
+            && frame.data.size() == 3) {
+            const int item = profileFor(*m_model).dualReceiver->lanOutputItem;
+            const std::array<std::uint8_t, 2> itemBytes{encodeBcdByte(item / 100), encodeBcdByte(item % 100)};
+            if (frame.data[0] == itemBytes[0] && frame.data[1] == itemBytes[1]
+                && frame.data[2] <= 1) {
+                const bool changed = m_lanOutput != frame.data[2];
+                m_lanOutput = frame.data[2];
+                if (changed && m_lanOutput != 0) {
+                    emit configurationWarning(QStringLiteral(
+                        "LAN output is IF. Select AF in the radio's LAN AF/IF Output menu for PC receive audio."));
+                }
+                return;
+            }
+        }
         if (!frame.hasSub)
             return;
         if (frame.sub == 0x00) {
@@ -3635,9 +3761,27 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             }
         }
 
-        const auto mod = modulationProfileFor(*m_model);
+        const auto mod = currentModulationProfile();
         if (!mod)
             return;
+        if (hasDualReceivers()) {
+            const auto& items = profileFor(*m_model).dualReceiver->dataInputItems;
+            int variant = item == mod->dataOffInputItem ? 0 : -1;
+            for (int index = 0; index < 3; ++index) {
+                if (item == items[index]) { variant = index + 1; }
+            }
+            if (variant >= 0) {
+                if (frame.data.size() != 3 || !std::ranges::any_of(mod->choices,
+                    [&frame](const auto& choice) { return choice.value == frame.data[2]; })) { return; }
+                m_dualModInputs[variant] = frame.data[2];
+                m_dataOffModInput = m_dualModInputs[0];
+                const int active = m_receivers[m_dualTxReceiver].data;
+                m_dataModInput = active > 0 ? m_dualModInputs[active] : -1;
+                publishPhoneModulationLevel();
+                checkModInput();
+                return;
+            }
+        }
         if (item == mod->dataOffInputItem) {
             m_dataOffModInput = frame.data[2];
         } else if (item == mod->dataInputItem) {
@@ -3720,7 +3864,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         }
         double value = spec->id == MeterId::Power && !powerCurve.empty()
             ? interpolateCurve(powerCurve, *raw)
-            : meterValue(spec->id, *raw, s9ReferenceFor(m_frequencyHz),
+            : meterValue(spec->id, *raw, s9ReferenceFor(hasDualReceivers() ? m_receivers[0].frequencyHz : m_frequencyHz),
                          meterProfile.calibration);
         if (spec->id == MeterId::Power
             && meterProfile.powerConversion
@@ -3991,6 +4135,11 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
 
 void IcomCivBackend::onAudio(const std::vector<float>& mono)
 {
+    if (m_session && m_session->rxChannels() == 2) {
+        if (hasDualReceivers()) { onDualAudio(mono); }
+        return;
+    }
+    if (hasDualReceivers() && m_lanOutput != 0) { return; }
     if (mono.empty() || mono.size() > static_cast<std::size_t>(PcmFrame::kMaxFrames)
         || !m_rxResampler) {
         return;
@@ -4212,6 +4361,28 @@ std::string IcomCivBackend::semanticKey(std::span<const std::uint8_t> frame) con
     if (!parsed) {
         return {};
     }
+    if (hasDualReceivers() && parsed->hasSub
+        && (parsed->cmd == 0x25 || parsed->cmd == 0x26 || parsed->cmd == 0x29)) {
+        std::string key = "receiver." + std::to_string(parsed->sub)
+            + "." + std::to_string(parsed->cmd);
+        if (parsed->cmd == 0x29) {
+            for (const std::uint8_t b : std::span<const std::uint8_t>(parsed->data).first(
+                     std::min<std::size_t>(2, parsed->data.size()))) {
+                key += "." + std::to_string(b);
+                if (key.size() > 50) { break; }
+            }
+        }
+        return key;
+    }
+    if (hasDualReceivers() && parsed->cmd == cmd::kScope && parsed->hasSub
+        && !parsed->data.empty()) {
+        std::string key = "scope." + std::to_string(parsed->sub) + "."
+            + std::to_string(parsed->data.front());
+        if (parsed->sub == scope::kFixedEdge && parsed->data.size() >= 2) {
+            key += "." + std::to_string(parsed->data[1]);
+        }
+        return key;
+    }
     switch (parsed->cmd) {
     case cmd::kRxAntenna:
         return "rx.antenna";
@@ -4266,6 +4437,22 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
         return std::nullopt;
     }
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
+    if (hasDualReceivers() && parsed->hasSub) {
+        if (parsed->cmd == cmd::kVfoControl && parsed->sub == 0xc2) {
+            return buildFrameSub(addr, cmd::kVfoControl, 0xc2);
+        }
+        if (parsed->cmd == 0x25 || parsed->cmd == 0x26) {
+            return buildFrameSub(addr, parsed->cmd, parsed->sub);
+        }
+        if (parsed->cmd == 0x29 && parsed->data.size() >= 2) {
+            return buildFrameSub(addr, 0x29, parsed->sub,
+                std::span<const std::uint8_t>(parsed->data).first(2));
+        }
+        if (parsed->cmd == cmd::kScope && parsed->data.size() >= 2) {
+            return buildFrameSub(addr, cmd::kScope, parsed->sub,
+                std::span<const std::uint8_t>(parsed->data).first(parsed->sub == scope::kFixedEdge ? 2 : 1));
+        }
+    }
     switch (parsed->cmd) {
     case cmd::kRxAntenna:
         if (m_model && profileFor(*m_model).rxAntenna
@@ -4325,12 +4512,13 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
                                qint64 notBeforeMs,
                                std::vector<std::uint8_t> replyDataPrefix, bool coalesce)
 {
-    const std::optional<CivFrame> parsed = parseFrame(frame);
+    const std::vector<std::uint8_t> wire = receiverCommand(frame);
+    const std::optional<CivFrame> parsed = parseFrame(wire);
     if (!parsed) {
         return;
     }
     IcomCivScheduler::Request request;
-    request.frame = frame;
+    request.frame = wire;
     request.key = key.empty() ? semanticKey(frame) : key;
     request.priority = priority;
     request.expectsReply = true;
@@ -4343,6 +4531,9 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
         // until the timeout, while retaining the same semantic generation.
         request.replyHasSub = true;
         request.replySub = 0;
+    }
+    if (parsed->cmd == 0x29 || parsed->cmd == cmd::kScope) {
+        replyDataPrefix = parsed->data;
     }
     request.replyDataPrefix = std::move(replyDataPrefix);
     request.coalesce = coalesce;
@@ -4767,6 +4958,13 @@ void IcomCivBackend::terminateScheduler(
 void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame,
                                     const std::optional<TxCoordinator::Command>& command)
 {
+    if (m_dualRestoring) { return; }
+    const std::vector<std::uint8_t> wire = receiverCommand(frame);
+    if (wire != frame) {
+        sendUserCommand(wire, command);
+        return;
+    }
+
     if (command && !command->permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
@@ -4810,8 +5008,16 @@ void IcomCivBackend::scheduleFrequencyRestore()
     });
 }
 
-void IcomCivBackend::setSliceFrequency(int, double hz)
+void IcomCivBackend::setSliceFrequency(int receiver, double hz)
 {
+    if (hasDualReceivers()) {
+        if (!m_session || !m_connected || receiver < 0 || receiver > 1 || !std::isfinite(hz)
+            || hz < m_model->tuningMinHz || hz > m_model->tuningMaxHz) { return; }
+        m_receivers[receiver].commandedFrequencyHz = static_cast<std::uint64_t>(std::llround(hz));
+        sendUserCommand(buildFrameSub(m_session->civAddress(), 0x25,
+            static_cast<std::uint8_t>(receiver), encodeFreq(*m_receivers[receiver].commandedFrequencyHz)));
+        return;
+    }
     if (!std::isfinite(hz) || hz <= 0.0
         || hz > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
         return;
@@ -4855,6 +5061,16 @@ void IcomCivBackend::setSliceFrequency(int, double hz)
 void IcomCivBackend::requestSliceTune(int sliceId, const SliceTuneRequest& request)
 {
     setSliceFrequency(sliceId, request.frequencyHz);
+    if (hasDualReceivers()) {
+        if (sliceId >= 0 && sliceId < 2 && request.panIntent == SliceTuneRequest::PanIntent::AllowRecenter) {
+            const auto& state = m_receivers[sliceId];
+            if (state.scopeMode != ScopeMode::Centre && state.spanHz > 0
+                && std::abs(request.frequencyHz - state.centreHz) > state.spanHz) {
+                requestDualScopeWindow(sliceId, request.frequencyHz, state.spanHz * 2.0);
+            }
+        }
+        return;
+    }
     if (request.panIntent != SliceTuneRequest::PanIntent::AllowRecenter
         || !scopeWindowIsEdgeDriven() || !std::isfinite(request.frequencyHz)
         || request.frequencyHz <= 0.0) {
@@ -4869,8 +5085,18 @@ void IcomCivBackend::requestSliceTune(int sliceId, const SliceTuneRequest& reque
     }
 }
 
-void IcomCivBackend::setSliceMode(int, const QString& mode)
+void IcomCivBackend::setSliceMode(int receiver, const QString& mode)
 {
+    if (hasDualReceivers()) {
+        if (receiver < 0 || receiver > 1) { return; }
+        bool data = false;
+        const auto civ = modeFromNeutral(mode.toStdString(), data);
+        if (!civ || std::ranges::find(modeListFor(*m_model), mode.toStdString())
+                == modeListFor(*m_model).end()) { return; }
+        const ReceiverState& state = m_receivers[receiver];
+        writeDualMode(receiver, *civ, data ? std::max<std::uint8_t>(1, state.data) : 0, state.filter);
+        return;
+    }
     bool data = false;
     auto civ = modeFromNeutral(mode.toStdString(), data);
     if (!civ) {
@@ -4940,8 +5166,14 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
     publishCapabilities();
 }
 
-void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
+void IcomCivBackend::setSliceFilter(int receiver, int lowHz, int highHz)
 {
+    if (hasDualReceivers()) {
+        // Native FIL slots are the MVP filter surface; do not reshape a
+        // selected front-panel receiver through an unaddressed width write.
+        if (receiver >= 0 && receiver < 2) { publishDualReceiver(receiver); }
+        return;
+    }
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
     // The LADDER mode, not the neutral one: the two differ in RTTY, where the
     // radio's own widths are 2.4k/500/250 — see currentLadderMode().
@@ -5008,8 +5240,14 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
     emit sliceChanged(sliceId(), d);
 }
 
-void IcomCivBackend::setSliceFilterPreset(int, int presetId)
+void IcomCivBackend::setSliceFilterPreset(int receiver, int presetId)
 {
+    if (hasDualReceivers()) {
+        if (receiver < 0 || receiver > 1 || presetId < 1 || presetId > 3) { return; }
+        const ReceiverState& state = m_receivers[receiver];
+        writeDualMode(receiver, state.mode, state.data, presetId);
+        return;
+    }
     const std::string ladder = currentLadderMode().toStdString();
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
     const std::optional<FilterPresetRecallPlan> plan = filterPresetRecallPlan(
@@ -5080,8 +5318,13 @@ void IcomCivBackend::setTxFilter(int lowHz, int highHz)
     // the decode publishes the pair the radio actually holds.
 }
 
-void IcomCivBackend::setSliceAgc(int, const QString& mode, int)
+void IcomCivBackend::setSliceAgc(int receiver, const QString& mode, int)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     if (!capabilities().agcModes.contains(mode.toLower())) {
         // OFF is 1A 04 time-constant editing, not a 16 12 selector value.
         // Do not substitute FAST or overwrite the radio's stored constants.
@@ -5103,8 +5346,28 @@ void IcomCivBackend::setSliceAgc(int, const QString& mode, int)
                                    func::kAgc, value));
 }
 
-void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent intent)
+void IcomCivBackend::setPanCenter(const QString& id, double hz, PanCenterIntent intent)
 {
+    if (hasDualReceivers()) {
+        bool valid = false;
+        const int receiver = id.toInt(&valid);
+        if (!valid || receiver < 0 || receiver > 1) { return; }
+        ReceiverState& state = m_receivers[receiver];
+        if (!state.visible || !std::isfinite(hz)) { return; }
+        if (intent == PanCenterIntent::Drag && state.scopeMode == ScopeMode::Centre) {
+            setSliceFrequency(receiver, hz);
+        } else if (state.spanHz > 0 && state.scopeMode != ScopeMode::Centre) {
+            state.pendingCentreHz = hz;
+            const auto generation = m_sessionGeneration;
+            QTimer::singleShot(0, this, [this, receiver, generation] {
+                if (generation != m_sessionGeneration) { return; }
+                auto& current = m_receivers[receiver];
+                const auto centre = std::exchange(current.pendingCentreHz, std::nullopt);
+                if (centre) { requestDualScopeWindow(receiver, *centre, current.spanHz * 2.0); }
+            });
+        }
+        return;
+    }
     if (m_scopeSpanHz <= 0)
         return;
 
@@ -5214,8 +5477,31 @@ void IcomCivBackend::applyPendingScopeCentre()
                            vfoRange);
 }
 
-void IcomCivBackend::setPanBandwidth(const QString&, double hz)
+void IcomCivBackend::setPanBandwidth(const QString& id, double hz)
 {
+    if (hasDualReceivers()) {
+        bool valid = false;
+        const int receiver = id.toInt(&valid);
+        if (!valid || receiver < 0 || receiver > 1 || !m_session || !std::isfinite(hz)
+            || hz <= 0 || hz > 1e6) { return; }
+        ReceiverState& state = m_receivers[receiver];
+        if (!state.visible) { return; }
+        if (state.scopeMode != ScopeMode::Centre) {
+            const double centre = state.pendingCentreHz.value_or(state.centreHz);
+            state.pendingCentreHz.reset();
+            requestDualScopeWindow(receiver, centre, hz);
+            return;
+        }
+        int span = spanForBandwidthHz(static_cast<int>(std::llround(hz)));
+        if (span == state.spanHz && hz != state.spanHz * 2.0) {
+            span = adjacentScopeSpanHz(span, hz < state.spanHz * 2.0 ? -1 : 1);
+        }
+        std::vector<std::uint8_t> data{static_cast<std::uint8_t>(receiver)};
+        const auto frequency = encodeFreq(span);
+        data.insert(data.end(), frequency.begin(), frequency.end());
+        sendUserCommand(buildFrameSub(m_session->civAddress(), cmd::kScope, 0x15, data));
+        return;
+    }
     if (hz <= 0.0 || !m_model->hasScope)
         return;
     // Fixed / SCROLL-F: the width is the edge preset's (27 15 does nothing
@@ -5273,8 +5559,19 @@ void IcomCivBackend::setPanBandwidth(const QString&, double hz)
 // The parameter is named gainDb by the seam and is a PERCENT here — see the
 // unit suffix published at connect. Renaming it would mean renaming the seam,
 // which is right for a Flex and wrong only for the radios that have no dB.
-void IcomCivBackend::setPanRfGain(const QString&, int gainDb)
+void IcomCivBackend::setPanRfGain(const QString& id, int gainDb)
 {
+    if (hasDualReceivers()) {
+        bool valid = false;
+        const int receiver = id.toInt(&valid);
+        if (!valid || receiver < 0 || receiver > 1 || !m_session) { return; }
+        const auto command = cmdSetLevel(m_session->civAddress(), level::kRf,
+                                        percentToLevelRaw(std::clamp(gainDb,0,100)));
+        sendUserCommand(buildFrameSub(m_session->civAddress(), 0x29,
+            static_cast<std::uint8_t>(receiver),
+            std::span<const std::uint8_t>(command).subspan(4,command.size()-5)));
+        return;
+    }
     m_rfGainPercent = std::clamp(gainDb, 0, 100);
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
                                 level::kRf, percentToLevelRaw(std::clamp(gainDb, 0, 100))));
@@ -5348,6 +5645,31 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
 ReceiveDispatch IcomCivBackend::requestSliceControl(int sliceId, const SliceControlRequest& request)
 {
     using Field = SliceControlRequest::Field;
+    if (hasDualReceivers() && request.valid() && sliceId >= 0 && sliceId < 2) {
+        if (request.field == Field::ActiveSlice) {
+            setActiveSlice(sliceId);
+            return ReceiveDispatch::LocalOnly;
+        }
+        if (request.field == Field::TxSlice) {
+            const int receiver = std::get<bool>(request.value) ? sliceId : 1 - sliceId;
+            if (!m_connected || !m_session || m_keyed || m_dualRestoring
+                || !m_receivers[receiver].visible || !m_dualSplit.has_value()) {
+                return ReceiveDispatch::Unsupported;
+            }
+            // MAIN transmits with split OFF, SUB with split ON. Editing focus
+            // stays independent; a selection never keys the global PTT.
+            m_dualRequestedTxReceiver = receiver;
+            sendUserCommand(buildFrame(m_session->civAddress(), cmd::kDuplex,
+                std::array<std::uint8_t, 1>{static_cast<std::uint8_t>(receiver)}));
+            queueRead(cmdReadTransmitFrequency(m_session->civAddress()),
+                "dual.tx-frequency", IcomCivScheduler::Priority::Operator);
+            pumpCiv(nowMs());
+            return ReceiveDispatch::Dispatched;
+        }
+        // TX routing is radio-owned split, never a local TX flag edit.
+        if (request.field == Field::Rit
+            || request.field == Field::Xit || sliceId != 0) { return ReceiveDispatch::Unsupported; }
+    }
     if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()) {
         return ReceiveDispatch::Unsupported;
     }
@@ -5518,6 +5840,30 @@ ReceiveDispatch IcomCivBackend::requestSliceDsp(int sliceId, const SliceDspReque
 
 ReceiveDispatch IcomCivBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
 {
+    if (hasDualReceivers()) {
+        if (!m_connected || !m_session || sliceId < 0 || sliceId > 1 || !request.valid()) {
+            return ReceiveDispatch::Unsupported;
+        }
+        ReceiverState& state = m_receivers[sliceId];
+        if (!state.visible) { return ReceiveDispatch::Unsupported; }
+        SliceDelta delta;
+        switch (request.field) {
+        case SliceAudioRequest::Field::Gain:
+            state.monitorGain = request.value;
+            delta.audioGain = request.value;
+            break;
+        case SliceAudioRequest::Field::Mute:
+            state.monitorMute = request.value != 0;
+            delta.audioMute = state.monitorMute;
+            break;
+        case SliceAudioRequest::Field::Pan:
+            state.monitorPan = request.value;
+            delta.audioPan = request.value;
+            break;
+        }
+        emit sliceChanged(sliceId, delta);
+        return ReceiveDispatch::LocalOnly;
+    }
     if (!m_connected || !m_session || !m_model || sliceId != 0
         || !request.valid() || request.field != SliceAudioRequest::Field::Gain) {
         return ReceiveDispatch::Unsupported;
@@ -5565,8 +5911,13 @@ ReceiveDispatch IcomCivBackend::requestSliceLock(int sliceId, bool locked)
     return ReceiveDispatch::Dispatched;
 }
 
-void IcomCivBackend::setSliceRxAntenna(int, const QString& antenna)
+void IcomCivBackend::setSliceRxAntenna(int receiver, const QString& antenna)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     if (!m_model || !profileFor(*m_model).rxAntenna
         || !profileFor(*m_model).rxAntenna->selectable)
         return;
@@ -5622,7 +5973,7 @@ void IcomCivBackend::setSpeechProcessor(bool on, int level)
 
 void IcomCivBackend::setMicGain(int gainPercent)
 {
-    if (const auto mod = modulationProfileFor(*m_model);
+    if (const auto mod = currentModulationProfile();
         mod && mod->phoneLevelFollowsNetworkInput) {
         const int activeInput = m_dataMode ? m_dataModInput : m_dataOffModInput;
         if (activeInput == mod->networkOnlyValue) {
@@ -5672,8 +6023,13 @@ void IcomCivBackend::setTxMonitor(bool on, int levelPercent)
                                 percentToLevelRaw(m_monitorLevelPercent)));
 }
 
-void IcomCivBackend::setSliceNoiseReduction(int, bool on, int level)
+void IcomCivBackend::setSliceNoiseReduction(int receiver, bool on, int level)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     m_nrLevelPercent = level;
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
     if (m_nrEnableSent != (on ? 1 : 0)) {
@@ -5687,9 +6043,14 @@ void IcomCivBackend::setSliceNoiseReduction(int, bool on, int level)
         sendUserCommand(cmdSetLevel(addr, level::kNrLevel, percentToLevelRaw(level)));
 }
 
-void IcomCivBackend::setSliceNoiseBlanker(int, AetherSDR::NoiseBlankerKind kind,
+void IcomCivBackend::setSliceNoiseBlanker(int receiver, AetherSDR::NoiseBlankerKind kind,
                                           int level, AetherSDR::NoiseBlankerFill fill)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     // The radio has ONE blanker, so anything but Off is on and the fill is not a
     // thing this radio has an opinion about. Not a downgrade of the operator's
     // request: Advanced is only reachable where hasHostNoiseBlanker is set, and
@@ -5706,8 +6067,13 @@ void IcomCivBackend::setSliceNoiseBlanker(int, AetherSDR::NoiseBlankerKind kind,
         sendUserCommand(cmdSetLevel(addr, level::kNbLevel, percentToLevelRaw(level)));
 }
 
-void IcomCivBackend::setSliceAutoNotch(int, bool on)
+void IcomCivBackend::setSliceAutoNotch(int receiver, bool on)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     if (m_anfEnableSent == (on ? 1 : 0))
         return;
     m_anfEnableSent = on ? 1 : 0;
@@ -5715,8 +6081,13 @@ void IcomCivBackend::setSliceAutoNotch(int, bool on)
                                    func::kAutoNotch, on ? 1 : 0));
 }
 
-void IcomCivBackend::setSliceManualNotch(int, bool on, int position)
+void IcomCivBackend::setSliceManualNotch(int receiver, bool on, int position)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     m_notchPosPercent = position;
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
     // Same enable-dedupe as NR and NB, and for the same reason documented on
@@ -5741,8 +6112,15 @@ void IcomCivBackend::setSliceManualNotch(int, bool on, int position)
 // slider moved, persisted, and reached no register. `controls map` reported it
 // as decode-only, which is what made a dead slider distinguishable from a
 // working one.
-void IcomCivBackend::setSliceAudioGain(int, int gainPercent)
+void IcomCivBackend::setSliceAudioGain(int receiver, int gainPercent)
 {
+    if (hasDualReceivers()) {
+        SliceAudioRequest request;
+        request.field = SliceAudioRequest::Field::Gain;
+        request.value = std::clamp(gainPercent,0,100);
+        requestSliceAudio(receiver,request);
+        return;
+    }
     m_afGainPercent = std::clamp(gainPercent, 0, 100);
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
                                 level::kAf, percentToLevelRaw(m_afGainPercent)));
@@ -5819,8 +6197,13 @@ bool IcomCivBackend::queueTunerReadIfSupported(
     return true;
 }
 
-void IcomCivBackend::setSliceSquelch(int, bool on, int level)
+void IcomCivBackend::setSliceSquelch(int receiver, bool on, int level)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     // sendUserCommand drops a write outside a connected session; record no
     // on-at-0 intent for a write that never reaches the radio.
     if (!m_session || !m_connected)
@@ -5835,8 +6218,13 @@ void IcomCivBackend::setSliceSquelch(int, bool on, int level)
     sendUserCommand(cmdSetLevel(m_session->civAddress(), level::kSquelch, raw));
 }
 
-void IcomCivBackend::setSliceFmToneMode(int, const QString& mode)
+void IcomCivBackend::setSliceFmToneMode(int receiver, const QString& mode)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
     if (!fm || !fm->hasTxCtcss) {
         return;
@@ -5865,8 +6253,13 @@ void IcomCivBackend::setSliceFmToneMode(int, const QString& mode)
                                    func::kRepeaterTone, on ? 1 : 0));
 }
 
-void IcomCivBackend::setSliceFmToneRxValue(int, double hz)
+void IcomCivBackend::setSliceFmToneRxValue(int receiver, double hz)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     if (!ctcssRxProfileFor(m_model) || !isCanonicalCtcssTone(hz)) {
         qCWarning(lcIcomCiv) << "refusing invalid receive CTCSS frequency" << hz;
         return;
@@ -5875,9 +6268,14 @@ void IcomCivBackend::setSliceFmToneRxValue(int, double hz)
                                     repeaterTone::kRxCtcss, hz));
 }
 
-void IcomCivBackend::setSliceFmDtcs(int, int code, bool txReverse,
+void IcomCivBackend::setSliceFmDtcs(int receiver, int code, bool txReverse,
                                     bool rxReverse)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     const FmRepeaterProfile* fm = extendedFmReadbackProfileFor(m_model);
     if (!fm || !fm->hasDtcs || !isCanonicalDtcsCode(code)) {
         qCWarning(lcIcomCiv) << "refusing invalid DTCS code" << code;
@@ -5888,8 +6286,13 @@ void IcomCivBackend::setSliceFmDtcs(int, int code, bool txReverse,
         code, txReverse, rxReverse));
 }
 
-void IcomCivBackend::setSliceFmToneValue(int, double hz)
+void IcomCivBackend::setSliceFmToneValue(int receiver, double hz)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
     if (!fm || !fm->hasTxCtcss) {
         return;
@@ -5906,8 +6309,13 @@ void IcomCivBackend::setSliceFmToneValue(int, double hz)
                                        hz));
 }
 
-void IcomCivBackend::setSliceRepeaterOffsetDir(int, const QString& direction)
+void IcomCivBackend::setSliceRepeaterOffsetDir(int receiver, const QString& direction)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
     if (!fm || !fm->hasDuplex) {
         return;
@@ -5927,8 +6335,13 @@ void IcomCivBackend::setSliceRepeaterOffsetDir(int, const QString& direction)
         m_session ? m_session->civAddress() : 0xA4, wireDirection));
 }
 
-void IcomCivBackend::setSliceFmRepeaterOffset(int, double hz)
+void IcomCivBackend::setSliceFmRepeaterOffset(int receiver, double hz)
 {
+    if (hasDualReceivers() && receiver != 0) {
+        emit configurationWarning(QStringLiteral("This SUB control is deferred in the initial dual-receiver bring-up."));
+        return;
+    }
+
     const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
     if (!fm || !fm->hasDuplex) {
         return;
@@ -6084,6 +6497,11 @@ void IcomCivBackend::setTransmitFrequencyCheck(bool on)
 
 void IcomCivBackend::setSliceRitEnabled(int sliceId, bool on)
 {
+    if (hasDualReceivers()) {
+        emit configurationWarning(QStringLiteral("MAIN/SUB RIT and XIT routing is deferred in the initial bring-up."));
+        return;
+    }
+
     Q_UNUSED(sliceId);
     m_ritOn = on;
     sendUserCommand(cmdRitEnable(m_session ? m_session->civAddress() : 0xA4, on));
@@ -6091,6 +6509,11 @@ void IcomCivBackend::setSliceRitEnabled(int sliceId, bool on)
 
 void IcomCivBackend::setSliceXitEnabled(int sliceId, bool on)
 {
+    if (hasDualReceivers()) {
+        emit configurationWarning(QStringLiteral("MAIN/SUB RIT and XIT routing is deferred in the initial bring-up."));
+        return;
+    }
+
     Q_UNUSED(sliceId);
     m_xitOn = on;
     sendUserCommand(cmdXitEnable(m_session ? m_session->civAddress() : 0xA4, on));
@@ -6098,6 +6521,11 @@ void IcomCivBackend::setSliceXitEnabled(int sliceId, bool on)
 
 void IcomCivBackend::setSliceRitOffset(int sliceId, int hz)
 {
+    if (hasDualReceivers()) {
+        emit configurationWarning(QStringLiteral("MAIN/SUB RIT and XIT routing is deferred in the initial bring-up."));
+        return;
+    }
+
     Q_UNUSED(sliceId);
     m_ritOffsetHz = hz;
     // ONE offset register serves both RIT and XIT on this radio — 21 00 is the
@@ -6135,6 +6563,12 @@ void IcomCivBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operati
     // gated on the KEY edge only, so an unkey always reaches the radio whatever
     // mode it is in. A guard that could swallow an unkey would be a stuck
     // transmitter, which is far worse than the emission it prevents.
+    if (key && hasDualReceivers() && (m_dualRequestedTxReceiver || !m_dualSplit.has_value()
+        || !m_receivers[m_dualTxReceiver].modeKnown
+        || m_receivers[m_dualTxReceiver].frequencyHz == 0)) {
+        emit configurationWarning(QStringLiteral("PTT refused until MAIN/SUB mode, frequency and split are read back."));
+        return;
+    }
     if (key && refuseKeyingInReceiveOnlyMode())
         return;
 
@@ -6221,7 +6655,10 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxC
         const bool cwMode = mode.startsWith(QLatin1String("CW"));
         if ((!capabilities().hasCwTune && cwMode)
             || !m_session || !m_connected || !m_model->hasTransmit
-            || refuseKeyingInReceiveOnlyMode()) {
+            || refuseKeyingInReceiveOnlyMode()
+            || (hasDualReceivers() && (m_dualRequestedTxReceiver || !m_dualSplit.has_value()
+                || !m_receivers[m_dualTxReceiver].modeKnown
+                || m_receivers[m_dualTxReceiver].frequencyHz == 0))) {
             return;
         }
         m_tuneOperation = operation;
@@ -6547,6 +6984,8 @@ QVariantMap IcomCivBackend::profileMap() const
     out.insert(QStringLiteral("guideRevision"), sv(profile.guideRevision));
     out.insert(QStringLiteral("voxDelaySetItem"), profile.setMenu.voxDelayItem);
     out.insert(QStringLiteral("civTransceiveSetItem"), profile.setMenu.civTransceiveItem);
+    // Kept with the existing profile diagnostic so offline evidence cannot
+    // be mistaken for a live receiver/channel-mapping qualification.
     QVariantList features;
     for (const FeatureEvidence& feature : profile.features) {
         QVariantMap row;
@@ -6597,6 +7036,74 @@ QVariantMap IcomCivBackend::profileMap() const
         gps.insert(QStringLiteral("timeCorrectSetItem"), profile.gps->timeCorrectItem);
         gps.insert(QStringLiteral("ntpAccess"), profile.gps->hasNtpAccess);
         out.insert(QStringLiteral("gps"), gps);
+    }
+    if (hasDualReceivers()) {
+        QVariantList receivers;
+        for (int receiver = 0; receiver < 2; ++receiver) {
+            const ReceiverState& state = m_receivers[receiver];
+            receivers.append(QVariantMap{
+                {QStringLiteral("id"), receiver},
+                {QStringLiteral("name"), receiver == 0 ? QStringLiteral("MAIN") : QStringLiteral("SUB")},
+                {QStringLiteral("frequencyHz"), QVariant::fromValue<qulonglong>(state.frequencyHz)},
+                {QStringLiteral("dataVariant"), state.data},
+                {QStringLiteral("filter"), state.filter},
+                {QStringLiteral("scopeBins"), state.scope.geometry().points},
+                {QStringLiteral("scopeMode"), static_cast<int>(state.scopeMode)},
+                {QStringLiteral("visible"), state.visible},
+                {QStringLiteral("scopeEdgeSlot"), state.edgeSlot},
+                {QStringLiteral("borrowedEdgeSlot"), state.borrowedSlot},
+                {QStringLiteral("monitorPan"), state.monitorPan},
+                {QStringLiteral("monitorMute"), state.monitorMute},
+                {QStringLiteral("scopeFrames"), QVariant::fromValue<qulonglong>(state.scopeFrames)},
+                {QStringLiteral("scopeAgeMs"), state.scopeFrames ? nowMs() - state.lastScopeAtMs : -1},
+                {QStringLiteral("audioFrames"), QVariant::fromValue<qulonglong>(state.audioFrames)},
+                {QStringLiteral("audioRms"), state.audioRms},
+                {QStringLiteral("centreHz"), static_cast<qlonglong>(state.centreHz)},
+                {QStringLiteral("halfSpanHz"), static_cast<qlonglong>(state.spanHz)}});
+        }
+        out.insert(QStringLiteral("receivers"), receivers);
+        QVariantList presets;
+        for (const auto& [key, value] : m_dualSavedPresets) {
+            presets.append(QVariantMap{{QStringLiteral("range"), key.first}, {QStringLiteral("slot"), key.second},
+                {QStringLiteral("originalLowerHz"), QVariant::fromValue<qulonglong>(value.lowerHz)},
+                {QStringLiteral("originalUpperHz"), QVariant::fromValue<qulonglong>(value.upperHz)}});
+        }
+        out.insert(QStringLiteral("borrowedScopePresets"), presets);
+        QVariantList observedPresets;
+        for (const auto& [key, value] : m_dualObservedPresets) {
+            observedPresets.append(QVariantMap{{QStringLiteral("range"), key.first}, {QStringLiteral("slot"), key.second},
+                {QStringLiteral("lowerHz"), QVariant::fromValue<qulonglong>(value.lowerHz)},
+                {QStringLiteral("upperHz"), QVariant::fromValue<qulonglong>(value.upperHz)}});
+        }
+        out.insert(QStringLiteral("scopePresetValues"), observedPresets);
+        out.insert(QStringLiteral("scopeRestoring"), m_dualRestoring);
+        out.insert(QStringLiteral("subOpening"), m_dualPanOpening);
+        out.insert(QStringLiteral("subClosing"), m_dualPanClosing);
+        out.insert(QStringLiteral("dualWatchOwned"), m_dualWatchOwned);
+        out.insert(QStringLiteral("txReceiver"), m_dualTxReceiver);
+        if (m_dualRequestedTxReceiver) { out.insert(QStringLiteral("pendingTxReceiver"), *m_dualRequestedTxReceiver); }
+        if (m_dualTxFrequencyHz) { out.insert(QStringLiteral("txFrequencyHz"), static_cast<qint64>(*m_dualTxFrequencyHz)); }
+        QVariantList inputs;
+        const auto mod = currentModulationProfile();
+        for (int variant = 0; variant < 4; ++variant) {
+            const int item = variant == 0 ? mod->dataOffInputItem
+                : profileFor(*m_model).dualReceiver->dataInputItems[variant - 1];
+            QVariantMap input{{QStringLiteral("variant"), variant}, {QStringLiteral("item"), item}};
+            if (m_dualModInputs[variant] >= 0) {
+                input.insert(QStringLiteral("value"), m_dualModInputs[variant]);
+                for (const auto& choice : mod->choices) {
+                    if (choice.value == m_dualModInputs[variant]) {
+                        input.insert(QStringLiteral("source"), QString::fromUtf8(choice.label.data(), choice.label.size()));
+                    }
+                }
+            }
+            inputs.append(input);
+        }
+        out.insert(QStringLiteral("modulationInputs"), inputs);
+        out.insert(QStringLiteral("dualWatch"), m_dualWatch ? QVariant(*m_dualWatch) : QVariant());
+        out.insert(QStringLiteral("lanOutput"), m_lanOutput);
+        out.insert(QStringLiteral("rxChannels"), m_session ? m_session->rxChannels() : 0);
+        out.insert(QStringLiteral("hardwareQualified"), false);
     }
     return out;
 }
@@ -6840,7 +7347,7 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     if (id == QLatin1String("agc"))      { setSliceAgc(slice, m_agcMode, 0); return true; }
     if (id == QLatin1String("tx.power")) { writeTxPowerLevel(m_txPowerPercent); return true; }
     if (id == QLatin1String("mic.gain")) {
-        const auto mod = modulationProfileFor(*m_model);
+        const auto mod = currentModulationProfile();
         const int activeInput = m_dataMode ? m_dataModInput : m_dataOffModInput;
         if (mod && mod->phoneLevelFollowsNetworkInput
             && activeInput == mod->networkOnlyValue) {
@@ -6867,7 +7374,7 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         // SET-menu map, or before the readback has landed — there is no safe
         // value to send in either case, and inventing one would move the
         // operator's radio.
-        const auto mod = modulationProfileFor(*m_model);
+        const auto mod = currentModulationProfile();
         if (!mod || m_dataOffModInput < 0)
             return false;
         sendUserCommand(cmdWriteSetting(
@@ -7437,6 +7944,23 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         return;
     }
     if (verb == QLatin1String("scope.reference")) {
+        if (hasDualReceivers()) {
+            const double value = arg.toDouble();
+            const auto& profile = *profileFor(*m_model).dualReceiver;
+            if (!m_session || !std::isfinite(value)
+                || value < profile.referenceMinDb || value > profile.referenceMaxDb) {
+                emit extensionError(requestId, QStringLiteral("Scope REF requires %1 to %2 dB.")
+                    .arg(profile.referenceMinDb).arg(profile.referenceMaxDb));
+                return;
+            }
+            const int hundredths = static_cast<int>(std::lround(std::abs(value) * 2.0)) * 50;
+            const std::array<std::uint8_t,4> data{static_cast<std::uint8_t>(m_dualFocus),
+                encodeBcdByte(hundredths / 100), encodeBcdByte(hundredths % 100),
+                static_cast<std::uint8_t>(value < 0 ? 1 : 0)};
+            sendUserCommand(buildFrameSub(m_session->civAddress(), cmd::kScope, scope::kReference, data));
+            emit extensionResult(requestId, true);
+            return;
+        }
         sendUserCommand(cmdScopeReference(m_session ? m_session->civAddress() : 0xA4,
                                           arg.toDouble()));
         m_scopeCal.referenceDb = arg.toDouble();
@@ -7463,7 +7987,7 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         return;
     }
     if (verb == QLatin1String("audio.pc")) {
-        const auto mod = modulationProfileFor(*m_model);
+        const auto mod = currentModulationProfile();
         if (!mod) {
             // Reachable only from an operator click now that the connect edge
             // publishes state instead of commanding. A warning that answers a
@@ -7502,6 +8026,65 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
     }
     if (verb == QLatin1String("controls.map")) {
         emit extensionResult(requestId, controlMap());
+        return;
+    }
+    if (verb == QLatin1String("scope.preset") || verb == QLatin1String("scope.slot")) {
+        const QStringList fields = arg.toString().simplified().split(QLatin1Char(' '));
+        const bool preset = verb == QLatin1String("scope.preset");
+        if (!hasDualReceivers() || !m_session || !m_connected || m_keyed || m_dualRestoring
+            || (preset ? fields.size() != 2 && fields.size() != 4 : fields.size() != 2)) {
+            emit extensionError(requestId, QStringLiteral("Scope preset/slot requires connected RX and valid fields."));
+            return;
+        }
+        bool firstValid = false, slotValid = false;
+        const int first = fields[0].toInt(&firstValid);
+        const int slot = fields[1].toInt(&slotValid);
+        if (!firstValid || !slotValid || slot < 1 || slot > 4
+            || (preset ? first < 1 || first > 12 : first < 0 || first > 1)) {
+            emit extensionError(requestId, QStringLiteral("Invalid scope range/receiver or slot."));
+            return;
+        }
+        if (!preset) {
+            sendUserCommand(cmdScopeEdgeNumber(m_session->civAddress(), slot, static_cast<std::uint8_t>(first)));
+        } else if (fields.size() == 2) {
+            const auto read = buildFrameSub(m_session->civAddress(), cmd::kScope, scope::kFixedEdge,
+                std::array<std::uint8_t,2>{encodeBcdByte(first), encodeBcdByte(slot)});
+            queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Operator);
+            pumpCiv(nowMs());
+        } else {
+            bool lowValid = false, highValid = false;
+            const auto low = fields[2].toULongLong(&lowValid);
+            const auto high = fields[3].toULongLong(&highValid);
+            const auto ranges = scopeEdgeRanges();
+            const auto range = std::ranges::find_if(ranges, [first](const auto& value) { return value.number == first; });
+            if (!lowValid || !highValid || range == ranges.end() || low < range->lowerHz
+                || high > range->upperHz || high < low || high - low > kScopeFixedEdgeMaxWidthHz
+                || low % 1000 || high % 1000) {
+                emit extensionError(requestId, QStringLiteral("Preset requires whole-kHz edges inside its range and width at most 1 MHz."));
+                return;
+            }
+            sendUserCommand(cmdScopeFixedEdge(m_session->civAddress(), first, slot, low, high));
+        }
+        emit extensionResult(requestId, QStringLiteral("Scope request queued; confirm through profile readback."));
+        return;
+    }
+    if (verb == QLatin1String("receiver.dualwatch")) {
+        const QString value = arg.toString().trimmed().toLower();
+        if (!hasDualReceivers() || !m_session || !m_connected
+            || (value != QLatin1String("on") && value != QLatin1String("off"))) {
+            emit extensionError(requestId, QStringLiteral("Dualwatch requires a connected MAIN/SUB profile and on/off."));
+            return;
+        }
+        m_dualWatchOwned = false; // explicit operator request supersedes pane ownership
+        m_dualPanWatchRequested = true;
+        if ((value == QLatin1String("off") && m_dualPanOpening)
+            || (value == QLatin1String("on") && m_dualPanClosing)) {
+            m_dualPanOpening = m_dualPanClosing = false;
+            ++m_dualPaneEpoch;
+        }
+        const std::array<std::uint8_t,1> setting{static_cast<std::uint8_t>(value == QLatin1String("on"))};
+        sendUserCommand(buildFrameSub(m_session->civAddress(), cmd::kVfoControl, 0xc2, setting));
+        emit extensionResult(requestId, QStringLiteral("Dualwatch requested; confirm with civ profile."));
         return;
     }
     if (verb == QLatin1String("profile.show")) {
@@ -7696,6 +8279,7 @@ void IcomCivBackend::publishMeterDefs()
 
 void IcomCivBackend::onMeterTick()
 {
+    if (m_dualRestoring) { return; }
     if (!m_session || !m_connected)
         return;
     const std::int64_t now = nowMs();
@@ -7727,6 +8311,8 @@ void IcomCivBackend::onMeterTick()
     }
 
     for (MeterId id : m_meters.due(now)) {
+        const auto& dual = profileFor(*m_model).dualReceiver;
+        if (id == MeterId::Overflow && dual && !dual->adcOverflowRead) { continue; }
         const MeterSpec* spec = meterSpecFor(id);
         if (!spec)
             continue;
@@ -7741,6 +8327,7 @@ void IcomCivBackend::onMeterTick()
 
 void IcomCivBackend::onLinkTick()
 {
+    if (m_dualRestoring) { return; }
     if (!m_session)
         return;
     const auto s = m_session->stats();
@@ -7842,123 +8429,127 @@ void IcomCivBackend::onLinkTick()
         return; // identity discovery owns startup; do not poll the seed address
     }
 
-    // CI-V Transceive is a low-latency hint, not a subscription. Queue bounded
-    // reconciliation groups; the scheduler turns them into one paced stream,
-    // coalesces duplicates and lets an operator command overtake all of them.
-    const std::uint8_t addr = m_session->civAddress();
-    const auto queueControl = [this](const std::vector<std::uint8_t>& frame) {
-        queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Control);
-    };
-    const int phase = ++m_controlPollPhase;
+    if (hasDualReceivers()) {
+        pollDualReceivers();
+    } else {
+        // CI-V Transceive is a low-latency hint, not a subscription. Queue bounded
+        // reconciliation groups; the scheduler turns them into one paced stream,
+        // coalesces duplicates and lets an operator command overtake all of them.
+        const std::uint8_t addr = m_session->civAddress();
+        const auto queueControl = [this](const std::vector<std::uint8_t>& frame) {
+            queueRead(frame, semanticKey(frame), IcomCivScheduler::Priority::Control);
+        };
+        const int phase = ++m_controlPollPhase;
 
-    const IcomModelProfile& profile = profileFor(*m_model);
-    if (profile.supports(IcomFeature::GpsPosition) && m_gpsSource != 0x00) {
-        queueRead(cmdReadGpsPosition(addr), semanticKey(cmdReadGpsPosition(addr)),
-                  IcomCivScheduler::Priority::Maintenance);
-    }
-    if (m_ntpAccess.active()) {
-        if (!expireNtpAccess(now)) {
-            queueRead(cmdReadNtpAccessResult(addr),
-                      semanticKey(cmdReadNtpAccessResult(addr)),
+        const IcomModelProfile& profile = profileFor(*m_model);
+        if (profile.supports(IcomFeature::GpsPosition) && m_gpsSource != 0x00) {
+            queueRead(cmdReadGpsPosition(addr), semanticKey(cmdReadGpsPosition(addr)),
                       IcomCivScheduler::Priority::Maintenance);
         }
-    }
-
-    // Switches whose front-panel state must feel live. NR/NB were the measured
-    // failure: Transceive sometimes announced them and sometimes did not.
-    for (std::uint8_t fn : {func::kAutoNotch, func::kManualNotch,
-                            func::kNoiseReduce, func::kNoiseBlanker}) {
-        queueControl(cmdReadFunction(addr, fn));
-    }
-    if (capabilities().hasRadioDialLock) {
-        queueControl(cmdReadFunction(addr, func::kDialLock));
-    }
-    const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
-    if (ctcssRxProfileFor(m_model)) {
-        queueControl(cmdReadRepeaterAccess(addr));
-    } else if (fm && fm->hasTxCtcss) {
-        queueControl(cmdReadFunction(addr, func::kRepeaterTone));
-    }
-
-    if (phase % 2 == 0) {
-        queueControl(cmdReadFrequency(addr));
-        queueControl(profileFor(*m_model).supports(IcomFeature::VfoMode)
-                         ? cmdReadVfoMode(addr) : cmdReadMode(addr));
-        if (fm && fm->hasDuplex) {
-            queueControl(cmdReadRepeaterOffsetDirection(addr));
-            queueControl(cmdReadRepeaterOffset(addr));
+        if (m_ntpAccess.active()) {
+            if (!expireNtpAccess(now)) {
+                queueRead(cmdReadNtpAccessResult(addr),
+                          semanticKey(cmdReadNtpAccessResult(addr)),
+                          IcomCivScheduler::Priority::Maintenance);
+            }
         }
-        if (fm && fm->hasTxCtcss) {
-            queueControl(cmdReadRepeaterToneRegister(
-                addr, repeaterTone::kTxCtcss));
-            if (ctcssRxProfileFor(m_model)) {
+
+        // Switches whose front-panel state must feel live. NR/NB were the measured
+        // failure: Transceive sometimes announced them and sometimes did not.
+        for (std::uint8_t fn : {func::kAutoNotch, func::kManualNotch,
+                                func::kNoiseReduce, func::kNoiseBlanker}) {
+            queueControl(cmdReadFunction(addr, fn));
+        }
+        if (capabilities().hasRadioDialLock) {
+            queueControl(cmdReadFunction(addr, func::kDialLock));
+        }
+        const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+        if (ctcssRxProfileFor(m_model)) {
+            queueControl(cmdReadRepeaterAccess(addr));
+        } else if (fm && fm->hasTxCtcss) {
+            queueControl(cmdReadFunction(addr, func::kRepeaterTone));
+        }
+
+        if (phase % 2 == 0) {
+            queueControl(cmdReadFrequency(addr));
+            queueControl(profileFor(*m_model).supports(IcomFeature::VfoMode)
+                             ? cmdReadVfoMode(addr) : cmdReadMode(addr));
+            if (fm && fm->hasDuplex) {
+                queueControl(cmdReadRepeaterOffsetDirection(addr));
+                queueControl(cmdReadRepeaterOffset(addr));
+            }
+            if (fm && fm->hasTxCtcss) {
                 queueControl(cmdReadRepeaterToneRegister(
-                    addr, repeaterTone::kRxCtcss));
+                    addr, repeaterTone::kTxCtcss));
+                if (ctcssRxProfileFor(m_model)) {
+                    queueControl(cmdReadRepeaterToneRegister(
+                        addr, repeaterTone::kRxCtcss));
+                }
+            }
+            for (std::uint8_t fn : {func::kMonitorFn, func::kVox}) {
+                queueControl(cmdReadFunction(addr, fn));
             }
         }
-        for (std::uint8_t fn : {func::kMonitorFn, func::kVox}) {
-            queueControl(cmdReadFunction(addr, fn));
-        }
-    }
 
-    if (phase % 3 == 0) {
-        // Write confirmations are not subscriptions. Native front-panel edits
-        // of these MK2 controls need periodic reads even without Transceive.
-        if (profile.pollCwSquelchAndTxBandwidth) {
-            for (std::uint8_t which : {level::kSquelch, level::kCwPitch, level::kKeySpeed}) {
-                queueControl(cmdReadLevel(addr, which));
-            }
-            queueControl(cmdReadFunction(addr, func::kTxBandwidth));
-            const int item = activeTxBandwidthItem();
-            if (item >= 0) {
-                queueControl(cmdReadSetting(addr, item));
-            }
-        }
-        for (std::uint8_t which : {level::kRf, level::kMicGain, level::kMonitor,
-                                   level::kVoxGain, level::kNotchPos,
-                                   level::kNrLevel, level::kNbLevel}) {
-            queueControl(cmdReadLevel(addr, which));
-        }
-        if (!m_tuning) {
-            queueControl(cmdReadLevel(addr, level::kRfPower));
-        }
-        for (std::uint8_t fn : {func::kPreamp, func::kAgc}) {
-            queueControl(cmdReadFunction(addr, fn));
-        }
-        queueControl(cmdReadAttenuator(addr));
-        if (profile.rxAntenna && profile.rxAntenna->readbackAvailable) {
-            queueControl(cmdReadRxAntenna(addr));
-        }
-        queueTunerReadIfSupported(addr, IcomCivScheduler::Priority::Control);
-        for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
-                                 tuneOffset::kXitOnOff}) {
-            queueControl(cmdReadTuneOffset(addr, sub));
-        }
-        if (extendedFmReadbackProfileFor(m_model)) {
-            queueControl(cmdReadRepeaterToneRegister(
-                addr, repeaterTone::kDtcs));
-        }
-    }
-    // SET-menu changes can originate on the front panel. Refresh slowly: they
-    // are troubleshooting state, not interactive controls, and share this CI-V
-    // stream with tuning and meters.
-    if (phase % 12 == 0) {
-        if (const auto mod = modulationProfileFor(*m_model)) {
-            for (int item : {mod->dataOffInputItem, mod->dataInputItem,
-                             mod->usbLevelItem, mod->accessoryLevelItem,
-                             mod->networkLevelItem}) {
+        if (phase % 3 == 0) {
+            // Write confirmations are not subscriptions. Native front-panel edits
+            // of these MK2 controls need periodic reads even without Transceive.
+            if (profile.pollCwSquelchAndTxBandwidth) {
+                for (std::uint8_t which : {level::kSquelch, level::kCwPitch, level::kKeySpeed}) {
+                    queueControl(cmdReadLevel(addr, which));
+                }
+                queueControl(cmdReadFunction(addr, func::kTxBandwidth));
+                const int item = activeTxBandwidthItem();
                 if (item >= 0) {
                     queueControl(cmdReadSetting(addr, item));
                 }
             }
+            for (std::uint8_t which : {level::kRf, level::kMicGain, level::kMonitor,
+                                       level::kVoxGain, level::kNotchPos,
+                                       level::kNrLevel, level::kNbLevel}) {
+                queueControl(cmdReadLevel(addr, which));
+            }
+            if (!m_tuning) {
+                queueControl(cmdReadLevel(addr, level::kRfPower));
+            }
+            for (std::uint8_t fn : {func::kPreamp, func::kAgc}) {
+                queueControl(cmdReadFunction(addr, fn));
+            }
+            queueControl(cmdReadAttenuator(addr));
+            if (profile.rxAntenna && profile.rxAntenna->readbackAvailable) {
+                queueControl(cmdReadRxAntenna(addr));
+            }
+            queueTunerReadIfSupported(addr, IcomCivScheduler::Priority::Control);
+            for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
+                                     tuneOffset::kXitOnOff}) {
+                queueControl(cmdReadTuneOffset(addr, sub));
+            }
+            if (extendedFmReadbackProfileFor(m_model)) {
+                queueControl(cmdReadRepeaterToneRegister(
+                    addr, repeaterTone::kDtcs));
+            }
         }
-        if (profile.supports(IcomFeature::GpsPosition)) {
-            queueControl(cmdReadGpsSource(addr));
-        }
-        if (profile.supports(IcomFeature::GpsTimeConfiguration) && profile.gps) {
-            for (int item : {profile.gps->ntpEnabledItem, profile.gps->ntpServerItem,
-                             profile.gps->timeCorrectItem}) {
-                queueControl(cmdReadSetting(addr, item));
+        // SET-menu changes can originate on the front panel. Refresh slowly: they
+        // are troubleshooting state, not interactive controls, and share this CI-V
+        // stream with tuning and meters.
+        if (phase % 12 == 0) {
+            if (const auto mod = currentModulationProfile()) {
+                for (int item : {mod->dataOffInputItem, mod->dataInputItem,
+                                 mod->usbLevelItem, mod->accessoryLevelItem,
+                                 mod->networkLevelItem}) {
+                    if (item >= 0) {
+                        queueControl(cmdReadSetting(addr, item));
+                    }
+                }
+            }
+            if (profile.supports(IcomFeature::GpsPosition)) {
+                queueControl(cmdReadGpsSource(addr));
+            }
+            if (profile.supports(IcomFeature::GpsTimeConfiguration) && profile.gps) {
+                for (int item : {profile.gps->ntpEnabledItem, profile.gps->ntpServerItem,
+                                 profile.gps->timeCorrectItem}) {
+                    queueControl(cmdReadSetting(addr, item));
+                }
             }
         }
     }
@@ -8034,7 +8625,7 @@ IRadioBackend::HealthSnapshot IcomCivBackend::healthSnapshot() const
     // named by that selection. These are separate rows because DATA OFF and
     // DATA are independent radio-owned settings; folding them together hid the
     // exact half responsible for a keyed-but-silent transmission.
-    if (const auto mod = modulationProfileFor(*m_model)) {
+    if (const auto mod = currentModulationProfile()) {
         const auto describe = [this, &mod](int value) {
             const ModulationInputChoice* selected = nullptr;
             for (const ModulationInputChoice& choice : mod->choices) {
@@ -8080,7 +8671,9 @@ IRadioBackend::HealthSnapshot IcomCivBackend::healthSnapshot() const
         }
         if (m_dataModInput >= 0) {
             h.values.insert(QStringLiteral("datamod"), describe(m_dataModInput));
-            h.labels.insert(QStringLiteral("datamod"), QStringLiteral("DATA MOD"));
+            h.labels.insert(QStringLiteral("datamod"), hasDualReceivers()
+                ? QStringLiteral("DATA%1 MOD").arg(m_receivers[m_dualTxReceiver].data)
+                : QStringLiteral("DATA MOD"));
             h.order << QStringLiteral("datamod");
         }
     }

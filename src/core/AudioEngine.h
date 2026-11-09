@@ -194,6 +194,7 @@ public:
     int  rxPan() const { return m_rxPan.load(); }
     void  setRxBufferCapMs(int ms) { m_rxBufferCapMs.store(qBound(50, ms, 1000)); }
     int   rxBufferCapMs() const { return m_rxBufferCapMs.load(); }
+    void setReceiveJitterBuffer(int prefillMs, int bufferCapMs);
     void setReceivePresentationDelays(
         int flexDelayMs,
         int kiwiDelayMs,
@@ -1328,6 +1329,7 @@ private:
     std::unique_ptr<Resampler> m_lineOutLeftResampler;
     std::unique_ptr<Resampler> m_lineOutRightResampler;
     void drainRxAudio(qsizetype freeBytes);
+    void drainRxAudio(qsizetype freeBytes, qsizetype playbackQueuedBytes);
     bool retireInvalidPcmSources();
     void queueLegacyKiwiAudioData(const QByteArray& pcm24kStereoFloat);
     void queueKiwiAudioData(const QString& sourceId, const QByteArray& pcm24kStereoFloat);
@@ -1573,6 +1575,9 @@ private:
     QString           m_externalKiwiReceivePresentationDelaySourceId;
     int               m_externalKiwiReceivePresentationDelayMs{0};
     std::atomic<bool> m_rxPresentationPrebuffering{false};
+    std::atomic<int> m_rxJitterPrefillMs{0};
+    std::atomic<int> m_rxJitterCapMs{0};
+    std::atomic<bool> m_rxJitterPrebuffering{false};
     std::atomic<bool> m_kiwiSdrPrebuffering{false};
     std::vector<std::unique_ptr<ExternalRxAudioSourceState>> m_externalKiwiSources;
     std::atomic<qsizetype> m_rxBufferBytes{0};

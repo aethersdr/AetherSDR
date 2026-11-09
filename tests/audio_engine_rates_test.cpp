@@ -59,6 +59,8 @@ public:
     {
         engine.m_lineOutDrainClock.restart();
     }
+    static void drainWithPlayback(AudioEngine& engine, qsizetype freeBytes, qsizetype queuedBytes)
+    { engine.drainRxAudio(freeBytes, queuedBytes); }
     static qsizetype rawBytes(const AudioEngine& engine)
     {
         qsizetype result = engine.m_rxBuffer.size();
@@ -792,6 +794,64 @@ void transitionsAndRejection()
 
 void queueBudgetsAndDeviceTransitions()
 {
+    for (int rate : {24000, 48000}) {
+        Fixture fixture(rate);
+        fixture.engine.setReceiveJitterBuffer(200, 400);
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {rate, PcmLayout::Stereo});
+        feed(fixture.engine, producer, tone(rate, rate / 5));
+        AudioEngineRatesTestAccess::drainWithPlayback(fixture.engine, rate / 5 * kFrameBytes, 0);
+        const qsizetype initial = fixture.output.data().size();
+        check(initial == rate / 5 * kFrameBytes, "initial prefill can move entirely into the playback device");
+        AudioEngineRatesTestAccess::drainWithPlayback(fixture.engine,
+            rate / 100 * kFrameBytes, rate * 19 / 100 * kFrameBytes);
+        feed(fixture.engine, producer, tone(rate, rate / 100));
+        AudioEngineRatesTestAccess::drainWithPlayback(fixture.engine,
+            rate / 100 * kFrameBytes, rate * 18 / 100 * kFrameBytes);
+        check(fixture.output.data().size() == initial + rate / 100 * kFrameBytes,
+              "empty software queue does not restart prefill while the device is still playing");
+        AudioEngineRatesTestAccess::drainWithPlayback(fixture.engine, rate / 100 * kFrameBytes, 0);
+        const qsizetype afterStarvation = fixture.output.data().size();
+        feed(fixture.engine, producer, tone(rate, rate / 10));
+        fixture.tick();
+        check(fixture.output.data().size() == afterStarvation,
+              "actual device and software starvation restarts bounded stereo prefill");
+    }
+    for (int rate : {24000, 48000}) {
+        Fixture fixture(rate);
+        fixture.engine.setRxBufferCapMs(100);
+        fixture.engine.setReceiveJitterBuffer(200, 400);
+        PcmProducer producer;
+        producer.start(PcmPurpose::Speaker, -1, {rate, PcmLayout::Stereo});
+        feed(fixture.engine, producer, tone(rate, rate / 10));
+        fixture.tick();
+        check(fixture.output.data().isEmpty(), "shared jitter buffer waits for its initial stereo prefill");
+        feed(fixture.engine, producer, tone(rate, rate / 10, rate / 10));
+        fixture.tick();
+        for (int tick = 1; tick < 100; ++tick) {
+            if (tick % 20 == 0) {
+                feed(fixture.engine, producer, tone(rate, rate / 5, rate / 5 * (tick / 20)));
+            }
+            fixture.tick();
+        }
+        check(fixture.output.data().size() == rate * kFrameBytes,
+              "one shared stereo clock plays continuously across repeated 200 ms delivery gaps");
+        const auto beforeRefill = fixture.output.data().size();
+        fixture.tick(); // drain empty: one starvation incident, then refill
+        feed(fixture.engine, producer, tone(rate, rate / 10));
+        fixture.tick();
+        check(fixture.output.data().size() == beforeRefill,
+              "a starved stereo stream refills before resuming playback");
+        feed(fixture.engine, producer, tone(rate, rate / 10));
+        fixture.tick();
+        check(fixture.output.data().size() == beforeRefill + rate / 100 * kFrameBytes,
+              "refill resumes both channels together");
+        feed(fixture.engine, producer, tone(rate, rate * 3 / 5));
+        check(AudioEngineRatesTestAccess::rawBytes(fixture.engine) <= rate * kFrameBytes * 4 / 10,
+              "network jitter buffering bounds accumulated stereo backlog to its cap");
+        fixture.engine.setReceiveJitterBuffer(0, 0);
+        fixture.finish();
+    }
     for (int producerRate : {24000, 48000}) {
         Fixture fixture(44100);
         fixture.engine.setRxBufferCapMs(100);

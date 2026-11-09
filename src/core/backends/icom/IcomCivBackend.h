@@ -10,8 +10,12 @@
 #include <QVariantList>
 #include <QElapsedTimer>
 
+#include <array>
 #include <deque>
 #include <memory>
+#include <map>
+#include <set>
+#include <utility>
 #include <optional>
 #include <span>
 #include <string>
@@ -69,6 +73,10 @@ public:
     [[nodiscard]] bool isConnected() const override;
 
     // ---- intents DOWN ----
+    void setActiveSlice(int sliceId) override;
+    bool createPanadapter() override;
+    bool removePanadapter(const QString& panId) override;
+    bool removeSlice(int sliceId) override;
     void setSliceFrequency(int sliceId, double hz) override;
     void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
     void setSliceMode(int sliceId, const QString& mode) override;
@@ -125,7 +133,7 @@ public:
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
-    // One slice, always the transmit slice: the slice id is ignored.
+    // Legacy single-receiver tune offsets; high-end MAIN/SUB routing is deferred.
     void setSliceRitEnabled(int sliceId, bool on) override;
     void setSliceXitEnabled(int sliceId, bool on) override;
     void setSliceRitOffset(int sliceId, int hz) override;
@@ -341,6 +349,81 @@ private:
     void requestCivIdentity(std::uint64_t sessionGeneration);
     [[nodiscard]] int sliceId() const noexcept { return 0; }
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
+
+    bool hasDualReceivers() const;
+    void initialiseDualReceivers();
+    void pollDualReceivers();
+    bool handleDualReceiverFrame(const CivFrame& frame);
+    void publishDualReceiver(int receiver);
+    void syncDualTransmit();
+    void writeDualMode(int receiver, CivMode mode, std::uint8_t data, int filter);
+    std::vector<std::uint8_t> receiverCommand(const std::vector<std::uint8_t>& frame) const;
+    std::optional<ModulationProfile> currentModulationProfile() const;
+    void onDualAudio(const std::vector<float>& interleaved);
+    void publishDualPan(int receiver);
+    void settleDualPanLifecycle();
+    void requestDualScopeWindow(int receiver, double centreHz, double widthHz);
+    void flushDualScopeWindow(int receiver);
+    bool restoreDualScopePresetsConfirmed();
+    bool handleDualScopePreset(const CivFrame& frame);
+    struct ReceiverState {
+        std::uint64_t frequencyHz = 0;
+        std::optional<std::uint64_t> commandedFrequencyHz;
+        CivMode mode = CivMode::Usb;
+        std::uint8_t data = 0;
+        int filter = 1;
+        bool modeKnown = false;
+        int monitorGain = 100;
+        int monitorPan = 50;
+        bool monitorMute = false;
+        ScopeDecoder scope{ScopeGeometry{}};
+        ScopeCalibration calibration;
+        std::int64_t centreHz = 0;
+        std::int64_t spanHz = 0;
+        ScopeMode scopeMode = ScopeMode::Centre;
+        std::uint64_t scopeFrames = 0;
+        qint64 lastScopeAtMs = 0;
+        std::uint64_t audioFrames = 0;
+        double audioRms = 0.0;
+        bool visible = false;
+        bool viewInitialised = false;
+        int edgeSlot = 0;
+        int borrowedSlot = 0;
+        int originalSlot = 0;
+        std::optional<ScopeEdgeWindow> windowTarget;
+        int windowRange = 0;
+        std::optional<double> pendingCentreHz;
+        qint64 lastWindowWriteMs = -200;
+        bool windowFlushScheduled = false;
+        std::uint64_t windowEpoch = 0;
+        qint64 windowHoldUntilMs = 0;
+        std::unique_ptr<Resampler> audio;
+    };
+    std::array<ReceiverState, 2> m_receivers;
+    bool m_dualInitialised = false;
+    std::optional<bool> m_dualSplit;
+    std::optional<int> m_dualRequestedTxReceiver;
+    std::optional<std::uint64_t> m_dualTxFrequencyHz;
+    std::array<int, 4> m_dualModInputs{{-1, -1, -1, -1}};
+    std::optional<bool> m_dualWatch;
+    int m_dualTxReceiver = 0;
+    int m_dualFocus = 0;
+    bool m_dualPanOpening = false;
+    bool m_dualPanWatchRequested = false;
+    bool m_dualPanClosing = false;
+    bool m_dualWatchOwned = false;
+    bool m_dualPanHasOpened = false;
+    int m_dualMainMonitorPan = 0;
+    std::uint64_t m_dualPaneEpoch = 0;
+    using ScopePresetKey = std::pair<int, int>;
+    std::map<ScopePresetKey, ScopeEdgeWindow> m_dualSavedPresets;
+    std::map<ScopePresetKey, ScopeEdgeWindow> m_dualWrittenPresets;
+    std::set<ScopePresetKey> m_dualPresetReads;
+    std::map<ScopePresetKey, ScopeEdgeWindow> m_dualObservedPresets;
+    std::map<ScopePresetKey, ScopeEdgeWindow> m_dualRestoreExpected;
+    std::array<int, 2> m_dualRestoreSlots{};
+    bool m_dualRestoring = false;
+    int m_lanOutput = -1;
 
     std::unique_ptr<IcomSession> m_session;
     std::uint64_t m_sessionGeneration = 0;
