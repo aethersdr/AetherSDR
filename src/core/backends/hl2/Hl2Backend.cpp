@@ -2288,8 +2288,6 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // A new connect re-derives the passband from the mode; a mid-session linkUp
     // (EP6 silence then resume) does not. See m_passbandDerivedThisConnect.
     m_passbandDerivedThisConnect = false;
-    // The TX route is this radio's own, restored by applyRestoredState() (#4954):
-    // a transverter on RF1 must not come back to up to 5 W out of ANT.
 
     // Load this radio's frequency calibration first, before any frequency is
     // computed. Keyed by MAC (one crystal per radio); an empty serial gets the
@@ -2509,6 +2507,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.cl1RefClock = m_hw.cl1RefClock;
     // Identity for the CL1 latch, which is per-radio while MetisClient is not.
     mp.radioSerial = m_radioSerial;
+    // The TX route is this radio's own, restored by applyRestoredState() (#4954):
+    // a transverter on RF1 must not come back to up to 5 W out of ANT.
     mp.txRoute     = m_txRoute;
     qCInfo(lcHl2).nospace()
         << "HL2 band filter: " << QString::asprintf("0x%02X", m_ocFilterByte)

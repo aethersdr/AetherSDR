@@ -33,6 +33,7 @@
 #include <QStringList>
 #include <QThread>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -121,6 +122,7 @@ struct Hl2TxRouteTestAccess {
     static void clientRefused(Hl2Backend& b, int actual) { b.onMetisTxRouteRefused(actual); }
     static void setBandKey(Hl2Backend& b, const QString& band) { b.m_currentBandKey = band; }
     static void seedConnectDrive(Hl2Backend& b) { b.seedConnectDrive(); }
+    static void pushInitialState(Hl2Backend& b) { b.pushInitialState(); }
     static void emitAllSliceState(Hl2Backend& b) { b.emitAllSliceState(); }
     // What start() does with Params.txRoute, which connectRadio() fills from m_txRoute.
     static void startSessionOnBackendRoute(Hl2Backend& b)
@@ -497,6 +499,11 @@ void testBackendDrive(TxTestAuthority& authority)
     d = drainBackend(b);
     check(d && (*d)[1] == 20 * kTxDriveMax / 100 && !paOn(*d), "RT12: TUNE on RF1 uses RF1's drive");
     check(A::tuneFor(b, b40) == tune40, "RT12: TUNE on RF1 records no tune power");
+    b.requestTransmitControl({TransmitControlRequest::Field::TunePower, 95},
+                             TunePowerContext::LiveLocalCarrier);
+    d = drainBackend(b);
+    check(!d || ((*d)[1] == 20 * kTxDriveMax / 100 && !paOn(*d)),
+          "RT12: the tune slider moved during TUNE on RF1 leaves RF1's drive");
     b.setTune(false, 80, authority.operation, {});
     A::expireTxTail(b);
     d = drainBackend(b);
@@ -602,6 +609,13 @@ void testPersistence()
     std::optional<Cc> d = drainBackend(b);
     check(d && (*d)[1] == 0 && !paOn(*d) && A::bandDrive(b, b20) == 100,
           "RT7: the connect push leaves RF1 at drive 0, PA off, and ANT's band drive alone");
+    // linkUp: pushInitialState() applies the start band's drive on ANT only.
+    p.clearRfPower();
+    A::pushInitialState(b);
+    d = drainBackend(b);
+    check((!d || ((*d)[1] == 0 && !paOn(*d))) && A::bandDrive(b, b20) == 100
+              && std::find(p.rfPower.begin(), p.rfPower.end(), 100) == p.rfPower.end(),
+          "RT7: linkUp on a restored RF1 applies and echoes no ANT band drive");
     A::emitAllSliceState(b);
     check(bothSay(p, "RF1"), "RT7: every slice publishes the restored RF1");
 
