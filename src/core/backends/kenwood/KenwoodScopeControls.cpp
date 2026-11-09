@@ -398,7 +398,7 @@ bool KenwoodBackend::adoptScopeControl(const QByteArray& message, quint64 ingres
 
 void KenwoodBackend::adoptScopeFilterFrame(const QByteArray& message, quint64 ingressBatch)
 {
-    if (message.size() != 431 || !message.startsWith("##DD3")) { return; }
+    if (message.size() != 431 || !message.startsWith("##DD" "3")) { return; }
     QVariantList values; values.reserve(213);
     const auto hex = [](char digit) {
         if (digit >= '0' && digit <= '9') { return digit - '0'; }

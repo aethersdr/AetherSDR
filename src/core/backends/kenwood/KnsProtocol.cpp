@@ -194,7 +194,7 @@ KnsProtocol::Events KnsProtocol::tick(qint64 nowMs)
 
 std::optional<ScopeLine> decodeScope(const QByteArray& message)
 {
-    if (!message.startsWith("##DD2") || message.size() != 1285) { return std::nullopt; }
+    if (!message.startsWith("##DD" "2") || message.size() != 1285) { return std::nullopt; }
     ScopeLine line;
     line.levels.reserve(640);
     for (qsizetype index = 5; index < message.size(); index += 2) {

@@ -1133,7 +1133,7 @@ void KenwoodBackend::adopt(const QByteArray& message, quint64 ingressBatch)
     if ((message.startsWith("BS") || message.startsWith("DD0") || message.startsWith("DD1") || message.startsWith("AI"))
         && !adoptScopeControl(message, ingressBatch)) { return; }
     if (!guard || publicationGeneration != m_generation) { return; }
-    if (message.startsWith("##DD3")) {
+    if (message.startsWith("##DD" "3")) {
         adoptScopeFilterFrame(message, ingressBatch);
         return;
     }
@@ -1686,7 +1686,7 @@ void KenwoodBackend::adopt(const QByteArray& message, quint64 ingressBatch)
             }
         }
         publishGeometry();
-    } else if (message.startsWith("##DD2")) {
+    } else if (message.startsWith("##DD" "2")) {
         const std::optional<ScopeLine> scope = decodeScope(message);
         const bool center = m_scopeMode == 0 && m_scopeShift == 4 && m_spanHz > 0
             && m_receiveVfo >= 0 && m_frequency[m_receiveVfo] > 0;
