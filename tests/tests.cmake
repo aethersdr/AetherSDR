@@ -10819,6 +10819,7 @@ set_tests_properties(two_tone_tune_gate_test PROPERTIES
 add_executable(phone_tx_filter_numeric_entry_test
     tests/phone_tx_filter_numeric_entry_test.cpp
     src/gui/PhoneApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
@@ -10837,6 +10838,7 @@ set_tests_properties(phone_tx_filter_numeric_entry_test PROPERTIES
 add_executable(phone_applet_dexp_visibility_test
     tests/phone_applet_dexp_visibility_test.cpp
     src/gui/PhoneApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
@@ -10858,6 +10860,7 @@ set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
 add_executable(phone_applet_vox_disarm_test
     tests/phone_applet_vox_disarm_test.cpp
     src/gui/PhoneApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
@@ -10964,6 +10967,7 @@ set_tests_properties(phone_cw_acc_availability_test PROPERTIES
 add_executable(phone_mon_vox_availability_test
     tests/phone_mon_vox_availability_test.cpp
     src/gui/PhoneApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PhoneCwApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
