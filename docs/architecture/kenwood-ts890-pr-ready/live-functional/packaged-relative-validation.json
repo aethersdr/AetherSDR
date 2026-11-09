@@ -1,0 +1,29 @@
+{
+  "status": "REPRESENTATIVE_LIVE_FC_UD_PASS_RESTORED",
+  "app": "build-ts890-m5/delivery-pr-rx-20261106-085700/AetherSDR.app",
+  "physicalSettingWrites": 6,
+  "cases": [
+    {
+      "action": "FC Up x1",
+      "observedAfterMhz": 1.82701,
+      "readbackSeconds": 1.1363715410116129,
+      "restoredMhz": 1.827,
+      "passed": true
+    },
+    {
+      "action": "UD Up single",
+      "observedAfterMhz": 1.82701,
+      "readbackSeconds": 0.4469456669758074,
+      "restoredMhz": 1.827,
+      "passed": true
+    },
+    {
+      "action": "UD Down3",
+      "observedAfterMhz": 1.82697,
+      "readbackSeconds": 1.7304936250438914,
+      "restoredMhz": 1.827,
+      "passed": true
+    }
+  ],
+  "qualification": "Three real-widget representative cases; other discrete parameter combinations are software-qualified, not exhaustively hardware-tested. Earlier failed attempt preserved separately."
+}
