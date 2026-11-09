@@ -155,7 +155,8 @@ private:
     TxCoordinator::Request m_pttRequest;
     TxCoordinator::Request m_cwxRequest;
     // send_morse on a radio with no text buffer (hasHostCwTextKeyer). Created
-    // on first use; used and destroyed on the model's thread only.
+    // on first use; used on the model's thread only, and closed there by the
+    // destructor (queued only when it runs on another thread).
     std::shared_ptr<HostCwTextKeyer> m_hostCwText;
     int  m_sliceIndex{0};
     bool m_extended{false};

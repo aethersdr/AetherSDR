@@ -261,6 +261,31 @@ void testStopMorseKeysUpAtOnce()
     check("and keys again", pumpUntil([&] { return f.edges.size() >= 2; }, 2000) && f.edges.size() == 2);
 }
 
+// The protocol destroyed mid-message, as ~RadioSession does before the model
+// destructs: the key is up before the destructor returns, with no event-loop
+// turn, and nothing keys afterwards, a send() still queued included.
+void testDestroyedMidMessage()
+{
+    Fixture f(hl2Capabilities(true), QStringLiteral("hl2"), QStringLiteral("CW"));
+    auto port = std::make_unique<RigctlProtocol>(&f.radio);
+    port->setSliceIndex(0);
+    (void)cat(*port, QStringLiteral("L KEYSPD 20"));
+    check("teardown: send_morse accepted",
+          cat(*port, QStringLiteral("b MMMMMMMMMM")).endsWith(QLatin1String("RPRT 0")));
+    check("teardown: the first key-down arrives", pumpUntil([&] { return !f.edges.empty(); }, 2000));
+    pumpFor(20);
+    check("teardown: precondition, the key is down mid-element", !f.edges.empty() && f.edges.back().down);
+    // A second message handed to a queued send() that has not run yet.
+    check("teardown: a second send is queued",
+          port->handleLine(QStringLiteral("b MMMM")).trimmed() == QLatin1String("RPRT 0"));
+    const size_t before = f.edges.size();
+    port.reset();
+    check("teardown: the key is up when the destructor returns",
+          f.edges.size() == before + 1 && !f.edges.back().down);
+    pumpFor(800);
+    check("teardown: and no further edge follows, the queued send included", f.edges.size() == before + 1);
+}
+
 void testRefusals()
 {
     {
@@ -501,6 +526,7 @@ int main(int argc, char** argv)
     }
     testHl2KeysTextInMorseTiming();
     testStopMorseKeysUpAtOnce();
+    testDestroyedMidMessage();
     testRefusals();
     testBreakInOff();
     testLengthBounds();
