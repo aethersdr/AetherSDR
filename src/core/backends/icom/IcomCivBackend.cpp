@@ -413,6 +413,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
     c.cwTextControl = std::nullopt;
+    c.hostCwKeyingControl = std::nullopt;   // setCwKeying() is the default no-op
     c.cwTextKeyerName = QStringLiteral("CWK");
     c.cwTextMinWpm = profile.cwTextKeyer ? profile.cwTextKeyer->minWpm : 6;
     c.cwTextMaxWpm = profile.cwTextKeyer ? profile.cwTextKeyer->maxWpm : 48;

@@ -86,7 +86,7 @@ void HostCwTextKeyer::stop()
     m_input = {};
     m_keyer.reset();   // joins the worker; its final key-up finds a closed request
     if (m_model) {
-        m_model->abortTxProducerInputs(m_producer, TransmitModel::PttSource::Dax);
+        m_model->abortTxProducerInputs(m_producer, TransmitModel::PttSource::Mox);
     }
 }
 
