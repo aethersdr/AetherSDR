@@ -6970,6 +6970,11 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME automation_probe_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
+    # Tailnet shim discovery helper: relay framing over a socket pair, and a
+    # loopback broadcast. No shim or radio.
+    add_test(NAME tailnet_discovery_helper
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/flex-tailnet-shim/test_discovery_helper.py)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
