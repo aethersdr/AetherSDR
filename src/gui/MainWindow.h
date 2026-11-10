@@ -718,6 +718,10 @@ private:
     QString txAudioPathBlockMessage(TxAudioPathBlock block) const;
     bool showTxAudioPathErrorIfBlocked(); // MainWindow_DspApplets.cpp
     void updateTxAudioPathNotice(); // MainWindow_DspApplets.cpp
+    bool txMicChainReady() const;   // MainWindow_DspApplets.cpp
+    void refreshTxMicReadyIndicators(); // MainWindow_DspApplets.cpp
+    void noticeVoiceKeyWithoutInput(); // MainWindow_DspApplets.cpp
+    NoInputVoiceKeyNotice m_noInputVoiceKeyNotice;
     // Binds the Flex-shaped voice controls — PROC and its NOR/DX/DX+ level — to
     // the client-side compressor on a backend that modulates on this host, and
     // publishes that compressor's gain reduction as the TX:COMPPEAK meter.
