@@ -8,11 +8,3 @@ third_party/wdsp/** linguist-vendored whitespace=-trailing-space,-space-before-t
 
 # PDFs are binary even when their streams are uncompressed text.
 *.pdf binary
-
-# Shipped to the radio and executed THERE, so they must stay LF whatever the
-# checkout's core.autocrlf says. On a Windows checkout without this, build.py
-# packages `#!/bin/sh\r` and the radio hunts for an interpreter literally named
-# `/bin/sh\r`: "cannot execute: required file not found", exit 127, with
-# nothing naming the \r. The .cfg is corrupted the same way and SmartSDR parses
-# it to register the waveform, so the refusal can come even earlier. See #7126.
-tools/*-agent/package/** text eol=lf
