@@ -75,21 +75,13 @@ from pathlib import Path
 # drop the number here in the same commit. When a file reaches 0, delete its row.
 BASELINE = {
     # ---- models ----
-    "src/models/RadioModel.cpp": 74,
-    "src/models/DaxIqModel.cpp": 4,
-    "src/models/EqualizerModel.cpp": 4,
+    "src/models/RadioModel.cpp": 61,
     "src/models/FlexWaveformModel.cpp": 3,
-    # ---- gui ----
-    "src/gui/MainWindow.cpp": 1,
-    "src/gui/MainWindow_Wiring.cpp": 1,
-    "src/gui/MainWindow_DigitalModes.cpp": 2,
     # ---- core (above the seam; backends/ is excluded) ----
-    "src/core/TciServer.cpp": 3,
     "src/core/AutomationServer.cpp": 1,
     "src/core/WaveformInstaller.cpp": 3,
     "src/core/DvkWavTransfer.cpp": 1,
     "src/core/FirmwareUploader.cpp": 2,
-    "src/core/WfmDemodulator.cpp": 2,
     "src/core/TciProtocol.cpp": 1,
 }
 

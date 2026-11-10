@@ -34,6 +34,7 @@ public:
         return m_state && m_state->live.load(std::memory_order_acquire)
             && std::chrono::steady_clock::now() < m_state->deadline;
     }
+    bool present() const { return bool(m_state); }
 
     void revoke() const
     {

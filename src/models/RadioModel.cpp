@@ -903,6 +903,17 @@ RadioModel::SetupCommandSink RadioModel::setupCommandSink(const SetupCommandWrit
     };
 }
 
+RadioModel::AudioCommandSink RadioModel::audioCommandSink()
+{
+    const QPointer<RadioModel> model(this);
+    const quint64 generation = m_backendReceiverGeneration;
+    return [model, generation](const QString& command, ResponseCallback reply, const AudioControlGuard& guard) {
+        if (!model || generation != model->m_backendReceiverGeneration
+            || !model->controlSessionCurrent(model->controlSession())) { return false; }
+        return model->sendCmd(command, std::move(reply), [guard] { return guard.permits(); }) != 0;
+    };
+}
+
 void RadioModel::setupBackend(const QString& family)
 {
     // Rerunnable on every family switch. Every connection made here must have the
@@ -979,6 +990,7 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
+            flex->setAudioCommandSink(audioCommandSink());
             flex->setDaxTxClientHandleProvider([this] { return ourClientHandle(); });
             flex->setDaxTxCommandSink([this](const QString& command, ResponseCallback reply,
                                             const DaxTxRequestGuard& guard) {
@@ -1474,12 +1486,14 @@ void RadioModel::setupBackend(const QString& family)
             m_panStream->notifyDaxCreateFailed(ch);
             return;
         }
-        sendCmd(QString("stream create type=dax_rx dax_channel=%1").arg(ch),
-                [this, ch](int code, const QString& body) {
-            if (code != 0) {
+        const QPointer<PanadapterStream> originalStream(m_panStream);
+        requestAudioStream({AudioStreamKind::DaxReceive, AudioStreamAction::Create, 0, ch},
+                [originalStream, ch](const AudioStreamReply& reply) {
+            if (!originalStream) { return; }
+            if (reply.result.kind != RadioControlReply::Kind::Accepted) {
                 qCWarning(lcDax) << "RadioModel: dax_rx stream create for channel"
-                                 << ch << "failed, code" << Qt::hex << code << body;
-                m_panStream->notifyDaxCreateFailed(ch);
+                                 << ch << "failed, code" << Qt::hex << reply.result.code << reply.result.message;
+                originalStream->notifyDaxCreateFailed(ch);
                 return;
             }
             // Success needs no action here. The #1439 legacy client-
@@ -1495,10 +1509,9 @@ void RadioModel::setupBackend(const QString& family)
     if (m_panStream)
     connect(m_panStream, &PanadapterStream::daxStreamRemoveNeeded,
             this, [this, generation](quint32 streamId, int ch) {
-        Q_UNUSED(ch);
         if (generation != m_backendReceiverGeneration) return;
         if (!isConnected()) return;
-        sendCommand(QString("stream remove 0x%1").arg(streamId, 0, 16));
+        requestAudioStream({AudioStreamKind::DaxReceive, AudioStreamAction::Remove, streamId, ch});
     });
 
     // RadioConnection (created + owned by the backend above, on its own worker
@@ -1651,6 +1664,10 @@ void RadioModel::wireBackendReceiverState()
     }
     const quint64 generation = m_backendReceiverGeneration;
     wireGpsSessionReceivers();
+    connect(m_backend.get(), &IRadioBackend::audioStreamChanged, this,
+        [this, generation](const AudioStreamDelta& delta) {
+            if (generation == m_backendReceiverGeneration) { applyAudioStreamDelta(delta); }
+        });
     // The radio's answer to a transmit setting the caller waits on. Queued, so
     // an answer never lands inside the request that asked for it, and a
     // replaced backend's late answer is dropped by the generation guard.
@@ -1878,6 +1895,8 @@ void RadioModel::wireBackendReceiverState()
 
 void RadioModel::teardownBackend()
 {
+    m_txSessionClosing = true;
+    resetAudioControls();
     resetAdministration();
     resetTransmitDaxSessionState();
     // Retirement callbacks can attempt edits before teardown returns.
@@ -2278,6 +2297,9 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<PanControlRequest>();
     qRegisterMetaType<SlicePresetRequest>();
     qRegisterMetaType<PanDisplayRequest>();
+    qRegisterMetaType<AudioStreamRequest>();
+    qRegisterMetaType<GraphicEqRequest>();
+    qRegisterMetaType<AudioStreamDelta>();
     qRegisterMetaType<PanLifecycleRequest>();
     connect(this, &RadioModel::panadapterAdded, this, &RadioModel::settlePanCreations);
     connect(this, &RadioModel::panadapterReclaimed, this, &RadioModel::settlePanCreations);
@@ -2598,9 +2620,8 @@ RadioModel::RadioModel(QObject* parent)
         return backendCapabilities().daxIqSampleRates;
     });
 
-    // Forward DAX IQ commands to the radio
-    connect(&m_daxIqModel, &DaxIqModel::commandReady, this, [this](const QString& cmd){
-        sendCmd(cmd);
+    m_daxIqModel.setControlDispatcher([this](AudioStreamRequest request, const AudioStreamCompletion& completion) {
+        return requestAudioStream(std::move(request), completion);
     });
 
     // Route amplifier (PGXL) operate intent to the radio through the backend seam
@@ -2647,18 +2668,8 @@ RadioModel::RadioModel(QObject* parent)
     });
 
 
-    // Forward equalizer model commands to the radio
-    connect(&m_equalizerModel, &EqualizerModel::commandReady, this, [this](const QString& cmd){
-        // Without a command plane the graphic EQ is served by ClientEq
-        // (MainWindow::applyGraphicEqToClientEq, bound to the model's own
-        // state signals), so the slider and a mapped MIDI band DO act. Sending
-        // the `eq` text anyway only reached sendCmd's drop and told the
-        // operator a working control was unsupported.
-        if (!hasCommandPlane()) {
-            return;
-        }
-        sendCmd(cmd);
-    });
+    connect(&m_equalizerModel, &EqualizerModel::controlRequested, this,
+        [this](const GraphicEqRequest& request) { requestGraphicEq(request); });
 
     // Forward TNF intents to the backend, which decides whether a notch is a
     // radio feature (Flex: `tnf …` on the command plane) or host DSP (HL2:
@@ -6818,7 +6829,7 @@ void RadioModel::setBinauralRx(bool on)
 {
     if (m_binauralRx == on) return;
     m_binauralRx = on;
-    sendCmd(QString("radio set binaural_rx=%1").arg(on ? 1 : 0));
+    requestRadioSetup({RadioSetupField::BinauralReceive, on});
 }
 
 void RadioModel::setPanWnb(bool on)
@@ -8069,17 +8080,19 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
                         // Radio always forces Opus for remote_audio_tx regardless of
                         // what we request (confirmed by protocol testing, v1.4.0.0).
-                        sendCmd(
-                            "stream create type=remote_audio_tx compression=opus",
-                            [this](int code, const QString& body) {
-                                if (code == 0) {
-                                    quint32 id = body.trimmed().toUInt(nullptr, 16);
+                        // The Demo declares no stream control, so it gets no request.
+                        const std::optional<AudioStreamControl> streams = backendCapabilities().audioStreamControl;
+                        if (!streams || !streams->supports(AudioStreamKind::RemoteTransmit)) { return; }
+                        requestAudioStream({AudioStreamKind::RemoteTransmit, AudioStreamAction::Create},
+                            [this](const AudioStreamReply& reply) {
+                                if (reply.result.kind == RadioControlReply::Kind::Accepted) {
+                                    const quint32 id = reply.streamId;
                                     qCDebug(lcProtocol) << "RadioModel: remote_audio_tx stream created, id:"
                                              << Qt::hex << id;
                                     emit remoteTxStreamReady(id);
                                 } else {
                                     qCWarning(lcProtocol) << "RadioModel: stream create remote_audio_tx failed, code"
-                                               << Qt::hex << code << "body:" << body;
+                                               << Qt::hex << reply.result.code << "body:" << reply.result.message;
                                 }
                             });
                     });
@@ -8385,6 +8398,8 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    m_txSessionClosing = true;
+    resetAudioControls();
     resetAdministration();
     resetTransmitDaxSessionState();
     const auto retireDax = qScopeGuard([this] { resetTransmitDaxSessionState(); });
@@ -10014,6 +10029,7 @@ void RadioModel::requestLocalPtt()
 
 void RadioModel::createRxAudioStream()
 {
+    if (!backendCapabilities().audioStreamControl) { return; }
     const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
     if (!pcAudio && !lineOutAudioStreamDemanded()) {
         qCDebug(lcProtocol) << "RadioModel: PC audio disabled and Line Out consent is off — skipping remote_audio_rx";
@@ -10023,11 +10039,17 @@ void RadioModel::createRxAudioStream()
 
     // A pre-connect PC Audio toggle must not leave a request pending when no
     // registered GUI session can send it. The connect handshake retries it.
-    if (!hasCommandPlane() || !isConnected()
+    if (!isConnected()
         || m_guiClientRegistrationState.phase() != GuiClientRegistrationState::Phase::Registered) {
-        logRemoteAudioRxSummary(hasCommandPlane()
-            ? QStringLiteral("create deferred: GUI session not ready")
-            : QStringLiteral("create skipped: backend has no command plane"));
+        logRemoteAudioRxSummary(QStringLiteral("create deferred: GUI session not ready"));
+        return;
+    }
+    if (m_remoteRxAllocationPending) {
+        if (m_rxAudio.removeRequested) {
+            m_rxAudio.removeRequested = false;
+            m_remoteRxRestartAfterCancel = true;
+        }
+        logRemoteAudioRxSummary(QStringLiteral("create skipped: request already pending"));
         return;
     }
 
@@ -10035,29 +10057,35 @@ void RadioModel::createRxAudioStream()
         logRemoteAudioRxSummary(QStringLiteral("create skipped: stream already known"));
         return;
     }
-    if (m_rxAudio.createPending) {
-        logRemoteAudioRxSummary(QStringLiteral("create skipped: request already pending"));
-        return;
-    }
 
+    m_remoteRxAllocationPending = true;
     m_rxAudio.createPending = true;
     m_rxAudio.removeRequested = false;
+    m_remoteRxRestartAfterCancel = false;
+    const RadioControlSession session = controlSession();
+    const quint64 revision = ++m_remoteRxRequestRevision;
+    const QString compression = audioCompressionParam();
+    m_remoteRxCreateGuard = AudioControlGuard::create(30000);
     resetAudioStreamDiagnostics();
     logRemoteAudioRxSummary(QStringLiteral("create requested"));
     // Push our mute preference before opening the stream. Firmware defaults
     // mute_local_audio_when_remote=1, silencing hardware outputs whenever any
     // remote_audio_rx stream exists. Overriding here covers multi-client
     // scenarios where another client (e.g. SmartSDR) has set it to 1. (#1069)
-    sendCmd(QString("radio set mute_local_audio_when_remote=%1")
-                .arg(m_muteLocalWhenRemote ? 1 : 0));
-    sendCmd(QString("stream create type=remote_audio_rx compression=%1").arg(audioCompressionParam()),
-        [this](int code, const QString& body) {
+    requestRadioSetup({RadioSetupField::MuteLocalWhenRemote, m_muteLocalWhenRemote});
+    AudioStreamRequest request{AudioStreamKind::RemoteReceive, AudioStreamAction::Create};
+    request.compression = compression == QLatin1String("opus") ? AudioCompression::Opus : AudioCompression::None;
+    request.guard = m_remoteRxCreateGuard;
+    requestAudioStream(request,
+        [this, session, revision, compression](const AudioStreamReply& reply) {
+            if (controlSession() != session || m_remoteRxRequestRevision != revision) { return; }
+            m_remoteRxAllocationPending = false;
             m_rxAudio.createPending = false;
-            if (code == 0) {
-                const quint32 streamId = RadioStatusOwnership::parseCreateResponseStreamId(body);
+            if (reply.result.kind == RadioControlReply::Kind::Accepted) {
+                const quint32 streamId = reply.streamId;
                 if (streamId == 0) {
                     qCWarning(lcProtocol) << "RadioModel: stream create remote_audio_rx returned unparseable body:"
-                                          << body;
+                                          << reply.result.message;
                     logRemoteAudioRxSummary(QStringLiteral("create response unparseable"));
                     return;
                 }
@@ -10068,12 +10096,12 @@ void RadioModel::createRxAudioStream()
                                         << RadioStatusOwnership::hexId(oldStreamId)
                                         << "with create response"
                                         << RadioStatusOwnership::hexId(streamId);
-                    sendCmd(QString("stream remove %1").arg(RadioStatusOwnership::hexId(oldStreamId)));
+                    requestAudioStream({AudioStreamKind::RemoteReceive, AudioStreamAction::Remove, oldStreamId});
                 }
 
                 m_rxAudio.streamId = streamId;
                 m_rxAudio.clientHandle = clientHandle();
-                m_rxAudio.compression = audioCompressionParam();
+                m_rxAudio.compression = compression;
                 resetAudioStreamDiagnostics();
                 qCDebug(lcProtocol) << "RadioModel: remote_audio_rx stream created, id:"
                                     << RadioStatusOwnership::hexId(streamId);
@@ -10081,9 +10109,20 @@ void RadioModel::createRxAudioStream()
                 if (m_rxAudio.removeRequested)
                     removeRxAudioStream();
             } else {
+                if (reply.result.kind == RadioControlReply::Kind::Cancelled && reply.streamId != 0
+                    && m_rxAudio.streamId == reply.streamId) { m_rxAudio = {}; }
                 qCWarning(lcProtocol) << "RadioModel: stream create remote_audio_rx failed, code"
-                           << Qt::hex << code << "body:" << body;
+                           << Qt::hex << reply.result.code << "body:" << reply.result.message;
                 logRemoteAudioRxSummary(QStringLiteral("create failed"));
+                if (std::exchange(m_remoteRxRestartAfterCancel, false) && controlSessionCurrent(session)) {
+                    QTimer::singleShot(0, this, [this, session, revision] {
+                        if (controlSessionCurrent(session) && m_remoteRxRequestRevision == revision
+                            && (AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True"
+                                || lineOutAudioStreamDemanded())) {
+                            createRxAudioStream();
+                        }
+                    });
+                }
             }
         });
 }
@@ -10094,8 +10133,10 @@ void RadioModel::removeRxAudioStream()
         m_rxAudio.removeRequested = false;
         return;
     }
+    m_remoteRxCreateGuard.revoke();
+    m_remoteRxRestartAfterCancel = false;
     if (m_rxAudio.streamId == 0) {
-        if (m_rxAudio.createPending) {
+        if (m_remoteRxAllocationPending) {
             m_rxAudio.removeRequested = true;
             logRemoteAudioRxSummary(QStringLiteral("remove deferred: create pending"));
         } else {
@@ -10108,15 +10149,15 @@ void RadioModel::removeRxAudioStream()
     // Reassert our mute preference when tearing down. If another client's
     // stream remains open after ours is removed, this prevents the global
     // mute_local_audio_when_remote from silencing hardware outputs. (#1110)
-    sendCmd(QString("radio set mute_local_audio_when_remote=%1")
-                .arg(m_muteLocalWhenRemote ? 1 : 0));
-    sendCmd(QString("stream remove %1").arg(RadioStatusOwnership::hexId(streamId)));
+    requestRadioSetup({RadioSetupField::MuteLocalWhenRemote, m_muteLocalWhenRemote});
+    if (requestAudioStream({AudioStreamKind::RemoteReceive, AudioStreamAction::Remove, streamId})
+        == ReceiveDispatch::Unsupported) { return; }
     qCDebug(lcProtocol) << "RadioModel: removed remote_audio_rx stream"
                         << RadioStatusOwnership::hexId(streamId);
     m_rxAudio.streamId = 0;
     m_rxAudio.clientHandle = 0;
     m_rxAudio.statusSeen = false;
-    m_rxAudio.removeRequested = false;
+    m_rxAudio.removeRequested = m_remoteRxAllocationPending;
     m_rxAudio.compression.clear();
     resetAudioStreamDiagnostics();
     logRemoteAudioRxSummary(QStringLiteral("remove requested"));
@@ -10127,7 +10168,6 @@ void RadioModel::setLineOutAudioRequested(bool requested)
     if (m_lineOutAudioRequested == requested) { return; }
     m_lineOutAudioRequested = requested;
     if (lineOutAudioStreamDemanded()) {
-        m_rxAudio.removeRequested = false;
         createRxAudioStream();
     } else if (AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True") {
         removeRxAudioStream();
@@ -10145,7 +10185,6 @@ void RadioModel::setLineOutPcAudioOffConsent(bool enabled)
     if (m_lineOutPcAudioOffConsent == enabled) { return; }
     m_lineOutPcAudioOffConsent = enabled;
     if (lineOutAudioStreamDemanded()) {
-        m_rxAudio.removeRequested = false;
         createRxAudioStream();
     } else if (AppSettings::instance().value("PcAudioEnabled", "True").toString() != "True") {
         removeRxAudioStream();
@@ -10239,8 +10278,13 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
         return true;
     }
 
-    if (m_rxAudio.removeRequested && m_rxAudio.streamId != 0)
+    if (m_rxAudio.removeRequested && m_rxAudio.streamId != 0) {
+        // A restart requested while the create was pending (compression
+        // change) still applies once its cancelled reply arrives.
+        const bool restart = m_remoteRxRestartAfterCancel;
         removeRxAudioStream();
+        m_remoteRxRestartAfterCancel = restart && m_remoteRxAllocationPending;
+    }
 
     return true;
 }
@@ -11503,8 +11547,10 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
                     qCInfo(lcDax) << "RadioModel: dax_rx ch" << ch
                                   << "not auto-bound — sending #1439 nudge";
                     m_nudgedDaxStreams.insert(stream.streamId);
-                    sendCommand(QString("slice set %1 dax=%2")
-                                    .arg(s->sliceId()).arg(ch));
+                    if (m_backend) {
+                        m_backend->requestSliceControl(s->sliceId(),
+                            {SliceControlRequest::Field::DaxChannel, ch});
+                    }
                     break;
                 }
             }
@@ -11515,8 +11561,13 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
 void RadioModel::onStatusReceived(const QString& object,
                                   const QMap<QString, QString>& kvs)
 {
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession original = controlSession();
+    if (m_flexBackend) { m_flexBackend->decodeStreamStatus(object, kvs); }
+    if (!alive || controlSession() != original) { return; }
     // Relay to listeners (e.g., MemoryDialog)
     emit statusReceived(object, kvs);
+    if (!alive || controlSession() != original) { return; }
 
     handleRemoteAudioRxStreamStatus(object, kvs);
     if (m_flexBackend) {
@@ -13414,15 +13465,32 @@ void RadioModel::resetPanState()
 
 void RadioModel::createAudioStream()
 {
+    if (m_remoteRxAllocationPending) {
+        m_remoteRxCreateGuard.revoke();
+        m_rxAudio.removeRequested = true;
+        m_remoteRxRestartAfterCancel = true;
+        return;
+    }
     // Remove old audio stream first, then create new one in the callback
     if (m_rxAudio.streamId != 0) {
         const quint32 oldId = m_rxAudio.streamId;
-        m_rxAudio = {};
-        sendCmd(
-            QString("stream remove %1").arg(RadioStatusOwnership::hexId(oldId)),
-            [this](int, const QString&) {
-                // Old stream removed — now create the new one
-                createRxAudioStream();
+        const RadioControlSession session = controlSession();
+        const quint64 revision = ++m_remoteRxRequestRevision;
+        requestAudioStream({AudioStreamKind::RemoteReceive, AudioStreamAction::Remove, oldId},
+            [this, oldId, session, revision](const AudioStreamReply& reply) {
+                if (controlSessionCurrent(session) && reply.result.kind == RadioControlReply::Kind::Failed) {
+                    qCWarning(lcProtocol) << "RadioModel: remote_audio_rx remove for a compression change failed,"
+                                          << "code" << Qt::hex << reply.result.code
+                                          << "- the stream keeps its old compression";
+                }
+                if (controlSessionCurrent(session) && reply.result.code == 0
+                    && m_remoteRxRequestRevision == revision
+                    && (AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True"
+                        || lineOutAudioStreamDemanded())
+                    && (m_rxAudio.streamId == oldId || m_rxAudio.streamId == 0)) {
+                    m_rxAudio = {};
+                    createRxAudioStream();
+                }
             });
     } else {
         createRxAudioStream();
@@ -13488,9 +13556,13 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
     qCInfo(lcDax).noquote()
         << "RadioModel: DAX TX create requested"
         << QStringLiteral("reason=%1").arg(daxTxRequestReasonName(reason));
-    sendCmd(
-        "stream create type=dax_tx",
-        [this, reason, session, createTicket, startRevision, origin](int code, const QString& body) {
+    AudioStreamRequest createRequest{AudioStreamKind::DaxTransmit, AudioStreamAction::Create};
+    createRequest.guard = createGuard;
+    requestAudioStream(createRequest,
+        [this, reason, session, createTicket, startRevision, origin](const AudioStreamReply& reply) {
+            const int code = reply.result.kind == RadioControlReply::Kind::Accepted ? 0
+                : reply.result.code != 0 ? reply.result.code : -1;
+            const QString& body = reply.result.message;
             if (session != m_daxTxSession || createTicket != m_daxTxCreateTicket
                 || !origin || origin != m_backend.get()) {
                 return;
@@ -13506,7 +13578,7 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
                 return;
             }
 
-            const quint32 id = RadioStatusOwnership::parseCreateResponseStreamId(body);
+            const quint32 id = reply.streamId;
             if (id == 0) {
                 qCWarning(lcDax).noquote()
                     << "RadioModel: DAX TX create failed"
@@ -13531,7 +13603,7 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
                 || !origin || origin != m_backend.get()) { return; }
             continueDaxTxOwnership();
             if (self && session == m_daxTxSession) { finishWsprDaxTxRelease(); }
-        }, [createGuard] { return createGuard.permits(); });
+        });
     return true;
 }
 

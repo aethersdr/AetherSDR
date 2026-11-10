@@ -9,6 +9,7 @@
 // Kept honest by `python tools/gen_seam_probe_table.py --check` in
 // .github/workflows/static-checks.yml, on every pull request, without a build.
 
+AETHER_SEAM_PROBE(audioStreamChanged);
 AETHER_SEAM_PROBE(independentTxStopped);
 AETHER_SEAM_PROBE(transmitControlAnswered);
 AETHER_SEAM_PROBE(connected);

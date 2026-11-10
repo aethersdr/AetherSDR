@@ -621,26 +621,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             wirePan(pan);
         }
 
-        // If iq_stop/disconnect wins the race against the radio's stream-create
-        // status, DaxIqModel cannot remove an id it has not learned yet. Reap
-        // the just-created stream as soon as that status arrives.
+        // A status for a channel settles any create we had outstanding, whether
+        // it succeeded or not, so a later iq_start can re-arm. A create that
+        // iq_stop or a disconnect revoked is cleaned up by the model.
         connect(&m_model->daxIqModel(), &DaxIqModel::streamChanged,
-                this, [this](int channel) {
-            // A status for this channel settles any create we had outstanding,
-            // whether it succeeded or not, so a later iq_start can re-arm.
-            m_iqCreateInFlight.remove(channel);
-            if (!m_pendingIqRemovals.contains(channel)
-                || iqChannelInUse(channel)) {
-                return;
-            }
-            const DaxIqModel::IqStream& stream = m_model->daxIqModel().stream(channel);
-            if (!stream.exists) {
-                return;
-            }
-            m_model->daxIqModel().removeStream(channel);
-            m_pendingIqRemovals.remove(channel);
-            m_tciIqChannels.remove(channel);
-        });
+                this, [this](int channel) { m_iqCreateInFlight.remove(channel); });
     }
 
     // Periodic status broadcast (200ms — S-meter, TX sensors, TX state)
@@ -4336,11 +4321,10 @@ bool TciServer::ensureIqStream(int trx)
     // it — re-binding would only steal it from the receiver that has it.
     const int shared = m_iqPanChannel.value(panId, 0);
     if (shared != 0) {
-        m_pendingIqRemovals.remove(shared);
         iq.setSampleRate(shared, rate);
-        if (!iq.stream(shared).exists && !m_iqCreateInFlight.contains(shared)) {
+        if (!iq.stream(shared).exists) {
+            if (!iq.createStream(shared) && !iq.createPending(shared)) { return false; }
             m_iqCreateInFlight.insert(shared);
-            iq.createStream(shared);
         }
         return true;
     }
@@ -4362,35 +4346,33 @@ bool TciServer::ensureIqStream(int trx)
     // The receiver's slice moved pans. Unbind the stale pan before re-pointing
     // the channel, so a pan is never left routed at a channel nothing reads.
     const QString stalePan = m_iqPanChannel.key(channel, QString());
+    // A pan that has since closed has no binding left to undo.
     if (!stalePan.isEmpty() && stalePan != panId) {
-        m_model->sendCommand(
-            QStringLiteral("display pan set %1 daxiq_channel=0").arg(stalePan));
+        PanadapterModel* stale = m_model->panadapter(stalePan);
+        if (stale && m_model->requestPanIqBinding(stale, 0) == ReceiveDispatch::Unsupported) { return false; }
         m_iqPanChannel.remove(stalePan);
     }
 
-    // #3977 makes RadioModel::sendCommand() DROP a `display pan set` for a pan
-    // the radio has said another client owns (the #3951 signature). Test that
-    // condition here rather than reading sendCommand()'s bool: that return also
-    // folds in transport state, so treating it as the answer would report a
-    // receiver unarmed merely because the command was queued. This is the case
-    // the contract is about — without it TCI creates the stream, the bind is
-    // silently dropped, and the skimmer is told it started.
+    // Do not allocate an IQ channel for a pan owned by another client.
     if (PanadapterModel* pan = m_model->panadapter(panId);
         pan && !pan->ownedByClient(m_model->ourClientHandle())) {
         qCWarning(lcCat) << "TCI: refusing IQ start for trx" << trx
                          << "— pan" << panId << "is owned by another client";
         return false;
     }
-    m_model->sendCommand(QStringLiteral("display pan set %1 daxiq_channel=%2")
-                             .arg(panId).arg(channel));
+    if (m_model->requestPanIqBinding(m_model->panadapter(panId), channel) == ReceiveDispatch::Unsupported) { return false; }
 
     m_iqPanChannel.insert(panId, channel);
     m_tciIqChannels.insert(channel);
-    m_pendingIqRemovals.remove(channel);
     iq.setSampleRate(channel, rate);
-    if (!iq.stream(channel).exists && !m_iqCreateInFlight.contains(channel)) {
+    if (!iq.stream(channel).exists) {
+        if (!iq.createStream(channel) && !iq.createPending(channel)) {
+            m_model->requestPanIqBinding(m_model->panadapter(panId), 0);
+            m_iqPanChannel.remove(panId);
+            m_tciIqChannels.remove(channel);
+            return false;
+        }
         m_iqCreateInFlight.insert(channel);
-        iq.createStream(channel);
     }
     return true;
 }
@@ -4417,20 +4399,14 @@ void TciServer::releaseIqChannel(int channel)
     // blocks the DAX IQ applet from using that pan.
     const QString panId = m_iqPanChannel.key(channel, QString());
     if (!panId.isEmpty()) {
-        m_model->sendCommand(
-            QStringLiteral("display pan set %1 daxiq_channel=0").arg(panId));
+        m_model->requestPanIqBinding(m_model->panadapter(panId), 0);
         m_iqPanChannel.remove(panId);
     }
-    if (!m_model->daxIqModel().stream(channel).exists) {
-        // iq_stop won the race against the create status; DaxIqModel cannot
-        // remove an id it has not learned. The streamChanged reaper finishes.
-        m_pendingIqRemovals.insert(channel);
-        return;
-    }
     m_model->daxIqModel().removeStream(channel);
+    // An unanswered create is revoked by the model, which also removes its late
+    // ID, so nothing is left for the streamChanged reaper.
     m_tciIqChannels.remove(channel);
     m_iqCreateInFlight.remove(channel);
-    m_pendingIqRemovals.remove(channel);
 }
 
 // The DaxIqModel mutations below are called DIRECTLY, not via
@@ -4463,20 +4439,18 @@ void TciServer::releaseAllIqStreams()
     for (int channel : owned) {
         releaseIqChannel(channel);
     }
-    // Keep exactly the ownership entries the reaper still needs; drop the rest.
     // The same TciServer object is stopped and restarted by TciApplet (enable
     // toggle, port change), so a claim left behind here outlives the session
     // that made it.
     m_iqCreateInFlight.clear();
     m_iqPanChannel.clear();
-    m_tciIqChannels.intersect(m_pendingIqRemovals);
+    m_tciIqChannels.clear();
 }
 
 void TciServer::resetIqStreamBookkeeping()
 {
     m_tciIqChannels.clear();
     m_iqCreateInFlight.clear();
-    m_pendingIqRemovals.clear();
     m_iqPanChannel.clear();
 }
 

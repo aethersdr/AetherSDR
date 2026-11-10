@@ -4,6 +4,7 @@
 #include "core/SpotRequestQueue.h"
 #include "core/SpectrumDecodeScale.h"
 #include "core/backends/IndependentTxControl.h"
+#include "core/backends/AudioControlRequest.h"
 
 #include "core/backends/flex/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
@@ -1653,6 +1654,10 @@ public:
     // Speaker mix shared by PC playback and independent Line Out demand.
     void createRxAudioStream();
     void removeRxAudioStream();
+    ReceiveDispatch requestAudioStream(AudioStreamRequest request, const AudioStreamCompletion& completion = {});
+    ReceiveDispatch requestGraphicEq(GraphicEqRequest request);
+    ReceiveDispatch requestPanIqBinding(PanadapterModel* pan, int channel);
+    void reassertSliceAudio(SliceModel* slice);
     void setLineOutAudioRequested(bool requested);
     bool lineOutAudioRequested() const { return m_lineOutAudioRequested; }
     bool lineOutAudioStreamDemanded() const;
@@ -1693,6 +1698,36 @@ private slots:
                                 const SpectrumCoverage& coverage);
 
 private:
+    void resetAudioControls();
+    void applyAudioStreamDelta(const AudioStreamDelta& delta);
+    struct AudioStreamIdentity {
+        AudioStreamKind kind;
+        int channel{0};
+        quint32 owner{0};
+        quint64 incarnation{0};
+    };
+    struct PendingAudioControl {
+        AudioStreamRequest request;
+        RadioControlSession session;
+        quint64 retirementSerial{0};
+        quint64 retirementEpoch{0};
+        quint64 incarnation{0};
+        AudioStreamCompletion completion;
+        bool completed{false};
+        bool answered{false};
+        QPointer<QTimer> deadline{};
+    };
+    QHash<quint32, AudioStreamIdentity> m_audioStreams;
+    QHash<quint32, quint64> m_audioRetirements;
+    QHash<quint64, std::shared_ptr<PendingAudioControl>> m_audioPending;
+    QHash<int, AudioControlGuard> m_graphicEqGuards;
+    quint64 m_audioTicket{0};
+    quint64 m_audioRetirementSerial{0};
+    quint64 m_audioRetirementEpoch{0};
+    AudioControlGuard m_remoteRxCreateGuard;
+    bool m_remoteRxAllocationPending{false};
+    quint64 m_remoteRxRequestRevision{0};
+    bool m_remoteRxRestartAfterCancel{false};
     struct PendingPanCreation;
     QMap<quint64, std::shared_ptr<PendingPanCreation>> m_pendingPanCreations;
     quint64 m_nextPanCreation{0};
@@ -1735,6 +1770,7 @@ private:
     void observeDaxTxStream(const DaxTxStreamDelta& delta);
     void publishDaxTxOwnership();
     void refreshDaxTxOwnershipGuards();
+    bool daxTxOwnershipWritten() const;
     void interruptDaxTxOwnership(const QString& reason);
     bool beginDaxTxOwnership(bool take, bool wspr);
     void continueDaxTxOwnership();
@@ -2169,6 +2205,8 @@ private:
     using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
     using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
     SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {});
+    using AudioCommandSink = std::function<bool(const QString&, ResponseCallback, const AudioControlGuard&)>;
+    AudioCommandSink audioCommandSink();
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
