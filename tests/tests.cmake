@@ -276,6 +276,7 @@ set_tests_properties(audio_engine_pcm_lifetime_test PROPERTIES TIMEOUT 120)
 add_executable(audio_engine_tx_input_missing_test tests/audio_engine_tx_input_missing_test.cpp)
 target_link_libraries(audio_engine_tx_input_missing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME audio_engine_tx_input_missing_test COMMAND audio_engine_tx_input_missing_test)
+set_tests_properties(audio_engine_tx_input_missing_test PROPERTIES TIMEOUT 120)
 
 # #5687 follow-up: managed Kiwi sources must actually be given an NNR filter.
 # Drives the real DSP initializer through the friend seam; no sockets/devices.

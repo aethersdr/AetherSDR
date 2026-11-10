@@ -1328,6 +1328,7 @@ private:
     std::unique_ptr<Resampler> m_txResampler;  // RADE e.g. 48k -> 24k (lazy init)
 
     friend class AudioEngineRatesTestAccess;
+    friend class AudioEngineTxInputMissingTestAccess;  // #7078
     void captureLineOutAudio(const QByteArray& pcm, int sampleRate);
     void resetLineOutCapture();
     PcmProducer m_lineOutProducer;

@@ -119,5 +119,51 @@ int main()
           classifyTxAudioPath(true, flex, true, u"PC", true), TxAudioPathBlock::None);
     check("backend without routing restrictions ignores a missing input",
           classifyTxAudioPath(true, other, true, u"PC", true), TxAudioPathBlock::None);
+
+    const auto checkBool = [&failures](const char* name, bool actual, bool expected) {
+        const bool passed = actual == expected;
+        std::printf("%s %s\n", passed ? "PASS" : "FAIL", name);
+        if (!passed) {
+            ++failures;
+        }
+    };
+
+    // Which NoInputDevice text is shown.
+    // HL2 shape: micSelection is forced to PC. Icom shape: it stays "MIC".
+    RadioCapabilities hl2;
+    hl2.canTransmit = true;
+    hl2.takesTxAudioOverSeam = true;
+    hl2.hostModulates = true;
+    RadioCapabilities icom;
+    icom.canTransmit = true;
+    icom.takesTxAudioOverSeam = true;
+
+    // Which NoInputDevice text is shown.
+    checkBool("host-modulated radio gets the no-voice-RF wording",
+              noInputDeviceWording(hl2) == NoInputDeviceWording::NoVoiceRf, true);
+    checkBool("radio-modulated seam radio gets the no-computer-voice wording",
+              noInputDeviceWording(icom) == NoInputDeviceWording::NoComputerVoice, true);
+
+    // Whether a device change retries capture; the Icom must too (#7078).
+    checkBool("HL2 retries capture", txCaptureRetryWanted(true, hl2, true, u"PC"), true);
+    checkBool("networked Icom with PC Audio on retries capture with mic MIC",
+              txCaptureRetryWanted(true, icom, true, u"MIC"), true);
+    checkBool("networked Icom with PC Audio off opens no capture",
+              txCaptureRetryWanted(true, icom, false, u"MIC"), false);
+    checkBool("host-modulated seam retries even with the setting off",
+              txCaptureRetryWanted(true, hl2, false, u"MIC"), true);
+    RadioCapabilities icomRx = icom;
+    icomRx.canTransmit = false;
+    checkBool("receive-only seam radio opens no capture",
+              txCaptureRetryWanted(true, icomRx, true, u"MIC"), false);
+    checkBool("disconnected radio opens no capture",
+              txCaptureRetryWanted(false, icom, true, u"PC"), false);
+    // Flex: unchanged, the PC mic selection alone decides.
+    for (bool pcOn : {false, true}) {
+        checkBool("Flex PC mic retries capture", txCaptureRetryWanted(true, flex, pcOn, u"PC"),
+                  true);
+        checkBool("Flex radio mic opens no capture",
+                  txCaptureRetryWanted(true, flex, pcOn, u"MIC"), false);
+    }
     return failures == 0 ? 0 : 1;
 }

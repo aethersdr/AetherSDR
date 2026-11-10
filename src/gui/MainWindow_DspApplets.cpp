@@ -70,7 +70,8 @@ QString MainWindow::txAudioPathBlockMessage(TxAudioPathBlock block) const
                   "A mic plugged into the radio bypasses its effects. "
                   "In Phone/CW, set Microphone source to PC.");
     case TxAudioPathBlock::NoInputDevice:
-        if (m_radioModel.backendCapabilities().hostModulates) {
+        if (noInputDeviceWording(m_radioModel.backendCapabilities())
+            == NoInputDeviceWording::NoVoiceRf) {
             return tr("No microphone: this radio is modulated by the computer, "
                       "and no audio input device was found. Voice transmits no "
                       "RF until one is connected. CW, TUNE and DAX/TCI are not "
@@ -78,7 +79,8 @@ QString MainWindow::txAudioPathBlockMessage(TxAudioPathBlock block) const
         }
         return tr("No microphone: no audio input device was found on this "
                   "computer, so no voice audio from the computer reaches the "
-                  "radio. Connect a microphone to this computer.");
+                  "radio. AetherTX needs a microphone connected to this "
+                  "computer.");
     case TxAudioPathBlock::None:
         return {};
     }
@@ -135,8 +137,12 @@ void MainWindow::updateTxAudioPathNotice()
             compact = tr("A radio mic bypasses AetherTX. In Phone/CW, "
                          "set Microphone source to PC.");
         } else if (block == TxAudioPathBlock::NoInputDevice) {
-            compact = tr("No audio input device was found. Connect a "
-                         "microphone to this computer.");
+            compact = noInputDeviceWording(m_radioModel.backendCapabilities())
+                    == NoInputDeviceWording::NoVoiceRf
+                ? tr("No audio input device was found. Connect a "
+                     "microphone to this computer.")
+                : tr("No audio input device was found. AetherTX needs a "
+                     "microphone connected to this computer.");
         }
     }
 

@@ -14,8 +14,7 @@
 
 namespace AetherSDR {
 
-// Same friend seam as audio_engine_rates_test, in a separate executable.
-class AudioEngineRatesTestAccess {
+class AudioEngineTxInputMissingTestAccess {
 public:
     static void markInputMissing(AudioEngine& engine)
     {
@@ -68,7 +67,7 @@ int main(int argc, char** argv)
 
     // Seam route up, capture not attempted (PC Audio off): flag is kept.
     audio.applyBackendAudioCapabilities(true, seamCaps(), false, {});
-    AudioEngineRatesTestAccess::markInputMissing(audio);
+    AudioEngineTxInputMissingTestAccess::markInputMissing(audio);
     audio.applyBackendAudioCapabilities(true, seamCaps(), false, {});
     check(audio.hostModulation() && !audio.isTxStreaming(),
           "seam route without PC Audio opens no capture");
@@ -85,7 +84,7 @@ int main(int argc, char** argv)
     // Seam route withdrawn while connected (identity revoked, canTransmit off).
     emitted.clear();
     audio.applyBackendAudioCapabilities(true, seamCaps(), false, {});
-    AudioEngineRatesTestAccess::markInputMissing(audio);
+    AudioEngineTxInputMissingTestAccess::markInputMissing(audio);
     RadioCapabilities rxOnly = seamCaps();
     rxOnly.canTransmit = false;
     audio.applyBackendAudioCapabilities(true, rxOnly, false, {});
@@ -96,7 +95,7 @@ int main(int argc, char** argv)
     // A connected radio that never used the seam (Flex) keeps its own
     // capture result: its PC-audio capture is started outside this method.
     emitted.clear();
-    AudioEngineRatesTestAccess::markInputMissing(audio);
+    AudioEngineTxInputMissingTestAccess::markInputMissing(audio);
     RadioCapabilities flex;
     flex.family = QStringLiteral("flex");
     flex.canTransmit = true;

@@ -49,8 +49,9 @@ whenever the audio path is wrong:
   networked Icom), turn on **PC Audio** in the title bar.
 - On a radio that takes its transmit audio from this computer (such as a
   networked Icom or a Hermes-Lite 2), connect a microphone to the computer
-  when the notice says no audio input device was found. Without one, voice
-  transmits nothing. CW, TUNE and DAX/TCI are not affected.
+  when the notice says no audio input device was found. Without one,
+  AetherTX has no input, and a Hermes-Lite 2 transmits no voice at all.
+  CW, TUNE and DAX/TCI are not affected.
 
 While the path is wrong, the docked Aetherial Audio applet replaces its TX
 controls with the same guidance, and AetherTX and the TX stage editors refuse

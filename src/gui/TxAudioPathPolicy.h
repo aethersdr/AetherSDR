@@ -34,4 +34,31 @@ enum class TxAudioPathBlock { None, PcAudio, MicInput, NoInputDevice };
     return TxAudioPathBlock::None;
 }
 
+// Which NoInputDevice text fits: a host-modulated radio sends no voice RF at
+// all; any other seam radio may still be fed by its own microphone.
+enum class NoInputDeviceWording { NoVoiceRf, NoComputerVoice };
+
+[[nodiscard]] inline NoInputDeviceWording noInputDeviceWording(const RadioCapabilities& caps)
+{
+    return caps.hostModulates ? NoInputDeviceWording::NoVoiceRf
+                              : NoInputDeviceWording::NoComputerVoice;
+}
+
+// Whether an audio device change should retry TX capture. A PC mic selection
+// (Flex, HL2) or the seam route with PC Audio on, as when the capabilities
+// arrive: a networked Icom keeps micSelection "MIC" (#7078).
+[[nodiscard]] inline bool txCaptureRetryWanted(
+    bool connected, const RadioCapabilities& caps, bool pcAudioEnabled,
+    QStringView micSelection)
+{
+    if (!connected) {
+        return false;
+    }
+    if (micSelection == u"PC") {
+        return true;
+    }
+    return caps.takesTxAudioOverSeam && caps.canTransmit
+        && (pcAudioEnabled || caps.hostModulates);
+}
+
 } // namespace AetherSDR
