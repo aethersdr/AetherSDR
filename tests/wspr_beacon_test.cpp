@@ -82,6 +82,44 @@ void testValidation()
     check(static_cast<bool>(WsprBeacon::encode(QStringLiteral("VE3ABC"),
                                                QStringLiteral("FN25"), 37)),
           "a full six-character call still encodes");
+    // Six characters with the digit in position 1 cannot be aligned.
+    check(!WsprBeacon::encode(QStringLiteral("K1ABCD"),
+                              QStringLiteral("FN42"), 37),
+          "a six-character call with a one-character prefix is rejected");
+}
+
+// Calls whose 2nd and 3rd characters are both digits (#7117). The expected
+// symbols are from WSJT-X's own get_wspr_channel_symbols() in
+// tools/wspr-agent/wsprd/wsprsim_utils.c, run on the same messages; the same
+// harness reproduces testReferenceVector()'s K1ABC FN42 37 vector exactly.
+void testDigitInSecondAndThirdPosition()
+{
+    static constexpr std::array<uint8_t, WsprBeacon::kSymbolCount> v31dl{
+        3,3,0,0,2,0,0,0,3,2,0,0,1,3,1,2,2,0,3,0,2,1,0,3,3,1,1,2,0,2,
+        0,0,0,0,1,2,2,1,2,3,0,2,2,0,0,2,1,2,3,1,0,2,3,1,2,1,2,0,0,1,
+        3,2,1,2,2,0,2,3,3,2,3,0,1,2,3,2,1,0,0,1,2,0,3,2,3,1,2,0,2,1,
+        1,2,1,0,3,2,0,0,1,0,0,0,0,0,1,2,0,3,2,0,3,1,3,0,1,3,0,2,3,1,
+        0,1,0,2,0,1,3,3,2,0,2,0,0,3,2,3,0,2,3,3,0,2,2,2,0,2,2,3,1,2,
+        3,2,3,1,0,0,2,3,3,2,0,2
+    };
+    static constexpr std::array<uint8_t, WsprBeacon::kSymbolCount> a61ab{
+        1,1,2,2,0,0,2,2,3,0,0,2,3,3,1,0,0,0,3,0,0,3,0,3,3,3,3,0,2,2,
+        2,0,2,0,3,0,0,1,2,1,2,2,0,2,2,2,1,2,1,1,2,2,3,3,2,3,2,0,2,1,
+        1,2,1,0,2,0,2,3,1,2,1,0,3,2,3,0,3,2,2,3,0,2,1,2,3,1,2,2,0,1,
+        3,0,3,2,3,2,2,0,3,2,0,2,0,0,1,0,0,3,0,0,3,1,1,0,3,1,0,2,3,1,
+        0,3,2,2,0,3,1,1,0,2,2,2,0,3,2,3,0,2,1,3,0,0,2,2,2,2,2,3,3,0,
+        3,2,3,3,0,0,2,3,1,2,0,2
+    };
+
+    const WsprBeacon::EncodeResult v31 =
+        WsprBeacon::encode(QStringLiteral("V31DL"), QStringLiteral("FN42"), 37);
+    check(static_cast<bool>(v31), "V31DL encodes");
+    check(v31.symbols == v31dl, "V31DL FN42 37 symbols match WSJT-X");
+
+    const WsprBeacon::EncodeResult a61 =
+        WsprBeacon::encode(QStringLiteral("A61AB"), QStringLiteral("LL75"), 30);
+    check(static_cast<bool>(a61), "A61AB encodes");
+    check(a61.symbols == a61ab, "A61AB LL75 30 symbols match WSJT-X");
 }
 
 void testSampleTimingAndTailSilence()
@@ -394,6 +432,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     testReferenceVector();
     testValidation();
+    testDigitInSecondAndThirdPosition();
     testSampleTimingAndTailSilence();
     testTwentyOneSecondsDoesNotComplete();
     testToneConventionMatchesWsjtx();
