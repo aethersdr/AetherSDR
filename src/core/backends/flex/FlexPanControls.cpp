@@ -33,6 +33,7 @@ ReceiveDispatch FlexBackend::requestPanDisplay(const QString& panId, const QStri
     if (id.isEmpty()) { return ReceiveDispatch::Unsupported; }
     QString fields;
     switch (request.field) {
+    // FlexLib v4.3.16 Panadapter.cs:259 binds IQ the same way.
     case Field::DaxIqChannel: fields = QStringLiteral("daxiq_channel=%1").arg(std::get<int>(request.value)); break;
     case Field::Geometry: {
         const PanGeometryRequest geometry = std::get<PanGeometryRequest>(request.value);

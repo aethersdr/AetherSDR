@@ -13487,6 +13487,11 @@ void RadioModel::createAudioStream()
         const quint64 revision = ++m_remoteRxRequestRevision;
         requestAudioStream({AudioStreamKind::RemoteReceive, AudioStreamAction::Remove, oldId},
             [this, oldId, session, revision](const AudioStreamReply& reply) {
+                if (controlSessionCurrent(session) && reply.result.kind == RadioControlReply::Kind::Failed) {
+                    qCWarning(lcProtocol) << "RadioModel: remote_audio_rx remove for a compression change failed,"
+                                          << "code" << Qt::hex << reply.result.code
+                                          << "- the stream keeps its old compression";
+                }
                 if (controlSessionCurrent(session) && reply.result.code == 0
                     && m_remoteRxRequestRevision == revision
                     && (AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True"

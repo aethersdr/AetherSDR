@@ -3,6 +3,8 @@
 #include <QPointer>
 #include <QThread>
 #include <QTimer>
+#include <memory>
+#include <optional>
 #include <utility>
 
 namespace AetherSDR {
@@ -82,7 +84,7 @@ ReceiveDispatch RadioModel::requestAudioStream(AudioStreamRequest request, const
     };
     if (QThread::currentThread() != thread()) { return refuse(QStringLiteral("audio request is off-thread")); }
     const RadioControlSession session = controlSession();
-    const auto control = backendCapabilities().audioStreamControl;
+    const std::optional<AudioStreamControl> control = backendCapabilities().audioStreamControl;
     if (!request.valid() || !m_backend || !controlSessionCurrent(session) || !control
         || !control->supports(request.kind) || m_audioPending.size() >= 64 || clientHandle() == 0
         || (request.kind == AudioStreamKind::Iq && request.action == AudioStreamAction::Create
@@ -196,7 +198,7 @@ ReceiveDispatch RadioModel::requestAudioStream(AudioStreamRequest request, const
 ReceiveDispatch RadioModel::requestGraphicEq(GraphicEqRequest request)
 {
     if (QThread::currentThread() != thread() || !request.valid()) { return ReceiveDispatch::Unsupported; }
-    const auto control = backendCapabilities().radioGraphicEqControl;
+    const std::optional<GraphicEqControl> control = backendCapabilities().radioGraphicEqControl;
     if (!control) { return ReceiveDispatch::LocalOnly; }
     if (!controlSessionCurrent(controlSession()) || !control->paths.contains(request.path)) {
         return ReceiveDispatch::Unsupported;
