@@ -18,8 +18,22 @@
 
 namespace AetherSDR {
 
-// Smallest declared width covering both edges around the radio-owned center,
-// saturating at the widest detent. Widths are positive and sorted ascending.
+// Native scope centers and band-plan edges resolve to whole Hz. Rounding each
+// before subtracting keeps MHz representation noise from skipping an exactly
+// fitting detent. Leaves room for both subtraction and doubling.
+[[nodiscard]] inline std::optional<std::int64_t> nativePanZoomWholeHz(double mhz)
+{
+    const double hz = mhz * 1.0e6;
+    constexpr std::int64_t kMaxHz = std::numeric_limits<std::int64_t>::max() / 4;
+    if (!std::isfinite(hz) || hz < 1.0 || hz >= static_cast<double>(kMaxHz)) {
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(std::round(hz));
+}
+
+// Span-only modes (PanZoomPlacement::FitAroundCenter): the smallest declared
+// width covering both edges around the radio-owned center, saturating at the
+// widest detent. Widths are positive and sorted ascending.
 [[nodiscard]] inline std::optional<int> nativePanZoomWidthHz(
     double centerMhz, double lowMhz, double highMhz,
     std::span<const int> widthsHz)
@@ -27,20 +41,9 @@ namespace AetherSDR {
     if (widthsHz.empty()) {
         return std::nullopt;
     }
-    // Native scope centers and band-plan edges resolve to whole Hz. Round
-    // each before subtracting so MHz representation noise cannot skip an
-    // exactly fitting detent. Leave room for both subtraction and doubling.
-    const auto frequencyHz = [](double mhz) -> std::optional<std::int64_t> {
-        const double hz = mhz * 1.0e6;
-        constexpr std::int64_t kMaxHz = std::numeric_limits<std::int64_t>::max() / 4;
-        if (!std::isfinite(hz) || hz < 1.0 || hz >= static_cast<double>(kMaxHz)) {
-            return std::nullopt;
-        }
-        return static_cast<std::int64_t>(std::round(hz));
-    };
-    const auto centerHz = frequencyHz(centerMhz);
-    const auto lowHz = frequencyHz(lowMhz);
-    const auto highHz = frequencyHz(highMhz);
+    const auto centerHz = nativePanZoomWholeHz(centerMhz);
+    const auto lowHz = nativePanZoomWholeHz(lowMhz);
+    const auto highHz = nativePanZoomWholeHz(highMhz);
     if (!centerHz || !lowHz || !highHz || *lowHz >= *highHz) {
         return std::nullopt;
     }
@@ -52,6 +55,67 @@ namespace AetherSDR {
         }
     }
     return widthsHz.back();
+}
+
+// Modes that honor center and width (PanZoomPlacement::CenterAllocation): the
+// allocation itself, its midpoint at its exact width. The backend clamps the
+// width to the window range it accepts.
+struct NativePanZoomWindow {
+    double centerMhz;
+    std::int64_t widthHz;
+};
+[[nodiscard]] inline std::optional<NativePanZoomWindow> nativePanZoomCenteredWindow(
+    double lowMhz, double highMhz)
+{
+    const auto lowHz = nativePanZoomWholeHz(lowMhz);
+    const auto highHz = nativePanZoomWholeHz(highMhz);
+    if (!lowHz || !highHz || *lowHz >= *highHz) {
+        return std::nullopt;
+    }
+    return NativePanZoomWindow{static_cast<double>(*lowHz + *highHz) / 2.0e6,
+                               *highHz - *lowHz};
+}
+
+// The whole native-span zoom decision. `centerAllocation` is
+// PanZoomPlacement::CenterAllocation. A centered allocation wider than
+// `maxWidthMhz` becomes a max-width window inside it that keeps the tuned
+// frequency on screen, 5% in from either edge. Span-only placements return no
+// centre: the radio keeps its own.
+struct NativePanZoomRequest {
+    std::optional<double> centerMhz;
+    double widthMhz;
+};
+[[nodiscard]] inline std::optional<NativePanZoomRequest> nativePanZoomRequest(
+    bool centerAllocation, double centerMhz, double tunedMhz, double maxWidthMhz,
+    double lowMhz, double highMhz, std::span<const int> widthsHz)
+{
+    if (!centerAllocation) {
+        const auto widthHz = nativePanZoomWidthHz(centerMhz, lowMhz, highMhz, widthsHz);
+        if (!widthHz) {
+            return std::nullopt;
+        }
+        return NativePanZoomRequest{std::nullopt, *widthHz / 1.0e6};
+    }
+    const auto window = nativePanZoomCenteredWindow(lowMhz, highMhz);
+    const auto maxHz = nativePanZoomWholeHz(maxWidthMhz);
+    if (!window || !maxHz) {
+        return std::nullopt;
+    }
+    if (window->widthHz <= *maxHz) {
+        return NativePanZoomRequest{window->centerMhz, window->widthHz / 1.0e6};
+    }
+    const auto lowHz = nativePanZoomWholeHz(lowMhz);
+    const auto highHz = nativePanZoomWholeHz(highMhz);
+    const auto tunedHz = nativePanZoomWholeHz(tunedMhz);
+    if (!lowHz || !highHz || !tunedHz) {
+        return std::nullopt;
+    }
+    const std::int64_t half = *maxHz / 2;
+    const std::int64_t margin = *maxHz / 20;
+    std::int64_t centerHz = std::llround(window->centerMhz * 1.0e6);
+    centerHz = std::clamp(centerHz, *lowHz + half, *highHz - half);
+    centerHz = std::clamp(centerHz, *tunedHz - half + margin, *tunedHz + half - margin);
+    return NativePanZoomRequest{centerHz / 1.0e6, *maxHz / 1.0e6};
 }
 
 // Why a band/segment-zoom write is refused, or None if it is admissible.

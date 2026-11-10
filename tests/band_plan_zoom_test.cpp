@@ -2,8 +2,6 @@
 #include "gui/PanZoomModeGate.h"
 
 #include <QCoreApplication>
-#include <QFile>
-#include <QRegularExpression>
 #include <QString>
 
 #include <array>
@@ -61,6 +59,13 @@ int main(int argc, char** argv)
           "10 m stays separate from 12 m");
     check(!plan.zoomRegionAt(13.000, false), "outside the plan does not guess a band");
     check(!plan.zoomRegionAt(std::nan(""), true), "invalid frequency is refused");
+    check(matches(plan.zoomRegionAt(5.340, false), 5.3305, 5.4063),
+          "band zoom between 60 m channels still finds the band");
+    check(!plan.zoomRegionAt(5.340, true), "segment zoom between channels finds no segment");
+    check(matches(plan.zoomRegionAt(14.1000000000001, true), 14.100, 14.350)
+              && matches(plan.zoomRegionAt(14.0999999999999, true), 14.100, 14.350),
+          "a frequency a ulp off a shared edge picks the segment beginning there");
+
 
     // Exercise the same width selector used by MainWindow, after the plan
     // lookup. These ARRL segment edges fit a native 50 kHz span exactly.
@@ -123,28 +128,58 @@ int main(int argc, char** argv)
     check(nativePanZoomWidthHz(14.0475, 14.025, 14.070, widthsHz) == 50000,
           "a radio already centred on the allocation needs only 50 kHz");
 
-    // MainWindow has no socket-free construction seam. Pin only its wiring:
-    // the helper must receive the reported centre, and its result must go to
-    // the bandwidth-only request. Helper tests cannot detect a caller that
-    // instead fits a midpoint which the backend may refuse to apply.
-    QFile source(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Shortcuts.cpp"));
-    check(source.open(QIODevice::ReadOnly), "MainWindow source is available for wiring check");
-    const QString text = QString::fromUtf8(source.readAll());
-    const qsizetype begin = text.indexOf(QStringLiteral("void MainWindow::togglePanZoomModeForPan("));
-    const qsizetype end = text.indexOf(QStringLiteral("void MainWindow::zoomActivePanadapter("), begin);
-    check(begin >= 0 && end > begin, "native zoom handler is found for wiring check");
-    if (begin >= 0 && end > begin) {
-        const QString handler = text.mid(begin, end - begin);
-        const QRegularExpression reportedCenter(
-            QStringLiteral(R"(nativePanZoomWidthHz\s*\(\s*pan->centerMhz\(\)\s*,)"));
-        const QRegularExpression bandwidthRequest(
-            QStringLiteral(R"(requestPanBandwidth\s*\(\s*panId\s*,\s*targetMhz\s*\))"));
-        check(reportedCenter.match(handler).hasMatch(),
-              "native zoom fits around the radio-reported centre");
-        check(bandwidthRequest.match(handler).hasMatch()
-                  && !handler.contains(QStringLiteral("requestPanCenter(")),
-              "native zoom changes bandwidth without requesting a different centre");
+    // Centre-honoring modes (SCROLL-F, our Fixed) request the allocation
+    // itself, so it lands on screen however far the window had been moved.
+    // Fitting around a 12.500 MHz window instead saturates at 1 MHz and shows
+    // 12.0-13.0 MHz, with the 14.025-14.070 MHz segment off screen.
+    {
+        const auto region = plan.zoomRegionAt(14.050, true);
+        check(region.has_value(), "the far-window case resolves its segment");
+        if (region) {
+            check(nativePanZoomWidthHz(12.500, region->lowMhz, region->highMhz, widthsHz)
+                      == 1000000,
+                  "a span-only fit around a far window saturates");
+            const auto window = nativePanZoomCenteredWindow(region->lowMhz, region->highMhz);
+            check(window && window->widthHz == 45000
+                      && std::llround(window->centerMhz * 1.0e6) == 14047500,
+                  "a centred zoom requests the 45 kHz allocation at its midpoint");
+            if (window) {
+                const auto centerHz = std::llround(window->centerMhz * 1.0e6);
+                check(centerHz - window->widthHz / 2 <= std::llround(region->lowMhz * 1.0e6)
+                          && centerHz + window->widthHz / 2 >= std::llround(region->highMhz * 1.0e6),
+                      "the centred window covers both allocation edges");
+            }
+        }
     }
+    check(!nativePanZoomCenteredWindow(14.070, 14.025), "a reversed allocation is refused");
+    check(!nativePanZoomCenteredWindow(std::nan(""), 14.070), "an invalid edge is refused");
+
+    // The whole decision MainWindow dispatches: span-only placements send no
+    // centre; centre-honoring placements send the allocation, and one wider
+    // than the window keeps the tuned frequency on screen.
+    {
+        const auto fit = nativePanZoomRequest(false, 14.069, 14.069, 1.0, 14.025, 14.070, widthsHz);
+        check(fit && !fit->centerMhz && std::llround(fit->widthMhz * 1.0e6) == 100000,
+              "span-only zoom keeps the radio centre and picks a detent");
+        const auto centred = nativePanZoomRequest(true, 12.500, 14.050, 1.0, 14.025, 14.070, widthsHz);
+        check(centred && centred->centerMhz
+                  && std::llround(*centred->centerMhz * 1.0e6) == 14047500
+                  && std::llround(centred->widthMhz * 1.0e6) == 45000,
+              "a centred zoom from a far window requests the allocation");
+        const auto wide = nativePanZoomRequest(true, 28.900, 28.074, 1.0, 28.000, 29.700, widthsHz);
+        check(wide && wide->centerMhz && std::llround(wide->widthMhz * 1.0e6) == 1000000,
+              "an allocation wider than the window gets the widest window");
+        if (wide && wide->centerMhz) {
+            const auto c = std::llround(*wide->centerMhz * 1.0e6);
+            check(c - 500000 >= 28000000 && c + 500000 <= 29700000,
+                  "the narrowed window stays inside the allocation");
+            check(c - 500000 + 50000 <= 28074000 && 28074000 <= c + 500000 - 50000,
+                  "and keeps the tuned frequency on screen");
+        }
+        check(!nativePanZoomRequest(true, 14.05, 14.05, 0.0, 14.025, 14.070, widthsHz),
+              "an unknown window limit is refused");
+    }
+
     check(!nativePanZoomWidthHz(14.05, 14.025, 14.025, widthsHz),
           "zero-width region is refused");
     check(!nativePanZoomWidthHz(14.05, 14.025, 14.0250001, widthsHz),

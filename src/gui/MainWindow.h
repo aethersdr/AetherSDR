@@ -76,6 +76,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #ifdef HAVE_MIDI
@@ -400,7 +401,6 @@ protected:
 private slots:
     // Radio/connection events
     void onConnectionStateChanged(bool connected);
-    void refreshPanZoomControls();
     void adjustCatPortCounts(bool connected);  // called from onConnectionStateChanged
     void onConnectionError(const QString& msg);
     // GHSA-wfx7-w6p8-4jr2 phase 2 (#2951): show mismatch modal and
@@ -432,6 +432,13 @@ private slots:
     void applyOperatorTuningStep(int stepHz);
 
 private:
+    void refreshPanZoomControls();
+    // Why a native-span B/S cannot act on this pan right now, or nullopt.
+    // The B/S enable and every command path ask this one question.
+    std::optional<QString> nativePanZoomBlockedReason(const PanadapterModel* pan) const;
+    // The active band plan's zoom region (low, high MHz) at a frequency.
+    std::optional<std::pair<double, double>> bandPlanZoomRegion(double frequencyMhz,
+                                                                bool segment) const;
     enum class TuneIntent {
         IncrementalTune,
         AbsoluteJump,

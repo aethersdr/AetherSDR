@@ -1170,6 +1170,12 @@ void RadioModel::setupBackend(const QString& family)
             pan->setScopeModeIndex(index);
         }
     });
+    connect(m_backend.get(), &IRadioBackend::panZoomPlacementChanged, this,
+            [this](const QString& panId, PanZoomPlacement placement) {
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->setZoomPlacement(placement);
+        }
+    });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
         if (auto* pan = resolveBackendPan(panId)) pan->setRxAntenna(ant);
@@ -2224,6 +2230,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateAtuAvailability);
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateAtuAvailability);
     qRegisterMetaType<PcmFrame>();
+    qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
     qRegisterMetaType<TxCoordinator::StopRequest>();

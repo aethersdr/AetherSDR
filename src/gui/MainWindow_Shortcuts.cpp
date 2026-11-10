@@ -46,7 +46,6 @@
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "models/BandDefs.h"
-#include "models/BandPlanManager.h"
 #include "models/VoiceKeyerController.h"
 #include "models/SliceModel.h"
 #include "workspace/WorkspaceController.h"
@@ -2036,30 +2035,23 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
         // announced: a press that does nothing silently is the failure
         // PanZoomModeGate.h exists to prevent.
         const char* what = segmentZoom ? "segment zoom" : "band zoom";
-        if (!pan->bandwidthLimitsKnown() || !pan->centerKnown() || !m_bandPlanMgr
-            || zoom->nativeWidthsHz.isEmpty()) {
-            qCWarning(lcDevices) << what << "refused: the radio has not reported its scope"
-                                 << "geometry yet";
-            statusBar()->showMessage(
-                tr("Waiting for the radio's scope geometry before zooming."), 5000);
+        if (const auto blocked = nativePanZoomBlockedReason(pan)) {
+            qCWarning(lcDevices).noquote() << what << "refused:" << *blocked;
+            statusBar()->showMessage(*blocked, 5000);
             return;
         }
-        SliceModel* slice = activeSlice();
-        if (!slice || slice->panId() != panId) {
-            slice = nullptr;
-            for (SliceModel* candidate : m_radioModel.slices()) {
-                if (candidate && candidate->panId() == panId) {
-                    slice = candidate;
-                    break;
-                }
-            }
+        if (!m_bandPlanMgr || zoom->nativeWidthsHz.isEmpty()) {
+            qCWarning(lcDevices) << what << "refused: no band plan or declared scope widths";
+            showUnsupportedControlNotice();
+            return;
         }
+        SliceModel* slice = preferredMemorySlice(panId);
         if (!slice) {
             qCWarning(lcDevices) << what << "refused: no receiver on this panadapter";
             statusBar()->showMessage(tr("No receiver on this panadapter to zoom around."), 5000);
             return;
         }
-        const auto region = m_bandPlanMgr->zoomRegionAt(slice->frequency(), segmentZoom);
+        const auto region = bandPlanZoomRegion(slice->frequency(), segmentZoom);
         if (!region) {
             // Reachable: the IARU plans stop at 6 m, and no shipped plan has 23 cm.
             qCWarning(lcDevices) << what << "refused: the active band plan has no"
@@ -2072,25 +2064,29 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
                 6000);
             return;
         }
-        // Fit both allocation edges around the radio-reported centre. Native
-        // scope span control does not guarantee a centre move, so requesting
-        // an allocation midpoint could leave the narrower span off target.
-        const std::optional<int> targetHz = nativePanZoomWidthHz(
-            pan->centerMhz(), region->lowMhz, region->highMhz,
+        const auto request = nativePanZoomRequest(
+            pan->zoomPlacement() == PanZoomPlacement::CenterAllocation,
+            pan->centerMhz(), slice->frequency(), pan->maxBandwidthMhz(),
+            region->first, region->second,
             {zoom->nativeWidthsHz.constData(),
              static_cast<std::size_t>(zoom->nativeWidthsHz.size())});
-        if (!targetHz) {
-            qCWarning(lcDevices) << what << "refused: no native scope width fits"
-                                 << region->lowMhz << "-" << region->highMhz << "MHz";
+        if (!request) {
+            qCWarning(lcDevices) << what << "refused: no native scope window fits"
+                                 << region->first << "-" << region->second << "MHz";
             showUnsupportedControlNotice();
             return;
         }
-        const double targetMhz = *targetHz / 1.0e6;
-        const bool widthSame = qFuzzyCompare(pan->bandwidthMhz(), targetMhz);
-        if (widthSame) {
-            return;
+        const bool widthSame = qFuzzyCompare(pan->bandwidthMhz(), request->widthMhz);
+        if (request->centerMhz) {
+            if (widthSame
+                && std::llround(pan->centerMhz() * 1.0e6)
+                       == std::llround(*request->centerMhz * 1.0e6)) {
+                return;
+            }
+            m_radioModel.requestPanCenter(panId, *request->centerMhz, request->widthMhz);
+        } else if (!widthSame) {
+            m_radioModel.requestPanBandwidth(panId, request->widthMhz);
         }
-        m_radioModel.requestPanBandwidth(panId, targetMhz);
         return;
     }
     // Flex keeps its zoom flags in radio status, so a manual pan/zoom clears

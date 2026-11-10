@@ -5662,6 +5662,8 @@ void MainWindow::buildUI()
         // not only this one's (#5750), so the whole stack is re-derived.
         syncPanSpanControlPlacement();
     });
+    // The startup pane was added before this connect; dim its B/S now.
+    refreshPanZoomControls();
     // Removing or re-keying a pane can take the span control's owner with
     // it; re-derive so exactly one pane still carries it (#5750).
     connect(m_panStack, &PanadapterStack::panRemoved, this,
@@ -6668,12 +6670,45 @@ void MainWindow::refreshPanZoomControls()
             continue;
         }
         const auto* pan = m_radioModel.panadapter(applet->panId());
+        std::optional<QString> blocked;
+        if (!m_radioModel.isConnected()) {
+            blocked = tr("Connect to a radio to use band and segment zoom.");
+        } else if (!zoom) {
+            blocked = tr("This radio has no band or segment zoom.");
+        } else if (nativeSpan) {
+            blocked = nativePanZoomBlockedReason(pan);
+        }
         const bool available = AetherSDR::bandSegmentZoomAvailable(
-            m_radioModel.isConnected(), zoom.has_value())
-            && (!nativeSpan || (pan && pan->bandwidthLimitsKnown()
-                                && pan->centerKnown()));
-        applet->spectrumWidget()->setBandSegmentZoomAvailable(available, nativeSpan);
+            m_radioModel.isConnected(), zoom.has_value()) && !blocked;
+        applet->spectrumWidget()->setBandSegmentZoomAvailable(
+            available, nativeSpan, blocked.value_or(QString()));
     }
+}
+
+std::optional<std::pair<double, double>> MainWindow::bandPlanZoomRegion(double frequencyMhz,
+                                                                      bool segment) const
+{
+    if (!m_bandPlanMgr) {
+        return std::nullopt;
+    }
+    const auto region = m_bandPlanMgr->zoomRegionAt(frequencyMhz, segment);
+    if (!region) {
+        return std::nullopt;
+    }
+    return std::pair{region->lowMhz, region->highMhz};
+}
+
+std::optional<QString> MainWindow::nativePanZoomBlockedReason(const PanadapterModel* pan) const
+{
+    if (pan && pan->zoomPlacement() == PanZoomPlacement::Unavailable) {
+        return tr("The radio's Fixed preset sets the scope edges, so band and "
+                  "segment zoom cannot change them.");
+    }
+    if (!pan || !pan->bandwidthLimitsKnown() || !pan->centerKnown()
+        || pan->zoomPlacement() == PanZoomPlacement::Unknown) {
+        return tr("Waiting for the radio's scope geometry.");
+    }
+    return std::nullopt;
 }
 
 void MainWindow::onConnectionStateChanged(bool connected)

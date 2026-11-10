@@ -479,15 +479,18 @@ public:
     // Flex uses radio-owned zoom flags; a radio declaring a native scope span
     // (Icom today) zooms by setting that span. Keyed on the declaration, not
     // the family, so the text stays right for the next backend that declares it.
-    void setBandSegmentZoomAvailable(bool available, bool nativeSpan = false)
+    // `blockedReason` says why the buttons are dimmed, when the caller knows.
+    void setBandSegmentZoomAvailable(bool available, bool nativeSpan = false,
+                                     const QString& blockedReason = {})
     {
         const QString tip = !available
-            ? (nativeSpan ? tr("Waiting for the radio's scope geometry.")
-                          : tr("Band/segment zoom needs a radio that declares it."))
+            ? (!blockedReason.isEmpty() ? blockedReason
+               : nativeSpan ? tr("Waiting for the radio's scope geometry.")
+                            : tr("Band and segment zoom are not available."))
             : nativeSpan
                 ? tr("Zoom using the radio's scope span; the tuned frequency stays unchanged.")
                 : QString();
-        // Called on every scope sweep: skip the work when nothing changed.
+        // Refreshed on capability, limit and placement changes: skip no-ops.
         if (m_zoomBandBtn && m_zoomBandBtn->isEnabled() == available
             && m_zoomBandBtn->toolTip() == tip) {
             return;
