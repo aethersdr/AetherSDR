@@ -3713,6 +3713,28 @@ endif()
 # It is include()d rather than add_subdirectory()'d so that relative paths inside
 # it keep resolving against the repository root. The header of that file explains
 # why that matters and why it should not be "tidied up" into a subdirectory.
+# aether_non_test_targets: every default-built executable and library declared
+# in this file so far, which is everything except the tests in
+# tests/tests.cmake. PR CI builds this instead of `all`: it does not run the
+# suite, so compiling and linking ~850 test executables was most of its wall
+# clock. Collected rather than listed, so a new app, tool or library joins it
+# without a CI edit. Custom targets are skipped because a target's ALL flag is
+# not queryable; the ones the apps need still build as their dependencies, as
+# do targets from add_subdirectory().
+get_directory_property(_aether_pre_test_targets BUILDSYSTEM_TARGETS)
+add_custom_target(aether_non_test_targets)
+foreach(_tgt IN LISTS _aether_pre_test_targets)
+    get_target_property(_tgt_type ${_tgt} TYPE)
+    get_target_property(_tgt_excluded ${_tgt} EXCLUDE_FROM_ALL)
+    if(_tgt_type MATCHES "^(EXECUTABLE|STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY)$"
+            AND NOT _tgt_excluded)
+        add_dependencies(aether_non_test_targets ${_tgt})
+    endif()
+endforeach()
+unset(_aether_pre_test_targets)
+unset(_tgt_type)
+unset(_tgt_excluded)
+
 enable_testing()
 # DeepCW offline replay harness (RFC #4817 regression take): not built by default.
 if(ORT_FOUND)

@@ -1,9 +1,11 @@
 name: CI
 
 # ── THE TEST GATE IN THIS FILE IS FROZEN ─────────────────────────────────────
-# This workflow does not run the test suite. The Linux `build` job runs NO
-# tests; the only `ctest -R` steps are the ones listed in
-# .github/ci-test-gate.txt, kept on the macOS and Windows jobs because the
+# This workflow does not run the test suite. On pull requests it does not
+# even build it: the Linux and macOS jobs build aether_non_test_targets plus
+# the gate tests they run, and Windows lists its targets explicitly. The
+# Linux `build` job runs NO tests; the only `ctest -R` steps are the ones
+# listed in .github/ci-test-gate.txt, kept on the macOS and Windows jobs because the
 # claim each pins is about THAT platform's toolchain (Apple Metal, MSVC
 # portability, #4559's Windows-only separator failure) — not because Linux
 # cannot run them; most of them also run on the weekly Linux lane. That list
@@ -305,8 +307,13 @@ jobs:
           }
           grep "GPU spectrum rendering enabled" configure.log
 
+      # PRs build everything except the tests (aether_non_test_targets in
+      # CMakeLists.txt): this job runs none of them, and they were about two
+      # thirds of its build time. A PR that breaks a test's compile is caught
+      # after merge, by full-suite.yml. Pushes to main still build `all`,
+      # because full-suite.yml restores the ccache this job saves from main.
       - name: Build
-        run: cmake --build build -j$(nproc)
+        run: cmake --build build -j$(nproc) ${{ github.event_name == 'pull_request' && '--target aether_non_test_targets' || '' }}
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
@@ -1170,8 +1177,11 @@ jobs:
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)
 
+      # PRs build everything except the tests, plus the two gate tests run
+      # below; same reasoning as the Linux job's Build step. Main builds `all`
+      # so the ccache it saves stays warm for test sources.
       - name: Build
-        run: cmake --build build -j$(sysctl -n hw.ncpu)
+        run: cmake --build build -j$(sysctl -n hw.ncpu) ${{ github.event_name == 'pull_request' && '--target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test' || '' }}
 
       - name: Run macOS MNR regression test
         run: ctest --test-dir build -R '^mac_nr_filter_test$' --no-tests=error --output-on-failure
