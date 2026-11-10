@@ -789,7 +789,7 @@ connects).
 | `flags` (or `vfoFlags`) | `all` (default) / `<sliceId>` | VFO flag attachment snapshot: each flag’s slice id, expected radio pan id, attached UI pan id/index, geometry, visibility, and `attachedToExpectedPan`; also reports `missingSlices`. |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 | `eqstats` | Client EQ canvas objectName (default: all) | analyzer paint/cache counters — see [`get eqstats`](#get-eqstats) |
-| `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
+| `tracedebug` | `<panIndex>` / `<objectName>` (default: all; property `bins` needs one) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
 | `display` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter **Display panel** settings — see [`get display`](#get-display) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
@@ -1098,6 +1098,64 @@ used by the stacked trace renderer.
    "flexBins":{"count":768,"finiteCount":768},
    "kiwiBins":{"count":768,"finiteCount":768}}]}
 ```
+
+**The bins themselves** (#5806). With `property` `bins` and one pan as the
+selector, the reply carries that pan's last decoded frame instead of statistics:
+
+```json
+→ {"cmd":"get","model":"tracedebug","selector":"0","property":"bins"}
+← {"ok":true,"model":"tracedebug","property":"bins","pan":{
+   "panIndex":0,"name":"SpectrumWidget","kiwiWaterfallActive":false,
+   "count":1024,"finiteCount":1024,"fftFrameSequence":5120,"ageMs":31,"settledFrames":12,
+   "centerHz":3775000,"spanHz":384000,"lowHz":3583000,"binHz":375,
+   "encoderRangeValid":true,"encoderMinDbm":-140,"encoderMaxDbm":-20,"encoderYPixels":700,
+   "bins":[-121.4,-121.9,...]}}
+```
+
+- `bins` is the last radio frame exactly as the widget decoded it: never
+  smoothed, never reprojected after a pan or zoom, never cropped. It runs from
+  `lowHz` in steps of `binHz` (`spanHz` / `count`), the pan geometry the
+  widget showed when the frame arrived. It is the whole computed frame: on a
+  radio that declares `hasDdcPanEdgeRolloff` (ANAN) the display shows only its
+  central part, over a narrower span. A non-finite bin is `null`.
+- `ageMs` is the time since that frame arrived (monotonic clock).
+  `fftFrameSequence` tells two reads of the same frame apart. `settledFrames`
+  counts the frames received since the geometry last changed.
+- A frame carries no frequency geometry of its own, so the widget only pairs it
+  with the geometry it is showing once that geometry has been steady for 3
+  frames. Until then the reply is a refusal, `ok:false` with the reason:
+
+  ```json
+  ← {"ok":false,"error":"tracedebug bins: geometry changed 1 frames ago; wait for 3 settled frames"}
+  ```
+
+  The refusals: `no frame decoded yet` (also after the display was cleared,
+  on disconnect or a profile load); `pan animation running`; `a pan or zoom is
+  in progress` (a drag, or a zoom still settling or waiting to be sent); `a
+  requested pan or zoom is not yet confirmed by the radio` (on a radio that
+  confirms geometry: from the request until its echo, at most 2 s);
+  `geometry changed after the last frame` and `geometry changed N frames ago`
+  (any change of centre or bandwidth, shown or requested); `the last frame
+  was decoded across a dBm range change`; and, while Receive Sync delays the
+  spectrum, `the frame was held by Receive Sync; no age or geometry can be
+  established` (a held frame may arrive after the pan moved; after one, 3
+  unheld frames must follow). Turn Receive Sync off to measure. A refused client retries after a
+  frame interval, or up to 2 s for an unconfirmed request. A
+  retune the widget has not been told about yet (made elsewhere, before its
+  status arrives) cannot be seen here.
+- The values are in the units the backend delivered; nothing here calibrates
+  them. On Flex they are decoded from the radio's pixel encoding, so one
+  amplitude step is `(encoderMaxDbm - encoderMinDbm) / (encoderYPixels - 1)`.
+  These fields belong to the returned frame: `encoderMinDbm`/`encoderMaxDbm`
+  are the dBm range that frame was decoded with (the stream's decode scale
+  when it reports one, else the widget's encoder range as the frame arrived),
+  and `encoderYPixels` is the y-pixel count the widget held as it arrived.
+  On HL2 they come from a host-side FFT, absolute only once a full-scale
+  reference has been measured (`Hl2DbReference::isCalibrated()`).
+- When `kiwiWaterfallActive` is true, the pan is showing a KiwiSDR source and
+  `bins` is still the radio's frame, not the trace on screen.
+- A selector is required: `bins` without one is an error, and so is a selector
+  that matches no pan.
 
 `selector` filters by pan index (`get tracedebug 0`) or objectName. Key fields:
 
@@ -2789,6 +2847,9 @@ Bare-line forms are also accepted:
 
 ```text
 connect list
+connect profiles
+connect profile stations <station-id>
+connect profile operators <operator-id>
 connect show
 connect hide
 connect local first
@@ -2798,6 +2859,18 @@ connect ip 192.168.1.21 hl2
 connect wait 30000
 disconnect
 ```
+
+`connect profiles` returns the credential-free, versioned connection workspace: saved locations and
+their connection paths, operator audio/layout preferences, account labels and
+references, and the selected IDs. The API retains the `stations` collection name
+for compatibility with saved documents; the UI calls these **Locations**.
+It never contains passwords or refresh tokens.
+It is available in Observe-only mode. `connect profile stations|operators <id>`
+persists a selection, including while a radio is live. Location selection does
+not connect or change audio. Explicitly switching operators recalls the saved
+computer audio/layout preferences, without changing radio-owned state, and is refused while transmitting. This mutation is refused
+in Observe-only mode. Profile creation and editing are exercised through the
+normal `connectionProfileEditor` widgets with `invoke`.
 
 `connect show` and `connect hide` idempotently show/raise or hide the
 modeless **Connect to Radio** dialog for visual debugging; they do not toggle,
@@ -4769,13 +4842,21 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 
 ---
 
-## Stick Pro analyzer bring-up
+## RigExpert Stick analyzer bring-up
 
 `lab status|devices|connect <index>|sweep <startHz> <stopHz> <intervals> isolated|stop|disconnect`
 controls the AetherLab USB proof of concept (RFC #6471). `status`
 returns identity, all accepted raw/derived samples, count hypothesis, terminal
 state and the last 128 HID reports. `devices` explicitly scans normal-mode
-Stick Pro interfaces. `connect` queries VER/FULLINFO and never starts RF.
+Stick 230, 500, Pro and XPro interfaces. `connect` queries VER/FULLINFO and
+requires an identity matching the USB model; it never starts RF.
+
+`model`, `experimental`, `minFrequencyHz` and `maxFrequencyHz` are included in
+session and device metadata. `identityVerified` reports whether the session
+received a matching VER identity. `supportedModels` lists all four profiles.
+Stick 230, 500 and XPro are experimental with hardware testing pending. Limits
+are 0.1–230, 0.1–500, 0.1–600 and 0.1–1000 MHz respectively. A Pro profile does
+not imply full qualification; the existing limited bench evidence still applies.
 
 Acquisition requires `AETHER_AUTOMATION_ALLOW_LAB_RF=1` on the app process and
 an explicit `isolated` token. This permission is separate from radio TX.
@@ -5036,7 +5117,7 @@ audio devices require separate hardware validation.
 | `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
 | `daxTx` | `daxtx` | daxTx <take\|release\|status> — this client's DAX TX stream ownership; never keys TX |
 | `meterwindow` | — | meterwindow <start [duration_ms]\|status\|stop> — bounded meter ages and unrounded peaks; never keys TX |
-| `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
+| `connect` | — | connect <list\|profiles\|profile stations\|operators <id>\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
@@ -5062,7 +5143,7 @@ audio devices require separate hardware validation.
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
-| `lab` | — | lab <status\|devices\|connect index\|sweep startHz stopHz intervals isolated\|stop\|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1) |
+| `lab` | — | lab <status\|devices\|connect index\|sweep startHz stopHz intervals isolated\|stop\|disconnect> — RigExpert Stick USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1) |
 | `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod profile, TXDELAY, RX tap, WIDE1-1 fill-in digipeater, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |

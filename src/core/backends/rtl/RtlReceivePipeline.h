@@ -123,6 +123,9 @@ public:
     bool takePacket(Packet& output) noexcept;
     void setMonitor(int slot, int gain, int pan, bool mute) noexcept;
     bool needsRepair() const noexcept { return m_faults.load(std::memory_order_acquire) != 0; }
+    // Offline observation only; never poll or wait inside acquisition.
+    bool outputSettledForTest() const noexcept
+    { return !needsRepair() && m_reader.outputSettledForTest(); }
     std::uint64_t droppedPackets() const noexcept { return m_drops.load(std::memory_order_relaxed); }
     bool legacy() const noexcept { return m_legacy; }
     void setStartupTrace(RtlStartupTrace* trace) noexcept { m_startupTrace = trace; }

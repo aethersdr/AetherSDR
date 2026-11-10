@@ -1181,6 +1181,12 @@ void RadioModel::setupBackend(const QString& family)
             pan->setScopeModeIndex(index);
         }
     });
+    connect(m_backend.get(), &IRadioBackend::panZoomPlacementChanged, this,
+            [this](const QString& panId, PanZoomPlacement placement) {
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->setZoomPlacement(placement);
+        }
+    });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
         if (auto* pan = resolveBackendPan(panId)) pan->setRxAntenna(ant);
@@ -2226,11 +2232,17 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::sliceAdded, this, [this](SliceModel* slice) {
         connect(slice, &SliceModel::modeChanged, this, &RadioModel::updateTuneAvailability);
         connect(slice, &SliceModel::txSliceChanged, this, &RadioModel::updateTuneAvailability);
+        connect(slice, &SliceModel::txSliceChanged, this, &RadioModel::updateAtuAvailability);
+        connect(slice, &SliceModel::txAntennaChanged, this, &RadioModel::updateAtuAvailability);
         updateTuneAvailability();
+        updateAtuAvailability();
     });
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateTuneAvailability);
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateTuneAvailability);
+    connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateAtuAvailability);
+    connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateAtuAvailability);
     qRegisterMetaType<PcmFrame>();
+    qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
     qRegisterMetaType<TxCoordinator::StopRequest>();
@@ -4492,41 +4504,6 @@ bool RadioModel::requestAmCarrierLevel(int level)
     return true;
 }
 
-void RadioModel::recallBandStackReceiveDsp(SliceModel* slice,
-                                           const BandStackEntry& entry)
-{
-    if (!slice) {
-        return;
-    }
-    // Under KiwiSDR external receive the AGC setters address the KiwiSDR AGC
-    // (its own dB range), but the bookmark holds the RADIO's AGC: only in that
-    // case the caller sends it as wire text. Otherwise the slice setters below
-    // are the one route, through the receive-intent dispatcher to the backend.
-    if (!slice->externalReceiveReplacementActive()) {
-        if (!entry.agcMode.isEmpty() && entry.agcMode != slice->agcMode()) {
-            slice->recallAgcMode(entry.agcMode);
-        }
-        if (entry.agcThreshold != slice->agcThreshold()) {
-            slice->recallAgcThreshold(entry.agcThreshold);
-        }
-    }
-    if (entry.nbOn != slice->nbOn()) {
-        slice->setNb(entry.nbOn);
-    }
-    if (entry.nbLevel != slice->nbLevel()) {
-        slice->setNbLevel(entry.nbLevel);
-    }
-    if (!radioSideNoiseReductionAvailable()) {
-        return;
-    }
-    if (entry.nrOn != slice->nrOn()) {
-        slice->setNr(entry.nrOn);
-    }
-    if (entry.nrLevel != slice->nrLevel()) {
-        slice->setNrLevel(entry.nrLevel);
-    }
-}
-
 void RadioModel::setTransmitFrequencyCheck(bool on)
 {
     if (!m_backend || !isConnected()) {
@@ -4759,6 +4736,14 @@ void RadioModel::updateTuneAvailability()
     const bool cwMode = slice && slice->mode().startsWith(QLatin1String("CW"));
     m_transmitModel.setTuneAvailable(!isConnected() || !cwMode
                                      || backendCapabilities().hasCwTune);
+}
+
+void RadioModel::updateAtuAvailability()
+{
+    const SliceModel* slice = txSlice();
+    // XVTA/XVTB (and the 6000-series XVTR port) bypass the internal ATU.
+    m_transmitModel.setAtuAvailable(!isConnected() || !slice
+        || !slice->txAntenna().startsWith(QLatin1String("XVT"), Qt::CaseInsensitive));
 }
 
 void RadioModel::publishCapabilities(bool connected)

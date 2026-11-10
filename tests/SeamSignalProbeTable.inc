@@ -61,6 +61,7 @@ AETHER_SEAM_PROBE(panAttenuatorInfoChanged);
 AETHER_SEAM_PROBE(panAttenuatorChanged);
 AETHER_SEAM_PROBE(panScopeModesChanged);
 AETHER_SEAM_PROBE(panScopeModeChanged);
+AETHER_SEAM_PROBE(panZoomPlacementChanged);
 AETHER_SEAM_PROBE(panRxAntennaChanged);
 AETHER_SEAM_PROBE(panAntennaListChanged);
 AETHER_SEAM_PROBE(panWaterfallLineDurationChanged);

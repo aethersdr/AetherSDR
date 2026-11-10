@@ -1372,6 +1372,9 @@ signals:
     // picked on the front panel), so the UI lights none.
     void panScopeModesChanged(const QString& panId, const QStringList& labels);
     void panScopeModeChanged(const QString& panId, int index);
+    // Required of a backend declaring PanZoomModes::Control::NativeScopeSpan:
+    // until it is published the pan reads Unknown and B/S stay dimmed.
+    void panZoomPlacementChanged(const QString& panId, AetherSDR::PanZoomPlacement placement);
 
     // Panadapter antenna selection (universal). Two signals because the wire may
     // report the selected RX antenna and the available list independently.
