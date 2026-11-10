@@ -171,7 +171,7 @@ void testIndependentDaxPump()
         WsprBeacon::encode(QStringLiteral("K1ABC"),
                            QStringLiteral("FN42"), 37);
     AudioEngine engine;
-    engine.setTxStreamId(0x4a000001U);
+    engine.setDaxTxAudioRoute(0x4a000001U, AetherSDR::DaxTxAudioPermit::confirmed(0x4a000001U));
     engine.setTransmitting(true);
     engine.setRadioTransmitting(true, /*ownedByUs=*/true);
 
