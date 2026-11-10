@@ -2252,18 +2252,20 @@ void TciServer::handleVfoRequest(TciClient* client, const TciProtocol::VfoReques
         return;
     }
 
+    const bool vfoBEqualsRx
+        = request.frequencyHz == TciProtocol::mhzToHz(rxSlice->frequency());
     const TciRoutingState::RouteDecision route
-        = m_routingState.resolveVfoB(rxSlice->sliceId(), routingEndpoints(client));
+        = m_routingState.resolveVfoB(rxSlice->sliceId(), routingEndpoints(client), vfoBEqualsRx);
     if (route.action == TciRoutingState::RouteAction::EchoOnly) {
-        // The only TX slice is another client's receiver and no split was
-        // requested: this receiver has no VFO B to tune. TCI has no error
-        // frame, so answer with the channel-1 projection of the RX slice —
-        // channel 0 has normally just been set to the same value, so the
-        // client's rig-control wait is satisfied without touching any other
-        // slice (#5193).
+        // No split was requested and this receiver has no VFO B to tune: the
+        // only TX slice is another client's receiver (#5193), or VFO B is the
+        // RX frequency itself. TCI has no error frame, so answer with the
+        // channel-1 projection of the RX slice — channel 0 has normally just
+        // been set to the same value, so the client's rig-control wait is
+        // satisfied without touching or creating any other slice.
         qCDebug(lcCat).noquote()
-            << QStringLiteral("TCI: vfo:%1,1 echoed without tuning - the TX slice is another"
-                              " client's receiver (#5193)")
+            << QStringLiteral("TCI: vfo:%1,1 echoed without tuning - no split and no VFO B"
+                              " of its own")
                    .arg(request.trx);
         replyText(client,
             QStringLiteral("vfo:%1,1,%2;")
@@ -2334,8 +2336,10 @@ void TciServer::handleSplitRequest(TciClient* client, const TciProtocol::SplitRe
             return;
         }
 
-        const TciRoutingState::RouteDecision route
-            = m_routingState.resolveVfoB(rxSlice->sliceId(), routingEndpoints(client));
+        // vfoBEqualsRx is false on purpose: split is already latched above,
+        // so the simplex-restate gate in resolveVfoB() cannot apply here.
+        const TciRoutingState::RouteDecision route = m_routingState.resolveVfoB(
+            rxSlice->sliceId(), routingEndpoints(client), /*vfoBEqualsRx=*/false);
         if (route.action == TciRoutingState::RouteAction::UseExisting) {
             broadcast(confirmation);
             return;
