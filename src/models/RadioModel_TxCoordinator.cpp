@@ -235,6 +235,8 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         return false;
     }
     if (m_daxTxOwnershipIntent) {
+        qCWarning(lcProtocol) << "RadioModel: TX refused — a DAX TX stream selection was pending;"
+                              << "the selection is interrupted, key again to transmit";
         interruptDaxTxOwnership(tr("Transmit preparation interrupted DAX TX ownership. Waiting for fresh radio status."));
         return false;
     }
@@ -465,7 +467,8 @@ bool RadioModel::requestProducerAtu(const TxCoordinator::Request& request, bool 
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Atu, dispatched);
     m_transmitModel.requestAtu(start, route);
-    const bool accepted = dispatched;
+    // A start withdrawn during admission dispatches its cleanup, not a cycle.
+    const bool accepted = dispatched && (!start || m_transmitModel.atuAvailable());
     if (start && !accepted) {
         m_transmitModel.requestAtu(false, route);
     }

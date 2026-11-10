@@ -2787,6 +2787,9 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
         return normalizedAction.isEmpty() || normalizedAction == QLatin1String("status")
             || normalizedAction == QLatin1String("devices") || normalizedAction == QLatin1String("stop");
     }
+    if (name == QLatin1String("connect") && normalizedAction == QLatin1String("profiles")) {
+        return true;
+    }
     // The probe constructs only an isolated TransmitModel and touches no session.
     if (name == QLatin1String("interlock") && action == QLatin1String("probe")) {
         return true;
@@ -3322,7 +3325,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doMeterWindow(a.action, a.value);
             });
 
-        add("connect", {}, "connect <list|show|hide|local|ip|wait> [args]",
+        add("connect", {}, "connect <list|profiles|profile stations|operators <id>|show|hide|local|ip|wait> [args]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket* sock) -> QJsonObject {
                 if (a.action.isEmpty()) {
@@ -3612,7 +3615,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("lab", {},
-            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
+            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — RigExpert Stick USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doLab(a.action, a.value);
@@ -6050,6 +6053,13 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         // and Kiwi 2D/3D display sources deterministically.
         bool selectorIsIndex = false;
         const int wantIndex = selector.toInt(&selectorIsIndex);
+        // `bins`: one pan's trace bins themselves (#5806), so a client can
+        // measure rather than read four statistics. One pan only, to bound
+        // the reply.
+        const bool wantBins = property == QLatin1String("bins");
+        if (wantBins && selector.isEmpty()) {
+            return err(QStringLiteral("tracedebug bins needs one pan: a pan index or objectName"));
+        }
         QJsonArray pans;
         QSet<QWidget*> seen;
         const QList<QWidget*> widgets =
@@ -6065,7 +6075,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             }
 
             QVariantMap snap;
-            if (!QMetaObject::invokeMethod(w, "traceDebugSnapshot",
+            if (!QMetaObject::invokeMethod(w, wantBins ? "traceBinsSnapshot" : "traceDebugSnapshot",
                                            Qt::DirectConnection,
                                            Q_RETURN_ARG(QVariantMap, snap))) {
                 continue;
@@ -6074,7 +6084,22 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                 && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex) {
                 continue;
             }
+            if (wantBins) {
+                // The widget refuses while the frame's geometry is not settled.
+                const QString refusal = snap.value(QStringLiteral("refusal")).toString();
+                if (!refusal.isEmpty()) {
+                    return err(QStringLiteral("tracedebug bins: ") + refusal);
+                }
+                return QJsonObject{{QStringLiteral("ok"), true},
+                                   {QStringLiteral("model"), model},
+                                   {QStringLiteral("property"), property},
+                                   {QStringLiteral("pan"), QJsonObject::fromVariantMap(snap)}};
+            }
             pans.append(QJsonObject::fromVariantMap(snap));
+        }
+        if (wantBins) {
+            return err(QStringLiteral("tracedebug bins: no pan matches '") + selector
+                       + QStringLiteral("'"));
         }
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("model"), model},
@@ -6631,6 +6656,19 @@ QJsonObject AutomationServer::doConnect(const QString& action,
         };
     }
 
+    if (a == QLatin1String("profiles")) {
+        return QJsonObject{{"ok", true}, {"profiles", conn->automationConnectionProfiles()}};
+    }
+    if (a == QLatin1String("profile")) {
+        const QStringList parts = arg.simplified().split(' ');
+        if (parts.size() != 2 || (parts[0] != QLatin1String("stations") && parts[0] != QLatin1String("operators"))) {
+            return err(QStringLiteral("connect profile requires stations|operators <id>"));
+        }
+        QString error;
+        if (!conn->automationSelectConnectionProfile(parts[0], parts[1], &error)) { return err(error); }
+        return QJsonObject{{"ok", true}};
+    }
+
     if (m_radioModel && m_radioModel->isConnected()) {
         return err(QStringLiteral("already connected to a radio"));
     }
@@ -6802,7 +6840,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     return err(QStringLiteral("unknown connect action: ") + action
-               + QStringLiteral(" (use list|show|hide|local|ip|wait)"));
+               + QStringLiteral(" (use list|profiles|profile|show|hide|local|ip|wait)"));
 }
 
 QJsonObject AutomationServer::doConnectDialog(const QString& action)

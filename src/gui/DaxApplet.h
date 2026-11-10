@@ -58,6 +58,10 @@ private:
     QPointer<RadioModel> m_model;
     std::unique_ptr<QObject> m_modelBinding;
     std::unique_ptr<ControlAvailabilityRegistry> m_ownershipAvailability;
+    // The registry freezes its reason at registration; rebuild only on change.
+    bool m_ownershipCanRequest{false};
+    bool m_ownershipOwned{false};
+    QString m_ownershipReason;
     bool m_nativeReceiveRouting{false};
     int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 

@@ -141,6 +141,15 @@ void PanadapterModel::setScopeModeIndex(int index)
     emit scopeModeIndexChanged(m_scopeModeIndex);
 }
 
+void PanadapterModel::setZoomPlacement(PanZoomPlacement placement)
+{
+    if (placement == m_zoomPlacement) {
+        return;
+    }
+    m_zoomPlacement = placement;
+    emit zoomPlacementChanged(m_zoomPlacement);
+}
+
 bool PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
 {
     bool changed = false;

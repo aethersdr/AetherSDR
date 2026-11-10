@@ -44,7 +44,7 @@ This applies to the [Ulanzi Dial](./ulanzi-dial.md), the Stream Deck+ ([StreamDe
 
 - **Menus** are in the system menu bar at the top of the screen. See [Menu Reference](./menu-reference.md).
 - **Radio Setup** is **AetherSDR → Preferences...** (Settings → Radio Setup... on the other platforms). Search in it with ⌘F.
-- **Window:** a native window with the standard traffic-light buttons, the tiling menu, Stage Manager and native full screen (Cmd+Ctrl+F). Cmd+M minimizes the window.
+- **Window:** a native window with the standard traffic-light buttons, the tiling menu, Stage Manager and native full screen (Cmd+Ctrl+F). In full screen, the title bar sits at the top of the window without an empty toolbar strip above it. Leaving full screen restores the traffic lights in the title-bar row. Cmd+M minimizes the window.
 - **DAX virtual audio** is built in through the DAX Virtual Audio Driver (above). See [DAX Virtual Audio](./dax-virtual-audio.md).
 - **CAT virtual serial ports** (PTY) are available as well as TCP ports, at `~/Library/Caches/AetherSDR/cat-A` … `cat-H`. See [CAT Control](./cat-control.md).
 - **Noise reduction:** **MNR**, Apple's MMSE-Wiener spectral noise reduction on the vDSP/Accelerate framework, is available only on macOS. **BNR** (NVIDIA) is not available; use **DFNR** instead, which runs on any CPU. See [DSP Noise Mitigation](./dsp-noise-mitigation.md).

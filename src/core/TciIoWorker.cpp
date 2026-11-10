@@ -263,7 +263,7 @@ void TciIoWorker::receiveText(quint64 id, const QString& text)
         return;
     }
     for (const QString& command : commands) {
-        it->texts.push_back({command + QLatin1Char(';'), {}, false, m_daxTxAudioPermit, true});
+        it->texts.push_back({command + QLatin1Char(';'), {}, false, m_daxTxAudioPermit});
     }
     if (it->activated) { captureTextInputs(*it); }
     it->textBytes += bytes;
@@ -298,11 +298,6 @@ void TciIoWorker::captureTextInputs(Client& client)
                 if (m_txClient == client.lifetime->id) { stopChrono(); }
             } else if (request && request->transmitting) {
                 text.input = client.producer.request();
-                // Native enqueue pins the route even before client activation.
-                if (!text.daxPermitCaptured) {
-                    text.daxPermit = m_daxTxAudioPermit;
-                    text.daxPermitCaptured = true;
-                }
             }
         }
     }

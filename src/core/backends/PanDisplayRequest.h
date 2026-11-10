@@ -28,6 +28,15 @@ enum class PanDisplayField {
 };
 enum class PanGeometryComponent { Center, Bandwidth };
 
+// How a native-span band/segment zoom can be placed in the scope's current
+// mode. The backend owns the mode, so it says which request the radio honors.
+enum class PanZoomPlacement {
+    Unknown,           // mode not reported yet: zoom waits
+    FitAroundCenter,   // span only, around the radio's center (Icom Center)
+    CenterAllocation,  // center and width both honored (SCROLL-F, our Fixed)
+    Unavailable,       // the radio owns the edges (an operator Fixed preset)
+};
+
 struct PanDisplayControl {
     QSet<PanDisplayField> fields;
     QSet<PanGeometryComponent> geometry;
@@ -103,3 +112,4 @@ struct PanDisplayRequest {
 } // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::PanDisplayRequest)
+Q_DECLARE_METATYPE(AetherSDR::PanZoomPlacement)

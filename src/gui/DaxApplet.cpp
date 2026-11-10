@@ -276,7 +276,6 @@ void DaxApplet::buildOwnershipUI(QVBoxLayout* outer)
 
 void DaxApplet::updateDaxTxOwnership()
 {
-    m_ownershipAvailability.reset();
     const QJsonObject snapshot = m_model ? m_model->daxTxOwnershipSnapshot() : QJsonObject();
     const bool available = snapshot.value(QStringLiteral("available")).toBool();
     const bool pending = snapshot.value(QStringLiteral("pending")).toBool();
@@ -306,18 +305,27 @@ void DaxApplet::updateDaxTxOwnership()
     }
     const QString description = tr("Select or deselect AetherSDR's DAX transmit-audio stream. "
                                    "This does not start transmission or control SmartSDR DAX's stream.");
-    m_daxTxToggle->setAccessibleDescription(description);
-    m_daxTxToggle->setToolTip(description);
     QString reason = snapshot.value(take ? QStringLiteral("takeReason") : QStringLiteral("releaseReason")).toString();
     if (reason.isEmpty()) {
         reason = tr("Waiting for confirmed TX stream status from a supported radio.");
     }
-    if (m_model) {
+    if (m_model && m_ownershipAvailability && m_ownershipCanRequest == canRequest
+        && m_ownershipOwned == owned && m_ownershipReason == reason) {
+        // Unchanged inputs: keep the existing registration and its connections.
+    } else if (m_model) {
+        m_ownershipAvailability.reset();
+        m_ownershipCanRequest = canRequest;
+        m_ownershipOwned = owned;
+        m_ownershipReason = reason;
+        // The registry restores these own texts whenever the toggle is available.
+        m_daxTxToggle->setAccessibleDescription(description);
+        m_daxTxToggle->setToolTip(description);
         m_ownershipAvailability = std::make_unique<ControlAvailabilityRegistry>(*m_model, this);
         m_ownershipAvailability->registerWidget(m_daxTxToggle, reason,
             [canRequest](bool, const RadioCapabilities&) { return canRequest; },
             [owned] { return owned; }, false);
     } else {
+        m_ownershipAvailability.reset();
         m_daxTxToggle->setEnabled(false);
         m_daxTxToggle->setToolTip(reason);
         m_daxTxToggle->setAccessibleDescription(reason);

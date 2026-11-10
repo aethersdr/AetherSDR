@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.11.1 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -882,6 +882,7 @@ set(AETHER_SETTINGS_SOURCES
 )
 
 set(CORE_SOURCES
+    src/models/ConnectionWorkspace.cpp
     src/core/control/ControlProtocolCodec.cpp # aetherd v1 bounded JSON envelopes
     src/core/control/ControlResourceStore.cpp # typed snapshots and revisions
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
@@ -1133,6 +1134,8 @@ set(CORE_SOURCES
     src/core/TailnetShimTokenStore.cpp
     src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
     src/core/RadioHealthClient.cpp    # radio health agent readout (tools/radio-health)
+    src/core/WsprAgent.cpp            # WSPR receiver on the radio (tools/wspr-agent)
+    src/core/WsprAgentClient.cpp
     src/core/TailnetLinkTelemetry.cpp   # link telemetry from the shim, for Network Diagnostics
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp
@@ -1257,6 +1260,7 @@ if(WIN32)
 endif()
 
 set(MODEL_SOURCES
+    src/models/RadioSwrValidityFilter.cpp
     src/models/DecoderAudioModel.cpp
     src/models/Ax25ReceiveModel.cpp
     src/models/AprsDigipeaterModel.cpp
@@ -1418,6 +1422,7 @@ set(GUI_SOURCES
     src/gui/WaveformsDialog.cpp
     src/gui/WaveformEnvironmentDialog.cpp
     src/gui/TailnetShimDialog.cpp
+    src/gui/WsprConfigureWindow.cpp
     src/gui/QrCodeImage.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp
@@ -1478,7 +1483,6 @@ set(GUI_SOURCES
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/AnalogMeterFaceTheme.cpp
-    src/gui/RadioSwrValidityFilter.cpp
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/gui/CrossNeedleMeterGeometry.cpp

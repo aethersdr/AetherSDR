@@ -1136,6 +1136,7 @@ ReceiveDispatch FlexBackend::requestSliceAgcThresholdMode(int sliceId, AgcThresh
 
 void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
 {
+    if (sliceId < 0 || !request.valid()) { return; }
     // FlexLib 4.2.18 Slice: each AGC setter writes only its own field.
     switch (request.field) {
     case SliceAgcRequest::Field::Mode:
