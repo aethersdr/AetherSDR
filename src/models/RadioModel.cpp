@@ -10290,8 +10290,13 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
         return true;
     }
 
-    if (m_rxAudio.removeRequested && m_rxAudio.streamId != 0)
+    if (m_rxAudio.removeRequested && m_rxAudio.streamId != 0) {
+        // A restart requested while the create was pending (compression
+        // change) still applies once its cancelled reply arrives.
+        const bool restart = m_remoteRxRestartAfterCancel;
         removeRxAudioStream();
+        m_remoteRxRestartAfterCancel = restart && m_remoteRxAllocationPending;
+    }
 
     return true;
 }
@@ -13484,7 +13489,8 @@ void RadioModel::createAudioStream()
             [this, oldId, session, revision](const AudioStreamReply& reply) {
                 if (controlSessionCurrent(session) && reply.result.code == 0
                     && m_remoteRxRequestRevision == revision
-                    && AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True"
+                    && (AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True"
+                        || lineOutAudioStreamDemanded())
                     && (m_rxAudio.streamId == oldId || m_rxAudio.streamId == 0)) {
                     m_rxAudio = {};
                     createRxAudioStream();

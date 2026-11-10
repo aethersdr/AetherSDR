@@ -337,6 +337,53 @@ void lineOutStreamLifecycle()
     settings.setValue("PcAudioEnabled", previous);
 }
 
+// A compression change (Radio Setup) removes the receive stream and creates
+// it again at the new compression, for whichever demand holds it.
+void compressionRestart()
+{
+    auto& settings = AppSettings::instance();
+    const QVariant previous = settings.value("PcAudioEnabled", "True");
+    const auto creates = [](AudioFixture& f) {
+        return f.backend->commands().filter(QStringLiteral("stream create type=remote_audio_rx")).size();
+    };
+    {
+        settings.setValue("PcAudioEnabled", "False");
+        AudioFixture f;
+        TxOperationIntegrationTestAccess::acceptGuiRegistration(f.radio);
+        f.radio.setLineOutPcAudioOffConsent(true);
+        f.radio.setLineOutAudioRequested(true);
+        check(creates(f) == 1, "compression fixture: consented Line Out allocates with PC Audio off");
+        if (creates(f) == 1) {
+            f.answer(f.backend->writes.size() - 1, 0x100);
+            f.stream(0x100, QStringLiteral("remote_audio_rx"));
+            f.radio.createAudioStream();
+            const size_t remove = f.backend->writes.size() - 1;
+            check(f.backend->commands().last() == QStringLiteral("stream remove 0x100"),
+                "compression change removes the Line Out stream");
+            f.backend->answer(remove, {RadioControlReply::Kind::Accepted, 0, QString()});
+            events();
+            check(creates(f) == 2, "compression change recreates the stream for consented Line Out with PC Audio off");
+        }
+    }
+    settings.setValue("PcAudioEnabled", "True");
+    for (bool statusFirst : {false, true}) {
+        AudioFixture f;
+        TxOperationIntegrationTestAccess::acceptGuiRegistration(f.radio);
+        TxOperationIntegrationTestAccess::startRx(f.radio);
+        check(creates(f) == 1, "compression fixture: PC Audio allocates");
+        if (creates(f) != 1) { continue; }
+        const size_t create = f.backend->writes.size() - 1;
+        f.radio.createAudioStream();
+        if (statusFirst) { f.stream(0x100, QStringLiteral("remote_audio_rx")); }
+        f.answer(create, 0x100);
+        events();
+        check(creates(f) == 2, statusFirst
+            ? "compression change during a pending create ends with a fresh create (status first)"
+            : "compression change during a pending create ends with a fresh create (reply first)");
+    }
+    settings.setValue("PcAudioEnabled", previous);
+}
+
 void remoteRxAndNativeAudio()
 {
     {
@@ -403,5 +450,6 @@ int main(int argc, char** argv)
     terminalWriter();
     remoteRxAndNativeAudio();
     lineOutStreamLifecycle();
+    compressionRestart();
     return failures == 0 ? 0 : 1;
 }
