@@ -11,6 +11,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #endif
 
@@ -57,12 +58,21 @@ bool listenRefusesLongPath()
     const QByteArray savedXdg = qgetenv("XDG_RUNTIME_DIR");
     const bool hadXdg = qEnvironmentVariableIsSet("XDG_RUNTIME_DIR");
     qputenv("XDG_RUNTIME_DIR", QFile::encodeName(runtime));
-    {
+    // Only call listen() when Qt resolves the injected directory: a fallback
+    // runtime directory could be the user's real one.
+    const bool injected = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) == runtime;
+    ok &= check(injected, "Qt resolves the injected runtime directory");
+    if (injected) {
         AetherSDR::control::LocalControlServer server;
-        ok &= check(!server.listen(QStringLiteral("aetherd-v1")),
+        ok &= check(!server.listen(QStringLiteral("local-socket-path-test")),
                     "listen() refuses an endpoint over the length limit");
         ok &= check(server.listenError().contains(QStringLiteral("106-byte limit")),
                     "listenError() names the length limit");
+        QString pathError;
+        ok &= check(AetherSDR::control::LocalControlServer::clientEndpoint(
+                        QStringLiteral("local-socket-path-test"), &pathError).isEmpty()
+                        && pathError.contains(QStringLiteral("106-byte limit")),
+                    "clientEndpoint() refuses the same path and names the limit");
     }
     if (hadXdg) {
         qputenv("XDG_RUNTIME_DIR", savedXdg);

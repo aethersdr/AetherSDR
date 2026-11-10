@@ -126,12 +126,12 @@ std::unique_ptr<QLockFile> LocalControlServer::reserveCredentialAuthority(const 
 
 bool LocalControlServer::listen(const QString& name, ListenMode mode)
 {
+    m_listenError.clear();
     if (m_server.isListening() || m_lock || m_limits.maxClients < 1
         || m_limits.handshakeTimeoutMs < 1 || m_limits.maxQueuedOutputBytes < 1) {
         return false;
     }
 
-    m_listenError.clear();
     QString endpointName;
     QString lockPath;
     if (!resolveEndpoint(name, &endpointName, &lockPath)) {
@@ -172,11 +172,18 @@ bool LocalControlServer::listen(const QString& name, ListenMode mode)
     return mode == ListenMode::ReserveEndpoint || startServing();
 }
 
-QString LocalControlServer::clientEndpoint(const QString& logicalName)
+QString LocalControlServer::clientEndpoint(const QString& logicalName, QString* pathError)
 {
     QString endpoint;
     QString lock;
-    return resolveEndpoint(logicalName, &endpoint, &lock) ? endpoint : QString{};
+    if (!resolveEndpoint(logicalName, &endpoint, &lock)) {
+        return {};
+    }
+    const QString tooLong = localSocketPathTooLong(endpoint, localSocketPathLimit());
+    if (pathError) {
+        *pathError = tooLong;
+    }
+    return tooLong.isEmpty() ? endpoint : QString{};
 }
 
 bool LocalControlServer::startServing()

@@ -53,7 +53,9 @@ public:
     // Current-user lock only (no additional listener), shared by serving and
     // offline provisioning across socket names. Hold through daemon shutdown.
     [[nodiscard]] static std::unique_ptr<QLockFile> reserveCredentialAuthority(const QString& authorityId);
-    [[nodiscard]] static QString clientEndpoint(const QString& logicalName);
+    // Empty when the endpoint cannot be resolved or is too long for a Unix
+    // socket; in the second case *pathError says why.
+    [[nodiscard]] static QString clientEndpoint(const QString& logicalName, QString* pathError = nullptr);
     void close();
     [[nodiscard]] bool isListening() const { return m_server.isListening(); }
     [[nodiscard]] QString fullServerName() const { return m_server.fullServerName(); }
