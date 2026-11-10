@@ -15,6 +15,8 @@
 #include <QStringList>
 
 #include <functional>
+#include <map>
+#include <memory>
 #include <vector>
 
 class QTimer;
@@ -24,13 +26,17 @@ namespace AetherSDR {
 class Ctr2UsbRelay;
 
 // Operator-facing state for the CTR2 relay. Wi-Fi mode runs TcpByteProxy
-// (the CTR2 connects to this PC over TCP); USB mode runs Ctr2UsbRelay over
-// a selected HID device. Both forward to the radio AetherSDR is connected
-// to, which the owner pushes in through setAetherRadio(); that destination is
-// captured at start() and never retargeted while running. The model never
-// reads RadioModel or a backend itself: the CTR2 is its own radio client.
-// Nothing persists; the relay is off on every launch. USB mode is the default
-// when the build has hidapi, with the first recognized CTR2 preselected.
+// (the CTR2 connects to this PC over TCP); USB mode runs a Ctr2UsbRelay per
+// started HID device, so several controllers (a CTR2 and an AetherKnob, say)
+// relay at once, each its own client of the radio. Both forward to the radio
+// AetherSDR is connected to, which the owner pushes in through
+// setAetherRadio(); that destination is captured when the first relay starts
+// and never retargeted while any runs. The model never reads RadioModel or a
+// backend itself: each controller is its own radio client. USB mode is the
+// default when the build has hidapi, with the first recognized CTR2
+// preselected. In USB mode the selected device (usbDevicePath()) is the focus:
+// the calls without a device path (start(), state(), stats(), the firmware
+// calls) act on it.
 // Design: docs/ctr2-tcp-proxy-design.md, docs/ctr2-usb-relay-design.md.
 class Ctr2ProxyModel : public QObject {
     Q_OBJECT
@@ -87,12 +93,14 @@ public:
 
     // HID interfaces on usage page 0xFF00, usage 0x01 (USB).
     QList<Ctr2HidPort::DeviceInfo> availableUsbDevices() const { return m_usbChoices; }
+    // The focus. Changing it never stops or starts a relay.
     QString usbDevicePath() const { return m_usbDevicePath; }
     bool setUsbDevicePath(const QString& path);
     // Linux: the selected CTR2's device node exists but this user may not
     // open it, i.e. the udev access rule is not installed yet. Always false
     // on other platforms, in Wi-Fi mode, or with no device selected.
     bool usbDeviceNeedsAccessRule() const;
+    bool usbDeviceNeedsAccessRule(const QString& path) const;
 
     // The radio AetherSDR is connected to. A null address means the relay
     // has no usable destination, and unavailableReason says why. A running
@@ -102,28 +110,43 @@ public:
                         const QString& unavailableReason);
     QString aetherRadioLabel() const { return m_aetherRadioLabel; }
 
-    // Empty when Start may be pressed; otherwise the reason it may not.
+    // Empty when Start may be pressed; otherwise the reason it may not. With
+    // a path: for that USB device.
     QString configurationProblem() const;
+    QString configurationProblem(const QString& usbPath) const;
+    // Any relay is up: the Wi-Fi proxy, or a USB relay for any device.
     bool isRunning() const;
+    // The relay for this USB device is up.
+    bool isRunning(const QString& usbPath) const;
+    // The USB devices being relayed now.
+    QStringList runningUsbDevices() const;
 
+    // Wi-Fi: starts the proxy. USB: starts the focus device's relay.
     bool start();
+    bool start(const QString& usbPath);
+    // Stops every relay.
     void stop();
+    void stop(const QString& usbPath);
     // Stop pressed by the operator: also holds off the automatic start until
-    // AetherSDR next connects to a radio.
+    // AetherSDR next connects to a radio. Without a path, for every relay.
     void stopByOperator();
+    void stopByOperator(const QString& usbPath);
 
     // Starts the relay by itself whenever AetherSDR is connected to a radio,
     // with the setup it last started with (Ctr2RelaySettings, saved), and
-    // keeps trying while the device is missing. In USB mode only a device
-    // whose firmware relays over USB (usbLink()) is started, and a device
-    // that failed without ever answering is retried only every
-    // kNoAnswerRetryMs, or at once when the device list, the selected
-    // device, the mode or the radio changes.
+    // keeps trying while a device is missing. In USB mode it starts every
+    // device it has relayed before that is plugged in (the focus when it
+    // remembers none); only a device whose firmware relays over USB
+    // (usbLink()) is started, and a device that failed without ever answering
+    // is retried only every kNoAnswerRetryMs, or at once when the device
+    // list, the selected device, the mode or the radio changes.
     bool autoStart() const { return m_settings.autoStart; }
     void setAutoStart(bool on);
     static constexpr int kAutoStartRetryMs = 5000;
     static constexpr int kNoAnswerRetryMs = 60000;
     void setNoAnswerRetryMs(int ms);   // tests
+    // Tests: the radio socket every USB relay started from now on uses.
+    void setUsbRadioSocketFactory(TcpByteProxy::SocketFactory factory);
     // While the relay is stopped, USB devices are rescanned this often, so a
     // controller that switched firmware (and so changed its USB identity)
     // appears without pressing Rescan.
@@ -135,32 +158,40 @@ public:
     // from the CTR2, as firmware without USB mode never answers; empty
     // otherwise.
     QString noAnswerHint() const;
+    QString noAnswerHint(const QString& usbPath) const;
     static constexpr int kNoAnswerHintMs = 10000;
     void setNoAnswerHintMs(int ms);   // tests
 
+    // Wi-Fi: the proxy. USB: the focus device's relay; with a path, that one.
     TcpByteProxy::State state() const;
+    TcpByteProxy::State state(const QString& usbPath) const;
     QString stateText() const;
+    QString stateText(const QString& usbPath) const;
     QString lastError() const;
+    QString lastError(const QString& usbPath) const;
     QString listenerEndpoint() const;
     QString peerEndpoint() const;
     QString radioEndpoint() const;
     TcpByteProxy::Stats stats() const;
 
-    // True while the USB relay is up with a device that negotiated the
+    // True while a USB relay is up with a device that negotiated the
     // AudioSpectrum link extension (AetherKnob; never a stock CTR2).
     bool audioSpectrumWanted() const;
-    // And it also negotiated AudioSpectrumLinear: windows not starting at 0.
+    // And such a device also negotiated AudioSpectrumLinear: windows not
+    // starting at 0.
     bool audioSpectrumLinearWanted() const;
-    // True while the USB relay is up with a device that negotiated CwText.
+    // True while a USB relay is up with a device that negotiated CwText.
     bool cwTextWanted() const;
-    // Decoded CW text for the device, with the decoder's cost (lower is
-    // better). False if not wanted now or nothing printable is left.
+    // Decoded CW text for every device that wants it, with the decoder's cost
+    // (lower is better). False if none wants it now or nothing printable is left.
     bool sendCwText(const QString& text, float cost);
 
     // Firmware version of the selected USB device: from the relay while it
     // runs, otherwise read when the device is selected or rescanned. Empty
-    // for a device that does not report one (any stock CTR2).
+    // for a device that does not report one (any stock CTR2). With a path:
+    // that device's, known while it is relayed or once it has been the focus.
     QString usbFirmwareVersion() const;
+    QString usbFirmwareVersion(const QString& usbPath) const;
     bool firmwareUpdateAvailable() const { return static_cast<bool>(m_firmwareOpener); }
     // Whether the selected USB device takes FIRMWARE commands (restart into
     // its other firmware or download mode, restartUsbDevice()), as read with
@@ -180,11 +211,11 @@ public:
     // for it and does not come back, as the device leaves.
     bool restartUsbDevice(Ctr2FirmwareUpdater::Restart target, QString* problem);
     Ctr2FirmwareUpdater* firmwareUpdater() const { return m_firmware; }
-    // One AudioSpectrum frame: bars in dBFS, log-spaced from lowHz to spanHz
-    // (a non-finite bar reads as silence). False if not wanted now or the
-    // link is busy.
+    // One AudioSpectrum frame, to every device that wants it: bars in dBFS,
+    // log-spaced from lowHz to spanHz (a non-finite bar reads as silence).
+    // False if none wants it now or every link is busy.
     // With linear, the bars split lowHz..spanHz evenly (AudioSpectrumLinear;
-    // only when audioSpectrumLinearWanted()).
+    // only to the devices that negotiated it).
     bool sendAudioSpectrum(int lowHz, int spanHz, const std::vector<float>& barsDb,
                            bool linear = false);
     // The span to send for a passband: its width, rounded up to a clean
@@ -221,24 +252,47 @@ private:
     void applyDeviceScan(DeviceScan scan);
     void rescanInBackground();
     void tryAutoStart();
-    void onUsbStateChanged();
-    void saveSetup();
+    void saveSetup(const QString& usbPath = {});
+
+    // One USB device's relay and what the model knows of its run. Created
+    // when the device is first started, kept while it is listed so its stop
+    // reason still shows, dropped once it is gone and stopped.
+    struct UsbLink {
+        Ctr2UsbRelay* relay{nullptr};
+        QTimer* noAnswerTimer{nullptr};
+        bool answered{false};   // the device has answered since its relay started
+        bool noAnswer{false};   // and has not, kNoAnswerHintMs after starting
+        QString startError;     // opening the device failed
+        QString stopReason;     // why its relay stopped on its own
+        bool heldByOperator{false};   // stopped by the operator this connection
+        // Failed before the device ever answered (firmware with no USB mode,
+        // or a fault on the way up): no automatic retry before this expires,
+        // rather than opening the device on this thread every
+        // kAutoStartRetryMs. Expired (the default) means no hold.
+        QDeadlineTimer noAnswerHold;
+    };
+    UsbLink* usbLink(const QString& path) const;
+    UsbLink* ensureUsbLink(const QString& path);
+    void onUsbStateChanged(const QString& path);
+    void stopUsbLink(UsbLink* link);
+    const Ctr2HidPort::DeviceInfo* listedUsbDevice(const QString& path) const;
+    bool remembered(const Ctr2HidPort::DeviceInfo& device) const;
     static bool parsePort(const QString& text, quint16* port);
     static bool parseIpv4(const QString& text, QHostAddress* address);
     bool radioProblem(QString* problem) const;
     bool buildConfig(TcpByteProxy::Config* config, QString* problem) const;
     const Ctr2HidPort::DeviceInfo* selectedUsbDevice() const;
     bool usbActive() const { return m_activeTransport == Transport::Usb; }
+    bool wifiRunning() const;
 
     TcpByteProxy* m_proxy{nullptr};
-    Ctr2UsbRelay* m_usb{nullptr};
+    // Keyed by HID path. unique_ptr: a link's address stays put while the
+    // map changes, so callbacks may hold it.
+    std::map<QString, std::unique_ptr<UsbLink>> m_usbLinks;
+    TcpByteProxy::SocketFactory m_usbRadioSocketFactory;   // tests
     QTimer* m_statsTimer{nullptr};
     Transport m_transport{Transport::Wifi};
     Transport m_activeTransport{Transport::Wifi};
-    QTimer* m_noAnswerTimer{nullptr};
-    bool m_usbAnswered{false};   // the CTR2 has answered since the relay started
-    bool m_noAnswer{false};
-    QString m_usbStartError;
     QStringList m_listenChoices;
     QString m_listenAddress;
     QString m_listenPort{QString::number(kDefaultPort)};
@@ -248,10 +302,10 @@ private:
     quint16 m_aetherRadioPort{kDefaultPort};
     QString m_aetherRadioLabel;
     QString m_aetherRadioReason;
-    QHostAddress m_runningRadioAddress;  // captured at start()
+    QHostAddress m_runningRadioAddress;  // captured when the first relay starts
     quint16 m_runningRadioPort{0};
     QString m_runningRadioLabel;
-    QString m_stopReason;                // why the relay stopped on its own
+    QString m_stopReason;                // why the Wi-Fi proxy stopped on its own
     ListenAddressSource m_listenAddresses;
     UsbDeviceSource m_usbDevices;
     bool m_usbDevicesThreadSafe{false};
@@ -271,12 +325,7 @@ private:
     // Bumped by every synchronous scan, backend change and relay start, so a
     // background scan that started before one of them is dropped.
     quint64 m_scanGeneration{0};
-    bool m_autoStartHeld{false};   // the operator stopped it this connection
-    // The USB relay failed before the CTR2 ever answered (firmware with no
-    // USB mode, or a fault on the way up): no automatic retry before this
-    // expires, rather than opening the device on this thread every
-    // kAutoStartRetryMs. Expired (the default) means no hold.
-    QDeadlineTimer m_noAnswerHold;
+    bool m_autoStartHeld{false};   // the operator stopped the Wi-Fi proxy this connection
     // A restart request (restartUsbDevice) answered: the device leaves the bus
     // a moment later (Lynovation's firmware after about two seconds), and is
     // still listed until then. Auto-start leaves m_restartedPath alone until a
@@ -285,9 +334,11 @@ private:
     Ctr2HidPort::DeviceInfo m_restartedDevice;   // as listed when restarted
     bool m_restartedSeenGone{false};
     QDeadlineTimer m_restartedHold;
-    // The restarted device is the one selected and still held.
+    // The restarted device is this one (the focus without a path) and still held.
     bool restartHeld();
+    bool restartHeld(const QString& path);
     int m_noAnswerRetryMs{kNoAnswerRetryMs};
+    int m_noAnswerHintMs{kNoAnswerHintMs};
 };
 
 } // namespace AetherSDR

@@ -1,7 +1,8 @@
 // Ctr2ProxyModel destination handling: the relay targets only the radio its
 // owner pushes in, and every unusable case keeps Start disabled with the
-// pushed reason. Socket-free: nothing is bound, and a relay that reaches
-// its radio connection gets an injected socket.
+// pushed reason. Socket-free but for one case: a relay that reaches its radio
+// connection gets an injected socket, except in testSeveralDevicesAtOnce,
+// whose links go all the way up to a radio listening on loopback.
 
 #include "TestSettingsProfile.h"
 #include "core/Ctr2HidFraming.h"
@@ -25,11 +26,15 @@
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSet>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
 
 #include <cstdio>
 #include <functional>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -96,10 +101,7 @@ public:
 
 void injectInertRadio(Ctr2ProxyModel& model)
 {
-    auto* relay = model.findChild<AetherSDR::Ctr2UsbRelay*>();
-    check(relay != nullptr, "the model owns a USB relay");
-    if (relay)
-        relay->setRadioSocketFactory([] { return new InertRadioSocket; });
+    model.setUsbRadioSocketFactory([] { return new InertRadioSocket; });
 }
 
 // A relay port whose device offers link extensions it did not take.
@@ -433,7 +435,9 @@ void testAutoStart(const QString& product)
         model.stop();
     }
     check(AetherSDR::Ctr2RelaySettings::load().autoStart
-              && AetherSDR::Ctr2RelaySettings::load().usbSerial == aether.serial,
+              && AetherSDR::Ctr2RelaySettings::load().usbDevices
+                     == QList<AetherSDR::Ctr2RelaySettings::UsbDevice>{
+                         {aether.serial, aether.vendorId, aether.productId}},
           "auto-start and the device are saved");
     {
         *devices = {stock, aether};
@@ -994,6 +998,186 @@ void testUsbAccessRuleDetection()
 
 } // namespace
 
+// A relay port that negotiated link extensions, and counts the messages of
+// each type the host sent it.
+class LinkPort : public FakePort {
+public:
+    using FakePort::FakePort;
+    void negotiate(quint32 bits) { setExtensions(bits, std::nullopt, bits); }
+    void send(const std::vector<AetherSDR::ctr2hid::Report>& reports) override
+    {
+        for (const AetherSDR::ctr2hid::Report& r : reports) {
+            if (r[0] == AetherSDR::ctr2hid::kMarker)
+                ++sentTypes[r[3]];
+        }
+    }
+    int sent(AetherSDR::ctr2hid::MessageType type) const
+    {
+        const auto it = sentTypes.find(static_cast<std::uint8_t>(type));
+        return it == sentTypes.end() ? 0 : it->second;
+    }
+    std::map<std::uint8_t, int> sentTypes;
+};
+
+// Several controllers relay at once, each its own link to the same radio:
+// they start and stop independently, a change of focus touches none of
+// them, extension traffic goes only to the device that negotiated it, and
+// a change of radio stops them all. Every one started is remembered.
+void testSeveralDevicesAtOnce()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    using AetherSDR::ctr2hid::MessageType;
+    AetherSDR::Ctr2RelaySettings{}.save();
+    QTcpServer radio;
+    if (!radio.listen(QHostAddress::LocalHost, 0)) {
+        std::fprintf(stderr, "SKIP: testSeveralDevicesAtOnce cannot bind loopback\n");
+        return;
+    }
+    std::vector<QTcpSocket*> radioConns;
+    QObject::connect(&radio, &QTcpServer::newConnection, &radio, [&] {
+        while (QTcpSocket* s = radio.nextPendingConnection())
+            radioConns.push_back(s);
+    });
+    const Info ctr2{QStringLiteral("ctr2"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                    QStringLiteral("B81F3FC45888")};
+    const Info knob{QStringLiteral("knob"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"),
+                    QStringLiteral("DC0A69526454")};
+    const quint32 knobBits = AetherSDR::ctr2hid::capabilityBit(MessageType::AudioSpectrum)
+        | AetherSDR::ctr2hid::capabilityBit(MessageType::CwText);
+    auto log = std::make_shared<PortLog>();
+    std::map<QString, QPointer<LinkPort>> ports;
+    Ctr2ProxyModel model;
+    model.setUsbBackend([&] { return QList<Info>{ctr2, knob}; },
+                        [&](const Info& d, QString*) {
+                            auto* port = new LinkPort(log);
+                            if (d.path == knob.path)
+                                port->negotiate(knobBits);
+                            ports[d.path] = port;
+                            return static_cast<AetherSDR::Ctr2HidPort*>(port);
+                        });
+    model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    model.setAetherRadio(QHostAddress::LocalHost, radio.serverPort(), QStringLiteral("FLEX"), {});
+
+    check(model.start(ctr2.path) && model.start(knob.path), "two controllers start");
+    check(model.isRunning(ctr2.path) && model.isRunning(knob.path)
+              && model.runningUsbDevices().size() == 2 && log->opened == 2,
+          "both relay, each through its own port");
+    const auto ready = QByteArray::fromHex("ff00000200010000");   // READY, counter 0
+    emit ports[ctr2.path]->reportsReceived(ready);
+    emit ports[knob.path]->reportsReceived(ready);
+    check(waitUntil([&] {
+              return model.state(ctr2.path) == AetherSDR::TcpByteProxy::State::Relaying
+                  && model.state(knob.path) == AetherSDR::TcpByteProxy::State::Relaying;
+          }, 3000),
+          "both links come up");
+    check(radioConns.size() == 2, "each is its own client of the radio");
+
+    check(model.audioSpectrumWanted() && model.cwTextWanted(),
+          "the knob's extensions are wanted while it relays");
+    check(model.sendAudioSpectrum(66, 4000, std::vector<float>(32, -40.0f))
+              && ports[knob.path]->sent(MessageType::AudioSpectrum) == 1
+              && ports[ctr2.path]->sent(MessageType::AudioSpectrum) == 0,
+          "a spectrum goes to the device that negotiated it, and no other");
+    check(model.sendCwText(QStringLiteral("CQ"), 0.1f)
+              && ports[knob.path]->sent(MessageType::CwText) == 1
+              && ports[ctr2.path]->sent(MessageType::CwText) == 0,
+          "so does CW text");
+
+    model.setUsbDevicePath(knob.path);
+    check(model.isRunning(ctr2.path) && model.isRunning(knob.path),
+          "changing the focus stops nothing");
+    model.stopByOperator(ctr2.path);
+    check(!model.isRunning(ctr2.path) && model.isRunning(knob.path)
+              && model.state(knob.path) == AetherSDR::TcpByteProxy::State::Relaying,
+          "stopping one leaves the other relaying");
+    check(model.audioSpectrumWanted(), "and its extensions wanted");
+    emit ports[knob.path]->failed(QStringLiteral("HID read failed"));
+    check(!model.isRunning(knob.path) && !model.isRunning(),
+          "a device that fails stops only its own relay");
+
+    check(model.start(ctr2.path) && model.start(knob.path), "both start again");
+    model.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.77")), 4992, QStringLiteral("Other"), {});
+    check(!model.isRunning(ctr2.path) && !model.isRunning(knob.path),
+          "a change of radio stops every relay");
+    check(model.lastError(ctr2.path).contains(QStringLiteral("another radio"))
+              && model.lastError(knob.path).contains(QStringLiteral("another radio")),
+          "and each says why");
+    model.stop();
+
+    using Saved = AetherSDR::Ctr2RelaySettings::UsbDevice;
+    check(AetherSDR::Ctr2RelaySettings::load().usbDevices
+              == QList<Saved>{{ctr2.serial, ctr2.vendorId, ctr2.productId},
+                              {knob.serial, knob.vendorId, knob.productId}},
+          "every device started is remembered, in the order first started");
+    AetherSDR::Ctr2RelaySettings{}.save();
+}
+
+// Auto-start starts every remembered controller that is plugged in, and the
+// focus; an operator's Stop holds one device until the next connection, as
+// it held the single relay.
+void testAutoStartsEveryRememberedDevice()
+{
+    using Info = AetherSDR::Ctr2HidPort::DeviceInfo;
+    const Info ctr2{QStringLiteral("ctr2"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                    QStringLiteral("B81F3FC45888")};
+    const Info knob{QStringLiteral("knob"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"),
+                    QStringLiteral("DC0A69526454")};
+    const Info spare{QStringLiteral("spare"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
+                     QStringLiteral("000000000077")};
+    AetherSDR::Ctr2RelaySettings settings;
+    settings.autoStart = true;
+    settings.hasSetup = true;
+    settings.usbDevices = {{knob.serial, knob.vendorId, knob.productId},
+                           {ctr2.serial, ctr2.vendorId, ctr2.productId}};
+    settings.save();
+    auto log = std::make_shared<PortLog>();
+    Ctr2ProxyModel model;
+    model.setUsbBackend([&] { return QList<Info>{spare, ctr2, knob}; },
+                        [log](const Info&, QString*) {
+                            return static_cast<AetherSDR::Ctr2HidPort*>(new FakePort(log));
+                        });
+    injectInertRadio(model);
+    check(model.usbDevicePath() == ctr2.path, "the first remembered device listed is the focus");
+    const QHostAddress radio(QStringLiteral("192.0.2.10"));
+    model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+    check(waitUntil([&] { return model.isRunning(ctr2.path) && model.isRunning(knob.path); }, 1000),
+          "connecting starts both remembered controllers");
+    check(!model.isRunning(spare.path), "a controller never relayed is left alone");
+
+    model.stopByOperator(knob.path);
+    check(!waitUntil([&] { return model.isRunning(knob.path); }, Ctr2ProxyModel::kAutoStartRetryMs + 2000)
+              && model.isRunning(ctr2.path),
+          "the operator's Stop holds that one for this connection");
+    model.setAetherRadio({}, 0, {}, {});
+    model.setAetherRadio(radio, 4992, QStringLiteral("FLEX"), {});
+    check(waitUntil([&] { return model.isRunning(ctr2.path) && model.isRunning(knob.path); }, 1000),
+          "the next connection starts both again");
+    model.stop();
+    AetherSDR::Ctr2RelaySettings{}.save();
+}
+
+// Settings saved before several devices could relay name one device; it
+// loads as the list's only entry, and is saved back as a list.
+void testSingleDeviceSettingsMigrate()
+{
+    auto& app = AetherSDR::AppSettings::instance();
+    app.setValue(QStringLiteral("Ctr2Relay"),
+                 QStringLiteral("{\"autoStart\":true,\"transport\":\"usb\",\"usbSerial\":\"B81F3FC45888\","
+                                "\"usbVendorId\":12346,\"usbProductId\":4097}"));
+    AetherSDR::Ctr2RelaySettings s = AetherSDR::Ctr2RelaySettings::load();
+    using Saved = AetherSDR::Ctr2RelaySettings::UsbDevice;
+    check(s.autoStart && s.hasSetup && s.usb
+              && s.usbDevices == QList<Saved>{{QStringLiteral("B81F3FC45888"), 0x303A, 0x1001}},
+          "the one remembered device becomes the list");
+    s.save();
+    const QJsonObject o = QJsonDocument::fromJson(
+        app.value(QStringLiteral("Ctr2Relay"), QString{}).toString().toUtf8()).object();
+    check(o.contains(QStringLiteral("usbDevices")) && !o.contains(QStringLiteral("usbSerial")),
+          "it is saved back as a list only");
+    check(AetherSDR::Ctr2RelaySettings::load().usbDevices == s.usbDevices, "and loads the same");
+    AetherSDR::Ctr2RelaySettings{}.save();
+}
+
 int main(int argc, char** argv)
 {
     // Before the app: starting the relay saves its setup.
@@ -1070,6 +1254,9 @@ int main(int argc, char** argv)
     testInterfacesRescanWithoutUsbSource();
     testScanFromBeforeAStartIsDropped();
     testFirmwareCommandsOffered();
+    testSeveralDevicesAtOnce();
+    testAutoStartsEveryRememberedDevice();
+    testSingleDeviceSettingsMigrate();
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

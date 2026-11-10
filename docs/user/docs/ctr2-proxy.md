@@ -49,13 +49,15 @@ Closing the window does not stop the relay.
 The relay starts when you press **Start**, or by itself with **Start
 automatically** (see [Starting automatically](#starting-automatically)). Each
 time it starts, its setup (mode, device, listen address and port) is saved and
-offered again at the next launch.
+offered again at the next launch. In USB mode several controllers can relay at
+the same time, a CTR2 and an AetherKnob for example, each with its own
+**Start** (see [Using USB mode](#using-usb-mode)).
 
 The **Mode** selector offers **Wi-Fi** and **USB**.
 
 <img src="/img/screens/ctr2-applet.png" width="248" alt="CTR2 Proxy applet. Mode is set to USB with a Rescan button, the USB selector reads Select CTR2 USB device, and the Radio row (blacked out here) sits beside a dimmed Start button. An amber hint reads Select the CTR2 USB device, followed by State: Stopped and traffic counters of 0 B to the radio and to the CTR2." />
 
-*The CTR2 relay controls before a CTR2 is selected, from before they moved into the CTR2 window. The radio's address is blacked out.*
+*The CTR2 relay controls before a CTR2 is selected, from before they moved into the CTR2 window and before USB mode listed each controller in its own row. The radio's address is blacked out.*
 
 > **Check the mode the first time.** On builds with USB support, USB is the
 > default until the relay has been started once. Lynovation's M5Dial-based
@@ -70,7 +72,10 @@ connects to a radio. The choice is saved.
 
 - If the CTR2 is not plugged in yet, AetherSDR keeps looking every few seconds
   and starts the relay when it appears.
-- Pressing **Stop** holds it off until AetherSDR next connects to a radio.
+- In USB mode it starts every controller it has relayed before that is plugged
+  in, and the selected one.
+- Pressing **Stop** holds that controller off until AetherSDR next connects to
+  a radio.
 - In USB mode it starts a CTR2-Max (on Lynovation's firmware or AetherCTR2),
   a CTR2-MIDI or an AetherKnob. A CTR2-Max on firmware older than v2.00.00, or
   a CTR2-MIDI on firmware without USB support, never answers; see
@@ -104,13 +109,20 @@ so you only pick the device and press **Start**. It needs a CTR2-Max running
 Lynovation's firmware v2.00.00 or later or AetherCTR2 (see below), a CTR2-MIDI
 on firmware with USB support, or an AetherKnob.
 
-- The **USB** device list shows candidate HID devices, with known CTR2 boards
-  and the AetherKnob named and listed first. While the relay is stopped the
-  list refreshes itself every 2 seconds, so a CTR2-Max that switches between
-  its stock firmware and AetherCTR2 shows up as it is now; **Rescan** refreshes
-  it (and the local addresses) at once.
-  USB discovery is shared with other HID controllers, so you can rescan while
-  an encoder is reconnecting. Stopping one controller leaves the others available.
+- The **USB** list has a row for each candidate HID device, with known CTR2
+  boards and the AetherKnob named and listed first. Each row shows the
+  controller's firmware version when known, its state, and its own **Start**
+  or **Stop**, so several controllers relay at once, each as its own client of
+  the radio. Select a row to see that controller's state, traffic and last
+  error below it, and to aim the CTR2-Max firmware part at it; selecting a row
+  starts or stops nothing.
+- The list refreshes itself every 2 seconds, also while controllers relay, so
+  one plugged in later appears, and a CTR2-Max that switches between its stock
+  firmware and AetherCTR2 shows up as it is now; **Rescan** refreshes it (and
+  the local addresses) at once. USB discovery is shared with other HID
+  controllers, so you can rescan while an encoder is reconnecting.
+- A firmware install or **Restart into** stops only the selected controller's
+  relay; the others keep relaying.
 - **Linux:** a udev rule for the CTR2 ships with the build. If the device
   cannot be opened, **Start** offers to install the rule
   (`/etc/udev/rules.d/70-aethersdr-ctr2.rules`) through `pkexec`, asking for
@@ -337,7 +349,8 @@ firmware, and restarts the CTR2-Max into it.
 
 While running, the **CTR2 Relay** part of the window shows:
 
-- **State:** Stopped, Listening, Connecting, Relaying, Closing or Error.
+- **State:** Stopped, Listening, Connecting, Relaying, Closing or Error. In
+  USB mode, for the selected controller, whose name it starts with.
 - The endpoints: the listener, the connected CTR2, and the radio.
 - A table of counters, toward the radio (`↑ Radio`) and toward the CTR2
   (`↓ CTR2`): **Bytes** relayed, bytes **Queued** and not yet sent, and in USB
@@ -346,12 +359,16 @@ While running, the **CTR2 Relay** part of the window shows:
   connections that were turned away.
 - The last error, kept apart from the relayed data.
 
-Stop the proxy to change its settings.
+Stop the proxy to change its settings. In USB mode, stop every controller to
+change the mode.
 
 ### Limits
 
 - It always relays to the radio AetherSDR is connected to, captured at
-  **Start**, and **stops when AetherSDR disconnects or switches radios**.
+  **Start**, and **stops when AetherSDR disconnects or switches radios**. In
+  USB mode every controller relays to that same radio, and all of them stop.
+- Wi-Fi mode relays one CTR2 at a time; several controllers at once need USB
+  mode.
 - It is unavailable on SmartLink connections and on radios without
   multi-client sessions.
 - It is not a VPN or tunnel; the PC must be reachable from the CTR2 and the

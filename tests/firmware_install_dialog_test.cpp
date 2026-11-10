@@ -14,7 +14,11 @@
 #include "models/FirmwareInstallModel.h"
 
 #include <QApplication>
+#include <QLabel>
+#include <QListWidget>
+#include <QPushButton>
 #include <QTabWidget>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QUrl>
@@ -150,6 +154,83 @@ void aCtr2MaxSeenKeepsThePart()
     }
 }
 
+// A relay port that accepts writes and goes nowhere.
+class QuietPort : public Ctr2HidPort {
+public:
+    bool isOpen() const override { return true; }
+    void send(const std::vector<ctr2hid::Report>&) override {}
+    void discardQueued() override {}
+    void shutdown(const std::vector<ctr2hid::Report>&) override { deleteLater(); }
+    QString description() const override { return QStringLiteral("Quiet CTR2"); }
+};
+
+// A radio socket that never connects, so nothing reaches the network.
+class InertRadioSocket final : public QTcpSocket {
+public:
+    using QTcpSocket::connectToHost;
+    void connectToHost(const QString&, quint16, OpenMode = ReadWrite,
+                       NetworkLayerProtocol = AnyIPProtocol) override
+    {
+    }
+};
+
+// Several controllers: a row each, with its own Start/Stop; selecting a row
+// moves the focus and the details below, and starts or stops nothing.
+void aRowPerController()
+{
+    Window w;
+    check(w.open(), "the window opens");
+    if (!w.fw || !w.tabs) {
+        return;
+    }
+    w.relay.setUsbBackend([d = w.devices] { return *d; },
+                          [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(new QuietPort); });
+    w.relay.setUsbRadioSocketFactory([] { return new InertRadioSocket; });
+    w.relay.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992, QStringLiteral("FLEX"), {});
+    *w.devices = {kKnob, kMax};
+    w.relay.refreshDevices();
+    QCoreApplication::processEvents();
+    auto* list = w.dialog->findChild<QListWidget*>(QStringLiteral("ctr2ProxyUsbDevices"));
+    check(list && list->count() == 2, "a row for each controller");
+    if (!list || list->count() != 2) {
+        return;
+    }
+    const auto rowOf = [&](const Info& d) -> QListWidgetItem* {
+        for (int i = 0; i < list->count(); ++i) {
+            if (list->item(i)->data(Qt::UserRole).toString() == d.path)
+                return list->item(i);
+        }
+        return nullptr;
+    };
+    const auto button = [&](const Info& d) {
+        return list->itemWidget(rowOf(d))->findChild<QPushButton*>(QStringLiteral("ctr2ProxyUsbStart"));
+    };
+    check(button(kKnob) && button(kMax) && button(kKnob)->text() == QStringLiteral("Start"),
+          "each row has its own Start");
+    button(kKnob)->click();
+    button(kMax)->click();
+    check(w.relay.isRunning(kKnob.path) && w.relay.isRunning(kMax.path),
+          "pressing both starts both");
+    check(button(kKnob)->text() == QStringLiteral("Stop")
+              && button(kKnob)->accessibleName() == QStringLiteral("Stop relaying AetherKnob"),
+          "a relaying row offers Stop, named for its controller");
+    check(rowOf(kKnob)->data(Qt::AccessibleTextRole).toString().startsWith(QStringLiteral("AetherKnob, ")),
+          "a screen reader hears the row's controller and state");
+
+    list->setCurrentItem(rowOf(kKnob));
+    check(w.relay.usbDevicePath() == kKnob.path, "selecting a row makes it the focus");
+    auto* state = w.dialog->findChild<QLabel*>(QStringLiteral("ctr2ProxyState"));
+    check(state && state->text().startsWith(QStringLiteral("AetherKnob: ")),
+          "the details below name the selected controller");
+    check(w.relay.isRunning(kMax.path), "and selecting stops nothing");
+
+    button(kKnob)->click();
+    check(!w.relay.isRunning(kKnob.path) && w.relay.isRunning(kMax.path),
+          "a row's Stop stops only its controller");
+    check(button(kKnob)->text() == QStringLiteral("Start"), "and it offers Start again");
+    w.relay.stop();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -169,6 +250,7 @@ int main(int argc, char** argv)
 
     heightFollowsTheMaxPart();
     aCtr2MaxSeenKeepsThePart();
+    aRowPerController();
 
     return g_failures ? 1 : 0;
 }

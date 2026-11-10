@@ -13,9 +13,11 @@
 #include <QIntValidator>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QLocale>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QStandardPaths>
 #include <QVBoxLayout>
 
@@ -110,11 +112,19 @@ void Ctr2ProxyPanel::buildUi()
     grid->addWidget(m_listenPortEdit, 1, 2);
 
     m_usbRowLabel = makeRowLabel(tr("USB"), this);
-    grid->addWidget(m_usbRowLabel, 2, 0);
-    m_usbCombo = new GuardedComboBox(this);
-    m_usbCombo->setObjectName(QStringLiteral("ctr2ProxyUsbDevice"));
-    m_usbCombo->setAccessibleName(tr("CTR2 USB device"));
-    grid->addWidget(m_usbCombo, 2, 1, 1, 3);
+    grid->addWidget(m_usbRowLabel, 2, 0, Qt::AlignTop);
+    // A row per controller, each with its own Start/Stop; the selected row's
+    // state, traffic and error show below.
+    m_usbList = new QListWidget(this);
+    m_usbList->setObjectName(QStringLiteral("ctr2ProxyUsbDevices"));
+    m_usbList->setAccessibleName(tr("CTR2 USB devices"));
+    m_usbList->setAccessibleDescription(
+        tr("Each controller can relay at the same time; select one to see its details"));
+    m_usbList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_usbList->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+    m_usbList->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_usbList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    grid->addWidget(m_usbList, 2, 1, 1, 3);
 
     grid->addWidget(makeRowLabel(tr("Radio"), this), 3, 0);
     // Always the radio AetherSDR is connected to; captured when Start is pressed.
@@ -131,7 +141,8 @@ void Ctr2ProxyPanel::buildUi()
     m_autoStart->setObjectName(QStringLiteral("ctr2ProxyAutoStart"));
     m_autoStart->setToolTip(tr("Starts the relay with the setup it last started with, whenever "
                                "AetherSDR connects to a radio, and keeps trying until the CTR2 "
-                               "is plugged in. Stop holds it off until the next connection."));
+                               "is plugged in. In USB mode it starts every controller it has "
+                               "relayed before. Stop holds one off until the next connection."));
     grid->addWidget(m_autoStart, 4, 1, 1, 3);
 
     grid->setColumnStretch(1, 1);
@@ -226,9 +237,9 @@ void Ctr2ProxyPanel::buildUi()
             m_model->setListenAddress(idx > 0 ? m_listenCombo->itemText(idx) : QString());
         }
     });
-    connect(m_usbCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int idx) {
-        if (m_model) {
-            m_model->setUsbDevicePath(idx > 0 ? m_usbCombo->itemData(idx).toString() : QString());
+    connect(m_usbList, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* item) {
+        if (m_model && item) {
+            m_model->setUsbDevicePath(item->data(Qt::UserRole).toString());
         }
     });
     connect(m_listenPortEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
@@ -260,6 +271,27 @@ void Ctr2ProxyPanel::onStartClicked()
     }
 #endif
     m_model->start();
+}
+
+void Ctr2ProxyPanel::onUsbRowClicked(const QString& path)
+{
+    if (!m_model || m_installingRule) {
+        return;
+    }
+    if (m_model->isRunning(path)) {
+        m_model->stopByOperator(path);
+        return;
+    }
+    // The row pressed becomes the focus: the access rule's offer, and the
+    // Start that follows it, act on the focus.
+    m_model->setUsbDevicePath(path);
+#ifdef Q_OS_LINUX
+    if (m_model->usbDeviceNeedsAccessRule(path)) {
+        offerUsbAccessRule();
+        return;
+    }
+#endif
+    m_model->start(path);
 }
 
 #ifdef Q_OS_LINUX
@@ -533,6 +565,8 @@ void Ctr2ProxyPanel::setModel(Ctr2ProxyModel* model)
         connect(m_model, &Ctr2ProxyModel::endpointsChanged, this, &Ctr2ProxyPanel::syncStatus);
         connect(m_model, &Ctr2ProxyModel::lastErrorChanged, this, &Ctr2ProxyPanel::syncStatus);
         connect(m_model, &Ctr2ProxyModel::statsChanged, this, &Ctr2ProxyPanel::syncStats);
+        connect(m_model, &Ctr2ProxyModel::firmwareVersionChanged, this, &Ctr2ProxyPanel::syncUsbRows);
+        connect(m_model, &Ctr2ProxyModel::extensionsChanged, this, &Ctr2ProxyPanel::syncUsbRows);
         connect(m_model, &Ctr2ProxyModel::autoStartChanged, this, [this] {
             const QSignalBlocker block(m_autoStart);
             m_autoStart->setChecked(m_model->autoStart());
@@ -566,20 +600,123 @@ void Ctr2ProxyPanel::syncAddresses()
         }
     }
     {
-        const QSignalBlocker block(m_usbCombo);
-        m_usbCombo->clear();
-        m_usbCombo->addItem(tr("Select CTR2 USB device"));
+        const QSignalBlocker block(m_usbList);
+        m_usbList->clear();
+        m_usbRows.clear();
+        const QList<Ctr2HidPort::DeviceInfo> devices =
+            m_model ? m_model->availableUsbDevices() : QList<Ctr2HidPort::DeviceInfo>();
+        for (const Ctr2HidPort::DeviceInfo& d : devices) {
+            UsbRow row;
+            row.item = new QListWidgetItem(m_usbList);
+            row.item->setData(Qt::UserRole, d.path);
+            row.item->setToolTip(d.label());
+            auto* w = new QWidget(m_usbList);
+            auto* h = new QHBoxLayout(w);
+            h->setContentsMargins(4, 2, 4, 2);
+            h->setSpacing(8);
+            // Device strings come from the device: never rich text.
+            row.name = makeLabel(d.shortName(), w);
+            row.name->setTextFormat(Qt::PlainText);
+            row.version = makeLabel(QString(), w, "secondary");
+            row.version->setTextFormat(Qt::PlainText);
+            row.state = makeLabel(QString(), w, "secondary");
+            row.button = new QPushButton(tr("Start"), w);
+            row.button->setObjectName(QStringLiteral("ctr2ProxyUsbStart"));
+            h->addWidget(row.name);
+            h->addWidget(row.version);
+            h->addStretch(1);
+            h->addWidget(row.state);
+            h->addWidget(row.button);
+            const QString path = d.path;
+            connect(row.button, &QPushButton::clicked, this, [this, path] { onUsbRowClicked(path); });
+            row.item->setSizeHint(w->sizeHint());
+            m_usbList->setItemWidget(row.item, w);
+            m_usbRows.insert(d.path, row);
+        }
         if (m_model) {
-            for (const Ctr2HidPort::DeviceInfo& d : m_model->availableUsbDevices()) {
-                m_usbCombo->addItem(d.label(), d.path);
-            }
-            const int idx = m_usbCombo->findData(m_model->usbDevicePath());
-            m_usbCombo->setCurrentIndex(idx > 0 ? idx : 0);
-            if (idx <= 0 && !m_model->usbDevicePath().isEmpty() && !m_model->isRunning()) {
-                m_model->setUsbDevicePath(QString());
-            }
+            const auto it = m_usbRows.constFind(m_model->usbDevicePath());
+            if (it != m_usbRows.constEnd())
+                m_usbList->setCurrentItem(it->item);
         }
     }
+    syncUsbRows();
+}
+
+// Each row as tall as its widgets under the window's sheet, which is applied
+// only once the panel is in the window, and the list tall enough for every row
+// without scrolling, up to four.
+void Ctr2ProxyPanel::fitUsbList()
+{
+    int all = 0, shown = 0;
+    for (int i = 0; i < m_usbList->count(); ++i) {
+        QListWidgetItem* item = m_usbList->item(i);
+        if (QWidget* w = m_usbList->itemWidget(item)) {
+            w->ensurePolished();
+            // A little over the widgets' own height: the item's rectangle is
+            // inset from its size hint, which clipped the buttons' edges.
+            const QSize hint = w->sizeHint() + QSize(0, 6);
+            if (item->sizeHint() != hint)
+                item->setSizeHint(hint);
+        }
+        all += item->sizeHint().height();
+        if (i < 4)
+            shown += item->sizeHint().height();
+    }
+    m_usbList->doItemsLayout();
+    // The frame and the sheet's padding around the rows.
+    const int around = qMax(0, m_usbList->sizeHint().height() - all);
+    const int height = qMax(shown, m_usbList->fontMetrics().height() + 12) + around;
+    if (m_usbList->height() != height)
+        m_usbList->setFixedHeight(height);
+}
+
+void Ctr2ProxyPanel::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::StyleChange)
+        fitUsbList();
+}
+
+void Ctr2ProxyPanel::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    fitUsbList();
+}
+
+void Ctr2ProxyPanel::syncUsbRows()
+{
+    for (auto it = m_usbRows.constBegin(); it != m_usbRows.constEnd(); ++it) {
+        const QString& path = it.key();
+        const UsbRow& row = it.value();
+        const bool running = m_model && m_model->isRunning(path);
+        const QString version = m_model ? m_model->usbFirmwareVersion(path) : QString();
+        row.version->setText(version);
+        const QString error = m_model ? m_model->lastError(path) : QString();
+        const QString state = !m_model ? QString()
+            : running              ? m_model->stateText(path)
+            : !error.isEmpty()     ? tr("Stopped")
+                                   : tr("Idle");
+        row.state->setText(state);
+        // Relaying reads in the normal ink; idle dims, a stop with an error is red.
+        row.state->setProperty("tone", running ? QString() : (error.isEmpty() ? QStringLiteral("secondary")
+                                                                                : QStringLiteral("danger")));
+        row.state->style()->unpolish(row.state);
+        row.state->style()->polish(row.state);
+        const QString problem = m_model && !running ? m_model->configurationProblem(path) : QString();
+        row.button->setText(running ? tr("Stop") : tr("Start"));
+        row.button->setEnabled(m_model && !m_installingRule && (running || problem.isEmpty()));
+        const QString name = row.name->text();
+        row.button->setAccessibleName(running ? tr("Stop relaying %1").arg(name)
+                                              : tr("Start relaying %1").arg(name));
+        row.button->setAccessibleDescription(m_installingRule ? tr("Waiting for administrator approval")
+                                                              : problem);
+        QStringList spoken{name};
+        if (!version.isEmpty())
+            spoken << tr("firmware %1").arg(version);
+        spoken << state;
+        row.item->setData(Qt::AccessibleTextRole, spoken.join(QStringLiteral(", ")));
+    }
+    fitUsbList();
 }
 
 void Ctr2ProxyPanel::syncConfiguration()
@@ -597,7 +734,8 @@ void Ctr2ProxyPanel::syncConfiguration()
         m_modeCombo->setCurrentIndex(usb ? 1 : 0);
     }
     setAvailability(m_modeCombo, editable, frozen);
-    setAvailability(m_refreshBtn, editable, frozen);
+    // In USB mode a controller can be plugged in while others relay.
+    setAvailability(m_refreshBtn, editable || (haveModel && usb && !m_installingRule), frozen);
     const QString wifiOnly = tr("Used in Wi-Fi mode only");
     setAvailability(m_listenCombo, editable && !usb, editable ? wifiOnly : frozen);
     setAvailability(m_listenPortEdit, editable && !usb, editable ? wifiOnly : frozen);
@@ -605,14 +743,14 @@ void Ctr2ProxyPanel::syncConfiguration()
     const QString usbReason = !usbAvailable
         ? tr("This build has no USB HID support (hidapi)")
         : tr("Used in USB mode only");
-    const bool usbEditable = editable && usb && usbAvailable;
-    setAvailability(m_usbCombo, usbEditable, editable ? usbReason : frozen);
+    setAvailability(m_usbList, usb && usbAvailable && !m_installingRule,
+                    m_installingRule ? frozen : usbReason);
     // Only the row the mode uses is shown; the grid collapses the hidden one.
     m_listenRowLabel->setVisible(!usb);
     m_listenCombo->setVisible(!usb);
     m_listenPortEdit->setVisible(!usb);
     m_usbRowLabel->setVisible(usb);
-    m_usbCombo->setVisible(usb);
+    m_usbList->setVisible(usb);
 
     if (haveModel) {
         if (m_listenPortEdit->text() != m_model->listenPortText()) {
@@ -626,13 +764,20 @@ void Ctr2ProxyPanel::syncConfiguration()
         m_radioLabel->setAccessibleName(tr("Relay radio: %1").arg(m_radioLabel->text()));
     }
 
-    const QString problem = editable ? m_model->configurationProblem() : QString();
+    // USB: the selected controller's; its own row button starts it.
+    const bool focusRunning = haveModel
+        && (usb ? m_model->isRunning(m_model->usbDevicePath()) : running);
+    const QString problem = haveModel && !focusRunning && !m_installingRule
+        ? m_model->configurationProblem() : QString();
     // While running, the hint that the CTR2 has not answered the link.
-    const QString hint = problem.isEmpty() && running ? m_model->noAnswerHint() : problem;
+    const QString hint = problem.isEmpty() && focusRunning ? m_model->noAnswerHint() : problem;
     m_problemLabel->setText(hint);
-    m_problemLabel->setAccessibleName(problem.isEmpty() && running ? tr("CTR2 link status")
-                                                                   : tr("CTR2 proxy configuration"));
+    m_problemLabel->setAccessibleName(problem.isEmpty() && focusRunning
+                                          ? tr("CTR2 link status")
+                                          : tr("CTR2 proxy configuration"));
     m_problemLabel->setVisible(!hint.isEmpty());
+    // Wi-Fi's Start; USB rows carry their own.
+    m_startBtn->setVisible(!usb);
     m_startBtn->setText(m_installingRule ? tr("Authorizing\u2026")
                                           : (running ? tr("Stop") : tr("Start")));
     m_startBtn->setAccessibleName(m_installingRule ? tr("Authorizing CTR2 USB access")
@@ -642,6 +787,14 @@ void Ctr2ProxyPanel::syncConfiguration()
         !haveModel ? tr("Proxy unavailable")
         : m_installingRule ? frozen
         : (running ? QString() : problem));
+    if (haveModel && usb) {
+        const auto it = m_usbRows.constFind(m_model->usbDevicePath());
+        if (it != m_usbRows.constEnd() && m_usbList->currentItem() != it->item) {
+            const QSignalBlocker block(m_usbList);
+            m_usbList->setCurrentItem(it->item);
+        }
+    }
+    syncUsbRows();
 }
 
 void Ctr2ProxyPanel::syncStatus()
@@ -653,7 +806,12 @@ void Ctr2ProxyPanel::syncStatus()
         m_errorLabel->hide();
         return;
     }
-    m_stateLabel->setText(tr("State: %1").arg(m_model->stateText()));
+    const bool usbMode = m_model->transport() == Ctr2ProxyModel::Transport::Usb;
+    const auto focus = m_usbRows.constFind(m_model->usbDevicePath());
+    // USB: the selected controller's, named, as several may relay.
+    m_stateLabel->setText(usbMode && focus != m_usbRows.constEnd()
+                              ? tr("%1: %2").arg(focus->name->text(), m_model->stateText())
+                              : tr("State: %1").arg(m_model->stateText()));
     m_stateLabel->setAccessibleName(m_stateLabel->text());
 
     const bool usb = m_model->transport() == Ctr2ProxyModel::Transport::Usb;
@@ -664,7 +822,8 @@ void Ctr2ProxyPanel::syncStatus()
     if (!m_model->peerEndpoint().isEmpty()) {
         parts << (usb ? tr("USB %1") : tr("CTR2 %1")).arg(m_model->peerEndpoint());
     }
-    if (m_model->isRunning() && !m_model->radioEndpoint().isEmpty()) {
+    if (!m_model->radioEndpoint().isEmpty()
+        && (usb ? m_model->isRunning(m_model->usbDevicePath()) : m_model->isRunning())) {
         parts << tr("Radio %1").arg(m_model->radioEndpoint());
     }
     m_endpointsLabel->setText(parts.join(QStringLiteral("\n")));
@@ -674,6 +833,7 @@ void Ctr2ProxyPanel::syncStatus()
     m_errorLabel->setText(err.isEmpty() ? QString() : tr("Last error: %1").arg(err));
     m_errorLabel->setVisible(!err.isEmpty());
     m_errorLabel->setAccessibleName(m_errorLabel->text());
+    syncUsbRows();
 }
 
 void Ctr2ProxyPanel::syncStats()
