@@ -130,6 +130,13 @@ static int kernel_clock_synced(void)
     return state != TIME_ERROR && !(tx.status & STA_UNSYNC);
 }
 
+/* Indirection so the selftest can hold the kernel at UNSYNC and exercise the
+ * REAL clock_synced(). Without it, a build host whose own clock is synced
+ * makes the radio operand dead in any test of clock_synced(): the mutation
+ * `clock_synced_from(kernel_clock_synced(), 0)` passed for exactly that
+ * reason. Production never reassigns this. */
+static int (*g_kernel_clock_synced)(void) = kernel_clock_synced;
+
 /* The decision, given the kernel's verdict and the radio's. Pure, so the
  * selftest can put the kernel in either state. */
 static int clock_synced_from(int kernel_says, int radio_says)
@@ -137,21 +144,24 @@ static int clock_synced_from(int kernel_says, int radio_says)
     return kernel_says || radio_says;
 }
 
+/* A FLEX-6000 runs kernel 2.6.37, where chronyd disciplines the clock but
+ * never clears STA_UNSYNC. Measured on a FLEX-6300 whose selected pool source
+ * reported stratum=1 and reach=255 while the kernel still said UNSYNC, and
+ * whose wall clock matched UTC to well under a second.
+ *
+ * Without the radio's verdict the agent never leaves waiting_clock on a 6000
+ * -- the only hardware it is built for -- so it captures nothing at all. The
+ * radio's own report that it has settled on a source is the better evidence on
+ * that kernel, so accept it.
+ *
+ * Both reads go through clock_synced_from() in ONE call rather than an early
+ * return on the kernel branch. A short-circuit here would leave the decision
+ * outside the function the truth table tests: a reviewer's `return 0;`
+ * mutation on the old tail compiled and PASSED the selftest, because the
+ * tested function was no longer the one deciding. Keep this a single call. */
 static int clock_synced(void)
 {
-    if (kernel_clock_synced())
-        return 1;
-    /* A FLEX-6000 runs kernel 2.6.37, where chronyd disciplines the clock but
-     * never clears STA_UNSYNC. Measured on a FLEX-6300 whose selected pool
-     * source reported stratum 3 and reach 255 while the kernel still said
-     * UNSYNC, and whose wall clock matched UTC to well under a second.
-     *
-     * Without this the agent never leaves waiting_clock on a 6000 -- the only
-     * hardware it is built for -- so it captures nothing at all. The radio's
-     * own report that it has settled on a source is the better evidence on
-     * that kernel, so accept it. Radios whose kernel does clear the flag
-     * return above and never reach this line. */
-    return clock_synced_from(0, g_ntp_selected);
+    return clock_synced_from(g_kernel_clock_synced(), g_ntp_selected);
 }
 
 static int lan_caller(const struct sockaddr_in *a)
@@ -1651,10 +1661,13 @@ static int selftest_radio_lines(void)
  * left waiting_clock on the only hardware it is built for. clock_synced() now
  * accepts the radio's own report that it has settled on a source.
  *
- * The first branch of clock_synced() reads the real kernel clock, which on a
- * synced build host returns 1 and would hide the fallback entirely. So this
- * drives the API line parser -- the same api_line() the radio feeds -- and
- * asserts on the latch it sets, which no host clock can influence. */
+ * clock_synced() reads the kernel through g_kernel_clock_synced, which this
+ * test substitutes so the kernel can be held at UNSYNC on a synced build host.
+ * It also drives the API line parser -- the same api_line() the radio feeds --
+ * and asserts on the latch it sets, which no host clock can influence. */
+
+/* Substituted for the kernel read: always "not synced", the FLEX-6000 state. */
+static int kernel_says_unsynced(void) { return 0; }
 static int selftest_ntp_fallback(void)
 {
     int fail = 0;
@@ -1711,13 +1724,7 @@ static int selftest_ntp_fallback(void)
         fail = 1;
     }
 
-    /* The decision itself, with the kernel's answer supplied rather than read.
-     * This is the assertion that actually proves the fix: on a build host
-     * whose own clock is synced, clock_synced() returns at its kernel branch
-     * and the fallback is unreachable, so testing clock_synced() alone would
-     * pass even with the fallback deleted. Measured: WSL reports
-     * STA_UNSYNC=clear, so that is this host.
-     *
+    /* The decision, with the kernel's answer supplied rather than read.
      * Row 2 is the FLEX-6000 case the fix exists for: kernel says no, radio
      * says a source is selected, and the agent must capture. */
     {
@@ -1737,11 +1744,32 @@ static int selftest_ntp_fallback(void)
         }
     }
 
-    /* And the real function, which on any host must never report unsynced
-     * once a source is selected. */
-    if (!clock_synced()) {
-        printf("selftest FAIL: clock_synced() false with an ntp source selected\n");
-        fail = 1;
+    /* And the real clock_synced(), with the kernel held at UNSYNC -- the
+     * FLEX-6000 state. This is the assertion that proves the shipped path:
+     * with the kernel saying no, the radio's verdict is the only thing that
+     * can return true, so dropping it cannot pass. On a synced build host an
+     * un-substituted clock_synced() would return 1 whatever the radio said.
+     *
+     * g_ntp_selected is still 1 here, latched by the lines driven above. */
+    {
+        int (*const saved_kernel)(void) = g_kernel_clock_synced;
+        g_kernel_clock_synced = kernel_says_unsynced;
+
+        if (!clock_synced()) {
+            printf("selftest FAIL: clock_synced() false with the kernel UNSYNC "
+                   "and an ntp source selected -- the FLEX-6000 case\n");
+            fail = 1;
+        }
+        /* The other half: with no source selected either, it must wait. A
+         * clock_synced() hard-wired to 1 fails here. */
+        g_ntp_selected = 0;
+        if (clock_synced()) {
+            printf("selftest FAIL: clock_synced() true with the kernel UNSYNC "
+                   "and no ntp source selected\n");
+            fail = 1;
+        }
+        g_ntp_selected = 1;
+        g_kernel_clock_synced = saved_kernel;
     }
 
     /* The latch holds: chrony can drop a source for one poll while the clock
