@@ -12,13 +12,15 @@ applies_to: ["FlexRadio"]
 
 :::
 
-A FLEX-8000-series, Aurora, ML-9600 or CL-9300 radio running SmartSDR v4.3.16 or later sets its own clock from a list of NTP servers that it keeps itself. **Radio Setup → Time** shows that list and lets you change it. The radio owns the list: AetherSDR sends each change to the radio, and the table shows what the radio then reports.
+A radio running SmartSDR v4.3.16 or later sets its own clock from a list of NTP servers that it keeps itself. **Radio Setup → Time** shows that list and lets you change it. The radio owns the list: AetherSDR sends each change to the radio, and the table shows what the radio then reports.
 
 ## Requirements
 
-- A FLEX-8000-series, Aurora, ML-9600 (or MLS-9601) or CL-9300 (or CLS-9301) radio running SmartSDR v4.3.16 or later.
+- A FlexRadio running SmartSDR v4.3.16 or later. That includes the FLEX-6000 series as well as the FLEX-8000 series, Aurora, ML-9600 (or MLS-9601) and CL-9300 (or CLS-9301).
 
-On older firmware, on a 6000-series radio, or with no radio connected, the **Time** page is still there but dimmed, and it says why.
+On older firmware, or with no radio connected, the **Time** page is still there but dimmed, and it says why.
+
+A FLEX-6000 has been seen reporting its sources, but adding, removing, enabling or disabling one there has not been tested yet. If the radio refuses a change, the page shows the radio's error, and the list stays as the radio reports it.
 
 ## The table
 
