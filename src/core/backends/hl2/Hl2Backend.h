@@ -1125,6 +1125,10 @@ private:
     bool m_txFilterFromOperator = false;
     int m_txFilterLowHz = 300;
     int m_txFilterHighHz = 2700;
+    // The passband last handed to m_txDsp, for the health row: what it runs,
+    // not what effectiveTxPassband() would say now.
+    int m_txPassbandSentLowHz = 300;
+    int m_txPassbandSentHighHz = 2700;
 
     // Loudest mic peak of this transmission, dBFS, for the unkey "went out quiet"
     // diagnostic (the ALC only reduces). -140 is Hl2TxDsp::micPeak's silence floor

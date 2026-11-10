@@ -30,7 +30,7 @@ The HL2 has no on-board DSP, so AetherSDR does the demodulation, filtering, AGC,
 
 ### Connecting
 
-The HL2 is found automatically on your LAN: open **File → Connect to Radio...** → **On This Network**, select it and click **Connect Selected Radio**. AetherSDR probes from every active IPv4 interface, so a computer with several network adapters finds the HL2 on the one it is connected to, and keeps using that interface for the session and its reconnects.
+The HL2 is found automatically on your LAN: open **File → Connect to Radio...** → **Nearby radios**, select it and click **Connect Selected Radio**. AetherSDR probes from every active IPv4 interface, so a computer with several network adapters finds the HL2 on the one it is connected to, and keeps using that interface for the session and its reconnects.
 
 Across a VPN or another subnet, use **Connect by IP** with **Radio type:** set to **Hermes-Lite 2** (see [Manual Connection](./manual-connection.md)).
 
@@ -199,7 +199,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - Only one Hermes-Lite 2 (gateware 74) on macOS, transmitting into a dummy load, has been tested for this page. Linux, Windows and other HL2 boards have not. If you run an HL2 there, reports of what works and what does not are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)).
 - Keying with the HL2's hardware PTT jack shows as transmit in AetherSDR and mutes the receiver, but does not carry host audio: only the radio is keyed, and AetherSDR sends no modulation ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
 - RF1's output level against the RF power slider, and its harmonics, have not been measured ([#4954](https://github.com/aethersdr/AetherSDR/issues/4954)). Start low and use a fixed attenuator before any receiver or analyzer.
-- Each over starts with about 100 ms of keyed silence before your audio is transmitted ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
+- Each over starts with keyed silence before your audio is transmitted: about 125 ms from the microphone and 175 to 195 ms from a TCI client, longer when the client's audio arrives unevenly ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
 
 ## Troubleshooting
 

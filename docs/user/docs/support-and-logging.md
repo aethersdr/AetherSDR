@@ -35,7 +35,7 @@ Choosing **Support & Diagnostics...** while it is open brings the window to the 
 
 ### Diagnostic Logging
 
-A grid of checkboxes, one per log category. Hover a box for what it covers. Turn on the categories relevant to your problem, then reproduce it. The dialog advises restarting AetherSDR after changing categories so the new settings are in effect from startup.
+A grid of checkboxes, one per log category. The three columns stay fully visible at the window’s minimum width; scroll vertically to reach the remaining categories. Hover a box for what it covers. Turn on the categories relevant to your problem, then reproduce it. The dialog advises restarting AetherSDR after changing categories so the new settings are in effect from startup.
 
 **Enable All** / **Disable All** toggle every category at once. The categories, and which are on by default, are listed under [Log categories](#log-categories).
 

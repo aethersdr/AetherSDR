@@ -27,14 +27,14 @@ struct WsprPackage {
         const char* sha256;
         qint64 size;
     };
-    static constexpr const char* kVersion = "0.1.0";
+    static constexpr const char* kVersion = "0.1.7";
     // FLEX-6000: a legacy waveform, whose settings persist on /user.
     static constexpr Pin kLegacy{":/waveforms/AetherWSPR.ssdr_waveform", "AetherWSPR.ssdr_waveform",
-                                 "db0d5d29b55c0941d9ebcde0a4cfbff0dd12d939be2e4cd1b9a6b337175ae54c", 141994};
+                                 "b590bf70550ffca1d2bfa63b088bf2360003583f0db1857742a5f19f2e150ca9", 142256};
     // FLEX-8000 and Aurora: a container, because a legacy waveform has only
     // RAM there and the container's writable layer survives a reboot.
     static constexpr Pin kContainer{":/waveforms/AetherWSPR.tar.gz", "AetherWSPR.tar.gz",
-                                    "08fb92338e5ee9bd0cf0d3ea663314d85e73d969a2c626633fc3e25d0b11be9d", 155020};
+                                    "3789ab5242ff6391ffa910c9012063d782e9f2a76676b45c34b4b52452fa71d1", 155772};
 };
 
 // The receiver's waveform name, in both packages.
@@ -185,6 +185,10 @@ bool reachableRadio(bool overWan, const QHostAddress& address);
 // copy already there. Only bytes matching the pin are written: empty, with
 // `error` set, otherwise.
 QString writeBundledPackage(const WsprPackage::Pin& pin, const QString& dir, QString* error);
+
+// Whether a receiver reporting `installed` is older than the one bundled
+// (WsprPackage::kVersion). Unreadable versions are never older.
+bool updateAvailable(const QString& installed);
 
 }  // namespace wspr
 }  // namespace AetherSDR

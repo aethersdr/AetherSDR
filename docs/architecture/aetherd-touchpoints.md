@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 282 touchpoint headers (230 core, 52 models) — 282/282 tagged, 0/282 converted.
+**Totals:** 284 touchpoint headers (230 core, 54 models) — 284/284 tagged, 0/284 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -189,7 +189,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/VoiceSignalDetector.h` | 1 | universal — Engine-side DSP: detects voice signals in FFT bins using band-plan segments; radio-agnostic spectrum analysis | unconverted |
 | `core/WaterfallRate.h` | 2 | mixed(flex) — The single definition of what the 1..100 'WtrFall Rate' control means (low is slow, high is fast). A universal display concept that carries TWO conversion laws, deliberately not the same function, because who turns rate into rows differs per family (#3104, #4606). | unconverted |
 | `core/WaveformInstaller.h` | 1 | vendor(flex) — Uploads Docker waveform images via SmartSDR fw 4.2.18 'file upload' TCP protocol — Flex-only ecosystem. | unconverted |
-| `core/WfmDemodulator.h` | 1 | mixed(flex) — WFM demod around WfmDsp: demod/Doppler-offset intent is core; IQ source is DAX IQ + SmartSDR cmds (flex) | unconverted |
+| `core/WfmDemodulator.h` | 1 | mixed(flex) — WFM demod around WfmDsp: demod/Doppler-offset intent is core; IQ source remains Flex DAX IQ, with typed pan binding | unconverted |
 | `core/WfmSettings.h` | 1 | ui-support — Client-side settings blob (AppSettings JSON) storing WFM audio output device id + legacy-key migration. | unconverted |
 | `core/WindowsFirewall.h` | 1 | ui-support — Reads Windows Defender Firewall's rules for the AetherSDR executable and runs the UAC netsh fix. Host-OS plumbing, not radio state; read only by the Network Diagnostics Windows Firewall page. | unconverted |
 | `core/WsjtxClient.h` | 2 | ui-support — UDP listener for local WSJT-X app decodes/status; desktop-side integration feeding the universal spot surface | unconverted |
@@ -247,16 +247,17 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/BandDefs.h` | 5 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 9 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 6 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |
+| `models/ConnectionWorkspace.h` | 1 | ui-support — Local connection memberships, credential references and operator audio/layout preferences; no radio operating state. | unconverted |
 | `models/Ctr2ProxyModel.h` | 5 | peripheral(ctr2) — CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A device that negotiates link extensions (HID Feature report 0x02; never a stock CTR2) also receives AetherSDR's own audio spectrum, from the GUI's Ctr2AudioSpectrumFeeder, beside the relayed stream. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091). | unconverted |
 | `models/CwDecodeSettings.h` | 9 | ui-support — CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state. | unconverted |
 | `models/CwRxModel.h` | 2 | universal — Receive CW backend catalog and lifecycle over typed PCM; decoder workers remain private and TX is separate. | unconverted |
 | `models/CwxModel.h` | 1 | universal — Plain-text CW keyer intent: typed WPM/delay/QSK, macro and send/erase requests, batch cancellation and bounded speed-echo bookkeeping. Command encoding and queue-reply decoding live below the seam; legacy CWX status parsing remains. | unconverted |
 | `models/DStarModel.h` | 1 | universal — D-STAR configuration and session state (callsigns, RPT1/RPT2 routing, modem/serial paths). Digital-voice state any backend carrying DV would present. | unconverted |
-| `models/DaxIqModel.h` | 1 | vendor(flex) — Flex DAX IQ streams: dax_iq stream create/rate cmds, 4-ch DAX model, pipes to SDR apps — DAX is Flex-only | unconverted |
+| `models/DaxIqModel.h` | 1 | vendor(flex) — Flex DAX IQ streams: typed create/remove/rate requests, four-channel model and pipes to SDR apps; Flex status parsing remains in the model | unconverted |
 | `models/DaxReceiveModel.h` | 1 | universal — Owner-thread adapter from typed native receive PCM and stable TCI receiver bindings to the existing 24 kHz virtual audio bridges; no radio wire protocol. | unconverted |
 | `models/DecoderAudioModel.h` | 3 | mixed(flex) — Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry. | unconverted |
 | `models/DigitalVoiceWaveformHistory.h` | 1 | mixed(flex) — Rolling health history for the DV waveform path (sample rate, turnaround, deficits). Generic rate/latency telemetry fused with Flex VITA sequence-gap counters. | unconverted |
-| `models/EqualizerModel.h` | 3 | universal — 8-band TX/RX audio EQ state (enable + band gains) — core capability; SmartSDR wire parsing/cmds move to flex adapter | unconverted |
+| `models/EqualizerModel.h` | 3 | universal — 8-band TX/RX audio EQ state and typed enable/band-gain intent are universal; Flex encoding is backend-owned, legacy status parsing remains | unconverted |
 | `models/FirmwareInstallModel.h` | 1 | peripheral(ctr2) — CTR2-Max firmware installer model behind the CTR2 window: the signed release catalog, which controller is connected and in what mode, and actions on it (EspFirmwareJob in ROM download mode, or Ctr2ProxyModel's updater over the USB link), each checked against the device the operator confirmed. Controller firmware tooling, no radio state; a peripheral, NOT behind the radio seam. | unconverted |
 | `models/FlexWaveformModel.h` | 1 | vendor(flex) — FlexLib waveform/WFP container management: parses SmartSDR waveform status, emits Flex protocol commands | unconverted |
 | `models/GreenHeronModel.h` | 1 | peripheral(greenheron) — Green Heron "Everyware" client — antenna switches and rotator on one connection to a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md. | unconverted |
@@ -277,6 +278,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/RadioModel.h` | 60 | mixed(flex) — Central radio aggregate: core slice/pan/TX/meter/memory state fused with Flex protocol, DAX, SmartLink, Multi-Flex | unconverted |
 | `models/RadioSession.h` | 1 | universal — Per-radio session aggregate: owns RadioModel + id/label; session concept is core-profile, no vendor surface | unconverted |
 | `models/RadioStatusOwnership.h` | 1 | vendor(flex) — SmartSDR status parsing helpers: Flex hex handles, client_handle ownership, remote_audio_rx, interlock gate | unconverted |
+| `models/RadioSwrValidityFilter.h` | 1 | universal — Trust gate for a radio's SWR stream against instantaneous forward power (attack-immediately/timed-release envelope, low-SWR and below-unity confirmation). Pure value logic, no vendor ties; consumed by the S-meter and by TCI tx_sensors. | unconverted |
 | `models/ReceiverSlotCount.h` | 2 | universal — How many receiver letters (A, B, C, ...) the UI offers — the RX applet's slice tabs and the CAT applet's VFO targets — tracked from the connection/capability/slice edges. Family-agnostic: the backend's declared ceiling, floored by the slots live receivers occupy (#5775, #5776). | unconverted |
 | `models/Rn2SettingsModel.h` | 1 | universal — Process-wide owner of client-side RN2 configuration as one versioned object (Principle V). Engine DSP configuration; radio-agnostic. | unconverted |
 | `models/SliceLinkPolicy.h` | 2 | universal — Pure decision logic for Slice Link (cross-panadapter VFO link) — echo classification on integer Hz, no QObject, no I/O, no model access. Canonical slice state only. | unconverted |

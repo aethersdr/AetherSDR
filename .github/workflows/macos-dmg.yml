@@ -935,7 +935,7 @@ jobs:
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           files: |
             out/AetherSDR-*.dmg
@@ -1036,6 +1036,6 @@ jobs:
 
       - name: Attach to release
         if: ${{ startsWith(github.ref, 'refs/tags/') && steps.signed.outcome == 'success' }}
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           files: out/AetherSDR-*.app.tar.zst
