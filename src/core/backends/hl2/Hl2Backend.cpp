@@ -8047,6 +8047,9 @@ void Hl2Backend::pushInitialState()
             for (std::size_t i = 0; i < count; ++i) {
                 Receiver& r = m_rx[i];
                 const Receiver& memory = m_restoredReceivers[i];
+                // The mode term holds by construction where
+                // seedOpenReceiversFromMemory() ran; it decides on a same-radio
+                // reconnect whose receivers kept their live mode.
                 if (&r == rx(m_txDdc) || r.mode != memory.mode)
                     continue;
                 r.filterLowHz = memory.filterLowHz;

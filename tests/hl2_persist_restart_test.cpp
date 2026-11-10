@@ -18,7 +18,8 @@
 //
 //  3. A second receiver's own frequency, mode and passband across a restart,
 //     reopened by the link-up replay as a restart does, and opened AT the
-//     connect by the automation-only numRx param.
+//     connect by the automation-only numRx param, and across a same-radio
+//     reconnect whose receivers kept their live mode.
 //
 // No socket: see Hl2PersistHarness.h. The radio is never keyed (the drive is a
 // setpoint; the transmit gate stays shut). The settings profile is isolated.
@@ -304,6 +305,91 @@ int main(int argc, char** argv)
                 throughDisk(RadioSettingsScope(QStringLiteral("hl2"), serialFor(203)), caps, captured);
             Session next(serialFor(203), back, k20m, {{QStringLiteral("numRx"), 2}});
             checkB(next, QStringLiteral("numRx"));
+        }
+    }
+
+    // ======================================================================
+    // 4. A same-radio reconnect whose receivers kept their live state
+    // ======================================================================
+    // Same backend, same serial, numRx=2: buildReceivers() carries both
+    // receivers, so connectRadio() skips seedOpenReceiversFromMemory() and B
+    // keeps its LIVE mode. The link-up derivation then puts B on that mode's
+    // default, and the remembered pair applies only where the live mode is the
+    // one it was saved with.
+    {
+        const QString serial = serialFor(204);
+        const QVariantMap twoRx{{QStringLiteral("numRx"), 2}};
+        Session s(serial, RestoredRadioState{}, k20m, twoRx);
+        check(Session::Access::receiverCount(s.backend) == 2,
+              "reconnect setup: numRx=2 opens two receivers");
+        const int b = Session::Access::sliceIdOf(s.backend, 1);
+        s.backend.setSliceFrequency(b, k40mB);
+        s.backend.setSliceMode(b, QStringLiteral("LSB"));
+        s.backend.setSliceFilter(b, -2400, -400);
+        const RestoredRadioState remembered = throughDisk(
+            RadioSettingsScope(QStringLiteral("hl2"), serial), caps,
+            s.backend.currentOperatingState());
+        const QJsonObject rbMem = Session::receiverOf(remembered, 1);
+        check(rbMem.value(QStringLiteral("mode")).toString() == QLatin1String("LSB")
+                  && rbMem.value(QStringLiteral("filterLowHz")).toInt() == -2400
+                  && rbMem.value(QStringLiteral("filterHighHz")).toInt() == -400,
+              "reconnect setup: the remembered document holds B's LSB -2400..-400");
+
+        const auto liveB = [&] {
+            return Session::receiverOf(s.backend.currentOperatingState(), 1);
+        };
+        const auto pbOf = [](const QJsonObject& r) {
+            return std::pair<int, int>{r.value(QStringLiteral("filterLowHz")).toInt(),
+                                       r.value(QStringLiteral("filterHighHz")).toInt()};
+        };
+
+        // Live mode differs from the remembered one: B stays in CWU on the
+        // passband the click gave it, never the remembered LSB pair.
+        s.backend.setSliceMode(b, QStringLiteral("CWU"));
+        const auto cwu = pbOf(liveB());
+        check(cwu != std::pair<int, int>{-2400, -400},
+              QStringLiteral("reconnect, modes differ: B's live CWU passband %1..%2 differs "
+                             "from the remembered LSB pair (control)")
+                  .arg(cwu.first).arg(cwu.second));
+        s.disconnect();
+        s.connect(serial, remembered, k20m, twoRx);
+        {
+            const QJsonObject rb = liveB();
+            const auto pb = pbOf(rb);
+            check(Session::Access::receiverCount(s.backend) == 2
+                      && rb.value(QStringLiteral("mode")).toString() == QLatin1String("CWU"),
+                  QStringLiteral("reconnect, modes differ: B kept its live mode (the carried "
+                                 "road), got \"%1\"")
+                      .arg(rb.value(QStringLiteral("mode")).toString()));
+            check(pb == cwu,
+                  QStringLiteral("reconnect, modes differ: B keeps its live CWU passband %1..%2, "
+                                 "not the remembered LSB pair, got %3..%4")
+                      .arg(cwu.first).arg(cwu.second).arg(pb.first).arg(pb.second));
+        }
+
+        // Live mode matches the remembered one: the remembered pair replaces
+        // the live passband (the derivation has already discarded the edit).
+        s.backend.setSliceMode(b, QStringLiteral("LSB"));
+        const auto lsbDefault = pbOf(liveB());
+        s.backend.setSliceFilter(b, -2800, -300);
+        const auto edited = pbOf(liveB());
+        check(edited == std::pair<int, int>{-2800, -300}
+                  && edited != std::pair<int, int>{-2400, -400} && edited != lsbDefault
+                  && lsbDefault != std::pair<int, int>{-2400, -400},
+              QStringLiteral("reconnect, modes match: the live edit -2800..-300, the remembered "
+                             "pair and the LSB default %1..%2 all differ (control)")
+                  .arg(lsbDefault.first).arg(lsbDefault.second));
+        s.disconnect();
+        s.connect(serial, remembered, k20m, twoRx);
+        {
+            const QJsonObject rb = liveB();
+            const auto pb = pbOf(rb);
+            check(rb.value(QStringLiteral("mode")).toString() == QLatin1String("LSB")
+                      && pb == std::pair<int, int>{-2400, -400},
+                  QStringLiteral("reconnect, modes match: B comes back on the remembered LSB "
+                                 "pair -2400..-400, got %1 %2..%3")
+                      .arg(rb.value(QStringLiteral("mode")).toString())
+                      .arg(pb.first).arg(pb.second));
         }
     }
 
