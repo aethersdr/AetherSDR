@@ -8967,7 +8967,11 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
         }
     }
 
-    if (dev.isNull()) {
+    const bool inputDeviceMissing = dev.isNull();
+    if (m_txInputDeviceMissing.exchange(inputDeviceMissing) != inputDeviceMissing) {
+        emit txInputDeviceMissingChanged(inputDeviceMissing);
+    }
+    if (inputDeviceMissing) {
         qCWarning(lcAudio) << "AudioEngine: no audio input device available";
         return false;
     }

@@ -53,7 +53,8 @@ MainWindow::TxAudioPathBlock MainWindow::txAudioPathBlock() const
         .value("PcAudioEnabled", "True").toString() == "True";
     return classifyTxAudioPath(m_radioModel.isConnected(),
                               m_radioModel.backendCapabilities(), pcAudioOn,
-                              m_radioModel.transmitModel().micSelection());
+                              m_radioModel.transmitModel().micSelection(),
+                              m_audio && m_audio->txInputDeviceMissing());
 }
 
 QString MainWindow::txAudioPathBlockMessage(TxAudioPathBlock block) const
@@ -68,6 +69,16 @@ QString MainWindow::txAudioPathBlockMessage(TxAudioPathBlock block) const
         return tr("AetherTX uses a microphone connected to this computer. "
                   "A mic plugged into the radio bypasses its effects. "
                   "In Phone/CW, set Microphone source to PC.");
+    case TxAudioPathBlock::NoInputDevice:
+        if (m_radioModel.backendCapabilities().hostModulates) {
+            return tr("No microphone: this radio is modulated by the computer, "
+                      "and no audio input device was found. Voice transmits no "
+                      "RF until one is connected. CW, TUNE and DAX/TCI are not "
+                      "affected.");
+        }
+        return tr("No microphone: no audio input device was found on this "
+                  "computer, so no voice audio from the computer reaches the "
+                  "radio. Connect a microphone to this computer.");
     case TxAudioPathBlock::None:
         return {};
     }
@@ -123,6 +134,9 @@ void MainWindow::updateTxAudioPathNotice()
         } else if (block == TxAudioPathBlock::MicInput) {
             compact = tr("A radio mic bypasses AetherTX. In Phone/CW, "
                          "set Microphone source to PC.");
+        } else if (block == TxAudioPathBlock::NoInputDevice) {
+            compact = tr("No audio input device was found. Connect a "
+                         "microphone to this computer.");
         }
     }
 
@@ -259,6 +273,10 @@ void MainWindow::wirePooDooTiles()
             chain->setRxPcAudioEnabled(on);
             updateTxAudioPathNotice();
         });
+        // Capture starts on the audio thread; re-read the route when it
+        // finds, or stops finding, an input device.
+        connect(m_audio, &AudioEngine::txInputDeviceMissingChanged, this,
+                [this](bool) { updateTxAudioPathNotice(); });
 
         // DSP — aggregate of every client-side NR module.  These are
         // mutually exclusive in AudioEngine::processRx (chained

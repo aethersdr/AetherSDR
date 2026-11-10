@@ -208,6 +208,9 @@ public:
     void setMuted(bool m);
     bool isRxStreaming() const { return m_audioSink != nullptr; }
     bool isTxStreaming() const { return m_audioSource != nullptr; }
+    // The last TX capture start found no audio input device at all (#7078).
+    // Refreshed by every startTxStream(); a format failure leaves it false.
+    bool txInputDeviceMissing() const { return m_txInputDeviceMissing.load(); }
     // Which producer currently owns the QSO recorder's TX slot (#2539,
     // #4281). Both the mic monitor tap and the CW record pump reach
     // QsoRecorder::feedTxAudio, so both ends ask this one question rather
@@ -862,6 +865,7 @@ signals:
                                              int sampleRate);
 
     void pcMicLevelChanged(float peakDbfs, float avgDbfs);  // client-side PC mic metering
+    void txInputDeviceMissingChanged(bool missing);
     void scopeSamplesReady(const QByteArray& monoFloat32Pcm, int sampleRate, bool tx);
     // Emitted on the local TX audio that will feed the radio. For PC mic
     // voice this is after the strip, PC mic gain, and final limiter; for
@@ -1153,6 +1157,7 @@ private:
     std::atomic<float> m_pcMicGain{1.0f};     // client-side PC mic gain (0.0-1.0)
     std::atomic<bool>  m_daxTxMode{false};    // DAX TX mode: VirtualAudioBridge handles TX
     QElapsedTimer      m_txSourceStartTime;
+    std::atomic<bool>  m_txInputDeviceMissing{false};
     quint64            m_txLifecycleGeneration{0};
     QElapsedTimer      m_txCaptureHealthClock;
     TxCaptureHealthTracker m_txCaptureHealth;
