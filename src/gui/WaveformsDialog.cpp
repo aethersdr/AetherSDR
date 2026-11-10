@@ -1688,12 +1688,16 @@ void WaveformsDialog::onInstallWsprClicked()
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return;
     }
-    const bool docker = remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container;
+    installWspr(remoteAccessPackageFor(m_radioModel) == TailnetShimPackage::Container);
+}
+
+bool WaveformsDialog::installWspr(bool docker)
+{
     if (docker) {
         const QString blocker = dockerInstallBlockerText(m_radioModel, m_radioModel->flexWaveformModel());
         if (!blocker.isEmpty()) {
             showDockerWfpNotReadyDialog(this, blocker);
-            return;
+            return false;
         }
     }
     // The package ships inside AetherSDR; the installer wants a file.
@@ -1707,9 +1711,89 @@ void WaveformsDialog::onInstallWsprClicked()
         ScopedChildWidget<CanonMessageBox> box(tr("WSPR Receiver Not Installed"), error, this);
         box.get()->setDefaultButton(box.get()->addButton(tr("OK"), CanonMessageBox::Role::Accept));
         box.get()->exec();
-        return;
+        return false;
     }
     installWaveformPath(docker, path, m_radioModel);
+    return true;
+}
+
+void WaveformsDialog::updateWspr(bool container, const std::function<void(bool)>& done)
+{
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        if (done) {
+            done(false);
+        }
+        return;
+    }
+    // The installed row says which package this is.
+    const bool docker = container;
+    const QString name = QString::fromLatin1(kWsprWaveformName);
+    const QString removeAction = docker ? QStringLiteral("remove_container") : QStringLiteral("uninstall");
+    FlexWaveformModel& waveforms = m_radioModel->flexWaveformModel();
+    setRowNotice(name, tr("Updating…"), QStringLiteral("pending"), true);
+
+    // The radio accepts the removal at once and takes a few seconds to carry
+    // it out; install again once it no longer lists the receiver.
+    struct Pending {
+        bool done{false};
+        QMetaObject::Connection listed;
+        QMetaObject::Connection replied;
+    };
+    auto pending = std::make_shared<Pending>();
+    auto* bound = new QTimer(this);
+    bound->setSingleShot(true);
+    const QPointer<RadioModel> modelGuard(m_radioModel);
+    const RadioControlSession chosenSession = m_radioModel->controlSession();
+    auto finish = [this, pending, bound, docker, done, modelGuard, chosenSession](bool install) {
+        if (pending->done) {
+            return;
+        }
+        pending->done = true;
+        disconnect(pending->listed);
+        disconnect(pending->replied);
+        bound->stop();
+        bound->deleteLater();
+        const bool started = install && radioStillChosen(modelGuard, chosenSession) && installWspr(docker);
+        if (done) {
+            done(started);
+        }
+    };
+    pending->listed = connect(&waveforms, &FlexWaveformModel::waveformsChanged, this, [&waveforms, finish] {
+        for (const FlexWaveformEntry& w : waveforms.waveforms()) {
+            if (isWsprWaveform(w.name)) {
+                return;
+            }
+        }
+        finish(true);
+    });
+    pending->replied = connect(&waveforms, &FlexWaveformModel::commandFinished, this,
+                               [this, name, removeAction, docker, finish](
+                                   const QString& action, const QString& which, bool ok, const QString& message) {
+        if (action == removeAction && which == name && !ok) {
+            finish(false);
+            const QString why = message.isEmpty() ? tr("the radio refused it") : message;
+            showWaveformInstallResultDialog(
+                this, tr("Update Failed"),
+                docker ? tr("The radio didn't remove the WSPR receiver's container: %1").arg(why)
+                       : tr("The radio didn't uninstall the WSPR receiver: %1").arg(why));
+        }
+    });
+    // Installing over a receiver the radio still lists would collide with
+    // it: if the removal isn't seen in time, say so rather than install.
+    connect(bound, &QTimer::timeout, this, [this, name, finish] {
+        finish(false);
+        setRowNotice(name, tr("Update didn't finish"), QStringLiteral("error"), false);
+        showWaveformInstallResultDialog(
+            this, tr("Update Failed"),
+            tr("The radio still lists the WSPR receiver after 30 seconds. Remove it from the Waveforms "
+               "list, then install the WSPR receiver again."));
+    });
+    bound->start(30'000);
+    if (docker) {
+        waveforms.requestRemoveContainer(name);
+    } else {
+        waveforms.requestUninstall(name);
+    }
 }
 
 void WaveformsDialog::installRemoteAccess(bool container)
@@ -2552,7 +2636,7 @@ void WaveformsDialog::refreshWaveformList()
         if (isWsprWaveform(name)) {
             configureBtn = new QPushButton(tr("Configure…"), actionWidget);
             configureBtn->setAccessibleName(tr("Configure the WSPR receiver"));
-            connect(configureBtn, &QPushButton::clicked, this, [this]() {
+            connect(configureBtn, &QPushButton::clicked, this, [this, isContainer]() {
                 static QPointer<WsprConfigureWindow> open;
                 if (open) {
                     open->raise();
@@ -2561,6 +2645,14 @@ void WaveformsDialog::refreshWaveformList()
                 }
                 auto* window = new WsprConfigureWindow(m_radioModel, this);
                 window->setAttribute(Qt::WA_DeleteOnClose);
+                connect(window, &WsprConfigureWindow::reinstallRequested, this,
+                        [this, isContainer, window = QPointer<WsprConfigureWindow>(window)] {
+                    updateWspr(isContainer, [window](bool started) {
+                        if (window && !started) {
+                            window->reinstallFailed();
+                        }
+                    });
+                });
                 open = window;
                 window->show();
             });
