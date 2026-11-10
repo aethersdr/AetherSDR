@@ -16,6 +16,13 @@ delivers only to a separate computer on its LAN.
   slice (`tx=0`) and takes its DAX audio (`dax_rx`, 24 kHz). The radio
   removes headless slices when its last GUI client disconnects; the agent
   remakes the slice at once and loses that one cycle.
+- **Which slice:** the highest free one, D before C before B, and never A,
+  the operator's: a GUI client that connects later takes a slice it finds
+  as its own. The radio has no way to name a new slice's index (it gives the
+  lowest free one), so the agent fills the lower free slots with placeholder
+  slices first and removes them once its own exists. Total slices are the
+  free slots (`radio slices=`) plus the ones in use. When only A is free it
+  makes nothing and tries again every 5 minutes.
 - **Capture:** each even UTC minute, 114 s, timed by the system clock. It
   waits until the kernel reports the clock synchronized; on an 8000-series
   radio the clock comes from its GPS-disciplined stratum-1 NTP. Lost VITA

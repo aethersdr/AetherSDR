@@ -53,7 +53,7 @@
 #include "grayline.h"
 #include "wsprd/wsprsim_utils.h"
 
-#define AGENT_VERSION "0.1.0"
+#define AGENT_VERSION "0.1.2"
 #define STATUS_PORT 48995
 #define AUDIO_RATE 24000
 #define BB_RATE 375
@@ -1191,6 +1191,20 @@ typedef struct {
      * slice's status can arrive before the reply that names it ours. */
     long long rf_hz[MAX_SLICES];
     long long create_hz;  /* what we asked the next slice to be created at */
+    /* The radio's slices, by index, from the same statuses, and its free
+     * slots ("radio slices=N"), -1 until reported: together they give how
+     * many slices the radio has. */
+    int in_use[MAX_SLICES];
+    int available;
+    /* The reply to "sub slice all", which follows the status of every slice
+     * open: until it arrives, a slice in use may not be known yet. */
+    int want_slices, slices_known;
+    /* Taking the highest free slice (choose_slice): the index wanted, and
+     * the lower slices the radio handed out first, removed once it's ours. */
+    int target;
+    int filler[MAX_SLICES];
+    int fillers;
+    double slice_retry;   /* mono_s() before which no slice is made, 0 none */
     unsigned handle;
     int lost;             /* our slice was removed: remake it now */
 } api_t;
@@ -1215,6 +1229,7 @@ static int api_connect(api_t *a, int udp_port)
 {
     memset(a, 0, sizeof *a);
     a->slice = -1;
+    a->available = -1;
     struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(4992)};
     inet_pton(AF_INET, g_radio_addr, &sa.sin_addr);
     a->fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -1226,7 +1241,8 @@ static int api_connect(api_t *a, int udp_port)
     api_send(a, "client udpport %d", udp_port);
     a->want_info = api_send(a, "info");
     api_send(a, "sub gps all");
-    api_send(a, "sub slice all");
+    api_send(a, "sub radio all");
+    a->want_slices = api_send(a, "sub slice all");
     return 1;
 }
 
@@ -1236,12 +1252,58 @@ static void api_close(api_t *a)
     a->fd = -1;
 }
 
-static void make_slice(api_t *a, long long dial_hz, const char *ant, int dax)
+/* How long to wait when only slice A is free. */
+#define SLICE_RETRY_S 300
+
+/* The slice to take: the highest free one, D before C before B, and never
+ * A, which is the operator's (a GUI client that connects later takes a
+ * headless slice it finds as its own). -1 when only A is free, or when the
+ * radio has not yet said how many slices it has. */
+static int choose_slice(const api_t *a)
 {
-    (void)dax;
+    if (a->available < 0 || !a->slices_known) return -1;
+    int open = 0;
+    for (int i = 0; i < MAX_SLICES; i++) open += a->in_use[i] != 0;
+    int total = open + a->available;
+    if (total > MAX_SLICES) total = MAX_SLICES;
+    for (int i = total - 1; i >= 1; i--)
+        if (!a->in_use[i]) return i;
+    return -1;
+}
+
+static void send_create(api_t *a, const char *ant)
+{
+    if (ant[0]) a->want_slice = api_send(a, "slice create freq=%.6f rxant=%s mode=DIGU", a->create_hz / 1e6, ant);
+    else a->want_slice = api_send(a, "slice create freq=%.6f mode=DIGU", a->create_hz / 1e6);
+}
+
+/* Asks for a slice at the highest free index. The radio has no way to name
+ * the index of a new slice: it gives the lowest free one. So any lower free
+ * slots are filled first, and those placeholder slices removed once ours
+ * exists (api_line). Returns 0 without asking when only A is free; it asks
+ * again after SLICE_RETRY_S. */
+static int make_slice(api_t *a, long long dial_hz, const char *ant)
+{
+    /* Not yet: "radio slices=" comes with sub radio, and the slices open
+     * with sub slice, the reply after them. */
+    if (a->available < 0 || !a->slices_known) return 0;
+    int target = choose_slice(a);
+    if (target < 0) {
+        logf_("only slice A is free; trying again in %d minutes", SLICE_RETRY_S / 60);
+        a->slice_retry = mono_s() + SLICE_RETRY_S;
+        return 0;
+    }
+    a->target = target;
+    a->fillers = 0;
     a->create_hz = dial_hz;
-    if (ant[0]) a->want_slice = api_send(a, "slice create freq=%.6f rxant=%s mode=DIGU", dial_hz / 1e6, ant);
-    else a->want_slice = api_send(a, "slice create freq=%.6f mode=DIGU", dial_hz / 1e6);
+    send_create(a, ant);
+    return 1;
+}
+
+static void remove_fillers(api_t *a)
+{
+    for (int i = 0; i < a->fillers; i++) api_send(a, "slice remove %d", a->filler[i]);
+    a->fillers = 0;
 }
 
 static void field(const char *s, const char *key, char *out, size_t cap)
@@ -1267,6 +1329,11 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
         unsigned long code = strtoul(p1 + 1, NULL, 16);
         char *msg = strchr(p1 + 1, '|');
         msg = msg ? msg + 1 : (char *)"";
+        if (seq == a->want_slices) {
+            a->want_slices = 0;
+            a->slices_known = 1;
+            return;
+        }
         if (seq == a->want_info && !code) {
             char call[16];
             field(msg, "callsign=", call, sizeof call);
@@ -1276,8 +1343,22 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             pthread_mutex_unlock(&G.mu);
         } else if (seq == a->want_slice) {
             a->want_slice = 0;
-            if (code) { logf_("slice create refused: %08lx %s", code, msg); return; }
-            a->slice = atoi(msg);
+            if (code) {
+                logf_("slice create refused: %08lx %s", code, msg);
+                remove_fillers(a);
+                a->slice_retry = mono_s() + SLICE_RETRY_S;
+                return;
+            }
+            int index = atoi(msg);
+            if (index < a->target && a->fillers < MAX_SLICES) {
+                /* A lower slot the radio filled first: keep it until ours exists. */
+                a->filler[a->fillers++] = index;
+                if (index >= 0 && index < MAX_SLICES) a->in_use[index] = 1;
+                send_create(a, cfg->rxant);
+                return;
+            }
+            remove_fillers(a);
+            a->slice = index;
             api_send(a, "slice set %d tx=0", a->slice);
             api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
             a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
@@ -1310,13 +1391,18 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             snprintf(G.gps_grid, sizeof G.gps_grid, "%s", grid);
             pthread_mutex_unlock(&G.mu);
         }
+    } else if (!strncmp(body, "radio ", 6)) {
+        char n[8];
+        field(body, " slices=", n, sizeof n);
+        if (n[0]) a->available = atoi(n);
     } else if (!strncmp(body, "slice ", 6)) {
         int index = atoi(body + 6);
         if (index >= 0 && index < MAX_SLICES) {
             char mhz[24];
             field(body, "RF_frequency=", mhz, sizeof mhz);
             if (mhz[0]) a->rf_hz[index] = llround(atof(mhz) * 1e6);
-            if (strstr(body, " in_use=0")) a->rf_hz[index] = 0;
+            if (strstr(body, " in_use=1")) a->in_use[index] = 1;
+            if (strstr(body, " in_use=0")) { a->rf_hz[index] = 0; a->in_use[index] = 0; }
         }
         if (index != a->slice) return;
         /* The radio removes headless slices when its last GUI client
@@ -1561,7 +1647,9 @@ static int selftest_radio_lines(void)
     /* FlexLib's key for the antenna (Radio.cs RequestSlice). */
     char sent[256];
     while (read(p[0], sent, sizeof sent) == (ssize_t)sizeof sent) {}
-    make_slice(&a, 14095600, "ANT2", 4);
+    a.available = 4;
+    a.slices_known = 1;
+    make_slice(&a, 14095600, "ANT2");
     ssize_t k = read(p[0], sent, sizeof sent - 1);
     sent[k > 0 ? k : 0] = 0;
     fail |= !strstr(sent, " rxant=ANT2 ");
@@ -1614,10 +1702,88 @@ static int selftest_upload_off(void)
 
 static const char *BAD_GRIDS[] = {"ZZ99", "AA00zz", "D18P", "DN1", "DN18p", "1234", "DN18-g"};
 
+/* The slice taken: the highest free one, D before C before B, never A. The
+ * radio hands out the lowest free index, so the lower free slots are filled
+ * with placeholder slices first and removed once ours exists. Only A free:
+ * nothing is asked for, and the retry waits SLICE_RETRY_S. Driven through
+ * the real line handler, reading what is sent to the radio. */
+static int selftest_slice_choice(void)
+{
+    int p[2];
+    if (pipe(p)) return 1;
+    config_t c;
+    config_default(&c);
+    char l[128], sent[2048];
+    int fail = 0;
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = p[1];
+    a.slice = -1;
+    a.available = -1;
+    fail |= make_slice(&a, 7038600, "") != 0 || a.want_slice;   /* count not known yet */
+
+    /* A GUI's slice A open, three free: wants D, fills B and C first. Not
+     * before the reply to "sub slice all", which follows the slices' status:
+     * the free count alone would make three slices look like all of them. */
+    a.want_slices = 7;
+    strcpy(l, "S0|radio slices=3 panadapters=3");
+    api_line(&a, l, &c);
+    fail |= choose_slice(&a) != -1 || make_slice(&a, 7038600, "") != 0;
+    strcpy(l, "S1|slice 0 in_use=1 RF_frequency=14.074000");
+    api_line(&a, l, &c);
+    strcpy(l, "R7|0|");
+    api_line(&a, l, &c);
+    fail |= !a.slices_known || choose_slice(&a) != 3;
+    fail |= !make_slice(&a, 7038600, "");
+    snprintf(l, sizeof l, "R%d|0|1", a.want_slice);
+    api_line(&a, l, &c);
+    fail |= a.slice != -1 || a.fillers != 1 || !a.want_slice;
+    snprintf(l, sizeof l, "R%d|0|2", a.want_slice);
+    api_line(&a, l, &c);
+    fail |= a.slice != -1 || a.fillers != 2;
+    snprintf(l, sizeof l, "R%d|0|3", a.want_slice);
+    api_line(&a, l, &c);
+    fail |= a.slice != 3 || a.fillers != 0;
+    ssize_t k = read(p[0], sent, sizeof sent - 1);
+    sent[k > 0 ? k : 0] = 0;
+    fail |= !strstr(sent, "|slice remove 1\n") || !strstr(sent, "|slice remove 2\n")
+        || strstr(sent, "|slice remove 3") || strstr(sent, "|slice remove 0");
+    fail |= !strstr(sent, "|slice set 3 dax=");
+
+    /* B, C and D taken, only A free: nothing asked, retry in five minutes. */
+    api_t b;
+    memset(&b, 0, sizeof b);
+    b.fd = p[1];
+    b.slice = -1;
+    b.available = 1;
+    b.slices_known = 1;
+    b.in_use[1] = b.in_use[2] = b.in_use[3] = 1;
+    double before = mono_s();
+    fail |= choose_slice(&b) != -1 || make_slice(&b, 7038600, "") != 0;
+    fail |= b.slice_retry < before + SLICE_RETRY_S - 1 || b.want_slice;
+
+    /* C taken, D free with A and B: D, after filling A and B. */
+    b.in_use[1] = b.in_use[3] = 0;
+    b.available = 3;
+    b.slice_retry = 0;
+    fail |= choose_slice(&b) != 3;
+    /* Only B free besides A: B. */
+    b.in_use[3] = 1;
+    b.available = 2;
+    b.in_use[1] = 0;
+    fail |= choose_slice(&b) != 1;
+
+    close(p[0]);
+    close(p[1]);
+    if (fail) { printf("selftest FAIL: slice choice\n"); return 1; }
+    return 0;
+}
+
 static int selftest(double snr_db)
 {
     if (selftest_persistence() || selftest_spots() || selftest_upload_off()
-        || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()) return 1;
+        || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()
+        || selftest_slice_choice()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
         if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
     if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }
@@ -1925,17 +2091,23 @@ int main(int argc, char *argv[])
                 int period;
                 const char *band = band_for_cycle(&cfg, grid, target, cur, &period);
                 long long dial = band_dial(band);
-                if (a.slice < 0) make_slice(&a, dial, cfg.rxant, cfg.dax_channel);
-                else {
+                int asked = 1;
+                if (a.slice < 0) {
+                    /* None free but A, or the count not known yet: nothing
+                     * this cycle, and asked again on a later pass. */
+                    asked = mono_s() >= a.slice_retry && make_slice(&a, dial, cfg.rxant);
+                } else {
                     api_send(&a, "slice tune %d %.6f", a.slice, dial / 1e6);
                     if (cfg.rxant[0]) api_send(&a, "slice set %d rxant=%s", a.slice, cfg.rxant);
                 }
-                pthread_mutex_lock(&G.mu);
-                snprintf(G.band, sizeof G.band, "%s", band);
-                G.dial_hz = dial;
-                G.hop_period = period;
-                pthread_mutex_unlock(&G.mu);
-                tuned_for = target;
+                if (asked) {
+                    pthread_mutex_lock(&G.mu);
+                    snprintf(G.band, sizeof G.band, "%s", band);
+                    G.dial_hz = dial;
+                    G.hop_period = period;
+                    pthread_mutex_unlock(&G.mu);
+                    tuned_for = target;
+                }
             }
         }
 
