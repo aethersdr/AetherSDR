@@ -1310,6 +1310,17 @@ static void make_slice(api_t *a, long long dial_hz, const char *ant, int dax)
     else a->want_slice = api_send(a, "slice create freq=%.6f mode=DIGU", dial_hz / 1e6);
 }
 
+/* Each cycle's retune, a band hop included. The mode goes with the tune every
+ * time: a GUI client the radio reports as the slice's owner can change it (a
+ * connecting AetherSDR set it to LSB, #7139), and a band change can recall
+ * that band's mode. WSPR decodes only from DIGU. */
+static void retune_slice(api_t *a, long long dial_hz, const char *ant)
+{
+    api_send(a, "slice tune %d %.6f", a->slice, dial_hz / 1e6);
+    api_send(a, "slice set %d mode=DIGU", a->slice);
+    if (ant[0]) api_send(a, "slice set %d rxant=%s", a->slice, ant);
+}
+
 static void field(const char *s, const char *key, char *out, size_t cap)
 {
     out[0] = 0;
@@ -1867,6 +1878,29 @@ static int selftest_save_failure(void)
     return 0;
 }
 
+/* Every retune puts the slice back in DIGU, after the tune, with or without an
+ * antenna. Driven through the real sender over a socketpair. */
+static int selftest_retune_mode(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = sv[0];
+    a.slice = 3;
+    retune_slice(&a, 14095600, "");
+    retune_slice(&a, 21094600, "ANT2");
+    close(sv[0]);
+    char wire[512] = "";
+    ssize_t k = read(sv[1], wire, sizeof wire - 1);
+    close(sv[1]);
+    if (k > 0) wire[k] = 0;
+    const char *want = "C1|slice tune 3 14.095600\nC2|slice set 3 mode=DIGU\n"
+                       "C3|slice tune 3 21.094600\nC4|slice set 3 mode=DIGU\nC5|slice set 3 rxant=ANT2\n";
+    if (strcmp(wire, want)) { printf("selftest FAIL: a retune does not put the slice back in DIGU:\n%s", wire); return 1; }
+    return 0;
+}
+
 /* Upload off leaves nothing queued; on keeps the queue. */
 static int selftest_upload_off(void)
 {
@@ -1886,7 +1920,7 @@ static int selftest(double snr_db)
 {
     if (selftest_persistence() || selftest_spots() || selftest_upload_off()
         || selftest_busy_cycle() || selftest_radio_lines() || selftest_ntp_fallback()
-        || selftest_save_failure()) return 1;
+        || selftest_save_failure() || selftest_retune_mode()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
         if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
     if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }
@@ -2195,10 +2229,7 @@ int main(int argc, char *argv[])
                 const char *band = band_for_cycle(&cfg, grid, target, cur, &period);
                 long long dial = band_dial(band);
                 if (a.slice < 0) make_slice(&a, dial, cfg.rxant, cfg.dax_channel);
-                else {
-                    api_send(&a, "slice tune %d %.6f", a.slice, dial / 1e6);
-                    if (cfg.rxant[0]) api_send(&a, "slice set %d rxant=%s", a.slice, cfg.rxant);
-                }
+                else retune_slice(&a, dial, cfg.rxant);
                 pthread_mutex_lock(&G.mu);
                 snprintf(G.band, sizeof G.band, "%s", band);
                 G.dial_hz = dial;
