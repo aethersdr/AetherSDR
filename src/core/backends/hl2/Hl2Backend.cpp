@@ -1902,6 +1902,9 @@ RadioCapabilities Hl2Backend::capabilities() const
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
     c.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Native,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+    // No Flex stream plane: receive audio is native and graphic EQ is host-side.
+    c.audioStreamControl = std::nullopt;
+    c.radioGraphicEqControl = std::nullopt;
     // setTune() is the built-in test tone at ZERO offset — a single carrier
     // exactly on the TX NCO. Nothing here can produce a second tone.
     c.twoToneGenerator = std::nullopt;
@@ -2581,6 +2584,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         const auto [txLo, txHi] = effectiveTxPassband(txMode);
         tc.filterLowHz  = txLo;
         tc.filterHighHz = txHi;
+        m_txPassbandSentLowHz = txLo;
+        m_txPassbandSentHighHz = txHi;
     }
     // Remember the target the modulator is being handed, so the health snapshot
     // and the unkey diagnostic both report what it is RUNNING rather than what
@@ -5503,6 +5508,8 @@ void Hl2Backend::pushTxPassband(const QString& mode)
 {
     const auto [lo, hi] = effectiveTxPassband(mode);
     if (m_txDsp) {
+        m_txPassbandSentLowHz = lo;
+        m_txPassbandSentHighHz = hi;
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(lo)),
             Q_ARG(double, static_cast<double>(hi)));
@@ -5541,10 +5548,13 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
     const Receiver* txRx = rx(m_txDdc);
     const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
     const auto [applyLo, applyHi] = effectiveTxPassband(txMode);
-    if (m_txDsp)
+    if (m_txDsp) {
+        m_txPassbandSentLowHz = applyLo;
+        m_txPassbandSentHighHz = applyHi;
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(applyLo)),
             Q_ARG(double, static_cast<double>(applyHi)));
+    }
 
     // Client-authoritative state moved, so the capture half has to know — the
     // radio will never report this back, and without the hook the setting only
@@ -6560,17 +6570,13 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
         std::isnan(m_alcGainDb) ? QVariant() : QVariant(m_alcGainDb));
     put("alcPeakDbfs", QStringLiteral("Post-ALC peak (dBFS)"),
         std::isnan(m_alcPeakDbfs) ? QVariant() : QVariant(m_alcPeakDbfs));
-    // The passband the modulator is running RIGHT NOW, which on any mode other
-    // than SSB voice is NOT the operator's stored pair — effectiveTxPassband()
-    // deliberately declines to apply a voice setting to CW or the digital modes.
-    // Reporting the stored pair here would explain nothing on exactly the modes
-    // where the two disagree.
+    // The passband last handed to the modulator, not one recomputed from the
+    // mode: a path that forgets to send it shows here instead of hiding (#7091).
+    // On modes other than SSB voice it is not the operator's stored pair.
     {
-        const Receiver* txRx = rx(m_txDdc);
-        const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
-        const auto [lo, hi] = effectiveTxPassband(txMode);
         put("txPassbandHz", QStringLiteral("TX passband in use (Hz)"),
-            QStringLiteral("%1 .. %2").arg(lo).arg(hi));
+            QStringLiteral("%1 .. %2").arg(m_txPassbandSentLowHz)
+                .arg(m_txPassbandSentHighHz));
         put("txPassbandFromOperator", QStringLiteral("TX passband is an operator override"),
             m_txFilterFromOperator);
     }
@@ -8031,6 +8037,9 @@ void Hl2Backend::pushInitialState()
                         defaultPassbandForMode(txRx->mode);
                     txRx->filterLowHz = pbLowHz;
                     txRx->filterHighHz = pbHighHz;
+                    // connectRadio() opened the modulator on the pre-restore
+                    // mode's passband, and setMode() below keeps it (#7091).
+                    pushTxPassband(txRx->mode);
                 }
                 if (m_restoredState.filterLowHz != 0.0
                     || m_restoredState.filterHighHz != 0.0) {

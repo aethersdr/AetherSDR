@@ -1566,6 +1566,69 @@ void testFixedOnOperatorSlotRefusesGestures()
     check(!pan.isEmpty(), "and the view is put back");
 }
 
+// B/S placement mirrors what setPanCenter()/setPanBandwidth() honor in each
+// scope mode, and a centred zoom lands the allocation on screen even when our
+// Fixed window is far from the VFO.
+void testZoomPlacementFollowsScopeMode()
+{
+    const auto last = [](const QSignalSpy& spy) {
+        return spy.isEmpty() ? PanZoomPlacement::Unknown
+                             : spy.last().at(1).value<PanZoomPlacement>();
+    };
+    {
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-705");
+        Access::scrollF(backend);   // scope started; the Center sweep below sets the mode
+        QSignalSpy placement(&backend, &IRadioBackend::panZoomPlacementChanged);
+        Access::deliver(backend, *scopeSweep(14'050'000, 25'000));
+        check(last(placement) == PanZoomPlacement::FitAroundCenter,
+              "Center mode zooms by span around the radio's centre");
+    }
+    {
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scrollF(backend);
+        QSignalSpy placement(&backend, &IRadioBackend::panZoomPlacementChanged);
+        Access::deliver(backend, frequencyEcho(14'050'000));
+        Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000));
+        check(last(placement) == PanZoomPlacement::CenterAllocation,
+              "SCROLL-F centres the allocation");
+    }
+    {
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scrollF(backend);
+        Access::fixedView(backend);
+        QSignalSpy placement(&backend, &IRadioBackend::panZoomPlacementChanged);
+        Access::deliver(backend, frequencyEcho(14'050'000));
+        Access::deliver(backend, *scopeEdgeSweep(14'000'000, 14'100'000, 0xB6, 0x01));
+        Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x01}));
+        check(last(placement) == PanZoomPlacement::Unavailable,
+              "a Fixed on the operator's slot 1 makes band/segment zoom unavailable");
+    }
+    {
+        IcomCivBackend backend;
+        Access::prepare(backend, "IC-7300MK2");
+        Access::scrollF(backend);
+        Access::fixedView(backend);
+        QSignalSpy placement(&backend, &IRadioBackend::panZoomPlacementChanged);
+        Access::deliver(backend, frame(cmd::kScope, scope::kEdgeNumber, {0x00, 0x04}));
+        Access::deliver(backend, frequencyEcho(14'050'000));
+        Access::deliver(backend, *scopeEdgeSweep(12'000'000, 13'000'000, 0xB6, 0x01));
+        check(last(placement) == PanZoomPlacement::CenterAllocation,
+              "our Fixed on slot 4 centres the allocation");
+        Access::forget(backend);
+        backend.setPanCenter(QStringLiteral("0"), 14'047'500.0, IRadioBackend::PanCenterIntent::Range);
+        backend.setPanBandwidth(QStringLiteral("0"), 45'000.0);
+        Access::settleScope(backend);
+        const auto edges = edgeWrites(Access::issued(backend));
+        check(edges.size() == 1 && edges.front().slot == 4
+                  && edges.front().lowerHz <= 14'025'000 && edges.front().upperHz >= 14'070'000
+                  && edges.front().upperHz - edges.front().lowerHz == 45'000,
+              "a centred zoom from a window at 12-13 MHz shows 14.025-14.070 MHz");
+    }
+}
+
 // An edge-pan that carries the VFO across an edge-range boundary takes the
 // window with it: the Drag centre is placed in the VFO's range, not the one on
 // screen. A pan drag (no VFO motion) still stops at the boundary.
@@ -1939,6 +2002,7 @@ int main(int argc, char** argv)
     testScrollFReselectsSlotOnRangeChange();
     testScrollFRefusalFallsBackToCenter();
     testFixedOnOperatorSlotRefusesGestures();
+    testZoomPlacementFollowsScopeMode();
     testScopeStartupInitialisesFromRadio();
     testScopeStartupKeepsTheOperatorsSlot();
     testRefusedTuneDropsItsQueuedWindow();

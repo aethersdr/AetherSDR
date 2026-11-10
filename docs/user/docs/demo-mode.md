@@ -20,7 +20,7 @@ Demo mode runs the full AetherSDR interface against a built-in simulator, so you
 ## Setup
 
 1. Open the **Connect to Radio** window (**File → Connect to Radio...**).
-2. On **On This Network**, the list includes **AetherSDR Demo**, labeled **"Simulator (not on the air)"**.
+2. Under **Nearby radios**, the list includes **AetherSDR Demo**, labeled **"Simulator (not on the air)"**.
 3. Select it and click **Connect Selected Radio**.
 
 The demo always sorts below real radios and is never chosen over one. There is no menu item or command-line flag; you connect to it like any radio.

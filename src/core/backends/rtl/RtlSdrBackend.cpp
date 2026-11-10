@@ -248,6 +248,9 @@ RadioCapabilities RtlSdrBackend::capabilities() const
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
     c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
+    // No Flex stream plane: receive audio is native and graphic EQ is host-side.
+    c.audioStreamControl = std::nullopt;
+    c.radioGraphicEqControl = std::nullopt;
     c.model  = m_modelName;
     c.manufacturer = m_vendor.isEmpty() ? QStringLiteral("Realtek") : m_vendor;
 
