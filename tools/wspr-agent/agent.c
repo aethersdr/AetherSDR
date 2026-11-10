@@ -76,10 +76,14 @@ int wsprd_main(int argc, char *argv[]);
 
 static volatile pid_t g_decoder;
 
+/* Set once the radio API exists: removes our slice and stream on the way out. */
+static void (*volatile g_term_hook)(void);
+
 static void on_term(int sig)
 {
     (void)sig;
     if (g_decoder > 0) kill(g_decoder, SIGKILL);
+    if (g_term_hook) g_term_hook();
     _exit(0);
 }
 
@@ -1248,7 +1252,101 @@ typedef struct {
     long long create_hz;  /* what we asked the next slice to be created at */
     unsigned handle;
     int lost;             /* our slice was removed: remake it now */
+    /* The slice index a previous run of ours saved, checked against the
+     * `sub slice all` dump only (want_dump is that request), -1 none. */
+    int orphan;
+    int want_dump;
 } api_t;
+
+/* ------------------------------------------------- our slice across restarts
+ *
+ * The radio keeps a slice after the client that made it is gone, so every
+ * restart of ours (container stop, update, reinstall, crash) used to leave one
+ * behind (#7139). On SIGTERM we remove our slice and stream ourselves. After a
+ * crash there is no SIGTERM, so the index we were given is saved, and at the
+ * next start that index is removed only if it still looks exactly like what
+ * we leave behind: no panadapter, no DAX channel, DIGU, on a WSPR dial. */
+
+static api_t *volatile g_api;
+
+/* Async-signal-safe: digits only, no stdio. */
+static size_t put_num(char *p, unsigned long v, unsigned base, int width)
+{
+    char t[24];
+    size_t n = 0;
+    do { t[n++] = "0123456789ABCDEF"[v % base]; v /= base; } while (v || (int)n < width);
+    for (size_t i = 0; i < n; i++) p[i] = t[n - 1 - i];
+    return n;
+}
+
+static size_t put_str(char *p, const char *s)
+{
+    size_t n = 0;
+    while (s[n]) { p[n] = s[n]; n++; }
+    return n;
+}
+
+/* Runs in the SIGTERM handler. The leading newline ends any command the
+ * signal interrupted, so ours start on a line of their own. */
+static void release_on_term(void)
+{
+    api_t *a = g_api;
+    if (!a || a->fd < 0 || a->slice < 0) return;
+    char out[96];
+    size_t n = 0;
+    out[n++] = '\n';
+    if (a->stream) {
+        n += put_str(out + n, "C9001|stream remove 0x");
+        n += put_num(out + n, a->stream, 16, 8);
+        out[n++] = '\n';
+    }
+    n += put_str(out + n, "C9002|slice remove ");
+    n += put_num(out + n, (unsigned long)a->slice, 10, 1);
+    out[n++] = '\n';
+    if (write(a->fd, out, n) < 0) return;
+}
+
+static void slice_file(char *path, size_t cap)
+{
+    snprintf(path, cap, "%s/slice", G.state_path);
+}
+
+static void save_slice_index(int index)
+{
+    if (!G.state_path[0]) return;
+    char path[540], tmp[550], text[16];
+    slice_file(path, sizeof path);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    int l = snprintf(text, sizeof text, "%d\n", index);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+    int ok = write(fd, text, (size_t)l) == l && fsync(fd) == 0;
+    close(fd);
+    if (!ok || rename(tmp, path)) unlink(tmp);
+}
+
+static int load_slice_index(void)
+{
+    if (!G.state_path[0]) return -1;
+    char path[540], text[16] = "";
+    slice_file(path, sizeof path);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    ssize_t k = read(fd, text, sizeof text - 1);
+    close(fd);
+    if (k <= 0) return -1;
+    text[k] = 0;
+    char *end;
+    long v = strtol(text, &end, 10);
+    return (end != text && v >= 0 && v < MAX_SLICES) ? (int)v : -1;
+}
+
+static int is_wspr_dial(long long hz)
+{
+    for (size_t i = 0; i < sizeof BANDS / sizeof BANDS[0]; i++)
+        if (llabs(BANDS[i].dial_hz - hz) < 2) return 1;
+    return 0;
+}
 
 static int api_send(api_t *a, const char *fmt, ...)
 {
@@ -1274,7 +1372,7 @@ static void api_introduce(api_t *a, int udp_port)
     api_send(a, "client udpport %d", udp_port);
     a->want_info = api_send(a, "info");
     api_send(a, "sub gps all");
-    api_send(a, "sub slice all");
+    a->want_dump = api_send(a, "sub slice all");
     /* 4.3.16 and later. Older firmware answers with an error and we simply
      * never see an ntp_sources status, leaving the kernel flag as the only
      * evidence, exactly as before this subscription existed. */
@@ -1285,6 +1383,7 @@ static int api_connect(api_t *a, int udp_port)
 {
     memset(a, 0, sizeof *a);
     a->slice = -1;
+    a->orphan = load_slice_index();
     struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(4992)};
     inet_pton(AF_INET, g_radio_addr, &sa.sin_addr);
     a->fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -1310,14 +1409,16 @@ static void make_slice(api_t *a, long long dial_hz, const char *ant, int dax)
     else a->want_slice = api_send(a, "slice create freq=%.6f mode=DIGU", dial_hz / 1e6);
 }
 
-/* Each cycle's retune, a band hop included. The mode goes with the tune every
- * time: a GUI client the radio reports as the slice's owner can change it (a
- * connecting AetherSDR set it to LSB, #7139), and a band change can recall
- * that band's mode. WSPR decodes only from DIGU. */
+/* Each cycle's retune, a band hop included. The mode and tx=0 go with the tune
+ * every time: a GUI client the radio reports as the slice's owner can change
+ * them (a connecting AetherSDR set it to LSB and made it its TX slice, #7139),
+ * and a band change can recall that band's mode. WSPR decodes only from DIGU,
+ * and this slice must never be the one that transmits. */
 static void retune_slice(api_t *a, long long dial_hz, const char *ant)
 {
     api_send(a, "slice tune %d %.6f", a->slice, dial_hz / 1e6);
     api_send(a, "slice set %d mode=DIGU", a->slice);
+    api_send(a, "slice set %d tx=0", a->slice);
     if (ant[0]) api_send(a, "slice set %d rxant=%s", a->slice, ant);
 }
 
@@ -1355,6 +1456,7 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             a->want_slice = 0;
             if (code) { logf_("slice create refused: %08lx %s", code, msg); return; }
             a->slice = atoi(msg);
+            save_slice_index(a->slice);
             api_send(a, "slice set %d tx=0", a->slice);
             api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
             a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
@@ -1372,6 +1474,11 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             a->stream = (unsigned)strtoul(msg, NULL, 16);
             pthread_mutex_lock(&G.mu); G.stream_ok = 1; pthread_mutex_unlock(&G.mu);
             logf_("DAX audio stream 0x%08x", a->stream);
+        } else if (seq == a->want_dump) {
+            /* Every open slice's status came before this reply; later
+             * statuses are not a leftover of ours. */
+            a->want_dump = 0;
+            a->orphan = -1;
         }
         return;
     }
@@ -1418,6 +1525,24 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             field(body, "RF_frequency=", mhz, sizeof mhz);
             if (mhz[0]) a->rf_hz[index] = llround(atof(mhz) * 1e6);
             if (strstr(body, " in_use=0")) a->rf_hz[index] = 0;
+        }
+        if (index == a->orphan && index != a->slice && strstr(body, " in_use=1")) {
+            /* The one full status for the index a previous run of ours saved.
+             * Removed only if it is exactly what we leave behind; anything
+             * else is someone's slice now, and stays. */
+            char pan[16], dax[8], mode[12], mhz[24];
+            field(body, " pan=", pan, sizeof pan);
+            field(body, " dax=", dax, sizeof dax);
+            field(body, " mode=", mode, sizeof mode);
+            field(body, "RF_frequency=", mhz, sizeof mhz);
+            a->orphan = -1;
+            if (!strcmp(pan, "0x00000000") && !strcmp(dax, "0") && !strcmp(mode, "DIGU")
+                && mhz[0] && is_wspr_dial(llround(atof(mhz) * 1e6))) {
+                api_send(a, "slice remove %d", index);
+                logf_("removed slice %d, left on %s MHz by an earlier run of ours", index, mhz);
+            } else {
+                logf_("slice %d is not ours any more; leaving it", index);
+            }
         }
         if (index != a->slice) return;
         /* The radio removes headless slices when its last GUI client
@@ -1617,6 +1742,7 @@ static int selftest_radio_lines(void)
     memset(&a, 0, sizeof a);
     a.fd = p[1];
     a.slice = 0;
+    a.orphan = -1;
     config_t c;
     config_default(&c);
     char l[160];
@@ -1878,8 +2004,18 @@ static int selftest_save_failure(void)
     return 0;
 }
 
-/* Every retune puts the slice back in DIGU, after the tune, with or without an
- * antenna. Driven through the real sender over a socketpair. */
+/* What a socketpair's far end received, as one string. */
+static void drain_wire(int fd, char *wire, size_t cap)
+{
+    size_t n = 0;
+    ssize_t k;
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+    while (n + 1 < cap && (k = read(fd, wire + n, cap - 1 - n)) > 0) n += (size_t)k;
+    wire[n] = 0;
+}
+
+/* Every retune puts the slice back in DIGU and off TX, after the tune, with or
+ * without an antenna. Driven through the real sender over a socketpair. */
 static int selftest_retune_mode(void)
 {
     int sv[2];
@@ -1888,16 +2024,134 @@ static int selftest_retune_mode(void)
     memset(&a, 0, sizeof a);
     a.fd = sv[0];
     a.slice = 3;
+    a.orphan = -1;
     retune_slice(&a, 14095600, "");
     retune_slice(&a, 21094600, "ANT2");
+    char wire[512];
+    drain_wire(sv[1], wire, sizeof wire);
     close(sv[0]);
-    char wire[512] = "";
-    ssize_t k = read(sv[1], wire, sizeof wire - 1);
     close(sv[1]);
-    if (k > 0) wire[k] = 0;
-    const char *want = "C1|slice tune 3 14.095600\nC2|slice set 3 mode=DIGU\n"
-                       "C3|slice tune 3 21.094600\nC4|slice set 3 mode=DIGU\nC5|slice set 3 rxant=ANT2\n";
-    if (strcmp(wire, want)) { printf("selftest FAIL: a retune does not put the slice back in DIGU:\n%s", wire); return 1; }
+    const char *want = "C1|slice tune 3 14.095600\nC2|slice set 3 mode=DIGU\nC3|slice set 3 tx=0\n"
+                       "C4|slice tune 3 21.094600\nC5|slice set 3 mode=DIGU\nC6|slice set 3 tx=0\n"
+                       "C7|slice set 3 rxant=ANT2\n";
+    if (strcmp(wire, want)) { printf("selftest FAIL: a retune does not put the slice back in DIGU, off TX:\n%s", wire); return 1; }
+    return 0;
+}
+
+/* SIGTERM removes our stream and slice, each on a line of its own even when
+ * the signal cut a command short; with no slice it sends nothing. */
+static int selftest_release_on_term(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = sv[0];
+    a.slice = 3;
+    a.stream = 0x04000008;
+    a.orphan = -1;
+    g_api = &a;
+    release_on_term();
+    a.stream = 0;
+    a.slice = 12;
+    release_on_term();
+    a.slice = -1;
+    release_on_term();
+    g_api = NULL;
+    char wire[256];
+    drain_wire(sv[1], wire, sizeof wire);
+    close(sv[0]);
+    close(sv[1]);
+    const char *want = "\nC9001|stream remove 0x04000008\nC9002|slice remove 3\n"
+                       "\nC9002|slice remove 12\n";
+    if (strcmp(wire, want)) { printf("selftest FAIL: SIGTERM does not release our slice:\n%s", wire); return 1; }
+    return 0;
+}
+
+/* At start, the saved index is removed only when its status in the
+ * `sub slice all` dump is exactly what we leave behind. Any other slice at
+ * that index, or any status after the dump's reply, is left alone. */
+static int selftest_orphan(void)
+{
+    static const struct { const char *line; int removed; const char *why; } cases[] = {
+        {"S1|slice 2 in_use=1 RF_frequency=18.104600 client_handle=0x4EAD1E55 pan=0x00000000 dax=0 mode=DIGU rxant=ANT1", 1,
+         "what a removed receiver left (measured 2026-11-10)"},
+        {"S1|slice 2 in_use=1 RF_frequency=18.104600 client_handle=0x4EAD1E55 pan=0x40000000 dax=0 mode=DIGU", 0,
+         "on a GUI's panadapter"},
+        {"S1|slice 2 in_use=1 RF_frequency=18.104600 client_handle=0x4EAD1E55 pan=0x00000000 dax=4 mode=DIGU", 0,
+         "with a DAX channel"},
+        {"S1|slice 2 in_use=1 RF_frequency=18.104600 client_handle=0x4EAD1E55 pan=0x00000000 dax=0 mode=LSB", 0,
+         "in another mode"},
+        {"S1|slice 2 in_use=1 RF_frequency=18.110000 client_handle=0x4EAD1E55 pan=0x00000000 dax=0 mode=DIGU", 0,
+         "off every WSPR dial"},
+        {"S1|slice 3 in_use=1 RF_frequency=18.104600 client_handle=0x4EAD1E55 pan=0x00000000 dax=0 mode=DIGU", 0,
+         "at another index"},
+    };
+    config_t c;
+    config_default(&c);
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        int sv[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
+        api_t a;
+        memset(&a, 0, sizeof a);
+        a.fd = sv[0];
+        a.slice = -1;
+        a.orphan = 2;
+        a.want_dump = 7;
+        a.seq = 20;
+        char l[200];
+        snprintf(l, sizeof l, "%s", cases[i].line);
+        api_line(&a, l, &c);
+        char wire[128];
+        drain_wire(sv[1], wire, sizeof wire);
+        close(sv[0]);
+        close(sv[1]);
+        int removed = !strcmp(wire, "C21|slice remove 2\n");
+        if (removed != cases[i].removed || (!removed && wire[0])) {
+            printf("selftest FAIL: orphan check, slice %s: sent \"%s\"\n", cases[i].why, wire);
+            return 1;
+        }
+    }
+    /* After the dump's reply, the same leftover is not touched. */
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = sv[0];
+    a.slice = -1;
+    a.orphan = 2;
+    a.want_dump = 7;
+    char r[] = "R7|0|", l[200];
+    api_line(&a, r, &c);
+    snprintf(l, sizeof l, "%s", cases[0].line);
+    api_line(&a, l, &c);
+    char wire[128];
+    drain_wire(sv[1], wire, sizeof wire);
+    close(sv[0]);
+    close(sv[1]);
+    if (wire[0] || a.orphan != -1) { printf("selftest FAIL: orphan check ran after the dump: \"%s\"\n", wire); return 1; }
+    return 0;
+}
+
+/* The saved index survives a restart; a missing or bad file means none. */
+static int selftest_slice_file(void)
+{
+    char dir[400], path[540];
+    if (snprintf(dir, sizeof dir, "%s/slicefile", g_work) >= (int)sizeof dir) return 1;
+    mkdir(dir, 0700);
+    snprintf(G.state_path, sizeof G.state_path, "%s", dir);
+    slice_file(path, sizeof path);
+    unlink(path);
+    int none = load_slice_index();
+    save_slice_index(5);
+    int five = load_slice_index();
+    int fd = open(path, O_WRONLY | O_TRUNC);
+    if (fd >= 0) { if (write(fd, "x\n", 2) != 2) none = 99; close(fd); }
+    int bad = load_slice_index();
+    unlink(path);
+    rmdir(dir);
+    G.state_path[0] = 0;
+    if (none != -1 || five != 5 || bad != -1) { printf("selftest FAIL: slice file %d %d %d\n", none, five, bad); return 1; }
     return 0;
 }
 
@@ -1920,7 +2174,8 @@ static int selftest(double snr_db)
 {
     if (selftest_persistence() || selftest_spots() || selftest_upload_off()
         || selftest_busy_cycle() || selftest_radio_lines() || selftest_ntp_fallback()
-        || selftest_save_failure() || selftest_retune_mode()) return 1;
+        || selftest_save_failure() || selftest_retune_mode() || selftest_release_on_term()
+        || selftest_orphan() || selftest_slice_file()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
         if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
     if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }
@@ -2161,7 +2416,9 @@ int main(int argc, char *argv[])
     d.qdat = qdat;
     dsp_reset(&d);
 
-    api_t a = {.fd = -1, .slice = -1};
+    api_t a = {.fd = -1, .slice = -1, .orphan = -1};
+    g_api = &a;
+    g_term_hook = release_on_term;
     decode_t dc = {.pid = 0, .fd = -1};
     long long capture_t = 0;   /* cycle being recorded, 0 none */
     long long capture_dial = 0; /* what it was tuned to when it started: */
