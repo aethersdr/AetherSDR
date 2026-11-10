@@ -44,11 +44,13 @@ void FlexBackend::decodeAudioStreamStatus(const QString& object, const QMap<QStr
     }
     const bool iqChannel = kvs.contains(QStringLiteral("daxiq_channel"));
     const QString channelKey = iqChannel ? QStringLiteral("daxiq_channel") : QStringLiteral("dax_channel");
+    // A channel outside 1..8 (1..4 for IQ) says nothing about who owns the
+    // stream; like FlexLib v4.3.16 (DAXRXAudioStream.cs:213), skip the field
+    // and keep the known channel.
     if (kvs.contains(channelKey)) {
         bool valid = false;
         const int channel = kvs.value(channelKey).toInt(&valid);
         if (valid && channel >= 1 && channel <= (iqChannel ? 4 : 8)) { delta.channel = channel; }
-        else { delta.invalidOwner = true; }
     }
     emit audioStreamChanged(delta);
 }

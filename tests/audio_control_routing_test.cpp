@@ -134,6 +134,13 @@ void identityAndReplies()
         f.stream(0x100);
         check(!old.permits(), "A/B/A ownership never revives an already queued mutation");
     }
+    for (const QString& channel : {QStringLiteral("0"), QStringLiteral("9"), QStringLiteral("x")}) {
+        AudioFixture f;
+        f.stream(0x100);
+        f.status(QStringLiteral("stream 0x100"), {{"type", "dax_iq"}, {"client_handle", "0x71"}, {"daxiq_channel", channel}});
+        check(f.radio.requestAudioStream({AudioStreamKind::Iq, AudioStreamAction::Remove, 0x100, 1})
+            == ReceiveDispatch::Dispatched, "an unusable channel value leaves our stream's identity and ownership intact");
+    }
     for (const QString& owner : {QStringLiteral("0x72"), QStringLiteral("broken"), QStringLiteral("0x0")}) {
         AudioFixture f;
         f.stream(0x100, QStringLiteral("dax_iq"), owner);
