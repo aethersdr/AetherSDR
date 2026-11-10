@@ -185,6 +185,69 @@ int main()
     report("license feature name matches FlexLib's digital_voice_keyer",
            QString(kDvkLicenseFeature) == QStringLiteral("digital_voice_keyer"));
 
+    // One session on a radio that reports its DVK enabled but refuses every dvk
+    // command with 50004001 (#6262), keyer source Automatic (#7152). Nothing
+    // sent at connect detects the refusal: `sub dvk all` is the only dvk
+    // command then, and its reply is not examined. So the first DVK action of
+    // each session still goes to the radio and is refused; that refusal moves
+    // Automatic to Local, and a disconnect clears it, so the next session
+    // starts on the radio again.
+    {
+        using S = VoiceKeyerSourceSetting;
+        using R = VoiceKeyerSource;
+        const bool hasKeyer = true;
+        const bool canTransmit = true;
+        // The licence status this radio sends, if it sends one: enabled.
+        for (const bool licenseSeen : {false, true}) {
+            const bool licenseEnabled = licenseSeen;
+
+            // Connected, nothing refused yet: Automatic is on the radio DVK and
+            // nothing blocks it, so the first F-key or REC goes to the radio.
+            const R atConnect = resolveVoiceKeyerSource(S::Auto, hasKeyer, licenseSeen,
+                                                        licenseEnabled, false);
+            const bool firstActionGoesToRadio =
+                atConnect == R::Radio
+                && voiceKeyerIndicatorBlocker(atConnect, true, licenseSeen, licenseEnabled,
+                                              false) == B::None
+                && voiceKeyerUsable(atConnect, hasKeyer, canTransmit);
+
+            // The radio refuses it: Automatic moves to Local, which nothing
+            // blocks, so the panel drives the local keyer with no stuck message.
+            const R afterRefusal = resolveVoiceKeyerSource(S::Auto, hasKeyer, licenseSeen,
+                                                           licenseEnabled, true);
+            const bool movesToLocal =
+                afterRefusal == R::Local
+                && voiceKeyerIndicatorBlocker(afterRefusal, true, licenseSeen, licenseEnabled,
+                                              true) == B::None
+                && voiceKeyerUsable(afterRefusal, hasKeyer, canTransmit)
+                && voiceKeyerPanelUnavailableReason(afterRefusal, hasKeyer, canTransmit,
+                                                    licenseSeen, licenseEnabled, true)
+                       .isEmpty();
+
+            // Disconnect clears the refusal (DvkModel::reset): the next
+            // session starts on the radio DVK again.
+            const bool nextSessionOnRadio =
+                resolveVoiceKeyerSource(S::Auto, hasKeyer, licenseSeen, licenseEnabled, false)
+                == R::Radio;
+
+            report(licenseSeen
+                       ? "auto_session_refusing_radio_reported_licensed_first_action_then_local"
+                       : "auto_session_refusing_radio_no_licence_report_first_action_then_local",
+                   firstActionGoesToRadio && movesToLocal && nextSessionOnRadio);
+        }
+
+        // With Radio chosen explicitly the refusal never moves the keyer: the
+        // panel stays on the radio DVK, blocked, and names the way out.
+        const R forced = resolveVoiceKeyerSource(S::Radio, true, false, false, true);
+        report("forced_radio_after_refusal_stays_blocked_with_a_reason",
+               forced == R::Radio
+                   && voiceKeyerIndicatorBlocker(forced, true, false, false, true)
+                          == B::NotLicensed
+                   && voiceKeyerPanelUnavailableReason(forced, true, true, false, false, true)
+                          == QStringLiteral(
+                              "Radio DVK not licensed (SmartSDR+). Choose Local with ⚙."));
+    }
+
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

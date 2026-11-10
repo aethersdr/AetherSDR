@@ -1801,7 +1801,8 @@ void MainWindow::showVoiceKeyerSourceMenu(const QPoint& globalPos)
                                VoiceKeyerSourceSetting::Auto,
                                m_radioModel.hasVoiceKeyer(),
                                m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
-                               m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature))
+                               m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
+                               m_radioModel.dvkLicenseRefused())
                            == VoiceKeyerSource::Local;
 
     QMenu menu(this);

@@ -47,7 +47,7 @@ When the window is short, scroll the list of recording slots; the panel title, s
 
 Click the **⚙** button at the right end of the panel title. From the keyboard, Tab to it and press Space or Enter. A menu opens with these choices:
 
-- **Automatic by radio licence** — the default. Uses the Radio DVK when the radio has one and has not reported that SmartSDR+ is missing, and Local otherwise. The menu shows which one it picks on this radio, for example `(now: Local)`.
+- **Automatic by radio licence** — the default. Uses the Radio DVK when the radio has one and has not reported that SmartSDR+ is missing, and Local otherwise. A radio that refuses a DVK command with the SmartSDR+ error counts as reporting it, and Automatic switches to Local once anything recording or playing has ended. The menu shows which one it picks on this radio, for example `(now: Local)`.
 - **Radio DVK — recordings on the radio** — grayed out, with the reason, on a radio with no voice keyer or no SmartSDR+.
 - **Local — recordings on this computer**.
 - **Open Local Recordings Folder** — opens the folder the local recordings are kept in.

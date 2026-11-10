@@ -30,35 +30,50 @@ int main()
     using S = VoiceKeyerSourceSetting;
     using R = VoiceKeyerSource;
 
-    // Arguments are (setting, radioHasKeyer, licenceSeen, licenceEnabled).
+    // Arguments are (setting, radioHasKeyer, licenceSeen, licenceEnabled,
+    // radioRefused).
 
     // Auto follows the licence once the radio has reported it.
     report("auto_licensed_uses_radio",
-           resolveVoiceKeyerSource(S::Auto, true, true, true) == R::Radio);
+           resolveVoiceKeyerSource(S::Auto, true, true, true, false) == R::Radio);
     report("auto_unlicensed_uses_local",
-           resolveVoiceKeyerSource(S::Auto, true, true, false) == R::Local);
+           resolveVoiceKeyerSource(S::Auto, true, true, false, false) == R::Local);
 
     // Before the radio reports the entitlement, stay on the radio DVK (fail
     // open, like the indicator) — an unknown licence is not a missing one.
     report("auto_unknown_licence_stays_on_radio",
-           resolveVoiceKeyerSource(S::Auto, true, false, false) == R::Radio,
-           name(resolveVoiceKeyerSource(S::Auto, true, false, false)));
+           resolveVoiceKeyerSource(S::Auto, true, false, false, false) == R::Radio,
+           name(resolveVoiceKeyerSource(S::Auto, true, false, false, false)));
 
     // A radio with no DVK at all has nothing for Auto to fall back to, whatever
     // the licence says — an HL2 or an Icom reports no entitlement because it has
     // no DVK, not because one is switched off. Picking Radio there left the
     // feature unreachable on every non-Flex radio.
     report("auto_on_a_radio_without_a_dvk_uses_local",
-           resolveVoiceKeyerSource(S::Auto, false, false, false) == R::Local,
-           name(resolveVoiceKeyerSource(S::Auto, false, false, false)));
+           resolveVoiceKeyerSource(S::Auto, false, false, false, false) == R::Local,
+           name(resolveVoiceKeyerSource(S::Auto, false, false, false, false)));
     report("auto_on_a_radio_without_a_dvk_ignores_a_licensed_report",
-           resolveVoiceKeyerSource(S::Auto, false, true, true) == R::Local);
+           resolveVoiceKeyerSource(S::Auto, false, true, true, false) == R::Local);
+
+    // A 50004001 refusal is the radio saying no as well (#6262): a refusing
+    // radio still reports the DVK enabled and may never send the licence
+    // status, so Auto must leave the radio DVK on the refusal alone.
+    report("auto_refused_with_no_licence_report_uses_local",
+           resolveVoiceKeyerSource(S::Auto, true, false, false, true) == R::Local,
+           name(resolveVoiceKeyerSource(S::Auto, true, false, false, true)));
+    report("auto_refused_while_reported_licensed_uses_local",
+           resolveVoiceKeyerSource(S::Auto, true, true, true, true) == R::Local,
+           name(resolveVoiceKeyerSource(S::Auto, true, true, true, true)));
+    // An explicit Radio choice is never overridden, refusal or not: the panel
+    // says why it cannot run and offers Local instead.
+    report("forced_radio_survives_a_refusal",
+           resolveVoiceKeyerSource(S::Radio, true, false, false, true) == R::Radio);
 
     // An explicit choice wins over the licence either way.
     report("forced_local_on_licensed_radio",
-           resolveVoiceKeyerSource(S::Local, true, true, true) == R::Local);
+           resolveVoiceKeyerSource(S::Local, true, true, true, false) == R::Local);
     report("forced_radio_on_unlicensed_radio",
-           resolveVoiceKeyerSource(S::Radio, true, true, false) == R::Radio);
+           resolveVoiceKeyerSource(S::Radio, true, true, false, false) == R::Radio);
 
     // Persisted text round-trips; anything unrecognised is Auto.
     report("setting_names_round_trip",
