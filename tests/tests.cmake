@@ -6628,6 +6628,16 @@ target_compile_definitions(automation_tracedebug_bins_test PRIVATE
 target_link_libraries(automation_tracedebug_bins_test PRIVATE aethercore Qt6::Widgets)
 add_test(NAME automation_tracedebug_bins_test COMMAND automation_tracedebug_bins_test)
 set_tests_properties(automation_tracedebug_bins_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# `get tracedebug <pan> bins` across Receive Sync on/off, pan and zoom (#6720):
+# real ReceivePresentationSync, queue, FrameCapture and bridge; no socket.
+add_executable(tracedebug_bins_held_frame_scenario_test
+    tests/tracedebug_bins_held_frame_scenario_test.cpp
+)
+target_include_directories(tracedebug_bins_held_frame_scenario_test PRIVATE src)
+target_link_libraries(tracedebug_bins_held_frame_scenario_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME tracedebug_bins_held_frame_scenario_test COMMAND tracedebug_bins_held_frame_scenario_test)
+set_tests_properties(tracedebug_bins_held_frame_scenario_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(automation_device_diagnostics_test
     tests/automation_device_diagnostics_test.cpp
@@ -11093,6 +11103,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_ping_build_identity_test
     automation_gauge_verb_test
     automation_tracedebug_bins_test
+    tracedebug_bins_held_frame_scenario_test
     automation_persist_diagnostics_test
     automation_server_gesture_test
     automation_device_diagnostics_test
