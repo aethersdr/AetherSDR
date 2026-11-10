@@ -1528,8 +1528,14 @@ bool MetisClient::txIqPrimeHolds()
     // queued-IQ arm counts.
     if (m_txIq.empty())
         return false;
+    // Read here, not at arming: the key edge arms the prime before the first
+    // block says whether this over's audio is client-leveled.
+    const bool client = m_txClientLeveledMargin.load(std::memory_order_relaxed);
+    if (client)
+        m_txIqPrimeTarget = std::max(m_txIqPrimeTarget, kTxPrimeClientTargetSamples);
     const bool reached = m_txIq.size() >= m_txIqPrimeTarget;
-    const bool expired = m_txIqPrimeHeldPackets >= kTxPrimeMaxHoldPackets;
+    const bool expired = m_txIqPrimeHeldPackets
+        >= (client ? kTxPrimeClientMaxHoldPackets : kTxPrimeMaxHoldPackets);
     if (!reached && !expired) {
         ++m_txIqPrimeHeldPackets;
         ++m_txPrimeHoldPackets;

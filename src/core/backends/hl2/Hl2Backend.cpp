@@ -5398,6 +5398,10 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
     // mic-capture gate or adding an engine feed must re-check these fences.
     m_txAudioClientLeveled =
         m_txAudioClientLeveled || (source == TxAudioSource::ClientLeveled);
+    // Before the block is queued to the modulator, so the prime sees the
+    // larger TCI/DAX margin by the time this audio reaches the wire.
+    if (m_metis)
+        m_metis->setTxClientLeveledMargin(source == TxAudioSource::ClientLeveled);
     // The unkey diagnostic must not tell a WSPR beacon to raise its mic gain.
     // Engine-generated audio has no mic slider in its path at all now, so
     // "raise mic gain" would point at a control that cannot move it.

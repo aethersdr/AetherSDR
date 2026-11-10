@@ -407,6 +407,14 @@ public:
     // belongs to the transmission that just ended.
     Q_INVOKABLE void flushTxIq();
     [[nodiscard]] std::size_t txQueueDepth() const noexcept { return m_txIq.size(); }
+    // Client-leveled (TCI/DAX) transmit audio crosses more threads than the
+    // microphone before it reaches this queue, and arrives with more jitter.
+    // While set, the prime holds kTxPrimeClientMarginBlocks instead of
+    // kTxPrimeMarginBlocks. Any thread; read on the I/O thread.
+    void setTxClientLeveledMargin(bool on) noexcept
+    {
+        m_txClientLeveledMargin.store(on, std::memory_order_relaxed);
+    }
 
     // TX IQ FIFO fault accounting. The FIFO is bounded at kTxQueueMax: overflow drops
     // the oldest samples, underflow zero-fills (ep2WriteTxIq). These count, they do
@@ -853,6 +861,18 @@ private:
             / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeTargetSamples < kTxQueueMax,
                   "the prime target must fit below the overflow bound");
+    // TCI/DAX audio: six blocks (128 ms). On a Hermes-Lite 2 the TCI path
+    // measured mid-over starvations of 1-49 EP2 packets (up to 128 ms) with
+    // the two-block margin, against a steady client and an on-time TCI clock.
+    static constexpr std::size_t kTxPrimeClientMarginBlocks = 6;
+    static constexpr std::size_t kTxPrimeClientTargetSamples =
+        (kTxPrimeClientMarginBlocks + 1) * kTxPrimeBlockSamples;
+    static constexpr std::uint64_t kTxPrimeClientMaxHoldPackets =
+        (2 * kTxPrimeClientMarginBlocks * kTxPrimeBlockSamples)
+            / static_cast<std::size_t>(kTxSamplesPerPacket);
+    static_assert(kTxPrimeClientTargetSamples < kTxQueueMax,
+                  "the client prime target must fit below the overflow bound");
+    std::atomic<bool> m_txClientLeveledMargin{false};
     std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally
     std::uint64_t m_txIqPrimeHeldPackets = 0;   // this hold, for the deadline
     std::uint64_t m_txPrimeHoldPackets = 0;     // process total
