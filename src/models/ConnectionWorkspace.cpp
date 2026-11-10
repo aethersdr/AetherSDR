@@ -75,8 +75,7 @@ bool validate(const QJsonObject& document, QString* error)
                 return fail(error, QStringLiteral("Invalid audio device identity."));
             }
         }
-        const QStringList layouts{"1", "2v", "2h", "2h1", "12h", "3v", "2x2", "4v", "3h2", "2x3", "4h3", "2x4"};
-        if (!layouts.contains(preferences.value("layout").toString())) {
+        if (!ConnectionWorkspace::operatorLayouts().contains(preferences.value("layout").toString())) {
             return fail(error, QStringLiteral("Invalid operator layout."));
         }
     }
@@ -161,12 +160,20 @@ QJsonObject ConnectionWorkspace::defaultOperatorPreferences()
     return {{"inputDeviceId", ""}, {"outputDeviceId", ""}, {"layout", "1"}};
 }
 
+const QStringList& ConnectionWorkspace::operatorLayouts()
+{
+    static const QStringList layouts{"1", "2v", "2h", "2h1", "12h", "3v", "2x2", "4v", "3h2", "2x3", "4h3", "2x4"};
+    return layouts;
+}
+
 QJsonObject ConnectionWorkspace::captureOperatorPreferences()
 {
     const AppSettings& settings = AppSettings::instance();
+    // An unknown saved layout must not make the whole document invalid.
+    const QString layout = settings.value("PanadapterLayout", "1").toString();
     return {{"inputDeviceId", QString::fromLatin1(settings.value("AudioInputDeviceId").toByteArray().toBase64())},
             {"outputDeviceId", QString::fromLatin1(settings.value("AudioOutputDeviceId").toByteArray().toBase64())},
-            {"layout", settings.value("PanadapterLayout", "1").toString()}};
+            {"layout", ConnectionWorkspace::operatorLayouts().contains(layout) ? layout : QStringLiteral("1")}};
 }
 
 QString ConnectionWorkspace::accountId(const QString& email)
@@ -256,7 +263,8 @@ QJsonObject ConnectionWorkspace::load()
     QJsonArray accounts;
     const QString email = QString::fromUtf8(QByteArray::fromBase64(
         settings.value("SmartLinkEmail").toString().toUtf8()));
-    // A legacy refresh token can exist without an email; keep its reference.
+    // Signing in always wrote SmartLinkEmail, so it marks prior SmartLink use;
+    // the legacy account keeps the existing refresh-token key.
     if (settings.contains("SmartLinkEmail")) {
         accounts.append(QJsonObject{{"id", "legacy"}, {"name", email.isEmpty() ? QStringLiteral("SmartLink account") : email.left(128)},
                                    {"email", email}});

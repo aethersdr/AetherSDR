@@ -1043,6 +1043,11 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
     connect(dialog, &QObject::destroyed, this, [this, dialog] {
         if (m_reconnectDlg == dialog)
             m_reconnectDlg = nullptr;
+        // Dismissed without Reconnect: release the SmartLink account.
+        if (m_userDisconnected && !m_radioModel.isConnected()) {
+            m_smartLink.setAccountLocked(false);
+            m_pendingWanRadio = {};
+        }
     });
 
     connect(quit, &QPushButton::clicked, this, [this, dialog] {

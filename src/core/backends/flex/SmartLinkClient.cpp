@@ -168,40 +168,49 @@ void SmartLinkClient::loginWithRefreshToken(const QString& refreshToken)
     m_authReply = reply;
     connect(reply, &QNetworkReply::finished, this, [this, reply, generation] {
         reply->deleteLater();
-        if (generation != m_authGeneration) { return; }
-        m_authReply.clear();
-        m_authRequestInProgress = false;
-
-        if (reply->error() != QNetworkReply::NoError) {
-            const auto data = reply->readAll();
-            QJsonObject err = QJsonDocument::fromJson(data).object();
-            QString desc = err.value("error_description").toString(reply->errorString());
-            qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 refresh failed:" << desc;
-            resetAuthentication();
-            emit authFailed(desc);
-            return;
-        }
-
-        const auto data = reply->readAll();
-        QJsonObject resp = QJsonDocument::fromJson(data).object();
-        m_idToken = resp.value("id_token").toString();
-        // Auth0 may return a new refresh token
-        QString newRefresh = resp.value("refresh_token").toString();
-        if (!newRefresh.isEmpty())
-            m_refreshToken = newRefresh;
-
-        if (m_idToken.isEmpty()) {
-            resetAuthentication();
-            emit authFailed("No id_token in refresh response");
-            return;
-        }
-
-        qCDebug(lcSmartLink) << "SmartLinkClient: Auth0 refresh successful";
-        m_authenticated = true;
-        saveCredentials();
-        emit authenticated();
-        connectToServer();
+        finishRefreshReply(reply, generation);
     });
+}
+
+void SmartLinkClient::finishRefreshReply(QNetworkReply* reply, quint64 generation)
+{
+    if (generation != m_authGeneration) { return; }
+    m_authReply.clear();
+    m_authRequestInProgress = false;
+
+    if (reply->error() != QNetworkReply::NoError) {
+        const auto data = reply->readAll();
+        QJsonObject err = QJsonDocument::fromJson(data).object();
+        QString desc = err.value("error_description").toString(reply->errorString());
+        qCWarning(lcSmartLink) << "SmartLinkClient: Auth0 refresh failed:" << desc;
+        // Only an Auth0 answer invalidates the token; a transport failure keeps
+        // it so the next reconnect can retry.
+        if (reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).isValid()) {
+            resetAuthentication();
+        }
+        emit authFailed(desc);
+        return;
+    }
+
+    const auto data = reply->readAll();
+    QJsonObject resp = QJsonDocument::fromJson(data).object();
+    m_idToken = resp.value("id_token").toString();
+    // Auth0 may return a new refresh token
+    QString newRefresh = resp.value("refresh_token").toString();
+    if (!newRefresh.isEmpty())
+        m_refreshToken = newRefresh;
+
+    if (m_idToken.isEmpty()) {
+        resetAuthentication();
+        emit authFailed("No id_token in refresh response");
+        return;
+    }
+
+    qCDebug(lcSmartLink) << "SmartLinkClient: Auth0 refresh successful";
+    m_authenticated = true;
+    saveCredentials();
+    emit authenticated();
+    connectToServer();
 }
 
 void SmartLinkClient::logout()
@@ -271,11 +280,16 @@ void SmartLinkClient::saveCredentials()
 
 void SmartLinkClient::clearCredentials()
 {
-    m_sessionCredentials.remove(m_accountId);
+    forgetAccount(m_accountId);
+}
+
+void SmartLinkClient::forgetAccount(const QString& id)
+{
+    m_sessionCredentials.remove(id);
 #ifdef HAVE_KEYCHAIN
     auto* job = new QKeychain::DeletePasswordJob("AetherSDR");
     job->setAutoDelete(true);
-    job->setKey(SettingsCredentialPolicy::smartLinkCredentialKey(m_accountId));
+    job->setKey(SettingsCredentialPolicy::smartLinkCredentialKey(id));
     job->setInsecureFallback(false);
     connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
         if (j->error() != QKeychain::NoError && j->error() != QKeychain::EntryNotFound)
@@ -285,7 +299,7 @@ void SmartLinkClient::clearCredentials()
     });
     job->start();
 #endif
-    if (m_accountId == QLatin1String("legacy")) {
+    if (id == QLatin1String("legacy")) {
         AppSettings::instance().remove("SmartLinkEmail");
         AppSettings::instance().save();
     }

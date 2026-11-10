@@ -135,6 +135,8 @@ public slots:
     void setSmartLinkClient(SmartLinkClient* client);
     QJsonObject workspaceSnapshot() const;
     bool applyWorkspaceOperator();
+    // Operator switches re-point TX audio, so they wait while transmitting.
+    void setTransmittingProbe(std::function<bool()> probe) { m_transmitting = std::move(probe); }
     bool selectWorkspaceProfile(const QString& collection, const QString& id, QString* error = nullptr);
     QJsonObject automationConnectionProfiles() const override { return workspaceSnapshot(); }
     bool automationSelectConnectionProfile(const QString& collection, const QString& id, QString* error) override
@@ -273,6 +275,10 @@ private:
     QString formatWanRadioLabel(const WanRadioInfo& radio) const;
     void buildWorkspace(QVBoxLayout* root);
     void importAddressHistory();
+    void updateOperatorWarning();
+    QJsonObject savedManualPath(const QString& host, const QString& family) const;
+    QString operatorSwitchBlocked() const;
+    std::function<bool()> m_transmitting;
     void refreshWorkspace();
     void refreshWorkspaceDetails();
     bool persistWorkspace(const QJsonObject& document);

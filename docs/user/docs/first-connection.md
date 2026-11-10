@@ -70,7 +70,7 @@ If your radio is on a different subnet or behind a VPN, discovery cannot see it.
 
 ### SmartLink (remote operation)
 
-Choose **SmartLink accounts…** to reach a FlexRadio over the internet. See [SmartLink Setup](./smartlink-setup.md).
+Choose **Accounts…** (SmartLink accounts) to reach a FlexRadio over the internet. See [SmartLink Setup](./smartlink-setup.md).
 
 ## Known issues
 

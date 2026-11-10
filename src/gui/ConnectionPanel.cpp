@@ -94,7 +94,7 @@ public:
         auto* combo = qobject_cast<QComboBox*>(watched);
         if (combo && event->type() == QEvent::KeyPress && !combo->view()->isVisible()) {
             auto* key = static_cast<QKeyEvent*>(event);
-            if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)
+            if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) && !key->isAutoRepeat()
                 && !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
                 for (QPushButton* button : combo->window()->findChildren<QPushButton*>()) {
                     if (button->isDefault() && button->isEnabled() && button->isVisible()) {
@@ -1938,6 +1938,11 @@ QString ConnectionPanel::formatWanRadioLabel(const WanRadioInfo& radio) const
 
     if (!radio.guiClientStations.trimmed().isEmpty())
         detail += QStringLiteral(" • station %1").arg(radio.guiClientStations.trimmed());
+    // The SmartLink path stays listed so it can be saved; the label points at
+    // the faster LAN path for the same radio.
+    if (std::any_of(m_radios.cbegin(), m_radios.cend(),
+                    [&radio](const RadioInfo& lan) { return !radio.serial.isEmpty() && lan.serial == radio.serial; }))
+        detail += QStringLiteral(" • ") + tr("also on your local network");
 
     return title + QLatin1Char('\n') + detail;
 }
@@ -1960,6 +1965,12 @@ void ConnectionPanel::setManualMessage(const QString& text, bool error)
 
 void ConnectionPanel::updateLocalPageState()
 {
+    // A LAN sighting changes the "also on your local network" note on the
+    // SmartLink rows for the same radio.
+    for (int i = 0; i < m_wanRadios.size() && i < m_wanList->count(); ++i) {
+        const QString label = formatWanRadioLabel(m_wanRadios[i]);
+        if (m_wanList->item(i)->text() != label) { m_wanList->item(i)->setText(label); }
+    }
     const bool hasRadios = !m_radios.isEmpty();
     m_localStateStack->setCurrentIndex(hasRadios ? 0 : 1);
 
@@ -2342,7 +2353,6 @@ void ConnectionPanel::onLocalConnectClicked()
 
     // A staged Icom credential belongs to the attempt it was staged for.
     clearPendingIcomCredentials();
-    rememberWorkspaceRadio(info, "local");
     emit connectRequested(info);
 }
 
@@ -2353,7 +2363,6 @@ void ConnectionPanel::onWanConnectClicked()
         return;
 
     saveLowBandwidthPreference(m_lowBwCheck->isChecked());
-    rememberWorkspaceWan(m_wanRadios[row]);
     emit wanConnectRequested(m_wanRadios[row]);
 }
 
@@ -2982,6 +2991,18 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         // Interactive connects keep the currently selected source path. Only
         // startup and an explicit recent-address selection restore profiles.
         applySavedSourceSelection(trimmedIp, /*restoreFamily=*/true);
+    }
+    if (restoreSavedFamily) {
+        // A saved Icom connection carries its own credential key; startup must
+        // read that key, not the single pre-workspace password.
+        const QJsonObject path = savedManualPath(trimmedIp, QString::fromLatin1(kFamilyIcom));
+        if (!path.isEmpty()) {
+            m_activeIcomCredentialId = path.value("credentialId").toString();
+            m_allowLegacyIcomCredential = path.value("legacyCredentials").toBool();
+            if (!path.value("username").toString().isEmpty()) {
+                m_manualIcomUserEdit->setText(path.value("username").toString());
+            }
+        }
     }
 
     bool staleSelection = false;
@@ -4163,8 +4184,10 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
     auto* manageProfiles = new QPushButton(tr("Operators…"), page);
     manageProfiles->setObjectName(QStringLiteral("connectionManageProfiles"));
     profiles->addWidget(manageProfiles);
-    auto* accounts = new QPushButton(tr("SmartLink accounts…"), page);
+    auto* accounts = new QPushButton(tr("Accounts…"), page);
     accounts->setObjectName(QStringLiteral("connectionManageAccounts"));
+    accounts->setAccessibleName(tr("SmartLink accounts"));
+    accounts->setToolTip(tr("SmartLink accounts"));
     profiles->addWidget(accounts);
     radioColumn->addLayout(profiles);
     m_operatorWarning = makeWrappedLabel(QString(),
@@ -4173,6 +4196,11 @@ void ConnectionPanel::buildWorkspace(QVBoxLayout* root)
     m_operatorWarning->setObjectName(QStringLiteral("connectionOperatorWarning"));
     m_operatorWarning->hide();
     radioColumn->addWidget(m_operatorWarning);
+    // The warning describes a temporary fallback; it ends when the device returns.
+    auto* mediaDevices = new QMediaDevices(this);
+    const auto refreshWarning = [this] { if (!m_operatorWarning->isHidden()) { updateOperatorWarning(); } };
+    connect(mediaDevices, &QMediaDevices::audioInputsChanged, this, refreshWarning);
+    connect(mediaDevices, &QMediaDevices::audioOutputsChanged, this, refreshWarning);
     columns->addLayout(radioColumn, 1);
     m_modeStack->addWidget(page);
 
@@ -4510,6 +4538,14 @@ bool ConnectionPanel::selectWorkspaceProfile(const QString& collection, const QS
     m_pendingSmartLinkConnection = {};
     next[collection == QLatin1String("stations") ? "selectedStation" : "selectedOperator"] = id;
     const bool changedOperator = collection == QLatin1String("operators") && id != m_workspace.value("selectedOperator").toString();
+    if (changedOperator) {
+        if (const QString blocked = operatorSwitchBlocked(); !blocked.isEmpty()) {
+            setStatusText(blocked);
+            setAutomationError(error, blocked);
+            refreshWorkspace();
+            return false;
+        }
+    }
     if (!persistWorkspace(next)) { return false; }
     if (changedOperator) { applyWorkspaceOperator(); }
     return true;
@@ -4554,6 +4590,34 @@ void ConnectionPanel::storeWorkspaceConnection(const QJsonObject& connection, co
         next["addressHistory"] = history;
     }
     persistWorkspace(next);
+}
+
+QString ConnectionPanel::operatorSwitchBlocked() const
+{
+    return m_transmitting && m_transmitting() ? tr("Stop transmitting before switching operators.") : QString();
+}
+
+QJsonObject ConnectionPanel::savedManualPath(const QString& host, const QString& family) const
+{
+    // The selected Location wins when several Locations save the same host.
+    const QJsonArray all = m_workspace.value("stations").toArray();
+    const QString selected = m_workspace.value("selectedStation").toString();
+    QList<QJsonObject> stations;
+    for (const QJsonValue& station : all) {
+        if (station.toObject().value("id").toString() == selected) { stations.prepend(station.toObject()); }
+        else { stations.append(station.toObject()); }
+    }
+    for (const QJsonObject& station : stations) {
+        for (const QJsonValue& value : station.value("connections").toArray()) {
+            const QJsonObject path = value.toObject();
+            if (path.value("kind").toString() == QLatin1String("manual")
+                && path.value("family").toString() == family
+                && path.value("host").toString() == host) {
+                return path;
+            }
+        }
+    }
+    return {};
 }
 
 void ConnectionPanel::rememberWorkspaceRadio(const RadioInfo& info, const QString& kind)
@@ -4634,9 +4698,8 @@ void ConnectionPanel::saveWorkspaceSelection()
     dialog->show();
 }
 
-bool ConnectionPanel::applyWorkspaceOperator()
+void ConnectionPanel::updateOperatorWarning()
 {
-    if (m_workspace.isEmpty()) { return true; }
     const QJsonObject profile = ConnectionWorkspace::find(m_workspace.value("operators").toArray(), m_workspace.value("selectedOperator").toString());
     const QJsonObject preferences = profile.value("preferences").toObject();
     QStringList missing;
@@ -4650,6 +4713,14 @@ bool ConnectionPanel::applyWorkspaceOperator()
     m_operatorWarning->setText(missing.isEmpty() ? QString()
         : tr("Saved %1 unavailable. Using the system default temporarily; the saved preference is kept.").arg(missing.join(tr(" and "))));
     m_operatorWarning->setVisible(!missing.isEmpty());
+}
+
+bool ConnectionPanel::applyWorkspaceOperator()
+{
+    if (m_workspace.isEmpty()) { return true; }
+    const QJsonObject profile = ConnectionWorkspace::find(m_workspace.value("operators").toArray(), m_workspace.value("selectedOperator").toString());
+    const QJsonObject preferences = profile.value("preferences").toObject();
+    updateOperatorWarning();
     emit operatorPreferencesRequested(preferences);
     return true;
 }
@@ -4794,7 +4865,9 @@ bool ConnectionPanel::prepareWorkspaceLogin(const QString& email)
     }
     next["accounts"] = accounts;
     next["selectedAccount"] = id;
-    if (!persistWorkspace(next)) { return false; }
+    // Signing in does not depend on profiles: an unavailable or unsaved
+    // workspace (reported by persistWorkspace) still lets the account sign in.
+    if (!m_workspace.isEmpty()) { persistWorkspace(next); }
     m_smartLink->setAccountId(id);
     return true;
 }
@@ -4880,9 +4953,7 @@ void ConnectionPanel::editWorkspaceProfile(const QString& collection, const QStr
         };
         populateDevices(input, QMediaDevices::audioInputs());
         populateDevices(output, QMediaDevices::audioOutputs());
-        for (const QString& arrangement : {QStringLiteral("1"), QStringLiteral("2v"), QStringLiteral("2h"),
-                QStringLiteral("2h1"), QStringLiteral("12h"), QStringLiteral("3v"), QStringLiteral("2x2"),
-                QStringLiteral("4v"), QStringLiteral("3h2"), QStringLiteral("2x3"), QStringLiteral("4h3"), QStringLiteral("2x4")}) {
+        for (const QString& arrangement : ConnectionWorkspace::operatorLayouts()) {
             panLayout->addItem(arrangement, arrangement);
         }
         const auto setPreferences = [input, output, panLayout](const QJsonObject& preferences) {
@@ -4950,6 +5021,9 @@ void ConnectionPanel::editWorkspaceProfile(const QString& collection, const QStr
                 && peer.value("serial") == original.value("serial") && peer.value("family") == original.value("family")) { continue; }
             namePeers.append(peer);
         }
+        if (collection == QLatin1String("operators") && newRecord) {
+            if (const QString blocked = operatorSwitchBlocked(); !blocked.isEmpty()) { error->setText(blocked); return; }
+        }
         if (!ConnectionWorkspace::uniqueName(namePeers, name->text(), existingId)) {
             error->setText(tr("Choose a unique, nonempty name (up to 128 characters).")); return;
         }
@@ -4989,7 +5063,9 @@ void ConnectionPanel::editWorkspaceProfile(const QString& collection, const QStr
             next["stations"] = stations;
         } else {
             next[collection] = current;
-            if (collection != QLatin1String("accounts") || newRecord) {
+            // Editing an operator never switches to it; only Use profile or
+            // Create and use recalls operator preferences.
+            if (collection == QLatin1String("stations") || newRecord) {
                 next[collection == QLatin1String("stations") ? "selectedStation" : collection == QLatin1String("operators") ? "selectedOperator" : "selectedAccount"] = record.value("id");
             }
         }
@@ -5223,8 +5299,13 @@ void ConnectionPanel::manageOperatorProfiles()
     connect(this, &ConnectionPanel::workspaceChanged, dialog, refill);
     refill();
     auto* actions = new QHBoxLayout;
-    for (const QString& action : {QStringLiteral("Create"), QStringLiteral("Edit"), QStringLiteral("Duplicate"), QStringLiteral("Remove"), QStringLiteral("Use profile")}) {
-        auto* button = new QPushButton(QCoreApplication::translate("ConnectionPanel", action.toUtf8().constData()), dialog);
+    static const char* const kOperatorActions[] = {
+        QT_TRANSLATE_NOOP("ConnectionPanel", "Create"), QT_TRANSLATE_NOOP("ConnectionPanel", "Edit"),
+        QT_TRANSLATE_NOOP("ConnectionPanel", "Duplicate"), QT_TRANSLATE_NOOP("ConnectionPanel", "Remove"),
+        QT_TRANSLATE_NOOP("ConnectionPanel", "Use profile")};
+    for (const char* source : kOperatorActions) {
+        const QString action = QString::fromLatin1(source);
+        auto* button = new QPushButton(tr(source), dialog);
         button->setObjectName(QStringLiteral("connectionOperator") + QString(action).remove(' '));
         actions->addWidget(button);
         connect(button, &QPushButton::clicked, dialog, [this, dialog, list, action] {
@@ -5320,7 +5401,10 @@ void ConnectionPanel::removeWorkspaceProfile(const QString& collection, const QS
     }
     if (!persistWorkspace(next)) { return; }
     if (collection == QLatin1String("accounts") && m_smartLink) {
-        m_smartLink->setAccountId(id);
+        if (m_smartLink->accountId() != id) {
+            m_smartLink->forgetAccount(id);
+            return;
+        }
         m_smartLink->logout();
         m_wanRadios.clear();
         m_wanList->clear();

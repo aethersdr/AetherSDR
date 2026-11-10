@@ -3,6 +3,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 namespace AetherSDR {
 
@@ -19,6 +20,8 @@ public:
                            const QString& exceptId = {});
     static QJsonObject captureOperatorPreferences();
     static QJsonObject defaultOperatorPreferences();
+    // The pan layouts PanadapterStack can arrange (its kLayoutPanCount keys).
+    static const QStringList& operatorLayouts();
     static QString accountId(const QString& email);
     static QString credentialKey(const QString& accountId);
     static QString connectionCredentialId(const QString& host, const QString& username);

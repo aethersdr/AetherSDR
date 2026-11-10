@@ -2807,7 +2807,7 @@ It never contains passwords or refresh tokens.
 It is available in Observe-only mode. `connect profile stations|operators <id>`
 persists a selection, including while a radio is live. Location selection does
 not connect or change audio. Explicitly switching operators recalls the saved
-computer audio/layout preferences, without changing radio-owned state. This mutation is refused
+computer audio/layout preferences, without changing radio-owned state, and is refused while transmitting. This mutation is refused
 in Observe-only mode. Profile creation and editing are exercised through the
 normal `connectionProfileEditor` widgets with `invoke`.
 

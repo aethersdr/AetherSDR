@@ -25,7 +25,9 @@
 #include <QLabel>
 #include <QGroupBox>
 #include <QSpinBox>
+#include <QNetworkReply>
 #include <cstdio>
+#include <cstring>
 
 namespace AetherSDR {
 struct SmartLinkClientTestAccess {
@@ -44,6 +46,44 @@ struct SmartLinkClientTestAccess {
     }
     static quint64 generation(const SmartLinkClient& client) { return client.m_authGeneration; }
     static bool retained(const SmartLinkClient& client) { return client.m_sessionCredentials.value("legacy") == "test-legacy"; }
+    static void finishRefresh(SmartLinkClient& client, QNetworkReply* reply, quint64 generation)
+    {
+        client.finishRefreshReply(reply, generation);
+    }
+    static QString refreshToken(const SmartLinkClient& client) { return client.m_refreshToken; }
+};
+struct ConnectionPanelSmartLinkTestAccess {
+    static QString icomCredentialId(const ConnectionPanel& panel) { return panel.m_activeIcomCredentialId; }
+    static bool legacyIcomCredential(const ConnectionPanel& panel) { return panel.m_allowLegacyIcomCredential; }
+    static QString wanLabel(const ConnectionPanel& panel, const WanRadioInfo& radio) { return panel.formatWanRadioLabel(radio); }
+};
+}
+
+namespace {
+// An inert, already-finished reply: no socket, no network access manager.
+class CannedReply final : public QNetworkReply {
+public:
+    CannedReply(const QByteArray& body, QNetworkReply::NetworkError error, int httpStatus)
+        : m_body(body)
+    {
+        open(QIODevice::ReadOnly);
+        if (error != QNetworkReply::NoError) { setError(error, QStringLiteral("canned failure")); }
+        if (httpStatus > 0) { setAttribute(QNetworkRequest::HttpStatusCodeAttribute, httpStatus); }
+        setFinished(true);
+    }
+    void abort() override {}
+    qint64 bytesAvailable() const override { return m_body.size() - m_offset + QNetworkReply::bytesAvailable(); }
+protected:
+    qint64 readData(char* data, qint64 maxSize) override
+    {
+        const qint64 count = qMin(maxSize, qint64(m_body.size() - m_offset));
+        std::memcpy(data, m_body.constData() + m_offset, size_t(count));
+        m_offset += count;
+        return count;
+    }
+private:
+    QByteArray m_body;
+    qint64 m_offset{0};
 };
 }
 
@@ -66,6 +106,12 @@ int main(int argc, char** argv)
     const QJsonObject fresh = ConnectionWorkspace::load();
     check("clean settings do not invent a SmartLink account", fresh.value("accounts").toArray().isEmpty()
         && fresh.value("selectedAccount").toString().isEmpty());
+    settings.removeRadioFeature("local", "", "ConnectionWorkspace");
+    settings.setValue("PanadapterLayout", " 2v");
+    const QJsonObject oddLayout = ConnectionWorkspace::load();
+    check("an unknown saved pan layout migrates as single-pan instead of failing", !oddLayout.isEmpty()
+        && oddLayout.value("operators").toArray().first().toObject().value("preferences").toObject().value("layout").toString() == "1");
+    settings.remove("PanadapterLayout");
     settings.removeRadioFeature("local", "", "ConnectionWorkspace");
     settings.setValue("LastConnectedRadioSerial", "saved-flex");
     settings.setValue("SmartLinkEmail", QString::fromLatin1(QByteArray("personal@example.test").toBase64()));
@@ -224,6 +270,15 @@ int main(int argc, char** argv)
         QSignalSpy connects(&panel, &ConnectionPanel::connectRequested);
         QSignalSpy audioChanges(&panel, &ConnectionPanel::operatorPreferencesRequested);
         const QString importedOperator = document.value("selectedOperator").toString();
+        const QString operatorBefore = panel.workspaceSnapshot().value("selectedOperator").toString();
+        bool transmitting = true;
+        panel.setTransmittingProbe([&transmitting] { return transmitting; });
+        QString switchError;
+        check("operator switching waits while transmitting", operatorBefore != importedOperator
+            && !panel.selectWorkspaceProfile("operators", importedOperator, &switchError)
+            && panel.workspaceSnapshot().value("selectedOperator").toString() == operatorBefore
+            && audioChanges.isEmpty() && switchError.contains("Stop transmitting"));
+        transmitting = false;
         panel.selectWorkspaceProfile("operators", importedOperator);
         const QJsonObject savedPreferences = ConnectionWorkspace::find(panel.workspaceSnapshot().value("operators").toArray(), importedOperator).value("preferences").toObject();
         check("an explicit operator switch recalls preferences with a visible fallback warning", audioChanges.count() == 1
@@ -236,6 +291,24 @@ int main(int argc, char** argv)
         panel.automationConnectLocalSerial("DEMO-0001", &error);
         QCoreApplication::processEvents();
         check("connect succeeds without replaying a missing-device operator snapshot", connects.count() == 1 && audioChanges.isEmpty());
+        bool demoSaved = false;
+        for (const QJsonValue& station : panel.workspaceSnapshot().value("stations").toArray()) {
+            for (const QJsonValue& path : station.toObject().value("connections").toArray()) {
+                demoSaved = demoSaved || path.toObject().value("serial").toString() == "DEMO-0001";
+            }
+        }
+        check("connecting to a nearby radio does not save it to the Location", !demoSaved);
+        {
+            WanRadioInfo sameRadio;
+            sameRadio.serial = QStringLiteral("DEMO-0001");
+            sameRadio.model = QStringLiteral("AetherSDR Demo");
+            sameRadio.status = QStringLiteral("Available");
+            WanRadioInfo remoteOnly = sameRadio;
+            remoteOnly.serial = QStringLiteral("1234-5678");
+            check("a SmartLink radio also on the LAN says so", ConnectionPanelSmartLinkTestAccess::wanLabel(panel, sameRadio)
+                .contains("also on your local network")
+                && !ConnectionPanelSmartLinkTestAccess::wanLabel(panel, remoteOnly).contains("also on your local network"));
+        }
         check("temporary fallback preserves the saved operator device", ConnectionWorkspace::find(panel.workspaceSnapshot().value("operators").toArray(), importedOperator).value("preferences").toObject() == savedPreferences);
     }
     {
@@ -248,6 +321,25 @@ int main(int argc, char** argv)
         check("switching fences pending asynchronous authentication", SmartLinkClientTestAccess::generation(client) > generation);
         check("switching clears the previously published radio list", lists.count() == 1);
         check("switching preserves the other session credential", SmartLinkClientTestAccess::retained(client));
+        {
+            // A reply from the account switched away from must change nothing.
+            QSignalSpy failures(&client, &SmartLinkClient::authFailed);
+            QSignalSpy successes(&client, &SmartLinkClient::authenticated);
+            CannedReply stale(QByteArray("{}"), QNetworkReply::NoError, 200);
+            SmartLinkClientTestAccess::finishRefresh(client, &stale, generation);
+            check("switching fences a stale refresh reply", failures.isEmpty() && successes.isEmpty()
+                && SmartLinkClientTestAccess::clean(client));
+            const quint64 current = SmartLinkClientTestAccess::generation(client);
+            SmartLinkClientTestAccess::seed(client);
+            CannedReply offline(QByteArray(), QNetworkReply::HostNotFoundError, 0);
+            SmartLinkClientTestAccess::finishRefresh(client, &offline, current);
+            check("a transport failure keeps the refresh token for the next retry", failures.count() == 1
+                && SmartLinkClientTestAccess::refreshToken(client) == "test-refresh");
+            CannedReply rejected(QByteArray(R"({"error_description":"expired"})"), QNetworkReply::ContentAccessDenied, 403);
+            SmartLinkClientTestAccess::finishRefresh(client, &rejected, SmartLinkClientTestAccess::generation(client));
+            check("an Auth0 rejection discards the refresh token", failures.count() == 2
+                && failures.last().first().toString() == "expired" && SmartLinkClientTestAccess::clean(client));
+        }
         client.setAccountLocked(true);
         client.setAccountId("legacy");
         check("dependent WAN session prevents account switching", client.accountId() == secondAccount);
@@ -476,6 +568,19 @@ int main(int argc, char** argv)
             panel.findChild<QPushButton*>("connectionBackToStation")->click();
         }
         check("editing saved port choices does not connect a radio", connects.isEmpty());
+        ConnectionPanel startup;
+        startup.probeRadio(QStringLiteral("192.0.2.30"), /*restoreSavedFamily=*/true);
+        check("startup auto-connect reads the saved Icom connection's own credential key",
+            ConnectionPanelSmartLinkTestAccess::icomCredentialId(startup) == "requires-relink"
+            && !ConnectionPanelSmartLinkTestAccess::legacyIcomCredential(startup)
+            && startup.findChild<QLineEdit*>("connectionManualIcomUser")->text() == "portable");
+        QCoreApplication::processEvents();
+        // Ends in the Icom password branch: no network probe is ever issued.
+        bool icomBranch = false;
+        for (QLabel* label : startup.findChildren<QLabel*>()) {
+            icomBranch = icomBranch || label->text().contains("No saved Icom password");
+        }
+        check("the startup Icom probe stops at the missing scoped password without dialing", icomBranch);
     }
     {
         QJsonObject grouped = ConnectionWorkspace::load();

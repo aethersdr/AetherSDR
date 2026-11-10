@@ -63,6 +63,8 @@ public:
     void saveCredentials();
     // Clear stored credentials from OS keychain
     void clearCredentials();
+    // Delete one account's saved credential without touching the active session.
+    void forgetAccount(const QString& id);
     // Switch identity without forgetting the previous account's credential.
     void setAccountId(const QString& id);
     QString accountId() const { return m_accountId; }
@@ -114,6 +116,7 @@ private:
     friend struct SmartLinkClientTestAccess;
     void connectToServer();
     void resetAuthentication();
+    void finishRefreshReply(QNetworkReply* reply, quint64 generation);
     void parseMessage(const QString& msg);
     void parseRadioList(const QString& msg);
     void parseConnectReady(const QString& msg);

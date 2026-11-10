@@ -41,7 +41,7 @@ At the location, using SmartSDR for Windows:
 *Saved SmartLink accounts and sign-in, before authentication.*
 
 1. Open **File → Connect to Radio...** and select the location that will contain the remote radio.
-2. Choose **SmartLink accounts…**. Use **Add** to name an account and enter its email address.
+2. Choose **Accounts…**. Use **Add** to name an account and enter its email address.
 3. Enter that account's password and click **Sign In**.
 4. Select a remote radio and click **Save selected radio to location**. Return with **Back to location**, select the radio and press **Connect**.
 
@@ -51,7 +51,7 @@ Each saved remote connection remembers its account. Pressing **Connect** selects
 
 The account selector supports **Add**, **Rename** and **Remove**. Signing out or removing an account forgets only that account's credential. Connections that reference a removed account remain saved and explain that the account must be added again. Disconnect a live SmartLink radio before switching, signing out or removing an account. Local radios remain available independently of SmartLink authentication.
 
-Account discovery uses one account at a time. Switching clears the previous account's list; an offline saved radio is not presented as a freshly discovered radio. Account labels and email addresses survive restart. Refresh tokens survive restart only in builds with a working platform keychain; other builds display a session-only notice.
+Account discovery uses one account at a time. Switching clears the previous account's list; an offline saved radio is not presented as a freshly discovered radio. A remote radio that is also on your local network is marked *also on your local network*; connect to it through **Nearby radios** for the faster path. Account labels and email addresses survive restart. Refresh tokens survive restart only in builds with a working platform keychain; other builds display a session-only notice.
 
 On a slow or metered connection, tick **Use low bandwidth mode** under *Connection options for slower links* before connecting, and consider Opus audio compression — see [Low Bandwidth Connections](./low-bandwidth-connections.md).
 

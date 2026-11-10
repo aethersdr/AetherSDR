@@ -23,7 +23,7 @@ A new setup starts with **Home**. With one location, its name and **Add location
 *Home keeps a single-location setup compact. Add another location to reveal the Locations column.*
 
 1. Choose **+ Add location**, enter a distinguishable name and save.
-2. Add a discovered radio through **Nearby radios**, create a manual path with **+ Add radio by IP**, or save a remote radio through **SmartLink accounts…**.
+2. Add a discovered radio through **Nearby radios**, create a manual path with **+ Add radio by IP**, or save a remote radio through **Accounts…**.
 3. Select the location and radio, then press **Connect**. A saved radio stays listed when offline.
 
 Drag locations up or down to set their order; the order is saved automatically. Right-click a location for **Edit**, **Move**, **Rename** and **Remove**, or open **Location options…**. **Move** also changes its position in the list. **Remove** asks for confirmation and removes its saved paths while keeping physical radios and account credentials. Keep at least one location.
@@ -38,7 +38,7 @@ Radio names appear in bold, with model and availability beneath. Unnamed radios 
 
 The selected-radio card shows the model above the radio name, followed by separate **Connection**, **SmartLink** (for remote connections) and **Operator** rows. The connection and operator describe the next connection. Multiple paths for a verified radio identity appear under **Connection settings → Connect using**. Choose the desired path before connecting. Only the selected SmartLink account supplies the current remote list.
 
-Right-click a radio, or open **Radio options…**, for **Edit**, **Move**, **Rename** and **Remove**. **Move** carries its saved paths to another location; **Remove** asks for confirmation. Expand **Connection settings** to save a nearby radio or **Copy to another location…**. Copying a path preserves its shared account reference. It does not copy a password or create another radio.
+Right-click a radio, or open **Radio options…**, for **Edit**, **Move**, **Rename** and **Remove**. **Move** carries its saved paths to another location; **Remove** asks for confirmation. Connecting to a nearby radio does not save it; expand **Connection settings** to save it or **Copy to another location…**. Copying a path preserves its shared account reference. It does not copy a password or create another radio.
 
 Connection forms retain the selected family's settings, including source interfaces, Icom ports and low bandwidth mode. Family support levels and receive-only limits remain those listed in [Supported Radios](./supported-radios.md). KiwiSDR and Web-888 remain auxiliary receive sources in Antennas.
 
@@ -65,7 +65,7 @@ Connection forms retain the selected family's settings, including source interfa
 
 **Edit** renames or changes preferences. **Duplicate** creates an independent copy. To remove the selected profile, choose a replacement first; keep at least one operator. Profiles never contain account credentials, frequency, mode, power or radio operating profiles.
 
-Preferences are recalled only when you explicitly switch operators or create and use a new operator. Reconnecting or browsing locations keeps your current computer audio and layout choices. Editing a saved operator changes its saved preferences.
+Preferences are recalled only when you explicitly switch operators or create and use a new operator. Reconnecting or browsing locations keeps your current computer audio and layout choices. Editing a saved operator changes its saved preferences without switching to it. Operators cannot be switched while transmitting, because the switch can change the microphone.
 
 **System default** follows the computer’s default device. If an explicitly selected operator references an unavailable device, AetherSDR temporarily uses the system default and displays a warning. The saved device preference is kept, so it can be recalled when the device is available again.
 

@@ -522,6 +522,7 @@ void MainWindow::wireDiscovery()
         }
     });
 
+    m_connPanel->setTransmittingProbe([this] { return m_radioModel.transmitModel().isTransmitting(); });
     connect(m_connPanel, &ConnectionPanel::operatorPreferencesRequested, this,
             [this](const QJsonObject& preferences) {
         const auto deviceFor = [](const QList<QAudioDevice>& devices, const QString& encoded) {
@@ -1137,6 +1138,11 @@ void MainWindow::wireRadioModel()
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
         if (!connected) {
             m_pendingDisplayWrites.flush();
+            // No automatic reconnect follows, so nothing depends on the account.
+            if (m_userDisconnected) {
+                m_smartLink.setAccountLocked(false);
+                m_pendingWanRadio = {};
+            }
         }
     });
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
