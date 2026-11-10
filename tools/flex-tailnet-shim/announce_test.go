@@ -470,6 +470,66 @@ func TestAnnouncerHelperHello(t *testing.T) {
 	}
 }
 
+// TestAnnounceBindAddrs: UDP 4992 is bound to the limited broadcast address
+// and the broadcast address of each private network on an interface that is
+// up and broadcasts; never the wildcard or an interface's own address, which
+// would match the clients' datagrams to the radio.
+func TestAnnounceBindAddrs(t *testing.T) {
+	ipnet := func(cidr string) *net.IPNet {
+		ip, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n.IP = ip
+		return n
+	}
+	ifaces := []announceInterface{
+		{net.FlagUp | net.FlagBroadcast, []net.Addr{ipnet("192.168.0.20/24"), ipnet("fe80::1/64")}},
+		{net.FlagUp | net.FlagLoopback, []net.Addr{ipnet("127.0.0.1/8")}},
+		{net.FlagBroadcast, []net.Addr{ipnet("10.0.0.5/8")}},                            // down
+		{net.FlagUp | net.FlagBroadcast, []net.Addr{ipnet("172.30.0.2/16")}},            // the radio's container network
+		{net.FlagUp | net.FlagPointToPoint, []net.Addr{ipnet("100.70.0.2/32")}},         // tailnet
+		{net.FlagUp | net.FlagBroadcast, []net.Addr{ipnet("0.0.0.0/0"), &net.IPAddr{}}}, // nothing to bind
+	}
+	got := announceBindAddrs(ifaces)
+	if fmt.Sprint(got) != "[255.255.255.255 192.168.0.255]" {
+		t.Errorf("bind addresses %v, want [255.255.255.255 192.168.0.255]", got)
+	}
+	for _, a := range got {
+		if a.IsUnspecified() || a == netip.MustParseAddr("192.168.0.20") {
+			t.Errorf("binds %v", a)
+		}
+	}
+}
+
+// TestReuseAddrControl: the 4992 sockets set SO_REUSEADDR and not
+// SO_REUSEPORT, which would put them in the radio's SO_REUSEPORT group and
+// share its traffic (discovery.go's reuseControl sets both, for 4O3A).
+func TestReuseAddrControl(t *testing.T) {
+	lc := net.ListenConfig{Control: reuseAddrControl}
+	pc, err := lc.ListenPacket(context.Background(), "udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	raw, err := pc.(*net.UDPConn).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var addr, port int
+	var aerr, perr error
+	raw.Control(func(fd uintptr) {
+		addr, aerr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR)
+		port, perr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT)
+	})
+	if aerr != nil || perr != nil {
+		t.Fatal(aerr, perr)
+	}
+	if addr == 0 || port != 0 {
+		t.Errorf("SO_REUSEADDR=%d SO_REUSEPORT=%d, want set and clear", addr, port)
+	}
+}
+
 // TestAnnouncerHelperFeed runs the helper feed over loopback TCP: an
 // admitted helper gets each forwarded announcement, rewritten, and its
 // device is not also sent a copy; a helper connecting later gets the last

@@ -337,27 +337,18 @@ func (a *Announcer) Start() {
 // where the radio allows that; nothing else sets it, so as not to join the
 // radio's socket in a SO_REUSEPORT group that would share its traffic.
 func listenAnnouncements() []net.PacketConn {
-	addrs := []netip.Addr{netip.AddrFrom4([4]byte{255, 255, 255, 255})}
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		log.Printf("announce: listing interfaces: %v", err)
 	}
+	var found []announceInterface
 	for _, ifc := range ifaces {
-		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagBroadcast == 0 {
-			continue
-		}
 		as, _ := ifc.Addrs()
-		for _, ia := range as {
-			if p, ok := ia.(*net.IPNet); ok {
-				if b, ok := directedBroadcast(p); ok {
-					addrs = append(addrs, b)
-				}
-			}
-		}
+		found = append(found, announceInterface{flags: ifc.Flags, addrs: as})
 	}
 	lc := net.ListenConfig{Control: reuseAddrControl}
 	var out []net.PacketConn
-	for _, b := range addrs {
+	for _, b := range announceBindAddrs(found) {
 		pc, err := lc.ListenPacket(context.Background(), "udp4", netip.AddrPortFrom(b, announcePort).String())
 		if err != nil {
 			log.Printf("announce: cannot hear the radio's announcements on %s:%d: %v", b, announcePort, err)
@@ -366,6 +357,34 @@ func listenAnnouncements() []net.PacketConn {
 		out = append(out, pc)
 	}
 	return out
+}
+
+// announceInterface is what choosing the bind addresses needs from one
+// network interface.
+type announceInterface struct {
+	flags net.Flags
+	addrs []net.Addr
+}
+
+// announceBindAddrs is where UDP 4992 is bound: the limited broadcast
+// address, and the broadcast address of each private network on an
+// interface that is up and broadcasts. Never the wildcard or a unicast
+// address, which would match the clients' datagrams to the radio.
+func announceBindAddrs(ifaces []announceInterface) []netip.Addr {
+	addrs := []netip.Addr{netip.AddrFrom4([4]byte{255, 255, 255, 255})}
+	for _, ifc := range ifaces {
+		if ifc.flags&net.FlagUp == 0 || ifc.flags&net.FlagBroadcast == 0 {
+			continue
+		}
+		for _, ia := range ifc.addrs {
+			if p, ok := ia.(*net.IPNet); ok {
+				if b, ok := directedBroadcast(p); ok {
+					addrs = append(addrs, b)
+				}
+			}
+		}
+	}
+	return addrs
 }
 
 // directedBroadcast is a private IPv4 network's broadcast address; the
