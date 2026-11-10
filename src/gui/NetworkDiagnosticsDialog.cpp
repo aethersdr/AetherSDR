@@ -1,11 +1,13 @@
 #include "NetworkDiagnosticsDialog.h"
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
 #include "FramelessResizer.h"
 #include "ScopedChildWidget.h"
 #include "LogSyntaxHighlighter.h"
 #include "TimeSeriesGraphWidget.h"
 #include "core/AudioEngine.h"
 #include "core/DigitalVoiceModeRegistry.h"
+#include "core/ExternalFilePath.h"
 #include "core/LogManager.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"   // self-guards on HAVE_WEBSOCKETS
@@ -20,6 +22,7 @@
 
 #include <QComboBox>
 #include <QDateTime>
+#include <QDir>
 #include <QFileInfo>
 #include <QFont>
 #include <QFrame>
@@ -258,36 +261,6 @@ QScrollArea {
 QSplitter::handle {
     background: transparent;
 }
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
 )";
 
 static QFrame* makeDiagnosticsPanel(const QString& title, QWidget* parent = nullptr)
@@ -340,7 +313,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     FramelessResizer::install(this);
     bodyWidget()->setObjectName(QStringLiteral("networkDiagnosticsBody"));
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kNetworkDiagnosticsStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kNetworkDiagnosticsStyle) + canonScrollBarRules() + canonIndicatorRules();
     });
 
     auto* body = new QVBoxLayout(bodyWidget());
@@ -665,7 +638,8 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     row = 0;
     dropGrid->addWidget(makeNote(
         "Inferred packet loss from missing VITA sequence numbers. Zero loss here does "
-        "not rule out jitter or late bursts."), row++, 0, 1, 2);
+        "not rule out jitter or late bursts. Late counts FFT and waterfall packets "
+        "that arrived after their frame was replaced and were discarded."), row++, 0, 1, 2);
     dropGrid->addWidget(new QLabel("Audio:"), row, 0);
     m_audioDropLabel = makeDim();
     dropGrid->addWidget(m_audioDropLabel, row++, 1);
@@ -1896,7 +1870,8 @@ void NetworkDiagnosticsDialog::initializeLogTail()
 {
     const QString logPath = LogManager::instance().logFilePath();
     if (m_logPathLabel) {
-        m_logPathLabel->setText(QString("Log: %1").arg(logPath));
+        m_logPathLabel->setText(QString("Log: %1").arg(
+            QDir::toNativeSeparators(ExternalFilePath::resolve(logPath))));
     }
 
     m_logFile.close();
@@ -1924,7 +1899,8 @@ bool NetworkDiagnosticsDialog::reopenLogFile(bool keepExistingLines)
 {
     const QString logPath = LogManager::instance().logFilePath();
     if (m_logPathLabel) {
-        m_logPathLabel->setText(QString("Log: %1").arg(logPath));
+        m_logPathLabel->setText(QString("Log: %1").arg(
+            QDir::toNativeSeparators(ExternalFilePath::resolve(logPath))));
     }
 
     m_logFile.close();
@@ -3075,7 +3051,12 @@ void NetworkDiagnosticsDialog::refresh()
             rateKbps = sample.meterKbps;
         }
         rateLabels[i]->setText(QString("%1 kbps").arg(static_cast<int>(rateKbps)));
-        dropLabels[i]->setText(formatDrop(cs));
+        QString drop = formatDrop(cs);
+        if (cats[i] == PanadapterStream::CatFFT
+            || cats[i] == PanadapterStream::CatWaterfall) {
+            drop += QStringLiteral(" \u00b7 %1 late").arg(cs.late);
+        }
+        dropLabels[i]->setText(drop);
     }
 
     // DAX traffic

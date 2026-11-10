@@ -24,6 +24,10 @@ AetherSDR runs natively on macOS, with separate signed and notarized DMGs for Ap
 3. Start AetherSDR from Applications. Both DMGs are signed and notarized by Apple, so Gatekeeper verifies them with no extra steps.
 4. The **Connect to Radio** window opens. Continue with [First Connection](./first-connection.md), or try [Your First Session](./your-first-session.md) with no radio.
 
+### Allowing Local Network access
+
+Radio discovery needs **Local Network** permission on macOS 15 and later. Allow AetherSDR when macOS asks, or enable it in **System Settings → Privacy & Security → Local Network**. This permission is separate from the firewall.
+
 ### Installing the DAX audio driver
 
 [DAX Virtual Audio](./dax-virtual-audio.md) on macOS uses the **DAX Virtual Audio Driver** that ships in the AetherSDR DMG. Install it from the DMG before you enable DAX. Without it, enabling DAX shows **DAX Audio Driver Missing**.
@@ -40,7 +44,7 @@ This applies to the [Ulanzi Dial](./ulanzi-dial.md), the Stream Deck+ ([StreamDe
 
 - **Menus** are in the system menu bar at the top of the screen. See [Menu Reference](./menu-reference.md).
 - **Radio Setup** is **AetherSDR → Preferences...** (Settings → Radio Setup... on the other platforms). Search in it with ⌘F.
-- **Window:** a native window with the standard traffic-light buttons, the tiling menu, Stage Manager and native full screen (Cmd+Ctrl+F). Cmd+M minimizes the window.
+- **Window:** a native window with the standard traffic-light buttons, the tiling menu, Stage Manager and native full screen (Cmd+Ctrl+F). In full screen, the title bar sits at the top of the window without an empty toolbar strip above it. Leaving full screen restores the traffic lights in the title-bar row. Cmd+M minimizes the window.
 - **DAX virtual audio** is built in through the DAX Virtual Audio Driver (above). See [DAX Virtual Audio](./dax-virtual-audio.md).
 - **CAT virtual serial ports** (PTY) are available as well as TCP ports, at `~/Library/Caches/AetherSDR/cat-A` … `cat-H`. See [CAT Control](./cat-control.md).
 - **Noise reduction:** **MNR**, Apple's MMSE-Wiener spectral noise reduction on the vDSP/Accelerate framework, is available only on macOS. **BNR** (NVIDIA) is not available; use **DFNR** instead, which runs on any CPU. See [DSP Noise Mitigation](./dsp-noise-mitigation.md).
@@ -74,6 +78,15 @@ To use the settings command line, run the program inside the app bundle, for exa
 - An RTL-SDR Blog V4 dongle shows only noise, with no signals ([#6016](https://github.com/aethersdr/AetherSDR/issues/6016)).
 
 ## Troubleshooting
+
+### The radio is reachable by IP but missing from the list
+
+Automatic discovery needs incoming network broadcasts and Local Network permission.
+
+1. Open **System Settings → Privacy & Security → Local Network** and allow AetherSDR.
+2. In **Connect to Radio**, click **Retry Discovery**.
+3. For a local source build, configure with `-DAETHER_MACOS_ADHOC_SIGN=ON`, then rebuild the complete **AetherSDR** target before launching its `.app`. This development-only option signs the finished bundle so macOS recognizes its permission identity; production signing and release CI leave it disabled. See [macOS development identity](./building-from-source.md#macos-development-identity).
+4. If broadcasts are blocked by a router or VPN, use **Connect by IP**. See [Manual Connection](./manual-connection.md).
 
 ### Enabling DAX shows "DAX Audio Driver Missing"
 

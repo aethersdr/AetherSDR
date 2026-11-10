@@ -14,7 +14,11 @@ applies_to: ["FlexRadio"]
 
 Multi-Flex lets AetherSDR operate alongside SmartSDR, Maestro, or another AetherSDR instance, each as an independent client on the same radio.
 
-Multi-Flex is a FlexRadio feature. Other radio families allow one client at a time, so the multiFLEX controls are not offered on them (see [Supported Radios](./supported-radios.md)).
+Multi-Flex is a FlexRadio feature. Unsupported multiFLEX controls are dimmed with
+an explanation (see [Supported Radios](./supported-radios.md)). The **Enabled /
+Disabled** button waits for the radio's initial setting and returns to its last
+reported value if a change is rejected or times out. An accepted request stays
+visible until the radio reports a setting, including when you reconnect.
 
 ## Requirements
 
@@ -40,9 +44,9 @@ AetherSDR handles this automatically:
 
 ## Using the multiFLEX Dashboard
 
-**Settings → multiFLEX...** opens the **multiFLEX Dashboard**, a live list of every connected station:
+**Settings → multiFLEX...** opens the **multiFLEX Dashboard**, a live list of every connected station. It stays open beside the main window while you work; choosing **multiFLEX...** again brings it to the front, and it closes when the radio disconnects. Drag any empty part of it to move it, drag an edge to resize it, and close it with the round button in its top-right corner, Escape or Ctrl+W (⌘W on macOS). It remembers its size and place:
 
-<img src="/img/screens/multiflex-dashboard.png" width="760" alt="multiFLEX Dashboard window headed multiFLEX Stations with a green Enabled indicator. A table with columns Local PTT, Station, TX Ant and TX Freq (MHz) lists one row: a tick, AetherSDR, ANT1 and 14.250. A Close button sits at the bottom right." />
+<img src="/img/screens/multiflex-dashboard.png" width="760" alt="multiFLEX Dashboard window with a round close button in its top-right corner and a green Enabled button under its header. A table with columns Local PTT, Station, TX Ant and TX Freq (MHz) lists one row: a tick, AetherSDR, ANT1 and 14.250." />
 
 *The multiFLEX Dashboard: every station sharing the radio.*
 
@@ -54,9 +58,7 @@ AetherSDR handles this automatically:
 | **TX FREQ (MHz)** | Transmit frequency |
 | *(button)* | **Disconnect** removes that client from the radio |
 
-Below the table:
-- **Enabled / Disabled** turns multiFLEX on or off on the radio.
-- **Enable** (Local PTT) requests PTT for your station when another client holds it.
+The **Enabled / Disabled** button above the table turns multiFLEX on or off on the radio. Below the table, **Enable** (Local PTT) requests PTT for your station when another client holds it.
 
 A green **multiFLEX** button appears in the title bar while other clients are connected. Hover it for the list of stations; click it to open the dashboard.
 

@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <vector>
 #include <limits>
+#include <optional>
+#include <span>
+#include <string>
 
 using namespace AetherSDR::hl2;
 
@@ -257,6 +260,8 @@ int main()
         check(r && r->isHermesLite2(), "board 0x06 -> Hermes-Lite 2");
         check(r && r->mac[0] == 0x10 && r->mac[5] == 0x15, "MAC parsed");
         check(r && r->gatewareVersion == 0x4A, "gateware byte parsed");
+        check(r && r->gatewareMinor == std::optional<std::uint8_t>(0),
+              "minor version read from offset 0x15 (zero here)");
         check(r && r->numRx == 0x04, "receiver count read from offset 0x13 (19)");
         check(r && r->numRx != 0x45, "not offset 20 — that is the board/bandscope byte");
         check(r && r->numRx != 0x77, "not offset 18");
@@ -269,6 +274,26 @@ int main()
         shortReply[10] = 0x06;
         const auto sr = parseDiscoveryReply(shortReply);
         check(sr && sr->numRx == 0, "short reply -> numRx defaults to 0 (no OOB read)");
+        check(sr && !sr->gatewareMinor, "short reply -> no minor version (no OOB read)");
+        // The gateware minor version is VERSION_MINOR at offset 0x15
+        // (usopenhpsdr1.v:286, offset = 0x3B - 0x26). Neighbors carry other
+        // values so a read one byte off is caught. SQUARE SDR 2 reports 52 (#6806).
+        reply[2] = 0x02;
+        reply[0x14] = 0x7F;                                        // BANDSCOPE_BITS and BOARD
+        reply[0x15] = 52;                                          // VERSION_MINOR
+        reply[0x16] = 0x11;                                        // unused/zero upstream
+        const auto sq = parseDiscoveryReply(reply);
+        check(sq && sq->gatewareMinor == std::optional<std::uint8_t>(52),
+              "minor version 52 read from offset 0x15, not its neighbors");
+        check(sq && gatewareVersionText(*sq) == "74.52", "version text is major.minor, decimal");
+        reply[0x15] = 3;
+        check(gatewareVersionText(*parseDiscoveryReply(reply)) == "74.3", "stock HL2 reads 74.3");
+        // 0x15 is the last byte a reply must carry to report a minor version.
+        check(parseDiscoveryReply(std::span<const std::uint8_t>(reply.data(), 0x16))->gatewareMinor
+                  == std::optional<std::uint8_t>(3), "a reply ending at offset 0x15 still carries it");
+        const auto cut = parseDiscoveryReply(std::span<const std::uint8_t>(reply.data(), 0x15));
+        check(cut && !cut->gatewareMinor && gatewareVersionText(*cut) == "74",
+              "a reply ending before 0x15 shows the major version alone");
         std::array<std::uint8_t, 4> junk{0x00, 0x11, 0x22, 0x33};
         check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
     }
@@ -1191,6 +1216,53 @@ int main()
         const auto high = ccIoBoardTxFrequency(0x11'22'33'44'55ull);
         check(high[0][4] == 0x11 && high[4][4] == 0x55,
               "all 40 bits reach the wire");
+    }
+
+    // ---- IO board status read (REG_INPUT_PINS..REG_FIRMWARE_MAJOR) ----
+    {
+        // The DATA word is what i2c_bus2.v decodes at 0x3d: cmd_data[31:25] ==
+        // 7'h03 with cmd_data[24] set selects STATE_READ_CMDADDR, [22:16] is the
+        // chip and [15:8] the register the read starts from.
+        const std::uint32_t d = kIoBoardStatusReadData;
+        check(((d >> 25) & 0x7F) == 0x03, "status read carries the I2C cookie 7'h03");
+        check(((d >> 24) & 0x01) == 1, "and cmd_data[24], which makes it a READ");
+        check(((d >> 23) & 0x01) == 1, "stop bit set");
+        check(((d >> 16) & 0x7F) == kIoBoardI2cAddr, "addressed to the IO board chip");
+        check(((d >> 8) & 0xFF) == kIoBoardRegInputPins, "starting at REG_INPUT_PINS");
+        check((d & 0xFF) == 0, "C4 carries no data byte: a read writes only the pointer");
+        check(kIoBoardRegInputPins == 6, "REG_INPUT_PINS is register 6 (i2c_registers.h)");
+
+        // The reply: four bytes read from register 6 upwards, the FIRST into
+        // resp_data[7:0] (STATE_READ_DATA1), the last into [31:24].
+        const IoBoardStatus s = decodeIoBoardStatus(0x07'00'EE'2Bu);
+        check(s.inputPins == 0x2B, "DATA[7:0] is REG_INPUT_PINS");
+        check(s.antennaTuner == 0xEE, "DATA[15:8] is REG_ANTENNA_TUNER");
+        check(s.fault == 0x00, "DATA[23:16] is REG_FAULT");
+        check(s.firmwareMajor == 0x07, "DATA[31:24] is REG_FIRMWARE_MAJOR");
+        // 0x2B = 0b101011: EXTTR, In1, In3, In5.
+        check(s.receiving(), "bit 0 is EXTTR, and 1 means RECEIVE");
+        check(s.input(1) && !s.input(2) && s.input(3) && !s.input(4) && s.input(5),
+              "bits 1..5 are In1..In5");
+        check(!s.input(0) && !s.input(6), "there is no In0 and no In6");
+        check(!decodeIoBoardStatus(0x07'00'00'2Au).receiving(),
+              "EXTTR low is transmit");
+
+        // A reply read from a real board on firmware 2.11. Its bytes are not
+        // symmetric, so it pins the order the synthetic vector above assumes.
+        const IoBoardStatus board = decodeIoBoardStatus(0x02'00'00'01u);
+        check(board.inputPins == 0x01 && board.receiving(), "a board's EXTTR is in DATA[7:0]");
+        check(board.firmwareMajor == 2, "and its firmware major in DATA[31:24]");
+
+        // An empty bus reads as 0xFF; bits 6..7 of REG_INPUT_PINS are never set
+        // by a board.
+        check(s.fromBoard() && board.fromBoard(), "a board's reply is from a board");
+        check(!decodeIoBoardStatus(0xFF'FF'FF'FFu).fromBoard(), "an all-ones reply is not");
+        check(!decodeIoBoardStatus(0x02'00'00'41u).fromBoard()
+                  && !decodeIoBoardStatus(0x02'00'00'81u).fromBoard(),
+              "nor is any reply with bit 6 or 7 of REG_INPUT_PINS set");
+        check(!decodeIoBoardStatus(0x00'00'00'00u).fromBoard()
+                  && !decodeIoBoardStatus(0x00'00'00'01u).fromBoard(),
+              "nor one reporting firmware 0, which no board does");
     }
 
     // ---- adcClipRatePercent: NULL AND ZERO ARE DIFFERENT FACTS ------------

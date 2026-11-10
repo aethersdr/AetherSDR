@@ -67,7 +67,17 @@ With a neural decoder selected:
 - **Sens**, the lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
 - Characters are coloured by the model's own confidence, on the same green-to-red scale, and are never hidden.
 - Callsign contact cards and the MQTT text stream come from ggmorse only.
-- AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on radios with SmartSDR+) works with any decoder.
+- AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on a radio licensed for it through SmartSDR+, which it keeps after the subscription lapses) works with any decoder.
+
+The slice's **Once** and **Loop** auto-tune controls adjust receive tuning;
+they do not transmit. Starting requires an unlocked CW slice owned by this
+client and a CW auto-tune license. **Loop** shows this client's requested loop state,
+not a radio-reported indication that a signal has been found. Rebuilding the
+slice controls preserves that request. Locking the slice or leaving CW mode
+requests Stop; an existing loop can also be stopped if its license becomes
+unavailable. Disconnecting or losing ownership clears the local request, and
+reconnecting does not restart it. Without a CW auto-tune license, the local **Zero Beat**
+control remains available where its decoder requirements are met.
 
 DeepCW discards its provisional text (about 5–7 seconds) when the source changes, audio is interrupted, or decoding stops. Its worker finishes the current inference or model load before stopping, so switching decoders can pause the interface until that work finishes.
 
@@ -81,7 +91,7 @@ The decoder processes the received audio on a separate worker thread. It detects
 - **Auto speed detection** within the speed search range
 - **Cost function**: measures how well the detected on/off timing matches ideal Morse ratios; this drives the confidence colors
 
-Retuning resets the decoder state; pitch and speed locks survive a retune.
+Retuning resets the decoder state; pitch and speed locks survive a retune. Selecting a slice on another panadapter releases both locks.
 
 ### Which audio is decoded
 
@@ -124,8 +134,8 @@ Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON mess
 | **Sens** | 0–100 (default 30). Hides low-confidence characters: 0 shows everything, higher values show only confident decodes. |
 | **🔒P** | Lock the decoder's pitch at the current value |
 | **🔒S** | Lock the decoder's speed at the current WPM |
-| **Pitch** | Pitch search range, 300–1200 Hz (default 500–700 Hz) |
-| **WPM** | Speed search range, 5–60 WPM (default 15–40 WPM) |
+| **Pitch** | Pitch search range, 300–1200 Hz (default 500–700 Hz), remembered and the same on every pan. When the CW pitch changes, or when you connect to the radio, the range moves to the pitch ±150 Hz, unless it already covers the pitch; then it stays as you set it. |
+| **WPM** | Speed search range, 5–60 WPM (default 15–40 WPM), remembered and the same on every pan |
 | **CPY ALL** / **CPY VIS** | Copy all decoded text, or just the visible text, to the clipboard |
 | **A− / A+** | Decoded-text size (8–32 px), remembered |
 | **CLR** | Clear the decoded text |
@@ -153,7 +163,6 @@ Colors are based on ggmorse's cost function:
 ## Known issues
 
 - The decoder shows no text on some FLEX-8600 setups ([#6158](https://github.com/aethersdr/AetherSDR/issues/6158)).
-- The pitch search range is not kept when a slice is reopened, even with both range locks engaged ([#5921](https://github.com/aethersdr/AetherSDR/issues/5921)).
 - The squelch threshold line can appear on the panadapter in CW, although squelch is unavailable there ([#6276](https://github.com/aethersdr/AetherSDR/issues/6276)).
 
 ## Troubleshooting

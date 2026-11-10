@@ -7,6 +7,7 @@
 #include <QList>
 #include <QObject>
 
+#include <atomic>
 #include <complex>
 #include <span>
 #include <cstdint>
@@ -184,7 +185,8 @@ public:
     // and marshals these across; they are Q_INVOKABLE so it can.
     Q_INVOKABLE bool start(const Params& params);   // bind, send start + priming C&C, begin ingest
     Q_INVOKABLE void stop();                        // send stop, close socket
-    [[nodiscard]] bool isRunning() const noexcept { return m_running; }
+    // Safe from any thread: Hl2Backend reads it to refuse a key while stopped.
+    [[nodiscard]] bool isRunning() const noexcept { return m_running.load(); }
     [[nodiscard]] quint64 droppedPackets() const noexcept { return m_drops; }
     [[nodiscard]] const Hl2Telemetry& telemetry() const noexcept { return m_telemetry; }
 
@@ -270,6 +272,11 @@ public:
     // read data and neither is allowed; on an echo address it would leave the six-bit
     // address as the only match.
     Q_INVOKABLE bool requestRegister(int addr, quint32 data, bool subsystemRead = false);
+    // Read the IO board's status registers over RQST/ACK (kIoBoardStatusReadData).
+    // The only request that reaches 0x3d, and a read, so the allow-list above
+    // stays shut. Answered exactly once, by ioBoardStatusReady or
+    // ioBoardStatusFailed, never by the controlReply* signals.
+    Q_INVOKABLE void requestIoBoardStatus();
 
     // I/O-THREAD ONLY, like linkCounters(). Returned by reference because the
     // machine holds no implicitly-shared members; GUI-thread consumers read the
@@ -336,15 +343,22 @@ public:
     static int effectiveNumRx(const Params& p);
     int effectiveNumRx() const { return effectiveNumRx(m_params); }
 
-    // Transmit gate. setMox() does nothing until enableTransmit(true); with the gate
-    // closed setMox(true) is a silent no-op, so a refused key fails safe. Policy lives
-    // in Hl2Backend (interactive enables; automation defers to
+    // Transmit gate. setMox() does nothing until enableTransmit(true), and closing the
+    // gate drops the key; with it closed setMox(true) is a silent no-op, so a refused key
+    // fails safe. Policy lives in Hl2Backend (interactive enables; automation defers to
     // AETHER_AUTOMATION_ALLOW_TX). hl2_tx_gate_test asserts that no EP2 frame carries
     // C0 bit 0 while the gate is closed.
-    void enableTransmit(bool allowed) noexcept { m_txAllowed = allowed; }
+    void enableTransmit(bool allowed) noexcept
+    {
+        m_txAllowed = allowed;
+        if (!allowed) {
+            m_mox = false;
+        }
+    }
     [[nodiscard]] bool transmitEnabled() const noexcept { return m_txAllowed; }
 
-    // Key / unkey. Ignored unless enableTransmit(true) was called.
+    // Key / unkey. A key is refused unless enableTransmit(true) was called and the
+    // session is streaming (start() until stop()); stop() drops a held key.
     void setMox(bool keyed, const TxCoordinator::Operation& operation);
     // Only the backend's explicit CW break-in path uses CW holds to sustain
     // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.
@@ -364,7 +378,9 @@ public:
 
     // Build the EP2 packet this client would send next, without sending it.
     // Exists so the gate can be tested on the exact bytes that would go out.
+    // `nowMs` is controlNowMs()'s clock; it only spaces I2C bus 2 traffic.
     std::array<std::uint8_t, kUsbPacketSize> buildNextControlPacket();
+    std::array<std::uint8_t, kUsbPacketSize> buildNextControlPacket(qint64 nowMs);
 
     // Queue transmit IQ. Samples are consumed kTxSamplesPerPacket at a time, one
     // packet per EP2 frame, so the queue drains at the 48 kHz EP2 rate.
@@ -373,7 +389,9 @@ public:
     // repeating stale samples or blocking the pacer. Repeating would put a
     // periodic artefact on the air, and blocking would starve the radio's
     // watchdog. Overflow drops the oldest, because on transmit the freshest
-    // audio is the one that matters.
+    // audio is the one that matters. The queue is primed at the start of each
+    // over and again after every abandon (abandonTxIq()): the first samples
+    // wait until kTxPrimeTargetSamples are queued (#6052).
     void queueTxIq(std::span<const std::complex<float>> iq, const TxCoordinator::Context& context);
     // Discard pending transmit audio. Call on unkey: whatever is still queued
     // belongs to the transmission that just ended.
@@ -392,6 +410,26 @@ public:
     [[nodiscard]] std::uint64_t txUnderflowPackets() const noexcept { return m_txUnderflowPackets; }
     [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
     [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
+    // Empty-queue keyed silence at the head of the most recent over that
+    // carried queued IQ, in EP2 samples: txUnderflowSamples from MOX-on to the
+    // first queued sample. Logged at that moment under lcHl2Tx. Same THREAD
+    // CONTRACT as the three above.
+    [[nodiscard]] std::uint64_t lastKeyDownUnderflowSamples() const noexcept
+    {
+        return m_lastKeyDownUnderflowSamples;
+    }
+    // Packets the prime held from MOX-on to the first queued sample, with samples
+    // waiting. With lastKeyDownUnderflowSamples it is the queue's whole share of
+    // the over's leading silence; neither contains the other.
+    [[nodiscard]] std::uint64_t lastKeyDownPrimeHoldPackets() const noexcept
+    {
+        return m_lastKeyDownPrimeHoldPackets;
+    }
+    // Keyed packets sent as silence by the prime with samples waiting (#6052):
+    // not an underflow. Overs the prime let go at its deadline rather than its
+    // target. Totals since process start, I/O thread only, like the three above.
+    [[nodiscard]] std::uint64_t txPrimeHoldPackets() const noexcept { return m_txPrimeHoldPackets; }
+    [[nodiscard]] std::uint64_t txPrimeDeadlineReleases() const noexcept { return m_txPrimeDeadlineReleases; }
 
     // Baseband test tone, offsetHz from the TX carrier, amplitude 0..1 (<= 0
     // disables); takes precedence over queued IQ. Synthesised per EP2 packet with
@@ -467,6 +505,10 @@ signals:
     // machine is in quarantine, so the next requestRegister() will refuse for
     // a while. Consumers must not retry immediately in this handler.
     void controlRequestFailed(int addr, bool refused);
+    // requestIoBoardStatus()'s answer: registers 6..9 as read (decodeIoBoardStatus),
+    // never the echo of an ignored read, or why there is no reading.
+    void ioBoardStatusReady(quint32 registers);
+    void ioBoardStatusFailed(const QString& reason);
 
 private slots:
     // The sampling period elapsed: start one arming cycle if the interlocks allow.
@@ -607,6 +649,8 @@ private:
     [[nodiscard]] qint64 controlNowMs() const noexcept;
     // Emit whatever verdict the machine has settled, if any.
     void publishControlVerdict();
+    // A request that ends without an answer, on the signal its caller listens to.
+    void publishControlFailure(int addr, bool refused);
     // Confirm that the packet buildNextControlPacket() just produced reached the
     // socket, and start the RQST deadline if it carried the request bank. Takes
     // the socket's return value, so a write the kernel refused leaves the
@@ -766,6 +810,28 @@ private:
     // Roughly a quarter second at 48 kHz. Past this the operator is hearing
     // latency, so dropping is better than growing the backlog.
     static constexpr std::size_t kTxQueueMax = 12000;
+    // THE PRIME (#6052). Delivery is in whole blocks, so an unprimed queue is
+    // empty when each block is due and any lateness is keyed zeros mid-over.
+    // Armed on the keyed edge and on every abandon; the keyed queued-IQ arm then
+    // sends silence until the target is queued. Margin = target - one block:
+    // two blocks (42.67 ms) cover every over measured; that is also the latency.
+    static constexpr std::size_t kTxPrimeBlockSamples = 1024;   // Hl2TxDsp block at 48 kHz; hl2_tx_gate_test pins it
+    static constexpr std::size_t kTxPrimeMarginBlocks = 2;
+    static constexpr std::size_t kTxPrimeTargetSamples =
+        (kTxPrimeMarginBlocks + 1) * kTxPrimeBlockSamples;
+    // Deadline in packets: twice the margin's arrival time. A stopped producer is let go.
+    static constexpr std::uint64_t kTxPrimeMaxHoldPackets =
+        (2 * kTxPrimeMarginBlocks * kTxPrimeBlockSamples)
+            / static_cast<std::size_t>(kTxSamplesPerPacket);
+    static_assert(kTxPrimeTargetSamples < kTxQueueMax,
+                  "the prime target must fit below the overflow bound");
+    std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally
+    std::uint64_t m_txIqPrimeHeldPackets = 0;   // this hold, for the deadline
+    std::uint64_t m_txPrimeHoldPackets = 0;     // process total
+    std::uint64_t m_txPrimeDeadlineReleases = 0;
+    void armTxIqPrime() noexcept;
+    void abandonTxIq();   // every empty-without-transmit; re-arms the prime
+    [[nodiscard]] bool txIqPrimeHolds();   // true: send silence, leave the queue
     // Monotonic for the life of the PROCESS; see the accessors above. Never
     // reset on key, unkey, link loss or a change of radio -- a per-over counter
     // would answer a different question and would lose the drift that
@@ -792,6 +858,16 @@ private:
             / static_cast<std::uint64_t>(kTxSamplesPerPacket);
     std::uint64_t m_txUnderflowRunQuietPackets = 0;
     void reportTxUnderflowRun();
+    // Key-down report (#6052): armed on MOX's rising edge with the underflow and
+    // prime-hold totals, reported once on the first keyed packet carrying queued
+    // IQ. The differences are the silence this queue put at the head of the over
+    // (empty packets, and packets the prime held). CW and the test tone log nothing.
+    bool m_keyDownReportPending = false;
+    std::uint64_t m_keyDownUnderflowBase = 0;
+    std::uint64_t m_lastKeyDownUnderflowSamples = 0;
+    std::uint64_t m_keyDownPrimeHoldBase = 0;
+    std::uint64_t m_lastKeyDownPrimeHoldPackets = 0;
+    void reportKeyDown();
     double m_toneHz = 0.0;
     double m_toneAmp = 0.0;
     double m_tonePhase = 0.0;   // radians, carried across packets
@@ -824,6 +900,23 @@ private:
     // onControlPacketSent() runs, "is it still Queued" cannot distinguish a
     // request that went out from one that never did.
     bool m_requestOnBuiltPacket = false;
+    // I2C bus 2 spacing. i2c_bus2.v ignores any command that reaches it mid-
+    // transaction, so the IO board status read and the bus-2 writes either side
+    // of it go out at least kI2cBusSpacingMs apart. A config bank whose bus-2
+    // bits changed counts as a write (frame A's filter bits start one), and the
+    // read never shares its packet. Stamped on the packet built, committed when
+    // onControlPacketSent() sees it reach the socket. The ms clock rounds down,
+    // hence 2 for "over 1 ms".
+    static constexpr qint64 kI2cBusSpacingMs = 2;
+    qint64 m_builtAtMs = 0;
+    bool   m_busReadOnBuiltPacket = false;
+    bool   m_i2cWriteOnBuiltPacket = false;
+    // configBus2Bits() of the config bank; kConfigBus2Unknown before a session's first.
+    static constexpr std::uint32_t kConfigBus2Unknown = 0xFFFFFFFFu;
+    std::uint32_t m_configBus2OnBuiltPacket = kConfigBus2Unknown;
+    std::uint32_t m_lastConfigBus2Sent = kConfigBus2Unknown;
+    qint64 m_lastBusReadSentMs = -kI2cBusSpacingMs;
+    qint64 m_lastI2cWriteSentMs = -kI2cBusSpacingMs;
     // Last transmit frequency handed to the IO board, and whether one ever was.
     // A separate flag rather than a 0 sentinel: 0 Hz is not a plausible tuned
     // frequency, but "never sent" still has to survive a radio that legitimately
@@ -906,7 +999,9 @@ private:
     int m_bsConsecutiveTimeouts = 0;
     // Since the MOX falling edge; invalid until the first unkey of the session.
     QElapsedTimer m_sinceUnkey;
-    bool m_running = false;
+    // Written on the I/O thread (start(), stop()); atomic so isRunning() can be
+    // read from the backend's thread.
+    std::atomic<bool> m_running{false};
     bool m_linkUp = false;
     // Reused per-packet decode buffers, one vector per running receiver. Sized
     // from m_ccRxFreq and reused rather than reallocated: at four receivers and

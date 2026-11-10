@@ -7,15 +7,23 @@
 // Socket-free: a backend with no transport, status lines fed to the model's
 // router, and meter-class packets fed straight to processDatagram(). The
 // restart is keyed by stream id alone, whatever the packet class.
+// Pre-connect PC Audio toggles also leave RX creation retryable: a real model's
+// connection records writes in memory and delivers replies through its ordinary
+// commandResponse signal. No radio peer is connected.
 
 #include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/flex/PanadapterStream.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "models/RadioModel.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QJsonObject>
+#include <QList>
 #include <QMap>
+#include <QPair>
 #include <QString>
 #include <QtEndian>
 
@@ -23,6 +31,50 @@
 #include <memory>
 
 namespace AetherSDR {
+class TxOperationIntegrationTestAccess {
+public:
+    static void recordCommands(RadioModel& radio, QList<QPair<quint32, QString>>& commands)
+    {
+        RadioConnection* connection = radio.m_connection;
+        QMetaObject::invokeMethod(connection, [connection, &commands]() {
+            connection->m_commandSinkForTest = [connection, &commands](quint32 seq, const QString& command) {
+                if (connection->isConnected()) {
+                    commands.append({seq, command});
+                }
+            };
+        }, Qt::BlockingQueuedConnection);
+    }
+    static void connectTransport(RadioModel& radio)
+    {
+        radio.m_connection->m_handle = 0x12345678u;
+        radio.m_connection->m_state.store(ConnectionState::Connected);
+        radio.m_guiClientRegistrationState.begin();
+    }
+    static void acceptGuiRegistration(RadioModel& radio)
+    {
+        radio.m_guiClientRegistrationState.complete(0, {});
+    }
+    static void drainCommands(RadioModel& radio)
+    {
+        QMetaObject::invokeMethod(radio.m_connection, [] {}, Qt::BlockingQueuedConnection);
+    }
+    static void reply(RadioModel& radio, quint32 seq, const QString& body)
+    {
+        RadioConnection* connection = radio.m_connection;
+        QMetaObject::invokeMethod(connection, [connection, seq, body]() {
+            emit connection->commandResponse(seq, 0, body);
+        }, Qt::BlockingQueuedConnection);
+        QCoreApplication::processEvents();
+    }
+    static void finish(RadioModel& radio)
+    {
+        radio.m_connection->m_state.store(ConnectionState::Disconnected);
+        QMetaObject::invokeMethod(radio.m_connection, [connection = radio.m_connection]() {
+            connection->m_commandSinkForTest = {};
+        }, Qt::BlockingQueuedConnection);
+    }
+};
+
 class VitaSequenceLossLogTestAccess {
 public:
     static void feedMeter(PanadapterStream& stream, quint32 streamId, int seq)
@@ -70,12 +122,158 @@ public:
     std::unique_ptr<PanadapterStream> stream = std::make_unique<PanadapterStream>();
 };
 
+void preconnectAudioDoesNotBlockRegisteredReceive()
+{
+    RadioModel radio;
+    QList<QPair<quint32, QString>> commands;
+    using Access = TxOperationIntegrationTestAccess;
+    Access::recordCommands(radio, commands);
+
+    radio.createRxAudioStream();
+    radio.removeRxAudioStream();
+    radio.createRxAudioStream();
+    Access::drainCommands(radio);
+    QJsonObject state = radio.troubleshootingSnapshot()["radio"].toObject()["remote_audio_rx"].toObject();
+    report("disconnected PC Audio toggles leave RX creation retryable",
+           !state["create_pending"].toBool() && !state["remove_requested"].toBool());
+    report("disconnected PC Audio emits no transport command", commands.isEmpty());
+
+    Access::connectTransport(radio);
+    radio.createRxAudioStream();
+    Access::drainCommands(radio);
+    state = radio.troubleshootingSnapshot()["radio"].toObject()["remote_audio_rx"].toObject();
+    report("pending GUI registration leaves RX creation retryable",
+           !state["create_pending"].toBool() && !state["remove_requested"].toBool());
+    report("RX creation waits for accepted GUI registration", commands.isEmpty());
+
+    Access::acceptGuiRegistration(radio);
+    radio.createRxAudioStream();
+    Access::drainCommands(radio);
+    quint32 createSeq = 0;
+    int createCount = 0;
+    for (const QPair<quint32, QString>& command : commands) {
+        if (command.second.startsWith(QStringLiteral("stream create type=remote_audio_rx "))) {
+            createSeq = command.first;
+            ++createCount;
+        }
+    }
+    report("registered transport receives exactly one RX creation request", createCount == 1);
+    if (createSeq != 0) {
+        Access::reply(radio, createSeq, QStringLiteral("0x04000008"));
+    }
+    state = radio.troubleshootingSnapshot()["radio"].toObject()["remote_audio_rx"].toObject();
+    report("successful creation response adopts our RX stream",
+           state["stream_id_known"].toBool() && state["owned_by_us"].toBool()
+           && !state["create_pending"].toBool() && !state["remove_requested"].toBool());
+    Access::finish(radio);
+}
+
+void lineOutOwnsReceiveWithoutPcPlayback()
+{
+    auto& settings = AppSettings::instance();
+    const QVariant previous = settings.value("PcAudioEnabled", "True");
+    for (bool pcPlaybackRemains : {false, true}) {
+        settings.setValue("PcAudioEnabled", "False");
+        RadioModel radio;
+        radio.setLineOutPcAudioOffConsent(true);
+        QList<QPair<quint32, QString>> commands;
+        using Access = TxOperationIntegrationTestAccess;
+        Access::recordCommands(radio, commands);
+        Access::connectTransport(radio);
+        Access::acceptGuiRegistration(radio);
+        radio.setLineOutAudioRequested(true);
+        radio.setLineOutAudioRequested(false);
+        radio.setLineOutAudioRequested(true);
+        radio.removeRxAudioStream();
+        Access::drainCommands(radio);
+        quint32 createSeq = 0;
+        int creates = 0;
+        for (const auto& command : commands) {
+            if (command.second.startsWith(QStringLiteral("stream create type=remote_audio_rx "))) {
+                createSeq = command.first;
+                ++creates;
+            }
+        }
+        report("recording alone creates one radio stream across pending demand changes", creates == 1);
+        if (createSeq != 0) { Access::reply(radio, createSeq, QStringLiteral("0x04000008")); }
+        radio.handleStatusForTest(QStringLiteral("stream 0x04000008"),
+            {{QStringLiteral("type"), QStringLiteral("remote_audio_rx")},
+             {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
+        Access::drainCommands(radio);
+        auto state = radio.troubleshootingSnapshot()["radio"].toObject()["remote_audio_rx"].toObject();
+        report("PC Audio off and restored status preserve the recording stream",
+               state["stream_id_known"].toBool() && !state["remove_requested"].toBool());
+        report("PC Audio preference stays off during recording",
+               settings.value("PcAudioEnabled").toString() == "False");
+        settings.setValue("PcAudioEnabled", pcPlaybackRemains ? "True" : "False");
+        radio.setLineOutAudioRequested(false);
+        Access::drainCommands(radio);
+        state = radio.troubleshootingSnapshot()["radio"].toObject()["remote_audio_rx"].toObject();
+        report("last recording listener releases only when PC playback does not need the stream",
+               state["stream_id_known"].toBool() == pcPlaybackRemains);
+        Access::finish(radio);
+    }
+    settings.setValue("PcAudioEnabled", previous);
+}
+
+void lineOutRequiresConsentWhenPcAudioIsOff()
+{
+    auto& settings = AppSettings::instance();
+    const QVariant previous = settings.value("PcAudioEnabled", "True");
+    settings.setValue("PcAudioEnabled", "False");
+
+    RadioModel radio;
+    QList<QPair<quint32, QString>> commands;
+    using Access = TxOperationIntegrationTestAccess;
+    Access::recordCommands(radio, commands);
+    Access::connectTransport(radio);
+    Access::acceptGuiRegistration(radio);
+
+    radio.setLineOutAudioRequested(true);
+    Access::drainCommands(radio);
+    int creates = 0;
+    for (const auto& command : commands) {
+        if (command.second.startsWith(QStringLiteral("stream create type=remote_audio_rx "))) {
+            ++creates;
+        }
+    }
+    report("Line Out does not open remote_audio_rx while PC Audio is off without consent",
+           creates == 0 && !radio.lineOutAudioStreamDemanded());
+
+    radio.setLineOutPcAudioOffConsent(true);
+    Access::drainCommands(radio);
+    quint32 createSeq = 0;
+    for (const auto& command : commands) {
+        if (command.second.startsWith(QStringLiteral("stream create type=remote_audio_rx "))) {
+            ++creates;
+            createSeq = command.first;
+        }
+    }
+    report("explicit PC Audio-off consent starts the radio audio stream", creates == 1
+           && radio.lineOutAudioStreamDemanded());
+    if (createSeq != 0) { Access::reply(radio, createSeq, QStringLiteral("0x04000008")); }
+    radio.setLineOutPcAudioOffConsent(false);
+    Access::drainCommands(radio);
+    bool removed = false;
+    for (const auto& command : commands) {
+        removed = removed || command.second.startsWith(QStringLiteral("stream remove 0x04000008"));
+    }
+    report("withdrawing consent releases the stream and stops Line Out demand",
+           removed && !radio.lineOutAudioStreamDemanded());
+    Access::finish(radio);
+    settings.setValue("PcAudioEnabled", previous);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("remote-audio-rx-seq-restart"));
     QCoreApplication app(argc, argv);
+
+    preconnectAudioDoesNotBlockRegisteredReceive();
+    lineOutOwnsReceiveWithoutPcPlayback();
+    lineOutRequiresConsentWhenPcAudioIsOff();
 
     RadioModel radio;
     auto backend = std::make_unique<Backend>();

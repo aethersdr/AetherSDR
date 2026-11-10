@@ -20,7 +20,7 @@ Open it from **Tools → Net Scheduler...**
 
 Click **Add…** and fill in (a new net starts as Weekly on today's weekday):
 
-<img src="/img/screens/net-scheduler-add-net.png" width="488" alt="Add Net dialog. Name: Tuesday 20 m Net. Repeats Weekly every 1 week(s), On with day buttons M, T, W, T, F, S, S. At 8:00 PM, Etc/UTC. Remind me 10 minutes before. Frequency 14.250000 MHz, USB, with a Capture current VFO button. Filter 100 Hz to 2800 Hz, an empty Notes field, the next occurrence in blue, and OK and Cancel buttons." />
+<img src="/img/screens/net-scheduler-add-net.png" width="488" alt="Add Net dialog with its title in the canon header and a round close button in the top-right corner. Name: Tuesday 20 m Net. Repeats Weekly every 1 week(s), On with day buttons M, T, W, T, F, S, S. At 8:00 PM, Etc/UTC. Remind me 10 minutes before. Frequency 14.250000 MHz, USB, with a Capture current VFO button. Filter 100 Hz to 2800 Hz, an empty Notes field, the next occurrence in blue, and OK and Cancel buttons." />
 
 *Adding a net: name, repeat pattern, time, reminder and frequency.*
 
@@ -37,7 +37,11 @@ Click **Add…** and fill in (a new net starts as Weekly on today's weekday):
   before**, or **1 hour before**.
 - **Frequency**, with **Capture current VFO** to copy the active slice's
   frequency, mode and filter (it needs an open slice on a connected radio).
-- **Mode** and **Filter**.
+- **Mode** and **Filter**. FreeDV presets can use **FDVU** (upper sideband)
+  or **FDVL** (lower sideband); **FDV** is also available for existing presets.
+  Capturing or editing a preset also preserves a mode name outside the common
+  choices, such as a radio waveform. Mode names are normalized to uppercase.
+  The connected radio must support that mode to tune to it.
 - **Notes:** net control, NetLogger name and anything else you want to keep
   with it.
 
@@ -55,6 +59,10 @@ At reminder time a banner appears in the main window with:
 
 AetherSDR also tries to show a desktop notification.
 
+On a supported radio, a captured preset also reapplies its tuning step and any
+saved repeater offset or tone fields. Fields absent from the preset are left
+unchanged. The net is not a radio memory slot, and applying it does not key TX.
+
 ### Import and export
 
 **Export…** saves the schedule as a JSON file; **Import…** reads one back,
@@ -65,13 +73,19 @@ When an imported net matches one you already have, choose:
 - **Overwrite** — replace yours with the imported one.
 - **Import as new** — keep both.
 
+Imports reject presets whose mode, repeater direction or tone mode contains
+spaces, control characters or other invalid token characters, or exceeds 64
+characters. The error identifies the net and field to correct; the existing
+schedule stays unchanged. Safe waveform mode names are preserved even when
+they are outside the common choices.
+
 ## Reference
 
 ### The schedule list
 
 The window lists your nets with these columns:
 
-<img src="/img/screens/net-scheduler-window.png" width="640" alt="Net Scheduler window. A table with columns On, Name, Repeats, Next, Frequency and Mode lists two nets: Tuesday 20 m Net, weekly, 14.2500 MHz USB, and Sunday 20 m Net, weekly, 14.3000 MHz USB, the second selected. Add…, Edit…, Remove, Disable, Tune Now, Import… and Export… buttons run along the bottom." />
+<img src="/img/screens/net-scheduler-window.png" width="640" alt="Net Scheduler window with its title in the canon header and a round close button in the top-right corner. A table with columns On, Name, Repeats, Next, Frequency and Mode lists two nets: Tuesday 20 m Net, weekly, 14.2500 MHz USB, and Sunday 20 m Net, weekly, 14.3000 MHz USB, the second selected. Add…, Edit…, Remove, Disable, Tune Now, Import… and Export… buttons run along the bottom." />
 
 *The Net Scheduler with two weekly nets added.*
 
@@ -85,7 +99,15 @@ The window lists your nets with these columns:
 | **Mode** | The mode to tune |
 
 Buttons: **Add…**, **Edit…**, **Remove**, **Enable** / **Disable**,
-**Import…** and **Export…**.
+**Tune Now**, **Import…** and **Export…**.
+
+**Remove** asks first, with **Cancel** as the default, so pressing Return
+keeps the net; click **Remove** to delete it.
+
+The window has no title bar: drag any empty part of it to move it, drag an
+edge to resize it, and close it with the round button in its top-right
+corner, Escape, or ⌘W (Ctrl+W on Windows and Linux). It reopens where you
+left it.
 
 ## Troubleshooting
 

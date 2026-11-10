@@ -2,6 +2,7 @@
 #include "GuardedSlider.h"
 #include "PskBeaconLevelPolicy.h"
 #include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
 #include "ComboStyle.h"
 #include "FramelessResizer.h"
 
@@ -14,6 +15,7 @@
 #include "core/PskReporterClient.h"
 #include "core/RadioSettingsScope.h"
 #include "core/TxKeyingMarker.h"
+#include "core/WsprAgentClient.h"
 #include "core/WsprBeacon.h"
 #include "map/CityLightsShading.h"
 #include "map/MapDisplayWidget.h"
@@ -307,36 +309,6 @@ QScrollArea {
 QSplitter::handle {
     background: transparent;
 }
-QScrollBar:vertical {
-    background: transparent;
-    width: 12px;
-    margin: 8px 2px 8px 2px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-height: 34px;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-QScrollBar:horizontal {
-    background: transparent;
-    height: 12px;
-    margin: 2px 8px 2px 8px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: {{color.canon.lineHi}};
-    border-radius: 5px;
-    min-width: 34px;
-}
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
-    width: 0px;
-}
 )";
 
 // A status token as "#rrggbb" for rich text, through the window's scope.
@@ -450,6 +422,7 @@ QString buildSpotCard(const PskReporterSpot& spot, bool hasHome,
 PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                                            RadioModel* radioModel,
                                            PropForecastClient* propForecast,
+                                           WsprSpotFeed* wsprFeed,
                                            QWidget* parent)
     : CanonWindow(QStringLiteral("AetherMap"), parent, Kind::Workspace)
     , m_audioEngine(audioEngine)
@@ -468,7 +441,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     setMinimumSize(720, 520);
     FramelessResizer::install(this);
     applyCanonSheet(bodyWidget(), [] {
-        return QString::fromLatin1(kAetherMapStyle) + canonIndicatorRules();
+        return QString::fromLatin1(kAetherMapStyle) + canonScrollBarRules() + canonIndicatorRules();
     });
 
     auto* root = new QVBoxLayout(bodyWidget());
@@ -1505,6 +1478,38 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_markerRefreshTimer->setInterval(250);
     connect(m_markerRefreshTimer, &QTimer::timeout,
             this, &PskReporterMapDialog::rebuildMarkers);
+    // The WSPR receiver's decodes, in PSK Reporter's shape: heard here.
+    m_wsprFeed = wsprFeed;
+    const auto readWsprReports = [this] {
+        m_wsprReports.clear();
+        if (!m_wsprFeed) {
+            return;
+        }
+        for (const WsprSpot& s : m_wsprFeed->recentSpots()) {
+            if (s.call.isEmpty()) {
+                continue;   // an unresolved hashed call has no station to place
+            }
+            PskReporterSpot report;
+            report.receiverCallsign = m_wsprFeed->receiverCallsign();
+            report.receiverLocator = m_wsprFeed->receiverGrid();
+            report.senderCallsign = s.call;
+            report.senderLocator = s.grid;
+            report.mode = QStringLiteral("WSPR");
+            report.frequencyHz = s.frequencyHz;
+            report.snr = s.snr;
+            report.flowStartSeconds = s.cycleStart;
+            m_wsprReports.append(report);
+        }
+    };
+    readWsprReports();
+    if (m_wsprFeed) {
+        connect(m_wsprFeed, &WsprSpotFeed::spotsUpdated, this, [this, readWsprReports] {
+            readWsprReports();
+            if (!m_markerRefreshTimer->isActive()) {
+                m_markerRefreshTimer->start();
+            }
+        });
+    }
     connect(m_client, &PskReporterClient::spotsUpdated, this, [this] {
         if (!m_markerRefreshTimer->isActive()) {
             m_markerRefreshTimer->start();
@@ -2600,6 +2605,14 @@ void PskReporterMapDialog::rebuildMarkers()
         // Merge the live layer second so an equal-timestamp report is rendered
         // with callsign-specific labeling and hover behavior.
         mergeSpots(m_client->spots(), true);
+    }
+    // Stations this station's own WSPR receiver heard: part of a view that
+    // shows every station, or that names this one.
+    for (const PskReporterSpot& spot : m_wsprReports) {
+        if (globalEnabled
+            || spot.receiverCallsign.compare(m_appliedMapCallsign, Qt::CaseInsensitive) == 0) {
+            mergeSpot(spot, !globalEnabled);
+        }
     }
 
     QVector<MapView::Marker> markers;

@@ -3,6 +3,7 @@
 // unit scaling). No radio, no Qt event loop required.
 
 #include "core/MemoryCsvCompat.h"
+#include "core/MemoryFieldValues.h"
 
 #include <QByteArray>
 #include <QFile>
@@ -161,6 +162,33 @@ void testChirpMissingToneFreqFallsToOff()
                "0 Hz tone value degrades to off");
 }
 
+void testFreeDvRoundTrip()
+{
+    for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL"),
+                                QStringLiteral("FDV")}) {
+        expect(AetherSDR::MemoryFields::isKnownMode(mode),
+               "FreeDV modes are recognized rather than passed through as unknown CSV modes");
+        MemoryCsvRecord record;
+        record.memory.name = "FreeDV";
+        record.memory.freq = 14.236;
+        record.memory.mode = mode;
+        record.memory.rxFilterLow = mode == "FDVL" ? -3000 : 95;
+        record.memory.rxFilterHigh = mode == "FDVL" ? -95 : 3000;
+        const MemoryCsvParseResult result =
+            MemoryCsvCompat::parse(MemoryCsvCompat::serialize({record}));
+        expect(result.ok(), "modern and legacy FreeDV CSV imports have no validation errors");
+        if (!expect(result.records.size() == 1, "FreeDV CSV round-trip yields one record")) {
+            continue;
+        }
+        const AetherSDR::MemoryEntry& restored = result.records.first().memory;
+        expect(restored.mode == mode, "FreeDV CSV preserves the mode token");
+        expect(restored.rxFilterLow == record.memory.rxFilterLow,
+               "FreeDV CSV preserves the low filter edge");
+        expect(restored.rxFilterHigh == record.memory.rxFilterHigh,
+               "FreeDV CSV preserves the high filter edge");
+    }
+}
+
 #ifdef CHIRP_SAMPLE_CSV
 void testSampleFixtureParses()
 {
@@ -197,6 +225,7 @@ int main()
     testSampleFixtureParses();
 #endif
     testSmartSdrStillWorks();
+    testFreeDvRoundTrip();
     testUnknownHeaderRejected();
 
     if (g_failures == 0)

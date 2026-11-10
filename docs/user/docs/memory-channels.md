@@ -14,9 +14,11 @@ Open it from **Tools → Memory...**
 For quick recall while operating, the panadapter's overlay **Memory** button
 opens a browse panel (see [Memory browse panel](#memory-browse-panel)).
 
-<img src="/img/screens/memory-dialog.png" width="1000" alt="Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KK7GWY, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected." />
+<img src="/img/screens/memory-dialog.png" width="1000" alt="Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KI4TTZ, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected." />
 
 *The Memory Channels window, listing the memories stored in the radio.*
+
+The window has no title bar. Drag any empty part of it to move it, and drag an edge or corner to resize it; it reopens at the size and place you left it. Close it with the round **✕** in the top-right corner, **Esc** or **Ctrl+W** (**⌘W** on macOS); while the search box holds text, **Esc** clears it first. **View → Frameless Window** does not apply to it.
 
 ## Using memory channels
 
@@ -84,7 +86,7 @@ Sortable columns:
 | Owner | Callsign that created the memory |
 | Frequency | Frequency in MHz |
 | Name | User-assigned name (e.g. "K7ID Repeater") |
-| Mode | USB, LSB, CW, FM, etc. |
+| Mode | USB, LSB, CW, FM, etc.; FreeDV uses FDVU or FDVL, with FDV also available for existing memories |
 | Step | Tuning step in Hz |
 | Offset Dir | Up / Down / Simplex |
 | Repeater Offset | MHz |

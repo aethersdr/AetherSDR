@@ -1,8 +1,10 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "CwReceiveControl.h"
 #include "SpotRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
+#include "CwTextRequest.h"
 #include "PanDisplayRequest.h"
 #include "PanLifecycleRequest.h"
 
@@ -666,6 +668,7 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    std::optional<CwReceiveControl> cwReceiveControl;
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
     std::optional<PanControl> panControl;
@@ -825,6 +828,15 @@ struct RadioCapabilities {
         QString requiredLicenseFeature;
     };
     std::optional<AutoAgcThresholdControl> autoAgcThresholdControl;
+    // The gain the AGC-T knob (0..100) sets: offsetDb + dbPerStep * knob, both
+    // as the AGC's maximum gain and, with AGC off, as its fixed gain. The AGC-T
+    // tooltips show it. Absent: no mapping declared, and the tooltips show the
+    // knob position as before.
+    struct AgcGainScale {
+        double offsetDb = 0.0;
+        double dbPerStep = 1.0;
+    };
+    std::optional<AgcGainScale> agcGainScale;
     // Modes the implemented selector can honor. A native OFF time-constant
     // editor is a different contract from selecting a fast/medium/slow bank.
     QStringList agcModes{QStringLiteral("off"), QStringLiteral("slow"),
@@ -904,6 +916,12 @@ struct RadioCapabilities {
     // applet, the Profile Manager, import/export, the Profiles menu — goes away,
     // rather than offering an empty list the operator cannot populate.
     bool hasProfiles = false;
+    // The radio also stores named CW profiles (Flex `profile cw …`, SmartSDR
+    // 4.3.16+) that a client can list, load, create, delete and reset. Engaged
+    // gates ProfileRequest::Kind::Cw and the Profile Manager CW tab; meaningless
+    // unless hasProfiles is also true.
+    struct CwProfileControl {};
+    std::optional<CwProfileControl> cwProfileControl;
 
     // Per-slice RX audio and per-pan IQ as separate streams routed to virtual audio
     // devices for external decoders (Flex DAX). UI visibility only; the crash guard
@@ -956,6 +974,7 @@ struct RadioCapabilities {
     int cwPitchStepHz = 10;
 
     QString cwTextKeyerName{QStringLiteral("CWX")};
+    std::optional<CwTextControl> cwTextControl;
     int cwTextMinWpm = 5;
     int cwTextMaxWpm = 100;
     int cwTextMaxMessageChars = 0;  // 0 = backend has no fixed whole-message limit
@@ -982,6 +1001,19 @@ struct RadioCapabilities {
     // tab: that page drives the local ThumbDV helper against a SmartSDR D-STAR
     // waveform, which is empty on every family that cannot load waveforms.
     bool hasWaveforms = false;
+    // The radio keeps an environment per Docker waveform container and can
+    // recreate a container with a new one (Flex `waveform env …` / `waveform
+    // recreate`, SmartSDR 4.3.16+, on a platform with a Waveform Processor).
+    // Engaged gates WaveformEnvRequest and the Waveforms dialog's Environment…
+    // action; meaningless unless hasWaveforms is also true.
+    struct WaveformEnvControl {};
+    std::optional<WaveformEnvControl> waveformEnvControl;
+    // The radio keeps its own list of NTP time sources that a client can list,
+    // add, remove, enable and disable (Flex `ntp_sources …`, SmartSDR 4.3.16+ on
+    // the BigBend platform: FLEX-8000, Aurora, ML-9600, CL-9300). Engaged gates NtpSourceRequest and the Radio Setup Time
+    // page; maxSources is the radio's ceiling.
+    struct NtpSourceControl { int maxSources{10}; };
+    std::optional<NtpSourceControl> ntpSourceControl;
 
     // Several GUI clients can hold independent sessions on the radio at once,
     // each with its own slices and audio streams (SmartSDR multiFLEX). A backend

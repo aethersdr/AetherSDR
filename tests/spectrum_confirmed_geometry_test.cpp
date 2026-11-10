@@ -2,6 +2,7 @@
 #include "TestSettingsProfile.h"
 #include "FlexSquelchBridgeFixture.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/SpectrumTraceBins.h"
 #include "gui/VfoWidget.h"
 #include "gui/SpectrumOverlayMenu.h"
 #include "gui/MainWindowHelpers.h"
@@ -17,6 +18,7 @@
 #include <QPainter>
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QThread>
@@ -100,6 +102,20 @@ struct SpectrumOffscreenTestAccess {
         widget.drawOffScreenSlices(painter, QRect(0, 0, widget.width(), widget.spectrumPixelHeight()));
         return widget.m_offScreenRects.front().center();
     }
+    // The shared anchored-zoom tail both the macOS trackpad (ZoomNativeGesture)
+    // and the touch pinch (QPinchGesture) funnel through after the refactor.
+    static void anchoredZoom(SpectrumWidget& widget, double bandwidthFactor,
+                             QPointF globalPos) {
+        widget.applyAnchoredZoom(bandwidthFactor, globalPos);
+    }
+    static void finishZoomSettle(SpectrumWidget& widget) {
+        widget.finishFrequencyRangeSettleUpdate();
+    }
+    // One in-window slice-drag tune step: edgePanTuneRequested with the
+    // centre unchanged.
+    static void sliceDragTuneStep(SpectrumWidget& widget, int x) {
+        widget.driveVfoDragTune(x, "test");
+    }
 };
 }
 namespace AetherSDR::rtl {
@@ -141,6 +157,296 @@ void wait(int ms)
     }
 }
 bool near(double a, double b) { return std::abs(a - b) < 1e-10; }
+
+// Registered with QT_SCALE_FACTOR=2 (a Retina screen). A FLEX-8600 on 4.3.16
+// stops FFT and waterfall data for every client at xpixels 4093 or more.
+int runPanPixelsAtRetinaScale()
+{
+    int failures = 0;
+    const auto check = [&](bool ok, const char* name) {
+        std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
+        failures += !ok;
+    };
+    SpectrumWidget pan;
+    pan.resize(1000, 600);
+    const double ratio = pan.devicePixelRatioF();
+    if (!near(ratio, 2.0)) {
+        std::printf("[FAIL] pan pixels: device pixel ratio is %g, expected 2\n", ratio);
+        return 1;
+    }
+    check(panXpixelsFor(&pan) == 2000, "pan pixels: a 1000-point pan requests 2000 device pixels");
+    pan.resize(1921, 600);
+    check(panXpixelsFor(&pan) == 3840, "pan pixels: a 1921-point pan (3842 unclamped) is capped at 3840");
+    pan.resize(2047, 600);
+    // The safety bound, from the measured stall: unlike the 3840 checks, which
+    // follow the chosen cap, this one must not be relaxed if the cap changes.
+    check(panXpixelsFor(&pan) <= 4092,
+          "pan pixels: a 2047-point pan (4094 unclamped, a stalling width) requests at most 4092");
+    pan.resize(2100, 600);
+    check(panXpixelsFor(&pan) == 3840, "pan pixels: a 2100-point pan is capped at 3840");
+    pan.resize(2560, 600);
+    check(panXpixelsFor(&pan) == 3840, "pan pixels: a 2560-point pan (a 5K screen's full width) is capped at 3840");
+    return failures ? 1 : 0;
+}
+
+// `get tracedebug <pan> bins` (#5806): the widget hands out the last frame as
+// it arrived, with the geometry it arrived under, and refuses while a pan or
+// zoom has not been followed by kSettledFrames frames.
+int runTraceBins()
+{
+    int failures = 0;
+    const auto check = [&](bool ok, const char* name) {
+        std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
+        failures += !ok;
+    };
+    constexpr int kSettled = static_cast<int>(SpectrumTraceBins::FrameCapture::kSettledFrames);
+    int frameNo = 0;
+    // Each frame distinct and sloped, so a reprojected copy cannot equal it.
+    const auto frame = [&frameNo]() {
+        ++frameNo;
+        QVector<float> bins(256);
+        for (int i = 0; i < bins.size(); ++i) {
+            bins[i] = -130.0f + 0.1f * static_cast<float>(i) + static_cast<float>(frameNo);
+        }
+        bins[64] = -40.0f - static_cast<float>(frameNo);
+        return bins;
+    };
+    const auto refusal = [](const QVariantMap& m) {
+        return m.value(QStringLiteral("refusal")).toString();
+    };
+    const auto sameBins = [](const QVariantMap& m, const QVector<float>& want) {
+        const QVariantList got = m.value(QStringLiteral("bins")).toList();
+        if (got.size() != want.size()) {
+            return false;
+        }
+        for (int i = 0; i < want.size(); ++i) {
+            if (got.at(i).toDouble() != static_cast<double>(want.at(i))) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto nearHz = [](double a, double b) { return std::abs(a - b) < 1e-3; };
+
+    SpectrumWidget w;
+    w.resize(1000, 600);
+    w.setFrequencyRangeImmediate(14.100, 0.200);
+    check(refusal(w.traceBinsSnapshot()).contains(QLatin1String("no frame")),
+          "trace bins: refused before any frame");
+
+    QVector<float> last;
+    for (int i = 0; i < kSettled; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+    }
+    QVariantMap m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last),
+          "trace bins (a): settled frames are returned exactly as fed");
+    check(nearHz(m.value(QStringLiteral("centerHz")).toDouble(), 14'100'000.0)
+              && nearHz(m.value(QStringLiteral("spanHz")).toDouble(), 200'000.0)
+              && m.value(QStringLiteral("ageMs")).toLongLong() >= 0,
+          "trace bins (a): with the ingest geometry and a frame age");
+
+    // (b) A radio-echo zoom: setFrequencyRangeImmediate reprojects m_bins.
+    w.setFrequencyRangeImmediate(14.100, 0.100);
+    m = w.traceBinsSnapshot();
+    check(!refusal(m).isEmpty(), "trace bins (b): refused right after a zoom, before any new frame");
+    for (int i = 0; i < kSettled - 1; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+        check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+              "trace bins (b): refused while fewer than kSettledFrames frames followed the zoom");
+    }
+    last = frame();
+    w.updateSpectrum(last);
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last)
+              && nearHz(m.value(QStringLiteral("spanHz")).toDouble(), 100'000.0),
+          "trace bins (b): the kSettledFrames-th frame after the zoom is returned as fed, at the new span");
+
+    // (b) A centre-only snap (a large pan): m_bins is reprojected, not replaced.
+    w.setFrequencyRangeImmediate(14.160, 0.100);
+    check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+          "trace bins (b): refused right after a large pan");
+    for (int i = 0; i < kSettled; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+    }
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last)
+              && nearHz(m.value(QStringLiteral("centerHz")).toDouble(), 14'160'000.0),
+          "trace bins (b): settled again after the pan, at the new centre");
+
+    // (b) A local anchored zoom (trackpad/pinch path): in progress until it settles.
+    const QPointF anchor(w.mapToGlobal(QPoint(w.width() / 2, w.height() / 2)));
+    SpectrumOffscreenTestAccess::anchoredZoom(w, 1.5, anchor);
+    check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+          "trace bins (b): refused during a local zoom gesture");
+    SpectrumOffscreenTestAccess::finishZoomSettle(w);
+    for (int i = 0; i < kSettled - 1; ++i) {
+        w.updateSpectrum(frame());
+    }
+    check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+          "trace bins (b): refused after the gesture until kSettledFrames frames");
+    last = frame();
+    w.updateSpectrum(last);
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last),
+          "trace bins (b): returned once the gesture's frames settled");
+
+    // (c) A pan-follow nudge animates the centre.
+    const double center = w.centerMhz();
+    w.setFrequencyRange(center + w.bandwidthMhz() * 0.05, w.bandwidthMhz());
+    check(refusal(w.traceBinsSnapshot()).contains(QLatin1String("animation")),
+          "trace bins (c): refused while the pan animation runs");
+    for (int i = 0; i < kSettled; ++i) {
+        w.updateSpectrum(frame());
+    }
+    check(refusal(w.traceBinsSnapshot()).contains(QLatin1String("animation")),
+          "trace bins (c): frames during the animation do not end the refusal");
+    wait(400);
+    check(!refusal(w.traceBinsSnapshot()).isEmpty(),
+          "trace bins (c): refused after the animation lands until new frames arrive");
+    for (int i = 0; i < kSettled; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+    }
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last)
+              && nearHz(m.value(QStringLiteral("centerHz")).toDouble(), w.centerMhz() * 1e6),
+          "trace bins (c): returned after the animation at the landed centre");
+
+    // (d) rfoust's probe (#6720): frames queued by Receive Sync before a pan
+    // and delivered after it. Unflagged, as on 3c71caffb, they pass at the new
+    // centre; flagged as held they are refused until kSettledFrames unheld.
+    {
+        SpectrumWidget q;
+        q.resize(1000, 600);
+        q.setFrequencyRangeImmediate(14.100, 0.200);
+        for (int i = 0; i < kSettled; ++i) {
+            q.updateSpectrum(frame());
+        }
+        QList<QVector<float>> queued;
+        for (int i = 0; i < kSettled; ++i) {
+            queued.append(frame());
+        }
+        q.setFrequencyRangeImmediate(14.160, 0.200);
+        for (const auto& f : queued) {
+            q.updateSpectrum(f);
+        }
+        QVariantMap qm = q.traceBinsSnapshot();
+        check(refusal(qm).isEmpty()
+                  && nearHz(qm.value(QStringLiteral("centerHz")).toDouble(), 14'160'000.0),
+              "trace bins (d): unflagged queued frames pass at the new centre (the defect)");
+        q.setFrequencyRangeImmediate(14.220, 0.200);
+        for (const auto& f : queued) {
+            q.updateSpectrum(f, {}, true);
+        }
+        check(refusal(q.traceBinsSnapshot()).contains(QLatin1String("held by Receive Sync")),
+              "trace bins (d): held frames are refused");
+        for (int i = 0; i < kSettled - 1; ++i) {
+            q.updateSpectrum(frame());
+        }
+        check(!refusal(q.traceBinsSnapshot()).isEmpty(),
+              "trace bins (d): the count restarts after held frames");
+        last = frame();
+        q.updateSpectrum(last);
+        qm = q.traceBinsSnapshot();
+        check(refusal(qm).isEmpty() && sameBins(qm, last),
+              "trace bins (d): unheld frames are accepted after kSettledFrames");
+    }
+
+    // The encoder fields are the frame's, not the widget's current range.
+    {
+        SpectrumWidget e;
+        e.resize(1000, 600);
+        e.setFrequencyRangeImmediate(7.100, 0.200);
+        e.setEncoderDbmRange(-140.0f, -20.0f, 1);
+        for (int i = 0; i < kSettled; ++i) {
+            e.updateSpectrum(frame(), SpectrumDecodeScale{-140.0f, -20.0f, 1});
+        }
+        e.setEncoderDbmRange(-150.0f, -30.0f, 2);
+        const QVariantMap em = e.traceBinsSnapshot();
+        check(refusal(em).isEmpty()
+                  && em.value(QStringLiteral("encoderMinDbm")).toFloat() == -140.0f
+                  && em.value(QStringLiteral("encoderMaxDbm")).toFloat() == -20.0f,
+              "trace bins: the encoder range is the one the returned frame was decoded with");
+    }
+
+    // clearDisplay (disconnect, profile load) drops the captured frame.
+    w.clearDisplay();
+    check(refusal(w.traceBinsSnapshot()).contains(QLatin1String("no frame")),
+          "trace bins: refused as no frame after clearDisplay");
+    for (int i = 0; i < kSettled; ++i) {
+        last = frame();
+        w.updateSpectrum(last);
+    }
+    m = w.traceBinsSnapshot();
+    check(refusal(m).isEmpty() && sameBins(m, last), "trace bins: returned again after new frames");
+
+    // A slice-drag tune step leaves the pan where it is: no geometry change.
+    {
+        const quint64 settledBefore = m.value(QStringLiteral("settledFrames")).toULongLong();
+        SpectrumOffscreenTestAccess::sliceDragTuneStep(w, w.width() / 3);
+        const QVariantMap after = w.traceBinsSnapshot();
+        check(refusal(after).isEmpty()
+                  && after.value(QStringLiteral("settledFrames")).toULongLong() == settledBefore,
+              "trace bins: a slice-drag tune step with an unchanged centre keeps the settle count");
+    }
+
+    // Confirmation mode: a sent request changes nothing until the radio's echo.
+    {
+        SpectrumWidget f;
+        f.resize(1000, 600);
+        f.setPanGeometryConfirmationRequired(true);
+        f.observeFrequencyRange(10.120, 0.200);
+        double reqCenter = -1.0;
+        double reqSpan = -1.0;
+        QObject::connect(&f, &SpectrumWidget::frequencyRangeChangeRequested, &f,
+                         [&](double c, double b) { reqCenter = c; reqSpan = b; });
+        for (int i = 0; i < kSettled; ++i) {
+            f.updateSpectrum(frame());
+        }
+        check(refusal(f.traceBinsSnapshot()).isEmpty(), "trace bins (confirm): settled before the request");
+        const QPointF mid(f.mapToGlobal(QPoint(f.width() / 2, f.height() / 2)));
+        SpectrumOffscreenTestAccess::anchoredZoom(f, 0.5, mid);
+        SpectrumOffscreenTestAccess::finishZoomSettle(f);
+        check(reqSpan > 0.0 && nearHz(f.bandwidthMhz() * 1e6, 200'000.0),
+              "trace bins (confirm): the zoom is requested, not applied");
+        for (int i = 0; i < kSettled; ++i) {
+            f.updateSpectrum(frame());
+        }
+        check(refusal(f.traceBinsSnapshot()).contains(QLatin1String("not yet confirmed")),
+              "trace bins (confirm): frames before the echo do not end the refusal");
+        f.observeFrequencyRange(reqCenter, reqSpan);
+        check(!refusal(f.traceBinsSnapshot()).isEmpty(),
+              "trace bins (confirm): refused right after the echo moves the geometry");
+        for (int i = 0; i < kSettled; ++i) {
+            last = frame();
+            f.updateSpectrum(last);
+        }
+        m = f.traceBinsSnapshot();
+        check(refusal(m).isEmpty() && sameBins(m, last)
+                  && nearHz(m.value(QStringLiteral("spanHz")).toDouble(), reqSpan * 1e6),
+              "trace bins (confirm): returned after the echo and settled frames, at the echoed span");
+        // An echo that never comes stops refusing after the guard.
+        SpectrumOffscreenTestAccess::anchoredZoom(f, 0.5, mid);
+        SpectrumOffscreenTestAccess::finishZoomSettle(f);
+        for (int i = 0; i < kSettled; ++i) {
+            f.updateSpectrum(frame());
+        }
+        check(refusal(f.traceBinsSnapshot()).contains(QLatin1String("not yet confirmed")),
+              "trace bins (confirm): a request without an echo is refused");
+        wait(static_cast<int>(SpectrumTraceBins::FrameCapture::kRequestEchoGuardMs) + 200);
+        check(refusal(f.traceBinsSnapshot()).isEmpty(),
+              "trace bins (confirm): a lost echo stops refusing after kRequestEchoGuardMs");
+        // A slice-drag tune step sends no pan command, so nothing awaits an echo.
+        SpectrumOffscreenTestAccess::sliceDragTuneStep(f, f.width() / 3);
+        check(refusal(f.traceBinsSnapshot()).isEmpty(),
+              "trace bins (confirm): a slice-drag tune step with an unchanged centre is not an unconfirmed request");
+    }
+    return failures ? 1 : 0;
+}
 }
 
 int main(int argc, char** argv)
@@ -149,6 +455,12 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     if (app.arguments().contains(QStringLiteral("--flex-squelch-bridge-fixture"))) {
         return runFlexSquelchBridgeFixture(app);
+    }
+    if (app.arguments().contains(QStringLiteral("--pan-pixels-retina"))) {
+        return runPanPixelsAtRetinaScale();
+    }
+    if (app.arguments().contains(QStringLiteral("--trace-bins"))) {
+        return runTraceBins();
     }
     int failures = 0;
     const auto check = [&](bool ok, const char* name) {
@@ -806,6 +1118,105 @@ int main(int argc, char** argv)
         band.setBandPlanFontSize(0);
         hoverAt(14.105);
         check(tipGone(), "usage hover: no tooltip while the band strip is Off");
+    }
+    {
+        // The cap holds without a scale factor, so it stays pinned even if the
+        // --pan-pixels-retina registration's QT_SCALE_FACTOR is ignored.
+        SpectrumWidget wide;
+        wide.resize(5000, 600);
+        if (near(wide.devicePixelRatioF(), 1.0)) {
+            check(panXpixelsFor(&wide) == 3840, "pan pixels: a 5000-pixel pan at ratio 1 is capped at 3840");
+        } else {
+            std::printf("[SKIP] pan pixels: the ratio-1 cap case needs QT_SCALE_FACTOR unset (ratio is %g)\n",
+                        wide.devicePixelRatioF());
+        }
+    }
+
+    {
+        // Anchored gesture zoom (the shared applyAnchoredZoom extracted from the
+        // trackpad/pinch paths). Under confirmation the new span is requested,
+        // not applied locally, so assert the requested span and the clamp.
+        SpectrumWidget widget;
+        widget.resize(1000, 400);
+        widget.setPanGeometryConfirmationRequired(true);
+        widget.setFrequencyRangeImmediate(14.200, 0.200);
+        double reqSpan = -1;
+        QObject::connect(&widget, &SpectrumWidget::frequencyRangeChangeRequested,
+            &widget, [&](double, double span) { reqSpan = span; });
+        const QPointF anchor(widget.mapToGlobal(QPoint(widget.width() / 2,
+                                                       widget.height() / 2)));
+        SpectrumOffscreenTestAccess::anchoredZoom(widget, 0.5, anchor);
+        check(near(reqSpan, 0.100),
+              "anchored zoom: bandwidth factor 0.5 requests half the span");
+        check(near(widget.bandwidthMhz(), 0.200),
+              "anchored zoom: under confirmation the span is requested, not applied");
+        reqSpan = -1;
+        SpectrumOffscreenTestAccess::anchoredZoom(widget, 1.0e6, anchor);  // past max
+        check(reqSpan < 0, "anchored zoom past max bandwidth is clamped (no request)");
+        SpectrumOffscreenTestAccess::anchoredZoom(widget, 1.0e-9, anchor);  // past min
+        check(reqSpan < 0, "anchored zoom past min bandwidth is clamped (no request)");
+    }
+    {
+        // #6883: while FFT frames present, a waterfall row and its scroll ride
+        // the next FFT present. If the stream stops right after, the deferred
+        // row and its finished scroll must still be presented. One FFT frame,
+        // one native row 5 ms later, then silence.
+        SpectrumWidget wf;
+        wf.resize(1000, 600);
+        wf.setFrequencyRangeImmediate(14.100, 0.200);
+        wf.show();
+        const auto pump = [](int ms) {
+            QElapsedTimer clock;
+            clock.start();
+            while (clock.elapsed() < ms) {
+                QApplication::processEvents(QEventLoop::AllEvents, 5);
+                QThread::msleep(1);
+            }
+        };
+        pump(150);
+        // Offscreen has no QRhi to size the waterfall; give it rows directly.
+        SpectrumOffscreenTestAccess::prepareHistory(wf);
+        struct PaintCounter : QObject {
+            int paints = 0;
+            bool eventFilter(QObject*, QEvent* event) override {
+                if (event->type() == QEvent::Paint) {
+                    ++paints;
+                }
+                return false;
+            }
+        } counter;
+        wf.setConnectionAnimationVisible(false);
+        pump(100);
+        wf.installEventFilter(&counter);
+        pump(300);
+        std::printf("fft_stop_idle_paints=%d\n", counter.paints);
+        check(counter.paints == 0, "the final-frame probe starts from an idle widget");
+        counter.paints = 0;
+        wf.updateSpectrum(QVector<float>(512, -100.0f));
+        pump(5);
+        wf.updateWaterfallRow(QVector<float>(1024, 100.0f), 14.0, 14.2, 1);
+        const int paintsAtRow = counter.paints;
+        {
+            const QVariantMap atRow = wf.automationDssSnapshot();
+            std::printf("fft_stop_at_row width=%d rows=%d history=%d write=%d animating=%d visible=%d\n",
+                        atRow.value(QStringLiteral("waterfallWidth")).toInt(),
+                        atRow.value(QStringLiteral("waterfallRows")).toInt(),
+                        atRow.value(QStringLiteral("waterfallHistoryRows")).toInt(),
+                        atRow.value(QStringLiteral("waterfallWriteRow")).toInt(),
+                        atRow.value(QStringLiteral("waterfallScrollAnimating")).toBool(),
+                        wf.isVisible());
+        }
+        pump(500);
+        const QVariantMap stats = wf.automationDssSnapshot();
+        std::printf("fft_stop_final_frame paintsAtRow=%d paintsAfter=%d rows=%d animating=%d\n",
+                    paintsAtRow, counter.paints,
+                    stats.value(QStringLiteral("waterfallHistoryRows")).toInt(),
+                    stats.value(QStringLiteral("waterfallScrollAnimating")).toBool());
+        check(stats.value(QStringLiteral("waterfallHistoryRows")).toInt() >= 1,
+              "the native row reached the waterfall");
+        check(counter.paints > paintsAtRow,
+              "a row deferred to the next FFT frame is still presented when the FFT stops");
+        wf.removeEventFilter(&counter);
     }
     return failures ? 1 : 0;
 }

@@ -33,11 +33,14 @@
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/ReceiveCommand.h"
 #include "core/backends/ModelControlRequest.h"
+#include "core/backends/CwTextRequest.h"
 #include "core/backends/RadioSetupRequest.h"
 #include "core/backends/SpotRequest.h"
 #include "core/backends/PanControlRequest.h"
 #include "core/backends/SlicePresetRequest.h"
 #include "core/backends/ProfileRequest.h"
+#include "core/backends/NtpSourceRequest.h"
+#include "core/backends/WaveformEnvRequest.h"
 #include "core/backends/MemoryRequest.h"
 #include "core/backends/SliceLifecycleRequest.h"
 #include "core/backends/RestoredRadioState.h"
@@ -183,13 +186,19 @@ public:
             || request.field == RadioSetupRequest::Field::ClientStation)
             ? ReceiveDispatch::LocalOnly : ReceiveDispatch::Unsupported;
     }
+    virtual ReceiveDispatch requestRadioReboot(const RadioControlCompletion&,
+        const RadioControlFence&, const std::function<void()>&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestCwAutoTune(int, CwAutoTuneAction,
+        const RadioControlCompletion&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSpot(const SpotRequest&, const QString& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestPanControl(const QString&, const PanControlRequest&)
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSlicePreset(int, const SlicePresetRequest&)
     { return ReceiveDispatch::Unsupported; }
-    virtual ReceiveDispatch requestTxBand(const TxBandRequest&)
+    virtual ReceiveDispatch requestTxBand(const TxBandRequest&, const RadioSetupCompletion& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestPanDisplay(const QString& panId, const QString&,
         const PanDisplayRequest& request, const RadioControlCompletion& = {},
@@ -248,6 +257,19 @@ public:
     virtual ReceiveDispatch requestMemory(const MemoryRequest&,
                                           const RadioControlCompletion& = {},
                                           const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    // One step of a waveform container environment change. Gated by
+    // capabilities().waveformEnvControl; the radio's container status is the only
+    // confirmation of what the environment became.
+    virtual ReceiveDispatch requestWaveformEnv(const WaveformEnvRequest&,
+                                               const RadioControlCompletion& = {},
+                                               const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    // One command toward the radio's NTP time source list. Gated by
+    // capabilities().ntpSourceControl; ntpSourceChanged is the only confirmation.
+    virtual ReceiveDispatch requestNtpSource(const NtpSourceRequest&,
+                                             const RadioControlCompletion& = {},
+                                             const RadioControlFence& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestUsbCable(const UsbCableRequest&)
     { return ReceiveDispatch::Unsupported; }
@@ -493,6 +515,14 @@ public:
     {
         Q_UNUSED(panId);
         Q_UNUSED(step);
+    }
+    // How the radio's own scope window follows the VFO. `index` addresses the
+    // label list published on panScopeModesChanged; the control is enabled only
+    // for two or more labels, so only a backend with a real choice receives this.
+    virtual void setPanScopeMode(const QString& panId, int index)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(index);
     }
     virtual void setSliceRxAntenna(int sliceId, const QString& antenna)
     {
@@ -801,6 +831,16 @@ public:
     Q_UNUSED(completion);
         Q_UNUSED(text);
         return QStringLiteral("radio has no text keyer");
+    }
+    // Buffered text control is optional. Keying retains an admitted operation;
+    // operator configuration uses session/edit fences without an operation;
+    // original-intent cleanup retains its operation and never acquires one here.
+    virtual ReceiveDispatch requestCwTextControl(const CwTextRequest& request,
+        const TxCoordinator::Command& command, const RadioControlFence& current,
+        const CwTextCompletion& completion = {})
+    {
+        Q_UNUSED(request); Q_UNUSED(command); Q_UNUSED(current); Q_UNUSED(completion);
+        return ReceiveDispatch::Unsupported;
     }
     virtual void abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) { Q_UNUSED(operation); Q_UNUSED(completion); }
     virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
@@ -1223,6 +1263,9 @@ signals:
     // tx/mic profiles, the global-profile list, or the import/export flags.
     void profileChanged(const ProfileDelta& delta);
 
+    // Present-only status for one of the radio's NTP time sources, or its removal.
+    void ntpSourceChanged(const NtpSourceDelta& delta);
+
     // Meter definition catalog (aetherd RFC 2.3 — MeterModel touchpoint). The
     // backend decodes the vendor meter-status wire format into a typed MeterDef;
     // RadioModel hands it straight to MeterModel::defineMeter(). Fields the wire
@@ -1315,6 +1358,13 @@ signals:
     void panPreampChanged(const QString& panId, int step);
     void panAttenuatorInfoChanged(const QString& panId, const QStringList& labels);
     void panAttenuatorChanged(const QString& panId, int step);
+
+    // The radio's scope mode, for a backend whose panadapter is the radio's own
+    // scope (Icom: Center / Scroll-F / Fixed). Fewer than two labels = no choice,
+    // shown unavailable; index -1 means a mode outside the list (e.g. SCROLL-C
+    // picked on the front panel), so the UI lights none.
+    void panScopeModesChanged(const QString& panId, const QStringList& labels);
+    void panScopeModeChanged(const QString& panId, int index);
 
     // Panadapter antenna selection (universal). Two signals because the wire may
     // report the selected RX antenna and the available list independently.

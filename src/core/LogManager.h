@@ -31,6 +31,7 @@ Q_DECLARE_LOGGING_CATEGORY(lcDax)
 Q_DECLARE_LOGGING_CATEGORY(lcMeters)
 Q_DECLARE_LOGGING_CATEGORY(lcTransmit)
 Q_DECLARE_LOGGING_CATEGORY(lcFirmware)
+Q_DECLARE_LOGGING_CATEGORY(lcUpdater)
 Q_DECLARE_LOGGING_CATEGORY(lcTuner)
 Q_DECLARE_LOGGING_CATEGORY(lcGui)
 Q_DECLARE_LOGGING_CATEGORY(lcDxCluster)
@@ -134,6 +135,7 @@ signals:
 private:
     LogManager();
     void applyFilterRules();
+    static void updateLatestLogAlias(const QString& path);
 
     QList<Category> m_categories;
     mutable QMutex m_pathMutex;

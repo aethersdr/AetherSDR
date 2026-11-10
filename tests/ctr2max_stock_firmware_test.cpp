@@ -369,7 +369,7 @@ void testWindowFlow()
     const QString path = dir.filePath(QStringLiteral("CTR2-Max_v10200l.zip"));
     {
         QFile out(path);
-        out.open(QIODevice::WriteOnly);
+        check(out.open(QIODevice::WriteOnly), "the fixture zip can be written");
         out.write(writeStoredZip({{QStringLiteral("CTR2-Max.bin"), merged(app(), rows8())}}));
     }
     auto devices = std::make_shared<Devices>();
@@ -378,7 +378,7 @@ void testWindowFlow()
     std::atomic<int> opens{0};
 
     FirmwareInstallModel model(nullptr);
-    model.setJobTargetOpener([flash, &opens](const QString&, QString*) {
+    model.setJobTargetOpener([flash, &opens](const QString&, QString*, bool*) {
         ++opens;
         // The job owns what it opens; this one shares the test's flash.
         struct Shared : EspFlashTarget {
@@ -428,7 +428,7 @@ void testWindowFlow()
                              "flash-backup-AAAAAAAAAAAA-20260101-000001.bin",
                              "flash-backup-B81F3FC45888-mine.bin"}) {
         QFile f(backups.filePath(QString::fromLatin1(name)));
-        f.open(QIODevice::WriteOnly);
+        check(f.open(QIODevice::WriteOnly), "the fixture backup can be created");
     }
 
     // Its stock firmware is running: the install waits for download mode.
@@ -578,7 +578,7 @@ void testReleaseAndRestore()
     std::atomic<int> opens{0};
 
     FirmwareInstallModel model(nullptr);
-    model.setJobTargetOpener([flash, &opens](const QString&, QString*) {
+    model.setJobTargetOpener([flash, &opens](const QString&, QString*, bool*) {
         ++opens;
         auto s = std::make_unique<SharedFlash>();
         s->f = flash;
@@ -688,7 +688,7 @@ void testFirmwareStore()
         const QString path = downloads.filePath(QStringLiteral("CTR2-Max_%1.zip").arg(
             QString::fromLatin1(version)));
         QFile out(path);
-        out.open(QIODevice::WriteOnly);
+        check(out.open(QIODevice::WriteOnly), "the fixture download can be written");
         out.write(writeStoredZip({{QStringLiteral("Manuals/manual.pdf"), "%PDF"},
                                   {QStringLiteral("CTR2-Max.bin"),
                                    merged(app(version), rows8())}}));
@@ -734,7 +734,7 @@ void testRestartInto()
     flash->flash.replace(0x410000, image.size(), image);
     flash->flash.replace(0x10000, app().size(), app());   // the stock firmware
     FirmwareInstallModel model(nullptr);
-    model.setJobTargetOpener([flash](const QString&, QString*) {
+    model.setJobTargetOpener([flash](const QString&, QString*, bool*) {
         auto s = std::make_unique<SharedFlash>();
         s->f = flash;
         return std::unique_ptr<EspFlashTarget>(std::move(s));
@@ -827,7 +827,7 @@ struct Key {
 void writeFile(const QString& path, const QByteArray& data)
 {
     QFile f(path);
-    f.open(QIODevice::WriteOnly);
+    check(f.open(QIODevice::WriteOnly), "the fixture file can be written");
     f.write(data);
 }
 

@@ -87,7 +87,7 @@ Radio Setup gains a page for some families: **Calibration** and **HL2 Hardware**
 
 ### Peripherals
 
-Supported external devices include the 4O3A/FlexRadio PGXL power amplifier and TGXL tuner, plus ACOM S-series, SPE Expert, VK3AMP and Elecraft KPA1500 amplifiers. See [Peripherals](./peripherals.md) and [Amplifiers](./amplifiers.md).
+Supported external devices include the 4O3A/FlexRadio PGXL power amplifier and TGXL tuner, plus ACOM S-series, SPE Expert, VK3AMP, RF-KIT (RF2K-S) and Elecraft KPA1500 amplifiers. See [Peripherals](./peripherals.md) and [Amplifiers](./amplifiers.md).
 
 ## See also
 

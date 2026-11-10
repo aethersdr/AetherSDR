@@ -19,7 +19,7 @@ bandwidth marked.
   Genius XL** is in OPERATE.
 
 > **Other amplifiers are not checked.** AetherSweep only knows about the
-> PGXL. If you have an ACOM, SPE, VK3AMP, KPA1500 or any other amplifier in
+> PGXL. If you have an ACOM, SPE, VK3AMP, RF-KIT, KPA1500 or any other amplifier in
 > line, put it in standby or bypass yourself before sweeping. See
 > [Amplifiers](./amplifiers.md).
 
@@ -50,8 +50,9 @@ the whole band on the TX slice.
 Before a sweep transmits, a modal "Antenna SWR Sweep — License Confirmation"
 explains that it sends a 1 W tune carrier at several frequencies across the
 band, and that you are responsible for checking the band is clear and for
-complying with your license. Tick **Remember my answer** to skip it next time
-from the ANT panel. **Tools → Start SWR Scan...** always shows it.
+complying with your license. Tick **Remember my answer** to skip it next time,
+from either the ANT panel or **Tools → Start SWR Scan...**. To see it again,
+set `SwrSweepLicenseConfirmed` to `False` in **Settings → Settings Browser...**.
 
 ### What gets swept
 

@@ -41,16 +41,6 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accessory.key.meffa.standby.foreground", QString("#008040"));
     m_tokens.insert("color.accessory.key.standby.background", QString("#5a3a0a"));
     m_tokens.insert("color.accessory.key.standby.foreground", QString("#ffb84d"));
-    {
-        ThemeGradient g;
-        g.type = ThemeGradient::Linear;
-        g.angle = 90.0;
-        g.stops.append({0.0, QColor("#1a5c30")});
-        g.stops.append({0.35, QColor("#4a5520")});
-        g.stops.append({0.65, QColor("#6a4520")});
-        g.stops.append({1.0, QColor("#6e1f1f")});
-        m_tokens.insert("color.accessory.swrScale", QVariant::fromValue(g));
-    }
     m_tokens.insert("color.background.0", QString("#0f0f1a"));
     m_tokens.insert("color.background.1", QString("#1a2a3a"));
     m_tokens.insert("color.background.2", QString("#304050"));
@@ -83,6 +73,13 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.canon.aqua", QString("#8ef7e6"));
     m_tokens.insert("color.canon.bloom.blue", QString("#293aa7ff"));
     m_tokens.insert("color.canon.bloom.teal", QString("#1a7bf2dc"));
+    m_tokens.insert("color.canon.category.amber", QString("#f0a35e"));
+    m_tokens.insert("color.canon.category.aqua", QString("#8ef7e6"));
+    m_tokens.insert("color.canon.category.blue", QString("#3aa7ff"));
+    m_tokens.insert("color.canon.category.cyan", QString("#5de3ff"));
+    m_tokens.insert("color.canon.category.rose", QString("#fca5a5"));
+    m_tokens.insert("color.canon.category.teal", QString("#7bf2dc"));
+    m_tokens.insert("color.canon.category.violet", QString("#c4a1ff"));
     m_tokens.insert("color.canon.control", QString("#12233a"));
     m_tokens.insert("color.canon.cyan", QString("#5de3ff"));
     m_tokens.insert("color.canon.grid", QString("#0978aad2"));
@@ -138,6 +135,13 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.meter.pivot.rim", QString("#3a3e48"));
     m_tokens.insert("color.meter.rms", QString("#00b4d8"));
     m_tokens.insert("color.meter.thresh", QString("#ffb84d"));
+    m_tokens.insert("color.networkQuality.excellent", QString("#00cc66"));
+    m_tokens.insert("color.networkQuality.fair", QString("#cc9900"));
+    m_tokens.insert("color.networkQuality.good", QString("#00b4d8"));
+    m_tokens.insert("color.networkQuality.off", QString("#8aa8c0"));
+    m_tokens.insert("color.networkQuality.poor", QString("#cc3333"));
+    m_tokens.insert("color.qr.dark", QString("#000000"));
+    m_tokens.insert("color.qr.light", QString("#ffffff"));
     m_tokens.insert("color.slice.a", QString("#00d4ff"));
     m_tokens.insert("color.slice.b", QString("#ff40ff"));
     m_tokens.insert("color.slice.c", QString("#40ff40"));

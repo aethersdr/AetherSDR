@@ -1,6 +1,6 @@
 // Compiles src/core/NnrControls.h, which is the point.
 //
-// The header's ranges and default markers are assertions about WDSP 2.10's
+// The header's ranges and default markers are assertions about WDSP 2.11's
 // source, and they carry static_asserts that hold them to it -- but a
 // static_assert in a header nobody includes is never compiled and never fails.
 // Until NnrFilter lands (RFC #5684 step 2) this is the translation unit that

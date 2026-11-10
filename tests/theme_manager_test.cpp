@@ -7,6 +7,7 @@
 
 #include <QApplication>
 #include <QBrush>
+#include <QColor>
 #include <QGradient>
 #include <QHeaderView>
 #include <QHoverEvent>
@@ -1415,6 +1416,8 @@ int main(int argc, char** argv)
             "ground", "raised", "nested", "control", "ink", "inkSoft", "muted",
             "line", "lineHi", "cyan", "aqua", "onAccent", "sparkHot", "sparkGold",
             "sparkGoldHot", "bloom.blue", "bloom.teal", "grid",
+            "category.cyan", "category.aqua", "category.blue", "category.amber",
+            "category.violet", "category.rose", "category.teal",
         };
         auto contrast = [](const QColor& a, const QColor& b) {
             auto lum = [](const QColor& c) {
@@ -1446,6 +1449,15 @@ int main(int argc, char** argv)
                 {"inkSoft", "nested", 4.5},   // build-card values
                 {"muted", "ground", 4.5},     // version line, close button
                 {"sparkGold", "control", 3.0},  // Logbook button focus ring
+                // Updates window: chapter dots and highlight-card edges are
+                // non-text marks on the ground and the raised card (3:1).
+                {"category.cyan", "ground", 3.0},   {"category.cyan", "raised", 3.0},
+                {"category.aqua", "ground", 3.0},   {"category.aqua", "raised", 3.0},
+                {"category.blue", "ground", 3.0},   {"category.blue", "raised", 3.0},
+                {"category.amber", "ground", 3.0},  {"category.amber", "raised", 3.0},
+                {"category.violet", "ground", 3.0}, {"category.violet", "raised", 3.0},
+                {"category.rose", "ground", 3.0},   {"category.rose", "raised", 3.0},
+                {"category.teal", "ground", 3.0},   {"category.teal", "raised", 3.0},
             };
             for (const auto& pr : pairs) {
                 const double r = contrast(canon(pr.fg), canon(pr.bg));
@@ -1769,6 +1781,52 @@ int main(int argc, char** argv)
         EXPECT_TRUE(header.pixelColor(50, header.height() - 1).rgb() == border);
         EXPECT_TRUE(header.pixelColor(sectionRight - 3, 1).rgb()
                     == tm.color(QStringLiteral("color.background.1")).rgb());
+    }
+
+    // Quality dots and capped chip borders are data-bearing UI components.
+    {
+        auto& theme = ThemeManager::instance();
+        const QString originalTheme = theme.activeTheme();
+        const auto composite = [](const QColor& foreground, const QColor& background) {
+            const double a = foreground.alphaF();
+            return QColor::fromRgbF(
+                a * foreground.redF() + (1.0 - a) * background.redF(),
+                a * foreground.greenF() + (1.0 - a) * background.greenF(),
+                a * foreground.blueF() + (1.0 - a) * background.blueF());
+        };
+        const auto luminance = [](const QColor& color) {
+            const auto linear = [](double value) {
+                return value <= 0.04045 ? value / 12.92
+                    : std::pow((value + 0.055) / 1.055, 2.4);
+            };
+            return 0.2126 * linear(color.redF()) + 0.7152 * linear(color.greenF())
+                + 0.0722 * linear(color.blueF());
+        };
+        const auto contrast = [&](const QColor& a, const QColor& b) {
+            const double first = luminance(a);
+            const double second = luminance(b);
+            return (std::max(first, second) + 0.05) / (std::min(first, second) + 0.05);
+        };
+        for (const QString& name : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            EXPECT_TRUE(theme.setActiveTheme(name));
+            const QColor bar = composite(theme.color(QStringLiteral("color.titlebar.background")),
+                                        theme.color(QStringLiteral("color.background.app")));
+            const QColor background = composite(
+                theme.color(QStringLiteral("color.titlebar.tab.active.background")), bar);
+            for (const QString& grade : {QStringLiteral("excellent"), QStringLiteral("good"),
+                                         QStringLiteral("fair"), QStringLiteral("poor")}) {
+                const QColor ink = theme.color(QStringLiteral("color.networkQuality.") + grade);
+                EXPECT_TRUE(ink.isValid() && ink.alpha() == 255);
+                EXPECT_TRUE(contrast(ink, background) >= 3.0);
+                if (grade != QStringLiteral("excellent")) {
+                    QColor tint = ink;
+                    tint.setAlphaF(0.22);
+                    const QColor fill = composite(tint, background);
+                    EXPECT_TRUE(contrast(theme.color(QStringLiteral("color.text.primary")), fill) >= 4.5);
+                }
+            }
+        }
+        EXPECT_TRUE(theme.setActiveTheme(originalTheme));
     }
 
     if (g_failures == 0) {

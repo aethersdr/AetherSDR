@@ -752,7 +752,7 @@ void GGMorse::decode_float() {
     int bestLevelIdx = 0;
     int bestSpeedIdx = 0;
 
-    // Speed range from caller (s-index = wpm - 5). Default 5..115 WPM.
+    // Speed range from caller (s-index = wpm - 5). Default 5..55 WPM; a set range is capped at 115.
     const float sRangeMin = m_impl->parametersDecode.speedRangeMin_wpm;
     const float sRangeMax = m_impl->parametersDecode.speedRangeMax_wpm;
     int s0 = (sRangeMin > 0.0f) ? std::max(0, (int)std::round(sRangeMin - 5.0f)) : 0;
@@ -988,12 +988,9 @@ void GGMorse::decode_float() {
                                 auto let = m_impl->alphabet.find(m_impl->curLetter);
                                 if (let != m_impl->alphabet.end()) {
                                     m_impl->rxData.push_back(let->second);
-                                    printf("%c", let->second);
                                 } else {
                                     m_impl->rxData.push_back('?');
-                                    printf("?");
                                 }
-                                fflush(stdout);
                                 m_impl->curLetter = "";
                             }
                             {
@@ -1001,7 +998,6 @@ void GGMorse::decode_float() {
                                 if (tmp.size()) {
                                     m_impl->rxData.push_back(tmp[0]);
                                 }
-                                printf("%s", tmp.c_str());
                             }
                         }
                     }

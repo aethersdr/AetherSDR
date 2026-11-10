@@ -243,10 +243,12 @@ int FlexBackend::nrsLevelMaximum() const
 void FlexBackend::refreshFirmwareCapabilities()
 {
     const int maximum = nrsLevelMaximum();
-    if (maximum == m_announcedNrsLevelMaximum) {
+    const bool cwProfiles = firmwareAtLeast(QVersionNumber(4, 3, 16));
+    if (maximum == m_announcedNrsLevelMaximum && cwProfiles == m_announcedCwProfiles) {
         return;
     }
     m_announcedNrsLevelMaximum = maximum;
+    m_announcedCwProfiles = cwProfiles;
     emit capabilitiesChanged();
 }
 
@@ -696,6 +698,8 @@ RadioCapabilities FlexBackend::capabilities() const
         setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
     }
     caps.radioSetupControl = setup;
+    caps.cwReceiveControl = CwReceiveControl{{CwAutoTuneAction::Once,
+        CwAutoTuneAction::Start, CwAutoTuneAction::Stop}};
     caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
                                     SpotAction::Clear, SpotAction::Trigger}};
     caps.panControl = PanControl{{PanControlField::BandZoom, PanControlField::SegmentZoom,
@@ -713,6 +717,10 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hostDroopCalibration = false;   // no known DDC edge droop on this radio
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
+    // Published FlexLib 4.3.16 adds the CW profile type (Radio.cs:8780-8919).
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16))) {
+        caps.cwProfileControl = RadioCapabilities::CwProfileControl{};
+    }
     caps.hasSelectableMicInputs = true;
     // SmartSDR's compander command is the authoritative DEXP path used by
     // TransmitModel::setDexp/setDexpLevel.
@@ -772,6 +780,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // SmartSDR+ entitlement gate.
     caps.hasRadioSideCwKeyer = true;
     caps.cwTextKeyerName = QStringLiteral("CWX");
+    using CwField = CwTextRequest::Field;
+    caps.cwTextControl = CwTextControl{{CwField::Send, CwField::SendMacro,
+        CwField::SaveMacro, CwField::Speed, CwField::Delay, CwField::Qsk,
+        CwField::Erase, CwField::Clear}, CwTextControl::Completion::RadioCharacterIndex};
     caps.cwTextMinWpm = 5;
     caps.cwTextMaxWpm = 100;
     caps.cwTextMaxMessageChars = 0;
@@ -782,6 +794,18 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasVoiceKeyer = true;
     caps.hasFullDuplex = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
+    // Container environments (FlexLib 4.3.16 Radio.cs:8841-8861) need firmware
+    // that has them and a platform with a Waveform Processor.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform != RadioPlatform::Unknown
+        && !isKnownNonWfpPlatform(mc.platform)) {
+        caps.waveformEnvControl = RadioCapabilities::WaveformEnvControl{};
+    }
+    // The radio's own NTP time sources (FlexLib 4.3.16 NtpSource.cs; SMART-10565
+    // names FLEX-8000/Aurora). FlexLib subscribes on every radio, so the gate is
+    // the platform those share: BigBend, ML-9600 and CL-9300 included.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform == RadioPlatform::BigBend) {
+        caps.ntpSourceControl = RadioCapabilities::NtpSourceControl{NtpSourceRules::kMaxSources};
+    }
     caps.hasMultiClientSessions = true;  // multiFLEX
     caps.alwaysUseClientSideSpots = false;
     // TNFs. Neither FlexLib nor the `tnf` status declares a ceiling — Radio.cs
@@ -901,6 +925,7 @@ ReceiveDispatch FlexBackend::requestSliceAgcThresholdMode(int sliceId, AgcThresh
 
 void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
 {
+    if (sliceId < 0 || !request.valid()) { return; }
     // FlexLib 4.2.18 Slice: each AGC setter writes only its own field.
     switch (request.field) {
     case SliceAgcRequest::Field::Mode:
@@ -1454,7 +1479,8 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
     }
 
     for (int index : meterOrder) {
-        const QMap<QString, QString>& f = grouped.constFind(index).value();
+        const auto group = grouped.constFind(index);
+        const QMap<QString, QString>& f = group.value();
         // Build the typed MeterDef directly (#4070). Present-only: a field the
         // wire didn't report keeps its MeterDef default. The carry() ok-guard is
         // defensive/consistency only here — a plain MeterDef field's default IS
@@ -2102,6 +2128,16 @@ void FlexBackend::decodeProfileStatus(const QString& profileType, const QString&
         return;
     }
 
+    // FlexLib 4.3.16 reports the CW profile's dirty flag as
+    // unsaved_changes_cw (Radio.cs:12002); the suffix names the profile type.
+    static const QLatin1String unsavedPrefix("unsaved_changes_");
+    if (key.startsWith(unsavedPrefix) && key.size() > unsavedPrefix.size()) {
+        d.type = key.mid(unsavedPrefix.size());
+        d.unsavedChanges = val == QLatin1String("1");
+        emit profileChanged(d);
+        return;
+    }
+
     d.type = profileType;
     if (key == QLatin1String("list"))
         d.list = val.split('^', Qt::SkipEmptyParts);
@@ -2123,6 +2159,16 @@ void FlexBackend::decodeProfileFlags(const QMap<QString, QString>& kvs)
     carry(kvs, "exporting", d.exporting);
     if (d.importing || d.exporting)
         emit profileChanged(d);
+    // Same unsaved_changes_<type> rule as decodeProfileStatus.
+    static const QLatin1String unsavedPrefix("unsaved_changes_");
+    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
+        if (it.key().startsWith(unsavedPrefix) && it.key().size() > unsavedPrefix.size()) {
+            ProfileDelta unsaved;
+            unsaved.type = it.key().mid(unsavedPrefix.size());
+            unsaved.unsavedChanges = it.value() == QLatin1String("1");
+            emit profileChanged(unsaved);
+        }
+    }
 }
 
 void FlexBackend::send(const QString& cmd)

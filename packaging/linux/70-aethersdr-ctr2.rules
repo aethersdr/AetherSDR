@@ -6,7 +6,14 @@
 # The patterns must equal Ctr2HidPort::knownCtr2Devices();
 # ctr2_proxy_model_test enforces it.
 #
+# The tty line is the CTR2-Max in download mode, for firmware installs from
+# the CTR2 window: the ESP32-S3's built-in USB serial/JTAG port. Any ESP32-S3
+# class board shows the same identity, in download mode and also under
+# firmware that leaves USB to it, so the line opens that port on any such
+# board to the seat's user. It cannot be narrowed to a CTR2.
+#
 # Installed by the build on Linux hidapi builds, and also installed on demand
-# by the CTR2 Proxy applet (via pkexec) for builds that did not ship it.
+# by the CTR2 window (via pkexec) for builds that did not ship it.
 ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", ATTRS{product}=="ESP32S3_DEV|M5STACK_DIAL|STAMP-S3|AETHER_KNOB|Aether*", TAG+="uaccess"
 ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2886", ATTRS{idProduct}=="0056", ATTRS{product}=="XIAO_ESP32S3", TAG+="uaccess"
+ACTION!="remove", SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", ATTRS{product}=="USB JTAG/serial debug unit", TAG+="uaccess"

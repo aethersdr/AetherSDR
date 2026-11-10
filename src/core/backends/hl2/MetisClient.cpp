@@ -1,6 +1,7 @@
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2EmergencyStop.h"
 #include "core/LogManager.h"   // lcHl2 — commanded-NCO breadcrumbs
+#include "core/TxChainLatency.h"
 
 #include <QElapsedTimer>
 #include <QThread>
@@ -40,6 +41,17 @@ namespace AetherSDR::hl2 {
 // counters on the I/O thread.
 
 namespace {
+
+// requestIoBoardStatus()'s answer for every way bus 2 can be busy.
+const QString kIoBoardBusBusy = QStringLiteral("the radio's I2C bus was busy");
+
+// The config bank's bits that start a bus-2 write when they change
+// (i2c_bus2.v, address 0x00): filter select DATA[23:17], RX antenna DATA[13] and,
+// on AK4951 builds, the speaker bit DATA[11].
+std::uint32_t configBus2Bits(const Cc& config) noexcept
+{
+    return (std::uint32_t(config[2] & 0xFE) << 8) | std::uint32_t(config[3] & 0x28);
+}
 
 // A family switch destroys the transport without power-cycling the radio.
 // Keep unresolved clock recovery until a complete OFF sequence is sent.
@@ -297,6 +309,8 @@ bool MetisClient::start(const Params& params)
     m_port = params.port;
     m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte,
                           m_params.ditherBit, m_params.randomBit);
+    // A new session's first config bank may move the radio's filter relays.
+    m_lastConfigBus2Sent = kConfigBus2Unknown;
     m_ccGain = ccRxGain(m_params.lnaGainDb);
     // Every receiver starts on RX1's frequency; Hl2Backend moves the rest as it
     // brings each slice up. The BANK COUNT is fixed here and never re-derived
@@ -575,7 +589,7 @@ void MetisClient::dropControlRequest()
     const auto st = m_ccRequest.state();
     if (st == Hl2ControlRequest::State::Queued
         || st == Hl2ControlRequest::State::Awaiting) {
-        emit controlRequestFailed(m_ccRequest.outstanding().addr, /*refused=*/false);
+        publishControlFailure(m_ccRequest.outstanding().addr, /*refused=*/false);
     }
     m_ccRequest.reset();
     // A bank already built but not yet confirmed has nowhere to land now.
@@ -603,6 +617,9 @@ void MetisClient::stop()
         m_socket = nullptr;
     }
     m_running = false;
+    // The key ends with the session: the next start() streams unkeyed until a
+    // fresh setMox(true).
+    m_mox = false;
     // Any silence recovery in flight ends with the session. The COUNTERS do
     // not: they live on m_link, which start() replaces and stop() leaves
     // standing, because a stop is not a reason to forget that a recovery
@@ -1176,17 +1193,55 @@ bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
     return m_ccRequest.arm(r);
 }
 
+void MetisClient::requestIoBoardStatus()
+{
+    // Same stream gate as requestRegister(): the reply can only ride EP6.
+    if (!m_running || !m_linkUp) {
+        emit ioBoardStatusFailed(QStringLiteral("the radio is not streaming"));
+        return;
+    }
+    Hl2ControlRequest::Request r;
+    r.addr = kC0I2c2 >> 1;
+    r.data = kIoBoardStatusReadData;
+    r.echo = Hl2ControlRequest::Echo::SubsystemRead;
+    if (!m_ccRequest.arm(r)) {
+        emit ioBoardStatusFailed(
+            QStringLiteral("another control request is outstanding or quarantined"));
+    }
+}
+
 void MetisClient::publishControlVerdict()
 {
     const auto reply = m_ccRequest.takeReply();
     if (!reply)
         return;
-    if (reply->outcome == Hl2ControlRequest::Outcome::Answered) {
-        emit controlReplyReady(reply->addr, reply->data);
+    if (reply->outcome != Hl2ControlRequest::Outcome::Answered) {
+        publishControlFailure(reply->addr,
+                              reply->outcome == Hl2ControlRequest::Outcome::Refused);
+    } else if (reply->addr == (kC0I2c2 >> 1)) {
+        // i2c_bus2.v ignores a command that arrives during a write, and control.v
+        // then returns the request's own DATA as the reply (docs/HERMES.md, "The
+        // IO board status read"). A real reading of those bytes would need EXTTR
+        // low and an undefined fault code, so this costs nothing real.
+        if (reply->data == kIoBoardStatusReadData) {
+            emit ioBoardStatusFailed(kIoBoardBusBusy);
+        } else {
+            emit ioBoardStatusReady(reply->data);
+        }
     } else {
-        emit controlRequestFailed(
-            reply->addr, reply->outcome == Hl2ControlRequest::Outcome::Refused);
+        emit controlReplyReady(reply->addr, reply->data);
     }
+}
+
+void MetisClient::publishControlFailure(int addr, bool refused)
+{
+    // Only requestIoBoardStatus() arms 0x3d; requestRegister() refuses it.
+    if (addr == (kC0I2c2 >> 1)) {
+        emit ioBoardStatusFailed(refused ? kIoBoardBusBusy
+                                         : QStringLiteral("the radio did not answer"));
+        return;
+    }
+    emit controlRequestFailed(addr, refused);
 }
 
 qint64 MetisClient::controlNowMs() const noexcept
@@ -1227,9 +1282,11 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
         return;
     }
     const bool was = m_mox;
-    if (keyed && !m_txAllowed) {
+    if (keyed && (!m_txAllowed || !m_running)) {
         // Fail SAFE and stay refused. Not an error return: a caller that could
         // retry past a refusal is exactly what this gate exists to prevent.
+        // A stopped session refuses too: a key latched while not streaming
+        // would reach the wire with the first frame of the next start().
         keyed = false;
     }
     m_mox = keyed;
@@ -1242,12 +1299,22 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
     if (m_mox == was)
         return;
 
+    // The key-down report (#6052): armed on the rising edge, disarmed on the
+    // falling one so an over that never carried queued IQ says nothing.
+    m_keyDownReportPending = m_mox;
+    if (m_mox) {
+        m_keyDownUnderflowBase = m_txUnderflowSamples;
+        m_keyDownPrimeHoldBase = m_txPrimeHoldPackets;
+    }
+
     // THE BANDSCOPE'S TRANSMIT INTERLOCK, on the edges of the one member that
     // is the final authority for keying on the wire (buildNextControlPacket
     // reads exactly this, ANDed with the gate). The HL2 receives while it
     // transmits and hears its own PA at enormous strength, so a block taken
     // under MOX is a picture of us, at a level with no relation to the band.
     if (m_mox) {
+        // An over starts here, so the TX IQ queue's prime is armed (#6052).
+        armTxIqPrime();
         // Abandon whatever cycle was in flight rather than let it finish: the
         // packets still to come would be transmit-contaminated, and half a
         // clean block merged with half a keyed one is worse than no block.
@@ -1315,7 +1382,7 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
         // CW owns the IQ stream until PTT drops. Voice already queued behind a
         // manual MOX must not leak into the spaces between elements. Abandoned,
         // not dropped -- uncounted for the same reason as clearCwKeying().
-        m_txIq.clear();
+        abandonTxIq();
         m_cwEnvelope = 0.0;
         // ...but a starvation in progress ended at this instant, not at the
         // unkey that eventually follows.
@@ -1336,7 +1403,7 @@ void MetisClient::clearCwKeying()
     // Audio captured while CW owned the stream is stale; dropping it keeps a CW exit
     // under held PTT from transmitting old mic audio. Not counted as overflow (that
     // counts carry-loss, not a deliberate abandon), but the underflow run ends here.
-    m_txIq.clear();
+    abandonTxIq();
     reportTxUnderflowRun();
 }
 
@@ -1350,7 +1417,7 @@ void MetisClient::queueTxIq(std::span<const std::complex<float>> iq, const TxCoo
         // belong to a transmission that is no longer the current one, so this
         // is an abandon of stale audio rather than a FIFO dropping audio it was
         // asked to carry -- see clearCwKeying() for the same distinction.
-        m_txIq.clear();
+        abandonTxIq();
         m_txIqContext = context;
     }
     for (const auto& s : iq)
@@ -1379,12 +1446,52 @@ void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoord
 
 void MetisClient::flushTxIq()
 {
-    m_txIq.clear();
+    abandonTxIq();
     // A flush is how an over ends, so it is also where a starvation that ran
     // to the end of that over stops. Without this the run would sit unreported
     // until the NEXT transmission happened to emit a full packet, and would
     // then be attributed to it.
     reportTxUnderflowRun();
+}
+
+void MetisClient::armTxIqPrime() noexcept
+{
+    m_txIqPrimeTarget = kTxPrimeTargetSamples;
+    m_txIqPrimeHeldPackets = 0;
+}
+
+void MetisClient::abandonTxIq()
+{
+    m_txIq.clear();
+    armTxIqPrime();
+}
+
+bool MetisClient::txIqPrimeHolds()
+{
+    if (m_txIqPrimeTarget == 0)
+        return false;
+    // An empty queue is not a hold: it is the whole-packet underflow the
+    // queued-IQ arm counts.
+    if (m_txIq.empty())
+        return false;
+    const bool reached = m_txIq.size() >= m_txIqPrimeTarget;
+    const bool expired = m_txIqPrimeHeldPackets >= kTxPrimeMaxHoldPackets;
+    if (!reached && !expired) {
+        ++m_txIqPrimeHeldPackets;
+        ++m_txPrimeHoldPackets;
+        return true;
+    }
+    if (!reached)
+        ++m_txPrimeDeadlineReleases;
+    qCDebug(lcHl2Tx) << "HL2 tx fifo: prime let go at depth" << m_txIq.size()
+                     << "of target" << m_txIqPrimeTarget << "after holding"
+                     << m_txIqPrimeHeldPackets << "keyed EP2 packet(s) of silence"
+                     << "with samples waiting"
+                     << (reached ? "(target reached)."
+                                 : "(DEADLINE: the producer stopped short of the target).");
+    m_txIqPrimeTarget = 0;
+    m_txIqPrimeHeldPackets = 0;
+    return false;
 }
 
 void MetisClient::reportTxUnderflowRun()
@@ -1408,7 +1515,40 @@ void MetisClient::reportTxUnderflowRun()
     m_txUnderflowRunSamples = 0;
 }
 
+void MetisClient::reportKeyDown()
+{
+    m_keyDownReportPending = false;
+    m_lastKeyDownUnderflowSamples = m_txUnderflowSamples - m_keyDownUnderflowBase;
+    m_lastKeyDownPrimeHoldPackets = m_txPrimeHoldPackets - m_keyDownPrimeHoldBase;
+    // Both figures are 48 kHz samples: EP2 is clocked at kEp2AudioRateHz and
+    // latencyFrames() is defined at 48 kHz, so they add without conversion.
+    const auto ms = [](double samples) {
+        return QString::number(1000.0 * samples / kEp2AudioRateHz, 'f', 2);
+    };
+    const int chain = TxChainLatency::voiceProcessorFrames();
+    const QString chainText = chain >= 0
+        ? QStringLiteral("%1 frames (%2 ms)").arg(chain).arg(ms(chain))
+        : QStringLiteral("n/a (the transmit audio is not on the microphone path)");
+    qCDebug(lcHl2Tx).nospace().noquote()
+        << "HL2 tx key-down: first queued IQ after "
+        << m_lastKeyDownUnderflowSamples << " samples ("
+        << ms(static_cast<double>(m_lastKeyDownUnderflowSamples))
+        << " ms) of EMPTY-QUEUE keyed silence (txUnderflowSamples since MOX-on)"
+        << " and " << m_lastKeyDownPrimeHoldPackets << " packet(s) ("
+        << ms(static_cast<double>(m_lastKeyDownPrimeHoldPackets * kTxSamplesPerPacket))
+        << " ms) HELD BY THE PRIME with samples waiting (txPrimeHoldPackets since"
+        << " MOX-on); upstream of the queue, TxVoiceProcessor::latencyFrames() = "
+        << chainText
+        << ". None of these includes the WDSP TXA channel's own delay, which is"
+        << " fixed by its configuration and measured offline (hl2_tx_latency_test).";
+}
+
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
+{
+    return buildNextControlPacket(controlNowMs());
+}
+
+std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qint64 nowMs)
 {
     const qint64 now = TxCoordinator::monotonicMs();
     if (!m_moxOperation.permitsDispatch(now)) {
@@ -1424,7 +1564,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         m_tonePhase = 0.0;
     }
     if (!m_txIqContext.permitsDispatch(TxCoordinator::monotonicMs())) {
-        m_txIq.clear();
+        abandonTxIq();
     }
     static const Cc kCcAdc = ccAdcAssign();
     // Cleared here rather than only on confirmation: a packet built and then
@@ -1432,8 +1572,22 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     // a stale claim that some later packet carried the request.
     m_requestOnBuiltPacket = false;
     m_cl1BankOnBuiltPacket = false;
+    m_busReadOnBuiltPacket = false;
+    m_i2cWriteOnBuiltPacket = false;
+    m_builtAtMs = nowMs;
+    m_configBus2OnBuiltPacket = configBus2Bits(m_ccConfig);
+    const auto isI2cBank = [](const Cc& bank) {
+        return bank[0] == kC0I2c1 || bank[0] == kC0I2c2;
+    };
+    // Bus 2 spacing (m_builtAtMs): a held bank waits for a later packet, in order.
+    const bool holdI2cWrite = nowMs - m_lastBusReadSentMs < kI2cBusSpacingMs;
+    const bool requestIsBusRead = m_ccRequest.state() == Hl2ControlRequest::State::Queued
+        && m_ccRequest.outstanding().addr == (kC0I2c2 >> 1);
+    const bool holdBusRead = requestIsBusRead
+        && (m_configBus2OnBuiltPacket != m_lastConfigBus2Sent
+            || nowMs - m_lastI2cWriteSentMs < kI2cBusSpacingMs);
     Cc b;
-    if (!m_oneShot.empty()) {
+    if (!m_oneShot.empty() && !(holdI2cWrite && isI2cBank(m_oneShot.front()))) {
         b = m_oneShot.front();
         m_oneShot.pop_front();
         // Claimed, not yet counted: onControlPacketSent() decides whether this
@@ -1441,7 +1595,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         // above and for the same reason — a packet built and then discarded must
         // not retire one of the twenty-four writes.
         m_cl1BankOnBuiltPacket = isCl1Bank(b);
-    } else if (const auto rqst = m_ccRequest.wireBank()) {
+        m_i2cWriteOnBuiltPacket = isI2cBank(b);
+    } else if (const auto rqst = holdBusRead ? std::optional<Cc>{} : m_ccRequest.wireBank()) {
         // AFTER the one-shots, ahead of the round robin. After, because a
         // one-shot is a write the operator asked for and a read-back that
         // overtook it would return the value from before the change. Ahead of
@@ -1452,6 +1607,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         // per armed request — the RQST bit never reaches a bank the round robin
         // re-asserts, which would re-request three times a rotation for ever.
         b = *rqst;
+        m_busReadOnBuiltPacket = requestIsBusRead;
         // Not onRequestSent() here: the deadline starts when onControlPacketSent() sees
         // the socket accept the bank, so a failed send leaves the request Queued for the
         // next EP2 frame instead of timing out unseen.
@@ -1535,6 +1691,11 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         while (m_tonePhase > 2.0 * 3.14159265358979323846)
             m_tonePhase -= 2.0 * 3.14159265358979323846;
         ep2WriteTxIq(pkt, block);
+    } else if (keyed && txIqPrimeHolds()) {
+        // The prime's hold (#6052): samples are waiting but the queue is below
+        // its target, so this packet stays the silence ep2Packet filled in and
+        // the queue deepens. Not an underflow; txPrimeHoldPackets() counts it.
+        // After the CW and tone arms, which never reach it.
     } else if (keyed) {
         // Just `keyed`: the arms above take CW and positive tone amplitude, and a NaN
         // m_toneAmp (setTxTestTone's clamp passes NaN) fails both `> 0.0` and `<= 0.0`,
@@ -1564,6 +1725,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
             if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets)
                 reportTxUnderflowRun();
         }
+        if (n > 0 && m_keyDownReportPending)
+            reportKeyDown();
         if (n > 0)
             ep2WriteTxIq(pkt, block);   // a short block leaves the rest as silence
         // n == 0 needs no write at all: ep2Packet already zero-filled the
@@ -1609,6 +1772,19 @@ void MetisClient::onControlPacketSent(qint64 bytesWritten, qint64 nowMs) noexcep
     m_requestOnBuiltPacket = false;
     if (carriedRequest && bytesWritten > 0)
         m_ccRequest.onRequestSent(nowMs);
+    if (bytesWritten > 0) {
+        // Not a session's first config: the read waits for EP6, long after it.
+        if (m_lastConfigBus2Sent != kConfigBus2Unknown
+            && m_configBus2OnBuiltPacket != m_lastConfigBus2Sent)
+            m_lastI2cWriteSentMs = m_builtAtMs;
+        m_lastConfigBus2Sent = m_configBus2OnBuiltPacket;
+        if (m_busReadOnBuiltPacket)
+            m_lastBusReadSentMs = m_builtAtMs;
+        if (m_i2cWriteOnBuiltPacket)
+            m_lastI2cWriteSentMs = m_builtAtMs;
+    }
+    m_busReadOnBuiltPacket = false;
+    m_i2cWriteOnBuiltPacket = false;
     // Only a complete OFF sequence releases recovery. A session interrupted
     // earlier leaves the record for the next transport to resend the whole table.
     const bool carriedCl1 = m_cl1BankOnBuiltPacket;
@@ -1648,7 +1824,7 @@ void MetisClient::sendControlPacket()
     if (!m_txIq.empty()) {
         audioDispatch = m_txIqContext.beginDispatch(TxCoordinator::monotonicMs());
         if (!audioDispatch) {
-            m_txIq.clear();
+            abandonTxIq();
         }
     }
     const auto packet = buildNextControlPacket();

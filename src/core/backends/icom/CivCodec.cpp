@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 
 namespace AetherSDR::icom {
@@ -1097,11 +1096,76 @@ std::vector<std::uint8_t> cmdScopeDataOutput(std::uint8_t to, bool on)
     return buildFrameSub(to, cmd::kScope, scope::kDataOutput, body);
 }
 
-std::vector<std::uint8_t> cmdScopeMode(std::uint8_t to, bool fixed)
+std::vector<std::uint8_t> cmdScopeMode(std::uint8_t to, std::uint8_t mode, std::uint8_t selector)
 {
-    // 0000 = centre, 0001 = fixed. Two BCD bytes, not one.
-    const auto bcd = encodeLevel(fixed ? 1 : 0);
-    return buildFrameSub(to, cmd::kScope, scope::kMode, bcd);
+    const std::array<std::uint8_t, 2> body{selector, encodeBcdByte(std::min<int>(mode, 3))};
+    return buildFrameSub(to, cmd::kScope, scope::kMode, body);
+}
+
+std::vector<std::uint8_t> cmdScopeEdgeNumber(std::uint8_t to, int edge, std::uint8_t selector)
+{
+    const std::array<std::uint8_t, 2> body{selector, encodeBcdByte(std::clamp(edge, 1, 4))};
+    return buildFrameSub(to, cmd::kScope, scope::kEdgeNumber, body);
+}
+
+std::vector<std::uint8_t> cmdReadScopeEdgeNumber(std::uint8_t to, std::uint8_t selector)
+{
+    const std::array<std::uint8_t, 1> body{selector};
+    return buildFrameSub(to, cmd::kScope, scope::kEdgeNumber, body);
+}
+
+std::vector<std::uint8_t> cmdReadScopeMode(std::uint8_t to, std::uint8_t selector)
+{
+    const std::array<std::uint8_t, 1> body{selector};
+    return buildFrameSub(to, cmd::kScope, scope::kMode, body);
+}
+
+std::vector<std::uint8_t> cmdScopeFixedEdge(std::uint8_t to, int rangeNumber, int edge,
+                                            std::uint64_t lowerHz, std::uint64_t upperHz)
+{
+    std::vector<std::uint8_t> body;
+    body.reserve(2 + 2 * kFreqBytes);
+    body.push_back(encodeBcdByte(std::clamp(rangeNumber, 1, 99)));
+    body.push_back(encodeBcdByte(std::clamp(edge, 1, 4)));
+    const auto lo = encodeFreq(lowerHz);
+    const auto hi = encodeFreq(upperHz);
+    body.insert(body.end(), lo.begin(), lo.end());
+    body.insert(body.end(), hi.begin(), hi.end());
+    return buildFrameSub(to, cmd::kScope, scope::kFixedEdge, body);
+}
+
+std::optional<ScopeEdgeRange> scopeEdgeRangeFor(std::span<const ScopeEdgeRange> ranges,
+                                                std::uint64_t hz) noexcept
+{
+    for (const auto& r : ranges) {
+        const bool last = r.number == ranges.back().number;
+        if (hz >= r.lowerHz && (hz < r.upperHz || (last && hz == r.upperHz))) {
+            return r;
+        }
+    }
+    return std::nullopt;
+}
+
+ScopeEdgeWindow clampScopeEdgeWindow(const ScopeEdgeRange& range, double centreHz,
+                                     double widthHz) noexcept
+{
+    const double rangeWidth = static_cast<double>(range.upperHz - range.lowerHz);
+    const double maxWidth = std::min(static_cast<double>(kScopeFixedEdgeMaxWidthHz), rangeWidth);
+    double width = std::isfinite(widthHz) ? widthHz : maxWidth;
+    width = std::clamp(width, static_cast<double>(kScopeFixedEdgeMinWidthHz), maxWidth);
+    // Whole kHz, so the window we remember is the window the radio will echo.
+    width = std::max(1000.0, std::round(width / 1000.0) * 1000.0);
+
+    double centre = std::isfinite(centreHz) ? centreHz
+                                            : (range.lowerHz + range.upperHz) / 2.0;
+    double lower = std::round((centre - width / 2.0) / 1000.0) * 1000.0;
+    // SHIFT into the range; the width was already made to fit.
+    lower = std::clamp(lower, static_cast<double>(range.lowerHz),
+                       static_cast<double>(range.upperHz) - width);
+    ScopeEdgeWindow w;
+    w.lowerHz = static_cast<std::uint64_t>(lower);
+    w.upperHz = static_cast<std::uint64_t>(lower + width);
+    return w;
 }
 
 int nearestScopeSpanHz(int requestedHz) noexcept
@@ -1332,10 +1396,10 @@ std::optional<GpsPosition> decodeGpsPosition(std::span<const std::uint8_t> data)
         const int second = decodeBcdByte(data[26]);
         if (validDate(year, month, day)
             && hour <= 23 && minute <= 59 && second <= 60) {
-            char iso[21]{};
-            std::snprintf(iso, sizeof(iso), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-                          year, month, day, hour, minute, second);
-            out.utcIso8601 = iso;
+            // Every field is in range here: the year has four digits, the rest two.
+            const auto two = [](int v) { return std::string{char('0' + v / 10), char('0' + v % 10)}; };
+            out.utcIso8601 = std::to_string(year) + '-' + two(month) + '-' + two(day) + 'T' + two(hour)
+                             + ':' + two(minute) + ':' + two(second) + 'Z';
         }
     }
     return out;

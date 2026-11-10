@@ -1,5 +1,6 @@
 #include "MainWindowHelpers.h"
 
+#include "SpectrumPreviewLogic.h"
 #include "SpectrumWidget.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "core/RadioDiscovery.h"
@@ -133,20 +134,28 @@ QString networkTooltipRow(const QString& label, const QString& value)
 
 QString networkQualityColor(const QString& quality)
 {
-    if (quality == QStringLiteral("Excellent")
-            || quality == QStringLiteral("Very Good")) {
-        return QStringLiteral("#00cc66");
+    QString token = QStringLiteral("color.networkQuality.off");
+    if (quality == QStringLiteral("Excellent") || quality == QStringLiteral("Very Good")) {
+        token = QStringLiteral("color.networkQuality.excellent");
+    } else if (quality == QStringLiteral("Good")) {
+        token = QStringLiteral("color.networkQuality.good");
+    } else if (quality == QStringLiteral("Fair")) {
+        token = QStringLiteral("color.networkQuality.fair");
+    } else if (quality == QStringLiteral("Poor")) {
+        token = QStringLiteral("color.networkQuality.poor");
     }
-    if (quality == QStringLiteral("Fair")) {
-        return QStringLiteral("#cc9900");
+    return ThemeManager::instance().color(token).name();
+}
+
+QString adaptiveFpsCapColor(int fpsCap)
+{
+    if (fpsCap <= 4) {
+        return networkQualityColor(QStringLiteral("Poor"));
     }
-    if (quality == QStringLiteral("Poor")) {
-        return QStringLiteral("#cc3333");
+    if (fpsCap <= 8) {
+        return networkQualityColor(QStringLiteral("Fair"));
     }
-    if (quality == QStringLiteral("Good")) {
-        return QStringLiteral("#00b4d8");
-    }
-    return QStringLiteral("#8aa8c0"); // Off / unknown
+    return networkQualityColor(QStringLiteral("Good"));
 }
 
 QString buildNetworkTooltip(const RadioModel& model,
@@ -464,10 +473,6 @@ constexpr int kDefaultPanXpixels = 1024;
 constexpr int kDefaultPanYpixels = 700;
 constexpr int kMinPanXpixels = 100;
 constexpr int kMinPanYpixels = 20;
-// FLEX radios cap panadapter FFT frames at a 4096-bin boundary. Requesting
-// that boundary (or more) leaves the right edge malformed on firmware
-// 4.2.18/4.2.20, so stay one bin below it.
-constexpr int kMaxRadioPanXPixels = 4095;
 constexpr int kMaxRadioPanYPixels = 8192;
 // A sanity bound on a device-pixel width, not a backend limit: each backend
 // clamps to the point count it can produce.
@@ -475,11 +480,9 @@ constexpr int kMaxLocalPanPixels = 16384;
 
 int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels, int maximumPixels)
 {
-    const double ratio = spectrum ? spectrum->devicePixelRatioF() : 1.0;
-    const double dpr = std::isfinite(ratio) && ratio > 0.0 ? ratio : 1.0;
-    return std::clamp(static_cast<int>(std::lround(logicalPixels * dpr)),
-                      1,
-                      maximumPixels);
+    return panDevicePixels(logicalPixels,
+                           spectrum ? spectrum->devicePixelRatioF() : 1.0,
+                           maximumPixels);
 }
 } // namespace
 
@@ -488,7 +491,7 @@ int panXpixelsFor(const SpectrumWidget* spectrum)
     if (!spectrum || spectrum->width() < kMinPanXpixels) {
         return kDefaultPanXpixels;
     }
-    return radioPixelsFor(spectrum, spectrum->width(), kMaxRadioPanXPixels);
+    return panRadioXpixels(spectrum->width(), spectrum->devicePixelRatioF());
 }
 
 int panLocalSpectrumPointsFor(const SpectrumWidget* spectrum)

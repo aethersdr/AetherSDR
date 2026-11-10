@@ -52,6 +52,23 @@ FinishedLabelNoIcons=It's time to get on the air.%n%nSetup has finished installi
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[InstallDelete]
+; Clear the Qt plugin folders before [Files] repopulates them from deploy\.
+; An upgrade otherwise keeps any plugin the current payload no longer ships,
+; and Qt loads plugins by scanning the folder, not by a manifest. A Qt 6.7
+; tls\qopensslbackend.dll left by a pre-May-2026 install fails to load under
+; Qt 6.12, and Qt's TLS loader stops at the first plugin that fails, so
+; schannel never loads and every HTTPS request in the app fails (#6374).
+; windeployqt fills each of these folders completely on every build.
+Type: filesandordirs; Name: "{app}\generic"
+Type: filesandordirs; Name: "{app}\iconengines"
+Type: filesandordirs; Name: "{app}\imageformats"
+Type: filesandordirs; Name: "{app}\multimedia"
+Type: filesandordirs; Name: "{app}\networkinformation"
+Type: filesandordirs; Name: "{app}\platforms"
+Type: filesandordirs; Name: "{app}\styles"
+Type: filesandordirs; Name: "{app}\tls"
+
 [Files]
 #ifdef VC_RUNTIME_DIR
 Source: "..\..\deploy\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "concrt140.dll,msvcp140*.dll,vccorlib140.dll,vcruntime140*.dll,vcomp140*.dll"

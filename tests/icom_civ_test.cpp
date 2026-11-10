@@ -701,8 +701,89 @@ static void testCommands()
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x11, 0x01, 0xFD}),
           "scope DATA OUTPUT is a separate command, 27 11 01");
 
-    check(bytesAre(cmdScopeMode(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x14, 0x00, 0x01, 0xFD}),
+    check(bytesAre(cmdScopeMode(kIc705, 0x01), {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x14, 0x00, 0x01, 0xFD}),
           "fixed mode is 27 14 0001 — two BCD bytes, not one");
+
+    // SCROLL-F (IC-7300MK2 guide pp. 25-26, IC-705 ed. 6 p. 29, IC-9700 ed. 4 pp. 25-26)
+    {
+        constexpr std::uint8_t kMk2 = 0xB6;
+        check(bytesAre(cmdScopeMode(kMk2, 0x03), {0xFE, 0xFE, 0xB6, 0xE0, 0x27, 0x14, 0x00, 0x03, 0xFD}),
+              "SCROLL-F is 27 14 00 03");
+        check(bytesAre(cmdScopeMode(kMk2, 0x00), {0xFE, 0xFE, 0xB6, 0xE0, 0x27, 0x14, 0x00, 0x00, 0xFD}),
+              "Center is 27 14 00 00");
+        check(bytesAre(cmdScopeEdgeNumber(kMk2, 4), {0xFE, 0xFE, 0xB6, 0xE0, 0x27, 0x16, 0x00, 0x04, 0xFD}),
+              "edge slot 4 is 27 16 00 04");
+        check(bytesAre(cmdReadScopeEdgeNumber(kMk2), {0xFE, 0xFE, 0xB6, 0xE0, 0x27, 0x16, 0x00, 0xFD}),
+              "the edge-slot read carries only the leading 00 selector");
+        // Range 04 (6-8 MHz), edge 2, 7.000-7.300 MHz. TWELVE data bytes and NO
+        // leading 00: range, edge, then two little-endian BCD frequencies.
+        check(bytesAre(cmdScopeFixedEdge(kMk2, 4, 2, 7'000'000, 7'300'000),
+                       {0xFE, 0xFE, 0xB6, 0xE0, 0x27, 0x1E, 0x04, 0x02,
+                        0x00, 0x00, 0x00, 0x07, 0x00,
+                        0x00, 0x00, 0x30, 0x07, 0x00, 0xFD}),
+              "fixed edge is 27 1E <range> <edge> <lower LE BCD> <upper LE BCD>");
+        check(bytesAre(cmdScopeFixedEdge(kMk2, 13, 1, 70'000'000, 70'500'000),
+                       {0xFE, 0xFE, 0xB6, 0xE0, 0x27, 0x1E, 0x13, 0x01,
+                        0x00, 0x00, 0x00, 0x70, 0x00,
+                        0x00, 0x00, 0x50, 0x70, 0x00, 0xFD}),
+              "range 13 is BCD 0x13, not 0x0D");
+
+        const auto r7 = scopeEdgeRangeFor(kScopeEdgeRangesHf, 7'074'000);
+        check(r7 && r7->number == 4, "7.074 MHz is range 04 (6-8 MHz)");
+        const auto r14 = scopeEdgeRangeFor(kScopeEdgeRangesHf, 14'074'000);
+        check(r14 && r14->number == 6, "14.074 MHz is range 06 (11-15 MHz)");
+        const auto r50 = scopeEdgeRangeFor(kScopeEdgeRangesHf, 50'313'000);
+        check(r50 && r50->number == 12, "50.313 MHz is range 12 (45-60 MHz)");
+        const auto rEdge = scopeEdgeRangeFor(kScopeEdgeRangesHf, 1'600'000);
+        check(rEdge && rEdge->number == 2, "a shared boundary resolves to the range it starts");
+        const auto rTop = scopeEdgeRangeFor(kScopeEdgeRangesHf, 74'800'000);
+        check(rTop && rTop->number == 13, "the very top of the tuning range is still range 13");
+        check(!scopeEdgeRangeFor(kScopeEdgeRangesHf, 10'000) && !scopeEdgeRangeFor(kScopeEdgeRangesHf, 145'000'000),
+              "outside the MK2's tuning range there is no edge range");
+
+        const auto r705Top = scopeEdgeRangeFor(kScopeEdgeRangesIc705, 74'800'000);
+        check(r705Top && r705Top->number == 14,
+              "on the IC-705, 74.8 MHz starts range 14 rather than ending range 13");
+        const auto r705Two = scopeEdgeRangeFor(kScopeEdgeRangesIc705, 145'000'000);
+        check(r705Two && r705Two->number == 16, "IC-705 2 m is range 16 (137-200 MHz)");
+        const auto r705Uhf = scopeEdgeRangeFor(kScopeEdgeRangesIc705, 435'000'000);
+        check(r705Uhf && r705Uhf->number == 17, "IC-705 70 cm is range 17");
+        check(!scopeEdgeRangeFor(kScopeEdgeRangesIc705, 300'000'000),
+              "the IC-705 has no edge range over 200-400 MHz");
+        const auto r9700 = scopeEdgeRangeFor(kScopeEdgeRangesIc9700, 1'296'200'000);
+        check(r9700 && r9700->number == 3, "IC-9700 23 cm is range 03");
+        check(!scopeEdgeRangeFor(kScopeEdgeRangesIc9700, 14'074'000),
+              "the IC-9700 has no HF edge range");
+
+        constexpr std::uint8_t kIc9700 = 0xA2;
+        check(bytesAre(cmdScopeMode(kIc9700, 0x03, 0x01),
+                       {0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x14, 0x01, 0x03, 0xFD}),
+              "IC-9700 SCROLL-F on the SUB scope is 27 14 01 03");
+        check(bytesAre(cmdScopeEdgeNumber(kIc9700, 4, 0x01),
+                       {0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x16, 0x01, 0x04, 0xFD}),
+              "IC-9700 slot 4 on the SUB scope is 27 16 01 04");
+
+        // Clamping: shift, never shrink below the request; cap at 1 MHz.
+        const ScopeEdgeRange range40 = *r7;
+        auto w = clampScopeEdgeWindow(range40, 7'150'000, 300'000);
+        check(w.lowerHz == 7'000'000 && w.upperHz == 7'300'000, "an in-range window is unchanged");
+        w = clampScopeEdgeWindow(range40, 7'950'000, 300'000);
+        check(w.lowerHz == 7'700'000 && w.upperHz == 8'000'000,
+              "a window past the range's top is SHIFTED down, keeping its width");
+        w = clampScopeEdgeWindow(range40, 6'010'000, 300'000);
+        check(w.lowerHz == 6'000'000 && w.upperHz == 6'300'000,
+              "and past the bottom, shifted up");
+        w = clampScopeEdgeWindow(range40, 7'000'000, 5'000'000);
+        check(w.upperHz - w.lowerHz == 1'000'000, "no wider than 1 MHz (Advanced Manual)");
+        w = clampScopeEdgeWindow(*scopeEdgeRangeFor(kScopeEdgeRangesHf, 1'850'000), 1'850'000, 1'000'000);
+        check(w.lowerHz == 1'600'000 && w.upperHz == 2'000'000,
+              "no wider than the range itself (160 m is 400 kHz)");
+        w = clampScopeEdgeWindow(range40, 7'074'000, 100);
+        check(w.upperHz - w.lowerHz == 5'000, "no narrower than 5 kHz");
+        w = clampScopeEdgeWindow(range40, 7'074'321, 12'345);
+        check(w.lowerHz % 1000 == 0 && w.upperHz % 1000 == 0,
+              "both edges are whole kHz — the radio ignores the rest");
+    }
 
     // The span snaps to the eight the radio has.
     check(nearestScopeSpanHz(37000) == 25000, "37 kHz snaps down to 25 kHz");

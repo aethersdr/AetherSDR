@@ -89,7 +89,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 
 ## Spotting & Tools
 
-- [SpotHub](./spothub.md) — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM, EiBi, SpotCollector, Smart Spot Filtering
+- [SpotHub](./spothub.md) — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM, EiBi, DXLab SpotCollector via Commander, Smart Spot Filtering
 - [AetherMap](./psk-reporter-map.md) — Who hears you: 2D map or 3D globe, weather radar, night lights
 - [AetherSweep](./aethersweep.md) — In-panadapter SWR analyzer with CSV export
 - [Net Scheduler](./net-scheduler.md) — Recurring net reminders with one-click Tune Now
@@ -99,7 +99,7 @@ Prefer paper? Download the [printable manual](pathname:///AetherSDR-Manual.pdf) 
 ## Station Accessories
 
 - [Peripherals](./peripherals.md) — Add, remove and auto-connect station accessories; 4O3A access codes; PGXL and Antenna Genius
-- [Amplifiers](./amplifiers.md) — ACOM, SPE Expert, VK3AMP and KPA1500 amplifiers; LP-100A wattmeter
+- [Amplifiers](./amplifiers.md) — ACOM, SPE Expert, VK3AMP, KPA1500 and RF-KIT amplifiers; LP-100A wattmeter
 - [TGXL Tuner Control](./tgxl-tuner-control.md) — 4O3A Tuner Genius XL: direct or relayed, autotune, antenna switch
 - [ShackSwitch](./shackswitch.md) — Network antenna switch with dummy-load protection
 - [Green Heron Everyware](./green-heron-everyware.md) — Green Heron Everyware antenna switch and rotator control

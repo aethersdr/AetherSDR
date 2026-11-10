@@ -1,6 +1,7 @@
 #include "LogManager.h"
 #include "AppSettings.h"
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -9,7 +10,16 @@
 #include <QJsonObject>
 #include <QMutexLocker>
 #include <QStandardPaths>
+#include <QString>
 #include <QTime>
+#include <QtCore/qlogging.h>
+
+#ifdef Q_OS_UNIX
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <unistd.h>
+#endif
 
 namespace AetherSDR {
 
@@ -28,6 +38,9 @@ Q_LOGGING_CATEGORY(lcDax,        "aether.dax",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcMeters,     "aether.meters",      QtWarningMsg)
 Q_LOGGING_CATEGORY(lcTransmit,   "aether.transmit",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcFirmware,   "aether.firmware",    QtInfoMsg)
+// Info by default: a few lines per launch, and the only record of what an
+// automatic update check decided.
+Q_LOGGING_CATEGORY(lcUpdater,    "aether.updater",     QtInfoMsg)
 Q_LOGGING_CATEGORY(lcTuner,      "aether.tuner",       QtWarningMsg)
 Q_LOGGING_CATEGORY(lcGui,        "aether.gui",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDxCluster,  "aether.dxcluster",   QtWarningMsg)
@@ -86,6 +99,7 @@ LogManager::LogManager()
         {"aether.meters",     "Meters",       "Meter definitions and value conversion"},
         {"aether.transmit",   "Transmit",     "TX state, ATU, profiles, power control"},
         {"aether.firmware",   "Firmware",     "Firmware download, staging, upload"},
+        {"aether.updater",    "App Updates",  "AetherSDR update checks: trigger, result, skipped and store-managed installs"},
         {"aether.tuner",      "Tuner/AGM",    "TGXL tuner, Antenna Genius state"},
         {"aether.kat500", "KAT500 Tuner", "Independent tuner connection, confirmed readbacks, configuration and maintenance diagnostics"},
         {"aether.peripheral.auth", "Peripheral Authorization", "Credential store availability and save failures; code values are never logged"},
@@ -235,12 +249,9 @@ bool LogManager::startLogging(const QString& path, bool mirrorToStderr)
     const RetentionConfig cfg = retentionConfig();
     const qint64 maxBytes = static_cast<qint64>(cfg.activeLogMaxMb) * 1024 * 1024;
 
-    // Rotation callback runs on the writer thread. It picks a fresh
-    // timestamped path under the same dir, updates the active path, and
-    // re-points the aethersdr.log symlink so the Support dialog and
-    // support-bundle scan continue to find the live file. Writer hands us
-    // the closed file via currentPath; we never touch the writer's file
-    // handle here. (#2498)
+    // Rotation runs on the writer thread. The new path is published for
+    // Support and bundles, and the POSIX alias for external tools, only once
+    // the writer has opened it; a failed open leaves both on the old file.
     m_writer.setRotationConfig(maxBytes,
         [this](const QString& currentPath) -> QString {
             const QString dir = QFileInfo(currentPath).absolutePath();
@@ -252,19 +263,63 @@ bool LogManager::startLogging(const QString& path, bool mirrorToStderr)
             }
             if (QFile::exists(candidate))
                 return {};
-
-            setActiveLogFilePath(candidate);
-
-            const QString symlink = dir + "/aethersdr.log";
-            QFile::remove(symlink);
-            QFile::link(candidate, symlink);
             return candidate;
+        },
+        [this](const QString& newPath) {
+            setActiveLogFilePath(newPath);
+            updateLatestLogAlias(newPath);
         });
 
     if (!m_writer.start(path, mirrorToStderr))
         return false;
 
+    updateLatestLogAlias(path);
     return true;
+}
+
+namespace {
+// main() installs its message handler only after startLogging() returns, so
+// alias warnings go straight to the writer to reach the log file.
+void warnLogAlias(const QString& message)
+{
+    const QMessageLogContext context(__FILE__, __LINE__, Q_FUNC_INFO, "default");
+    LogManager::instance().enqueueMessage(QtWarningMsg, context, message);
+}
+} // namespace
+
+void LogManager::updateLatestLogAlias(const QString& path)
+{
+    const QFileInfo logFile(path);
+    // Callers that log directly to the legacy name must keep their live file.
+    if (logFile.fileName() == QStringLiteral("aethersdr.log")) {
+        return;
+    }
+    const QString alias = logFile.absolutePath() + QStringLiteral("/aethersdr.log");
+#ifdef Q_OS_UNIX
+    // A same-directory rename keeps the latest-log symlink replacement atomic.
+    const QByteArray aliasBytes = QFile::encodeName(alias);
+    const QByteArray tmpBytes = QFile::encodeName(alias + QStringLiteral(".new"));
+    const QByteArray targetBytes = QFile::encodeName(logFile.absoluteFilePath());
+    ::unlink(tmpBytes.constData());
+    if (::symlink(targetBytes.constData(), tmpBytes.constData()) != 0) {
+        const int err = errno;
+        warnLogAlias(QStringLiteral("LogManager: failed to create temp log symlink %1: %2")
+                         .arg(alias + QStringLiteral(".new"), QString::fromLocal8Bit(strerror(err))));
+    } else if (::rename(tmpBytes.constData(), aliasBytes.constData()) != 0) {
+        const int err = errno;
+        ::unlink(tmpBytes.constData());
+        warnLogAlias(QStringLiteral("LogManager: failed to rename log symlink into place %1: %2")
+                         .arg(alias, QString::fromLocal8Bit(strerror(err))));
+    }
+#elif defined(Q_OS_WIN)
+    // QFile::link creates a binary shell shortcut on Windows, even with a
+    // .log name. Remove aliases left by older installs; use logFilePath().
+    QFile legacyAlias(alias);
+    if (legacyAlias.exists() && !legacyAlias.remove()) {
+        warnLogAlias(QStringLiteral("LogManager: failed to remove legacy log shortcut %1: %2")
+                         .arg(QDir::toNativeSeparators(alias), legacyAlias.errorString()));
+    }
+#endif
 }
 
 void LogManager::shutdownLogging()

@@ -3,6 +3,7 @@
 #include "Ctr2HidPort.h"
 #include "LogManager.h"
 #include "TcpSocketEndpoint.h"
+#include "UnicastEndpoint.h"
 
 #include <QAbstractSocket>
 #include <QNetworkDatagram>
@@ -19,18 +20,6 @@ using ctr2hid::Message;
 using ctr2hid::MessageType;
 
 namespace {
-
-QString endpointText(const QHostAddress& address, quint16 port)
-{
-    return QStringLiteral("%1:%2").arg(address.toString()).arg(port);
-}
-
-bool usableIpv4(const QHostAddress& address)
-{
-    bool ok = false;
-    const quint32 v4 = address.toIPv4Address(&ok);
-    return ok && v4 != 0 && v4 != 0xFFFFFFFFu && !address.isMulticast();
-}
 
 } // namespace
 
@@ -288,11 +277,13 @@ private:
 
     void onRadioDatagrams()
     {
-        const quint32 radio = m_owner->m_radioAddress.toIPv4Address();
+        const QHostAddress& radio = m_owner->m_radioAddress;
         while (m_udp && m_udp->hasPendingDatagrams()) {
             const QNetworkDatagram d = m_udp->receiveDatagram(ctr2hid::kMaxDatagramBytes + 1);
-            bool ok = false;
-            if (d.senderAddress().toIPv4Address(&ok) != radio || !ok || m_ended) {
+            // Address only: the radio sends UDP from its own ports (LAN VITA
+            // from 4993, not the TCP port m_radioPort), and the CTR2 receives
+            // that source port as the datagram's label.
+            if (usableUnicastAddress(d.senderAddress()) != radio || m_ended) {
                 continue;  // only the radio's own datagrams are relayed
             }
             const QByteArray bytes = d.data();
@@ -389,8 +380,9 @@ bool Ctr2UsbRelay::start(Ctr2HidPort* port, const QHostAddress& radioAddress, qu
         setState(State::Error);
         return false;
     }
-    if (!usableIpv4(radioAddress) || radioPort == 0) {
-        setLastError(QStringLiteral("Enter the radio's IPv4 address and port"));
+    const QHostAddress radio = usableUnicastAddress(radioAddress);
+    if (radio.isNull() || radioPort == 0) {
+        setLastError(QStringLiteral("Enter the radio's address and port"));
         setState(State::Error);
         return false;
     }
@@ -401,7 +393,7 @@ bool Ctr2UsbRelay::start(Ctr2HidPort* port, const QHostAddress& radioAddress, qu
     connect(m_port, &Ctr2HidPort::failed, this, &Ctr2UsbRelay::onPortFailed);
     connect(m_port, &Ctr2HidPort::extensionsNegotiated, this,
             &Ctr2UsbRelay::onExtensionsNegotiated);
-    m_radioAddress = QHostAddress(radioAddress.toIPv4Address());
+    m_radioAddress = radio;
     m_radioPort = radioPort;
     m_rx.reset();
     m_rx.setExtensions(m_port->extensions());

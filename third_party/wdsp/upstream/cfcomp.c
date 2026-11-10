@@ -596,6 +596,11 @@ void SetTXACFCOMPprofile (int channel, int nfreqs, double* F, double* G, double 
 {
 	CFCOMP a = txa[channel].cfcomp.p;
 	EnterCriticalSection (&ch[channel].csDSP);
+	if (nfreqs < 1 || nfreqs > a->max_freqs || F == 0 || G == 0 || E == 0)
+	{
+		LeaveCriticalSection (&ch[channel].csDSP);
+		return;
+	}
 	a->nfreqsG = nfreqs;
 	a->nfreqsE = nfreqs;
 	memcpy (a->Fg, F, a->nfreqsG * sizeof (double));
@@ -613,6 +618,11 @@ void SetTXACFCOMPGprofile(int channel, int nfreqs, double* F, double* G)
 {
 	CFCOMP a = txa[channel].cfcomp.p;
 	EnterCriticalSection(&ch[channel].csDSP);
+	if (nfreqs < 1 || nfreqs > a->max_freqs || F == 0 || G == 0)
+	{
+		LeaveCriticalSection (&ch[channel].csDSP);
+		return;
+	}
 	a->nfreqsG = nfreqs;
 	memcpy(a->Fg, F, a->nfreqsG * sizeof(double));
 	memcpy(a->G,  G, a->nfreqsG * sizeof(double));
@@ -626,6 +636,11 @@ void SetTXACFCOMPEprofile(int channel, int nfreqs, double* F, double* E)
 {
 	CFCOMP a = txa[channel].cfcomp.p;
 	EnterCriticalSection(&ch[channel].csDSP);
+	if (nfreqs < 1 || nfreqs > a->max_freqs || F == 0 || E == 0)
+	{
+		LeaveCriticalSection (&ch[channel].csDSP);
+		return;
+	}
 	a->nfreqsE = nfreqs;
 	memcpy(a->Fe, F, a->nfreqsE * sizeof(double));
 	memcpy(a->E,  E, a->nfreqsE * sizeof(double));

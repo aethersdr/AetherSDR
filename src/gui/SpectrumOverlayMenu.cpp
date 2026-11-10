@@ -243,9 +243,17 @@ static constexpr int BAND_BTN_H = 26;
 // to silently un-style the panel with no compile error). Routed through
 // ThemeManager so the border stays theme-aware instead of pinning the dark
 // theme's #304050 literal.
+//
+// Panels are siblings of the menu and children of the spectrum, so a mouse
+// event a panel or its descendants ignore (a right press on a label or button,
+// a double-click on empty space) would otherwise propagate to the spectrum's
+// tuning handlers (#6802). WA_NoMousePropagation stops it at the panel. Every
+// QWidget panel is built and rebuilt through this helper; MemoryBrowsePanel,
+// which styles itself, sets the attribute at its creation site.
 static void applyPanelStyle(QWidget* panel, const QString& objectName)
 {
     panel->setObjectName(objectName);
+    panel->setAttribute(Qt::WA_NoMousePropagation);
     AetherSDR::ThemeManager::instance().applyStyleSheet(
         panel,
         QStringLiteral("QWidget#%1 { background: rgba(15, 15, 26, 220); "
@@ -257,12 +265,15 @@ static void applyPanelStyle(QWidget* panel, const QString& objectName)
 // (label+control rows, the Display scroll area/viewport/content). Scoped
 // because an unscoped "QWidget { … }" cascades onto children and their tooltip
 // labels. QWidget# even for the QScrollArea: the name already pins one widget.
-static void applyTransparentStyle(QWidget* widget, const QString& objectName)
+// `childRules` styles the row's children through this one call (already scoped).
+static void applyTransparentStyle(QWidget* widget, const QString& objectName,
+                                  const QString& childRules = {})
 {
     widget->setObjectName(objectName);
     widget->setStyleSheet(
         QStringLiteral("QWidget#%1 { background: transparent; border: none; }")
-            .arg(objectName));
+            .arg(objectName)
+        + childRules);
 }
 
 static const QString kLabelStyle =
@@ -502,12 +513,6 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     if (parentWidget()) {
         parentWidget()->installEventFilter(this);
     }
-
-    // Mouse presses on panel backgrounds must not fall through to the
-    // spectrum. Wheel ownership is handled for every descendant above.
-    for (auto* panel : {m_bandPanel, m_antPanel, m_daxPanel, m_displayPanel,
-                        static_cast<QWidget*>(m_memoryPanel)})
-        if (panel) panel->installEventFilter(this);
 
     updateLayout();
 
@@ -1548,6 +1553,8 @@ void SpectrumOverlayMenu::toggleDaxPanel()
 void SpectrumOverlayMenu::buildMemoryPanel()
 {
     m_memoryPanel = new MemoryBrowsePanel(parentWidget());
+    // Not styled through applyPanelStyle(), so it sets the same boundary.
+    m_memoryPanel->setAttribute(Qt::WA_NoMousePropagation);
     m_memoryPanel->hide();
     connect(m_memoryPanel, &MemoryBrowsePanel::memoryActivated, this,
             [this](int memoryIndex) {
@@ -1881,6 +1888,39 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         connect(m_weightedAvgBtn, &QPushButton::toggled, this, [this](bool on) {
             emit fftWeightedAverageChanged(on);
         });
+    }
+
+    // Scope mode, for a radio whose panadapter is its own scope (Icom). First in
+    // the group because it changes what every spectrum gesture does. An
+    // Icom-only cluster: built for that family alone (setRadioFamily), and
+    // dimmed with a reason on an Icom whose model or firmware has no choice.
+    {
+        m_scopeModeRow = new QWidget;
+        // The label and the buttons rebuilt per radio share the row's one
+        // stylesheet, scoped to it, with the panel's label and button looks.
+        const QString scoped = QStringLiteral("QWidget#displayScopeModeRow ");
+        applyTransparentStyle(m_scopeModeRow, QStringLiteral("displayScopeModeRow"),
+                              QString(labelStyle).replace(QStringLiteral("QLabel"),
+                                                          scoped + QStringLiteral("QLabel"))
+                                  + QString(btnStyle).replace(
+                                      QStringLiteral("QPushButton"),
+                                      scoped + QStringLiteral("QPushButton")));
+        m_scopeModeLayout = new QHBoxLayout(m_scopeModeRow);
+        m_scopeModeLayout->setContentsMargins(0, 2, 0, 2);
+        m_scopeModeLayout->setSpacing(3);
+        m_scopeModeLayout->addWidget(new QLabel(tr("Scope:")));
+        m_scopeModeRow->setToolTip(tr(
+            "How the radio's scope window follows the VFO.\n"
+            "Center: the window is centered on the VFO; dragging retunes.\n"
+            "Scroll-F: the window stays put; click to tune, drag to scroll.\n"
+            "  A drag stops before the VFO leaves the screen.\n"
+            "Fixed: as Scroll-F, but the window can be dragged away from\n"
+            "  the VFO; AetherSDR follows the VFO when you tune off-screen.\n"
+            "Scroll-F and Fixed rewrite the radio's stored Fixed Edges\n"
+            "preset 4; presets 1-3 are left as you set them."));
+        rebuildScopeModeButtons();
+        grid->addWidget(m_scopeModeRow, row, 0, 1, 4);
+        ++row;
     }
 
     // ── Sliders ───────────────────────────────────────────────────────────
@@ -3354,6 +3394,89 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
           QStringLiteral("attenuator"));
 }
 
+// The buttons do not own their state: a click emits the request and they
+// repaint from the index the backend reports.
+void SpectrumOverlayMenu::setScopeModeLabels(const QStringList& labels)
+{
+    if (labels == m_scopeModeLabels && m_scopeModeBtns.size() == labels.size()) {
+        return;
+    }
+    m_scopeModeLabels = labels;
+    rebuildScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::setScopeModeIndex(int index)
+{
+    m_scopeModeIndex = index;
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::setRadioFamily(const QString& family)
+{
+    if (family == m_radioFamily) {
+        return;
+    }
+    m_radioFamily = family;
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::rebuildScopeModeButtons()
+{
+    if (!m_scopeModeRow || !m_scopeModeLayout) {
+        return;
+    }
+    qDeleteAll(m_scopeModeBtns);
+    m_scopeModeBtns.clear();
+    // A radio with no choice publishes the one mode it has; show that mode
+    // dimmed, not three buttons it does not offer.
+    const QStringList labels = !m_scopeModeLabels.isEmpty()
+        ? m_scopeModeLabels : QStringList{tr("Center"), tr("Scroll-F"), tr("Fixed")};
+    for (int i = 0; i < labels.size(); ++i) {
+        auto* btn = new QPushButton(labels.at(i));
+        btn->setCheckable(true);
+        btn->setFixedHeight(20);
+        QString slug = labels.at(i).toLower();
+        slug.remove(QLatin1Char('-'));
+        slug.remove(QLatin1Char(' '));
+        btn->setObjectName(QStringLiteral("displayScopeMode_%1").arg(slug));
+        btn->setAccessibleName(tr("Scope mode %1").arg(labels.at(i)));
+        m_scopeModeLayout->addWidget(btn, 1);
+        m_scopeModeBtns.append(btn);
+        connect(btn, &QPushButton::clicked, this, [this, i] {
+            // Undo the checked state Qt gave the click; the backend's answer lights it.
+            refreshScopeModeButtons();
+            if (i != m_scopeModeIndex) {
+                emit scopeModeChanged(i);
+            }
+        });
+    }
+    refreshScopeModeButtons();
+}
+
+void SpectrumOverlayMenu::refreshScopeModeButtons()
+{
+    if (!m_scopeModeRow) {
+        return;
+    }
+    // Shown for the Icom family only (a maintainer-ruled exception to
+    // dim-never-hide); within it the backend's label list decides: fewer than
+    // two = an Icom whose model or firmware has no choice, dimmed with the
+    // reason; two or more = the choice.
+    m_scopeModeRow->setVisible(m_radioFamily.compare(QLatin1String("icom"),
+                                                     Qt::CaseInsensitive) == 0);
+    const bool available = m_scopeModeLabels.size() > 1;
+    const QString reason = available ? QString{}
+        : tr("Scope mode selection is unavailable for this radio or firmware.");
+    m_scopeModeRow->setEnabled(available);
+    m_scopeModeRow->setAccessibleDescription(reason);
+    for (int i = 0; i < m_scopeModeBtns.size(); ++i) {
+        QSignalBlocker b(m_scopeModeBtns[i]);
+        m_scopeModeBtns[i]->setChecked(available && i == m_scopeModeIndex);
+        m_scopeModeBtns[i]->setAccessibleDescription(reason);
+        m_scopeModeBtns[i]->setToolTip(available ? m_scopeModeRow->toolTip() : reason);
+    }
+}
+
 void SpectrumOverlayMenu::setLoopState(bool loopA, bool loopB)
 {
     if (!m_loopABtn || !m_loopBBtn)
@@ -3459,7 +3582,6 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     m_bandPanel = new QWidget(parentWidget());
     applyPanelStyle(m_bandPanel, QStringLiteral("bandPanel"));
     m_bandPanel->hide();
-    m_bandPanel->installEventFilter(this);
 
     auto* grid = new QGridLayout(m_bandPanel);
     grid->setContentsMargins(2, 2, 2, 2);
@@ -3638,7 +3760,6 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     m_xvtrPanel = new QWidget(parentWidget());
     applyPanelStyle(m_xvtrPanel, QStringLiteral("xvtrPanel"));
     m_xvtrPanel->hide();
-    m_xvtrPanel->installEventFilter(this);
     m_xvtrPanelVisible = false;
 
     auto* xvGrid = new QGridLayout(m_xvtrPanel);
@@ -3816,28 +3937,6 @@ bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
     if (obj == parentWidget() && event->type() == QEvent::Resize
         && m_displayPanelVisible) {
         layoutDisplayPanel();
-    }
-
-    if (event->type() == QEvent::MouseButtonDblClick) {
-        if (auto* slider = qobject_cast<QSlider*>(obj)) {
-            slider->setValue(50);
-            return true;
-        }
-    }
-    // Consume panel-background mouse events so they don't reach the spectrum.
-    // SpectrumOverlayWheelGuard owns wheel routing for panels and descendants.
-    if (obj == m_bandPanel || obj == m_antPanel
-        || obj == m_daxPanel || obj == m_displayPanel || obj == m_memoryPanel) {
-        if (event->type() == QEvent::MouseButtonPress
-            || event->type() == QEvent::MouseButtonRelease) {
-            if (auto* panel = qobject_cast<QWidget*>(obj)) {
-                if (auto* mouseEvent = dynamic_cast<QMouseEvent*>(event);
-                    mouseEvent && panel->childAt(mouseEvent->pos())) {
-                    return QWidget::eventFilter(obj, event);
-                }
-            }
-            return true;  // consumed
-        }
     }
     return QWidget::eventFilter(obj, event);
 }

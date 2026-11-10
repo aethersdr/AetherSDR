@@ -27,7 +27,10 @@ These controls operate the radio. External Elecraft tuners have their own applet
 - **MOX** — manual transmit
 - **ATU** — run the antenna tuner
 - **MEM** — use ATU memory
-- **APD** — Adaptive Pre-Distortion (Active/Cal/Avail indicators). On
+- **APD** — Adaptive Pre-Distortion (Active/Cal/Avail indicators).
+  **Active** lights when the radio reports a correction on air for the
+  transmit slice's antenna, frequency and power; on firmware 4.3 and later,
+  that means the radio's APD state is active or hold. On
   FLEX-8000-series radios running fw 4.2.18+, APD also supports
   **External APD**: pick a sampler-port input via the sub-menu so the radio
   can train its predistortion against the output of an external linear
@@ -45,7 +48,11 @@ the Tuner Genius XL.
 ### TUNE
 
 - **Right-click TUNE** to choose **Mono Tone** or **Two Tone** for the tune
-  carrier.
+  carrier. **Two Tone** requires a radio with a two-tone generator (FlexRadio).
+  On other connected radios the entry is dimmed with a reason; its keyboard
+  shortcut and MIDI action show the reason without starting TUNE. Use ordinary
+  **TUNE** for a single carrier on transmit-capable radios. Stopping an active
+  tune remains available.
 - Changes to **Tune Power** made while TUNE is keyed take effect immediately,
   including on the Hermes-Lite 2 and networked Icom radios.
 - TUNE and CW keying lock each other out: while TUNE is on, a paddle, straight
@@ -90,6 +97,14 @@ the Tuner Genius XL.
 - **MEM** shows the tuner's real memory state as the radio reports it, not
   just your last click.
 - ATU tune failures are reported in the status bar.
+- After a successful match, pressing **ATU** again at the same TX frequency
+  requests bypass. At a different TX frequency, it starts a new matching cycle.
+- On FlexRadio, selecting **XVTA**, **XVTB** or **XVTR** as the TX antenna dims
+  **ATU**, **MEM** and the **Success**, **Byp** and **Mem** indicators. The
+  internal ATU is outside that transmit path. **TUNE** remains available for
+  carrier and transverter drive checks; it does not start an ATU matching cycle.
+  **Tools → Pre-tune ATU Bands...** and **Tools → Clear ATU Memories...** are
+  also disabled, with the same transverter-path explanation.
 
 **ATU band pre-tune sweep.** Open it from **Tools → Pre-tune ATU Bands...** or
 right-click **ATU** → **Pre-tune bands…**. It walks the band-plan segments of
@@ -134,7 +149,13 @@ confirmation.
 - **+ACC** — accessory input toggle
 - **PROC** — speech processor (NOR/DX/DX+)
 - **DAX** — DAX audio toggle
-- **MON** — monitor + volume slider
+- **MON** — monitor + volume slider. Both are disabled, with an explanation
+  in their tooltips and accessible descriptions, when the connected radio
+  does not expose monitor control.
+
+MON and VOX shortcuts and MIDI mappings also refuse unsupported controls and
+show an unsupported-control notice instead of changing the model state.
+Radios that expose these controls keep their normal behavior.
 
 Hover the Level, Compression or ALC gauge for its exact value. In CW modes the
 applet switches to keyer controls, including the APF toggle and level.
@@ -155,6 +176,14 @@ changes made at the radio or by another client; **Breakin** requests a change.
 
 - **AM Carrier slider** (0–100)
 - **VOX** toggle + level + delay
+
+  The toggle and level slider are disabled, with an explanation in their
+  tooltips and accessible descriptions, when the connected radio does not
+  expose VOX control. Delay is available only when the radio exposes it.
+
+  Automation can explicitly disarm VOX with `invoke "VOX voice-operated transmit"
+  setChecked false` without TX permission. The `vox_toggle` automation shortcut
+  requires TX permission in either direction.
 - **DEXP** — downward expansion (noise gate on the radio's mic path)
 - **TX Filter** — Low Cut / High Cut step buttons
 

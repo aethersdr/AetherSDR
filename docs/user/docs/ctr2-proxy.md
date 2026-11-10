@@ -25,17 +25,25 @@ AetherSDR's own command or transmit paths.
 
 - AetherSDR connected to a radio that accepts more than one client, over the
   LAN or a VPN. The proxy is unavailable on SmartLink connections.
-- **Wi-Fi (TCP) mode** works with current CTR2 firmware.
-- **USB mode** needs a CTR2-Max running AetherCTR2 (AetherSDR installs it;
-  see [Installing AetherCTR2 on a CTR2-Max](#installing-aetherctr2-on-a-ctr2-max))
-  or an AetherKnob, and a build with USB HID support (hidapi). The CTR2-Max's
-  stock firmware has no USB mode.
+- **USB mode** needs a CTR2-Max running Lynovation's firmware v2.00.00 or
+  later, or AetherCTR2 (AetherSDR installs it; see
+  [Installing AetherCTR2 on a CTR2-Max](#installing-aetherctr2-on-a-ctr2-max)),
+  a CTR2-MIDI on firmware with USB support, or an AetherKnob, and a build with
+  USB HID support (hidapi). From v2.00.00 the CTR2-Max's firmware connects
+  over USB only.
+- **Wi-Fi mode** is for CTR2s that connect over Wi-Fi: Lynovation's other CTR2
+  controllers (the M5Dial-based CTR2-Quad, Duo and Uno, and a CTR2-MIDI on
+  earlier firmware), and a CTR2-Max still on firmware older than v2.00.00.
 
 ## Setup
 
 Open **Settings → Controllers → CTR2...**. The window has two parts: **CTR2
 Relay** at the top, and **CTR2-Max Firmware** below it (see
 [Installing AetherCTR2 on a CTR2-Max](#installing-aetherctr2-on-a-ctr2-max)).
+When the USB device selected is another kind of controller (a CTR2-MIDI, an
+M5Dial or an AetherKnob) and no CTR2-Max is connected, the window shows only
+the relay. The firmware part comes back when a CTR2-Max is connected, and
+stays until the window is closed.
 Closing the window does not stop the relay.
 
 The relay starts when you press **Start**, or by itself with **Start
@@ -43,16 +51,16 @@ automatically** (see [Starting automatically](#starting-automatically)). Each
 time it starts, its setup (mode, device, listen address and port) is saved and
 offered again at the next launch.
 
-The **Mode** selector offers **Wi-Fi (TCP)** and **USB**.
+The **Mode** selector offers **Wi-Fi** and **USB**.
 
 <img src="/img/screens/ctr2-applet.png" width="248" alt="CTR2 Proxy applet. Mode is set to USB with a Rescan button, the USB selector reads Select CTR2 USB device, and the Radio row (blacked out here) sits beside a dimmed Start button. An amber hint reads Select the CTR2 USB device, followed by State: Stopped and traffic counters of 0 B to the radio and to the CTR2." />
 
 *The CTR2 relay controls before a CTR2 is selected, from before they moved into the CTR2 window. The radio's address is blacked out.*
 
 > **Check the mode the first time.** On builds with USB support, USB is the
-> default until the relay has been started once. A CTR2 on its stock firmware
-> works only in **Wi-Fi (TCP)** mode, so pick it unless the CTR2-Max runs
-> AetherCTR2.
+> default until the relay has been started once. Lynovation's M5Dial-based
+> CTR2s, a CTR2-MIDI without USB support, and a CTR2-Max on firmware older
+> than v2.00.00, work only in **Wi-Fi** mode, so pick it for those.
 
 ## Starting automatically
 
@@ -63,17 +71,26 @@ connects to a radio. The choice is saved.
 - If the CTR2 is not plugged in yet, AetherSDR keeps looking every few seconds
   and starts the relay when it appears.
 - Pressing **Stop** holds it off until AetherSDR next connects to a radio.
-- In USB mode it starts only a CTR2-Max running AetherCTR2, or an AetherKnob.
-  A CTR2 on its stock firmware has no USB mode.
+- In USB mode it starts a CTR2-Max (on Lynovation's firmware or AetherCTR2),
+  a CTR2-MIDI or an AetherKnob. A CTR2-Max on firmware older than v2.00.00, or
+  a CTR2-MIDI on firmware without USB support, never answers; see
+  [No answer from the CTR2](#no-answer-from-the-ctr2). Lynovation's firmware
+  uses its board's generic USB name (Espressif's, or Seeed's XIAO_ESP32S3), so
+  another board with the same name and kind of HID interface may be tried too. A device that never
+  answers is tried about once a minute.
 - **Linux:** if the CTR2 udev rule is not installed yet, press **Start** once
   to install it.
 
-## Using Wi-Fi (TCP) mode
+## Using Wi-Fi mode
 
 1. On the CTR2, set the radio IP address to **this PC's LAN address**.
 2. In the CTR2 window, pick the **Listen** address: one of this PC's local IPv4
    addresses. The listen port is 4992; it can be changed while stopped.
 3. Press **Start**.
+
+The relay reaches the radio at the address AetherSDR is connected to, IPv4
+or IPv6, in both Wi-Fi and USB mode; only the Wi-Fi **Listen** address must be
+IPv4.
 
 Each CTR2 connection gets a fresh connection to the radio. Only one CTR2
 connection is active at a time; extra ones are closed and counted as
@@ -84,7 +101,8 @@ features of the CTR2 that rely on UDP may not work this way.
 
 The CTR2's traffic travels in USB HID reports, and AetherSDR starts the link,
 so you only pick the device and press **Start**. It needs a CTR2-Max running
-AetherCTR2 (see below) or an AetherKnob.
+Lynovation's firmware v2.00.00 or later or AetherCTR2 (see below), a CTR2-MIDI
+on firmware with USB support, or an AetherKnob.
 
 - The **USB** device list shows candidate HID devices, with known CTR2 boards
   and the AetherKnob named and listed first. While the relay is stopped the
@@ -96,8 +114,10 @@ AetherCTR2 (see below) or an AetherKnob.
 - **Linux:** a udev rule for the CTR2 ships with the build. If the device
   cannot be opened, **Start** offers to install the rule
   (`/etc/udev/rules.d/70-aethersdr-ctr2.rules`) through `pkexec`, asking for
-  your administrator password once. The rule only opens CTR2 controllers and
-  the AetherKnob to whoever is logged in at the computer.
+  your administrator password once. The rule opens CTR2 controllers, the
+  AetherKnob, and the USB serial port of ESP32-S3 boards (which the CTR2-Max
+  uses in download mode, for firmware installs) to whoever is logged in at the
+  computer, and to no one else.
 - **AetherKnob** (an AetherSDR controller on the Elecrow CrowPanel 2.1"
   rotary display) uses USB mode the same way. It appears in the list as
   **AetherKnob**. While it is relaying, AetherSDR also sends it a 32-bar
@@ -127,6 +147,13 @@ AetherCTR2 (see below) or an AetherKnob.
     become spaces. DeepFist's decode is not sent yet.
 
   A CTR2 never receives either.
+- **A faster link.** Controller firmware that supports it (AetherCTR2 builds
+  with wide reports) and AetherSDR agree by themselves on a USB link about
+  seven times faster; AetherCTR2 uses it for the panadapter's zoom and
+  reference levels. Lynovation's firmware and older AetherCTR2 releases keep
+  the plain link and work as before. **On Windows, update AetherSDR first:**
+  AetherSDR releases from before the faster link cannot relay firmware that
+  supports it there.
 - Other controller firmware that speaks the same USB link can name itself:
   a `303A:1001` device whose USB product name starts with **Aether** (that
   exact case) and continues with at least one more character appears in the
@@ -173,16 +200,18 @@ version, or other stock firmware it asks you to, in an alert: hold **BOOT** (thr
 
 ### Requirements
 
-- **The CTR2-Max must be registered** with its stock firmware, v1.02.00m or
+- **The CTR2-Max must be registered** with its stock firmware, v2.00.00 or
   later (your call and registration key, entered on the unit). A unit
-  registered with an earlier version is taken once it has run v1.02.00m or
+  registered with an earlier version is taken once it has run v2.00.00 or
   later: update its firmware first (see
   [Updating the CTR2-Max's own firmware](#updating-the-ctr2-maxs-own-firmware)).
   AetherSDR reads the registration before writing anything, and refuses an
   unregistered unit; AetherCTR2 also checks it at every start.
 - **Linux:** download mode uses the unit's USB serial port. If AetherSDR
-  cannot open it, add yourself to the group that owns the port (`dialout` or
-  `uucp`, depending on the distribution) and log in again.
+  cannot open it, the CTR2 window offers to install the CTR2 access rule
+  (the same one **Start** installs) through `pkexec`, asking for your
+  administrator password once, then carries on with the install. No group
+  change or logging out is needed.
 - A build with serial-port support (Qt Serial Port) for download mode, and
   USB HID support (hidapi) for updates over the cable.
 
@@ -222,7 +251,7 @@ starts.
 
 **Back to AetherCTR2**, from the stock firmware, either:
 
-- with CTR2-Max firmware v1.02.00 or later, choose **Run AetherCTR2** at the
+- with CTR2-Max firmware v2.00.00 or later, choose **Run AetherCTR2** at the
   bottom of page 1 of the CTR2-Max's **Settings** menu (it reads
   **AetherCTR2 n/a** when AetherCTR2 is not installed), or
 - with any version, press **Restart into → AetherCTR2** in the CTR2 window.
@@ -231,7 +260,15 @@ starts.
 The CTR2 window notices the switch by itself: the device list and **Status**
 follow within a couple of seconds, with no **Rescan** needed. With **Start
 automatically** ticked, the relay starts again once the CTR2-Max is back in
-AetherCTR2.
+AetherCTR2. After a restart asked for from the CTR2 window, it waits for the
+unit to leave and come back rather than reopening it on its way out; if
+AetherSDR misses that, it tries again after 20 seconds. Another controller is
+not kept waiting.
+
+Before **Restart into**, **Install** or a stock-firmware install, the window
+may show **Reading the CTR2-Max's firmware…** for a moment while it checks
+whether the running firmware can restart on request, so it asks for the BOOT
+and RESET buttons only when the firmware really needs them.
 
 ### Backups
 
@@ -245,7 +282,9 @@ date, including any saved with **Back Up…** in earlier versions of AetherSDR
 it. Installing one restores it: the whole flash goes back exactly as it
 was, both firmwares, the settings and the registration included, and anything
 since is lost. A backup restores only onto the unit it came from (matched by
-its MAC address), and only if the file is unchanged since it was made.
+its MAC address), and only if the file is unchanged since it was made. The
+question before a restore has **Cancel** as its default, so pressing Return
+keeps what is on the unit; restoring takes a click on **Restore**.
 
 ### Cancelling
 
@@ -266,7 +305,7 @@ supply this firmware: download it from Lynovation's
    unzip it.
 2. In the CTR2 window, choose the **Lynovation** tab, press **Open File…**
    and choose the zip (or the `.bin` file inside it). The firmware is added
-   to the tab's list, for example **CTR2-Max firmware v1.02.00n**, and
+   to the tab's list, for example **CTR2-Max firmware v2.00.01**, and
    chosen.
 3. Connect the CTR2-Max with a USB cable and press the tab's **Install…**,
    then **Update**.
@@ -344,7 +383,28 @@ second client. The proxy cannot be used with this radio.
 
 The build was made without hidapi.
 
-1. Pick **Wi-Fi (TCP)** mode instead.
+1. Pick **Wi-Fi** mode instead, if the CTR2's firmware still has Wi-Fi.
+
+### No answer from the CTR2
+
+The relay is running in USB mode, but the CTR2 has not answered it:
+"No answer from the CTR2. USB mode needs CTR2-Max firmware v2.00.00 or
+later, AetherCTR2, or CTR2-MIDI firmware with USB support."
+
+1. Check the CTR2-Max's firmware version. Before v2.00.00 it has no USB mode.
+   A CTR2-MIDI needs Lynovation's firmware with USB support.
+2. Update it to v2.00.00 or later (see
+   [Updating the CTR2-Max's own firmware](#updating-the-ctr2-maxs-own-firmware)), or
+   install AetherCTR2.
+3. Or stop the relay and use **Wi-Fi** mode with the firmware it has. Other
+   M5Dial-based CTR2s (Quad, Duo, Uno) always use Wi-Fi mode.
+
+If the relay stops with an error before the CTR2 ever answered, **Start
+automatically** waits a minute before trying it again, instead of a few
+seconds. It tries again at once when the USB device list changes (the CTR2
+switches firmware, or another device is plugged in or out), when you pick
+another device or mode, when you tick **Start automatically** again, or when
+AetherSDR next connects to a radio. **Start** always tries again.
 
 ### "... is in use by another AetherSDR"
 
@@ -365,9 +425,9 @@ It stops when AetherSDR disconnects or switches radios.
 ### "This CTR2-Max is not registered"
 
 AetherSDR installs AetherCTR2 only on a unit registered with CTR2-Max
-firmware v1.02.00m or later.
+firmware v2.00.00 or later.
 
-1. If its CTR2-Max firmware is older than v1.02.00m, update it first (see
+1. If its CTR2-Max firmware is older than v2.00.00, update it first (see
    [Updating the CTR2-Max's own firmware](#updating-the-ctr2-maxs-own-firmware)).
 2. Start the stock firmware (press **RESET**), and if it is not registered,
    enter your call and registration key on the unit.

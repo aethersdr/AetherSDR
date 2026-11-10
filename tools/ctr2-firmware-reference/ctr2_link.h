@@ -163,6 +163,26 @@ float ctr2_spectrum_linear_edge(uint16_t low_hz, uint16_t span_hz, uint8_t n, ui
  * yet. A longer message is a framing error (CTR2_ERR_BAD_LENGTH). */
 uint16_t ctr2_ext_max_length(uint8_t type);
 
+/* Wide reports: capability bit 5, which names no message (0x45 is never
+ * sent). Once the host accepts it, both directions carry the 8-byte reports
+ * bundled in HID report CTR2_WIDE_REPORT_ID instead of report 0x01, up to
+ * CTR2_WIDE_REPORTS at a time:
+ *   [count 1..7][count reports, back to back][zero padding]
+ * in CTR2_WIDE_REPORT_BYTES after the report ID. The messages do not change.
+ * A device offering it declares that report (Input and Output, 63 bytes)
+ * beside report 0x01; Windows then pads every report it reads from the
+ * device to 64 bytes. The device drops back to report 0x01 whenever the
+ * host reads Feature report 0x02 (a new host session), until a Set accepts
+ * the bit again. */
+#define CTR2_CAP_WIDE_REPORTS   (1ul << 5)
+#define CTR2_WIDE_REPORT_ID     0x04u
+#define CTR2_WIDE_REPORT_BYTES  63u
+#define CTR2_WIDE_REPORTS       7u
+
+/* Reports in a wide report (`len` bytes after its report ID), or 0 when it
+ * is malformed. They start at in + 1. */
+size_t ctr2_wide_count(const uint8_t *in, size_t len);
+
 /* Capability negotiation: HID Feature report CTR2_FEATURE_REPORT_ID,
  * CTR2_FEATURE_BYTES after the report ID:
  *   ['C']['X'][extension version 0x01][0x00][capabilities, 32 bits MSB first]

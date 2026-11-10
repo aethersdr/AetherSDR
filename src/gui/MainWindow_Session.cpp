@@ -6,6 +6,7 @@
 // at its original constructor position.
 
 #include "MainWindow.h"
+#include "models/AntennaAnalyzerModel.h"
 
 #include "MeterApplet.h"
 
@@ -21,6 +22,7 @@
 #include "PersistentDialog.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
+#include "RadioTabBar.h"
 #include "RfGainRestore.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with ConnectionPanel
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
@@ -48,6 +50,7 @@
 #include "PanadapterApplet.h"
 #include "PanFrameGuard.h"
 #include "CatControlApplet.h"
+#include "models/ReceiverSlotCount.h"
 #include "ClientChainApplet.h"
 #include "DaxApplet.h"
 #include "DaxIqApplet.h"
@@ -63,11 +66,11 @@
 #include "core/ThemeManager.h"
 #include "SpectrumWidget.h"
 #include "TitleBar.h"
+#include "UpdatesWindow.h"
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
 
-#include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QLineEdit>
@@ -84,6 +87,7 @@
 #include <QMessageBox>
 #include <QAbstractButton>
 #include <QCheckBox>
+#include <QColor>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QPointer>
@@ -94,6 +98,49 @@
 #include <cmath>
 
 namespace AetherSDR {
+
+void MainWindow::refreshAdaptiveThrottleChip()
+{
+    if (!m_titleBar) {
+        return;
+    }
+    const bool enabled = AppSettings::instance()
+        .value("AdaptiveThrottleEnabled", "False").toString() == "True";
+    // Unticking the box doesn't lift a cap already in force:
+    // RadioModel::applyAdaptiveFrameRate() stops adjusting, so the cap stays
+    // until disconnect.  The chip stays with it, so the cap is never hidden.
+    const QString capColor = m_adaptiveFpsCap > 0
+        ? adaptiveFpsCapColor(m_adaptiveFpsCap) : QString();
+    m_titleBar->radioTabBar()->setAdaptiveThrottle(
+        enabled || m_adaptiveFpsCap > 0, m_adaptiveFpsCap,
+        capColor.isEmpty() ? QColor() : QColor(capColor));
+    m_titleBar->setThrottleFlashColor(capColor);
+}
+
+void MainWindow::refreshNetworkQualityIndicators()
+{
+    if (!m_networkLabel || !m_networkStatusBlock) {
+        return;
+    }
+    const QString quality = m_radioModel.networkQuality();
+    const QString color = networkQualityColor(quality);
+    if (m_titleBar) {
+        m_titleBar->radioTabBar()->setLinkQuality(
+            quality == QStringLiteral("Off") ? QColor() : QColor(color), quality);
+    }
+    const bool dwellPending = m_adaptiveFpsCap > 0 && m_radioModel.pendingThrottleLift();
+    const QString capSuffix = m_adaptiveFpsCap > 0
+        ? (dwellPending
+           ? QStringLiteral(" · %1 fps cap (restoring)").arg(m_adaptiveFpsCap)
+           : QStringLiteral(" · %1 fps cap").arg(m_adaptiveFpsCap))
+        : QString();
+    m_networkLabel->setText(QString("[<span style='color:%1'>%2</span>]")
+        .arg(color, quality + capSuffix));
+    const QString tooltip = buildNetworkTooltip(m_radioModel, m_adaptiveFpsCap, dwellPending);
+    m_networkLabel->setToolTip(tooltip);
+    m_networkStatusBlock->setToolTip(tooltip);
+    refreshAdaptiveThrottleChip();
+}
 
 namespace {
 QString defaultPanLayoutForCount(int panCount)
@@ -309,9 +356,19 @@ void MainWindow::refreshRadioTabs()
             || entry.id == m_lastSessionTab.id
             || !hidden.contains(entry.id);
     }
-    m_titleBar->setRadioTabs(tabs);
     m_titleBar->setDiscoveredRadios(tabs);
+    if (m_aetherLabWidget) {
+        RadioTabEntry lab;
+        lab.kind = RadioTabEntry::Kind::Workspace;
+        lab.id = QStringLiteral("aetherlab");
+        lab.name = tr("AetherLab");
+        lab.detail = tr("Antenna Analyzer · USB");
+        tabs.append(lab);
+    }
+    m_titleBar->setRadioTabs(tabs);
+    // Refresh radio-link ownership even while the lab remains selected.
     m_titleBar->setActiveRadio(activeSerial);
+    if (m_aetherLabActive) { m_titleBar->setActiveRadio(QStringLiteral("aetherlab")); }
 }
 
 void MainWindow::wireDiscovery()
@@ -547,6 +604,8 @@ void MainWindow::wireDiscovery()
         // operator confirm — the tab is a selector, not a disconnect button.
         connect(m_titleBar, &TitleBar::radioTabActivated, this,
                 [this](const QString& radioId) {
+            if (radioId == QLatin1String("aetherlab")) { showAetherLab(); return; }
+            returnFromAetherLab();
             if (m_radioModel.isConnected() && m_radioModel.serial() == radioId) {
                 return;   // already the active session — nothing to do
             }
@@ -606,6 +665,8 @@ void MainWindow::wireDiscovery()
             dialog->show();
             editor->setFocus(Qt::OtherFocusReason);
         });
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::aetherLabRequested,
+                this, &MainWindow::showAetherLab);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::rescanRequested,
                 m_connPanel, &ConnectionPanel::retryDiscoveryRequested);
         connect(m_titleBar->radioTabBar(), &RadioTabBar::radioActionRequested,
@@ -793,6 +854,10 @@ void MainWindow::disconnectFromRadioByUser()
     s.remove("LastConnectedRadioSerial");
     s.remove("LastRoutedRadioIp");
     s.save();
+    // Lift any adaptive cap while the link is up, so the radio keeps the
+    // operator's rates rather than the cap for the next session.
+    if (m_adaptiveThrottleActive)
+        restorePreCapPanRates();
     m_radioModel.disconnectFromRadio();
 }
 
@@ -1827,10 +1892,18 @@ void MainWindow::wirePanLifecycle()
                 static_cast<double>(PerfTelemetry::nowNs() - emittedNs) / 1000000.0);
         }
         const PanFrameGuard frameGuard = capturePanFrame(streamId, false);
+        // A held frame reaches the widget after its pan may have moved, so
+        // `get tracedebug <pan> bins` refuses it (#6720). Every backend's
+        // spectrum (HL2 too) arrives here as the Flex source.
+        const bool heldForPresentation =
+            receivePresentationDelayMs(ReceivePresentationSource::Flex,
+                                       ReceivePresentationSurface::Spectrum,
+                                       QString::number(streamId)) > 0;
         deferReceivePresentation(
             ReceivePresentationSource::Flex,
             ReceivePresentationSurface::Spectrum,
-            [this, profileLoadFrameReady, streamId, bins, decodeScale, frameGuard]() {
+            [this, profileLoadFrameReady, streamId, bins, decodeScale, frameGuard,
+             heldForPresentation]() {
                 if (m_shuttingDown || !m_panStack || !frameGuard.isCurrent()) {
                     return;
                 }
@@ -1841,7 +1914,7 @@ void MainWindow::wirePanLifecycle()
                                                        bins.size())) {
                                 return;
                             }
-                            sw->updateSpectrum(bins, decodeScale);
+                            sw->updateSpectrum(bins, decodeScale, heldForPresentation);
                             finishPanadapterConnectionAnimation();
                         }
                         return;
@@ -1855,7 +1928,7 @@ void MainWindow::wirePanLifecycle()
                 if (m_radioModel.panadapters().isEmpty()
                     && !profileLoadRadioStateWritesHeld()) {
                     if (auto* sw = spectrum()) {
-                        sw->updateSpectrum(bins, decodeScale);
+                        sw->updateSpectrum(bins, decodeScale, heldForPresentation);
                         finishPanadapterConnectionAnimation();
                     }
                 } else {
@@ -2264,6 +2337,18 @@ void MainWindow::wirePanLifecycle()
                 this, [this, panId = pan->panId()](int step) {
             m_radioModel.setPanAttenuatorFor(panId, step);
         });
+        // The radio's scope mode: same model -> menu / menu -> model shape.
+        connect(pan, &PanadapterModel::scopeModeLabelsChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setScopeModeLabels);
+        connect(pan, &PanadapterModel::scopeModeIndexChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setScopeModeIndex);
+        connect(applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::scopeModeChanged,
+                this, [this, panId = pan->panId()](int index) {
+            m_radioModel.setPanScopeModeFor(panId, index);
+        });
         // Seed from whatever the model already holds: this wiring can run after
         // the backend has published, and a control built empty would stay empty
         // until the operator moved something on the radio.
@@ -2280,6 +2365,9 @@ void MainWindow::wirePanLifecycle()
         syncPreampIndicator();
         applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
         applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
+        applet->spectrumWidget()->overlayMenu()->setRadioFamily(m_radioModel.family());
+        applet->spectrumWidget()->overlayMenu()->setScopeModeLabels(pan->scopeModeLabels());
+        applet->spectrumWidget()->overlayMenu()->setScopeModeIndex(pan->scopeModeIndex());
 
         // Push display dimensions to the radio so it sends full-size FFT bins.
         // Without this, the radio uses xpixels=50 ypixels=20 (default) and
@@ -2480,6 +2568,45 @@ void MainWindow::wirePanLifecycle()
 
 }
 
+void MainWindow::applyCatPortCount()
+{
+    auto& s = AppSettings::instance();
+    const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
+
+    for (int i = 0; i < kCatPorts; ++i) {
+        if (!catPort(i)) {
+            continue;
+        }
+
+        const QString prefix = QString("CatPort_%1_").arg(i);
+        const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
+        const QString d = s.value(prefix + "Dialect", "Rigctld").toString();
+        const CatDialect dialect = dialectFromKey(d);
+        const QString defaultPort = dialect == CatDialect::OTRSP
+            ? QString::number(CatPort::kOtrspDefaultPort) : QString();
+        const QString savedPort = s.value(prefix + "Port", "").toString();
+        const int portNum = (savedPort.isEmpty() ? defaultPort : savedPort).toInt();
+        // CAT ports are independent control channels, not one port per receiver.
+        const bool shouldRun = masterOn && portEnabled && portNum >= 1024 && portNum <= 65535;
+
+        if (shouldRun && !catPort(i)->isRunning()) {
+            catPort(i)->setDialect(dialect);
+            catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+            catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
+            catPort(i)->start(static_cast<quint16>(portNum));
+        } else if (!shouldRun
+                   && (catPort(i)->isRunning() || !catPort(i)->errorString().isEmpty())) {
+            catPort(i)->stop();
+        }
+    }
+
+    auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
+    if (applet) {
+        applet->setCatEnabled(masterOn);
+        applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
+    }
+}
+
 void MainWindow::wireCatPorts()
 {
     // ── Unified CAT ports (kCatPorts slots, configured from settings) ───────────
@@ -2496,9 +2623,7 @@ void MainWindow::wireCatPorts()
         const QString prefix = QString("CatPort_%1_").arg(i);
         auto& s = AppSettings::instance();
         QString d = s.value(prefix + "Dialect", "Rigctld").toString();
-        CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
-                        : (d == "TS2000")  ? CatDialect::TS2000
-                        : CatDialect::Rigctld;
+        CatDialect dial = dialectFromKey(d);
         catPort(i)->setDialect(dial);
         catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
         catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
@@ -2535,9 +2660,16 @@ void MainWindow::wireCatPorts()
     // through a context-bound queued connection carrying the TX permit.
     auto* tci = new TciServer(&m_radioModel, nullptr);
     tci->setAudioEngine(m_audio);
+    connect(m_titleBar, &TitleBar::pcAudioToggled, tci, &TciServer::updateLineOutCapture);
     m_session->setTciServer(tci);
     m_appletPanel->tciApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->tciApplet()->setTciServer(tciServer());
+    // `rx_ctun_ex` (Thetis CTUN) drives center lock, the inverse switch. A TCI
+    // client is not the operator: it changes the live lock only, never the
+    // saved preference, so it does not outlive the session.
+    tci->setCenterLockHandlers(
+        [this](int sliceId, bool locked) { setSessionCenterLockForSlice(sliceId, locked); },
+        [this](int sliceId) { return centerLockActiveForSlice(m_radioModel.slice(sliceId)); });
     // TCI RX row count follows the radio's slice capacity too (#4854 review).
     if (auto* tciApplet = m_appletPanel->tciApplet()) {
         tciApplet->setMaxDaxChannels(m_radioModel.maxSlices());
@@ -3004,6 +3136,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         }
         return tciServer()->routingSnapshot();
     });
+    m_automation->setLabHandler([this](const QString& action, const QString& value) {
+        return antennaAnalyzerModel()->automation(action, value);
+    });
     m_automation->setDeviceDiagnosticsHandler([this](const QString& diagnostic) {
         if (diagnostic != QLatin1String("ulanzi")
             && diagnostic != QLatin1String("ulanzi-start")
@@ -3401,23 +3536,16 @@ void MainWindow::applyFirmwareCurrencyToVersionLabel()
 }
 
 // The version row's action (click, Return/Enter, or the accessible Press):
-// open the release notes, but ONLY while it shows an out-of-date version,
-// which is the state the tooltip invites a click in. Otherwise it does nothing.
-void MainWindow::openFirmwareReleaseNotes()
+// open the Updates window at the radio's firmware, but ONLY while it shows an
+// out-of-date version, which is the state the tooltip invites a click in.
+// Otherwise it does nothing.
+void MainWindow::openFirmwareUpdate()
 {
     if (m_radioFirmwareCurrency != AetherSDR::FirmwareCurrency::Status::Outdated)
         return;
-    const auto& source = m_radioModel.backendCapabilities().firmwareUpdateSource;
-    if (!source.has_value())
-        return;
-    // The newest release OF THE RADIO'S OWN LINE, never the newest overall: an
-    // operator on v3 must not be handed v4's notes.
-    const QString url = AetherSDR::FirmwareCurrency::releaseNotesUrl(
-        source->releaseNotesUrlTemplate,
-        AetherSDR::FirmwareCurrency::upgradeTargetFor(
-            source->publishedReleases, m_radioVersionLabel->text()));
-    if (!url.isEmpty())
-        QDesktopServices::openUrl(QUrl(url));
+    showUpdatesWindow(false);
+    if (m_updatesWindow)
+        m_updatesWindow->showFirmware();
 }
 
 void MainWindow::createPansSequentially(const QString& layoutId, int total,
