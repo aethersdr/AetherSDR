@@ -55,11 +55,13 @@ void RadioModel::applyAudioStreamDelta(const AudioStreamDelta& delta)
     }
     auto stream = m_audioStreams.find(delta.streamId);
     if (stream == m_audioStreams.end()) {
-        if (!delta.kind || !delta.clientHandle || m_audioStreams.size() >= 64) { return; }
+        // Owner 0 is unknown (no client_handle yet, or 0x0): the model's
+        // adopters decide whether such a stream is ours, as they do for pans.
+        if (!delta.kind || m_audioStreams.size() >= 64) { return; }
         stream = m_audioStreams.insert(delta.streamId,
-            {*delta.kind, delta.channel.value_or(0), *delta.clientHandle, ++m_audioRetirementSerial});
+            {*delta.kind, delta.channel.value_or(0), delta.clientHandle.value_or(0), ++m_audioRetirementSerial});
     } else if ((delta.kind && *delta.kind != stream->kind)
-        || (delta.clientHandle && *delta.clientHandle != stream->owner)
+        || (delta.clientHandle && stream->owner != 0 && *delta.clientHandle != stream->owner)
         || (delta.channel && stream->channel != 0 && *delta.channel != stream->channel)) {
         stream->incarnation = ++m_audioRetirementSerial;
         m_audioRetirements.insert(delta.streamId, m_audioRetirementSerial);
@@ -104,7 +106,8 @@ ReceiveDispatch RadioModel::requestAudioStream(AudioStreamRequest request, const
     quint64 incarnation = 0;
     if (request.action != AudioStreamAction::Create) {
         const auto stream = m_audioStreams.constFind(request.streamId);
-        if (stream == m_audioStreams.cend() || stream->kind != request.kind || stream->owner != clientHandle()
+        if (stream == m_audioStreams.cend() || stream->kind != request.kind
+            || (stream->owner != 0 && stream->owner != clientHandle())
             || (request.channel != 0 && stream->channel != 0 && stream->channel != request.channel)) {
             return refuse(QStringLiteral("audio stream identity is not owned by this client"));
         }
@@ -138,7 +141,8 @@ ReceiveDispatch RadioModel::requestAudioStream(AudioStreamRequest request, const
             const bool identitySafe = sameSession && pending->retirementEpoch == alive->m_audioRetirementEpoch
                 && alive->m_audioRetirements.value(reply.streamId) <= pending->retirementSerial
                 && (existing == alive->m_audioStreams.cend()
-                    || (existing->owner == alive->clientHandle() && existing->kind == pending->request.kind
+                    || ((existing->owner == 0 || existing->owner == alive->clientHandle())
+                    && existing->kind == pending->request.kind
                         && existing->incarnation > pending->retirementSerial
                         && (existing->channel == 0 || existing->channel == pending->request.channel)));
             if (identitySafe && reply.result.code == 0 && alive->m_audioStreams.size() < 64) {
@@ -164,7 +168,8 @@ ReceiveDispatch RadioModel::requestAudioStream(AudioStreamRequest request, const
         } else if (reply.streamId != 0) {
             const auto existing = alive->m_audioStreams.constFind(reply.streamId);
             current = current && existing != alive->m_audioStreams.cend()
-                && existing->incarnation == pending->incarnation && existing->owner == alive->clientHandle();
+                && existing->incarnation == pending->incarnation
+                && (existing->owner == 0 || existing->owner == alive->clientHandle());
         }
         if (!current) { reply.result.kind = RadioControlReply::Kind::Cancelled; }
         if (!pending->completed) {

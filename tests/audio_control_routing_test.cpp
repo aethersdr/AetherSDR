@@ -141,11 +141,26 @@ void identityAndReplies()
         check(f.radio.requestAudioStream({AudioStreamKind::Iq, AudioStreamAction::Remove, 0x100, 1})
             == ReceiveDispatch::Dispatched, "an unusable channel value leaves our stream's identity and ownership intact");
     }
-    for (const QString& owner : {QStringLiteral("0x72"), QStringLiteral("broken"), QStringLiteral("0x0")}) {
+    for (const QString& owner : {QStringLiteral("0x72"), QStringLiteral("broken")}) {
         AudioFixture f;
         f.stream(0x100, QStringLiteral("dax_iq"), owner);
         check(f.radio.requestAudioStream({AudioStreamKind::Iq, AudioStreamAction::Remove, 0x100, 1})
             == ReceiveDispatch::Unsupported && f.backend->writes.empty(), "foreign or malformed ownership cannot remove a stream");
+    }
+    for (bool zeroHandle : {false, true}) {
+        AudioFixture f;
+        QMap<QString, QString> fields{{"type", "dax_iq"}, {"daxiq_channel", "1"}};
+        if (zeroHandle) { fields.insert("client_handle", "0x0"); }
+        f.status(QStringLiteral("stream 0x100"), fields);
+        check(f.radio.requestAudioStream({AudioStreamKind::Iq, AudioStreamAction::SetIqRate, 0x100, 1, 96000})
+            == ReceiveDispatch::Dispatched
+            && f.radio.requestAudioStream({AudioStreamKind::Iq, AudioStreamAction::Remove, 0x100, 1})
+            == ReceiveDispatch::Dispatched,
+            zeroHandle ? "a stream reported with client_handle=0x0 can be re-rated and removed"
+                       : "a stream reported without client_handle can be re-rated and removed");
+        f.stream(0x100, QStringLiteral("dax_iq"), QStringLiteral("0x72"));
+        check(f.radio.requestAudioStream({AudioStreamKind::Iq, AudioStreamAction::Remove, 0x100, 1})
+            == ReceiveDispatch::Unsupported, "an owner learned later as foreign closes that admission");
     }
     {
         AudioFixture f;

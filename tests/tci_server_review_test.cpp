@@ -2518,9 +2518,18 @@ public:
         // and drops the pan binding now rather than leaving it routed at a
         // channel nothing reads.
         server.stopIqForClient(server.m_clients[1], 0);
-        return !server.m_tciIqChannels.contains(1)
-            && !model.daxIqModel().createPending(1)
-            && server.m_iqPanChannel.isEmpty();
+        if (server.m_tciIqChannels.contains(1) || !server.m_iqPanChannel.isEmpty()) {
+            std::printf("      last stop kept the channel or its pan binding\n");
+            return false;
+        }
+        RadioControlCompletion create;
+        for (const auto& write : fixture.backend->writes) {
+            if (write.command == QStringLiteral("stream create type=dax_iq daxiq_channel=1")) { create = write.completion; }
+        }
+        if (!create) { return false; }
+        create({RadioControlReply::Kind::Accepted, 0, QStringLiteral("0x20000100")});
+        spin(1);
+        return fixture.backend->commands().contains(QStringLiteral("stream remove 0x20000100"));
     }
 
     static bool txPermissionFollowsModesAndCapabilities()

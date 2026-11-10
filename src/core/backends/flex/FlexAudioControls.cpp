@@ -37,10 +37,16 @@ void FlexBackend::decodeAudioStreamStatus(const QString& object, const QMap<QStr
     else if (type == QLatin1String("dax_tx")) { delta.kind = AudioStreamKind::DaxTransmit; }
     else if (type == QLatin1String("dax_iq")) { delta.kind = AudioStreamKind::Iq; }
     else if (kvs.contains(QStringLiteral("type"))) { delta.removed = true; }
+    // client_handle=0x0 leaves the owner unknown, as a missing field does; only
+    // a value that does not parse is malformed.
     if (kvs.contains(QStringLiteral("client_handle"))) {
-        const quint32 owner = RadioStatusOwnership::parseFlexId(kvs.value(QStringLiteral("client_handle")));
-        delta.invalidOwner = owner == 0;
-        if (!delta.invalidOwner) { delta.clientHandle = owner; }
+        const QString handle = kvs.value(QStringLiteral("client_handle")).trimmed();
+        const quint32 owner = RadioStatusOwnership::parseFlexId(handle);
+        const QString digits = handle.startsWith(QLatin1String("0x"), Qt::CaseInsensitive) ? handle.mid(2) : handle;
+        bool parsed = false;
+        const bool zero = owner == 0 && digits.toUInt(&parsed, 16) == 0 && parsed;
+        if (owner != 0) { delta.clientHandle = owner; }
+        else if (!zero) { delta.invalidOwner = true; }
     }
     const bool iqChannel = kvs.contains(QStringLiteral("daxiq_channel"));
     const QString channelKey = iqChannel ? QStringLiteral("daxiq_channel") : QStringLiteral("dax_channel");
