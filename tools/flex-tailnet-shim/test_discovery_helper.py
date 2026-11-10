@@ -93,7 +93,7 @@ def test_broadcast_reaches_a_listener():
     listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     listener.bind(("127.0.0.1", 0))
     listener.settimeout(2)
-    out = discovery_helper.broadcast_socket("127.0.0.1")
+    out = discovery_helper.broadcast_socket()
     with listener, out:
         check(out.getsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST) != 0,
               "SO_BROADCAST is not set")
@@ -101,6 +101,52 @@ def test_broadcast_reaches_a_listener():
         out.sendto(packet, listener.getsockname())
         got, _ = listener.recvfrom(4096)
         check(got == packet, f"listener got {got!r}")
+
+
+def test_default_broadcast():
+    """On Windows the announcement stays on the PC (the loopback network);
+    elsewhere, where a loopback broadcast reaches no one, it is the limited
+    broadcast. --broadcast overrides it, and --from is gone."""
+    check(discovery_helper.default_broadcast("win32") == "127.255.255.255", "Windows default")
+    for platform in ("darwin", "linux"):
+        check(discovery_helper.default_broadcast(platform) == "255.255.255.255",
+              f"{platform} default")
+    args = discovery_helper.parse_args(["--shim", "flex-radio"])
+    check(args.broadcast == discovery_helper.default_broadcast(), f"parsed default {args.broadcast}")
+    args = discovery_helper.parse_args(["--shim", "flex-radio", "--broadcast", "192.168.1.255"])
+    check(args.broadcast == "192.168.1.255", f"override {args.broadcast}")
+    try:
+        import contextlib, io
+        with contextlib.redirect_stderr(io.StringIO()):
+            discovery_helper.parse_args(["--shim", "flex-radio", "--from", "100.64.0.2"])
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("--from was accepted")
+
+
+def test_windows_loopback_broadcast_reaches_every_listener():
+    """What the Windows default rests on: a broadcast to the loopback network
+    reaches every program sharing the port, as SmartSDR, DAX and CAT do.
+    Windows only; macOS delivers it to no one."""
+    if sys.platform != "win32":
+        return
+    first = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    first.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    first.bind(("0.0.0.0", 0))
+    port = first.getsockname()[1]
+    second = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    second.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    second.bind(("0.0.0.0", port))
+    out = discovery_helper.broadcast_socket()
+    with first, second, out:
+        first.settimeout(2)
+        second.settimeout(2)
+        packet = b"serial=1 ip=100.64.0.1"
+        out.sendto(packet, (discovery_helper.default_broadcast(), port))
+        for name, s in (("first", first), ("second", second)):
+            got, _ = s.recvfrom(4096)
+            check(got == packet, f"{name} listener got {got!r}")
 
 
 def test_keepalive_is_on():

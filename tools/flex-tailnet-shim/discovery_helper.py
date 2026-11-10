@@ -9,6 +9,11 @@ PC: it connects to the radio's tailnet shim, receives each announcement
 (already naming the shim's tailnet address), and broadcasts it on the PC,
 where every listener gets it.
 
+On Windows the broadcast goes to the loopback network, so it never leaves the
+PC: the announcement carries the radio's serial number and callsign, and other
+devices on the PC's network couldn't use it anyway, since they can't reach the
+tailnet address it names.
+
     python discovery_helper.py --shim flex-radio
 
 It keeps no copy: when the shim can't be reached, nothing is broadcast, and
@@ -36,6 +41,16 @@ CONNECT_TIMEOUT = 10
 # interrupt a blocked socket call, and the helper waits on one indefinitely
 # while the radio is quiet, so the network side runs in its own thread.
 INTERRUPT_POLL_SECONDS = 0.5
+
+
+def default_broadcast(platform=sys.platform):
+    """Where the announcement is broadcast unless --broadcast says otherwise.
+
+    Windows delivers a loopback broadcast to every program listening on the
+    port, and it never leaves the PC; 255.255.255.255 also goes out on the
+    PC's network. macOS delivers a loopback broadcast to no one, so other
+    systems keep the limited broadcast."""
+    return "127.255.255.255" if platform == "win32" else "255.255.255.255"
 
 log = logging.getLogger("discovery-helper")
 
@@ -95,30 +110,30 @@ def enable_keepalive(sock):
             sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, name), value)
 
 
-def broadcast_socket(bind_from):
-    """A UDP socket allowed to broadcast, bound to bind_from if given."""
+def broadcast_socket():
+    """A UDP socket allowed to broadcast."""
     out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     out.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    if bind_from:
-        out.bind((bind_from, 0))
     return out
 
 
-def main(argv=None):
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Broadcast a tailnet radio's discovery announcement on this computer.")
     parser.add_argument("--shim", required=True,
                         help="the radio's tailnet name or address, e.g. flex-radio")
-    parser.add_argument("--broadcast", default="255.255.255.255",
-                        help="address to broadcast the announcement to")
-    parser.add_argument("--from", dest="bind_from", default="",
-                        help="local address to broadcast from (default: the system's choice)")
-    args = parser.parse_args(argv)
+    parser.add_argument("--broadcast", default=default_broadcast(),
+                        help="address to broadcast the announcement to (default: %(default)s)")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
                         datefmt="%Y/%m/%d %H:%M:%S")
 
     try:
-        out = broadcast_socket(args.bind_from)
+        out = broadcast_socket()
     except OSError as e:
         log.error("broadcast socket: %s", e)
         return 1
