@@ -58,7 +58,7 @@ it (`POST /v1/local/expose`), so a remote AetherSDR can read it too.
 ## Build and test
 
 ```sh
-python3 -I build.py --output OUT --host     # needs zig 0.17
+python3 -I build.py --output OUT --host     # needs zig 0.17.0 exactly (see build.py)
 OUT/aether-wspr-host selftest -27           # synthetic signal through DSP + decoder
 ./test_osd.sh /path/to/wsjtx                # C ports vs WSJT-X's Fortran (needs gfortran)
 ```

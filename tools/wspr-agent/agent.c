@@ -1266,6 +1266,21 @@ static int api_send(api_t *a, const char *fmt, ...)
 
 static const char *g_radio_addr = "127.0.0.1";
 
+/* What a new connection tells and asks the radio, on whatever socket a->fd
+ * is: the selftest sends it down a socketpair. */
+static void api_introduce(api_t *a, int udp_port)
+{
+    api_send(a, "client program AetherWSPR");
+    api_send(a, "client udpport %d", udp_port);
+    a->want_info = api_send(a, "info");
+    api_send(a, "sub gps all");
+    api_send(a, "sub slice all");
+    /* 4.3.16 and later. Older firmware answers with an error and we simply
+     * never see an ntp_sources status, leaving the kernel flag as the only
+     * evidence, exactly as before this subscription existed. */
+    api_send(a, "sub ntp_sources all");
+}
+
 static int api_connect(api_t *a, int udp_port)
 {
     memset(a, 0, sizeof *a);
@@ -1277,15 +1292,7 @@ static int api_connect(api_t *a, int udp_port)
     if (connect(a->fd, (struct sockaddr *)&sa, sizeof sa)) { close(a->fd); a->fd = -1; return 0; }
     int one = 1;
     setsockopt(a->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    api_send(a, "client program AetherWSPR");
-    api_send(a, "client udpport %d", udp_port);
-    a->want_info = api_send(a, "info");
-    api_send(a, "sub gps all");
-    api_send(a, "sub slice all");
-    /* 4.3.16 and later. Older firmware answers with an error and we simply
-     * never see an ntp_sources status, leaving the kernel flag as the only
-     * evidence, exactly as before this subscription existed. */
-    api_send(a, "sub ntp_sources all");
+    api_introduce(a, udp_port);
     return 1;
 }
 
@@ -1801,46 +1808,31 @@ static int selftest_ntp_fallback(void)
     /* The agent must actually ASK the radio for ntp_sources. Injecting status
      * lines above proves the parser, not the subscription -- and without the
      * subscription a real radio sends nothing and the agent waits forever.
-     *
-     * api_connect() dials g_radio_addr:4992, and g_radio_addr defaults to
-     * 127.0.0.1, so a listener on loopback:4992 catches the real function's
-     * output. This is what went on the wire, not a grep of the source. */
+     * api_introduce() is what api_connect() sends on every connection; here
+     * it goes down a socketpair, and the other end reads what went out. */
     {
-        int srv = socket(AF_INET, SOCK_STREAM, 0);
-        int one = 1;
-        struct sockaddr_in sa;
-        memset(&sa, 0, sizeof sa);
-        sa.sin_family = AF_INET;
-        sa.sin_port = htons(4992);
-        sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        if (srv >= 0)
-            setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-        if (srv < 0 || bind(srv, (struct sockaddr *)&sa, sizeof sa) || listen(srv, 1)) {
-            /* Port 4992 is busy -- a real SmartSDR or another agent is on this
-             * host. Say so rather than reporting a pass that did not happen. */
-            printf("selftest SKIP: port 4992 busy, subscription not checked\n");
+        int sv[2];
+        char wire[2048] = "";
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) {
+            printf("selftest FAIL: socketpair\n");
+            fail = 1;
         } else {
             api_t s;
-            int ok = api_connect(&s, 0);
-            int c = ok ? accept(srv, NULL, NULL) : -1;
-            char wire[2048] = "";
-            if (c >= 0) {
-                struct timeval tv = {1, 0};
-                setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-                ssize_t n = recv(c, wire, sizeof wire - 1, 0);
-                wire[n > 0 ? n : 0] = 0;
-                close(c);
-            }
-            if (!ok) {
-                printf("selftest FAIL: api_connect to the loopback listener failed\n");
-                fail = 1;
-            } else if (!strstr(wire, "sub ntp_sources all")) {
+            memset(&s, 0, sizeof s);
+            s.fd = sv[0];
+            s.slice = -1;
+            api_introduce(&s, 0);
+            close(sv[0]);
+            size_t n = 0;
+            ssize_t k;
+            while (n + 1 < sizeof wire && (k = read(sv[1], wire + n, sizeof wire - 1 - n)) > 0) n += (size_t)k;
+            wire[n] = 0;
+            close(sv[1]);
+            if (!strstr(wire, "|sub ntp_sources all\n")) {
                 printf("selftest FAIL: the agent never subscribes to ntp_sources\n");
                 fail = 1;
             }
-            if (ok) api_close(&s);
         }
-        if (srv >= 0) close(srv);
     }
 
     g_ntp_selected = saved;
