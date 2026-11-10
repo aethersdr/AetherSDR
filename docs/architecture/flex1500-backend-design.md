@@ -301,7 +301,7 @@ Two notes on the implementation:
   into a DSP oscillator offset (`console.cs` `FWCDDSFreq`). That parks the DDS
   on a coarse grid of SYSCLK/2^16 (`spur_tune_width`, `console.cs:14330`), and
   PowerSDR only does it when its SR checkbox is on. In AetherSDR the pan center
-  and the slice are decoupled already (HERMES §6 gaps 8 and 12), so the
+  and the slice are decoupled already (HERMES §6 gap 12), so the
   backend can choose its own LO grid. It does not need to copy this scheme.
   Whether it reduces spurs on real hardware is a measurement question.
 
@@ -557,7 +557,9 @@ Phase 1 has no TX path at all, and the encoder enforces that:
 - `Flex1500OpEncoder` is an allowlist containing exactly the §4.3 set, and
   every other opcode is refused at the seam. That makes Principle VI hold by
   construction: no keying opcode can be expressed, whatever the model layer
-  asks for.
+  asks for. This holds only if the `USB_OP_*` values themselves travel on the
+  wire (§11.1 question 12). If the closed library turns ops into raw I2C or SPI
+  transfers, the allowlist has to be over wire transactions instead.
 - `capabilities().canTransmit = false`, so `RadioModel`'s existing TX gates
   (`refuseKeyOnTransmitIncapableBackend` and the receive-only checks) refuse
   every keying intent before it reaches the backend. The backend's own
@@ -611,8 +613,9 @@ Three options:
 The FLEX-1500 is the simplest host-DSP radio the project would support: one
 receiver at a fixed rate. A from-scratch receiver of that size is smaller than
 the slice of HL2 that would be shared, so it does not raise the cost of a later
-extraction. Under A, `flex1500` becomes the first consumer of the extracted
-layer, which is a useful test of whether the extraction is general.
+extraction. Option A's benefit, `flex1500` as the first consumer and a
+generality test of the extracted layer, is given up, and §2.5 keeps its own
+schedule.
 
 The other §2.5 and #5554 rules hold whatever is chosen. No `family ==
 "flex1500"` branches above the seam. No raw wire text above the seam (the
@@ -684,6 +687,11 @@ first, then the tuning-accuracy check against §5.1.
     [CAPTURE-PENDING]
 11. **TAS1020B DMA hypothesis:** one isochronous IN and one isochronous OUT
     (§3). [CAPTURE-PENDING]
+12. **Is the `USB_OP_*` value itself on the wire, or does the closed library
+    translate ops into raw bus transfers?** The enum carries generic
+    `I2C_WRITE_VALUE`, `WRITE_SPI` and `SET_DDS_FREQ` ops (§4.2), so a tuning op
+    could reach the radio as I2C or SPI writes with no opcode on the wire.
+    [CAPTURE-PENDING]
 
 ### 11.2 Maintainer decisions
 
@@ -691,8 +699,11 @@ Decided 2026-11-08: the backend stays queued behind the freeze, the capture
 program (§6) and tester recruitment start now, and scaffolding is option B
 (§9). Still open:
 
-1. **Allowlist encoder** as the Principle VI mechanism for phase 1 (§8). The
-   recommendation is yes.
+1. **Allowlist encoder** as the Principle VI mechanism for phase 1 (§8),
+   conditional on §11.1 question 12. If opcodes are on the wire, the allowlist
+   is over opcode values. If the library translates them, it is over wire
+   transactions (for example, SPI writes to the FTW0 address only). The
+   recommendation is yes in either form.
 2. **EEPROM calibration:** should phase 1 read the RX level and image tables
    (§5.3) for a calibrated dBm axis and I/Q balance, or ship uncalibrated?
 3. **Radio-side audio:** should PowerSDR's routing of RX audio back to the
