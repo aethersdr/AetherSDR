@@ -272,6 +272,11 @@ target_link_libraries(audio_engine_pcm_lifetime_test PRIVATE aethercore Qt6::Cor
 add_test(NAME audio_engine_pcm_lifetime_test COMMAND audio_engine_pcm_lifetime_test)
 set_tests_properties(audio_engine_pcm_lifetime_test PROPERTIES TIMEOUT 120)
 
+# #7078: a disconnect or withdrawn seam route clears the missing-input flag.
+add_executable(audio_engine_tx_input_missing_test tests/audio_engine_tx_input_missing_test.cpp)
+target_link_libraries(audio_engine_tx_input_missing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_tx_input_missing_test COMMAND audio_engine_tx_input_missing_test)
+
 # #5687 follow-up: managed Kiwi sources must actually be given an NNR filter.
 # Drives the real DSP initializer through the friend seam; no sockets/devices.
 add_executable(nnr_external_source_test tests/nnr_external_source_test.cpp)
@@ -10776,6 +10781,7 @@ set(AETHER_SETTINGS_CONSUMERS
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
+    audio_engine_tx_input_missing_test
     nnr_external_source_test
     nnr_model_publication_test
     automation_nnr_probe_test
