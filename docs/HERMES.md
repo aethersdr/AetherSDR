@@ -1682,7 +1682,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | 20 | ~~Multi-slice: index-space mapping object~~ | A3 §3 | **DONE — §19.** `Hl2Receivers.h`. The WDSP channel really is not the DDC index: ids come from a shared 32-slot pool, so after a TX channel has come and gone receiver 0 is routinely not channel 0 | S |
 | 21 | Diversity as a **pre-channel combiner** | A3 §6 | `divEXT` takes two DDC streams and yields one. Modelling it as a two-input slice fights the DSP layer | M |
 | 22 | Hardware-managed T/R LNA gain (`0x0e[15]`) | A2 §A2 | Quisk uses it; lower latency than any host round trip; PureSignal needs an unclipped feedback path | S |
-| 23 | PureSignal | O §11, A1 §B6 | Needs everything above. Consumes 4 RX (2 feedback), halving the slice budget | L |
+| 23 | PureSignal | O §11, A1 §B6 | **DONE**. HL2 wire facts (consulted from MI0BOT's Thetis fork, see THIRD_PARTY_LICENSES): `0x0a` C2 bit 6 enables the feedback path, DDC2 carries the coupler feedback and DDC3 the TX DAC reference, keyed LNA gain is `19 - att` (att -28..31). WDSP `calcc` runs the calibration and the correction. `Hl2PureSignal` is an original controller built on calcc's `SetPSControl` / `GetPSInfo` interface: `Hl2PsController` turns Off / Auto / Single / Restore into calcc control flags and follows calcc's state, and `Hl2PsGain` moves the keyed feedback gain after each calcc attempt whose level is outside 128 < fb <= 181. The stream is floored at four DDCs while PS is on, so the slice ceiling drops to 2 and spans that cannot carry four DDCs refuse it. Controls live in the PureSignal applet (HL2 only). Row 22 is not a prerequisite for this path: the keyed gain is written per MOX edge from the host | L |
 
 ### Tier 5 — the RX audio bus (added after the §18 audit)
 

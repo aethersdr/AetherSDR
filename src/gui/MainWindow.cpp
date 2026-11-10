@@ -71,6 +71,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "AppletPanel.h"
+#include "PureSignalApplet.h"
 #include "DemoApplet.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
@@ -7578,6 +7579,11 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
         connect(backend, &IRadioBackend::audioFrameReady,
                 m_audio, &AudioEngine::feedPcmFrame);
     }
+
+    // PureSignal binds through the seam: the applet checks the backend's
+    // advertised hl2/puresignal extension and unbinds from anything else.
+    if (m_appletPanel && m_appletPanel->pureSignalApplet())
+        m_appletPanel->pureSignalApplet()->setBackend(backend);
 
     // HL2 only: opening its client-side WDSP chains measures FFTW plans, ~20 s
     // without cached wisdom, so the operator needs a visible explanation. The

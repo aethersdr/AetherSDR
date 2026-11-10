@@ -295,6 +295,12 @@ int MetisClient::effectiveNumRx(const Params& p)
     // cannot retune would give the eighth panadapter a frozen NCO.
     if (n > kMaxTunableRx)
         n = kMaxTunableRx;
+    // PureSignal needs DDC2 (feedback) and DDC3 (TX reference) on the wire
+    // whatever the operator is running. Never past the board: the floor must
+    // not invent DDCs a board does not have; Hl2Backend refuses PureSignal on
+    // such a board instead.
+    if (p.pureSignal && n < 4 && (p.boardMaxRx <= 0 || p.boardMaxRx >= 4))
+        n = 4;
     return n;
 }
 
@@ -319,6 +325,7 @@ bool MetisClient::start(const Params& params)
     m_ccRxFreq.clear();
     for (int rx = 0; rx < effectiveNumRx(); ++rx)
         m_ccRxFreq.push_back(ccRxFreq(rx, m_params.rxFrequencyHz));
+    applyPureSignalNcos();
     m_txSeq = 0;
     m_roundRobin = 0;
     m_haveRxSeq = false;
@@ -754,8 +761,69 @@ void MetisClient::setReceiverCount(int count)
     Params next = m_params;
     next.numRx = count;
     const int after = effectiveNumRx(next);
+    // Keep the request even when the DDC count on the wire does not move:
+    // under PureSignal's four-DDC floor a change from 1 to 2 receivers sends
+    // the same four, and dropping it here would bring the old count back when
+    // PureSignal turns off.
+    m_params.numRx = count;
     if (after == before)
         return;                       // nothing to do; do NOT restart for a no-op
+
+    relayoutReceivers(before);
+}
+
+void MetisClient::setPureSignal(bool enabled)
+{
+    if (enabled == m_params.pureSignal)
+        return;
+    const int before = effectiveNumRx();
+    m_params.pureSignal = enabled;
+    qInfo() << "MetisClient: PureSignal" << (enabled ? "on" : "off");
+    if (effectiveNumRx() != before)
+        relayoutReceivers(before);
+    else
+        applyPureSignalNcos();
+    queueOneShotIfRunning(currentGainBank());
+}
+
+void MetisClient::setPureSignalTxGainDb(int db)
+{
+    db = std::clamp(db, kLnaGainMinDb, kLnaGainMaxDb);
+    if (db == m_psTxGainDb)
+        return;
+    m_psTxGainDb = db;
+    // Only the keyed bank carries it; unkeyed, the next key edge sends it.
+    if (m_params.pureSignal && m_mox && m_txAllowed)
+        queueOneShotIfRunning(currentGainBank());
+}
+
+Cc MetisClient::currentGainBank() const noexcept
+{
+    if (!m_params.pureSignal)
+        return m_ccGain;
+    const bool keyed = m_mox && m_txAllowed;
+    return ccGain(keyed ? m_psTxGainDb : m_params.lnaGainDb, true);
+}
+
+void MetisClient::applyPureSignalNcos()
+{
+    if (!m_params.pureSignal || m_ccRxFreq.size() < 4)
+        return;
+    const Cc& tx = m_ccTxFreq;
+    const std::uint32_t hz = (std::uint32_t(tx[1]) << 24) | (std::uint32_t(tx[2]) << 16)
+                           | (std::uint32_t(tx[3]) << 8)  |  std::uint32_t(tx[4]);
+    for (int i = 2; i < 4; ++i) {
+        const Cc bank = ccRxFreq(i, hz);
+        if (m_ccRxFreq[static_cast<std::size_t>(i)] == bank)
+            continue;
+        m_ccRxFreq[static_cast<std::size_t>(i)] = bank;
+        queueOneShotIfRunning(bank);
+    }
+}
+
+void MetisClient::relayoutReceivers(int before)
+{
+    const int after = effectiveNumRx();
 
     // Preserve the frequency of every receiver that survives. They are the
     // operator's tuning, and a restart that silently returned them all to RX1's
@@ -766,8 +834,6 @@ void MetisClient::setReceiverCount(int count)
         keptHz.push_back((std::uint32_t(bank[1]) << 24) | (std::uint32_t(bank[2]) << 16)
                        | (std::uint32_t(bank[3]) << 8)  |  std::uint32_t(bank[4]));
     }
-
-    m_params.numRx = count;
 
     if (!m_running || !hasCommandTransport()) {
         // Not streaming: just restate the banks. There is no layout to race.
@@ -781,6 +847,7 @@ void MetisClient::setReceiverCount(int count)
                                          : m_params.rxFrequencyHz;
             m_ccRxFreq[static_cast<std::size_t>(i)] = ccRxFreq(i, hz);
         }
+        applyPureSignalNcos();
         return;
     }
 
@@ -801,6 +868,7 @@ void MetisClient::setReceiverCount(int count)
                                      : m_params.rxFrequencyHz;
         m_ccRxFreq.push_back(ccRxFreq(i, hz));
     }
+    applyPureSignalNcos();
     // Between stop and start the steps are spaced by m_restartTimer, not
     // msleep, so this thread keeps pacing EP2 (now carrying the new config
     // bank) and reading EP6 (discarded while restartAwaitingStart()). No run
@@ -1299,6 +1367,12 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
     if (m_mox == was)
         return;
 
+    // PureSignal: the 0x0a bank changes meaning with T/R (feedback gain while
+    // keyed, receive gain otherwise), so it goes out on the edge rather than
+    // waiting up to a rotation with the receive gain on a keyed radio.
+    if (m_params.pureSignal)
+        queueOneShotIfRunning(currentGainBank());
+
     // The key-down report (#6052): armed on the rising edge, disarmed on the
     // falling one so an over that never carried queued IQ says nothing.
     m_keyDownReportPending = m_mox;
@@ -1344,6 +1418,8 @@ void MetisClient::setTxFrequencyHz(std::uint32_t hz)
     qCDebug(lcHl2) << "HL2: TX NCO <-" << hz << "Hz (commanded)";
     m_ccTxFreq = ccTxFreq(hz);
     queueOneShotIfRunning(m_ccTxFreq);
+    // PureSignal's two DDCs listen on the transmit frequency.
+    applyPureSignalNcos();
 }
 
 void MetisClient::setTxDriveLevel(int level)
@@ -1628,7 +1704,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         if (slot < nFreq)
             b = m_ccRxFreq[slot];
         else if (slot == nFreq)
-            b = m_ccGain;
+            b = currentGainBank();
         else
             b = kCcAdc;
         ++m_roundRobin;

@@ -172,6 +172,40 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 > **Upgrading from an older version:** the transmit queue adds about 43 ms of audio delay and can discard about 43 ms more audio when you release PTT. The shorter voice filter partly offsets the start delay: one HL2 tone measurement showed about 12 ms more leading silence overall. Allow the audio to finish before releasing PTT; external digital-mode timing must accommodate the queue delay.
 
+## PureSignal
+
+PureSignal corrects the transmitter's distortion with adaptive pre-distortion. The HL2 measures its own transmitted signal on a feedback receiver. The **PS** applet appears in the applet panel when an HL2 is connected.
+
+**What it needs.** PureSignal uses DDC 2 and 3 for the feedback and the transmit reference, so it needs:
+
+- gateware that offers four receivers;
+- a span narrow enough for four receivers to fit the link;
+- at most two receivers open. While PureSignal is on, you cannot open a third.
+
+When one of these is missing, the PureSignal button is dimmed, and the line under it says why.
+
+**Controls.** Hover over any control in the applet for a short explanation.
+
+- **PureSignal** turns it on and off. It starts off on every connect. You can turn it on or off only while you are not transmitting.
+- **Auto** calibrates again and again while you transmit.
+- **Single** calibrates once, on your next transmission, then holds that correction. It stays lit from the press until that calibration is done. If the calibration fails, Single starts it again, three tries in all, and then turns off.
+- **FB** is the feedback level. A calibration needs it inside the marked window (128–181).
+- The line under the meter shows the attenuation, the number of calibrations and the engine state. The state line says what PureSignal is doing, for example "Armed — key into a load to calibrate".
+
+PureSignal never keys the radio. It calibrates on transmissions you make yourself: key into your antenna or a dummy load.
+
+**Settings** (under **▸ Settings**):
+
+- **Auto-attenuate feedback** moves the receive attenuation while keyed, so the feedback level stays in the window. Turn it off to set **TX att** by hand (−28 to 31 dB).
+- If the attenuation reaches its maximum (31 dB) and the feedback is still above the window, the state line says "Feedback too strong to calibrate at 31 dB". PureSignal cannot calibrate until the level comes down. This happens with an external amplifier's RF sampler at high power. Put a fixed attenuator (for example an SMA attenuator) in the feedback line until the level settles inside the window.
+- If the HL2 itself reports ADC overload while you transmit with PureSignal on, the state line turns red: "WARNING: ADC overload while transmitting — the feedback overdrives the receive input". The feedback is then too strong for the receive converter, and no calibration done at that level can be trusted. Add the attenuator before you transmit at that power again. The warning stays after you unkey, and clears on the next transmission without overload. At the other end, "Feedback too weak at full gain" means the coupler or sampler gives too little signal.
+- **Reset** drops the correction.
+- **Save…** writes the current correction to a file. **Restore…** loads one. The file path must be shorter than 256 bytes.
+
+**Single, Reset and Restore switch Auto off,** because each one replaces continuous calibration with a correction you chose. Press **Auto** again to go back to continuous calibration.
+
+AetherSDR remembers **Auto**, **Auto-attenuate feedback** and a manual **TX att** for each HL2. The attenuation that auto-attenuate reaches is not remembered: each session finds it again on the first calibration.
+
 ## Other Features
 
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
