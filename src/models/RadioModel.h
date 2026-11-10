@@ -1769,6 +1769,7 @@ private:
     void observeDaxTxStream(const DaxTxStreamDelta& delta);
     void publishDaxTxOwnership();
     void refreshDaxTxOwnershipGuards();
+    bool daxTxOwnershipWritten() const;
     void interruptDaxTxOwnership(const QString& reason);
     bool beginDaxTxOwnership(bool take, bool wspr);
     void continueDaxTxOwnership();

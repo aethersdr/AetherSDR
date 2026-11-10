@@ -53,6 +53,8 @@ public:
         model.refreshDaxTxOwnershipGuards();
     }
     static void reopenTransmit(RadioModel& model) { model.m_txSessionClosing = false; }
+    static void interrupt(RadioModel& model)
+    { model.interruptDaxTxOwnership(QStringLiteral("test interrupt")); }
 };
 class AudioEngineRatesTestAccess {
 public:
@@ -479,6 +481,30 @@ void creationAndBusy()
 }
 }
 
+// An interrupt that lands while the take is still being published, before
+// anything is written, leaves nothing for the radio to report on.
+void interruptBeforeDispatch()
+{
+    Fixture f;
+    f.stream(false);
+    bool armed = true;
+    QObject::connect(&f.model, &RadioModel::daxTxOwnershipChanged, &f.model, [&] {
+        if (armed && f.snapshot().value("pending").toBool() && f.writes.empty()) {
+            armed = false;
+            DaxTxOwnershipTestAccess::interrupt(f.model);
+        }
+    });
+    f.action(QStringLiteral("take"));
+    check(!armed && f.writes.empty() && !f.snapshot().value("pending").toBool(),
+          "an interrupt during publication stops the take before any write");
+    check(!f.snapshot().value("uncertain").toBool(),
+          "an interrupt with nothing written does not wait for radio status");
+    check(f.action(QStringLiteral("take")).value("ok").toBool() && f.writes.size() == 1
+          && f.writes[0].command == QLatin1String("stream set 0x4a000001 tx=1"),
+          "a new take after an unwritten interrupt dispatches without fresh status");
+    DaxTxOwnershipTestAccess::timeout(f.model);
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settings(QStringLiteral("dax-tx-ownership-test"));
@@ -488,5 +514,6 @@ int main(int argc, char** argv)
     ordering(false); ordering(true);
     failuresAndClients(); mediaAndSourceFlags(); lifecycle(); creationAndBusy();
     exactInputAndKeyFences(); cancellationAndMalformedStatus(); createOrderingAndGuardRefresh();
+    interruptBeforeDispatch();
     return failures ? 1 : 0;
 }
