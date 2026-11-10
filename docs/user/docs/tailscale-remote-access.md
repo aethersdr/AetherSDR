@@ -362,7 +362,8 @@ computer running Tailscale also work through it:
 - **SmartSDR for Windows** lists the radio from its announcement. Only one
   program on a computer receives each announcement, so SmartSDR, DAX and CAT
   can't all see the radio at once unless a discovery helper runs on that
-  computer. This hasn't been tested on Windows yet.
+  computer. With the helper running, SmartSDR, DAX and CAT all work over the
+  tailnet, and AetherSDR on the same computer lists the radio too.
 
 A device that can't run Tailscale itself can't reach the tailnet.
 
