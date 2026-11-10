@@ -1,7 +1,7 @@
 ---
 title: "NTP Time Sources"
 slug: "/ntp-time-sources"
-description: "See which NTP server a FlexRadio sets its clock from, and add, edit, enable, disable or remove the radio's NTP time sources (SmartSDR v4.3.16 or later, FLEX-8000 series, Aurora, ML-9600 and CL-9300)."
+description: "See which NTP server a FlexRadio sets its clock from, and add, edit, enable, disable or remove the radio's NTP time sources (SmartSDR v4.3.16 or later)."
 status: "Experimental"
 applies_to: ["FlexRadio"]
 ---
