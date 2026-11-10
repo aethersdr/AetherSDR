@@ -16,6 +16,13 @@ delivers only to a separate computer on its LAN.
   slice (`tx=0`) and takes its DAX audio (`dax_rx`, 24 kHz). The radio
   removes headless slices when its last GUI client disconnects; the agent
   remakes the slice at once and loses that one cycle.
+- **Its slice:** a slice outlives the client that made it, so the agent
+  cleans up after itself. On SIGTERM (stop, update, remove) it removes its
+  slice and stream and waits up to 1.5 s for the radio to answer. After a
+  crash, the next start removes the slice at the index it saved, but only
+  if that slice still looks like its own: no panadapter, DIGU, on a WSPR
+  dial frequency, on DAX channel 0 or its own. A GUI client can take the
+  slice over (#7139), so every retune sets `mode=DIGU` and `tx=0` again.
 - **Capture:** each even UTC minute, 114 s, timed by the system clock. It
   waits for a trusted clock; on an 8000-series radio that comes from its
   GPS-disciplined stratum-1 NTP. A FLEX-6000 runs kernel 2.6.37, where
