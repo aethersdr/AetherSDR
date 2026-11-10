@@ -3004,7 +3004,156 @@ QString RadioModel::foreignSliceOwnerStation(int sliceId) const
 {
     auto it = m_foreignSliceOwners.constFind(sliceId);
     if (it == m_foreignSliceOwners.constEnd()) return {};
+    if (sliceId == m_externalSliceId && it.value() == externalSliceOwner()) return m_externalSliceLabel;
     return m_clientStations.value(it.value(), {});
+}
+
+quint32 RadioModel::externalSliceOwner() const
+{
+    // Never 0 (no owner) and never ours.
+    return m_externalSliceHandle ? m_externalSliceHandle : 0xFFFFFFFEu;
+}
+
+void RadioModel::setExternalSliceClient(quint32 handle, int sliceId, const QString& label)
+{
+    if (handle == clientHandle() && handle != 0) { return; }   // never our own slices
+    const int old = m_externalSliceId;
+    const quint32 oldOwner = externalSliceOwner();
+    m_externalSliceHandle = handle;
+    m_externalSliceLabel = label;
+    m_externalSliceId = sliceId;
+    if (old >= 0 && old != sliceId && m_foreignSliceOwners.value(old) == oldOwner) {
+        // No longer the external client's: the radio's next status for that
+        // slot says whose it is.
+        m_foreignSliceOwners.remove(old);
+        emit slotOccupancyChanged(old);
+    }
+    if (sliceId >= 0) {
+        markExternalSliceForeign(sliceId);
+    }
+}
+
+void RadioModel::clearExternalSliceClient()
+{
+    setExternalSliceClient(0, -1, {});
+}
+
+// The external slice as a foreign slot: an adopted SliceModel goes, a held
+// status is dropped, and our slices left empty get a default one.
+void RadioModel::markExternalSliceForeign(int sliceId)
+{
+    const bool known = slice(sliceId) || m_staleSlices.contains(sliceId)
+        || m_heldSliceStatuses.contains(sliceId) || m_foreignSliceOwners.contains(sliceId);
+    m_heldSliceStatuses.remove(sliceId);
+    if (!known) { return; }   // not reported yet: its status is marked on arrival
+    const bool wasOurs = slice(sliceId) != nullptr;
+    handleSliceStatus(sliceId,
+                      {{QStringLiteral("client_handle"),
+                        QStringLiteral("0x%1").arg(externalSliceOwner(), 8, 16, QLatin1Char('0'))}},
+                      false);
+    if (wasOurs) { createDefaultSliceIfNone(); }
+}
+
+void RadioModel::beginSliceAdoptionHold()
+{
+    m_heldSliceStatuses.clear();
+    m_defaultSliceAfterHold = false;
+    m_sliceAdoptionHeld = true;
+    if (!m_sliceAdoptionHoldTimer) {
+        m_sliceAdoptionHoldTimer = new QTimer(this);
+        m_sliceAdoptionHoldTimer->setSingleShot(true);
+        connect(m_sliceAdoptionHoldTimer, &QTimer::timeout, this, [this] {
+            qCDebug(lcProtocol) << "RadioModel: slice adoption hold timed out";
+            releaseSliceAdoption();
+        });
+    }
+    m_sliceAdoptionHoldTimer->start(m_sliceAdoptionHoldMs);
+    emit sliceAdoptionHoldStarted();
+}
+
+void RadioModel::releaseSliceAdoption()
+{
+    if (!m_sliceAdoptionHeld) { return; }
+    m_sliceAdoptionHeld = false;
+    if (m_sliceAdoptionHoldTimer) { m_sliceAdoptionHoldTimer->stop(); }
+    const QMap<int, QMap<QString, QString>> held = std::exchange(m_heldSliceStatuses, {});
+    for (auto it = held.cbegin(); it != held.cend(); ++it) {
+        QMap<QString, QString> kvs = it.value();
+        if (it.key() == m_externalSliceId) {
+            kvs.insert(QStringLiteral("client_handle"),
+                       QStringLiteral("0x%1").arg(externalSliceOwner(), 8, 16, QLatin1Char('0')));
+        }
+        handleSliceStatus(it.key(), kvs, false);
+    }
+    if (std::exchange(m_defaultSliceAfterHold, false) || m_sliceListAnswered) {
+        createDefaultSliceIfNone();
+    }
+}
+
+void RadioModel::createDefaultSliceIfNone()
+{
+    if (m_sliceAdoptionHeld || !isConnected() || !m_sliceListAnswered || !m_slices.isEmpty()) { return; }
+    qCDebug(lcProtocol) << "RadioModel: no slices of our own left — creating default";
+    ensureDefaultSlicePreferringRestoredPan();
+}
+
+void RadioModel::resetExternalSliceState()
+{
+    if (m_sliceAdoptionHoldTimer) { m_sliceAdoptionHoldTimer->stop(); }
+    m_sliceAdoptionHeld = false;
+    m_heldSliceStatuses.clear();
+    m_defaultSliceAfterHold = false;
+    m_sliceListAnswered = false;
+    m_externalSliceHandle = 0;
+    m_externalSliceId = -1;
+}
+
+// A slice the external client makes while we are connected: the radio
+// reports it as ours, but the status's source is that client.
+void RadioModel::noteExternalSliceCreation(const QString& object, const QMap<QString, QString>& kvs,
+                                           quint32 sourceHandle)
+{
+    if (!m_externalSliceHandle || sourceHandle != m_externalSliceHandle
+        || kvs.value(QStringLiteral("in_use")) != QLatin1String("1")
+        || !object.startsWith(QLatin1String("slice "))) { return; }
+    bool ok = false;
+    const int id = object.mid(6).trimmed().toInt(&ok);
+    if (!ok || id == m_externalSliceId) { return; }
+    qCDebug(lcProtocol) << "RadioModel: slice" << id << "made by" << m_externalSliceLabel;
+    setExternalSliceClient(m_externalSliceHandle, id, m_externalSliceLabel);
+}
+
+bool RadioModel::allSliceSlotsInUse() const
+{
+    const int max = maxSlices();
+    if (max <= 0) { return false; }
+    QSet<int> taken = m_ownedSliceIds;
+    for (SliceModel* s : m_slices) { taken.insert(s->sliceId()); }
+    for (auto it = m_foreignSliceOwners.cbegin(); it != m_foreignSliceOwners.cend(); ++it) {
+        taken.insert(it.key());
+    }
+    return taken.size() >= max;
+}
+
+bool RadioModel::takeExternalSliceForNew(const QString& panId, std::optional<double> freqMhz)
+{
+    const int id = m_externalSliceId;
+    if (id < 0 || !m_backend || !panadapter(panId) || m_foreignSliceOwners.value(id) != externalSliceOwner()) {
+        return false;
+    }
+    const QPointer<RadioModel> alive(this);
+    const RadioControlSession session = controlSession();
+    const ReceiveDispatch removal = m_backend->requestSliceRemove(id,
+        [alive, id](const RadioControlReply& reply) {
+            if (alive && reply.kind != RadioControlReply::Kind::Accepted
+                && reply.kind != RadioControlReply::Kind::Cancelled) {
+                emit alive->sliceLifecycleFailed(QStringLiteral("remove"), id, reply.message);
+            }
+        },
+        [alive, session] { return alive && alive->controlSessionCurrent(session); });
+    if (removal == ReceiveDispatch::Unsupported) { return false; }
+    qCInfo(lcProtocol) << "RadioModel: taking slice" << id << "from" << m_externalSliceLabel;
+    return freqMhz ? addSliceOnPan(panId, *freqMhz) : addSliceOnPan(panId);
 }
 
 void RadioModel::clearAutomationSliceFixtures()
@@ -7214,6 +7363,7 @@ void RadioModel::stageSessionModelsForReconnect()
         emit rawSliceModeListsChanged();
     }
     m_foreignSliceOwners.clear();
+    resetExternalSliceState();
     m_pendingPanStatuses.clear();
     m_panTransmitInhibitReasons.clear();
     m_panTransmitInhibitedTxSlices.clear();
@@ -7323,6 +7473,7 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     // a reclaim candidate for the new one.
     m_ownedSliceIds.clear();
     m_foreignSliceOwners.clear();
+    resetExternalSliceState();
     m_activePanId.clear();
     m_staleSessionSerial.clear();
     m_connectedSessionSerial.clear();
@@ -7745,6 +7896,12 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
     // Arming at "sub slice all" opens the window after onSliceAdded has already
     // chosen its source, so the guard is never consulted (#4759).
     emit sliceConnectEnumerationStarted();
+    // An on-radio client's headless slice is handed to us with the dump
+    // that answers "client gui": hold ours until it is known which one that
+    // is (setExternalSliceClient). Its status service is out of reach over
+    // SmartLink, so no hold there.
+    m_sliceListAnswered = false;   // this connection's "slice list" is still to come
+    if (m_sliceAdoptionHoldMs > 0 && !isWan()) { beginSliceAdoptionHold(); }
     sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
         armClientConnectionNoticeSuppression();
         if (commandNeverReachedRadio(code)) {
@@ -7971,6 +8128,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                         }
                         const QStringList ids = body.trimmed().split(' ', Qt::SkipEmptyParts);
                         qCDebug(lcProtocol) << "RadioModel: slice list ->" << (ids.isEmpty() ? "(empty)" : body);
+                        m_sliceListAnswered = true;
 
                         if (ids.isEmpty()) {
                             // Radio reports no slices. Reuse an already-restored pan if we
@@ -7984,6 +8142,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                             qCDebug(lcProtocol) << "RadioModel: radio has" << ids.size()
                                      << "slice(s) but none matched yet — deferring 500ms";
                             QTimer::singleShot(500, this, [this]() {
+                                if (m_sliceAdoptionHeld) {
+                                    // Decided when the hold ends.
+                                    m_defaultSliceAfterHold = true;
+                                    return;
+                                }
                                 if (m_slices.isEmpty() && isConnected()) {
                                     qCDebug(lcProtocol) << "RadioModel: deferred check — still no owned slices, creating default";
                                     ensureDefaultSlicePreferringRestoredPan();
@@ -9769,6 +9932,7 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
     // token, and 4.1.x is unverified — which is one reason eviction defaults
     // off (see staleSessionEvictionEnabled()).
     noteForeignPanWriteIfAny(msg.object, msg.kvs, msg.handle);
+    noteExternalSliceCreation(msg.object, msg.kvs, msg.handle);
 
     // Raw line: "S<handle>|meter 7.src=SLC#7.num=0#7.nam=LEVEL#..."
     const QString& raw = msg.raw;
@@ -10378,6 +10542,8 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
 
 quint32 RadioModel::clientHandle() const
 {
+    if (m_clientHandleForTest)
+        return m_clientHandleForTest;
     if (m_wanConn)
         return m_wanConn->clientHandle();
     // No RadioConnection for a non-Flex backend; the Flex client-handle concept
@@ -12763,11 +12929,28 @@ void RadioModel::handleSliceStatus(int id,
                                     const QMap<QString, QString>& kvs,
                                     bool removed)
 {
+    if (removed) {
+        m_heldSliceStatuses.remove(id);
+        if (id == m_externalSliceId) { m_externalSliceId = -1; }
+    } else if (m_sliceAdoptionHeld) {
+        // Connecting: our slices wait until the external client's is known
+        // (releaseSliceAdoption replays them).
+        const bool ours = kvs.contains(QStringLiteral("client_handle")) && clientHandle() != 0
+            && kvs.value(QStringLiteral("client_handle")).toUInt(nullptr, 16) == clientHandle();
+        if (id != m_externalSliceId && (ours || m_heldSliceStatuses.contains(id))) {
+            QMap<QString, QString>& held = m_heldSliceStatuses[id];
+            for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) { held.insert(it.key(), it.value()); }
+            return;
+        }
+    }
+
     // Track slice ownership via client_handle (only present in some messages).
     bool ownershipConfirmed = false;
     if (kvs.contains("client_handle")) {
         bool validOwner = false;
-        const quint32 owner = kvs["client_handle"].toUInt(&validOwner, 16);
+        quint32 owner = kvs["client_handle"].toUInt(&validOwner, 16);
+        // The external client's slice is its own, whatever the radio says.
+        if (validOwner && id == m_externalSliceId) { owner = externalSliceOwner(); }
         if (validOwner && owner != 0 && owner == clientHandle()) {
             ownershipConfirmed = !m_ownedSliceIds.contains(id);
             m_ownedSliceIds.insert(id);
@@ -12834,6 +13017,9 @@ void RadioModel::handleSliceStatus(int id,
         syncDigitalVoiceTxSelection();
         return;
     }
+
+    // Another client's slot (an update without client_handle): not ours.
+    if (m_foreignSliceOwners.contains(id) || id == m_externalSliceId) { return; }
 
     // If we've seen client_handle info and this slice isn't ours, skip it
     if (!m_ownedSliceIds.isEmpty() && !m_ownedSliceIds.contains(id)) {

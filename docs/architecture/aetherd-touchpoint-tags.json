@@ -95,6 +95,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/WsprSliceGuard.h": {
+  "tag": "peripheral(wspr-agent)",
+  "note": "Asks the WSPR receiver (its /v1/status on TCP 48995) which slice is its own and its client handle, and tells RadioModel to show that slice as another client's: the radio reports every headless slice the receiver makes as owned by the connected GUI client. Created once by MainWindow; drives RadioModel's connect hold. Same direct-transport peripheral as core/WsprAgentClient.h, NOT behind the IRadioBackend radio seam.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/TailnetShimTokenStore.h": {
   "tag": "peripheral(tailnet-shim)",
   "note": "OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h).",

@@ -202,6 +202,13 @@ std::optional<WsprStatus> parseStatus(const QByteArray& json)
     st.hopPeriod = boundedString(o.value(QLatin1String("hop_period")), 16);
     st.depth = o.value(QLatin1String("depth")).toString();
     st.slice = o.value(QLatin1String("slice")).toBool();
+    // Older receivers send neither: no slice named, nothing marked.
+    if (inRange(o.value(QLatin1String("slice_index")), 0, 63)) {
+        st.sliceIndex = o.value(QLatin1String("slice_index")).toInt();
+    }
+    bool handleOk = false;
+    const quint32 handle = o.value(QLatin1String("client_handle")).toString().toUInt(&handleOk, 16);
+    if (handleOk) { st.clientHandle = handle; }
     st.audio = o.value(QLatin1String("audio")).toBool();
     if (!validBand(st.band)
         || (!st.depth.isEmpty() && !depths().contains(st.depth))) {

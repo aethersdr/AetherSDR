@@ -888,6 +888,31 @@ public:
     // Station name of the client occupying a foreign slot, or empty string
     // if not foreign / not known yet.
     QString foreignSliceOwnerStation(int sliceId) const;
+
+    // A slice another client on the radio owns although the radio reports
+    // it as ours. AetherWSPR, the on-radio WSPR receiver, is the case: the
+    // radio hands every headless slice it makes to the GUI client connected
+    // then. That slice is a foreign slot, shown as in use by `label` and
+    // never adopted. The client is known by its handle (statuses of slices
+    // it makes while we are connected carry it as their source) and by the
+    // slice it reports. Set by WsprSliceGuard; cleared on disconnect.
+    void setExternalSliceClient(quint32 handle, int sliceId, const QString& label);
+    void clearExternalSliceClient();
+    int externalSlice() const { return m_externalSliceId; }
+    // Holds our slices from the radio's connect-time dump for up to `ms`
+    // (0: off) on each LAN connect, so the external slice is known before
+    // anything is adopted. sliceAdoptionHeld() asks for it; release with
+    // releaseSliceAdoption().
+    void setSliceAdoptionHoldOnConnect(int ms) { m_sliceAdoptionHoldMs = ms; }
+    bool sliceAdoptionHeld() const { return m_sliceAdoptionHeld; }
+    void releaseSliceAdoption();
+    // Every slot is taken, ours or another client's.
+    bool allSliceSlotsInUse() const;
+    // A new slice in the external client's slot when every slot is in use:
+    // removes that slice, then creates ours on panId (at freqMhz, or placed
+    // as addSliceOnPan places it); the radio gives the freed slot to the
+    // create that follows the removal.
+    bool takeExternalSliceForNew(const QString& panId, std::optional<double> freqMhz = std::nullopt);
     bool automationApplySliceFixture(int sliceId,
                                      const QString& radioLetter,
                                      QString* error = nullptr);
@@ -1315,6 +1340,8 @@ signals:
     // Emitted immediately before "sub slice all" is dispatched during connect
     // handshake, opening the connect-time slice enumeration window.
     void sliceConnectEnumerationStarted();
+    // A LAN connect is holding our slices until releaseSliceAdoption().
+    void sliceAdoptionHoldStarted();
     // Emitted when the "slice list" reply arrives during connect handshake,
     // closing the connect-time slice enumeration window.
     void sliceConnectEnumerationFinished();
@@ -1975,6 +2002,18 @@ public:
     {
         onStatusReceived(object, kvs);
     }
+    // The same, from a client whose handle is the status's S<handle> source.
+    void handleStatusFromForTest(quint32 sourceHandle, const QString& object,
+                                 const QMap<QString, QString>& kvs)
+    {
+        noteExternalSliceCreation(object, kvs, sourceHandle);
+        onStatusReceived(object, kvs);
+    }
+    // Our client handle and the radio's address without a connection.
+    void setClientHandleForTest(quint32 handle) { m_clientHandleForTest = handle; }
+    void setRadioAddressForTest(const QHostAddress& address) { m_lastInfo.address = address; }
+    // The connect hold, as the connect sequence begins it.
+    void beginSliceAdoptionHoldForTest() { beginSliceAdoptionHold(); }
     // Fire the LAN auto-reconnect timer's handler now instead of waiting for it.
     // Drives the REAL handler, not a copy of its body, so a test can pin what the
     // reconnect restores — see the licensed-capacity case in
@@ -2695,6 +2734,26 @@ private:
     quint16  m_wanUdpPort{4991};
     QSet<int>          m_ownedSliceIds;   // slice IDs that belong to our client
     QHash<int, quint32> m_foreignSliceOwners;  // slot id → owning client handle
+    quint32 m_clientHandleForTest{0};
+    // The external slice client (setExternalSliceClient) and the connect hold.
+    quint32 m_externalSliceHandle{0};
+    int m_externalSliceId{-1};
+    QString m_externalSliceLabel;
+    int m_sliceAdoptionHoldMs{0};
+    bool m_sliceAdoptionHeld{false};
+    QMap<int, QMap<QString, QString>> m_heldSliceStatuses;
+    bool m_defaultSliceAfterHold{false};
+    bool m_sliceListAnswered{false};
+    QTimer* m_sliceAdoptionHoldTimer{nullptr};
+    // The owner recorded for the external slice: its handle, or a stand-in
+    // while the handle is not known.
+    quint32 externalSliceOwner() const;
+    void beginSliceAdoptionHold();
+    void resetExternalSliceState();
+    void noteExternalSliceCreation(const QString& object, const QMap<QString, QString>& kvs,
+                                   quint32 sourceHandle);
+    void markExternalSliceForeign(int sliceId);
+    void createDefaultSliceIfNone();
     QSet<int>          m_automationSliceFixtures; // disconnected bridge fixtures
     bool               m_automationSliceFixtureBaselineActive{false};
     QString            m_automationSliceFixtureBaselineModel;

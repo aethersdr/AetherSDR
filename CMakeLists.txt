@@ -1299,6 +1299,7 @@ set(MODEL_SOURCES
     src/models/VoiceKeyerController.cpp
     src/models/NavtexModel.cpp
     src/models/FlexWaveformModel.cpp
+    src/models/WsprSliceGuard.cpp     # keeps AetherWSPR's slice out of ours
     src/models/DStarModel.cpp
     src/models/DigitalVoiceWaveformHistory.cpp
     src/models/BandSettings.cpp

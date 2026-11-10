@@ -418,6 +418,11 @@ private slots:
     void refreshTunerPortFrequency();
     // Ordinary RX close from the VFO ✕ / "Close Slice" menu (RFC #5468 P01).
     void requestSliceClose(int sliceId);
+    // A new slice on panId (at freqMhz, or placed as RadioModel places it).
+    // With every slot in use and one the WSPR receiver's, asks whether to
+    // stop the receiver and take its slot; with every slot in use otherwise,
+    // says the radio's limit.
+    bool requestNewSlice(const QString& panId, std::optional<double> freqMhz = std::nullopt);
 
     // Master volume — single entry point used by both the title bar slider
     // (TitleBar::masterVolumeChanged) and TCI clients (TciServer::

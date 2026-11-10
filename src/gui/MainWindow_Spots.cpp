@@ -29,6 +29,8 @@
 
 #include <QDateTime>
 #include <QMessageBox>
+#include "models/WsprSliceGuard.h"
+
 #include <QSet>
 #ifdef HAVE_MQTT
 #include <QJsonDocument>
@@ -75,6 +77,8 @@ void MainWindow::wireSpotSubsystem()
     m_eibiClient = new EibiClient;
     m_n1mmSpotClient = new N1MMSpotClient;
     m_wsprFeed = new WsprSpotFeed(this);
+    // The WSPR receiver's slice is shown as another client's, never ours.
+    new WsprSliceGuard(&m_radioModel, this);
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
 #endif

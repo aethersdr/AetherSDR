@@ -3358,6 +3358,15 @@ add_test(NAME band_recall_slice_selection_policy_test
     COMMAND band_recall_slice_selection_policy_test)
 
 # Pins RadioModel slice status connect-enumeration adoption and ensures zero active=1 commands are sent.
+# The WSPR receiver's slice is another client's: RadioModel's connect hold,
+# its source-handle recognition, and WsprSliceGuard. Socket-free.
+add_executable(wspr_slice_guard_test
+    tests/wspr_slice_guard_test.cpp
+)
+target_include_directories(wspr_slice_guard_test PRIVATE src)
+target_link_libraries(wspr_slice_guard_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME wspr_slice_guard_test COMMAND wspr_slice_guard_test)
+
 add_executable(radiomodel_slice_connect_enumeration_test
     tests/radiomodel_slice_connect_enumeration_test.cpp
 )

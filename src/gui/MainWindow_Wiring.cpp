@@ -26,6 +26,8 @@
 #include "Ax25HfPacketDecodeDialog.h"
 #include "AccessoryPanelWidgets.h"   // kRelayMeterFreshnessMs
 #include "AppletPanel.h"
+#include "CanonMessageBox.h"
+#include "ScopedChildWidget.h"
 #include "DbmRangeTransition.h"
 #include "MainWindowHelpers.h"
 #include "OwnedSingleShotTimer.h"
@@ -2542,6 +2544,33 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // sees the false->true edge. Re-derive once now, or on connect the live
     // span control stays on the fallback pane instead of the TX pane (#5750).
     syncPanSpanControlPlacement();
+}
+
+bool MainWindow::requestNewSlice(const QString& panId, std::optional<double> freqMhz)
+{
+    if (m_radioModel.allSliceSlotsInUse()) {
+        const int wspr = m_radioModel.externalSlice();
+        if (wspr < 0) {
+            statusBar()->showMessage(
+                tr("%1 supports a maximum of %2 slices across all connected clients")
+                    .arg(m_radioModel.model()).arg(m_radioModel.maxSlices()), 4000);
+            return false;
+        }
+        ScopedChildWidget<CanonMessageBox> box(
+            tr("Stop the WSPR receiver?"),
+            tr("Every slice is in use. The WSPR receiver on the radio has slice %1.\n\n"
+               "Stop it to use that slice? The receiver starts again by itself, on the "
+               "highest free slice, within 5 minutes of one being free.")
+                .arg(QChar('A' + wspr)),
+            this);
+        QPushButton* cancel = box.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+        QPushButton* stop = box.get()->addButton(tr("Stop WSPR Receiver"), CanonMessageBox::Role::Destructive);
+        box.get()->setDefaultButton(cancel);
+        box.get()->exec();
+        if (!box || box.get()->clickedButton() != stop) { return false; }
+        return m_radioModel.takeExternalSliceForNew(panId, freqMhz);
+    }
+    return freqMhz ? m_radioModel.addSliceOnPan(panId, *freqMhz) : m_radioModel.addSliceOnPan(panId);
 }
 
 void MainWindow::requestSliceClose(int sliceId)
@@ -5294,7 +5323,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // limit via sliceCreateFailed. Fixes #3086.
         const QString panId = resolveClickedPanId();
         if (!panId.isEmpty())
-            m_radioModel.addSliceOnPan(panId, mhz);
+            requestNewSlice(panId, mhz);
     });
     connect(sw, &SpectrumWidget::kiwiSpotClicked,
             this, [this, resolveSpectrumTuneTarget, resolveClickedPanId](double mhz, const QString& mode, int loHz, int hiHz) {
@@ -5306,7 +5335,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             // async, so the mode/filter below cannot target the new slice.
             const QString panId = resolveClickedPanId();
             if (!panId.isEmpty())
-                m_radioModel.addSliceOnPan(panId, mhz);
+                requestNewSlice(panId, mhz);
             return;
         }
         queueActiveSliceForSpectrumTarget(target->sliceId());
@@ -5616,14 +5645,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // ── +RX / +TNF buttons ───────────────────────────────────────────────
     connect(menu, &SpectrumOverlayMenu::addRxClicked,
             this, [this](const QString& panId) {
-        int limit = m_radioModel.maxSlices();
-        if (m_radioModel.slices().size() < limit) {
-            m_radioModel.addSliceOnPan(panId);
-        } else {
+        if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) {
             statusBar()->showMessage(
                 QString("%1 supports a maximum of %2 slices")
-                    .arg(m_radioModel.model()).arg(limit), 4000);
+                    .arg(m_radioModel.model()).arg(m_radioModel.maxSlices()), 4000);
+            return;
         }
+        requestNewSlice(panId);
     });
     connect(menu, &SpectrumOverlayMenu::addTnfClicked,
             this, [this]() {
@@ -5678,14 +5706,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::sliceCreateRequested,
             this, [this, applet](double freqMhz) {
-        const int limit = m_radioModel.maxSlices();
-        if (m_radioModel.slices().size() < limit) {
-            m_radioModel.addSliceOnPan(applet->panId(), freqMhz);
-        } else {
+        if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) {
             statusBar()->showMessage(
                 QString("%1 supports a maximum of %2 slices")
-                    .arg(m_radioModel.model()).arg(limit), 4000);
+                    .arg(m_radioModel.model()).arg(m_radioModel.maxSlices()), 4000);
+            return;
         }
+        requestNewSlice(applet->panId(), freqMhz);
     });
     connect(sw, &SpectrumWidget::sliceTuneRequested,
             this, [this](int sliceId, double freqMhz) {

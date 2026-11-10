@@ -68,6 +68,20 @@ int main(int argc, char** argv)
         check(st->spots.size() == 2, "spots with an impossible SNR or a callsign that isn't one are dropped");
         check(st->spots.size() == 2 && st->spots[1].call.isEmpty() && st->spots[1].grid == "EM32re",
               "a hashed call (empty) is kept with its grid");
+        check(st->sliceIndex == -1 && st->clientHandle == 0,
+              "a receiver before 0.1.3 names no slice and no handle");
+    }
+    {
+        // 0.1.3 on: its slice and client handle, for AetherSDR to treat as another client's.
+        QByteArray json(kStatus);
+        json.replace("\"slice\":true,", "\"slice\":true,\"slice_index\":3,\"client_handle\":\"0x2A5F27D7\",");
+        const auto named = wspr::parseStatus(json);
+        check(named && named->sliceIndex == 3 && named->clientHandle == 0x2A5F27D7u,
+              "slice_index and client_handle come through");
+        json.replace("\"slice_index\":3", "\"slice_index\":-1");
+        const auto none = wspr::parseStatus(json);
+        check(none && none->sliceIndex == -1 && none->clientHandle == 0x2A5F27D7u,
+              "no slice yet (-1) is none");
     }
     check(!wspr::parseStatus("not json"), "non-JSON is refused");
     check(!wspr::parseStatus(R"({"agent":"AetherHealth"})"), "another agent's JSON is refused");

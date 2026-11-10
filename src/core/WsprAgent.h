@@ -87,6 +87,10 @@ struct WsprStatus {
     QString depth;
     bool slice{false};
     bool audio{false};
+    // Its slice's index (-1 none) and its client handle (0 unknown); the
+    // radio reports that slice as the connected GUI client's. From 0.1.3 on.
+    int sliceIndex{-1};
+    quint32 clientHandle{0};
     struct Upload {
         bool enabled{false};
         qint64 sent{0};
