@@ -598,12 +598,18 @@ func TestFailedTransferReplyClearsItsWait(t *testing.T) {
 // stays on the tailnet. Nothing else that mentions ip= changes: not the
 // radio's static network settings, not a reply to some other command, not a
 // failed `info`.
-func TestInfoReplyNamesTheDialledAddress(t *testing.T) {
+// infoRelay starts a fake radio and a relay listening on listen, connects a
+// client, reads the greeting, and sends three commands: `info` (answered
+// with the 6500's real reply and an unsolicited status), a lookalike reply
+// to another command, and a failed `info`. It returns the address the client
+// dialled and the reader for the relayed replies.
+func infoRelay(t *testing.T, listen string) (dialled string, rd *bufio.Reader) {
+	t.Helper()
 	api, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer api.Close()
+	t.Cleanup(func() { api.Close() })
 	go func() {
 		c, err := api.Accept()
 		if err != nil {
@@ -633,33 +639,57 @@ func TestInfoReplyNamesTheDialledAddress(t *testing.T) {
 		},
 		ClientTX: loopUDP(t), ClientPrime: loopUDP(t), ClientOut: loopUDP(t),
 	}
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	defer ln.Close()
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		t.Skipf("can't listen on %s: %v", listen, err)
+	}
+	t.Cleanup(func() { ln.Close() })
 	go relay.Serve(ln)
 
 	ctl, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ctl.Close()
+	t.Cleanup(func() { ctl.Close() })
 	ctl.SetReadDeadline(time.Now().Add(3 * time.Second))
-	rd := bufio.NewReader(ctl)
+	rd = bufio.NewReader(ctl)
 	rd.ReadString('\n') // V
 	rd.ReadString('\n') // H
-	dialled := ctl.RemoteAddr().(*net.TCPAddr).IP.String()
-
 	fmt.Fprint(ctl, "C5|info\nC6|radio uptime\nC7|info\n")
-	for _, want := range []string{
-		"R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:02:01:06," +
-			"ip=" + dialled + ",netmask=255.255.255.0,gateway=192.168.8.1,region=\"USA\"\r\n",
+	return ctl.RemoteAddr().(*net.TCPAddr).IP.String(), rd
+}
+
+func expectLines(t *testing.T, rd *bufio.Reader, want ...string) {
+	t.Helper()
+	for _, w := range want {
+		if l, err := rd.ReadString('\n'); l != w {
+			t.Fatalf("got %q (%v)\nwant %q", l, err, w)
+		}
+	}
+}
+
+func TestInfoReplyNamesTheDialledAddress(t *testing.T) {
+	dialled, rd := infoRelay(t, "127.0.0.1:0")
+	expectLines(t, rd,
+		"R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:02:01:06,"+
+			"ip="+dialled+",netmask=255.255.255.0,gateway=192.168.8.1,region=\"USA\"\r\n",
 		"S0|radio static_net_params ip=192.168.8.122 gateway=192.168.8.1 netmask=255.255.255.0\n",
 		"R6|0|ip=192.168.8.122\n",
 		"R7|50000015|ip=192.168.8.122\n",
-	} {
-		if l, err := rd.ReadString('\n'); l != want {
-			t.Fatalf("got %q (%v)\nwant %q", l, err, want)
-		}
-	}
+	)
+}
+
+// A client that dialled the shim over IPv6 (Tailscale's fd7a:… address) gets
+// the info reply as the radio sent it: ip= is only ever rewritten to IPv4.
+func TestInfoReplyUnchangedOverIPv6(t *testing.T) {
+	_, rd := infoRelay(t, "[::1]:0")
+	expectLines(t, rd,
+		"R5|0|model=\"FLEX-6500\",name=\"K5PTB\",mac=00:1C:2D:02:01:06,"+
+			"ip=192.168.8.122,netmask=255.255.255.0,gateway=192.168.8.1,region=\"USA\"\r\n",
+		"S0|radio static_net_params ip=192.168.8.122 gateway=192.168.8.1 netmask=255.255.255.0\n",
+		"R6|0|ip=192.168.8.122\n",
+		"R7|50000015|ip=192.168.8.122\n",
+	)
 }
 
 // A grant whose caller WhoIs then refuses isn't used up: the computer that
