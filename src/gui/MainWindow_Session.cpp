@@ -1156,6 +1156,8 @@ void MainWindow::wireRadioModel()
     // set its visibility.
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, &MainWindow::applyCapabilitiesToUi);
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged,
+            this, [this] { refreshPanZoomControls(); });
     // Icom's connected edge precedes its verified CI-V model identity. Re-run
     // only when the canonical capability picture changes so the family-wide
     // experimental treatment can settle model-specifically without exposing a
@@ -2386,6 +2388,19 @@ void MainWindow::wirePanLifecycle()
         connect(pan, &PanadapterModel::scopeModeIndexChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setScopeModeIndex);
+        connect(pan, &PanadapterModel::zoomPlacementChanged,
+                this, [this] { refreshPanZoomControls(); });
+        connect(pan, &PanadapterModel::bandwidthLimitsChanged,
+                this, [this] { refreshPanZoomControls(); });
+        // Geometry moves on every sweep; only the first confirmed centre can
+        // change B/S availability.
+        connect(pan, &PanadapterModel::infoChanged,
+                this, [this, pan, known = pan->centerKnown()]() mutable {
+            if (pan->centerKnown() != known) {
+                known = pan->centerKnown();
+                refreshPanZoomControls();
+            }
+        });
         connect(applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::scopeModeChanged,
                 this, [this, panId = pan->panId()](int index) {
