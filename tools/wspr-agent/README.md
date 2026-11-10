@@ -22,7 +22,12 @@ delivers only to a separate computer on its LAN.
   lowest free one), so the agent fills the lower free slots with placeholder
   slices first and removes them once its own exists. Total slices are the
   free slots (`radio slices=`) plus the ones in use. When only A is free it
-  makes nothing and tries again every 5 minutes.
+  makes nothing and tries again every 5 minutes. If someone removes its
+  slice (AetherSDR does, to give the operator a fourth one), it waits 5 s
+  before making another, so the other client's new slice lands first.
+- **For AetherSDR:** the radio reports every slice the agent makes as owned
+  by the GUI client then connected, so `/v1/status` names it:
+  `slice_index` (-1 when none) and the agent's own `client_handle`.
 - **Capture:** each even UTC minute, 114 s, timed by the system clock. It
   waits until the kernel reports the clock synchronized; on an 8000-series
   radio the clock comes from its GPS-disciplined stratum-1 NTP. Lost VITA
@@ -51,7 +56,7 @@ delivers only to a separate computer on its LAN.
 
 | Request | Does |
 |---|---|
-| `GET /v1/status[?since=<unix>]` | State, clock, band, upload counters, recent cycles and spots |
+| `GET /v1/status[?since=<unix>]` | State, clock, band, its slice (`slice_index`) and client handle, upload counters, recent cycles and spots |
 | `GET /v1/config` | Settings, and whether an admin token was issued |
 | `POST /v1/config` | Any subset of `{callsign, grid, band, hopping, gray_minutes, hop_sunrise[], hop_day[], hop_sunset[], hop_night[], depth, rxant, upload, dax_channel}`. The first POST is open and returns `admin_token`; later ones need `Authorization: Bearer <token>` |
 

@@ -53,7 +53,7 @@
 #include "grayline.h"
 #include "wsprd/wsprsim_utils.h"
 
-#define AGENT_VERSION "0.1.2"
+#define AGENT_VERSION "0.1.3"
 #define STATUS_PORT 48995
 #define AUDIO_RATE 24000
 #define BB_RATE 375
@@ -427,6 +427,11 @@ static struct {
     long long dial_hz;
     int hop_period;             /* period of the tuned cycle, -1 when not hopping */
     int slice_ok, stream_ok;
+    /* Our slice's index (-1 none) and our client handle (0 not yet), so
+     * AetherSDR can treat that slice as ours, not its own: the radio reports
+     * every slice we make as owned by the GUI client then connected. */
+    int slice_index;
+    unsigned client_handle;
     spot_t spots[MAX_SPOTS];
     int nspots, spot_head;
     cycle_t cycles[MAX_CYCLES];
@@ -435,7 +440,7 @@ static struct {
     int upload_queued;
     char upload_error[80];
     long long started;
-} G = { .mu = PTHREAD_MUTEX_INITIALIZER, .state = "starting", .hop_period = -1 };
+} G = { .mu = PTHREAD_MUTEX_INITIALIZER, .state = "starting", .hop_period = -1, .slice_index = -1 };
 
 static void effective_call_grid(char *call, char *grid)
 {
@@ -947,6 +952,8 @@ static void status_json(buf_t *b, long long since)
     bputs(b, ",\"band\":"); bjson_str(b, G.band);
     bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"audio\":%s", G.dial_hz, G.slice_ok ? "true" : "false",
             G.stream_ok ? "true" : "false");
+    bprintf(b, ",\"slice_index\":%d,\"client_handle\":\"0x%08X\"", G.slice_ok ? G.slice_index : -1,
+            G.client_handle);
     bputs(b, ",\"hop_period\":");
     bjson_str(b, G.hop_period >= 0 ? PERIOD_NAME[G.hop_period] : "");
     bputs(b, ",\"depth\":");
@@ -1254,6 +1261,8 @@ static void api_close(api_t *a)
 
 /* How long to wait when only slice A is free. */
 #define SLICE_RETRY_S 300
+/* How long to wait before remaking a slice someone removed. */
+#define REMOVED_GRACE_S 5
 
 /* The slice to take: the highest free one, D before C before B, and never
  * A, which is the operator's (a GUI client that connects later takes a
@@ -1289,7 +1298,8 @@ static int make_slice(api_t *a, long long dial_hz, const char *ant)
     if (a->available < 0 || !a->slices_known) return 0;
     int target = choose_slice(a);
     if (target < 0) {
-        logf_("only slice A is free; trying again in %d minutes", SLICE_RETRY_S / 60);
+        logf_("%s; trying again in %d minutes", a->in_use[0] ? "no slice is free" : "only slice A is free",
+              SLICE_RETRY_S / 60);
         a->slice_retry = mono_s() + SLICE_RETRY_S;
         return 0;
     }
@@ -1321,7 +1331,11 @@ static void field(const char *s, const char *key, char *out, size_t cap)
 /* Handles one line from the radio. */
 static void api_line(api_t *a, char *l, const config_t *cfg)
 {
-    if (l[0] == 'H') { a->handle = (unsigned)strtoul(l + 1, NULL, 16); return; }
+    if (l[0] == 'H') {
+        a->handle = (unsigned)strtoul(l + 1, NULL, 16);
+        pthread_mutex_lock(&G.mu); G.client_handle = a->handle; pthread_mutex_unlock(&G.mu);
+        return;
+    }
     if (l[0] == 'R') {
         int seq = atoi(l + 1);
         char *p1 = strchr(l, '|');
@@ -1363,7 +1377,7 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
             a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
             if (a->slice < MAX_SLICES && !a->rf_hz[a->slice]) a->rf_hz[a->slice] = a->create_hz;
-            pthread_mutex_lock(&G.mu); G.slice_ok = 1; pthread_mutex_unlock(&G.mu);
+            pthread_mutex_lock(&G.mu); G.slice_ok = 1; G.slice_index = a->slice; pthread_mutex_unlock(&G.mu);
             logf_("slice %d on %s", a->slice, G.band);
         } else if (seq == a->want_stream) {
             a->want_stream = 0;
@@ -1414,8 +1428,12 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             a->stream = 0;
             a->stream_retry = 0;
             a->lost = 1;
+            /* Not at once: a GUI that took it (AetherSDR, to give the operator
+             * a fourth slice) creates its own next, and the radio would hand
+             * us the slot first. */
+            a->slice_retry = mono_s() + REMOVED_GRACE_S;
             pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
-            logf_("our slice was removed; making it again");
+            logf_("our slice was removed; making another in %d s", REMOVED_GRACE_S);
         }
     }
 }
@@ -1772,6 +1790,33 @@ static int selftest_slice_choice(void)
     b.available = 2;
     b.in_use[1] = 0;
     fail |= choose_slice(&b) != 1;
+
+    /* Our slice removed by someone else: no new one for REMOVED_GRACE_S. */
+    api_t r;
+    memset(&r, 0, sizeof r);
+    r.fd = p[1];
+    r.slice = 3;
+    r.available = 1;
+    r.slices_known = 1;
+    before = mono_s();
+    strcpy(l, "S1|slice 3 in_use=0");
+    api_line(&r, l, &c);
+    fail |= r.slice != -1 || !r.lost || r.slice_retry < before + REMOVED_GRACE_S - 1;
+
+    /* The status names our slice and handle, for AetherSDR. */
+    strcpy(l, "H2A5F27D7");
+    api_line(&r, l, &c);
+    pthread_mutex_lock(&G.mu);   /* held while building, as the server does */
+    G.slice_ok = 1;
+    G.slice_index = 3;
+    static char out[512 * 1024];
+    buf_t sb = {out, 0, sizeof out, 0};
+    status_json(&sb, 0);
+    fail |= sb.full || !strstr(out, "\"slice_index\":3") || !strstr(out, "\"client_handle\":\"0x2A5F27D7\"");
+    G.slice_ok = 0;
+    G.slice_index = -1;
+    G.client_handle = 0;
+    pthread_mutex_unlock(&G.mu);
 
     close(p[0]);
     close(p[1]);
