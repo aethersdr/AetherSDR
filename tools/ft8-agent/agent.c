@@ -1282,7 +1282,31 @@ typedef struct {
     long long create_hz;  /* what we asked the next slice to be created at */
     unsigned handle;
     int lost;             /* our slice was removed: remake it now */
+    /* The DAX channel we are actually trying, which is not always the
+     * configured one: see dax_fallback(). 0 = use the config. */
+    int dax_try;
 } api_t;
+
+/* The next DAX channel to try after the radio refused one.
+ *
+ * ⛔ A FLEX-6300 has only channels 1 and 2; 3 and 4 return 50000016
+ * (measured). The agent's own default is 4, so a fresh install on a 6300
+ * never gets audio -- and the old behaviour was to re-ask for the SAME
+ * refused channel every 10 s, forever. Nigel put it plainly: a blank
+ * install should just work, with nothing clever needed and no host
+ * involved.
+ *
+ * Walking DOWN rather than up is deliberate: channel 1 exists on every
+ * 6000, 7000 and 8000, so the walk always terminates somewhere real. The
+ * configured channel is still tried FIRST, so an operator who picked 2 on
+ * purpose keeps it.
+ *
+ * (rxant needs no equivalent: blank already means "the radio's default",
+ * which is why a blank install lands on the right antenna already.) */
+static int dax_fallback(int tried)
+{
+    return tried > 1 ? tried - 1 : 0;   /* 0: nothing left to try */
+}
 
 static int api_send(api_t *a, const char *fmt, ...)
 {
@@ -1372,15 +1396,31 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             if (code) { logf_("slice create refused: %08lx %s", code, msg); return; }
             a->slice = atoi(msg);
             api_send(a, "slice set %d tx=0", a->slice);
-            api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
-            a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
+            /* First attempt uses the configured channel; dax_try carries a
+             * fallback across the retry. */
+            if (!a->dax_try) a->dax_try = cfg->dax_channel;
+            api_send(a, "slice set %d dax=%d", a->slice, a->dax_try);
+            a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", a->dax_try);
             if (a->slice < MAX_SLICES && !a->rf_hz[a->slice]) a->rf_hz[a->slice] = a->create_hz;
             pthread_mutex_lock(&G.mu); G.slice_ok = 1; pthread_mutex_unlock(&G.mu);
             logf_("slice %d on %s", a->slice, G.band);
         } else if (seq == a->want_stream) {
             a->want_stream = 0;
             if (code) {
-                logf_("DAX audio refused: %08lx %s", code, msg);
+                /* Step down to a channel this radio has, rather than
+                 * asking for the refused one again every 10 s. */
+                const int next = dax_fallback(a->dax_try);
+                if (next) {
+                    logf_("DAX channel %d refused (%08lx); trying %d",
+                          a->dax_try, code, next);
+                    a->dax_try = next;
+                    api_send(a, "slice set %d dax=%d", a->slice, a->dax_try);
+                    a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d",
+                                              a->dax_try);
+                    return;
+                }
+                logf_("DAX audio refused on every channel: %08lx %s", code, msg);
+                a->dax_try = 0;        /* start again from the config */
                 a->stream_retry = mono_s() + 10;
                 return;
             }
@@ -1570,6 +1610,54 @@ static const char *const COORDINATED[10];
  * The messages are built with the library's own encoder-free path: we pack a
  * standard message from its fields, then decode it back, which exercises
  * exactly the call the live decoder makes. */
+/* A blank install must reach audio on any radio.
+ *
+ * The agent's default DAX channel is 4; a FLEX-6300 has only 1 and 2 and
+ * returns 50000016 for the rest. Before dax_fallback() the refusal path
+ * re-asked for the SAME channel every 10 s, so a fresh install stayed deaf
+ * forever -- measured on the 6300 on 2026-11-09.
+ *
+ * The walk must terminate at a channel every 6000/7000/8000 has, and must
+ * not loop or skip past 1. */
+static int selftest_dax_fallback(void)
+{
+    int fail = 0;
+    /* The step-down itself, including the end of the walk. */
+    const struct { int tried, want; const char *what; } step[] = {
+        {4, 3, "the default 4 steps to 3"},
+        {3, 2, "3 steps to 2"},
+        {2, 1, "2 steps to 1"},
+        {1, 0, "1 is the end of the walk"},
+        {8, 7, "the highest the config allows still steps down"},
+    };
+    for (size_t i = 0; i < sizeof step / sizeof step[0]; i++) {
+        const int got = dax_fallback(step[i].tried);
+        if (got != step[i].want) {
+            printf("selftest FAIL: dax_fallback(%d) gave %d, want %d (%s)\n",
+                   step[i].tried, got, step[i].want, step[i].what);
+            fail = 1;
+        }
+    }
+    /* The whole walk from the default must reach 1 and stop, visiting each
+     * channel once. A loop here would hang a fresh install just as surely as
+     * the old repeat did. */
+    {
+        int ch = 4, seen[9] = {0}, steps = 0;
+        while (ch) {
+            if (ch < 1 || ch > 8) { printf("selftest FAIL: walk left range at %d\n", ch); fail = 1; break; }
+            if (seen[ch]) { printf("selftest FAIL: walk revisited %d\n", ch); fail = 1; break; }
+            seen[ch] = 1;
+            ch = dax_fallback(ch);
+            if (++steps > 8) { printf("selftest FAIL: walk did not terminate\n"); fail = 1; break; }
+        }
+        if (!fail && !(seen[1] && seen[2])) {
+            printf("selftest FAIL: the walk from 4 never tried 1 and 2\n");
+            fail = 1;
+        }
+    }
+    return fail;
+}
+
 /* Both encodings of "RR73" reach spot_from_message, and neither may become a
  * grid.
  *
@@ -1868,10 +1956,24 @@ static int selftest_radio_lines(void)
     strcpy(l, "S1|slice 1 in_use=0");
     api_line(&b, l, &c);
     fail |= b.slice != -1 || b.rf_hz[1] != 0;
+    /* A refused DAX channel now steps DOWN instead of re-asking for the same
+     * one: 50000016 is what a FLEX-6300 returns for channel 3 or 4, and the
+     * old behaviour (retry the same channel every 10 s) left a fresh install
+     * deaf forever. So the agent must issue a NEW stream create and NOT arm
+     * the retry timer while it still has channels to try. */
+    a.dax_try = 4;
     a.want_stream = 9;
     strcpy(l, "R9|50000016|");
     api_line(&a, l, &c);
-    fail |= a.want_stream != 0 || a.stream_retry <= 0;
+    fail |= a.dax_try != 3 || a.want_stream == 0 || a.stream_retry != 0;
+    /* ...and when channel 1 is refused there is nothing left, so it falls back
+     * to the retry timer rather than looping. */
+    a.dax_try = 1;
+    a.want_stream = 11;
+    a.stream_retry = 0;
+    strcpy(l, "R11|50000016|");
+    api_line(&a, l, &c);
+    fail |= a.want_stream != 0 || a.stream_retry <= 0 || a.dax_try != 0;
     a.want_stream = 10;
     strcpy(l, "R10|0|04000008");
     api_line(&a, l, &c);
@@ -1921,7 +2023,7 @@ static const char *BAD_GRIDS[] = {"ZZ99", "AA00zz", "D18P", "DN1", "DN18p", "123
 
 static int selftest(void)
 {
-    if (selftest_rr73_both_encodings()) return 1;
+    if (selftest_dax_fallback() || selftest_rr73_both_encodings()) return 1;
     if (selftest_persistence() || selftest_spots() || selftest_budget_flagged()
         || selftest_busy_cycle() || selftest_radio_lines() || selftest_save_failure()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
