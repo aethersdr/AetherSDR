@@ -195,7 +195,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 - Only one Hermes-Lite 2 (gateware 74) on macOS, transmitting into a dummy load, has been tested for this page. Linux, Windows and other HL2 boards have not. If you run an HL2 there, reports of what works and what does not are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)).
 - Keying with the HL2's hardware PTT jack shows as transmit in AetherSDR and mutes the receiver, but does not carry host audio: only the radio is keyed, and AetherSDR sends no modulation ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
-- Each over starts with about 100 ms of keyed silence before your audio is transmitted ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
+- Each over starts with keyed silence before your audio is transmitted: about 125 ms from the microphone and 175 to 195 ms from a TCI client, longer when the client's audio arrives unevenly ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
 
 ## Troubleshooting
 
