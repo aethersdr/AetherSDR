@@ -9,9 +9,11 @@
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QSemaphore>
 #include <QSignalSpy>
 #include <QTimer>
 #include <QtTest>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -50,6 +52,9 @@ public:
     static bool pingActive(const RadioModel& model) { return model.m_pingTimer.isActive(); }
     static void startMonitor(RadioModel& model) { model.startNetworkMonitor(); }
     static void changeTransport(RadioModel& model) { ++model.m_connection->m_sessionGeneration; }
+    static SessionCommandGuard sessionRequest(RadioModel& model) { return model.m_sessionCommands.request(); }
+    static quint32 send(RadioModel& model, const QString& command, const SessionCommandGuard& guard)
+    { return model.sendCmd(command, {}, guard); }
     static void closeTransport(RadioModel& model, ConnectionState state)
     {
         model.m_connection->m_state.store(state);
@@ -181,6 +186,26 @@ private slots:
         QVERIFY(!another.current());
         QVERIFY(!connection.writeSessionCommand(4, "ping", connection.commandSessionGeneration(), another));
         QCOMPARE(writes, 1);
+    }
+    // A guarded sendCmd() reaches the wire through the session writer, so a
+    // transport replaced before the queued write refuses it.
+    void guardedSendUsesSessionWriter()
+    {
+        for (bool replace : {false, true}) {
+            RadioModel model;
+            RecordingSessionBackend* backend = install(model);
+            RadioConnection* connection = backend->connection();
+            std::atomic<int> writes{0};
+            SessionControlTestAccess::installWriter(*connection, [&writes](quint32, const QString&) { ++writes; });
+            QSemaphore hold;
+            QMetaObject::invokeMethod(connection, [&hold] { hold.acquire(); });
+            QVERIFY(SessionControlTestAccess::send(model, QStringLiteral("ping"),
+                                                   SessionControlTestAccess::sessionRequest(model)) != 0);
+            if (replace) { SessionControlTestAccess::changeTransport(model); }
+            hold.release();
+            QMetaObject::invokeMethod(connection, [] {}, Qt::BlockingQueuedConnection);
+            QCOMPARE(writes.load(), replace ? 0 : 1);
+        }
     }
     void wanRejectsCancelledAndReplacedSession()
     {
