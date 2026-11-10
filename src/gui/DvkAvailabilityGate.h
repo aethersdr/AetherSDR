@@ -97,17 +97,53 @@ inline QString radioVoiceKeyerUnavailableReason(bool hasVoiceKeyer,
     return QString();
 }
 
+// Whether the keyer panel may open. Wider than voiceKeyerUsable() on purpose:
+// the panel's settings button is the only place the keyer source is chosen, so
+// a source this radio cannot serve (the radio DVK unlicensed, or a radio with
+// none) must still let the operator reach it and pick Local. The TX-mode gate
+// still applies, and a radio that can neither transmit nor host a DVK has
+// nothing to choose between.
+inline bool voiceKeyerPanelOpenable(bool txModeIsVoice, bool radioHasKeyer, bool canTransmit)
+{
+    return txModeIsVoice && (radioHasKeyer || canTransmit);
+}
+
+// Why the open panel cannot drive its keyer, for the panel's status line; empty
+// when it can. Short enough for the two lines the status area reserves, and it
+// names the way out, because the panel is where the source is changed.
+inline QString voiceKeyerPanelUnavailableReason(VoiceKeyerSource source,
+                                                bool radioHasKeyer,
+                                                bool canTransmit,
+                                                bool licenseSeen,
+                                                bool licenseEnabled,
+                                                bool radioRefused)
+{
+    if (source == VoiceKeyerSource::Local) {
+        return canTransmit ? QString() : QStringLiteral("This radio cannot transmit.");
+    }
+    if (!radioHasKeyer) {
+        return QStringLiteral("This radio has no DVK. Choose Local with ⚙.");
+    }
+    if (radioRefused || (licenseSeen && !licenseEnabled)) {
+        return QStringLiteral("Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.");
+    }
+    return QString();
+}
+
 // Tooltip for the DVK indicator. Names the SmartSDR+ requirement directly
 // rather than FlexLib's "Subscribe…" copy. FlexLib gates DVK on the
 // subscription Feature record and a FLEX-8600 on fw 4.2.18 reports
 // `reason=PLUS`, so `reason` is not branched on. It says the radio is not
 // licensed, never that the subscription must be active: a lapsed subscriber
 // keeps every feature released before the expiration (LicenseEntitlement.h).
+// An unlicensed radio still opens the panel (voiceKeyerPanelOpenable), so the
+// tooltip says where to go.
 inline QString dvkIndicatorTooltip(DvkIndicatorBlocker blocker)
 {
     if (blocker == DvkIndicatorBlocker::NotLicensed) {
         return QStringLiteral(
-            "Digital Voice Keyer — not licensed on this radio (SmartSDR+)");
+            "Digital Voice Keyer — not licensed on this radio (SmartSDR+). "
+            "Click to open, then choose Local with ⚙.");
     }
     return QStringLiteral("Digital Voice Keyer — click to toggle");
 }

@@ -33,7 +33,7 @@ The DVK indicator is hidden only on a radio that can neither transmit nor host a
 
 ### Opening DVK
 
-Click the **DVK** indicator in the status bar at the bottom of the screen. The panel opens beside the panadapter. Its title names the keyer in use, for example **Digital Voice Keyer (Local)**.
+Choose **Tools → Digital Voice Keyer**, or click the **DVK** indicator in the status bar at the bottom of the screen. The panel opens beside the panadapter, and the Tools entry is ticked while it is open; choose it again to close the panel. The title names the keyer in use, for example **Digital Voice Keyer (Local)**.
 
 The DVK panel and the [CWX Panel](./cwx-panel.md) share the same space — opening one closes the other.
 
@@ -45,12 +45,14 @@ When the window is short, scroll the list of recording slots; the panel title, s
 
 ### Choosing where recordings are kept
 
-Right-click the **DVK** indicator, or choose **Settings → Voice Keyer Source...**. With the indicator focused, the context-menu key or **Shift+F10** opens the same menu.
+Click the **⚙** button at the right end of the panel title. From the keyboard, Tab to it and press Space or Enter. A menu opens with these choices:
 
-- **Automatic by radio licence** — the default. Uses the Radio DVK when the radio has one and has not reported that SmartSDR+ is missing, and Local otherwise. The menu shows which one it chose, for example `(now: Local)`.
+- **Automatic by radio licence** — the default. Uses the Radio DVK when the radio has one and has not reported that SmartSDR+ is missing, and Local otherwise. The menu shows which one it picks on this radio, for example `(now: Local)`.
 - **Radio DVK — recordings on the radio** — grayed out, with the reason, on a radio with no voice keyer or no SmartSDR+.
 - **Local — recordings on this computer**.
 - **Open Local Recordings Folder** — opens the folder the local recordings are kept in.
+
+The panel opens even when the keyer chosen here can't be used on this radio, so this menu is always within reach.
 
 A change made while a recording, playback or preview is running waits for it to end, so STOP and the F-keys keep driving the keyer that started it. The status line says so, for example `On air · slot 1 · 2.6s of 3.0s · Radio keyer when this ends`.
 
@@ -150,13 +152,13 @@ The DVK label in the status bar has three visual states:
 
 - **Bright cyan** — panel is open
 - **Dim white** — available (voice mode), click to open
-- **Dark gray** — unavailable (not in a voice mode, or the Radio DVK is not licensed)
+- **Dark gray** — not ready: the TX slice is not in a voice mode, or the keyer chosen can't be used on this radio. In the second case a click still opens the panel, so you can choose another keyer.
 
 The indicator can also be reached with the keyboard: Tab to it and press Enter.
 
 ### SmartSDR+ license
 
-When the Radio DVK is in use and the radio reports that the feature is not licensed, or refuses a DVK command or transfer with the SmartSDR+ error, the **DVK indicator itself is disabled** — grayed out with an arrow cursor and the tooltip "Digital Voice Keyer — not licensed on this radio (SmartSDR+)". The F1–F12 shortcuts and any open panel are gated the same way, and the panel status reads `Disabled · not licensed (SmartSDR+)`. With **Automatic by radio licence** selected, the same report switches the panel to the local keyer instead.
+When the Radio DVK is in use and the radio reports that the feature is not licensed, or refuses a DVK command or transfer with the SmartSDR+ error, the **DVK indicator** turns dark gray with the tooltip "Digital Voice Keyer — not licensed on this radio (SmartSDR+). Click to open, then choose Local with ⚙." The panel still opens, with its slots and buttons disabled and the status `Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.`, and the F1–F12 shortcuts are off. With **Automatic by radio licence** selected, the same report switches the panel to the local keyer instead.
 
 A SmartSDR+ subscription licenses every feature released before it expires, and the radio keeps those features after it lapses, so AetherSDR goes by what the radio reports for the feature, never by the subscription's expiration date. AetherSDR only applies this once the radio positively says no; if the radio never reports the license, the Radio DVK stays available. If the radio later reports the license as enabled, for example after a subscription is activated mid-session, the Radio DVK becomes available again without reconnecting.
 
@@ -166,9 +168,9 @@ A SmartSDR+ subscription licenses every feature released before it expires, and 
 
 The transmit slice is not in a voice mode; or **Radio DVK** is selected and the radio reports no SmartSDR+ license, or has no voice keyer of its own (a Hermes-Lite 2 or Networked Icom radio).
 
-1. Switch the TX slice to a voice mode (USB, LSB, AM, SAM, FM, NFM or DFM).
-2. Hover the indicator. If the tooltip says the radio isn't licensed, renew SmartSDR+ on the radio, or right-click the indicator and choose **Local — recordings on this computer**.
-3. On a radio with no voice keyer of its own, right-click the indicator, or choose **Settings → Voice Keyer Source...**, and pick **Local — recordings on this computer** or **Automatic by radio licence**.
+1. Switch the TX slice to a voice mode (USB, LSB, AM, SAM, FM, NFM or DFM). Outside a voice mode the panel can't be opened.
+2. In a voice mode, open the panel anyway. If its status line says the radio isn't licensed, renew SmartSDR+ on the radio, or click **⚙** and choose **Local — recordings on this computer**.
+3. On a radio with no voice keyer of its own, the status line reads `This radio has no DVK. Choose Local with ⚙.` Click **⚙** and pick **Local — recordings on this computer** or **Automatic by radio licence**.
 
 ### REC says to set the mic source to PC
 

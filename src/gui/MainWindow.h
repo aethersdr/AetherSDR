@@ -1125,10 +1125,8 @@ private:
     void wireLocalVoiceKeyer();
     VoiceKeyerSource voiceKeyerSource() const;
     void applyVoiceKeyerSource();
+    // The keyer-source chooser behind the DVK panel's settings button.
     void showVoiceKeyerSourceMenu(const QPoint& globalPos);
-    // Where to pop the chooser when it is opened from the keyboard: under the
-    // DVK indicator when that is on screen, otherwise the window's centre.
-    QPoint voiceKeyerSourceMenuAnchor() const;
     void showNr2ParamPopup(const QPoint& globalPos);
     void showNr4ParamPopup(const QPoint& globalPos);
     void showDfnrParamPopup(const QPoint& globalPos);
@@ -1865,6 +1863,7 @@ private:
     QAction*         m_aetherialAction{nullptr};
     QAction*         m_cwKeyerAction{nullptr};
     QAction*         m_copyAssistAction{nullptr};
+    QAction*         m_voiceKeyerAction{nullptr};
     QAction*         m_gpsDashboardAction{nullptr};
     QAction*         m_agcTCalibrationMenuAction{nullptr};
     // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from

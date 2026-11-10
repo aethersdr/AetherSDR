@@ -62,6 +62,21 @@ public:
     // a radio it has not yet been verified on. Empty for none.
     void setSourceQualifier(const QString& text);
 
+    // Why the bound keyer cannot be driven (the radio DVK unlicensed, or a
+    // radio with none), shown on the status line; empty when it can. While set,
+    // every slot and transport control is disabled and only the settings
+    // button acts, because choosing another source is the way out.
+    void setUnavailableReason(const QString& reason);
+    QString unavailableReason() const { return m_unavailableReason; }
+
+    // Where the keyer-source menu opens: under the settings button.
+    QPoint settingsMenuAnchor() const;
+
+signals:
+    // The settings button was pressed. MainWindow owns the keyer-source
+    // choice, which needs the radio's licence state the panel never sees.
+    void settingsRequested();
+
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
 
@@ -84,12 +99,14 @@ private:
     // The title carries the keyer's source ("(Radio)" / "(Local)") so the
     // operator can always see which keyer the panel drives.
     QLabel* m_titleLabel{nullptr};
+    QPushButton* m_settingsBtn{nullptr};
     QLabel* m_statusLabel;
     QLabel* m_statusDot{nullptr};
     int m_selectedSlot{1};
     bool m_voxHeldOff{false};
     QString m_pendingSourceNotice;
     QString m_sourceQualifier;
+    QString m_unavailableReason;
     QLineEdit* m_renameEdit{nullptr};
     int m_renameSlot{-1};
 

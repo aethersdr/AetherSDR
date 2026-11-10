@@ -368,6 +368,89 @@ int main(int argc, char** argv)
                     .arg(joined(first.calls).c_str(), joined(other.calls).c_str())).toStdString());
     }
 
+    // The keyer source is chosen from the panel's own settings button: it is
+    // a real, focusable, named button, and pressing it asks MainWindow (which
+    // holds the licence state) for the menu.
+    {
+        FakeKeyer k;
+        DvkPanel gearPanel(&k);
+        QPushButton* gear = gearPanel.findChild<QPushButton*>(QStringLiteral("dvkSettings"));
+        int requested = 0;
+        QObject::connect(&gearPanel, &DvkPanel::settingsRequested, [&] { ++requested; });
+        if (gear) {
+            gear->click();
+        }
+        report("settings_button_requests_the_source_menu",
+               gear && requested == 1 && gear->focusPolicy() != Qt::NoFocus
+                   && gear->accessibleName() == QLatin1String("Voice keyer settings"),
+               (QStringLiteral("found=%1 requested=%2").arg(gear != nullptr).arg(requested))
+                   .toStdString());
+    }
+
+    // A keyer the radio cannot serve leaves the panel open (that is where the
+    // source is changed) with every slot and transport control disabled and the
+    // reason on the status line; only the settings button still acts.
+    {
+        FakeKeyer k;
+        k.addRecording(1, QStringLiteral("CQ"), 1000);
+        DvkPanel blockedPanel(&k);
+        const QString reason = QStringLiteral("Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.");
+        blockedPanel.setUnavailableReason(reason);
+        QPushButton* bf1 = buttonByText(blockedPanel, QStringLiteral("F1"));
+        QPushButton* brec = buttonByText(blockedPanel, QString::fromUtf8("● REC"));
+        QPushButton* bplay = buttonByText(blockedPanel, QString::fromUtf8("▶ PLAY"));
+        QPushButton* bprev = buttonByText(blockedPanel, QString::fromUtf8("◀ PREV"));
+        QPushButton* gear = blockedPanel.findChild<QPushButton*>(QStringLiteral("dvkSettings"));
+        QLabel* bstatus = statusLabel(blockedPanel);
+        const bool allFound = bf1 && brec && bplay && bprev && gear && bstatus;
+        const bool controlsOff = allFound && !bf1->isEnabled() && !brec->isEnabled()
+                                 && !bplay->isEnabled() && !bprev->isEnabled();
+        const bool reasonShown = allFound && bstatus->text() == reason;
+        if (allFound) {
+            bf1->click();   // a disabled button ignores this; the guard is belt and braces
+        }
+        bool menuShown = false;
+        QTimer::singleShot(0, &blockedPanel, [&] {
+            if (QWidget* popup = QApplication::activePopupWidget()) {
+                menuShown = true;
+                popup->close();
+            }
+        });
+        if (QWidget* row = blockedPanel.findChild<QWidget*>(QStringLiteral("dvkSlot1"))) {
+            emit row->customContextMenuRequested(QPoint(2, 2));
+        }
+        QCoreApplication::processEvents();
+        bool renameOpened = false;
+        if (QLabel* name = labelWithText(blockedPanel, QStringLiteral("CQ"))) {
+            QMouseEvent dbl(QEvent::MouseButtonDblClick, QPointF(2, 2), QPointF(2, 2),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(name, &dbl);
+            for (QLineEdit* e : blockedPanel.findChildren<QLineEdit*>()) {
+                renameOpened = renameOpened || e->isVisibleTo(&blockedPanel);
+            }
+        }
+        report("unavailable_keyer_offers_no_rename", !renameOpened);
+        report("unavailable_keyer_disables_slots_and_transport_not_settings",
+               controlsOff && reasonShown && gear->isEnabled() && !menuShown && k.calls.isEmpty(),
+               (QStringLiteral("found=%1 off=%2 reason=%3 menu=%4 calls=[%5]")
+                    .arg(allFound).arg(controlsOff).arg(reasonShown).arg(menuShown)
+                    .arg(joined(k.calls).c_str())).toStdString());
+
+        blockedPanel.setUnavailableReason(QString());
+        report("clearing_the_reason_restores_the_controls",
+               allFound && bf1->isEnabled() && brec->isEnabled() && bplay->isEnabled()
+                   && bstatus->text() == QLatin1String("Idle"),
+               allFound ? bstatus->text().toStdString() : std::string());
+
+        // An operation already in flight can still be ended.
+        k.pushStatus(VoiceKeyer::Playback, 1);
+        blockedPanel.setUnavailableReason(reason);
+        QPushButton* bstop = buttonByText(blockedPanel, QString::fromUtf8("■ STOP"));
+        report("unavailable_keyer_still_lets_stop_end_an_operation",
+               allFound && bstop && bstop->isEnabled() && bplay->isEnabled());
+        k.pushStatus(VoiceKeyer::Idle, -1);
+    }
+
     std::printf("\n%s (%d failed)\n", g_failed ? "FAILED" : "PASSED", g_failed);
     return g_failed ? 1 : 0;
 }

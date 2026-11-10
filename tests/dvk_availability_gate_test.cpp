@@ -81,10 +81,13 @@ int main()
     // ── Tooltip names the missing subscription ──────────────────────────────
     // The whole point of the gate: a dimmed button has to say what it needs, or
     // it is just as mute as the silently-refused command it replaced.
-    report("unlicensed tooltip names SmartSDR+, not an active subscription",
+    // It says the radio is not licensed, never that a subscription must be
+    // active (#6924), and since the unlicensed indicator still opens the panel,
+    // it also says how to reach the client-side keyer from there.
+    report("unlicensed tooltip names SmartSDR+ and the way to Local",
            dvkIndicatorTooltip(B::NotLicensed)
-               == QStringLiteral("Digital Voice Keyer — not licensed on this "
-                                 "radio (SmartSDR+)"));
+               == QStringLiteral("Digital Voice Keyer — not licensed on this radio "
+                                 "(SmartSDR+). Click to open, then choose Local with ⚙."));
     report("mode-gated tooltip stays the normal one",
            dvkIndicatorTooltip(B::TxModeNotVoice)
                == QStringLiteral("Digital Voice Keyer — click to toggle"));
@@ -141,6 +144,42 @@ int main()
            !voiceKeyerUsable(VS::Local, true, false));
     report("radio keyer with a DVK is usable",
            voiceKeyerUsable(VS::Radio, true, true));
+
+    // ── The panel opens wider than the keyer can be driven ──────────────────
+    // The source is chosen from the panel's settings button and nowhere else,
+    // so a Radio choice the radio cannot serve must still open the panel, or an
+    // operator whose saved choice is Radio is locked out of picking Local.
+    report("panel opens on a radio with no DVK that can transmit",
+           voiceKeyerPanelOpenable(true, false, true));
+    report("panel opens on a radio with a DVK, licence aside",
+           voiceKeyerPanelOpenable(true, true, false));
+    report("panel stays shut on a radio with neither a DVK nor transmit",
+           !voiceKeyerPanelOpenable(true, false, false));
+    report("panel stays shut outside a voice mode",
+           !voiceKeyerPanelOpenable(false, true, true));
+
+    // ── And says why it cannot drive the keyer ──────────────────────────────
+    const auto why = [](VS source, bool hasKeyer, bool canTx, bool seen, bool enabled,
+                        bool refused) {
+        return voiceKeyerPanelUnavailableReason(source, hasKeyer, canTx, seen, enabled, refused);
+    };
+    report("no reason for a licensed radio DVK",
+           why(VS::Radio, true, true, true, true, false).isEmpty());
+    report("no reason while the entitlement is unreported (fails open)",
+           why(VS::Radio, true, true, false, false, false).isEmpty());
+    report("unlicensed radio DVK names SmartSDR+ and points to Local",
+           why(VS::Radio, true, true, true, false, false)
+               == QStringLiteral("Radio DVK not licensed (SmartSDR+). Choose Local with ⚙."));
+    report("a refused dvk command reads as unlicensed",
+           why(VS::Radio, true, true, true, true, true).contains(QStringLiteral("SmartSDR+")));
+    report("Radio on a radio with no DVK points to Local",
+           why(VS::Radio, false, true, true, true, false)
+               == QStringLiteral("This radio has no DVK. Choose Local with ⚙."));
+    report("no reason for Local on a radio that transmits, licence aside",
+           why(VS::Local, true, true, true, false, true).isEmpty());
+    report("Local on a radio that cannot transmit says so",
+           why(VS::Local, true, false, true, true, false)
+               == QStringLiteral("This radio cannot transmit."));
 
     // ── The feature name is the FlexLib one ─────────────────────────────────
     report("license feature name matches FlexLib's digital_voice_keyer",
