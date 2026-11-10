@@ -181,6 +181,26 @@ no span request (`MainWindow::panSpanFixedByBackend()`, `PanSpanControlGate.h`).
 An absent record dims nothing. `pan_dimension_routing_test` builds each family's
 real record; `pan_control_routing_test` pins the Flex encoder and fences.
 
+### Audio stream and radio graphic EQ requests
+
+`audioStreamControl` lists the `AudioStreamKind`s a backend can create and remove
+through `RadioModel::requestAudioStream()` (and, for IQ, re-rate).
+`radioGraphicEqControl` lists the radio-side graphic EQ paths `requestGraphicEq()`
+may write. Both are desktop request records: an undeclared kind or path is
+refused, and with no radio EQ record the graphic EQ stays host-side
+(`LocalOnly`). Neither widens the daemon capability catalogue.
+
+| Backend | `audioStreamControl` | `radioGraphicEqControl` |
+|---|---|---|
+| Flex | remote RX, remote TX, DAX RX, DAX TX, IQ | RX, TX |
+| HL2 | absent | absent |
+| ANAN | absent | absent |
+| RTL | absent | absent |
+| Icom | absent | absent |
+| Demo | absent | absent |
+
+`audio_control_routing_test` pins the Flex encoder and the native refusals.
+
 ### Native receive audio export
 
 `receiveAudioExport` describes the typed pre-monitor `sliceAudioFrameReady`
