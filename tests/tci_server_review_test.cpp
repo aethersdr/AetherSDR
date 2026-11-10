@@ -13,7 +13,6 @@
 #include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
-#include "models/MeterModel.h"
 #include "models/TransmitModel.h"
 
 #include <QCoreApplication>
@@ -32,7 +31,6 @@
 #include <QUrl>
 #include <QWebSocket>
 
-#include <cmath>
 #include <cstring>
 #include <cstdio>
 #include <memory>
@@ -2931,9 +2929,8 @@ public:
         return true;
     }
 
-    // tx_sensors goes out during tune, and its power fields carry the current
-    // forward power, not the gauge's smoothed value or a peak hold.
-    static bool txSensorsFollowTuneAndCurrentPower()
+    // tx_sensors goes out during tune, not only during a MOX/PTT transmit.
+    static bool txSensorsFollowTune()
     {
         bool ok = true;
         const auto expect = [&ok](bool cond, const char* what) {
@@ -2942,7 +2939,6 @@ public:
                 ok = false;
             }
         };
-        const auto near = [](float a, float b) { return std::fabs(a - b) < 0.01f; };
 
         RadioModel model;
         expect(!TciServer::txSensorsKeyed(model), "idle: no tx_sensors");
@@ -2954,26 +2950,6 @@ public:
         model.transmitModel().applyChanges(tune);
         expect(!TciServer::txSensorsKeyed(model), "tune off stops tx_sensors");
 
-        MeterModel& meters = model.meterModel();
-        meters.defineMeter({1, "TX", 0, "FWDPWR", "Watts", 0, 100, "Forward power"});
-        meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("FWDPWR"), 5.0f);
-        expect(near(TciServer::txSensorsForwardWatts(meters), 5.0f),
-               "without FWDPWR_NOW: the FWDPWR sample (5 W)");
-        meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("FWDPWR"), 0.5f);
-        expect(meters.fwdPower() > 1.0f,
-               "control: the smoothed gauge is still above 1 W after the drop");
-        expect(near(TciServer::txSensorsForwardWatts(meters), 0.5f),
-               "the drop to 0.5 W reaches tx_sensors at once, not smoothed");
-
-        // A backend whose FWDPWR is a peak hold publishes FWDPWR_NOW (HL2, dBm).
-        meters.defineMeter({2, "TX", 0, "FWDPWR_NOW", "dBm", 0, 41, "Forward power, no hold"});
-        meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("FWDPWR"), 5.0f);
-        meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("FWDPWR_NOW"), 30.0f);
-        expect(near(TciServer::txSensorsForwardWatts(meters), 1.0f),
-               "FWDPWR_NOW wins over a held FWDPWR (30 dBm = 1 W)");
-        meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("FWDPWR_NOW"), 0.0f);
-        expect(TciServer::txSensorsForwardWatts(meters) == 0.0f,
-               "no carrier (0 dBm) reads 0 W, not 1 mW");
         return ok;
     }
 
@@ -3308,7 +3284,7 @@ int main(int argc, char** argv)
     const bool valueSeed
         = AetherSDR::TciServerReviewTest::valueRelaySeedsAfterRewire();
     const bool txSensorsNow
-        = AetherSDR::TciServerReviewTest::txSensorsFollowTuneAndCurrentPower();
+        = AetherSDR::TciServerReviewTest::txSensorsFollowTune();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -3411,7 +3387,7 @@ int main(int argc, char** argv)
                 guiSplit ? "PASS" : "FAIL");
     std::printf("%s  RIT/XIT offset and AGC relays seed once after a re-wire (#2824)\n",
                 valueSeed ? "PASS" : "FAIL");
-    std::printf("%s  tx_sensors follows tune and carries the current forward power\n",
+    std::printf("%s  tx_sensors follows tune\n",
                 txSensorsNow ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();

@@ -276,7 +276,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::radioTransmitConfirmed, this,
             &TciServer::onRadioTransmitConfirmed);
         connect(&m_model->meterModel(), &MeterModel::txMetersChanged,
-                this, [this](float, float swr, bool swrValid) {
+                this, [this](float fwd, float swr, bool swrValid) {
+            m_cachedFwdPower = fwd;
             // TCI's wire format has no absent marker; 1.0 is what this cache
             // held before any SWR arrived, so absence maps back to it rather
             // than to 0.0 (which is out of the meter's domain).
@@ -4017,30 +4018,6 @@ bool TciServer::txSensorsKeyed(RadioModel& model)
            || model.isRadioTransmitting();
 }
 
-// Forward power for tx_sensors, the way Thetis sends it: the current reading,
-// with no peak hold and no display smoothing, in both the rms and the peak
-// field. MeterModel::fwdPower() is smoothed for AetherSDR's own gauge and
-// decays over seconds, so a client's meter stood still while the operator
-// talked. A backend whose FWDPWR is itself a peak hold (HL2) also publishes
-// the unheld reading as TX:FWDPWR_NOW; any other backend's FWDPWR sample is
-// already the current reading.
-float TciServer::txSensorsForwardWatts(const MeterModel& mm)
-{
-    float watts = mm.fwdPowerInstant();
-    const int now = mm.findMeter(QStringLiteral("TX"), QStringLiteral("FWDPWR_NOW"));
-    const qint64 age = now >= 0 ? mm.valueAgeMs(now) : -1;
-    if (age >= 0 && age <= 1000) {
-        const MeterDef* def = mm.meterDef(now);
-        const float v = mm.value(now);
-        const bool inWatts = def
-            && (def->unit.compare(QLatin1String("Watts"), Qt::CaseInsensitive) == 0
-                || def->unit.compare(QLatin1String("W"), Qt::CaseInsensitive) == 0);
-        watts = inWatts ? v : std::pow(10.0f, v / 10.0f) / 1000.0f;
-    }
-    // No carrier reads 0 dBm, which is 1 mW, not 0 W.
-    return watts <= 0.0011f ? 0.0f : watts;
-}
-
 void TciServer::broadcastStatus()
 {
     if (m_clients.isEmpty() || !m_model || !m_model->isConnected())
@@ -4080,14 +4057,11 @@ void TciServer::broadcastStatus()
             // tx_sensors:trx,mic_dbm,fwd_watts,peak_watts,swr,alc_dbfs
             // alc_dbfs (trailing field, AetherSDR extension) is the SW-ALC
             // peak; index-based parsers safely ignore the extra field.
-            // Both power fields carry the same current reading, as Thetis
-            // does; see txSensorsForwardWatts().
-            const float fwdW = txSensorsForwardWatts(m_model->meterModel());
             const QString message =
                 QStringLiteral("tx_sensors:0,%1,%2,%3,%4,%5;")
                     .arg(m_cachedMicLevel, 0, 'f', 1)
-                    .arg(fwdW, 0, 'f', 1)
-                    .arg(fwdW, 0, 'f', 1)
+                    .arg(m_cachedFwdPower, 0, 'f', 1)
+                    .arg(m_cachedFwdPower, 0, 'f', 1)  // peak ≈ avg for now
                     .arg(m_cachedSwr, 0, 'f', 1)
                     .arg(m_cachedAlc, 0, 'f', 1);
             sendClientText(cs.socket, message);
