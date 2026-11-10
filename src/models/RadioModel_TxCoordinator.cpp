@@ -235,6 +235,8 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         return false;
     }
     if (m_daxTxOwnershipIntent) {
+        qCWarning(lcProtocol) << "RadioModel: TX refused — a DAX TX stream selection was pending;"
+                              << "the selection is interrupted, key again to transmit";
         interruptDaxTxOwnership(tr("Transmit preparation interrupted DAX TX ownership. Waiting for fresh radio status."));
         return false;
     }

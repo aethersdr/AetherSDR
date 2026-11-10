@@ -59,7 +59,7 @@ The normal RTL limit remains one receiver. Additional inputs are for the process
 
 ### Transmit audio
 
-On FlexRadio, a digital program's audio from **AetherSDR TX** uses this client's DAX TX stream. Before transmitting, select your local TX slice, leave the radio idle, and click the **TX stream** toggle in **DAX Audio**. Wait for **Selected** without **Audio blocked**. Put the TX slice in a digital mode (DIGU or DIGL) and initiate transmission separately in your program. Voice modes use your microphone.
+On FlexRadio, a digital program's audio from **AetherSDR TX** uses this client's DAX TX stream. Before transmitting, select your local TX slice and check that **TX stream** in **DAX Audio** reads **Selected** without **Audio blocked**. If it reads **Not selected** (for example, because another MultiFlex client's stream holds TX), click it while the radio is idle and wait for **Selected**. Put the TX slice in a digital mode (DIGU or DIGL) and initiate transmission separately in your program. Voice modes use your microphone.
 
 With MultiFlex, another client can select its own DAX TX stream. AetherSDR's label follows the radio's report, and deselection blocks its DAX transmit audio. Click **Selected** while idle to deselect AetherSDR's stream. These actions do not change the TX slice or global DAX input, key the radio, start audio, or restore a previous transmission. A later transmission needs a new operator action.
 
@@ -73,7 +73,7 @@ Selection requests are not saved or replayed on reconnect. The label follows cur
 This transmit-capable setup applies to FlexRadio.
 
 1. Put the slice in **DIGU** and set its DAX channel to **1**.
-2. Enable **DAX**, click the **TX stream** toggle while the radio is idle, and wait for **Selected** without **Audio blocked**. Turn on a **Rigctld** CAT port (see [CAT Control](./cat-control.md)).
+2. Enable **DAX**, and check that **TX stream** reads **Selected** without **Audio blocked**. If it reads **Not selected**, click it while the radio is idle. Turn on a **Rigctld** CAT port (see [CAT Control](./cat-control.md)).
 3. In WSJT-X, **File → Settings → Audio**: Input **AetherSDR DAX 1**, Output **AetherSDR TX**.
 4. **Settings → Radio**: Rig `Hamlib NET rigctl`, Network Server `127.0.0.1:4532`, PTT Method `CAT`.
 

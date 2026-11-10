@@ -17,6 +17,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QPointer>
 #include <QPushButton>
 #include <QStringList>
 
@@ -145,6 +146,12 @@ void appletLifetimeAndReasons()
         && toggle->toolTip() == first->daxTxOwnershipUnavailableReason(true)
         && toggle->accessibleDescription() == toggle->toolTip(),
         "unsupported selection uses the model's reason in both accessible channels");
+    const QPointer<ControlAvailabilityRegistry> ownershipRegistry =
+        applet.findChildren<ControlAvailabilityRegistry*>().constLast();
+    for (int i = 0; i != 3; ++i) { emit first->daxTxOwnershipChanged(); }
+    check(ownershipRegistry && toggle->toolTip() == first->daxTxOwnershipUnavailableReason(true)
+        && toggle->accessibleDescription() == toggle->toolTip(),
+        "unchanged ownership updates keep the registration and its accessible reason");
     applet.setRadioModel(first.get());
     check(registryCount() == boundRegistries && firstSource->ownershipCalls == 0,
         "rebinding replaces registrations without requesting selection");

@@ -106,6 +106,10 @@ request. A refused, cancelled or timed-out request cannot resume later. If the
 stream already exists but is not selected, select it with **TX stream** in
 **DAX Audio** while the radio is idle, then initiate a new transmission.
 
+On a slow link, such as SmartLink, that first transmission can time out in
+WSJT-X or JTDX, which wait one second for the `trx` reply. Key again; the
+stream now exists.
+
 ### MSHV
 
 **Settings → Interface**, select **TCI**, enter `localhost` and port `50001`, and enable audio streaming if wanted.

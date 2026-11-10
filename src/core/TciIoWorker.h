@@ -117,7 +117,6 @@ private:
             TxCoordinator::Request input;
             bool captured{false};
             DaxTxAudioPermit daxPermit{DaxTxAudioPermit::blocked()};
-            bool daxPermitCaptured{false};
         };
         std::deque<Text> texts;
         qsizetype textBytes{0};
