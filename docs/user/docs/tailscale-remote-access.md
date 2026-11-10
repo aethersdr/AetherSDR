@@ -353,6 +353,8 @@ asking computer's own session.
 
 - **Update** (shown when a newer version is available): removes the container (on a FLEX-6000, uninstalls the
   waveform) and installs the new one, after asking. Open **Remote Access** again and scan the new code.
+- **Waveforms → Environment… → Apply & Recreate** on the remote-access container: rebuilds it from its
+  image, which may sign the radio out. AetherSDR asks first.
 - **Disconnect** (shown once the radio is on the tailnet): ends remote
   sessions, signs the radio out and deletes its tailnet state and token. The
   next time you open **Remote Access**, a new code appears to sign it in

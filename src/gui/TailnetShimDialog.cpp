@@ -1066,12 +1066,6 @@ void TailnetShimDialog::reset()
     close();
 }
 
-QString TailnetShimDialog::offTailnetWarning()
-{
-    return tr("Don't do this while you're away from the radio. Until it's signed in again from its local "
-              "network, you can't reach it remotely.");
-}
-
 void TailnetShimDialog::updateRadioShim()
 {
     if (!m_status) {
