@@ -304,6 +304,9 @@ private:
     // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
     friend struct Hl2AutoGainLawTestAccess;
     friend struct Hl2SessionMemoryTestAccess;
+    // Installs MetisClient's start() stand-in and injects the link edge, so a
+    // real connectRadio() runs without a socket (hl2_persist_*_test).
+    friend struct Hl2PersistTestAccess;
     // Feeds EP6 status frames to the backend's own MetisClient on its I/O thread,
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
