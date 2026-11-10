@@ -976,10 +976,9 @@ static void status_json(buf_t *b, long long since)
      * or neither. An operator looking at a bool cannot tell a GPS-locked
      * radio from a 6000 running on the fallback. */
     {
-        struct timex ctx;
-        memset(&ctx, 0, sizeof ctx);
-        int cst = adjtimex(&ctx);
-        const char *csrc = (cst != TIME_ERROR && !(ctx.status & STA_UNSYNC)) ? "kernel"
+        /* kernel_clock_synced(), not a second inline adjtimex: two copies of
+         * the same test drift apart. A reviewer asked for this.  */
+        const char *csrc = kernel_clock_synced() ? "kernel"
                          : g_ntp_selected ? "radio_ntp" : "none";
         bputs(b, ",\"clock_source\":");
         bjson_str(b, csrc);
@@ -1364,7 +1363,23 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
          * kernel never clears STA_UNSYNC. Latching is deliberate: chrony can
          * briefly drop a source while the clock stays disciplined, and losing
          * the cycle over that would cost two minutes of capture. */
-        if (strstr(body, " state=selected"))
+        /* Match the FIELD, not the text anywhere in the line.
+         *
+         * The real status carries a free-text description= in quotes, so a
+         * plain strstr(" state=selected") also fires on a description that
+         * merely contains those words. A reviewer raised that as theoretical;
+         * a fixture here turned it into a failing test. Requiring the token to
+         * END -- a space, or the end of the line -- fixes it, because a
+         * quoted description cannot end the token without closing the quote
+         * first.
+         *
+         * The radio also publishes its own boolean, " selected=1". Checking it
+         * too was tempting, but it agrees with this match on every real line,
+         * so it would be code doing no work and no fixture could justify it. */
+        const char *const TAG = " state=selected";
+        const char *const st = strstr(body, TAG);
+        const size_t tn = strlen(TAG);
+        if (st && (st[tn] == ' ' || st[tn] == '\0'))
             g_ntp_selected = 1;
     } else if (!strncmp(body, "slice ", 6)) {
         int index = atoi(body + 6);
@@ -1652,7 +1667,7 @@ static int selftest_ntp_fallback(void)
     a.slice = 0;
     config_t c;
     config_default(&c);
-    char l[200];
+    char l[320];   /* the real ntp_sources line is ~180 bytes */
     const int saved = g_ntp_selected;
 
     /* Source states a radio reports that are NOT evidence. A candidate or a
@@ -1660,12 +1675,17 @@ static int selftest_ntp_fallback(void)
      * "selected" must be matched as a whole word with its leading space --
      * `state=selectable` is a real chrony state and starts with "selected"
      * only if you compare carelessly. */
+    /* The real wire shape, from a FLEX-6300 on 4.3.16.42034 (see below): the
+     * first word is `id=`, not an index. An earlier version of this test
+     * invented "ntp_sources 1 state=..." and a reviewer caught it. */
     const char *not_evidence[] = {
-        "S1|ntp_sources 0 state=candidate name=0.flex.pool.ntp.org stratum=3 reach=255",
-        "S1|ntp_sources 1 state=selectable name=1.flex.pool.ntp.org stratum=2 reach=255",
-        "S1|ntp_sources 2 state=falseticker name=2.flex.pool.ntp.org stratum=3 reach=255",
-        "S1|ntp_sources 3 state=unreachable name=3.flex.pool.ntp.org stratum=0 reach=0",
-        "S1|ntp_sources 4 name=deselected.example.org stratum=3 reach=255",
+        "S17B07863|ntp_sources id=default-pool address=0.debian.pool.ntp.org enabled=1 directive=pool selected=0 prefer=0 state=candidate stratum=3 reach=255 description=\"Debian NTP pool\"",
+        "S17B07863|ntp_sources id=default-pool address=1.debian.pool.ntp.org enabled=1 directive=pool selected=0 prefer=0 state=selectable stratum=2 reach=255 description=\"Debian NTP pool\"",
+        "S17B07863|ntp_sources id=default-pool address=2.debian.pool.ntp.org enabled=1 directive=pool selected=0 prefer=0 state=falseticker stratum=3 reach=255 description=\"Debian NTP pool\"",
+        "S17B07863|ntp_sources id=default-pool address=3.debian.pool.ntp.org enabled=1 directive=pool selected=0 prefer=0 state=unreachable stratum=0 reach=0 description=\"Debian NTP pool\"",
+        /* A description that merely CONTAINS the word, and an address that
+         * starts with "deselected": neither is a selected source. */
+        "S17B07863|ntp_sources id=default-pool address=deselected.example.org enabled=1 directive=pool selected=0 prefer=0 state=candidate stratum=3 reach=255 description=\"not state=selected\"",
     };
     for (size_t i = 0; i < sizeof not_evidence / sizeof not_evidence[0]; i++) {
         g_ntp_selected = 0;
@@ -1677,10 +1697,14 @@ static int selftest_ntp_fallback(void)
         }
     }
 
-    /* What the 6300 actually published while its kernel still said UNSYNC:
-     * stratum 3, reach 255, state=selected. That is the evidence we accept. */
+    /* VERBATIM from a FLEX-6300, model="FLEX-6300", software_ver=4.3.16.42034,
+     * captured 2026-11-09 while its kernel still reported STA_UNSYNC. This is
+     * the evidence the fallback accepts. Note stratum=1: the radio had settled
+     * on a stratum-1 source and still would not clear the kernel flag. */
     g_ntp_selected = 0;
-    strcpy(l, "S1|ntp_sources 1 state=selected name=1.flex.pool.ntp.org stratum=3 reach=255");
+    strcpy(l, "S17B07863|ntp_sources id=default-pool address=2.debian.pool.ntp.org enabled=1 "
+              "directive=pool selected=1 prefer=0 state=selected stratum=1 reach=255 "
+              "description=\"Debian NTP pool\"");
     api_line(&a, l, &c);
     if (!g_ntp_selected) {
         printf("selftest FAIL: a selected ntp source was not accepted\n");
@@ -1723,7 +1747,9 @@ static int selftest_ntp_fallback(void)
     /* The latch holds: chrony can drop a source for one poll while the clock
      * stays disciplined, and losing waiting_clock over that would cost two
      * minutes of capture. */
-    strcpy(l, "S1|ntp_sources 1 state=candidate name=1.flex.pool.ntp.org stratum=3 reach=255");
+    strcpy(l, "S17B07863|ntp_sources id=default-pool address=2.debian.pool.ntp.org enabled=1 "
+              "directive=pool selected=0 prefer=0 state=candidate stratum=1 reach=255 "
+              "description=\"Debian NTP pool\"");
     api_line(&a, l, &c);
     if (!g_ntp_selected) {
         printf("selftest FAIL: the ntp latch dropped on a transient state\n");
