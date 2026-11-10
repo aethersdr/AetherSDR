@@ -42,6 +42,15 @@ func TestExposeValidates(t *testing.T) {
 			t.Errorf("name %q: got %v, want errExposeName", name, err)
 		}
 	}
+	// The on-radio agents' ports stay publishable: radio health (48994,
+	// RadioHealthPackage.h) and WSPR (48995). The discovery helper feed
+	// must not take either.
+	for _, port := range []int{48994, 48995} {
+		agent := exposer{listening: anyService}
+		if _, _, err := agent.register(port, "agent"); err != nil {
+			t.Errorf("agent port %d: %v", port, err)
+		}
+	}
 	if _, _, err := e.register(48995, "AetherWSPR"); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +277,7 @@ func TestLocalExposeAPIOnlyForTheRadio(t *testing.T) {
 	// Loopback, the radio address the radio names and the radio's own
 	// interface addresses are all the radio.
 	for i, from := range []string{"127.0.0.1:5000", "172.30.1.1:5000", "172.30.2.1:5000", "192.168.50.100:5000"} {
-		body := fmt.Sprintf(`{"port":%d,"name":"app%d"}`, 48995+i, i)
+		body := fmt.Sprintf(`{"port":%d,"name":"app%d"}`, 50000+i, i)
 		if code := post(from, body); code != http.StatusOK {
 			t.Errorf("%s: %d, want 200", from, code)
 		}

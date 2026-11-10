@@ -446,7 +446,7 @@ container.
   this to **grants**:
   `{"src": ["tag:radio"], "dst": ["group:hams"], "ip": ["udp:4992"]}`.
   Without it the radio isn't listed, but **Connect by IP** still works. A
-  discovery helper connects to the radio on TCP 48994, so a rule that lists
+  discovery helper connects to the radio on TCP 48996, so a rule that lists
   ports must include it. The default rules (everyone reaches everything)
   need neither.
 - The announcement carries what the radio broadcasts on its own network:
@@ -487,7 +487,7 @@ container.
 | Tailnet | TCP, as the radio opens them | Side channels such as file transfer |
 | Tailnet | TCP 48993 | Network Diagnostics report (`GET /v1/session`) |
 | Tailnet, radio to your devices | UDP 4992 | The radio's announcement, which lists it |
-| Tailnet | TCP 48994 | Discovery helper |
+| Tailnet | TCP 48996 | Discovery helper |
 | Tailnet, via shared routes | UDP 9007 / 9008 / 9010 discovery, device TCP ports | Antenna Genius / PGXL / TGXL |
 | Radio LAN only | TCP 48992 | Setup interface used by **Remote Access** |
 

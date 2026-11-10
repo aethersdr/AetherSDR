@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -104,9 +106,9 @@ func TestRewriteAnnouncementText(t *testing.T) {
 func TestRewriteAnnouncementRefuses(t *testing.T) {
 	self := netip.MustParseAddr("100.64.0.1")
 	for _, in := range [][]byte{
-		[]byte("model=FLEX-6500 ip=192.168.0.20 port=4992"),          // no serial
+		[]byte("model=FLEX-6500 ip=192.168.0.20 port=4992"),           // no serial
 		[]byte("model=FLEX-6500 serial=1234 port=4992"),               // no ip
-		[]byte("serial= ip=192.168.0.20"),                            // empty serial
+		[]byte("serial= ip=192.168.0.20"),                             // empty serial
 		[]byte("model=X serial=1 inuse_ip=192.168.0.50"),              // only a lookalike key
 		vitaAnnouncement("model=FLEX-6500 serial=1 port=4992", false), // VITA, no ip
 		{},
@@ -372,6 +374,102 @@ func readFrame(c net.Conn, d time.Duration) ([]byte, error) {
 	return b, err
 }
 
+// readAnswer reads the shim's one-line answer to a helper's hello.
+func readAnswer(t *testing.T, c net.Conn) string {
+	t.Helper()
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var line []byte
+	b := make([]byte, 1)
+	for {
+		if _, err := c.Read(b); err != nil {
+			t.Fatalf("reading the answer after %q: %v", line, err)
+		}
+		if b[0] == '\n' {
+			return string(line)
+		}
+		line = append(line, b[0])
+	}
+}
+
+// TestAnnouncerHelperHello: a helper that opens with another feed version,
+// with something that isn't the hello, or with nothing, is answered
+// REFUSED with the reason and closed, and is sent no announcement though a
+// fresh one is waiting; so is one past the helper limit. Status keeps the
+// last refusal.
+func TestAnnouncerHelperHello(t *testing.T) {
+	defer func(d time.Duration) { helperHelloTimeout = d }(helperHelloTimeout)
+	helperHelloTimeout = 200 * time.Millisecond
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	a := &Announcer{}
+	a.Attach(netip.MustParseAddr("100.70.0.2"), func([]byte, netip.AddrPort) error { return nil },
+		func(context.Context) ([]tailPeer, error) { return nil, nil },
+		func() (string, []string) { return announceAll, nil })
+	defer a.Detach()
+	a.mu.Lock()
+	a.lastOut, a.lastOutT = vitaAnnouncement(announcePayload, false), time.Now().Add(time.Hour)
+	a.mu.Unlock()
+	go a.ServeHelpers(ln, func(net.Addr) (string, bool) { return "winpc", true })
+
+	open := func(hello string) net.Conn {
+		c, err := net.Dial("tcp4", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hello != "" {
+			c.Write([]byte(hello))
+		}
+		return c
+	}
+	for _, tc := range []struct{ hello, reason string }{
+		{"AETHER-DISCOVERY 2\n", `it speaks feed version "2"; this shim speaks version 1`},
+		{"AETHER-DISCOVERY 1 extra\n", `it speaks feed version "1 extra"; this shim speaks version 1`},
+		{"GET / HTTP/1.1\r\n", "it did not open with the AETHER-DISCOVERY hello"},
+		{strings.Repeat("A", 100) + "\n", "the hello is too long"},
+		{"", "no hello within 200ms"},
+	} {
+		c := open(tc.hello)
+		if got, want := readAnswer(t, c), "AETHER-DISCOVERY 1 REFUSED "+tc.reason; got != want {
+			t.Errorf("hello %q: answer %q, want %q", tc.hello, got, want)
+		}
+		c.SetReadDeadline(time.Now().Add(time.Second))
+		if n, err := c.Read(make([]byte, 64)); err != io.EOF {
+			t.Errorf("hello %q: read %d bytes, %v after REFUSED; want closed", tc.hello, n, err)
+		}
+		c.Close()
+		if r := a.Status().HelperRefused; r == nil || r.Reason != tc.reason || r.From != "winpc" {
+			t.Errorf("hello %q: status helper_refused = %+v", tc.hello, r)
+		}
+	}
+
+	// A CRLF hello is accepted, and the answer comes before the waiting
+	// announcement.
+	var kept []net.Conn
+	defer func() {
+		for _, c := range kept {
+			c.Close()
+		}
+	}()
+	for i := 0; i < maxHelpers; i++ {
+		c := open("AETHER-DISCOVERY 1\r\n")
+		kept = append(kept, c)
+		if got := readAnswer(t, c); got != "AETHER-DISCOVERY 1 OK" {
+			t.Fatalf("helper %d: answer %q", i, got)
+		}
+		if _, err := readFrame(c, time.Second); err != nil {
+			t.Fatalf("helper %d: no announcement after OK: %v", i, err)
+		}
+	}
+	extra := open("AETHER-DISCOVERY 1\n")
+	defer extra.Close()
+	if got, want := readAnswer(t, extra), fmt.Sprintf("AETHER-DISCOVERY 1 REFUSED %d discovery helpers are already connected", maxHelpers); got != want {
+		t.Errorf("helper past the limit: answer %q, want %q", got, want)
+	}
+}
+
 // TestAnnouncerHelperFeed runs the helper feed over loopback TCP: an
 // admitted helper gets each forwarded announcement, rewritten, and its
 // device is not also sent a copy; a helper connecting later gets the last
@@ -422,10 +520,18 @@ func TestAnnouncerHelperFeed(t *testing.T) {
 		defer c.Close()
 		c.Write(vitaAnnouncement(announcePayload, false))
 	}
-	dial := func() net.Conn {
+	dialRaw := func() net.Conn {
 		c, err := net.Dial("tcp4", ln.Addr().String())
 		if err != nil {
 			t.Fatal(err)
+		}
+		c.Write([]byte("AETHER-DISCOVERY 1\n"))
+		return c
+	}
+	dial := func() net.Conn {
+		c := dialRaw()
+		if got := readAnswer(t, c); got != "AETHER-DISCOVERY 1 OK" {
+			t.Fatalf("answer %q, want OK", got)
 		}
 		return c
 	}
@@ -463,14 +569,20 @@ func TestAnnouncerHelperFeed(t *testing.T) {
 	if b2, err := readFrame(late, time.Second); err != nil || !bytes.Equal(b2, b) {
 		t.Fatalf("a helper connecting later wasn't sent the last announcement: %v", err)
 	}
-	// A refused helper is closed with nothing sent, though there is an
-	// announcement it would otherwise be sent at once.
+	// A helper the allowlist refuses is closed with nothing sent, not even
+	// an answer, though there is an announcement it would otherwise be sent
+	// at once. Status records the refusal.
 	admit.Store(false)
-	refused := dial()
-	if _, err := readFrame(refused, time.Second); err != io.EOF {
-		t.Fatalf("refused helper: %v, want closed with nothing sent", err)
+	refused := dialRaw()
+	refused.SetReadDeadline(time.Now().Add(time.Second))
+	// Closed unread, its hello still queued: the close may come as a reset.
+	if n, err := refused.Read(make([]byte, 64)); err != io.EOF && !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("refused helper: read %d bytes, %v; want closed with nothing sent", n, err)
 	}
 	refused.Close()
+	if r := a.Status().HelperRefused; r == nil || r.From != "winpc" || r.Reason != "not allowed" {
+		t.Errorf("status helper_refused = %+v", r)
+	}
 
 	mu.Lock()
 	mode = announceOff

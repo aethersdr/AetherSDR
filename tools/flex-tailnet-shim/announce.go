@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/netip"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -35,6 +39,12 @@ import (
 // helper connected is not also sent a copy. The helper opens the
 // connection, so it needs no tailnet access rule beyond reaching the radio.
 //
+// The helper opens with a hello line naming the feed version it speaks,
+// "AETHER-DISCOVERY 1". The shim answers with one line, "AETHER-DISCOVERY 1
+// OK" or "AETHER-DISCOVERY 1 REFUSED <reason>", so a helper the shim can't
+// serve says why instead of retrying silently. A device the allowlist
+// refuses is closed unanswered, as every other tailnet flow is.
+//
 // The sockets that hear the announcement are bound to broadcast addresses
 // only. The radio's own UDP 4992 receives the clients' registration
 // datagrams; a socket bound to the radio's address or the wildcard could
@@ -53,14 +63,23 @@ const (
 	// devices past it are listed in status as over the limit.
 	maxAnnounceTargets = 32
 	// AnnounceFeedPort is the tailnet TCP port discovery helpers connect
-	// to. Each announcement is sent as a 2-byte big-endian length and the
-	// packet.
-	AnnounceFeedPort = 48994
+	// to. After the hello and its answer, each announcement is sent as a
+	// 2-byte big-endian length and the packet. Not 48994 or 48995: those
+	// are the radio-health and WSPR agents' ports, published through expose.
+	AnnounceFeedPort = 48996
 	maxHelpers       = 16
+	// The hello: helloPrefix and the feed version, then a newline; the
+	// answer repeats the prefix and the shim's version.
+	helloPrefix  = "AETHER-DISCOVERY "
+	helloVersion = 1
+	maxHelloLine = 64
 	// helperFresh: a helper that connects is sent the last announcement at
 	// once if it is this recent, so the radio is listed without waiting.
 	helperFresh = 3 * time.Second
 )
+
+// helperHelloTimeout is how long a connected helper has to send its hello.
+var helperHelloTimeout = 5 * time.Second
 
 // Announcement modes (provisionConfig.Announce; "" is stored for all).
 const (
@@ -271,6 +290,15 @@ type Announcer struct {
 	helpers  map[*helperConn]bool
 	lastOut  []byte
 	lastOutT time.Time
+	// The last discovery helper refused, for /v1/status.
+	helperRefused *HelperRefusal
+}
+
+// HelperRefusal is the last discovery helper the shim refused, and why.
+type HelperRefusal struct {
+	From   string `json:"from"`
+	Reason string `json:"reason"`
+	At     string `json:"at"` // RFC 3339
 }
 
 // helperConn is one connected discovery helper.
@@ -508,18 +536,24 @@ func (a *Announcer) serveHelper(c net.Conn, authorize func(net.Addr) (string, bo
 	}
 	who, ok := authorize(c.RemoteAddr())
 	if !ok {
-		log.Printf("announce: refused a discovery helper from %s", who)
+		a.noteRefused(who, "not allowed")
+		return
+	}
+	br := bufio.NewReaderSize(c, maxHelloLine)
+	if reason := readHello(c, br); reason != "" {
+		a.refuseHelper(c, who, reason)
 		return
 	}
 	h := &helperConn{addr: ap.Addr().Unmap(), conn: c, ch: make(chan []byte, 2)}
 	a.mu.Lock()
 	if a.link == nil {
 		a.mu.Unlock()
-		return // the node is stopping
+		a.refuseHelper(c, who, "the shim's tailnet node is stopping")
+		return
 	}
 	if len(a.helpers) >= maxHelpers {
 		a.mu.Unlock()
-		log.Printf("announce: refused a discovery helper from %s: %d connected", who, maxHelpers)
+		a.refuseHelper(c, who, fmt.Sprintf("%d discovery helpers are already connected", maxHelpers))
 		return
 	}
 	if a.helpers == nil {
@@ -539,11 +573,15 @@ func (a *Announcer) serveHelper(c net.Conn, authorize func(net.Addr) (string, bo
 		a.Refresh()
 		log.Printf("announce: discovery helper from %s left", who)
 	}()
+	// The answer goes before any frame: this goroutine writes both.
+	if !writeAnswer(c, "OK") {
+		return
+	}
 
-	// The helper never sends; a read returns when it goes away.
+	// After the hello the helper never sends; a read returns when it goes away.
 	gone := make(chan struct{})
 	go func() {
-		io.Copy(io.Discard, c)
+		io.Copy(io.Discard, br)
 		close(gone)
 	}()
 	for {
@@ -560,6 +598,62 @@ func (a *Announcer) serveHelper(c net.Conn, authorize func(net.Addr) (string, bo
 			}
 		}
 	}
+}
+
+// readHello reads the helper's hello line and returns why it can't be
+// served, or "" for a helper speaking this feed version.
+func readHello(c net.Conn, br *bufio.Reader) string {
+	c.SetReadDeadline(time.Now().Add(helperHelloTimeout))
+	defer c.SetReadDeadline(time.Time{})
+	line, err := br.ReadSlice('\n')
+	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return "no hello within " + helperHelloTimeout.String()
+		}
+		if err == bufio.ErrBufferFull {
+			return "the hello is too long"
+		}
+		return "closed before its hello: " + err.Error()
+	}
+	text := strings.TrimRight(string(line), "\r\n")
+	version, ok := strings.CutPrefix(text, helloPrefix)
+	if !ok {
+		return "it did not open with the " + strings.TrimSpace(helloPrefix) + " hello"
+	}
+	if version != fmt.Sprint(helloVersion) {
+		return fmt.Sprintf("it speaks feed version %.16q; this shim speaks version %d", version, helloVersion)
+	}
+	return ""
+}
+
+// refuseHelper tells the helper why it is refused, and records it. The
+// shim then shuts its side and drains what the helper sent: closing with
+// unread bytes queued resets the connection, and a reset can discard the
+// answer before the helper reads it.
+func (a *Announcer) refuseHelper(c net.Conn, who, reason string) {
+	a.noteRefused(who, reason)
+	if !writeAnswer(c, "REFUSED "+reason) {
+		return
+	}
+	if tc, ok := c.(interface{ CloseWrite() error }); ok {
+		tc.CloseWrite()
+	}
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	io.CopyN(io.Discard, c, 4096)
+}
+
+func (a *Announcer) noteRefused(who, reason string) {
+	log.Printf("announce: refused a discovery helper from %s: %s", who, reason)
+	a.mu.Lock()
+	a.helperRefused = &HelperRefusal{From: who, Reason: reason, At: time.Now().UTC().Format(time.RFC3339)}
+	a.mu.Unlock()
+}
+
+// writeAnswer sends the answer line; false if the helper can't take it.
+func writeAnswer(c net.Conn, verdict string) bool {
+	c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_, err := fmt.Fprintf(c, "%s%d %s\n", helloPrefix, helloVersion, verdict)
+	return err == nil
 }
 
 // Refresh re-selects the devices now, after a setting changed.
@@ -660,12 +754,18 @@ type AnnounceStatus struct {
 	// 3339); empty if it never has been, in which case nothing is sent.
 	Heard   string         `json:"heard"`
 	Devices []AnnouncePeer `json:"devices"`
+	// HelperRefused: the last discovery helper refused, and why.
+	HelperRefused *HelperRefusal `json:"helper_refused,omitempty"`
 }
 
 func (a *Announcer) Status() AnnounceStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	st := AnnounceStatus{Devices: append([]AnnouncePeer{}, a.report...)}
+	if a.helperRefused != nil {
+		r := *a.helperRefused
+		st.HelperRefused = &r
+	}
 	if !a.heard.IsZero() {
 		st.Heard = a.heard.UTC().Format(time.RFC3339)
 	}

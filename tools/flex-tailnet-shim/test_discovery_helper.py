@@ -87,6 +87,63 @@ def test_relay_endings():
     check(isinstance(err, EOFError), f"truncated frame: {err!r}")
 
 
+def answer_hello(reply, close=True):
+    """hello() against a fake shim that sends reply (then closes, if close);
+    what the helper sent, and how hello() ended (None for OK)."""
+    shim, helper = socket.socketpair()
+    with shim, helper:
+        helper.settimeout(0.3)
+        shim.sendall(reply)
+        if close:
+            shim.shutdown(socket.SHUT_WR)
+        try:
+            discovery_helper.hello(helper)
+            ended = None
+        except Exception as e:  # noqa: BLE001 - the ending is what is checked
+            ended = e
+        shim.settimeout(1)
+        return shim.recv(64), ended
+
+
+def test_hello():
+    """The helper opens with the hello and reads the shim's one-line answer:
+    OK carries on, REFUSED says the shim's reason, and a shim that closes
+    unanswered, answers with something else (a shim older than the hello
+    sends frames at once) or says nothing each give a reason."""
+    sent, ended = answer_hello(b"AETHER-DISCOVERY 1 OK\n" + frame(b"serial=1"), close=False)
+    check(sent == b"AETHER-DISCOVERY 1\n", f"hello sent {sent!r}")
+    check(ended is None, f"OK: {ended!r}")
+    _, ended = answer_hello(b"AETHER-DISCOVERY 1 REFUSED 16 discovery helpers are already connected\n")
+    check(isinstance(ended, discovery_helper.Refused)
+          and str(ended) == "16 discovery helpers are already connected", f"REFUSED: {ended!r}")
+    for reply, want in ((b"", "without answering"),
+                        (b"AETHER-DISC", "partway"),
+                        (frame(b"model=FLEX-6500 serial=1 ip=100.64.0.1"), "older than this helper"),
+                        (b"AETHER-DISCOVERY 1 MAYBE\n", "unexpected answer"),
+                        (b"AETHER-DISCOVERY 1 REFUSED " + b"A" * 300, "too long")):
+        _, ended = answer_hello(reply)
+        check(isinstance(ended, discovery_helper.NoAnswer) and want in str(ended),
+              f"reply {reply[:20]!r}: {ended!r}, want NoAnswer about {want!r}")
+    _, ended = answer_hello(b"", close=False)
+    check(isinstance(ended, discovery_helper.NoAnswer) and "didn't answer the hello within" in str(ended),
+          f"silent shim: {ended!r}")
+
+
+def test_matches_the_shim():
+    """The port and the hello are the ones announce.go serves."""
+    import re
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "announce.go"), encoding="utf-8") as f:
+        go = f.read()
+    port = int(re.search(r"AnnounceFeedPort\s*=\s*(\d+)", go).group(1))
+    prefix = re.search(r'helloPrefix\s*=\s*"([^"]*)"', go).group(1)
+    version = re.search(r"helloVersion\s*=\s*(\d+)", go).group(1)
+    check(discovery_helper.FEED_PORT == port, f"FEED_PORT {discovery_helper.FEED_PORT}, shim {port}")
+    check(port not in (48994, 48995), f"feed port {port} is an on-radio agent's")
+    check(discovery_helper.ANSWER_PREFIX == prefix, f"answer prefix {discovery_helper.ANSWER_PREFIX!r}, shim {prefix!r}")
+    check(discovery_helper.HELLO == f"{prefix}{version}\n".encode(), f"hello {discovery_helper.HELLO!r}")
+
+
 def test_broadcast_reaches_a_listener():
     """The socket main() sends with may broadcast, and a packet it sends
     arrives at a listener as is (loopback stands in for the PC)."""
@@ -177,8 +234,11 @@ discovery_helper.FEED_PORT = shim.getsockname()[1]
 held = []
 
 def quiet_shim():
-    held.append(shim.accept()[0])   # connected, and never sends a frame
-    time.sleep(0.5)                 # the helper is now waiting to read
+    conn = shim.accept()[0]
+    held.append(conn)
+    conn.recv(64)                       # the hello
+    conn.sendall(b"AETHER-DISCOVERY 1 OK\n")  # and then never a frame
+    time.sleep(0.5)                     # the helper is now waiting to read
     # Ctrl+C as Windows delivers it: Python is told, but a blocked socket
     # call isn't woken. (A POSIX SIGINT would wake it, hiding the problem.)
     _thread.interrupt_main()

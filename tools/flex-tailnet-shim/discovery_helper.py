@@ -30,7 +30,15 @@ import threading
 import time
 
 # The shim's discovery helper port (announce.go: AnnounceFeedPort).
-FEED_PORT = 48994
+FEED_PORT = 48996
+# The hello naming the feed version this helper speaks, and the start of the
+# shim's one-line answer: "AETHER-DISCOVERY 1 OK" or "... REFUSED <reason>".
+HELLO = b"AETHER-DISCOVERY 1\n"
+ANSWER_PREFIX = "AETHER-DISCOVERY "
+MAX_ANSWER = 256
+HELLO_TIMEOUT = 10
+# A refusal (another feed version, too many helpers) won't clear in seconds.
+REFUSED_RETRY_SECONDS = 30
 # Where clients listen for the radio's announcement.
 ANNOUNCE_PORT = 4992
 # An announcement is under 1 KB; the shim never frames more than this.
@@ -57,6 +65,56 @@ log = logging.getLogger("discovery-helper")
 
 class FrameError(Exception):
     """The shim sent a frame length that can't be an announcement."""
+
+
+class Refused(Exception):
+    """The shim answered the hello with REFUSED; the message is its reason."""
+
+
+class NoAnswer(Exception):
+    """The shim didn't answer the hello as a shim that speaks it would."""
+
+
+def hello(sock):
+    """Send the hello and read the shim's answer. Returns when it is OK;
+    raises Refused with the shim's reason, or NoAnswer."""
+    sock.sendall(HELLO)
+    prefix = ANSWER_PREFIX.encode()
+    line = bytearray()
+    try:
+        while not line.endswith(b"\n"):
+            if len(line) >= MAX_ANSWER:
+                raise NoAnswer("the shim's answer to the hello is too long")
+            chunk = sock.recv(1)
+            if not chunk:
+                raise NoAnswer(closed_unanswered(line))
+            line += chunk
+            # A shim older than the hello sends frames at once; say so on the
+            # first byte that can't be an answer, not after MAX_ANSWER.
+            if not prefix.startswith(bytes(line[:len(prefix)])):
+                raise NoAnswer(NOT_A_HELLO_SHIM)
+    except socket.timeout:
+        raise NoAnswer(f"the shim didn't answer the hello within {HELLO_TIMEOUT} s; "
+                       "it may be older than this helper") from None
+    except ConnectionResetError:
+        raise NoAnswer(closed_unanswered(line)) from None
+    text = line.decode("utf-8", "replace").rstrip("\r\n")
+    _version, _, verdict = text[len(ANSWER_PREFIX):].partition(" ")
+    if verdict == "OK":
+        return
+    if verdict.startswith("REFUSED"):
+        raise Refused(verdict[len("REFUSED"):].strip() or "no reason given")
+    raise NoAnswer(f"unexpected answer to the hello: {text!r}")
+
+
+NOT_A_HELLO_SHIM = "the shim didn't answer the hello; it may be older than this helper"
+
+
+def closed_unanswered(line):
+    if line:
+        return "the shim closed the connection partway through its answer"
+    return ("the shim closed the connection without answering: this device may not "
+            "be allowed to use the radio (check Remote Access in AetherSDR)")
 
 
 def read_exactly(sock, n):
@@ -146,8 +204,8 @@ def main(argv=None):
 
 
 def serve(shim, out, dst):
-    """Connect to the shim and relay its announcements, reconnecting for as
-    long as the helper runs."""
+    """Connect to the shim, say hello, and relay its announcements,
+    reconnecting for as long as the helper runs."""
     feed = f"{shim}:{FEED_PORT}"
     while True:
         try:
@@ -157,6 +215,18 @@ def serve(shim, out, dst):
             time.sleep(RETRY_SECONDS)
             continue
         with conn:
+            conn.settimeout(HELLO_TIMEOUT)
+            try:
+                hello(conn)
+            except Refused as e:
+                log.error("%s refused this helper: %s; retrying in %d s",
+                          feed, e, REFUSED_RETRY_SECONDS)
+                time.sleep(REFUSED_RETRY_SECONDS)
+                continue
+            except (NoAnswer, OSError) as e:
+                log.warning("%s: %s; retrying", feed, e)
+                time.sleep(RETRY_SECONDS)
+                continue
             conn.settimeout(None)
             enable_keepalive(conn)
             log.info("connected to %s; broadcasting its announcements to %s:%d", feed, *dst)

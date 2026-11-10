@@ -156,8 +156,8 @@ including other 172.30.x hosts, gets 403.
 - The registration is a 10-minute lease (`expires_in_s`), renewed by posting
   again. The app's `name` owns the port: the same name renews it, another
   gets 409. When the lease lapses, the port and its open connections close.
-- Ports 1024-65535 only, never 22, 4991-4995, 42607, 48992 or 48993, and at
-  most 8. `/v1/status` lists them as `exposed_ports`. They survive the
+- Ports 1024-65535 only, never 22, 4991-4995, 42607, 48992, 48993 or 48996,
+  and at most 8. `/v1/status` lists them as `exposed_ports`. They survive the
   tailnet node restarting, but not the shim.
 - Anything running on the radio is trusted to publish: names are
   self-asserted, and any wildcard listener can be published. That matches a
