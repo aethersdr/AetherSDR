@@ -62,6 +62,12 @@ public:
     quint64 commandSessionGeneration() const { return m_sessionGeneration; }
     void forgetSessionReply(quint32 sequence, quint64 generation)
     { if (generation == m_sessionGeneration) { m_pendingCallbacks.remove(sequence); } }
+    // The one admission rule for session and administration writes: the
+    // caller's session is current and this transport is the one it opened.
+    bool sessionWriteAdmitted(quint64 generation, const SessionCommandGuard& guard) const
+    { return guard.current() && generation == m_sessionGeneration && isConnected(); }
+    quint32 sendSessionCommand(const QString& command, quint64 generation,
+                               const SessionCommandGuard& guard, ResponseCallback callback = {});
     quint32 sendAdministrationCommand(const QString& command, quint64 generation,
         const SessionCommandGuard& guard, ResponseCallback callback);
 
@@ -105,6 +111,7 @@ private slots:
 
 private:
     friend class WanConnectionTestAccess;
+    friend class SessionControlTestAccess;
     friend class RadioAdministrationTestAccess;
 
     void processLine(const QString& line);

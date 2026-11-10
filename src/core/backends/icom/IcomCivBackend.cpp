@@ -364,6 +364,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
     // No Flex stream plane: receive audio is native and graphic EQ is host-side.
     c.audioStreamControl = std::nullopt;

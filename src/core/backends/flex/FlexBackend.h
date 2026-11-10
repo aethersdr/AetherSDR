@@ -67,6 +67,11 @@ public:
     void setAnsweredCommandSink(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
+    using SessionCommandSink = std::function<bool(const QString&, const SessionCommandGuard&,
+                                                   const RadioControlCompletion&)>;
+    void setSessionCommandSink(SessionCommandSink sink) { m_sessionSink = std::move(sink); }
+    ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
+        const SessionCommandGuard& guard, const SessionControlCompletion& completion = {}) override;
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
     using AdministrationCommandSink = std::function<bool(const QString&,
         const RadioControlCompletion&, const RadioControlFence&, const std::function<void()>&)>;
@@ -257,8 +262,6 @@ public:
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
     // residual). Present-only, ok-guarded numeric parses.
     void decodeRadioStatus(const QMap<QString, QString>& kvs);
-    // Full info reply: missing/invalid region clears the observation.
-    void decodeRadioInfoMetadata(const QString& body);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
     void decodeAtuStatus(const QMap<QString, QString>& kvs);
     void decodeApdStatus(const QMap<QString, QString>& kvs);
@@ -333,6 +336,7 @@ private:
     quint64 m_daxTxIncarnation{0};
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
+    SessionCommandSink m_sessionSink;
     AdministrationCommandSink m_administrationSink;
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};

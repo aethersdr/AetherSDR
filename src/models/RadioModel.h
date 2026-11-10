@@ -1857,7 +1857,24 @@ private:
     using ResponseCallback = RadioConnection::ResponseCallback;
     void requestRadioInfo();
     quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr,
-                    std::function<bool()> dispatchAllowed = {});
+                    std::optional<SessionCommandGuard> guard = {},
+                    std::function<bool()> dispatchAllowed = {},
+                    bool expireReply = false);
+    ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
+                                         const SessionControlCompletion& completion = {});
+    void requestStartupSetup(const RadioSetupRequest& request);
+    void resetSessionControls();
+    bool sessionTransportCurrent() const;
+    RadioControlFence sessionControlFence() const;
+    RadioControlFence registrationRejectionFence() const;
+    std::function<void()> sessionContinuation(std::function<void()> action) const;
+    SessionCommandGuard m_sessionCommands;
+    std::optional<SessionControl> m_sessionControl;
+    quint64 m_sessionControlGeneration{~quint64{0}};
+    QPointer<QObject> m_sessionWire;
+    quint64 m_sessionWireGeneration{0};
+    quint64 m_sessionRequestId{0};
+    QMap<quint64, std::function<void()>> m_sessionCancellations;
     quint32 clientHandle() const;
     PanadapterModel* ensureOwnedPanadapter(const QString& panId);
     void updateStreamFilters();
@@ -2093,6 +2110,7 @@ private:
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
+    friend class SessionControlTestAccess;
     friend class RadioAdministrationTestAccess;
     struct PendingAdministrationWrite {
         RadioControlSession session{};

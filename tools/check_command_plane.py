@@ -75,7 +75,7 @@ from pathlib import Path
 # drop the number here in the same commit. When a file reaches 0, delete its row.
 BASELINE = {
     # ---- models ----
-    "src/models/RadioModel.cpp": 61,
+    "src/models/RadioModel.cpp": 18,
     "src/models/FlexWaveformModel.cpp": 3,
     # ---- core (above the seam; backends/ is excluded) ----
     "src/core/AutomationServer.cpp": 1,
