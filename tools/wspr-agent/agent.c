@@ -1310,6 +1310,24 @@ static int make_slice(api_t *a, long long dial_hz, const char *ant)
     return 1;
 }
 
+/* Removes our own slice (a new DAX channel, or back to the radio's default
+ * antenna, needs a new one) and frees its slot here at once: the slice is
+ * made again in the same pass, before the radio's statuses say the slot is
+ * free, and would otherwise count as someone else's. The radio's statuses
+ * then confirm both values ("slices=" is an absolute count). */
+static void release_own_slice(api_t *a)
+{
+    api_send(a, "slice remove %d", a->slice);
+    if (a->stream) api_send(a, "stream remove 0x%08X", a->stream);
+    if (a->slice >= 0 && a->slice < MAX_SLICES && a->in_use[a->slice]) {
+        a->in_use[a->slice] = 0;
+        if (a->available >= 0) a->available++;
+    }
+    a->slice = -1;
+    a->stream = 0;
+    a->stream_retry = 0;
+}
+
 static void remove_fillers(api_t *a)
 {
     for (int i = 0; i < a->fillers; i++) api_send(a, "slice remove %d", a->filler[i]);
@@ -1791,6 +1809,28 @@ static int selftest_slice_choice(void)
     b.in_use[1] = 0;
     fail |= choose_slice(&b) != 1;
 
+    /* Removing our own slice to remake it (a new DAX channel) frees its slot
+     * here at once: the same slot is chosen again, not a lower one, and not
+     * a five-minute wait on a two-slice radio. */
+    api_t o;
+    memset(&o, 0, sizeof o);
+    o.fd = p[1];
+    o.slices_known = 1;
+    o.slice = 3;
+    o.in_use[0] = o.in_use[3] = 1;
+    o.available = 2;
+    release_own_slice(&o);
+    fail |= o.slice != -1 || choose_slice(&o) != 3;
+    api_t two;   /* FLEX-6400: the agent on B, the operator on A */
+    memset(&two, 0, sizeof two);
+    two.fd = p[1];
+    two.slices_known = 1;
+    two.slice = 1;
+    two.in_use[0] = two.in_use[1] = 1;
+    two.available = 0;
+    release_own_slice(&two);
+    fail |= choose_slice(&two) != 1;
+
     /* Our slice removed by someone else: no new one for REMOVED_GRACE_S. */
     api_t r;
     memset(&r, 0, sizeof r);
@@ -2096,11 +2136,7 @@ int main(int argc, char *argv[])
             /* A new DAX channel needs a new slice and stream, and only a new
              * slice can go back to the radio's default antenna; bands and
              * the rest apply at the next cycle without one. */
-            api_send(&a, "slice remove %d", a.slice);
-            if (a.stream) api_send(&a, "stream remove 0x%08X", a.stream);
-            a.slice = -1;
-            a.stream = 0;
-            a.stream_retry = 0;
+            release_own_slice(&a);
             tuned_for = 0;
             pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
         }
