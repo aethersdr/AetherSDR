@@ -307,9 +307,10 @@ jobs:
           }
           grep "GPU spectrum rendering enabled" configure.log
 
-      # PRs build everything except the tests (aether_non_test_targets in
-      # CMakeLists.txt): this job runs none of them, and they were about two
-      # thirds of its build time. A PR that breaks a test's compile is caught
+      # PRs build aether_non_test_targets (CMakeLists.txt): the root-directory
+      # apps, tools and libraries, without anything from tests/tests.cmake.
+      # This job runs none of those tests, and they were about two thirds of
+      # its build time. A PR that breaks a test's compile is caught
       # after merge, by full-suite.yml. Pushes to main still build `all`,
       # because full-suite.yml restores the ccache this job saves from main.
       - name: Build
@@ -1177,7 +1178,7 @@ jobs:
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)
 
-      # PRs build everything except the tests, plus the two gate tests run
+      # PRs build aether_non_test_targets plus the two gate tests run
       # below; same reasoning as the Linux job's Build step. Main builds `all`
       # so the ccache it saves stays warm for test sources.
       - name: Build

@@ -3714,13 +3714,13 @@ endif()
 # it keep resolving against the repository root. The header of that file explains
 # why that matters and why it should not be "tidied up" into a subdirectory.
 # aether_non_test_targets: every default-built executable and library declared
-# in this file so far, which is everything except the tests in
-# tests/tests.cmake. PR CI builds this instead of `all`: it does not run the
-# suite, so compiling and linking ~850 test executables was most of its wall
-# clock. Collected rather than listed, so a new app, tool or library joins it
-# without a CI edit. Custom targets are skipped because a target's ALL flag is
-# not queryable; the ones the apps need still build as their dependencies, as
-# do targets from add_subdirectory().
+# in this file (the root directory) before tests/tests.cmake is included. PR CI
+# builds this instead of `all`: it does not run the suite, so compiling and
+# linking ~850 test executables was most of its wall clock. A new app, tool or
+# library declared here, above this block, joins without a CI edit. Custom
+# targets and targets from add_subdirectory() are built only when a collected
+# target depends on them, and anything declared in tests/tests.cmake (tests and
+# tools such as kiwi_directory_poc) is left out.
 get_directory_property(_aether_pre_test_targets BUILDSYSTEM_TARGETS)
 add_custom_target(aether_non_test_targets)
 foreach(_tgt IN LISTS _aether_pre_test_targets)
