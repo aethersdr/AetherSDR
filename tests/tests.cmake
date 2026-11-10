@@ -121,6 +121,30 @@ unset(_aether_shared_source_count)
 # matters.
 get_property(_aether_targets_before_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 
+# ── aether_non_test_targets: everything the root declared before this file ───
+# Built from the same baseline, so the production/test boundary has one
+# definition. Pull-request CI builds this instead of `all` (ci.yml): it runs
+# none of the tests, and compiling and linking them was most of its build
+# time. Every default-built executable and library the root CMakeLists.txt
+# declares above include(tests/tests.cmake) joins without a CI edit. Custom
+# targets and targets from add_subdirectory() build only when a collected
+# target depends on them; everything declared in this file, tests and tools
+# such as kiwi_directory_poc alike, is left out.
+add_custom_target(aether_non_test_targets)
+foreach(_tgt IN LISTS _aether_targets_before_tests)
+    get_target_property(_tgt_type ${_tgt} TYPE)
+    get_target_property(_tgt_excluded ${_tgt} EXCLUDE_FROM_ALL)
+    # aether_test_* are this file's shared test objects, declared above the
+    # baseline so the retrofits leave them alone; they are not production.
+    if(_tgt_type MATCHES "^(EXECUTABLE|STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY)$"
+            AND NOT _tgt_excluded AND NOT _tgt MATCHES "^aether_test_")
+        add_dependencies(aether_non_test_targets ${_tgt})
+    endif()
+endforeach()
+unset(_tgt)
+unset(_tgt_type)
+unset(_tgt_excluded)
+
 # ── Bound: the executables this file declares, by name ───────────────────────
 # The other half of the baseline. "Declared in the root directory since the
 # baseline" is this file's executables only while nothing else declares one
@@ -4654,6 +4678,15 @@ target_include_directories(band_plan_license_filter_test PRIVATE src)
 target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME band_plan_license_filter_test COMMAND band_plan_license_filter_test)
 
+add_executable(band_plan_zoom_test
+    tests/band_plan_zoom_test.cpp
+    src/models/BandPlanManager.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(band_plan_zoom_test PRIVATE src)
+target_link_libraries(band_plan_zoom_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME band_plan_zoom_test COMMAND band_plan_zoom_test)
+
 qt_add_resources(KIWISDR_DX_SPOTS_TEST_RESOURCES resources/resources.qrc)
 add_executable(kiwisdr_dx_spots_test
     tests/kiwisdr_dx_spots_test.cpp
@@ -8878,6 +8911,18 @@ add_test(NAME nr2_wisdom_window_test COMMAND nr2_wisdom_window_test)
 set_tests_properties(nr2_wisdom_window_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(connection_workspace_test
+    tests/connection_workspace_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/FramelessResizer.cpp
+)
+target_include_directories(connection_workspace_test PRIVATE src tests)
+target_link_libraries(connection_workspace_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
+set_target_properties(connection_workspace_test PROPERTIES AUTOMOC ON)
+add_test(NAME connection_workspace_test COMMAND connection_workspace_test)
+set_tests_properties(connection_workspace_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(connection_panel_size_test
     tests/connection_panel_size_test.cpp
     src/gui/ConnectionPanel.cpp
@@ -8898,8 +8943,7 @@ set_tests_properties(connection_panel_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The VPN source-path picker keeps the operator's own pick across family
-# flips while the address is edited. Socket-free (reads the interface list);
-# exit 77 without an adapter carrying an IPv6 GUA and ULA.
+# flips while the address is edited. Socket-free, with fixed interface snapshots.
 add_executable(connection_panel_source_pick_test
     tests/connection_panel_source_pick_test.cpp
     src/gui/ConnectionPanel.cpp
@@ -8915,7 +8959,7 @@ target_link_libraries(connection_panel_source_pick_test PRIVATE
 set_target_properties(connection_panel_source_pick_test PROPERTIES AUTOMOC ON)
 add_test(NAME connection_panel_source_pick_test COMMAND connection_panel_source_pick_test)
 set_tests_properties(connection_panel_source_pick_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" SKIP_RETURN_CODE 77)
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Leaving minimal mode after a launch in it must not draw the spectrum's first
 # QRhi frame inside the exit's resize cascade (#5915; #4363, #4990). Plain
@@ -9952,6 +9996,13 @@ target_link_libraries(pan_control_routing_test PRIVATE aethercore Qt6::Core Qt6:
 add_test(NAME pan_control_routing_test COMMAND pan_control_routing_test)
 set_tests_properties(pan_control_routing_test PROPERTIES TIMEOUT 30)
 
+# Socket-free audio/IQ allocation and EQ control through production encoders.
+add_executable(audio_control_routing_test tests/audio_control_routing_test.cpp)
+target_include_directories(audio_control_routing_test PRIVATE src tests)
+target_link_libraries(audio_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME audio_control_routing_test COMMAND audio_control_routing_test)
+set_tests_properties(audio_control_routing_test PROPERTIES TIMEOUT 30)
+
 # Socket-free Flex status parsing through RadioModel's real routing seam.
 add_executable(radiomodel_spot_status_test tests/radiomodel_spot_status_test.cpp)
 target_include_directories(radiomodel_spot_status_test PRIVATE src tests)
@@ -10630,6 +10681,32 @@ if(NOT WIN32)
     set_tests_properties(dax_receive_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+# Socket-free DAX ownership: production encoder, model/bridge handler and PCM
+# packetizers with injected observations/replies; no firmware peer or listener.
+add_executable(dax_tx_backend_test tests/dax_tx_backend_test.cpp)
+target_include_directories(dax_tx_backend_test PRIVATE src tests)
+target_link_libraries(dax_tx_backend_test PRIVATE aethercore Qt6::Core)
+add_test(NAME dax_tx_backend_test COMMAND dax_tx_backend_test)
+
+add_executable(dax_tx_ownership_test tests/dax_tx_ownership_test.cpp)
+target_include_directories(dax_tx_ownership_test PRIVATE src tests)
+target_link_libraries(dax_tx_ownership_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME dax_tx_ownership_test COMMAND dax_tx_ownership_test)
+
+add_executable(dax_tx_media_context_test tests/dax_tx_media_context_test.cpp)
+target_include_directories(dax_tx_media_context_test PRIVATE src tests)
+target_link_libraries(dax_tx_media_context_test PRIVATE aethercore Qt6::Core)
+add_test(NAME dax_tx_media_context_test COMMAND dax_tx_media_context_test)
+
+add_executable(dax_tx_applet_test tests/dax_tx_applet_test.cpp
+    src/gui/DaxApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
+    src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(dax_tx_applet_test PRIVATE src tests)
+target_link_libraries(dax_tx_applet_test PRIVATE aetherdesktop_support Qt6::Widgets)
+add_test(NAME dax_tx_applet_test COMMAND dax_tx_applet_test)
+set_tests_properties(dax_tx_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 if(TARGET Qt6::WebSockets)
     add_executable(tci_applet_test tests/tci_applet_test.cpp
         src/gui/TciApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
@@ -10651,6 +10728,11 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    audio_control_routing_test
+    dax_tx_backend_test
+    dax_tx_ownership_test
+    dax_tx_media_context_test
+    dax_tx_applet_test
     bandstack_cat_controls_test
     two_tone_tune_gate_test
     update_controller_test
@@ -10662,6 +10744,7 @@ set(AETHER_SETTINGS_CONSUMERS
     otrsp_protocol_test
     otrsp_port_test
     otrsp_applet_test
+    connection_workspace_test
     dsp_parameter_reset_test
     cw_rx_model_test
     asr_native_receiver_test
@@ -10832,6 +10915,7 @@ set(AETHER_SETTINGS_CONSUMERS
     qso_recorder_pc_audio_guard_test
     qso_recorder_filename_collision_test
     band_plan_license_filter_test
+    band_plan_zoom_test
     kiwisdr_dx_spots_test
     passive_spots_policy_test
     digital_voice_waveform_process_test
@@ -10923,6 +11007,8 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    dax_tx_ownership_test
+    dax_tx_applet_test
     automation_lab_test
     flex_readonly_metadata_test
     dsp_parameter_reset_test

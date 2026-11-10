@@ -35,7 +35,7 @@ int main(int argc, char** argv)
         packets.append(packet);
         contexts.append(context);
     });
-    audio.setTxStreamId(0x1234);
+    audio.setDaxTxAudioRoute(0x1234, DaxTxAudioPermit::confirmed(0x1234));
     audio.setTransmitting(true);
     constexpr int kHalfPacketBytes = 64 * 2 * sizeof(float);
     const QByteArray oldHalf(kHalfPacketBytes, '\x3f');

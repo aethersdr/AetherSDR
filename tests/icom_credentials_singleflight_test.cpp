@@ -164,6 +164,32 @@ int main(int argc, char** argv)
     drainCallbacks();
     check(missingRetried, "missing entry blocked later retry");
 
+    const QString connectionA(64, QLatin1Char('a'));
+    const QString connectionB(64, QLatin1Char('b'));
+    IcomCredentials::saveForConnection(connectionA, QStringLiteral("password-a"));
+    check(QKeychain::TestControl::pendingWrite->key() == QStringLiteral("icom/%1/password").arg(connectionA),
+          "connection A wrote an unscoped key");
+    check(!QKeychain::TestControl::pendingWrite->insecureFallback(), "scoped save allowed plaintext fallback");
+    QKeychain::TestControl::pendingWrite->finish();
+    IcomCredentials::saveForConnection(connectionB, QStringLiteral("password-b"));
+    check(QKeychain::TestControl::pendingWrite->key() == QStringLiteral("icom/%1/password").arg(connectionB),
+          "connection B reused A's key");
+    QKeychain::TestControl::pendingWrite->finish();
+    QString scopedA;
+    QString scopedB;
+    IcomCredentials::loadForConnection(connectionA, &firstContext, [&](const QString& value) { scopedA = value; });
+    IcomCredentials::loadForConnection(connectionB, &secondContext, [&](const QString& value) { scopedB = value; });
+    drainCallbacks();
+    check(scopedA == QStringLiteral("password-a") && scopedB == QStringLiteral("password-b"),
+          "connection password caches crossed identities");
+    check(IcomCredentials::sessionPassword() == QStringLiteral("exists-now"),
+          "loading a saved connection changed the active backend credential");
+    bool relinkRequired = false;
+    IcomCredentials::loadForConnection(QStringLiteral("[REDACTED]"), &firstContext,
+        [&](const QString& value) { relinkRequired = value.isEmpty(); });
+    drainCallbacks();
+    check(relinkRequired, "an imported credential reference left the connection waiting forever");
+
     if (g_failures == 0) {
         std::printf("icom_credentials_singleflight_test: all checks passed\n");
     }

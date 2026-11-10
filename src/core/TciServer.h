@@ -1,6 +1,7 @@
 #pragma once
 #ifdef HAVE_WEBSOCKETS
 
+#include "DaxTxAudioPermit.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
 #include "TciAudioHeader.h"
@@ -257,7 +258,10 @@ private:
     void handleSplitRequest(TciClient* client, const TciProtocol::SplitRequest& request);
     void handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request);
     void handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request,
-                          const TxCoordinator::Request& txRequest);
+                          const TxCoordinator::Request& txRequest, bool wantsAudio,
+                          const DaxTxAudioPermit& daxPermit);
+    void retireTrxRequest(TciClient* client, const TxCoordinator::Request& request);
+    bool trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& request) const;
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
@@ -310,6 +314,9 @@ private:
     struct ClientState {
         TxCoordinator::Producer txProducer;
         TxCoordinator::Request pttRequest;
+        DaxTxAudioPermit pttDaxPermit{DaxTxAudioPermit::blocked()};
+        bool pttWantsAudio{false};
+        std::optional<DaxTxAudioPermit> ingressDaxPermit;
         QPointer<TciClient> socket;
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo
@@ -415,7 +422,6 @@ private:
     // receiver whose create was lost or which outlived a stop()/start() cycle.
     QSet<int>          m_tciIqChannels;      // 1-based channels TCI created
     QSet<int>          m_iqCreateInFlight;   // create issued, status not yet seen
-    QSet<int>          m_pendingIqRemovals;  // awaiting a create status to reap
     QHash<QString,int> m_iqPanChannel;       // panId → TCI-owned DAX IQ channel
     int                m_announcedIqSampleRate{48000};
     int                m_iqSampleRate{48000};// shared requested rate, all TCI receivers
@@ -455,6 +461,9 @@ private:
         QPointer<TciClient> client;
         TciProtocol::TrxRequest request;
         TxCoordinator::Request txRequest;
+        bool wantsAudio{false};
+        DaxTxAudioPermit daxPermit{DaxTxAudioPermit::blocked()};
+        bool waitingForDax{false};
     };
     std::optional<PendingTrxRequest> m_pendingTrxRequest;
     struct PendingRouteCommand
