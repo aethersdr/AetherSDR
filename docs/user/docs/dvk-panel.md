@@ -45,7 +45,7 @@ When the window is short, scroll the list of recording slots; the panel title, s
 
 ### Choosing where recordings are kept
 
-Click the **⚙** button at the right end of the panel title. From the keyboard, Tab to it and press Space or Enter. A menu opens with these choices:
+Click the **⚙** button at the right end of the panel title. From the keyboard, Tab to it and press Space or Enter; with **Settings → Keyboard Shortcuts** on, Space is PTT, so use Enter. A menu opens with these choices:
 
 - **Automatic by radio licence** — the default. Uses the Radio DVK when the radio has one and has not reported that SmartSDR+ is missing, and Local otherwise. A radio that refuses a DVK command with the SmartSDR+ error counts as reporting it, and Automatic switches to Local once anything recording or playing has ended. The menu shows which one it picks on this radio, for example `(now: Local)`.
 - **Radio DVK — recordings on the radio** — grayed out, with the reason, on a radio with no voice keyer or no SmartSDR+.
@@ -87,7 +87,7 @@ Only one operation runs at a time. STOP is enabled only while something is runni
 
 ### Managing slots
 
-Right-click any slot row to access:
+Right-click any slot row, or Tab to the slot's F-key button and press the Menu key or **Shift+F10**, to access:
 
 - **Rename…** — inline text editor (also available via double-click on name). A name holds up to 61 UTF-8 bytes; quotes and `|` are removed. Enter saves, Escape cancels.
 - **Clear** — erase the recording (grayed out for empty slots and while the DVK is busy). The Radio DVK decides whether the slot keeps its name.
@@ -122,6 +122,7 @@ Screen readers announce each slot as, for example, "Slot 3: CQ Contest, 4.2s", a
 |-----|--------|
 | F1–F12 | Play that slot on-air; press again to stop. Works while the TX slice is in a voice mode, even with the panel closed. |
 | Escape | Stop any active recording, playback, or preview (or cancel a rename) |
+| Menu key or Shift+F10 | On a focused F-key button in the panel, open that slot's menu (Rename, Clear, Import, Export) |
 
 F1–F12 follow the transmit slice's mode: in voice modes they play DVK recordings, in CW they send CWX macros (see [CWX Panel](./cwx-panel.md)), and only one of the two responds.
 

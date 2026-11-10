@@ -139,6 +139,9 @@ private:
     void refreshTransport();
     void togglePlayback(int id);
     void stopActiveOperation();
+    // The slot menu from a right-click on the row, or the Menu key or
+    // Shift+F10 on the slot's F-key; nothing while the keyer is unavailable.
+    void openSlotMenu(int id, const QPoint& globalPos);
     void showContextMenu(int id, const QPoint& globalPos);
     void startRename(int id);
     void commitRename();

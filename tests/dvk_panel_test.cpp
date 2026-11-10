@@ -16,6 +16,8 @@
 #include <QShortcut>
 #include <QStringList>
 #include <QPointer>
+#include <QContextMenuEvent>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QLineEdit>
 #include <QMenu>
@@ -380,11 +382,151 @@ int main(int argc, char** argv)
         if (gear) {
             gear->click();
         }
+        // Return presses it too: Space may be bound to PTT, which the app-wide
+        // filter takes before the button sees it.
+        int byReturn = 0;
+        if (gear) {
+            const int before = requested;
+            QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(gear, &ret);
+            byReturn = requested - before;
+        }
+        report("settings_button_is_pressed_by_return", byReturn == 1,
+               QStringLiteral("requests=%1").arg(byReturn).toStdString());
         report("settings_button_requests_the_source_menu",
-               gear && requested == 1 && gear->focusPolicy() != Qt::NoFocus
+               gear && requested == 1 + byReturn && gear->focusPolicy() != Qt::NoFocus
                    && gear->accessibleName() == QLatin1String("Voice keyer settings"),
                (QStringLiteral("found=%1 requested=%2").arg(gear != nullptr).arg(requested))
                    .toStdString());
+    }
+
+    // The keyboard path to a slot's menu (#7152): the Menu key or Shift+F10 on
+    // a slot's focused F-key opens that slot's menu, the one a right-click on
+    // the row opens; plain F10 does not, and an unavailable keyer offers none.
+    {
+        FakeKeyer k;
+        k.addRecording(3, QStringLiteral("Contest CQ"), 1000);
+        DvkPanel keysPanel(&k);
+        QPushButton* f3 = buttonByText(keysPanel, QStringLiteral("F3"));
+        // Sends one key press to the F-key and reports whether a slot menu
+        // opened; with clear set, picks Clear from it.
+        const auto press = [&](int key, Qt::KeyboardModifiers mods, bool clear) {
+            bool opened = false;
+            QTimer::singleShot(0, &keysPanel, [&] {
+                QMenu* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                if (!menu) {
+                    return;
+                }
+                opened = true;
+                for (QAction* action : menu->actions()) {
+                    if (clear && action->text() == QLatin1String("Clear")) {
+                        action->trigger();
+                        break;
+                    }
+                }
+                menu->close();
+            });
+            if (f3) {
+                QKeyEvent ev(QEvent::KeyPress, key, mods);
+                QApplication::sendEvent(f3, &ev);
+            }
+            QCoreApplication::processEvents();   // retire the timer if nothing opened
+            return opened;
+        };
+
+        const bool focusable = f3 && f3->focusPolicy() != Qt::NoFocus && f3->isEnabled();
+        // Shown, as it is whenever its F-keys can have focus: the first popup
+        // from a panel that was never shown is not reported active on macOS.
+        keysPanel.show();
+        QCoreApplication::processEvents();
+        const bool byMenuKey = press(Qt::Key_Menu, Qt::NoModifier, true);
+        const bool clearedSlot3 = k.calls.contains(QStringLiteral("clear 3"));
+        report("menu_key_on_an_fkey_opens_that_slots_menu",
+               focusable && byMenuKey && clearedSlot3,
+               (QStringLiteral("focusable=%1 opened=%2 calls=[%3]")
+                    .arg(focusable).arg(byMenuKey).arg(joined(k.calls).c_str())).toStdString());
+
+        report("shift_f10_on_an_fkey_opens_that_slots_menu",
+               press(Qt::Key_F10, Qt::ShiftModifier, false));
+
+        // Where the platform raises a keyboard context-menu event instead of a
+        // key press (the Menu key on Linux, Shift+F10 on Windows), Qt sends it
+        // to the focused F-key. The F-key ignores it and Qt passes it up to the
+        // row, whose custom context menu is the slot's menu.
+        k.calls.clear();
+        bool byNativeEvent = false;
+        QTimer::singleShot(0, &keysPanel, [&] {
+            QMenu* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu) {
+                return;
+            }
+            byNativeEvent = true;
+            for (QAction* action : menu->actions()) {
+                if (action->text() == QLatin1String("Clear")) {
+                    action->trigger();
+                    break;
+                }
+            }
+            menu->close();
+        });
+        if (f3) {
+            QContextMenuEvent ev(QContextMenuEvent::Keyboard, QPoint(0, 0),
+                                 f3->mapToGlobal(QPoint(0, 0)));
+            QApplication::sendEvent(f3, &ev);
+        }
+        QCoreApplication::processEvents();
+        report("keyboard_context_menu_event_on_an_fkey_opens_that_slots_menu",
+               byNativeEvent && k.calls.contains(QStringLiteral("clear 3")),
+               (QStringLiteral("opened=%1 calls=[%2]").arg(byNativeEvent)
+                    .arg(joined(k.calls).c_str())).toStdString());
+
+        k.calls.clear();
+        const bool byPlainF10 = press(Qt::Key_F10, Qt::NoModifier, false);
+        report("plain_f10_on_an_fkey_opens_no_menu", !byPlainF10 && k.calls.isEmpty(),
+               joined(k.calls));
+
+        keysPanel.setUnavailableReason(QStringLiteral("This radio has no DVK. Choose Local with ⚙."));
+        report("unavailable_keyer_opens_no_slot_menu_from_the_keyboard",
+               !press(Qt::Key_Menu, Qt::NoModifier, false)
+                   && !press(Qt::Key_F10, Qt::ShiftModifier, false));
+    }
+
+    // Tab order (#7152): the settings button is the panel's first stop, so the
+    // keyer source is one Tab away, and the slots' F-keys follow in slot
+    // order, each one Tab from the next, so every slot's menu is reachable.
+    {
+        FakeKeyer k;
+        DvkPanel chainPanel(&k);
+        chainPanel.show();
+        QCoreApplication::processEvents();
+        QStringList stops;
+        QWidget* start = chainPanel.findChild<QWidget*>(QStringLiteral("dvkSettings"));
+        for (QWidget* w = start; w; ) {
+            if ((w->focusPolicy() & Qt::TabFocus) && w->isVisibleTo(&chainPanel)
+                && chainPanel.isAncestorOf(w)) {
+                stops << w->objectName();
+            }
+            w = w->nextInFocusChain();
+            if (w == start) {
+                break;
+            }
+        }
+        QStringList fkeys;
+        for (const QString& name : stops) {
+            if (name.startsWith(QLatin1String("dvkPlaySlot"))) {
+                fkeys << name;
+            }
+        }
+        QStringList expectedFkeys;
+        for (int id = 1; id <= 12; ++id) {
+            expectedFkeys << QStringLiteral("dvkPlaySlot%1").arg(id);
+        }
+        report("tab_order_settings_first_then_fkeys_in_slot_order",
+               !stops.isEmpty() && stops.first() == QLatin1String("dvkSettings")
+                   && fkeys == expectedFkeys
+                   && stops.indexOf(QStringLiteral("dvkPlaySlot1"))
+                          < stops.indexOf(QStringLiteral("dvkRecord")),
+               stops.join(QLatin1Char(' ')).toStdString());
     }
 
     // A keyer the radio cannot serve leaves the panel open (that is where the

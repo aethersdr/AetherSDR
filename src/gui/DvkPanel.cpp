@@ -11,6 +11,7 @@
 #include <QScrollArea>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QFileDialog>
 #include <QDir>
 #include <QRegularExpression>
@@ -127,7 +128,10 @@ DvkPanel::DvkPanel(VoiceKeyer* keyer, QWidget* parent)
     m_settingsBtn = new QPushButton(QString::fromUtf8("\u2699"));
     m_settingsBtn->setObjectName(QStringLiteral("dvkSettings"));
     m_settingsBtn->setFixedSize(22, 22);
-    m_settingsBtn->setAutoDefault(false);
+    // Return and Enter press it as well as Space. A QPushButton outside a
+    // dialog answers Return only when auto-default, and an operator with Space
+    // bound to PTT (the default) has no other key that presses it.
+    m_settingsBtn->setAutoDefault(true);
     m_settingsBtn->setAccessibleName(QStringLiteral("Voice keyer settings"));
     m_settingsBtn->setAccessibleDescription(
         QStringLiteral("Choose the keyer: automatic, the radio's DVK, or recordings on this computer"));
@@ -195,6 +199,11 @@ DvkPanel::DvkPanel(VoiceKeyer* keyer, QWidget* parent)
         fkeyBtn->setFixedSize(34, 22);
         fkeyBtn->setToolTip(QString("Play recording %1 on-air (F%1)").arg(id));
         markTxKeying(fkeyBtn);   // plays the slot on air → keys TX
+        // The keyboard path to the slot's menu: the Menu key or Shift+F10 on
+        // the focused F-key opens what a right-click on the row does (#7152);
+        // see eventFilter() for which platform delivers which key how.
+        fkeyBtn->setProperty("dvkMenuSlot", id);
+        fkeyBtn->installEventFilter(this);
         rowLayout->addWidget(fkeyBtn);
 
         auto* nameLabel = new QLabel(QString("Recording %1").arg(id));
@@ -249,11 +258,7 @@ DvkPanel::DvkPanel(VoiceKeyer* keyer, QWidget* parent)
         // Right-click context menu on row
         rowFrame->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(rowFrame, &QFrame::customContextMenuRequested, this, [this, id](const QPoint& pos) {
-            if (!m_unavailableReason.isEmpty()) {
-                return;
-            }
-            selectSlot(id);
-            showContextMenu(id, m_rowFrames[id - 1]->mapToGlobal(pos));
+            openSlotMenu(id, m_rowFrames[id - 1]->mapToGlobal(pos));
         });
 
         // Left-click row to select, double-click name label to rename
@@ -737,6 +742,25 @@ QString DvkPanel::formatDuration(int ms)
 
 bool DvkPanel::eventFilter(QObject* obj, QEvent* event)
 {
+    // Menu key or Shift+F10 on a slot's F-key: that slot's menu, under the key.
+    // Only where the key arrives as a key press: Shift+F10 on Linux and macOS,
+    // the Menu key on Windows and macOS. Where the platform turns the key into a
+    // keyboard context-menu event instead (the Menu key on Linux, Shift+F10 on
+    // Windows), Qt sends that to the focused F-key, which ignores it, so it
+    // reaches the row's custom context menu and the same slot menu.
+    if (event->type() == QEvent::KeyPress) {
+        const int menuSlot = obj->property("dvkMenuSlot").toInt();
+        auto* key = static_cast<QKeyEvent*>(event);
+        const bool menuKey = key->key() == Qt::Key_Menu
+                             || (key->key() == Qt::Key_F10
+                                 && key->modifiers().testFlag(Qt::ShiftModifier));
+        if (menuSlot >= 1 && menuSlot <= 12 && menuKey) {
+            auto* fkey = m_fkeyBtns[menuSlot - 1];
+            openSlotMenu(menuSlot, fkey->mapToGlobal(QPoint(0, fkey->height())));
+            return true;
+        }
+    }
+
     int id = obj->property("slotId").toInt();
     if (id < 1 || id > 12)
         return QWidget::eventFilter(obj, event);
@@ -861,6 +885,16 @@ void DvkPanel::refreshFromKeyer()
         onRecordingChanged(id);
     }
     onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
+}
+
+void DvkPanel::openSlotMenu(int id, const QPoint& globalPos)
+{
+    // A keyer the radio cannot serve offers nothing to rename, clear or move.
+    if (!m_unavailableReason.isEmpty()) {
+        return;
+    }
+    selectSlot(id);
+    showContextMenu(id, globalPos);
 }
 
 void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
