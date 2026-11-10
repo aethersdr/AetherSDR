@@ -1013,8 +1013,8 @@ struct RadioCapabilities {
     std::optional<WaveformEnvControl> waveformEnvControl;
     // The radio keeps its own list of NTP time sources that a client can list,
     // add, remove, enable and disable (Flex `ntp_sources …`, SmartSDR 4.3.16+ on
-    // the BigBend platform: FLEX-8000, Aurora, ML-9600, CL-9300). Engaged gates NtpSourceRequest and the Radio Setup Time
-    // page; maxSources is the radio's ceiling.
+    // every platform, FLEX-6000 included). Engaged gates NtpSourceRequest and the
+    // Radio Setup Time page; maxSources is the radio's ceiling.
     struct NtpSourceControl { int maxSources{10}; };
     std::optional<NtpSourceControl> ntpSourceControl;
 

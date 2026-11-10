@@ -1011,10 +1011,12 @@ RadioCapabilities FlexBackend::capabilities() const
         && !isKnownNonWfpPlatform(mc.platform)) {
         caps.waveformEnvControl = RadioCapabilities::WaveformEnvControl{};
     }
-    // The radio's own NTP time sources (FlexLib 4.3.16 NtpSource.cs; SMART-10565
-    // names FLEX-8000/Aurora). FlexLib subscribes on every radio, so the gate is
-    // the platform those share: BigBend, ML-9600 and CL-9300 included.
-    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform == RadioPlatform::BigBend) {
+    // The radio's own NTP time sources (FlexLib 4.3.16.42034 NtpSource.cs). FlexLib
+    // gates them on no platform: Radio.cs:2348 sends `sub ntp_sources all` on
+    // every radio and RequestNtpSource (Radio.cs:14535) validates only its
+    // inputs. A FLEX-6300 on 4.3.16.42034 reports the same status as the 8600
+    // (#7127), so the gate is the firmware, for any model we know.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform != RadioPlatform::Unknown) {
         caps.ntpSourceControl = RadioCapabilities::NtpSourceControl{NtpSourceRules::kMaxSources};
     }
     caps.hasMultiClientSessions = true;  // multiFLEX

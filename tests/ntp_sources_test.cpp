@@ -133,10 +133,20 @@ void flexDeclarationAndEncoding()
           "FLEX-8600 on 4.3.16 declares ten NTP sources");
     model = QStringLiteral("AU-520M");
     check(flex.capabilities().ntpSourceControl.has_value(), "Aurora declares them");
-    for (const QString& other : {QStringLiteral("FLEX-6700"), QStringLiteral("FLEX-6400M"), QString()}) {
-        model = other;
-        check(!flex.capabilities().ntpSourceControl, "6000-series and unknown models declare none");
+    // #7127: a FLEX-6300 on 4.3.16.42034 publishes ntp_sources, and FlexLib
+    // gates them on no platform, so the 6000 series declares them too.
+    for (const QString& sixK : {QStringLiteral("FLEX-6300"), QStringLiteral("FLEX-6700"),
+                                QStringLiteral("FLEX-6400M")}) {
+        model = sixK;
+        check(flex.capabilities().ntpSourceControl && flex.capabilities().ntpSourceControl->maxSources == 10,
+              "6000-series models on 4.3.16 declare ten NTP sources");
     }
+    model = QString();
+    check(!flex.capabilities().ntpSourceControl, "an unknown model declares none");
+    model = QStringLiteral("FLEX-6300");
+    firmware = QStringLiteral("4.3.15");
+    check(!flex.capabilities().ntpSourceControl, "a 6000-series radio on older firmware declares none");
+    firmware = QStringLiteral("4.3.16.42034");
     model = QStringLiteral("FLEX-8400");
     flex.requestNtpSource({Action::Subscribe, {}});
     flex.requestNtpSource({Action::Create, def(QStringLiteral("nist"))});
@@ -193,6 +203,17 @@ void statusDecode()
     flex.decodeNtpSourceStatus(QStringLiteral("id= enabled=1"));
     flex.decodeNtpSourceStatus(QStringLiteral("id=z"));
     check(seen.size() == 4, "a line without a leading id, with an empty id or with nothing after it is ignored");
+
+    // Measured on a FLEX-6300, 4.3.16.42034 (#7127): the same shape, plus stratum.
+    const ParsedMessage sixK = CommandParser::parseLine(QStringLiteral(
+        "S17B07863|ntp_sources id=default-pool address=2.debian.pool.ntp.org enabled=1 directive=pool "
+        "selected=1 prefer=0 state=selected stratum=1 reach=255 description=\"Debian NTP pool\""));
+    flex.decodeNtpSourceStatus(sixK.raw.mid(sixK.raw.indexOf(QLatin1Char('|')) + 1).mid(12));
+    const NtpSourceDelta s = seen.value(4);
+    check(seen.size() == 5 && s.id == QLatin1String("default-pool") && s.selected == true
+              && s.state == QStringLiteral("selected") && s.stratum == 1 && s.reach == 255
+              && s.description == QStringLiteral("Debian NTP pool"),
+          "the FLEX-6300's line decodes, stratum included");
 }
 
 struct Rig {
@@ -306,8 +327,8 @@ void subscription()
     Rig six;
     six.model = QStringLiteral("FLEX-6700");
     NtpSourcesTestAccess::publish(six.radio);
-    check(!six.backend->commands.contains(QStringLiteral("sub ntp_sources all")),
-          "a FLEX-6000 on 4.3.16 is never sent the subscription");
+    check(six.backend->commands.count(QStringLiteral("sub ntp_sources all")) == 1,
+          "a FLEX-6000 on 4.3.16 is sent the subscription once (#7127)");
 }
 
 void bridgeReadback()
