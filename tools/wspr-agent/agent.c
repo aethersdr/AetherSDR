@@ -53,7 +53,7 @@
 #include "grayline.h"
 #include "wsprd/wsprsim_utils.h"
 
-#define AGENT_VERSION "0.1.5"
+#define AGENT_VERSION "0.1.7"
 #define STATUS_PORT 48995
 #define AUDIO_RATE 24000
 #define BB_RATE 375
@@ -150,7 +150,9 @@ static int clock_synced_from(int kernel_says, int radio_says)
  * whose wall clock matched UTC to well under a second.
  *
  * Without the radio's verdict the agent never leaves waiting_clock on a 6000
- * -- the only hardware it is built for -- so it captures nothing at all. The
+ * -- the hardware this fix is for -- so it captures nothing at all. (The agent
+ * also ships as the FLEX-8000/Aurora container, whose kernel clears the flag
+ * normally and which returns on the kernel operand.) The
  * radio's own report that it has settled on a source is the better evidence on
  * that kernel, so accept it.
  *
@@ -1658,7 +1660,7 @@ static int selftest_radio_lines(void)
  *
  * A FLEX-6000 runs kernel 2.6.37: chronyd disciplines the clock, the wall
  * clock is right, and STA_UNSYNC stays set forever. The agent therefore never
- * left waiting_clock on the only hardware it is built for. clock_synced() now
+ * left waiting_clock on the hardware this fix is for. clock_synced() now
  * accepts the radio's own report that it has settled on a source.
  *
  * clock_synced() reads the kernel through g_kernel_clock_synced, which this

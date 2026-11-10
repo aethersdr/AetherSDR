@@ -11,9 +11,18 @@ for both kinds of radio, as static binaries with the licenses:
 
     python3 -I build.py --output OUT_DIR [--host]
 
-Needs zig 0.17 (it bundles the linker and musl for both targets). The
-packages are reproducible byte for byte with the same zig. --host also builds
-a native binary for the tests.
+Needs zig **0.17.0** exactly -- not 0.17.1, which generates a different
+(32 bytes larger) ARMv7 binary from identical source, so the FLEX-6000 package
+will not match its pin. --host also builds a native binary for the tests.
+
+Two more things the packages are reproducible ACROSS only if they match:
+  * a UTF-8 locale. licenses() reads musl's COPYRIGHT, which is UTF-8 and
+    holds 14 non-ASCII characters. Under a single-byte locale (cp1252 on a
+    default Windows Python) they are mis-decoded and re-encoded 28 bytes
+    longer. Run with PYTHONUTF8=1 on Windows.
+  * the zlib that Python's zipfile uses. CPython 3.14 bundles zlib-ng, which
+    deflates a few bytes larger than stock zlib on identical input -- enough
+    to change the package sha without changing a single member byte.
 
 AetherSDR ships both as Qt resources: copy them to resources/waveforms/ and
 update the version, SHA-256s and sizes in src/core/WsprAgent.h together.
