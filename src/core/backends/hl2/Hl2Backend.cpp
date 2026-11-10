@@ -2021,7 +2021,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {TxPowerBand{c.tuningMinHz, c.tuningMaxHz,
                                   static_cast<double>(kHl2RatedOutputWatts)}};
     // ANT or RF1 is the operator's own choice; a CAT antenna select must not move it.
-    c.independentTxAntenna = IndependentTxAntenna{};
+    // RF1 has no forward-power detector, so its gauges read "not measured".
+    c.independentTxAntenna = IndependentTxAntenna{{QStringLiteral("RF1")}};
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
