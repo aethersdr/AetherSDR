@@ -53,7 +53,7 @@
 #include "grayline.h"
 #include "wsprd/wsprsim_utils.h"
 
-#define AGENT_VERSION "0.1.3"
+#define AGENT_VERSION "0.1.4"
 #define STATUS_PORT 48995
 #define AUDIO_RATE 24000
 #define BB_RATE 375
@@ -432,6 +432,7 @@ static struct {
      * every slice we make as owned by the GUI client then connected. */
     int slice_index;
     unsigned client_handle;
+    unsigned pan;               /* our slice's panadapter, 0 none (headless) */
     spot_t spots[MAX_SPOTS];
     int nspots, spot_head;
     cycle_t cycles[MAX_CYCLES];
@@ -952,8 +953,8 @@ static void status_json(buf_t *b, long long since)
     bputs(b, ",\"band\":"); bjson_str(b, G.band);
     bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"audio\":%s", G.dial_hz, G.slice_ok ? "true" : "false",
             G.stream_ok ? "true" : "false");
-    bprintf(b, ",\"slice_index\":%d,\"client_handle\":\"0x%08X\"", G.slice_ok ? G.slice_index : -1,
-            G.client_handle);
+    bprintf(b, ",\"slice_index\":%d,\"client_handle\":\"0x%08X\",\"pan\":\"0x%08X\"",
+            G.slice_ok ? G.slice_index : -1, G.client_handle, G.slice_ok ? G.pan : 0u);
     bputs(b, ",\"hop_period\":");
     bjson_str(b, G.hop_period >= 0 ? PERIOD_NAME[G.hop_period] : "");
     bputs(b, ",\"depth\":");
@@ -1214,6 +1215,15 @@ typedef struct {
     double slice_retry;   /* mono_s() before which no slice is made, 0 none */
     unsigned handle;
     int lost;             /* our slice was removed: remake it now */
+    /* Panadapters. With a GUI client connected, the radio opens a new one,
+     * owned by that GUI, for each slice made without naming a pan; with none
+     * connected a slice is headless (no pan), and a GUI that connects gets it
+     * put on its own pan. Our slice belongs on a pan of ours alone: own_pan is
+     * the one the current make opened (0 when headless), and a slice of ours
+     * found on any other is moved (remade) there. */
+    unsigned slice_pan[MAX_SLICES];
+    unsigned own_pan;
+    int move;             /* our slice is on someone else's pan: remake it */
 } api_t;
 
 static int api_send(api_t *a, const char *fmt, ...)
@@ -1282,8 +1292,12 @@ static int choose_slice(const api_t *a)
 
 static void send_create(api_t *a, const char *ant)
 {
-    if (ant[0]) a->want_slice = api_send(a, "slice create freq=%.6f rxant=%s mode=DIGU", a->create_hz / 1e6, ant);
-    else a->want_slice = api_send(a, "slice create freq=%.6f mode=DIGU", a->create_hz / 1e6);
+    /* After the first slice of a make, every other goes on the pan that one
+     * opened, so a make leaves one pan, not one per placeholder. */
+    char pan[24] = "";
+    if (a->own_pan) snprintf(pan, sizeof pan, "pan=0x%08X ", a->own_pan);
+    if (ant[0]) a->want_slice = api_send(a, "slice create %sfreq=%.6f rxant=%s mode=DIGU", pan, a->create_hz / 1e6, ant);
+    else a->want_slice = api_send(a, "slice create %sfreq=%.6f mode=DIGU", pan, a->create_hz / 1e6);
 }
 
 /* Asks for a slice at the highest free index. The radio has no way to name
@@ -1305,6 +1319,7 @@ static int make_slice(api_t *a, long long dial_hz, const char *ant)
     }
     a->target = target;
     a->fillers = 0;
+    a->own_pan = 0;   /* the first create opens it */
     a->create_hz = dial_hz;
     send_create(a, ant);
     return 1;
@@ -1326,6 +1341,7 @@ static void release_own_slice(api_t *a)
     a->slice = -1;
     a->stream = 0;
     a->stream_retry = 0;
+    a->move = 0;
 }
 
 static void remove_fillers(api_t *a)
@@ -1382,6 +1398,8 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
                 return;
             }
             int index = atoi(msg);
+            /* Its status, with its pan, came before this reply. */
+            if (!a->own_pan && index >= 0 && index < MAX_SLICES) a->own_pan = a->slice_pan[index];
             if (index < a->target && a->fillers < MAX_SLICES) {
                 /* A lower slot the radio filled first: keep it until ours exists. */
                 a->filler[a->fillers++] = index;
@@ -1395,7 +1413,11 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
             a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
             if (a->slice < MAX_SLICES && !a->rf_hz[a->slice]) a->rf_hz[a->slice] = a->create_hz;
-            pthread_mutex_lock(&G.mu); G.slice_ok = 1; G.slice_index = a->slice; pthread_mutex_unlock(&G.mu);
+            pthread_mutex_lock(&G.mu);
+            G.slice_ok = 1;
+            G.slice_index = a->slice;
+            G.pan = a->slice < MAX_SLICES ? a->slice_pan[a->slice] : 0;
+            pthread_mutex_unlock(&G.mu);
             logf_("slice %d on %s", a->slice, G.band);
         } else if (seq == a->want_stream) {
             a->want_stream = 0;
@@ -1434,7 +1456,16 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             field(body, "RF_frequency=", mhz, sizeof mhz);
             if (mhz[0]) a->rf_hz[index] = llround(atof(mhz) * 1e6);
             if (strstr(body, " in_use=1")) a->in_use[index] = 1;
-            if (strstr(body, " in_use=0")) { a->rf_hz[index] = 0; a->in_use[index] = 0; }
+            if (strstr(body, " in_use=0")) { a->rf_hz[index] = 0; a->in_use[index] = 0; a->slice_pan[index] = 0; }
+            char pan[24];
+            field(body, " pan=", pan, sizeof pan);
+            if (pan[0]) {
+                a->slice_pan[index] = (unsigned)strtoul(pan, NULL, 16);
+                /* Ours, put on a pan that isn't ours (a GUI client's, which
+                 * gets a headless slice when it connects): move it. */
+                if (index == a->slice && a->slice_pan[index] && a->slice_pan[index] != a->own_pan)
+                    a->move = 1;
+            }
         }
         if (index != a->slice) return;
         /* The radio removes headless slices when its last GUI client
@@ -1831,6 +1862,47 @@ static int selftest_slice_choice(void)
     release_own_slice(&two);
     fail |= choose_slice(&two) != 1;
 
+    /* Panadapters: the first create of a make opens one (a GUI client is
+     * connected); the other creates name it, so a make leaves one pan. Our
+     * slice found on another pan (a GUI's, which a headless slice is put on
+     * when the GUI connects) is to be moved; on its own pan it stays. */
+    {
+        int qp[2];
+        if (pipe(qp)) return 1;
+        api_t q;
+        memset(&q, 0, sizeof q);
+        q.fd = qp[1];
+        q.slice = -1;
+        q.slices_known = 1;
+        q.available = 3;
+        q.in_use[0] = 1;   /* the GUI's slice A */
+        fail |= !make_slice(&q, 7038600, "");
+        strcpy(l, "S1|slice 1 in_use=1 RF_frequency=7.038600 pan=0x40000005");
+        api_line(&q, l, &c);
+        snprintf(l, sizeof l, "R%d|0|1", q.want_slice);
+        api_line(&q, l, &c);
+        fail |= q.own_pan != 0x40000005u || q.fillers != 1;
+        ssize_t n = read(qp[0], sent, sizeof sent - 1);
+        sent[n > 0 ? n : 0] = 0;
+        fail |= !strstr(sent, "slice create pan=0x40000005 freq=");      /* the next goes on that pan */
+        strcpy(l, "S1|slice 3 in_use=1 RF_frequency=7.038600 pan=0x40000005");
+        api_line(&q, l, &c);
+        snprintf(l, sizeof l, "R%d|0|3", q.want_slice);
+        api_line(&q, l, &c);
+        fail |= q.slice != 3 || q.move;
+        strcpy(l, "S1|slice 3 RF_frequency=3.568600 pan=0x40000005");
+        api_line(&q, l, &c);
+        fail |= q.move;                                                   /* its own pan: stays */
+        strcpy(l, "S1|slice 3 in_use=1 RF_frequency=3.568600 pan=0x40000000");
+        api_line(&q, l, &c);
+        fail |= !q.move;                                                  /* a GUI's pan: move */
+        q.available = 1;   /* as the radio says now: A, B (placeholder) and D in use */
+        release_own_slice(&q);
+        fail |= q.move || q.slice != -1 || choose_slice(&q) != 3;
+        close(qp[0]);
+        close(qp[1]);
+    }
+
     /* Our slice removed by someone else: no new one for REMOVED_GRACE_S. */
     api_t r;
     memset(&r, 0, sizeof r);
@@ -1849,10 +1921,13 @@ static int selftest_slice_choice(void)
     pthread_mutex_lock(&G.mu);   /* held while building, as the server does */
     G.slice_ok = 1;
     G.slice_index = 3;
+    G.pan = 0x40000005u;
     static char out[512 * 1024];
     buf_t sb = {out, 0, sizeof out, 0};
     status_json(&sb, 0);
-    fail |= sb.full || !strstr(out, "\"slice_index\":3") || !strstr(out, "\"client_handle\":\"0x2A5F27D7\"");
+    fail |= sb.full || !strstr(out, "\"slice_index\":3") || !strstr(out, "\"client_handle\":\"0x2A5F27D7\"")
+        || !strstr(out, "\"pan\":\"0x40000005\"");
+    G.pan = 0;
     G.slice_ok = 0;
     G.slice_index = -1;
     G.client_handle = 0;
@@ -2148,6 +2223,14 @@ int main(int argc, char *argv[])
             tuned_for = 0;
         }
 
+        if (a.move && a.slice >= 0 && !a.want_slice) {
+            logf_("our slice %d was put on another client's panadapter; moving it to its own", a.slice);
+            release_own_slice(&a);
+            pthread_mutex_lock(&G.mu); G.slice_ok = G.stream_ok = 0; pthread_mutex_unlock(&G.mu);
+            tuned_for = 0;
+            if (capture_t) logf_("cycle %lld abandoned: the slice moved", capture_t);
+            capture_t = 0;
+        }
         if (a.lost) {
             a.lost = 0;
             tuned_for = 0;

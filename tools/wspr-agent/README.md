@@ -25,9 +25,17 @@ delivers only to a separate computer on its LAN.
   makes nothing and tries again every 5 minutes. If someone removes its
   slice (AetherSDR does, to give the operator a fourth one), it waits 5 s
   before making another, so the other client's new slice lands first.
-- **For AetherSDR:** the radio reports every slice the agent makes as owned
-  by the GUI client then connected, so `/v1/status` names it:
-  `slice_index` (-1 when none) and the agent's own `client_handle`.
+- **Its own panadapter:** with a GUI client connected, the radio opens a new
+  panadapter, owned by that GUI, for every slice made without naming one;
+  with none connected a slice is headless, and the next GUI to connect gets
+  it put on its own panadapter. The agent's slice stays off every GUI's
+  panadapter: the placeholders and its slice all go on the one panadapter
+  its first create opened, and if it finds its slice on any other (a GUI's,
+  at connect) it remakes it on one of its own.
+- **For AetherSDR:** the radio reports every slice the agent makes, and the
+  panadapter it sits on, as owned by the GUI client then connected, so
+  `/v1/status` names them: `slice_index` (-1 when none), `pan` (0 when
+  headless) and the agent's own `client_handle`.
 - **Capture:** each even UTC minute, 114 s, timed by the system clock. It
   waits until the kernel reports the clock synchronized; on an 8000-series
   radio the clock comes from its GPS-disciplined stratum-1 NTP. Lost VITA
