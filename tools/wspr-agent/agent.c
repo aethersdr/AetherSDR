@@ -1304,6 +1304,28 @@ static void release_on_term(void)
     n += put_num(out + n, (unsigned long)a->slice, 10, 1);
     out[n++] = '\n';
     if (write(a->fd, out, n) < 0) return;
+    /* Exiting at once closes a socket that may hold statuses we never read,
+     * and the kernel then resets the connection instead of closing it; the
+     * radio can drop the commands above with it (measured: the slice stayed).
+     * So wait, at most 1.5 s, for the radio's answer to the remove. */
+    static const char want[] = "R9002|";
+    size_t matched = 0;
+    struct timespec t0, now;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long ms = (now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+        if (ms >= 1500) break;
+        struct pollfd pf = {.fd = a->fd, .events = POLLIN};
+        if (poll(&pf, 1, (int)(1500 - ms)) <= 0) break;
+        char in[4096];
+        ssize_t k = read(a->fd, in, sizeof in);
+        if (k <= 0) break;
+        for (ssize_t i = 0; i < k; i++) {
+            matched = in[i] == want[matched] ? matched + 1 : (in[i] == want[0] ? 1 : 0);
+            if (matched == sizeof want - 1) return;
+        }
+    }
 }
 
 static void slice_file(char *path, size_t cap)
@@ -1529,14 +1551,17 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
         if (index == a->orphan && index != a->slice && strstr(body, " in_use=1")) {
             /* The one full status for the index a previous run of ours saved.
              * Removed only if it is exactly what we leave behind; anything
-             * else is someone's slice now, and stays. */
-            char pan[16], dax[8], mode[12], mhz[24];
+             * else is someone's slice now, and stays. A leftover keeps our
+             * DAX channel until a new slice takes that channel, and then
+             * shows 0 (both measured on a FLEX-8600, 2026-11-10). */
+            char pan[16], dax[8], mode[12], mhz[24], ours[8];
             field(body, " pan=", pan, sizeof pan);
             field(body, " dax=", dax, sizeof dax);
             field(body, " mode=", mode, sizeof mode);
             field(body, "RF_frequency=", mhz, sizeof mhz);
+            snprintf(ours, sizeof ours, "%d", cfg->dax_channel);
             a->orphan = -1;
-            if (!strcmp(pan, "0x00000000") && !strcmp(dax, "0") && !strcmp(mode, "DIGU")
+            if (!strcmp(pan, "0x00000000") && (!strcmp(dax, "0") || !strcmp(dax, ours)) && !strcmp(mode, "DIGU")
                 && mhz[0] && is_wspr_dial(llround(atof(mhz) * 1e6))) {
                 api_send(a, "slice remove %d", index);
                 logf_("removed slice %d, left on %s MHz by an earlier run of ours", index, mhz);
@@ -2038,8 +2063,17 @@ static int selftest_retune_mode(void)
     return 0;
 }
 
+static long elapsed_ms(const struct timespec *t0)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - t0->tv_sec) * 1000 + (now.tv_nsec - t0->tv_nsec) / 1000000;
+}
+
 /* SIGTERM removes our stream and slice, each on a line of its own even when
- * the signal cut a command short; with no slice it sends nothing. */
+ * the signal cut a command short, then waits for the radio's answer to the
+ * remove: at once when it is there (statuses before it are read past), at
+ * most 1.5 s when it never comes. With no slice it sends nothing. */
 static int selftest_release_on_term(void)
 {
     int sv[2];
@@ -2051,10 +2085,17 @@ static int selftest_release_on_term(void)
     a.stream = 0x04000008;
     a.orphan = -1;
     g_api = &a;
+    static const char answered[] = "S1|slice 3 in_use=0\nR9001|0|\nR9002|0|\n";
+    if (write(sv[1], answered, sizeof answered - 1) != (ssize_t)(sizeof answered - 1)) return 1;
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     release_on_term();
+    long quick = elapsed_ms(&t0);
     a.stream = 0;
     a.slice = 12;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     release_on_term();
+    long slow = elapsed_ms(&t0);
     a.slice = -1;
     release_on_term();
     g_api = NULL;
@@ -2065,6 +2106,10 @@ static int selftest_release_on_term(void)
     const char *want = "\nC9001|stream remove 0x04000008\nC9002|slice remove 3\n"
                        "\nC9002|slice remove 12\n";
     if (strcmp(wire, want)) { printf("selftest FAIL: SIGTERM does not release our slice:\n%s", wire); return 1; }
+    if (quick > 500 || slow < 1400 || slow > 2500) {
+        printf("selftest FAIL: SIGTERM's wait for the radio: %ld ms answered, %ld ms unanswered\n", quick, slow);
+        return 1;
+    }
     return 0;
 }
 
@@ -2078,8 +2123,10 @@ static int selftest_orphan(void)
          "what a removed receiver left (measured 2026-11-10)"},
         {"S1|slice 2 in_use=1 RF_frequency=18.104600 client_handle=0x4EAD1E55 pan=0x40000000 dax=0 mode=DIGU", 0,
          "on a GUI's panadapter"},
-        {"S1|slice 2 in_use=1 RF_frequency=18.104600 client_handle=0x4EAD1E55 pan=0x00000000 dax=4 mode=DIGU", 0,
-         "with a DAX channel"},
+        {"S1|slice 2 in_use=1 RF_frequency=14.095600 client_handle=0x4EAD1E55 pan=0x00000000 dax=4 mode=DIGU tx=0", 1,
+         "left by a kill -9, still on our DAX channel (measured 2026-11-10)"},
+        {"S1|slice 2 in_use=1 RF_frequency=18.104600 client_handle=0x4EAD1E55 pan=0x00000000 dax=2 mode=DIGU", 0,
+         "on another DAX channel"},
         {"S1|slice 2 in_use=1 RF_frequency=18.104600 client_handle=0x4EAD1E55 pan=0x00000000 dax=0 mode=LSB", 0,
          "in another mode"},
         {"S1|slice 2 in_use=1 RF_frequency=18.110000 client_handle=0x4EAD1E55 pan=0x00000000 dax=0 mode=DIGU", 0,
