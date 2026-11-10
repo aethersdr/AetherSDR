@@ -186,5 +186,9 @@ bool reachableRadio(bool overWan, const QHostAddress& address);
 // `error` set, otherwise.
 QString writeBundledPackage(const WsprPackage::Pin& pin, const QString& dir, QString* error);
 
+// Whether a receiver reporting `installed` is older than the one bundled
+// (WsprPackage::kVersion). Unreadable versions are never older.
+bool updateAvailable(const QString& installed);
+
 }  // namespace wspr
 }  // namespace AetherSDR
