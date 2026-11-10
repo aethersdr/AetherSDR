@@ -130,8 +130,8 @@ on firmware with USB support, or an AetherKnob.
   AetherKnob, and the USB serial port of ESP32-S3 boards (which the CTR2-Max
   uses in download mode, for firmware installs) to whoever is logged in at the
   computer, and to no one else.
-- **AetherKnob** (an AetherSDR controller on the Elecrow CrowPanel 2.1"
-  rotary display) uses USB mode the same way. It appears in the list as
+- **AetherKnob** (an AetherSDR controller on the Waveshare
+  ESP32-S3-Knob-Touch-LCD-1.8 rotary display) uses USB mode the same way. It appears in the list as
   **AetherKnob**. While it is relaying, AetherSDR also sends it a 32-bar
   spectrum for its center display. While receiving it shows the audio you
   are hearing (after the radio's DSP, AetherSDR's noise reduction and the
