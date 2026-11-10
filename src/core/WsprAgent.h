@@ -86,6 +86,10 @@ struct WsprStatus {
     QString hopPeriod;      // sunrise, day, sunset, night; empty when not hopping
     QString depth;
     bool slice{false};
+    // The radio's index for the receiver's slice, which the radio reports as
+    // the connected GUI client's own (#7139); -1 when it has none or is too
+    // old to say (before 0.1.9).
+    int sliceIndex{-1};
     bool audio{false};
     struct Upload {
         bool enabled{false};

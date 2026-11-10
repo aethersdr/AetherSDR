@@ -474,6 +474,7 @@ static struct {
     long long dial_hz;
     int hop_period;             /* period of the tuned cycle, -1 when not hopping */
     int slice_ok, stream_ok;
+    int slice_index;      /* the radio's index for our slice; read only while slice_ok */
     spot_t spots[MAX_SPOTS];
     int nspots, spot_head;
     cycle_t cycles[MAX_CYCLES];
@@ -1004,8 +1005,10 @@ static void status_json(buf_t *b, long long since)
     bjson_str(b, call);
     bputs(b, ",\"grid\":"); bjson_str(b, grid);
     bputs(b, ",\"band\":"); bjson_str(b, G.band);
-    bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"audio\":%s", G.dial_hz, G.slice_ok ? "true" : "false",
-            G.stream_ok ? "true" : "false");
+    /* slice_index lets a GUI client leave our slice alone: the radio reports
+     * it as that client's own (#7139). -1 while we have none. */
+    bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"slice_index\":%d,\"audio\":%s", G.dial_hz,
+            G.slice_ok ? "true" : "false", G.slice_ok ? G.slice_index : -1, G.stream_ok ? "true" : "false");
     bputs(b, ",\"hop_period\":");
     bjson_str(b, G.hop_period >= 0 ? PERIOD_NAME[G.hop_period] : "");
     bputs(b, ",\"depth\":");
@@ -1483,7 +1486,7 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
             a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
             if (a->slice < MAX_SLICES && !a->rf_hz[a->slice]) a->rf_hz[a->slice] = a->create_hz;
-            pthread_mutex_lock(&G.mu); G.slice_ok = 1; pthread_mutex_unlock(&G.mu);
+            pthread_mutex_lock(&G.mu); G.slice_ok = 1; G.slice_index = a->slice; pthread_mutex_unlock(&G.mu);
             logf_("slice %d on %s", a->slice, G.band);
         } else if (seq == a->want_stream) {
             a->want_stream = 0;
@@ -2113,6 +2116,40 @@ static int selftest_release_on_term(void)
     return 0;
 }
 
+/* The status names the radio's index for our slice, so a GUI client can
+ * leave it alone (#7139), and -1 once the radio has removed it. */
+static int selftest_slice_index(void)
+{
+    int p[2];
+    if (pipe(p)) return 1;
+    fcntl(p[1], F_SETFL, O_NONBLOCK);
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = p[1];
+    a.slice = -1;
+    a.orphan = -1;
+    config_t c;
+    config_default(&c);
+    char l[160];
+    static char out[512 * 1024];
+    a.want_slice = 8;
+    a.create_hz = 14095600;
+    strcpy(l, "R8|0|5");
+    api_line(&a, l, &c);
+    buf_t b = {out, 0, sizeof out, 0};
+    status_json(&b, 0);
+    int fail = b.full || !strstr(out, "\"slice_index\":5,");
+    strcpy(l, "S1|slice 5 in_use=0");
+    api_line(&a, l, &c);
+    buf_t e = {out, 0, sizeof out, 0};
+    status_json(&e, 0);
+    fail |= e.full || !strstr(out, "\"slice_index\":-1,");
+    close(p[0]);
+    close(p[1]);
+    if (fail) printf("selftest FAIL: the status does not name our slice's index\n");
+    return fail;
+}
+
 /* At start, the saved index is removed only when its status in the
  * `sub slice all` dump is exactly what we leave behind. Any other slice at
  * that index, or any status after the dump's reply, is left alone. */
@@ -2222,7 +2259,7 @@ static int selftest(double snr_db)
     if (selftest_persistence() || selftest_spots() || selftest_upload_off()
         || selftest_busy_cycle() || selftest_radio_lines() || selftest_ntp_fallback()
         || selftest_save_failure() || selftest_retune_mode() || selftest_release_on_term()
-        || selftest_orphan() || selftest_slice_file()) return 1;
+        || selftest_orphan() || selftest_slice_file() || selftest_slice_index()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
         if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
     if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }
