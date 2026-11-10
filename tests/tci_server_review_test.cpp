@@ -2508,17 +2508,18 @@ public:
 
         server.stopIqForClient(server.m_clients[0], 0);
         if (!server.m_tciIqChannels.contains(1)
-            || server.m_pendingIqRemovals.contains(1)
             || !server.m_clients[1].iqReceivers.contains(0)) {
             std::printf("      one client's stop released a shared channel\n");
             return false;
         }
 
         // Last subscriber leaves. The radio never confirmed the create, so the
-        // removal parks until the status lands — and the pan binding is dropped
-        // now rather than being left routed at a channel nothing reads.
+        // model revokes it and removes its late ID; TCI releases the channel
+        // and drops the pan binding now rather than leaving it routed at a
+        // channel nothing reads.
         server.stopIqForClient(server.m_clients[1], 0);
-        return server.m_pendingIqRemovals.contains(1)
+        return !server.m_tciIqChannels.contains(1)
+            && !model.daxIqModel().createPending(1)
             && server.m_iqPanChannel.isEmpty();
     }
 

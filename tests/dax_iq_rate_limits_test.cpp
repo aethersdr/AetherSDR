@@ -106,6 +106,44 @@ public:
         return ok;
     }
 
+    // A pan that closed while TCI IQ was bound to it must not hold the channel.
+    static bool closedPanReleasesBinding(RadioModel& model, const std::function<void(const QString&)>& changeModel)
+    {
+        changeModel(QStringLiteral("FLEX-6700"));
+        TciServer server(&model);
+        model.handleStatusForTest(QStringLiteral("slice 0"),
+            {{"in_use", "1"}, {"client_handle", "0x71"}, {"pan", "0x40000001"}, {"mode", "USB"}});
+        server.wireSlice(0, model.slice(0));
+        model.handleStatusForTest(QStringLiteral("display pan 0x40000001"), {{"client_handle", "0x71"}});
+        server.m_iqPanChannel.insert(QStringLiteral("0x4000000f"), 1);
+        server.m_tciIqChannels.insert(1);
+        (void)server.ensureIqStream(0);
+        const bool released = !server.m_iqPanChannel.contains(QStringLiteral("0x4000000f"));
+        server.resetIqStreamBookkeeping();
+        return released;
+    }
+
+    // A TCI release before the create status must not leave the channel marked
+    // for removal: an operator stream the DAX IQ applet opens there later survives.
+    static bool releaseBeforeStatusSparesLaterStream(RadioModel& model)
+    {
+        TciServer server(&model);
+        DaxIqModel& iq = model.daxIqModel();
+        server.m_tciIqChannels.insert(2);
+        server.releaseIqChannel(2);
+        iq.createStream(2);
+        QSignalSpy requests(&iq, &DaxIqModel::controlRequested);
+        iq.applyStreamStatus(0x120, {{"daxiq_channel", "2"}, {"daxiq_rate", "48000"}});
+        bool removed = false;
+        for (const QList<QVariant>& args : requests) {
+            const AudioStreamRequest request = qvariant_cast<AudioStreamRequest>(args.first());
+            removed = removed || (request.action == AudioStreamAction::Remove && request.streamId == 0x120);
+        }
+        const bool spared = iq.stream(2).exists && !removed;
+        server.resetIqStreamBookkeeping();
+        return spared;
+    }
+
     static bool rateReplacement(RadioModel& model, const std::function<void(const QString&)>& changeModel)
     {
         TciServer server(&model);
@@ -346,6 +384,13 @@ int main(int argc, char** argv)
     check(TciServerReviewTest::rateReplacement(model, [source](const QString& name) {
         source->model = name;
     }), "TCI retains 192k preference, restores at 96k, refuses unsupported SET and announces effective rate");
+    iq.handleDisconnect();
+    check(TciServerReviewTest::closedPanReleasesBinding(model, [source](const QString& name) {
+        source->model = name;
+    }),
+          "a closed pan's TCI IQ binding is dropped instead of blocking the channel");
+    check(TciServerReviewTest::releaseBeforeStatusSparesLaterStream(model),
+          "a TCI IQ release before the create status spares a later DAX IQ applet stream");
     iq.handleDisconnect();
 #endif
 

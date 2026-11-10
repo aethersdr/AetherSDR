@@ -149,7 +149,9 @@ ReceiveDispatch RadioModel::requestAudioStream(AudioStreamRequest request, const
                 if ((!current || pending->completed) && pending->request.kind != AudioStreamKind::DaxTransmit) {
                     bool newerCreate = false;
                     for (auto it = alive->m_audioPending.cbegin(); it != alive->m_audioPending.cend(); ++it) {
-                        newerCreate = newerCreate || (it.key() > ticket && it.value()->request.kind == pending->request.kind
+                        newerCreate = newerCreate || (it.key() > ticket
+                            && it.value()->request.action == AudioStreamAction::Create
+                            && it.value()->request.kind == pending->request.kind
                             && it.value()->request.channel == pending->request.channel);
                     }
                     if (!newerCreate) {
@@ -212,7 +214,7 @@ ReceiveDispatch RadioModel::requestGraphicEq(GraphicEqRequest request)
 
 ReceiveDispatch RadioModel::requestPanIqBinding(PanadapterModel* pan, int channel)
 {
-    if (!pan || clientHandle() == 0 || pan->ownerHandle() != clientHandle()) { return ReceiveDispatch::Unsupported; }
+    if (!pan || clientHandle() == 0 || !pan->ownedByClient(clientHandle())) { return ReceiveDispatch::Unsupported; }
     return requestPanDisplay(pan, {PanDisplayField::DaxIqChannel, channel});
 }
 

@@ -192,6 +192,19 @@ void cancellation()
     }
     {
         AudioFixture f;
+        f.stream(0x150);
+        AudioStreamRequest create{AudioStreamKind::Iq, AudioStreamAction::Create, 0, 1};
+        create.guard = AudioControlGuard::create(30000);
+        f.radio.requestAudioStream(create);
+        create.guard.revoke();
+        check(f.radio.requestAudioStream({AudioStreamKind::Iq, AudioStreamAction::Remove, 0x150, 1})
+            == ReceiveDispatch::Dispatched, "a newer remove on the same channel is pending");
+        f.answer(0, 0x100);
+        check(f.backend->commands().count(QStringLiteral("stream remove 0x100")) == 1,
+            "only a newer create, not a newer remove, spares a canceled late allocation");
+    }
+    {
+        AudioFixture f;
         int calls = 0;
         f.radio.requestAudioStream({AudioStreamKind::Iq, AudioStreamAction::Create, 0, 1},
             [&](const AudioStreamReply&) { ++calls; });
@@ -246,6 +259,11 @@ void iqAndBinding()
     check(!second.permits() && f.radio.requestPanIqBinding(pan, 1) == ReceiveDispatch::Unsupported,
         "pan ownership change closes binding admission and its queued write");
     pan->setClientHandle(QStringLiteral("71"));
+    PanadapterModel* unknownOwner = f.publish(QStringLiteral("0x40000002"));
+    unknownOwner->setClientHandle(QStringLiteral("0"));
+    check(unknownOwner->ownerHandle() == 0
+        && f.radio.requestPanIqBinding(unknownOwner, 1) == ReceiveDispatch::Dispatched,
+        "a pan whose owner the radio has not reported binds IQ like every other pan control");
     f.radio.requestPanIqBinding(pan, 1);
     const AudioControlGuard third = f.guards.back();
     TxOperationIntegrationTestAccess::resetAudio(f.radio);

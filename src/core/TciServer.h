@@ -422,7 +422,6 @@ private:
     // receiver whose create was lost or which outlived a stop()/start() cycle.
     QSet<int>          m_tciIqChannels;      // 1-based channels TCI created
     QSet<int>          m_iqCreateInFlight;   // create issued, status not yet seen
-    QSet<int>          m_pendingIqRemovals;  // awaiting a create status to reap
     QHash<QString,int> m_iqPanChannel;       // panId → TCI-owned DAX IQ channel
     int                m_announcedIqSampleRate{48000};
     int                m_iqSampleRate{48000};// shared requested rate, all TCI receivers
