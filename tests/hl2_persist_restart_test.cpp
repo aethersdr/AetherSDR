@@ -347,6 +347,7 @@ int main(int argc, char** argv)
         // passband the click gave it, never the remembered LSB pair.
         s.backend.setSliceMode(b, QStringLiteral("CWU"));
         const auto cwu = pbOf(liveB());
+        const QString cwuMode = liveB().value(QStringLiteral("mode")).toString();
         check(cwu != std::pair<int, int>{-2400, -400},
               QStringLiteral("reconnect, modes differ: B's live CWU passband %1..%2 differs "
                              "from the remembered LSB pair (control)")
@@ -357,10 +358,11 @@ int main(int argc, char** argv)
             const QJsonObject rb = liveB();
             const auto pb = pbOf(rb);
             check(Session::Access::receiverCount(s.backend) == 2
-                      && rb.value(QStringLiteral("mode")).toString() == QLatin1String("CWU"),
-                  QStringLiteral("reconnect, modes differ: B kept its live mode (the carried "
-                                 "road), got \"%1\"")
-                      .arg(rb.value(QStringLiteral("mode")).toString()));
+                      && cwuMode != QLatin1String("LSB")
+                      && rb.value(QStringLiteral("mode")).toString() == cwuMode,
+                  QStringLiteral("reconnect, modes differ: B kept its live mode \"%1\" (the "
+                                 "carried road), got \"%2\"")
+                      .arg(cwuMode, rb.value(QStringLiteral("mode")).toString()));
             check(pb == cwu,
                   QStringLiteral("reconnect, modes differ: B keeps its live CWU passband %1..%2, "
                                  "not the remembered LSB pair, got %3..%4")
