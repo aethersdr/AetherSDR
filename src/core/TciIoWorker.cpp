@@ -139,6 +139,10 @@ void TciIoWorker::stop()
     }
     m_clients.clear();
     m_rxClients.clear();
+    m_lineOutClients.clear();
+    m_lineOutEpoch = {};
+    m_lineOutNextSample = 0;
+    m_lineOutGate = {};
     if (m_server) {
         m_server->close();
         delete m_server;
@@ -216,22 +220,7 @@ void TciIoWorker::acceptConnections()
         const quint64 id = client.lifetime->id;
         m_clients.insert(id, client);
         connect(socket, &QWebSocket::textMessageReceived, this, [this, id](const QString& text) {
-            auto it = m_clients.find(id);
-            if (it == m_clients.end() || !it->lifetime->live.load()) { return; }
-            const qsizetype bytes = text.size() * sizeof(QChar);
-            if (bytes > kTextBytes - it->textBytes || it->texts.size() >= 64) {
-                closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
-                return;
-            }
-            const QStringList commands = text.split(QLatin1Char(';'), Qt::SkipEmptyParts);
-            if (it->texts.size() + commands.size() > 64) {
-                closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
-                return;
-            }
-            for (const QString& command : commands) { it->texts.push_back({command + QLatin1Char(';'), {}}); }
-            if (it->activated) { captureTextInputs(*it); }
-            it->textBytes += bytes;
-            dispatchText(id);
+            receiveText(id, text);
         });
         connect(socket, &QWebSocket::binaryMessageReceived, this, [this, id](const QByteArray& data) {
             receiveBinary(id, data);
@@ -257,6 +246,28 @@ void TciIoWorker::acceptConnections()
         });
         emit clientOpened(client.lifetime, socket->peerAddress(), socket->peerPort());
     }
+}
+
+void TciIoWorker::receiveText(quint64 id, const QString& text)
+{
+    auto it = m_clients.find(id);
+    if (it == m_clients.end() || !it->lifetime->live.load()) { return; }
+    const qsizetype bytes = text.size() * sizeof(QChar);
+    if (bytes > kTextBytes - it->textBytes || it->texts.size() >= 64) {
+        closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
+        return;
+    }
+    const QStringList commands = text.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    if (it->texts.size() + commands.size() > 64) {
+        closeClient(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("TCI command backlog"));
+        return;
+    }
+    for (const QString& command : commands) {
+        it->texts.push_back({command + QLatin1Char(';'), {}, false, m_daxTxAudioPermit});
+    }
+    if (it->activated) { captureTextInputs(*it); }
+    it->textBytes += bytes;
+    dispatchText(id);
 }
 
 void TciIoWorker::activate(quint64 id, const TxCoordinator::Producer& producer)
@@ -309,7 +320,13 @@ void TciIoWorker::dispatchText(quint64 id)
     it->textInFlight = true;
     // Includes the in-flight message until acknowledgement; controller backlog
     // remains bounded while its event loop is busy.
-    emit textReceived(id, text.message, text.input);
+    emit textReceived(id, text.message, text.input, text.daxPermit);
+}
+
+void TciIoWorker::setDaxTxAudioPermit(const DaxTxAudioPermit& permit)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    m_daxTxAudioPermit = permit;
 }
 
 void TciIoWorker::acknowledgeText(quint64 id)
@@ -358,7 +375,107 @@ void TciIoWorker::removeClient(quint64 id)
 {
     if (m_txClient == id) { stopChrono(); }
     m_rxClients.remove(id);
+    m_lineOutClients.remove(id);
     m_clients.remove(id);
+}
+
+void TciIoWorker::configureLineOut(const TciLineOutConfig& config)
+{
+    if (!config.lifetime || !config.lifetime->live.load()) { return; }
+    const quint64 id = config.lifetime->id;
+    if (config.receivers.isEmpty()) {
+        m_lineOutClients.remove(id);
+        return;
+    }
+    LineOutClient& client = m_lineOutClients[id];
+    if (client.config.generation != config.generation
+        || client.config.receivers != config.receivers) {
+        client.converter.reset();
+    }
+    client.config = config;
+}
+
+void TciIoWorker::setLineOutIncludeTx(bool enabled)
+{
+    if (m_lineOutIncludeTx == enabled) { return; }
+    m_lineOutIncludeTx = enabled;
+    for (LineOutClient& client : m_lineOutClients) { client.converter.reset(); }
+}
+
+bool TciIoWorker::lineOutDeliveryCurrent(quint64 id, quint64 generation, int receiver,
+    const PcmFrame& frame, const std::shared_ptr<TciRxConverter>& converter) const
+{
+    const auto client = m_lineOutClients.constFind(id);
+    return frame.current() && m_lineOutEpoch.current()
+        && frame.stream() == m_lineOutEpoch.stream()
+        && client != m_lineOutClients.cend() && client->config.lifetime->live.load()
+        && client->config.generation == generation
+        && client->config.receivers.contains(receiver) && client->converter == converter;
+}
+
+void TciIoWorker::receiveLineOutPcm(const PcmFrame& frame, bool transmitting)
+{
+    const PcmFrame input = frame;
+    if (m_lineOutProcessing || m_lineOutClients.isEmpty() || !input.current()
+        || input.stream().purpose != PcmPurpose::Speaker) { return; }
+    if (m_lineOutEpoch.current() && m_lineOutEpoch.stream() != input.stream()) { return; }
+    if (!m_lineOutGate.accept(input)) { return; }
+    m_lineOutProcessing = true;
+    QPointer<TciIoWorker> self(this);
+    const auto guard = qScopeGuard([self] { if (self) { self->m_lineOutProcessing = false; } });
+    if (m_lineOutEpoch.stream() != input.stream()
+        || m_lineOutNextSample != input.firstSample() || input.discontinuity()
+        || m_lineOutTransmitting != transmitting) {
+        for (LineOutClient& client : m_lineOutClients) { client.converter.reset(); }
+    }
+    m_lineOutEpoch = input.epochLease();
+    m_lineOutNextSample = input.firstSample() + input.frameCount();
+    m_lineOutTransmitting = transmitting;
+    QVector<float> samples = input.samples();
+    if (transmitting && !m_lineOutIncludeTx) { samples.fill(0.0f); }
+    const QList<quint64> recipients = m_lineOutClients.keys();
+    for (quint64 id : recipients) {
+        auto client = m_lineOutClients.find(id);
+        if (client == m_lineOutClients.end() || !client->config.lifetime->live.load()) { continue; }
+        const TciLineOutConfig config = client->config;
+        std::shared_ptr<TciRxConverter> converter = client->converter;
+        if (!converter) {
+            converter = std::make_shared<TciRxConverter>(input.stream().format, 48000);
+            if (!converter->valid()) { continue; }
+            client->converter = converter;
+        }
+        const auto send = m_rxSend;
+        const auto backlog = m_rxBacklog;
+        converter->process(std::span<const float>(samples.constData(), samples.size()),
+            [self, id, config, converter, input, send, backlog](QVector<float> stereo) {
+                for (int receiver : config.receivers) {
+                    if (!self || !self->lineOutDeliveryCurrent(id, config.generation, receiver, input, converter)) { return false; }
+                    const QByteArray packet = encodeRxAudio(receiver, 48000, 2, 3, stereo, 1.0f, 4);
+                    const qint64 pending = backlog(id);
+                    if (!self || !self->lineOutDeliveryCurrent(id, config.generation, receiver, input, converter)) { return false; }
+                    if (pending < 0 || pending > kMaxRxBacklogBytes - packet.size()) {
+                        self->m_lineOutClients.remove(id);
+                        emit self->lineOutStopped(id, config.generation);
+                        if (!self) { return false; }
+                        qCWarning(lcCat) << "TCI: Line Out audio stopped: backlog limit"
+                                        << "client=" << id << "pending_bytes=" << pending;
+                        self->m_rxClose(id, QWebSocketProtocol::CloseCodeTooMuchData, QStringLiteral("Line Out backlog limit"));
+                        return false;
+                    }
+                    const qint64 sent = send(id, packet);
+                    if (!self) { return false; }
+                    if (sent != packet.size()) {
+                        self->m_lineOutClients.remove(id);
+                        emit self->lineOutStopped(id, config.generation);
+                        qCWarning(lcCat) << "TCI: Line Out audio stopped: send failed"
+                                        << "client=" << id << "sent_bytes=" << sent;
+                        return false;
+                    }
+                }
+                return self && input.current();
+            });
+        if (!self) { return; }
+    }
 }
 
 void TciIoWorker::configureClient(const TciStreamConfig& config)
@@ -464,7 +581,7 @@ void TciIoWorker::receivePcm(quint64 key, const PcmFrame& frame)
     if (recipients.isEmpty()) { return; }
     double sum = 0;
     for (float sample : input.samples()) { sum += double(sample) * sample; }
-    publishRxLevel(binding.gainChannel, float(std::sqrt(sum / input.samples().size()) * gain));
+    publishRxLevel(binding.gainChannel, float(std::sqrt(sum / input.samples().size())));
     if (!self || !input.current() || !binding.current()) { return; }
     for (const auto& [id, generation] : recipients) {
         auto client = m_rxClients.find(id);
@@ -559,7 +676,7 @@ void TciIoWorker::stopChrono()
 
 
 QByteArray TciIoWorker::encodeRxAudio(int trx, int rate, int channels, int format,
-                                   const QVector<float>& stereo, float gain)
+                                   const QVector<float>& stereo, float gain, int type)
 {
     const int frames = static_cast<int>(stereo.size() / 2);
     const int scalars = frames * channels;
@@ -570,7 +687,7 @@ QByteArray TciIoWorker::encodeRxAudio(int trx, int rate, int channels, int forma
     header.sampleRate = static_cast<quint32>(rate);
     header.format = static_cast<quint32>(format);
     header.length = static_cast<quint32>(scalars);
-    header.type = 1;
+    header.type = static_cast<quint32>(type);
     header.channels = static_cast<quint32>(channels);
     std::memcpy(packet.data(), &header, sizeof(header));
     for (int i = 0; i < scalars; ++i) {

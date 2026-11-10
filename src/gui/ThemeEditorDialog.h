@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QColor>
 #include <QPointer>
@@ -24,7 +24,10 @@ class TokenEditorWidget;
 // and theme import. Committed edits go through ThemeManager and live-repaint
 // every applyStyleSheet() widget. "Save As..." writes
 // <GenericConfigLocation>/AetherSDR/themes/<name>.json and activates it.
-class ThemeEditorDialog : public PersistentDialog {
+// View → Theme Editor…, in a canon workspace (RFC #6226, #7057). Only the
+// editor's chrome is canon: every swatch and value is read through the root /
+// explicit-path ThemeManager API, so what it shows stays the edited theme.
+class ThemeEditorDialog : public CanonWindow {
     Q_OBJECT
 public:
     explicit ThemeEditorDialog(QWidget* parent = nullptr);

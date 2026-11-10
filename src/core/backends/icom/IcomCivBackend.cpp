@@ -361,6 +361,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.broadcastFmReceive = std::nullopt;
     c.fmDtcsCodes = {};
     c.family = QStringLiteral("icom");
+    c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
     c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
@@ -407,6 +408,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
     c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
+    c.cwTextControl = std::nullopt;
     c.cwTextKeyerName = QStringLiteral("CWK");
     c.cwTextMinWpm = profile.cwTextKeyer ? profile.cwTextKeyer->minWpm : 6;
     c.cwTextMaxWpm = profile.cwTextKeyer ? profile.cwTextKeyer->maxWpm : 48;
@@ -536,9 +538,16 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // No DDC in any networked Icom's receive chain — CI-V ships finished audio
     // (see hasDaxStreams below), not a decimated IQ stream with an edge to taper.
     c.hasDdcPanEdgeRolloff = false;
-    // CI-V has no per-pan zoom-to-band/segment verb; the scope span is set
-    // directly, not by a radio-owned flag.
-    c.panZoomModes = std::nullopt;
+    // A scope-capable model can fulfill band/segment zoom by setting its native
+    // span; the radio still owns the center. The widths come from the same
+    // detent table used by setPanBandwidth() and the limits status.
+    if (m.hasScope) {
+        const auto widths = availableBandwidthsHz();
+        c.panZoomModes = RadioCapabilities::PanZoomModes{
+            QStringLiteral("setPanBandwidth"),
+            RadioCapabilities::PanZoomModes::Control::NativeScopeSpan,
+            QVector<int>(widths.begin(), widths.end())};
+    }
     c.panFrameRateShaping = std::nullopt;  // no client owner is declared for FFT FPS
     // CI-V carries no waterfall rate: the client is the only memory it has.
     c.panWaterfallRateShaping =
@@ -1848,6 +1857,7 @@ void IcomCivBackend::initialiseScopeMode(ScopeMode reported)
     m_scopeModeRequestedAtMs = nowMs();
     m_scopePublishedModeIndex = scopeModeIndexFor(m_scopeView);
     emit panScopeModeChanged(panId(), m_scopePublishedModeIndex);
+    publishZoomPlacement();
     selectScopeEdgeSlot(IcomCivScheduler::Priority::Maintenance);
     queueWrite(cmdScopeMode(m_session->civAddress(),
                             static_cast<std::uint8_t>(ScopeMode::ScrollF), m_scopeSelector),
@@ -2093,6 +2103,7 @@ void IcomCivBackend::publishScopeModes()
         if (hasScope) {
             emit panScopeModeChanged(panId(), kScopeModeIndexCenter);
         }
+        publishZoomPlacement(/*force*/ true);
         return;
     }
     emit panScopeModesChanged(panId(), {QStringLiteral("Center"), QStringLiteral("Scroll-F"),
@@ -2101,6 +2112,7 @@ void IcomCivBackend::publishScopeModes()
     // commanded mode count before its sweeps arrive is armed only by a write.
     m_scopePublishedModeIndex = scopeModeIndexFor(m_scopeView);
     emit panScopeModeChanged(panId(), m_scopePublishedModeIndex);
+    publishZoomPlacement(/*force*/ true);
 }
 
 void IcomCivBackend::noteSweepScopeMode(ScopeMode mode)
@@ -2126,6 +2138,7 @@ void IcomCivBackend::noteSweepScopeMode(ScopeMode mode)
         resetScopeEdgeState();
     }
     publishReportedScopeMode();
+    publishZoomPlacement();
 }
 
 // The Scope row lights the radio's reported mode. Fixed lights only on our
@@ -2152,6 +2165,43 @@ void IcomCivBackend::publishReportedScopeMode()
     emit panScopeModeChanged(panId(), index);
 }
 
+PanZoomPlacement IcomCivBackend::zoomPlacement() const
+{
+    if (!m_model || !m_model->hasScope) {
+        return PanZoomPlacement::Unknown;
+    }
+    if (!scopeModesOffered()) {
+        return PanZoomPlacement::FitAroundCenter;
+    }
+    if (scopeWindowIsEdgeDriven()) {
+        return PanZoomPlacement::CenterAllocation;
+    }
+    if (scopeModeChangeInFlight()) {
+        return m_scopeView == ScopeView::Center ? PanZoomPlacement::FitAroundCenter
+                                                : PanZoomPlacement::Unknown;
+    }
+    if (!m_scopeReportedMode) {
+        return PanZoomPlacement::Unknown;
+    }
+    // Fixed that is not edge-driven (an operator preset, or a slot never read
+    // back) is put back by setPanBandwidth().
+    if (*m_scopeReportedMode == ScopeMode::Fixed) {
+        return PanZoomPlacement::Unavailable;
+    }
+    // Center and SCROLL-C take a span around the radio's center.
+    return PanZoomPlacement::FitAroundCenter;
+}
+
+void IcomCivBackend::publishZoomPlacement(bool force)
+{
+    const PanZoomPlacement placement = zoomPlacement();
+    if (!force && m_zoomPlacementPublished == placement) {
+        return;
+    }
+    m_zoomPlacementPublished = placement;
+    emit panZoomPlacementChanged(panId(), placement);
+}
+
 void IcomCivBackend::setPanScopeMode(const QString&, int index)
 {
     if (!scopeModesOffered()) {
@@ -2172,6 +2222,7 @@ void IcomCivBackend::setPanScopeMode(const QString&, int index)
     m_scopeModeRequestedAtMs = nowMs();
     m_scopePublishedModeIndex = scopeModeIndexFor(view);
     emit panScopeModeChanged(panId(), m_scopePublishedModeIndex);
+    publishZoomPlacement();
     if (!m_session || !m_connected) {
         return;
     }
@@ -2224,6 +2275,7 @@ void IcomCivBackend::handleScopeReply(const CivFrame& frame)
             }
             m_scopeEdgeNumber = edge;
             publishReportedScopeMode();
+            publishZoomPlacement();
         }
     } else if (frame.sub == scope::kMode) {
         const int mode = decodeBcdByte(frame.data[1]);
@@ -2288,6 +2340,7 @@ void IcomCivBackend::resetScopeEdgeState()
         // A new session (or a new radio) re-reads all of this.
         m_scopeReportedMode.reset();
         m_scopePublishedModeIndex = -2;
+        m_zoomPlacementPublished.reset();
         m_scopeModeRequestedAtMs = 0;
         m_scopeEdgeNumber = 0;
         m_scopeLowerHz = 0;
@@ -2425,6 +2478,7 @@ void IcomCivBackend::onScopeSelectorChanged(std::uint8_t selector)
     m_scopeModeRequestedAtMs = 0;
     // The other scope's slot is unknown until its 27 16 reply: not ours.
     m_scopeEdgeNumber = 0;
+    publishZoomPlacement();
     if (!m_session || !scopeModesOffered()) {
         return;
     }

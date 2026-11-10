@@ -1,8 +1,10 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "CwReceiveControl.h"
 #include "SpotRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
+#include "CwTextRequest.h"
 #include "PanDisplayRequest.h"
 #include "PanLifecycleRequest.h"
 
@@ -426,17 +428,14 @@ struct RadioCapabilities {
     }
 
 
-    // Per-pan band/segment zoom: `display pan set <panId> band_zoom=<0|1>` and
-    // `segment_zoom=` (#4057). Absent refuses: every surface that can issue the
-    // write asks gui/PanZoomModeGate.h, so a radio with no such verb never shows a
-    // zoom control that moves without effect (HERMES.md §17). A record so a radio
-    // answering only one of the two keys can gain a field here.
+    // Per-pan band/segment zoom. Flex has radio-owned mode flags; Icom scope
+    // radios use native span detents. Absent refuses every surface through
+    // gui/PanZoomModeGate.h.
     struct PanZoomModes {
-        // The verb that carries both modes, recorded so the declaration names
-        // what it grants rather than being a bare presence bit. DIAGNOSTIC, in
-        // exactly TwoToneGenerator::selectionCommand's sense below: the gate
-        // branches on this record being ENGAGED and never on the string.
+        enum class Control { RadioFlags, NativeScopeSpan };
         QString setCommand;
+        Control control = Control::RadioFlags;
+        QVector<int> nativeWidthsHz;
     };
     std::optional<PanZoomModes> panZoomModes;
 
@@ -669,6 +668,7 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    std::optional<CwReceiveControl> cwReceiveControl;
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
     std::optional<PanControl> panControl;
@@ -828,6 +828,15 @@ struct RadioCapabilities {
         QString requiredLicenseFeature;
     };
     std::optional<AutoAgcThresholdControl> autoAgcThresholdControl;
+    // The gain the AGC-T knob (0..100) sets: offsetDb + dbPerStep * knob, both
+    // as the AGC's maximum gain and, with AGC off, as its fixed gain. The AGC-T
+    // tooltips show it. Absent: no mapping declared, and the tooltips show the
+    // knob position as before.
+    struct AgcGainScale {
+        double offsetDb = 0.0;
+        double dbPerStep = 1.0;
+    };
+    std::optional<AgcGainScale> agcGainScale;
     // Modes the implemented selector can honor. A native OFF time-constant
     // editor is a different contract from selecting a fast/medium/slow bank.
     QStringList agcModes{QStringLiteral("off"), QStringLiteral("slow"),
@@ -965,6 +974,7 @@ struct RadioCapabilities {
     int cwPitchStepHz = 10;
 
     QString cwTextKeyerName{QStringLiteral("CWX")};
+    std::optional<CwTextControl> cwTextControl;
     int cwTextMinWpm = 5;
     int cwTextMaxWpm = 100;
     int cwTextMaxMessageChars = 0;  // 0 = backend has no fixed whole-message limit
@@ -998,6 +1008,12 @@ struct RadioCapabilities {
     // action; meaningless unless hasWaveforms is also true.
     struct WaveformEnvControl {};
     std::optional<WaveformEnvControl> waveformEnvControl;
+    // The radio keeps its own list of NTP time sources that a client can list,
+    // add, remove, enable and disable (Flex `ntp_sources …`, SmartSDR 4.3.16+ on
+    // the BigBend platform: FLEX-8000, Aurora, ML-9600, CL-9300). Engaged gates NtpSourceRequest and the Radio Setup Time
+    // page; maxSources is the radio's ceiling.
+    struct NtpSourceControl { int maxSources{10}; };
+    std::optional<NtpSourceControl> ntpSourceControl;
 
     // Several GUI clients can hold independent sessions on the radio at once,
     // each with its own slices and audio streams (SmartSDR multiFLEX). A backend

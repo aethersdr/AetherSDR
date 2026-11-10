@@ -23,6 +23,7 @@ const sidebars = {
         "your-first-session",
         "installation",
         "first-connection",
+        "station-profiles",
         "before-you-transmit"
       ]
     },
@@ -33,6 +34,7 @@ const sidebars = {
         "supported-radios",
         "flexradio",
         "radio-health-tools",
+        "wspr-receiver",
         "hermes-lite-2",
         "networked-icom",
         "anan-g2",
@@ -153,6 +155,7 @@ const sidebars = {
       "label": "Settings",
       "items": [
         "radio-setup",
+        "ntp-time-sources",
         "audio-settings",
         "settings-and-backups",
         "keyboard-shortcuts",

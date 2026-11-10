@@ -18,8 +18,8 @@
     <ul>
       <li>Native SmartSDR protocol — speaks v1.4.0.0 directly without Wine or virtual machines</li>
       <li>GPU-accelerated spectrum and waterfall with multi-panadapter support and native VITA-49 streams</li>
-      <li>Aetherial Audio Channel Strip — unified RX/TX DSP suite with six noise-reduction engines</li>
-      <li>Multi-client (Multi-Flex) operation alongside SmartSDR and Maestro, plus SmartLink remote and TCI v2.0 server</li>
+      <li>Aetherial Audio Channel Strip — unified RX/TX DSP suite with seven noise-reduction engines</li>
+      <li>Multi-client (Multi-Flex) operation alongside SmartSDR and Maestro, plus SmartLink remote and a TCI server</li>
       <li>AetherModem packet radio, CW operator suite, FreeDV RADE, and per-slice WFM demodulator for satellite data</li>
     </ul>
   </description>
@@ -68,6 +68,8 @@
   </content_rating>
 
   <releases>
+    <release version="26.11.2" date="2026-11-08"/>
+    <release version="26.11.1" date="2026-11-01"/>
     <release version="26.10.4" date="2026-10-25"/>
     <release version="26.10.3" date="2026-10-18"/>
     <release version="26.10.2" date="2026-10-11"/>

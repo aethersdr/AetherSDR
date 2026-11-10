@@ -4,11 +4,13 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 
 #include <QDateTime>
 #include <QHash>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QMetaObject>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QThread>
@@ -32,6 +34,43 @@ namespace AetherSDR {
 using namespace flexkv;
 
 namespace {
+
+std::optional<quint32> daxTxIdentity(const QString& text)
+{
+    if (text.isEmpty() || text.size() > 10) {
+        return std::nullopt;
+    }
+    const bool prefixed = text.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive);
+    const qsizetype first = prefixed ? 2 : 0;
+    if (first == text.size()) {
+        return std::nullopt;
+    }
+    bool hexDigit = false;
+    for (qsizetype i = first; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        if (ch >= QLatin1Char('0') && ch <= QLatin1Char('9')) {
+            continue;
+        }
+        if ((ch >= QLatin1Char('a') && ch <= QLatin1Char('f'))
+            || (ch >= QLatin1Char('A') && ch <= QLatin1Char('F'))) {
+            hexDigit = true;
+            continue;
+        }
+        return std::nullopt;
+    }
+    bool ok = false;
+    const quint32 value = text.mid(first).toUInt(&ok, prefixed || hexDigit ? 16 : 10);
+    return ok && value != 0 ? std::optional<quint32>(value) : std::nullopt;
+}
+
+struct DaxTxReplyState {
+    DaxTxOwnershipCompletion completion;
+    bool sinkReturned{false};
+    bool received{false};
+    bool finished{false};
+    int code{0};
+    QString body;
+};
 
 QStringList uniqueCommaList(const QString& value)
 {
@@ -150,6 +189,174 @@ void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
 void FlexBackend::setCommandSink(std::function<bool(const QString&, CommandReply)> sink)
 {
     m_sink = std::move(sink);
+}
+
+void FlexBackend::setDaxTxClientHandleProvider(std::function<quint32()> provider)
+{
+    m_daxTxClientHandleProvider = std::move(provider);
+}
+
+void FlexBackend::setDaxTxCommandSink(
+    std::function<bool(const QString&, CommandReply, const DaxTxRequestGuard&)> sink)
+{
+    m_daxTxSink = std::move(sink);
+}
+
+ReceiveDispatch FlexBackend::requestDaxTxOwnership(const DaxTxOwnershipRequest& request,
+                                                  DaxTxOwnershipCompletion completion)
+{
+    const auto refuse = [&completion](const QString& reason) {
+        if (completion) {
+            completion(false, reason);
+        }
+        return ReceiveDispatch::Unsupported;
+    };
+    if (QThread::currentThread() != thread() || request.streamId == 0) {
+        return refuse(QStringLiteral("DAX TX ownership requires a valid stream on the backend thread."));
+    }
+    if (!request.guard.permits()) {
+        return refuse(QStringLiteral("The DAX TX ownership request is no longer current."));
+    }
+    const quint32 owner = m_daxTxClientHandleProvider ? m_daxTxClientHandleProvider() : 0;
+    const auto stream = m_daxTxStreams.constFind(request.streamId);
+    if (owner == 0 || stream == m_daxTxStreams.cend()
+        || stream->clientHandle != owner || !stream->tx.has_value()) {
+        return refuse(QStringLiteral("DAX TX ownership requires a confirmed stream owned by this client."));
+    }
+    if (!m_daxTxSink) {
+        return refuse(QStringLiteral("DAX TX ownership has no guarded command transport."));
+    }
+
+    const quint64 session = m_daxTxSession;
+    const quint64 incarnation = stream->incarnation;
+    const quint32 streamId = request.streamId;
+    const DaxTxRequestGuard guard = request.guard;
+    const QPointer<FlexBackend> receiver(this);
+    const auto reply = std::make_shared<DaxTxReplyState>();
+    reply->completion = std::move(completion);
+    const auto finish = [receiver, session, incarnation, streamId, owner, guard, reply]
+                        (int code, const QString& body) {
+        if (!receiver || reply->finished) {
+            return;
+        }
+        if (!reply->sinkReturned) {
+            if (!reply->received) {
+                reply->received = true;
+                reply->code = code;
+                reply->body = body;
+            }
+            return;
+        }
+        const auto current = receiver->m_daxTxStreams.constFind(streamId);
+        const bool valid = guard.permits() && session == receiver->m_daxTxSession
+            && current != receiver->m_daxTxStreams.cend()
+            && current->incarnation == incarnation && current->clientHandle == owner
+            && current->tx.has_value() && receiver->m_daxTxClientHandleProvider
+            && receiver->m_daxTxClientHandleProvider() == owner;
+        reply->finished = true;
+        DaxTxOwnershipCompletion completed = std::move(reply->completion);
+        if (completed) {
+            const QString reason = !valid
+                ? QStringLiteral("The DAX TX request or stream changed before the command reply.")
+                : code != 0
+                    ? QStringLiteral("Radio rejected DAX TX ownership (0x%1): %2")
+                          .arg(static_cast<quint32>(code), 0, 16).arg(body)
+                    : QString();
+            completed(valid && code == 0, reason);
+        }
+    };
+    const std::function<bool(const QString&, CommandReply, const DaxTxRequestGuard&)> sink = m_daxTxSink;
+    const bool dispatched = sink(QStringLiteral("stream set 0x%1 tx=%2")
+                                    .arg(request.streamId, 0, 16).arg(request.take ? 1 : 0),
+        [receiver, finish](int code, const QString& body) {
+            if (!receiver) {
+                return;
+            }
+            if (QThread::currentThread() != receiver->thread()) {
+                QMetaObject::invokeMethod(receiver, [finish, code, body] { finish(code, body); });
+            } else {
+                finish(code, body);
+            }
+        }, guard);
+    reply->sinkReturned = true;
+    if (!receiver) {
+        return ReceiveDispatch::Unsupported;
+    }
+    if (!dispatched) {
+        reply->finished = true;
+        DaxTxOwnershipCompletion completed = std::move(reply->completion);
+        if (completed) {
+            completed(false, QStringLiteral("DAX TX ownership was not dispatched to the radio."));
+        }
+        return ReceiveDispatch::Unsupported;
+    }
+    if (reply->received) {
+        finish(reply->code, reply->body);
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+void FlexBackend::decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    static const QRegularExpression pattern(
+        QStringLiteral("\\A(stream|tx_audio_stream) ([^\\s]+)(?: (removed))?\\z"));
+    const QRegularExpressionMatch match = pattern.match(object);
+    const std::optional<quint32> streamId = match.hasMatch()
+        ? daxTxIdentity(match.captured(2)) : std::nullopt;
+    if (!streamId) {
+        return;
+    }
+    const bool known = m_daxTxStreams.contains(*streamId);
+    const bool legacy = match.captured(1) == QLatin1String("tx_audio_stream");
+    const bool otherType = !legacy && kvs.contains(QStringLiteral("type"))
+        && kvs.value(QStringLiteral("type")) != QLatin1String("dax_tx");
+    DaxTxStreamDelta delta;
+    delta.streamId = *streamId;
+    delta.removed = !match.captured(3).isEmpty() || kvs.contains(QStringLiteral("removed"))
+        || kvs.value(QStringLiteral("in_use")) == QLatin1String("0") || (known && otherType);
+    if (delta.removed) {
+        ++m_daxTxIncarnation;
+        m_daxTxStreams.remove(*streamId);
+        emit daxTxStreamChanged(delta);
+        return;
+    }
+    if (otherType || (!known && !legacy
+        && kvs.value(QStringLiteral("type")) != QLatin1String("dax_tx"))) {
+        return;
+    }
+
+    if (!known) {
+        DaxTxStreamState state;
+        state.incarnation = ++m_daxTxIncarnation;
+        m_daxTxStreams.insert(*streamId, state);
+    }
+    DaxTxStreamState& state = m_daxTxStreams[*streamId];
+    if (kvs.contains(QStringLiteral("client_handle"))) {
+        delta.clientHandle = daxTxIdentity(kvs.value(QStringLiteral("client_handle")));
+        delta.invalidOwner = !delta.clientHandle.has_value();
+        if (delta.invalidOwner || state.clientHandle != delta.clientHandle) {
+            state.incarnation = ++m_daxTxIncarnation;
+            state.tx.reset();
+        }
+        state.clientHandle = delta.clientHandle;
+    }
+    if (kvs.contains(QStringLiteral("tx"))) {
+        const QString value = kvs.value(QStringLiteral("tx"));
+        if (value == QLatin1String("0") || value == QLatin1String("1")) {
+            delta.tx = value == QLatin1String("1");
+            if (state.clientHandle && !delta.invalidOwner) {
+                state.tx = delta.tx;
+            }
+        } else {
+            delta.invalidTx = true;
+            state.tx.reset();
+            state.incarnation = ++m_daxTxIncarnation;
+        }
+    }
+    emit daxTxStreamChanged(delta);
 }
 
 void FlexBackend::requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId)
@@ -698,6 +905,8 @@ RadioCapabilities FlexBackend::capabilities() const
         setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
     }
     caps.radioSetupControl = setup;
+    caps.cwReceiveControl = CwReceiveControl{{CwAutoTuneAction::Once,
+        CwAutoTuneAction::Start, CwAutoTuneAction::Stop}};
     caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
                                     SpotAction::Clear, SpotAction::Trigger}};
     caps.panControl = PanControl{{PanControlField::BandZoom, PanControlField::SegmentZoom,
@@ -778,6 +987,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // SmartSDR+ entitlement gate.
     caps.hasRadioSideCwKeyer = true;
     caps.cwTextKeyerName = QStringLiteral("CWX");
+    using CwField = CwTextRequest::Field;
+    caps.cwTextControl = CwTextControl{{CwField::Send, CwField::SendMacro,
+        CwField::SaveMacro, CwField::Speed, CwField::Delay, CwField::Qsk,
+        CwField::Erase, CwField::Clear}, CwTextControl::Completion::RadioCharacterIndex};
     caps.cwTextMinWpm = 5;
     caps.cwTextMaxWpm = 100;
     caps.cwTextMaxMessageChars = 0;
@@ -793,6 +1006,12 @@ RadioCapabilities FlexBackend::capabilities() const
     if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform != RadioPlatform::Unknown
         && !isKnownNonWfpPlatform(mc.platform)) {
         caps.waveformEnvControl = RadioCapabilities::WaveformEnvControl{};
+    }
+    // The radio's own NTP time sources (FlexLib 4.3.16 NtpSource.cs; SMART-10565
+    // names FLEX-8000/Aurora). FlexLib subscribes on every radio, so the gate is
+    // the platform those share: BigBend, ML-9600 and CL-9300 included.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform == RadioPlatform::BigBend) {
+        caps.ntpSourceControl = RadioCapabilities::NtpSourceControl{NtpSourceRules::kMaxSources};
     }
     caps.hasMultiClientSessions = true;  // multiFLEX
     caps.alwaysUseClientSideSpots = false;
@@ -913,6 +1132,7 @@ ReceiveDispatch FlexBackend::requestSliceAgcThresholdMode(int sliceId, AgcThresh
 
 void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
 {
+    if (sliceId < 0 || !request.valid()) { return; }
     // FlexLib 4.2.18 Slice: each AGC setter writes only its own field.
     switch (request.field) {
     case SliceAgcRequest::Field::Mode:
@@ -1466,7 +1686,8 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
     }
 
     for (int index : meterOrder) {
-        const QMap<QString, QString>& f = grouped.constFind(index).value();
+        const auto group = grouped.constFind(index);
+        const QMap<QString, QString>& f = group.value();
         // Build the typed MeterDef directly (#4070). Present-only: a field the
         // wire didn't report keeps its MeterDef default. The carry() ok-guard is
         // defensive/consistency only here — a plain MeterDef field's default IS
@@ -1863,6 +2084,8 @@ void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, Q
 
 void FlexBackend::clearExtensionHandles()
 {
+    ++m_daxTxSession;
+    m_daxTxStreams.clear();
     // Identity replies belong to the same session as the cached encode handles.
     ++m_nicknameSession;
     ++m_tuneOutputSession;

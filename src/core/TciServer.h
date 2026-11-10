@@ -1,6 +1,7 @@
 #pragma once
 #ifdef HAVE_WEBSOCKETS
 
+#include "DaxTxAudioPermit.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
 #include "TciAudioHeader.h"
@@ -12,6 +13,7 @@
 #include "PcmFrame.h"
 #include "TxCoordinator.h"
 #include "core/backends/SliceLifecycleRequest.h"
+#include "models/RadioSwrValidityFilter.h"
 
 #include <QWebSocketProtocol>  // CloseCode for the m_rxClose test seam
 #include <QObject>
@@ -109,6 +111,12 @@ public:
     QVector<TciClientInfo> connectedClients() const;
 
     void setAudioEngine(AudioEngine* audio);
+    void setLineOutIncludeTx(bool enabled);
+    bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
+    void setLineOutPcAudioOffConsent(bool enabled);
+    bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
+    // The application owns PC Audio preferences; refresh after its toggle.
+    void updateLineOutCapture();
     // Thread-safe owning ingress, safe even if a source callback overlaps
     // controller destruction. The closure contains no controller pointer.
     std::function<void(int, const PcmFrame&)> daxPcmSink() const;
@@ -142,10 +150,8 @@ public:
     void setOverflowMode(int mode);
     int overflowMode() const { return static_cast<int>(m_overflowMode); }
 
-    // Per-channel TCI RX gain (0.0–1.0), applied to outbound DAX audio before
-    // resampling and sending to TCI clients.  Decoupled from DaxRxGain<n> so
-    // DAX bridge and TCI maintain independent per-channel gains.
-    // Channel is 1-based (1–4).  Persists to TciRxGain<channel>.
+    // Per-channel TCI RX attenuation, from silence through unity (0.0-1.0).
+    // Independent of DAX bridge gain; channels 1-8 persist to TciRxGain<channel>.
     void setRxChannelGain(int channel, float gain);
     float rxChannelGain(int channel) const;
 
@@ -173,6 +179,8 @@ public slots:
     void onDaxStreamUnregistered(int channel, quint32 streamId);
 
 signals:
+    void lineOutIncludeTxChanged(bool enabled);
+    void lineOutPcAudioOffConsentChanged(bool enabled);
     void clientCountChanged(int count);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
@@ -186,7 +194,7 @@ signals:
     // emitted but can be muted per-command via the monitor's
     // suppression list to keep the stream readable.
     void tciMessage(const QString& direction, const QString& text);
-    void rxLevel(int channel, float rms);  // 1-based channel, RMS of TCI-gained RX audio
+    void rxLevel(int channel, float rms);  // 1-based channel, pre-fader RMS
     void txLevel(float rms);                // RMS of post-gain TCI TX audio
     // Emitted when a TCI client sends `volume:N;` (master volume SET).
     // MainWindow handles it by calling the same path as the title bar
@@ -250,7 +258,10 @@ private:
     void handleSplitRequest(TciClient* client, const TciProtocol::SplitRequest& request);
     void handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request);
     void handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request,
-                          const TxCoordinator::Request& txRequest);
+                          const TxCoordinator::Request& txRequest, bool wantsAudio,
+                          const DaxTxAudioPermit& daxPermit);
+    void retireTrxRequest(TciClient* client, const TxCoordinator::Request& request);
+    bool trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& request) const;
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
@@ -309,6 +320,9 @@ private:
         // keyerHeld, not keyerRequest.valid(): a revoked request still owes its key-up.
         TxCoordinator::Request keyerRequest;
         bool keyerHeld{false};
+        DaxTxAudioPermit pttDaxPermit{DaxTxAudioPermit::blocked()};
+        bool pttWantsAudio{false};
+        std::optional<DaxTxAudioPermit> ingressDaxPermit;
         QPointer<TciClient> socket;
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo
@@ -320,6 +334,8 @@ private:
         int          audioChannels{2};       // 1=mono, 2=stereo
         int          audioFormat{3};         // 0=int16, 3=float32
         quint64 rxGeneration{0};
+        QSet<int> lineOutReceivers;
+        quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
@@ -365,6 +381,10 @@ private:
     void announceEffectiveIqSampleRate();
 
     void syncClient(const ClientState& client);
+    void syncLineOutClient(const ClientState& client);
+    bool m_lineOutIncludeTx{false};
+    bool m_lineOutPcAudioOffConsent{false};
+    bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);
     void refreshRxBindings();
@@ -448,6 +468,9 @@ private:
         QPointer<TciClient> client;
         TciProtocol::TrxRequest request;
         TxCoordinator::Request txRequest;
+        bool wantsAudio{false};
+        DaxTxAudioPermit daxPermit{DaxTxAudioPermit::blocked()};
+        bool waitingForDax{false};
     };
     std::optional<PendingTrxRequest> m_pendingTrxRequest;
     struct PendingRouteCommand
@@ -534,6 +557,13 @@ private:
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
+    // tx_sensors' SWR goes through the same validity gate as the S-meter (see
+    // the txMetersChanged hookup); reset on every un-key edge. The sentinel
+    // value for a confirmed below-unity reading is TCI's own: the S-meter
+    // pegs at its scale end (3), TCI reports 10.
+    static constexpr float kTciMaximumSwr = 10.0f;
+    RadioSwrValidityFilter m_txSwrFilter;
+    QElapsedTimer     m_txSwrClock;
     float             m_cachedMicLevel{-50.0f};
     float             m_cachedAlc{0.0f};       // SW-ALC peak, dBFS
 };

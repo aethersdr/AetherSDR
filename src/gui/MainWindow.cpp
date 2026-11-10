@@ -868,6 +868,7 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
         m_wanReconnectAttemptInProgress = false;
         return;
     }
+    m_smartLink.setAccountLocked(true);
     quint16 udpPort = m_radioModel.panStream()->localPort();
     if (udpPort == 0) {
         // Not yet bound — start WAN early to get a port
@@ -1042,6 +1043,11 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
     connect(dialog, &QObject::destroyed, this, [this, dialog] {
         if (m_reconnectDlg == dialog)
             m_reconnectDlg = nullptr;
+        // Dismissed without Reconnect: release the SmartLink account.
+        if (m_userDisconnected && !m_radioModel.isConnected()) {
+            m_smartLink.setAccountLocked(false);
+            m_pendingWanRadio = {};
+        }
     });
 
     connect(quit, &QPushButton::clicked, this, [this, dialog] {
@@ -1960,8 +1966,6 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Title bar: PC Audio, master volume, headphone volume ────────────────
     // The remote_audio_rx stream controls the radio's audio routing:
     // stream exists → audio to PC; stream removed → audio to radio speakers.
-    // TCI clients get RX audio via DAX (#1331), not this stream, so PC Audio
-    // is free to toggle the stream purely on its own local-sink needs.
     connect(m_titleBar, &TitleBar::pcAudioToggled, this, [this](bool on) {
         if (on) {
             // Restart the local audio sink to recover from stale WASAPI sessions
@@ -1972,10 +1976,7 @@ MainWindow::MainWindow(QWidget* parent)
             });
             m_radioModel.createRxAudioStream();
         } else {
-            // Stop the local sink so audio isn't played locally, then drop
-            // the remote_audio_rx stream. TCI clients get RX audio via DAX
-            // (#1331), not this stream, so there's no client to keep it
-            // alive for.
+            // Stop the local sink so audio isn't played locally.
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->stopRxStream();
             });
@@ -2200,41 +2201,16 @@ MainWindow::MainWindow(QWidget* parent)
     // Quality-level colors come from networkQualityColor() (MainWindowHelpers)
     // so the footer label and the diagnostics tooltip share one mapping and
     // never diverge (e.g. "Off" is neutral grey in both, not green here).
-    // Map an fps cap to the matching quality-level color for the throttle indicator.
-    auto fpsCapColor = [](int fpsCap) -> QString {
-        if (fpsCap <= 4) return QStringLiteral("#cc3333"); // Poor
-        if (fpsCap <= 8) return QStringLiteral("#cc9900"); // Fair
-        return QStringLiteral("#00b4d8");                  // Good
-    };
-
     connect(&m_radioModel, &RadioModel::networkQualityChanged,
-            this, [this](const QString& quality, int pingMs) {
-        const QString color = networkQualityColor(quality);
-        // Append fps cap so users understand why moving the fps slider has no effect.
-        // Show "(restoring)" during the min-dwell hold so testers can distinguish
-        // stuck throttle from a deliberate stability wait.
-        const bool dwellPending = m_adaptiveFpsCap > 0 && m_radioModel.pendingThrottleLift();
-        const QString capSuffix = m_adaptiveFpsCap > 0
-            ? (dwellPending
-               ? QStringLiteral(" · %1 fps cap (restoring)").arg(m_adaptiveFpsCap)
-               : QStringLiteral(" · %1 fps cap").arg(m_adaptiveFpsCap))
-            : QString();
-        m_networkLabel->setText(QString("[<span style='color:%1'>%2</span>]")
-            .arg(color, quality + capSuffix));
-        Q_UNUSED(pingMs);
-        const QString tooltip = buildNetworkTooltip(m_radioModel,
-                                                     m_adaptiveFpsCap,
-                                                     dwellPending);
-        m_networkLabel->setToolTip(tooltip);
-        m_networkStatusBlock->setToolTip(tooltip);
-    });
+            this, &MainWindow::refreshNetworkQualityIndicators);
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &MainWindow::refreshNetworkQualityIndicators);
 
     connect(&m_radioModel, &RadioModel::adaptiveThrottleChanged,
-            this, [this, fpsCapColor](bool active, int fpsCap) {
+            this, [this](bool active, int fpsCap) {
         m_adaptiveThrottleActive = active;
         m_adaptiveFpsCap = active ? fpsCap : 0;
-        if (m_titleBar)
-            m_titleBar->setThrottleFlashColor(active ? fpsCapColor(fpsCap) : QString{});
+        refreshAdaptiveThrottleChip();
         if (active) {
             m_adaptiveFpsCapsSent.insert(fpsCap);
             m_adaptiveWfRatesSent.insert(m_radioModel.adaptiveWfRateForCap(fpsCap));
@@ -2273,6 +2249,11 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_adaptiveThrottleActive)
             restorePreCapPanRates(panId);
     });
+
+    // The AT chip follows the connect panel's checkbox, not just an engaged cap.
+    connect(m_connPanel, &ConnectionPanel::adaptiveThrottleEnabledChanged,
+            this, [this](bool) { refreshAdaptiveThrottleChip(); });
+    refreshNetworkQualityIndicators();
 
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyVolts) {
@@ -2338,6 +2319,8 @@ MainWindow::MainWindow(QWidget* parent)
     // by luck rather than by wiring.
     connect(&m_radioModel.transmitModel(), &TransmitModel::stateChanged,
             this, [this]() { updatePaTempLabel(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::atuAvailabilityChanged,
+            this, &MainWindow::updateToolsMenuState);
 
     auto normalizeOscillatorValue = [](QString value) {
         value = value.trimmed().toLower();
@@ -3424,8 +3407,13 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
                     tr("TX Playback: no transmit control is available right now."), 4000);
                 return;
             }
-            toggleRxPlaybackTransmit(
-                controller->captureProgram(TxController::Activity::Mox).request());
+            const TxCoordinator::Request input =
+                controller->captureProgram(TxController::Activity::Mox).request();
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+                m_radioModel.noteDaxTxInput(input);
+            }
+            toggleRxPlaybackTransmit(input);
         });
         registerTxKeyingAction(m_rxDialog->txPlaybackAction(),
             [this](const std::shared_ptr<TxController>& controller,
@@ -3436,6 +3424,10 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
             }
             const TxCoordinator::Request input =
                 controller->captureProgram(TxController::Activity::Mox).request();
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+                m_radioModel.noteDaxTxInput(input);
+            }
             return [this, input] { toggleRxPlaybackTransmit(input); };
         });
         // Seed the EQ page with the filter it is looking at right now, rather
@@ -3813,10 +3805,7 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         if (newComp != prevComp && m_radioModel.isConnected()) {
             qDebug() << "MainWindow: audio compression changed from" << prevComp
                      << "to" << newComp << "— recreating audio stream";
-            m_radioModel.removeRxAudioStream();
-            QTimer::singleShot(500, this, [this]() {
-                m_radioModel.createRxAudioStream();
-            });
+            m_radioModel.createAudioStream();
             updateNr2Availability();  // Disable NR2 if switching to Opus (#1597)
         }
     });
@@ -3949,6 +3938,7 @@ static LRESULT frameHitCode(WindowChrome::FrameHit hit)
     case WindowChrome::FrameHit::TopRight:    return HTTOPRIGHT;
     case WindowChrome::FrameHit::BottomLeft:  return HTBOTTOMLEFT;
     case WindowChrome::FrameHit::BottomRight: return HTBOTTOMRIGHT;
+    case WindowChrome::FrameHit::Caption:     return HTCAPTION;
     case WindowChrome::FrameHit::Client:      break;
     }
     return HTCLIENT;
@@ -3960,7 +3950,8 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
     // Under the expanded client area Qt 6.12 answers WM_NCHITTEST by turning
     // the live mouse-button state into synthetic presses, which doubles real
     // clicks and closes menus as they open (#6272). Answer it here instead:
-    // the resize band at the edges, client area everywhere else.
+    // the resize band at the edges, the title bar's own background as the
+    // caption so Windows offers Snap (#6825), client area everywhere else.
     if (msg && result && msg->message == WM_NCHITTEST
         && windowFlags().testFlag(Qt::ExpandedClientAreaHint)) {
         RECT window{};
@@ -3976,7 +3967,23 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
         const QRect rect(window.left, window.top,
                          window.right - window.left, window.bottom - window.top);
-        *result = frameHitCode(WindowChrome::expandedFrameHit(point, rect, borderX, borderY));
+        // The client area's top-left in screen pixels. GetWindowRect includes
+        // the invisible DWM resize border and Qt's geometry does not, so the
+        // caption gate anchors here instead — see logicalScreenPoint().
+        POINT clientOrigin{0, 0};
+        ClientToScreen(msg->hwnd, &clientOrigin);
+        // The bar's height is in logical pixels and WM_NCHITTEST is physical.
+        // Classify the message's point even when the shell queries it away
+        // from the cursor. Interactive controls stay client, as do tooltipped
+        // handles because caption mouse moves bypass Qt's tooltip timer.
+        const bool barShown = m_titleBar && m_titleBar->isVisible();
+        const int captionHeight = WindowChrome::captionHeightForHitTest(
+            point, window.top, QPoint(clientOrigin.x, clientOrigin.y),
+            mapToGlobal(QPoint(0, 0)), barShown ? m_titleBar->height() : 0,
+            devicePixelRatioF(),
+            [this](const QPoint& logical) { return m_titleBar->isCaptionMoveAreaAt(logical); });
+        *result = frameHitCode(
+            WindowChrome::expandedFrameHit(point, rect, borderX, borderY, captionHeight));
         return true;
     }
     // The whole window is client area, inset only while maximized so nothing
@@ -4448,7 +4455,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             DxClusterClient* dxCluster = m_dxCluster;
             DxClusterClient* rbnClient = m_rbnClient;
             WsjtxClient* wsjtxClient = m_wsjtxClient;
-            SpotCollectorClient* spotCollectorClient = m_spotCollectorClient;
             PotaClient* potaClient = m_potaClient;
             EibiClient* eibiClient = m_eibiClient;
             N1MMSpotClient* n1mmSpotClient = m_n1mmSpotClient;
@@ -4476,15 +4482,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
                 QMetaObject::invokeMethod(wsjtxClient, [wsjtxClient] {
                     ShutdownTrace workerTrace("spots.wsjtx.stop.worker");
                     wsjtxClient->stopListening();
-                },
-                                          Qt::BlockingQueuedConnection);
-            }
-            {
-                ShutdownTrace trace("spots.collector.stop");
-                QMetaObject::invokeMethod(spotCollectorClient,
-                                          [spotCollectorClient] {
-                    ShutdownTrace workerTrace("spots.collector.stop.worker");
-                    spotCollectorClient->stopListening();
                 },
                                           Qt::BlockingQueuedConnection);
             }
@@ -4527,7 +4524,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             dxCluster->deleteLater();
             rbnClient->deleteLater();
             wsjtxClient->deleteLater();
-            spotCollectorClient->deleteLater();
             potaClient->deleteLater();
             eibiClient->deleteLater();
             n1mmSpotClient->deleteLater();
@@ -4544,7 +4540,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             delete m_dxCluster;
             delete m_rbnClient;
             delete m_wsjtxClient;
-            delete m_spotCollectorClient;
             delete m_potaClient;
             delete m_eibiClient;
             delete m_n1mmSpotClient;
@@ -4555,7 +4550,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
         m_dxCluster = nullptr;
         m_rbnClient = nullptr;
         m_wsjtxClient = nullptr;
-        m_spotCollectorClient = nullptr;
         m_potaClient = nullptr;
         m_eibiClient = nullptr;
         m_n1mmSpotClient = nullptr;
@@ -5666,10 +5660,7 @@ void MainWindow::buildUI()
         if (!applet || !applet->spectrumWidget()) {
             return;
         }
-        applet->spectrumWidget()->setBandSegmentZoomAvailable(
-            bandSegmentZoomAvailable(
-                m_radioModel.isConnected(),
-                m_radioModel.backendCapabilities().panZoomModes.has_value()));
+        refreshPanZoomControls();
         // The two capability switches onConnectionStateChanged() applies for
         // the same reason: a pan created after connect would otherwise keep
         // the widget defaults (no edge crop, client EMA on) until the next
@@ -5686,6 +5677,8 @@ void MainWindow::buildUI()
         // not only this one's (#5750), so the whole stack is re-derived.
         syncPanSpanControlPlacement();
     });
+    // The startup pane was added before this connect; dim its B/S now.
+    refreshPanZoomControls();
     // Removing or re-keying a pane can take the span control's owner with
     // it; re-derive so exactly one pane still carries it (#5750).
     connect(m_panStack, &PanadapterStack::panRemoved, this,
@@ -5732,60 +5725,15 @@ void MainWindow::buildUI()
             m_radioModel.settingsScope(), m_bandPlanMgr);
     });
     connect(bsPanel, &BandStackPanel::recallRequested, this,
-            [this](const BandStackEntry& e) {
-        auto* slice = activeSlice();
-        if (!slice) return;
-        int id = slice->sliceId();
-
-        // Mode first (affects filter ranges). The HL2's data-mode AGC relies
-        // on this order; hl2_bandstack_digital_agc_test replays it.
-        if (slice->mode() != e.mode) {
-            slice->setMode(e.mode);
-        }
-        applyTuneRequest(slice, e.frequencyMhz,
-                         TuneIntent::AbsoluteJump, "bandstack-recall");
-        // Filter
-        if (e.filterLow != 0 || e.filterHigh != 0) {
-            slice->setFilterWidth(e.filterLow, e.filterHigh);
-        }
-        // Antennas
-        if (!e.rxAntenna.isEmpty() && e.rxAntenna != slice->rxAntenna()) {
-            m_radioModel.sendCommand(QString("slice set %1 rxant=%2").arg(id).arg(e.rxAntenna));
-        }
-        if (!e.txAntenna.isEmpty() && e.txAntenna != slice->txAntenna()) {
-            m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
-        }
-        // AGC while KiwiSDR external receive audio replaces the slice: the
-        // bookmark holds the RADIO's AGC, which the SliceModel setters would
-        // write into the KiwiSDR AGC, so it goes as wire text here and
-        // recallBandStackReceiveDsp() below leaves the AGC alone.
-        if (slice->externalReceiveReplacementActive()) {
-            if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
-                m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
-            }
-            if (!slice->automaticAgcThresholdActiveOrPending()
-                && e.agcThreshold != slice->agcThreshold()) {
-                m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
-            }
-        }
-        // Volume
-        if (static_cast<int>(slice->audioGain()) != e.audioGain) {
-            slice->setAudioGain(static_cast<float>(e.audioGain));
-        }
-        // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
-        // setters, so they reach every backend, not only a command plane.
-        m_radioModel.recallBandStackReceiveDsp(slice, e);
-        // Stored WNB values are optional replay, not individual control actions.
-        if (auto* pan = m_radioModel.activePanadapter()) {
-            if (e.wnbOn != pan->wnbActive()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn},
-                    {}, /*announce=*/false);
-            }
-            if (e.wnbLevel != pan->wnbLevel()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel},
-                    {}, /*announce=*/false);
-            }
-        }
+            [this](const BandStackEntry& entry) {
+        const QPointer<MainWindow> owner(this);
+        m_radioModel.recallBandStack(activeSlice(), entry,
+            [owner](SliceModel* slice, double mhz) {
+                if (owner) {
+                    owner->applyTuneRequest(slice, mhz,
+                        TuneIntent::AbsoluteJump, "bandstack-recall");
+                }
+            });
     });
     connect(bsPanel, &BandStackPanel::removeRequested, this,
             [this](int index) {
@@ -6668,48 +6616,6 @@ int MainWindow::catPortTargetCount() const
     return ReceiverSlotCount::forCeiling(m_radioModel.maxSlices(), m_radioModel.slices());
 }
 
-void MainWindow::applyCatPortCount()
-{
-    auto& s = AppSettings::instance();
-    const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
-
-    for (int i = 0; i < kCatPorts; ++i) {
-        if (!catPort(i)) continue;
-
-        const QString prefix = QString("CatPort_%1_").arg(i);
-        const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
-        const int  portNum     = s.value(prefix + "Port", "").toInt();
-        // A CAT port is a control channel, not a 1:1 mapping to a slice — don't
-        // cap how many configured ports start by the radio's receiver count
-        // (#3693). Receiver capacity bounds the VFO-letter choices per port
-        // (ReceiverSlotCount::catLetters() feeds the applet), not whether a
-        // port runs.
-        const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024);
-
-        if (shouldRun && !catPort(i)->isRunning()) {
-            // Re-apply config in case dialect/VFO was changed while stopped
-            QString d = s.value(prefix + "Dialect", "Rigctld").toString();
-            CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
-                            : (d == "TS2000")  ? CatDialect::TS2000
-                            : CatDialect::Rigctld;
-            catPort(i)->setDialect(dial);
-            catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
-            catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
-            catPort(i)->start(static_cast<quint16>(portNum));
-        } else if (!shouldRun && catPort(i)->isRunning()) {
-            catPort(i)->stop();
-        }
-    }
-
-    auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
-    if (applet) {
-        applet->setCatEnabled(masterOn);
-        // The radio's own count while connected (one letter on a one-receiver
-        // radio), every letter when none is (#5776).
-        applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
-    }
-}
-
 void MainWindow::migrateCatSettings()
 {
     auto& s = AppSettings::instance();
@@ -6766,6 +6672,60 @@ void MainWindow::applyDarkTheme()
 
 // ─── Radio/model event handlers ───────────────────────────────────────────────
 
+void MainWindow::refreshPanZoomControls()
+{
+    if (!m_panStack) {
+        return;
+    }
+    const auto zoom = m_radioModel.backendCapabilities().panZoomModes;
+    const bool nativeSpan = zoom && zoom->control
+        == RadioCapabilities::PanZoomModes::Control::NativeScopeSpan;
+    for (auto* applet : m_panStack->allApplets()) {
+        if (!applet || !applet->spectrumWidget()) {
+            continue;
+        }
+        const auto* pan = m_radioModel.panadapter(applet->panId());
+        std::optional<QString> blocked;
+        if (!m_radioModel.isConnected()) {
+            blocked = tr("Connect to a radio to use band and segment zoom.");
+        } else if (!zoom) {
+            blocked = tr("This radio has no band or segment zoom.");
+        } else if (nativeSpan) {
+            blocked = nativePanZoomBlockedReason(pan);
+        }
+        const bool available = AetherSDR::bandSegmentZoomAvailable(
+            m_radioModel.isConnected(), zoom.has_value()) && !blocked;
+        applet->spectrumWidget()->setBandSegmentZoomAvailable(
+            available, nativeSpan, blocked.value_or(QString()));
+    }
+}
+
+std::optional<std::pair<double, double>> MainWindow::bandPlanZoomRegion(double frequencyMhz,
+                                                                      bool segment) const
+{
+    if (!m_bandPlanMgr) {
+        return std::nullopt;
+    }
+    const auto region = m_bandPlanMgr->zoomRegionAt(frequencyMhz, segment);
+    if (!region) {
+        return std::nullopt;
+    }
+    return std::pair{region->lowMhz, region->highMhz};
+}
+
+std::optional<QString> MainWindow::nativePanZoomBlockedReason(const PanadapterModel* pan) const
+{
+    if (pan && pan->zoomPlacement() == PanZoomPlacement::Unavailable) {
+        return tr("The radio's Fixed preset sets the scope edges, so band and "
+                  "segment zoom cannot change them.");
+    }
+    if (!pan || !pan->bandwidthLimitsKnown() || !pan->centerKnown()
+        || pan->zoomPlacement() == PanZoomPlacement::Unknown) {
+        return tr("Waiting for the radio's scope geometry.");
+    }
+    return std::nullopt;
+}
+
 void MainWindow::onConnectionStateChanged(bool connected)
 {
     if (m_shuttingDown) {
@@ -6784,24 +6744,16 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Band/segment zoom reads the declared RadioCapabilities::panZoomModes
-    // (FlexBackend engages it; others set nullopt), not a family check or
-    // hasCommandPlane() (the sim owns a RadioConnection but has no
-    // band_zoom=/segment_zoom=). Re-evaluated on every connect and disconnect,
-    // since backendCapabilities() reflects only the current radio.
+    // Band/segment zoom reads the backend's declared control contract. Native
+    // span zoom also waits for radio-reported pan limits before enabling.
     if (m_panStack) {
-        // One predicate with the command paths in MainWindow_Shortcuts.cpp, so
-        // "the button is grey" and "the keystroke is refused" cannot drift
-        // apart on the capability (PanZoomModeGate.h).
-        const bool zoomAvailable = AetherSDR::bandSegmentZoomAvailable(
-            connected, m_radioModel.backendCapabilities().panZoomModes.has_value());
+        refreshPanZoomControls();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
             m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
-                applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
                     AetherSDR::clientFftSmoothingEnabled(connected, backendAverages));
@@ -7032,12 +6984,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!m_wsjtxClient->isListening())
                     QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(wAddr, wPort); });
             }
-            // Auto-start SpotCollector listener if enabled
-            if (cs.value("SpotCollectorAutoStart", "False").toString() == "True") {
-                quint16 scPort = static_cast<quint16>(cs.value("SpotCollectorPort", 9999).toInt());
-                if (!m_spotCollectorClient->isListening())
-                    QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->startListening(scPort); });
-            }
             // Auto-start POTA polling if enabled
             if (cs.value("PotaAutoStart", "False").toString() == "True") {
                 int pInterval = cs.value("PotaPollInterval", 60).toInt();
@@ -7176,7 +7122,6 @@ void MainWindow::onConnectionStateChanged(bool connected)
         QMetaObject::invokeMethod(m_dxCluster, [=, this] { m_dxCluster->disconnect(); });
         QMetaObject::invokeMethod(m_rbnClient, [=, this] { m_rbnClient->disconnect(); });
         QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->stopListening(); });
-        QMetaObject::invokeMethod(m_spotCollectorClient, [=, this] { m_spotCollectorClient->stopListening(); });
         QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->stopPolling(); });
 #ifdef HAVE_WEBSOCKETS
         QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->stopConnection(); });
@@ -7251,6 +7196,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
         m_adaptiveFpsCapsSent.clear();
         m_adaptiveWfRatesSent.clear();
+        refreshAdaptiveThrottleChip();  // or the bar keeps the dead cap until the next connect
 
         // Clear spectrum/waterfall so the display doesn't look frozen
         if (m_panStack) {
@@ -7326,6 +7272,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 reconnectDialog->deleteLater();
             });
             connect(dismissBtn, &QPushButton::clicked, this, [this]() {
+                m_smartLink.setAccountLocked(false);
+                m_pendingWanRadio = {};
                 m_userDisconnected = true;
                 m_wanReconnectTimer.stop();
                 m_wanReconnectAttemptInProgress = false;
@@ -8041,6 +7989,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
+        m_appletPanel->phoneCwApplet()->setMonitorAvailable(
+            !connected || caps.txMonitorControl.has_value());
         m_appletPanel->meterApplet()->setPaInstrumentTelemetryState(
             connected, caps.hasPaTemperatureTelemetry,
             caps.hasPaCurrentTelemetry);
@@ -8062,6 +8012,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
+            phone->setVoxAvailable(!connected || caps.voxControl.has_value());
             phone->setVoxDelayAvailable(
                 !connected || (caps.voxControl && caps.voxControl->hasDelay));
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
@@ -8251,7 +8202,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // occupy the same row. Radios that report a temperature, or that have made
     // no such claim, are untouched by construction.
     if (m_appletPanel) {
-        m_appletPanel->meterApplet()->setSupplyVoltageTelemetryState(connected);
+        m_appletPanel->meterApplet()->setSupplyVoltageTelemetryState(
+            connected, caps.hasSupplyVoltageTelemetry);
     }
     // A readout the radio can never produce, as distinct from one that has not
     // arrived yet. The two capability flags are re-checked so a real reading
@@ -9574,12 +9526,18 @@ void MainWindow::routeCwDecoderOutput()
                    m_cwDecoderApplet, &PanadapterApplet::appendCwTextTx);
         disconnect(&m_cwDecoder, &CwRxModel::statsUpdated,
                    m_cwDecoderApplet, &PanadapterApplet::setCwStats);
-        if (auto* pb = m_cwDecoderApplet->lockPitchButton())
+        // Unchecked after the disconnect, so returning to this pan shows no
+        // stale lock and the decoder is not toggled from here.
+        if (auto* pb = m_cwDecoderApplet->lockPitchButton()) {
             disconnect(pb, &QPushButton::toggled,
                        &m_cwDecoder, &CwRxModel::lockPitch);
-        if (auto* sb = m_cwDecoderApplet->lockSpeedButton())
+            pb->setChecked(false);
+        }
+        if (auto* sb = m_cwDecoderApplet->lockSpeedButton()) {
             disconnect(sb, &QPushButton::toggled,
                        &m_cwDecoder, &CwRxModel::lockSpeed);
+            sb->setChecked(false);
+        }
         disconnect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
                    &m_cwDecoder, &CwRxModel::setPitchRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
@@ -9619,10 +9577,17 @@ void MainWindow::routeCwDecoderOutput()
             m_cwLastSpeedWpm  = speedWpm;
         });
 #endif
+        // A lock holds the signal heard on the old pan, and a retarget is a
+        // station boundary: the target's buttons and the decoder start
+        // unlocked. Unchecked before the connect so only the explicit
+        // unlock below reaches the decoder.
+        m_cwDecoderApplet->lockPitchButton()->setChecked(false);
+        m_cwDecoderApplet->lockSpeedButton()->setChecked(false);
         connect(m_cwDecoderApplet->lockPitchButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwRxModel::lockPitch);
         connect(m_cwDecoderApplet->lockSpeedButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwRxModel::lockSpeed);
+        m_cwDecoder.releaseLocks();
         connect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
                 &m_cwDecoder, &CwRxModel::setPitchRange);
         m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(),
@@ -10549,16 +10514,11 @@ void MainWindow::updateToolsMenuState()
         && m_radioModel.txOwnedByUs() && idle;
     const bool hasTxApplet = m_appletPanel && m_appletPanel->txApplet();
 
-    // An external TunerGenius XL in OPERATE puts the internal ATU out of the
-    // line, and TxApplet::updateAtuAvailability() greys the ATU and MEM buttons
-    // for exactly that reason (#443). The ATU right-click menu rides the
-    // disabled ATU button, so before Tools existed that gate was also the only
-    // route to these two actions — lifting them to the menu bar without the same
-    // condition would make Tools the one way left to pre-tune through a tuner
-    // that is in OPERATE.
+    // Tools and the applet share the internal-ATU path gate: neither TGXL
+    // Operate nor a transverter output can use the radio's tuner.
     const bool tgxlOperate = tuner.isPresent() && tuner.isOperate()
         && !tuner.isBypass();
-    const bool memories = caps.hasTunerMemories && !tgxlOperate;
+    const bool memories = caps.hasTunerMemories && !tgxlOperate && tx.atuAvailable();
 
     if (m_addPanAction) {
         m_addPanAction->setEnabled(connected && m_panStack
@@ -10593,7 +10553,7 @@ void MainWindow::updateToolsMenuState()
     }
 
     // Every disabling condition names itself. A greyed control with no stated
-    // reason reads as broken (#5510), and Pre-tune now has five of them.
+    // reason reads as broken (#5510).
     if (m_preTuneAction) {
         m_preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
             && hasTxApplet);
@@ -10602,6 +10562,8 @@ void MainWindow::updateToolsMenuState()
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
                 ? tr("Disabled — TGXL is in OPERATE mode")
+            : !tx.atuAvailable()
+                ? tr("Disabled — the internal ATU is not in the transverter TX path")
             : !hasTxApplet
                 ? tr("The transmit applet is unavailable in this build")
             : !tx.memoriesEnabled()
@@ -10620,6 +10582,8 @@ void MainWindow::updateToolsMenuState()
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
                 ? tr("Disabled — TGXL is in OPERATE mode")
+            : !tx.atuAvailable()
+                ? tr("Disabled — the internal ATU is not in the transverter TX path")
             : !hasTxApplet
                 ? tr("The transmit applet is unavailable in this build")
             : !connected

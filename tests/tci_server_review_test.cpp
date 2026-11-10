@@ -10,6 +10,7 @@
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/sim/SimBackend.h"
+#include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -30,6 +31,7 @@
 #include <QUrl>
 #include <QWebSocket>
 
+#include <cmath>
 #include <cstring>
 #include <cstdio>
 #include <memory>
@@ -218,6 +220,7 @@ public:
     static bool deferredAbortIsClientScoped()
     {
         RadioModel model;
+        model.setBackendForTest(std::make_unique<TxCapableBackend>(), QStringLiteral("test"));
         TciServer server(&model);
         TciClient client;
         TciClient otherClient;
@@ -554,13 +557,17 @@ public:
     // cache drags transmit back to slice 0 — wrong band, wrong antenna.
     static bool pttRouteFixture(RadioModel& model, TciServer& server)
     {
-        QString error;
-        if (!model.automationApplySliceFixture(0, QString(), &error)
-            || !model.automationApplySliceFixture(1, QString(), &error)) {
-            std::fprintf(stderr, "ptt route fixtures failed: %s\n",
-                         error.toUtf8().constData());
-            return false;
-        }
+        // Route diagnostics are independent of Flex DAX media admission.
+        model.setBackendForTest(std::make_unique<TxCapableBackend>(), QStringLiteral("test"));
+        SliceDelta rx;
+        rx.inUse = true;
+        rx.active = true;
+        rx.mode = QStringLiteral("USB");
+        rx.frequency = 14.225;
+        rx.panId = QStringLiteral("0x40000000");
+        rx.txSlice = false;
+        model.emitBackendSliceChangedForTest(0, rx);
+        model.emitBackendSliceChangedForTest(1, rx);
         SliceModel* s1 = model.slice(1);
         if (!s1) {
             return false;
@@ -1944,6 +1951,48 @@ public:
             && fresh.valid() && fresh.sameRequest(client.texts[2].input);
     }
 
+    // tx_sensors' SWR is the TciServer consumer of MeterModel::txMetersChanged.
+    // Drive it through real meter updates, so the forward power the gate sees
+    // is whatever the production hookup reads, and observe the cached value
+    // tx_sensors sends. The 30 mW "pause" is below the filter's 50 mW floor
+    // while MeterModel's smoothed forward power still reads about 4 W, so a
+    // hookup that gated on the smoothed value would let the 4.0 through.
+    static bool tciSwrIsGatedOnInstantForwardPower()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        MeterModel& meters = model.meterModel();
+        meters.defineMeter({1, "TX", 0, "FWDPWR", "Watts", 0, 100, "Forward power"});
+        meters.defineMeter({2, "TX", 0, "SWR", "SWR", 1, 100, "Standing wave ratio"});
+        const auto feed = [&meters](float watts, float swr) {
+            meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("FWDPWR"), watts);
+            meters.updateValueByName(QStringLiteral("TX"), QStringLiteral("SWR"), swr);
+        };
+        bool ok = true;
+        const auto expect = [&](float want, const char* what) {
+            if (std::fabs(server.m_cachedSwr - want) > 0.01f) {
+                std::printf("      %s: tx_sensors SWR %.2f, expected %.2f\n",
+                            what, static_cast<double>(server.m_cachedSwr),
+                            static_cast<double>(want));
+                ok = false;
+            }
+        };
+
+        server.onRadioTransmittingChanged(true);
+        feed(5.0f, 1.3f);
+        expect(1.3f, "reading under carrier");
+        feed(0.03f, 4.0f);
+        expect(1.3f, "reading without measurable carrier holds");
+        feed(5.0f, 2.5f);
+        expect(2.5f, "worsening under carrier passes");
+        server.onRadioTransmittingChanged(false);
+        expect(1.0f, "un-key returns to rest");
+        server.onRadioTransmittingChanged(true);
+        feed(0.03f, 4.0f);
+        expect(1.0f, "no held reading survives into the next over");
+        return ok;
+    }
+
     static bool lateKeyIsAbortedOnModelThread()
     {
         RadioModel model;
@@ -3027,12 +3076,53 @@ public:
         agc.agcThreshold = 72;  // 65 is the default: no change, no signal
         s0->applyChanges(agc);
         if (!sent.contains(QStringLiteral("agc_mode:0,fast;"))
-            || !sent.contains(QStringLiteral("agc_gain:0,72;"))) {
+            || !sent.contains(QStringLiteral("agc_gain:0,81;"))) {
             std::printf("      GUI AGC change was not broadcast\n");
             return false;
         }
-        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,72;"))) {
+        if (!protocol.generateInitBurst().contains(QStringLiteral("agc_gain:0,81;"))) {
             std::printf("      init burst misses agc_gain\n");
+            return false;
+        }
+
+        s0->setExternalReceiveAudioReplacementMute(true, false);
+        s0->setAgcThreshold(-90);
+        s0->setExternalReceiveAudioReplacementMute(false, false);
+        sent.clear();
+        protocol.handleCommand(QStringLiteral("agc_gain:0,-10"));
+        const bool speculative = !protocol.pendingNotification().isEmpty();
+        s0->setExternalReceiveAudioReplacementMute(true, false);
+        QCoreApplication::processEvents();
+        if (speculative || sent.count(QStringLiteral("agc_gain:0,-90;")) != 1
+            || sent.contains(QStringLiteral("agc_gain:0,-10;"))
+            || protocol.handleCommand(QStringLiteral("agc_gain:0"))
+                != QStringLiteral("agc_gain:0,-90;")) {
+            std::printf("      dropped AGC SET did not preserve observed-state notifications\n");
+            return false;
+        }
+
+        sent.clear();
+        protocol.handleCommand(QStringLiteral("agc_gain:0,-80"));
+        if (!protocol.pendingNotification().isEmpty()) {
+            std::printf("      Kiwi AGC SET announced before delivery\n");
+            return false;
+        }
+        QCoreApplication::processEvents();
+        if (sent.count(QStringLiteral("agc_gain:0,-80;")) != 1) {
+            std::printf("      applied Kiwi AGC SET was not relayed once\n");
+            return false;
+        }
+        sent.clear();
+        protocol.handleCommand(QStringLiteral("agc_gain:0,-80"));
+        QCoreApplication::processEvents();
+        spin(450);
+        if (sent.contains(QStringLiteral("agc_gain:0,-80;"))) {
+            std::printf("      unchanged Kiwi AGC or deferred seed was announced again\n");
+            return false;
+        }
+        s0->setExternalReceiveAudioReplacementMute(false, false);
+        if (sent.count(QStringLiteral("agc_gain:0,81;")) != 1) {
+            std::printf("      native AGC was not restored in the relay\n");
             return false;
         }
         return true;
@@ -3074,7 +3164,7 @@ public:
         server.wireSlice(s0->sliceId(), s0);
         const QStringList expected {
             QStringLiteral("rit_offset:0,120;"), QStringLiteral("xit_offset:0,-50;"),
-            QStringLiteral("agc_mode:0,fast;"), QStringLiteral("agc_gain:0,72;"),
+            QStringLiteral("agc_mode:0,fast;"), QStringLiteral("agc_gain:0,81;"),
         };
         for (const QString& m : expected) {
             if (sent.contains(m)) {
@@ -3113,6 +3203,12 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(
         QStringLiteral("aether-tci-server-review-test"));
+    // The DAX IQ fixture builds a pipe, which would load module-pipe-source
+    // into the user's live PulseAudio through pactl on the model's worker
+    // thread. Answer it here: no process is launched (#6726).
+    AetherSDR::DaxIqModel::setPactlRunnerForTest([](const QStringList&) {
+        return quint32{0};
+    });
     QCoreApplication app(argc, argv);
     AetherSDR::AppSettings::instance().load();
 
@@ -3314,6 +3410,10 @@ int main(int argc, char** argv)
     std::printf("%s  RIT/XIT offset and AGC relays seed once after a re-wire (#2824)\n",
                 valueSeed ? "PASS" : "FAIL");
 
+    const bool tciSwrGated = AetherSDR::TciServerReviewTest::tciSwrIsGatedOnInstantForwardPower();
+    std::printf("%s  tx_sensors SWR is gated on instant forward power and resets on un-key\n",
+                tciSwrGated ? "PASS" : "FAIL");
+
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
     const bool inputFence = AetherSDR::TciServerReviewTest::ingressReleaseFencesEarlierCommands();
@@ -3336,6 +3436,6 @@ int main(int argc, char** argv)
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
         && chronoIdle && chronoCatchUp && daxRestored && initProtocol
-        && dsbMode && rxCtunEx && guiSplit && valueSeed
+        && dsbMode && rxCtunEx && guiSplit && valueSeed && tciSwrGated
         ? 0 : 1;
 }

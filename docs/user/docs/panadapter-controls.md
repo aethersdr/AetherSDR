@@ -10,6 +10,14 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 
 *A panadapter on 20 m with its waterfall, the slice A VFO flag and the overlay menu down the left edge.*
 
+The **B** and **S** buttons at the bottom left zoom to the active band or band-plan segment. On a scope-capable Icom, the tuned frequency never changes, and what the buttons do depends on the scope mode:
+
+- **SCROLL-F, or Fixed chosen in AetherSDR:** the scope shows the allocation itself, centered at its exact width, wherever the window was. With the ARRL US plan, **S** on 14.050 MHz shows 14.025–14.070 MHz (45 kHz). Allocations wider than 1 MHz show a 1 MHz window inside them.
+- **Center:** the scope keeps its center and picks the smallest span that covers both allocation edges. With a center of 14.050 MHz, **S** selects 50 kHz for the same segment; at 14.069 MHz it widens to 100 kHz. Allocations wider than the widest span use that span.
+- **Fixed set on the radio (presets 1–3):** the buttons are dimmed, because the radio's preset owns the scope edges.
+
+A second press at the same zoom does nothing; Icom zoom is not a toggle. FlexRadio uses its own band and segment zoom modes. The buttons remain disabled when the connected radio does not declare either control.
+
 ## Using the panadapter
 
 ### Mouse controls
@@ -165,6 +173,17 @@ Status cards appear over the spectrum for things like "Center Lock released", a 
 
 The status bar at the bottom of the window starts with the band-stack indicator and **+PAN** (add a panadapter), followed by indicators such as **TNF**, **CWX**, **ASR**, **DVK** and **FDX** (each only on radios and builds that support it). Click an indicator to toggle it, or press **Tab** to reach it and **Return** or **Enter** to activate it.
 
+Click a bookmark in the band-stack panel to recall its saved receive settings
+on the active slice. The recall stays with that slice and its panadapter even
+if focus changes. Disconnecting, replacing either resource, or starting another
+recall stops the remaining settings from the older recall.
+
+Saved antenna ports must appear in the radio's available-port lists; invalid or
+unavailable ports are skipped. Antenna indicators change when the radio reports
+the accepted selection. Saved AGC-T does not override automatic AGC-T. With
+KiwiSDR receive replacement active, the saved radio AGC settings remain separate
+from KiwiSDR's receive AGC.
+
 **FDX** requests full duplex through the connected radio. A refusal leaves its
 state unchanged; a delayed reply cannot overwrite a newer request or a newer
 radio status. Enabling full duplex does not start a transmission.
@@ -238,7 +257,7 @@ Click **Display** in the overlay menu. The panel is divided into sections and sc
 | **Grid** | On by default | Frequency and dB grid lines. |
 | **Wt Avg** | Off by default | Weighted averaging that favors recent frames. |
 | **FFT AVG** | 0–100 | Frame averaging. Higher is smoother but slower to react; 0 is unaveraged. |
-| **FFT FPS** | 5–60, default 25 | Spectrum frame rate. |
+| **FFT FPS** | 5–60, default 25 | Spectrum frame rate. While the spectrum is updating, the waterfall scroll and the SmartMTR value labels redraw at this rate too, together with the trace, so a lower FFT FPS also makes them move in coarser steps. |
 | **FFT Smooth** | Off–16 px, default Off | Smooths the trace across frequency by averaging each point with its neighbors this many pixels either side, in linear power, so a dB average doesn't drag the noise floor down; the smoothed floor reads its true average power, about 1–1.5 dB above the middle of the unsmoothed noise. FFT AVG smooths over time; this smooths across the band. Only the trace is affected, not the waterfall. |
 | **De-comb Hz** | Off–600 Hz, default Off | Zoomed in on SSB, the trace and waterfall show each voice as a comb of its pitch harmonics, 100–250 Hz apart. De-comb draws a smooth curve over that comb (a cepstral envelope), keeping the signal's outline and peak level. The value is the widest harmonic spacing it removes: about 300 Hz covers most voices; raise it if a high voice still shows a comb. It rounds a signal's steep edges by about half this width, and carriers closer together than it blur into one. It works on signals more than about 8 dB above the noise; the noise floor itself is left as drawn, and the waterfall is not changed. At wide spans, where the comb isn't resolved, it does nothing. |
 | **FFT Line** | Off–5.0 px, default 1.0 px | Trace thickness, with its own color button. |

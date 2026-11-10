@@ -59,7 +59,6 @@
 #include "core/MqttClient.h"
 #endif
 #include "core/WsjtxClient.h"
-#include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
 #include "core/EibiClient.h"
 #include "core/N1MMSpotClient.h"
@@ -77,6 +76,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #ifdef HAVE_MIDI
@@ -140,6 +140,7 @@ namespace AetherSDR {
 enum class RadioSliceSelectionSource;
 
 class AetherClockApplet;
+class WsprSpotFeed;
 class AetherClockEngine;
 class AetherClockModel;
 class AntennaAnalyzerModel;
@@ -172,6 +173,8 @@ class UiTickLagMeter;
 class WhatsNewDialog;
 class Nr2WisdomDialog;
 class ProfileManagerDialog;
+class HelpDialog;
+class SupportDialog;
 class SettingsBrowserDialog;
 class ProfileImportExportDialog;
 class RadioSetupDialog;
@@ -429,6 +432,13 @@ private slots:
     void applyOperatorTuningStep(int stepHz);
 
 private:
+    void refreshPanZoomControls();
+    // Why a native-span B/S cannot act on this pan right now, or nullopt.
+    // The B/S enable and every command path ask this one question.
+    std::optional<QString> nativePanZoomBlockedReason(const PanadapterModel* pan) const;
+    // The active band plan's zoom region (low, high MHz) at a frequency.
+    std::optional<std::pair<double, double>> bandPlanZoomRegion(double frequencyMhz,
+                                                                bool segment) const;
     enum class TuneIntent {
         IncrementalTune,
         AbsoluteJump,
@@ -1136,6 +1146,7 @@ private:
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
     void showSystemInfoDialog();
+    void showHelpGuide(const QString& title, const QString& resourcePath);
     void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
     // Construct the AetherModem window hidden if it does not exist yet, and
@@ -1193,6 +1204,9 @@ private:
     // pre-cap FPS and waterfall rate. Used on throttle lift, and before a
     // disconnect, app close, band change or pan close while capped.
     void restorePreCapPanRates(const QString& onlyPanId = {});
+    // Push the throttle's enabled flag and current cap to the radio tab's AT chip.
+    void refreshAdaptiveThrottleChip();
+    void refreshNetworkQualityIndicators();
     void startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots = true);
     void requestWanReconnect();
     void showForcedDisconnectDialog(bool wasWan, const RadioInfo& radioInfo, const WanRadioInfo& wanInfo);
@@ -1230,8 +1244,7 @@ private:
     BandSnapshot captureCurrentBandState() const;
     void restoreBandState(const BandSnapshot& snap);
     void startSwrSweep(int requestedSliceId = -1, int sweepPowerWatts = 1,
-                       double customLowMhz = 0.0, double customHighMhz = 0.0,
-                       bool forceLicenseConfirm = false);
+                       double customLowMhz = 0.0, double customHighMhz = 0.0);
     void clearSwrSweepPlot();
     void saveSwrSweepCsv();
     void advanceSwrSweep();
@@ -1423,11 +1436,13 @@ private:
     QTimer            m_cwxTxEndTimer;
 #endif
     WsjtxClient*       m_wsjtxClient{nullptr};
-    SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
     EibiClient*          m_eibiClient{nullptr};
     QHash<QString, int>  m_eibiSpotKeyToId;
     N1MMSpotClient*      m_n1mmSpotClient{nullptr};
+    // The WSPR receiver on the radio (tools/wspr-agent): its spots for
+    // SpotHub and the panadapter. Main thread; it only polls HTTP.
+    WsprSpotFeed*        m_wsprFeed{nullptr};
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
@@ -1790,6 +1805,8 @@ private:
     QPointer<MultiFlexDialog> m_multiFlexDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
+    QHash<QString, QPointer<HelpDialog>> m_helpDialogs;   // by resource path
+    QPointer<SupportDialog> m_supportDialog;
     QPointer<CanonWindow> m_aboutWindow;
     QPointer<AetherRxDialog> m_rxDialog;
     QPointer<Nr2WisdomDialog> m_nr2WisdomDialog;
@@ -2431,9 +2448,7 @@ bool MainWindow::showOrRaiseCanon(QPointer<T>& slot, Create&& create)
         window->setAttribute(Qt::WA_DeleteOnClose);
         slot = window;
     }
-    slot->show();
-    slot->raise();
-    slot->activateWindow();
+    slot->showAndActivate();
     return created;
 }
 

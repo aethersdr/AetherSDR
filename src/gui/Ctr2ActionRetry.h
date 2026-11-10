@@ -20,9 +20,9 @@ public:
 
     struct Ticket {
         quint64 serial{0};
-        Job job;
-        QString doneText;
-        QString device;   // mark(): the device the press was for
+        Job job{};
+        QString doneText{};
+        QString device{};   // mark(): the device the press was for
     };
 
     // An action starting; retry: it is the one retry of the previous action.
