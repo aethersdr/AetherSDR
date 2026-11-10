@@ -185,6 +185,9 @@ public:
     qint64 fwdPowerUpdatedAtMs() const { return m_lastFwdPowerUpdateMs; }
     qint64 reflectedPowerUpdatedAtMs() const { return m_lastReflectedPowerUpdateMs; }
     qint64 swrUpdatedAtMs() const { return m_lastSwrUpdateMs; }
+    // Receipt sequence survives clear(); unlike a timestamp it distinguishes
+    // updates in the same millisecond from FWDPWR-only notifications.
+    quint64 swrUpdateSequence() const { return m_swrUpdateSequence; }
     qint64 tgxlFwdPowerUpdatedAtMs() const { return m_lastTgxlFwdPowerUpdateMs; }
     qint64 tgxlSwrUpdatedAtMs() const { return m_lastTgxlSwrUpdateMs; }
     bool hasRecentTxMeters(qint64 maxAgeMs) const;
@@ -515,6 +518,7 @@ private:
     qint64 m_lastFwdPowerUpdateMs{0};
     qint64 m_lastReflectedPowerUpdateMs{0};
     qint64 m_lastSwrUpdateMs{0};
+    quint64 m_swrUpdateSequence{0};
     float m_micPeak{-50.0f};
     float m_compressionMaximumDb{25.0f};
     float m_compPeak{0.0f};       // radio-provided compression amount in dB

@@ -4566,6 +4566,8 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // can arrive before any no-carrier sample does, and the new over would
         // open displaying the old one's peak.
         m_fwdPeakWatts = 0.0;
+        // Likewise the SWR gate's envelope: the new over sets its own.
+        m_swrGate.reset();
     }
 
     const bool keyChanged = m_keyed != key;
@@ -6630,6 +6632,20 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
         put("swr", QStringLiteral("SWR"), swr);
     }
 
+    section("swrMeterState", QStringLiteral("SWR meter publication"));
+    put("swrMeterState", QStringLiteral("Latest SWR publication decision"), m_swrMeterState);
+    put("swrMeterKeyed", QStringLiteral("Latest SWR decision was keyed"), m_swrMeterKeyed);
+    put("swrMeterInput", QStringLiteral("SWR input selection"), m_swrMeterInput);
+    put("swrMeterForwardRaw", QStringLiteral("SWR selected forward (counts)"), opt(m_swrMeterForward));
+    put("swrMeterReverseRaw", QStringLiteral("SWR selected reverse (counts)"), opt(m_swrMeterReverse));
+    put("swrMeterMinForwardCounts", QStringLiteral("SWR minimum forward (counts)"), kMinForwardCountsForSwr);
+    put("swrMeterSession", QStringLiteral("SWR publication session"), QVariant::fromValue(m_connectGeneration));
+    put("swrKeyedEligible", QStringLiteral("Keyed SWR eligible windows"), QVariant::fromValue(m_swrKeyedEligible));
+    put("swrKeyedLowPower", QStringLiteral("Keyed SWR low-power windows"), QVariant::fromValue(m_swrKeyedLowPower));
+    put("swrKeyedSettling", QStringLiteral("Keyed SWR settling windows"), QVariant::fromValue(m_swrKeyedSettling));
+    put("swrKeyedPause", QStringLiteral("Keyed SWR speech-pause windows"), QVariant::fromValue(m_swrKeyedPause));
+    put("swrKeyedMissing", QStringLiteral("Keyed SWR missing/invalid sample windows"), QVariant::fromValue(m_swrKeyedMissing));
+
     // Telemetry attribution. Published here and winning the merge over
     // Hl2TelemetryService's same key, so both inputs must be asked here
     // (the service is injected for that), or `port-1025` would be
@@ -8173,6 +8189,14 @@ void Hl2Backend::pushInitialState()
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
     m_radioPtt = false;
+    m_swrGate.reset();
+    m_swrMeterState = QStringLiteral("unobserved");
+    m_swrMeterInput.clear();
+    m_swrMeterKeyed = false;
+    m_swrMeterForward.reset();
+    m_swrMeterReverse.reset();
+    m_swrKeyedEligible = m_swrKeyedLowPower = m_swrKeyedSettling = 0;
+    m_swrKeyedPause = m_swrKeyedMissing = 0;
     publishTransmitState();
     m_tuning = false;
     m_tuneOperation = {};
@@ -8276,10 +8300,44 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // detectorVolts(), #4578), and only meaningful with real forward power:
     // below kMinForwardCountsForSwr (MetisProtocol.h, shared with Radio Health)
     // noise drives the ratio to 255.99:1.
-    if (t.forwardPowerRaw && t.reversePowerRaw
-        && *t.forwardPowerRaw >= kMinForwardCountsForSwr) {
-        if (const auto swr = swrFromRaw(*t.forwardPowerRaw, *t.reversePowerRaw))
-            emit meterUpdate(QStringLiteral("TX:SWR"), *swr);
+    // Keyed, the pair is the window's two maxima: forward (RADDR 1) and reverse
+    // (RADDR 2) come in different responses, so the last two can sit on
+    // different points of the speech envelope. Unkeyed, the last values, as
+    // for FWDPWR below. m_swrGate drops the key-on and speech-pause windows;
+    // the meter then holds its last reading.
+    const bool windowPair = m_keyed && t.forwardPowerPeakRaw && t.reversePowerPeakRaw;
+    const std::optional<int> swrFwd = windowPair ? t.forwardPowerPeakRaw : t.forwardPowerRaw;
+    const std::optional<int> swrRev = windowPair ? t.reversePowerPeakRaw : t.reversePowerRaw;
+    const bool settling = windowPair && m_swrGate.keyOnWindowsLeft > 0;
+    const bool swrModulated = !windowPair || m_swrGate.accept(*swrFwd);
+    std::optional<double> swr;
+    m_swrMeterInput = windowPair ? QStringLiteral("window peaks") : QStringLiteral("last pair");
+    m_swrMeterKeyed = m_keyed;
+    m_swrMeterForward = swrFwd;
+    m_swrMeterReverse = swrRev;
+    if (!swrFwd || !swrRev) {
+        m_swrMeterState = QStringLiteral("missing samples");
+        if (m_keyed) { ++m_swrKeyedMissing; }
+    } else if (settling) {
+        m_swrMeterState = QStringLiteral("key-on settling");
+        if (m_keyed) { ++m_swrKeyedSettling; }
+    } else if (*swrFwd < kMinForwardCountsForSwr) {
+        m_swrMeterState = QStringLiteral("low forward power");
+        if (m_keyed) { ++m_swrKeyedLowPower; }
+    } else if (!swrModulated) {
+        m_swrMeterState = QStringLiteral("speech pause");
+        if (m_keyed) { ++m_swrKeyedPause; }
+    } else if ((swr = swrFromRaw(*swrFwd, *swrRev))) {
+        m_swrMeterState = QStringLiteral("eligible");
+        if (m_keyed) { ++m_swrKeyedEligible; }
+    } else {
+        m_swrMeterState = QStringLiteral("invalid samples");
+        if (m_keyed) { ++m_swrKeyedMissing; }
+    }
+    // Eligibility is recorded before emission so a broken delivery path cannot
+    // turn a missing update into evidence of intentional suppression.
+    if (swr) {
+        emit meterUpdate(QStringLiteral("TX:SWR"), *swr);
     }
     // Forward/reverse power through directionalWatts()'s uncalibrated reference
     // curve; raw counts are logged too, for future per-unit calibration.
@@ -8315,6 +8373,7 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
                          << "(uncalibrated reference curve);"
                          << "window peak" << t.forwardPowerPeakRaw.value_or(-1)
+                         << "rev peak" << t.reversePowerPeakRaw.value_or(-1)
                          << "of" << t.forwardPowerSamples << "RADDR-1 samples ("
                          << t.forwardPowerSkipped << "skipped) in"
                          << t.adcWindowMs << "ms";

@@ -162,6 +162,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **Session safety:** MOX, CW PTT and TUNE requests are refused while the radio session is stopped. Stopping the session clears a held software key; reconnecting requires a fresh transmit request.
 - **Show TX in Waterfall:** **Settings → Radio Setup... → Transmit → Show TX in Waterfall** lets the waterfall draw spectrum rows over the TX passband while transmitting. It starts off, and AetherSDR remembers your choice separately for each HL2 across reconnects and restarts. The control does not key the radio.
 - **Max Power:** **Settings → Radio Setup... → Transmit → Max Power** shows the HL2's rated watts, read-only. The power gauge uses a 5 W scale, and forward power reads near PEP on speech.
+- **SWR while transmitting** is the ratio of the highest forward and the highest reflected reading in each 0.1 s telemetry window, so it reads the load rather than the speech envelope. It appears about 0.2 s after keying and holds its last reading through pauses in speech. Unkeyed, and in **Tools → Radio Health...**, SWR is the ratio of the latest pair of readings.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
 - **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
@@ -177,7 +178,8 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - CW, RTTY and AetherClock decoders, and the QSO recorder.
 - AX.25 packet with AetherModem (APRS, KISS TNC, terminal and mailbox).
 - **Memory channels**, stored on this computer in the bank shared by radios without memory slots. See [Memory Channels](./memory-channels.md).
-- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware and the transmit voice chain.
+- **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware and the transmit voice chain. Its **SWR meter publication** section shows the selected forward/reflected counts, the minimum forward count, the latest publication decision, and keyed-window counters. These describe the meter's actual input; the separate raw SWR row remains the latest-pair diagnostic.
+- **Certification reports:** `radiocert meters` reports **SUPPRESSED** when this run's SWR windows were withheld for low forward power, key-on settling, or speech pauses. **INCONCLUSIVE** means publication evidence is missing or the radio session changed. **NOT DELIVERED** means the backend had eligible keyed windows but no new keyed SWR update reached the meter. A reading retained from an earlier run, or received while unkeyed, does not count as keyed delivery in this run.
 - Connection health in the title bar, status bar and network statistics.
 
 ## Reference

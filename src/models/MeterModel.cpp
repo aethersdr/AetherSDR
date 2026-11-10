@@ -23,10 +23,9 @@ namespace {
 // exactly, while any genuine reading (0 dBm is already 30 dB below a 1 W
 // carrier) stays on the smoothed path.
 constexpr float kNoCarrierWatts = 0.0011f;
-// MeterModel::kMinForwardWattsForSwr — the SWR power floor — now lives in the
-// header, because `radiocert`'s keyed-RF precondition has to reason about the
-// same number: the finding it suppresses is "TX:SWR never fed", and SWR is fed
-// exactly when forward power clears this floor.
+// MeterModel::kMinForwardWattsForSwr is the consumer's display-liveness floor.
+// A backend can withhold SWR for additional producer-side conditions, so this
+// floor alone does not establish that an SWR update should have been published.
 //
 // NOTE: kNoCarrierWatts (#4540) and kMinForwardWattsForSwr (#4533) share the
 // same numeric floor but answer different questions -- "is a carrier present"
@@ -1095,6 +1094,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
         } else if (idx == m_swrIdx) {
             m_lastTxMeterUpdateMs = packetUpdatedMs;
             m_lastSwrUpdateMs = m_lastTxMeterUpdateMs;
+            ++m_swrUpdateSequence;
             m_swr = v;
             txChanged = true;
             directionalChanged = true;
