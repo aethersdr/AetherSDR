@@ -18,6 +18,16 @@ public:
         radio.m_connection = &connection;
     }
     static bool apply(RadioModel& radio) { return radio.applyTuneInhibit(); }
+    static void openSession(RadioModel& radio)
+    {
+        radio.m_connection->m_state.store(ConnectionState::Connected);
+        radio.m_sessionCommands = SessionCommandGuard::create();
+        radio.m_sessionWire = radio.m_connection;
+        radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
+        if (auto* flex = dynamic_cast<FlexBackend*>(radio.m_backend.get())) {
+            flex->setSetupCommandSink(radio.setupCommandSink());
+        }
+    }
     static void restore(RadioModel& radio) { radio.restoreTuneInhibit(); }
     static void disconnect(RadioModel& radio) { radio.onDisconnected(); }
     static void reopen(RadioModel& radio) { radio.m_txSessionClosing = false; }
@@ -155,6 +165,20 @@ void ownershipAndChurn()
     check(local.wire.count("interlock bandset 9 acc_tx_enabled=1") == 0
         && local.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
           "explicit same-value output edit wins while another band's edit cannot cancel ownership");
+
+    // The typed TX-band setter is an operator edit too; the setup sink must
+    // relinquish the field the same way sendCmdPublic does.
+    Fixture typed;
+    TxOperationIntegrationTestAccess::openSession(typed.radio);
+    typed.apply();
+    const qsizetype beforeEdit = typed.wire.size();
+    const ReceiveDispatch edit = typed.radio.requestTxBand({9, TxBandRequest::Field::AccessoryTx, false});
+    const bool editWritten = typed.wire.size() == beforeEdit + 1
+        && typed.wire.last() == QStringLiteral("interlock bandset 9 acc_tx_enabled=0");
+    typed.restore();
+    check(edit == ReceiveDispatch::Dispatched && editWritten
+              && typed.wire.count("interlock bandset 9 acc_tx_enabled=1") == 0,
+          "a typed TX-band edit during the inhibit is written and not undone by the restore");
 
     Fixture rejected;
     rejected.apply();

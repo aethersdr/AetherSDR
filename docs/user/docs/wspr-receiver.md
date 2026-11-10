@@ -19,7 +19,7 @@ It is receive-only: it never transmits, and its slice is never the transmit slic
 
 ## Requirements
 
-- A FLEX-8000 series or Aurora radio, where it runs as a container and so needs the radio's Waveform Processor ready. A FLEX-6000 can install it as a legacy waveform, but this hasn't been tested: its single processor core may not finish decoding a busy band within the two-minute cycle, and the receiver records only once the radio's clock is synchronized, which may not happen on a radio with no time source.
+- A FLEX-8000 series or Aurora radio, where it runs as a container and so needs the radio's Waveform Processor ready. A FLEX-6000 can install it as a legacy waveform, but this hasn't been tested: its single processor core may not finish decoding a busy band within the two-minute cycle. The receiver records only once the radio's clock is synchronized; on a FLEX-6000 it takes the radio's own report that it has settled on an NTP source, so a radio with no time source never starts recording.
 - AetherSDR connected to the radio over its **local network** or through [Remote Access](./tailscale-remote-access.md) version 0.5.2 or later. SmartLink can't reach the receiver.
 - One free slice. The receiver takes one of the radio's slices for as long as it runs.
 
@@ -31,6 +31,10 @@ It is receive-only: it never transmits, and its slice is never the transmit slic
 The receiver ships inside AetherSDR, so nothing is downloaded. It takes less than 500 KB on the radio. It starts within seconds, and listens on 20 m until you change that.
 
 To remove it, click **Remove** (FLEX-8000 and Aurora) or **Uninstall** (FLEX-6000) on its **AetherWSPR** row. This also removes its settings.
+
+## Updating it
+
+When the radio runs an older receiver than the one in this AetherSDR, its **Configure...** window shows **Update**. Click it and confirm: AetherSDR removes the old receiver, installs the new one, and gives it the old one's settings once it starts, which can take a minute or two. Keep the window open until it says the update is done. Updating claims the new receiver for this computer.
 
 ## Configuring it
 

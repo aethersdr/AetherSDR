@@ -11,6 +11,7 @@
 #include "core/backends/rtl/RtlSdrDdc.h"
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -33,10 +34,11 @@ bool requiresLock(const char* name, Prepare prepare, Operation operation,
     operation(control);
     const auto controlDuration = std::chrono::steady_clock::now() - controlStart;
     control.reset();
-    if (controlDuration > 500ms) {
-        std::cerr << "FAIL: " << name << " positive control was too slow\n";
-        return false;
-    }
+    // Model loading remains real work after FFTW wisdom is warm, especially
+    // under TSan. Observe for longer than that work takes so a slow operation
+    // cannot pass as a blocked one. CTest bounds the entire test.
+    const auto blockedWindow = std::max(750ms,
+        std::chrono::duration_cast<std::chrono::milliseconds>(controlDuration * 3));
 
     auto object = prepare();
     std::unique_lock<std::mutex> held = acquireLock();
@@ -50,7 +52,7 @@ bool requiresLock(const char* name, Prepare prepare, Operation operation,
     while (!started.load()) {
         std::this_thread::yield();
     }
-    std::this_thread::sleep_for(750ms);
+    std::this_thread::sleep_for(blockedWindow);
     const bool blocked = !completed.load();
     held.unlock();
     worker.join();

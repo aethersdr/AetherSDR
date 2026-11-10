@@ -116,8 +116,12 @@ int main(int argc, char* argv[])
         nullptr, {}, nullptr, parser.isSet(controlOption));
     if (!server.listen(parser.value(socketOption),
                        AetherSDR::control::LocalControlServer::ListenMode::ReserveEndpoint)) {
-        QTextStream(stderr) << "aetherd: cannot listen on local socket '"
-                            << parser.value(socketOption) << "'\n";
+        QTextStream err(stderr);
+        err << "aetherd: cannot listen on local socket '" << parser.value(socketOption) << "'";
+        if (!server.listenError().isEmpty()) {
+            err << ": " << server.listenError();
+        }
+        err << '\n';
         return 1;
     }
     std::unique_ptr<QLockFile> authorityReservation;

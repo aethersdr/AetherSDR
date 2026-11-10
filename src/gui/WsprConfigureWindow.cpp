@@ -1,7 +1,9 @@
 #include "WsprConfigureWindow.h"
 
 #include "CanonIndicators.h"
+#include "CanonMessageBox.h"
 #include "CanonTableStyle.h"
+#include "ScopedChildWidget.h"
 
 #include "core/TailnetShimTokenStore.h"
 #include "core/ThemeManager.h"
@@ -338,6 +340,12 @@ WsprConfigureWindow::WsprConfigureWindow(RadioModel* model, QWidget* parent)
     layout->addWidget(m_messageLabel);
 
     auto* buttons = new QHBoxLayout;
+    m_updateButton = new QPushButton(tr("Update"), body);
+    m_updateButton->setObjectName(QStringLiteral("wsUpdate"));
+    m_updateButton->setAccessibleName(tr("Update the WSPR receiver on this radio"));
+    m_updateButton->hide();
+    connect(m_updateButton, &QPushButton::clicked, this, &WsprConfigureWindow::updateReceiver);
+    buttons->addWidget(m_updateButton);
     buttons->addStretch(1);
     auto* cancel = new QPushButton(tr("Cancel"), body);
     cancel->setAccessibleName(tr("Close without saving"));
@@ -382,12 +390,27 @@ WsprConfigureWindow::WsprConfigureWindow(RadioModel* model, QWidget* parent)
             }, TailnetShimTokenStore::Entry::Wspr);
         }
         showConfig(config, true);
+        if (m_restore) {
+            endUpdate(tr("Updated to version %1, with its settings.").arg(QString::fromLatin1(WsprPackage::kVersion)),
+                      QStringLiteral("ok"));
+            return;
+        }
         setMessage(tr("Saved on the radio."), QStringLiteral("ok"));
     });
     connect(m_client, &WsprAgentClient::requestFailed, this,
             [this](const QString& operation, const QString& message, bool unauthorized) {
         if (operation == QLatin1String("status")) {
-            setStatusLine(tr("Not answering"), QStringLiteral("error"));
+            // Through an Update the receiver is expected to be away a while.
+            if (!m_restore) {
+                setStatusLine(tr("Not answering"), QStringLiteral("error"));
+            }
+            return;
+        }
+        if (m_restore && operation == QLatin1String("save")) {
+            endUpdate(tr("Updated, but its settings weren't put back: %1 Set them again here.").arg(message),
+                      QStringLiteral("error"));
+            m_loaded.reset();
+            m_client->fetchConfig();
             return;
         }
         m_busy = false;
@@ -397,6 +420,19 @@ WsprConfigureWindow::WsprConfigureWindow(RadioModel* model, QWidget* parent)
                                      "start over.")
                                 : message,
                    QStringLiteral("error"));
+    });
+
+    // A container first waits for the radio's API, so a new receiver can take
+    // a minute or two to answer.
+    m_updateDeadline = new QTimer(this);
+    m_updateDeadline->setSingleShot(true);
+    m_updateDeadline->setInterval(180'000);
+    connect(m_updateDeadline, &QTimer::timeout, this, [this] {
+        endUpdate(tr("The new receiver didn't answer within three minutes, so its settings weren't put "
+                     "back. Set them again here once it answers."),
+                  QStringLiteral("error"));
+        m_loaded.reset();
+        m_client->fetchConfig();
     });
 
     m_statusTimer = new QTimer(this);
@@ -462,8 +498,9 @@ void WsprConfigureWindow::showConfig(const WsprConfig& c, bool claimed)
 
 void WsprConfigureWindow::closeEvent(QCloseEvent* event)
 {
-    // The reply to a first save carries the only copy of the admin token.
-    if (m_busy) {
+    // The reply to a first save carries the only copy of the admin token, and
+    // through an Update only this window holds the settings to put back.
+    if (m_busy || m_restore) {
         event->ignore();
         return;
     }
@@ -472,6 +509,22 @@ void WsprConfigureWindow::closeEvent(QCloseEvent* event)
 
 void WsprConfigureWindow::showStatus(const WsprStatus& st)
 {
+    if (st.version != m_installedVersion) {
+        m_installedVersion = st.version;
+        updateControls();
+    }
+    if (m_restore) {
+        // Through an Update: the old receiver may answer until it is removed;
+        // the new one answers at the bundled version, unclaimed, and its
+        // first save is the old one's settings.
+        if (!m_restoreSent && st.version == QLatin1String(WsprPackage::kVersion)) {
+            m_restoreSent = true;
+            m_busy = true;
+            setStatusLine(tr("Restoring settings…"), QStringLiteral("starting"));
+            m_client->saveConfig(*m_restore, QString());
+        }
+        return;
+    }
     // It answers now, so it may not have when the window opened.
     if (!m_loaded) {
         m_client->fetchConfig();
@@ -560,19 +613,78 @@ void WsprConfigureWindow::setStatusLine(const QString& text, const QString& stat
 void WsprConfigureWindow::updateControls()
 {
     const bool loaded = m_loaded.has_value();
+    const bool editable = loaded && !m_busy && !m_restore;
     for (QWidget* w : std::initializer_list<QWidget*>{m_callsignEdit, m_gridEdit, m_bandCombo, m_antennaCombo,
                                                       m_depthCombo, m_daxCombo, m_hopCheck, m_uploadCheck}) {
-        w->setEnabled(loaded && !m_busy);
+        w->setEnabled(editable);
     }
-    const bool hop = loaded && !m_busy && m_hopCheck->isChecked();
+    const bool hop = editable && m_hopCheck->isChecked();
     m_graySpin->setEnabled(hop);
     m_hopTable->setEnabled(hop);
     const bool dirty = loaded && collect() != *m_loaded;
-    m_applyButton->setEnabled(dirty && !m_busy);
-    m_applyButton->setAccessibleDescription(!loaded   ? tr("The receiver's settings haven't been read yet.")
-                                            : m_busy  ? tr("Saving.")
-                                            : !dirty  ? tr("Nothing has changed.")
-                                                      : QString());
+    m_applyButton->setEnabled(dirty && editable);
+    m_applyButton->setAccessibleDescription(!loaded    ? tr("The receiver's settings haven't been read yet.")
+                                            : m_restore ? tr("Updating the receiver.")
+                                            : m_busy    ? tr("Saving.")
+                                            : !dirty    ? tr("Nothing has changed.")
+                                                        : QString());
+    // An older receiver on the radio: Update reinstalls it at the bundled
+    // version and puts its settings back, so it needs them read first.
+    const bool outdated = wspr::updateAvailable(m_installedVersion) && !m_restore;
+    m_updateButton->setVisible(outdated);
+    m_updateButton->setEnabled(outdated && editable);
+    const QString updateWhy = !outdated ? QString()
+        : !loaded ? tr("The receiver's settings haven't been read yet.")
+                  : tr("Install version %1 on the radio, keeping these settings.")
+                        .arg(QString::fromLatin1(WsprPackage::kVersion));
+    m_updateButton->setToolTip(updateWhy);
+    m_updateButton->setAccessibleDescription(updateWhy);
+}
+
+void WsprConfigureWindow::updateReceiver()
+{
+    if (!m_loaded || m_busy || m_restore || !wspr::updateAvailable(m_installedVersion)) {
+        return;
+    }
+    const QPointer<WsprConfigureWindow> self(this);
+    ScopedChildWidget<CanonMessageBox> ask(
+        tr("Update the WSPR Receiver?"),
+        tr("Version %1 is available; this radio runs %2.")
+            .arg(QString::fromLatin1(WsprPackage::kVersion), m_installedVersion),
+        this);
+    ask.get()->setInformativeText(
+        tr("Updating removes and reinstalls the receiver. Its settings are put back once it starts."));
+    ask.get()->setDefaultButton(ask.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* go = ask.get()->addButton(tr("Update"), CanonMessageBox::Role::Accept);
+    ask.get()->exec();
+    if (!self || !ask || ask.get()->clickedButton() != go) {
+        return;
+    }
+    m_restore = m_loaded;
+    m_restoreSent = false;
+    setStatusLine(tr("Updating…"), QStringLiteral("starting"));
+    setMessage(tr("Installing version %1. Its settings are put back once it starts, which can take a "
+                  "minute or two.").arg(QString::fromLatin1(WsprPackage::kVersion)));
+    m_updateDeadline->start();
+    updateControls();
+    emit reinstallRequested();
+}
+
+void WsprConfigureWindow::reinstallFailed()
+{
+    if (m_restore) {
+        endUpdate(tr("The update didn't start; the Waveforms window says why."), QStringLiteral("error"));
+    }
+}
+
+void WsprConfigureWindow::endUpdate(const QString& message, const QString& tone)
+{
+    m_restore.reset();
+    m_restoreSent = false;
+    m_updateDeadline->stop();
+    m_busy = false;
+    setMessage(message, tone);
+    updateControls();
 }
 
 }  // namespace AetherSDR
