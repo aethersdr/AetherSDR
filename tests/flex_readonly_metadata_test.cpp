@@ -7,6 +7,7 @@
 #include "core/backends/SessionCommandGuard.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/flex/FlexSessionControls.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -106,6 +107,12 @@ public:
 using namespace AetherSDR;
 
 namespace {
+// The info reply reaches the model as the backend's typed RadioDelta, the
+// same delta requestRadioInfo() applies.
+void emitInfo(FlexBackend* backend, const QString& body)
+{
+    emit backend->radioChanged(FlexSessionControls::infoMetadata(body));
+}
 QMap<QString, QString> sliceStatus()
 {
     return {{QStringLiteral("in_use"), QStringLiteral("1")},
@@ -315,9 +322,9 @@ private slots:
         QFETCH(int, expected);
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=3"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=3"));
         QSignalSpy typed(f.backend, &IRadioBackend::radioChanged);
-        f.backend->decodeRadioInfoMetadata(body);
+        emitInfo(f.backend, body);
         QCOMPARE(typed.count(), 1);
         const RadioDelta delta = typed.first().first().value<RadioDelta>();
         QVERIFY(delta.iaruRegion.has_value());
@@ -331,13 +338,13 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("region=USA,iaru_region=2"));
+        emitInfo(f.backend, QStringLiteral("region=USA,iaru_region=2"));
         f.backend->decodeRadioStatus({{QStringLiteral("region"), QStringLiteral("USA")}});
         QCOMPARE(f.radio.iaruRegion().value_or(0), 2);
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("region=USA"));
+        emitInfo(f.backend, QStringLiteral("region=USA"));
         QVERIFY(!f.radio.iaruRegion().has_value());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=1"));
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=not-a-region"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=1"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=not-a-region"));
         QVERIFY(!f.radio.iaruRegion().has_value());
         QVERIFY(f.noCommands());
     }
@@ -405,7 +412,7 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         SliceModel* slice = f.radio.slice(0);
         connect(&f.radio, &RadioModel::infoChanged, &f.radio, [slice] {
             slice->setFrequency(14.3);
@@ -418,7 +425,7 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         const quint32 seq = f.requestInfo();
         const RadioConnection::ResponseCallback old = RadioNicknameTestAccess::callback(f.radio, seq);
         QVERIFY(old);
@@ -566,7 +573,7 @@ private slots:
         for (const bool known : {false, true, false}) {
             f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"),
                 known ? QStringLiteral("DIGU") : QString()}});
-            f.backend->decodeRadioInfoMetadata(known ? QStringLiteral("iaru_region=2") : QString());
+            emitInfo(f.backend, known ? QStringLiteral("iaru_region=2") : QString());
             const QJsonValue chain = known ? QJsonValue(QStringLiteral("DIGU")) : QJsonValue();
             const QJsonValue region = known ? QJsonValue(2) : QJsonValue();
             for (const QString& model : {QStringLiteral("slice"), QStringLiteral("radio")}) {
@@ -607,7 +614,7 @@ private slots:
         QVERIFY(f.init());
         SliceModel* original = f.radio.slice(0);
         f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         RadioNicknameTestAccess::disconnect(f.radio);
         QVERIFY(original->chainMode().isEmpty());
         QVERIFY(!f.radio.iaruRegion().has_value());
@@ -618,7 +625,7 @@ private slots:
         QVERIFY(original->chainMode().isEmpty());
         f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("FutureChain")}});
         QCOMPARE(original->chainMode(), QStringLiteral("FutureChain"));
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=3"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=3"));
         QCOMPARE(f.radio.iaruRegion().value_or(0), 3);
     }
 
@@ -628,7 +635,7 @@ private slots:
         QVERIFY(f.init());
         SliceModel* original = f.radio.slice(0);
         f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         f.radio.stageSessionModelsForReconnectForTest();
         QVERIFY(original->chainMode().isEmpty());
         QVERIFY(!f.radio.iaruRegion().has_value());
@@ -659,7 +666,7 @@ private slots:
         Fixture f;
         QVERIFY(f.init());
         f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         f.detach();
         QVERIFY(f.radio.rebuildBackendForTest(QStringLiteral("sim")));
         QVERIFY(!f.radio.iaruRegion().has_value());
@@ -695,7 +702,7 @@ private slots:
         for (const QString& chain : {QStringLiteral("USB"), QStringLiteral("DIGU"), QStringLiteral("FutureChain")}) {
             f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), chain}});
             for (int region = 1; region <= 3; ++region) {
-                f.backend->decodeRadioInfoMetadata(QStringLiteral("region=USA,iaru_region=%1").arg(region));
+                emitInfo(f.backend, QStringLiteral("region=USA,iaru_region=%1").arg(region));
                 f.get(QStringLiteral("slice"), QStringLiteral("chainMode"));
                 f.get(QStringLiteral("radio"), QStringLiteral("iaruRegion"));
                 f.radio.troubleshootingSnapshot();

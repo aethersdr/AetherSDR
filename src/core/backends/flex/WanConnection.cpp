@@ -194,14 +194,14 @@ void WanConnection::disconnectFromRadio()
 quint32 WanConnection::sendSessionCommand(const QString& command, quint64 generation,
                                           const SessionCommandGuard& guard, ResponseCallback callback)
 {
-    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return 0; }
+    if (!sessionWriteAdmitted(generation, guard)) { return 0; }
     return sendCommand(command, std::move(callback));
 }
 
 quint32 WanConnection::sendAdministrationCommand(const QString& command, quint64 generation,
     const SessionCommandGuard& guard, ResponseCallback callback)
 {
-    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return 0; }
+    if (!sessionWriteAdmitted(generation, guard)) { return 0; }
     const quint32 seq = m_seqCounter.fetch_add(1);
     if (callback) { m_pendingCallbacks.insert(seq, std::move(callback)); }
     const QByteArray data = CommandParser::buildCommand(seq, command);

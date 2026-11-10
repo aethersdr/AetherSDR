@@ -411,7 +411,7 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
 bool RadioConnection::writeSessionCommand(quint32 seq, const QString& command,
                                           quint64 generation, const SessionCommandGuard& guard)
 {
-    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return false; }
+    if (!sessionWriteAdmitted(generation, guard)) { return false; }
     writeCommand(seq, command);
     return true;
 }
@@ -419,7 +419,7 @@ bool RadioConnection::writeSessionCommand(quint32 seq, const QString& command,
 bool RadioConnection::writeAdministrationCommand(quint32 seq, const QString& command,
     quint64 generation, const SessionCommandGuard& guard)
 {
-    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return false; }
+    if (!sessionWriteAdmitted(generation, guard)) { return false; }
     if (m_commandSinkForTest) {
         m_commandSinkForTest(seq, command);
         return true;

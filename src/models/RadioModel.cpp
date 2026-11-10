@@ -886,6 +886,10 @@ void RadioModel::forgetAdministrationReply(const PendingAdministrationWrite& ope
     }
 }
 
+namespace {
+bool rejectsForeignPanWrite(const RadioModel& radio, const QString& cmd);
+}
+
 RadioModel::SetupCommandSink RadioModel::setupCommandSink(const SetupCommandWriter& writer)
 {
     const QPointer<RadioModel> model(this);
@@ -899,8 +903,12 @@ RadioModel::SetupCommandSink RadioModel::setupCommandSink(const SetupCommandWrit
                 completion({code == 0 ? RadioSetupReply::Kind::Accepted : RadioSetupReply::Kind::Failed, code, body});
             };
         }
-        return writer ? writer(command, std::move(reply))
-                      : model->sendCmd(command, std::move(reply), model->m_sessionCommands.request()) != 0;
+        if (writer) { return writer(command, std::move(reply)); }
+        // The guards sendCmdPublic applies to every operator write: an output
+        // edit supersedes a TUNE inhibit, and another client's pan is refused.
+        model->relinquishTuneInhibit(command);
+        if (rejectsForeignPanWrite(*model, command)) { return false; }
+        return model->sendCmd(command, std::move(reply), model->m_sessionCommands.request()) != 0;
     };
 }
 
@@ -1004,7 +1012,7 @@ void RadioModel::setupBackend(const QString& family)
                         completion({kind, code, body});
                     };
                 }
-                return sendCmd(command, std::move(reply), guard) != 0;
+                return sendCmd(command, std::move(reply), guard, {}, /*expireReply=*/true) != 0;
             });
             flex->setAudioCommandSink(audioCommandSink());
             flex->setDaxTxClientHandleProvider([this] { return ourClientHandle(); });
@@ -7220,13 +7228,18 @@ void RadioModel::onConnected()
 
     // Register as GUI client FIRST — required before subscriptions,
     // especially on WAN/SmartLink where the radio is stricter.
-    disconnectPendingClientsThen(sessionContinuation([this] {
+    disconnectPendingClientsThen([this] {
         if (m_wanConn) {
             // On WAN: wait for client ip response before sending client gui.
             // The radio needs time after wan validate to accept GUI registration.
             // multiFLEX conflict on WAN is caught pre-connection via licensedClients.
             requestSessionControl({SessionControlField::ClientIp}, [this, current = sessionControlFence()](const SessionControlReply& reply) {
-                if (!current() || reply.result.kind == RadioControlReply::Kind::Cancelled) { return; }
+                if (!current()) { return; }
+                if (reply.result.kind == RadioControlReply::Kind::Cancelled) {
+                    emit connectionError(tr("GUI client registration did not complete: %1").arg(reply.result.message));
+                    if (current()) { forceDisconnect(); }
+                    return;
+                }
                 qCDebug(lcProtocol) << "RadioModel: client ip ->" << reply.clientIp;
                 registerAsGuiClient(AppSettings::instance().effectiveGuiClientId());
             });
@@ -7237,7 +7250,7 @@ void RadioModel::onConnected()
                 registerAsGuiClient(AppSettings::instance().effectiveGuiClientId());
             });
         }
-    }));
+    });
 }
 
 void RadioModel::stageSessionModelsForReconnect()
@@ -7456,7 +7469,16 @@ void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHand
         const quint32 handle = remaining->takeFirst();
         qCDebug(lcProtocol) << "RadioModel: disconnecting occupied client" << Qt::hex << handle;
         requestSessionControl(SessionControlRequest::disconnectClient(handle), [this, handle, self, current, completion](const SessionControlReply& reply) {
-            if (!current() || reply.result.kind == RadioControlReply::Kind::Cancelled) {
+            if (!current()) {
+                return;
+            }
+            // Cancelled while the session is still current means the request
+            // was never dispatched: fail like a refused disconnect.
+            if (reply.result.kind == RadioControlReply::Kind::Cancelled) {
+                if (*completion) {
+                    emit connectionError(tr("Client disconnection did not complete; reconnecting."));
+                    if (current()) { forceDisconnect(); }
+                }
                 return;
             }
             if (!reply.accepted()) {
@@ -10384,7 +10406,8 @@ RadioControlFence RadioModel::registrationRejectionFence() const
 
 quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb,
                             std::optional<SessionCommandGuard> guard,
-                            std::function<bool()> dispatchAllowed)
+                            std::function<bool()> dispatchAllowed,
+                            bool expireReply)
 {
     if (guard && (!guard->current() || m_expiringPendingCallbacks || !sessionTransportCurrent())) { return 0; }
     if (dispatchAllowed && !dispatchAllowed()) {
@@ -10496,10 +10519,15 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb,
         const quint64 generation = m_sessionWireGeneration;
         const bool answered = bool(cb);
         const quint32 seq = connection->sendSessionCommand(command, generation, *guard, std::move(cb));
-        if (seq && answered) {
-            QTimer::singleShot(30000, this, [connection, generation, seq] {
+        if (seq && answered && expireReply) {
+            auto* expiry = new QTimer(this);
+            expiry->setObjectName(QStringLiteral("sessionReplyExpiry"));
+            expiry->setSingleShot(true);
+            connect(expiry, &QTimer::timeout, this, [expiry, connection, generation, seq] {
                 if (connection) { connection->forgetSessionReply(seq, generation); }
+                expiry->deleteLater();
             });
+            expiry->start(30000);
         }
         return seq;
     }
@@ -10561,8 +10589,18 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb,
             emit conn->commandResponse(seq, kNoCommandPlaneCode, QStringLiteral("Original session ended before write"));
         }
     });
-    if (guard && m_pendingCallbacks.contains(seq)) {
-        QTimer::singleShot(30000, this, [this, seq] { m_pendingCallbacks.remove(seq); });
+    // Session controls complete themselves after 30 s, so their unanswered
+    // callback is dropped then; every other command waits for its reply or
+    // the session's end.
+    if (expireReply && m_pendingCallbacks.contains(seq)) {
+        auto* expiry = new QTimer(this);
+        expiry->setObjectName(QStringLiteral("sessionReplyExpiry"));
+        expiry->setSingleShot(true);
+        connect(expiry, &QTimer::timeout, this, [this, expiry, seq] {
+            m_pendingCallbacks.remove(seq);
+            expiry->deleteLater();
+        });
+        expiry->start(30000);
     }
     return seq;
 }

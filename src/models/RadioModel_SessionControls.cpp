@@ -36,7 +36,13 @@ ReceiveDispatch RadioModel::requestSessionControl(const SessionControlRequest& r
 {
     if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
     const RadioControlSession session = controlSession();
-    const auto capability = backendCapabilities().sessionControl;
+    // The session-control record is fixed per backend; rebuilding the whole
+    // capability struct for each of the connect-time requests is not needed.
+    if (m_sessionControlGeneration != m_backendReceiverGeneration) {
+        m_sessionControl = backendCapabilities().sessionControl;
+        m_sessionControlGeneration = m_backendReceiverGeneration;
+    }
+    const std::optional<SessionControl>& capability = m_sessionControl;
     if (!m_backend || !controlSessionCurrent(session) || !sessionTransportCurrent() || !m_sessionCommands.current()
         || !capability || !capability->supports(request.field)
         || (request.field == SessionControlField::DisconnectClient

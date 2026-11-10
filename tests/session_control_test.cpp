@@ -43,7 +43,8 @@ public:
     static bool expire(RadioModel& model)
     {
         for (QTimer* timer : model.findChildren<QTimer*>(QString(), Qt::FindDirectChildrenOnly)) {
-            if (timer->isActive() && timer->isSingleShot() && timer->interval() == 30000) {
+            if (timer->isActive() && timer->isSingleShot() && timer->interval() == 30000
+                && timer->objectName() != QLatin1String("sessionReplyExpiry")) {
                 return QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection);
             }
         }
@@ -55,6 +56,17 @@ public:
     static SessionCommandGuard sessionRequest(RadioModel& model) { return model.m_sessionCommands.request(); }
     static quint32 send(RadioModel& model, const QString& command, const SessionCommandGuard& guard)
     { return model.sendCmd(command, {}, guard); }
+    static quint32 sendAnswered(RadioModel& model, const QString& command, bool expireReply,
+                                RadioModel::ResponseCallback reply)
+    { return model.sendCmd(command, std::move(reply), model.m_sessionCommands.request(), {}, expireReply); }
+    static bool answer(RadioModel& model, quint32 seq)
+    {
+        const auto callback = model.m_pendingCallbacks.take(seq);
+        if (callback) { callback(0, {}); }
+        return bool(callback);
+    }
+    static QTimer* replyExpiry(RadioModel& model)
+    { return model.findChild<QTimer*>(QStringLiteral("sessionReplyExpiry"), Qt::FindDirectChildrenOnly); }
     static void closeTransport(RadioModel& model, ConnectionState state)
     {
         model.m_connection->m_state.store(state);
@@ -207,6 +219,28 @@ private slots:
             QCOMPARE(writes.load(), replace ? 0 : 1);
         }
     }
+    // Only session controls drop an unanswered reply after 30 s; a guarded
+    // setup write keeps waiting for its reply, as an unguarded command does.
+    void onlySessionControlsExpireReplies()
+    {
+        RadioModel model;
+        RecordingSessionBackend* backend = install(model);
+        SessionControlTestAccess::installWriter(*backend->connection(), [](quint32, const QString&) {});
+        int answered = 0;
+        const quint32 setup = SessionControlTestAccess::sendAnswered(model, QStringLiteral("radio set foo=1"), false,
+            [&answered](int, const QString&) { ++answered; });
+        QVERIFY(setup != 0);
+        QVERIFY(!SessionControlTestAccess::replyExpiry(model));
+        QVERIFY(SessionControlTestAccess::answer(model, setup));
+        QCOMPARE(answered, 1);
+        const quint32 session = SessionControlTestAccess::sendAnswered(model, QStringLiteral("ping"), true,
+            [&answered](int, const QString&) { ++answered; });
+        QTimer* expiry = SessionControlTestAccess::replyExpiry(model);
+        QVERIFY(session != 0 && expiry);
+        QVERIFY(QMetaObject::invokeMethod(expiry, "timeout", Qt::DirectConnection));
+        QVERIFY(!SessionControlTestAccess::answer(model, session));
+        QCOMPARE(answered, 1);
+    }
     void wanRejectsCancelledAndReplacedSession()
     {
         WanConnection connection;
@@ -294,6 +328,19 @@ private slots:
         QCOMPARE(continued, 0);
         lateReply({RadioControlReply::Kind::Accepted, 0, {}});
         QCOMPARE(backend->commands.size(), size_t(1));
+    }
+    // A disconnect the session cannot dispatch while still current is a
+    // failure too, not a silent end to the bootstrap chain.
+    void undispatchedDisconnectFailsLoudly()
+    {
+        RadioModel model;
+        RecordingSessionBackend* backend = install(model);
+        backend->accept = false;
+        QSignalSpy errors(&model, &RadioModel::connectionError);
+        int continued = 0;
+        SessionControlTestAccess::disconnectClients(model, {8}, [&] { ++continued; });
+        QCOMPARE(errors.size(), 1);
+        QCOMPARE(continued, 0);
     }
     void reentrantMonitorCannotStartOldTimer()
     {

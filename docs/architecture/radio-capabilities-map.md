@@ -201,6 +201,27 @@ refused, and with no radio EQ record the graphic EQ stays host-side
 
 `audio_control_routing_test` pins the Flex encoder and the native refusals.
 
+### Session bootstrap and client management requests
+
+`sessionControl` lists the `SessionControlField`s a backend can send through
+`RadioModel::requestSessionControl()`: GUI registration, subscriptions, startup
+radio information and slice enumeration, UDP-port registration, keepalive/ping
+and targeted client disconnection. Requests are tied to the session and
+transport generation that issued them; an undeclared field is refused. It does
+not widen the daemon capability catalogue.
+
+| Backend | `sessionControl` |
+|---|---|
+| Flex | every field |
+| HL2 | absent |
+| ANAN | absent |
+| RTL | absent |
+| Icom | absent |
+| Demo | absent |
+
+`session_control_test` pins the Flex encoder, the fences and the
+unsupported-backend refusal.
+
 ### Native receive audio export
 
 `receiveAudioExport` describes the typed pre-monitor `sliceAudioFrameReady`

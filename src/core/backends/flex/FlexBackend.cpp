@@ -2172,11 +2172,6 @@ void FlexBackend::decodeApdSamplerStatus(const QMap<QString, QString>& kvs)
     emit transmitChanged(d);
 }
 
-void FlexBackend::decodeRadioInfoMetadata(const QString& body)
-{
-    emit radioChanged(FlexSessionControls::infoMetadata(body));
-}
-
 void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
 {
     // Radio-global status → typed RadioDelta (aetherd RFC 2.3 — RadioModel

@@ -74,6 +74,10 @@ public slots:
     // via QMetaObject::invokeMethod (auto-queued to worker thread). (#502)
     void writeCommand(quint32 seq, const QString& command);
     quint64 commandSessionGeneration() const { return m_sessionGeneration.load(); }
+    // The one admission rule for session and administration writes: the
+    // caller's session is current and this transport is the one it opened.
+    bool sessionWriteAdmitted(quint64 generation, const SessionCommandGuard& guard) const
+    { return guard.current() && generation == m_sessionGeneration && isConnected(); }
     bool writeSessionCommand(quint32 seq, const QString& command,
                              quint64 generation, const SessionCommandGuard& guard);
     bool writeAdministrationCommand(quint32 seq, const QString& command,
