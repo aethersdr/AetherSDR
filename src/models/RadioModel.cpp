@@ -8080,6 +8080,9 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
                         // Radio always forces Opus for remote_audio_tx regardless of
                         // what we request (confirmed by protocol testing, v1.4.0.0).
+                        // The Demo declares no stream control, so it gets no request.
+                        const std::optional<AudioStreamControl> streams = backendCapabilities().audioStreamControl;
+                        if (!streams || !streams->supports(AudioStreamKind::RemoteTransmit)) { return; }
                         requestAudioStream({AudioStreamKind::RemoteTransmit, AudioStreamAction::Create},
                             [this](const AudioStreamReply& reply) {
                                 if (reply.result.kind == RadioControlReply::Kind::Accepted) {
