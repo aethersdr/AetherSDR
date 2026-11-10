@@ -3591,7 +3591,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("lab", {},
-            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
+            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — RigExpert Stick USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doLab(a.action, a.value);
@@ -6018,6 +6018,13 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         // and Kiwi 2D/3D display sources deterministically.
         bool selectorIsIndex = false;
         const int wantIndex = selector.toInt(&selectorIsIndex);
+        // `bins`: one pan's trace bins themselves (#5806), so a client can
+        // measure rather than read four statistics. One pan only, to bound
+        // the reply.
+        const bool wantBins = property == QLatin1String("bins");
+        if (wantBins && selector.isEmpty()) {
+            return err(QStringLiteral("tracedebug bins needs one pan: a pan index or objectName"));
+        }
         QJsonArray pans;
         QSet<QWidget*> seen;
         const QList<QWidget*> widgets =
@@ -6033,7 +6040,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             }
 
             QVariantMap snap;
-            if (!QMetaObject::invokeMethod(w, "traceDebugSnapshot",
+            if (!QMetaObject::invokeMethod(w, wantBins ? "traceBinsSnapshot" : "traceDebugSnapshot",
                                            Qt::DirectConnection,
                                            Q_RETURN_ARG(QVariantMap, snap))) {
                 continue;
@@ -6042,7 +6049,22 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                 && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex) {
                 continue;
             }
+            if (wantBins) {
+                // The widget refuses while the frame's geometry is not settled.
+                const QString refusal = snap.value(QStringLiteral("refusal")).toString();
+                if (!refusal.isEmpty()) {
+                    return err(QStringLiteral("tracedebug bins: ") + refusal);
+                }
+                return QJsonObject{{QStringLiteral("ok"), true},
+                                   {QStringLiteral("model"), model},
+                                   {QStringLiteral("property"), property},
+                                   {QStringLiteral("pan"), QJsonObject::fromVariantMap(snap)}};
+            }
             pans.append(QJsonObject::fromVariantMap(snap));
+        }
+        if (wantBins) {
+            return err(QStringLiteral("tracedebug bins: no pan matches '") + selector
+                       + QStringLiteral("'"));
         }
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("model"), model},

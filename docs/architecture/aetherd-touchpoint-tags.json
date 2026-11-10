@@ -1091,6 +1091,12 @@
   "split": "Core: meter defs/values, S-meter, TX pwr/SWR, mic/ALC, telemetry. Flex: VITA-49 scaling, TGXL/PGXL handles, COMPPEAK slice quirks",
   "confidence": "high"
  },
+ "models/RadioSwrValidityFilter.h": {
+  "tag": "universal",
+  "note": "Trust gate for a radio's SWR stream against instantaneous forward power (attack-immediately/timed-release envelope, low-SWR and below-unity confirmation). Pure value logic, no vendor ties; consumed by the S-meter and by TCI tx_sensors.",
+  "split": "",
+  "confidence": "high"
+ },
  "models/NetEntry.h": {
   "tag": "ui-support",
   "note": "Net scheduler entry: RRULE/timezone/reminder metadata, operator-scoped local JSON; radio state only via embedded MemoryEntry",
