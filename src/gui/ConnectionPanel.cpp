@@ -3548,7 +3548,7 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                 // Same label Hl2Discovery sets on the broadcast path — this
                 // is the SECOND place an HL2 RadioInfo is built, and a field
                 // set in only one of them is not set at all.
-                info.versionLabel = QStringLiteral("Gateware");
+                info.versionLabel = QString::fromStdString(hl2::gatewareVersionLabel(*reply));
                 // Streaming (status byte 0x03) means another client already owns
                 // the radio. Reflect it rather than hard-coding Available.
                 info.inUse    = reply->streaming;

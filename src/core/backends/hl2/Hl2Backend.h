@@ -108,6 +108,10 @@ public:
         TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
+    // One receive input, ANT (#4954): ANT is accepted with nothing to send, any
+    // other token is refused; when called, both republish the slice so the
+    // button shows ANT. RadioModel refuses a token outside the list before this.
+    ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
@@ -284,6 +288,7 @@ private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PanCreateTestAccess;
     friend struct Hl2PcmTestAccess;
+    friend struct Hl2RxAntennaTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
     // Hands receiver 0 a configured Hl2RxDsp so the APF and AGC-off verbs can
@@ -314,6 +319,7 @@ private:
     // Feeds EP6 status frames to the backend's own MetisClient on its I/O thread,
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
+    friend struct Hl2TxRouteTestAccess;
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
     void onRadioPttChanged(bool keyed);
@@ -322,6 +328,8 @@ private:
     // Reads the snapshot at a chosen instant, so hl2_adc_age_gate_test puts a
     // held slice peak on either side of kSliceStaleMs without waiting.
     friend struct Hl2AdcAgeTestAccess;
+    // Runs loadHardwareOptions() without a socket (hl2_hardware_document_test).
+    friend struct Hl2BoardIdentityTestAccess;
     // The snapshot at `nowNs`, on steadyNowNs()'s timeline. The converter rows
     // take their age from it and read no clock, so the age row and the pairing
     // gate describe one instant.
@@ -408,7 +416,7 @@ private:
     std::unique_ptr<RadioConnectRequest> m_queuedConnect;
     quint64 m_connectGeneration = 0;
 
-    void emitSliceState(int ddc);   // sliceChanged(delta) from a receiver's state
+    void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
     void emitAllSliceState();
     void emitAllPanState();
@@ -436,6 +444,17 @@ private:
     // Clamp 0..100, map onto the drive register, honour the transmit gate.
     // Shared by setTxPower() and setTune() so the mapping exists exactly once.
     void applyDrive(int percent);
+    // 0..100 onto the register, with the transmit gate; what applyDrive() writes.
+    [[nodiscard]] int driveLevelFor(int percent) const noexcept;
+    // The drive in force for the route: RF1's own value there, ANT's band drive
+    // otherwise. RF1 never reads or writes the band maps (#4954).
+    [[nodiscard]] int operatorDrivePercent() const noexcept;
+    // Field::TxAntenna: "ANT" or "RF1". Every outcome republishes the actual
+    // route on every slice; a refusal also raises configurationWarning.
+    ReceiveDispatch requestTxRoute(const QString& token);
+    void applyTxRoute(hl2::TxRoute next);
+    void refuseTxRoute(const QString& why);
+    void onMetisTxRouteRefused(int actual);
     void beginTxTail();
     void cancelTxTail();
     void finishTxTail();
@@ -502,6 +521,14 @@ private:
     // a SquareSDR 2 look identical on the wire and the dither bit means different
     // things on each. See Hl2HardwareOptions.
     Hl2HardwareOptions m_hw;
+    // The board this radio's gateware names, and whether m_hw.codec and
+    // m_hw.filterBoard are the suggestion for it rather than a stored choice.
+    // A suggested field is not persisted until a hw.set names it (#6806).
+    hl2::GatewareBoard m_gatewareBoard = hl2::GatewareBoard::Unknown;
+    bool m_hwCodecSuggested = false;
+    bool m_hwFilterBoardSuggested = false;
+    // Load m_hw for m_radioSerial at connect, applying sessionCodec().
+    void loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor);
     // Adopt a new set: persist (or not), push every field that changed to the
     // wire, and re-evaluate the band filter. The single path for a hardware
     // change whoever asked for it (setup dialog, automation bridge, connect).
@@ -521,6 +548,11 @@ private:
     // One per running DDC, holding only per-receiver state. Anything the hardware
     // shares (sample rate, LNA gain, filter board) stays in the flat members below.
     struct Receiver {
+        // Repeated TX antenna echoes retrigger display listeners on tune.
+        QString publishedTxAntenna;
+        // Antenna echoes reset the display's noise-floor lock; publish once
+        // per receiver, or when answering an explicit antenna request/refresh.
+        bool antennasPublished = false;
         // Owns its demod + spectrum chain; created on connect, destroyed on disconnect,
         // lives on the I/O thread.
         Hl2RxDsp* dsp = nullptr;
@@ -1075,6 +1107,13 @@ private:
     // last handed to MetisClient; negative = never written, row absent. The "gated"
     // row is derived from m_txAllowed at read time.
     int m_txDriveRegister = -1;
+    // The transmit output (#4954), per radio: txSetpoints.txRoute, absent reads ANT.
+    hl2::TxRoute m_txRoute = hl2::TxRoute::Ant;
+    // RF1's drive, set to the starting value at every change to RF1 and never
+    // stored. The starting value is 0 % (gateware nibble 0) until RF1's level
+    // against drive has been measured.
+    static constexpr int kRf1StartDrivePercent = 0;
+    int m_rf1DrivePercent = kRf1StartDrivePercent;
     // RFC #4603 state memory. m_restoredState is the validated pre-connect snapshot;
     // the per-band maps (Hl2Bands.h keys) are the session's working copies, with
     // defaults for unvisited bands. m_currentBandKey says which band live edits
@@ -1103,6 +1142,8 @@ private:
     bool recordTunePower(int percent);
     // The band's remembered TUNE power, echoed to TransmitModel; nothing when unknown.
     void applyTuneMemoryFor(const QString& bandKey);
+    // The start band's drive (ANT) or RF1's own, echoed before linkUp (#4954).
+    void seedConnectDrive();
 
     // The operator's TX passband and whether they have set one.
     // defaultTxPassbandForMode() is re-pushed on every mode set and TX-slice move
@@ -1161,6 +1202,8 @@ private:
     // tracks the gauge fill on an HL2.
     static constexpr double kFwdPeakReleaseAlpha = 0.05;
     double m_fwdPeakWatts = 0.0;
+    // Drops keyed SWR from speech-pause windows; see KeyedSwrGate.
+    KeyedSwrGate m_swrGate;
 
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.

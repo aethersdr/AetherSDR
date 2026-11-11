@@ -1526,7 +1526,7 @@ void MainWindow::wireRadioModel()
         // PooDoo is actually doing something during transmit.
         if (m_appletPanel && m_appletPanel->clientChainApplet()) {
             const auto& tx = m_radioModel.transmitModel();
-            const bool ready = (tx.micSelection() == "PC") && !tx.daxOn();
+            const bool ready = txMicChainReady();
             m_appletPanel->clientChainApplet()->setMicInputReady(ready);
             m_appletPanel->clientChainApplet()->setTxActive(
                 ready && tx.isTransmitting());

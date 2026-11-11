@@ -127,6 +127,7 @@
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
+#include "RadioHealthDialog.h"
 #include "SwrSweepLicenseDialog.h"
 #include "DxClusterDialog.h"
 #ifdef HAVE_WEBSOCKETS
@@ -5383,8 +5384,14 @@ void MainWindow::handleAudioDeviceListChanged()
         outputDecision.action == AudioDeviceAction::RestorePreferred
             ? audioDeviceById(outputDevices, preferredOutputId)
             : QAudioDevice{};
-    const bool pcMicInUse = m_radioModel.isConnected()
-        && m_radioModel.transmitModel().micSelection() == "PC";
+    // PC mic selection, or seam TX audio (the networked Icom keeps "MIC").
+    const auto txCaptureWanted = [this]() {
+        return txCaptureRetryWanted(
+            m_radioModel.isConnected(), m_radioModel.backendCapabilities(),
+            AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True",
+            m_radioModel.transmitModel().micSelection());
+    };
+    const bool pcMicInUse = txCaptureWanted();
     const auto applyFallback = [&]() {
         resetMissingAudioDevicesToDefault(resetInput,
                                           resetOutput,
@@ -5431,9 +5438,8 @@ void MainWindow::handleAudioDeviceListChanged()
         const QAudioDevice selectedOutput = dialog.selectedOutputDevice();
         const bool inputChanged =
             !sameAudioDeviceSelection(currentInput, selectedInput);
-        const bool reinitializePcInput = inputChanged
-            && m_radioModel.isConnected()
-            && m_radioModel.transmitModel().micSelection() == "PC";
+        // Re-read: the route may have changed while the dialog was open.
+        const bool reinitializePcInput = inputChanged && txCaptureWanted();
         // "System default" beside an absent saved device keeps the saved id.
         applyAudioDeviceSelection(
             selectedInput,
@@ -10223,7 +10229,7 @@ void MainWindow::toggleAetherialStrip()
         m_aetherialStrip->setMonitorHasRecording(m_finalMonitor->hasRecording());
         // Seed the chain's MIC-ready + TX-active indicators (reuse the
         // tx alias declared above for the EQ cutoff seeding).
-        const bool ready = (tx.micSelection() == "PC") && !tx.daxOn();
+        const bool ready = txMicChainReady();
         m_aetherialStrip->setMicInputReady(ready);
         m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
         updateTxAudioPathNotice();

@@ -27,14 +27,14 @@ struct WsprPackage {
         const char* sha256;
         qint64 size;
     };
-    static constexpr const char* kVersion = "0.1.8";
+    static constexpr const char* kVersion = "0.1.10";
     // FLEX-6000: a legacy waveform, whose settings persist on /user.
     static constexpr Pin kLegacy{":/waveforms/AetherWSPR.ssdr_waveform", "AetherWSPR.ssdr_waveform",
-                                 "b7306f56ca4401b054c26c004f19ade01bb143616a1d6188baa73c410ce9a251", 145300};
+                                 "cb0c42898fde018579992ab5249a905b6012187fbe5d1cf8a2666dcf0c337a19", 146255};
     // FLEX-8000 and Aurora: a container, because a legacy waveform has only
     // RAM there and the container's writable layer survives a reboot.
     static constexpr Pin kContainer{":/waveforms/AetherWSPR.tar.gz", "AetherWSPR.tar.gz",
-                                    "fa50ac249cb3173462224f4dc075e955f857a2984bc486b92fa3068b10f8227b", 159522};
+                                    "c6f7227c7cca97f1bd3676169d4967f3ed83ec240262b174a3dc11aefde775fc", 160226};
 };
 
 // The receiver's waveform name, in both packages.
@@ -86,6 +86,10 @@ struct WsprStatus {
     QString hopPeriod;      // sunrise, day, sunset, night; empty when not hopping
     QString depth;
     bool slice{false};
+    // The radio's index for the receiver's slice, which the radio reports as
+    // the connected GUI client's own (#7139); -1 when it has none or is too
+    // old to say (before 0.1.9).
+    int sliceIndex{-1};
     bool audio{false};
     struct Upload {
         bool enabled{false};

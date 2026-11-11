@@ -53,7 +53,7 @@
 #include "grayline.h"
 #include "wsprd/wsprsim_utils.h"
 
-#define AGENT_VERSION "0.1.8"
+#define AGENT_VERSION "0.1.10"
 #define STATUS_PORT 48995
 #define AUDIO_RATE 24000
 #define BB_RATE 375
@@ -474,6 +474,7 @@ static struct {
     long long dial_hz;
     int hop_period;             /* period of the tuned cycle, -1 when not hopping */
     int slice_ok, stream_ok;
+    int slice_index;      /* the radio's index for our slice; read only while slice_ok */
     spot_t spots[MAX_SPOTS];
     int nspots, spot_head;
     cycle_t cycles[MAX_CYCLES];
@@ -1004,8 +1005,10 @@ static void status_json(buf_t *b, long long since)
     bjson_str(b, call);
     bputs(b, ",\"grid\":"); bjson_str(b, grid);
     bputs(b, ",\"band\":"); bjson_str(b, G.band);
-    bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"audio\":%s", G.dial_hz, G.slice_ok ? "true" : "false",
-            G.stream_ok ? "true" : "false");
+    /* slice_index lets a GUI client leave our slice alone: the radio reports
+     * it as that client's own (#7139). -1 while we have none. */
+    bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"slice_index\":%d,\"audio\":%s", G.dial_hz,
+            G.slice_ok ? "true" : "false", G.slice_ok ? G.slice_index : -1, G.stream_ok ? "true" : "false");
     bputs(b, ",\"hop_period\":");
     bjson_str(b, G.hop_period >= 0 ? PERIOD_NAME[G.hop_period] : "");
     bputs(b, ",\"depth\":");
@@ -1256,6 +1259,12 @@ typedef struct {
      * `sub slice all` dump only (want_dump is that request), -1 none. */
     int orphan;
     int want_dump;
+    /* Our last `slice tune` and where it asked for. The radio sends a
+     * slice's status to the other clients, not to the one that changed it
+     * (measured on a FLEX-8600, 4.3.16), so its success reply is the only
+     * word that our slice is where we tuned it. */
+    int want_tune;
+    long long tune_hz;
 } api_t;
 
 /* ------------------------------------------------- our slice across restarts
@@ -1438,7 +1447,8 @@ static void make_slice(api_t *a, long long dial_hz, const char *ant, int dax)
  * and this slice must never be the one that transmits. */
 static void retune_slice(api_t *a, long long dial_hz, const char *ant)
 {
-    api_send(a, "slice tune %d %.6f", a->slice, dial_hz / 1e6);
+    a->want_tune = api_send(a, "slice tune %d %.6f", a->slice, dial_hz / 1e6);
+    a->tune_hz = dial_hz;
     api_send(a, "slice set %d mode=DIGU", a->slice);
     api_send(a, "slice set %d tx=0", a->slice);
     if (ant[0]) api_send(a, "slice set %d rxant=%s", a->slice, ant);
@@ -1474,6 +1484,10 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             for (char *q = call; *q; q++) *q = (char)toupper((unsigned char)*q);
             snprintf(G.radio_call, sizeof G.radio_call, "%s", call);
             pthread_mutex_unlock(&G.mu);
+        } else if (seq == a->want_tune) {
+            a->want_tune = 0;
+            if (code) logf_("slice tune refused: %08lx %s", code, msg);
+            else if (a->slice >= 0 && a->slice < MAX_SLICES) a->rf_hz[a->slice] = a->tune_hz;
         } else if (seq == a->want_slice) {
             a->want_slice = 0;
             if (code) { logf_("slice create refused: %08lx %s", code, msg); return; }
@@ -1483,7 +1497,7 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
             a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
             if (a->slice < MAX_SLICES && !a->rf_hz[a->slice]) a->rf_hz[a->slice] = a->create_hz;
-            pthread_mutex_lock(&G.mu); G.slice_ok = 1; pthread_mutex_unlock(&G.mu);
+            pthread_mutex_lock(&G.mu); G.slice_ok = 1; G.slice_index = a->slice; pthread_mutex_unlock(&G.mu);
             logf_("slice %d on %s", a->slice, G.band);
         } else if (seq == a->want_stream) {
             a->want_stream = 0;
@@ -2060,6 +2074,37 @@ static int selftest_retune_mode(void)
                        "C4|slice tune 3 21.094600\nC5|slice set 3 mode=DIGU\nC6|slice set 3 tx=0\n"
                        "C7|slice set 3 rxant=ANT2\n";
     if (strcmp(wire, want)) { printf("selftest FAIL: a retune does not put the slice back in DIGU, off TX:\n%s", wire); return 1; }
+
+    /* The radio answers our tune but sends its status only to other
+     * clients, so the reply is what says the slice moved. */
+    int p[2];
+    if (pipe(p)) return 1;
+    fcntl(p[1], F_SETFL, O_NONBLOCK);
+    api_t b;
+    memset(&b, 0, sizeof b);
+    b.fd = p[1];
+    b.slice = 2;
+    b.orphan = -1;
+    b.rf_hz[2] = 14095600;
+    config_t c;
+    config_default(&c);
+    char l[64];
+    retune_slice(&b, 1836600, "");
+    int before = on_dial(&b, 1836600);
+    snprintf(l, sizeof l, "R%d|0|", b.want_tune);
+    api_line(&b, l, &c);
+    int moved = on_dial(&b, 1836600);
+    retune_slice(&b, 3568600, "");
+    snprintf(l, sizeof l, "R%d|50000016|", b.want_tune);
+    api_line(&b, l, &c);
+    int refused_stays = on_dial(&b, 1836600) && !on_dial(&b, 3568600);
+    close(p[0]);
+    close(p[1]);
+    if (before || !moved || !refused_stays) {
+        printf("selftest FAIL: the tune's reply does not move our slice (before %d, after %d, refused %d)\n",
+               before, moved, refused_stays);
+        return 1;
+    }
     return 0;
 }
 
@@ -2111,6 +2156,40 @@ static int selftest_release_on_term(void)
         return 1;
     }
     return 0;
+}
+
+/* The status names the radio's index for our slice, so a GUI client can
+ * leave it alone (#7139), and -1 once the radio has removed it. */
+static int selftest_slice_index(void)
+{
+    int p[2];
+    if (pipe(p)) return 1;
+    fcntl(p[1], F_SETFL, O_NONBLOCK);
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = p[1];
+    a.slice = -1;
+    a.orphan = -1;
+    config_t c;
+    config_default(&c);
+    char l[160];
+    static char out[512 * 1024];
+    a.want_slice = 8;
+    a.create_hz = 14095600;
+    strcpy(l, "R8|0|5");
+    api_line(&a, l, &c);
+    buf_t b = {out, 0, sizeof out, 0};
+    status_json(&b, 0);
+    int fail = b.full || !strstr(out, "\"slice_index\":5,");
+    strcpy(l, "S1|slice 5 in_use=0");
+    api_line(&a, l, &c);
+    buf_t e = {out, 0, sizeof out, 0};
+    status_json(&e, 0);
+    fail |= e.full || !strstr(out, "\"slice_index\":-1,");
+    close(p[0]);
+    close(p[1]);
+    if (fail) printf("selftest FAIL: the status does not name our slice's index\n");
+    return fail;
 }
 
 /* At start, the saved index is removed only when its status in the
@@ -2222,7 +2301,7 @@ static int selftest(double snr_db)
     if (selftest_persistence() || selftest_spots() || selftest_upload_off()
         || selftest_busy_cycle() || selftest_radio_lines() || selftest_ntp_fallback()
         || selftest_save_failure() || selftest_retune_mode() || selftest_release_on_term()
-        || selftest_orphan() || selftest_slice_file()) return 1;
+        || selftest_orphan() || selftest_slice_file() || selftest_slice_index()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
         if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
     if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }

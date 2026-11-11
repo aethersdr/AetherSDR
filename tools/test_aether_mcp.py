@@ -404,7 +404,8 @@ def test_secure_app_instance():
     original_bridge = aether_mcp.Bridge
     original_os = aether_mcp.os
     saved_env = {key: os.environ.get(key) for key in (
-        "AETHER_MCP_TOKEN", "AETHER_MCP_SOCKET", "AETHER_AUTOMATION_ALLOW_TX")}
+        "AETHER_MCP_TOKEN", "AETHER_MCP_SOCKET", "AETHER_AUTOMATION_ALLOW_TX",
+        "AETHER_SETTINGS_DIR")}
     popen_calls = []
     bridge_requests = []
     tx_allowed = [False]
@@ -549,6 +550,31 @@ def test_secure_app_instance():
                   stopped.get("running") is False and process.terminated
                   and aether_mcp._owned_app is None, str(stopped))
 
+            from unittest.mock import patch
+            selected_profile = Path(temp_root) / "operator-profile"
+            selected_profile.mkdir()
+            # A sentinel checks launcher writes/cleanup, not Qt settings parsing.
+            saved_profile = selected_profile / "saved-profile.txt"
+            saved_state = "AutoConnectToLastRadio=True\nLastConnectedRadioSerial=saved-target\n"
+            saved_profile.write_text(saved_state, encoding="utf-8")
+            for profile in (str(selected_profile), None):
+                if profile is None:
+                    os.environ.pop("AETHER_SETTINGS_DIR", None)
+                else:
+                    os.environ["AETHER_SETTINGS_DIR"] = profile
+                with patch.object(aether_mcp.subprocess, "run") as config:
+                    result = json.loads(aether_mcp.handle_tool(
+                        "app_instance", {"action": "launch", "worktree": str(worktree)})
+                        ["content"][0]["text"])
+                    launch_env = popen_calls[-1][1]["env"]
+                    check("app_instance preserves selected/default profile without config commands",
+                          result.get("authenticated") is True and not config.called
+                          and launch_env.get("AETHER_SETTINGS_DIR") == profile,
+                          str(result))
+                    aether_mcp.handle_tool("app_instance", {"action": "stop"})
+                check("app_instance leaves saved autoconnect and last-radio fixture intact",
+                      saved_profile.read_text(encoding="utf-8") == saved_state)
+
             os.environ.pop("AETHER_MCP_TOKEN", None)
             before = len(popen_calls)
             refused = aether_mcp.handle_tool(
@@ -640,6 +666,12 @@ def test_jsonrpc_robustness():
     check("batch array rejected -32600", -32600 in codes, str(resps))
     served = [r for r in resps if r.get("id") == 7 and "result" in r]
     check("loop keeps serving after bad input", len(served) == 1, str(resps))
+    launch_tool = next(tool for tool in served[0]["result"]["tools"]
+                       if tool["name"] == "app_instance")
+    description = launch_tool["description"]
+    check("published launch contract names saved-profile autoconnect",
+          "AutoConnectToLastRadio" in description
+          and "disables radio autoconnect" not in description, description)
 
 
 def test_robustness_tools():

@@ -47,6 +47,13 @@ whenever the audio path is wrong:
   applet.
 - On a radio that takes its transmit audio over the network (such as a
   networked Icom), turn on **PC Audio** in the title bar.
+- On a radio that takes its transmit audio from this computer (such as a
+  networked Icom or a Hermes-Lite 2), connect a microphone to the computer
+  when the notice says no audio input device was found. Without one,
+  AetherTX has no input, and a Hermes-Lite 2 transmits no voice at all.
+  CW, TUNE and DAX/TCI are not affected. On a Hermes-Lite 2 (a radio this
+  computer modulates), the first voice transmission in that state also shows
+  the notice on the panadapter. It does not stop the transmission.
 
 While the path is wrong, the docked Aetherial Audio applet replaces its TX
 controls with the same guidance, and AetherTX and the TX stage editors refuse
@@ -141,7 +148,9 @@ doing.
 
 At the foot of the tab column, **MIC** lights when the PC microphone is
 selected and DAX is off, which means the chain really is in the transmit
-path. **TX** lights while you are transmitting on your own slice.
+path. On a Hermes-Lite 2 (a radio this computer modulates), it also needs an
+audio input device on this computer. **TX** lights while you are transmitting
+on your own slice.
 
 ## Using AetherRX
 
@@ -525,6 +534,8 @@ The audio path is wrong. The message names the fix.
 1. On a FlexRadio, set **Microphone source** to **PC** in the **P/CW** applet.
 2. On a radio that takes its transmit audio over the network, turn on
    **PC Audio** in the title bar.
+3. If the message says no audio input device was found, connect a
+   microphone to this computer.
 
 ### The monitor plays silence
 

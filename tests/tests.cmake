@@ -272,6 +272,12 @@ target_link_libraries(audio_engine_pcm_lifetime_test PRIVATE aethercore Qt6::Cor
 add_test(NAME audio_engine_pcm_lifetime_test COMMAND audio_engine_pcm_lifetime_test)
 set_tests_properties(audio_engine_pcm_lifetime_test PROPERTIES TIMEOUT 120)
 
+# #7078: a disconnect or withdrawn seam route clears the missing-input flag.
+add_executable(audio_engine_tx_input_missing_test tests/audio_engine_tx_input_missing_test.cpp)
+target_link_libraries(audio_engine_tx_input_missing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_tx_input_missing_test COMMAND audio_engine_tx_input_missing_test)
+set_tests_properties(audio_engine_tx_input_missing_test PROPERTIES TIMEOUT 120)
+
 # #5687 follow-up: managed Kiwi sources must actually be given an NNR filter.
 # Drives the real DSP initializer through the friend seam; no sockets/devices.
 add_executable(nnr_external_source_test tests/nnr_external_source_test.cpp)
@@ -2346,6 +2352,7 @@ add_executable(modem_chrome_test
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/gui/DragValuePopup.cpp
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(modem_chrome_test PRIVATE src)
 target_link_libraries(modem_chrome_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -2443,6 +2450,92 @@ set_target_properties(callsign_lookup_dialog_test PROPERTIES AUTOMOC ON)
 add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
 set_tests_properties(callsign_lookup_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Radio Health on CanonWindow (#7027): a frameless workspace in the canon
+# scope that keeps its old geometry key and polls only while shown. No radio
+# model: the window is built with none.
+add_executable(radio_health_dialog_test
+    tests/radio_health_dialog_test.cpp
+    src/gui/RadioHealthDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_health_dialog_test PRIVATE src tests)
+target_link_libraries(radio_health_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(radio_health_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME radio_health_dialog_test COMMAND radio_health_dialog_test)
+set_tests_properties(radio_health_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 60)
+
+# What's New on CanonWindow (#7045): canon colours for the rich-text notes in
+# each theme, a canon Find prompt, and every close path. Socket-free: the
+# GitHub fetch is switched off through WhatsNewDialogTestAccess.
+add_executable(whats_new_dialog_test
+    tests/whats_new_dialog_test.cpp
+    src/gui/WhatsNewDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(whats_new_dialog_test PRIVATE src tests)
+target_link_libraries(whats_new_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(whats_new_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME whats_new_dialog_test COMMAND whats_new_dialog_test)
+set_tests_properties(whats_new_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
+
+# Import/Export Profiles on CanonWindow (#7032): the "transfer still running"
+# question guards Esc, Ctrl+W and the corner close alike, and the import
+# confirmation defaults to Cancel. Socket-free: transfers are only marked busy.
+add_executable(profile_import_export_dialog_test
+    tests/profile_import_export_dialog_test.cpp
+    src/gui/ProfileImportExportDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(profile_import_export_dialog_test PRIVATE src tests)
+target_link_libraries(profile_import_export_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(profile_import_export_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME profile_import_export_dialog_test COMMAND profile_import_export_dialog_test)
+set_tests_properties(profile_import_export_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
+
+# MIDI Controller Mapping on CanonWindow (#7040): a canon workspace whose
+# manual editor is a canon dialog, whose shared-source question defaults to
+# Cancel, and whose every close path cancels a waiting Learn. No port opened.
+add_executable(midi_mapping_dialog_test
+    tests/midi_mapping_dialog_test.cpp
+    src/gui/MidiMappingDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(midi_mapping_dialog_test PRIVATE src tests)
+target_link_libraries(midi_mapping_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(midi_mapping_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME midi_mapping_dialog_test COMMAND midi_mapping_dialog_test)
+set_tests_properties(midi_mapping_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
 
 # Support & Diagnostics on CanonWindow (#7051): no layout warnings, a plain
 # selectable log path, every close path and a legible floor. No radio, no
@@ -2718,10 +2811,14 @@ set_tests_properties(favorites_picker_selection_test PROPERTIES
 add_executable(settings_browser_dialog_test
     tests/settings_browser_dialog_test.cpp
     src/gui/SettingsBrowserDialog.cpp
-    src/gui/PersistentDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/FramelessMessageBox.cpp
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(settings_browser_dialog_test PRIVATE src tests)
 target_link_libraries(settings_browser_dialog_test PRIVATE
@@ -2730,7 +2827,8 @@ target_link_libraries(settings_browser_dialog_test PRIVATE
 set_target_properties(settings_browser_dialog_test PROPERTIES AUTOMOC ON)
 add_test(NAME settings_browser_dialog COMMAND settings_browser_dialog_test)
 set_tests_properties(settings_browser_dialog PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
 
 add_executable(app_settings_safety_test
     tests/app_settings_safety_test.cpp
@@ -4103,6 +4201,12 @@ target_include_directories(tx_audio_path_policy_test PRIVATE src)
 target_link_libraries(tx_audio_path_policy_test PRIVATE Qt6::Core)
 add_test(NAME tx_audio_path_policy_test COMMAND tx_audio_path_policy_test)
 
+# #7078: socket-free voice-key notice and MIC readiness policy.
+add_executable(tx_voice_key_notice_test tests/tx_voice_key_notice_test.cpp)
+target_include_directories(tx_voice_key_notice_test PRIVATE src)
+target_link_libraries(tx_voice_key_notice_test PRIVATE Qt6::Core)
+add_test(NAME tx_voice_key_notice_test COMMAND tx_voice_key_notice_test)
+
 # #5958: production CHAIN visibility under injected route notices; no sockets.
 add_executable(client_chain_audio_path_test
     tests/client_chain_audio_path_test.cpp
@@ -4491,6 +4595,37 @@ target_link_libraries(radio_setup_headphone_output_gate_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME radio_setup_headphone_output_gate_test COMMAND radio_setup_headphone_output_gate_test)
 set_tests_properties(radio_setup_headphone_output_gate_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# HL2 Hardware page: a suggested codec or filter board is labeled; choosing stores it (#6806).
+# Injected hl2 extension backend; no socket and no radio.
+add_executable(hl2_codec_suggestion_dialog_test
+    tests/hl2_codec_suggestion_dialog_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
+    src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
+    src/gui/Kpa500AdvancedWidget.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(hl2_codec_suggestion_dialog_test PRIVATE src tests)
+target_link_libraries(hl2_codec_suggestion_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME hl2_codec_suggestion_dialog_test COMMAND hl2_codec_suggestion_dialog_test)
+set_tests_properties(hl2_codec_suggestion_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # Recorded status and injected command/reply sinks; no synthetic radio or sockets.
@@ -7745,6 +7880,13 @@ if(AETHER_ENABLE_HL2_SIGNAL_STOP_TEST)
     endif()
 endif()
 
+# #4954 RX half: the HL2 publishes one receive input, ANT, on every slice; RF1 is
+# never offered for receive. Constructed backend, no socket, nothing keyed.
+add_executable(hl2_rx_antenna_test tests/hl2_rx_antenna_test.cpp)
+target_include_directories(hl2_rx_antenna_test PRIVATE src tests)
+target_link_libraries(hl2_rx_antenna_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_rx_antenna_test COMMAND hl2_rx_antenna_test)
+
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -7757,6 +7899,20 @@ add_executable(hl2_rit_xit_test tests/hl2_rit_xit_test.cpp)
 target_include_directories(hl2_rit_xit_test PRIVATE src tests)
 target_link_libraries(hl2_rit_xit_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rit_xit_test COMMAND hl2_rit_xit_test)
+
+# #4954: the HL2 transmit output, ANT or RF1 (PA off). Wire banks from the
+# transport's own builder and a constructed backend — no socket, nothing keyed.
+add_executable(hl2_tx_route_test tests/hl2_tx_route_test.cpp)
+target_include_directories(hl2_tx_route_test PRIVATE src tests)
+target_link_libraries(hl2_tx_route_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_route_test COMMAND hl2_tx_route_test)
+
+# #4954: hamlib set_ant and a band-stack recall leave an independent TX output
+# alone. Production CAT parser and recall, injected backend — no socket, nothing keyed.
+add_executable(independent_tx_antenna_test tests/independent_tx_antenna_test.cpp)
+target_include_directories(independent_tx_antenna_test PRIVATE src tests)
+target_link_libraries(independent_tx_antenna_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME independent_tx_antenna_test COMMAND independent_tx_antenna_test)
 
 # #6105: RIT/XIT cross the seam with the slice id; the Flex command text is
 # unchanged. Injected recording backend — no socket, nothing keyed.
@@ -8636,7 +8792,7 @@ target_include_directories(stored_control_dialogs_test PRIVATE src tests)
 target_link_libraries(stored_control_dialogs_test PRIVATE aethercore Qt6::Core Qt6::Widgets Qt6::Test)
 set_target_properties(stored_control_dialogs_test PROPERTIES AUTOMOC ON)
 add_test(NAME stored_control_dialogs_test COMMAND stored_control_dialogs_test)
-set_tests_properties(stored_control_dialogs_test PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(stored_control_dialogs_test PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(memory_import_test tests/memory_import_test.cpp)
 target_include_directories(memory_import_test PRIVATE src tests)
@@ -9635,6 +9791,13 @@ add_executable(hl2_persist_restart_test tests/hl2_persist_restart_test.cpp)
 target_include_directories(hl2_persist_restart_test PRIVATE src tests)
 target_link_libraries(hl2_persist_restart_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_persist_restart_test COMMAND hl2_persist_restart_test)
+# Transmit on receiver B across a same-radio reconnect that opens only A at the
+# connect: the modulator's mode and the TX NCO must follow B once the replay
+# reopens it. Socket-free (Hl2PersistHarness.h); never keys.
+add_executable(hl2_tx_mode_reconnect_test tests/hl2_tx_mode_reconnect_test.cpp)
+target_include_directories(hl2_tx_mode_reconnect_test PRIVATE src tests)
+target_link_libraries(hl2_tx_mode_reconnect_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_tx_mode_reconnect_test COMMAND hl2_tx_mode_reconnect_test)
 add_executable(hl2_persist_two_radios_test tests/hl2_persist_two_radios_test.cpp)
 target_include_directories(hl2_persist_two_radios_test PRIVATE src tests)
 target_link_libraries(hl2_persist_two_radios_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
@@ -10260,6 +10423,35 @@ target_link_libraries(vfo_meter_overlay_invalidation_test PRIVATE
 add_test(NAME vfo_meter_overlay_invalidation_test
          COMMAND vfo_meter_overlay_invalidation_test)
 set_tests_properties(vfo_meter_overlay_invalidation_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Socket-free: the VFO DAX list names a reserved slot's channel (#7139).
+add_executable(vfo_dax_reserved_test
+    tests/vfo_dax_reserved_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(vfo_dax_reserved_test PRIVATE src)
+target_link_libraries(vfo_dax_reserved_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME vfo_dax_reserved_test
+         COMMAND vfo_dax_reserved_test)
+set_tests_properties(vfo_dax_reserved_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # FM filter capability and edge routing through the real RX and VFO widgets.
@@ -10901,6 +11093,7 @@ set(AETHER_SETTINGS_CONSUMERS
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
+    audio_engine_tx_input_missing_test
     nnr_external_source_test
     nnr_model_publication_test
     automation_nnr_probe_test
@@ -10916,6 +11109,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_max_power_field_test
     radio_setup_recording_mode_dim_test
     radio_setup_headphone_output_gate_test
+    hl2_codec_suggestion_dialog_test
     radio_setup_show_tx_waterfall_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
@@ -10962,6 +11156,7 @@ set(AETHER_SETTINGS_CONSUMERS
     net_scheduler_modes_test
     rx_applet_squelch_reconciliation_test
     vfo_meter_overlay_invalidation_test
+    vfo_dax_reserved_test
     fm_filter_controls_test
     wfm_controls_test
     spectrum_confirmed_geometry_test
@@ -10982,9 +11177,13 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_gain_restore_test
     hl2_rx_only_tx_chain_test
     hl2_persist_restart_test
+    hl2_tx_mode_reconnect_test
     hl2_persist_two_radios_test
     hl2_rit_xit_test
+    hl2_tx_route_test
+    independent_tx_antenna_test
     slice_rit_xit_seam_test
+    hl2_rx_antenna_test
     hl2_tx_gate_test
     hl2_pan_limits_declaration_test
     hl2_fm_controls_declaration_test
@@ -11013,6 +11212,10 @@ set(AETHER_SETTINGS_CONSUMERS
     theme_manager_test
     canon_window_test
     callsign_lookup_dialog_test
+    radio_health_dialog_test
+    whats_new_dialog_test
+    profile_import_export_dialog_test
+    midi_mapping_dialog_test
     support_dialog_test
     theme_editor_dialog_test
     canon_message_box_test
