@@ -1259,6 +1259,12 @@ typedef struct {
      * `sub slice all` dump only (want_dump is that request), -1 none. */
     int orphan;
     int want_dump;
+    /* Our last `slice tune` and where it asked for. The radio sends a
+     * slice's status to the other clients, not to the one that changed it
+     * (measured on a FLEX-8600, 4.3.16), so its success reply is the only
+     * word that our slice is where we tuned it. */
+    int want_tune;
+    long long tune_hz;
 } api_t;
 
 /* ------------------------------------------------- our slice across restarts
@@ -1441,7 +1447,8 @@ static void make_slice(api_t *a, long long dial_hz, const char *ant, int dax)
  * and this slice must never be the one that transmits. */
 static void retune_slice(api_t *a, long long dial_hz, const char *ant)
 {
-    api_send(a, "slice tune %d %.6f", a->slice, dial_hz / 1e6);
+    a->want_tune = api_send(a, "slice tune %d %.6f", a->slice, dial_hz / 1e6);
+    a->tune_hz = dial_hz;
     api_send(a, "slice set %d mode=DIGU", a->slice);
     api_send(a, "slice set %d tx=0", a->slice);
     if (ant[0]) api_send(a, "slice set %d rxant=%s", a->slice, ant);
@@ -1477,6 +1484,10 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             for (char *q = call; *q; q++) *q = (char)toupper((unsigned char)*q);
             snprintf(G.radio_call, sizeof G.radio_call, "%s", call);
             pthread_mutex_unlock(&G.mu);
+        } else if (seq == a->want_tune) {
+            a->want_tune = 0;
+            if (code) logf_("slice tune refused: %08lx %s", code, msg);
+            else if (a->slice >= 0 && a->slice < MAX_SLICES) a->rf_hz[a->slice] = a->tune_hz;
         } else if (seq == a->want_slice) {
             a->want_slice = 0;
             if (code) { logf_("slice create refused: %08lx %s", code, msg); return; }
@@ -2063,6 +2074,37 @@ static int selftest_retune_mode(void)
                        "C4|slice tune 3 21.094600\nC5|slice set 3 mode=DIGU\nC6|slice set 3 tx=0\n"
                        "C7|slice set 3 rxant=ANT2\n";
     if (strcmp(wire, want)) { printf("selftest FAIL: a retune does not put the slice back in DIGU, off TX:\n%s", wire); return 1; }
+
+    /* The radio answers our tune but sends its status only to other
+     * clients, so the reply is what says the slice moved. */
+    int p[2];
+    if (pipe(p)) return 1;
+    fcntl(p[1], F_SETFL, O_NONBLOCK);
+    api_t b;
+    memset(&b, 0, sizeof b);
+    b.fd = p[1];
+    b.slice = 2;
+    b.orphan = -1;
+    b.rf_hz[2] = 14095600;
+    config_t c;
+    config_default(&c);
+    char l[64];
+    retune_slice(&b, 1836600, "");
+    int before = on_dial(&b, 1836600);
+    snprintf(l, sizeof l, "R%d|0|", b.want_tune);
+    api_line(&b, l, &c);
+    int moved = on_dial(&b, 1836600);
+    retune_slice(&b, 3568600, "");
+    snprintf(l, sizeof l, "R%d|50000016|", b.want_tune);
+    api_line(&b, l, &c);
+    int refused_stays = on_dial(&b, 1836600) && !on_dial(&b, 3568600);
+    close(p[0]);
+    close(p[1]);
+    if (before || !moved || !refused_stays) {
+        printf("selftest FAIL: the tune's reply does not move our slice (before %d, after %d, refused %d)\n",
+               before, moved, refused_stays);
+        return 1;
+    }
     return 0;
 }
 
