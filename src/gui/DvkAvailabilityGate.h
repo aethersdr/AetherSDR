@@ -63,7 +63,7 @@ inline DvkIndicatorBlocker voiceKeyerIndicatorBlocker(VoiceKeyerSource source,
     return dvkIndicatorBlocker(txModeIsVoice, licenseSeen, licenseEnabled, radioRefused);
 }
 
-// Whether the keyer surface can be driven at all, before the mode and licence
+// Whether the keyer surface can be driven at all, before the mode and license
 // gate above. The radio's own DVK is required only when the operator is driving
 // it: the client-side keyer stores and plays everything on this computer, so a
 // radio with no DVK is no reason to hide it — it only has to be able to

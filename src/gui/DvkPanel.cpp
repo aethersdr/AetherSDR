@@ -591,7 +591,7 @@ void DvkPanel::refreshTransport()
     // The F-key of a playing slot stops it, so it stays live with the keyer
     // unavailable, like the running transport control; the others start
     // playback and go dark. Their shortcuts follow, and Escape stays armed
-    // while anything runs: a licence report or refusal mid-message must not
+    // while anything runs: a license report or refusal mid-message must not
     // take the keyboard's way to stop it (Principle VI). In-flight arming
     // needs the TX slice in a voice mode, where the CWX shortcuts are off.
     const bool available = m_unavailableReason.isEmpty();

@@ -47,7 +47,7 @@ When the window is short, scroll the list of recording slots; the panel title, s
 
 Click the **⚙** button at the right end of the panel title. From the keyboard, Tab to it and press Space or Enter; with **Settings → Keyboard Shortcuts** on, Space is PTT, so use Enter. A menu opens with these choices:
 
-- **Automatic by radio licence** — the default. Uses the Radio DVK when the radio has one and has not reported that SmartSDR+ is missing, and Local otherwise. A radio that refuses a DVK command with the SmartSDR+ error counts as reporting it, and Automatic switches to Local once anything recording or playing has ended. The menu shows which one it picks on this radio, for example `(now: Local)`.
+- **Automatic by radio license** — the default. Uses the Radio DVK when the radio has one and has not reported that SmartSDR+ is missing, and Local otherwise. A radio that refuses a DVK command with the SmartSDR+ error counts as reporting it, and Automatic switches to Local once anything recording or playing has ended. The menu shows which one it picks on this radio, for example `(now: Local)`.
 - **Radio DVK — recordings on the radio** — grayed out, with the reason, on a radio with no voice keyer or no SmartSDR+.
 - **Local — recordings on this computer**.
 - **Open Local Recordings Folder** — opens the folder the local recordings are kept in.
@@ -159,7 +159,7 @@ The indicator can also be reached with the keyboard: Tab to it and press Enter.
 
 ### SmartSDR+ license
 
-When the Radio DVK is in use and the radio reports that the feature is not licensed, or refuses a DVK command or transfer with the SmartSDR+ error, the **DVK indicator** turns dark gray with the tooltip "Digital Voice Keyer — not licensed on this radio (SmartSDR+). Click to open, then choose Local with ⚙." The panel still opens, with its slots and buttons disabled and the status `Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.`, and the F1–F12 shortcuts are off. With **Automatic by radio licence** selected, the same report switches the panel to the local keyer instead.
+When the Radio DVK is in use and the radio reports that the feature is not licensed, or refuses a DVK command or transfer with the SmartSDR+ error, the **DVK indicator** turns dark gray with the tooltip "Digital Voice Keyer — not licensed on this radio (SmartSDR+). Click to open, then choose Local with ⚙." The panel still opens, with its slots and buttons disabled and the status `Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.`, and the F1–F12 shortcuts are off. With **Automatic by radio license** selected, the same report switches the panel to the local keyer instead.
 
 A SmartSDR+ subscription licenses every feature released before it expires, and the radio keeps those features after it lapses, so AetherSDR goes by what the radio reports for the feature, never by the subscription's expiration date. AetherSDR only applies this once the radio positively says no; if the radio never reports the license, the Radio DVK stays available. If the radio later reports the license as enabled, for example after a subscription is activated mid-session, the Radio DVK becomes available again without reconnecting.
 
@@ -171,7 +171,7 @@ The transmit slice is not in a voice mode; or **Radio DVK** is selected and the 
 
 1. Switch the TX slice to a voice mode (USB, LSB, AM, SAM, FM, NFM or DFM). Outside a voice mode the panel can't be opened.
 2. In a voice mode, open the panel anyway. If its status line says the radio isn't licensed, renew SmartSDR+ on the radio, or click **⚙** and choose **Local — recordings on this computer**.
-3. On a radio with no voice keyer of its own, the status line reads `This radio has no DVK. Choose Local with ⚙.` Click **⚙** and pick **Local — recordings on this computer** or **Automatic by radio licence**.
+3. On a radio with no voice keyer of its own, the status line reads `This radio has no DVK. Choose Local with ⚙.` Click **⚙** and pick **Local — recordings on this computer** or **Automatic by radio license**.
 
 ### REC says to set the mic source to PC
 

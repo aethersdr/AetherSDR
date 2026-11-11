@@ -97,7 +97,7 @@ int main()
 
     // ── RFC #4214: the client-side keyer ignores the radio's entitlement ────
     using VS = VoiceKeyerSource;
-    report("local keyer + unlicensed + voice -> None (no licence needed)",
+    report("local keyer + unlicensed + voice -> None (no license needed)",
            voiceKeyerIndicatorBlocker(VS::Local, true, true, false, false) == B::None);
     report("local keyer + unlicensed + non-voice -> TxModeNotVoice",
            voiceKeyerIndicatorBlocker(VS::Local, false, true, false, false) == B::TxModeNotVoice);
@@ -122,7 +122,7 @@ int main()
            radioVoiceKeyerUnavailableReason(true, false, false, false).isEmpty());
     report("radio choice closed when the radio reports no entitlement",
            radioVoiceKeyerUnavailableReason(true, true, false, false).contains(QStringLiteral("SmartSDR+")));
-    report("radio choice closed on a radio with no DVK, whatever the licence says",
+    report("radio choice closed on a radio with no DVK, whatever the license says",
            radioVoiceKeyerUnavailableReason(false, true, true, false)
                == QStringLiteral("not available on this radio"));
     // The case the refusal flag exists for: a refusing radio still reports
@@ -151,7 +151,7 @@ int main()
     // operator whose saved choice is Radio is locked out of picking Local.
     report("panel opens on a radio with no DVK that can transmit",
            voiceKeyerPanelOpenable(true, true, false, true));
-    report("panel opens on a radio with a DVK, licence aside",
+    report("panel opens on a radio with a DVK, license aside",
            voiceKeyerPanelOpenable(true, true, true, false));
     report("panel stays shut on a radio with neither a DVK nor transmit",
            !voiceKeyerPanelOpenable(true, true, false, false));
@@ -177,7 +177,7 @@ int main()
     report("Radio on a radio with no DVK points to Local",
            why(VS::Radio, false, true, true, true, false)
                == QStringLiteral("This radio has no DVK. Choose Local with ⚙."));
-    report("no reason for Local on a radio that transmits, licence aside",
+    report("no reason for Local on a radio that transmits, license aside",
            why(VS::Local, true, true, true, false, true).isEmpty());
     report("Local on a radio that cannot transmit says so",
            why(VS::Local, true, false, true, true, false)
@@ -209,7 +209,7 @@ int main()
         using R = VoiceKeyerSource;
         const bool hasKeyer = true;
         const bool canTransmit = true;
-        // The licence status this radio sends, if it sends one: enabled.
+        // The license status this radio sends, if it sends one: enabled.
         for (const bool licenseSeen : {false, true}) {
             const bool licenseEnabled = licenseSeen;
 
@@ -244,7 +244,7 @@ int main()
 
             report(licenseSeen
                        ? "auto_session_refusing_radio_reported_licensed_first_action_then_local"
-                       : "auto_session_refusing_radio_no_licence_report_first_action_then_local",
+                       : "auto_session_refusing_radio_no_license_report_first_action_then_local",
                    firstActionGoesToRadio && movesToLocal && nextSessionOnRadio);
         }
 

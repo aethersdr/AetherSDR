@@ -80,7 +80,7 @@ public:
 
 signals:
     // The settings button was pressed. MainWindow owns the keyer-source
-    // choice, which needs the radio's licence state the panel never sees.
+    // choice, which needs the radio's license state the panel never sees.
     void settingsRequested();
 
 protected:

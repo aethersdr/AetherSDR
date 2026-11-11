@@ -117,7 +117,7 @@ int main(int argc, char** argv)
     }
 
     // Auto follows a 50004001 refusal by itself, with no UI pass to prompt it:
-    // a radio that refuses DVK commands without ever reporting the licence
+    // a radio that refuses DVK commands without ever reporting the license
     // missing (#6262) moves Auto to the local keyer, and the radio's later
     // licensed report (which clears the refusal) moves it back.
     {

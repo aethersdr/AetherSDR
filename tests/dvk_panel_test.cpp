@@ -303,7 +303,7 @@ int main(int argc, char** argv)
            betaShown && labelWithText(panel, QStringLiteral("Digital Voice Keyer (Local)")) != nullptr);
 
     // An inline rename belongs to the keyer it started on. Rebinding the panel
-    // mid-edit — a source change, or Automatic following a licence status —
+    // mid-edit — a source change, or Automatic following a license status —
     // must not commit it to the other keyer, where a local name would land on
     // the radio's shared slot (#6292 review). Edit, rebind, then submit.
     {
@@ -372,7 +372,7 @@ int main(int argc, char** argv)
 
     // The keyer source is chosen from the panel's own settings button: it is
     // a real, focusable, named button, and pressing it asks MainWindow (which
-    // holds the licence state) for the menu.
+    // holds the license state) for the menu.
     {
         FakeKeyer k;
         DvkPanel gearPanel(&k);
@@ -641,6 +641,32 @@ int main(int argc, char** argv)
         report("operation_end_darkens_the_fkey_and_disarms_escape",
                allFound && !bf1->isEnabled() && escSc && !escSc->isEnabled()
                    && bstatus->text() == reason);
+    }
+
+    // An armed F-key shortcut on an unavailable keyer starts nothing.
+    // MainWindow arms the shortcuts offline with Radio chosen (hasVoiceKeyer()
+    // is permissive while disconnected), so the panel's own reason is the only
+    // gate between F1 and playbackStart() there (Principle VI).
+    {
+        FakeKeyer k;
+        k.addRecording(1, QStringLiteral("CQ"), 1000);
+        DvkPanel armedPanel(&k);
+        armedPanel.setShortcutsEnabled(true);
+        armedPanel.setUnavailableReason(QStringLiteral("Not connected to a radio."));
+        QShortcut* f1Sc = shortcutFor(armedPanel, Qt::Key_F1);
+        const bool armed = f1Sc && f1Sc->isEnabled();
+        k.calls.clear();
+        if (f1Sc) emit f1Sc->activated();
+        const QStringList blockedCalls = k.calls;
+        armedPanel.setUnavailableReason(QString());
+        k.calls.clear();
+        if (f1Sc) emit f1Sc->activated();
+        report("armed_fkey_shortcut_on_unavailable_keyer_starts_nothing",
+               armed && blockedCalls.isEmpty()
+                   && k.calls == QStringList{QStringLiteral("playbackStart 1")},
+               (QStringLiteral("armed=%1 blocked=[%2] control=[%3]")
+                    .arg(armed ? 1 : 0).arg(blockedCalls.join(QLatin1Char(',')),
+                                    k.calls.join(QLatin1Char(',')))).toStdString());
     }
 
     // A slot-menu action taken after the keyer became unavailable, while the

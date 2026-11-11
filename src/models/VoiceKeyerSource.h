@@ -8,7 +8,7 @@ namespace AetherSDR {
 // Which voice keyer the DVK panel drives (RFC #4214).
 //
 //  * Radio — the radio-hosted DVK: recordings on the radio, SmartSDR+ required.
-//  * Local — the client-side keyer: recordings on this computer, no licence,
+//  * Local — the client-side keyer: recordings on this computer, no license,
 //            portable across radios.
 enum class VoiceKeyerSource { Radio, Local };
 
@@ -47,7 +47,7 @@ inline VoiceKeyerSource resolveVoiceKeyerSource(VoiceKeyerSourceSetting setting,
     // Local is the only answer that works. RadioModel::hasVoiceKeyer() reports
     // true while disconnected, so this does not fire before a radio is known.
     if (!radioHasKeyer) return VoiceKeyerSource::Local;
-    // Otherwise Auto follows the licence. Until the radio has reported the
+    // Otherwise Auto follows the license. Until the radio has reported the
     // entitlement, stay on the radio DVK — the same fail-open rule the DVK
     // indicator uses (DvkAvailabilityGate.h): the radio must SAY no before the
     // UI decides no.
@@ -56,7 +56,7 @@ inline VoiceKeyerSource resolveVoiceKeyerSource(VoiceKeyerSourceSetting setting,
     // radios say it: a refusing radio still reports `dvk ... enabled=1` and may
     // never send `license feature ... enabled=0` (#6262), which left Auto on a
     // radio DVK that refuses every command. The refusal clears on disconnect
-    // and when the radio later reports the licence (DvkModel::clearRefusal).
+    // and when the radio later reports the license (DvkModel::clearRefusal).
     if (radioRefused) return VoiceKeyerSource::Local;
     return (licenseSeen && !licenseEnabled) ? VoiceKeyerSource::Local
                                             : VoiceKeyerSource::Radio;

@@ -1821,7 +1821,7 @@ void MainWindow::showVoiceKeyerSourceMenu(const QPoint& globalPos)
         group->addAction(a);
         return a;
     };
-    addChoice(QStringLiteral("Automatic by radio licence (now: %1)")
+    addChoice(QStringLiteral("Automatic by radio license (now: %1)")
                   .arg(autoLocal ? QStringLiteral("Local") : QStringLiteral("Radio")),
               VoiceKeyerSourceSetting::Auto);
     // The radio's own DVK can only be chosen when this radio has one and has
