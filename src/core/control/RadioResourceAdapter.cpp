@@ -157,6 +157,11 @@ RadioResourceAdapter::RadioResourceAdapter(
             this, [this] { publishRadioSession(); });
     connect(m_radio, &RadioModel::backendRebuilt,
             this, [this] { publishRadioSession(); });
+    connect(m_radio, &RadioModel::frontEndOverloadChanged,
+            this, [this](const FrontEndOverload& state) {
+                m_frontEndOverload = state;
+                publishFrontEndOverload();
+            });
 
     connect(m_radio, &RadioModel::sliceAdded,
             this, &RadioResourceAdapter::attachSlice);
@@ -382,6 +387,9 @@ void RadioResourceAdapter::publishRadioSession()
             {QStringLiteral("errorCode"), m_connectionTarget->errorCode()}});
     }
     m_resources->upsert({QStringLiteral("radioSession"), {}, m_radioSessionId}, value);
+    m_frontEndOverloadOffered = capabilities.frontEndOverloadObservation.has_value();
+    m_frontEndOverload = m_radio->frontEndOverload();
+    publishFrontEndOverload();
     // Refresh cached-authority projections on lifecycle/capability edges, not
     // on each sample. A newly unsupported operation must not retain old labels.
     for (SliceModel* slice : std::as_const(m_slices)) {
@@ -390,6 +398,33 @@ void RadioResourceAdapter::publishRadioSession()
     for (PanadapterModel* pan : std::as_const(m_panadapters)) {
         publishPanadapter(pan);
     }
+}
+
+QString RadioResourceAdapter::frontEndLevelName(FrontEndLevel level)
+{
+    switch (level) {
+    case FrontEndLevel::Unobserved: return QStringLiteral("unobserved");
+    case FrontEndLevel::Clean: return QStringLiteral("clean");
+    case FrontEndLevel::Marginal: return QStringLiteral("marginal");
+    case FrontEndLevel::Hot: return QStringLiteral("hot");
+    case FrontEndLevel::AtFloor: return QStringLiteral("atFloor");
+    }
+    return QStringLiteral("unobserved");
+}
+
+void RadioResourceAdapter::publishFrontEndOverload()
+{
+    const ResourceAddress address{QStringLiteral("frontEndOverload"), m_radioSessionId, {}};
+    if (!m_frontEndOverloadOffered || !m_radio->isConnected()) {
+        m_resources->remove(address);
+        return;
+    }
+    // The backend's free-text reason is not projected: it is not a bounded vocabulary.
+    m_resources->upsert(address, QJsonObject{
+        {QStringLiteral("level"), frontEndLevelName(m_frontEndOverload.level)},
+        {QStringLiteral("autoGain"), QJsonObject{
+            {QStringLiteral("armed"), m_frontEndOverload.autoArmed},
+            {QStringLiteral("offsetDb"), m_frontEndOverload.autoOffsetDb}}}});
 }
 
 void RadioResourceAdapter::publishSlice(SliceModel* slice)

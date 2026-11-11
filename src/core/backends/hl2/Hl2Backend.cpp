@@ -2047,6 +2047,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // declared as an observation of the radio's own inputs only.
     c.hasRadioPttReadback = false;
     c.radioPttObservation = RadioCapabilities::RadioPttObservation{};
+    // The pre-DDC clip bit (address 0, bit 24) feeds publishFrontEndOverload().
+    c.frontEndOverloadObservation = RadioCapabilities::FrontEndOverloadObservation{};
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
