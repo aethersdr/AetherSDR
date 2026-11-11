@@ -1972,6 +1972,9 @@ private:
     void restoreClientOwnedCwState(const RestoredRadioState& state);
     // The step rides the Tuning domain only where no command plane carries it.
     bool clientOwnsSliceStep() const;
+    // A declared receive CW pitch whose adoption the backend confirms: only then
+    // does pitch intent bypass the optimistic model value.
+    bool confirmsReceiveCwPitch() const;
     void restoreClientOwnedStep(const RestoredRadioState& state);
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
@@ -1979,6 +1982,8 @@ private:
     // run again on a family change — not just at construction.
     void setupBackend(const QString& family);
     void teardownBackend();
+    // Front-end overload back to Unobserved, emitting only on a change.
+    void resetFrontEndOverload();
     // The family switch itself: drop session models, tear down, build, announce.
     // One body, called by connectToRadio() and rebuildBackendForTest().
     void rebuildBackendForFamily(const QString& family);

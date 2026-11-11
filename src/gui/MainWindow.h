@@ -1129,10 +1129,8 @@ private:
     void wireLocalVoiceKeyer();
     VoiceKeyerSource voiceKeyerSource() const;
     void applyVoiceKeyerSource();
+    // The keyer-source chooser behind the DVK panel's settings button.
     void showVoiceKeyerSourceMenu(const QPoint& globalPos);
-    // Where to pop the chooser when it is opened from the keyboard: under the
-    // DVK indicator when that is on screen, otherwise the window's centre.
-    QPoint voiceKeyerSourceMenuAnchor() const;
     void showNr2ParamPopup(const QPoint& globalPos);
     void showNr4ParamPopup(const QPoint& globalPos);
     void showDfnrParamPopup(const QPoint& globalPos);
@@ -1869,6 +1867,7 @@ private:
     QAction*         m_aetherialAction{nullptr};
     QAction*         m_cwKeyerAction{nullptr};
     QAction*         m_copyAssistAction{nullptr};
+    QAction*         m_voiceKeyerAction{nullptr};
     QAction*         m_gpsDashboardAction{nullptr};
     QAction*         m_agcTCalibrationMenuAction{nullptr};
     // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from
@@ -2230,7 +2229,8 @@ private:
     SwrSweepState m_swrSweep;
     QTimer m_swrSweepTimer;
     // Polls the shared client compressor for the TX:COMPPEAK meter and mirrors
-    // its enable state back onto PROC. ClientComp has no change notification.
+    // its enable state back onto PROC, and the shared ClientEq enables back onto
+    // the graphic EQ. Neither has a change notification.
     QTimer m_hostVoiceChainTimer;
     // Last PROC state pushed onto that compressor, so the NOR/DX/DX+ presets are
     // only written when the operator actually changed the level (they overwrite

@@ -16,6 +16,8 @@
 #include <QShortcut>
 #include <QStringList>
 #include <QPointer>
+#include <QContextMenuEvent>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QLineEdit>
 #include <QMenu>
@@ -301,7 +303,7 @@ int main(int argc, char** argv)
            betaShown && labelWithText(panel, QStringLiteral("Digital Voice Keyer (Local)")) != nullptr);
 
     // An inline rename belongs to the keyer it started on. Rebinding the panel
-    // mid-edit — a source change, or Automatic following a licence status —
+    // mid-edit — a source change, or Automatic following a license status —
     // must not commit it to the other keyer, where a local name would land on
     // the radio's shared slot (#6292 review). Edit, rebind, then submit.
     {
@@ -366,6 +368,401 @@ int main(int argc, char** argv)
                row && triggered && first.calls.isEmpty() && other.calls.isEmpty(),
                (QStringLiteral("triggered=%1 first=[%2] other=[%3]").arg(triggered)
                     .arg(joined(first.calls).c_str(), joined(other.calls).c_str())).toStdString());
+    }
+
+    // The keyer source is chosen from the panel's own settings button: it is
+    // a real, focusable, named button, and pressing it asks MainWindow (which
+    // holds the license state) for the menu.
+    {
+        FakeKeyer k;
+        DvkPanel gearPanel(&k);
+        QPushButton* gear = gearPanel.findChild<QPushButton*>(QStringLiteral("dvkSettings"));
+        int requested = 0;
+        QObject::connect(&gearPanel, &DvkPanel::settingsRequested, [&] { ++requested; });
+        if (gear) {
+            gear->click();
+        }
+        // Return presses it too: Space may be bound to PTT, which the app-wide
+        // filter takes before the button sees it.
+        int byReturn = 0;
+        if (gear) {
+            const int before = requested;
+            QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(gear, &ret);
+            byReturn = requested - before;
+        }
+        report("settings_button_is_pressed_by_return", byReturn == 1,
+               QStringLiteral("requests=%1").arg(byReturn).toStdString());
+        report("settings_button_requests_the_source_menu",
+               gear && requested == 1 + byReturn && gear->focusPolicy() != Qt::NoFocus
+                   && gear->accessibleName() == QLatin1String("Voice keyer settings"),
+               (QStringLiteral("found=%1 requested=%2").arg(gear != nullptr).arg(requested))
+                   .toStdString());
+    }
+
+    // The keyboard path to a slot's menu (#7152): the Menu key or Shift+F10 on
+    // a slot's focused F-key opens that slot's menu, the one a right-click on
+    // the row opens; plain F10 does not, and an unavailable keyer offers none.
+    {
+        FakeKeyer k;
+        k.addRecording(3, QStringLiteral("Contest CQ"), 1000);
+        DvkPanel keysPanel(&k);
+        QPushButton* f3 = buttonByText(keysPanel, QStringLiteral("F3"));
+        // Sends one key press to the F-key and reports whether a slot menu
+        // opened; with clear set, picks Clear from it.
+        const auto press = [&](int key, Qt::KeyboardModifiers mods, bool clear) {
+            bool opened = false;
+            QTimer::singleShot(0, &keysPanel, [&] {
+                QMenu* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                if (!menu) {
+                    return;
+                }
+                opened = true;
+                for (QAction* action : menu->actions()) {
+                    if (clear && action->text() == QLatin1String("Clear")) {
+                        action->trigger();
+                        break;
+                    }
+                }
+                menu->close();
+            });
+            if (f3) {
+                QKeyEvent ev(QEvent::KeyPress, key, mods);
+                QApplication::sendEvent(f3, &ev);
+            }
+            QCoreApplication::processEvents();   // retire the timer if nothing opened
+            return opened;
+        };
+
+        const bool focusable = f3 && f3->focusPolicy() != Qt::NoFocus && f3->isEnabled();
+        // Shown, as it is whenever its F-keys can have focus: the first popup
+        // from a panel that was never shown is not reported active on macOS.
+        keysPanel.show();
+        QCoreApplication::processEvents();
+        const bool byMenuKey = press(Qt::Key_Menu, Qt::NoModifier, true);
+        const bool clearedSlot3 = k.calls.contains(QStringLiteral("clear 3"));
+        report("menu_key_on_an_fkey_opens_that_slots_menu",
+               focusable && byMenuKey && clearedSlot3,
+               (QStringLiteral("focusable=%1 opened=%2 calls=[%3]")
+                    .arg(focusable).arg(byMenuKey).arg(joined(k.calls).c_str())).toStdString());
+
+        report("shift_f10_on_an_fkey_opens_that_slots_menu",
+               press(Qt::Key_F10, Qt::ShiftModifier, false));
+
+        // Where the platform raises a keyboard context-menu event instead of a
+        // key press (the Menu key on Linux, Shift+F10 on Windows), Qt sends it
+        // to the focused F-key. The F-key ignores it and Qt passes it up to the
+        // row, whose custom context menu is the slot's menu.
+        k.calls.clear();
+        bool byNativeEvent = false;
+        QTimer::singleShot(0, &keysPanel, [&] {
+            QMenu* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu) {
+                return;
+            }
+            byNativeEvent = true;
+            for (QAction* action : menu->actions()) {
+                if (action->text() == QLatin1String("Clear")) {
+                    action->trigger();
+                    break;
+                }
+            }
+            menu->close();
+        });
+        if (f3) {
+            QContextMenuEvent ev(QContextMenuEvent::Keyboard, QPoint(0, 0),
+                                 f3->mapToGlobal(QPoint(0, 0)));
+            QApplication::sendEvent(f3, &ev);
+        }
+        QCoreApplication::processEvents();
+        report("keyboard_context_menu_event_on_an_fkey_opens_that_slots_menu",
+               byNativeEvent && k.calls.contains(QStringLiteral("clear 3")),
+               (QStringLiteral("opened=%1 calls=[%2]").arg(byNativeEvent)
+                    .arg(joined(k.calls).c_str())).toStdString());
+
+        k.calls.clear();
+        const bool byPlainF10 = press(Qt::Key_F10, Qt::NoModifier, false);
+        report("plain_f10_on_an_fkey_opens_no_menu", !byPlainF10 && k.calls.isEmpty(),
+               joined(k.calls));
+
+        keysPanel.setUnavailableReason(QStringLiteral("This radio has no DVK. Choose Local with ⚙."));
+        report("unavailable_keyer_opens_no_slot_menu_from_the_keyboard",
+               !press(Qt::Key_Menu, Qt::NoModifier, false)
+                   && !press(Qt::Key_F10, Qt::ShiftModifier, false));
+    }
+
+    // Tab order (#7152): the settings button is the panel's first stop, so the
+    // keyer source is one Tab away, and the slots' F-keys follow in slot
+    // order, each one Tab from the next, so every slot's menu is reachable.
+    {
+        FakeKeyer k;
+        DvkPanel chainPanel(&k);
+        chainPanel.show();
+        QCoreApplication::processEvents();
+        QStringList stops;
+        // Walk from the panel itself, so "first" means first in the panel.
+        QWidget* start = &chainPanel;
+        for (QWidget* w = start->nextInFocusChain(); w && w != start; ) {
+            if ((w->focusPolicy() & Qt::TabFocus) && w->isVisibleTo(&chainPanel)
+                && chainPanel.isAncestorOf(w)) {
+                stops << w->objectName();
+            }
+            w = w->nextInFocusChain();
+        }
+        QStringList fkeys;
+        for (const QString& name : stops) {
+            if (name.startsWith(QLatin1String("dvkPlaySlot"))) {
+                fkeys << name;
+            }
+        }
+        QStringList expectedFkeys;
+        for (int id = 1; id <= 12; ++id) {
+            expectedFkeys << QStringLiteral("dvkPlaySlot%1").arg(id);
+        }
+        report("tab_order_settings_first_then_fkeys_in_slot_order",
+               !stops.isEmpty() && stops.first() == QLatin1String("dvkSettings")
+                   && fkeys == expectedFkeys
+                   && stops.indexOf(QStringLiteral("dvkPlaySlot1"))
+                          < stops.indexOf(QStringLiteral("dvkRecord")),
+               stops.join(QLatin1Char(' ')).toStdString());
+    }
+
+    // A keyer the radio cannot serve leaves the panel open (that is where the
+    // source is changed) with every slot and transport control disabled and the
+    // reason on the status line; only the settings button still acts.
+    {
+        FakeKeyer k;
+        k.addRecording(1, QStringLiteral("CQ"), 1000);
+        DvkPanel blockedPanel(&k);
+        const QString reason = QStringLiteral("Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.");
+        blockedPanel.setUnavailableReason(reason);
+        QPushButton* bf1 = buttonByText(blockedPanel, QStringLiteral("F1"));
+        QPushButton* brec = buttonByText(blockedPanel, QString::fromUtf8("● REC"));
+        QPushButton* bplay = buttonByText(blockedPanel, QString::fromUtf8("▶ PLAY"));
+        QPushButton* bprev = buttonByText(blockedPanel, QString::fromUtf8("◀ PREV"));
+        QPushButton* gear = blockedPanel.findChild<QPushButton*>(QStringLiteral("dvkSettings"));
+        QLabel* bstatus = statusLabel(blockedPanel);
+        const bool allFound = bf1 && brec && bplay && bprev && gear && bstatus;
+        const bool controlsOff = allFound && !bf1->isEnabled() && !brec->isEnabled()
+                                 && !bplay->isEnabled() && !bprev->isEnabled();
+        const bool reasonShown = allFound && bstatus->text() == reason;
+        if (allFound) {
+            bf1->click();   // a disabled button ignores this; the guard is belt and braces
+        }
+        bool menuShown = false;
+        QTimer::singleShot(0, &blockedPanel, [&] {
+            if (QWidget* popup = QApplication::activePopupWidget()) {
+                menuShown = true;
+                popup->close();
+            }
+        });
+        if (QWidget* row = blockedPanel.findChild<QWidget*>(QStringLiteral("dvkSlot1"))) {
+            emit row->customContextMenuRequested(QPoint(2, 2));
+        }
+        QCoreApplication::processEvents();
+        bool renameOpened = false;
+        if (QLabel* name = labelWithText(blockedPanel, QStringLiteral("CQ"))) {
+            QMouseEvent dbl(QEvent::MouseButtonDblClick, QPointF(2, 2), QPointF(2, 2),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(name, &dbl);
+            for (QLineEdit* e : blockedPanel.findChildren<QLineEdit*>()) {
+                renameOpened = renameOpened || e->isVisibleTo(&blockedPanel);
+            }
+        }
+        report("unavailable_keyer_offers_no_rename", !renameOpened);
+        report("unavailable_keyer_disables_slots_and_transport_not_settings",
+               controlsOff && reasonShown && gear->isEnabled() && !menuShown && k.calls.isEmpty(),
+               (QStringLiteral("found=%1 off=%2 reason=%3 menu=%4 calls=[%5]")
+                    .arg(allFound).arg(controlsOff).arg(reasonShown).arg(menuShown)
+                    .arg(joined(k.calls).c_str())).toStdString());
+
+        blockedPanel.setUnavailableReason(QString());
+        report("clearing_the_reason_restores_the_controls",
+               allFound && bf1->isEnabled() && brec->isEnabled() && bplay->isEnabled()
+                   && bstatus->text() == QLatin1String("Idle"),
+               allFound ? bstatus->text().toStdString() : std::string());
+
+        // An operation already in flight can still be ended.
+        k.addRecording(2, QStringLiteral("QRZ"), 1000);
+        k.pushStatus(VoiceKeyer::Playback, 1);
+        const QString elapsedBefore = allFound ? bstatus->text() : QString();
+        blockedPanel.setUnavailableReason(reason);
+        QPushButton* bstop = buttonByText(blockedPanel, QString::fromUtf8("■ STOP"));
+        report("unavailable_keyer_still_lets_stop_end_an_operation",
+               allFound && bstop && bstop->isEnabled() && bplay->isEnabled());
+
+        // A reason that comes and goes mid-operation leaves the elapsed time
+        // alone; each pass used to tick it on by 100 ms.
+        blockedPanel.setUnavailableReason(QString());
+        blockedPanel.setUnavailableReason(reason);
+        report("reason_change_mid_operation_keeps_the_elapsed_time",
+               allFound && bstatus->text() == elapsedBefore,
+               (QStringLiteral("before=[%1] after=[%2]")
+                    .arg(elapsedBefore, allFound ? bstatus->text() : QString())).toStdString());
+
+        // The playing slot's F-key stops it; the other F-keys start, so they
+        // stay dark. With the TX slice in a voice mode, Escape and the playing
+        // slot's F-key shortcut stay armed though the keyer's are switched off.
+        QPushButton* bf2 = buttonByText(blockedPanel, QStringLiteral("F2"));
+        QShortcut* escSc = nullptr;
+        QShortcut* f1Sc = nullptr;
+        QShortcut* f2Sc = nullptr;
+        for (auto* sc : blockedPanel.findChildren<QShortcut*>()) {
+            if (sc->key() == QKeySequence(Qt::Key_Escape)) escSc = sc;
+            if (sc->key() == QKeySequence(Qt::Key_F1)) f1Sc = sc;
+            if (sc->key() == QKeySequence(Qt::Key_F2)) f2Sc = sc;
+        }
+        const bool scFound = escSc && f1Sc && f2Sc;
+        blockedPanel.setShortcutsEnabled(false, true);
+        const bool stopKeysArmed = scFound && escSc->isEnabled() && f1Sc->isEnabled()
+                                   && !f2Sc->isEnabled();
+        blockedPanel.setShortcutsEnabled(false, false);
+        const bool outsideVoiceOff = scFound && !escSc->isEnabled() && !f1Sc->isEnabled();
+        report("unavailable_keyer_keeps_the_playing_fkey_and_escape_live",
+               allFound && bf2 && bf1->isEnabled() && !bf2->isEnabled()
+                   && stopKeysArmed && outsideVoiceOff,
+               (QStringLiteral("f1=%1 f2=%2 armed=%3 offOutsideVoice=%4")
+                    .arg(allFound && bf1->isEnabled()).arg(bf2 && bf2->isEnabled())
+                    .arg(stopKeysArmed).arg(outsideVoiceOff)).toStdString());
+        blockedPanel.setShortcutsEnabled(false, true);
+        k.calls.clear();
+        if (allFound) {
+            bf1->click();
+        }
+        if (escSc) {
+            escSc->activated();
+        }
+        report("playing_fkey_and_escape_stop_the_unavailable_keyer",
+               k.calls == QStringList{QStringLiteral("playbackStop 1"),
+                                      QStringLiteral("playbackStop 1")},
+               joined(k.calls));
+
+        k.pushStatus(VoiceKeyer::Idle, -1);
+        report("operation_end_darkens_the_fkey_and_disarms_escape",
+               allFound && !bf1->isEnabled() && escSc && !escSc->isEnabled()
+                   && bstatus->text() == reason);
+    }
+
+    // An armed F-key shortcut on an unavailable keyer starts nothing.
+    // MainWindow arms the shortcuts offline with Radio chosen (hasVoiceKeyer()
+    // is permissive while disconnected), so the panel's own reason is the only
+    // gate between F1 and playbackStart() there (Principle VI).
+    {
+        FakeKeyer k;
+        k.addRecording(1, QStringLiteral("CQ"), 1000);
+        DvkPanel armedPanel(&k);
+        armedPanel.setShortcutsEnabled(true);
+        armedPanel.setUnavailableReason(QStringLiteral("Not connected to a radio."));
+        QShortcut* f1Sc = shortcutFor(armedPanel, Qt::Key_F1);
+        const bool armed = f1Sc && f1Sc->isEnabled();
+        k.calls.clear();
+        if (f1Sc) emit f1Sc->activated();
+        const QStringList blockedCalls = k.calls;
+        armedPanel.setUnavailableReason(QString());
+        k.calls.clear();
+        if (f1Sc) emit f1Sc->activated();
+        report("armed_fkey_shortcut_on_unavailable_keyer_starts_nothing",
+               armed && blockedCalls.isEmpty()
+                   && k.calls == QStringList{QStringLiteral("playbackStart 1")},
+               (QStringLiteral("armed=%1 blocked=[%2] control=[%3]")
+                    .arg(armed ? 1 : 0).arg(blockedCalls.join(QLatin1Char(',')),
+                                    k.calls.join(QLatin1Char(',')))).toStdString());
+    }
+
+    // A slot-menu action taken after the keyer became unavailable, while the
+    // menu's own event loop ran, changes nothing and says why.
+    {
+        FakeKeyer k;
+        k.addRecording(1, QStringLiteral("CQ"), 1000);
+        DvkPanel menuPanel(&k);
+        menuPanel.show();
+        QCoreApplication::processEvents();
+        const QString reason = QStringLiteral("Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.");
+        bool clearFound = false;
+        QTimer::singleShot(0, &menuPanel, [&] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu) {
+                return;
+            }
+            menuPanel.setUnavailableReason(reason);
+            for (QAction* a : menu->actions()) {
+                if (a->text() == QLatin1String("Clear")) {
+                    clearFound = true;
+                    a->trigger();
+                }
+            }
+            menu->close();
+        });
+        if (QWidget* row = menuPanel.findChild<QWidget*>(QStringLiteral("dvkSlot1"))) {
+            emit row->customContextMenuRequested(QPoint(2, 2));
+        }
+        QCoreApplication::processEvents();
+        report("slot_menu_action_rechecks_availability",
+               clearFound && k.calls.isEmpty(),
+               (QStringLiteral("menu=%1 calls=[%2]").arg(clearFound)
+                    .arg(joined(k.calls).c_str())).toStdString());
+    }
+
+    // Offline with the local keyer: nothing can go on the air or be recorded,
+    // but PREV plays on the speakers and the slot menu still works, so the
+    // operator can arrange and check their messages with no radio.
+    {
+        FakeKeyer k;
+        k.label = QStringLiteral("Local");
+        k.addRecording(1, QStringLiteral("CQ"), 1000);
+        DvkPanel offlinePanel(&k);
+        offlinePanel.show();
+        QCoreApplication::processEvents();
+        const QString reason = QStringLiteral("Not connected to a radio.");
+        offlinePanel.setUnavailableReason(reason, true);
+        QPushButton* of1 = buttonByText(offlinePanel, QStringLiteral("F1"));
+        QPushButton* orec = buttonByText(offlinePanel, QString::fromUtf8("● REC"));
+        QPushButton* oplay = buttonByText(offlinePanel, QString::fromUtf8("▶ PLAY"));
+        QPushButton* oprev = buttonByText(offlinePanel, QString::fromUtf8("◀ PREV"));
+        QLabel* ostatus = statusLabel(offlinePanel);
+        const bool found = of1 && orec && oplay && oprev && ostatus;
+        report("offline_local_previews_but_neither_transmits_nor_records",
+               found && oprev->isEnabled() && !orec->isEnabled() && !oplay->isEnabled()
+                   && !of1->isEnabled() && ostatus->text() == reason,
+               found ? (QStringLiteral("prev=%1 rec=%2 play=%3 f1=%4 status=[%5]")
+                            .arg(oprev->isEnabled()).arg(orec->isEnabled())
+                            .arg(oplay->isEnabled()).arg(of1->isEnabled())
+                            .arg(ostatus->text())).toStdString()
+                     : std::string("controls not found"));
+        if (found) {
+            oprev->click();
+        }
+        report("offline_local_prev_starts_a_preview",
+               k.calls == QStringList{QStringLiteral("previewStart 1")}, joined(k.calls));
+        k.calls.clear();
+
+        bool clearFound = false;
+        QTimer::singleShot(0, &offlinePanel, [&] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu) {
+                return;
+            }
+            for (QAction* a : menu->actions()) {
+                if (a->text() == QLatin1String("Clear")) {
+                    clearFound = true;
+                    a->trigger();
+                }
+            }
+            menu->close();
+        });
+        if (QWidget* row = offlinePanel.findChild<QWidget*>(QStringLiteral("dvkSlot1"))) {
+            emit row->customContextMenuRequested(QPoint(2, 2));
+        }
+        QCoreApplication::processEvents();
+        report("offline_local_slot_menu_still_edits",
+               clearFound && k.calls == QStringList{QStringLiteral("clear 1")},
+               (QStringLiteral("menu=%1 calls=[%2]").arg(clearFound)
+                    .arg(joined(k.calls).c_str())).toStdString());
+
+        // The same reason without the local slots (the radio DVK offline)
+        // previews nothing.
+        offlinePanel.setUnavailableReason(reason, false);
+        report("offline_radio_dvk_previews_nothing", found && !oprev->isEnabled());
     }
 
     std::printf("\n%s (%d failed)\n", g_failed ? "FAILED" : "PASSED", g_failed);

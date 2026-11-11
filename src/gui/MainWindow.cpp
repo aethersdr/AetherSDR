@@ -5647,6 +5647,9 @@ void MainWindow::buildUI()
     });
     m_dvkPanel = new DvkPanel(m_voiceKeyer->bound(), splitter);
     splitter->addWidget(m_dvkPanel);
+    connect(m_dvkPanel, &DvkPanel::settingsRequested, this, [this] {
+        showVoiceKeyerSourceMenu(m_dvkPanel->settingsMenuAnchor());
+    });
     applyVoiceKeyerSource();  // Local may already be the saved choice
     m_dvkPanel->hide();
 
@@ -10542,6 +10545,25 @@ void MainWindow::updateToolsMenuState()
         m_cwKeyerAction->setEnabled(m_cwxIndicator && m_cwxIndicator->isEnabled());
         m_cwKeyerAction->setChecked(m_cwxPanel && m_cwxPanel->isVisible());
     }
+    if (m_voiceKeyerAction) {
+        // Same gate as the status-bar DVK indicator. Dimmed, never hidden,
+        // with the reason in the status tip a screen reader announces
+        // (docs/agents/gui.md). Enablement follows the TX slice's mode as well
+        // as the capabilities, so ControlAvailabilityRegistry cannot own it.
+        const bool dvkOpen = m_dvkPanel && m_dvkPanel->isVisible();
+        const bool enabled = dvkOpen || (m_dvkIndicator && m_dvkIndicator->isEnabled());
+        m_voiceKeyerAction->setEnabled(enabled);
+        m_voiceKeyerAction->setChecked(dvkOpen);
+        const QString reason =
+            enabled ? QString()
+            : !(caps.hasVoiceKeyer || caps.canTransmit)
+                ? tr("This radio can neither transmit nor host a voice keyer")
+            : !m_radioModel.txSlice()
+                ? tr("Requires a transmit slice")
+            : tr("Requires the transmit slice in a voice mode");
+        m_voiceKeyerAction->setToolTip(reason);
+        m_voiceKeyerAction->setStatusTip(reason);
+    }
 #ifdef AETHER_ASR_ENABLED
     if (m_copyAssistAction) {
         const bool copyVisible = m_copyAssistApplet
@@ -10704,21 +10726,41 @@ void MainWindow::updateKeyerAvailability()
     // would take a working transcription feature down with the keyer. Which
     // capability matters depends on the keyer being driven: the radio's own DVK
     // for Radio, merely the ability to transmit for Local.
-    const bool dvkAvailable = voiceKeyerUsable(voiceKeyerSource(), hasVoiceKeyer,
-                                               m_radioModel.backendCapabilities().canTransmit)
+    const bool canTransmit = m_radioModel.backendCapabilities().canTransmit;
+    const bool dvkAvailable = voiceKeyerUsable(voiceKeyerSource(), hasVoiceKeyer, canTransmit)
                               && (dvkBlocker == DvkIndicatorBlocker::None);
-    const bool dvkUnlicensed = (dvkBlocker == DvkIndicatorBlocker::NotLicensed);
+    // The panel opens on a wider gate than the keyer can be driven on: its
+    // settings button is where the source is chosen, so a Radio choice this
+    // radio cannot serve must not lock the operator out of picking Local. The
+    // panel then disables its controls and names the reason.
+    // With no radio connected it opens too, for the local slots.
+    const bool connected = m_radioModel.isConnected();
+    const bool dvkOpenable = voiceKeyerPanelOpenable(connected, txIsSsb, hasVoiceKeyer,
+                                                     canTransmit);
 
     if (m_cwxPanel) {
         m_cwxPanel->setShortcutsEnabled(txIsCw
                                         && m_radioModel.hasCwTextStoredMacros());
     }
-    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable);
+    // In a voice mode, or with no radio (no TX slice, so not CW), the CWX
+    // shortcuts are off, so the panel may keep Escape and a playing slot's
+    // F-key armed to stop what is running: an offline preview included.
+    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable, txIsSsb || !connected);
     // The local keyer is verified on FlexRadio; on a radio with no voice keyer
     // of its own (Hermes-Lite 2, Icom, ...) it is Beta until those radios have
     // been tested on the air. hasVoiceKeyer() is permissive while disconnected,
     // so the word appears only once such a radio is actually connected.
     if (m_dvkPanel) {
+        // Offline the panel says so rather than blame the radio (the
+        // capabilities are then a default-constructed set), and the local
+        // slots stay previewable and editable.
+        m_dvkPanel->setUnavailableReason(
+            voiceKeyerPanelUnavailableReason(
+                voiceKeyerSource(), connected, hasVoiceKeyer, canTransmit,
+                m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
+                m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
+                m_radioModel.dvkLicenseRefused()),
+            voiceKeyerPanelSlotsEditableOffline(voiceKeyerSource(), connected));
         m_dvkPanel->setSourceQualifier(voiceKeyerSource() == VoiceKeyerSource::Local && !hasVoiceKeyer
                                            ? QStringLiteral("Beta") : QString());
     }
@@ -10740,13 +10782,14 @@ void MainWindow::updateKeyerAvailability()
     m_cwxIndicator->setCursor(txIsCw ? Qt::PointingHandCursor : Qt::ArrowCursor);
     StatusIndicator::setCheckedFor(m_cwxIndicator, m_cwxPanel->isVisible());
 
-    // DVK: available in voice modes (SSB, AM, FM — not DIGU/DIGL), and only on
-    // a radio that reports the DVK entitlement (see dvkIndicatorBlocker).
-    m_dvkIndicator->setEnabled(dvkAvailable);
-    // An unlicensed radio said so itself, so hide an open panel whether or not
-    // a TX slice currently exists — the mode gate's "keep it open across a
-    // transient no-TX-slice" caveat (#4173) applies only to the mode gate.
-    if ((dvkUnlicensed || (txSlice && !txIsSsb)) && m_dvkPanel->isVisible()) {
+    // DVK: opens in voice modes (SSB, AM, FM — not DIGU/DIGL). An unlicensed
+    // radio DVK no longer closes it or locks it shut: the panel is where Local
+    // is chosen, so it opens with its controls disabled and says why. Only the
+    // mode gate auto-hides, and only for a TX slice that exists (#4173).
+    // The indicator still dims while the keyer cannot be driven, so its look
+    // says "not ready" even though a click opens the panel.
+    m_dvkIndicator->setEnabled(dvkOpenable);
+    if (txSlice && !txIsSsb && m_dvkPanel->isVisible()) {
         m_dvkPanel->hide();
         setIndicatorStyle(m_dvkIndicator, kDisabled);
     } else if (m_dvkPanel->isVisible()) {
@@ -10754,8 +10797,8 @@ void MainWindow::updateKeyerAvailability()
     } else {
         setIndicatorStyle(m_dvkIndicator, dvkAvailable ? kAvail : kDisabled);
     }
-    m_dvkIndicator->setCursor(dvkAvailable ? Qt::PointingHandCursor
-                                           : Qt::ArrowCursor);
+    m_dvkIndicator->setCursor(dvkOpenable ? Qt::PointingHandCursor
+                                          : Qt::ArrowCursor);
     StatusIndicator::setCheckedFor(m_dvkIndicator, m_dvkPanel->isVisible());
     // An unlicensed radio gets a tooltip naming the missing subscription; the
     // mode gate keeps the normal one, since the panel's own title and the F-key

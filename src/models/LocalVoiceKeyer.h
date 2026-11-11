@@ -16,7 +16,7 @@ namespace AetherSDR {
 
 // The client-side voice keyer (RFC #4214): the DVK panel's slots, with the
 // recordings kept on this computer instead of on the radio — no SmartSDR+
-// licence, portable between radios, never touching a radio's stored DVK.
+// license, portable between radios, never touching a radio's stored DVK.
 //
 // Recording taps the audio AetherSDR already captures from the PC microphone
 // (AudioEngine::txFinalMonitorPcmReady, after the TX voice chain), so it never
