@@ -3115,6 +3115,12 @@
         },
         {
           "sleep": 15
+        },
+        {
+          "cmd": "invoke",
+          "target": "DSP settings",
+          "action": "click",
+          "_sleep": 0.8
         }
       ],
       "grab": {
@@ -3130,6 +3136,12 @@
         ]
       },
       "cleanup": [
+        {
+          "cmd": "invoke",
+          "target": "DSP settings",
+          "action": "click",
+          "_sleep": 0.8
+        },
         {
           "cmd": "invoke",
           "target": "panZoomOutBtn",
@@ -3194,8 +3206,8 @@
           "_sleep": 1.0
         }
       ],
-      "caption": "RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband.",
-      "alt": "Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode."
+      "caption": "RTTY mode on a narrow span: the red S (space) and green M (mark) lines sit inside the passband. The VFO's DSP tab is open, showing Mark 2125 and Shift 170.",
+      "alt": "Panadapter zoomed to a few kilohertz in RTTY mode. A shaded passband holds a dashed red line marked S and a dashed green line marked M, 170 Hz apart, beside the VFO flag reading 14.083.500 in RTTY mode. The flag's DSP tab is open: noise-filter buttons, the AetherRX and AetherTX launchers, a Parameters row, and Mark 2125 and Shift 170, each between a left and a right arrow button."
     },
     {
       "id": "rtty-decoder-pane",
