@@ -264,6 +264,31 @@ void enableAndGate()
           "a new client starts with the set disabled");
 }
 
+// Deliberately unlike the *_sensors_enable precedent, which takes only `true`
+// (TCI 2.1 §4.7 note 3 allows 1); RFC #7181 review, item 2.
+void enableBooleans()
+{
+    RadioModel model;
+    TciServer server(&model);
+    Wire a;
+    TciExtensionSetTest::attach(server, a.client, model);
+    a.send("rx_sensors_enable:1;");
+    check(a.take() == QStringList{QStringLiteral("rx_sensors_enable:false;")},
+          "the precedent: rx_sensors_enable:1 does not enable sensors");
+    a.send("aethersdr_ext_enable:1;");
+    check(TciExtensionSetTest::enabled(server, a.client) && a.take().size() == 1,
+          "aethersdr_ext_enable:1 enables and is answered");
+    a.send("aethersdr_ext_enable:0;");
+    check(!TciExtensionSetTest::enabled(server, a.client) && a.take().isEmpty(),
+          "aethersdr_ext_enable:0 disables, without a reply");
+    a.send("aethersdr_ext_enable:true;");
+    check(TciExtensionSetTest::enabled(server, a.client) && a.take().size() == 1,
+          "aethersdr_ext_enable:true enables and is answered");
+    a.send("aethersdr_ext_enable:false;");
+    check(!TciExtensionSetTest::enabled(server, a.client) && a.take().isEmpty(),
+          "aethersdr_ext_enable:false disables, without a reply");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -277,6 +302,7 @@ int main(int argc, char** argv)
     registrationRules();
     productionSetIsEmpty();
     enableAndGate();
+    enableBooleans();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
