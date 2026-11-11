@@ -45,6 +45,9 @@
 namespace AetherSDR {
 
 namespace {
+// fldigi's standard RTTY shifts, the RTTY decoder's Shift list.
+constexpr int kRttyShiftPresetsHz[] = {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850};
+
 void setDecoderInputHint(QLabel* label, const QString& hint, const QString& reason,
                          const QString& accessibleName)
 {
@@ -433,22 +436,18 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     rttyBar->addWidget(shiftLabel);
 
     m_rttyShiftCombo = new QComboBox;
+    m_rttyShiftCombo->setObjectName(QStringLiteral("rttyShiftCombo"));
     m_rttyShiftCombo->setStyleSheet(comboStyle);
     m_rttyShiftCombo->setFixedWidth(52);
-    m_rttyShiftCombo->setToolTip("Mark-to-space frequency shift");
-    // fldigi standard shifts
-    for (int hz : {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850})
+    m_rttyShiftCombo->setToolTip("Mark-to-space shift. Sets the slice's RTTY shift on the radio.");
+    for (int hz : kRttyShiftPresetsHz) {
         m_rttyShiftCombo->addItem(QString::number(hz), hz);
-    {
-        const int saved = AppSettings::instance().value("RttyDecoderShiftHz", "170").toInt();
-        const int idx   = m_rttyShiftCombo->findData(saved);
-        m_rttyShiftCombo->setCurrentIndex(idx >= 0 ? idx : m_rttyShiftCombo->findData(170));
     }
+    // The slice owns the shift; MainWindow shows its value here once the
+    // decoder runs, and a choice here is sent to the slice.
+    m_rttyShiftCombo->setCurrentIndex(m_rttyShiftCombo->findData(170));
     connect(m_rttyShiftCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
-        const int hz = m_rttyShiftCombo->currentData().toInt();
-        AppSettings::instance().setValue("RttyDecoderShiftHz", QString::number(hz));
-        AppSettings::instance().save();
-        emit rttyShiftHzChanged(hz);
+        emit rttyShiftHzChanged(m_rttyShiftCombo->currentData().toInt());
     });
     rttyBar->addWidget(m_rttyShiftCombo);
 
@@ -1173,9 +1172,25 @@ int PanadapterApplet::rttyMarkHz() const
     return m_rttyMarkCombo->currentData().toInt();
 }
 
-int PanadapterApplet::rttyShiftHz() const
+void PanadapterApplet::setRttyShiftHz(int hz)
 {
-    return m_rttyShiftCombo->currentData().toInt();
+    if (hz <= 0) { return; }
+    const auto isPreset = [](int v) {
+        return std::find(std::begin(kRttyShiftPresetsHz), std::end(kRttyShiftPresetsHz), v)
+            != std::end(kRttyShiftPresetsHz);
+    };
+    const QSignalBlocker block(m_rttyShiftCombo);
+    for (int i = m_rttyShiftCombo->count() - 1; i >= 0; --i) {
+        const int v = m_rttyShiftCombo->itemData(i).toInt();
+        if (v != hz && !isPreset(v)) { m_rttyShiftCombo->removeItem(i); }
+    }
+    int idx = m_rttyShiftCombo->findData(hz);
+    if (idx < 0) {
+        idx = 0;
+        while (idx < m_rttyShiftCombo->count() && m_rttyShiftCombo->itemData(idx).toInt() < hz) { ++idx; }
+        m_rttyShiftCombo->insertItem(idx, QString::number(hz), hz);
+    }
+    m_rttyShiftCombo->setCurrentIndex(idx);
 }
 
 float PanadapterApplet::rttyBaud() const

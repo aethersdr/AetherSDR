@@ -4026,12 +4026,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     sw->disconnect(this);
     menu->disconnect(this);
     applet->disconnect(this);
-    // This connection belongs to the pane's wiring, not decoder routing:
+    // These connections belong to the pane's wiring, not decoder routing:
     // routeRttyDecoderOutput() may already have selected this same applet,
     // and its unchanged-target fast path cannot restore a connection removed
-    // by the bulk disconnect above. Every close must persist dismissal (#5353).
+    // by the bulk disconnect above. Every close must persist dismissal (#5353),
+    // and every Shift choice must reach the slice (#6968).
     connect(applet, &PanadapterApplet::rttyPanelCloseRequested,
             this, &MainWindow::onRttyPanelCloseRequested);
+    connect(applet, &PanadapterApplet::rttyShiftHzChanged,
+            this, &MainWindow::onRttyDecoderShiftChosen);
     QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
     connect(this, &MainWindow::bandStackRestoreStarting,
             sw, [applet, pendingDbm, reconcileDbmRangeFromModel]

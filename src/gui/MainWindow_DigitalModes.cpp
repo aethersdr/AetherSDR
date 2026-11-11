@@ -331,8 +331,6 @@ void MainWindow::routeRttyDecoderOutput()
                    m_rttyDecoderApplet, &PanadapterApplet::setRttyStats);
         disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyMarkHzChanged,
                    &m_rttyDecoder, &RttyDecoder::setMarkFreqHz);
-        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyShiftHzChanged,
-                   &m_rttyDecoder, &RttyDecoder::setShiftHz);
         disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyBaudChanged,
                    &m_rttyDecoder, &RttyDecoder::setBaudRate);
         disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
@@ -348,14 +346,22 @@ void MainWindow::routeRttyDecoderOutput()
                 m_rttyDecoderApplet, &PanadapterApplet::setRttyStats);
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyMarkHzChanged,
                 &m_rttyDecoder, &RttyDecoder::setMarkFreqHz);
-        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyShiftHzChanged,
-                &m_rttyDecoder, &RttyDecoder::setShiftHz);
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyBaudChanged,
                 &m_rttyDecoder, &RttyDecoder::setBaudRate);
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
                 &m_rttyDecoder, &RttyDecoder::setReversePolarity);
     }
     refreshRttyInputStatus();
+}
+
+void MainWindow::onRttyDecoderShiftChosen(int hz)
+{
+    // The decoder has no shift of its own: the slice's shift draws the
+    // mark/space lines, and its change signal runs refreshRttyDecodeState(),
+    // which hands it to the decoder. Only the pane on screen speaks for the
+    // slice: another pan's hidden pane still holds its last value.
+    if (sender() != m_rttyDecoderApplet) { return; }
+    if (auto* s = activeSlice()) { s->setRttyShift(hz); }
 }
 
 void MainWindow::onRttyPanelCloseRequested()
@@ -400,7 +406,8 @@ void MainWindow::refreshRttyDecodeState()
     // markHz == 0 means "Auto": follow the radio's rttyMark setting
     const int effectiveMark = (markHz > 0) ? markHz : s->rttyMark();
     m_rttyDecoder.setMarkFreqHz(effectiveMark);
-    m_rttyDecoder.setShiftHz(m_rttyDecoderApplet->rttyShiftHz());
+    m_rttyDecoder.setShiftHz(s->rttyShift());
+    m_rttyDecoderApplet->setRttyShiftHz(s->rttyShift());
     m_rttyDecoder.setBaudRate(m_rttyDecoderApplet->rttyBaud());
     m_rttyDecoder.setReversePolarity(m_rttyDecoderApplet->rttyReverse());
 
