@@ -3,6 +3,7 @@
 #include "core/backends/RadioCapabilities.h"
 #include "AppActivity.h"
 #include "TciProtocol.h"
+#include "TciAntennaExtension.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
 #include "AppSettings.h"
@@ -646,6 +647,17 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         broadcastPower();
         m_powerRateTimer->start();
     });
+
+    // Extension set, antennas: the same limiter for their notices.
+    m_antennaRateTimer = new QTimer(this);
+    m_antennaRateTimer->setSingleShot(true);
+    m_antennaRateTimer->setInterval(kPowerRateLimitMs);
+    connect(m_antennaRateTimer, &QTimer::timeout, this, [this]() {
+        if (broadcastAntennas()) {
+            m_antennaRateTimer->start();
+        }
+    });
+    registerAntennaGroups();
 
     // Debounced DAX RX teardown — see scheduleDaxRelease(). Single-shot; a
     // reconnecting audio client cancels it before it fires.
@@ -3300,6 +3312,8 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
 
     Q_UNUSED(trx);
 
+    wireSliceAntennas(slice);
+
     connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double) {
         broadcastSliceFrequencies(slice);
     });
@@ -3797,6 +3811,272 @@ void TciServer::handleExtensionCommand(TciClient* ws, const QString& cmd)
     if (!result.broadcast.isEmpty()) {
         broadcastExtension(result.broadcast);
     }
+}
+
+// ── Extension set: antennas (RFC #7181) ─────────────────────────────────────
+// A set goes through SliceModel::setRxAntenna()/setTxAntenna(), the path the
+// RX applet's antenna menus take, so the backend's own refusals still apply.
+
+namespace {
+constexpr int kAntennaLineKinds = 4;
+} // namespace
+
+bool TciServer::antennaOffered(bool tx) const
+{
+    if (!m_model) {
+        return false;
+    }
+    bool anyList = false;
+    for (SliceModel* slice : m_model->slices()) {
+        if (slice && !antennaWireList(tx, slice).isEmpty()) {
+            anyList = true;
+            break;
+        }
+    }
+    return tx ? TciAntennaExtension::txOffered(m_model->isConnected(),
+                                               m_model->backendCapabilities().canTransmit,
+                                               anyList)
+              : TciAntennaExtension::rxOffered(m_model->isConnected(), anyList);
+}
+
+QStringList TciServer::antennaWireList(bool tx, const SliceModel* slice) const
+{
+    if (!slice) {
+        return {};
+    }
+    return TciAntennaExtension::wireNames(tx ? slice->txAntennaList() : slice->rxAntennaList());
+}
+
+QString TciServer::antennaLine(AntennaLine kind, int trx) const
+{
+    const bool tx = kind == AntennaLine::TxList || kind == AntennaLine::TxSelection;
+    const SliceModel* slice = sliceForTrxStrict(trx);
+    const QStringList wire = antennaWireList(tx, slice);
+    if (wire.isEmpty()) {
+        return {};
+    }
+    switch (kind) {
+    case AntennaLine::RxList:
+        return TciAntennaExtension::listLine(TciAntennaExtension::kRxListCommand, trx, wire);
+    case AntennaLine::TxList:
+        return TciAntennaExtension::listLine(TciAntennaExtension::kTxListCommand, trx, wire);
+    case AntennaLine::RxSelection:
+    case AntennaLine::TxSelection: {
+        const QString current = (tx ? slice->txAntenna() : slice->rxAntenna()).trimmed();
+        if (!TciAntennaExtension::representable(current)) {
+            return {};
+        }
+        return TciAntennaExtension::selectionLine(
+            tx ? TciAntennaExtension::kTxCommand : TciAntennaExtension::kRxCommand, trx, current);
+    }
+    }
+    return {};
+}
+
+QStringList TciServer::antennaStateLines(bool tx) const
+{
+    QStringList lines;
+    if (!m_model) {
+        return lines;
+    }
+    const int count = m_trxMap.trxCount(m_model);
+    const AntennaLine list = tx ? AntennaLine::TxList : AntennaLine::RxList;
+    const AntennaLine selection = tx ? AntennaLine::TxSelection : AntennaLine::RxSelection;
+    for (int trx = 0; trx < count; ++trx) {
+        for (const AntennaLine kind : {list, selection}) {
+            const QString line = antennaLine(kind, trx);
+            if (!line.isEmpty()) {
+                lines << line;
+            }
+        }
+    }
+    return lines;
+}
+
+bool TciServer::extensionKeyed() const
+{
+    const TransmitModel& tx = m_model->transmitModel();
+    return m_model->transmitOwnershipPending() || m_model->isRadioTransmitting()
+        || tx.isTransmitting() || tx.isMox() || tx.isTuning();
+}
+
+void TciServer::registerAntennaGroups()
+{
+    for (const bool tx : {false, true}) {
+        TciExtensionSet::Group group;
+        group.token = QString::fromLatin1(tx ? TciAntennaExtension::kTxToken
+                                             : TciAntennaExtension::kRxToken);
+        group.commands = tx
+            ? QStringList{QString::fromLatin1(TciAntennaExtension::kTxListCommand),
+                          QString::fromLatin1(TciAntennaExtension::kTxCommand)}
+            : QStringList{QString::fromLatin1(TciAntennaExtension::kRxListCommand),
+                          QString::fromLatin1(TciAntennaExtension::kRxCommand)};
+        group.offered = [this, tx] { return antennaOffered(tx); };
+        group.stateLines = [this, tx] { return antennaStateLines(tx); };
+        group.handle = [this, tx](const QString& name, const QStringList& args) {
+            return handleAntenna(tx, name, args);
+        };
+        registerExtensionGroup(std::move(group));
+    }
+    if (m_model) {
+        // The lists are per slice and move without capabilitiesChanged, so a
+        // slice leaving can take the last list, and the item, with it.
+        connect(m_model, &RadioModel::sliceRemoved, this, [this](int) {
+            announceExtensionSet();
+        });
+    }
+}
+
+void TciServer::wireSliceAntennas(SliceModel* slice)
+{
+    connect(slice, &SliceModel::rxAntennaListChanged, this, [this, slice](const QStringList&) {
+        antennaListMoved(AntennaLine::RxList, slice);
+    });
+    connect(slice, &SliceModel::txAntennaListChanged, this, [this, slice](const QStringList&) {
+        antennaListMoved(AntennaLine::TxList, slice);
+    });
+    connect(slice, &SliceModel::rxAntennaChanged, this, [this, slice](const QString&) {
+        queueAntennaNotice(AntennaLine::RxSelection, m_trxMap.trxForSlice(m_model, slice));
+    });
+    connect(slice, &SliceModel::txAntennaChanged, this, [this, slice](const QString&) {
+        queueAntennaNotice(AntennaLine::TxSelection, m_trxMap.trxForSlice(m_model, slice));
+    });
+    // What a line names can move without the value changing: the slice that
+    // will transmit, or the panadapter (whose antenna a Flex slice receives on).
+    connect(slice, &SliceModel::txSliceChanged, this, [this, slice](bool tx) {
+        if (tx) {
+            queueAntennaNotice(AntennaLine::TxSelection, m_trxMap.trxForSlice(m_model, slice));
+        }
+    });
+    connect(slice, &SliceModel::panIdChanged, this, [this, slice](const QString&) {
+        const int trx = m_trxMap.trxForSlice(m_model, slice);
+        queueAntennaNotice(AntennaLine::RxSelection, trx);
+        queueAntennaNotice(AntennaLine::TxSelection, trx);
+    });
+    // A new receiver brings its own lists.
+    antennaListMoved(AntennaLine::RxList, slice);
+    antennaListMoved(AntennaLine::TxList, slice);
+    const int trx = m_trxMap.trxForSlice(m_model, slice);
+    queueAntennaNotice(AntennaLine::RxSelection, trx);
+    queueAntennaNotice(AntennaLine::TxSelection, trx);
+}
+
+void TciServer::antennaListMoved(AntennaLine kind, SliceModel* slice)
+{
+    // Every enabled client holds the last advertisement (handleExtensionEnable
+    // and advertiseExtensions() record it). If the item list no longer matches,
+    // re-advertising sends the list and every state line, this one included.
+    const QString advertisement = m_extensions.advertisement();
+    const bool stale = std::any_of(m_clients.cbegin(), m_clients.cend(),
+        [&advertisement](const ClientState& client) {
+            return client.extensionsEnabled && client.extensionsAdvertised != advertisement;
+        });
+    if (stale) {
+        announceExtensionSet();
+        return;
+    }
+    queueAntennaNotice(kind, m_trxMap.trxForSlice(m_model, slice));
+}
+
+TciExtensionSet::Result TciServer::handleAntenna(bool tx, const QString& name,
+                                                 const QStringList& args)
+{
+    const bool listCommand = name == QLatin1String(TciAntennaExtension::kRxListCommand)
+        || name == QLatin1String(TciAntennaExtension::kTxListCommand);
+    const std::optional<TciAntennaExtension::Request> request
+        = TciAntennaExtension::parse(args, !listCommand);
+    if (!request || !antennaOffered(tx)) {
+        return {};
+    }
+    SliceModel* slice = sliceForTrxStrict(request->trx);
+    const QStringList wire = antennaWireList(tx, slice);
+    if (wire.isEmpty()) {
+        return {};
+    }
+    const AntennaLine selection = tx ? AntennaLine::TxSelection : AntennaLine::RxSelection;
+    TciExtensionSet::Result result;
+    if (!request->isSet) {
+        result.reply = antennaLine(listCommand ? (tx ? AntennaLine::TxList : AntennaLine::RxList)
+                                               : selection,
+                                   request->trx);
+        return result;
+    }
+    const QString wanted = TciAntennaExtension::listedName(wire, request->name);
+    const QString current = (tx ? slice->txAntenna() : slice->rxAntenna()).trimmed();
+    if (wanted.isEmpty() || wanted == current || m_model->isSlotForeign(slice->sliceId())) {
+        return {};
+    }
+    if (tx && extensionKeyed()) {
+        // Refused here, before any backend sees it; the HL2 would refuse again
+        // (Hl2Backend::requestTxRoute). The operator gets the reason, as from
+        // that refusal, and the client the antenna still in use.
+        const QString why = QStringLiteral("TCI: the transmit antenna cannot change while "
+                                           "transmitting; it stays %1.").arg(current);
+        qCWarning(lcCat).noquote() << why;
+        emit m_model->configurationWarning(why);
+        result.reply = antennaLine(selection, request->trx);
+        return result;
+    }
+    if (tx) {
+        slice->setTxAntenna(wanted);
+    } else {
+        slice->setRxAntenna(wanted);
+    }
+    // The answer is the antenna in use once the backend has replied, which is
+    // what the notice reads when it runs.
+    queueAntennaNotice(selection, request->trx);
+    return result;
+}
+
+void TciServer::queueAntennaNotice(AntennaLine kind, int trx)
+{
+    if (trx < 0) {
+        return;
+    }
+    m_antennaPending[static_cast<int>(kind)].insert(trx);
+    if (m_antennaSendPosted || m_antennaRateTimer->isActive()) {
+        return;
+    }
+    m_antennaSendPosted = true;
+    QMetaObject::invokeMethod(this, [this]() {
+        m_antennaSendPosted = false;
+        if (broadcastAntennas()) {
+            m_antennaRateTimer->start();
+        }
+    }, Qt::QueuedConnection);
+}
+
+bool TciServer::broadcastAntennas()
+{
+    QList<int> pending[kAntennaLineKinds];
+    bool any = false;
+    for (int kind = 0; kind < kAntennaLineKinds; ++kind) {
+        pending[kind] = m_antennaPending[kind].values();
+        std::sort(pending[kind].begin(), pending[kind].end());
+        m_antennaPending[kind].clear();
+        any = any || !pending[kind].isEmpty();
+    }
+    const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
+        [](const ClientState& client) { return client.extensionsEnabled; });
+    if (!any || !anyEnabled) {
+        return false;
+    }
+    bool sent = false;
+    for (int kind = 0; kind < kAntennaLineKinds; ++kind) {
+        const auto line = static_cast<AntennaLine>(kind);
+        const bool tx = line == AntennaLine::TxList || line == AntennaLine::TxSelection;
+        if (!antennaOffered(tx)) {
+            continue;
+        }
+        for (const int trx : pending[kind]) {
+            const QString text = antennaLine(line, trx);
+            if (!text.isEmpty()) {
+                broadcastExtension(text);
+                sent = true;
+            }
+        }
+    }
+    return sent;
 }
 
 void TciServer::broadcastBinary(const QByteArray& data)

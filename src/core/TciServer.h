@@ -81,6 +81,7 @@ class TciServer : public QObject {
     friend class TciRxAudioTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
+    friend class TciAntennaExtensionTest;
     friend class TciExtensionSetTest;
 
 public:
@@ -250,6 +251,24 @@ private:
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
     void broadcastBinary(const QByteArray& data);
+    // Extension groups `rx_antenna` and `tx_antenna` (TciAntennaExtension.h).
+    enum class AntennaLine { RxList, RxSelection, TxList, TxSelection };
+    void registerAntennaGroups();
+    void wireSliceAntennas(SliceModel* slice);
+    TciExtensionSet::Result handleAntenna(bool tx, const QString& name,
+                                          const QStringList& args);
+    bool antennaOffered(bool tx) const;
+    QStringList antennaWireList(bool tx, const SliceModel* slice) const;
+    QStringList antennaStateLines(bool tx) const;
+    QString antennaLine(AntennaLine kind, int trx) const;
+    // Transmitting, tuning, or a transmit operation still held: the sources
+    // ReceiveControlGuard::checkTransmit() reads.
+    bool extensionKeyed() const;
+    // A slice's list moved: a gate that flips re-sends the whole set, else
+    // the one line is queued.
+    void antennaListMoved(AntennaLine kind, SliceModel* slice);
+    void queueAntennaNotice(AntennaLine kind, int trx);
+    bool broadcastAntennas();
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
     SliceModel* sliceForTrxStrict(int trx) const;
@@ -515,6 +534,11 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Extension set, antenna notices: per line kind, the trx numbers pending;
+    // posted, then rate-limited like drive:.
+    QTimer*           m_antennaRateTimer{nullptr};
+    QSet<int>         m_antennaPending[4];
+    bool              m_antennaSendPosted{false};
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};
