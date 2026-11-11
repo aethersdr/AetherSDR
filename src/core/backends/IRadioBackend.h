@@ -118,6 +118,8 @@ struct MemoryRecallDetails {
 //     equivalents, which RadioModel drives directly (including
 //     BlockingQueuedConnection) until #5262 M4 / #5554 §2.6. No new call site may
 //     join them, and every handler bound to them is generation-guarded per rule 5.
+//     Their statusIngress() is not a worker: it lives on this thread and is the
+//     one way their wire lines reach the model (docs/agents/backends.md).
 //  4. SEAM PAYLOADS ARE DECLARED AND REGISTERED IN ONE PLACE. Every type crossing
 //     the seam (*Delta structs, MeterDef, LinkStats) has Q_DECLARE_METATYPE in
 //     its header AND qRegisterMetaType in RadioModel's constructor. Qt 6 queued

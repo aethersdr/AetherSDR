@@ -54,6 +54,10 @@ public:
     // other object.
     static std::optional<FirmwareUpdateStatus>
     fileUpdateStatus(const QString& object, const QMap<QString, QString>& kvs);
+    // "stream <id> …" / "tx_audio_stream <id> …" → the model's stream rules'
+    // view of it; nullopt for any other object.
+    static std::optional<StreamStatusDelta>
+    streamStatus(const QString& object, const QMap<QString, QString>& kvs);
 
     // A line as an accepted one is handled (decoders, then lineAccepted),
     // without the fence: RadioModel::handleLineForTest().

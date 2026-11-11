@@ -16,7 +16,6 @@
 #include "BandSettings.h"
 #include "DeclaredBands.h"
 #include "core/backends/flex/CommandParser.h"
-#include "core/backends/flex/FlexStreamStatus.h"
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
@@ -1467,8 +1466,9 @@ void RadioModel::setupBackend(const QString& family)
     // aetherd 2.4 (#4092): TGXL tuner status decoded in the backend drives TunerModel.
     connect(m_backend.get(), &IRadioBackend::tunerChanged, this,
             [this](const TunerDelta& delta) {
-        // A newly named TGXL: its meters reach it by handle.
-        if (delta.handle && *delta.handle != m_tunerModel.handle()) {
+        // A TGXL status naming a new handle: its meters reach it by handle.
+        if (delta.handle && delta.model == QStringLiteral("TunerGeniusXL")
+            && *delta.handle != m_tunerModel.handle()) {
             m_meterModel.setTgxlHandle(delta.handle->toUInt(nullptr, 0));
         }
         m_tunerModel.applyChanges(delta);
@@ -1755,11 +1755,7 @@ void RadioModel::wireStatusIngress(quint64 generation)
         });
         connect(flex, &FlexBackend::streamStatusObserved, this,
                 [this, generation](const StreamStatusDelta& stream) {
-            if (generation != m_backendReceiverGeneration) { return; }
-            handleRemoteAudioRxStreamStatus(stream);
-            if (generation != m_backendReceiverGeneration) { return; }
-            traceDaxStreamStatus(stream);
-            handleDaxRxStreamRegistry(stream);
+            if (generation == m_backendReceiverGeneration) { applyStreamStatus(stream); }
         });
     } else if (auto* sim = dynamic_cast<SimBackend*>(m_backend.get())) {
         m_statusIngress = sim->statusIngress();
@@ -8528,6 +8524,7 @@ void RadioModel::onDisconnected()
     m_xvtrList.clear();
     m_amplifier.reset();              // clear PGXL presence/operate (#4094)
     if (m_flexBackend) m_flexBackend->clearExtensionHandles();  // drop cached encode handles (#4198)
+    if (m_statusIngress) m_statusIngress->clearExtensionHandles();  // the demo ingress's TGXL identity
     m_fullDuplex = false;
     if (m_transmitFrequencyCheck) {
         m_transmitFrequencyCheck = false;
@@ -11361,9 +11358,19 @@ void RadioModel::emitOtherClientsChanged()
     emit otherClientsChanged(names.size(), names);
 }
 
+void RadioModel::applyStreamStatus(const StreamStatusDelta& stream)
+{
+    const quint64 generation = m_backendReceiverGeneration;
+    handleRemoteAudioRxStreamStatus(stream);
+    if (generation != m_backendReceiverGeneration) { return; }
+    traceDaxStreamStatus(stream);
+    handleDaxRxStreamRegistry(stream);
+}
+
 void RadioModel::traceDaxStreamStatus(const StreamStatusDelta& stream)
 {
-    const QString keys = stream.keys.join(QLatin1Char(','));
+    // Joined only where a log line is actually written.
+    const auto keys = [&stream] { return stream.keys.join(QLatin1Char(',')); };
     if (stream.object == StreamStatusDelta::Object::Stream) {
         const QString& incomingType = stream.type;
         const QString knownType = m_daxStreamDebug.value(stream.streamId).type;
@@ -11380,7 +11387,7 @@ void RadioModel::traceDaxStreamStatus(const StreamStatusDelta& stream)
                 << "RadioModel: DAX stream removed"
                 << QStringLiteral("stream=%1").arg(hexId(stream.streamId))
                 << QStringLiteral("type=%1").arg(type.isEmpty() ? QStringLiteral("(unknown)") : type)
-                << QStringLiteral("keys=%1").arg(keys);
+                << QStringLiteral("keys=%1").arg(keys());
             m_deadDaxRxSeen.remove(stream.streamId);
             m_externalDaxTxSeen.remove(stream.streamId);
             m_externalDaxRxSeen.remove(stream.streamId);
@@ -11414,9 +11421,8 @@ void RadioModel::traceDaxStreamStatus(const StreamStatusDelta& stream)
             state.txKnown = true;
         }
 
-        const bool deadOrphan = stream.ownerReported && stream.owner == 0
-            && stream.ip.value_or(QString()) == QStringLiteral("0.0.0.0");
-        if (state.type == QStringLiteral("dax_rx") && deadOrphan) {
+        if (state.type == QStringLiteral("dax_rx")
+            && isDeadOrphanStreamOwner(stream.ownerReported, stream.owner, stream.ip.value_or(QString()))) {
             if (!m_deadDaxRxSeen.contains(stream.streamId)) {
                 m_deadDaxRxSeen.insert(stream.streamId);
                 qCWarning(lcDax).noquote()
@@ -11480,7 +11486,7 @@ void RadioModel::traceDaxStreamStatus(const StreamStatusDelta& stream)
             fields << QStringLiteral("active=%1").arg(state.active ? 1 : 0);
         if (state.txKnown)
             fields << QStringLiteral("tx=%1").arg(state.tx ? 1 : 0);
-        fields << QStringLiteral("keys=%1").arg(keys);
+        fields << QStringLiteral("keys=%1").arg(keys());
 
         qCDebug(lcDax).noquote()
             << "RadioModel: DAX stream status" << fields.join(QLatin1Char(' '));
@@ -11492,7 +11498,7 @@ void RadioModel::traceDaxStreamStatus(const StreamStatusDelta& stream)
         qCDebug(lcDax).noquote()
             << "RadioModel: DAX tx_audio_stream removed"
             << QStringLiteral("stream=%1").arg(hexId(txAudioStream.streamId))
-            << QStringLiteral("keys=%1").arg(keys);
+            << QStringLiteral("keys=%1").arg(keys());
         m_daxStreamDebug.remove(txAudioStream.streamId);
         m_externalDaxTxSeen.remove(txAudioStream.streamId);
         return;
@@ -11523,7 +11529,7 @@ void RadioModel::traceDaxStreamStatus(const StreamStatusDelta& stream)
                                                     : QStringLiteral("?"))
         << QStringLiteral("tx=%1").arg(state.txKnown ? (state.tx ? QStringLiteral("1") : QStringLiteral("0"))
                                                      : QStringLiteral("?"))
-        << QStringLiteral("keys=%1").arg(keys);
+        << QStringLiteral("keys=%1").arg(keys());
 }
 
 // Single registration path for dax_rx streams (#3305): every consumer used to
@@ -11552,12 +11558,8 @@ void RadioModel::handleDaxRxStreamRegistry(const StreamStatusDelta& stream)
         return;
     }
     if (stream.type != QStringLiteral("dax_rx")) return;
-    // No owner field is ours; 0x0 (or an unparseable owner) is ours unless
-    // it is a dead orphan at 0.0.0.0.
-    const bool ours = !stream.ownerReported
-        || (stream.owner == 0 ? stream.ip.value_or(QString()) != QStringLiteral("0.0.0.0")
-                              : stream.owner == ourClientHandle());
-    if (!ours) {
+    if (!streamOwnerBelongsToUs(stream.ownerReported, stream.owner, stream.ip.value_or(QString()),
+                                ourClientHandle())) {
         qCDebug(lcDax).noquote()
             << "RadioModel: ignoring foreign DAX RX stream"
             << QStringLiteral("stream=%1").arg(hexId(stream.streamId))
@@ -12808,22 +12810,21 @@ void RadioModel::deliverLineForTest(const ParsedMessage& message)
         m_statusIngress->deliverForTest(message);   // decoders, then us
         return;
     }
-    // A fixture that aliased a Flex backend without setupBackend(): run its
-    // decoders, then this model's own handling. Without one, the stream rules
-    // still run on the same parse (a fixture driving them on another family).
+    // Every Flex backend is installed through setupBackend() or
+    // setBackendForTest(), which wire its ingress; a Flex alias without one
+    // would skip every decoder and pass vacuously.
     if (m_flexBackend) {
-        m_flexBackend->statusIngress()->decodeForTest(message);
-    } else if (message.type == MessageType::Status) {
-        if (const auto stream = flexStreamStatus(message.object, message.kvs)) {
-            handleRemoteAudioRxStreamStatus(*stream);
-            traceDaxStreamStatus(*stream);
-            handleDaxRxStreamRegistry(*stream);
-        }
+        qFatal("RadioModel::deliverLineForTest: install the Flex backend with setBackendForTest()");
     }
-    // The model's TX-ownership rules on an interlock line, for a fixture whose
-    // backend has no wired ingress.
-    if (message.type == MessageType::Status && message.object == QLatin1String("interlock")) {
-        applyInterlockStatus(FlexStatusIngress::interlockStatus(message.kvs));
+    // Another family's fixture: the model's own stream and TX-ownership rules
+    // still run on the same parse.
+    if (message.type == MessageType::Status) {
+        if (const auto stream = FlexStatusIngress::streamStatus(message.object, message.kvs)) {
+            applyStreamStatus(*stream);
+        }
+        if (message.object == QLatin1String("interlock")) {
+            applyInterlockStatus(FlexStatusIngress::interlockStatus(message.kvs));
+        }
     }
     handleMessageReceived(message);
     if (message.type == MessageType::Status) { onStatusReceived(message.object, message.kvs); }

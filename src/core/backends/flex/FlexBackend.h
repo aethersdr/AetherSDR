@@ -337,12 +337,6 @@ private:
     std::function<std::optional<bool>()> m_dspResetLicenseProvider;
     std::function<quint32()> m_sequenceProvider;
 
-    // Decode-side handle state (#4198). Captured from the amplifier/tgxl status
-    // decode and consumed by invokeExtension() to build the amp/tuner relay wire,
-    // so RadioModel no longer threads the Flex handle through the encode arg.
-    // Touched only on the main thread — both the decode (RadioModel::handleStatus)
-    // and the encode intent lambdas run there — so a plain QString needs no sync.
-
     // Radio-declared capacity (#5594 item 3), 0 until the radio says. Cleared by
     // clearExtensionHandles() on disconnect so a different radio cannot inherit
     // the previous one's limits.

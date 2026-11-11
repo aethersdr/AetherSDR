@@ -3,6 +3,7 @@
 // Moved from FlexBackend / FlexNtpSourceControls unchanged.
 #include "FlexStatusIngress.h"
 
+#include "core/LogManager.h"
 #include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexCwControls.h"
 #include "core/backends/flex/FlexCwxStatus.h"
@@ -842,11 +843,18 @@ void FlexStatusIngress::decodeTnfStatus(int notchId, bool removed, const QMap<QS
 // them apart by model=TunerGeniusXL / PowerGeniusXL. Removal arrives bare
 // ("amplifier <handle> removed") or as removed=1 (FlexLib Radio.cs:14060/14073
 // matches the substring "removed").
+std::optional<StreamStatusDelta> FlexStatusIngress::streamStatus(const QString& object,
+                                                                const QMap<QString, QString>& kvs)
+{
+    return flexStreamStatus(object, kvs);
+}
+
 void FlexStatusIngress::routeAmplifierStatus(const QString& object, const QMap<QString, QString>& kvs)
 {
     static const QRegularExpression ampRe(QStringLiteral(R"(^amplifier\s+(\S+)$)"));
     static const QRegularExpression ampRemovedRe(QStringLiteral(R"(^amplifier\s+(\S+)\s+removed$)"));
     if (const auto rm = ampRemovedRe.match(object); rm.hasMatch()) {
+        qCDebug(lcProtocol) << "FlexStatusIngress: amplifier removed (bare) handle=" << rm.captured(1);
         decodeAmplifierStatus(rm.captured(1), QString(), {}, /*removed=*/true);
         return;
     }
@@ -854,6 +862,7 @@ void FlexStatusIngress::routeAmplifierStatus(const QString& object, const QMap<Q
     if (!m.hasMatch()) { return; }
     const QString handle = m.captured(1);
     const QString model = kvs.value(QStringLiteral("model"));
+    qCDebug(lcProtocol) << "FlexStatusIngress: amplifier status handle=" << handle << "model=" << model;
     if (kvs.contains(QStringLiteral("removed"))) {
         decodeAmplifierStatus(handle, QString(), {}, /*removed=*/true);
         return;
@@ -887,7 +896,7 @@ void FlexStatusIngress::decodeAmplifierStatus(const QString& handle, const QStri
     if (removed) {
         // Drop the cached handle for the encode path (#4198) when the device it
         // names goes away. TGXL removal also arrives on the amplifier-removed
-        // wire (routed here by RadioModel), so clear whichever handle matches.
+        // wire (routeAmplifierStatus), so clear whichever handle matches.
         if (handle == m_ampHandle) m_ampHandle.clear();
         if (handle == m_tunerHandle) m_tunerHandle.clear();
         d.removed = true;

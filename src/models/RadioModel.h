@@ -1807,6 +1807,9 @@ private:
     void releaseWsprDaxTxOwnership();
     void finishWsprDaxTxRelease();
     bool acceptDaxTxCreate(quint32 id, quint64 startRevision);
+    // A stream status's model rules: remote audio ownership, then (unless that
+    // replaced the backend) the DAX stream trace and the DAX RX registry.
+    void applyStreamStatus(const StreamStatusDelta& stream);
     void traceDaxStreamStatus(const StreamStatusDelta& stream);
     void handleDaxRxStreamRegistry(const StreamStatusDelta& stream);
     bool handleRemoteAudioRxStreamStatus(const StreamStatusDelta& stream);
