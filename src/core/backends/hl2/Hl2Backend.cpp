@@ -1088,6 +1088,7 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
 
     Receiver seed = requested;
     seed.publishedTxAntenna.clear();
+    seed.antennasPublished = false;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -3457,6 +3458,19 @@ ReceiveDispatch Hl2Backend::requestSliceSquelch(int sliceId, const SliceSquelchR
     }
     setSliceSquelch(sliceId, request.enabled, request.level);
     return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch Hl2Backend::requestSliceRxAntenna(int sliceId, const QString& antenna)
+{
+    // The HL2 receives on ANT only. RF1 is a transmit output and 0x00[13] (the
+    // Alex RX-antenna bit) is left alone: no filter board known to us wires it.
+    const int ddc = ddcForSlice(sliceId);
+    if (!rx(ddc)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    emitSliceState(ddc, true);
+    return antenna == QLatin1String("ANT") ? ReceiveDispatch::LocalOnly
+                                           : ReceiveDispatch::Unsupported;
 }
 
 ReceiveDispatch Hl2Backend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
@@ -8859,6 +8873,13 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     // chosen. publishedModeStrings() is a subset of knownModeStrings(), so the
     // menu never offers a mode the restore boundary rejects.
     d.modeList = publishedModeStrings();
+    // One receive input, on every slice (#4954): the RX menu offers ANT and no
+    // invented ANT1/ANT2. RF1 is transmit-only and is never in this list.
+    d.rxAntennaList = QStringList{QStringLiteral("ANT")};
+    if (!r->antennasPublished || forceAntennas) {
+        d.rxAntenna = QStringLiteral("ANT");
+        r->antennasPublished = true;
+    }
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;

@@ -116,6 +116,7 @@ void rxMenuTokens(bool independent)
     d.txAntennaList = QStringList{"ANT", "RF1"};
     slice->applyChanges(d);
     radio.setAntennaAlias(QStringLiteral("RF1"), QStringLiteral("Transverter"));
+    radio.setAntennaAlias(QStringLiteral("ANT1"), QStringLiteral("Old antenna"));
 
     const QStringList known = radio.knownAntennaTokens();
     const QStringList rx = radio.rxAntennaMenuTokens();
@@ -123,6 +124,8 @@ void rxMenuTokens(bool independent)
     if (independent) {
         check(!rx.contains(QStringLiteral("RF1")), "RT10: with the record RF1 is not an RX menu token");
         check(rx.contains(QStringLiteral("ANT")), "RT10: ANT, published for receive, stays an RX menu token");
+        check(!rx.contains(QStringLiteral("ANT1")),
+              "RT10: a stale alias cannot invent an unpublished receive input");
         // A stale RX label naming the TX output does not vouch for itself.
         SliceDelta stale; stale.rxAntenna = QStringLiteral("RF1");
         slice->applyChanges(stale);

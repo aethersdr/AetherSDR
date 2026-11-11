@@ -3485,14 +3485,7 @@ QStringList RadioModel::rxAntennaMenuTokens() const
     for (SliceModel* s : m_slices) {
         if (s) { rxSide += s->rxAntennaList(); }
     }
-    QStringList txOnly;
-    for (SliceModel* s : m_slices) {
-        if (!s) { continue; }
-        for (const QString& ant : s->txAntennaList() + QStringList{s->txAntenna()}) {
-            if (!rxSide.contains(ant)) { txOnly << ant; }
-        }
-    }
-    tokens.removeIf([&txOnly](const QString& t) { return txOnly.contains(t); });
+    tokens.removeIf([&rxSide](const QString& t) { return !rxSide.contains(t); });
     return tokens;
 }
 
