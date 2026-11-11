@@ -18,6 +18,7 @@
 
 #include <QAbstractItemView>
 #include <QHideEvent>
+#include <QMetaObject>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
