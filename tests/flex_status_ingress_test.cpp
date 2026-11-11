@@ -14,6 +14,8 @@
 #include <QThread>
 #include <QtTest>
 
+#include <atomic>
+
 namespace AetherSDR {
 class RadioConnectionSessionTestAccess {
 public:
@@ -46,9 +48,19 @@ QStringList objects(const QSignalSpy& spy)
 }
 } // namespace
 
+// Each DAX IQ stream builds a pipe, which loads module-pipe-source through
+// pactl on DaxIqModel's worker thread. Answered for the whole process, never
+// cleared: a pipe built after a test returns must not reach the host (#6726).
+static std::atomic<int> s_pactlCalls{0};
+
 class FlexStatusIngressTest final : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase()
+    {
+        DaxIqModel::setPactlRunnerForTest([](const QStringList&) { return quint32(++s_pactlCalls); });
+    }
+
     // A line is accepted only with the current epoch: beginSession() refuses
     // everything queued before it, and retire() closes the current epoch but
     // never a newer one.
@@ -198,9 +210,6 @@ private slots:
     {
         TestSettingsProfile profile(QStringLiteral("flex-status-ingress-iq"));
         QVERIFY(profile.isValid());
-        // Each IQ stream would load a PipeWire pipe module; record instead.
-        int pactl = 0;
-        DaxIqModel::setPactlRunnerForTest([&pactl](const QStringList&) { return quint32(++pactl); });
         RadioModel model;
         QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
         model.enableDaxIqRegistry();
@@ -218,7 +227,6 @@ private slots:
         QVERIFY(!model.daxIqModel().stream(3).exists);
         model.handleLineForTest(QStringLiteral("S0|stream 0x20000001 removed"));
         QVERIFY(!model.daxIqModel().stream(1).exists);
-        DaxIqModel::setPactlRunnerForTest({});
     }
 
     // Until the desktop enables it, an IQ stream reaches neither DaxIqModel
@@ -227,15 +235,13 @@ private slots:
     {
         TestSettingsProfile profile(QStringLiteral("flex-status-ingress-iq-off"));
         QVERIFY(profile.isValid());
-        int pactl = 0;
-        DaxIqModel::setPactlRunnerForTest([&pactl](const QStringList&) { return quint32(++pactl); });
+        const int before = s_pactlCalls.load();
         RadioModel model;
         QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
         model.handleLineForTest(QStringLiteral("S0|stream 0x20000001 type=dax_iq daxiq_channel=1"));
         QVERIFY(!model.daxIqModel().stream(1).exists);
         QCoreApplication::processEvents();
-        QCOMPARE(pactl, 0);
-        DaxIqModel::setPactlRunnerForTest({});
+        QCOMPARE(s_pactlCalls.load(), before);
     }
 
     // A radio status line's pll_done reaches the setup dialog typed: running,
@@ -275,6 +281,25 @@ private slots:
         QVERIFY(!at(1).failed && !at(1).transfer);
         QVERIFY(at(2).failed && *at(2).failed);
         QCOMPARE(at(2).reason, QStringLiteral("bad_image"));
+    }
+
+    // The TX band table announces its own changes: a band line does, any
+    // other status does not.
+    void txBandChangesAreSignalled()
+    {
+        TestSettingsProfile profile(QStringLiteral("flex-status-ingress-band"));
+        QVERIFY(profile.isValid());
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
+        QSignalSpy bands(&model, &RadioModel::txBandSettingsChanged);
+        model.handleLineForTest(QStringLiteral("S0|transmit band 9 band_name=20 rfpower=80"));
+        QCOMPARE(bands.size(), 1);
+        QCOMPARE(model.txBandSettings().value(9).rfPower, 80);
+        model.handleLineForTest(QStringLiteral("S0|interlock band 9 tx1_enabled=1"));
+        QCOMPARE(bands.size(), 2);
+        model.handleLineForTest(QStringLiteral("S0|transmit rfpower=50"));
+        model.handleLineForTest(QStringLiteral("S0|transmit band x rfpower=1"));
+        QCOMPARE(bands.size(), 2);
     }
 
     // The H line reaches the model before connected(): both take one queued

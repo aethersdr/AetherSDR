@@ -2985,7 +2985,7 @@ RadioModel::~RadioModel()
     // Disconnect RadioModel's own connections to the wire objects BEFORE they
     // are torn down, to prevent use-after-free (ASAN). (#502) The objects are
     // still alive here — the backend owns them and destroys them next. The WAN
-    // connection also delivers statusReceived → handlePanadapterStatus / the
+    // connection also delivers status lines → handlePanadapterStatus / the
     // waterfall handler, both of which now deref m_flexBackend — sever it too so
     // a late WAN status can't reach a half-destroyed backend. (#4065 review)
     if (m_connection)                   // absent on a self-IQ backend
@@ -11367,7 +11367,7 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
 }
 
 // Single registration path for dax_rx streams (#3305): every consumer used to
-// run its own statusReceived hook (bridge / TCI / RADE) with subtly different
+// run its own raw status hook (bridge / TCI / RADE) with subtly different
 // filtering — RADE's had no client_handle check at all, so an external DAX
 // app's broadcast stream status could shadow the channel and suppress our own
 // `stream create` (state-machines.md §7.2: stream statuses go to ALL clients).
@@ -11441,14 +11441,8 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
 void RadioModel::onStatusReceived(const QString& object,
                                   const QMap<QString, QString>& kvs)
 {
-    const QPointer<RadioModel> alive(this);
-    const RadioControlSession original = controlSession();
     // Stream lifecycle (audio streams, DAX TX ownership, NetCW) was decoded by
     // the status ingress before this line reached the model.
-    // Relay to listeners (e.g., MemoryDialog)
-    emit statusReceived(object, kvs);
-    if (!alive || controlSession() != original) { return; }
-
     handleRemoteAudioRxStreamStatus(object, kvs);
     traceDaxStreamStatus(object, kvs);
     handleDaxRxStreamRegistry(object, kvs);
@@ -12135,6 +12129,7 @@ void RadioModel::onStatusReceived(const QString& object,
             if (kvs.contains("tunepower"))    b.tunePower = kvs["tunepower"].toInt();
             if (kvs.contains("inhibit"))      b.inhibit   = kvs["inhibit"] == "1";
             if (kvs.contains("hwalc_enabled"))b.hwAlc     = kvs["hwalc_enabled"] == "1";
+            emit txBandSettingsChanged();
         }
         return;
     }
@@ -12159,6 +12154,7 @@ void RadioModel::onStatusReceived(const QString& object,
             if (kvs.contains("tx1_enabled"))     b.tx1      = kvs["tx1_enabled"] == "1";
             if (kvs.contains("tx2_enabled"))     b.tx2      = kvs["tx2_enabled"] == "1";
             if (kvs.contains("tx3_enabled"))     b.tx3      = kvs["tx3_enabled"] == "1";
+            emit txBandSettingsChanged();
         }
         if (m_flexBackend) {
             m_flexBackend->decodeTuneOutputStatus(object, kvs);

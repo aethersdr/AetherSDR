@@ -1562,13 +1562,13 @@ signals:
     void digitalVoiceWaveformMetricsChanged();
     void digitalVoiceWaveformHealthChanged();
     void digitalVoiceWaveformDegradationStarted(const QString& message);
-    // Generic status relay — for dialogs that need to listen for specific objects.
-    void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
     // The radio's frequency calibration: running (done=false) or finished,
     // with the error that status line reported (empty when it carried none).
     void frequencyCalibrationReported(bool done, const QString& freqErrorPpb);
     // The radio's report on a firmware image it received (FirmwareUploader).
     void firmwareUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
+    // txBandSettings() changed (a "transmit band" or "interlock band" status).
+    void txBandSettingsChanged();
     // Emitted when the radio sends an M-prefix informational, warning, error,
     // or fatal message.  Severity comes from the high bits of the message
     // number per FlexLib Radio.cs:4498-4516.  MainWindow uses it to decide

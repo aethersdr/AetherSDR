@@ -497,6 +497,10 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("audio-control-routing"));
     qputenv("XDG_RUNTIME_DIR", profile.path().toUtf8());
+    // Each IQ stream builds a pipe, which loads module-pipe-source through
+    // pactl on the model's worker thread; answer it here so the host's
+    // PipeWire is never touched (#6726).
+    DaxIqModel::setPactlRunnerForTest([](const QStringList&) { return quint32{0}; });
     QCoreApplication app(argc, argv);
     encoding();
     identityAndReplies();
