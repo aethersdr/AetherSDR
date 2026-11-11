@@ -4496,7 +4496,8 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     if (!m_txAllowed) {
         if (key)
             qWarning() << "Hl2Backend: key refused — automation bridge is active "
-                          "without AETHER_AUTOMATION_ALLOW_TX";
+                          "without AETHER_AUTOMATION_ALLOW_TX"
+                          ", or with AETHER_AUTOMATION_NO_TX";
         return;
     }
     // A key with no running session is refused here too, so this backend never
@@ -4788,7 +4789,8 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const 
     if (!m_txAllowed) {
         if (down) {
             qWarning() << "Hl2Backend: CW key refused — automation bridge is active "
-                          "without AETHER_AUTOMATION_ALLOW_TX";
+                          "without AETHER_AUTOMATION_ALLOW_TX"
+                          ", or with AETHER_AUTOMATION_NO_TX";
         }
         return;
     }
