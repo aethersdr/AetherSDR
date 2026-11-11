@@ -405,8 +405,6 @@ void profileClosePaths()
     }
 }
 
-// Delete asks a CanonMessageBox with Cancel as the default: Cancel, Return,
-// Esc and closing it send nothing; Delete sends the removal.
 // A destructive profile question (Delete, or CW Reset) asks a CanonMessageBox
 // with Cancel as the default: Cancel, Return, Esc and closing it send nothing;
 // only the destructive button acts.
@@ -418,7 +416,7 @@ void profileDestructiveConfirm(const QString& type, const QString& buttonName,
     RadioSetupTestBackend* backend = installRadioSetupBackend(model);
     // CW profiles need SmartSDR 4.3.16; the page is dimmed without it.
     backend->setFirmwareVersionProvider([] { return QStringLiteral("4.3.16.42034"); });
-    ProfileDelta delta; delta.type = type == "global" ? QStringLiteral("global") : type;
+    ProfileDelta delta; delta.type = type;
     delta.list = QStringList{"Doomed"};
     StoredControlTestAccess::profile(model, delta);
     ProfileManagerDialog dialog(&model);

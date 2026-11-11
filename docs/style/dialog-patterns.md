@@ -285,7 +285,7 @@ null when the box is closed any other way; the default button is outlined in
 cyan and a destructive one is drawn in gold. `setDetailedText()` adds a
 read-only list to scroll and copy below the texts, in place of `QMessageBox`'s
 detailed text. The CTR2 window's questions, the Keyboard Shortcuts editor's
-questions, the Net Scheduler's, the Profile Manager's and Reset Settings' failure notice use it. Reset Settings'
+questions, the Net Scheduler's and Profile Manager's questions and notices, and Reset Settings' failure notice use it. Reset Settings'
 confirmation lists the files it will remove in a nested list, which the box has
 no place for, so it is its own `CanonWindow` dialog (`ResetSettingsPrompts`)
 with the same buttons.
