@@ -1,4 +1,5 @@
 // Production encoders and model admission, with unopened transports only.
+#include "core/backends/flex/FlexGraphicEqStatus.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "PanControlTestFixture.h"
@@ -463,7 +464,7 @@ void remoteRxAndNativeAudio()
     int requests = 0;
     QObject::connect(&native.equalizerModel(), &EqualizerModel::controlRequested, &native,
         [&requests](const GraphicEqRequest&) { ++requests; });
-    native.equalizerModel().applyRxEqStatus({{"63Hz", "3"}, {"mode", "1"}});
+    native.equalizerModel().applyEqStatus(flexGraphicEqStatus(GraphicEqRequest::Path::Receive, {{"63Hz", "3"}, {"mode", "1"}}));
     check(requests == 0, "radio EQ observation never feeds back a control request");
     std::thread offThread([&native] {
         native.equalizerModel().setRxBand(EqualizerModel::B63, 5);

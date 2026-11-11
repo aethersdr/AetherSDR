@@ -1713,6 +1713,9 @@ void RadioModel::wireStatusIngress(quint64 generation)
                 [this, generation](const FirmwareUpdateStatus& status) {
             if (generation == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
         });
+        connect(flex, &FlexBackend::graphicEqStatusObserved, this, [this, generation](const GraphicEqStatus& eq) {
+            if (generation == m_backendReceiverGeneration) { m_equalizerModel.applyEqStatus(eq); }
+        });
         connect(flex, &FlexBackend::cwxStatusObserved, this, [this, generation](const CwxStatusDelta& cwx) {
             if (generation == m_backendReceiverGeneration) { m_cwxModel.applyStatusDelta(cwx); }
         });
@@ -2368,6 +2371,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<StreamStatusDelta>();
     qRegisterMetaType<SpotStatusDelta>();
     qRegisterMetaType<CwxStatusDelta>();
+    qRegisterMetaType<GraphicEqStatus>();
     qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
@@ -12312,14 +12316,9 @@ void RadioModel::onStatusReceived(const QString& object,
     }
 
     // EQ status: "eq txsc mode=1 63Hz=0 125Hz=5 ..." or "eq rxsc ..."
-    if (object == "eq txsc") {
-        m_equalizerModel.applyTxEqStatus(kvs);
-        return;
-    }
-    if (object == "eq rxsc") {
-        m_equalizerModel.applyRxEqStatus(kvs);
-        return;
-    }
+    // Graphic EQ status ("eq txsc …", "eq rxsc …") is decoded by the status
+    // ingress.
+    if (object == "eq txsc" || object == "eq rxsc") { return; }
 
     // TNF status ("tnf <id> …") is decoded by the status ingress into the
     // seam's notchChanged/notchRemoved, which reach TnfModel like any

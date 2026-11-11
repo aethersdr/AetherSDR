@@ -5,6 +5,7 @@
 
 #include <QMetaType>
 #include <QSet>
+#include <array>
 #include <optional>
 
 namespace AetherSDR {
@@ -80,6 +81,14 @@ struct GraphicEqRequest {
         return field == Field::BandGain && band >= 0 && band < 8 && value >= -10 && value <= 10;
     }
 };
+
+// One graphic EQ path as the radio reported it, present-only. Bands are
+// GraphicEqRequest band indices (0 = 63 Hz … 7 = 8 kHz).
+struct GraphicEqStatus {
+    GraphicEqRequest::Path path{GraphicEqRequest::Path::Receive};
+    std::optional<bool> enabled;
+    std::array<std::optional<int>, 8> bands{};
+};
 struct GraphicEqControl {
     QSet<GraphicEqRequest::Path> paths;
 };
@@ -89,3 +98,4 @@ struct GraphicEqControl {
 Q_DECLARE_METATYPE(AetherSDR::AudioStreamRequest)
 Q_DECLARE_METATYPE(AetherSDR::GraphicEqRequest)
 Q_DECLARE_METATYPE(AetherSDR::AudioStreamDelta)
+Q_DECLARE_METATYPE(AetherSDR::GraphicEqStatus)

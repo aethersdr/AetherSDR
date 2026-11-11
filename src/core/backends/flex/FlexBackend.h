@@ -301,6 +301,8 @@ signals:
     void spotStatusObserved(const AetherSDR::SpotStatusDelta& delta);
     // The radio's CWX status (Flex-only; CwxModel applies it).
     void cwxStatusObserved(const AetherSDR::CwxStatusDelta& delta);
+    // The radio's graphic EQ status (Flex-only; EqualizerModel applies it).
+    void graphicEqStatusObserved(const AetherSDR::GraphicEqStatus& status);
 
 private:
     void send(const QString& cmd);

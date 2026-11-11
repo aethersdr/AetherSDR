@@ -49,8 +49,8 @@ public:
     int  rxBand(Band b) const { return m_rxBands[b]; }
 
     // ── Status parsing (called from RadioModel) ──────────────────────────────
-    void applyTxEqStatus(const QMap<QString, QString>& kvs);
-    void applyRxEqStatus(const QMap<QString, QString>& kvs);
+    // One EQ path as the radio reported it (the Flex status ingress decodes it).
+    void applyEqStatus(const GraphicEqStatus& status);
 
     // ── Commands (emit commandReady) ─────────────────────────────────────────
     void setTxEnabled(bool on);
@@ -88,7 +88,6 @@ signals:
     void operatorEdited();
 
 private:
-    void applyEqStatus(const QMap<QString, QString>& kvs, bool isTx);
 
     bool m_txEnabled{false};
     bool m_rxEnabled{false};

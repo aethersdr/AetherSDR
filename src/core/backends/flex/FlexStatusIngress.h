@@ -150,6 +150,7 @@ signals:
     void notchRemoved(int notchId);
     void spotStatusObserved(const AetherSDR::SpotStatusDelta& delta);
     void cwxStatusObserved(const AetherSDR::CwxStatusDelta& delta);
+    void graphicEqStatusObserved(const AetherSDR::GraphicEqStatus& status);
     void tuneOutputSuppressionObserved(int bandId, bool suppressed);
 
 private:
