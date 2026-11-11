@@ -277,7 +277,7 @@ void reentrantCloseAsksOnce()
             clickButton("Keep Transferring")(question);
         }
     });
-    dialog.close();
+    dialog.reject();
     qApp->removeEventFilter(&counter);
     check(driver.seen && counter.count == 1 && dialog.isVisible() && transfer->isBusy(),
           "a programmatic close during the busy question does not stack another question");

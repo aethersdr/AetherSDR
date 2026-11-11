@@ -212,7 +212,7 @@ void FlexWaveformModel::requestUninstall(const QString& name)
         qWarning() << "FlexWaveformModel: refusing unsafe waveform uninstall name:" << name;
         return;
     }
-    emit commandReady(QStringLiteral("waveform uninstall ") + name);
+    emit controlRequested({WaveformAction::Uninstall, name});
 }
 
 void FlexWaveformModel::requestRemoveContainer(const QString& name)
@@ -221,17 +221,13 @@ void FlexWaveformModel::requestRemoveContainer(const QString& name)
         qWarning() << "FlexWaveformModel: refusing unsafe waveform container removal name:" << name;
         return;
     }
-    emit commandReady(QStringLiteral("waveform remove_container ") + name);
+    emit controlRequested({WaveformAction::RemoveContainer, name});
 }
 
-void FlexWaveformModel::handleCommandReply(const QString& cmd, int code, const QString& body)
+void FlexWaveformModel::handleCommandReply(const WaveformRequest& request, const RadioControlReply& reply)
 {
-    // cmd is one this model emitted: "waveform <action> <name>".
-    const QStringList parts = cmd.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    if (parts.size() != 3 || parts.at(0) != QLatin1String("waveform")) {
-        return;
-    }
-    emit commandFinished(parts.at(1), parts.at(2), code == 0, body.trimmed());
+    emit commandFinished(waveformActionVerb(request.action), request.name, reply.kind == RadioControlReply::Kind::Accepted,
+                         reply.message.trimmed());
 }
 
 void FlexWaveformModel::requestRestart(const QString& name)
@@ -240,7 +236,7 @@ void FlexWaveformModel::requestRestart(const QString& name)
         qWarning() << "FlexWaveformModel: refusing unsafe waveform restart name:" << name;
         return;
     }
-    emit commandReady(QStringLiteral("waveform restart ") + name);
+    emit controlRequested({WaveformAction::Restart, name});
 }
 
 } // namespace AetherSDR
