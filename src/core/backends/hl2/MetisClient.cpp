@@ -1548,8 +1548,24 @@ bool MetisClient::txIqPrimeHolds()
     return false;
 }
 
+void MetisClient::trimTxIqAfterUnderflow()
+{
+    if (!m_txIqTrimArmed || m_txIq.size() <= kTxPrimeTargetSamples + kTxTrimMarginSamples)
+        return;
+    // Oldest first, as overflow does: one skip, then the over runs at the primed depth.
+    const std::size_t drop = m_txIq.size() - kTxPrimeTargetSamples;
+    m_txIq.erase(m_txIq.begin(), m_txIq.begin() + static_cast<std::ptrdiff_t>(drop));
+    m_txTrimSamples += drop;
+    ++m_txTrimEvents;
+    qCDebug(lcHl2Tx) << "HL2 tx fifo: backlog after a mid-over starvation trimmed by" << drop
+                     << "sample(s) to the prime target" << kTxPrimeTargetSamples
+                     << "(totals since process start:" << m_txTrimEvents << "trim(s) /"
+                     << m_txTrimSamples << "samples).";
+}
+
 void MetisClient::reportTxUnderflowRun()
 {
+    m_txIqTrimArmed = false;
     m_txUnderflowRunQuietPackets = 0;
     if (m_txUnderflowRunPackets == 0)
         return;
@@ -1776,12 +1792,16 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
             m_txUnderflowRunSamples += shortBy;
             // Still starving: whatever gap was accumulating was not a recovery.
             m_txUnderflowRunQuietPackets = 0;
+            if (!m_keyDownReportPending)
+                m_txIqTrimArmed = true;
         } else if (m_txUnderflowRunPackets > 0) {
             // A full packet does NOT end the run on its own -- see
             // kUnderflowRunQuietPackets. It only starts the clock on the gap
             // that will.
-            if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets)
+            if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets) {
+                trimTxIqAfterUnderflow();
                 reportTxUnderflowRun();
+            }
         }
         if (n > 0 && m_keyDownReportPending)
             reportKeyDown();

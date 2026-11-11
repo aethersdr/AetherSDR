@@ -26,6 +26,11 @@ struct MetisClientTestAccess {
     static constexpr int ep2AudioRateHz() { return MetisClient::kEp2AudioRateHz; }
     // A session without a socket: the client keys only while running.
     static void setStreaming(MetisClient& client) { client.m_running = true; }
+    // The queue's own bounds, read rather than retyped.
+    static constexpr std::size_t primeTarget() { return MetisClient::kTxPrimeTargetSamples; }
+    static constexpr std::size_t trimMargin() { return MetisClient::kTxTrimMarginSamples; }
+    static constexpr std::size_t queueMax() { return MetisClient::kTxQueueMax; }
+    static constexpr std::uint64_t quietPackets() { return MetisClient::kUnderflowRunQuietPackets; }
 };
 }
 
@@ -98,6 +103,14 @@ struct OverResult {
     bool everyPacketKeyed = true;
     bool sequenceIntact = true;   // every sample once, in order
     long long realSamples = 0;
+    int skips = 0;                // forward jumps in the sample sequence (drops)
+    long long skipped = 0;        // samples the jumps passed over
+    std::uint64_t trimSamples = 0;
+    std::uint64_t trimEvents = 0;
+    std::uint64_t overflowSamples = 0;
+    std::vector<std::size_t> depth;   // queue depth after each packet
+    std::vector<long long> arrivalTick;   // tick each block was queued on
+    std::vector<long long> gapEndTick;    // tick each mid-over gap closed on
 };
 
 // One over. `lateness[j]` is how late block j is, in samples, against a
@@ -121,7 +134,11 @@ OverResult runOver(const std::vector<int>& lateness)
     // queue was holding. Trailing zeros after the last real sample are the end
     // of the over and are not counted: a gap is closed by a real sample.
     const long long total = blocks * block;
-    for (long long tick = 0; r.realSamples < total && tick < 4 * total / kPacket; ++tick) {
+    long long expected = 0;       // producer index the next real sample should carry
+    for (long long tick = 0;
+         r.realSamples + static_cast<long long>(client.txTrimSamples() + client.txOverflowSamples()) < total
+         && tick < 4 * total / kPacket;
+         ++tick) {
         const long long now = tick * kPacket;
         while (nextBlock < blocks
                && (nextBlock + 1) * block + lateness[static_cast<std::size_t>(nextBlock)] <= now) {
@@ -129,12 +146,14 @@ OverResult runOver(const std::vector<int>& lateness)
             for (int n = 0; n < block; ++n)
                 iq[static_cast<std::size_t>(n)] = producerSample(nextBlock * block + n);
             client.queueTxIq(iq, tx.context);
+            r.arrivalTick.push_back(tick);
             if (r.firstArrival < 0)
                 r.firstArrival = now;
             ++nextBlock;
         }
         const auto pkt = client.buildNextControlPacket();
         r.everyPacketKeyed = r.everyPacketKeyed && anyFrameKeyed(pkt);
+        r.depth.push_back(client.txQueueDepth());
         const auto wire = decodeIq(pkt);
         for (std::size_t s = 0; s < wire.size(); ++s) {
             if (wire[s].i == 0 && wire[s].q == 0) {
@@ -145,15 +164,26 @@ OverResult runOver(const std::vector<int>& lateness)
                 r.firstReal = now + static_cast<long long>(s);
             } else if (zeroRun > 0) {
                 ++r.gaps;
+                r.gapEndTick.push_back(tick);
                 r.gapSamples += zeroRun;
                 r.longestGap = std::max(r.longestGap, zeroRun);
             }
             zeroRun = 0;
-            if (wire[s].i != counterOf(r.realSamples))
+            if (wire[s].i != counterOf(expected)) {
                 r.sequenceIntact = false;
+                // A drop is a forward jump; the counter is read modulo its period.
+                const long long jump = (wire[s].i - counterOf(expected) + kCounterPeriod) % kCounterPeriod;
+                ++r.skips;
+                r.skipped += jump;
+                expected += jump;
+            }
+            ++expected;
             ++r.realSamples;
         }
     }
+    r.trimSamples = client.txTrimSamples();
+    r.trimEvents = client.txTrimEvents();
+    r.overflowSamples = client.txOverflowSamples();
     return r;
 }
 
@@ -186,6 +216,7 @@ int main(int argc, char** argv)
         check(r.sequenceIntact && r.realSamples == static_cast<long long>(blocksInOver()) * block,
               "CONTROL: every sample of an on-time over reaches the wire once, in order");
         check(r.everyPacketKeyed, "CONTROL: the over is keyed from its first packet");
+        check(r.trimEvents == 0 && r.trimSamples == 0, "CONTROL: an on-time over is never trimmed");
     }
 
     // ---- THE MEASURED OVERS: d167 leg C, ten 3 s overs ----
@@ -207,6 +238,7 @@ int main(int argc, char** argv)
         long long worstHeld = 0;
         bool intact = true;
         bool keyed = true;
+        std::uint64_t trimmed = 0;
         for (const auto& over : kMeasuredOversMs) {
             std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
             int late = 0;
@@ -225,6 +257,7 @@ int main(int argc, char** argv)
             intact = intact && r.sequenceIntact
                      && r.realSamples == static_cast<long long>(blocksInOver()) * block;
             keyed = keyed && r.everyPacketKeyed;
+            trimmed += r.trimSamples;
         }
         std::fprintf(stderr,
             "PROBE  measured lateness (d167 leg C, 10 overs): %d gap(s) in %d of 10 overs,"
@@ -237,6 +270,7 @@ int main(int argc, char** argv)
               "puts NO keyed zeros in mid-over");
         check(intact, "late blocks are delayed, never lost, repeated or reordered");
         check(keyed, "MOX is on the first packet of the over and every one after it");
+        check(trimmed == 0, "the measured lateness never trims the queue");
         // WHAT THE DEPTH MAY COST. Two blocks plus the packet it is released
         // on: that is the latency #6052 puts to the maintainer, and a deeper
         // queue is a different proposal.
@@ -267,6 +301,7 @@ int main(int argc, char** argv)
                            "in mid-over");
         check(r.sequenceIntact && r.realSamples == static_cast<long long>(blocksInOver()) * block,
               "and every sample still reaches the wire once, in order");
+        check(r.trimSamples == 0, "and bounded jitter is never trimmed");
     }
 
     // ---- POSITIVE CONTROL: the gap detector still sees a gap ----
@@ -287,6 +322,69 @@ int main(int argc, char** argv)
               "POSITIVE CONTROL: a block later than the queue is deep is a gap, as long as "
               "the lateness less whatever depth the queue had");
         check(r.sequenceIntact, "and even then nothing is lost");
+        check(r.trimEvents == 0,
+              "a starvation followed by on-time blocks leaves no backlog, so nothing is trimmed");
+    }
+
+    // ---- A PAUSE THEN A BURST (hl2-lab d226): the backlog is trimmed once ----
+    //
+    // Delivery stops for `pauseMs` mid-over; every block due in that time then
+    // arrives in one burst. Untrimmed, the backlog rides as latency to the end
+    // of the over; the trim must bring the depth back to the prime target once
+    // the starvation episode has ended, and leave it there.
+    const std::size_t target = MetisClientTestAccess::primeTarget();
+    const std::size_t ceiling = target + MetisClientTestAccess::trimMargin();
+    const auto quiet = static_cast<long long>(MetisClientTestAccess::quietPackets());
+    for (const double pauseMs : {190.0, 300.0}) {
+        const int stalled = 40;   // the first block held back (~0.85 s into the over)
+        const long long resume = (stalled + 1) * static_cast<long long>(block) + msToSamples(pauseMs);
+        std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
+        for (std::size_t j = stalled; j < lateness.size(); ++j) {
+            const long long due = (static_cast<long long>(j) + 1) * block;
+            if (due < resume)
+                lateness[j] = static_cast<int>(resume - due);
+        }
+        const OverResult r = runOver(lateness);
+        const long long burstTick = r.arrivalTick[static_cast<std::size_t>(stalled)];
+        const long long lastTick = r.arrivalTick.back();
+        std::size_t peak = 0;
+        std::size_t after = 0;
+        for (long long t = burstTick; t < lastTick; ++t) {
+            const std::size_t d = r.depth[static_cast<std::size_t>(t)];
+            peak = std::max(peak, d);
+            if (t > burstTick + quiet)
+                after = std::max(after, d);
+        }
+        int gapsAfterBurst = 0;
+        for (const long long t : r.gapEndTick)
+            gapsAfterBurst += t > burstTick ? 1 : 0;
+        std::fprintf(stderr,
+            "PROBE  %.0f ms pause then a burst: peak depth %zu (%.2f ms), depth after %lld"
+            " packets at most %zu (%.2f ms); trimmed %llu sample(s) in %llu trim(s),"
+            " overflow %llu, %d skip(s) of %lld sample(s), %d gap(s) after the burst\n",
+            pauseMs, peak, samplesToMs(static_cast<long long>(peak)), quiet + 1, after,
+            samplesToMs(static_cast<long long>(after)),
+            static_cast<unsigned long long>(r.trimSamples),
+            static_cast<unsigned long long>(r.trimEvents),
+            static_cast<unsigned long long>(r.overflowSamples), r.skips, r.skipped,
+            gapsAfterBurst);
+        check(peak > ceiling, "CONTROL: the burst leaves a backlog above the prime target plus margin");
+        check(r.gaps >= 1, "CONTROL: the pause is a keyed gap on the wire");
+        check(after <= ceiling,
+              "once the starvation episode ends, the depth returns to the prime target plus "
+              "margin and stays there to the end of the over");
+        check(r.trimEvents == 1, "the backlog is trimmed exactly once");
+        check(r.trimSamples > 0
+                  && static_cast<long long>(r.trimSamples + r.overflowSamples) == r.skipped,
+              "every sample missing from the wire is counted, as trim or overflow");
+        check(gapsAfterBurst == 0, "the trim adds no keyed silence");
+        if (pauseMs < 200.0) {
+            check(r.overflowSamples == 0 && r.skips == 1,
+                  "a 190 ms backlog stays under the cap: the trim is the only discontinuity");
+        } else {
+            check(peak + kPacket >= MetisClientTestAccess::queueMax() && r.overflowSamples > 0,
+                  "CONTROL: a 300 ms backlog reaches the overflow cap, which stays the bound");
+        }
     }
 
     if (g_failures == 0)
