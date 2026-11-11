@@ -465,7 +465,7 @@ int main(int argc, char** argv)
 
         auto* path = tailing.findChild<QLabel*>(QStringLiteral("systemInfoLogPath"));
         report("the Logs tab names the file it is following",
-               path != nullptr && path->text().contains(logPath));
+               path != nullptr && path->text().contains(QDir::toNativeSeparators(logPath)));
 
         auto* view = tailing.findChild<QPlainTextEdit*>(
             QStringLiteral("systemInfoLogViewer"));
@@ -983,7 +983,9 @@ int main(int argc, char** argv)
             std::printf("  shown minimum %dx%d\n", canon.width(), canon.height());
             report("every control keeps its height at the smallest size", legible);
             report("the shown minimum height fits a 768 px screen", canon.height() <= 700);
-            canonTabs->setCurrentIndex(0);
+            if (canonTabs) {
+                canonTabs->setCurrentIndex(0);
+            }
             canon.hide();
         }
         tm.setActiveTheme(before);
