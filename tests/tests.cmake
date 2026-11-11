@@ -4824,6 +4824,47 @@ else()
 endif()
 add_test(NAME wspr_agent_test COMMAND wspr_agent_test)
 
+# PureSignal predistortion core for an on-radio waveform (tools/ps-waveform):
+# WDSP's calcc + iqc with only their own TUs (no FFTW library, no transmit
+# channel), plus the delay/NCO aligner, in a closed loop against a PA model.
+# The first test needs >= 20 dB of IMD3 improvement through a +-5 kHz TX
+# filter with a fractional loop delay and a 2 Hz NCO offset; the second pins
+# the bandwidth limit: with the filter at +-1.5 kHz, IMD3 (at +-2.1 kHz) is
+# outside it and can't be corrected. Socket-free.
+# Uses WDSP's POSIX port, so it is not built on Windows.
+if(NOT WIN32)
+    find_package(Threads REQUIRED)
+    set(PS_WAVEFORM_WDSP_SOURCES)
+    foreach(_ps_tu calcc iqc delay extrapolate nurbs nurbs_fit nurbs_spline fir utilities impulse_cache)
+        list(APPEND PS_WAVEFORM_WDSP_SOURCES third_party/wdsp/upstream/${_ps_tu}.c)
+    endforeach()
+    list(APPEND PS_WAVEFORM_WDSP_SOURCES third_party/wdsp/port/wdsp_port.c)
+    add_executable(ps_waveform_sim_test
+        tools/ps-waveform/ps_sim.c
+        tools/ps-waveform/ps_core.c
+        tools/ps-waveform/ps_align.c
+        ${PS_WAVEFORM_WDSP_SOURCES})
+    set_source_files_properties(${PS_WAVEFORM_WDSP_SOURCES}
+        TARGET_DIRECTORY ps_waveform_sim_test PROPERTIES COMPILE_OPTIONS "-w")
+    set_property(TARGET ps_waveform_sim_test PROPERTY C_STANDARD 11)
+    set_property(TARGET ps_waveform_sim_test PROPERTY C_EXTENSIONS ON)
+    target_compile_options(ps_waveform_sim_test PRIVATE
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wdsp/port/include/wdsp_port.h")
+    target_include_directories(ps_waveform_sim_test PRIVATE
+        third_party/wdsp/upstream third_party/wdsp/port/include third_party/wdsp/include
+        ${FFTW3_INCLUDE_DIRS})
+    # The radio build strips the FFTW-using functions these TUs carry but the
+    # core never calls; on the host it is simpler to link FFTW, as WDSP does.
+    target_link_directories(ps_waveform_sim_test PRIVATE ${FFTW3_LIBRARY_DIRS})
+    target_link_libraries(ps_waveform_sim_test PRIVATE ${FFTW3_LIBRARIES} Threads::Threads m)
+    add_test(NAME ps_waveform_sim_test COMMAND ps_waveform_sim_test
+        --filter-hz 5000 --frac-delay 0.37 --offset-hz 2 --seconds 8 --expect-imd3-gain 20)
+    add_test(NAME ps_waveform_sim_bandwidth_limit_test COMMAND ps_waveform_sim_test
+        --filter-hz 1500 --seconds 8 --expect-imd3-gain-below 5)
+    set_tests_properties(ps_waveform_sim_test ps_waveform_sim_bandwidth_limit_test
+        PROPERTIES TIMEOUT 120)
+endif()
+
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,
 # finder patterns, theme-invariant colors), socket-free.
 add_executable(qr_code_image_test
