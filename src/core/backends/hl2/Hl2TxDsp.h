@@ -54,7 +54,10 @@ public:
     struct Config {
         int inputSampleRateHz = 24000;    // AudioEngine TX audio rate
         int outputSampleRateHz = 48000;   // EP2, fixed
-        int dspBlockSize = 512;           // input samples per WDSP block
+        // Input samples per WDSP block: 10.67 ms at 24 kHz. The start of every
+        // over waits one block to fill and one block of TXA output pre-load, so
+        // the block is kept short (#6052); kTxFilterTaps is independent of it.
+        int dspBlockSize = 256;
         WdspChannel::Mode mode = WdspChannel::Mode::Usb;
         // SSB transmit passband. Narrower than the RX default on purpose:
         // splatter outside this is other people's problem, not ours.
@@ -253,8 +256,8 @@ private:
     unsigned long long m_txBlocks = 0;
     unsigned long long m_txFaultBlocks = 0;
 
-    // Exchange pacing. One capture delivery can carry several blocks (two per
-    // delivery at 24 kHz), and a back-to-back exchange underruns. Levelled
+    // Exchange pacing. One capture delivery can carry several blocks (four per
+    // Qt delivery from a 24 kHz device), and a back-to-back exchange underruns. Levelled
     // audio waits here; a block is exchanged only when outputReady() says the
     // previous block's output is out, and a 1 ms timer retries the rest. A head
     // block still not ready after exchangeStallNs() is dropped, not exchanged.

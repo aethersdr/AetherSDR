@@ -27,6 +27,7 @@
 #include <QStringList>
 #include <QThread>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -1418,14 +1419,14 @@ int main(int argc, char** argv)
                  * static_cast<std::uint64_t>(MetisClientTestAccess::ep2AudioRateHz()))
             / (static_cast<std::uint64_t>(chain.inputSampleRateHz)
                  * static_cast<std::uint64_t>(kTxSamplesPerPacket));
-        // PINNED at the geometry this product actually ships: 512 input samples
-        // at 24 kHz is 21.33 ms, and an EP2 packet is 126 samples at 48 kHz,
-        // which is 2.625 ms. 21.33 / 2.625 = 8.127, so EIGHT whole packets --
-        // 1008 samples, about 21 ms -- of substituted silence open every clean
+        // PINNED at the geometry this product actually ships: 256 input samples
+        // at 24 kHz is 10.67 ms, and an EP2 packet is 126 samples at 48 kHz,
+        // which is 2.625 ms. 10.67 / 2.625 = 4.06, so FOUR whole packets --
+        // 504 samples, about 10.5 ms -- of substituted silence open every clean
         // over, against a tail of at most 125 samples. If the block size or
         // either rate changes, this assertion is where it says so.
-        check(preRollPackets == 8,
-              "THE FLOOR (PRE-ROLL HALF): one Hl2TxDsp input block is eight EP2 packets");
+        check(preRollPackets == 4,
+              "THE FLOOR (PRE-ROLL HALF): one Hl2TxDsp input block is four EP2 packets");
 
         TxTestAuthority tx;
         ScopedTxFifoLog log;
@@ -1578,8 +1579,9 @@ int main(int argc, char** argv)
         // ---- THE PRIME (#6052): the first samples of an over ----
         // An empty queue is still the counted pre-roll above. Once a block
         // lands, keyed packets are silence, consume nothing and count no
-        // underflow until three blocks are queued (one draining, two margin).
-        // The block is derived from the real Hl2TxDsp::Config.
+        // underflow until one draining block plus 42.67 ms of margin is queued.
+        // The block is derived from the real Hl2TxDsp::Config; the margin is
+        // the decision, pinned in milliseconds so it does not follow the block.
         const Hl2TxDsp::Config chain{};
         const std::size_t block =
             static_cast<std::size_t>(chain.dspBlockSize)
@@ -1587,8 +1589,14 @@ int main(int argc, char** argv)
             / static_cast<std::size_t>(chain.inputSampleRateHz);
         check(MetisClientTestAccess::primeBlock() == block,
               "THE PRIME: the block MetisClient primes in is Hl2TxDsp's own, at the EP2 rate");
-        check(MetisClientTestAccess::primeTarget() == 3 * block,
-              "THE PRIME: the target is three blocks -- one draining, two of margin");
+        constexpr double kMarginMs = 128.0 / 3.0;   // 42.67 ms, #6052
+        const std::size_t margin = static_cast<std::size_t>(std::lround(
+            kMarginMs * MetisClientTestAccess::ep2AudioRateHz() / 1000.0));
+        check(MetisClientTestAccess::primeTarget() == block + margin,
+              "THE PRIME: the target is one draining block plus 42.67 ms of margin");
+        check(margin % block == 0,
+              "THE PRIME: the margin is a whole number of blocks, so the hold ends on a block");
+        const std::size_t targetBlocks = MetisClientTestAccess::primeTarget() / block;
         const std::vector<std::complex<float>> oneBlock(block, std::complex<float>(0.25f, -0.25f));
         const auto packet = static_cast<std::size_t>(kTxSamplesPerPacket);
 
@@ -1608,19 +1616,23 @@ int main(int argc, char** argv)
               "THE PRIME: a hold is not an underflow -- nothing was missing");
         check(over.txPrimeHoldPackets() == 1, "THE PRIME: it is counted as a hold instead");
 
-        over.queueTxIq(oneBlock, tx.context);            // block 2
-        check(!payloadNonZero(over.buildNextControlPacket()) && over.txQueueDepth() == 2 * block,
-              "THE PRIME: two blocks are still short of the target -- one block of margin "
-              "is not what was chosen");
+        for (std::size_t k = 2; k < targetBlocks; ++k) {  // blocks 2 .. one short
+            over.queueTxIq(oneBlock, tx.context);
+            check(!payloadNonZero(over.buildNextControlPacket()) && over.txQueueDepth() == k * block,
+                  "THE PRIME: every block short of the target is still held -- one block "
+                  "less margin is not what was chosen");
+        }
 
-        over.queueTxIq(oneBlock, tx.context);            // block 3: the target
+        over.queueTxIq(oneBlock, tx.context);            // the target
         const auto first = over.buildNextControlPacket();
         const auto firstShape = ep2IqShape(first);
         check(firstShape.carryingIq == kTxSamplesPerPacket && firstShape.firstSilent < 0,
               "THE PRIME: at the target the next packet is a FULL packet of IQ");
-        check(over.txQueueDepth() == 3 * block - packet, "THE PRIME: and the queue drains from there");
-        check(over.txPrimeHoldPackets() == 2 && over.txPrimeDeadlineReleases() == 0,
-              "THE PRIME: two packets were held, and the target let it go, not the deadline");
+        check(over.txQueueDepth() == MetisClientTestAccess::primeTarget() - packet,
+              "THE PRIME: and the queue drains from there");
+        check(over.txPrimeHoldPackets() == targetBlocks - 1 && over.txPrimeDeadlineReleases() == 0,
+              "THE PRIME: one packet per short block was held, and the target let it go, "
+              "not the deadline");
         check(log.primeLines().size() == 1, "THE PRIME: one log line when it lets go");
 
         // NOT DEFENDED. Below the target again, the queue keeps draining: the
@@ -1629,9 +1641,9 @@ int main(int argc, char** argv)
             check(payloadNonZero(over.buildNextControlPacket()),
                   "THE PRIME: once let go, a queue below the target still drains");
         const auto tail = ep2IqShape(over.buildNextControlPacket());
-        check(tail.carryingIq == static_cast<int>(3 * block % packet),
+        check(tail.carryingIq == static_cast<int>(MetisClientTestAccess::primeTarget() % packet),
               "THE PRIME: down to the last short packet, which is not held either");
-        check(over.txPrimeHoldPackets() == 2 && log.primeLines().size() == 1,
+        check(over.txPrimeHoldPackets() == targetBlocks - 1 && log.primeLines().size() == 1,
               "THE PRIME: no second hold and no second line in the same over");
 
         // THE KEYED EDGE ARMS IT AGAIN. Same context, no flush, queue empty:

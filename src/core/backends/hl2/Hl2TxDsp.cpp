@@ -329,7 +329,7 @@ void Hl2TxDsp::exchangeDueBlocks()
         connect(m_exchangeTimer, &QTimer::timeout, this, &Hl2TxDsp::onExchangeTimer);
     }
     // 1 ms retry: the worker needs well under a millisecond per block, and the
-    // burst's first block already queued 21.3 ms of IQ, so the host FIFO does
+    // burst's first block already queued one block of IQ, so the host FIFO does
     // not run dry while the rest wait.
     if (!m_exchangeTimer->isActive()) {
         m_exchangeTimer->start(1);
@@ -632,7 +632,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     // m_micGain (up to 40 dB apart). AudioEngine should never interleave
     // sources in one transmission (startWsprPump sets DAX TX mode; feedDaxTxAudio
     // returns while the beacon is active), but if it does, the residue
-    // (<= dspBlockSize-1 samples, ~21 ms) is dropped rather than mislevelled.
+    // (<= dspBlockSize-1 samples, ~11 ms) is dropped rather than mislevelled.
     if (source != m_lastSource && !m_inBuffer.empty()) {
         // Once per transmission, not once per block: this runs on the DSP
         // worker, and a sustained interleave would alternate every block.
