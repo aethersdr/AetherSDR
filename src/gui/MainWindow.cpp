@@ -10229,7 +10229,7 @@ void MainWindow::toggleAetherialStrip()
         m_aetherialStrip->setMonitorHasRecording(m_finalMonitor->hasRecording());
         // Seed the chain's MIC-ready + TX-active indicators (reuse the
         // tx alias declared above for the EQ cutoff seeding).
-        const bool ready = (tx.micSelection() == "PC") && !tx.daxOn();
+        const bool ready = txMicChainReady();
         m_aetherialStrip->setMicInputReady(ready);
         m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
         updateTxAudioPathNotice();

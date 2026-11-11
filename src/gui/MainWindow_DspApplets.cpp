@@ -24,7 +24,9 @@
 #include "ClientTubeEditor.h"
 #include "EqApplet.h"
 #include "PhoneApplet.h"
+#include "PanadapterStack.h"
 #include "PhoneCwApplet.h"
+#include "SpectrumWidget.h"
 #include "TitleBar.h"
 #include "ClientChainApplet.h"
 #include "MainWindowHelpers.h"
@@ -38,8 +40,11 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
-#include <QTimer>
+#include <QAccessible>
+#include <QAccessibleEvent>
 #include <QMessageBox>
+#include <QStatusBar>
+#include <QTimer>
 
 #include <memory>
 
@@ -118,6 +123,7 @@ void MainWindow::updateTxAudioPathNotice()
     bool warning = false;
 
     if (!m_radioModel.isConnected()) {
+        m_noInputVoiceKeyNotice.observe(TxAudioPathBlock::None);
         if (!pcAudioOn) {
             detail = tr("PC Audio is off. AetherTX processes a microphone "
                         "connected to this computer; a mic plugged into the "
@@ -128,6 +134,7 @@ void MainWindow::updateTxAudioPathNotice()
         }
     } else {
         const TxAudioPathBlock block = txAudioPathBlock();
+        m_noInputVoiceKeyNotice.observe(block);
         detail = txAudioPathBlockMessage(block);
         warning = block != TxAudioPathBlock::None;
         if (block == TxAudioPathBlock::PcAudio) {
@@ -169,6 +176,72 @@ void MainWindow::updateTxAudioPathNotice()
         if (m_clientTubeEditor && m_clientTubeEditor->isShowingTx()) m_clientTubeEditor->hide();
         if (m_clientPuduEditor && m_clientPuduEditor->isShowingTx()) m_clientPuduEditor->hide();
     }
+}
+
+bool MainWindow::txMicChainReady() const
+{
+    const TransmitModel& tx = m_radioModel.transmitModel();
+    return pcMicChainReady(m_radioModel.backendCapabilities(), tx.micSelection(),
+                           tx.daxOn(), m_audio && m_audio->txInputDeviceMissing());
+}
+
+void MainWindow::refreshTxMicReadyIndicators()
+{
+    const bool ready = txMicChainReady();
+    const bool txActive = ready && m_radioModel.transmitModel().isTransmitting();
+    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
+        m_appletPanel->clientChainApplet()->setMicInputReady(ready);
+        m_appletPanel->clientChainApplet()->setTxActive(txActive);
+    }
+    if (m_aetherialStrip) {
+        m_aetherialStrip->setMicInputReady(ready);
+        m_aetherialStrip->setTxActive(txActive);
+    }
+}
+
+// Advisory only: the key has already been accepted and is left alone.
+void MainWindow::noticeVoiceKeyWithoutInput()
+{
+    const SliceModel* txSlice = m_radioModel.txSlice();
+    const QString txMode = txSlice ? txSlice->mode()
+                                   : m_radioModel.transmitModel().txSliceMode();
+    const bool voiceKey = isMicVoiceKey(
+        m_radioModel.isOperatorTransmitting(),
+        m_radioModel.transmitModel().activePttSource()
+            == TransmitModel::PttSource::Wspr,
+        txMode, m_audio && m_audio->isRadeMode());
+    if (!voiceKey) {
+        return;
+    }
+    const TxAudioPathBlock block = txAudioPathBlock();
+    if (!m_noInputVoiceKeyNotice.takeVoiceKey(m_radioModel.backendCapabilities(),
+                                              block)) {
+        return;
+    }
+    const QString message = txAudioPathBlockMessage(block);
+    qCWarning(lcAudio) << "MainWindow: voice key started with no audio input device";
+    // The card is painted on the panadapter, which a screen reader cannot
+    // read (#3957), so the notice is announced as well.
+    if (QAccessible::isActive()) {
+        QAccessibleAnnouncementEvent announcement(this, message);
+        announcement.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
+        QAccessible::updateAccessibility(&announcement);
+    }
+    SpectrumWidget* where = nullptr;
+    if (m_panStack) {
+        if (txSlice && !txSlice->panId().isEmpty()) {
+            where = m_panStack->spectrum(txSlice->panId());
+        }
+        if (!where) {
+            where = m_panStack->activeSpectrum();
+        }
+    }
+    if (where) {
+        where->showNoticeCard(message, QStringLiteral("txaudio.no-input-device"),
+                              10000);
+        return;
+    }
+    statusBar()->showMessage(message, 10000);
 }
 
 QString MainWindow::activeAetherDspMethod() const
@@ -282,7 +355,19 @@ void MainWindow::wirePooDooTiles()
         // Capture starts on the audio thread; re-read the route when it
         // finds, or stops finding, an input device.
         connect(m_audio, &AudioEngine::txInputDeviceMissingChanged, this,
-                [this](bool) { updateTxAudioPathNotice(); });
+                [this](bool) {
+            updateTxAudioPathNotice();
+            // Only a host-modulated radio's MIC tile reads the device state.
+            if (hostModulatesTxAudio()) {
+                refreshTxMicReadyIndicators();
+            }
+        });
+        connect(&m_radioModel, &RadioModel::operatorTransmitChanged, this,
+                [this](bool keyed) {
+            if (keyed) {
+                noticeVoiceKeyWithoutInput();
+            }
+        });
 
         // DSP — aggregate of every client-side NR module.  These are
         // mutually exclusive in AudioEngine::processRx (chained
@@ -601,7 +686,7 @@ void MainWindow::wireDspApplets()
     // signal connections above (micStateChanged + moxChanged).
     {
         const auto& tx = m_radioModel.transmitModel();
-        const bool ready = (tx.micSelection() == "PC") && !tx.daxOn();
+        const bool ready = txMicChainReady();
         m_appletPanel->clientChainApplet()->setMicInputReady(ready);
         m_appletPanel->clientChainApplet()->setTxActive(
             ready && tx.isTransmitting());
@@ -616,8 +701,7 @@ void MainWindow::wireDspApplets()
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             this, [this](bool txActive) {
         if (!m_appletPanel || !m_appletPanel->clientChainApplet()) return;
-        const auto& tx = m_radioModel.transmitModel();
-        const bool ready = (tx.micSelection() == "PC") && !tx.daxOn();
+        const bool ready = txMicChainReady();
         m_appletPanel->clientChainApplet()->setTxActive(ready && txActive);
         if (m_aetherialStrip)
             m_aetherialStrip->setTxActive(ready && txActive);
