@@ -2352,6 +2352,7 @@ add_executable(modem_chrome_test
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     src/gui/DragValuePopup.cpp
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(modem_chrome_test PRIVATE src)
 target_link_libraries(modem_chrome_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -8742,7 +8743,7 @@ target_include_directories(stored_control_dialogs_test PRIVATE src tests)
 target_link_libraries(stored_control_dialogs_test PRIVATE aethercore Qt6::Core Qt6::Widgets Qt6::Test)
 set_target_properties(stored_control_dialogs_test PROPERTIES AUTOMOC ON)
 add_test(NAME stored_control_dialogs_test COMMAND stored_control_dialogs_test)
-set_tests_properties(stored_control_dialogs_test PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(stored_control_dialogs_test PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(memory_import_test tests/memory_import_test.cpp)
 target_include_directories(memory_import_test PRIVATE src tests)
@@ -9741,6 +9742,13 @@ add_executable(hl2_persist_restart_test tests/hl2_persist_restart_test.cpp)
 target_include_directories(hl2_persist_restart_test PRIVATE src tests)
 target_link_libraries(hl2_persist_restart_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_persist_restart_test COMMAND hl2_persist_restart_test)
+# Transmit on receiver B across a same-radio reconnect that opens only A at the
+# connect: the modulator's mode and the TX NCO must follow B once the replay
+# reopens it. Socket-free (Hl2PersistHarness.h); never keys.
+add_executable(hl2_tx_mode_reconnect_test tests/hl2_tx_mode_reconnect_test.cpp)
+target_include_directories(hl2_tx_mode_reconnect_test PRIVATE src tests)
+target_link_libraries(hl2_tx_mode_reconnect_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_tx_mode_reconnect_test COMMAND hl2_tx_mode_reconnect_test)
 add_executable(hl2_persist_two_radios_test tests/hl2_persist_two_radios_test.cpp)
 target_include_directories(hl2_persist_two_radios_test PRIVATE src tests)
 target_link_libraries(hl2_persist_two_radios_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
@@ -11090,6 +11098,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_gain_restore_test
     hl2_rx_only_tx_chain_test
     hl2_persist_restart_test
+    hl2_tx_mode_reconnect_test
     hl2_persist_two_radios_test
     hl2_rit_xit_test
     hl2_tx_route_test

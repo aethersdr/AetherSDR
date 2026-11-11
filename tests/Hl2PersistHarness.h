@@ -21,6 +21,8 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisClient.h"
+#include "core/backends/hl2/MetisProtocol.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 
 #include "TestDspBuildWait.h"
 
@@ -52,6 +54,7 @@ struct MetisClientTestAccess {
         };
     }
     static bool holdsSocket(const MetisClient& c) { return c.m_socket != nullptr; }
+    static Cc txFreqCc(const MetisClient& c) { return c.m_ccTxFreq; }
 };
 
 struct Hl2PersistTestAccess {
@@ -92,6 +95,27 @@ struct Hl2PersistTestAccess {
         return true;
     }
     static int receiverCount(const Hl2Backend& b) { return static_cast<int>(b.m_rx.size()); }
+    static int txDdc(const Hl2Backend& b) { return b.m_txDdc; }
+    // What the modulator was last told, read on its own thread so every queued
+    // setMode/setFilter posted before this call has run.
+    static Hl2TxDsp::Config txDspConfig(Hl2Backend& b)
+    {
+        Hl2TxDsp::Config out;
+        QMetaObject::invokeMethod(b.m_txDsp, [dsp = b.m_txDsp, &out] { out = dsp->config(); },
+                                  Qt::BlockingQueuedConnection);
+        return out;
+    }
+    // The TX NCO command word MetisClient holds (addr 0x01), and the word a
+    // given true-RF frequency should produce.
+    static Cc txNcoCc(Hl2Backend& b)
+    {
+        Cc out{};
+        QMetaObject::invokeMethod(b.m_metis, [metis = b.m_metis, &out] {
+            out = MetisClientTestAccess::txFreqCc(*metis);
+        }, Qt::BlockingQueuedConnection);
+        return out;
+    }
+    static Cc expectedTxCc(const Hl2Backend& b, double hz) { return ccTxFreq(b.ncoCommandHz(hz)); }
     static QString panIdOf(const Hl2Backend& b, int ddc)
     {
         const Hl2ReceiverIds* ids = b.m_ids.byDdc(ddc);
