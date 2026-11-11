@@ -347,6 +347,7 @@ bool MetisClient::start(const Params& params)
     // The ATU request cannot survive a connect either. The radio boots with the
     // bit clear, and re-asserting a tune nobody asked for would start one.
     m_atuTune = false;
+    resetTxDriveForSession();
     // A CONNECT is where the gate's standing intent is cleared, and one of only
     // two places: a receiver-count restart CARRIES it (Params::bandscope), a
     // stop ends the session it belonged to. Cleared after `m_params = params`
@@ -377,6 +378,11 @@ bool MetisClient::start(const Params& params)
     // the band filter is re-primed at every connect rather than trusted.
     m_ioBoardTxFreqSent = false;
     m_ioBoardTxFreqHz = 0;
+
+    // A test standing in for the wire (hl2_persist_*_test): the session state
+    // above is reset as for any connect, and no socket is opened.
+    if (m_startTransportForTest)
+        return m_startTransportForTest(params);
 
     m_socket = new QUdpSocket(this);
     const QHostAddress bindAddress = params.localAddress.isNull()
@@ -1102,11 +1108,10 @@ void MetisClient::setAtuTuneRequest(bool request)
     if (request == m_atuTune)
         return;
     m_atuTune = request;
-    // 0x09 carries the drive level and the PA enable alongside this bit, so the
-    // whole bank is restated. Reading the level back out of m_ccTxDrive keeps
-    // the PA-enable rule in setTxDriveLevel()'s hands — there is exactly one
-    // place that decides whether the amplifier is on, and this is not it.
-    m_ccTxDrive = ccTxDrive(m_ccTxDrive[1], m_ccTxDrive[1] > 0, m_atuTune);
+    // 0x09 carries the drive level, the PA enable and the route alongside this
+    // bit, so the whole bank is restated by txDriveBank(), the one place that
+    // decides whether the amplifier is on.
+    m_ccTxDrive = txDriveBank();
     queueOneShotIfRunning(m_ccTxDrive);
 }
 
@@ -1348,9 +1353,9 @@ void MetisClient::setTxFrequencyHz(std::uint32_t hz)
 
 void MetisClient::setTxDriveLevel(int level)
 {
-    // The PA follows the drive level: a non-zero drive means the operator wants
-    // output, and on this board that requires the onboard amplifier. Drive 0
-    // leaves it disabled, so the safe default state stays safe.
+    // On ANT the PA follows the drive level: a non-zero drive means the operator
+    // wants output, and on this board that requires the onboard amplifier. Drive 0
+    // leaves it disabled, so the safe default state stays safe. RF1 never enables it.
     //
     // Hard safety: a closed transmit gate forces drive 0 / PA off on the wire,
     // whatever level a caller requests. This is the last authority before the
@@ -1358,10 +1363,58 @@ void MetisClient::setTxDriveLevel(int level)
     // transmit-blocked session. (#4449 review — complements the Hl2Backend guard)
     if (!m_txAllowed)
         level = 0;
+    m_txDriveLevel = std::clamp(level, 0, kTxDriveMax);
     // The ATU request is re-asserted, not re-decided: it shares this register,
     // so rebuilding the bank without it would clear a tune in progress.
-    m_ccTxDrive = ccTxDrive(level, level > 0, m_atuTune);
+    m_ccTxDrive = txDriveBank();
     queueOneShotIfRunning(m_ccTxDrive);
+}
+
+void MetisClient::resetTxDriveForSession()
+{
+    // Drive 0, PA off, and the route from Params: a bank in the rotation must not
+    // carry the previous session's PA bit ahead of the backend's drive 0 (#4579).
+    m_txRoute = m_params.txRoute;
+    m_txDriveLevel = 0;
+    m_txRouteInRotation = m_txRoute != TxRoute::Ant;
+    m_ccTxDrive = txDriveBank();
+}
+
+Cc MetisClient::txDriveBank() const noexcept
+{
+    return ccTxDriveForRoute(m_txRoute, m_txDriveLevel, m_txAllowed, m_atuTune);
+}
+
+bool MetisClient::txRouteChangeBlocked() const noexcept
+{
+    return m_mox || m_telemetry.ptt
+        || (m_sinceUnkey.isValid() && m_sinceUnkey.elapsed() < kTxRouteUnkeyHoldMs);
+}
+
+void MetisClient::setTxRoute(int route, int level)
+{
+    const bool known = route == static_cast<int>(TxRoute::Ant)
+                    || route == static_cast<int>(TxRoute::Rf1);
+    const TxRoute next = known ? static_cast<TxRoute>(route) : m_txRoute;
+    if (known && next == m_txRoute) {
+        setTxDriveLevel(level);
+        return;
+    }
+    // The backend refuses these first; this is the wire's own second refusal,
+    // for a key or a tail the backend had not seen yet.
+    if (!known || txRouteChangeBlocked()) {
+        qCInfo(lcHl2) << "HL2: TX route change refused —"
+                      << (known ? "transmitting or in the unkey tail" : "unknown route");
+        emit txRouteRefused(static_cast<int>(m_txRoute));
+        return;
+    }
+    m_txRoute = next;
+    m_params.txRoute = next;
+    if (next != TxRoute::Ant) {
+        m_txRouteInRotation = true;
+    }
+    qCInfo(lcHl2) << "HL2: TX route <-" << (next == TxRoute::Rf1 ? "RF1" : "ANT");
+    setTxDriveLevel(level);
 }
 
 void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation)
@@ -1622,15 +1675,19 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
         // At 381 EP2 packets/s and four receivers that refreshes each bank ~64
         // times a second, which is well inside anything the operator can see.
         // `slotCount`, not `slots`: Qt #defines `slots` to nothing.
+        // Plus the 0x09 route bank once this session's route has left ANT
+        // (m_txRouteInRotation); a session that never did has no such slot.
         const std::size_t nFreq = m_ccRxFreq.size();
-        const std::size_t slotCount = nFreq + 2;
+        const std::size_t slotCount = nFreq + 2 + (m_txRouteInRotation ? 1 : 0);
         const std::size_t slot = m_roundRobin % slotCount;
         if (slot < nFreq)
             b = m_ccRxFreq[slot];
         else if (slot == nFreq)
             b = m_ccGain;
-        else
+        else if (slot == nFreq + 1)
             b = kCcAdc;
+        else
+            b = txDriveBank();
         ++m_roundRobin;
     }
     // MOX rides in C0 bit 0 of EVERY frame, so BOTH sub-frames carry it -- the

@@ -193,6 +193,13 @@ sessions are rechecked after cache signals, which can synchronously retire them.
 Neutral storage validation covers supported backend modes and wide FM filters;
 the legacy Flex editor dropdown is not the storage vocabulary.
 These desktop operations add no daemon catalogue methods or TX authority.
+NetCW carrier edges and CW PTT envelopes also use typed backend requests.
+RadioModel retains admission, producer ownership and sidetone policy;
+FlexCwControls owns the stream, framing, timestamp/index counters and redundant
+UDP scheduling with the operation-fenced TCP backstop. Queue completion includes
+cancelled work and is never radio-idle evidence. Local PTT requests retain their
+original session/client; only radio client status changes confirmed ownership.
+
 CWX buffered-keyer requests are typed `CwTextRequest` values; Flex owns their
 encoding and queue-reply decoding. Native text keyers retain the existing
 `sendCwText` adapter, with one actual sender per backend. Keep original producer,
@@ -238,6 +245,17 @@ host TUNE-power edits additionally require a live locally admitted carrier.
 HL2 host-keyer, sidetone and compressor settings return local-only receipts;
 their existing local consumers still apply them (#6153). Icom CW controls retain
 the current keyer capability gate; its replacement belongs to #6110.
+
+Audio stream create/remove and IQ-rate intents use `AudioStreamRequest`;
+graphic EQ uses `GraphicEqRequest`, and pan IQ binding extends the typed display
+control. Capability records describe actual dispatch, not daemon permissions.
+Flex owns encoding; native audio and host EQ must not fall through to Flex text.
+The engine validates original-session stream ownership and incarnation, retains
+bounded unconfirmed-allocation reservations, and revokes the immutable-deadline
+guard before a stale queued write can reach the transport. Allocation grants no
+DAX TX selection, global DAX-input mutation or keying authority. Keep sample/DSP
+paths unchanged during this control-plane migration; the legacy status readers
+are not evidence that their touchpoints are fully converted.
 
 If your change trips any of these, restructure the change — do not move the
 file, weaken the check, or add an exemption. Engine code that needs a UI

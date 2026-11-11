@@ -51,9 +51,49 @@ inline constexpr DocFieldCredential kDocFieldCredentials[] = {
     {"KenwoodConnection", "Password", "kenwood_password"},
 };
 
+// Named connection credentials are keychain-only. Reserve the dynamic keys
+// at the settings seam too, so an import or CLI write cannot persist them.
+struct ScopedCredential {
+    const char* prefix;
+    const char* suffix;
+};
+inline constexpr ScopedCredential kSmartLinkCredential{"smartlink/", "/refresh_token"};
+inline constexpr ScopedCredential kIcomCredential{"icom/", "/password"};
+inline constexpr ScopedCredential kScopedCredentials[] = {kSmartLinkCredential, kIcomCredential};
+
+inline QString scopedCredentialKey(const ScopedCredential& type, const QString& id)
+{
+    return QLatin1String(type.prefix) + id + QLatin1String(type.suffix);
+}
+
+inline QString smartLinkCredentialKey(const QString& id)
+{
+    return id.isEmpty() || id == QLatin1String("legacy") ? QStringLiteral("smartlink_refresh_token")
+        : scopedCredentialKey(kSmartLinkCredential, id);
+}
+
+inline QString icomCredentialKey(const QString& id)
+{
+    return scopedCredentialKey(kIcomCredential, id);
+}
+
+inline bool isScopedCredentialKey(const QString& key)
+{
+    for (const auto& entry : kScopedCredentials) {
+        const QString prefix = QLatin1String(entry.prefix);
+        const QString suffix = QLatin1String(entry.suffix);
+        if (key.startsWith(prefix) && key.endsWith(suffix)
+            && key.size() == prefix.size() + 64 + suffix.size()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Exact-name check: is `key` one of the known flat credential keys?
 inline bool isFlatCredentialKey(const QString& key)
 {
+    if (isScopedCredentialKey(key)) { return true; }
     for (const auto& entry : kFlatCredentials) {
         if (key == QLatin1String(entry.settingsKey)) {
             return true;
@@ -65,6 +105,7 @@ inline bool isFlatCredentialKey(const QString& key)
 // Keychain key for a flat credential settings key (empty when `key` isn't one).
 inline QString keychainKeyForFlat(const QString& key)
 {
+    if (isScopedCredentialKey(key)) { return key; }
     for (const auto& entry : kFlatCredentials) {
         if (key == QLatin1String(entry.settingsKey)) {
             return QLatin1String(entry.keychainKey);

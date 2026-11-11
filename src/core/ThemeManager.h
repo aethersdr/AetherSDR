@@ -135,15 +135,6 @@ public:
     // treatment. Custom paint code must consume the token itself.
     void setWidgetForegroundToken(QWidget* widget, const QString& token);
 
-    // Shared QCheckBox::indicator style fragment — ThemeManager tokens plus
-    // the full hover/checked/disabled pseudo-state set — so every dialog gets
-    // a visible, theme-reactive indicator in dark mode without hand-rolling
-    // the block per file (#4013).  Concatenate it onto the caller's
-    // "QCheckBox { ... }" template and pass the result to applyStyleSheet();
-    // it returns an unresolved template, so setStyleSheet() would NOT expand
-    // the {{tokens}} — use applyStyleSheet().
-    static QString checkBoxIndicatorStyle();
-
     // Stop tracking a widget — its recorded stylesheet template is
     // dropped and it no longer re-paints on themeChanged.  Useful for
     // widgets that want to take over stylesheet management themselves

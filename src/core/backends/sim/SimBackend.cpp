@@ -278,8 +278,12 @@ RadioCapabilities SimBackend::capabilities() const
     caps.family = familyName();
     caps.cwReceiveControl = std::nullopt;
     caps.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry}, {PanGeometryComponent::Center}};
+    caps.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+    // No Flex stream plane: receive audio is native and graphic EQ is host-side.
+    caps.audioStreamControl = std::nullopt;
+    caps.radioGraphicEqControl = std::nullopt;
     // The demo cannot key at all (Principle VI), let alone synthesise tones.
     caps.twoToneGenerator = std::nullopt;
     caps.firmwareUpdateSource = std::nullopt;  // synthetic radio; nothing to compare.

@@ -1,5 +1,9 @@
 #include "ProfileManagerDialog.h"
+#include "CanonIndicators.h"
+#include "CanonMessageBox.h"
 #include "ControlAvailabilityRegistry.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -12,8 +16,8 @@
 #include <QPushButton>
 #include <QCheckBox>
 #include <QLabel>
-#include <QMessageBox>
 #include <QPointer>
+#include <QStyle>
 #include <QSignalBlocker>
 #include <QTimer>
 #include "ScopedChildWidget.h"
@@ -21,6 +25,14 @@
 namespace AetherSDR {
 
 namespace {
+// The tab's label, for accessible names ("Transmit profile name").
+QString tabLabel(const QString& type)
+{
+    return type == QLatin1String("global") ? QStringLiteral("Global")
+        : type == QLatin1String("transmit") ? QStringLiteral("Transmit")
+        : type == QLatin1String("cw") ? QStringLiteral("CW") : QStringLiteral("Microphone");
+}
+
 ProfileRequest::Kind profileKind(const QString& type)
 {
     return type == QLatin1String("global") ? ProfileRequest::Kind::Global
@@ -29,37 +41,70 @@ ProfileRequest::Kind profileKind(const QString& type)
 }
 }
 
-static const QString kDialogStyle =
-    "QDialog { background: #0f0f1a; color: #c8d8e8; }"
-    "QTabWidget::pane { border: 1px solid #203040; background: #0f0f1a; }"
-    "QTabBar::tab { background: #1a2a3a; color: #8898a8; padding: 6px 14px;"
-    "  border: 1px solid #203040; border-bottom: none; border-top-left-radius: 4px;"
-    "  border-top-right-radius: 4px; margin-right: 2px; }"
-    "QTabBar::tab:selected { background: #0f0f1a; color: #c8d8e8; }"
-    "QLineEdit { background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  padding: 4px 6px; color: #c8d8e8; }"
-    "QListWidget { background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  color: #c8d8e8; }"
-    "QListWidget::item:selected { background: #0070c0; }"
-    "QPushButton { background: #1a2a3a; border: 1px solid #203040;"
-    "  border-radius: 3px; padding: 4px 12px; color: #c8d8e8; }"
-    "QPushButton:hover { background: #2a3a4a; }"
-    // Without this the dialog's explicit QPushButton color/background defeats
-    // Qt's default disabled rendering, so a disabled button is pixel-identical
-    // to an enabled one — the "no target" state (#4396) would be invisible.
-    "QPushButton:disabled { background: #141c26; border: 1px solid #1a2632;"
-    "  color: #5a6a78; }"
-    "QCheckBox { color: #c8d8e8; }"
-    "QCheckBox::indicator { width: 16px; height: 16px;"
-    "  border: 1px solid #406080; border-radius: 3px; background: #0a0a18; }"
-    "QCheckBox::indicator:checked { background: #00b4d8; }";
-
-// Result-line styling, matching ConnectionPanel's manual-connect result label
-// (ConnectionPanel.cpp:38-41) so the two read as the same kind of message.
-static const char* kResultInfoStyle =
-    "QLabel { color: #9bd1ff; font-size: 11px; background: transparent; border: none; }";
-static const char* kResultErrorStyle =
-    "QLabel { color: #ff8f8f; font-size: 11px; background: transparent; border: none; }";
+// What the shared canon dialog sheet (ModemChrome::Look::Canon: fields,
+// buttons, lists, the canon check box) leaves out: tabs as MQTT Settings and
+// SpotHub have them; selection ink on the name fields (#6917); the hints and
+// result lines; and the name field's right-click menu, a child of the field
+// that the sheet's transparent rule would otherwise leave with no panel.
+constexpr const char* kProfileManagerRules = R"(
+QTabWidget::pane {
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 10px;
+    top: -1px;
+}
+QTabBar::tab {
+    color: {{color.canon.muted}};
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 12px;
+    font-weight: 600;
+}
+QTabBar::tab:hover {
+    color: {{color.canon.ink}};
+}
+QTabBar::tab:selected {
+    color: {{color.canon.cyan}};
+    border-bottom-color: {{color.canon.cyan}};
+}
+QLineEdit {
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QLabel#profileHint {
+    color: {{color.canon.muted}};
+    font-size: 11px;
+}
+QLabel[resultTone="info"] {
+    color: {{color.canon.cyan}};
+    font-size: 11px;
+}
+QLabel[resultTone="error"] {
+    color: {{color.accent.danger}};
+    font-size: 11px;
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+)";
 
 // How long a Global save may sit unanswered before the result line stops
 // claiming it is still in flight. A profile save is a radio-side flash write,
@@ -69,17 +114,24 @@ static const char* kResultErrorStyle =
 static constexpr int kSaveResponseTimeoutMs = 15000;
 
 ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
-    : PersistentDialog("Profile Manager", "ProfileManagerDialogGeometry", parent),
+    : CanonWindow(QStringLiteral("Profile Manager"), parent, Kind::Workspace),
       m_model(model)
 {
-    theme::setContainer(this, QStringLiteral("dialog/profileManager"));
-    setMinimumSize(460, 400);
-    setStyleSheet(kDialogStyle);
+    setObjectName(QStringLiteral("ProfileManagerDialog"));
+    theme::setContainer(this, QStringLiteral("canon/profileManager"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("ProfileManagerDialogGeometry"));
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+             + QString::fromLatin1(kProfileManagerRules);
+    });
 
-    // PersistentDialog::setFramelessMode() owns the body layout's contents
-    // margins (9 / 9-or-7 / 9 / 9 depending on frameless chrome state).
     auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(9);
+    root->addWidget(makeCanonHeader(QStringLiteral("Profile Manager")));
 
     m_tabs = new QTabWidget;
 
@@ -113,15 +165,11 @@ ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
     // Auto-Save tab
     m_tabs->addTab(buildAutoSaveTab(), "Auto-Save");
 
-    root->addWidget(m_tabs);
+    root->addWidget(m_tabs, 1);
 
-    // Close button
-    auto* closeRow = new QHBoxLayout;
-    closeRow->addStretch();
-    auto* closeBtn = new QPushButton("Close");
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-    closeRow->addWidget(closeBtn);
-    root->addLayout(closeRow);
+    // 40 px taller than before for the canon header, and never smaller than
+    // the layout needs at this theme's font.
+    setMinimumSize(QSize(460, 440).expandedTo(minimumSizeHint()));
 
     // Listen for profile list updates
     connect(model, &RadioModel::globalProfilesChanged, this, [this] {
@@ -159,6 +207,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
     auto* nameEdit = new QLineEdit;
     nameEdit->setPlaceholderText("New Profile Name");
     nameEdit->setObjectName(QString("profileNameEdit_%1").arg(type));
+    nameEdit->setAccessibleName(QString("%1 profile name").arg(tabLabel(type)));
     vbox->addWidget(nameEdit);
 
     // Buttons: Load, Save/Create, Delete.
@@ -172,6 +221,8 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
     auto* saveBtn = new QPushButton(isGlobal ? "Save" : "Create");
     auto* deleteBtn = new QPushButton("Delete");
     saveBtn->setObjectName(QString("profileSaveBtn_%1").arg(type));
+    loadBtn->setObjectName(QString("profileLoadBtn_%1").arg(type));
+    deleteBtn->setObjectName(QString("profileDeleteBtn_%1").arg(type));
 
     loadBtn->setEnabled(false);
     deleteBtn->setEnabled(false);
@@ -189,6 +240,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
     auto* status = new QLabel;
     status->setObjectName(QString("profileStatus_%1").arg(type));
     status->setWordWrap(true);
+    status->setTextFormat(Qt::PlainText);
     status->setVisible(false);
     vbox->addWidget(status);
 
@@ -216,13 +268,15 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
             : QStringLiteral("Updates to existing profiles save automatically — enable\n"
                              "Auto-Save (Auto-Save tab) so changes follow the active profile.\n"
                              "Create makes a new profile; it does not overwrite an existing one."));
-        note->setStyleSheet("QLabel { color: #6888a0; font-size: 11px; }");
+        note->setObjectName(QStringLiteral("profileHint"));
         note->setWordWrap(true);
         vbox->addWidget(note);
     }
 
     // Profile list
     auto* list = new QListWidget;
+    list->setObjectName(QString("profileList_%1").arg(type));
+    list->setAccessibleName(QString("%1 profiles").arg(tabLabel(type)));
     for (const auto& p : profiles) {
         auto* item = new QListWidgetItem(p);
         if (p == active)
@@ -402,20 +456,19 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                     const QPointer<ProfileManagerDialog> self(this);
                     const QPointer<RadioModel> modelGuard(m_model);
                     const RadioControlSession session = m_model->controlSession();
-                    ScopedChildWidget<QMessageBox> boxOwner(this);
-                    QMessageBox& box = *boxOwner.get();
-                    box.setWindowTitle("Profile already exists");
-                    box.setIcon(QMessageBox::Question);
-                    box.setText(
-                        QString("A %1 profile named \"%2\" already exists.").arg(kind, name));
+                    ScopedChildWidget<CanonMessageBox> boxOwner(
+                        QStringLiteral("Profile already exists"),
+                        QString("A %1 profile named \"%2\" already exists.").arg(kind, name), this);
+                    CanonMessageBox& box = *boxOwner.get();
                     box.setInformativeText(
                         QString("The radio can't overwrite %1 profiles directly — updates "
                                 "are captured by Auto-Save while the profile is active. "
                                 "Auto-Save is currently OFF.\n\n"
                                 "Would you like to enable Auto-Save now so your changes "
                                 "to \"%2\" are captured?").arg(kind, name));
-                    auto* enableBtn = box.addButton("Enable Auto-Save", QMessageBox::AcceptRole);
-                    box.addButton("Close", QMessageBox::RejectRole);
+                    box.addButton("Close", CanonMessageBox::Role::Reject);
+                    auto* enableBtn = box.addButton("Enable Auto-Save",
+                                                    CanonMessageBox::Role::Accept);
                     box.setDefaultButton(enableBtn);
                     box.exec();
                     if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner
@@ -431,18 +484,17 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                     }
                     return;
                 }
-                ScopedChildWidget<QMessageBox> infoOwner(this);
-                QMessageBox& info = *infoOwner.get();
-                info.setIcon(QMessageBox::Information);
-                info.setWindowTitle("Profile already exists");
-                info.setText(QString("A %1 profile named \"%2\" already exists.\n\n"
-                            "The radio cannot overwrite %1 profiles directly. "
+                ScopedChildWidget<CanonMessageBox> infoOwner(
+                    QStringLiteral("Profile already exists"),
+                    QString("A %1 profile named \"%2\" already exists.").arg(kind, name), this);
+                CanonMessageBox& info = *infoOwner.get();
+                info.setInformativeText(
+                    QString("The radio cannot overwrite %1 profiles directly. "
                             "Updates are captured by Auto-Save (currently ON) "
                             "while the profile is active.\n\n"
                             "To replace this profile, delete it first and then "
-                            "Create it again.")
-                        .arg(kind, name));
-                info.setStandardButtons(QMessageBox::Ok);
+                            "Create it again.").arg(kind));
+                info.setDefaultButton(info.addButton("OK", CanonMessageBox::Role::Accept));
                 info.exec();
                 return;
             }
@@ -467,18 +519,21 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         const QPointer<ProfileManagerDialog> self(this);
         const QPointer<RadioModel> modelGuard(m_model);
         const RadioControlSession session = m_model->controlSession();
-        ScopedChildWidget<QMessageBox> boxOwner(this);
-        QMessageBox& box = *boxOwner.get();
-        box.setIcon(QMessageBox::Question);
-        box.setWindowTitle("Delete Profile");
-        box.setText(QString("Delete profile \"%1\"?").arg(name));
-        box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-        const int reply = box.exec();
+        // Destructive: Cancel is the default, and Cancel, the ✕ or Esc
+        // deletes nothing.
+        ScopedChildWidget<CanonMessageBox> boxOwner(
+            QStringLiteral("Delete Profile"),
+            QString("Delete profile \"%1\"?").arg(name), this);
+        CanonMessageBox& box = *boxOwner.get();
+        auto* cancelBtn = box.addButton("Cancel", CanonMessageBox::Role::Reject);
+        auto* deleteConfirm = box.addButton("Delete", CanonMessageBox::Role::Destructive);
+        box.setDefaultButton(cancelBtn);
+        box.exec();
         if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner
             || modelGuard->controlSession() != session) {
             return;
         }
-        if (reply != QMessageBox::Yes) return;
+        if (box.clickedButton() != deleteConfirm) return;
 
         // Drop the last Save result: leaving it up would keep reporting
         // 'Saved profile "X".' for the profile just deleted (#4362).
@@ -496,20 +551,21 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
             const QPointer<ProfileManagerDialog> self(this);
             const QPointer<RadioModel> modelGuard(m_model);
             const RadioControlSession session = m_model->controlSession();
-            ScopedChildWidget<QMessageBox> boxOwner(this);
-            QMessageBox& box = *boxOwner.get();
-            box.setIcon(QMessageBox::Question);
-            box.setWindowTitle("Reset CW Profile");
-            box.setText(QString("Reset CW profile \"%1\"?").arg(name));
+            ScopedChildWidget<CanonMessageBox> boxOwner(
+                QStringLiteral("Reset CW Profile"),
+                QString("Reset CW profile \"%1\"?").arg(name), this);
+            CanonMessageBox& box = *boxOwner.get();
             box.setInformativeText("Its settings return to the radio's built-in CW values. "
                                    "The Default profile is not copied.");
-            box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-            const int reply = box.exec();
+            auto* cancelBtn = box.addButton("Cancel", CanonMessageBox::Role::Reject);
+            auto* resetConfirm = box.addButton("Reset", CanonMessageBox::Role::Destructive);
+            box.setDefaultButton(cancelBtn);
+            box.exec();
             if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner
                 || modelGuard->controlSession() != session) {
                 return;
             }
-            if (reply != QMessageBox::Yes) return;
+            if (box.clickedButton() != resetConfirm) return;
 
             setTabStatus(type, QString(), false);
             modelGuard->requestProfile({ProfileRequest::Kind::Cw, ProfileRequest::Action::Reset, name},
@@ -528,7 +584,7 @@ QWidget* ProfileManagerDialog::buildAutoSaveTab()
     auto* desc = new QLabel(
         "When auto-save is enabled, changes to TX and Mic\n"
         "settings are automatically saved to the active profile.");
-    desc->setStyleSheet("QLabel { color: #6888a0; font-size: 11px; }");
+    desc->setObjectName(QStringLiteral("profileHint"));
     desc->setWordWrap(true);
     vbox->addWidget(desc);
     vbox->addSpacing(10);
@@ -578,7 +634,11 @@ void ProfileManagerDialog::setTabStatus(const QString& type, const QString& text
         return;
     }
     status->setText(text);
-    status->setStyleSheet(error ? kResultErrorStyle : kResultInfoStyle);
+    // The tone is a property the canon sheet matches, re-polished so the
+    // colour follows it and the next theme change.
+    status->setProperty("resultTone", error ? "error" : "info");
+    status->style()->unpolish(status);
+    status->style()->polish(status);
     status->setVisible(true);
 }
 

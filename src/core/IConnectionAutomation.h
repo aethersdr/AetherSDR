@@ -2,6 +2,7 @@
 
 #include <QList>
 #include <QString>
+#include <QJsonObject>
 
 #include "core/RadioDiscovery.h"  // RadioInfo
 
@@ -39,6 +40,12 @@ public:
     // newer Disconnect can cancel it even when the dialog kept an idle form.
     virtual void automationReserveIpConnect(const QString&) {}
     virtual quint64 automationNativeConnectionEpoch() const { return 0; }
+    virtual QJsonObject automationConnectionProfiles() const { return {}; }
+    virtual bool automationSelectConnectionProfile(const QString&, const QString&, QString* error)
+    {
+        if (error) { *error = QStringLiteral("connection profiles unavailable"); }
+        return false;
+    }
 
     // Connect-dialog visibility (fallback when no invokable dialog host is set).
     virtual bool automationDialogVisible() const = 0;

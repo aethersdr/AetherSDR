@@ -587,7 +587,8 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_MIDI
     auto* midiAction = controllersMenu->addAction("MIDI Mapping...");
     connect(midiAction, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_midiDialog, m_midiControl);
+        showOrRaiseCanon(m_midiDialog,
+                         [this] { return new MidiMappingDialog(m_midiControl, this); });
     });
 #endif
 #ifdef HAVE_HIDAPI
@@ -1129,11 +1130,13 @@ void MainWindow::buildMenuBar()
     m_profilesMenu = menuBar()->addMenu("&Profiles");
     auto* profileMgrAct = m_profilesMenu->addAction("Profile Manager...");
     connect(profileMgrAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_profileManagerDialog, &m_radioModel);
+        showOrRaiseCanon(m_profileManagerDialog,
+                         [this] { return new ProfileManagerDialog(&m_radioModel, this); });
     });
     auto* profileImportExportAct = m_profilesMenu->addAction("Import/Export Profiles...");
     connect(profileImportExportAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_profileImportExportDialog, &m_radioModel);
+        showOrRaiseCanon(m_profileImportExportDialog,
+                         [this] { return new ProfileImportExportDialog(&m_radioModel, this); });
     });
     m_profilesMenu->addSeparator();
 
@@ -1720,12 +1723,8 @@ void MainWindow::buildMenuBar()
 
     toolsMenu->addSeparator();
     toolsMenu->addAction("Radio Health...", this, [this] {
-        auto* dlg = new RadioHealthDialog(&m_radioModel, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        trackPersistentDialog(dlg);
-        dlg->show();
-        dlg->raise();
-        dlg->activateWindow();
+        showOrRaiseCanon(m_radioHealthDialog,
+                         [this] { return new RadioHealthDialog(&m_radioModel, this); });
     });
     auto* gpsDashboardAction = toolsMenu->addAction("AetherGPS...", this, [this] {
         showGpsLocationDialog();
@@ -1781,16 +1780,10 @@ void MainWindow::buildMenuBar()
         showHelpGuide(QStringLiteral("AetherSDR Help"), QStringLiteral(":/help/aethersdr-help.md"));
     });
     helpMenu->addAction("What's New...", this, [this]() {
-        if (m_whatsNewDialog) {
-            m_whatsNewDialog->show();
-            m_whatsNewDialog->raise();
-            m_whatsNewDialog->activateWindow();
-            return;
-        }
-        m_whatsNewDialog = WhatsNewDialog::showAll(this);
-        m_whatsNewDialog->setFramelessMode(
-            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-        trackPersistentDialog(m_whatsNewDialog);
+        showOrRaiseCanon(m_whatsNewDialog, [this] {
+            return new WhatsNewDialog(QString(), QCoreApplication::applicationVersion(), this,
+                                      false, true);
+        });
     });
     helpMenu->addSeparator();
 

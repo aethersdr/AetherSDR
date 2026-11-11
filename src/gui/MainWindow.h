@@ -76,6 +76,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #ifdef HAVE_MIDI
@@ -172,6 +173,7 @@ class UiTickLagMeter;
 class WhatsNewDialog;
 class Nr2WisdomDialog;
 class ProfileManagerDialog;
+class RadioHealthDialog;
 class HelpDialog;
 class SupportDialog;
 class SettingsBrowserDialog;
@@ -431,6 +433,13 @@ private slots:
     void applyOperatorTuningStep(int stepHz);
 
 private:
+    void refreshPanZoomControls();
+    // Why a native-span B/S cannot act on this pan right now, or nullopt.
+    // The B/S enable and every command path ask this one question.
+    std::optional<QString> nativePanZoomBlockedReason(const PanadapterModel* pan) const;
+    // The active band plan's zoom region (low, high MHz) at a frequency.
+    std::optional<std::pair<double, double>> bandPlanZoomRegion(double frequencyMhz,
+                                                                bool segment) const;
     enum class TuneIntent {
         IncrementalTune,
         AbsoluteJump,
@@ -943,6 +952,8 @@ private:
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
     void refreshRttyInputStatus();
+    void onRttyDecoderMarkChosen(int hz);
+    void onRttyDecoderShiftChosen(int hz);
     // The RTTY pane's ✕: persist "operator does not want this window" and
     // re-run the refresh, which stops the decoder (#5353).
     void onRttyPanelCloseRequested();
@@ -999,7 +1010,7 @@ private:
     // propagate the frameless toggle without an explicit qobject_cast branch.
     //
     // Slot must be typed QPointer<ConcreteDialog> so the ctor args match.
-    // Example: showOrRaisePersistent(m_profileManagerDialog, &m_radioModel);
+    // Example: showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
     template <class T, class... Args>
     void showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs);
 
@@ -1782,6 +1793,7 @@ private:
     // invokes the verb that record names.
     QPointer<BandscopeDialog> m_bandscopeDialog;
     QPointer<MemoryDialog> m_memoryDialog;
+    QPointer<RadioHealthDialog> m_radioHealthDialog;
     QPointer<NetSchedulerDialog> m_netSchedulerDialog;
     NetScheduler* m_netScheduler{nullptr};
     NetReminderBanner* m_netReminderBanner{nullptr};
@@ -2404,6 +2416,8 @@ private:
 #if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
+    RadioControlSession m_daxMicOverrideSession{};
+    quint64 m_daxMicOverrideRevision{0};
     bool startDax();
     void stopDax();
     // #2895: react to per-slice DAX channel (re)assignment while the bridge is

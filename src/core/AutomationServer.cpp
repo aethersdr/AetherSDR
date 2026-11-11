@@ -2787,6 +2787,9 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
         return normalizedAction.isEmpty() || normalizedAction == QLatin1String("status")
             || normalizedAction == QLatin1String("devices") || normalizedAction == QLatin1String("stop");
     }
+    if (name == QLatin1String("connect") && normalizedAction == QLatin1String("profiles")) {
+        return true;
+    }
     // The probe constructs only an isolated TransmitModel and touches no session.
     if (name == QLatin1String("interlock") && action == QLatin1String("probe")) {
         return true;
@@ -2812,6 +2815,9 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
         return normalizedAction == QLatin1String("state");  // snapshot only
     }
     if (name == QLatin1String("gesture")) {
+        return normalizedAction == QLatin1String("status");
+    }
+    if (name == QLatin1String("daxTx")) {
         return normalizedAction == QLatin1String("status");
     }
     // `modem`/`link` mix introspection with actions that key the radio
@@ -2868,6 +2874,7 @@ const QStringList& getModelNames()
         QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
         QStringLiteral("display"),
         QStringLiteral("waveforms"),
+        QStringLiteral("daxtx"),
         QStringLiteral("ntp"),
         QStringLiteral("kiwi"),
     };
@@ -3280,8 +3287,15 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("get", {}, "get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
                 a.model = vtok(p, 1);
-                a.selector = vtok(p, 2);
-                a.property = vtok(p, 3);
+                if (a.model == QLatin1String("daxtx")) {
+                    if (p.size() > 3) {
+                        return err(QStringLiteral("get daxtx accepts only one optional property"));
+                    }
+                    a.property = vtok(p, 2);
+                } else {
+                    a.selector = vtok(p, 2);
+                    a.property = vtok(p, 3);
+                }
                 return {};
             },
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
@@ -3292,13 +3306,26 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doGet(a.model, a.selector, a.property);
             });
 
+        add("daxTx", {QStringLiteral("daxtx")},
+            "daxTx <take|release|status> — this client's DAX TX stream ownership; never keys TX",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                if (p.size() != 2) {
+                    return err(QStringLiteral("daxTx requires exactly one action (take|release|status)"));
+                }
+                a.action = vtok(p, 1);
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doDaxTx(a.action);
+            });
+
         add("meterwindow", {}, "meterwindow <start [duration_ms]|status|stop> — bounded meter ages and unrounded peaks; never keys TX",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doMeterWindow(a.action, a.value);
             });
 
-        add("connect", {}, "connect <list|show|hide|local|ip|wait> [args]",
+        add("connect", {}, "connect <list|profiles|profile stations|operators <id>|show|hide|local|ip|wait> [args]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket* sock) -> QJsonObject {
                 if (a.action.isEmpty()) {
@@ -3904,6 +3931,17 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("invalid JSON: ") + perr.errorString());
         const QJsonObject obj = doc.object();
         cmd        = obj.value(QStringLiteral("cmd")).toString();
+        if (cmd == QLatin1String("daxTx") || cmd == QLatin1String("daxtx")) {
+            for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+                if (it.key() != QLatin1String("cmd") && it.key() != QLatin1String("action")
+                    && it.key() != QLatin1String("args") && it.key() != QLatin1String("token")) {
+                    return err(QStringLiteral("daxTx accepts only an action; stream identity is fixed to this client"));
+                }
+            }
+            if (obj.contains(QStringLiteral("args")) && obj.contains(QStringLiteral("action"))) {
+                return err(QStringLiteral("daxTx accepts either action or positional args, not both"));
+            }
+        }
         a.target   = obj.value(QStringLiteral("target")).toString();
         a.path     = obj.value(QStringLiteral("path")).toString();
         a.action   = obj.value(QStringLiteral("action")).toString();
@@ -6235,6 +6273,11 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = radioSnapshot(radio);
     } else if (model == QLatin1String("gps")) {
         data = gpsSnapshot(radio);
+    } else if (model == QLatin1String("daxtx")) {
+        if (!selector.isEmpty()) {
+            return err(QStringLiteral("get daxtx takes no selector; stream identity is fixed to this client"));
+        }
+        data = radio->daxTxOwnershipSnapshot();
     } else if (model == QLatin1String("ntp")) {
         // The radio's own NTP time sources as it last reported them (#6953).
         const std::optional<RadioCapabilities::NtpSourceControl> control =
@@ -6363,7 +6406,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|hostnb|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|display|clients|kiwi|wavestats|clock)"));
+                   + QStringLiteral(" (use audio|dsp|hostnb|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|display|clients|daxtx|kiwi|wavestats|clock)"));
     }
 
     if (!property.isEmpty()) {
@@ -6382,6 +6425,46 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         {QStringLiteral("model"), model},
         {model, data},   // keyed by model name: "radio" / "slice" / "pan"
     };
+}
+
+QJsonObject AutomationServer::doDaxTx(const QString& action)
+{
+    const QString normalizedAction = action.trimmed().toLower();
+    if (normalizedAction != QLatin1String("take")
+        && normalizedAction != QLatin1String("release")
+        && normalizedAction != QLatin1String("status")) {
+        return err(QStringLiteral("daxTx requires an action (take|release|status)"));
+    }
+    const QPointer<RadioModel> radio = m_radioModel;
+    if (!radio) {
+        return err(QStringLiteral("no radio model available"));
+    }
+
+    bool admitted = true;
+    QString refusal;
+    if (normalizedAction != QLatin1String("status")) {
+        const bool take = normalizedAction == QLatin1String("take");
+        refusal = radio->daxTxOwnershipUnavailableReason(take);
+        admitted = radio->requestDaxTxOwnership(take);
+        if (!radio || m_radioModel != radio) {
+            return err(QStringLiteral("radio model changed during the DAX TX ownership request"));
+        }
+    }
+    const QJsonObject snapshot = radio->daxTxOwnershipSnapshot();
+    QJsonObject reply{
+        {QStringLiteral("ok"), admitted},
+        {QStringLiteral("action"), normalizedAction},
+        {QStringLiteral("pending"), snapshot.value(QStringLiteral("pending")).toBool()},
+        {QStringLiteral("daxtx"), snapshot},
+    };
+    if (!admitted) {
+        if (refusal.isEmpty()) {
+            refusal = snapshot.value(QStringLiteral("error")).toString();
+        }
+        reply[QStringLiteral("error")] = refusal.isEmpty()
+            ? QStringLiteral("DAX TX ownership request was refused") : refusal;
+    }
+    return reply;
 }
 
 QJsonObject AutomationServer::doWaveform(const QString& action,
@@ -6571,6 +6654,19 @@ QJsonObject AutomationServer::doConnect(const QString& action,
             {QStringLiteral("count"), radios.size()},
             {QStringLiteral("radios"), connectionRadioListToJson(radios)},
         };
+    }
+
+    if (a == QLatin1String("profiles")) {
+        return QJsonObject{{"ok", true}, {"profiles", conn->automationConnectionProfiles()}};
+    }
+    if (a == QLatin1String("profile")) {
+        const QStringList parts = arg.simplified().split(' ');
+        if (parts.size() != 2 || (parts[0] != QLatin1String("stations") && parts[0] != QLatin1String("operators"))) {
+            return err(QStringLiteral("connect profile requires stations|operators <id>"));
+        }
+        QString error;
+        if (!conn->automationSelectConnectionProfile(parts[0], parts[1], &error)) { return err(error); }
+        return QJsonObject{{"ok", true}};
     }
 
     if (m_radioModel && m_radioModel->isConnected()) {
@@ -6785,7 +6881,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     return err(QStringLiteral("unknown connect action: ") + action
-               + QStringLiteral(" (use list|show|hide|local|ip|wait)"));
+               + QStringLiteral(" (use list|profiles|profile|show|hide|local|ip|wait)"));
 }
 
 QJsonObject AutomationServer::doConnectDialog(const QString& action)

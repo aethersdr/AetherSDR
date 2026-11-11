@@ -45,9 +45,12 @@ struct RadioModelWakeTestAccess {
 struct ConnectionPanelStartupTestAccess {
     static void prepare(ConnectionPanel& panel,
                         std::function<void(const QHostInfo&)>& lookup,
-                        std::function<void(const QString&)>& password) {
+                        std::function<void(const QString&)>& password, QString* credentialId = nullptr) {
         panel.m_networkLoginLoader = [](const QString&, QObject*, std::function<void(NetworkRadioLogin)> done) { done({}); };
-        panel.m_icomPasswordLoader = [&password](QObject*, std::function<void(const QString&)> done) { password = std::move(done); };
+        panel.m_icomPasswordLoader = [&password, credentialId](const QString& id, QObject*, std::function<void(const QString&)> done) {
+            if (credentialId) { *credentialId = id; }
+            password = std::move(done);
+        };
         panel.m_networkHostLookup = new NetworkRadioLookup(
             [&lookup](const QString&, QObject*, std::function<void(const QHostInfo&)> done) {
                 lookup = std::move(done); return 17;
@@ -65,6 +68,10 @@ struct ConnectionPanelStartupTestAccess {
         panel.m_manualIcomUserEdit->setText(QStringLiteral("fixture-user"));
         panel.m_manualIcomPassEdit->clear();
         panel.onManualConnectClicked();
+    }
+    static void scopedIcomCredential(ConnectionPanel& panel, const QString& id) {
+        panel.m_activeIcomCredentialId = id;
+        panel.m_allowLegacyIcomCredential = false;
     }
     static void ownSocket(ConnectionPanel& panel, QTcpSocket* socket) { panel.m_manualFlexProbe = socket; }
     static void earlierSocket(ConnectionPanel& panel, QTcpSocket* socket) { panel.m_manualFlexProbes.append(socket); }
@@ -162,6 +169,28 @@ int main(int argc, char** argv) {
     settle();
     require(connects.isEmpty(), "entering deferred native login retires an older Icom credential completion");
     ConnectionPanelStartupTestAccess::choose(panel, QStringLiteral("icom"));
+    {
+        ConnectionPanel scoped;
+        QString requestedCredential;
+        std::function<void(const QString&)> scopedPassword;
+        ConnectionPanelStartupTestAccess::prepare(scoped, lookup, scopedPassword, &requestedCredential);
+        ConnectionPanelStartupTestAccess::choose(scoped, QStringLiteral("icom"));
+        ConnectionPanelStartupTestAccess::scopedIcomCredential(scoped, QStringLiteral("fixture-a"));
+        QSignalSpy scopedConnects(&scoped, &ConnectionPanel::connectRequested);
+        ConnectionPanelStartupTestAccess::pendingIcom(scoped);
+        require(requestedCredential == QStringLiteral("fixture-a") && scopedPassword,
+            "injected loader receives the selected connection credential identity");
+        const auto retiredPassword = scopedPassword;
+        ConnectionPanelStartupTestAccess::scopedIcomCredential(scoped, QStringLiteral("fixture-b"));
+        retiredPassword(QStringLiteral("fixture-password-a"));
+        settle();
+        require(scopedConnects.isEmpty(), "a password for a retired credential identity cannot connect");
+        ConnectionPanelStartupTestAccess::pendingIcom(scoped);
+        require(requestedCredential == QStringLiteral("fixture-b"), "the replacement read uses its own credential key");
+        scopedPassword(QStringLiteral("fixture-password-b"));
+        settle();
+        require(scopedConnects.size() == 1, "the current scoped password completion can connect");
+    }
     panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIcomPassword"))->setText(QStringLiteral("fixture-password"));
     const int beforeQueuedConnect = connects.size();
     const int beforeQueuedDisconnect = disconnects.size();
