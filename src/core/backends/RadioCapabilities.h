@@ -104,8 +104,9 @@ struct ReceiveDspControl {
     }
 };
 
-// Session-wide receive BFO pitch, dispatched through setCwPitch and confirmed
-// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path.
+// Session-wide receive BFO pitch, dispatched through setCwPitch and reported
+// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path;
+// the model's pitch is bypassed only under ReceiveControlPolicy::Confirmed.
 struct ReceiveCwPitchControl {
     int minimumHz = 100;
     int maximumHz = 6000;

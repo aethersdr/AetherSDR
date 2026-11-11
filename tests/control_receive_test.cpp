@@ -24,6 +24,12 @@
 #include <cstdio>
 #include <limits>
 
+namespace AetherSDR::hl2 {
+struct Hl2CwPitchReportTestAccess {
+    static void setConnected(Hl2Backend& backend, bool connected) { backend.m_connected = connected; }
+};
+} // namespace AetherSDR::hl2
+
 using namespace AetherSDR;
 using namespace AetherSDR::control;
 
@@ -65,6 +71,7 @@ public:
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString& id, double hz, PanCenterIntent) override { panId = id; record("center", {{"hz", hz}}); }
     void setPanBandwidth(const QString& id, double hz) override { panId = id; record("bandwidth", {{"hz", hz}}); }
+    void setCwPitch(int hz) override { record("pitch", {{"hz", hz}}); }
     void setKeying(bool, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { ++keys; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
     void record(const QString& name, const QJsonObject& values) { ++intents; method = name; args = values; }
@@ -106,6 +113,7 @@ struct Fixture {
     const QString pan = RadioModel::neutralPanIdStringForTest(0);
     const ResourceAddress sliceAddress{QStringLiteral("slice"), QStringLiteral("radio-1"), QStringLiteral("0")};
     const ResourceAddress panAddress{QStringLiteral("panadapter"), QStringLiteral("radio-1"), pan};
+    const ResourceAddress sessionAddress{QStringLiteral("radioSession"), {}, QStringLiteral("radio-1")};
 
     Fixture()
     {
@@ -121,6 +129,7 @@ struct Fixture {
         backend->caps.receiveAudioControl = ReceiveAudioControl{Authority::Engine};
         backend->caps.receivePanCenterControl = ReceivePanRangeControl{Authority::Engine, 100000, 60000000};
         backend->caps.receivePanBandwidthControl = ReceivePanRangeControl{Authority::Engine, 48000, 1536000};
+        backend->caps.receiveCwPitchControl = ReceiveCwPitchControl{100, 6000, 10};
         radio.setBackendForTest(std::move(owned), QStringLiteral("receive-test"));
         check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "socket-free owned slice installed");
         target = makeModelReceiveControlTarget(&radio, &connection);
@@ -132,6 +141,7 @@ struct Fixture {
         SliceDelta audio; audio.audioGain = 50; audio.audioMute = false;
         radio.slice(0)->applyChanges(audio);
         backend->panCenterBandwidthChanged(kBackendPan, 14.225, .192);
+        reportPitch(600);
         adapter.publishAll();
         hello(controller);
     }
@@ -139,6 +149,11 @@ struct Fixture {
     void hello(ControlSession& session)
     {
         check(call(service, session, "hello", {{"versions", QJsonArray{1}}}).contains("result"), "session negotiated");
+    }
+    void reportPitch(int hz)
+    {
+        TransmitDelta delta; delta.cwPitch = hz;
+        radio.transmitModel().applyChanges(delta);
     }
     void report(const QString& mode, int low, int high)
     {
@@ -148,9 +163,13 @@ struct Fixture {
     QJsonObject params(ReceiveOperation op) const
     {
         const bool isPan = op == ReceiveOperation::PanCenter || op == ReceiveOperation::PanBandwidth;
-        const auto snapshot = store.get(isPan ? panAddress : sliceAddress);
-        QJsonObject values{{"radioSession", "radio-1"}, {isPan ? "panadapter" : "slice", isPan ? pan : "0"},
+        const bool isSession = op == ReceiveOperation::CwPitch;
+        const auto snapshot = store.get(isSession ? sessionAddress : isPan ? panAddress : sliceAddress);
+        QJsonObject values{{"radioSession", "radio-1"},
             {"expectedRevision", static_cast<qint64>(snapshot ? snapshot->revision : 0)}};
+        if (!isSession) {
+            values.insert(isPan ? "panadapter" : "slice", isPan ? pan : "0");
+        }
         switch (op) {
         case ReceiveOperation::Mode: values.insert("mode", "LSB"); break;
         case ReceiveOperation::Filter: values.insert("lowHz", 200); values.insert("highHz", 2900); break;
@@ -158,6 +177,7 @@ struct Fixture {
         case ReceiveOperation::AudioMute: values.insert("muted", true); break;
         case ReceiveOperation::PanCenter: values.insert("hz", 14230000); break;
         case ReceiveOperation::PanBandwidth: values.insert("hz", 96000); break;
+        case ReceiveOperation::CwPitch: values.insert("hz", 700); break;
         }
         return values;
     }
@@ -200,8 +220,13 @@ void schemaAndAuthorization()
             bad = good; bad.insert("expectedRevision", value); f.reject(op, bad, "request.invalid_params");
         }
         bad = good; bad.insert("radioSession", "radio-2"); f.reject(op, bad, "resource.not_found");
-        bad = good; bad.insert(good.contains("slice") ? "slice" : "panadapter", "missing");
-        f.reject(op, bad, good.contains("slice") ? "request.invalid_params" : "resource.not_found");
+        if (good.contains("slice") || good.contains("panadapter")) {
+            bad = good; bad.insert(good.contains("slice") ? "slice" : "panadapter", "missing");
+            f.reject(op, bad, good.contains("slice") ? "request.invalid_params" : "resource.not_found");
+        } else {
+            bad = good; bad.insert("slice", "0");
+            f.reject(op, bad, "request.invalid_params");
+        }
         if (good.contains("slice")) {
             for (const char* id : {"-1", "+0", "00", "2147483648", "0\nraw"}) {
                 bad = good; bad.insert("slice", id); f.reject(op, bad, "request.invalid_params");
@@ -215,7 +240,8 @@ void schemaAndAuthorization()
         auto bad = f.params(ReceiveOperation::Mode); bad.insert("mode", mode);
         f.reject(ReceiveOperation::Mode, bad, "request.invalid_params");
     }
-    for (ReceiveOperation op : {ReceiveOperation::Filter, ReceiveOperation::AudioGain, ReceiveOperation::PanCenter, ReceiveOperation::PanBandwidth}) {
+    for (ReceiveOperation op : {ReceiveOperation::Filter, ReceiveOperation::AudioGain, ReceiveOperation::PanCenter,
+                                ReceiveOperation::PanBandwidth, ReceiveOperation::CwPitch}) {
         const char* field = op == ReceiveOperation::Filter ? "lowHz" : op == ReceiveOperation::AudioGain ? "gain" : "hz";
         for (QJsonValue value : {QJsonValue(true), QJsonValue("12"), QJsonValue(1.5), QJsonValue(QJsonValue::Null)}) {
             auto bad = f.params(op); bad.insert(field, value); f.reject(op, bad, "request.invalid_params");
@@ -232,7 +258,8 @@ void dispatchAndReadback()
     for (const auto& [op, method] : kReceiveMethods) {
         Fixture f;
         const bool pan = op == ReceiveOperation::PanCenter || op == ReceiveOperation::PanBandwidth;
-        const ResourceAddress address = pan ? f.panAddress : f.sliceAddress;
+        const ResourceAddress address = op == ReceiveOperation::CwPitch ? f.sessionAddress
+            : pan ? f.panAddress : f.sliceAddress;
         const auto before = *f.store.get(address);
         check(f.service.capabilities(f.controller).value("capabilities").toArray().contains(QString::fromLatin1(method)),
               "qualified operation advertised from action-time capability and observation");
@@ -932,6 +959,106 @@ void hl2DeclaredModesDriveTheControlPlane()
     expect("USB", "DRM", "request.out_of_range",
            "negative control: an UNDECLARED requested mode is declined, slice unharmed");
 }
+
+// radioSession.setCwPitch: one session-wide pitch, admitted from the declared
+// record and a backend-reported pitch, never from the model's own value.
+void cwPitchControl()
+{
+    {
+        Fixture f;
+        const QJsonObject observed = f.store.get(f.sessionAddress)->value
+            .value("receiveObservation").toObject().value("cwPitch").toObject();
+        check(observed.value("known").toBool() && observed.value("hz").toInt() == 600,
+              "the radio session publishes the reported CW pitch");
+        const QJsonObject declared = f.store.get(f.sessionAddress)->value.value("capabilities").toObject()
+            .value("receiveCwPitchControl").toObject();
+        check(declared.value("minimumHz").toInt() == 100 && declared.value("maximumHz").toInt() == 6000
+                  && declared.value("stepHz").toInt() == 10,
+              "the radio session publishes the declared pitch range and step");
+        for (int hz : {99, 6001, 705, 0, -600}) {
+            auto params = f.params(ReceiveOperation::CwPitch); params.insert("hz", hz);
+            f.reject(ReceiveOperation::CwPitch, params, "request.out_of_range");
+        }
+        for (int hz : {100, 6000, 750}) {
+            const int before = f.backend->intents;
+            auto params = f.params(ReceiveOperation::CwPitch); params.insert("hz", hz);
+            check(f.send(ReceiveOperation::CwPitch, params).contains("result")
+                      && f.backend->intents == before + 1 && f.backend->method == "pitch"
+                      && f.backend->args.value("hz").toInt() == hz,
+                  "a declared pitch on the step dispatches exactly one unchanged pitch intent");
+        }
+        check(f.radio.transmitModel().cwPitch() == 600,
+              "acceptance does not write the model's pitch before the backend reports it");
+        const auto stale = f.params(ReceiveOperation::CwPitch);
+        f.reportPitch(750);
+        check(f.store.get(f.sessionAddress)->value.value("receiveObservation").toObject()
+                  .value("cwPitch").toObject().value("hz").toInt() == 750
+                  && f.radio.transmitModel().cwPitch() == 750,
+              "a pitch report updates the published observation and the model");
+        f.reject(ReceiveOperation::CwPitch, stale, "request.conflict");
+        check(f.backend->keys == 0, "pitch control never keys");
+    }
+    {
+        Fixture f;
+        f.radio.transmitModel().resetState();
+        f.radio.transmitModel().setCwPitch(800);
+        check(!f.target->available(ReceiveOperation::CwPitch)
+                  && !f.service.capabilities(f.controller).value("capabilities").toArray()
+                         .contains(QStringLiteral("radioSession.setCwPitch")),
+              "negative control: a model-only pitch is not an observation, so pitch is not offered");
+        f.reject(ReceiveOperation::CwPitch, f.params(ReceiveOperation::CwPitch), "capability.unavailable");
+        f.reportPitch(800);
+        check(f.target->available(ReceiveOperation::CwPitch), "a backend pitch report re-enables pitch control");
+    }
+    {
+        Fixture f;
+        f.backend->caps.receiveCwPitchControl.reset();
+        check(!f.target->available(ReceiveOperation::CwPitch)
+                  && !f.service.capabilities(f.controller).value("capabilities").toArray()
+                         .contains(QStringLiteral("radioSession.setCwPitch")),
+              "negative control: a backend without receiveCwPitchControl is not offered pitch");
+        f.reject(ReceiveOperation::CwPitch, f.params(ReceiveOperation::CwPitch), "capability.unavailable");
+        check(f.target->available(ReceiveOperation::AudioGain),
+              "the other receive controls stay offered without a pitch record");
+    }
+}
+
+// The production records: HL2 declares the pitch and reports what it adopted;
+// Flex, Demo, ANAN and Icom do not declare it.
+void hl2CwPitchIsDeclaredAndReported()
+{
+    FlexBackend flex;
+    SimBackend sim;
+    anan::AnanBackend anan;
+    icom::IcomCivBackend icom;
+    check(!flex.capabilities().receiveCwPitchControl && !sim.capabilities().receiveCwPitchControl
+              && !anan.capabilities().receiveCwPitchControl && !icom.capabilities().receiveCwPitchControl,
+          "Flex, Demo, ANAN and Icom declare no receive CW pitch");
+    hl2::Hl2Backend hl2;
+    const RadioCapabilities caps = hl2.capabilities();
+    check(caps.receiveCwPitchControl && caps.receiveCwPitchControl->minimumHz == 100
+              && caps.receiveCwPitchControl->maximumHz == 6000 && caps.receiveCwPitchControl->stepHz == 10
+              && hl2.receiveControlPolicy() == ReceiveControlPolicy::Optimistic,
+          "HL2 declares a 100..6000 Hz pitch in 10 Hz steps and stays an optimistic backend");
+    QList<int> reports;
+    QObject::connect(&hl2, &IRadioBackend::transmitChanged, &hl2, [&](const TransmitDelta& delta) {
+        if (delta.cwPitch) { reports.append(*delta.cwPitch); }
+    });
+    hl2.setCwPitch(700);
+    check(reports.isEmpty(), "negative control: a disconnected HL2 reports no pitch");
+    hl2::Hl2CwPitchReportTestAccess::setConnected(hl2, true);
+    hl2.setCwPitch(700);
+    hl2.setCwPitch(720);
+    hl2.setCwPitch(9000);
+    hl2::Hl2CwPitchReportTestAccess::setConnected(hl2, false);
+    if (reports != QList<int>{700, 720, 6000}) {
+        std::printf("HL2 pitch reports:");
+        for (int hz : reports) { std::printf(" %d", hz); }
+        std::printf("\n");
+    }
+    check(reports == QList<int>{700, 720, 6000},
+          "a connected HL2 reports the adopted pitch on every call, same value and clamp included");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -948,5 +1075,7 @@ int main(int argc, char** argv)
     productionCapabilityContracts();
     hl2DeclaredFiltersDriveTheControlPlane();
     hl2DeclaredModesDriveTheControlPlane();
+    cwPitchControl();
+    hl2CwPitchIsDeclaredAndReported();
     return failures == 0 ? 0 : 1;
 }

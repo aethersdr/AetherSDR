@@ -19,10 +19,12 @@ schema validation or resource lookup. Unknown fields are rejected.
 | `slice.setAudioMute` | `slice`, `muted` |
 | `panadapter.setCenter` | `panadapter`, `hz` |
 | `panadapter.setBandwidth` | `panadapter`, `hz` |
+| `radioSession.setCwPitch` | `hz` |
 
 `radioSession` must identify the current `radio-1`. Slice IDs are canonical
 nonnegative decimal strings fitting int32; pan IDs are exact opaque resource
-IDs, not backend IDs. `expectedRevision` is the addressed slice/pan revision,
+IDs, not backend IDs. `expectedRevision` is the addressed slice/pan revision
+(the `radioSession` revision for `radioSession.setCwPitch`),
 a positive exact JSON integer at most 2^53-1. Numeric strings, booleans used as
 numbers, fractional numbers, nulls and unknown fields are not coerced.
 
@@ -35,6 +37,11 @@ shift-dependent, FM preset, or digital-voice lease behavior is guessed.
 `muted` is a JSON boolean. Pan `hz` is a positive exact JSON integer; coverage
 uses the same conservative whole-MHz observation ceiling as frequency control.
 Center and bandwidth must leave a positive-frequency viewport.
+CW pitch `hz` is an int32 receive BFO offset shared by every CW receiver of the
+session; it must lie inside the backend's declared `receiveCwPitchControl`
+range and on its step. The backend must have reported a pitch in this session
+(`receiveObservation.cwPitch` on the `radioSession` resource); the client's own
+cached pitch is not an observation.
 
 ```json
 {"v":1,"id":"mode-1","sessionId":"<negotiated>","method":"slice.setMode","params":{"radioSession":"radio-1","slice":"0","expectedRevision":42,"mode":"LSB"}}
@@ -94,14 +101,19 @@ a method only while at least one resource can use it. Every request rechecks
 its own resource. Null records mean unavailable. Refresh after lifecycle,
 capability, ownership and resource changes; advertisement reserves nothing.
 
-| Backend | Mode | Filter | Gain/mute | Pan center | Pan bandwidth |
-|---|---|---|---|---|---|
-| Sim | USB, LSB | unavailable: echo-only | unavailable | unavailable: fixed VFO scene | unavailable: fixed span |
-| Flex | USB/LSB, DIGU/DIGL, AM/SAM/DSB, CW, FM/NFM | USB/LSB, DIGU/DIGL, AM/SAM/DSB | unavailable: legacy wire route | unavailable: unknown coverage | unavailable: coupled legacy geometry |
-| HL2 | USB/LSB, DSB, DIGU/DIGL, AM/SAM, CW/CWL, FM | USB/LSB, DIGU/DIGL, AM/SAM, DSB, CW/CWL, FM | supported | 100 kHz–38.4 MHz | unavailable: radio-wide rate can retire receivers |
-| ANAN | not yet qualified | not yet qualified | supported | unavailable: also retunes slice | 48 kHz–1.536 MHz; backend selects actual rate; rate changes rebuild DSP and restart the P2 session, interrupting streams |
-| RTL-SDR | AM/SAM, FM/FMN/WFM, USB/LSB, CW/CWR | unavailable: DSP does not consume cuts | supported | unavailable: also retunes slice | 225001 Hz–3 MHz; observe actual result |
-| Icom | not yet qualified | profile/preset contract needed | not yet qualified | not yet qualified | not yet qualified |
+| Backend | Mode | Filter | Gain/mute | Pan center | Pan bandwidth | CW pitch |
+|---|---|---|---|---|---|---|
+| Sim | USB, LSB | unavailable: echo-only | unavailable | unavailable: fixed VFO scene | unavailable: fixed span | unavailable |
+| Flex | USB/LSB, DIGU/DIGL, AM/SAM/DSB, CW, FM/NFM | USB/LSB, DIGU/DIGL, AM/SAM/DSB | unavailable: legacy wire route | unavailable: unknown coverage | unavailable: coupled legacy geometry | unavailable: radio-owned `cw pitch` |
+| HL2 | USB/LSB, DSB, DIGU/DIGL, AM/SAM, CW/CWL, FM | USB/LSB, DIGU/DIGL, AM/SAM, DSB, CW/CWL, FM | supported | 100 kHz–38.4 MHz | unavailable: radio-wide rate can retire receivers | 100–6000 Hz, step 10 |
+| ANAN | not yet qualified | not yet qualified | supported | unavailable: also retunes slice | 48 kHz–1.536 MHz; backend selects actual rate; rate changes rebuild DSP and restart the P2 session, interrupting streams | not yet qualified |
+| RTL-SDR | AM/SAM, FM/FMN/WFM, USB/LSB, CW/CWR | unavailable: DSP does not consume cuts | supported | unavailable: also retunes slice | 225001 Hz–3 MHz; observe actual result | 100–6000 Hz, step 10 |
+| Icom | not yet qualified | profile/preset contract needed | not yet qualified | not yet qualified | not yet qualified | not yet qualified |
+
+HL2 and RTL demodulate on this host, so the pitch is their receive BFO and the
+record is `receiveCwPitchControl`. The HL2 reports the pitch it adopted on every
+`setCwPitch` while connected, including the connect-time push of the model's
+pitch; RTL reports it after DSP adoption.
 
 ANAN gain/mute is applied in the backend's own mixer, because it demodulates on
 this host: the per-slice mute and AF gain (and balance, which has no record here)

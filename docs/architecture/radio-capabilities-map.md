@@ -1143,8 +1143,10 @@ ASan-flaky IC-9700 block; #5443 tracks recovering the rest of that coverage.
 
 `receiveCwPitchControl` declares a session-wide receive BFO pitch range and step.
 It uses the existing `setCwPitch` verb, with accepted pitch reported through
-`TransmitDelta::cwPitch`. The record grants no transmit or microphone path;
-`hostModulates` remains independent. A backend using confirmed receive controls
+`TransmitDelta::cwPitch`; aetherd offers `radioSession.setCwPitch` from it. The
+record grants no transmit or microphone path; `hostModulates` remains
+independent. An optimistic backend (HL2) declaring it keeps the model's pitch
+edge route to `setCwPitch`. A backend using confirmed receive controls
 publishes pitch only after DSP adoption, and the shared model forwards operator
 intent without optimistically changing the observed pitch or sending a raw Flex
 command. An accepted pitch report is never routed back as another pitch request.

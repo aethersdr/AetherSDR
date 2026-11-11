@@ -1,6 +1,7 @@
 #include "ReceiveControlTarget.h"
 #include "ReceiveControlGuard.h"
 #include "models/PanadapterModel.h"
+#include "models/TransmitModel.h"
 
 #include <QHash>
 #include <QSet>
@@ -53,6 +54,9 @@ public:
     {
         if (thread() != QThread::currentThread() || !m_guard.ready()) {
             return false;
+        }
+        if (op == ReceiveOperation::CwPitch) {
+            return !checkCwPitch();
         }
         if (op == ReceiveOperation::PanCenter || op == ReceiveOperation::PanBandwidth) {
             for (PanadapterModel* pan : m_radio->panadapters()) {
@@ -154,6 +158,19 @@ public:
         return setPan(id, hz, ReceiveOperation::PanBandwidth);
     }
 
+    std::optional<ProtocolError> setCwPitch(int hz) override
+    {
+        if (const auto error = checkCwPitch()) {
+            return error;
+        }
+        const ReceiveCwPitchControl pitch = *m_radio->backendCapabilities().receiveCwPitchControl;
+        if (hz < pitch.minimumHz || hz > pitch.maximumHz || (hz - pitch.minimumHz) % pitch.stepHz != 0) {
+            return refusal("request.out_of_range", "CW pitch is outside the declared range or step");
+        }
+        m_radio->backend()->setCwPitch(hz);
+        return {};
+    }
+
 private:
     static ProtocolError refusal(const char* code, const char* message)
     {
@@ -202,6 +219,25 @@ private:
         }
         return supported ? std::nullopt : std::optional<ProtocolError>(
             refusal("capability.unavailable", "receive operation or observation unavailable"));
+    }
+
+    // The pitch must be declared and reported by this session's backend; the
+    // model's own value is not an observation.
+    std::optional<ProtocolError> checkCwPitch() const
+    {
+        if (thread() != QThread::currentThread()) {
+            return refusal("request.conflict", "receive target owning thread required");
+        }
+        const RadioCapabilities caps = m_radio ? m_radio->backendCapabilities() : RadioCapabilities{};
+        if (const auto error = m_guard.checkTransmit(caps)) {
+            return error;
+        }
+        const auto& pitch = caps.receiveCwPitchControl;
+        if (!pitch || pitch->minimumHz <= 0 || pitch->maximumHz < pitch->minimumHz || pitch->stepHz <= 0
+            || !m_radio->transmitModel().reportedCwPitch()) {
+            return refusal("capability.unavailable", "CW pitch control or observation unavailable");
+        }
+        return {};
     }
 
     std::optional<ProtocolError> checkPan(const QString& id, ReceiveOperation op) const

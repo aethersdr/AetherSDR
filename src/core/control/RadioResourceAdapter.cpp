@@ -4,6 +4,7 @@
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QJsonArray>
 #include <QtMath>
@@ -113,6 +114,11 @@ QJsonObject capabilityValue(const RadioCapabilities& capabilities)
             : QJsonValue(QJsonValue::Null)},
         {QStringLiteral("receivePanCenterControl"), receiveRange(capabilities.receivePanCenterControl)},
         {QStringLiteral("receivePanBandwidthControl"), receiveRange(capabilities.receivePanBandwidthControl)},
+        {QStringLiteral("receiveCwPitchControl"), capabilities.receiveCwPitchControl
+            ? QJsonValue(QJsonObject{{QStringLiteral("minimumHz"), capabilities.receiveCwPitchControl->minimumHz},
+                {QStringLiteral("maximumHz"), capabilities.receiveCwPitchControl->maximumHz},
+                {QStringLiteral("stepHz"), capabilities.receiveCwPitchControl->stepHz}})
+            : QJsonValue(QJsonValue::Null)},
         {QStringLiteral("canTransmit"), capabilities.canTransmit},
         {QStringLiteral("maximumTransmitWatts"), capabilities.txPowerMaxWatts},
         {QStringLiteral("hasTuner"), capabilities.hasTuner},
@@ -156,6 +162,8 @@ RadioResourceAdapter::RadioResourceAdapter(
     connect(m_radio, &RadioModel::capabilitiesChanged,
             this, [this] { publishRadioSession(); });
     connect(m_radio, &RadioModel::backendRebuilt,
+            this, [this] { publishRadioSession(); });
+    connect(&m_radio->transmitModel(), &TransmitModel::cwPitchReported,
             this, [this] { publishRadioSession(); });
 
     connect(m_radio, &RadioModel::sliceAdded,
@@ -366,6 +374,13 @@ void RadioResourceAdapter::publishRadioSession()
              {QStringLiteral("version"), m_radio->version()},
              {QStringLiteral("manufacturer"), capabilities.manufacturer}}},
         {QStringLiteral("capabilities"), capabilityValue(capabilities)}};
+    // Session-wide, so it lives here rather than on each slice.
+    const std::optional<int> pitch = m_radio->isConnected()
+        ? m_radio->transmitModel().reportedCwPitch() : std::nullopt;
+    value.insert(QStringLiteral("receiveObservation"), QJsonObject{
+        {QStringLiteral("cwPitch"), QJsonObject{
+            {QStringLiteral("known"), pitch.has_value()},
+            {QStringLiteral("hz"), observedValue(pitch)}}}});
     if (m_telemetry) {
         value.insert(QStringLiteral("meterDelivery"), m_telemetry->meterDelivery());
     }

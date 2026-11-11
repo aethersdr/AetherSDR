@@ -303,6 +303,9 @@ private:
     // Marks the backend connected and reaches its MetisClient, so the
     // `ioboard.status` verb can be followed to the client and back without a socket.
     friend struct Hl2IoBoardStatusTestAccess;
+    // Marks the backend connected so control_receive_test reads the CW pitch
+    // report setCwPitch publishes. Reaches nothing else.
+    friend struct Hl2CwPitchReportTestAccess;
     // Reads the receive shift/NCO and adds a second receiver's state without a
     // socket or DSP, for hl2_rit_xit_test. Reaches nothing else.
     friend struct Hl2RitXitTestAccess;
