@@ -48,14 +48,14 @@ void RadioModel::applyIqStreamDelta(const AudioStreamDelta& delta)
         m_daxIqModel.handleStreamRemoved(streamId);
     };
     // Any removed stream leaves the registry, whatever its type.
-    if (delta.removed || delta.invalidOwner) {
+    if (delta.removed) {
         leave();
         qCDebug(lcDax) << "RadioModel: unregistered removed DAX IQ stream" << "0x" + QString::number(streamId, 16);
         return;
     }
     if (delta.kind != AudioStreamKind::Iq) { return; }
-    // A stream with no owner field is taken as ours, as is 0x0 unless it is a
-    // dead orphan at 0.0.0.0.
+    // A stream with no owner of its own (no field, 0x0, or one that does not
+    // parse) is taken as ours, unless it is a dead orphan at 0.0.0.0.
     const bool ours = delta.clientHandle ? *delta.clientHandle == ourClientHandle() : !delta.orphaned;
     if (!ours) {
         leave();

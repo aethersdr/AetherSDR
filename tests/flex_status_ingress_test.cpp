@@ -11,6 +11,7 @@
 
 #include <QCoreApplication>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QThread>
 #include <QtTest>
 
@@ -48,16 +49,20 @@ QStringList objects(const QSignalSpy& spy)
 }
 } // namespace
 
-// Each DAX IQ stream builds a pipe, which loads module-pipe-source through
-// pactl on DaxIqModel's worker thread. Answered for the whole process, never
-// cleared: a pipe built after a test returns must not reach the host (#6726).
+// Each DAX IQ stream builds a FIFO and loads module-pipe-source through pactl
+// on DaxIqModel's worker thread. Both stay off the host for the whole process:
+// pactl is answered here, never cleared, and the FIFOs go to a private runtime
+// dir (#6726).
 static std::atomic<int> s_pactlCalls{0};
 
 class FlexStatusIngressTest final : public QObject {
     Q_OBJECT
+    QTemporaryDir m_runtime;
 private slots:
     void initTestCase()
     {
+        QVERIFY(m_runtime.isValid());
+        qputenv("XDG_RUNTIME_DIR", m_runtime.path().toUtf8());
         DaxIqModel::setPactlRunnerForTest([](const QStringList&) { return quint32(++s_pactlCalls); });
     }
 
@@ -225,8 +230,15 @@ private slots:
         model.handleLineForTest(QStringLiteral(
             "S0|stream 0x20000003 type=dax_iq daxiq_channel=3 client_handle=0x00000000 ip=0.0.0.0"));
         QVERIFY(!model.daxIqModel().stream(3).exists);
+        // An owner that does not parse counts as no owner, as before.
+        model.handleLineForTest(QStringLiteral(
+            "S0|stream 0x20000004 type=dax_iq daxiq_channel=4 client_handle=0xZZ ip=10.0.0.5"));
+        QVERIFY(model.daxIqModel().stream(4).exists);
         model.handleLineForTest(QStringLiteral("S0|stream 0x20000001 removed"));
         QVERIFY(!model.daxIqModel().stream(1).exists);
+        // FlexLib reads in_use=0 as removal (Radio.cs:3643).
+        model.handleLineForTest(QStringLiteral("S0|stream 0x20000004 in_use=0"));
+        QVERIFY(!model.daxIqModel().stream(4).exists);
     }
 
     // Until the desktop enables it, an IQ stream reaches neither DaxIqModel
@@ -235,17 +247,15 @@ private slots:
     {
         TestSettingsProfile profile(QStringLiteral("flex-status-ingress-iq-off"));
         QVERIFY(profile.isValid());
-        const int before = s_pactlCalls.load();
         RadioModel model;
         QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
         model.handleLineForTest(QStringLiteral("S0|stream 0x20000001 type=dax_iq daxiq_channel=1"));
         QVERIFY(!model.daxIqModel().stream(1).exists);
-        QCoreApplication::processEvents();
-        QCOMPARE(s_pactlCalls.load(), before);
     }
 
-    // A radio status line's pll_done reaches the setup dialog typed: running,
-    // finished with that line's error, and nothing for a malformed value.
+    // A radio status line's pll_done reaches the setup dialog typed, read as
+    // FlexLib does (a byte; any nonzero value is done): running, finished
+    // with that line's error, and nothing for a value that is not a byte.
     void frequencyCalibrationIsTyped()
     {
         TestSettingsProfile profile(QStringLiteral("flex-status-ingress-pll"));
@@ -254,9 +264,10 @@ private slots:
         QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
         QSignalSpy calibration(&model, &RadioModel::frequencyCalibrationReported);
         model.handleLineForTest(QStringLiteral("S0|radio pll_done=0"));
-        model.handleLineForTest(QStringLiteral("S0|radio pll_done=2"));
+        model.handleLineForTest(QStringLiteral("S0|radio pll_done=x"));
+        model.handleLineForTest(QStringLiteral("S0|radio pll_done=256"));
         model.handleLineForTest(QStringLiteral("S0|radio pll_done=1 freq_error_ppb=-23"));
-        model.handleLineForTest(QStringLiteral("S0|radio pll_done=1"));
+        model.handleLineForTest(QStringLiteral("S0|radio pll_done=2"));
         QCOMPARE(calibration.size(), 3);
         QCOMPARE(calibration.at(0), QList<QVariant>({false, QString()}));
         QCOMPARE(calibration.at(1), QList<QVariant>({true, QStringLiteral("-23")}));

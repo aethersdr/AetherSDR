@@ -1948,8 +1948,11 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
     // Calibration / defaults
     carry(kvs, "freq_error_ppb", d.freqErrorPpb);
     carry(kvs, "cal_freq", d.calFreqMhz);
-    if (const QString pll = kvs.value(QStringLiteral("pll_done")); pll == QLatin1String("0") || pll == QLatin1String("1")) {
-        d.pllDone = pll == QLatin1String("1");
+    // FlexLib v4.3.16 Radio.cs:4352: a byte, any nonzero value is done.
+    if (kvs.contains(QStringLiteral("pll_done"))) {
+        bool ok = false;
+        const uint pll = kvs.value(QStringLiteral("pll_done")).toUInt(&ok);
+        if (ok && pll <= 255) { d.pllDone = pll != 0; }
     }
     carry(kvs, "rtty_mark_default", d.rttyMarkDefault);
     // Audio outputs

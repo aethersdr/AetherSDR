@@ -3,6 +3,8 @@
 # Usage: AETHER_INGRESS_CORPUS=tests/data/flex_ingress_corpus.txt build/flex_ingress_characterization_test -vs > raw; tools/flex_ingress_trace.py raw
 import re, sys
 # Normalize a QtTest -vs trace: keep model-visible signals per fed line.
+# RadioModel's statusReceived relay is gone; it stays filtered so a trace
+# still diffs cleanly against the stage 0 baseline recorded on main.
 drop = re.compile(r'QFileDevice|QSaveFile|QFile\(|QEventDispatcher|QThread\(|QTimer\(|QSocketNotifier|objectNameChanged|destroyed \(|'
                   r'AetherSDR::RadioConnection\(|AetherSDR::WanConnection\(|AetherSDR::FlexStatusIngress\(|statusLineAccepted|RadioModel\([0-9a-f]*\) statusReceived|QAbstractEventDispatcher|deleteLater')
 out = []

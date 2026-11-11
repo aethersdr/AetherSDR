@@ -563,12 +563,14 @@ void FlexStatusIngress::decodeNtpSourceStatus(const QString& rawBody)
 void FlexStatusIngress::decodeAudioStreamStatus(const QString& object, const QMap<QString, QString>& kvs)
 {
     if (QThread::currentThread() != thread()) { return; }
-    static const QRegularExpression pattern(QStringLiteral("\\A(stream|tx_audio_stream) (0x[0-9a-fA-F]{1,8})(?: (removed))?\\z"));
+    // FlexLib StringHelper.TryParseInteger: a 0x-prefixed hex id or decimal.
+    static const QRegularExpression pattern(QStringLiteral("\\A(stream|tx_audio_stream) ([^\\s]+)(?: (removed))?\\z"));
     const QRegularExpressionMatch match = pattern.match(object);
     if (!match.hasMatch()) { return; }
+    const std::optional<quint32> streamId = daxTxIdentity(match.captured(2));
+    if (!streamId) { return; }
     AudioStreamDelta delta;
-    delta.streamId = RadioStatusOwnership::parseFlexId(match.captured(2));
-    if (delta.streamId == 0) { return; }
+    delta.streamId = *streamId;
     delta.removed = match.captured(3) == QLatin1String("removed") || kvs.contains(QStringLiteral("removed"))
         || kvs.value(QStringLiteral("in_use")) == QLatin1String("0");
     const QString type = match.captured(1) == QLatin1String("tx_audio_stream")
@@ -589,7 +591,8 @@ void FlexStatusIngress::decodeAudioStreamStatus(const QString& object, const QMa
         const bool zero = owner == 0 && digits.toUInt(&parsed, 16) == 0 && parsed;
         if (owner != 0) { delta.clientHandle = owner; }
         else if (!zero) { delta.invalidOwner = true; }
-        else { delta.orphaned = kvs.value(QStringLiteral("ip")).trimmed() == QLatin1String("0.0.0.0"); }
+        // 0x0, or an owner that does not parse, at 0.0.0.0 is a dead orphan.
+        if (owner == 0) { delta.orphaned = kvs.value(QStringLiteral("ip")).trimmed() == QLatin1String("0.0.0.0"); }
     }
     const bool iqChannel = kvs.contains(QStringLiteral("daxiq_channel"));
     const QString channelKey = iqChannel ? QStringLiteral("daxiq_channel") : QStringLiteral("dax_channel");

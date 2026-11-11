@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "PanControlTestFixture.h"
 #include "core/backends/sim/SimBackend.h"
+#include "IqStatusFixture.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -13,19 +14,6 @@
 #include <thread>
 #include <vector>
 
-// The IQ stream delta the status decoder produces for these fields.
-static AetherSDR::AudioStreamDelta iqStatus(quint32 streamId, const QMap<QString, QString>& fields)
-{
-    AetherSDR::AudioStreamDelta delta;
-    delta.streamId = streamId;
-    delta.kind = AetherSDR::AudioStreamKind::Iq;
-    bool ok = false;
-    if (const int ch = fields.value(QStringLiteral("daxiq_channel")).toInt(&ok); ok) { delta.channel = ch; }
-    if (const int rate = fields.value(QStringLiteral("daxiq_rate")).toInt(&ok); ok) { delta.iqRate = rate; }
-    if (fields.contains(QStringLiteral("pan"))) { delta.pan = fields.value(QStringLiteral("pan")); }
-    if (fields.contains(QStringLiteral("active"))) { delta.active = fields.value(QStringLiteral("active")) == QLatin1String("1"); }
-    return delta;
-}
 
 
 using namespace AetherSDR;
