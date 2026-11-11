@@ -481,15 +481,22 @@ setting survives a restart gets tested against the running app.
 (`SimBackend`), never the operator's FLEX-8600.** This is opt-*out*:
 `AutoConnectToLastRadio` defaults on, and the operator's saved settings point
 at the real radio, so a default-config instance connects itself to live
-hardware before you issue a verb. Two guards, both mandatory — isolate the
-settings store (`AETHER_SETTINGS_DIR` at a fresh scratch dir, or a scratch
-`HOME`/`XDG_CONFIG_HOME`), and connect explicitly to `DEMO-0001` and nothing
-else. If `get radio` ever shows a FLEX serial, `disconnect` immediately, fix
+hardware before you issue a verb. Two guards, both mandatory — isolate every
+store, and connect explicitly to `DEMO-0001` and nothing else.
+`AETHER_SETTINGS_DIR` moves only the settings store and the logs; MIDI,
+firmware staging, ASR models, themes and the spot-feed configs follow
+`QStandardPaths`, so also point `HOME` and the `XDG_*` directories (Linux), or
+`HOME` and `CFFIXED_USER_HOME` (macOS, where CoreFoundation ignores `HOME`),
+at scratch. `/pr-review` step 8 has the details. If `get radio` ever shows a FLEX serial, `disconnect` immediately, fix
 the isolation, and say so in the report.
 
 ```sh
 export SCRATCH=<your scratch dir>
+mkdir -p "$SCRATCH"/{home,config,data,cache,settings}
 AETHER_AUTOMATION=1 QT_QPA_PLATFORM=offscreen \
+HOME="$SCRATCH/home" CFFIXED_USER_HOME="$SCRATCH/home" \
+XDG_CONFIG_HOME="$SCRATCH/config" \
+XDG_DATA_HOME="$SCRATCH/data" XDG_CACHE_HOME="$SCRATCH/cache" \
 AETHER_SETTINGS_DIR="$SCRATCH/settings" \
 AETHER_AUTOMATION_IDENTITY=pr-<PR>-land \
 AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR> \
