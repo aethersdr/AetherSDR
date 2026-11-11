@@ -808,8 +808,7 @@ void MainWindow::readWsprReceiverSlice(const QHostAddress& radio, std::function<
     auto* client = new WsprAgentClient(this);
     client->setRadioAddress(radio);
     auto finish = std::make_shared<std::function<void(int)>>();
-    *finish = [this, client, finish, done = std::move(done)](int sliceIndex) mutable {
-        *finish = nullptr;   // once; also breaks the self-reference
+    *finish = [this, client, done = std::move(done)](int sliceIndex) {
         client->disconnect(this);
         client->cancel();
         client->deleteLater();
@@ -818,8 +817,11 @@ void MainWindow::readWsprReceiverSlice(const QHostAddress& radio, std::function<
         }
         if (done) done();
     };
+    // Once: taken out before it runs, so it never runs while being destroyed.
     auto call = [finish](int sliceIndex) {
-        if (*finish) (*finish)(sliceIndex);
+        if (auto run = std::exchange(*finish, nullptr)) {
+            run(sliceIndex);
+        }
     };
     connect(client, &WsprAgentClient::statusReceived, this,
             [call](const WsprStatus& status) { call(status.sliceIndex); });
