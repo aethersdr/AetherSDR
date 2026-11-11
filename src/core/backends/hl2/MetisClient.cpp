@@ -378,6 +378,11 @@ bool MetisClient::start(const Params& params)
     m_ioBoardTxFreqSent = false;
     m_ioBoardTxFreqHz = 0;
 
+    // A test standing in for the wire (hl2_persist_*_test): the session state
+    // above is reset as for any connect, and no socket is opened.
+    if (m_startTransportForTest)
+        return m_startTransportForTest(params);
+
     m_socket = new QUdpSocket(this);
     const QHostAddress bindAddress = params.localAddress.isNull()
         ? QHostAddress::AnyIPv4 : params.localAddress;

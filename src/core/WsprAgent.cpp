@@ -424,5 +424,23 @@ QString writeBundledPackage(const WsprPackage::Pin& pin, const QString& dir, QSt
     return target;
 }
 
+bool updateAvailable(const QString& installed)
+{
+    static const QRegularExpression re(QStringLiteral("^(\\d{1,6})\\.(\\d{1,6})\\.(\\d{1,6})"));
+    const QRegularExpressionMatch have = re.match(installed);
+    const QRegularExpressionMatch bundled = re.match(QString::fromLatin1(WsprPackage::kVersion));
+    if (!have.hasMatch() || !bundled.hasMatch()) {
+        return false;
+    }
+    for (int i = 1; i <= 3; ++i) {
+        const int a = have.captured(i).toInt();
+        const int b = bundled.captured(i).toInt();
+        if (a != b) {
+            return a < b;
+        }
+    }
+    return false;
+}
+
 }  // namespace wspr
 }  // namespace AetherSDR
