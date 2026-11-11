@@ -115,7 +115,8 @@ QJsonObject capabilityValue(const RadioCapabilities& capabilities)
         {QStringLiteral("receivePanCenterControl"), receiveRange(capabilities.receivePanCenterControl)},
         {QStringLiteral("receivePanBandwidthControl"), receiveRange(capabilities.receivePanBandwidthControl)},
         {QStringLiteral("receiveCwPitchControl"), capabilities.receiveCwPitchControl
-            ? QJsonValue(QJsonObject{{QStringLiteral("minimumHz"), capabilities.receiveCwPitchControl->minimumHz},
+            ? QJsonValue(QJsonObject{{QStringLiteral("authority"), receiveAuthority(capabilities.receiveCwPitchControl)},
+                {QStringLiteral("minimumHz"), capabilities.receiveCwPitchControl->minimumHz},
                 {QStringLiteral("maximumHz"), capabilities.receiveCwPitchControl->maximumHz},
                 {QStringLiteral("stepHz"), capabilities.receiveCwPitchControl->stepHz}})
             : QJsonValue(QJsonValue::Null)},
@@ -163,8 +164,13 @@ RadioResourceAdapter::RadioResourceAdapter(
             this, [this] { publishRadioSession(); });
     connect(m_radio, &RadioModel::backendRebuilt,
             this, [this] { publishRadioSession(); });
-    connect(&m_radio->transmitModel(), &TransmitModel::cwPitchReported,
-            this, [this] { publishRadioSession(); });
+    connect(&m_radio->transmitModel(), &TransmitModel::cwPitchReported, this, [this] {
+        const std::optional<int> pitch = m_radio->isConnected()
+            ? m_radio->transmitModel().reportedCwPitch() : std::nullopt;
+        if (pitch != m_publishedCwPitch) {
+            publishRadioSession();
+        }
+    });
     connect(m_radio, &RadioModel::frontEndOverloadChanged,
             this, [this](const FrontEndOverload& state) {
                 m_frontEndOverload = state;
@@ -382,6 +388,7 @@ void RadioResourceAdapter::publishRadioSession()
     // Session-wide, so it lives here rather than on each slice.
     const std::optional<int> pitch = m_radio->isConnected()
         ? m_radio->transmitModel().reportedCwPitch() : std::nullopt;
+    m_publishedCwPitch = pitch;
     value.insert(QStringLiteral("receiveObservation"), QJsonObject{
         {QStringLiteral("cwPitch"), QJsonObject{
             {QStringLiteral("known"), pitch.has_value()},

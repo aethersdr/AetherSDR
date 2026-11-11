@@ -132,7 +132,7 @@ struct Fixture {
         backend->caps.receiveAudioControl = ReceiveAudioControl{Authority::Engine};
         backend->caps.receivePanCenterControl = ReceivePanRangeControl{Authority::Engine, 100000, 60000000};
         backend->caps.receivePanBandwidthControl = ReceivePanRangeControl{Authority::Engine, 48000, 1536000};
-        backend->caps.receiveCwPitchControl = ReceiveCwPitchControl{100, 6000, 10};
+        backend->caps.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine, 100, 6000, 10};
         radio.setBackendForTest(std::move(owned), QStringLiteral("receive-test"));
         check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "socket-free owned slice installed");
         target = makeModelReceiveControlTarget(&radio, &connection);
@@ -975,9 +975,10 @@ void cwPitchControl()
               "the radio session publishes the reported CW pitch");
         const QJsonObject declared = f.store.get(f.sessionAddress)->value.value("capabilities").toObject()
             .value("receiveCwPitchControl").toObject();
-        check(declared.value("minimumHz").toInt() == 100 && declared.value("maximumHz").toInt() == 6000
+        check(declared.value("authority").toString() == QLatin1String("engine")
+                  && declared.value("minimumHz").toInt() == 100 && declared.value("maximumHz").toInt() == 6000
                   && declared.value("stepHz").toInt() == 10,
-              "the radio session publishes the declared pitch range and step");
+              "the radio session publishes the declared pitch authority, range and step");
         for (int hz : {99, 6001, 705, 0, -600}) {
             auto params = f.params(ReceiveOperation::CwPitch); params.insert("hz", hz);
             f.reject(ReceiveOperation::CwPitch, params, "request.out_of_range");
@@ -1028,9 +1029,10 @@ void cwPitchControl()
     {
         rtl::RtlSdrBackend rtl;
         const auto pitch = rtl.capabilities().receiveCwPitchControl;
-        check(pitch && pitch->minimumHz == 100 && pitch->maximumHz == 6000 && pitch->stepHz == 10
+        check(pitch && pitch->authority == SliceFrequencyControl::Authority::Engine
+                  && pitch->minimumHz == 100 && pitch->maximumHz == 6000 && pitch->stepHz == 10
                   && rtl.receiveControlPolicy() == ReceiveControlPolicy::Confirmed,
-              "RTL declares a 100..6000 Hz pitch in 10 Hz steps and confirms it");
+              "RTL declares an engine-owned 100..6000 Hz pitch in 10 Hz steps and confirms it");
     }
 #endif
     {
@@ -1066,10 +1068,12 @@ void hl2CwPitchIsDeclaredAndReported()
           "Flex, Demo, ANAN and Icom declare no receive CW pitch");
     hl2::Hl2Backend hl2;
     const RadioCapabilities caps = hl2.capabilities();
-    check(caps.receiveCwPitchControl && caps.receiveCwPitchControl->minimumHz == 100
+    check(caps.receiveCwPitchControl
+              && caps.receiveCwPitchControl->authority == SliceFrequencyControl::Authority::Engine
+              && caps.receiveCwPitchControl->minimumHz == 100
               && caps.receiveCwPitchControl->maximumHz == 6000 && caps.receiveCwPitchControl->stepHz == 10
               && hl2.receiveControlPolicy() == ReceiveControlPolicy::Optimistic,
-          "HL2 declares a 100..6000 Hz pitch in 10 Hz steps and stays an optimistic backend");
+          "HL2 declares an engine-owned 100..6000 Hz pitch in 10 Hz steps and stays an optimistic backend");
     QList<int> reports;
     QObject::connect(&hl2, &IRadioBackend::transmitChanged, &hl2, [&](const TransmitDelta& delta) {
         if (delta.cwPitch) { reports.append(*delta.cwPitch); }

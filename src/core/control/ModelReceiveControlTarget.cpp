@@ -160,10 +160,11 @@ public:
 
     std::optional<ProtocolError> setCwPitch(int hz) override
     {
-        if (const auto error = checkCwPitch()) {
+        const RadioCapabilities caps = m_radio ? m_radio->backendCapabilities() : RadioCapabilities{};
+        if (const auto error = checkCwPitch(caps)) {
             return error;
         }
-        const ReceiveCwPitchControl pitch = *m_radio->backendCapabilities().receiveCwPitchControl;
+        const ReceiveCwPitchControl pitch = *caps.receiveCwPitchControl;
         if (hz < pitch.minimumHz || hz > pitch.maximumHz || (hz - pitch.minimumHz) % pitch.stepHz != 0) {
             return refusal("request.out_of_range", "CW pitch is outside the declared range or step");
         }
@@ -225,10 +226,13 @@ private:
     // model's own value is not an observation.
     std::optional<ProtocolError> checkCwPitch() const
     {
+        return checkCwPitch(m_radio ? m_radio->backendCapabilities() : RadioCapabilities{});
+    }
+    std::optional<ProtocolError> checkCwPitch(const RadioCapabilities& caps) const
+    {
         if (thread() != QThread::currentThread()) {
             return refusal("request.conflict", "receive target owning thread required");
         }
-        const RadioCapabilities caps = m_radio ? m_radio->backendCapabilities() : RadioCapabilities{};
         if (const auto error = m_guard.checkTransmit(caps)) {
             return error;
         }

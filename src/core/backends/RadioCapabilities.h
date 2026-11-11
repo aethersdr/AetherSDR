@@ -113,6 +113,7 @@ struct ReceiveDspControl {
 // through TransmitDelta::cwPitch. Presence grants no transmit or microphone path;
 // the model's pitch is bypassed only under ReceiveControlPolicy::Confirmed.
 struct ReceiveCwPitchControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     int minimumHz = 100;
     int maximumHz = 6000;
     int stepHz = 10;

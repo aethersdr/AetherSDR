@@ -1142,7 +1142,8 @@ ASan-flaky IC-9700 block; #5443 tracks recovering the rest of that coverage.
 
 ## Confirmed host receive controls
 
-`receiveCwPitchControl` declares a session-wide receive BFO pitch range and step.
+`receiveCwPitchControl` declares a session-wide receive BFO pitch range and step,
+with the same `authority` as the other receive records (`Engine` on the HL2 and RTL).
 It uses the existing `setCwPitch` verb, with accepted pitch reported through
 `TransmitDelta::cwPitch`; aetherd offers `radioSession.setCwPitch` from it. The
 record grants no transmit or microphone path; `hostModulates` remains

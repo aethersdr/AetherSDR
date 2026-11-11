@@ -2024,7 +2024,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     // The BFO pitch is host DSP: setCwPitch adopts it and reports it back as
     // TransmitDelta::cwPitch. Same range and step as cwPitchMinHz..cwPitchMaxHz.
-    c.receiveCwPitchControl = ReceiveCwPitchControl{c.cwPitchMinHz, c.cwPitchMaxHz, c.cwPitchStepHz};
+    c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine,
+        c.cwPitchMinHz, c.cwPitchMaxHz, c.cwPitchStepHz};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,

@@ -237,8 +237,8 @@ commands. Create a new instance to restart discovery.
   - Optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`,
     `receivePanCenterControl`, `receivePanBandwidthControl`,
     `receiveCwPitchControl`: null when unqualified. Records carry `authority`
-    (`radio`, `engine`, `unknown`), except `receiveCwPitchControl`, which
-    carries inclusive `minimumHz`/`maximumHz` and `stepHz` for the session-wide
+    (`radio`, `engine`, `unknown`). `receiveCwPitchControl` also carries
+    inclusive `minimumHz`/`maximumHz` and `stepHz` for the session-wide
     receive BFO pitch. Mode carries `modes`; filter carries per-mode
     minimum/maximum low cut, high cut and width; audio carries gain bounds
     0–100; pan records carry inclusive `minimumHz`/`maximumHz`. See the
