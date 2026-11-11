@@ -4843,6 +4843,7 @@ if(NOT WIN32)
         tools/pd-waveform/pd_sim.c
         tools/pd-waveform/pd_core.c
         tools/pd-waveform/pd_align.c
+        tools/pd-waveform/pd_eq.c
         ${PS_WAVEFORM_WDSP_SOURCES})
     set_source_files_properties(${PS_WAVEFORM_WDSP_SOURCES}
         TARGET_DIRECTORY pd_waveform_sim_test PROPERTIES COMPILE_OPTIONS "-w")
@@ -4871,6 +4872,7 @@ if(NOT WIN32)
         tools/pd-waveform/pd_waveform.c
         tools/pd-waveform/pd_core.c
         tools/pd-waveform/pd_align.c
+        tools/pd-waveform/pd_eq.c
         ${PS_WAVEFORM_WDSP_SOURCES})
     set_source_files_properties(${PS_WAVEFORM_WDSP_SOURCES}
         TARGET_DIRECTORY pd_waveform_selftest PROPERTIES COMPILE_OPTIONS "-w")
@@ -4885,6 +4887,26 @@ if(NOT WIN32)
     target_link_libraries(pd_waveform_selftest PRIVATE ${FFTW3_LIBRARIES} Threads::Threads m)
     add_test(NAME pd_waveform_selftest COMMAND pd_waveform_selftest selftest)
     set_tests_properties(pd_waveform_selftest PROPERTIES TIMEOUT 60)
+
+    # not registered: needs a bench capture (AETHER_PD_DUMP) as its input.
+    # Replays aligned pairs through the calibration offline:
+    #   ninja pd_waveform_replay && ./pd_waveform_replay pairs.f32 --skip 1 --eq 31
+    add_executable(pd_waveform_replay EXCLUDE_FROM_ALL
+        tools/pd-waveform/pd_replay.c
+        tools/pd-waveform/pd_core.c
+        tools/pd-waveform/pd_eq.c
+        ${PS_WAVEFORM_WDSP_SOURCES})
+    set_source_files_properties(${PS_WAVEFORM_WDSP_SOURCES}
+        TARGET_DIRECTORY pd_waveform_replay PROPERTIES COMPILE_OPTIONS "-w")
+    set_property(TARGET pd_waveform_replay PROPERTY C_STANDARD 11)
+    set_property(TARGET pd_waveform_replay PROPERTY C_EXTENSIONS ON)
+    target_compile_options(pd_waveform_replay PRIVATE
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wdsp/port/include/wdsp_port.h")
+    target_include_directories(pd_waveform_replay PRIVATE
+        third_party/wdsp/upstream third_party/wdsp/port/include third_party/wdsp/include
+        ${FFTW3_INCLUDE_DIRS})
+    target_link_directories(pd_waveform_replay PRIVATE ${FFTW3_LIBRARY_DIRS})
+    target_link_libraries(pd_waveform_replay PRIVATE ${FFTW3_LIBRARIES} Threads::Threads m)
 endif()
 
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,

@@ -8,10 +8,14 @@
 //   feedback  DAX IQ from a panadapter fed by an external coupler on the
 //             transmit side's receive input (RX_A for ANT1), during TX
 //             -> mixed to the transmit frequency, decimated to 24 kHz
-//             -> pd_align -> pd_core_calibrate
+//             -> pd_align -> pd_eq -> pd_core_calibrate
 //
 // It never keys the radio: it sends transmit samples only in answer to the
-// radio's own transmit stream, which flows while the operator transmits.
+// radio's own transmit stream, and only while the interlock is PTT_REQUESTED
+// or TRANSMITTING. At UNKEY_REQUESTED it goes silent at once, as the
+// waveform-sdk example does: the radio finishes unkeying only when the
+// waveform stops sending (FLEX-8600, 2026-11-11: answering on through
+// UNKEY_REQUESTED held a test two-tone on the air until the slice left PD).
 //
 // Protocol: the waveform API as FlexRadio's public waveform-sdk uses it
 // (waveform create / set, slice and interlock status, VITA-49 float
@@ -40,6 +44,7 @@
 //   pd_waveform selftest   checks of parsing, packing and DSP; opens no socket
 #include "pd_align.h"
 #include "pd_core.h"
+#include "pd_eq.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -81,6 +86,21 @@
 // Feedback samples discarded at the start of each transmission before the
 // delay is measured, so the measurement sees the settled loop.
 #define SETTLE_SAMPLES RATE
+// A test two-tone repeats (710/1900 Hz every 100 ms), so every multiple of
+// that lag correlates perfectly and the loop delay is ambiguous. Each test
+// transmission, and each re-acquisition, opens with this much band-limited
+// noise instead: long enough to cover SETTLE_SAMPLES and an acquisition.
+#define TEST_NOISE_SAMPLES (2 * RATE)
+// The radio filters the waveform's I/Q before its amplifier, so the
+// reference is not the amplifier's input; WDSP then sees the low-amplitude
+// pairs scatter in phase and rejects every fit (FLEX-8600: sin^2+cos^2 off by
+// 0.06-0.07 against a 0.05 limit). After each delay lock the first
+// EQ_TRAIN_SAMPLES aligned pairs fit an EQ_TAPS FIR from reference to
+// feedback; calibration then sees the reference through it. On the bench
+// capture that took the phase spread below x = 0.1 from 39 to 6 degrees and
+// every fit was accepted.
+#define EQ_TAPS 31
+#define EQ_TRAIN_SAMPLES RATE
 
 static volatile sig_atomic_t g_stop;
 static void on_term(int sig) { (void)sig; g_stop = 1; }
@@ -361,6 +381,8 @@ typedef struct {
     double tx_mhz;                // that slice's frequency
     double pan_mhz;               // centre of the pan feeding DAX IQ
     int keyed;
+    int tx_on;                    // interlock PTT_REQUESTED or TRANSMITTING: may send
+    long n_tx_held;               // transmit packets not answered (interlock not keyed)
     int tx_count, rx_count;
     // DSP
     pd_core* core;
@@ -371,6 +393,7 @@ typedef struct {
     double* acq_tx;
     double* acq_rx;
     int acq_n, acq_len, aligned;
+    pd_eq* eq;                    // reference -> feedback linear path, per delay lock
     int feedback_ok;              // the DAX IQ pan covers this transmission
     int weak_blocks;              // consecutive blocks of poor coherence
     int settle_left;              // samples still to skip after key-up
@@ -382,6 +405,9 @@ typedef struct {
     double peak, gain;
     double test_f1, test_f2;      // AETHER_PD_TEST_TONES, Hz; 0 = use the mic
     long long test_n;             // samples of the test two-tone sent so far
+    int test_noise_left;          // samples of noise preamble still to send
+    cbp_t noise_bp;               // band-limits the preamble to 300-3000 Hz
+    unsigned noise_seed;
     int correct, daxiq_ch, daxiq_rate;
     double last_report;
     FILE* dump;                    // AETHER_PD_DUMP: aligned pairs, for analysis
@@ -427,8 +453,10 @@ static void start_feedback(wf_t* w)
     w->ref.n = w->fbk.n = 0;
     w->acq_n = 0;
     w->aligned = 0;
+    pd_eq_reset(w->eq);
     w->weak_blocks = 0;
     w->settle_left = SETTLE_SAMPLES;
+    w->test_noise_left = TEST_NOISE_SAMPLES;
     pd_align_restart(w->align);
     logf_("transmit: feedback shift %.0f Hz (tx %.6f MHz, pan %.6f MHz)", shift, w->tx_mhz, w->pan_mhz);
 }
@@ -519,6 +547,7 @@ static void api_line(wf_t* w, char* l)
             } else if (strcmp(mode, WF_MODE) && w->active_slice == idx) {
                 logf_("PD released by slice %d", idx);
                 w->active_slice = -1;
+                w->tx_on = 0;
                 set_keyed(w, 0);
             }
         }
@@ -536,6 +565,7 @@ static void api_line(wf_t* w, char* l)
         return;
     }
     if (!strncmp(m, "interlock ", 10) && kv(m, "state", v, sizeof v)) {
+        w->tx_on = !strcmp(v, "TRANSMITTING") || !strcmp(v, "PTT_REQUESTED");
         set_keyed(w, !strcmp(v, "TRANSMITTING"));
         return;
     }
@@ -555,7 +585,7 @@ static void send_pairs(wf_t* w, uint32_t sid, int* count, const float* pairs, in
 // Pairs reference and feedback blocks while transmitting.
 static void calibrate(wf_t* w)
 {
-    double tx[2 * BLOCK], rx[2 * BLOCK], atx[2 * BLOCK], arx[2 * BLOCK];
+    double tx[2 * BLOCK], rx[2 * BLOCK], atx[2 * BLOCK], arx[2 * BLOCK], etx[2 * BLOCK], erx[2 * BLOCK];
     while (w->ref.n >= BLOCK && w->fbk.n >= BLOCK) {
         fifo_pop(&w->ref, tx, BLOCK);
         fifo_pop(&w->fbk, rx, BLOCK);
@@ -600,14 +630,32 @@ static void calibrate(wf_t* w)
                 logf_("feedback stopped matching (coherence %.2f): finding the delay again",
                       pd_align_coherence(w->align));
                 w->aligned = 0;
+                pd_eq_reset(w->eq);
                 w->acq_n = 0;
                 w->weak_blocks = 0;
+                // Measure again on noise, past the samples already in flight.
+                w->test_noise_left = TEST_NOISE_SAMPLES;
+                w->settle_left = SETTLE_SAMPLES;
                 pd_align_restart(w->align);
             }
             continue;   // don't calibrate on pairs that don't match
         }
         w->weak_blocks = 0;
-        pd_core_calibrate(w->core, atx, arx, v);
+        if (!pd_eq_ready(w->eq)) {
+            pd_eq_train(w->eq, atx, arx, v);
+            if (pd_eq_trained(w->eq) >= EQ_TRAIN_SAMPLES) {
+                if (pd_eq_solve(w->eq)) {
+                    logf_("transmit path fitted: %d taps, %.1f dB of the feedback left unexplained",
+                          EQ_TAPS, 10 * log10(pd_eq_residual(w->eq) + 1e-30));
+                } else {
+                    logf_("transmit path fit failed: training again");
+                    pd_eq_reset(w->eq);
+                }
+            }
+            continue;
+        }
+        int m = pd_eq_apply(w->eq, atx, arx, v, etx, erx);
+        pd_core_calibrate(w->core, etx, erx, m);
     }
 }
 
@@ -645,12 +693,22 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
         pairs = MAX_SAMPLES;
     float out[2 * MAX_SAMPLES];
     if (v.sid & 1u) {
+        if (!w->tx_on) {
+            w->n_tx_held++;
+            return;
+        }
         w->n_tx_pkts++;
         // Transmit: the radio's mic stream, while the operator transmits.
         double iq[2 * MAX_SAMPLES];
         for (int k = 0; k < pairs; k++) {
             double i, q;
-            if (w->test_f1 > 0) {
+            if (w->test_f1 > 0 && w->test_noise_left > 0) {
+                // Band-limited noise for an unambiguous delay measurement.
+                w->test_noise_left--;
+                w->noise_seed = w->noise_seed * 1664525u + 1013904223u;
+                double u = ((w->noise_seed >> 8) / 16777216.0) - 0.5;
+                cbp_step(&w->noise_bp, 1.2 * w->peak * u, &i, &q);
+            } else if (w->test_f1 > 0) {
                 // Each tone at half the peak, so the envelope peaks at it.
                 double t = (double)w->test_n++ / RATE, a = w->peak / 2;
                 i = a * (cos(2 * M_PI * w->test_f1 * t) + cos(2 * M_PI * w->test_f2 * t));
@@ -741,14 +799,17 @@ static int wf_init(wf_t* w)
     int max_delay = (int)(env_d("AETHER_PD_MAX_DELAY_MS", 400) * RATE / 1000);
     w->core = pd_core_create(RATE, MAX_SAMPLES, w->peak);
     w->align = pd_align_create(max_delay, max_delay + 4 * BLOCK + 512);
+    w->eq = pd_eq_create(EQ_TAPS);
     w->ref.buf = calloc(2 * FIFO_LEN, sizeof(double));
     w->fbk.buf = calloc(2 * FIFO_LEN, sizeof(double));
     w->acq_len = max_delay + 8192;
     w->acq_tx = calloc(2 * (size_t)w->acq_len, sizeof(double));
     w->acq_rx = calloc(2 * (size_t)w->acq_len, sizeof(double));
-    if (!w->core || !w->align || !w->ref.buf || !w->fbk.buf || !w->acq_tx || !w->acq_rx)
+    if (!w->core || !w->align || !w->eq || !w->ref.buf || !w->fbk.buf || !w->acq_tx || !w->acq_rx)
         return 0;
     cbp_init(&w->mod, 200, 2800);
+    cbp_init(&w->noise_bp, 300, 3000);
+    w->noise_seed = 12345;
     decim_init(&w->fb, w->daxiq_rate, 0);
     return 1;
 }
@@ -773,16 +834,17 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         "\"tx_mhz\":%.6f,\"pan_mhz\":%.6f,\"daxiq_stream\":\"0x%08x\",\"daxiq_reply\":\"%s\",\"keyed\":%s,"
         "\"feedback_ok\":%s,\"correction\":%s,\"aligned\":%s,\"delay_samples\":%.2f,"
         "\"delay_corr\":%.3f,\"coherence\":%.3f,\"offset_hz\":%.4f,\"fits\":%d,"
-        "\"correcting\":%s,\"calc_state\":%d,\"tx_pkts\":%ld,\"fb_pkts\":%ld,"
+        "\"correcting\":%s,\"calc_state\":%d,\"tx_pkts\":%ld,\"tx_held\":%ld,\"fb_pkts\":%ld,"
         "\"other_pkts\":%ld,\"other_last\":\"sid 0x%08x cls 0x%04x\",\"ref_fifo\":%d,"
-        "\"fb_fifo\":%d,\"acq\":%d}\n",
+        "\"fb_fifo\":%d,\"acq\":%d,\"eq_ready\":%s,\"eq_residual_db\":%.1f}\n",
         WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
         w->daxiq_sid, w->daxiq_reply, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
         w->correct ? "true" : "false", w->aligned ? "true" : "false",
         pd_align_delay(w->align), pd_align_estimate_corr(w->align), pd_align_coherence(w->align),
         pd_align_offset_hz(w->align, RATE), pd_core_fits(w->core),
         pd_core_correcting(w->core) ? "true" : "false", pd_core_state(w->core),
-        w->n_tx_pkts, w->n_fb_pkts, w->n_fb_other, w->last_sid, w->last_cls, w->ref.n, w->fbk.n, w->acq_n);
+        w->n_tx_pkts, w->n_tx_held, w->n_fb_pkts, w->n_fb_other, w->last_sid, w->last_cls, w->ref.n, w->fbk.n, w->acq_n,
+        pd_eq_ready(w->eq) ? "true" : "false", 10 * log10(pd_eq_residual(w->eq) + 1e-30));
 }
 
 static void serve_status(const wf_t* w, int ls)
@@ -988,6 +1050,13 @@ static void loop_tap(void* ctx, const float* iq, int n)
     }
 }
 
+static int tapped;
+static void count_tap(void* ctx, const float* iq, int n)
+{
+    (void)iq;
+    *(int*)ctx += n;
+}
+
 static int selftest_loop(void)
 {
     int fails = 0;
@@ -1059,6 +1128,25 @@ static int selftest_loop(void)
     printf("loop: delay %.2f (want ~%.2f), correlation %.2f, coherence %.2f, fits %d, correcting %d\n",
            pd_align_delay(w.align), want, pd_align_estimate_corr(w.align), pd_align_coherence(w.align),
            pd_core_fits(w.core), pd_core_correcting(w.core));
+
+    // Transmit output stops at UNKEY_REQUESTED and stays off until the
+    // interlock asks for transmit again, test tones or not.
+    w.test_f1 = 710;
+    w.test_f2 = 1900;
+    w.tx_tap = count_tap;
+    w.tap_ctx = &tapped;
+    float quiet[2 * 128] = { 0 };
+    const char* states[] = { "UNKEY_REQUESTED", "READY", "PTT_REQUESTED", "TRANSMITTING", "UNKEY_REQUESTED" };
+    const int sends[] = { 0, 0, 1, 1, 0 };
+    for (int k = 0; k < 5; k++) {
+        char line[64];
+        snprintf(line, sizeof line, "S1|interlock state=%s", states[k]);
+        api_line(&w, line);
+        tapped = 0;
+        int len = vita_build(p, 0x84000001u, CLASS_AUDIO_24K, count++, quiet, 128);
+        on_packet(&w, p, len);
+        CHECK((tapped > 0) == sends[k]);
+    }
     close(w.api);
     free(l.line);
     return fails;
@@ -1197,5 +1285,6 @@ int main(int argc, char** argv)
         close(ls);
     pd_core_destroy(w.core);
     pd_align_destroy(w.align);
+    pd_eq_destroy(w.eq);
     return 0;
 }

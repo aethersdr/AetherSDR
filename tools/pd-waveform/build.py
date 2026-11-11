@@ -57,7 +57,7 @@ def zig_cc(target, out, cache, static=True):
     objs.append(str(o))
     link = LDFLAGS if static else ['-Wl,--gc-sections']
     subprocess.run(['zig', 'cc', *target, *CFLAGS, *link, '-Wall', '-Wextra', '-Werror', '-o', str(out),
-                    str(HERE / 'pd_waveform.c'), str(HERE / 'pd_align.c'), *objs, '-lm', '-lpthread'],
+                    str(HERE / 'pd_waveform.c'), str(HERE / 'pd_align.c'), str(HERE / 'pd_eq.c'), *objs, '-lm', '-lpthread'],
                    check=True, env=env)
     for o in objs:
         os.unlink(o)
