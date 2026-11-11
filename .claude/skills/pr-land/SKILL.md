@@ -6,16 +6,16 @@ description: Post-review remediation pass for AetherSDR — takes a PR whose pro
 # Land the PR — remediate, resolve, approve, arm
 
 Work the PR given in `$ARGUMENTS` (a number or a full URL; if absent, the PR
-for the current branch via `gh pr view`). Seven deliverables, in this order:
+for the current branch via `gh pr view`). Six deliverables, in this order:
 
 1. **One push** that resolves every outstanding finding, each one proved.
 2. **Every review thread answered and resolved** — evidence in the reply.
 3. **Every blocking review dismissed** with the evidence that retires it.
 4. **One approving review**, posted after the last push.
 5. **Auto-merge armed and confirmed able to fire** — not merely requested.
-6. **A markdown report to the operator** (step 12).
-7. **`main` green on the squash-merge commit** (step 13) — the check that
-   actually demonstrates the fix, and the one a PR-branch pass never does.
+6. **A markdown report to the operator** (step 12), naming the squash-merge
+   commit whose `main` CI is the independent check (step 13). The pass does
+   not wait for that CI.
 
 Where `gh` is unavailable — Claude Code Remote and web sessions have no `gh`
 CLI — use the GitHub MCP tools (`mcp__github__*`) throughout. Everything below
@@ -44,7 +44,8 @@ What is **not** approved is the code as it currently stands. Hold this posture:
   on the **squash-merge commit on `main`**, not on the PR branch, and says in
   as many words that agent self-grading does not substitute for that
   independent re-run. Everything you prove in steps 5 and 6 is the hypothesis.
-  Step 13 is the check, and the pass is not over until it passes.
+  Step 13 is the check. It runs after the pass ends, and the maintainer
+  follows it up.
 - **Completeness over deferral.** Nothing is left "for the author". Nothing
   becomes a follow-up issue in order to avoid making a call. If a finding
   needs a decision, the decision goes to the maintainer (next section) — not
@@ -767,43 +768,34 @@ tells the reader of the post-merge check what the squash result contains that
 CI never built.
 
 ### Post-merge (Principle XI)
-The squash commit's SHA and the verdict of `main`'s CI on it — the check that
-actually demonstrates the fix. If the merge had not fired yet, say that
-plainly and name what it is waiting on; never leave it implied.
+The squash commit's SHA, or, if the merge has not fired, what it is waiting
+on. Say that `main`'s CI on that SHA had not been watched. Never imply it
+passed.
 ```
 
 State current state, not the churn: what the branch is now, not a narration of
 what was tried and undone.
 
-## 13. The merge is not the end — Principle XI
+## 13. Post-merge CI — the maintainer's follow-up, not a wait
 
-A fix is demonstrated by CI re-running on the **squash-merge commit on
-`main`**, not on the PR branch, with the required checks green. Everything
-above is the hypothesis; this is the independent check, and the Constitution
-is explicit that agent self-grading does not substitute for it. Skipping it
-because "PR CI was green on identical content" is named there as the
-rationalization shape that leads to bypassed verification — the squash result
-is a different commit from the head you tested.
+Under Principle XI a fix is demonstrated by CI re-running on the
+**squash-merge commit on `main`**, not on the PR branch. That run is
+independent of this pass, and **the pass does not wait for it**. `main`'s
+push-triggered workflows (CI, Full Suite, CodeQL, the system-libraries
+canary) take up to about an hour. The maintainer checks the result later and
+comes back if anything fails.
 
-Once auto-merge fires:
+So, once the merge fires, record the squash SHA for the report and stop:
 
 ```sh
 gh pr view <PR> --json mergedAt,mergeCommit --jq '{mergedAt, sha: .mergeCommit.oid}'
-gh run list --branch main --limit 5 --json status,conclusion,headSha,workflowName
 ```
 
-Wait for the runs on that SHA to conclude. Read `conclusion`, not
-`statusCheckRollup` — the latter's `conclusion` is empty while a check is
-still running, which reads as "not failing" and is not the same thing.
-
-A red `main` traceable to this merge is **yours**: fix forward immediately or
-escalate to the maintainer with the failing job. Do not close the pass out on
-PR-branch green alone, and do not leave `main` red behind you.
-
-If the merge has not fired by the time the session ends — CI still running, or
-an approval still outstanding — say so in the report and name what the last
-check is waiting on. An honest "armed, not yet merged, main unverified" is a
-finished pass; an implied one is not.
+Do not start a background wait or poll the runs. Never claim `main` is green
+when you did not look. If you are brought back because a run on that SHA went
+red and the failure traces to this merge, it is yours: fix forward, or
+escalate with the failing job. Trace it first from the commits listed in step
+10.
 
 ## Never
 
@@ -826,5 +818,4 @@ finished pass; an implied one is not.
 - Leave an item "for the author".
 - Post an approving review from an identity that is not a code owner for the
   paths the PR touches.
-- Call the pass finished on PR-branch green, or walk away from a `main` turned
-  red by the merge you armed.
+- Report `main` as green on the squash commit without having seen its runs.
