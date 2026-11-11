@@ -3,6 +3,7 @@
 #include "core/backends/RadioCapabilities.h"
 #include "AppActivity.h"
 #include "TciProtocol.h"
+#include "TciSpanExtension.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
 #include "AppSettings.h"
@@ -65,6 +66,10 @@ namespace {
 // broadcasts in ~900 ms — without this, every one of those reaches every
 // client. With it, the same drag settles to ~20 over 2.8 s.
 constexpr int kPowerRateLimitMs = 100;
+// How long a dispatched aethersdr_rx_span set waits for its pan's report before
+// the span in force is sent as the answer (an HL2 rate change rebuilds every
+// receive chain first).
+constexpr int kSpanAnswerTimeoutMs = 2000;
 
 // The live IC-7300MK2 capture showed the radio-authoritative CI-V unkey edge
 // settling in 149 ms while an optimistic local edge arrived immediately. Keep
@@ -646,6 +651,27 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         broadcastPower();
         m_powerRateTimer->start();
     });
+
+    // Extension set, span: the same limiter for its notification, and a bound
+    // on how long a dispatched set waits for the radio's report.
+    m_spanRateTimer = new QTimer(this);
+    m_spanRateTimer->setSingleShot(true);
+    m_spanRateTimer->setInterval(kPowerRateLimitMs);
+    connect(m_spanRateTimer, &QTimer::timeout, this, [this]() {
+        if (m_spanPending && broadcastSpan()) {
+            m_spanRateTimer->start();
+        }
+    });
+    m_spanAnswerTimer = new QTimer(this);
+    m_spanAnswerTimer->setSingleShot(true);
+    m_spanAnswerTimer->setInterval(kSpanAnswerTimeoutMs);
+    connect(m_spanAnswerTimer, &QTimer::timeout, this, [this]() {
+        if (!m_spanAnswerOwed.isEmpty()) {
+            m_spanAnswerExpired = true;
+            queueSpanNotice();
+        }
+    });
+    registerSpanGroup();
 
     // Debounced DAX RX teardown — see scheduleDaxRelease(). Single-shot; a
     // reconnecting audio client cancels it before it fires.
@@ -3797,6 +3823,290 @@ void TciServer::handleExtensionCommand(TciClient* ws, const QString& cmd)
     if (!result.broadcast.isEmpty()) {
         broadcastExtension(result.broadcast);
     }
+}
+
+bool TciServer::extensionKeyed() const
+{
+    if (!m_model) {
+        return false;
+    }
+    const TransmitModel& tx = m_model->transmitModel();
+    return m_model->isRadioTransmitting() || tx.isTransmitting() || tx.isTuning()
+        || tx.isMox() || m_tciPttClient;
+}
+
+bool TciServer::spanOffered() const
+{
+    return m_model
+        && TciSpanExtension::offered(m_model->isConnected(), m_model->backendCapabilities());
+}
+
+std::optional<qint64> TciServer::spanForTrx(int trx, qint64* minHz, qint64* maxHz) const
+{
+    const SliceModel* slice = sliceForTrxStrict(trx);
+    const PanadapterModel* pan = slice ? m_model->panadapter(slice->panId()) : nullptr;
+    if (!pan || !pan->centerKnown() || !(pan->bandwidthMhz() > 0.0)) {
+        return std::nullopt;
+    }
+    if (minHz) {
+        *minHz = pan->bandwidthLimitsKnown() ? qRound64(pan->minBandwidthMhz() * 1.0e6) : 0;
+    }
+    if (maxHz) {
+        *maxHz = pan->bandwidthLimitsKnown() ? qRound64(pan->maxBandwidthMhz() * 1.0e6) : 0;
+    }
+    return qRound64(pan->bandwidthMhz() * 1.0e6);
+}
+
+QHash<int, qint64> TciServer::currentSpans() const
+{
+    QHash<int, qint64> spans;
+    const int count = m_trxMap.trxCount(m_model);
+    for (int trx = 0; trx < count; ++trx) {
+        if (const std::optional<qint64> hz = spanForTrx(trx)) {
+            spans.insert(trx, *hz);
+        }
+    }
+    return spans;
+}
+
+// The rates a set can reach now: the declared ones, inside every reported
+// pan limit (an HL2 lowers its widest as receivers open, and in low-bandwidth
+// mode).
+QString TciServer::spanRatesLine() const
+{
+    const TciSpanExtension::Model model
+        = TciSpanExtension::model(m_model->backendCapabilities());
+    qint64 minHz = 0;
+    qint64 maxHz = 0;
+    for (const PanadapterModel* pan : m_model->panadapters()) {
+        if (!pan || !pan->bandwidthLimitsKnown()) {
+            continue;
+        }
+        const qint64 low = qRound64(pan->minBandwidthMhz() * 1.0e6);
+        const qint64 high = qRound64(pan->maxBandwidthMhz() * 1.0e6);
+        minHz = std::max(minHz, low);
+        maxHz = maxHz == 0 ? high : std::min(maxHz, high);
+    }
+    return TciSpanExtension::ratesLine(
+        model, TciSpanExtension::reachableRates(model, minHz, maxHz));
+}
+
+QStringList TciServer::spanStateLines() const
+{
+    QStringList lines{spanRatesLine()};
+    const QHash<int, qint64> spans = currentSpans();
+    QList<int> trxs = spans.keys();
+    std::sort(trxs.begin(), trxs.end());
+    for (const int trx : std::as_const(trxs)) {
+        lines << TciSpanExtension::spanLine(trx, spans.value(trx));
+    }
+    return lines;
+}
+
+// The span group (RFC #7181). A set goes through RadioModel::requestPanBandwidth(),
+// the path of the desktop's span controls; the radio's report is the answer.
+void TciServer::registerSpanGroup()
+{
+    TciExtensionSet::Group group;
+    group.token = QString::fromLatin1(TciSpanExtension::kToken);
+    group.commands = QStringList{QString::fromLatin1(TciSpanExtension::kRatesCommand),
+                                 QString::fromLatin1(TciSpanExtension::kSpanCommand)};
+    group.offered = [this] { return spanOffered(); };
+    group.stateLines = [this] { return spanStateLines(); };
+    group.handle = [this](const QString& name, const QStringList& args) {
+        return handleSpan(name, args);
+    };
+    registerExtensionGroup(std::move(group));
+    m_spanAdvertisementSeen = m_extensions.advertisement();
+    if (!m_model) {
+        return;
+    }
+    // Re-sent when the span moves and also when what a line describes moves: a
+    // receiver appears, goes or changes pan, or the capability changes.
+    connect(m_model, &RadioModel::capabilitiesChanged, this,
+            [this](bool, const RadioCapabilities&) { resyncSpanAnnounced(); });
+    connect(m_model, &RadioModel::sliceAdded, this, [this](SliceModel* slice) {
+        wireSpanSlice(slice);
+        queueSpanNotice();
+    });
+    connect(m_model, &RadioModel::sliceRemoved, this, [this](int) { queueSpanNotice(); });
+    connect(m_model, &RadioModel::slotOccupancyChanged, this, [this](int) { queueSpanNotice(); });
+    connect(m_model, &RadioModel::panadapterAdded, this, [this](PanadapterModel* pan) {
+        wireSpanPan(pan);
+        queueSpanNotice();
+    });
+    connect(m_model, &RadioModel::panadapterRemoved, this,
+            [this](const QString&) { queueSpanNotice(); });
+    for (SliceModel* slice : m_model->slices()) {
+        wireSpanSlice(slice);
+    }
+    for (PanadapterModel* pan : m_model->panadapters()) {
+        wireSpanPan(pan);
+    }
+}
+
+void TciServer::wireSpanSlice(SliceModel* slice)
+{
+    if (slice) {
+        connect(slice, &SliceModel::panIdChanged, this, [this](const QString&) { queueSpanNotice(); });
+    }
+}
+
+void TciServer::wireSpanPan(PanadapterModel* pan)
+{
+    if (!pan) {
+        return;
+    }
+    // Every report, changed or not: a radio that kept its span (a snap to the
+    // current rate, an HL2 link-budget refusal) re-asserts it here, and that
+    // is the answer a dispatched set is waiting for.
+    const QPointer<PanadapterModel> reporter(pan);
+    connect(pan, &PanadapterModel::infoChanged, this, [this, reporter](double, double) {
+        if (reporter) {
+            m_spanReportedPans.insert(reporter->panId());
+        }
+        queueSpanNotice();
+    });
+    connect(pan, &PanadapterModel::bandwidthLimitsChanged, this,
+            [this](double, double) { queueSpanNotice(); });
+}
+
+// When the list changed, the mechanism has just sent every enabled client
+// the state lines; adopt them as sent so the notice repeats none of them.
+void TciServer::resyncSpanAnnounced()
+{
+    const QString advertisement = m_extensions.advertisement();
+    if (advertisement != m_spanAdvertisementSeen) {
+        m_spanAdvertisementSeen = advertisement;
+        if (spanOffered()) {
+            m_spanAnnounced = currentSpans();
+            m_spanRatesAnnounced = spanRatesLine();
+        } else {
+            m_spanAnnounced.clear();
+            m_spanRatesAnnounced.clear();
+        }
+    }
+    queueSpanNotice();
+}
+
+TciExtensionSet::Result TciServer::handleSpan(const QString& name, const QStringList& args)
+{
+    TciExtensionSet::Result result;
+    if (!spanOffered()) {
+        return result;
+    }
+    if (name == QLatin1String(TciSpanExtension::kRatesCommand)) {
+        if (args.isEmpty()) {
+            result.reply = spanRatesLine();
+        }
+        return result;
+    }
+    const std::optional<TciSpanExtension::Request> request = TciSpanExtension::parseSpan(args);
+    qint64 minHz = 0;
+    qint64 maxHz = 0;
+    const std::optional<qint64> current
+        = request ? spanForTrx(request->trx, &minHz, &maxHz) : std::nullopt;
+    if (!current) {
+        return result;
+    }
+    const QString currentLine = TciSpanExtension::spanLine(request->trx, *current);
+    if (!request->isSet) {
+        result.reply = currentLine;
+        return result;
+    }
+    const TciSpanExtension::Model model
+        = TciSpanExtension::model(m_model->backendCapabilities());
+    const qint64 target = TciSpanExtension::snap(request->hz, model, minHz, maxHz);
+    if (target == *current) {
+        // A snap or clamp that kept the span is answered to the sender; an
+        // exact set of the span in force is not.
+        if (request->hz != *current) {
+            result.reply = currentLine;
+        }
+        return result;
+    }
+    if (model.followsRate && extensionKeyed()) {
+        // On a radio whose span is its sample rate, a change rebuilds the
+        // receive chains; not while keyed.
+        qCInfo(lcCat) << "TCI: aethersdr_rx_span refused while keyed, trx" << request->trx;
+        result.reply = currentLine;
+        return result;
+    }
+    const QString panId = sliceForTrxStrict(request->trx)->panId();
+    m_spanAnswerOwed.insert(request->trx, panId);
+    m_spanAnswerTimer->start();
+    m_model->requestPanBandwidth(panId, static_cast<double>(target) / 1.0e6);
+    return result;
+}
+
+// Posted, so a burst of pan reports goes out once, then rate-limited like drive:.
+void TciServer::queueSpanNotice()
+{
+    m_spanPending = true;
+    if (m_spanSendPosted || m_spanRateTimer->isActive()) {
+        return;
+    }
+    m_spanSendPosted = true;
+    QMetaObject::invokeMethod(this, [this]() {
+        m_spanSendPosted = false;
+        if (broadcastSpan()) {
+            m_spanRateTimer->start();
+        }
+    }, Qt::QueuedConnection);
+}
+
+// What moved since the last notice, and the answer to a dispatched set once
+// its pan has reported (or kSpanAnswerTimeoutMs passed), even if the radio kept
+// the span. The record is kept with no client enabled too, so a later change is
+// never measured against a value from before someone enabled.
+bool TciServer::broadcastSpan()
+{
+    m_spanPending = false;
+    if (!spanOffered()) {
+        m_spanAnnounced.clear();
+        m_spanRatesAnnounced.clear();
+        m_spanAnswerOwed.clear();
+        m_spanReportedPans.clear();
+        m_spanAnswerExpired = false;
+        return false;
+    }
+    const QString rates = spanRatesLine();
+    const QHash<int, qint64> spans = currentSpans();
+    QStringList lines;
+    if (rates != m_spanRatesAnnounced) {
+        lines << rates;
+    }
+    QList<int> trxs = spans.keys();
+    std::sort(trxs.begin(), trxs.end());
+    for (const int trx : std::as_const(trxs)) {
+        const qint64 hz = spans.value(trx);
+        const auto owed = m_spanAnswerOwed.constFind(trx);
+        const bool answered = owed != m_spanAnswerOwed.cend()
+            && (m_spanAnswerExpired || m_spanReportedPans.contains(owed.value()));
+        if (answered || m_spanAnnounced.value(trx, -1) != hz) {
+            lines << TciSpanExtension::spanLine(trx, hz);
+            m_spanAnswerOwed.remove(trx);
+        }
+    }
+    if (m_spanAnswerExpired) {
+        m_spanAnswerOwed.clear();  // a trx that has gone has nothing to answer
+    }
+    m_spanRatesAnnounced = rates;
+    m_spanAnnounced = spans;
+    m_spanReportedPans.clear();
+    m_spanAnswerExpired = false;
+    if (m_spanAnswerOwed.isEmpty()) {
+        m_spanAnswerTimer->stop();
+    }
+    const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
+        [](const ClientState& client) { return client.extensionsEnabled; });
+    if (lines.isEmpty() || !anyEnabled) {
+        return false;
+    }
+    for (const QString& line : std::as_const(lines)) {
+        broadcastExtension(line);
+    }
+    return true;
 }
 
 void TciServer::broadcastBinary(const QByteArray& data)
