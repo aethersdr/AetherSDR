@@ -27,6 +27,8 @@
 //   AETHER_PD_MIC_GAIN     mic gain (default 1.0)
 //   AETHER_PD_MAX_DELAY_MS longest loop delay to search (default 400)
 //   AETHER_PD_CORRECT      0 runs the waveform with the correction off (default 1)
+//   AETHER_PD_DUMP         file: write the first 10 s of aligned reference/feedback
+//                          pairs (float32 tx_i tx_q rx_i rx_q), for analysis
 //   AETHER_PD_TEST_TONES   "f1,f2" in Hz: while keyed, send an equal two-tone
 //                          at f1 and f2 above the carrier instead of the mic,
 //                          at AETHER_PD_PEAK (a bench test signal)
@@ -71,10 +73,14 @@
 #define STATUS_PORT 48996
 #define CLASS_FLOAT_BIT 0x0200u  // packet class: 32-bit float samples
 // The delay is found again after this many consecutive blocks whose pairs
-// don't match, e.g. after an estimate taken on a two-tone, whose envelope
-// repeats every 1/(tone spacing) and can lock a wrong lag.
-#define WEAK_COHERENCE 0.3
+// don't match well. On the FLEX-8600 the loop delay at key-up differed from
+// the settled one by about 4 samples (coherence 0.82 instead of 0.999), and
+// an estimate on a two-tone, whose envelope repeats, can lock a wrong lag.
+#define WEAK_COHERENCE 0.9
 #define WEAK_BLOCKS 8
+// Feedback samples discarded at the start of each transmission before the
+// delay is measured, so the measurement sees the settled loop.
+#define SETTLE_SAMPLES RATE
 
 static volatile sig_atomic_t g_stop;
 static void on_term(int sig) { (void)sig; g_stop = 1; }
@@ -345,6 +351,10 @@ typedef struct {
     char rbuf[16384];
     size_t rlen;
     int seq_create, seq_daxiq;
+    char daxiq_reply[96];          // last reply to the DAX IQ stream request
+    long n_tx_pkts, n_fb_pkts, n_fb_other;   // packets seen, for the status line
+    unsigned last_cls, last_sid;   // the last packet that matched no stream
+    double slice_mhz[16];          // every slice's frequency, by index
     uint32_t tx_in, rx_in;        // stream IDs from waveform create
     uint32_t daxiq_sid;
     int active_slice;             // slice in PD mode, or -1
@@ -363,6 +373,7 @@ typedef struct {
     int acq_n, acq_len, aligned;
     int feedback_ok;              // the DAX IQ pan covers this transmission
     int weak_blocks;              // consecutive blocks of poor coherence
+    int settle_left;              // samples still to skip after key-up
     int daxiq_format_logged;
     struct sockaddr_in radio;     // where VITA packets go
     // Selftest only: sees every transmit block the waveform sends.
@@ -373,6 +384,8 @@ typedef struct {
     long long test_n;             // samples of the test two-tone sent so far
     int correct, daxiq_ch, daxiq_rate;
     double last_report;
+    FILE* dump;                    // AETHER_PD_DUMP: aligned pairs, for analysis
+    long dump_left;                // pairs still to write
 } wf_t;
 
 static int api_send(wf_t* w, const char* fmt, ...)
@@ -415,6 +428,7 @@ static void start_feedback(wf_t* w)
     w->acq_n = 0;
     w->aligned = 0;
     w->weak_blocks = 0;
+    w->settle_left = SETTLE_SAMPLES;
     pd_align_restart(w->align);
     logf_("transmit: feedback shift %.0f Hz (tx %.6f MHz, pan %.6f MHz)", shift, w->tx_mhz, w->pan_mhz);
 }
@@ -454,6 +468,7 @@ static void api_line(wf_t* w, char* l)
             kv_u32(msg, "rx_stream_in_id", &w->rx_in);
             logf_("registered %s: tx_in 0x%08x rx_in 0x%08x", WF_NAME, w->tx_in, w->rx_in);
         } else if (seq == w->seq_daxiq) {
+            snprintf(w->daxiq_reply, sizeof w->daxiq_reply, "%08lx %s", code, msg);
             if (code)
                 logf_("DAX IQ stream refused: %08lx %s", code, msg);
             else {
@@ -493,15 +508,26 @@ static void api_line(wf_t* w, char* l)
         if (kv(m, "mode", mode, sizeof mode)) {
             if (!strcmp(mode, WF_MODE) && w->active_slice < 0) {
                 w->active_slice = idx;
+                // The slice's frequency usually came in an earlier status.
+                if (idx >= 0 && idx < 16 && w->slice_mhz[idx] > 0)
+                    w->tx_mhz = w->slice_mhz[idx];
                 logf_("PD selected on slice %d", idx);
+                // Ask for the feedback stream again if the first request,
+                // made at connect, didn't produce one.
+                if (!w->daxiq_sid && w->api >= 0)
+                    w->seq_daxiq = api_send(w, "stream create type=dax_iq daxiq_channel=%d", w->daxiq_ch);
             } else if (strcmp(mode, WF_MODE) && w->active_slice == idx) {
                 logf_("PD released by slice %d", idx);
                 w->active_slice = -1;
                 set_keyed(w, 0);
             }
         }
-        if (idx == w->active_slice && kv(m, "RF_frequency", v, sizeof v))
-            w->tx_mhz = atof(v);
+        if (kv(m, "RF_frequency", v, sizeof v)) {
+            if (idx >= 0 && idx < 16)
+                w->slice_mhz[idx] = atof(v);
+            if (idx == w->active_slice)
+                w->tx_mhz = atof(v);
+        }
         return;
     }
     if (!strncmp(m, "display pan ", 12)) {
@@ -533,6 +559,10 @@ static void calibrate(wf_t* w)
     while (w->ref.n >= BLOCK && w->fbk.n >= BLOCK) {
         fifo_pop(&w->ref, tx, BLOCK);
         fifo_pop(&w->fbk, rx, BLOCK);
+        if (w->settle_left > 0) {
+            w->settle_left -= BLOCK;
+            continue;
+        }
         if (!w->aligned) {
             int m = BLOCK < w->acq_len - w->acq_n ? BLOCK : w->acq_len - w->acq_n;
             memcpy(w->acq_tx + 2 * w->acq_n, tx, sizeof(double) * 2 * (size_t)m);
@@ -549,13 +579,22 @@ static void calibrate(wf_t* w)
                     pd_align_restart(w->align);
                     w->aligned = 1;
                     w->weak_blocks = 0;
-                    logf_("loop delay %.2f samples (%.2f ms), correlation %.2f",
-                          d, d * 1000.0 / RATE, pd_align_estimate_corr(w->align));
+                    logf_("loop delay %.2f samples (%.2f ms), envelope correlation %.2f, phase correlation %.3f",
+                          d, d * 1000.0 / RATE, pd_align_estimate_corr(w->align), pd_align_phase_corr(w->align));
                 }
             }
             continue;
         }
         int v = pd_align_push(w->align, tx, rx, BLOCK, atx, arx);
+        if (w->dump && w->dump_left > 0 && v > 0) {
+            // float32 tx_i, tx_q, rx_i, rx_q per pair, native endian
+            for (int k = 0; k < v && w->dump_left > 0; k++, w->dump_left--) {
+                float f[4] = { (float)atx[2 * k], (float)atx[2 * k + 1], (float)arx[2 * k], (float)arx[2 * k + 1] };
+                fwrite(f, sizeof f, 1, w->dump);
+            }
+            if (w->dump_left == 0)
+                fflush(w->dump);
+        }
         if (v > 0 && pd_align_coherence(w->align) < WEAK_COHERENCE) {
             if (++w->weak_blocks >= WEAK_BLOCKS) {
                 logf_("feedback stopped matching (coherence %.2f): finding the delay again",
@@ -578,6 +617,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
     if (!vita_parse(p, n, &v))
         return;
     if (v.sid == w->daxiq_sid && w->daxiq_sid) {
+        w->n_fb_pkts++;
         if (!(v.cls & CLASS_FLOAT_BIT)) {
             if (!w->daxiq_format_logged)
                 logf_("DAX IQ arrives as class 0x%04x, not float samples: feedback off", v.cls);
@@ -594,13 +634,18 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
         calibrate(w);
         return;
     }
-    if (v.cls != CLASS_AUDIO_24K || w->active_slice < 0)
+    if (v.cls != CLASS_AUDIO_24K || w->active_slice < 0) {
+        w->n_fb_other++;
+        w->last_cls = v.cls;
+        w->last_sid = v.sid;
         return;
+    }
     int pairs = v.words / 2;
     if (pairs > MAX_SAMPLES)
         pairs = MAX_SAMPLES;
     float out[2 * MAX_SAMPLES];
     if (v.sid & 1u) {
+        w->n_tx_pkts++;
         // Transmit: the radio's mic stream, while the operator transmits.
         double iq[2 * MAX_SAMPLES];
         for (int k = 0; k < pairs; k++) {
@@ -672,6 +717,11 @@ static int wf_init(wf_t* w)
     }
     w->peak = env_d("AETHER_PD_PEAK", 0.7);
     w->gain = env_d("AETHER_PD_MIC_GAIN", 1.0);
+    const char* dump = getenv("AETHER_PD_DUMP");
+    if (dump && *dump) {
+        w->dump = fopen(dump, "wb");
+        w->dump_left = 10L * RATE;       // ten seconds of aligned pairs
+    }
     const char* tones = getenv("AETHER_PD_TEST_TONES");
     if (tones && *tones && sscanf(tones, "%lf,%lf", &w->test_f1, &w->test_f2) != 2) {
         logf_("AETHER_PD_TEST_TONES must be \"f1,f2\" in Hz");
@@ -720,16 +770,19 @@ static int status_json(const wf_t* w, char* out, size_t cap)
 {
     return snprintf(out, cap,
         "{\"name\":\"%s\",\"version\":\"%s\",\"registered\":%s,\"active_slice\":%d,"
-        "\"tx_mhz\":%.6f,\"pan_mhz\":%.6f,\"daxiq_stream\":\"0x%08x\",\"keyed\":%s,"
+        "\"tx_mhz\":%.6f,\"pan_mhz\":%.6f,\"daxiq_stream\":\"0x%08x\",\"daxiq_reply\":\"%s\",\"keyed\":%s,"
         "\"feedback_ok\":%s,\"correction\":%s,\"aligned\":%s,\"delay_samples\":%.2f,"
         "\"delay_corr\":%.3f,\"coherence\":%.3f,\"offset_hz\":%.4f,\"fits\":%d,"
-        "\"correcting\":%s,\"calc_state\":%d}\n",
+        "\"correcting\":%s,\"calc_state\":%d,\"tx_pkts\":%ld,\"fb_pkts\":%ld,"
+        "\"other_pkts\":%ld,\"other_last\":\"sid 0x%08x cls 0x%04x\",\"ref_fifo\":%d,"
+        "\"fb_fifo\":%d,\"acq\":%d}\n",
         WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
-        w->daxiq_sid, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
+        w->daxiq_sid, w->daxiq_reply, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
         w->correct ? "true" : "false", w->aligned ? "true" : "false",
         pd_align_delay(w->align), pd_align_estimate_corr(w->align), pd_align_coherence(w->align),
         pd_align_offset_hz(w->align, RATE), pd_core_fits(w->core),
-        pd_core_correcting(w->core) ? "true" : "false", pd_core_state(w->core));
+        pd_core_correcting(w->core) ? "true" : "false", pd_core_state(w->core),
+        w->n_tx_pkts, w->n_fb_pkts, w->n_fb_other, w->last_sid, w->last_cls, w->ref.n, w->fbk.n, w->acq_n);
 }
 
 static void serve_status(const wf_t* w, int ls)
@@ -769,7 +822,10 @@ static int selftest(void)
     CHECK(w.tx_in == 0x84000001u && w.rx_in == 0x84000000u);
 
     // Selecting PD on a slice, its frequency, the pan, and the interlock.
-    char s1[] = "S1|slice 1 in_use=1 mode=PD RF_frequency=14.200000 rxant=ANT1";
+    char s0[] = "S1|slice 1 in_use=1 mode=USB RF_frequency=14.200000 rxant=ANT1";
+    api_line(&w, s0);
+    CHECK(w.active_slice == -1 && w.tx_mhz == 0);
+    char s1[] = "S1|slice 1 mode=PD";
     api_line(&w, s1);
     CHECK(w.active_slice == 1 && fabs(w.tx_mhz - 14.2) < 1e-9);
     char s2[] = "S1|display pan 0x40000001 center=14.201000 daxiq_channel=1 rxant=RX_A";

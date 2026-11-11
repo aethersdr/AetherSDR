@@ -37,6 +37,8 @@ double pd_align_estimate_delay(pd_align* a, const double* tx, const double* rx, 
 
 // The normalized envelope correlation behind the last delay estimate, 0..1.
 double pd_align_estimate_corr(const pd_align* a);
+// The complex (carrier-phase) correlation at the refined delay, 0..1.
+double pd_align_phase_corr(const pd_align* a);
 
 // How well the pairs from the last pd_align_push() match: the normalized
 // complex correlation of feedback against reference, 0..1. It stays near 1

@@ -21,6 +21,10 @@
 #define PD_ALIGN_COARSE 8
 // The delay search needs at least this many samples past the longest lag.
 #define PD_ALIGN_MIN_SPAN 4096
+// How far the carrier-phase refinement searches either side of the envelope
+// estimate, in samples. The FLEX-8600's transmit filter put the two apart by
+// 3.3 samples at 24 kHz.
+#define PD_ALIGN_PHASE_SPAN 8.0
 // Fine delay search step, in samples.
 #define PD_ALIGN_FINE_STEP 0.01
 
@@ -35,6 +39,7 @@ struct pd_align {
     double phase;     // feedback de-rotation, radians
     double step;      // de-rotation per sample, radians
     double est_corr;  // correlation behind the last delay estimate
+    double phase_corr;  // complex correlation at the refined delay
     double coherence; // match of the last pushed block
 };
 
@@ -105,6 +110,36 @@ static double env_corr(const double* etx, const double* erx, int span, double la
     }
     (void)etx;
     return (ptx > 0 && prx > 0) ? s / sqrt(ptx * prx) : 0;
+}
+
+// Magnitude of the normalized complex correlation of the feedback against the
+// reference delayed by a fractional lag. Unlike the envelope correlation it
+// sees carrier phase, so it finds the *phase* delay, which is what the
+// calibration needs; the two differ when a filter in the radio's transmit
+// path has frequency-dependent group delay.
+static double cplx_corr(int span, double lag, int n, const double* txiq, const double* rxiq)
+{
+    int whole = (int)floor(lag);
+    double frac = lag - whole, h[PD_ALIGN_TAPS];
+    frac_taps(frac, h);
+    double zr = 0, zi = 0, ptx = 0, prx = 0;
+    for (int i = PD_ALIGN_TAPS; i < span - PD_ALIGN_TAPS; i++) {
+        int r = i + whole;
+        if (r >= n)
+            break;
+        double ti = 0, tq = 0;
+        for (int k = 0; k < PD_ALIGN_TAPS; k++) {
+            int j = i - (PD_ALIGN_TAPS / 2 - 1) + k;
+            ti += h[k] * txiq[2 * j];
+            tq += h[k] * txiq[2 * j + 1];
+        }
+        double ri = rxiq[2 * r], rq = rxiq[2 * r + 1];
+        zr += ri * ti + rq * tq;
+        zi += rq * ti - ri * tq;
+        ptx += ti * ti + tq * tq;
+        prx += ri * ri + rq * rq;
+    }
+    return (ptx > 0 && prx > 0) ? hypot(zr, zi) / sqrt(ptx * prx) : 0;
 }
 
 double pd_align_estimate_delay(pd_align* a, const double* tx, const double* rx, int n)
@@ -210,6 +245,69 @@ double pd_align_estimate_delay(pd_align* a, const double* tx, const double* rx, 
                 result = lag;
             }
         }
+        // Refine on carrier phase. Remove the NCO offset first: even 2 Hz
+        // turns the phase by more than half a turn across the window. Its
+        // estimate is the phase drift between blocks at the envelope delay.
+        int whole = (int)floor(result);
+        const int blk = 512;
+        double prev = 0, drift = 0;
+        int have = 0, used = 0;
+        for (int b0 = 0; b0 + blk + whole < n && b0 + blk <= span; b0 += blk) {
+            double zr = 0, zi = 0;
+            for (int i = b0; i < b0 + blk; i++) {
+                double ti = tx[2 * i], tq = tx[2 * i + 1];
+                double ri = rx[2 * (i + whole)], rq = rx[2 * (i + whole) + 1];
+                zr += ri * ti + rq * tq;
+                zi += rq * ti - ri * tq;
+            }
+            double ph = atan2(zi, zr);
+            if (have) {
+                double d = ph - prev;
+                while (d > M_PI) d -= 2 * M_PI;
+                while (d < -M_PI) d += 2 * M_PI;
+                drift += d;
+                used++;
+            }
+            prev = ph;
+            have = 1;
+        }
+        double w = used ? drift / used / blk : 0;   // radians per sample
+        double* rx2 = malloc(sizeof(double) * 2 * (size_t)n);
+        if (!rx2) {
+            free(etx);
+            free(erx);
+            return result;
+        }
+        for (int i = 0; i < n; i++) {
+            double c = cos(w * i), sn = sin(w * i);
+            rx2[2 * i] = rx[2 * i] * c + rx[2 * i + 1] * sn;
+            rx2[2 * i + 1] = rx[2 * i + 1] * c - rx[2 * i] * sn;
+        }
+        a->step = w;   // a head start for the tracker
+        // A coarse pass over +-PD_ALIGN_PHASE_SPAN samples, then a fine pass
+        // around its peak.
+        double cbest = -1, clag = result;
+        for (double lag = result - PD_ALIGN_PHASE_SPAN; lag <= result + PD_ALIGN_PHASE_SPAN + 1e-9; lag += 0.25) {
+            if (lag < 0)
+                continue;
+            double r = cplx_corr(span, lag, n, tx, rx2);
+            if (r > cbest) {
+                cbest = r;
+                clag = lag;
+            }
+        }
+        for (double lag = clag - 0.25; lag <= clag + 0.25 + 1e-9; lag += PD_ALIGN_FINE_STEP) {
+            if (lag < 0)
+                continue;
+            double r = cplx_corr(span, lag, n, tx, rx2);
+            if (r > cbest) {
+                cbest = r;
+                clag = lag;
+            }
+        }
+        free(rx2);
+        result = clag;
+        a->phase_corr = cbest;
     }
     free(etx);
     free(erx);
@@ -232,6 +330,7 @@ void pd_align_set_delay(pd_align* a, double delay)
 double pd_align_delay(const pd_align* a) { return a->delay + a->frac; }
 
 double pd_align_estimate_corr(const pd_align* a) { return a->est_corr; }
+double pd_align_phase_corr(const pd_align* a) { return a->phase_corr; }
 double pd_align_coherence(const pd_align* a) { return a->coherence; }
 
 void pd_align_restart(pd_align* a)

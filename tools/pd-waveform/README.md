@@ -134,6 +134,39 @@ the radio.
   39.5 dB above the leakage. With the VNA-measured coupling that puts the
   sample near -31 dBm and the leakage near -70 dBm.
 
+## First transmit runs, FLEX-8600, 2026-11-11 (40 m, 5 W, dummy load)
+
+Keyed through the operator's AetherSDR automation bridge (its DAX TX audio
+is only forwarded when the app itself holds the transmit intent). Measured on
+a second RX A panadapter with its own DAX IQ channel: **the radio deactivates
+an older stream when another client opens the same DAX IQ channel**, so the
+meter must never share the waveform's channel.
+
+| Run | Signal | IMD3 | IMD5 | IMD7 |
+|---|---|---|---|---|
+| 1 | radio two-tone (710/1900 Hz), USB | -27.4 dBc | -41.0 dBc | -52.2 dBc |
+| 2 | AetherPD two-tone, correction off | -27.9 dBc | -41.8 dBc | -53.6 dBc |
+
+- **RAW transmit works**: the waveform's own I/Q reaches the amplifier
+  essentially unchanged (run 2 matches run 1).
+- **On the 8600, DAX IQ can't reach an on-radio waveform**: the stream
+  request is refused with "Unable to Resolve the MAC address of Client with
+  IP 127.0.0.1 using ARP". The runs used the waveform on a LAN host instead.
+  Whether a FLEX-6000 delivers DAX IQ to an on-radio waveform is still open.
+- **The loop closes**: delay found (2176-2576 samples, about 100 ms from a
+  LAN host; it changes per transmission), envelope correlation 0.98, NCO
+  offset tracked at about -0.01 Hz, WDSP fitting about 1.6 times a second.
+- **Envelope delay is not carrier delay**: the radio's transmit filter put
+  them 3.3-4 samples apart (coherence 0.82 instead of 0.999). The aligner
+  now refines the delay on carrier phase after removing the NCO offset, and
+  waits 1 s after key-up before measuring.
+- **Open: a periodic test signal is ambiguous.** A 710/1900 Hz two-tone
+  repeats every 100 ms (2400 samples), so every multiple of that lag
+  correlates perfectly and the delay keeps being re-found. Next: open each
+  test transmission with a noise burst for acquisition, as the simulator
+  does, and check for sample slips between a LAN host and the radio.
+- No correction was applied on air yet.
+
 ## Not yet known
 
 - Whether the radio's transmit filter or ALC still acts on a `RAW`
