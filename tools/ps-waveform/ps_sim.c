@@ -121,7 +121,7 @@ static double gauss(unsigned* s)
 int main(int argc, char** argv)
 {
     double filter_hz = 0, offset_hz = 0.05, seconds = 20, expect = -1, expect_below = -1;
-    int delay = 37;
+    int delay = 37, max_delay = 400;
     double frac = 0;
     int realtime = 0;
     double fit_ms = 0;
@@ -130,6 +130,7 @@ int main(int argc, char** argv)
         if (!strcmp(argv[i], "--filter-hz")) filter_hz = atof(argv[i + 1]);
         else if (!strcmp(argv[i], "--offset-hz")) offset_hz = atof(argv[i + 1]);
         else if (!strcmp(argv[i], "--delay")) delay = atoi(argv[i + 1]);
+        else if (!strcmp(argv[i], "--max-delay")) max_delay = atoi(argv[i + 1]);
         else if (!strcmp(argv[i], "--frac-delay")) frac = atof(argv[i + 1]);
         else if (!strcmp(argv[i], "--seconds")) seconds = atof(argv[i + 1]);
         else if (!strcmp(argv[i], "--expect-imd3-gain")) expect = atof(argv[i + 1]);
@@ -139,7 +140,7 @@ int main(int argc, char** argv)
     }
 
     ps_core* core = ps_core_create(RATE, BLOCK, 2 * TONE_AMP);
-    ps_align* al = ps_align_create(400, 4 * BLOCK + 512);
+    ps_align* al = ps_align_create(max_delay, max_delay + 4 * BLOCK + 512);
     if (!core || !al) { fprintf(stderr, "setup failed\n"); return 2; }
 
     // Fractional part of the loop delay: a 31-tap windowed-sinc delay of
@@ -173,7 +174,7 @@ int main(int argc, char** argv)
     int nb = 0, na = 0;
 
     // Acquisition buffer for the delay estimate.
-    const int acq = 8192;
+    const int acq = max_delay + 8192;
     double* acq_tx = malloc(sizeof(double) * 2 * acq);
     double* acq_rx = malloc(sizeof(double) * 2 * acq);
     int nacq = 0, aligned = 0;

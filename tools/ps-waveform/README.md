@@ -17,7 +17,9 @@ their pointers and locks.
 |---|---|
 | `ps_core.[ch]` | Wraps WDSP's calibration (`pscc`) and correction (`xiqc`) |
 | `ps_align.[ch]` | Lines the feedback up with the reference: loop delay to a hundredth of a sample, and a slow tracker for the NCO offset between them |
-| `ps_sim.c` | Closed loop against a PA model; the CTest `ps_waveform_sim_test` |
+| `ps_waveform.c` | The waveform: radio API, VITA-49, USB modulator and demodulator, DAX IQ feedback; `selftest` is the CTest `ps_waveform_selftest` |
+| `ps_sim.c` | Closed loop against a PA model; the CTests `ps_waveform_sim_test` and `ps_waveform_sim_bandwidth_limit_test` |
+| `build.py`, `package/` | Builds `AetherPS.ssdr_waveform` with an ARMv7 (FLEX-6000) and an arm64 (FLEX-8000) binary |
 
 ## What the simulation shows
 
@@ -51,13 +53,58 @@ and back.
 on a FLEX-6000's Cortex-A8, which is still usable (fits run in the
 background while transmitting). Measure it on a real radio.
 
-## Next
+## The waveform
 
-1. A waveform that registers with `underlying_mode=RAW` and applies
-   `ps_core_correct` to its transmit I/Q. The gating question: does `RAW`
-   exist and transmit on 6000 firmware, and how wide is the radio's TX path
-   after it?
-2. Feedback from a DAX-IQ stream on the coupler's receive input during TX
-   (full duplex), into `ps_align` + `ps_core_calibrate`.
-3. Transmit tests are keyed by a person, into a dummy load, with APD off.
-   Nothing here keys the radio.
+`AetherPS` registers the mode **PS** with the `RAW` underlying mode, so the
+radio exchanges 24 kHz I/Q with it. With PS selected on a slice:
+
+- **Receive:** the slice's I/Q is demodulated as USB and returned as audio.
+- **Transmit:** mic audio becomes upper-sideband I/Q (200-2800 Hz), is
+  pre-distorted by `ps_core`, and goes back to the radio.
+- **Feedback:** while the radio transmits, a DAX IQ stream from a panadapter
+  on the coupler's receive input is mixed to the transmit frequency,
+  decimated to 24 kHz, and lined up with what was sent. The loop delay is
+  found again on each transmission (the first ~0.75 s), then the
+  calibration runs.
+
+It never keys the radio. It only answers the radio's own transmit stream.
+
+Build: `python3 -I build.py --output OUT --host` (zig 0.17). The package is
+~200 KB with both binaries.
+
+### Setup on the radio
+
+1. An external directional coupler and attenuator from the antenna output
+   into the transmit side's receive input (RX A for ANT1), at -20 dBm or
+   lower there. Turn on full duplex.
+2. A panadapter on that input, centred on the transmit frequency, with DAX
+   IQ channel 1 (or set `AETHER_PS_DAXIQ` in `launch.sh`).
+3. Install `AetherPS.ssdr_waveform`; select PS on the transmit slice.
+4. On a FLEX-8000, turn APD off so the two corrections don't fight.
+
+The log shows the registration reply, the loop delay it found, and the fit
+count while transmitting.
+
+## Testing on a radio, in order
+
+1. **No RF.** Install; select PS; check the registration reply has stream
+   IDs and that receive audio comes through. This settles whether `RAW`
+   exists on that firmware.
+2. **Dummy load, low power, correction off** (`AETHER_PS_CORRECT=0`): a
+   two-tone from the mic input. Check the transmitted spectrum, how wide the
+   radio's transmit path is after the waveform, and that the log finds a
+   loop delay.
+3. **Correction on**: compare IMD3 before and after at several powers.
+
+Every transmit is keyed by a person, into a dummy load. Nothing here keys
+the radio.
+
+## Not yet known
+
+- Whether the radio's transmit filter or ALC still acts on a `RAW`
+  waveform's output, and how wide that path is.
+- Whether DAX IQ reaches an on-radio process (it doesn't reach a container
+  on the FLEX-8600) and whether a FLEX-6000 with one SCU can monitor its
+  own transmit frequency in full duplex.
+- The full-scale level of `RAW` transmit samples (`AETHER_PS_PEAK`).
+- How long a fit takes on a FLEX-6000's Cortex-A8.

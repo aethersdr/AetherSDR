@@ -17,6 +17,10 @@
 // on the wanted instant. 16 taps keep the error well below the feedback's
 // noise for signals inside +-0.4 of the sample rate.
 #define PS_ALIGN_TAPS 16
+// Envelope averaging for the coarse delay search, in samples.
+#define PS_ALIGN_COARSE 8
+// The delay search needs at least this many samples past the longest lag.
+#define PS_ALIGN_MIN_SPAN 4096
 // Fine delay search step, in samples.
 #define PS_ALIGN_FINE_STEP 0.01
 
@@ -103,7 +107,7 @@ static double env_corr(const double* etx, const double* erx, int span, double la
 
 double ps_align_estimate_delay(const ps_align* a, const double* tx, const double* rx, int n)
 {
-    if (n <= 2 * a->max_delay + 4 * PS_ALIGN_TAPS)
+    if (n - a->max_delay < PS_ALIGN_MIN_SPAN)
         return -1;
     double* etx = malloc(sizeof(double) * (size_t)n);
     double* erx = malloc(sizeof(double) * (size_t)n);
@@ -127,10 +131,56 @@ double ps_align_estimate_delay(const ps_align* a, const double* tx, const double
     }
     // Envelopes are immune to the NCO offset, so the search can't be fooled
     // by the feedback rotating against the reference.
+    //
+    // A loop delay of up to half a second is 12,000 lags: searched sample by
+    // sample that is ~10^8 multiply-adds, seconds on a Cortex-A8. So search
+    // envelopes averaged over PS_ALIGN_COARSE samples first, then only the
+    // neighbourhood of the coarse peak at full rate.
+    const int span = n - a->max_delay;
+    int lo = 0, hi = a->max_delay;
+    if (a->max_delay > 4 * PS_ALIGN_COARSE) {
+        const int cn = n / PS_ALIGN_COARSE, cspan = span / PS_ALIGN_COARSE;
+        const int cmax = a->max_delay / PS_ALIGN_COARSE;
+        double* ctx = calloc((size_t)cn, sizeof(double));
+        double* crx = calloc((size_t)cn, sizeof(double));
+        if (!ctx || !crx) {
+            free(ctx);
+            free(crx);
+            free(etx);
+            free(erx);
+            return -1;
+        }
+        for (int i = 0; i < cn * PS_ALIGN_COARSE; i++) {
+            ctx[i / PS_ALIGN_COARSE] += etx[i];
+            crx[i / PS_ALIGN_COARSE] += erx[i];
+        }
+        int cbest = 0;
+        double cr = -2;
+        for (int lag = 0; lag <= cmax; lag++) {
+            double s = 0, ptx = 0, prx = 0;
+            for (int i = 0; i < cspan; i++) {
+                s += ctx[i] * crx[i + lag];
+                ptx += ctx[i] * ctx[i];
+                prx += crx[i + lag] * crx[i + lag];
+            }
+            double r = (ptx > 0 && prx > 0) ? s / sqrt(ptx * prx) : 0;
+            if (r > cr) {
+                cr = r;
+                cbest = lag;
+            }
+        }
+        free(ctx);
+        free(crx);
+        lo = cbest * PS_ALIGN_COARSE - 2 * PS_ALIGN_COARSE;
+        hi = cbest * PS_ALIGN_COARSE + 2 * PS_ALIGN_COARSE;
+        if (lo < 0)
+            lo = 0;
+        if (hi > a->max_delay)
+            hi = a->max_delay;
+    }
     int best = -1;
     double bestr = 0;
-    const int span = n - a->max_delay;
-    for (int lag = 0; lag <= a->max_delay; lag++) {
+    for (int lag = lo; lag <= hi; lag++) {
         double s = 0, ptx = 0, prx = 0;
         for (int i = 0; i < span; i++) {
             s += etx[i] * erx[i + lag];
@@ -176,6 +226,12 @@ void ps_align_set_delay(ps_align* a, double delay)
 }
 
 double ps_align_delay(const ps_align* a) { return a->delay + a->frac; }
+
+void ps_align_restart(ps_align* a)
+{
+    a->count = 0;
+    memset(a->ring, 0, sizeof(double) * 2 * (size_t)a->history);
+}
 
 double ps_align_offset_hz(const ps_align* a, double rate)
 {

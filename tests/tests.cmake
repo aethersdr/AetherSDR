@@ -4863,6 +4863,28 @@ if(NOT WIN32)
         --filter-hz 1500 --seconds 8 --expect-imd3-gain-below 5)
     set_tests_properties(ps_waveform_sim_test ps_waveform_sim_bandwidth_limit_test
         PROPERTIES TIMEOUT 120)
+
+    # The waveform itself (ps_waveform.c): registration reply, slice, pan and
+    # interlock status, the feedback guard, VITA packing, the USB modulator
+    # and the feedback mixer. Its selftest opens no socket.
+    add_executable(ps_waveform_selftest
+        tools/ps-waveform/ps_waveform.c
+        tools/ps-waveform/ps_core.c
+        tools/ps-waveform/ps_align.c
+        ${PS_WAVEFORM_WDSP_SOURCES})
+    set_source_files_properties(${PS_WAVEFORM_WDSP_SOURCES}
+        TARGET_DIRECTORY ps_waveform_selftest PROPERTIES COMPILE_OPTIONS "-w")
+    set_property(TARGET ps_waveform_selftest PROPERTY C_STANDARD 11)
+    set_property(TARGET ps_waveform_selftest PROPERTY C_EXTENSIONS ON)
+    target_compile_options(ps_waveform_selftest PRIVATE
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/third_party/wdsp/port/include/wdsp_port.h")
+    target_include_directories(ps_waveform_selftest PRIVATE
+        third_party/wdsp/upstream third_party/wdsp/port/include third_party/wdsp/include
+        ${FFTW3_INCLUDE_DIRS})
+    target_link_directories(ps_waveform_selftest PRIVATE ${FFTW3_LIBRARY_DIRS})
+    target_link_libraries(ps_waveform_selftest PRIVATE ${FFTW3_LIBRARIES} Threads::Threads m)
+    add_test(NAME ps_waveform_selftest COMMAND ps_waveform_selftest selftest)
+    set_tests_properties(ps_waveform_selftest PROPERTIES TIMEOUT 60)
 endif()
 
 # The Remote Access sign-in QR code: encodes the URL scannably (quiet zone,

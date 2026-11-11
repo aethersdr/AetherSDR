@@ -31,7 +31,8 @@ void ps_align_destroy(ps_align* a);
 // same instants (interleaved I/Q), to a fraction of a sample: the
 // calibration fails outright when the pairs are off by even a quarter
 // sample at 24 kHz. Returns the delay in samples, or -1 when the
-// correlation peak is not clear enough to trust.
+// correlation peak is not clear enough to trust. n must exceed the largest
+// delay by at least 4096 samples.
 double ps_align_estimate_delay(const ps_align* a, const double* tx, const double* rx, int n);
 
 // Delays below PS_ALIGN_MIN_DELAY samples are rounded to whole samples: the
@@ -46,6 +47,10 @@ double ps_align_delay(const ps_align* a);
 // many are valid; the first `delay` samples after a reset are not.
 int ps_align_push(ps_align* a, const double* tx, const double* rx, int n,
                   double* tx_out, double* rx_out);
+
+// Starts a new transmission: forgets the reference history and the pairing,
+// keeps the delay and the NCO-offset estimate (both belong to the radio).
+void ps_align_restart(ps_align* a);
 
 // Current estimate of the feedback's frequency offset in Hz, given the rate.
 double ps_align_offset_hz(const ps_align* a, double rate);
