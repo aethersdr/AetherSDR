@@ -97,6 +97,7 @@ struct Hl2Backend::DspSetupResult {
     std::vector<std::string> rxErr;
     bool txOk = false;
     std::string txErr;
+    bool txSkipped = false;   // receive-only backend: no transmit chain was built
 };
 
 namespace {
@@ -2621,10 +2622,13 @@ void Hl2Backend::beginDspSetup()
         return;
 
     const int actualNumRx = m_pendingConnect->actualNumRx;
+    // No transmit chain on a receive-only backend: m_txAllowed is decided once,
+    // in the constructor, so a chain built now could never be keyed.
+    Hl2TxDsp* const txDsp = m_txAllowed ? m_txDsp : nullptr;
     // The TX chain counts as a setup step only in the TXA build, which opens a
     // WDSP transmit channel (the costliest cold-cache step). The phasing build
     // only designs two FIR kernels.
-    const int total = actualNumRx + (AETHER_HL2_TX_TXA ? 1 : 0);
+    const int total = actualNumRx + ((AETHER_HL2_TX_TXA && txDsp) ? 1 : 0);
 
     // The chains to open, snapshotted on THIS thread. m_rx is GUI-thread-only
     // (see its declaration), so the I/O thread gets a plain vector of the
@@ -2662,14 +2666,13 @@ void Hl2Backend::beginDspSetup()
     armDspSetupWatchdog();
 
     const Hl2TxDsp::Config tc = m_pendingConnect->tc;
-    Hl2TxDsp* txDsp = m_txDsp;
     // QPointer guards a backend destroyed mid-build. The cross-thread reads
     // are sound because ~Hl2Backend() blocks on the I/O thread, so this lambda
     // always finishes first; QPointer is not thread-safe, so non-blocking
     // teardown would need another mechanism (docs/HERMES.md §22.4).
     QPointer<Hl2Backend> self(this);
 
-    QMetaObject::invokeMethod(chains.empty() ? static_cast<QObject*>(txDsp)
+    QMetaObject::invokeMethod(chains.empty() ? static_cast<QObject*>(m_txDsp)
                                              : static_cast<QObject*>(chains.front()),
         [self, chains, configs, tc, txDsp, total] {
         // ---- I/O THREAD ----
@@ -2706,7 +2709,7 @@ void Hl2Backend::beginDspSetup()
         // above. In the phasing build this stays silent, because announcing a
         // step that is over before the label repaints is worse than saying
         // nothing.
-        if (AETHER_HL2_TX_TXA && self) {
+        if (AETHER_HL2_TX_TXA && txDsp && self) {
             const QString stage = tr("Preparing the transmit chain…");
             const int done = static_cast<int>(chains.size());
             QMetaObject::invokeMethod(self, [self, stage, done, total] {
@@ -2714,8 +2717,11 @@ void Hl2Backend::beginDspSetup()
                     emit self->dspSetupProgress(stage, done, total);
             }, Qt::QueuedConnection);
         }
-        if (txDsp)
+        if (txDsp) {
             result.txOk = txDsp->configure(tc, &result.txErr);
+        } else {
+            result.txSkipped = true;
+        }
 
         // ---- back to the GUI thread ----
         QMetaObject::invokeMethod(self, [self, result] {
@@ -2910,9 +2916,12 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
             ids->analyzerId = i;   // Hl2Spectrum is per-receiver and owned by it
         }
     }
-    if (!result.txOk)
+    if (result.txSkipped) {
+        qCInfo(lcHl2) << "HL2 DSP setup: no transmit chain (receive only)";
+    } else if (!result.txOk) {
         qWarning() << "Hl2Backend: TX DSP unavailable —"
                    << QString::fromStdString(result.txErr) << "(receive is unaffected)";
+    }
 
     // ---- and only now, the wire ----
     //

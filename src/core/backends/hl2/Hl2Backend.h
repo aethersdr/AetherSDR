@@ -302,6 +302,8 @@ private:
     // socket or DSP, for hl2_rit_xit_test. Reaches nothing else.
     friend struct Hl2RitXitTestAccess;
     friend struct Hl2Cl1ReferenceTestAccess;
+    // Reads whether the connect built the transmit chain, on its own thread.
+    friend struct Hl2RxOnlyTxChainTestAccess;
     // Fires link edges through MetisClient's signals and seeds the connect
     // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
     friend struct Hl2AutoGainLawTestAccess;
