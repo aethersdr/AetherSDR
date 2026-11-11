@@ -4493,6 +4493,37 @@ add_test(NAME radio_setup_headphone_output_gate_test COMMAND radio_setup_headpho
 set_tests_properties(radio_setup_headphone_output_gate_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# HL2 Hardware page: a suggested codec or filter board is labeled; choosing stores it (#6806).
+# Injected hl2 extension backend; no socket and no radio.
+add_executable(hl2_codec_suggestion_dialog_test
+    tests/hl2_codec_suggestion_dialog_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
+    src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
+    src/gui/Kpa500AdvancedWidget.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(hl2_codec_suggestion_dialog_test PRIVATE src tests)
+target_link_libraries(hl2_codec_suggestion_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME hl2_codec_suggestion_dialog_test COMMAND hl2_codec_suggestion_dialog_test)
+set_tests_properties(hl2_codec_suggestion_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 # Recorded status and injected command/reply sinks; no synthetic radio or sockets.
 add_executable(tune_output_control_test tests/tune_output_control_test.cpp)
 target_include_directories(tune_output_control_test PRIVATE src tests)
@@ -10907,6 +10938,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_max_power_field_test
     radio_setup_recording_mode_dim_test
     radio_setup_headphone_output_gate_test
+    hl2_codec_suggestion_dialog_test
     radio_setup_show_tx_waterfall_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
