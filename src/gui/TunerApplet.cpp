@@ -1363,8 +1363,8 @@ void TunerApplet::updateAntennaButtons(int antA)
     // Mirror the hardware display: the active antenna button turns red while
     // the radio is transmitting through the tuner.
     static constexpr const char* kActiveTx =
-        "QPushButton { background: {{color.accent.danger}}; border: 1px solid {{color.accent.danger}}; "
-        "border-radius: 3px; color: {{color.background.0}}; font-size: 10px; font-weight: bold; }";
+        "QPushButton { background: {{color.highlight.tx}}; border: 1px solid {{color.highlight.tx}}; "
+        "border-radius: 3px; color: {{color.highlight.fg}}; font-size: 10px; font-weight: bold; }";
 
     // m_antTxActive covers TCI-only setups where the TGXL hardware interlock
     // cable is not wired (pttA/pttB stay 0); the ptt fallback covers setups
