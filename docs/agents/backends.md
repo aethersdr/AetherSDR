@@ -223,6 +223,14 @@ and refuses any pending creation whose discarded history makes ownership
 uncertain, rather than issuing a cleanup receipt from incomplete evidence.
 GUI, CAT and TCI retain their existing topology, frequency, focus and audio
 policies. TX assignment is not keying and grants no extra TX authority.
+Band-stack recall runs through `RadioModel` with a value copy of the bookmark;
+the GUI supplies its existing tuning policy. Each step rechecks the original
+session, slice, pan and ownership, and a newer recall supersedes the older tail.
+Physical antenna requests and radio AGC behind external receive replacement use
+typed backend verbs. CAT tuning steps use the same typed preset route as desktop
+controls and retain the queued request's original session and slice identity.
+A completed recall requests one slice-status refresh so a mode-change status
+cannot leave AGC values stale on firmware that only acknowledges AGC writes.
 Desktop spot, pan-utility and net/tuning-step requests also use typed backend
 verbs; their desktop-only field-set records are not daemon permissions. Spot
 batches retain their original control session and Clear All epoch and detach
@@ -236,6 +244,17 @@ host TUNE-power edits additionally require a live locally admitted carrier.
 HL2 host-keyer, sidetone and compressor settings return local-only receipts;
 their existing local consumers still apply them (#6153). Icom CW controls retain
 the current keyer capability gate; its replacement belongs to #6110.
+
+Audio stream create/remove and IQ-rate intents use `AudioStreamRequest`;
+graphic EQ uses `GraphicEqRequest`, and pan IQ binding extends the typed display
+control. Capability records describe actual dispatch, not daemon permissions.
+Flex owns encoding; native audio and host EQ must not fall through to Flex text.
+The engine validates original-session stream ownership and incarnation, retains
+bounded unconfirmed-allocation reservations, and revokes the immutable-deadline
+guard before a stale queued write can reach the transport. Allocation grants no
+DAX TX selection, global DAX-input mutation or keying authority. Keep sample/DSP
+paths unchanged during this control-plane migration; the legacy status readers
+are not evidence that their touchpoints are fully converted.
 
 If your change trips any of these, restructure the change — do not move the
 file, weaken the check, or add an exemption. Engine code that needs a UI

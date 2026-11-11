@@ -159,6 +159,14 @@ def test_field_mapping():
           r.get("cmd") == "menu" and r.get("action") == "open"
           and r.get("value") == "File", str(r))
 
+    for action in ("take", "release", "status"):
+        r = run_tool("dax_tx", {"action": action})[-1]
+        check(f"dax_tx {action} → exact non-keying ownership action",
+              r == {"cmd": "daxTx", "action": action}, str(r))
+    for invalid in ({"action": "toggle"}, {"action": "take", "streamId": "0x40000001"}, {}):
+        check("dax_tx rejects malformed or caller-selected stream without transport",
+              not run_tool("dax_tx", invalid), str(invalid))
+
     r = run_tool("streams", {"scope": "radio"})[-1]
     check("streams → cmd=streams action(scope)",
           r.get("cmd") == "streams" and r.get("action") == "radio", str(r))

@@ -868,6 +868,7 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
         m_wanReconnectAttemptInProgress = false;
         return;
     }
+    m_smartLink.setAccountLocked(true);
     quint16 udpPort = m_radioModel.panStream()->localPort();
     if (udpPort == 0) {
         // Not yet bound — start WAN early to get a port
@@ -1042,6 +1043,11 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
     connect(dialog, &QObject::destroyed, this, [this, dialog] {
         if (m_reconnectDlg == dialog)
             m_reconnectDlg = nullptr;
+        // Dismissed without Reconnect: release the SmartLink account.
+        if (m_userDisconnected && !m_radioModel.isConnected()) {
+            m_smartLink.setAccountLocked(false);
+            m_pendingWanRadio = {};
+        }
     });
 
     connect(quit, &QPushButton::clicked, this, [this, dialog] {
@@ -2313,6 +2319,8 @@ MainWindow::MainWindow(QWidget* parent)
     // by luck rather than by wiring.
     connect(&m_radioModel.transmitModel(), &TransmitModel::stateChanged,
             this, [this]() { updatePaTempLabel(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::atuAvailabilityChanged,
+            this, &MainWindow::updateToolsMenuState);
 
     auto normalizeOscillatorValue = [](QString value) {
         value = value.trimmed().toLower();
@@ -3399,8 +3407,13 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
                     tr("TX Playback: no transmit control is available right now."), 4000);
                 return;
             }
-            toggleRxPlaybackTransmit(
-                controller->captureProgram(TxController::Activity::Mox).request());
+            const TxCoordinator::Request input =
+                controller->captureProgram(TxController::Activity::Mox).request();
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+                m_radioModel.noteDaxTxInput(input);
+            }
+            toggleRxPlaybackTransmit(input);
         });
         registerTxKeyingAction(m_rxDialog->txPlaybackAction(),
             [this](const std::shared_ptr<TxController>& controller,
@@ -3411,6 +3424,10 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
             }
             const TxCoordinator::Request input =
                 controller->captureProgram(TxController::Activity::Mox).request();
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+                m_radioModel.noteDaxTxInput(input);
+            }
             return [this, input] { toggleRxPlaybackTransmit(input); };
         });
         // Seed the EQ page with the filter it is looking at right now, rather
@@ -5643,10 +5660,7 @@ void MainWindow::buildUI()
         if (!applet || !applet->spectrumWidget()) {
             return;
         }
-        applet->spectrumWidget()->setBandSegmentZoomAvailable(
-            bandSegmentZoomAvailable(
-                m_radioModel.isConnected(),
-                m_radioModel.backendCapabilities().panZoomModes.has_value()));
+        refreshPanZoomControls();
         // The two capability switches onConnectionStateChanged() applies for
         // the same reason: a pan created after connect would otherwise keep
         // the widget defaults (no edge crop, client EMA on) until the next
@@ -5663,6 +5677,8 @@ void MainWindow::buildUI()
         // not only this one's (#5750), so the whole stack is re-derived.
         syncPanSpanControlPlacement();
     });
+    // The startup pane was added before this connect; dim its B/S now.
+    refreshPanZoomControls();
     // Removing or re-keying a pane can take the span control's owner with
     // it; re-derive so exactly one pane still carries it (#5750).
     connect(m_panStack, &PanadapterStack::panRemoved, this,
@@ -5709,60 +5725,15 @@ void MainWindow::buildUI()
             m_radioModel.settingsScope(), m_bandPlanMgr);
     });
     connect(bsPanel, &BandStackPanel::recallRequested, this,
-            [this](const BandStackEntry& e) {
-        auto* slice = activeSlice();
-        if (!slice) return;
-        int id = slice->sliceId();
-
-        // Mode first (affects filter ranges). The HL2's data-mode AGC relies
-        // on this order; hl2_bandstack_digital_agc_test replays it.
-        if (slice->mode() != e.mode) {
-            slice->setMode(e.mode);
-        }
-        applyTuneRequest(slice, e.frequencyMhz,
-                         TuneIntent::AbsoluteJump, "bandstack-recall");
-        // Filter
-        if (e.filterLow != 0 || e.filterHigh != 0) {
-            slice->setFilterWidth(e.filterLow, e.filterHigh);
-        }
-        // Antennas
-        if (!e.rxAntenna.isEmpty() && e.rxAntenna != slice->rxAntenna()) {
-            m_radioModel.sendCommand(QString("slice set %1 rxant=%2").arg(id).arg(e.rxAntenna));
-        }
-        if (!e.txAntenna.isEmpty() && e.txAntenna != slice->txAntenna()) {
-            m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
-        }
-        // AGC while KiwiSDR external receive audio replaces the slice: the
-        // bookmark holds the RADIO's AGC, which the SliceModel setters would
-        // write into the KiwiSDR AGC, so it goes as wire text here and
-        // recallBandStackReceiveDsp() below leaves the AGC alone.
-        if (slice->externalReceiveReplacementActive()) {
-            if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
-                m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
-            }
-            if (!slice->automaticAgcThresholdActiveOrPending()
-                && e.agcThreshold != slice->agcThreshold()) {
-                m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
-            }
-        }
-        // Volume
-        if (static_cast<int>(slice->audioGain()) != e.audioGain) {
-            slice->setAudioGain(static_cast<float>(e.audioGain));
-        }
-        // AGC (outside KiwiSDR replacement), NB and NR through the SliceModel
-        // setters, so they reach every backend, not only a command plane.
-        m_radioModel.recallBandStackReceiveDsp(slice, e);
-        // Stored WNB values are optional replay, not individual control actions.
-        if (auto* pan = m_radioModel.activePanadapter()) {
-            if (e.wnbOn != pan->wnbActive()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::Wnb, e.wnbOn},
-                    {}, /*announce=*/false);
-            }
-            if (e.wnbLevel != pan->wnbLevel()) {
-                m_radioModel.requestPanDisplay(pan, {PanDisplayField::WnbLevel, e.wnbLevel},
-                    {}, /*announce=*/false);
-            }
-        }
+            [this](const BandStackEntry& entry) {
+        const QPointer<MainWindow> owner(this);
+        m_radioModel.recallBandStack(activeSlice(), entry,
+            [owner](SliceModel* slice, double mhz) {
+                if (owner) {
+                    owner->applyTuneRequest(slice, mhz,
+                        TuneIntent::AbsoluteJump, "bandstack-recall");
+                }
+            });
     });
     connect(bsPanel, &BandStackPanel::removeRequested, this,
             [this](int index) {
@@ -6701,6 +6672,60 @@ void MainWindow::applyDarkTheme()
 
 // ─── Radio/model event handlers ───────────────────────────────────────────────
 
+void MainWindow::refreshPanZoomControls()
+{
+    if (!m_panStack) {
+        return;
+    }
+    const auto zoom = m_radioModel.backendCapabilities().panZoomModes;
+    const bool nativeSpan = zoom && zoom->control
+        == RadioCapabilities::PanZoomModes::Control::NativeScopeSpan;
+    for (auto* applet : m_panStack->allApplets()) {
+        if (!applet || !applet->spectrumWidget()) {
+            continue;
+        }
+        const auto* pan = m_radioModel.panadapter(applet->panId());
+        std::optional<QString> blocked;
+        if (!m_radioModel.isConnected()) {
+            blocked = tr("Connect to a radio to use band and segment zoom.");
+        } else if (!zoom) {
+            blocked = tr("This radio has no band or segment zoom.");
+        } else if (nativeSpan) {
+            blocked = nativePanZoomBlockedReason(pan);
+        }
+        const bool available = AetherSDR::bandSegmentZoomAvailable(
+            m_radioModel.isConnected(), zoom.has_value()) && !blocked;
+        applet->spectrumWidget()->setBandSegmentZoomAvailable(
+            available, nativeSpan, blocked.value_or(QString()));
+    }
+}
+
+std::optional<std::pair<double, double>> MainWindow::bandPlanZoomRegion(double frequencyMhz,
+                                                                      bool segment) const
+{
+    if (!m_bandPlanMgr) {
+        return std::nullopt;
+    }
+    const auto region = m_bandPlanMgr->zoomRegionAt(frequencyMhz, segment);
+    if (!region) {
+        return std::nullopt;
+    }
+    return std::pair{region->lowMhz, region->highMhz};
+}
+
+std::optional<QString> MainWindow::nativePanZoomBlockedReason(const PanadapterModel* pan) const
+{
+    if (pan && pan->zoomPlacement() == PanZoomPlacement::Unavailable) {
+        return tr("The radio's Fixed preset sets the scope edges, so band and "
+                  "segment zoom cannot change them.");
+    }
+    if (!pan || !pan->bandwidthLimitsKnown() || !pan->centerKnown()
+        || pan->zoomPlacement() == PanZoomPlacement::Unknown) {
+        return tr("Waiting for the radio's scope geometry.");
+    }
+    return std::nullopt;
+}
+
 void MainWindow::onConnectionStateChanged(bool connected)
 {
     if (m_shuttingDown) {
@@ -6719,24 +6744,16 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Band/segment zoom reads the declared RadioCapabilities::panZoomModes
-    // (FlexBackend engages it; others set nullopt), not a family check or
-    // hasCommandPlane() (the sim owns a RadioConnection but has no
-    // band_zoom=/segment_zoom=). Re-evaluated on every connect and disconnect,
-    // since backendCapabilities() reflects only the current radio.
+    // Band/segment zoom reads the backend's declared control contract. Native
+    // span zoom also waits for radio-reported pan limits before enabling.
     if (m_panStack) {
-        // One predicate with the command paths in MainWindow_Shortcuts.cpp, so
-        // "the button is grey" and "the keystroke is refused" cannot drift
-        // apart on the capability (PanZoomModeGate.h).
-        const bool zoomAvailable = AetherSDR::bandSegmentZoomAvailable(
-            connected, m_radioModel.backendCapabilities().panZoomModes.has_value());
+        refreshPanZoomControls();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
             m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
-                applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
                     AetherSDR::clientFftSmoothingEnabled(connected, backendAverages));
@@ -7255,6 +7272,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 reconnectDialog->deleteLater();
             });
             connect(dismissBtn, &QPushButton::clicked, this, [this]() {
+                m_smartLink.setAccountLocked(false);
+                m_pendingWanRadio = {};
                 m_userDisconnected = true;
                 m_wanReconnectTimer.stop();
                 m_wanReconnectAttemptInProgress = false;
@@ -9414,9 +9433,8 @@ void MainWindow::reassertUnmutedSliceAudioForPan(const QString& panId)
         }
 
         // The model already shows unmuted, so SliceModel::setAudioMute(false)
-        // would no-op. Send the command directly to rebuild radio audio routing.
-        m_radioModel.sendCommand(
-            QString("slice set %1 audio_mute=0").arg(slice->sliceId()));
+        // would no-op. Reassert through the engine without changing local mute.
+        m_radioModel.reassertSliceAudio(slice);
     }
 }
 
@@ -10495,16 +10513,11 @@ void MainWindow::updateToolsMenuState()
         && m_radioModel.txOwnedByUs() && idle;
     const bool hasTxApplet = m_appletPanel && m_appletPanel->txApplet();
 
-    // An external TunerGenius XL in OPERATE puts the internal ATU out of the
-    // line, and TxApplet::updateAtuAvailability() greys the ATU and MEM buttons
-    // for exactly that reason (#443). The ATU right-click menu rides the
-    // disabled ATU button, so before Tools existed that gate was also the only
-    // route to these two actions — lifting them to the menu bar without the same
-    // condition would make Tools the one way left to pre-tune through a tuner
-    // that is in OPERATE.
+    // Tools and the applet share the internal-ATU path gate: neither TGXL
+    // Operate nor a transverter output can use the radio's tuner.
     const bool tgxlOperate = tuner.isPresent() && tuner.isOperate()
         && !tuner.isBypass();
-    const bool memories = caps.hasTunerMemories && !tgxlOperate;
+    const bool memories = caps.hasTunerMemories && !tgxlOperate && tx.atuAvailable();
 
     if (m_addPanAction) {
         m_addPanAction->setEnabled(connected && m_panStack
@@ -10539,7 +10552,7 @@ void MainWindow::updateToolsMenuState()
     }
 
     // Every disabling condition names itself. A greyed control with no stated
-    // reason reads as broken (#5510), and Pre-tune now has five of them.
+    // reason reads as broken (#5510).
     if (m_preTuneAction) {
         m_preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
             && hasTxApplet);
@@ -10548,6 +10561,8 @@ void MainWindow::updateToolsMenuState()
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
                 ? tr("Disabled — TGXL is in OPERATE mode")
+            : !tx.atuAvailable()
+                ? tr("Disabled — the internal ATU is not in the transverter TX path")
             : !hasTxApplet
                 ? tr("The transmit applet is unavailable in this build")
             : !tx.memoriesEnabled()
@@ -10566,6 +10581,8 @@ void MainWindow::updateToolsMenuState()
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
                 ? tr("Disabled — TGXL is in OPERATE mode")
+            : !tx.atuAvailable()
+                ? tr("Disabled — the internal ATU is not in the transverter TX path")
             : !hasTxApplet
                 ? tr("The transmit applet is unavailable in this build")
             : !connected

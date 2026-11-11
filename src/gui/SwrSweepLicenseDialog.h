@@ -19,7 +19,7 @@ public:
     // True when the user has either previously confirmed (with the
     // remember-my-answer checkbox) or just confirmed in this session.
     // Returns false if the user cancels.  Safe to call repeatedly.
-    static bool confirm(QWidget* parent = nullptr, bool force = false);
+    static bool confirm(QWidget* parent = nullptr);
 
 private:
     QCheckBox* m_rememberCheck{nullptr};

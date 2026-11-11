@@ -24,6 +24,8 @@
 #include <QVariantMap>
 
 #include "core/backends/AmpDelta.h"
+#include "core/backends/AudioControlRequest.h"
+#include "core/backends/DaxTxStream.h"
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
 #include "core/backends/MeterDef.h"
@@ -145,6 +147,10 @@ class IRadioBackend : public QObject {
     Q_OBJECT
 
 public:
+    virtual ReceiveDispatch requestAudioStream(const AudioStreamRequest&, const AudioStreamCompletion& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestGraphicEq(const GraphicEqRequest&)
+    { return ReceiveDispatch::Unsupported; }
     // Desktop control routing only: these do not extend the daemon registry.
     virtual ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request)
     {
@@ -158,6 +164,11 @@ public:
     virtual ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
                                                     TunePowerContext = TunePowerContext::Deferred)
     { return ReceiveDispatch::Unsupported; }
+    // Requests selection of our audio stream, never a global source or PTT edit.
+    // A dispatched command's acceptance does not confirm the observed TX bit.
+    virtual ReceiveDispatch requestDaxTxOwnership(const DaxTxOwnershipRequest&,
+                                                 DaxTxOwnershipCompletion = {})
+    { return ReceiveDispatch::Unsupported; }
     // Radio-owned identity; client-owned nicknames retain their local store.
     using NicknameCompletion = std::function<void(bool accepted)>;
     virtual ReceiveDispatch requestRadioNickname(const QString&, NicknameCompletion = {})
@@ -167,6 +178,9 @@ public:
     // hear the radio's reply leaves it to RadioModel, which reports it as not
     // confirmed rather than assume the radio agreed.
     virtual bool answersTransmitControl() const { return false; }
+    virtual ReceiveDispatch requestSessionControl(const SessionControlRequest&,
+        const SessionCommandGuard&, const SessionControlCompletion& = {})
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
                                               const RadioSetupCompletion& = {},
                                               const RadioControlFence& current = {})
@@ -1154,6 +1168,7 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    void audioStreamChanged(const AetherSDR::AudioStreamDelta& delta);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose
     // answerTicket was nonzero: applied when it accepted the setting. Emitted
@@ -1239,6 +1254,7 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+    void daxTxStreamChanged(const AetherSDR::DaxTxStreamDelta& delta);
     // An explicit radio readback confirmed the keyed state. This is distinct
     // from transmitChanged because optimistic state may already equal the
     // answer and therefore produce no delta. Backends without a separate
@@ -1388,6 +1404,9 @@ signals:
     // picked on the front panel), so the UI lights none.
     void panScopeModesChanged(const QString& panId, const QStringList& labels);
     void panScopeModeChanged(const QString& panId, int index);
+    // Required of a backend declaring PanZoomModes::Control::NativeScopeSpan:
+    // until it is published the pan reads Unknown and B/S stay dimmed.
+    void panZoomPlacementChanged(const QString& panId, AetherSDR::PanZoomPlacement placement);
 
     // Panadapter antenna selection (universal). Two signals because the wire may
     // report the selected RX antenna and the available list independently.

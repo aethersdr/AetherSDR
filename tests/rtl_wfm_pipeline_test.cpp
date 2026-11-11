@@ -5,6 +5,7 @@
 #include "core/backends/rtl/RtlSdrDdc.h"
 #endif
 #include "core/dsp/WdspChannel.h"
+#include "RtlPipelineTestFeed.h"
 
 #include <QCoreApplication>
 #include <QThreadPool>
@@ -212,7 +213,6 @@ std::array<Audio, 2> run(Pipeline& pipeline, const Transaction::State& current,
         audio.left.reserve(std::size_t(seconds * 48000) + 1024);
         audio.right.reserve(std::size_t(seconds * 48000) + 1024);
     }
-    const auto started = std::chrono::steady_clock::now();
     const std::uint64_t origin = position;
     const double rate = current.capture.achievedSampleRateHz;
     const std::uint64_t end = position + std::uint64_t(seconds * rate);
@@ -244,8 +244,10 @@ std::array<Audio, 2> run(Pipeline& pipeline, const Transaction::State& current,
             }
             result[packet.slot < 0 ? 1 : 0].accept(packet);
         }
-        std::this_thread::sleep_until(started + std::chrono::microseconds(
-            std::uint64_t((position - origin) * 1'000'000.0 / rate)));
+        if (!AetherSDR::test::settleRtlDsp(pipeline)) {
+            check(false, "offline WFM capture waits for actual WDSP output publication");
+            break;
+        }
     }
     const bool repair = pipeline.needsRepair();
     if (repair) { printRunFailure(pipeline, current, phase, origin, position, end); }
@@ -385,6 +387,7 @@ void workerUnderrunTrace()
     const bool installed = pipeline->prepare(current, true) && ready(*pipeline) && pipeline->adopt();
     check(installed && !pipeline->legacy(), "underrun fixture prepares the actual nonblocking WFM receiver");
     if (!installed || pipeline->legacy()) { pipeline->stop(); return; }
+    check(pipeline->outputSettledForTest(), "cold receiver starts with its prepared output credits");
 
     // The first worker to reach the existing handoff point is the sole WFM
     // worker in this fixture. Destruction order releases it before the pipeline
@@ -436,12 +439,15 @@ void workerUnderrunTrace()
     for (unsigned chunk = 0; chunk < 512 && slicePackets < 7 && !pipeline->needsRepair(); ++chunk) { feed(); }
     check(slicePackets == 7 && !pipeline->needsRepair(),
           "nonblocking WFM accepts the bounded seven-block USB burst while its worker is held");
+    check(!pipeline->outputSettledForTest(),
+          "offline feed observation detects unpublished output while a real worker is held");
     // D8 has seven prefilled output blocks plus the first acknowledged worker
     // handoff. Exhaustion therefore occurs on the ninth IQ block. It remains a
     // real fexchange2 -2; treating -2 as Ok must still fail this withdrawal.
     for (unsigned chunk = 0; chunk < 512 && !pipeline->needsRepair(); ++chunk) { feed(); }
     check(pipeline->needsRepair() && slicePackets == 8,
           "real nonblocking WFM exchange withdraws beyond its bounded eight-block credit");
+    check(!pipeline->outputSettledForTest(), "a faulted pipeline cannot acknowledge an offline feed");
     std::printf("WFM_HELD_BURST successful_blocks=%zu repair=%d\n", slicePackets, pipeline->needsRepair());
     const std::uint64_t faultCaptureFirst = failedCaptureFirst;
     // Subsequent continuous RF cannot publish stale decoder output or a second
@@ -701,7 +707,6 @@ MultiAudio runAnalogBank(Pipeline& pipeline, const Transaction::State& current,
     }
     const std::uint64_t origin = position;
     const std::uint64_t end = position + std::uint64_t(seconds * current.capture.achievedSampleRateHz);
-    const auto started = std::chrono::steady_clock::now();
     std::array<std::complex<float>, 8192> iq;
     while (position < end) {
         const std::size_t count = std::min<std::uint64_t>(iq.size(), end - position);
@@ -736,8 +741,11 @@ MultiAudio runAnalogBank(Pipeline& pipeline, const Transaction::State& current,
             result[packet.slot].accept(packet, wide ? 256 : 1024);
         }
         if (pipeline.needsRepair()) { check(false, "analog bank never withdraws a healthy receiver"); break; }
-        std::this_thread::sleep_until(started + std::chrono::duration<double>(
-            double(position - origin) / current.capture.achievedSampleRateHz));
+        if (!AetherSDR::test::settleRtlDsp(pipeline)) {
+            printRunFailure(pipeline, current, "analog", origin, position, end);
+            check(false, "offline analog capture waits for actual WDSP output publication");
+            break;
+        }
     }
     const Pipeline::Diagnostics diagnostic = pipeline.diagnostics();
     std::printf("ANALOG_BANK revision=%llu receivers=%zu position=%llu drops=%llu late=%llu rejected=%llu repair=%d\n",

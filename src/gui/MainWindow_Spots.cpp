@@ -11,6 +11,7 @@
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
 #include "core/N1MMSpotClient.h"
+#include "core/WsprAgentClient.h"
 #include "models/TransmitModel.h"
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
@@ -73,6 +74,7 @@ void MainWindow::wireSpotSubsystem()
     m_potaClient = new PotaClient;
     m_eibiClient = new EibiClient;
     m_n1mmSpotClient = new N1MMSpotClient;
+    m_wsprFeed = new WsprSpotFeed(this);
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
 #endif
@@ -443,6 +445,8 @@ void MainWindow::wireSpotSubsystem()
                 spotColor = as.value("RbnSpotColor", "#4488FF").toString();
             else if (source == "FreeDV")
                 spotColor = as.value("FreeDvSpotColor", "#FF8C00").toString();  // HAVE_WEBSOCKETS
+            else if (source == "WSPR")
+                spotColor = ThemeManager::instance().value(QString::fromLatin1(kWsprDefaultColorToken));
         }
         if (spotColor.length() == 7)
             spotColor = "#FF" + spotColor.mid(1);
@@ -762,6 +766,21 @@ void MainWindow::wireSpotSubsystem()
     });
 #endif
 
+    connect(m_wsprFeed, &WsprSpotFeed::spotReceived,
+            this, [queueSpotCmd](const DxSpot& spot) {
+        queueSpotCmd(spot, "WSPR");
+    });
+    // A new session or address: the feed belongs to the radio it started on.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        m_wsprFeed->stop();
+        // A radio without the receiver just refuses the poll, and one that
+        // gets it later is picked up by the next one.
+        if (connected && m_radioModel.backendCapabilities().hasWaveforms
+            && wspr::reachableRadio(m_radioModel.isWan(), m_radioModel.radioAddress())
+            && wspr::loadSpotHubSettings().autoStart) {
+            m_wsprFeed->start(m_radioModel.radioAddress());
+        }
+    });
 }
 
 } // namespace AetherSDR

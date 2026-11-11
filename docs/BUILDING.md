@@ -30,6 +30,7 @@ builds qtkeychain against it, then configure as usual:
 ```bash
 scripts/setup/setup-qt.sh
 cmake -B build -G Ninja \
+  -DREQUIRE_KEYCHAIN=ON \
   -DCMAKE_PREFIX_PATH="$(scripts/setup/setup-qt.sh --print-prefix);$(brew --prefix)"
 ```
 
@@ -37,6 +38,10 @@ The pinned Qt goes first in that list on purpose. `$(brew --prefix)` is there
 for fftw, librtlsdr, portaudio and hidapi, but a Homebrew `qt` formula (often
 pulled in by something else) lives under the same prefix; naming the pinned Qt
 first keeps it the one CMake finds.
+
+`REQUIRE_KEYCHAIN=ON` makes a missing credential store a configuration error.
+Keep it enabled when testing saved SmartLink accounts or Icom connections;
+without QtKeychain those credentials last only for the current session.
 
 Qt 6.12 needs **Xcode 16** (the macOS 15 SDK): Qt's own CMake stops at
 configure with "Qt requires at least version 16 of Xcode" on anything older,

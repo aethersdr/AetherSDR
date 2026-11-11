@@ -541,6 +541,8 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     if (m_model == model) return;
     m_model = model;
     if (!m_model) return;
+    m_lastAtuStatus = ATUStatus::None;
+    m_atuTunedFreqMhz = -1.0;
 
     // Transmit state changes → update sliders, tune button
     connect(m_model, &TransmitModel::stateChanged, this, &TxApplet::syncFromModel);
@@ -591,7 +593,7 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     });
 
     // ATU state changes → indicators
-    connect(m_model, &TransmitModel::atuStateChanged, this, &TxApplet::syncAtuIndicators);
+    connect(m_model, &TransmitModel::atuStateChanged, this, &TxApplet::syncAtuState);
 
     // APD button + indicators
     connect(m_apdBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -602,7 +604,7 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         m_updatingFromModel = true;
         m_apdBtn->setChecked(m_model->apdEnabled());
         m_updatingFromModel = false;
-        syncAtuIndicators();  // also refreshes APD indicators
+        syncAtuState();  // resetState also clears ATU state through this signal
     });
 
     // Profile list changes → populate combo
@@ -635,18 +637,24 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         syncAtuIndicators();
     });
     m_radioHasTunerMemories = m_model->hasTunerMemories();
+    connect(m_model, &TransmitModel::atuAvailabilityChanged, this, [this] {
+        updateAtuAvailability();
+        syncAtuIndicators();
+    });
 
     syncFromModel();
-    syncAtuIndicators();
+    syncAtuState();
     updateAtuAvailability();
 }
 
 void TxApplet::updateAtuAvailability()
 {
-    if (!m_atuBtn || !m_memBtn)
+    if (!m_atuBtn || !m_memBtn) {
         return;
-    const bool atuEnabled = m_radioHasTuner && !m_tgxlOperate;
-    const bool memoriesEnabled = m_radioHasTunerMemories && !m_tgxlOperate;
+    }
+    const bool pathAvailable = !m_model || m_model->atuAvailable();
+    const bool atuEnabled = m_radioHasTuner && !m_tgxlOperate && pathAvailable;
+    const bool memoriesEnabled = m_radioHasTunerMemories && !m_tgxlOperate && pathAvailable;
     m_atuBtn->setEnabled(atuEnabled);
     m_memBtn->setEnabled(memoriesEnabled);
     // The ATU context menu contains only memory operations. Keep the shared
@@ -660,16 +668,21 @@ void TxApplet::updateAtuAvailability()
     // point, and "Disabled — TGXL is in OPERATE mode" would send the operator
     // looking at the wrong box.
     QString tip;
-    if (!m_radioHasTuner)
+    if (!m_radioHasTuner) {
         tip = tr("Antenna tuner controls are unavailable for this radio");
-    else if (m_tgxlOperate)
+    } else if (m_tgxlOperate) {
         tip = tr("Disabled — TGXL is in OPERATE mode");
+    } else if (!pathAvailable) {
+        tip = tr("Disabled — the internal ATU is not in the transverter TX path");
+    }
     m_atuBtn->setToolTip(tip);
+    m_atuBtn->setAccessibleDescription(tip);
     if (!m_radioHasTunerMemories) {
         m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
     } else {
         m_memBtn->setToolTip(tip);
     }
+    m_memBtn->setAccessibleDescription(m_memBtn->toolTip());
 }
 
 void TxApplet::setTunerModel(TunerModel* tuner)
@@ -719,36 +732,48 @@ void TxApplet::syncFromModel()
     m_updatingFromModel = false;
 }
 
+void TxApplet::syncAtuState()
+{
+    if (!m_model) {
+        return;
+    }
+    const ATUStatus status = m_model->atuStatus();
+    // Only a new result can pin a match; memory/APD changes are not a tune.
+    if (status != m_lastAtuStatus) {
+        if (status == ATUStatus::Successful || status == ATUStatus::OK) {
+            m_atuTunedFreqMhz = m_model->transmitFreq();
+        } else if (status == ATUStatus::Bypass || status == ATUStatus::ManualBypass
+                   || status == ATUStatus::None) {
+            m_atuTunedFreqMhz = -1.0;
+        }
+        m_lastAtuStatus = status;
+    }
+    syncAtuIndicators();
+}
+
 void TxApplet::syncAtuIndicators()
 {
-    if (!m_model) return;
-
-    const auto status = m_model->atuStatus();
-
-    // Capture the freq the ATU just tuned at — gates the "second click ⇒ bypass"
-    // path so only same-frequency follow-up clicks bypass. (#1993)
-    if (status == ATUStatus::Successful || status == ATUStatus::OK)
-        m_atuTunedFreqMhz = m_model->transmitFreq();
-    else if (status == ATUStatus::Bypass || status == ATUStatus::ManualBypass) {
-        // Bypass clears the tuned-freq pin so the next click starts a fresh tune.
-        m_atuTunedFreqMhz = -1.0;
+    if (!m_model) {
+        return;
     }
+    const ATUStatus status = m_model->atuStatus();
 
+    const bool pathAvailable = m_model->atuAvailable();
     // Success — green when tune was successful
     setIndicatorState(m_successInd,
-        indicatorState(m_radioHasTuner,
+        indicatorState(m_radioHasTuner && pathAvailable,
                        status == ATUStatus::Successful || status == ATUStatus::OK));
 
     // Byp — orange when in bypass
     setIndicatorState(m_bypInd,
-        indicatorState(m_radioHasTuner,
+        indicatorState(m_radioHasTuner && pathAvailable,
                        status == ATUStatus::Bypass
                            || status == ATUStatus::ManualBypass),
         QColor(0xd0, 0x90, 0x00));
 
     // Mem — green when using memory
     setIndicatorState(m_memInd,
-        indicatorState(m_radioHasTunerMemories, m_model->usingMemory()));
+        indicatorState(m_radioHasTunerMemories && pathAvailable, m_model->usingMemory()));
 
     // APD indicators — mutually exclusive states, all off when APD disabled
     // Progression: Cal (calibrating) → Avail (calibration ready) → Active (applied)
@@ -866,16 +891,26 @@ void TxApplet::buildAtuContextMenu(QMenu& menu)
 
     auto* preTune = menu.addAction(QString::fromUtf8("Pre-tune bands\xE2\x80\xA6"));
     const bool memOn = m_model && m_model->memoriesEnabled();
-    preTune->setEnabled(m_radioHasTunerMemories && memOn);
+    const bool pathAvailable = !m_model || m_model->atuAvailable();
+    preTune->setEnabled(m_radioHasTunerMemories && pathAvailable && memOn);
     if (!m_radioHasTunerMemories) {
         preTune->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else if (!pathAvailable) {
+        preTune->setToolTip(tr("Disabled — the internal ATU is not in the transverter TX path"));
     } else if (!memOn) {
         preTune->setToolTip(tr("Enable MEM before running the pre-tune sweep"));
     }
+    preTune->setStatusTip(preTune->toolTip());
     connect(preTune, &QAction::triggered, this, &TxApplet::openPreTuneDialog);
 
     auto* clearMem = menu.addAction(QString::fromUtf8("Clear ATU memories\xE2\x80\xA6"));
-    clearMem->setEnabled(m_radioHasTunerMemories);
+    clearMem->setEnabled(m_radioHasTunerMemories && pathAvailable);
+    if (!m_radioHasTunerMemories) {
+        clearMem->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else if (!pathAvailable) {
+        clearMem->setToolTip(tr("Disabled — the internal ATU is not in the transverter TX path"));
+    }
+    clearMem->setStatusTip(clearMem->toolTip());
     connect(clearMem, &QAction::triggered,
             this, &TxApplet::confirmAndClearAtuMemories);
 }

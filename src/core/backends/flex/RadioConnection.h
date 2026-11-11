@@ -32,6 +32,7 @@ class RadioConnection : public QObject {
     Q_OBJECT
     friend class TxOperationIntegrationTestAccess;
     friend class RadioConnectionSessionTestAccess;
+    friend class SessionControlTestAccess;
     friend class TuneOutputControlTestAccess;
     friend class LanUdpKeepaliveTestAccess;
     friend class RadioAdministrationTestAccess;
@@ -73,6 +74,12 @@ public slots:
     // via QMetaObject::invokeMethod (auto-queued to worker thread). (#502)
     void writeCommand(quint32 seq, const QString& command);
     quint64 commandSessionGeneration() const { return m_sessionGeneration.load(); }
+    // The one admission rule for session and administration writes: the
+    // caller's session is current and this transport is the one it opened.
+    bool sessionWriteAdmitted(quint64 generation, const SessionCommandGuard& guard) const
+    { return guard.current() && generation == m_sessionGeneration && isConnected(); }
+    bool writeSessionCommand(quint32 seq, const QString& command,
+                             quint64 generation, const SessionCommandGuard& guard);
     bool writeAdministrationCommand(quint32 seq, const QString& command,
         quint64 generation, const SessionCommandGuard& guard);
     void writeIndependentPtt(quint32 seq, const TxCoordinator::Command& command);
@@ -147,7 +154,8 @@ private:
     // Bumped by resetSessionState() at every session edge. Deferred work
     // captures it so a timer armed in one session cannot fire into the next
     // (the synthetic-demo handshake). Only the connection thread mutates it;
-    // owner-thread callers capture the atomic value to fence queued commands.
+    // the model thread reads it for admission and captures it to fence queued
+    // commands.
     std::atomic<quint64> m_sessionGeneration{0};
     QTimer*      m_heartbeat{nullptr};
 

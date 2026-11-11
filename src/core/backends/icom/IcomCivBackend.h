@@ -665,6 +665,11 @@ private:
     void initialiseScopeMode(ScopeMode reported);
     void queueScopeStartupReads();
     void publishReportedScopeMode();
+    // Where a band/segment zoom can go in the current mode; mirrors exactly
+    // what setPanCenter()/setPanBandwidth() honor there.
+    [[nodiscard]] PanZoomPlacement zoomPlacement() const;
+    void publishZoomPlacement(bool force = false);
+    std::optional<PanZoomPlacement> m_zoomPlacementPublished;
     // The mode the radio last reported (sweep or 27 14 read).
     std::optional<ScopeMode> m_scopeReportedMode;
     int m_scopePublishedModeIndex = -2;   // -2 = nothing published yet

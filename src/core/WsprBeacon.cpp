@@ -85,7 +85,16 @@ WsprBeacon::EncodeResult WsprBeacon::encode(const QString& callsign,
             return result;
         }
     }
-    if (call.size() >= 2 && call.at(1).isDigit()) {
+    // The call-area digit must land in position 2. WSJT-X's pack_call()
+    // (tools/wspr-agent/wsprd/wsprsim_utils.c) tests position 2 first: a call
+    // that already has a digit there (V31DL, A61AB) is used as typed, and only
+    // otherwise does a digit in position 1 (K1ABC) get one leading space.
+    // Prepending whenever position 1 is a digit pushed V31DL's area digit into
+    // position 3 and rejected every call whose 2nd and 3rd characters are both
+    // digits (#7117).
+    if (call.size() >= 3 && call.at(2).isDigit()) {
+        // Already aligned.
+    } else if (call.size() >= 2 && call.at(1).isDigit()) {
         call.prepend(QLatin1Char(' '));
     }
     call = call.leftJustified(6, QLatin1Char(' '));
