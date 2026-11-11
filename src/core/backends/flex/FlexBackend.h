@@ -259,10 +259,6 @@ public:
     // stream-id — bundled onto the namespaced extensionStatus("flex","panState")
     // channel. Present-only (each key rides only when the wire reported it).
     void decodePanState(const QString& panId, const QMap<QString, QString>& kvs);
-    // Decode the SmartSDR meter-status wire body (definitions or a "N removed"
-    // line) and emit the normalized meterDefined/meterRemoved signals. Mirrors
-    // FlexLib Radio.cs ParseMeterStatus. (aetherd RFC 2.3 — MeterModel touchpoint.)
-    void decodeMeterStatus(const QString& rawBody);
     // Decode a Flex slice-status kv-set into the normalized, canonically-named
     // slice change map and emit sliceChanged(sliceId, changes). Owns all the
     // Flex wire knowledge (key names like "RF_frequency"/"filter_lo", "1"→bool,
@@ -270,12 +266,6 @@ public:
     // (aetherd RFC 2.3 — SliceModel touchpoint, full canonical rename.)
     void decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs);
 
-    // Decode the five Flex transmit-family status planes into a normalized,
-    // typed TransmitDelta and emit transmitChanged (aetherd RFC 2.3 — TransmitModel
-    // touchpoint). Each owns its SmartSDR wire keys, "1"→bool, ok-guarded +
-    // clamped numeric parses, uppercase, and list split; the model applies the
-    // present fields. Called from the matching RadioModel status choke points.
-    void decodeTransmitStatus(const QMap<QString, QString>& kvs);
     void decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs);
     void decodeAudioStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
     void decodeStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
@@ -284,8 +274,6 @@ public:
     // residual). Present-only, ok-guarded numeric parses.
     void decodeRadioStatus(const QMap<QString, QString>& kvs);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
-    void decodeAtuStatus(const QMap<QString, QString>& kvs);
-    void decodeApdStatus(const QMap<QString, QString>& kvs);
     // Translate a SmartSDR "amplifier <handle> …" status into a typed AmpDelta
     // and emit amplifierChanged (aetherd 2.4 — AmpModel decode split, #4094).
     // `model` is the wire "model" key (TunerGeniusXL routes to the tuner, not
@@ -305,33 +293,6 @@ public:
     // the decode path — without this the stale handle could survive a reconnect
     // to a *different* radio and be used to build a bogus relay command.
     void clearExtensionHandles();
-    void decodeApdSamplerStatus(const QMap<QString, QString>& kvs);
-    // Decode the Flex GPS-status line ("gps …", '#'-separated key=value tokens)
-    // into a present-only GpsDelta and emit gpsChanged (aetherd RFC 2.3 —
-    // RadioModel residual). Satellite counts are numeric; the rest keep the
-    // radio's string form (units included).
-    void decodeGpsStatus(const QString& rawBody);
-    // Decode a raw status body (after "S<handle>|") whose object this backend
-    // parses from the raw line itself; false when it is not one of them. Today
-    // that is `ntp_sources`, whose quoted description keeps its spaces only in
-    // the raw line.
-    bool decodeRawStatus(const QString& body);
-    // Decode one `ntp_sources id=<id> …` status body (after "ntp_sources ") into
-    // a present-only NtpSourceDelta and emit ntpSourceChanged. The description is
-    // quoted and may hold spaces (FlexLib NtpSource.cs SplitStatusTokens).
-    void decodeNtpSourceStatus(const QString& rawBody);
-    // Decode a Flex memory-slot status kv-set (keyed by slot index) into a
-    // normalized MemoryDelta and emit memoryChanged (aetherd RFC 2.3 — RadioModel
-    // residual). Sets delta.removed for "in_use=0" / a bare "removed"; carries
-    // text fields raw (the model sanitises). Present-only, ok-guarded numerics.
-    void decodeMemoryStatus(int index, const QMap<QString, QString>& kvs);
-    // Parse a Flex "profile <type> …" status body into a ProfileDelta and emit
-    // profileChanged (aetherd RFC 2.3 — RadioModel residual). Handles the raw
-    // ('^'-list, space-containing values) list/current form and the plain
-    // importing/exporting flags. profileType is "tx"/"mic"/"global"; empty for a
-    // flags-only kv-set with no profile type.
-    void decodeProfileStatus(const QString& profileType, const QString& rawBody);
-    void decodeProfileFlags(const QMap<QString, QString>& kvs);
 
 private:
     void send(const QString& cmd);

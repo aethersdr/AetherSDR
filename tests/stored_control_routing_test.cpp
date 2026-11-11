@@ -23,15 +23,8 @@ class StoredControlTestAccess {
 public:
     static void memory(RadioModel& model, const MemoryDelta& delta) { model.applyMemoryChanges(delta); }
     static void profile(RadioModel& model, const ProfileDelta& delta) { model.applyProfileChanges(delta); }
-    static void message(RadioModel& model, const QString& line)
-    {
-        model.handleMessageReceived(CommandParser::parseLine(line));
-    }
-    static void status(RadioModel& model, const QString& line)
-    {
-        const ParsedMessage msg = CommandParser::parseLine(line);
-        model.onStatusReceived(msg.object, msg.kvs);
-    }
+    static void message(RadioModel& model, const QString& line) { model.handleLineForTest(line); }
+    static void status(RadioModel& model, const QString& line) { model.handleLineForTest(line); }
     static void capabilitiesChanged(RadioModel& model) { model.refreshCwProfilesOnCapabilityChange(); }
     static bool flush(RadioModel& model) { return model.m_localMemories.flush(); }
 };

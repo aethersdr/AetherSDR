@@ -54,7 +54,7 @@ public:
 GpsDelta decode(FlexBackend& backend, const QString& body)
 {
     QSignalSpy spy(&backend, &IRadioBackend::gpsChanged);
-    backend.decodeGpsStatus(body);
+    backend.statusIngress()->decodeGpsStatus(body);
     check(spy.count() == 1, "one typed GPS delta per decoded status");
     return spy.isEmpty() ? GpsDelta{} : spy.at(0).at(0).value<GpsDelta>();
 }

@@ -19,6 +19,8 @@ void FlexStatusIngress::route(Transport* transport)
     m_route = token;
     m_connection = connect(transport, &Transport::lineReceived, this,
         [this, token](const ParsedMessage& line, quint64 epoch) {
+            if (token != m_route || epoch != m_epoch) { return; }
+            decodeLine(line);
             if (token == m_route && epoch == m_epoch) { emit lineAccepted(line); }
         }, Qt::QueuedConnection);
 }

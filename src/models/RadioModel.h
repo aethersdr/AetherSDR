@@ -1771,10 +1771,7 @@ private:
     void scheduleDStarRuntimeConfiguration();
     void applyPendingDStarRuntimeConfiguration();
     void syncDigitalVoiceTxSelection(bool force = false);
-    void handleMeterStatus(const QString& rawBody);
     void handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs);
-    void handleProfileStatus(const QString& object, const QMap<QString, QString>& kvs);
-    void handleProfileStatusRaw(const QString& profileType, const QString& rawBody);
     friend class DaxTxOwnershipTestAccess;
     void resetDaxTxOwnership();
     void retireDaxTxInputs();
@@ -1889,7 +1886,6 @@ private:
     quint32 clientHandle() const;
     PanadapterModel* ensureOwnedPanadapter(const QString& panId);
     void updateStreamFilters();
-    void handleGpsStatus(const QString& rawBody);
     void emitOtherClientsChanged();
     QString antennaAliasRadioKey() const;
     bool reloadAntennaAliases() const;
@@ -2068,10 +2064,11 @@ public:
     // Feed a decoded status line straight into the router. Used to pin the TNF
     // removal-status handling — the wire says the notch is gone, and the router
     // must not upsert it back into TnfModel.
-    void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs)
-    {
-        onStatusReceived(object, kvs);
-    }
+    // One wire line as the status ingress delivers it (decoders, then the
+    // model's own handling), without the session fence. handleStatusForTest()
+    // rebuilds the line from its object and key/value pairs.
+    void handleLineForTest(const QString& line);
+    void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs);
     // Fire the LAN auto-reconnect timer's handler now instead of waiting for it.
     // Drives the REAL handler, not a copy of its body, so a test can pin what the
     // reconnect restores — see the licensed-capacity case in

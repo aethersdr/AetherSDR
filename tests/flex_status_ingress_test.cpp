@@ -98,6 +98,49 @@ private slots:
         QCOMPARE(accepted.size(), 1);
     }
 
+    // A typed profile line is decoded once, flags included; an untyped one
+    // carries only flags.
+    void oneProfileDeltaPerLine()
+    {
+        FlexBackend backend;
+        QSignalSpy profiles(&backend, &IRadioBackend::profileChanged);
+        for (const char* text : {"S0|profile cw unsaved_changes_cw=1", "S0|profile global importing=1",
+                                 "S0|profile tx list=Default^Rag chew^", "S0|profile importing=0 exporting=0"}) {
+            profiles.clear();
+            backend.statusIngress()->deliverForTest(line(text));
+            QCOMPARE(profiles.size(), 1);
+        }
+    }
+
+    // Whole wire lines reach the moved decoders: key/value objects, raw-line
+    // objects, and the bare words folded into apd and memory objects.
+    void linesReachTheirDecoders()
+    {
+        FlexBackend backend;
+        FlexStatusIngress* ingress = backend.statusIngress();
+        QSignalSpy transmit(&backend, &IRadioBackend::transmitChanged);
+        QSignalSpy gps(&backend, &IRadioBackend::gpsChanged);
+        QSignalSpy meters(&backend, &IRadioBackend::meterDefined);
+        QSignalSpy memories(&backend, &IRadioBackend::memoryChanged);
+        QSignalSpy ntp(&backend, &IRadioBackend::ntpSourceChanged);
+        ingress->deliverForTest(line("S0|transmit rfpower=42"));
+        ingress->deliverForTest(line("S0|atu status=TUNE_SUCCESSFUL atu_enabled=1"));
+        ingress->deliverForTest(line("S0|apd equalizer_reset"));
+        ingress->deliverForTest(line("S0|apd sampler tx_ant=ANT1 selected_sampler=INTERNAL"));
+        QCOMPARE(transmit.size(), 4);
+        QCOMPARE(transmit.at(0).at(0).value<TransmitDelta>().rfPower, std::optional<int>(42));
+        ingress->deliverForTest(line("S0|gps status=Fine Lock#fix=3D#tracked=8"));
+        QCOMPARE(gps.size(), 1);
+        QCOMPARE(gps.at(0).at(0).value<GpsDelta>().tracked, std::optional<int>(8));
+        ingress->deliverForTest(line("S0|meter 7.src=SLC#7.num=0#7.nam=LEVEL#7.low=-150.0#7.hi=20.0#7.unit=dBm#7.fps=10#"));
+        QCOMPARE(meters.size(), 1);
+        ingress->deliverForTest(line("S0|memory 3 removed"));
+        QCOMPARE(memories.size(), 1);
+        QVERIFY(memories.at(0).at(0).value<MemoryDelta>().removed);
+        ingress->deliverForTest(line("S0|ntp_sources id=pool address=pool.ntp.org description=\"Two words\" enabled=1"));
+        QCOMPARE(ntp.size(), 1);
+    }
+
     // The H line reaches the model before connected(): both take one queued
     // hop from the connection's thread, in the order the wire produced them.
     void handleLineArrivesBeforeConnected()

@@ -9199,20 +9199,10 @@ void RadioModel::resetAudioStreamDiagnostics()
 
 void RadioModel::handleMemoryStatus(int index, const QMap<QString, QString>& kvs)
 {
-    // aetherd RFC 2.3 (RadioModel residual): the Flex memory-slot wire decode
-    // moved to FlexBackend::decodeMemoryStatus → memoryChanged → applyMemoryChanges
-    // (the model-side MemoryEntry update, text sanitisation, and emits). Thin
-    // forwarder behind the seam.
-    if (m_flexBackend) {
-        m_flexBackend->decodeMemoryStatus(index, kvs);
-        return;
-    }
-    // No Flex backend means no decoder on the other side of the seam, and this
-    // used to be a silent no-op. The memory dialog calls it after every
-    // successful write to fold the values it just sent into the cache, so on a
-    // locally-banked radio dropping it left the UI showing a channel that never
-    // updated. Same decoder, same delta path.
-    if (usesLocalMemoryBank())
+    // Folds values this client just wrote into the cache (the memory dialog
+    // after each successful write). The radio's own memory status arrives
+    // through the status ingress; this is the same decode on the same path.
+    if (m_flexBackend || usesLocalMemoryBank())
         applyMemoryChanges(MemoryWire::decodeStatus(index, kvs));
 }
 
@@ -9672,46 +9662,8 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg)
     // token, and 4.1.x is unverified — which is one reason eviction defaults
     // off (see staleSessionEvictionEnabled()).
     noteForeignPanWriteIfAny(msg.object, msg.kvs, msg.handle);
-
-    // Raw line: "S<handle>|meter 7.src=SLC#7.num=0#7.nam=LEVEL#..."
-    const QString& raw = msg.raw;
-    const int pipe = raw.indexOf('|');
-    if (pipe < 0) return;
-    const QString body = raw.mid(pipe + 1);
-    // Profile status: "profile tx list=Default^..." or "profile mic list=..."
-    // Profile names contain spaces, so parseKVs() (which splits on spaces) breaks
-    // the list value.  Handle raw here, same pattern as meter status.
-    if (body.startsWith("profile tx ")) {
-        handleProfileStatusRaw("tx", body.mid(11));  // skip "profile tx "
-        return;
-    }
-    if (body.startsWith("profile mic ")) {
-        handleProfileStatusRaw("mic", body.mid(12));  // skip "profile mic "
-        return;
-    }
-    if (body.startsWith("profile global ")) {
-        handleProfileStatusRaw("global", body.mid(15));  // skip "profile global "
-        return;
-    }
-    if (body.startsWith("profile cw ")) {
-        handleProfileStatusRaw("cw", body.mid(11));  // skip "profile cw "
-        return;
-    }
-
-    // Objects the Flex backend reads from the raw line itself (ntp_sources).
-    if (m_flexBackend && m_flexBackend->decodeRawStatus(body)) {
-        return;
-    }
-
-    // GPS status: "gps lat=...#lon=...#grid=...#tracked=...#visible=...#status=..."
-    if (body.startsWith("gps ")) {
-        handleGpsStatus(body.mid(4));  // skip "gps "
-        return;
-    }
-
-    if (!body.startsWith("meter ")) return;
-
-    handleMeterStatus(body.mid(6));  // skip "meter "
+    // Raw-line objects (profile lists, ntp_sources, gps, meter) are decoded by
+    // the status ingress before the line reaches here.
 }
 
 // ─── Status dispatch ──────────────────────────────────────────────────────────
@@ -11782,33 +11734,9 @@ void RadioModel::onStatusReceived(const QString& object,
     // Memory channels: "memory <index> key=val ..." or "memory <index> removed"
     // When there are no KV pairs (e.g., "memory 7 removed"), the parser puts
     // everything into the object name. Extract the index from the first token.
-    if (object.startsWith("memory ")) {
-        const QString rest = object.mid(7);  // "7 removed" or "7"
-        const int sp = rest.indexOf(' ');
-        const QString idxStr = (sp >= 0) ? rest.left(sp) : rest;
-        bool ok;
-        int idx = idxStr.toInt(&ok);
-        if (ok) {
-            // Merge any trailing bare words into kvs
-            QMap<QString, QString> merged = kvs;
-            if (sp >= 0) {
-                const QString extra = rest.mid(sp + 1);
-                for (const auto& token : extra.split(' ', Qt::SkipEmptyParts)) {
-                    const int eq = token.indexOf('=');
-                    if (eq < 0)
-                        merged.insert(token, QString{});
-                    else
-                        merged.insert(token.left(eq), token.mid(eq + 1));
-                }
-            }
-            qCDebug(lcProtocol) << "RadioModel: memory status for index" << idx
-                     << "keys:" << merged.keys();
-            handleMemoryStatus(idx, merged);
-            return;
-        }
-    }
+    // "memory N" is decoded by the status ingress.
+    if (object.startsWith("memory ")) { return; }
 
-    // Meter status uses '#'-separated tokens and is handled by handleMessageReceived().
 
     // "display pan 0x40000000 center=14.1 bandwidth=0.2 ..."
     // Only process status for OUR panadapter (matching client_handle or first unclaimed).
@@ -12101,7 +12029,7 @@ void RadioModel::onStatusReceived(const QString& object,
     static const QRegularExpression atuRe(R"(^atu\s+(\S+)$)");
     if (object.startsWith("atu")) {
         const auto m = atuRe.match(object);
-        if (m_flexBackend) m_flexBackend->decodeAtuStatus(kvs);   // radio's own ATU → TransmitModel
+        // The radio's own ATU (TransmitModel) is decoded by the status ingress.
         QString tunerHandle = m_tunerModel.handle();
         if (m.hasMatch() && tunerHandle.isEmpty()) {
             tunerHandle = m.captured(1);
@@ -12112,27 +12040,7 @@ void RadioModel::onStatusReceived(const QString& object,
         return;
     }
 
-    // APD status family.  Forms:
-    //   "apd enable=1 configurable=1"               → object "apd"
-    //   "apd equalizer_active=1 ant=ANT1 freq=... rfpower=..."  → object "apd"
-    //   "apd equalizer_reset"                        → object "apd equalizer_reset"
-    //   "apd sampler tx_ant=ANT1 selected_sampler=RX_A valid_samplers=..."
-    //                                                → object "apd sampler"
-    // Our parser splits object/kvs at the last space before the first '=',
-    // so any leading bare flags get absorbed into the object name.
-    if (object == "apd sampler") {
-        if (m_flexBackend) m_flexBackend->decodeApdSamplerStatus(kvs);
-        return;
-    }
-    if (object == "apd" || object.startsWith("apd ")) {
-        QMap<QString, QString> merged = kvs;
-        if (object.length() > 3) {
-            const QStringList flags = object.mid(4).split(' ', Qt::SkipEmptyParts);
-            for (const auto& f : flags) merged.insert(f, QString{});
-        }
-        if (m_flexBackend) m_flexBackend->decodeApdStatus(merged);
-        return;
-    }
+    // APD status ("apd …", "apd sampler …") is decoded by the status ingress.
 
     // Amplifier status: TGXL and PGXL both report via "amplifier"; FlexLib tells them
     // apart by model=TunerGeniusXL / PowerGeniusXL. Removal arrives bare ("amplifier
@@ -12198,16 +12106,8 @@ void RadioModel::onStatusReceived(const QString& object,
     }
 
     // Transmit status: "transmit rfpower=93 tunepower=38 tune=0 ..."
-    if (object == "transmit") {
-        if (m_flexBackend) m_flexBackend->decodeTransmitStatus(kvs);
-        return;
-    }
-
-    // TX profile status: "profile tx list=DAX^Default^..." or "profile tx current=Default"
-    if (object.startsWith("profile")) {
-        handleProfileStatus(object, kvs);
-        return;
-    }
+    // "transmit" and "profile …" are decoded by the status ingress.
+    if (object == "transmit" || object.startsWith("profile")) { return; }
 
     // Per-band TX settings: "transmit band 9 band_name=20 rfpower=100 ..."
     static const QRegularExpression txBandRe(R"(^transmit band\s+(\d+)$)");
@@ -12963,25 +12863,34 @@ void RadioModel::handleSliceStatus(int id,
     }
 }
 
-void RadioModel::handleMeterStatus(const QString& rawBody)
+void RadioModel::handleLineForTest(const QString& line)
 {
-    // aetherd RFC 2.3: the SmartSDR meter-status wire decode moved to
-    // FlexBackend::decodeMeterStatus, which emits meterDefined/meterRemoved →
-    // the ctor-wired handlers drive the MeterModel. Driving it from this choke
-    // point keeps both live and deferred/replayed meter status on the converted
-    // path. (MeterModel already held only core state; this removes the last Flex
-    // meter wire-decode from RadioModel.)
-    if (m_flexBackend) {
-        m_flexBackend->decodeMeterStatus(rawBody);
+    const ParsedMessage message = CommandParser::parseLine(line);
+    if (m_statusIngress) {
+        m_statusIngress->deliverForTest(message);
+        return;
     }
+    handleMessageReceived(message);
+    if (message.type == MessageType::Status) { onStatusReceived(message.object, message.kvs); }
 }
 
-void RadioModel::handleGpsStatus(const QString& rawBody)
+void RadioModel::handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs)
 {
-    // aetherd RFC 2.3 (RadioModel residual): the Flex GPS wire decode moved to
-    // FlexBackend::decodeGpsStatus → gpsChanged → applyGpsChanges (the model-side
-    // member update + gpsStatusChanged emit). Thin forwarder behind the seam.
-    if (m_flexBackend) m_flexBackend->decodeGpsStatus(rawBody);
+    QStringList fields;
+    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
+        fields << it.key() + QLatin1Char('=') + it.value();
+    }
+    if (!m_statusIngress) {
+        onStatusReceived(object, kvs);
+        return;
+    }
+    // Re-parsing a rebuilt line can split an object differently from the kvs
+    // a test supplied, so deliver the parsed form with the test's own values.
+    ParsedMessage message = CommandParser::parseLine(
+        QStringLiteral("S00000000|") + object + (fields.isEmpty() ? QString() : QLatin1Char(' ') + fields.join(QLatin1Char(' '))));
+    message.object = object;
+    message.kvs = kvs;
+    m_statusIngress->deliverForTest(message);
 }
 
 quint64 RadioModel::beginStatusSession()
@@ -13275,29 +13184,6 @@ void RadioModel::createDefaultSliceOnPan(const QString& panId,
                 emit alive->sliceCreateFailed(alive->maxSlices(), alive->m_model);
             }
         });
-}
-
-void RadioModel::handleProfileStatus(const QString& object,
-                                      const QMap<QString, QString>& kvs)
-{
-    // Profile list/current with space-containing names are handled by
-    // handleProfileStatusRaw() via handleMessageReceived().  This fallback
-    // handles any remaining profile status keys that don't have spaces
-    // (e.g. "profile importing=1", "profile exporting=0").
-    // aetherd RFC 2.3 (RadioModel residual): the space-free profile-flag decode
-    // moved to FlexBackend::decodeProfileFlags → profileChanged → applyProfileChanges.
-    Q_UNUSED(object);
-    if (m_flexBackend) m_flexBackend->decodeProfileFlags(kvs);
-}
-
-void RadioModel::handleProfileStatusRaw(const QString& profileType,
-                                         const QString& rawBody)
-{
-    // aetherd RFC 2.3 (RadioModel residual): the Flex "profile <type> …" wire
-    // decode (space-containing list/current values, importing/exporting flags)
-    // moved to FlexBackend::decodeProfileStatus → profileChanged →
-    // applyProfileChanges. Thin forwarder behind the seam.
-    if (m_flexBackend) m_flexBackend->decodeProfileStatus(profileType, rawBody);
 }
 
 void RadioModel::applyProfileChanges(const ProfileDelta& d)

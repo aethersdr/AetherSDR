@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CommandParser.h"
+#include "core/backends/IRadioBackend.h"
 
 #include <QMetaObject>
 #include <QObject>
@@ -35,12 +36,57 @@ public:
     // Refuse the given epoch from now on, if it is still the current one.
     void retire(quint64 epoch);
     quint64 epoch() const { return m_epoch; }
+    // A line as an accepted one is handled (decoders, then lineAccepted),
+    // without the fence: RadioModel::handleLineForTest().
+    void deliverForTest(const ParsedMessage& line) { decodeLine(line); emit lineAccepted(line); }
+
+    // ---- Decoders (FlexStatusDecoders.cpp) ----
+    // Every accepted line is decoded before lineAccepted carries it on, so the
+    // typed deltas land ahead of the model's own handling of the same line.
+    // Public so a test can feed one body; production feeds whole lines.
+    //
+    // The transmit-family planes (transmit, atu, apd, apd sampler) → typed
+    // TransmitDelta: SmartSDR wire keys, "1"→bool, ok-guarded and clamped
+    // numerics, uppercase, list split; the model applies the present fields.
+    void decodeTransmitStatus(const QMap<QString, QString>& kvs);
+    void decodeAtuStatus(const QMap<QString, QString>& kvs);
+    void decodeApdStatus(const QMap<QString, QString>& kvs);
+    void decodeApdSamplerStatus(const QMap<QString, QString>& kvs);
+    // The meter-status body (definitions or "N removed"), as FlexLib Radio.cs
+    // ParseMeterStatus.
+    void decodeMeterStatus(const QString& rawBody);
+    // The GPS line's '#'-separated tokens → present-only GpsDelta. Satellite
+    // counts are numeric; the rest keep the radio's string form.
+    void decodeGpsStatus(const QString& rawBody);
+    // A raw body (after "S<handle>|") whose object is read from the raw line
+    // itself; false when it is not one of them. Today: ntp_sources, whose
+    // quoted description keeps its spaces only there.
+    bool decodeRawStatus(const QString& body);
+    // `ntp_sources id=<id> …` → present-only NtpSourceDelta (FlexLib
+    // NtpSource.cs SplitStatusTokens for the quoted description).
+    void decodeNtpSourceStatus(const QString& rawBody);
+    // A memory-slot kv-set → MemoryDelta (removed for "in_use=0" or a bare
+    // "removed"; text raw, the model sanitises).
+    void decodeMemoryStatus(int index, const QMap<QString, QString>& kvs);
+    // "profile <type> …" ('^' lists, values with spaces, current, flags), and
+    // the space-free flags of an untyped profile object.
+    void decodeProfileStatus(const QString& profileType, const QString& rawBody);
+    void decodeProfileFlags(const QMap<QString, QString>& kvs);
 
 signals:
     void lineAccepted(const AetherSDR::ParsedMessage& line);
+    // The typed results, re-emitted by the owning backend as its own.
+    void transmitChanged(const AetherSDR::TransmitDelta& delta);
+    void meterDefined(const AetherSDR::MeterDef& def);
+    void meterRemoved(int index);
+    void gpsChanged(const AetherSDR::GpsDelta& delta);
+    void ntpSourceChanged(const AetherSDR::NtpSourceDelta& delta);
+    void memoryChanged(const AetherSDR::MemoryDelta& delta);
+    void profileChanged(const AetherSDR::ProfileDelta& delta);
 
 private:
     template <typename Transport> void route(Transport* transport);
+    void decodeLine(const ParsedMessage& line);
     QMetaObject::Connection m_connection;
     quint64 m_route{0};    // the current route's token; 0 = none
     quint64 m_routes{0};

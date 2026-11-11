@@ -188,7 +188,7 @@ void statusDecode()
     QObject::connect(&flex, &IRadioBackend::ntpSourceChanged, [&seen](const NtpSourceDelta& d) { seen.append(d); });
     const ParsedMessage msg = CommandParser::parseLine(kMeasured);
     const QString body = msg.raw.mid(msg.raw.indexOf(QLatin1Char('|')) + 1).mid(12);
-    flex.decodeNtpSourceStatus(body);
+    flex.statusIngress()->decodeNtpSourceStatus(body);
     const NtpSourceDelta d = seen.value(0);
     check(seen.size() == 1 && d.id == QLatin1String("default-pool") && !d.removed
               && d.address == QStringLiteral("2.debian.pool.ntp.org") && d.directive == QStringLiteral("pool")
@@ -197,24 +197,24 @@ void statusDecode()
           "the measured line decodes every field it carries and nothing it does not");
     check(d.description == QStringLiteral("Debian NTP pool"), "the quoted description keeps its spaces");
 
-    flex.decodeNtpSourceStatus(QStringLiteral("id=x description=\"removed later\" stratum=2"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id=x description=\"removed later\" stratum=2"));
     check(seen.size() == 2 && !seen.at(1).removed && seen.at(1).description == QStringLiteral("removed later")
               && seen.at(1).stratum == 2,
           "only the word right after the id means removal");
-    flex.decodeNtpSourceStatus(QStringLiteral("id=x removed"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id=x removed"));
     check(seen.size() == 3 && seen.at(2).removed && seen.at(2).id == QLatin1String("x"), "a bare removed is a removal");
-    flex.decodeNtpSourceStatus(QStringLiteral("id=x reach=abc enabled=yes"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id=x reach=abc enabled=yes"));
     check(seen.size() == 4 && !seen.at(3).reach && !seen.at(3).enabled, "malformed numbers and flags are dropped");
-    flex.decodeNtpSourceStatus(QStringLiteral("address=y enabled=1"));
-    flex.decodeNtpSourceStatus(QStringLiteral("id= enabled=1"));
-    flex.decodeNtpSourceStatus(QStringLiteral("id=z"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("address=y enabled=1"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id= enabled=1"));
+    flex.statusIngress()->decodeNtpSourceStatus(QStringLiteral("id=z"));
     check(seen.size() == 4, "a line without a leading id, with an empty id or with nothing after it is ignored");
 
     // Measured on a FLEX-6300, 4.3.16.42034 (#7127): the same shape, plus stratum.
     const ParsedMessage sixK = CommandParser::parseLine(QStringLiteral(
         "S17B07863|ntp_sources id=default-pool address=2.debian.pool.ntp.org enabled=1 directive=pool "
         "selected=1 prefer=0 state=selected stratum=1 reach=255 description=\"Debian NTP pool\""));
-    flex.decodeNtpSourceStatus(sixK.raw.mid(sixK.raw.indexOf(QLatin1Char('|')) + 1).mid(12));
+    flex.statusIngress()->decodeNtpSourceStatus(sixK.raw.mid(sixK.raw.indexOf(QLatin1Char('|')) + 1).mid(12));
     const NtpSourceDelta s = seen.value(4);
     check(seen.size() == 5 && s.id == QLatin1String("default-pool") && s.selected == true
               && s.state == QStringLiteral("selected") && s.stratum == 1 && s.reach == 255
@@ -304,7 +304,7 @@ void productionRoute()
     NtpSourcesTestAccess::message(radio, QStringLiteral("S0|ntp_sources id=stale address=old.example enabled=1"), true);
     check(radio.ntpSources().size() == 1, "a status queued from a previous session adds no row");
     FlexBackend flex;
-    check(!flex.decodeRawStatus(QStringLiteral("gps lat=1")) && flex.decodeRawStatus(QStringLiteral("ntp_sources id=a removed")),
+    check(!flex.statusIngress()->decodeRawStatus(QStringLiteral("gps lat=1")) && flex.statusIngress()->decodeRawStatus(QStringLiteral("ntp_sources id=a removed")),
           "the backend claims only the raw statuses it decodes");
 }
 
