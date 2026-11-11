@@ -43,6 +43,11 @@ struct TxPowerBand {
 // explicit TX antenna choice: hamlib set_ant writes the RX antenna alone and a
 // band-stack recall leaves it. Absent, both write it as before.
 struct IndependentTxAntenna {
+    // TX antenna tokens with no forward-power detector behind them (HL2: RF1).
+    // On these the TX applet labels its power and SWR gauges "not measured"
+    // rather than presenting about 0 W as a reading. Empty: every output is
+    // measured.
+    QStringList unmeteredOutputs;
     bool operator==(const IndependentTxAntenna&) const = default;
 };
 

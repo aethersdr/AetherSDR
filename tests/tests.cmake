@@ -10756,6 +10756,27 @@ add_test(NAME two_tone_tune_gate_test
 set_tests_properties(two_tone_tune_gate_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #4954: on a TX output the backend cannot meter (the HL2's RF1) the TX
+# applet's power and SWR gauges say "not measured" instead of reading 0 W.
+# Same link set as two_tone_tune_gate_test; no socket, nothing keyed.
+add_executable(tx_output_metering_test
+    tests/tx_output_metering_test.cpp
+    src/gui/TxApplet.cpp
+    src/gui/AtuPreTuneDialog.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(tx_output_metering_test PRIVATE src tests)
+target_link_libraries(tx_output_metering_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(tx_output_metering_test PROPERTIES AUTOMOC ON)
+add_test(NAME tx_output_metering_test
+         COMMAND tx_output_metering_test)
+set_tests_properties(tx_output_metering_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_tx_filter_numeric_entry_test
     tests/phone_tx_filter_numeric_entry_test.cpp
     src/gui/PhoneApplet.cpp
@@ -11046,6 +11067,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_tx_applet_test
     bandstack_cat_controls_test
     two_tone_tune_gate_test
+    tx_output_metering_test
     update_controller_test
     update_installer_test
     update_stager_test
