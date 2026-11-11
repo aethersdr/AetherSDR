@@ -177,6 +177,17 @@ static float word_float(const unsigned char* p)
     return f;
 }
 
+// DAX IQ payloads are little-endian floats, unlike the waveform's own audio
+// streams (measured on a FLEX-8600, SmartSDR 4.3.16: bytes 00 00 80 c2 are
+// -64.0). The radio's headers stay big-endian.
+static float word_float_le(const unsigned char* p)
+{
+    uint32_t u = (uint32_t)p[3] << 24 | (uint32_t)p[2] << 16 | (uint32_t)p[1] << 8 | p[0];
+    float f;
+    memcpy(&f, &u, 4);
+    return f;
+}
+
 // Builds a float-pair packet of class cls like the waveform SDK's
 // vita_send_data_packet: UTC + real-time timestamps from the system clock.
 static int vita_build(unsigned char* out, uint32_t sid, unsigned cls, int count, const float* pairs, int n)
@@ -572,7 +583,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
             return;
         for (int k = 0; k + 1 < v.words; k += 2) {
             double oi, oq;
-            if (decim_step(&w->fb, word_float(v.payload + 4 * k), word_float(v.payload + 4 * k + 4), &oi, &oq))
+            if (decim_step(&w->fb, word_float_le(v.payload + 4 * k), word_float_le(v.payload + 4 * k + 4), &oi, &oq))
                 fifo_push(&w->fbk, oi, oq);
         }
         calibrate(w);
@@ -871,6 +882,14 @@ static void loop_emit(loop_t* l, double i, double q)
     if (++l->npkt == 128) {
         unsigned char p[28 + 4 * 256];
         int len = vita_build(p, l->w->daxiq_sid, 0x02E4u, l->count++, l->pkt, 128);
+        // The radio sends DAX IQ samples little-endian: swap each word.
+        for (int o = 28; o < len; o += 4) {
+            unsigned char t0 = p[o], t1 = p[o + 1];
+            p[o] = p[o + 3];
+            p[o + 1] = p[o + 2];
+            p[o + 2] = t1;
+            p[o + 3] = t0;
+        }
         on_packet(l->w, p, len);
         l->npkt = 0;
     }

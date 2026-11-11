@@ -115,6 +115,22 @@ the radio.
   path is cut to that one-sided band, only the products above the carrier
   inside it can be corrected; the first transmit test settles it.
 
+## On the FLEX-8600 bench, 2026-11-11, before the transmit runs
+
+- **DAX IQ samples are little-endian floats** (headers big-endian), unlike
+  the waveform's own audio streams. The feedback path reads them that way;
+  the loop selftest sends them that way, and fails if they are read
+  big-endian.
+- **Transmit settings belong to each client.** `transmit set rfpower=`
+  from a second client is acknowledged and changes only that client's
+  copy; the transmitting client (the operator's GUI) sets power, DAX TX
+  and the like.
+- **RX A at 5 W on 40 m**, RF-S2K+ knob counter-clockwise, preamp off,
+  measured on DAX IQ: radio leakage with RX A terminated +53.3 dB, the
+  sample +92.8 dB, noise about -8 dB on the same scale. The sample is
+  39.5 dB above the leakage. With the VNA-measured coupling that puts the
+  sample near -31 dBm and the leakage near -70 dBm.
+
 ## Not yet known
 
 - Whether the radio's transmit filter or ALC still acts on a `RAW`
