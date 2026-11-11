@@ -323,6 +323,7 @@ void exactInputAndKeyFences()
     std::vector<TxCoordinator::Command> keys;
     f.backend->setTxCommandSink([&](const QString&, const TxCoordinator::Command& command) {
         keys.push_back(command);
+        return true;
     });
     const bool keyed = f.model.setProducerTransmit(child, true, TransmitModel::PttSource::Dax);
     check(keyed && !keys.empty() && keys.front().permitsDispatch(TxCoordinator::monotonicMs()),
@@ -348,6 +349,7 @@ void exactInputAndKeyFences()
     std::vector<TxCoordinator::Command> directKeys;
     direct.backend->setTxCommandSink([&](const QString&, const TxCoordinator::Command& command) {
         directKeys.push_back(command);
+        return true;
     });
     check(direct.model.setProducerTransmit(directInput, true, TransmitModel::PttSource::Dax),
           "a directly admitted original DAX request uses the production keying path");

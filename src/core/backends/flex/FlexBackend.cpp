@@ -108,6 +108,7 @@ FlexBackend::FlexBackend(QObject* parent)
     m_connection->moveToThread(m_connThread);
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
+    m_cwControls = std::make_unique<FlexCwControls>(m_panStream);
 
     // Observe wire lifecycle and re-emit as the interface's own signals. Queued
     // (auto) connections: the connection lives on its worker thread.
@@ -127,6 +128,7 @@ FlexBackend::FlexBackend(QObject* parent)
 
 FlexBackend::~FlexBackend()
 {
+    m_cwControls.reset();
     // Sever our own lifecycle observation of the connection FIRST — as the old
     // ~RadioModel's earlier m_backend.reset() effectively did (the backend was
     // destroyed, auto-disconnecting these links, before the wire teardown ran).
@@ -170,6 +172,26 @@ FlexBackend::~FlexBackend()
         m_networkThread->wait(3000);
     }
     m_panStream = nullptr;
+}
+
+void FlexBackend::setCwControlSink(FlexCwControls::ControlSink sink)
+{
+    m_cwControls->setControlSink(std::move(sink));
+}
+ReceiveDispatch FlexBackend::requestCwControl(const CwControlRequest& request,
+                                             const TxCoordinator::Command& command)
+{
+    return m_cwControls->request(request, command);
+}
+void FlexBackend::prepareCwTransport(quint32 handle, const RadioControlFence& current)
+{
+    m_cwControls->prepare(handle, current);
+}
+void FlexBackend::retireCwTransport() { m_cwControls->retire(); }
+ReceiveDispatch FlexBackend::requestLocalPtt(const RadioControlCompletion& completion,
+                                            const RadioControlFence& current)
+{
+    return m_cwControls->requestLocalPtt(completion, current);
 }
 
 void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
@@ -521,9 +543,10 @@ void FlexBackend::setSetupCommandSink(
     m_setupSink = std::move(sink);
 }
 
-void FlexBackend::setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink)
+void FlexBackend::setTxCommandSink(std::function<bool(const QString&, const TxCoordinator::Command&)> sink)
 {
     m_txSink = std::move(sink);
+    m_cwControls->setTxSink(m_txSink);
 }
 
 void FlexBackend::setSliceCommandSink(std::function<void(const QString&)> sink)

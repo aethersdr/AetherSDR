@@ -17,6 +17,7 @@
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
+#include "core/backends/SessionCommandGuard.h"
 #include "core/backends/OfflineHealthSource.h" // health that survives disconnection
 
 #include <QHostAddress>
@@ -1322,10 +1323,6 @@ signals:
     // generator. Not emitted for the iambic keyer's sendCwKeyEdge (#4976) or
     // for CWX, which drive the sidetone gate themselves.
     void cwKeyDownChanged(bool down);
-    // Non-Flex diagnostic edge emitted only after transmit preflight, directly
-    // before IRadioBackend::setCwKeying(). Lets tests and diagnostics prove a
-    // refused key-down did not cross the radio seam.
-    void backendCwKeyingForwarded(bool down);
     void sliceAdded(SliceModel* slice);
     void sliceRemoved(int sliceId);
     // Emitted immediately before "sub slice all" is dispatched during connect
@@ -2299,7 +2296,7 @@ private:
     void acknowledgeIndependentTxStop(const TxStopEvidence& evidence);
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
-    void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
+    bool sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
     ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
@@ -2350,17 +2347,6 @@ private:
     void syncNtpSources(bool connected, const RadioCapabilities& caps);
     DStarModel          m_dstarModel{nullptr, true};
 
-    // NetCW stream — VITA-49 UDP delivery for low-latency CW keying
-    quint32  m_netCwStreamId{0};
-    int      m_netCwIndex{1};           // sequential dedup index
-    QElapsedTimer m_netCwClock;          // 16-bit relative ms clock for time=0x....
-    qint64   m_netCwLastSendMs{-1};
-    bool sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
-                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
-                          std::chrono::steady_clock::time_point scheduledAt = {},
-                          std::function<void()> delivered = {},
-                          const TxCoordinator::Operation* captured = nullptr);
-    QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;
     QString     m_model;
@@ -2628,15 +2614,15 @@ private:
     // The refusal both of the above perform: raise the interlock notification
     // and roll back TransmitModel's optimistic transmit state. Always false.
     bool refuseKeyWithInterlock(const QString& message, const QString& key);
-    // Apply the same capability + receive-only-pan preflight to a non-Flex CW
-    // carrier edge before it crosses the backend seam. Key-up always passes so
-    // an inhibit arriving mid-element can never strand RF on.
-    bool forwardNonFlexCwKeying(bool down, const TxCoordinator::Operation& operation,
-                                const TxCoordinator::Completion& completion);
     bool sendCwInput(bool down, bool ptt, bool notifySidetone,
                      const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                      std::chrono::steady_clock::time_point scheduledAt,
                      const TxCoordinator::Request* request = nullptr);
+    bool dispatchCwInput(bool down, bool ptt, bool notifySidetone,
+                         const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
+                         std::chrono::steady_clock::time_point scheduledAt,
+                         const TxCoordinator::Request* request);
+    bool m_cwPracticeKeyDown{false};
     quint64 m_cwCommandEpoch{0};
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,

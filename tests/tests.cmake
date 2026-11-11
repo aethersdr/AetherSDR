@@ -1969,6 +1969,13 @@ target_include_directories(cw_mode_gate_test PRIVATE src)
 target_link_libraries(cw_mode_gate_test PRIVATE Qt6::Core)
 add_test(NAME cw_mode_gate_test COMMAND cw_mode_gate_test)
 
+# Socket-free: CW practice sidetone through the production RadioModel key path
+# with no transmit-capable backend.
+add_executable(cw_practice_sidetone_test tests/cw_practice_sidetone_test.cpp)
+target_include_directories(cw_practice_sidetone_test PRIVATE src tests)
+target_link_libraries(cw_practice_sidetone_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME cw_practice_sidetone_test COMMAND cw_practice_sidetone_test)
+
 # Socket-free production parser/seam/model and bridge dispatcher regression.
 add_executable(flex_readonly_metadata_test tests/flex_readonly_metadata_test.cpp)
 target_include_directories(flex_readonly_metadata_test PRIVATE src tests)
@@ -8664,6 +8671,12 @@ target_include_directories(tune_inhibit_restore_test PRIVATE src tests)
 target_link_libraries(tune_inhibit_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tune_inhibit_restore_test COMMAND tune_inhibit_restore_test)
 
+# Socket-free production NetCW encoder, scheduler, session and local PTT lifecycle.
+add_executable(flex_cw_controls_test tests/flex_cw_controls_test.cpp)
+target_include_directories(flex_cw_controls_test PRIVATE src tests)
+target_link_libraries(flex_cw_controls_test PRIVATE aethercore Qt6::Core)
+add_test(NAME flex_cw_controls_test COMMAND flex_cw_controls_test)
+
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
@@ -10907,6 +10920,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_iq_rate_limits_test
     offline_health_registry_test
     tx_operation_integration_test
+    flex_cw_controls_test
     tune_inhibit_restore_test
     tx_audio_context_test
     backend_slice_lifecycle_test
