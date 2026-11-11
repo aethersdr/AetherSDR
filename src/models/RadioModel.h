@@ -2068,6 +2068,7 @@ public:
     // model's own handling), without the session fence. handleStatusForTest()
     // rebuilds the line from its object and key/value pairs.
     void handleLineForTest(const QString& line);
+    void deliverLineForTest(const ParsedMessage& message);
     void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs);
     // Fire the LAN auto-reconnect timer's handler now instead of waiting for it.
     // Drives the REAL handler, not a copy of its body, so a test can pin what the

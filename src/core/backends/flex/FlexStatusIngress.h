@@ -39,6 +39,7 @@ public:
     // A line as an accepted one is handled (decoders, then lineAccepted),
     // without the fence: RadioModel::handleLineForTest().
     void deliverForTest(const ParsedMessage& line) { decodeLine(line); emit lineAccepted(line); }
+    void decodeForTest(const ParsedMessage& line) { decodeLine(line); }
 
     // ---- Decoders (FlexStatusDecoders.cpp) ----
     // Every accepted line is decoded before lineAccepted carries it on, so the
@@ -72,6 +73,26 @@ public:
     // the space-free flags of an untyped profile object.
     void decodeProfileStatus(const QString& profileType, const QString& rawBody);
     void decodeProfileFlags(const QMap<QString, QString>& kvs);
+    // Stream lifecycle ("stream 0x…", legacy "tx_audio_stream …"): audio
+    // stream deltas, DAX TX ownership, and NetCW removal (cwStreamRemoved).
+    void decodeStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
+    void decodeAudioStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
+    void decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs);
+
+    // The DAX TX streams the radio reported, as decodeDaxTxStatus keeps them.
+    // FlexBackend's ownership requests read them; a stream's incarnation
+    // changes whenever its owner or TX state does.
+    struct DaxTxStreamState {
+        std::optional<quint32> clientHandle;
+        std::optional<bool> tx;
+        quint64 incarnation{0};
+    };
+    const DaxTxStreamState* daxTxStream(quint32 streamId) const
+    {
+        const auto it = m_daxTxStreams.constFind(streamId);
+        return it == m_daxTxStreams.cend() ? nullptr : &it.value();
+    }
+    void clearDaxTxStreams() { m_daxTxStreams.clear(); }
 
 signals:
     void lineAccepted(const AetherSDR::ParsedMessage& line);
@@ -83,6 +104,10 @@ signals:
     void ntpSourceChanged(const AetherSDR::NtpSourceDelta& delta);
     void memoryChanged(const AetherSDR::MemoryDelta& delta);
     void profileChanged(const AetherSDR::ProfileDelta& delta);
+    void audioStreamChanged(const AetherSDR::AudioStreamDelta& delta);
+    void daxTxStreamChanged(const AetherSDR::DaxTxStreamDelta& delta);
+    // The radio removed a NetCW stream (FlexCwControls retires it).
+    void cwStreamRemoved(quint32 streamId);
 
 private:
     template <typename Transport> void route(Transport* transport);
@@ -91,6 +116,8 @@ private:
     quint64 m_route{0};    // the current route's token; 0 = none
     quint64 m_routes{0};
     quint64 m_epoch{0};
+    QMap<quint32, DaxTxStreamState> m_daxTxStreams;
+    quint64 m_daxTxIncarnation{0};
 };
 
 } // namespace AetherSDR

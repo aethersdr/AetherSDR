@@ -112,6 +112,26 @@ private slots:
         }
     }
 
+    // A DAX TX stream line is decoded once: one ownership delta, and one
+    // incarnation step when its TX state is malformed.
+    void oneDaxTxDeltaPerLine()
+    {
+        FlexBackend backend;
+        FlexStatusIngress* ingress = backend.statusIngress();
+        QSignalSpy dax(&backend, &IRadioBackend::daxTxStreamChanged);
+        QSignalSpy audio(&backend, &IRadioBackend::audioStreamChanged);
+        ingress->deliverForTest(line("S0|stream 0x84000001 type=dax_tx client_handle=0x00000071 tx=1"));
+        QCOMPARE(dax.size(), 1);
+        QCOMPARE(audio.size(), 1);
+        const quint64 before = ingress->daxTxStream(0x84000001)->incarnation;
+        ingress->deliverForTest(line("S0|stream 0x84000001 tx=2"));
+        QCOMPARE(dax.size(), 2);
+        QCOMPARE(ingress->daxTxStream(0x84000001)->incarnation, before + 1);
+        ingress->deliverForTest(line("S0|stream 0x84000001 removed"));
+        QCOMPARE(dax.size(), 3);
+        QVERIFY(!ingress->daxTxStream(0x84000001));
+    }
+
     // Whole wire lines reach the moved decoders: key/value objects, raw-line
     // objects, and the bare words folded into apd and memory objects.
     void linesReachTheirDecoders()

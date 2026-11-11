@@ -4,9 +4,13 @@
 #include "FlexStatusIngress.h"
 
 #include "core/backends/MemoryWireCodec.h"
+#include "core/backends/flex/FlexCwControls.h"
 #include "core/backends/flex/FlexKvCarry.h"
+#include "models/RadioStatusOwnership.h"
 
+#include <QPointer>
 #include <QRegularExpression>
+#include <QThread>
 #include <QStringList>
 
 #include <algorithm>
@@ -53,6 +57,35 @@ std::optional<int> parseInt(const QString& value)
     return ok ? std::optional<int>(v) : std::nullopt;
 }
 
+
+std::optional<quint32> daxTxIdentity(const QString& text)
+{
+    if (text.isEmpty() || text.size() > 10) {
+        return std::nullopt;
+    }
+    const bool prefixed = text.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive);
+    const qsizetype first = prefixed ? 2 : 0;
+    if (first == text.size()) {
+        return std::nullopt;
+    }
+    bool hexDigit = false;
+    for (qsizetype i = first; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        if (ch >= QLatin1Char('0') && ch <= QLatin1Char('9')) {
+            continue;
+        }
+        if ((ch >= QLatin1Char('a') && ch <= QLatin1Char('f'))
+            || (ch >= QLatin1Char('A') && ch <= QLatin1Char('F'))) {
+            hexDigit = true;
+            continue;
+        }
+        return std::nullopt;
+    }
+    bool ok = false;
+    const quint32 value = text.mid(first).toUInt(&ok, prefixed || hexDigit ? 16 : 10);
+    return ok && value != 0 ? std::optional<quint32>(value) : std::nullopt;
+}
+
 } // namespace
 
 void FlexStatusIngress::decodeLine(const ParsedMessage& line)
@@ -80,6 +113,11 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
     // Key/value route.
     const QString& object = line.object;
     const QMap<QString, QString>& kvs = line.kvs;
+    // Stream lifecycle first, for every line, as the model saw it before:
+    // audio streams, DAX TX ownership, NetCW removal.
+    const QPointer<FlexStatusIngress> alive(this);
+    decodeStreamStatus(object, kvs);
+    if (!alive) { return; }
     if (object.startsWith(QLatin1String("atu"))) { decodeAtuStatus(kvs); return; }
     // "apd sampler …" is its own object; any other leading bare words
     // ("apd equalizer_reset") are flags the parser folded into the object.
@@ -496,4 +534,118 @@ void FlexStatusIngress::decodeNtpSourceStatus(const QString& rawBody)
     emit ntpSourceChanged(d);
 }
 
+void FlexStatusIngress::decodeAudioStreamStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    if (QThread::currentThread() != thread()) { return; }
+    static const QRegularExpression pattern(QStringLiteral("\\A(stream|tx_audio_stream) (0x[0-9a-fA-F]{1,8})(?: (removed))?\\z"));
+    const QRegularExpressionMatch match = pattern.match(object);
+    if (!match.hasMatch()) { return; }
+    AudioStreamDelta delta;
+    delta.streamId = RadioStatusOwnership::parseFlexId(match.captured(2));
+    if (delta.streamId == 0) { return; }
+    delta.removed = match.captured(3) == QLatin1String("removed") || kvs.contains(QStringLiteral("removed"))
+        || kvs.value(QStringLiteral("in_use")) == QLatin1String("0");
+    const QString type = match.captured(1) == QLatin1String("tx_audio_stream")
+        ? QStringLiteral("dax_tx") : kvs.value(QStringLiteral("type"));
+    if (type == QLatin1String("remote_audio_rx")) { delta.kind = AudioStreamKind::RemoteReceive; }
+    else if (type == QLatin1String("remote_audio_tx")) { delta.kind = AudioStreamKind::RemoteTransmit; }
+    else if (type == QLatin1String("dax_rx")) { delta.kind = AudioStreamKind::DaxReceive; }
+    else if (type == QLatin1String("dax_tx")) { delta.kind = AudioStreamKind::DaxTransmit; }
+    else if (type == QLatin1String("dax_iq")) { delta.kind = AudioStreamKind::Iq; }
+    else if (kvs.contains(QStringLiteral("type"))) { delta.removed = true; }
+    // client_handle=0x0 leaves the owner unknown, as a missing field does; only
+    // a value that does not parse is malformed.
+    if (kvs.contains(QStringLiteral("client_handle"))) {
+        const QString handle = kvs.value(QStringLiteral("client_handle")).trimmed();
+        const quint32 owner = RadioStatusOwnership::parseFlexId(handle);
+        const QString digits = handle.startsWith(QLatin1String("0x"), Qt::CaseInsensitive) ? handle.mid(2) : handle;
+        bool parsed = false;
+        const bool zero = owner == 0 && digits.toUInt(&parsed, 16) == 0 && parsed;
+        if (owner != 0) { delta.clientHandle = owner; }
+        else if (!zero) { delta.invalidOwner = true; }
+    }
+    const bool iqChannel = kvs.contains(QStringLiteral("daxiq_channel"));
+    const QString channelKey = iqChannel ? QStringLiteral("daxiq_channel") : QStringLiteral("dax_channel");
+    // A channel outside 1..8 (1..4 for IQ) says nothing about who owns the
+    // stream; like FlexLib v4.3.16 (DAXRXAudioStream.cs:213), skip the field
+    // and keep the known channel.
+    if (kvs.contains(channelKey)) {
+        bool valid = false;
+        const int channel = kvs.value(channelKey).toInt(&valid);
+        if (valid && channel >= 1 && channel <= (iqChannel ? 4 : 8)) { delta.channel = channel; }
+    }
+    emit audioStreamChanged(delta);
+}
+void FlexStatusIngress::decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    static const QRegularExpression pattern(
+        QStringLiteral("\\A(stream|tx_audio_stream) ([^\\s]+)(?: (removed))?\\z"));
+    const QRegularExpressionMatch match = pattern.match(object);
+    const std::optional<quint32> streamId = match.hasMatch()
+        ? daxTxIdentity(match.captured(2)) : std::nullopt;
+    if (!streamId) {
+        return;
+    }
+    const bool known = m_daxTxStreams.contains(*streamId);
+    const bool legacy = match.captured(1) == QLatin1String("tx_audio_stream");
+    const bool otherType = !legacy && kvs.contains(QStringLiteral("type"))
+        && kvs.value(QStringLiteral("type")) != QLatin1String("dax_tx");
+    DaxTxStreamDelta delta;
+    delta.streamId = *streamId;
+    delta.removed = !match.captured(3).isEmpty() || kvs.contains(QStringLiteral("removed"))
+        || kvs.value(QStringLiteral("in_use")) == QLatin1String("0") || (known && otherType);
+    if (delta.removed) {
+        ++m_daxTxIncarnation;
+        m_daxTxStreams.remove(*streamId);
+        emit daxTxStreamChanged(delta);
+        return;
+    }
+    if (otherType || (!known && !legacy
+        && kvs.value(QStringLiteral("type")) != QLatin1String("dax_tx"))) {
+        return;
+    }
+
+    if (!known) {
+        DaxTxStreamState state;
+        state.incarnation = ++m_daxTxIncarnation;
+        m_daxTxStreams.insert(*streamId, state);
+    }
+    DaxTxStreamState& state = m_daxTxStreams[*streamId];
+    if (kvs.contains(QStringLiteral("client_handle"))) {
+        delta.clientHandle = daxTxIdentity(kvs.value(QStringLiteral("client_handle")));
+        delta.invalidOwner = !delta.clientHandle.has_value();
+        if (delta.invalidOwner || state.clientHandle != delta.clientHandle) {
+            state.incarnation = ++m_daxTxIncarnation;
+            state.tx.reset();
+        }
+        state.clientHandle = delta.clientHandle;
+    }
+    if (kvs.contains(QStringLiteral("tx"))) {
+        const QString value = kvs.value(QStringLiteral("tx"));
+        if (value == QLatin1String("0") || value == QLatin1String("1")) {
+            delta.tx = value == QLatin1String("1");
+            if (state.clientHandle && !delta.invalidOwner) {
+                state.tx = delta.tx;
+            }
+        } else {
+            delta.invalidTx = true;
+            state.tx.reset();
+            state.incarnation = ++m_daxTxIncarnation;
+        }
+    }
+    emit daxTxStreamChanged(delta);
+}
+void FlexStatusIngress::decodeStreamStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    const QPointer<FlexStatusIngress> alive(this);
+    if (const quint32 netCw = FlexCwControls::removedStreamId(object, kvs)) {
+        emit cwStreamRemoved(netCw);
+        if (!alive) { return; }
+    }
+    decodeAudioStreamStatus(object, kvs);
+    if (alive) { decodeDaxTxStatus(object, kvs); }
+}
 } // namespace AetherSDR

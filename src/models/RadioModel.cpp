@@ -11436,16 +11436,13 @@ void RadioModel::onStatusReceived(const QString& object,
 {
     const QPointer<RadioModel> alive(this);
     const RadioControlSession original = controlSession();
-    if (m_flexBackend) { m_flexBackend->decodeStreamStatus(object, kvs); }
-    if (!alive || controlSession() != original) { return; }
+    // Stream lifecycle (audio streams, DAX TX ownership, NetCW) was decoded by
+    // the status ingress before this line reached the model.
     // Relay to listeners (e.g., MemoryDialog)
     emit statusReceived(object, kvs);
     if (!alive || controlSession() != original) { return; }
 
     handleRemoteAudioRxStreamStatus(object, kvs);
-    if (m_flexBackend) {
-        m_flexBackend->decodeDaxTxStatus(object, kvs);
-    }
     traceDaxStreamStatus(object, kvs);
     handleDaxRxStreamRegistry(object, kvs);
 
@@ -12865,11 +12862,18 @@ void RadioModel::handleSliceStatus(int id,
 
 void RadioModel::handleLineForTest(const QString& line)
 {
-    const ParsedMessage message = CommandParser::parseLine(line);
+    deliverLineForTest(CommandParser::parseLine(line));
+}
+
+void RadioModel::deliverLineForTest(const ParsedMessage& message)
+{
     if (m_statusIngress) {
-        m_statusIngress->deliverForTest(message);
+        m_statusIngress->deliverForTest(message);   // decoders, then us
         return;
     }
+    // A fixture that aliased a Flex backend without setupBackend(): run its
+    // decoders, then this model's own handling.
+    if (m_flexBackend) { m_flexBackend->statusIngress()->decodeForTest(message); }
     handleMessageReceived(message);
     if (message.type == MessageType::Status) { onStatusReceived(message.object, message.kvs); }
 }
@@ -12880,17 +12884,13 @@ void RadioModel::handleStatusForTest(const QString& object, const QMap<QString, 
     for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
         fields << it.key() + QLatin1Char('=') + it.value();
     }
-    if (!m_statusIngress) {
-        onStatusReceived(object, kvs);
-        return;
-    }
     // Re-parsing a rebuilt line can split an object differently from the kvs
     // a test supplied, so deliver the parsed form with the test's own values.
     ParsedMessage message = CommandParser::parseLine(
         QStringLiteral("S00000000|") + object + (fields.isEmpty() ? QString() : QLatin1Char(' ') + fields.join(QLatin1Char(' '))));
     message.object = object;
     message.kvs = kvs;
-    m_statusIngress->deliverForTest(message);
+    deliverLineForTest(message);
 }
 
 quint64 RadioModel::beginStatusSession()

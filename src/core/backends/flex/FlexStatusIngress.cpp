@@ -3,6 +3,8 @@
 #include "RadioConnection.h"
 #include "WanConnection.h"
 
+#include <QPointer>
+
 namespace AetherSDR {
 
 FlexStatusIngress::FlexStatusIngress(QObject* parent)
@@ -20,8 +22,10 @@ void FlexStatusIngress::route(Transport* transport)
     m_connection = connect(transport, &Transport::lineReceived, this,
         [this, token](const ParsedMessage& line, quint64 epoch) {
             if (token != m_route || epoch != m_epoch) { return; }
+            // A decoded delta can end the session or the backend that owns us.
+            const QPointer<FlexStatusIngress> alive(this);
             decodeLine(line);
-            if (token == m_route && epoch == m_epoch) { emit lineAccepted(line); }
+            if (alive && token == m_route && epoch == m_epoch) { emit lineAccepted(line); }
         }, Qt::QueuedConnection);
 }
 

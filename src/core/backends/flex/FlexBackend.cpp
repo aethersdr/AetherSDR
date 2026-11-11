@@ -36,33 +36,6 @@ using namespace flexkv;
 
 namespace {
 
-std::optional<quint32> daxTxIdentity(const QString& text)
-{
-    if (text.isEmpty() || text.size() > 10) {
-        return std::nullopt;
-    }
-    const bool prefixed = text.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive);
-    const qsizetype first = prefixed ? 2 : 0;
-    if (first == text.size()) {
-        return std::nullopt;
-    }
-    bool hexDigit = false;
-    for (qsizetype i = first; i < text.size(); ++i) {
-        const QChar ch = text.at(i);
-        if (ch >= QLatin1Char('0') && ch <= QLatin1Char('9')) {
-            continue;
-        }
-        if ((ch >= QLatin1Char('a') && ch <= QLatin1Char('f'))
-            || (ch >= QLatin1Char('A') && ch <= QLatin1Char('F'))) {
-            hexDigit = true;
-            continue;
-        }
-        return std::nullopt;
-    }
-    bool ok = false;
-    const quint32 value = text.mid(first).toUInt(&ok, prefixed || hexDigit ? 16 : 10);
-    return ok && value != 0 ? std::optional<quint32>(value) : std::nullopt;
-}
 
 struct DaxTxReplyState {
     DaxTxOwnershipCompletion completion;
@@ -118,6 +91,10 @@ FlexBackend::FlexBackend(QObject* parent)
     connect(&m_statusIngress, &FlexStatusIngress::ntpSourceChanged, this, &IRadioBackend::ntpSourceChanged);
     connect(&m_statusIngress, &FlexStatusIngress::memoryChanged, this, &IRadioBackend::memoryChanged);
     connect(&m_statusIngress, &FlexStatusIngress::profileChanged, this, &IRadioBackend::profileChanged);
+    connect(&m_statusIngress, &FlexStatusIngress::audioStreamChanged, this, &IRadioBackend::audioStreamChanged);
+    connect(&m_statusIngress, &FlexStatusIngress::daxTxStreamChanged, this, &IRadioBackend::daxTxStreamChanged);
+    connect(&m_statusIngress, &FlexStatusIngress::cwStreamRemoved, this,
+            [this](quint32 streamId) { if (m_cwControls) { m_cwControls->observeStreamRemoved(streamId); } });
 
     // Observe wire lifecycle and re-emit as the interface's own signals. Queued
     // (auto) connections: the connection lives on its worker thread.
@@ -251,8 +228,8 @@ ReceiveDispatch FlexBackend::requestDaxTxOwnership(const DaxTxOwnershipRequest& 
         return refuse(QStringLiteral("The DAX TX ownership request is no longer current."));
     }
     const quint32 owner = m_daxTxClientHandleProvider ? m_daxTxClientHandleProvider() : 0;
-    const auto stream = m_daxTxStreams.constFind(request.streamId);
-    if (owner == 0 || stream == m_daxTxStreams.cend()
+    const FlexStatusIngress::DaxTxStreamState* stream = m_statusIngress.daxTxStream(request.streamId);
+    if (owner == 0 || !stream
         || stream->clientHandle != owner || !stream->tx.has_value()) {
         return refuse(QStringLiteral("DAX TX ownership requires a confirmed stream owned by this client."));
     }
@@ -280,9 +257,9 @@ ReceiveDispatch FlexBackend::requestDaxTxOwnership(const DaxTxOwnershipRequest& 
             }
             return;
         }
-        const auto current = receiver->m_daxTxStreams.constFind(streamId);
+        const FlexStatusIngress::DaxTxStreamState* current = receiver->m_statusIngress.daxTxStream(streamId);
         const bool valid = guard.permits() && session == receiver->m_daxTxSession
-            && current != receiver->m_daxTxStreams.cend()
+            && current
             && current->incarnation == incarnation && current->clientHandle == owner
             && current->tx.has_value() && receiver->m_daxTxClientHandleProvider
             && receiver->m_daxTxClientHandleProvider() == owner;
@@ -329,68 +306,6 @@ ReceiveDispatch FlexBackend::requestDaxTxOwnership(const DaxTxOwnershipRequest& 
     return ReceiveDispatch::Dispatched;
 }
 
-void FlexBackend::decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs)
-{
-    if (QThread::currentThread() != thread()) {
-        return;
-    }
-    static const QRegularExpression pattern(
-        QStringLiteral("\\A(stream|tx_audio_stream) ([^\\s]+)(?: (removed))?\\z"));
-    const QRegularExpressionMatch match = pattern.match(object);
-    const std::optional<quint32> streamId = match.hasMatch()
-        ? daxTxIdentity(match.captured(2)) : std::nullopt;
-    if (!streamId) {
-        return;
-    }
-    const bool known = m_daxTxStreams.contains(*streamId);
-    const bool legacy = match.captured(1) == QLatin1String("tx_audio_stream");
-    const bool otherType = !legacy && kvs.contains(QStringLiteral("type"))
-        && kvs.value(QStringLiteral("type")) != QLatin1String("dax_tx");
-    DaxTxStreamDelta delta;
-    delta.streamId = *streamId;
-    delta.removed = !match.captured(3).isEmpty() || kvs.contains(QStringLiteral("removed"))
-        || kvs.value(QStringLiteral("in_use")) == QLatin1String("0") || (known && otherType);
-    if (delta.removed) {
-        ++m_daxTxIncarnation;
-        m_daxTxStreams.remove(*streamId);
-        emit daxTxStreamChanged(delta);
-        return;
-    }
-    if (otherType || (!known && !legacy
-        && kvs.value(QStringLiteral("type")) != QLatin1String("dax_tx"))) {
-        return;
-    }
-
-    if (!known) {
-        DaxTxStreamState state;
-        state.incarnation = ++m_daxTxIncarnation;
-        m_daxTxStreams.insert(*streamId, state);
-    }
-    DaxTxStreamState& state = m_daxTxStreams[*streamId];
-    if (kvs.contains(QStringLiteral("client_handle"))) {
-        delta.clientHandle = daxTxIdentity(kvs.value(QStringLiteral("client_handle")));
-        delta.invalidOwner = !delta.clientHandle.has_value();
-        if (delta.invalidOwner || state.clientHandle != delta.clientHandle) {
-            state.incarnation = ++m_daxTxIncarnation;
-            state.tx.reset();
-        }
-        state.clientHandle = delta.clientHandle;
-    }
-    if (kvs.contains(QStringLiteral("tx"))) {
-        const QString value = kvs.value(QStringLiteral("tx"));
-        if (value == QLatin1String("0") || value == QLatin1String("1")) {
-            delta.tx = value == QLatin1String("1");
-            if (state.clientHandle && !delta.invalidOwner) {
-                state.tx = delta.tx;
-            }
-        } else {
-            delta.invalidTx = true;
-            state.tx.reset();
-            state.incarnation = ++m_daxTxIncarnation;
-        }
-    }
-    emit daxTxStreamChanged(delta);
-}
 
 void FlexBackend::requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId)
 {
@@ -1700,7 +1615,6 @@ void FlexBackend::decodePanExtensions(const QString& panId,
     }
 }
 
-
 void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs)
 {
     // Translate the Flex slice-status wire kv-set into the normalized, typed
@@ -1983,7 +1897,7 @@ void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, Q
 void FlexBackend::clearExtensionHandles()
 {
     ++m_daxTxSession;
-    m_daxTxStreams.clear();
+    m_statusIngress.clearDaxTxStreams();
     // Identity replies belong to the same session as the cached encode handles.
     ++m_nicknameSession;
     ++m_tuneOutputSession;

@@ -266,9 +266,6 @@ public:
     // (aetherd RFC 2.3 — SliceModel touchpoint, full canonical rename.)
     void decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs);
 
-    void decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs);
-    void decodeAudioStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
-    void decodeStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
     // Decode radio-global status ("radio …" / "radio slices …" etc.) into the
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
     // residual). Present-only, ok-guarded numeric parses.
@@ -310,15 +307,8 @@ private:
     TransferCommandSink m_transferSink;
     AudioCommandSink m_audioSink;
     std::function<bool(const QString&, CommandReply, const DaxTxRequestGuard&)> m_daxTxSink;
-    struct DaxTxStreamState {
-        std::optional<quint32> clientHandle;
-        std::optional<bool> tx;
-        quint64 incarnation{0};
-    };
-    QMap<quint32, DaxTxStreamState> m_daxTxStreams;
     std::function<quint32()> m_daxTxClientHandleProvider;
     quint64 m_daxTxSession{0};
-    quint64 m_daxTxIncarnation{0};
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
     SessionCommandSink m_sessionSink;
