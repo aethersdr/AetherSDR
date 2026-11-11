@@ -54,10 +54,10 @@ public:
 class RigExpertUsbPocTest final : public QObject {
     Q_OBJECT
 private:
-    InjectedHid* install(AntennaAnalyzerModel& model)
+    InjectedHid* install(AntennaAnalyzerModel& model, const QString& serial = QStringLiteral("460012345"))
     {
         auto* port = new InjectedHid(&model);
-        model.setUsbBackend([] { return QList<RigExpertUsbDevice>{{"injected", "460012345", "Stick Pro"}}; },
+        model.setUsbBackend([serial] { return QList<RigExpertUsbDevice>{{"injected", serial, "RigExpert"}}; },
                             [port](QObject*) { return port; });
         if (!model.refreshDevices() || !model.connectDevice(0)) { return nullptr; }
         return port;
@@ -69,6 +69,97 @@ private:
         AntennaAnalyzerModelTestAccess::identityQuiet(model);
     }
 private slots:
+    void stickModels_data()
+    {
+        QTest::addColumn<QString>("serial");
+        QTest::addColumn<QString>("name");
+        QTest::addColumn<qint64>("maximum");
+        QTest::addColumn<bool>("experimental");
+        // Manufacturer AntScope2 analyzerparameters.h: both serial revisions
+        // of each model use the same normal-mode HID measurement path.
+        QTest::newRow("230") << QString("423012345") << QString("Stick 230") << qint64(230000000) << true;
+        QTest::newRow("230-rev2") << QString("423112345") << QString("Stick 230") << qint64(230000000) << true;
+        QTest::newRow("500") << QString("450012345") << QString("Stick 500") << qint64(500000000) << true;
+        QTest::newRow("500-rev2") << QString("450112345") << QString("Stick 500") << qint64(500000000) << true;
+        QTest::newRow("pro") << QString("460012345") << QString("Stick Pro") << qint64(600000000) << false;
+        QTest::newRow("pro-rev2") << QString("460112345") << QString("Stick Pro") << qint64(600000000) << false;
+        QTest::newRow("xpro") << QString("499912345") << QString("Stick XPro") << qint64(1000000000) << true;
+        QTest::newRow("xpro-rev2") << QString("499812345") << QString("Stick XPro") << qint64(1000000000) << true;
+    }
+    void stickModels()
+    {
+        QFETCH(QString, serial);
+        QFETCH(QString, name);
+        QFETCH(qint64, maximum);
+        QFETCH(bool, experimental);
+        AntennaAnalyzerModel model;
+        InjectedHid* port = install(model, serial);
+        QVERIFY(port);
+        const QJsonObject discovered = model.automation("status", {}).value("devices").toArray().first().toObject();
+        QCOMPARE(discovered.value("model").toString(), name);
+        QCOMPARE(discovered.value("experimental").toBool(), experimental);
+        QCOMPARE(discovered.value("minFrequencyHz").toDouble(), 100000.0);
+        QCOMPARE(discovered.value("maxFrequencyHz").toDouble(), double(maximum));
+        QVERIFY(!model.snapshot().value("identityVerified").toBool());
+        QVERIFY(!model.automation("sweep", "100000 110000 1 isolated").value("ok").toBool());
+        QCOMPARE(port->commands, QList<QByteArray>{"VER\r\n"});
+        port->feed((name + " 123 REV 2\r\n").toLatin1());
+        AntennaAnalyzerModelTestAccess::identityQuiet(model);
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Ready);
+        const QJsonObject state = model.snapshot();
+        QCOMPARE(state.value("model").toString(), name);
+        QCOMPARE(state.value("experimental").toBool(), experimental);
+        QCOMPARE(state.value("maxFrequencyHz").toDouble(), double(maximum));
+        QVERIFY(state.value("identityVerified").toBool());
+        QCOMPARE(port->commands, (QList<QByteArray>{"VER\r\n", "FULLINFO\r\n"}));
+        QVERIFY(!model.sweep(99998, 110000, 1, true));
+        QVERIFY(!model.sweep(maximum - 10000, maximum + 2, 1, true));
+        QCOMPARE(port->commands.size(), 2);
+        QVERIFY(model.lastError().contains(name));
+        // Include the exact upper endpoint, including XPro data above 600 MHz.
+        const QString request = QString("%1 %2 1 isolated").arg(maximum - 10000).arg(maximum);
+        QVERIFY(model.automation("sweep", request).value("ok").toBool());
+        QCOMPARE(port->commands.last(), "FQ" + QByteArray::number(maximum - 5000) + "\r");
+        port->feed("OK\r\n");
+        QCOMPARE(port->commands.last(), QByteArray("SW10000\r"));
+        port->feed("OK\r\n");
+        QCOMPARE(port->commands.last(), QByteArray("FRX1\r"));
+        port->feed(QByteArray::number((maximum - 10000) / 1e6, 'f', 6) + ",50,0\r\n");
+        port->feed(QByteArray::number(maximum / 1e6, 'f', 6) + ",50,0\r\n");
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Complete);
+        QCOMPARE(model.snapshot().value("receivedRows").toInt(), 2);
+        QCOMPARE(port->final, AntennaAnalyzerModel::commandReport("off\r"));
+        QCOMPARE(model.snapshot().value("model").toString(), name);
+        QCOMPARE(model.snapshot().value("experimental").toBool(), experimental);
+        QVERIFY(!model.snapshot().value("countQualifiedOnHardware").toBool());
+    }
+    void mismatchedStickIdentity()
+    {
+        AntennaAnalyzerModel model;
+        InjectedHid* port = install(model, "423012345");
+        QVERIFY(port);
+        port->feed("Stick XPro 123\r\n");
+        AntennaAnalyzerModelTestAccess::identityQuiet(model);
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Error);
+        QVERIFY(model.lastError().contains("does not match"));
+        QVERIFY(!model.snapshot().value("identityVerified").toBool());
+        QCOMPARE(port->commands, QList<QByteArray>{"VER\r\n"});
+        QCOMPARE(port->final, AntennaAnalyzerModel::commandReport("off\r"));
+    }
+    void unsupportedSerialNeverOpens()
+    {
+        AntennaAnalyzerModel model;
+        QVERIFY(!install(model, "999912345"));
+        QVERIFY(model.lastError().contains("Unsupported"));
+        QCOMPARE(model.state(), AntennaAnalyzerModel::State::Disconnected);
+        QVERIFY(RigExpertHidTransport::modelForSerial({}).name.isEmpty());
+    }
+    void familyParserEnvelope()
+    {
+        QVERIFY(!AntennaAnalyzerModel::impedanceSample("1000,50,0").isEmpty());
+        QVERIFY(AntennaAnalyzerModel::impedanceSample("1000.000001,50,0").isEmpty());
+        QVERIFY(AntennaAnalyzerModel::impedanceSample("0.099999,50,0").isEmpty());
+    }
     void reportBounds()
     {
         QCOMPARE(AntennaAnalyzerModel::commandReport("VER\r\n").toHex().left(14), QByteArray("07055645520d0a"));

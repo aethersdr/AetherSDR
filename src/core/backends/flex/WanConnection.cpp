@@ -191,10 +191,17 @@ void WanConnection::disconnectFromRadio()
 
 // ─── Command dispatch ────────────────────────────────────────────────────────
 
+quint32 WanConnection::sendSessionCommand(const QString& command, quint64 generation,
+                                          const SessionCommandGuard& guard, ResponseCallback callback)
+{
+    if (!sessionWriteAdmitted(generation, guard)) { return 0; }
+    return sendCommand(command, std::move(callback));
+}
+
 quint32 WanConnection::sendAdministrationCommand(const QString& command, quint64 generation,
     const SessionCommandGuard& guard, ResponseCallback callback)
 {
-    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return 0; }
+    if (!sessionWriteAdmitted(generation, guard)) { return 0; }
     const quint32 seq = m_seqCounter.fetch_add(1);
     if (callback) { m_pendingCallbacks.insert(seq, std::move(callback)); }
     const QByteArray data = CommandParser::buildCommand(seq, command);
@@ -448,7 +455,7 @@ void WanConnection::processLine(const QString& line)
         auto it = m_pendingCallbacks.find(msg.sequence);
         if (it != m_pendingCallbacks.end()) {
             // A completion may retire this session or alter the callback map.
-            ResponseCallback callback = std::move(it.value());
+            const ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
             callback(msg.resultCode, msg.object);
         }

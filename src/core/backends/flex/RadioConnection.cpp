@@ -316,7 +316,6 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 
 void RadioConnection::resetSessionState()
 {
-    ++m_commandSession;
     m_pttProtocol.store(PttProtocol::Unknown);
     if (m_independentPtt) {
         m_independentPtt->disconnect();
@@ -409,20 +408,18 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
         << " totalMs=" << totalTimer.elapsed();
 }
 
-void RadioConnection::writeTransferCommand(quint32 seq, const QString& command,
-                                           const FileTransferGuard& guard, quint64 session)
+bool RadioConnection::writeSessionCommand(quint32 seq, const QString& command,
+                                          quint64 generation, const SessionCommandGuard& guard)
 {
-    if (!guard.current() || session != commandSession() || !isConnected()) {
-        emit commandResponse(seq, -1, QStringLiteral("Original transfer ended before dispatch."));
-        return;
-    }
+    if (!sessionWriteAdmitted(generation, guard)) { return false; }
     writeCommand(seq, command);
+    return true;
 }
 
 bool RadioConnection::writeAdministrationCommand(quint32 seq, const QString& command,
     quint64 generation, const SessionCommandGuard& guard)
 {
-    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return false; }
+    if (!sessionWriteAdmitted(generation, guard)) { return false; }
     if (m_commandSinkForTest) {
         m_commandSinkForTest(seq, command);
         return true;

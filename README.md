@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.11.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.11.2** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -31,6 +31,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, a WIDE1-1 fill-in digipeater, and an **APRS client** (station table, GPS beacon, messaging) on a Direwolf-derived VHF demodulator
 - **AetherLab** — an experimental vector network analyzer workspace for the RigExpert Stick Pro over USB, a proof of concept with hardware sweeps qualified on one Stick Pro 108 on macOS: SWR, return loss, impedance and series/parallel R, X, L and C with markers and JSON session export
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading and interpolated bandwidth at SWR ≤ 1.5 / 2.0
+- **AetherWSPR** — a receive-only WSPR receiver that runs on the radio itself (FLEX-8000 and Aurora as a container, FLEX-6000 as a legacy waveform), with its spots in SpotHub, on the panadapter and on AetherMap, and optional WSPRnet upload
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM+/DXLog contest bandmap, the EiBi shortwave schedule and the KiwiSDR DX Community database, with auto-mode switch and per-feed colouring
 - **Local voice keyer** — twelve PC-microphone recordings up to 30 seconds each, with preview, import/export and F1–F12 playback; radio DVK remains available separately
 - **CW operator suite** — ggmorse plus download-on-demand DeepCW and DeepFist receive decoders where ONNX Runtime is available (ggmorse only on Intel macOS), MIDI/keyboard straight-key and iambic paddles with full QSK, optional Quindar tones
@@ -38,7 +39,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **AetherMap (PSK Reporter) overlays** — optional global precipitation (LibreWXR, with NOAA, ECCC and EUMETNET OPERA regional radar backups and a per-provider legend), NOAA/NWS weather radar with observation playback ([`docs`](docs/psk-reporter-weather-radar.md)) and a NASA/GSFC VIIRS night-lights layer that fades through civil twilight ([`docs`](docs/psk-reporter-city-lights.md)), on both the 2D map and 3D globe
 - **SmartLink remote, remote over CGNAT, and a TCI server** — Auth0/TLS WAN operation; an in-radio Tailscale node, signed in with a QR code, that carries AetherSDR to a FLEX-8000 or Aurora radio behind CGNAT, and to a FLEX-6000 as a legacy waveform (not yet run end to end from AetherSDR); and CAT + audio + IQ + CW + spots + tune and receiver events over a single TCI WebSocket announcing protocol 2.1
-- **Broad hardware control** — rigctld and virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, a CTR2-Max relay over Wi-Fi or USB with negotiated spectrum and CW-text extensions for compatible controllers, and touch gestures (pinch-zoom, press-and-hold, kinetic scrolling) on touch screens
+- **Broad hardware control** — rigctld and virtual-serial CAT, OTRSP two-slice focus for contest loggers, MIDI mapping, the FlexControl knob, serial PTT/CW keying, Multi-Flex operation alongside SmartSDR/Maestro, a CTR2-Max relay over Wi-Fi or USB with negotiated spectrum and CW-text extensions for compatible controllers, and touch gestures (pinch-zoom, press-and-hold, kinetic scrolling) on touch screens
 - **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several windows if you want them. Named workspaces recall which applets are open as well as where they sit, and bind to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **A user guide at [docs.aethersdr.com](https://docs.aethersdr.com)** — Stable and Next versions, a printable PDF manual signed with each release, and a Log Analyzer that reads a log or support bundle in your browser without uploading it
 - **In-app updates** — a check at launch, at most once a day, that lights an UPDATE badge in the title bar, and an Updates window (File → Update...) that installs the new release as AetherSDR exits — on Windows, on macOS, and on Linux from an install made with Install for updates or `AetherSDR --install` — alongside the radio's firmware releases
@@ -268,8 +269,8 @@ Currently in flight:
   receive control, bounded telemetry and credential-bound transmit grants with
   Flex PTT handoff have landed, and the desktop's slice receive controls travel
   as typed backend requests. Radio Setup, TX Band, USB, profile and memory
-  controls, slice lifecycle and split routing, and panadapter/waterfall control
-  now use that seam too; per-client propagation, transmit for the other
+  controls, slice lifecycle and split routing, panadapter/waterfall control,
+  CW, radio administration and band-stack recall now use that seam too; per-client propagation, transmit for the other
   families and a thin client to replace direct model access have not.
 - **Non-Flex backends** — Hermes-Lite 2 (experimental), networked Icom (early;
   the IC-7300MK2 over RS-BA1 is supported), and ANAN-G2 and RTL-SDR
@@ -279,8 +280,8 @@ Currently in flight:
   live cross-window drag and field time against the Classic shell.
 - **The visual canon** — the AetherSDR style guide (RFC #6226) is applied one
   surface at a time; Callsign Lookup, FreeDV Reporter, Net Scheduler, Memory
-  Channels, MQTT Settings, Keyboard Shortcuts and Ulanzi Dial mapping now join
-  the earlier ones, and a single base-token flip comes last.
+  Channels, MQTT Settings, Keyboard Shortcuts, Ulanzi Dial mapping, Theme
+  Editor, Support & Diagnostics and the Help guides now join the earlier ones, and a single base-token flip comes last.
 - **Radio connection workspace** (RFC #6561) — Locations, operator profiles and
   SmartLink accounts in one workspace; the implementation is in review.
 - **AppSettings nested-JSON refactor** — storage is on SQLite with per-radio

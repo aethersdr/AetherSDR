@@ -1,23 +1,11 @@
-// Production encoder, admission and queued writer; no socket is initialized.
+// Production encoder and admission; no socket is initialized. The queued
+// writer is pinned in session_control_test.
 #include "RadioSetupControlFixture.h"
 #include "core/backends/FileTransferOperation.h"
-#include "core/backends/flex/RadioConnection.h"
 #include <QCoreApplication>
-#include <QEvent>
 #include <QtTest>
 
 using namespace AetherSDR;
-namespace AetherSDR {
-class RadioConnectionSessionTestAccess {
-public:
-    static void capture(RadioConnection& connection, QStringList& writes)
-    {
-        connection.m_state.store(ConnectionState::Connected);
-        connection.m_commandSinkForTest = [&writes](quint32, const QString& text) { writes << text; };
-    }
-    static void replace(RadioConnection& connection) { ++connection.m_commandSession; }
-};
-}
 
 struct Fixture {
     RadioModel model;
@@ -250,33 +238,6 @@ private slots:
         }
         QCOMPARE(f.commands, QStringList({"waveform restart ThumbDV", "waveform uninstall ThumbDV", "waveform remove_container ThumbDV"}));
         QCOMPARE(f.model.requestWaveform({WaveformAction::Restart,"bad\nname"}, &f.owner, {}), ReceiveDispatch::Unsupported);
-    }
-
-    void queuedWriterRechecksGuardAndSession()
-    {
-        RadioConnection connection;
-        QStringList writes;
-        RadioConnectionSessionTestAccess::capture(connection,writes);
-        const auto enqueue = [&](FileTransferGuard guard) {
-            const quint64 session = connection.commandSession();
-            QMetaObject::invokeMethod(&connection, [&connection,guard,session] {
-                connection.writeTransferCommand(1, QStringLiteral("file download db_package"), guard, session);
-            }, Qt::QueuedConnection);
-        };
-        FileTransferGuard cancelled(30000);
-        enqueue(cancelled); cancelled.cancel();
-        QCoreApplication::sendPostedEvents(&connection,QEvent::MetaCall);
-        QVERIFY(writes.isEmpty());
-        enqueue(FileTransferGuard(30000));
-        RadioConnectionSessionTestAccess::replace(connection);
-        QCoreApplication::sendPostedEvents(&connection,QEvent::MetaCall);
-        QVERIFY(writes.isEmpty());
-        enqueue(FileTransferGuard(0));
-        QCoreApplication::sendPostedEvents(&connection,QEvent::MetaCall);
-        QVERIFY(writes.isEmpty());
-        enqueue(FileTransferGuard(30000));
-        QCoreApplication::sendPostedEvents(&connection,QEvent::MetaCall);
-        QCOMPARE(writes.size(),1);
     }
 };
 QTEST_GUILESS_MAIN(FileTransferControlTest)

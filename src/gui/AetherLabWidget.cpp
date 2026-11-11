@@ -26,6 +26,8 @@
 #include <QResizeEvent>
 #include <QSaveFile>
 #include <QScrollArea>
+#include <QSignalBlocker>
+#include <QStringList>
 #include <QSlider>
 #include <QSpinBox>
 #include <QTimer>
@@ -87,7 +89,7 @@ protected:
         }
         p.drawText(QRectF(chart.left(), height() - 22, chart.width(), 18), Qt::AlignCenter, tr("Frequency (MHz)"));
         if (m_samples.isEmpty()) {
-            p.drawText(chart, Qt::AlignCenter, tr("Connect a Stick Pro, then run an explicit sweep"));
+            p.drawText(chart, Qt::AlignCenter, tr("Connect a RigExpert Stick, then run an explicit sweep"));
             return;
         }
         QPainterPath path;
@@ -269,24 +271,24 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     };
     m_controls = new QBoxLayout(QBoxLayout::TopToBottom);
     m_controls->setSpacing(12);
-    auto* connection = card(tr("STICK PRO · USB"));
+    auto* connection = card(tr("RIGEXPERT STICK · USB"));
     auto* devicesRow = new QHBoxLayout;
     m_devices = new QComboBox(connection);
     m_devices->setMinimumContentsLength(14);
     m_devices->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_devices->setObjectName(QStringLiteral("aetherLabDevice"));
-    m_devices->setAccessibleName(tr("Stick Pro USB interface"));
-    m_devices->setPlaceholderText(tr("Refresh USB to find a Stick Pro"));
+    m_devices->setAccessibleName(tr("RigExpert Stick USB interface"));
+    m_devices->setPlaceholderText(tr("Refresh USB to find a RigExpert Stick"));
     devicesRow->addWidget(m_devices, 1);
     m_rescan = new QPushButton(tr("Refresh USB"), connection);
-    m_rescan->setAccessibleName(tr("Refresh Stick Pro USB devices"));
+    m_rescan->setAccessibleName(tr("Refresh RigExpert Stick USB devices"));
     devicesRow->addWidget(m_rescan);
     m_connect = new QPushButton(tr("Connect"), connection);
     m_connect->setObjectName(QStringLiteral("aetherLabConnect"));
-    m_connect->setAccessibleName(tr("Connect Stick Pro"));
+    m_connect->setAccessibleName(tr("Connect RigExpert Stick"));
     devicesRow->addWidget(m_connect);
     m_disconnect = new QPushButton(tr("Disconnect"), connection);
-    m_disconnect->setAccessibleName(tr("Disconnect Stick Pro"));
+    m_disconnect->setAccessibleName(tr("Disconnect RigExpert Stick"));
     devicesRow->addWidget(m_disconnect);
     static_cast<QVBoxLayout*>(connection->layout())->addLayout(devicesRow);
     m_status = new QLabel(connection);
@@ -294,6 +296,11 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     m_status->setAccessibleDescription(tr("Analyzer session status"));
     m_status->setWordWrap(true);
     connection->layout()->addWidget(m_status);
+    m_modelSupport = new QLabel(connection);
+    m_modelSupport->setObjectName(QStringLiteral("aetherLabModelSupport"));
+    m_modelSupport->setWordWrap(true);
+    m_modelSupport->setProperty("labMuted", true);
+    connection->layout()->addWidget(m_modelSupport);
     auto* guidance = new QLabel(tr("Isolate the analyzer RF port from transmitters. Stop AntScope before connecting."), connection);
     guidance->setObjectName(QStringLiteral("aetherLabIsolationGuidance"));
     guidance->setWordWrap(true);
@@ -309,12 +316,10 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     const auto frequency = [sweepCard](const QString& name, double value) {
         auto* spin = new QDoubleSpinBox(sweepCard);
         spin->setDecimals(6);
-        spin->setRange(0.1, 600.0);
+        spin->setRange(0.0, 1000.0); // Refreshed from model metadata below.
         spin->setValue(value);
         spin->setSuffix(tr(" MHz"));
-        padSweepEditor(spin, QStringLiteral("600.000000 MHz"));
         spin->setAccessibleName(name);
-        spin->setAccessibleDescription(tr("Frequency in MHz, 0.1 to 600, with 1 Hz entry resolution"));
         return spin;
     };
     m_start = frequency(tr("Sweep start frequency"), 14.0);
@@ -338,7 +343,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
     }
     m_sweep = new QPushButton(tr("Run sweep"), sweepCard);
     m_sweep->setObjectName(QStringLiteral("aetherLabSweep"));
-    m_sweep->setAccessibleName(tr("Sweep antenna with Stick Pro"));
+    m_sweep->setAccessibleName(tr("Sweep antenna with RigExpert Stick"));
     m_sweep->setProperty("aetherLabRf", true);
     m_cancel = new QPushButton(tr("Stop"), sweepCard);
     m_cancel->setObjectName(QStringLiteral("aetherLabStop"));
@@ -478,6 +483,7 @@ AetherLabWidget::AetherLabWidget(AntennaAnalyzerModel* model, QWidget* parent)
         if (!m_refreshTimer->isActive()) { m_refreshTimer->start(); }
     });
     connect(m_rescan, &QPushButton::clicked, model, &AntennaAnalyzerModel::refreshDevices);
+    connect(m_devices, &QComboBox::currentIndexChanged, this, &AetherLabWidget::refresh);
     connect(m_connect, &QPushButton::clicked, this, [this] { m_model->connectDevice(m_devices->currentData().toInt()); });
     connect(m_disconnect, &QPushButton::clicked, model, &AntennaAnalyzerModel::disconnectDevice);
     connect(m_sweep, &QPushButton::clicked, this, [this] {
@@ -511,11 +517,14 @@ void AetherLabWidget::refresh()
     const QJsonArray devices = state.value(QStringLiteral("devices")).toArray();
     const QString signature = QString::fromUtf8(QJsonDocument(devices).toJson(QJsonDocument::Compact));
     if (m_deviceSignature != signature) {
+        const QSignalBlocker blocker(m_devices);
         m_deviceSignature = signature;
         m_devices->clear();
         for (const QJsonValue& value : devices) {
             const QJsonObject device = value.toObject();
-            m_devices->addItem(tr("%1 · %2").arg(device.value(QStringLiteral("product")).toString(),
+            const QString name = device.value(QStringLiteral("model")).toString();
+            m_devices->addItem(tr("%1%2 · %3").arg(name,
+                device.value(QStringLiteral("experimental")).toBool() ? tr(" (Experimental)") : QString(),
                 device.value(QStringLiteral("serial")).toString()), device.value(QStringLiteral("index")).toInt());
         }
         if (selected < m_devices->count()) { m_devices->setCurrentIndex(selected); }
@@ -524,12 +533,60 @@ void AetherLabWidget::refresh()
     const bool active = status == AntennaAnalyzerModel::State::Identifying || status == AntennaAnalyzerModel::State::Ready
         || status == AntennaAnalyzerModel::State::SettingFrequency || status == AntennaAnalyzerModel::State::SettingWidth
         || status == AntennaAnalyzerModel::State::Sweeping || status == AntennaAnalyzerModel::State::Closing;
+    if (active) {
+        const QSignalBlocker blocker(m_devices);
+        for (const QJsonValue& value : devices) {
+            const QJsonObject device = value.toObject();
+            if (device.value(QStringLiteral("path")) == state.value(QStringLiteral("path"))) {
+                m_devices->setCurrentIndex(m_devices->findData(device.value(QStringLiteral("index")).toInt()));
+                break;
+            }
+        }
+    }
     availability(m_rescan, !active, tr("Disconnect before rescanning USB"));
     availability(m_disconnect, active, tr("No open instrument session"));
-    availability(m_connect, !active && !devices.isEmpty(), tr("Refresh USB and select a Stick Pro; disconnect any open session first"));
+    availability(m_connect, !active && !devices.isEmpty(), tr("Refresh USB and select a RigExpert Stick; disconnect any open session first"));
     availability(m_devices, !active, tr("Disconnect before selecting another interface"));
-    availability(m_sweep, status == AntennaAnalyzerModel::State::Ready && m_isolated->isChecked(), tr("Connect and identify the Stick Pro, then confirm RF isolation"));
+    availability(m_sweep, status == AntennaAnalyzerModel::State::Ready && m_isolated->isChecked(), tr("Connect and identify the RigExpert Stick, then confirm RF isolation"));
     availability(m_cancel, active, tr("No open instrument session"));
+    QJsonObject rangeModel = state;
+    const int deviceIndex = m_devices->currentData().toInt();
+    if (!active && m_devices->currentIndex() >= 0 && deviceIndex >= 0 && deviceIndex < devices.size()) {
+        rangeModel = devices.at(deviceIndex).toObject();
+    }
+    QStringList experimentalModels;
+    double minimumHz = 0;
+    double maximumHz = 0;
+    for (const QJsonValue& value : state.value(QStringLiteral("supportedModels")).toArray()) {
+        const QJsonObject model = value.toObject();
+        if (model.value(QStringLiteral("experimental")).toBool()) {
+            experimentalModels.append(model.value(QStringLiteral("model")).toString());
+        }
+        const double modelMin = model.value(QStringLiteral("minFrequencyHz")).toDouble();
+        minimumHz = minimumHz == 0 ? modelMin : std::min(minimumHz, modelMin);
+        maximumHz = std::max(maximumHz, model.value(QStringLiteral("maxFrequencyHz")).toDouble());
+    }
+    const QString modelName = rangeModel.value(QStringLiteral("model")).toString();
+    if (!modelName.isEmpty()) {
+        minimumHz = rangeModel.value(QStringLiteral("minFrequencyHz")).toDouble();
+        maximumHz = rangeModel.value(QStringLiteral("maxFrequencyHz")).toDouble();
+    }
+    for (QDoubleSpinBox* spin : {m_start, m_stop}) {
+        spin->setRange(minimumHz / 1e6, maximumHz / 1e6);
+        padSweepEditor(spin, QString::number(maximumHz / 1e6, 'f', 6) + tr(" MHz"));
+        spin->setAccessibleDescription(tr("Frequency in MHz, %1 to %2, with 1 Hz entry resolution")
+            .arg(minimumHz / 1e6).arg(maximumHz / 1e6));
+    }
+    const QString supportText = modelName.isEmpty()
+        ? tr("%1: Experimental — hardware testing pending.").arg(experimentalModels.join(QStringLiteral(", ")))
+        : tr("%1 · %2–%3 MHz%4").arg(modelName).arg(minimumHz / 1e6).arg(maximumHz / 1e6)
+            .arg(rangeModel.value(QStringLiteral("experimental")).toBool()
+                ? tr(" · Experimental — hardware testing pending") : QString());
+    if (m_modelSupport->text() != supportText) {
+        m_modelSupport->setText(supportText);
+        QAccessibleEvent event(m_modelSupport, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
     const QString statusText = tr("%1 · %2 · %3 received rows%4").arg(analyzerStatusLabel(status),
         state.value(QStringLiteral("identity")).toString().isEmpty() ? tr("No verified identity") : state.value(QStringLiteral("identity")).toString(),
         QString::number(state.value(QStringLiteral("receivedRows")).toInt()),

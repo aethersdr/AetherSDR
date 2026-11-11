@@ -1,5 +1,6 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "SessionControlRequest.h"
 #include "CwReceiveControl.h"
 #include "SpotRequest.h"
 #include "FileTransferRequest.h"
@@ -9,6 +10,7 @@
 #include "CwTextRequest.h"
 #include "PanDisplayRequest.h"
 #include "PanLifecycleRequest.h"
+#include "AudioControlRequest.h"
 
 #include <QFlags>
 #include <QList>
@@ -430,17 +432,14 @@ struct RadioCapabilities {
     }
 
 
-    // Per-pan band/segment zoom: `display pan set <panId> band_zoom=<0|1>` and
-    // `segment_zoom=` (#4057). Absent refuses: every surface that can issue the
-    // write asks gui/PanZoomModeGate.h, so a radio with no such verb never shows a
-    // zoom control that moves without effect (HERMES.md §17). A record so a radio
-    // answering only one of the two keys can gain a field here.
+    // Per-pan band/segment zoom. Flex has radio-owned mode flags; Icom scope
+    // radios use native span detents. Absent refuses every surface through
+    // gui/PanZoomModeGate.h.
     struct PanZoomModes {
-        // The verb that carries both modes, recorded so the declaration names
-        // what it grants rather than being a bare presence bit. DIAGNOSTIC, in
-        // exactly TwoToneGenerator::selectionCommand's sense below: the gate
-        // branches on this record being ENGAGED and never on the string.
+        enum class Control { RadioFlags, NativeScopeSpan };
         QString setCommand;
+        Control control = Control::RadioFlags;
+        QVector<int> nativeWidthsHz;
     };
     std::optional<PanZoomModes> panZoomModes;
 
@@ -675,6 +674,8 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    // Desktop session bootstrap; does not advertise daemon methods or TX rights.
+    std::optional<SessionControl> sessionControl;
     std::optional<CwReceiveControl> cwReceiveControl;
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
@@ -937,6 +938,8 @@ struct RadioCapabilities {
     // Discrete DAX IQ request rates in Hz. Empty means unsupported or unknown.
     // Applied by the existing DaxIqModel command path, including stream restore.
     QList<int> daxIqSampleRates;
+    std::optional<AudioStreamControl> audioStreamControl;
+    std::optional<GraphicEqControl> radioGraphicEqControl;
 
     // Audio DSP runs inside the radio via command-plane verbs (Flex: NR/NB/ANF/NRL/
     // ANFL/ANFT, APD, wideband NB, 8-band hardware EQ `eq RXsc`/`eq TXsc`). False for
@@ -1017,8 +1020,8 @@ struct RadioCapabilities {
     std::optional<WaveformEnvControl> waveformEnvControl;
     // The radio keeps its own list of NTP time sources that a client can list,
     // add, remove, enable and disable (Flex `ntp_sources …`, SmartSDR 4.3.16+ on
-    // the BigBend platform: FLEX-8000, Aurora, ML-9600, CL-9300). Engaged gates NtpSourceRequest and the Radio Setup Time
-    // page; maxSources is the radio's ceiling.
+    // every platform, FLEX-6000 included). Engaged gates NtpSourceRequest and the
+    // Radio Setup Time page; maxSources is the radio's ceiling.
     struct NtpSourceControl { int maxSources{10}; };
     std::optional<NtpSourceControl> ntpSourceControl;
 

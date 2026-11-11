@@ -183,6 +183,47 @@ no span request (`MainWindow::panSpanFixedByBackend()`, `PanSpanControlGate.h`).
 An absent record dims nothing. `pan_dimension_routing_test` builds each family's
 real record; `pan_control_routing_test` pins the Flex encoder and fences.
 
+### Audio stream and radio graphic EQ requests
+
+`audioStreamControl` lists the `AudioStreamKind`s a backend can create and remove
+through `RadioModel::requestAudioStream()` (and, for IQ, re-rate).
+`radioGraphicEqControl` lists the radio-side graphic EQ paths `requestGraphicEq()`
+may write. Both are desktop request records: an undeclared kind or path is
+refused, and with no radio EQ record the graphic EQ stays host-side
+(`LocalOnly`). Neither widens the daemon capability catalogue.
+
+| Backend | `audioStreamControl` | `radioGraphicEqControl` |
+|---|---|---|
+| Flex | remote RX, remote TX, DAX RX, DAX TX, IQ | RX, TX |
+| HL2 | absent | absent |
+| ANAN | absent | absent |
+| RTL | absent | absent |
+| Icom | absent | absent |
+| Demo | absent | absent |
+
+`audio_control_routing_test` pins the Flex encoder and the native refusals.
+
+### Session bootstrap and client management requests
+
+`sessionControl` lists the `SessionControlField`s a backend can send through
+`RadioModel::requestSessionControl()`: GUI registration, subscriptions, startup
+radio information and slice enumeration, UDP-port registration, keepalive/ping
+and targeted client disconnection. Requests are tied to the session and
+transport generation that issued them; an undeclared field is refused. It does
+not widen the daemon capability catalogue.
+
+| Backend | `sessionControl` |
+|---|---|
+| Flex | every field |
+| HL2 | absent |
+| ANAN | absent |
+| RTL | absent |
+| Icom | absent |
+| Demo | absent |
+
+`session_control_test` pins the Flex encoder, the fences and the
+unsupported-backend refusal.
+
 ### Native receive audio export
 
 `receiveAudioExport` describes the typed pre-monitor `sliceAudioFrameReady`
@@ -378,7 +419,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `backendPanAveraging` (record) | absent | **10 ms** | absent | `MainWindow::onConnectionStateChanged()` → `SpectrumWidget::setClientFftSmoothingEnabled()` | The backend already averages the panadapter per the operator's FFT AVG before the frame leaves it, so the widget skips its fixed client-side EMA (`SMOOTH_ALPHA`) instead of averaging twice. Engaged by ANAN (WDSP's display analyzer, `AnanPanAnalyzer`) and HL2 (`Hl2Spectrum`'s time-constant average, power domain unless the weighted toggle selects log-recursive); `msPerAverageStep` is what one FFT AVG step means (10 ms on both). Engaged by RTL too (`SpectrumTemporalAverage` in its acquisition-owned accumulator, 10 ms per step). `clientPersistsAveraging` makes the client the persistence owner for FFT AVG and Wt Avg (per-radio `ClientDisplay.fftAverages`); ✅ for RTL and HL2, false for ANAN. `averageDescription` / `weightedDescription` replace the controls' default wording where the backend's units or weighted semantics differ; RTL supplies both, others leave them empty. Icom: absent |
 | `panFrameRateShaping` (record) | absent | **engaged**, `clientPersistsFrameRate` ✅ | absent | `MainWindow::clientPersistsFftFps()` → `RadioCapabilities::clientPersistsPanFrameRate()`, from `scheduleClientFftFpsSave` and `wirePanDisplayStatus` | Who keeps a pan's FFT frame rate (Display ▸ FFT FPS) where this engine paces the frames. Engaged with `clientPersistsFrameRate` true makes the client the persistence owner: the per-radio `ClientDisplay.fftFps` table is written and restored. Absent keeps a family's existing behavior, which is to store nothing. HL2 only; Flex (the radio stores and reports it), Icom, ANAN, RTL and Sim leave it absent. The save and the restore read the one accessor |
 | `panWaterfallRateShaping` (record) | absent | **engaged**, `clientPersistsWaterfallRate` ✅ | **engaged**, `clientPersistsWaterfallRate` ✅ | `MainWindow::clientPersistsWaterfallRate()` → `RadioCapabilities::clientPersistsPanWaterfallRate()`, from `scheduleClientWaterfallRateSave` and `wirePanDisplayStatus` | Who keeps a pan's waterfall rate (Display ▸ Rate) where this engine paces the rows. Engaged with `clientPersistsWaterfallRate` true makes the client the persistence owner: the per-radio `ClientDisplay.waterfallRates` table is written and restored. Engaged with false, or absent, stores and restores nothing. HL2, ANAN, Icom, RTL and Sim each engage it with true, since none of them holds a line duration; Flex (the radio stores and reports it) leaves it absent. A family stops storing the rate with one edit in its own `capabilities()`. The save and the restore read the one accessor |
-| `panZoomModes` (record) | ✅ engaged | — (absent) | — (absent) | `MainWindow::onConnectionStateChanged()` and the `PanadapterStack::panAdded` lambda → `SpectrumWidget::setBandSegmentZoomAvailable()`; `MainWindow::togglePanZoomModeForPan` and `MainWindow::setPanZoomMode` → `gui/PanZoomModeGate.h` | Per-pan band/segment zoom (`display pan set <pan> band_zoom=`/`segment_zoom=`). ENGAGED means the radio answers that wire text; ABSENT means undeclared and the gate REFUSES — the write would otherwise be dropped inside `RadioModel::sendCmd` while the control moved anyway. One predicate serves both the B/S button enable and all six command surfaces (shortcuts, MIDI, FlexControl, the RC28/Stream Deck/T-Mate2 chain, the wheel, the automation bridge), so "the button is grey" and "the keystroke is refused" cannot drift apart. A refusal on this rung logs and calls `MainWindow::showUnsupportedControlNotice()`, because a gate refuses before the send and `commandDropped()` never fires. A record and not a bool per #5262 M2 — the two zoom modes are separate wire keys — and a record and not a family string per the standing #5554 notice. Icom/ANAN/RTL: absent |
+| `panZoomModes` (record) | ✅ radio flags | — (absent) | — (absent) | `MainWindow::refreshPanZoomControls()` and `gui/PanZoomModeGate.h` | Per-pan Band Zoom and Segment Zoom. Flex engages radio-owned `band_zoom=` / `segment_zoom=` flags. Scope-capable Icom models engage native span zoom. Where it goes follows `PanadapterModel::zoomPlacement()`, published by the backend on `IRadioBackend::panZoomPlacementChanged` (required of a native-span backend). `FitAroundCenter` (Icom Center, SCROLL-C): `MainWindow::togglePanZoomModeForPan()` picks the smallest of the Center detents in `nativeWidthsHz` (`icom::availableBandwidthsHz()`) that covers the active plan region around the radio-reported center, and sends `RadioModel::requestPanBandwidth()`. `CenterAllocation` (SCROLL-F, our Fixed): it sends `RadioModel::requestPanCenter()` with the region's midpoint and exact width, which the backend clamps to its edge window. `Unavailable` (an operator Fixed preset) and `Unknown` dim the buttons with the reason and refuse every command path through `MainWindow::nativePanZoomBlockedReason()`. The tuned frequency remains radio-owned. Capability changes, limits, scope geometry and placement refresh availability. Absent declines all button, shortcut, controller, and automation entry points through the shared gate. Other backends remain absent. |
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
 | `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar text-keyer indicator and every text-send entry point. Icom: ✅ only for the verified IC-705 / IC-7300MK2 command-17 profiles |
 | `cwTextKeyerName`, ranges and support flags | CWX, 5–100 WPM, progress/macros/live/modifiers | defaults (unused) | defaults (unused) | `MainWindow::applyCapabilitiesToUi`, CAT/TCI/rigctl/automation adapters | Shapes the shared surface without a family branch. Icom: CWK, 6–48 WPM, 30 chars, no progress/stored macros/live typing/speed modifiers; unsupported text is rejected rather than rewritten |
@@ -387,7 +428,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` (Tools ▸ Waveforms… + AetherModem D-STAR tab), `MainWindow::scheduleDigitalVoiceAutoStart` | ThumbDV helper needs a SmartSDR D-STAR waveform. Flex sets true; Icom/HL2/Sim set false; ANAN/RTL inherit the `= false` default. Disconnected restores the tab. Autostart of `aether-dv-waveform` is gated on the same flag so a non-Flex connect cannot launch a helper with no Stop surface |
 | `waveformEnvControl` | engaged on firmware 4.3.16+ on a platform with a Waveform Processor (not Microburst/DeepEddy/Unknown) | absent | absent | `RadioModel::requestWaveformEnv`, `RadioModel::applyWaveformEnvironment`, `waveformEnvironmentUnavailableReason` (Waveforms ▸ Environment…, `WaveformEnvironmentDialog`) | Optional record (#6947): the radio keeps a per-container environment (`waveform env K=V` / `waveform env clear` / `waveform recreate`, status `env=` + `waveform restarted`). Requires `hasWaveforms`. Unavailable = the action is dimmed with the reason |
-| `ntpSourceControl` | engaged on firmware 4.3.16+ on the BigBend platform (FLEX-8000, Aurora, ML-9600/MLS-9601, CL-9300/CLS-9301), `maxSources` = 10 | absent | absent | `RadioModel::requestNtpSource`, `RadioModel::replaceNtpSource`, `RadioModel::syncNtpSources` (the once-per-session `sub ntp_sources all`), `NtpSourcesPage::unavailableReason` (Radio Setup ▸ Time) | Optional record (#6953): the radio keeps its own NTP source list (`ntp_sources create|remove|enable|disable`, status `ntp_sources id=…`). Unavailable = the Time page stays, dimmed with the reason |
+| `ntpSourceControl` | engaged on firmware 4.3.16+ on every known model, FLEX-6000 included (FlexLib gates them on no platform; a FLEX-6300 capture is in #7127), `maxSources` = 10 | absent | absent | `RadioModel::requestNtpSource`, `RadioModel::replaceNtpSource`, `RadioModel::syncNtpSources` (the once-per-session `sub ntp_sources all`), `NtpSourcesPage::unavailableReason` (Radio Setup ▸ Time) | Optional record (#6953): the radio keeps its own NTP source list (`ntp_sources create|remove|enable|disable`, status `ntp_sources id=…`). Unavailable = the Time page stays, dimmed with the reason |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `alwaysUseClientSideSpots` | ❌ | ✅ | ❌ | `MainWindow_Spots.cpp`, `MainWindow_Wiring.cpp` through `SpotCommandPolicy` | Forces SpotHub and manual spots into the existing passive-local `SpotModel` instead of emitting Flex `spot add` commands. Icom: ✅ because CI-V has no compatible spot service. HL2: ✅ because it has no command plane — `RadioModel::sendCmd` drops `spot add`, so with ❌ no DX-cluster, RBN, WSJT-X, POTA or manual spot was ever drawn (N1MM and EiBi markers were always client-side). Flex and Sim remain under the existing operator Passive toggle. ANAN/RTL inherit the `= false` default and have no command plane either. |
 | `hasGpsLocation` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi`, `RadioModel::hasGpsHardware`, GPS dashboard | Family/model can provide coordinates. Flex combines this with per-unit GPSDO/GNSS presence; IC-705 is ✅ from verified `23 00` |

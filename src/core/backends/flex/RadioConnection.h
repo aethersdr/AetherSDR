@@ -1,7 +1,6 @@
 #pragma once
 
 #include "CommandParser.h"
-#include "core/backends/FileTransferRequest.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/IndependentTxControl.h"
 #include "core/backends/SessionCommandGuard.h"
@@ -33,6 +32,7 @@ class RadioConnection : public QObject {
     Q_OBJECT
     friend class TxOperationIntegrationTestAccess;
     friend class RadioConnectionSessionTestAccess;
+    friend class SessionControlTestAccess;
     friend class TuneOutputControlTestAccess;
     friend class LanUdpKeepaliveTestAccess;
     friend class RadioAdministrationTestAccess;
@@ -45,7 +45,6 @@ public:
     ConnectionState state() const       { return m_state.load(); }
     quint32 clientHandle() const        { return m_handle; }
     bool isSyntheticDemo() const        { return m_syntheticDemo; }  // RFC #4288
-    quint64 commandSession() const { return m_commandSession.load(); }
     bool isConnected() const            { return m_state.load() == ConnectionState::Connected; }
     bool independentPttSupported() const;
     bool independentPttReady() const;
@@ -74,9 +73,13 @@ public slots:
     // Write a pre-sequenced command to the socket. Called from RadioModel
     // via QMetaObject::invokeMethod (auto-queued to worker thread). (#502)
     void writeCommand(quint32 seq, const QString& command);
-    void writeTransferCommand(quint32 seq, const QString& command,
-                              const FileTransferGuard& guard, quint64 session);
     quint64 commandSessionGeneration() const { return m_sessionGeneration.load(); }
+    // The one admission rule for session and administration writes: the
+    // caller's session is current and this transport is the one it opened.
+    bool sessionWriteAdmitted(quint64 generation, const SessionCommandGuard& guard) const
+    { return guard.current() && generation == m_sessionGeneration && isConnected(); }
+    bool writeSessionCommand(quint32 seq, const QString& command,
+                             quint64 generation, const SessionCommandGuard& guard);
     bool writeAdministrationCommand(quint32 seq, const QString& command,
         quint64 generation, const SessionCommandGuard& guard);
     void writeIndependentPtt(quint32 seq, const TxCoordinator::Command& command);
@@ -150,10 +153,10 @@ private:
     QByteArray   m_readBuffer;
     // Bumped by resetSessionState() at every session edge. Deferred work
     // captures it so a timer armed in one session cannot fire into the next
-    // (the synthetic-demo handshake). Connection-thread only, like the
-    // buffer above. (#5653 review)
+    // (the synthetic-demo handshake). Only the connection thread mutates it;
+    // the model thread reads it for admission and captures it to fence queued
+    // commands.
     std::atomic<quint64> m_sessionGeneration{0};
-    std::atomic<quint64> m_commandSession{0};
     QTimer*      m_heartbeat{nullptr};
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};

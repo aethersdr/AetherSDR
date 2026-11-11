@@ -273,9 +273,23 @@ def print_mapping(m: dict[str, Any]) -> None:
     print(f"first-time: {', '.join('@' + x for x in s['first_time']) or 'none'}")
     if s["excluded"]:
         print(f"excluded by hand: {', '.join(s['excluded'])}")
-    print("intro sentence: "
-          f"{s['units']} merged changes from {s['human_contributors']} human contributors, AetherClaude and "
-          f"{_word(s['dependabot'])} Dependabot update{'s' if s['dependabot'] != 1 else ''} within that total.")
+    print("intro sentence: " + intro_sentence(s))
+
+
+def intro_sentence(s: dict) -> str:
+    """The CHANGELOG intro's count sentence, naming each bot only when the
+    range has its changes (v26.10.4 had only Dependabot, v26.11.1 neither)."""
+    head = f"{s['units']} merged changes from {s['human_contributors']} human contributors"
+    agent = sum(v for k, v in s["bot_units"].items() if k.startswith("aethersdr-agent"))
+    dep = s["dependabot"]
+    updates = f"{_word(dep)} Dependabot update{'s' if dep != 1 else ''}"
+    if agent and dep:
+        return f"{head}, AetherClaude and {updates} within that total."
+    if agent:
+        return f"{head} and AetherClaude within that total."
+    if dep:
+        return f"{head} and {updates} within that total."
+    return f"{head}."
 
 
 def _word(n: int) -> str:
