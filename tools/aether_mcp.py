@@ -435,8 +435,11 @@ TOOLS = [
             "proof build owned by this MCP server. Launch accepts an absolute "
             "AetherSDR worktree and runs only its canonical build artifact, "
             "handing the existing AETHER_MCP_TOKEN to the child in memory. It "
-            "uses a unique explicit socket/label, disables radio autoconnect, "
-            "pins TX automation off, and succeeds only after authenticated "
+            "uses a unique explicit socket/label, preserves the selected saved "
+            "profile (including AETHER_SETTINGS_DIR), and honors "
+            "AutoConnectToLastRadio. Launch can connect the saved radio; use "
+            "only a profile and connection authorized for the task. It pins "
+            "TX automation off and succeeds only after authenticated "
             "whoami matches the child PID and identity. No token is returned, "
             "logged, passed on the command line, or written to settings."),
         "inputSchema": {"type": "object", "properties": {
