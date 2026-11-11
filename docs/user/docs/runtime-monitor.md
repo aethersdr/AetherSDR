@@ -12,6 +12,8 @@ The same group at the bottom of the **Tools** menu has two related diagnostic wi
 
 ## Using the Runtime Monitor
 
+The Runtime Monitor is a window of its own that can stay open on another monitor while you operate, and it reopens at the size and place you left it. Drag any empty part of it to move it, or an edge to resize it. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux); choosing **Runtime Monitor...** while it is open brings it to the front. It samples only while it is open.
+
 A **Timeframe** selector in the window header (1 minute, 5 minutes (default), 15 minutes or 1 hour) applies to every chart. It is hidden on the Threads and Logs tabs, which have no adjustable time axis.
 
 ### Overview

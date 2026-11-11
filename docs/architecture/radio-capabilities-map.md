@@ -73,6 +73,8 @@ radio copy.
 |---|---|---|---|---|---|---|---|
 | `radioSetupControl` | All implemented `RadioSetupRequest` fields, including physical outputs | absent | absent | absent | Lineout gain/mute | absent | `RadioModel::requestRadioSetup` admission; Radio Setup timing and maximum-power availability; existing output setters and controller requests |
 | `spotControl` | Add, remove, clear, trigger | absent | absent | absent | absent | absent | `RadioModel::requestSpot` and its session/epoch-fenced queue; local/passive, TCI and memory routes remain separate |
+| `waveformControl` | Restart, uninstall, remove container | absent | absent | absent | absent | absent | Typed waveform intent; backend encodes the command; completion is not a status observation |
+| `fileTransferControl` | Firmware, legacy waveform, profiles, DVK; Docker on WFP-capable hardware | absent | absent | absent | absent | absent | `RadioModel::beginFileTransfer` reserves the original session and peer; typed backend negotiation; queued-write cancellation and deadlines |
 | `cwReceiveControl` | Once, Start, Stop | absent | absent | absent | absent | absent | `RadioModel::requestCwAutoTune`; owned, current slice and SmartSDR+ eligibility for starts; existing-loop Stop remains available for cleanup |
 | `panControl` | Band zoom, segment zoom, receive antenna | absent | absent | absent | absent | absent | `RadioModel::requestPanControl`, exact pan identity and the existing zoom availability gate |
 | `slicePresetControl` | Step, repeater offset, tone mode/value | absent | absent | absent | absent | absent | `RadioModel::requestSlicePreset`; absent fields remain unchanged. Client-owned step still applies locally where no command plane exists |
@@ -200,6 +202,27 @@ refused, and with no radio EQ record the graphic EQ stays host-side
 | Demo | absent | absent |
 
 `audio_control_routing_test` pins the Flex encoder and the native refusals.
+
+### Session bootstrap and client management requests
+
+`sessionControl` lists the `SessionControlField`s a backend can send through
+`RadioModel::requestSessionControl()`: GUI registration, subscriptions, startup
+radio information and slice enumeration, UDP-port registration, keepalive/ping
+and targeted client disconnection. Requests are tied to the session and
+transport generation that issued them; an undeclared field is refused. It does
+not widen the daemon capability catalogue.
+
+| Backend | `sessionControl` |
+|---|---|
+| Flex | every field |
+| HL2 | absent |
+| ANAN | absent |
+| RTL | absent |
+| Icom | absent |
+| Demo | absent |
+
+`session_control_test` pins the Flex encoder, the fences and the
+unsupported-backend refusal.
 
 ### Native receive audio export
 
@@ -406,7 +429,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` (Tools ▸ Waveforms… + AetherModem D-STAR tab), `MainWindow::scheduleDigitalVoiceAutoStart` | ThumbDV helper needs a SmartSDR D-STAR waveform. Flex sets true; Icom/HL2/Sim set false; ANAN/RTL inherit the `= false` default. Disconnected restores the tab. Autostart of `aether-dv-waveform` is gated on the same flag so a non-Flex connect cannot launch a helper with no Stop surface |
 | `waveformEnvControl` | engaged on firmware 4.3.16+ on a platform with a Waveform Processor (not Microburst/DeepEddy/Unknown) | absent | absent | `RadioModel::requestWaveformEnv`, `RadioModel::applyWaveformEnvironment`, `waveformEnvironmentUnavailableReason` (Waveforms ▸ Environment…, `WaveformEnvironmentDialog`) | Optional record (#6947): the radio keeps a per-container environment (`waveform env K=V` / `waveform env clear` / `waveform recreate`, status `env=` + `waveform restarted`). Requires `hasWaveforms`. Unavailable = the action is dimmed with the reason |
-| `ntpSourceControl` | engaged on firmware 4.3.16+ on the BigBend platform (FLEX-8000, Aurora, ML-9600/MLS-9601, CL-9300/CLS-9301), `maxSources` = 10 | absent | absent | `RadioModel::requestNtpSource`, `RadioModel::replaceNtpSource`, `RadioModel::syncNtpSources` (the once-per-session `sub ntp_sources all`), `NtpSourcesPage::unavailableReason` (Radio Setup ▸ Time) | Optional record (#6953): the radio keeps its own NTP source list (`ntp_sources create|remove|enable|disable`, status `ntp_sources id=…`). Unavailable = the Time page stays, dimmed with the reason |
+| `ntpSourceControl` | engaged on firmware 4.3.16+ on every known model, FLEX-6000 included (FlexLib gates them on no platform; a FLEX-6300 capture is in #7127), `maxSources` = 10 | absent | absent | `RadioModel::requestNtpSource`, `RadioModel::replaceNtpSource`, `RadioModel::syncNtpSources` (the once-per-session `sub ntp_sources all`), `NtpSourcesPage::unavailableReason` (Radio Setup ▸ Time) | Optional record (#6953): the radio keeps its own NTP source list (`ntp_sources create|remove|enable|disable`, status `ntp_sources id=…`). Unavailable = the Time page stays, dimmed with the reason |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `alwaysUseClientSideSpots` | ❌ | ✅ | ❌ | `MainWindow_Spots.cpp`, `MainWindow_Wiring.cpp` through `SpotCommandPolicy` | Forces SpotHub and manual spots into the existing passive-local `SpotModel` instead of emitting Flex `spot add` commands. Icom: ✅ because CI-V has no compatible spot service. HL2: ✅ because it has no command plane — `RadioModel::sendCmd` drops `spot add`, so with ❌ no DX-cluster, RBN, WSJT-X, POTA or manual spot was ever drawn (N1MM and EiBi markers were always client-side). Flex and Sim remain under the existing operator Passive toggle. ANAN/RTL inherit the `= false` default and have no command plane either. |
 | `hasGpsLocation` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi`, `RadioModel::hasGpsHardware`, GPS dashboard | Family/model can provide coordinates. Flex combines this with per-unit GPSDO/GNSS presence; IC-705 is ✅ from verified `23 00` |

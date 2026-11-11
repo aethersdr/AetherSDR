@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include "FlexCwControls.h"
 #include <optional>
 
 #include <QMap>
@@ -67,7 +68,19 @@ public:
     void setAnsweredCommandSink(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
+    using SessionCommandSink = std::function<bool(const QString&, const SessionCommandGuard&,
+                                                   const RadioControlCompletion&)>;
+    void setSessionCommandSink(SessionCommandSink sink) { m_sessionSink = std::move(sink); }
+    ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
+        const SessionCommandGuard& guard, const SessionControlCompletion& completion = {}) override;
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
+    using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&,
+                                                    const RadioControlCompletion&)>;
+    void setTransferCommandSink(TransferCommandSink sink) { m_transferSink = std::move(sink); }
+    ReceiveDispatch requestWaveform(const WaveformRequest&, const RadioControlCompletion&,
+        const FileTransferGuard&, const RadioControlFence&) override;
+    ReceiveDispatch requestFileTransfer(const FileTransferRequest&, const FileTransferCompletion&,
+        const FileTransferGuard&, const RadioControlFence&) override;
     using AdministrationCommandSink = std::function<bool(const QString&,
         const RadioControlCompletion&, const RadioControlFence&, const std::function<void()>&)>;
     void setAdministrationCommandSink(AdministrationCommandSink sink)
@@ -78,10 +91,17 @@ public:
         const RadioControlCompletion& completion, const RadioControlFence& current) override;
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
+    void setCwControlSink(FlexCwControls::ControlSink sink);
+    ReceiveDispatch requestCwControl(const CwControlRequest& request,
+        const TxCoordinator::Command& command) override;
+    void prepareCwTransport(quint32 handle, const RadioControlFence& current) override;
+    void retireCwTransport() override;
+    ReceiveDispatch requestLocalPtt(const RadioControlCompletion& completion,
+                                    const RadioControlFence& current) override;
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
-    void setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink);
+    void setTxCommandSink(std::function<bool(const QString&, const TxCoordinator::Command&)> sink);
     // Queue admission and radio reply are separate. Replies run on the owner
     // thread; current is an immutable worker-safe fence at the terminal writer.
     using CwxCommandSink = std::function<bool(const QString&, const TxCoordinator::Command&,
@@ -257,8 +277,6 @@ public:
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
     // residual). Present-only, ok-guarded numeric parses.
     void decodeRadioStatus(const QMap<QString, QString>& kvs);
-    // Full info reply: missing/invalid region clears the observation.
-    void decodeRadioInfoMetadata(const QString& body);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
     void decodeAtuStatus(const QMap<QString, QString>& kvs);
     void decodeApdStatus(const QMap<QString, QString>& kvs);
@@ -315,11 +333,13 @@ private:
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
     void sendSliceTune(int sliceId, const SliceTuneRequest& request);
 
+    std::unique_ptr<FlexCwControls> m_cwControls;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<bool(const QString&, CommandReply)> m_sink;
+    TransferCommandSink m_transferSink;
     AudioCommandSink m_audioSink;
     std::function<bool(const QString&, CommandReply, const DaxTxRequestGuard&)> m_daxTxSink;
     struct DaxTxStreamState {
@@ -333,6 +353,7 @@ private:
     quint64 m_daxTxIncarnation{0};
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
+    SessionCommandSink m_sessionSink;
     AdministrationCommandSink m_administrationSink;
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};
@@ -340,7 +361,7 @@ private:
     quint64 m_tuneOutputSession = 0;
     QMap<int, quint64> m_tuneOutputRequests;
     QSet<int> m_tuneOutputKnownBands;
-    std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
+    std::function<bool(const QString&, const TxCoordinator::Command&)> m_txSink;
     CwxCommandSink m_cwxSink;
     CwxConfigurationSink m_cwxConfigurationSink;
     std::function<void(const QString&)> m_sliceSink;

@@ -1,4 +1,5 @@
 #include "core/backends/flex/FlexBackend.h"
+#include "FlexSessionControls.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include "core/AppActivity.h"
 
@@ -107,6 +108,7 @@ FlexBackend::FlexBackend(QObject* parent)
     m_connection->moveToThread(m_connThread);
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
+    m_cwControls = std::make_unique<FlexCwControls>(m_panStream);
 
     // Observe wire lifecycle and re-emit as the interface's own signals. Queued
     // (auto) connections: the connection lives on its worker thread.
@@ -126,6 +128,7 @@ FlexBackend::FlexBackend(QObject* parent)
 
 FlexBackend::~FlexBackend()
 {
+    m_cwControls.reset();
     // Sever our own lifecycle observation of the connection FIRST — as the old
     // ~RadioModel's earlier m_backend.reset() effectively did (the backend was
     // destroyed, auto-disconnecting these links, before the wire teardown ran).
@@ -169,6 +172,26 @@ FlexBackend::~FlexBackend()
         m_networkThread->wait(3000);
     }
     m_panStream = nullptr;
+}
+
+void FlexBackend::setCwControlSink(FlexCwControls::ControlSink sink)
+{
+    m_cwControls->setControlSink(std::move(sink));
+}
+ReceiveDispatch FlexBackend::requestCwControl(const CwControlRequest& request,
+                                             const TxCoordinator::Command& command)
+{
+    return m_cwControls->request(request, command);
+}
+void FlexBackend::prepareCwTransport(quint32 handle, const RadioControlFence& current)
+{
+    m_cwControls->prepare(handle, current);
+}
+void FlexBackend::retireCwTransport() { m_cwControls->retire(); }
+ReceiveDispatch FlexBackend::requestLocalPtt(const RadioControlCompletion& completion,
+                                            const RadioControlFence& current)
+{
+    return m_cwControls->requestLocalPtt(completion, current);
 }
 
 void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
@@ -520,9 +543,10 @@ void FlexBackend::setSetupCommandSink(
     m_setupSink = std::move(sink);
 }
 
-void FlexBackend::setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink)
+void FlexBackend::setTxCommandSink(std::function<bool(const QString&, const TxCoordinator::Command&)> sink)
 {
     m_txSink = std::move(sink);
+    m_cwControls->setTxSink(m_txSink);
 }
 
 void FlexBackend::setSliceCommandSink(std::function<void(const QString&)> sink)
@@ -894,6 +918,15 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
     caps.hasRemoteOnControl = true;
     caps.canUpgradeFirmware = true;
+    caps.waveformControl = WaveformControl{{WaveformAction::Uninstall,
+        WaveformAction::RemoveContainer, WaveformAction::Restart}};
+    caps.fileTransferControl = FileTransferControl{{FileTransferPurpose::Firmware,
+        FileTransferPurpose::LegacyWaveform, FileTransferPurpose::ProfileMetadata,
+        FileTransferPurpose::ProfileImport, FileTransferPurpose::ProfileExport,
+        FileTransferPurpose::DvkUpload, FileTransferPurpose::DvkDownload}};
+    if (mc.platform != RadioPlatform::Microburst && mc.platform != RadioPlatform::DeepEddy) {
+        caps.fileTransferControl->purposes.insert(FileTransferPurpose::DockerWaveform);
+    }
     caps.hasSmartLink = true;
     caps.hasLicenseInfo = true;
     caps.hasClientNetworkConfig = true;
@@ -905,6 +938,11 @@ RadioCapabilities FlexBackend::capabilities() const
         setup.fields.insert(static_cast<RadioSetupRequest::Field>(field));
     }
     caps.radioSetupControl = setup;
+    SessionControl session;
+    for (int field = 0; field < static_cast<int>(SessionControlField::Count); ++field) {
+        session.fields.insert(static_cast<SessionControlField>(field));
+    }
+    caps.sessionControl = session;
     caps.cwReceiveControl = CwReceiveControl{{CwAutoTuneAction::Once,
         CwAutoTuneAction::Start, CwAutoTuneAction::Stop}};
     caps.spotControl = SpotControl{{SpotAction::Add, SpotAction::Remove,
@@ -1011,10 +1049,12 @@ RadioCapabilities FlexBackend::capabilities() const
         && !isKnownNonWfpPlatform(mc.platform)) {
         caps.waveformEnvControl = RadioCapabilities::WaveformEnvControl{};
     }
-    // The radio's own NTP time sources (FlexLib 4.3.16 NtpSource.cs; SMART-10565
-    // names FLEX-8000/Aurora). FlexLib subscribes on every radio, so the gate is
-    // the platform those share: BigBend, ML-9600 and CL-9300 included.
-    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform == RadioPlatform::BigBend) {
+    // The radio's own NTP time sources (FlexLib 4.3.16.42034 NtpSource.cs). FlexLib
+    // gates them on no platform: Radio.cs:2348 sends `sub ntp_sources all` on
+    // every radio and RequestNtpSource (Radio.cs:14535) validates only its
+    // inputs. A FLEX-6300 on 4.3.16.42034 reports the same status as the 8600
+    // (#7127), so the gate is the firmware, for any model we know.
+    if (firmwareAtLeast(QVersionNumber(4, 3, 16)) && mc.platform != RadioPlatform::Unknown) {
         caps.ntpSourceControl = RadioCapabilities::NtpSourceControl{NtpSourceRules::kMaxSources};
     }
     caps.hasMultiClientSessions = true;  // multiFLEX
@@ -2164,32 +2204,6 @@ void FlexBackend::decodeApdSamplerStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains(QStringLiteral("selected_sampler")))
         d.apdSamplerSelected = kvs.value(QStringLiteral("selected_sampler")).toUpper();
     emit transmitChanged(d);
-}
-
-void FlexBackend::decodeRadioInfoMetadata(const QString& body)
-{
-    // FlexLib 4.3.16 Radio.UpdateInfo: this belongs to the comma-separated
-    // info reply, not radio status. A reply is a snapshot, unlike slice deltas.
-    RadioDelta delta;
-    delta.iaruRegion = 0;
-    for (QStringView field : QStringView(body).split(QLatin1Char(','))) {
-        const qsizetype eq = field.indexOf(QLatin1Char('='));
-        if (eq < 0 || field.left(eq).trimmed() != QLatin1String("iaru_region")) {
-            continue;
-        }
-        QStringView value = field.mid(eq + 1).trimmed();
-        delta.iaruRegion = 0;
-        if (value.size() > 16) { continue; }
-        const auto wrapper = [](QChar ch) {
-            return ch == QLatin1Char('\\') || ch == QLatin1Char('"');
-        };
-        while (!value.isEmpty() && wrapper(value.front())) { value = value.mid(1); }
-        while (!value.isEmpty() && wrapper(value.back())) { value = value.left(value.size() - 1); }
-        bool ok = false;
-        const int region = value.size() <= 8 ? value.toInt(&ok) : 0;
-        delta.iaruRegion = ok && region >= 1 && region <= 3 ? region : 0;
-    }
-    emit radioChanged(delta);
 }
 
 void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)

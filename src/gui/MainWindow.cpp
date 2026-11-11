@@ -4736,8 +4736,10 @@ void MainWindow::showNetworkDiagnosticsDialog()
 
 void MainWindow::showSystemInfoDialog()
 {
-    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get(), m_cpuHistory.get(),
-                          m_uiTickLagMeter.get());
+    showOrRaiseCanon(m_systemInfoDialog, [this] {
+        return new SystemInfoDialog(m_memoryHistory.get(), m_cpuHistory.get(),
+                                    m_uiTickLagMeter.get(), this);
+    });
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)
@@ -5624,8 +5626,10 @@ void MainWindow::buildUI()
     // code is already in reach.
     auto& dvkModel = m_radioModel.dvkModel();
     auto* dvkTransfer = new DvkWavTransfer(&m_radioModel, this);
-    connect(&dvkModel, &DvkModel::wavUploadRequested, dvkTransfer, &DvkWavTransfer::upload);
-    connect(&dvkModel, &DvkModel::wavDownloadRequested, dvkTransfer, &DvkWavTransfer::download);
+    connect(&dvkModel, &DvkModel::wavUploadRequested, dvkTransfer,
+            [dvkTransfer](int slot, const QString& path) { dvkTransfer->upload(slot, path); });
+    connect(&dvkModel, &DvkModel::wavDownloadRequested, dvkTransfer,
+            [dvkTransfer](int slot, const QString& path) { dvkTransfer->download(slot, path); });
     connect(dvkTransfer, &DvkWavTransfer::statusChanged, &dvkModel, &VoiceKeyer::transferStatusChanged);
     connect(dvkTransfer, &DvkWavTransfer::finished, &dvkModel, &VoiceKeyer::transferFinished);
     // isBusy(), not isTransferring(): the radio's file server answers 50000053

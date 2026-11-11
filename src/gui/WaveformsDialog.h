@@ -21,6 +21,7 @@ class QVBoxLayout;
 
 namespace AetherSDR {
 
+struct RadioControlSession;
 class RadioModel;
 class WaveformEnvironmentDialog;
 class WaveformInstaller;
@@ -74,7 +75,7 @@ private:
     // `quiet` (the radio health tools): no progress window and no result
     // pop-up; the health bar reports the outcome instead.
     void installWaveformPath(bool docker, const QString& path, RadioModel* model,
-                             bool quiet = false);
+                             const RadioControlSession& session, bool quiet = false);
     // Downloads, verifies and installs one remote-access package: the
     // container, or the legacy waveform for a radio without a Waveform
     // Processor.

@@ -278,6 +278,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.family = familyName();
     caps.cwReceiveControl = std::nullopt;
     caps.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry}, {PanGeometryComponent::Center}};
+    caps.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     caps.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Answered,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
     // No Flex stream plane: receive audio is native and graphic EQ is host-side.

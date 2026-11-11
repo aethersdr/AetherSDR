@@ -17,6 +17,7 @@
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
+#include "core/backends/SessionCommandGuard.h"
 #include "core/backends/OfflineHealthSource.h" // health that survives disconnection
 
 #include <QHostAddress>
@@ -205,11 +206,11 @@ public:
     // and hand the operator exactly the ambiguous retry it exists to forbid.
     // It lives here because the connection is what it is really keyed to: only
     // a genuine disconnect→reconnect clears it (see setConnected()).
-    bool firmwareRetryBlocked() const { return m_firmwareRetryBlocked; }
+    bool firmwareRetryBlocked() const;
     void blockFirmwareRetryUntilReconnect() { m_firmwareRetryBlocked = true; }
     // Only for an outcome the radio itself settled (`file update failed=`),
     // which leaves nothing pending to misattribute to the next attempt.
-    void clearFirmwareRetryBlock() { m_firmwareRetryBlocked = false; }
+    void clearFirmwareRetryBlock();
     // "idle" / "connecting" / "connected" — the bridge's third value, so a
     // caller can tell a connect that is working from one that is not happening
     // at all. `isConnected()` is unchanged (#5413 item 3). Derived from
@@ -1120,6 +1121,14 @@ public:
                                       QObject* replyContext = nullptr,
                                       const RadioSetupCompletion& completion = {},
                                       std::optional<RadioControlSession> expectedSession = {});
+    FileTransferHandle beginFileTransfer(FileTransferPurpose purpose, QObject* owner,
+        const RadioControlSession& expectedSession, int timeoutMs);
+    bool fileTransferCurrent(const FileTransferHandle& operation) const;
+    void finishFileTransfer(const FileTransferHandle& operation, int settleMs = 0);
+    ReceiveDispatch requestFileTransfer(const FileTransferHandle& operation,
+        const FileTransferRequest& request, const FileTransferCompletion& completion);
+    ReceiveDispatch requestWaveform(const WaveformRequest& request, QObject* owner,
+        const RadioControlCompletion& completion);
     RadioControlSession controlSession() const;
     bool controlSessionCurrent(const RadioControlSession& session) const;
     ReceiveDispatch requestSpot(const SpotRequest& request, PanadapterModel* pan = nullptr,
@@ -1325,10 +1334,6 @@ signals:
     // generator. Not emitted for the iambic keyer's sendCwKeyEdge (#4976) or
     // for CWX, which drive the sidetone gate themselves.
     void cwKeyDownChanged(bool down);
-    // Non-Flex diagnostic edge emitted only after transmit preflight, directly
-    // before IRadioBackend::setCwKeying(). Lets tests and diagnostics prove a
-    // refused key-down did not cross the radio seam.
-    void backendCwKeyingForwarded(bool down);
     void sliceAdded(SliceModel* slice);
     void sliceRemoved(int sliceId);
     // Emitted immediately before "sub slice all" is dispatched during connect
@@ -1668,10 +1673,6 @@ public:
 
     // True only when dispatched; the callback reports the later radio reply.
     bool sendCmdPublic(const QString& cmd, std::function<void(int code, const QString& body)> cb);
-    void requestFileUploadPort(qint64 size, const QString& uploadKind,
-                               std::function<void(int code, const QString& body)> cb);
-    void requestFileDownloadPort(const QString& downloadKind,
-                                 std::function<void(int code, const QString& body)> cb);
     void refreshProfiles();
     bool isProfileTransferBlocked() const;
     bool profileDatabaseImporting() const { return m_profileDatabaseImporting; }
@@ -1860,7 +1861,24 @@ private:
     using ResponseCallback = RadioConnection::ResponseCallback;
     void requestRadioInfo();
     quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr,
-                    std::function<bool()> dispatchAllowed = {});
+                    std::optional<SessionCommandGuard> guard = {},
+                    std::function<bool()> dispatchAllowed = {},
+                    bool expireReply = false);
+    ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
+                                         const SessionControlCompletion& completion = {});
+    void requestStartupSetup(const RadioSetupRequest& request);
+    void resetSessionControls();
+    bool sessionTransportCurrent() const;
+    RadioControlFence sessionControlFence() const;
+    RadioControlFence registrationRejectionFence() const;
+    std::function<void()> sessionContinuation(std::function<void()> action) const;
+    SessionCommandGuard m_sessionCommands;
+    std::optional<SessionControl> m_sessionControl;
+    quint64 m_sessionControlGeneration{~quint64{0}};
+    QPointer<QObject> m_sessionWire;
+    quint64 m_sessionWireGeneration{0};
+    quint64 m_sessionRequestId{0};
+    QMap<quint64, std::function<void()>> m_sessionCancellations;
     quint32 clientHandle() const;
     PanadapterModel* ensureOwnedPanadapter(const QString& panId);
     void updateStreamFilters();
@@ -2096,6 +2114,7 @@ private:
     friend class RerouteDeadControlsTestAccess;
     friend class VoiceKeyerTxRouteTestAccess;
     friend class RadioSetupControlTestAccess;
+    friend class SessionControlTestAccess;
     friend class RadioAdministrationTestAccess;
     struct PendingAdministrationWrite {
         RadioControlSession session{};
@@ -2208,6 +2227,11 @@ private:
     using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
     using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
     SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {});
+    using TransferCommandWriter = std::function<bool(const QString&, const FileTransferGuard&, ResponseCallback)>;
+    using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&, const RadioControlCompletion&)>;
+    TransferCommandSink transferCommandSink(const TransferCommandWriter& writer = {});
+    bool fileTransferEligible(FileTransferPurpose purpose, bool holdingReservation) const;
+    FileTransferHandle m_fileTransferOperation;
     using AudioCommandSink = std::function<bool(const QString&, ResponseCallback, const AudioControlGuard&)>;
     AudioCommandSink audioCommandSink();
     // Translate a MODEL pan id to the backend's own id for a command going down
@@ -2284,7 +2308,7 @@ private:
     void acknowledgeIndependentTxStop(const TxStopEvidence& evidence);
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
-    void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
+    bool sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
     ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
@@ -2335,17 +2359,6 @@ private:
     void syncNtpSources(bool connected, const RadioCapabilities& caps);
     DStarModel          m_dstarModel{nullptr, true};
 
-    // NetCW stream — VITA-49 UDP delivery for low-latency CW keying
-    quint32  m_netCwStreamId{0};
-    int      m_netCwIndex{1};           // sequential dedup index
-    QElapsedTimer m_netCwClock;          // 16-bit relative ms clock for time=0x....
-    qint64   m_netCwLastSendMs{-1};
-    bool sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
-                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
-                          std::chrono::steady_clock::time_point scheduledAt = {},
-                          std::function<void()> delivered = {},
-                          const TxCoordinator::Operation* captured = nullptr);
-    QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;
     QString     m_model;
@@ -2613,15 +2626,15 @@ private:
     // The refusal both of the above perform: raise the interlock notification
     // and roll back TransmitModel's optimistic transmit state. Always false.
     bool refuseKeyWithInterlock(const QString& message, const QString& key);
-    // Apply the same capability + receive-only-pan preflight to a non-Flex CW
-    // carrier edge before it crosses the backend seam. Key-up always passes so
-    // an inhibit arriving mid-element can never strand RF on.
-    bool forwardNonFlexCwKeying(bool down, const TxCoordinator::Operation& operation,
-                                const TxCoordinator::Completion& completion);
     bool sendCwInput(bool down, bool ptt, bool notifySidetone,
                      const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                      std::chrono::steady_clock::time_point scheduledAt,
                      const TxCoordinator::Request* request = nullptr);
+    bool dispatchCwInput(bool down, bool ptt, bool notifySidetone,
+                         const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
+                         std::chrono::steady_clock::time_point scheduledAt,
+                         const TxCoordinator::Request* request);
+    bool m_cwPracticeKeyDown{false};
     quint64 m_cwCommandEpoch{0};
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,

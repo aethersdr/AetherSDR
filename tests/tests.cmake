@@ -745,6 +745,15 @@ target_include_directories(model_control_routing_test PRIVATE src tests)
 target_link_libraries(model_control_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME model_control_routing_test COMMAND model_control_routing_test)
 
+# Production encoders, model sequencing and in-memory transport injection;
+# no listener, bind, connect or synthetic firmware peer.
+add_executable(session_control_test tests/session_control_test.cpp)
+target_include_directories(session_control_test PRIVATE src tests)
+target_link_libraries(session_control_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(session_control_test PROPERTIES AUTOMOC ON)
+add_test(NAME session_control_test COMMAND session_control_test)
+set_tests_properties(session_control_test PROPERTIES TIMEOUT 45)
+
 add_executable(radio_setup_control_routing_test tests/radio_setup_control_routing_test.cpp)
 add_executable(radio_administration_control_test tests/radio_administration_control_test.cpp)
 target_include_directories(radio_administration_control_test PRIVATE src tests)
@@ -1959,6 +1968,13 @@ add_executable(cw_mode_gate_test tests/cw_mode_gate_test.cpp)
 target_include_directories(cw_mode_gate_test PRIVATE src)
 target_link_libraries(cw_mode_gate_test PRIVATE Qt6::Core)
 add_test(NAME cw_mode_gate_test COMMAND cw_mode_gate_test)
+
+# Socket-free: CW practice sidetone through the production RadioModel key path
+# with no transmit-capable backend.
+add_executable(cw_practice_sidetone_test tests/cw_practice_sidetone_test.cpp)
+target_include_directories(cw_practice_sidetone_test PRIVATE src tests)
+target_link_libraries(cw_practice_sidetone_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME cw_practice_sidetone_test COMMAND cw_practice_sidetone_test)
 
 # Socket-free production parser/seam/model and bridge dispatcher regression.
 add_executable(flex_readonly_metadata_test tests/flex_readonly_metadata_test.cpp)
@@ -4033,7 +4049,7 @@ add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
 )
 target_include_directories(profile_transfer_test PRIVATE src)
-target_link_libraries(profile_transfer_test PRIVATE Qt6::Core)
+target_link_libraries(profile_transfer_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME profile_transfer_test COMMAND profile_transfer_test)
 
 # #5612 — aborting an in-progress upload during cleanup or socket replacement
@@ -5352,7 +5368,7 @@ add_executable(flex_waveform_model_test
     src/models/FlexWaveformModel.cpp
 )
 target_include_directories(flex_waveform_model_test PRIVATE src)
-target_link_libraries(flex_waveform_model_test PRIVATE Qt6::Core Qt6::Test)
+target_link_libraries(flex_waveform_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME flex_waveform_model_test COMMAND flex_waveform_model_test)
 
 # Docker-waveform install gate policy (#4210) — header-only, pure logic.
@@ -6619,6 +6635,16 @@ target_compile_definitions(automation_tracedebug_bins_test PRIVATE
 target_link_libraries(automation_tracedebug_bins_test PRIVATE aethercore Qt6::Widgets)
 add_test(NAME automation_tracedebug_bins_test COMMAND automation_tracedebug_bins_test)
 set_tests_properties(automation_tracedebug_bins_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# `get tracedebug <pan> bins` across Receive Sync on/off, pan and zoom (#6720):
+# real ReceivePresentationSync, queue, FrameCapture and bridge; no socket.
+add_executable(tracedebug_bins_held_frame_scenario_test
+    tests/tracedebug_bins_held_frame_scenario_test.cpp
+)
+target_include_directories(tracedebug_bins_held_frame_scenario_test PRIVATE src)
+target_link_libraries(tracedebug_bins_held_frame_scenario_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME tracedebug_bins_held_frame_scenario_test COMMAND tracedebug_bins_held_frame_scenario_test)
+set_tests_properties(tracedebug_bins_held_frame_scenario_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(automation_device_diagnostics_test
     tests/automation_device_diagnostics_test.cpp
@@ -8666,6 +8692,12 @@ target_include_directories(tune_inhibit_restore_test PRIVATE src tests)
 target_link_libraries(tune_inhibit_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tune_inhibit_restore_test COMMAND tune_inhibit_restore_test)
 
+# Socket-free production NetCW encoder, scheduler, session and local PTT lifecycle.
+add_executable(flex_cw_controls_test tests/flex_cw_controls_test.cpp)
+target_include_directories(flex_cw_controls_test PRIVATE src tests)
+target_link_libraries(flex_cw_controls_test PRIVATE aethercore Qt6::Core)
+add_test(NAME flex_cw_controls_test COMMAND flex_cw_controls_test)
+
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
@@ -8733,9 +8765,10 @@ add_test(NAME transmit_model_apd_test COMMAND transmit_model_apd_test)
 add_executable(system_info_dialog_test
     tests/system_info_dialog_test.cpp
     src/gui/SystemInfoDialog.cpp
-    src/gui/PersistentDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
     src/core/SystemInfo.cpp
@@ -8746,9 +8779,10 @@ add_executable(system_info_dialog_test
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(system_info_dialog_test PRIVATE src tests)
-target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets)
+target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets Qt6::Test)
 if(WIN32)
     target_link_libraries(system_info_dialog_test PRIVATE shell32 ole32 uuid)
 endif()
@@ -9263,6 +9297,8 @@ add_executable(waveform_env_control_test
     tests/waveform_env_control_test.cpp
     src/gui/WaveformEnvironmentDialog.cpp
     src/gui/CanonWindow.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
 )
 target_include_directories(waveform_env_control_test PRIVATE src tests)
 target_link_libraries(waveform_env_control_test PRIVATE
@@ -9588,6 +9624,26 @@ add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
 target_include_directories(hl2_gain_restore_test PRIVATE src tests)
 target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
+# A receive-only HL2 (aetherd) builds no transmit chain on connect; the
+# transmit-capable backend still does. Same socket-free harness as above.
+add_executable(hl2_rx_only_tx_chain_test tests/hl2_rx_only_tx_chain_test.cpp)
+target_include_directories(hl2_rx_only_tx_chain_test PRIVATE src tests)
+target_link_libraries(hl2_rx_only_tx_chain_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rx_only_tx_chain_test COMMAND hl2_rx_only_tx_chain_test)
+# What an HL2 comes back with after a restart, through the operator's setters
+# and the production store/load: every offered mode with its passband, the last
+# band, per-band drive and LNA gain, a second receiver's own passband; and two
+# radios (by MAC) in one profile. Socket-free: connectRadio() runs, but
+# MetisClient::start() returns through a test stand-in before its bind, and the
+# link edge is injected; each session checks that no socket is held. Never keys.
+add_executable(hl2_persist_restart_test tests/hl2_persist_restart_test.cpp)
+target_include_directories(hl2_persist_restart_test PRIVATE src tests)
+target_link_libraries(hl2_persist_restart_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_persist_restart_test COMMAND hl2_persist_restart_test)
+add_executable(hl2_persist_two_radios_test tests/hl2_persist_two_radios_test.cpp)
+target_include_directories(hl2_persist_two_radios_test PRIVATE src tests)
+target_link_libraries(hl2_persist_two_radios_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_persist_two_radios_test COMMAND hl2_persist_two_radios_test)
 # Which automatic RF gain law a connect installs: applyRestoredState() and the
 # constructor must install the same one. Socket-free: link edges, telemetry and
 # bandscope blocks go in through MetisClient's own signals on a backend that
@@ -10793,6 +10849,7 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    session_control_test
     audio_control_routing_test
     dax_tx_backend_test
     dax_tx_ownership_test
@@ -10892,6 +10949,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_iq_rate_limits_test
     offline_health_registry_test
     tx_operation_integration_test
+    flex_cw_controls_test
     tune_inhibit_restore_test
     tx_audio_context_test
     backend_slice_lifecycle_test
@@ -10927,6 +10985,9 @@ set(AETHER_SETTINGS_CONSUMERS
     automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test
+    hl2_rx_only_tx_chain_test
+    hl2_persist_restart_test
+    hl2_persist_two_radios_test
     hl2_rit_xit_test
     hl2_tx_route_test
     independent_tx_antenna_test
@@ -11091,6 +11152,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_ping_build_identity_test
     automation_gauge_verb_test
     automation_tracedebug_bins_test
+    tracedebug_bins_held_frame_scenario_test
     automation_persist_diagnostics_test
     automation_server_gesture_test
     automation_device_diagnostics_test
@@ -11741,3 +11803,19 @@ if(HAVE_PIPEWIRE)
     target_link_libraries(pipewire_rx_bridge_test PRIVATE aethercore Qt6::Core)
     add_test(NAME pipewire_rx_bridge_test COMMAND pipewire_rx_bridge_test)
 endif()
+
+# M4 waveform/file-transfer admission, wire encoding and staged export validation.
+add_executable(file_transfer_control_test tests/file_transfer_control_test.cpp)
+target_include_directories(file_transfer_control_test PRIVATE src tests)
+target_link_libraries(file_transfer_control_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME file_transfer_control_test COMMAND file_transfer_control_test)
+add_executable(profile_export_validation_test tests/profile_export_validation_test.cpp)
+target_include_directories(profile_export_validation_test PRIVATE src)
+target_link_libraries(profile_export_validation_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME profile_export_validation_test COMMAND profile_export_validation_test)
+
+# Inert transport and synchronous callback injection; no sockets are opened.
+add_executable(transfer_lifecycle_test tests/transfer_lifecycle_test.cpp)
+target_include_directories(transfer_lifecycle_test PRIVATE src)
+target_link_libraries(transfer_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME transfer_lifecycle_test COMMAND transfer_lifecycle_test)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IndependentTxControl.h"
+#include "CwControlRequest.h"
 
 #include "core/RadioSettingsIdentity.h"
 #include "core/RadioSettingsScope.h"
@@ -177,6 +178,9 @@ public:
     // hear the radio's reply leaves it to RadioModel, which reports it as not
     // confirmed rather than assume the radio agreed.
     virtual bool answersTransmitControl() const { return false; }
+    virtual ReceiveDispatch requestSessionControl(const SessionControlRequest&,
+        const SessionCommandGuard&, const SessionControlCompletion& = {})
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
                                               const RadioSetupCompletion& = {},
                                               const RadioControlFence& current = {})
@@ -261,6 +265,12 @@ public:
         }
         return ReceiveDispatch::Unsupported;
     }
+    virtual ReceiveDispatch requestWaveform(const WaveformRequest&,
+        const RadioControlCompletion&, const FileTransferGuard&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestFileTransfer(const FileTransferRequest&,
+        const FileTransferCompletion&, const FileTransferGuard&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestProfile(const ProfileRequest&,
                                            const RadioControlCompletion& = {},
                                            const RadioControlFence& = {})
@@ -766,8 +776,8 @@ public:
     // setKeying is the transmitter/PTT envelope, while this is the carrier
     // inside that envelope. A host-modulating backend turns the element into
     // shaped IQ and may use breakIn to raise/drop PTT around it; a radio-side
-    // keyer translates it to its own key-line protocol. Flex keeps using its
-    // timestamped NetCW path above this seam, so the default is a no-op.
+    // keyer translates it to its own key-line protocol. The default is a no-op;
+    // requestCwControl reports whether the backend implements carrier edges.
     virtual void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(down);
@@ -776,6 +786,25 @@ public:
         Q_UNUSED(operation);
     Q_UNUSED(completion);
     }
+
+    // Native PTT adapts to the existing envelope hook. Carrier support must be
+    // explicit; a no-op setCwKeying implementation is not an accepted edge.
+    virtual ReceiveDispatch requestCwControl(const CwControlRequest& request,
+        const TxCoordinator::Command& command)
+    {
+        if (request.kind != CwControlRequest::Kind::PttEnvelope
+            || !cwEdgeAdmitted(request, command, capabilities().canTransmit)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setKeying(request.down, command.operation, command.completion);
+        return ReceiveDispatch::Dispatched;
+    }
+    virtual void prepareCwTransport(quint32 clientHandle, const RadioControlFence& current)
+    { Q_UNUSED(clientHandle); Q_UNUSED(current); }
+    virtual void retireCwTransport() {}
+    virtual ReceiveDispatch requestLocalPtt(const RadioControlCompletion& completion,
+                                            const RadioControlFence& current)
+    { Q_UNUSED(completion); Q_UNUSED(current); return ReceiveDispatch::Unsupported; }
 
     // Let receive audio through WHILE TRANSMITTING (normally muted on TX). For
     // diagnostics: demodulating our own transmission checks the sideband convention

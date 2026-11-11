@@ -2378,7 +2378,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     });
 
     // Update RTTY mark/space lines on spectrum when mark/shift changes;
-    // also push new params to the decoder when Auto mark is selected.
+    // the active slice's new mark and shift also go to the decoder and its combos.
     connect(s, &SliceModel::rttyMarkChanged, this, [this, s](int) {
         pushSliceOverlay(s);
         if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
@@ -4026,12 +4026,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     sw->disconnect(this);
     menu->disconnect(this);
     applet->disconnect(this);
-    // This connection belongs to the pane's wiring, not decoder routing:
+    // These connections belong to the pane's wiring, not decoder routing:
     // routeRttyDecoderOutput() may already have selected this same applet,
     // and its unchanged-target fast path cannot restore a connection removed
-    // by the bulk disconnect above. Every close must persist dismissal (#5353).
+    // by the bulk disconnect above. Every close must persist dismissal (#5353),
+    // and every Mark and Shift choice must reach the slice (#7094, #6968).
     connect(applet, &PanadapterApplet::rttyPanelCloseRequested,
             this, &MainWindow::onRttyPanelCloseRequested);
+    connect(applet, &PanadapterApplet::rttyMarkHzChanged,
+            this, &MainWindow::onRttyDecoderMarkChosen);
+    connect(applet, &PanadapterApplet::rttyShiftHzChanged,
+            this, &MainWindow::onRttyDecoderShiftChosen);
     QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
     connect(this, &MainWindow::bandStackRestoreStarting,
             sw, [applet, pendingDbm, reconcileDbmRangeFromModel]

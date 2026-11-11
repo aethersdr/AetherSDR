@@ -1,7 +1,10 @@
 #pragma once
 #include "RadioSetupControl.h"
+#include "SessionControlRequest.h"
 #include "CwReceiveControl.h"
 #include "SpotRequest.h"
+#include "FileTransferRequest.h"
+#include "WaveformRequest.h"
 #include "PanControlRequest.h"
 #include "SlicePresetRequest.h"
 #include "CwTextRequest.h"
@@ -672,6 +675,8 @@ struct RadioCapabilities {
     // lock may be global and may also follow front-panel changes.
     bool hasRadioDialLock = false;
     bool hasRemoteOnControl = false; // client can configure wake-on-network
+    std::optional<FileTransferControl> fileTransferControl;
+    std::optional<WaveformControl> waveformControl;
     bool canUpgradeFirmware = false; // client can upload radio firmware
     bool hasSmartLink = false;       // client has the SmartLink/WAN service and pin store
     bool hasLicenseInfo = false;     // radio exposes SmartSDR entitlement details
@@ -680,6 +685,8 @@ struct RadioCapabilities {
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     std::optional<RadioSetupControl> radioSetupControl;
+    // Desktop session bootstrap; does not advertise daemon methods or TX rights.
+    std::optional<SessionControl> sessionControl;
     std::optional<CwReceiveControl> cwReceiveControl;
     // Desktop utility verbs only; neither record adds daemon permissions.
     std::optional<SpotControl> spotControl;
@@ -1024,8 +1031,8 @@ struct RadioCapabilities {
     std::optional<WaveformEnvControl> waveformEnvControl;
     // The radio keeps its own list of NTP time sources that a client can list,
     // add, remove, enable and disable (Flex `ntp_sources …`, SmartSDR 4.3.16+ on
-    // the BigBend platform: FLEX-8000, Aurora, ML-9600, CL-9300). Engaged gates NtpSourceRequest and the Radio Setup Time
-    // page; maxSources is the radio's ceiling.
+    // every platform, FLEX-6000 included). Engaged gates NtpSourceRequest and the
+    // Radio Setup Time page; maxSources is the radio's ceiling.
     struct NtpSourceControl { int maxSources{10}; };
     std::optional<NtpSourceControl> ntpSourceControl;
 

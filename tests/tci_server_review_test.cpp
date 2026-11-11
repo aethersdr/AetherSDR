@@ -1813,6 +1813,50 @@ public:
         return true;
     }
 
+    // Drives handleVfoRequest() with channel 0 = A then channel 1 = A, split
+    // off: no route may be recorded. Without a backend no slice can be
+    // created, so the route assertion is the one that bites. A differs from
+    // the slice's start frequency, so the comparison must see the frequency
+    // channel 0 just set.
+    static bool vfoBAtVfoAWithoutSplitCreatesNoSlice()
+    {
+        RadioModel model;
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error))
+            return false;
+        SliceModel* slice = model.slice(0);
+        if (!slice)
+            return false;
+
+        TciServer server(&model);
+        server.wireSlice(0, slice);
+        TciClient sock;
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        const int slicesBefore = model.slices().size();
+        const long long a = TciProtocol::mhzToHz(slice->frequency()) + 1000;
+
+        server.handleVfoRequest(&sock, TciProtocol::VfoRequest{0, 0, a});
+        server.handleVfoRequest(&sock, TciProtocol::VfoRequest{0, 1, a});
+
+        if (model.slices().size() != slicesBefore) {
+            std::printf("      a simplex restate created a slice (%d -> %d)\n",
+                        slicesBefore, int(model.slices().size()));
+            return false;
+        }
+        // No route recorded: a later bare PTT must not find a TX slice here.
+        if (server.m_routingState.txSliceId() >= 0
+            || server.m_routingState.rxSliceId() >= 0) {
+            std::printf("      a simplex restate recorded a route (rx=%d tx=%d)\n",
+                        server.m_routingState.rxSliceId(),
+                        server.m_routingState.txSliceId());
+            return false;
+        }
+        return true;
+    }
+
     // #4744: switching from resampled TCI RX to native rate carries staged
     // samples into the native frame source. Releasing that buffer before
     // gain conversion or sendBinaryMessage() left the payload pointer dangling.
@@ -3223,6 +3267,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::vfoSetAcknowledgesANoOp();
     const bool vfoChannelZeroOnce
         = AetherSDR::TciServerReviewTest::vfoSetChannelZeroBroadcastsExactlyOnce();
+    const bool vfoBRestateNoSlice
+        = AetherSDR::TciServerReviewTest::vfoBAtVfoAWithoutSplitCreatesNoSlice();
     const bool txTrxResets
         = AetherSDR::TciServerReviewTest::lastTxTrxResetsOnClose();
     const bool activeSliceSeed
@@ -3342,6 +3388,9 @@ int main(int argc, char** argv)
     std::printf("%s  vfo: SET on channel 0 broadcasts exactly once per move "
                 "(#5086)\n",
                 vfoChannelZeroOnce ? "PASS" : "FAIL");
+    std::printf("%s  vfo: VFO B at VFO A without split creates no slice or "
+                "route (#7071)\n",
+                vfoBRestateNoSlice ? "PASS" : "FAIL");
     std::printf("%s  PTT route log shows the cache disagreeing with live TX "
                 "(#4547)\n",
                 routeLogStaleCache ? "PASS" : "FAIL");
@@ -3405,7 +3454,7 @@ int main(int argc, char** argv)
         && rxEnableLifecycle && overlapSilent && reclaimCloseAnnounced
         && trxDistinctReconnect && heldTrxRefuses
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
-        && vfoChannelZeroOnce
+        && vfoChannelZeroOnce && vfoBRestateNoSlice
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
