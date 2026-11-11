@@ -9261,6 +9261,8 @@ add_executable(waveform_env_control_test
     tests/waveform_env_control_test.cpp
     src/gui/WaveformEnvironmentDialog.cpp
     src/gui/CanonWindow.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
 )
 target_include_directories(waveform_env_control_test PRIVATE src tests)
 target_link_libraries(waveform_env_control_test PRIVATE

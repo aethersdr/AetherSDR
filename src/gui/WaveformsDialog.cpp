@@ -840,6 +840,11 @@ bool confirmRadioWaveformRemoval(QWidget* parent, const QString& name, bool isCo
 
     const QPointer<QWidget> parentGuard(parent);
     ScopedChildWidget<CanonMessageBox> box(title, question, parent);
+    if (isTailnetShimWaveform(name, isContainer)) {
+        box.get()->setInformativeText(
+            QObject::tr("This takes the radio off your tailnet, and any remote session ends.\n\n%1")
+                .arg(TailnetShimDialog::offTailnetWarning()));
+    }
     // Return keeps the waveform; removing it takes a click.
     box.get()->setDefaultButton(box.get()->addButton(QObject::tr("Cancel"),
                                                      CanonMessageBox::Role::Reject));
