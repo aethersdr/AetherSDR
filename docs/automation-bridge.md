@@ -1695,8 +1695,9 @@ inside AetherSDR on the host, not in radio firmware (#5401).
   `modulatorFaultBlocks` counts blocks the modulator could not place on the
   wire, and is present **even at zero**: "no blocks were dropped" and "nobody
   counted" must not look the same. Non-zero means the modulator is being fed
-  faster than it can drain, or has stalled; it is logged on `aether.hl2.tx`
-  at the same moment.
+  faster than it can drain, or has stalled. It is logged on `aether.hl2.tx`
+  at once; on the HL2 the bridge value can trail the log by up to one refresh
+  (below).
 - `backend.chains[].level` — **how close to the DSP the values came from**.
   "Read-back" is used loosely, and the difference decides what a mismatch
   proves:
@@ -1711,18 +1712,34 @@ inside AetherSDR on the host, not in radio firmware (#5401).
     mistake for a real setting: a receiver with no channel behind it, or a
     transmit chain that has never been configured, refused its `configure()`, or
     been torn down by a disconnect, is exactly the state worth seeing.
+- **The HL2 answers from a cache** (`IRadioBackend` thread-contract rule 3),
+  so `get dsp` never waits on the radio's I/O thread. A verb that changes a
+  reported field schedules a publish, which is gathered on the I/O thread
+  behind the verb's own DSP change and lands on the next GUI-thread turn after
+  that, so the new value is one round trip through the I/O thread late. A
+  withdrawal (disconnect, receiver teardown, connect failure) turns the
+  `hl2-tx` entry `not-configured` at once; the `rx-wdsp` entries follow with
+  the next publish. The live readings — `wdspNotchCount`,
+  `appliedNoiseBlanker`, `modulatorBlocks`, `modulatorFaultBlocks` — are
+  re-gathered every second, so they are up to about 1 s old, and longer while
+  the I/O thread is busy (a cold WDSP open). After a verb, **poll** until the
+  field converges; a single read straight after the verb can see the value
+  from before it. `wait_for` and `assert_state` compare the whole property as
+  text, so for `backend` poll `get dsp backend` and compare the field itself.
 - **`dsp-config` describes the DSP, not the wire.** It is not liveness and not
   keying. Normal unkeying and transient link loss retain the applied
   configuration and still report `dsp-config`; for link state read
   [`connectState`](#connectstate) on `get radio`.
 - **`backend` is absent entirely when the gather is empty.** No backend
-  attached, a backend that does not implement the read-back, and a gather that
-  could not be made all produce **no `backend` key at all** — never an empty
+  attached, a backend that does not implement the read-back, and, on a backend
+  that gathers on demand, a gather that could not be made all produce **no `backend` key at all** — never an empty
   object and never an empty `chains` list, because an empty object would read as
   "we asked, and the answer is nothing". `get dsp backend` errors with
   `unknown property 'backend' for dsp` in exactly the cases the bare form omits
-  it. **A caller must not read the absence as "this radio has no chains"** — it
-  means the question went unanswered, which is a different fact. Both directions
+  it. The HL2 answers from its cache and always reports at least its `hl2-tx`
+  entry, so on an HL2 the key is never absent. **A caller must not read the
+  absence as "this radio has no chains"** — it means the question went
+  unanswered, which is a different fact. Both directions
   are pinned by `tests/automation_dsp_backend_readback_test.cpp`.
 - A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`, and
   `get dsp backend` returns the identical object the bare form reports. The
