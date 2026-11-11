@@ -42,7 +42,10 @@ public:
     // the active slice's mode in MainWindow so the keys fire regardless
     // of panel visibility, while staying mutually exclusive with CwxPanel
     // to avoid Qt shortcut ambiguity. (#2582)
-    void setShortcutsEnabled(bool enabled);
+    // stopKeysAllowed: the TX slice is in a voice mode, so CwxPanel's set is
+    // off and Escape and a playing slot's F-key may stay armed to stop an
+    // operation in flight even when `enabled` is false.
+    void setShortcutsEnabled(bool enabled, bool stopKeysAllowed = false);
 
     // Show one line in the panel's status area. For notices the keyer itself
     // does not raise — a source change waiting on the operation in flight.
@@ -66,7 +69,10 @@ public:
     // radio with none), shown on the status line; empty when it can. While set,
     // every slot and transport control is disabled and only the settings
     // button acts, because choosing another source is the way out.
-    void setUnavailableReason(const QString& reason);
+    // slotsEditable keeps what needs no radio: PREV on the speakers and the
+    // slot menu and rename (the local keyer with no radio connected). Nothing
+    // that transmits or records comes back.
+    void setUnavailableReason(const QString& reason, bool slotsEditable = false);
     QString unavailableReason() const { return m_unavailableReason; }
 
     // Where the keyer-source menu opens: under the settings button.
@@ -107,6 +113,9 @@ private:
     QString m_pendingSourceNotice;
     QString m_sourceQualifier;
     QString m_unavailableReason;
+    bool m_slotsEditableWhileUnavailable{false};
+    bool m_shortcutsWanted{false};
+    bool m_stopKeysAllowed{false};
     QLineEdit* m_renameEdit{nullptr};
     int m_renameSlot{-1};
 
@@ -116,11 +125,12 @@ private:
     int m_timerSlotId{-1};
     int m_timerStatus{0};  // VoiceKeyer::Status cast to int
 
-    // F1-F12 + ESC shortcuts — ApplicationShortcut on window(), enabled
+    // F1-F12 and ESC shortcuts — ApplicationShortcut on window(), enabled
     // by MainWindow based on the active slice's mode (mutually exclusive
     // with CwxPanel's set) so they fire regardless of panel visibility
     // (#2464, #2582).
     QVector<QShortcut*> m_shortcuts;
+    QShortcut* m_escShortcut{nullptr};
 
 
     // Connect the bound keyer's signals, and drop the previous keyer's.
@@ -137,6 +147,10 @@ private:
     // pending source change.
     QString statusSuffix() const;
     void refreshTransport();
+    // A recording, playback or preview is running or has been asked for.
+    bool operationInFlight() const;
+    // Preview, rename and the slot menu: everything that needs no radio.
+    bool slotsEditable() const;
     void togglePlayback(int id);
     void stopActiveOperation();
     // The slot menu from a right-click on the row, or the Menu key or

@@ -33,7 +33,7 @@ The DVK indicator is hidden only on a radio that can neither transmit nor host a
 
 ### Opening DVK
 
-Choose **Tools → Digital Voice Keyer**, or click the **DVK** indicator in the status bar at the bottom of the screen. The panel opens beside the panadapter, and the Tools entry is ticked while it is open; choose it again to close the panel. The title names the keyer in use, for example **Digital Voice Keyer (Local)**.
+Choose **Tools → Digital Voice Keyer**, or click the **DVK** indicator in the status bar at the bottom of the screen. The panel opens beside the panadapter, and the Tools entry is ticked while it is open; choose it again to close the panel. When the panel can't open, the Tools entry is grayed out and its tooltip says why. With no radio connected the panel still opens and its status line reads **Not connected to a radio.** Nothing can be played on the air or recorded then, but with the **Local** keyer you can preview slots on your speakers and rename, clear, import or export them. The title names the keyer in use, for example **Digital Voice Keyer (Local)**.
 
 The DVK panel and the [CWX Panel](./cwx-panel.md) share the same space — opening one closes the other.
 

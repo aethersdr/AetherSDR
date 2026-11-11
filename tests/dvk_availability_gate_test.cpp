@@ -150,18 +150,20 @@ int main()
     // so a Radio choice the radio cannot serve must still open the panel, or an
     // operator whose saved choice is Radio is locked out of picking Local.
     report("panel opens on a radio with no DVK that can transmit",
-           voiceKeyerPanelOpenable(true, false, true));
+           voiceKeyerPanelOpenable(true, true, false, true));
     report("panel opens on a radio with a DVK, licence aside",
-           voiceKeyerPanelOpenable(true, true, false));
+           voiceKeyerPanelOpenable(true, true, true, false));
     report("panel stays shut on a radio with neither a DVK nor transmit",
-           !voiceKeyerPanelOpenable(true, false, false));
+           !voiceKeyerPanelOpenable(true, true, false, false));
     report("panel stays shut outside a voice mode",
-           !voiceKeyerPanelOpenable(false, true, true));
+           !voiceKeyerPanelOpenable(true, false, true, true));
+    report("panel opens with no radio connected",
+           voiceKeyerPanelOpenable(false, false, false, false));
 
     // ── And says why it cannot drive the keyer ──────────────────────────────
     const auto why = [](VS source, bool hasKeyer, bool canTx, bool seen, bool enabled,
                         bool refused) {
-        return voiceKeyerPanelUnavailableReason(source, hasKeyer, canTx, seen, enabled, refused);
+        return voiceKeyerPanelUnavailableReason(source, true, hasKeyer, canTx, seen, enabled, refused);
     };
     report("no reason for a licensed radio DVK",
            why(VS::Radio, true, true, true, true, false).isEmpty());
@@ -180,6 +182,16 @@ int main()
     report("Local on a radio that cannot transmit says so",
            why(VS::Local, true, false, true, true, false)
                == QStringLiteral("This radio cannot transmit."));
+    report("offline, both sources say not connected rather than blame the radio",
+           voiceKeyerPanelUnavailableReason(VS::Local, false, true, false, false, false, false)
+                   == QStringLiteral("Not connected to a radio.")
+               && voiceKeyerPanelUnavailableReason(VS::Radio, false, true, false, false, false,
+                                                   false)
+                      == QStringLiteral("Not connected to a radio."));
+    report("offline, only the local slots stay editable",
+           voiceKeyerPanelSlotsEditableOffline(VS::Local, false)
+               && !voiceKeyerPanelSlotsEditableOffline(VS::Radio, false)
+               && !voiceKeyerPanelSlotsEditableOffline(VS::Local, true));
 
     // ── The feature name is the FlexLib one ─────────────────────────────────
     report("license feature name matches FlexLib's digital_voice_keyer",
@@ -220,7 +232,7 @@ int main()
                 && voiceKeyerIndicatorBlocker(afterRefusal, true, licenseSeen, licenseEnabled,
                                               true) == B::None
                 && voiceKeyerUsable(afterRefusal, hasKeyer, canTransmit)
-                && voiceKeyerPanelUnavailableReason(afterRefusal, hasKeyer, canTransmit,
+                && voiceKeyerPanelUnavailableReason(afterRefusal, true, hasKeyer, canTransmit,
                                                     licenseSeen, licenseEnabled, true)
                        .isEmpty();
 
@@ -243,7 +255,7 @@ int main()
                forced == R::Radio
                    && voiceKeyerIndicatorBlocker(forced, true, false, false, true)
                           == B::NotLicensed
-                   && voiceKeyerPanelUnavailableReason(forced, true, true, false, false, true)
+                   && voiceKeyerPanelUnavailableReason(forced, true, true, true, false, false, true)
                           == QStringLiteral(
                               "Radio DVK not licensed (SmartSDR+). Choose Local with ⚙."));
     }

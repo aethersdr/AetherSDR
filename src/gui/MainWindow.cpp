@@ -10546,12 +10546,23 @@ void MainWindow::updateToolsMenuState()
         m_cwKeyerAction->setChecked(m_cwxPanel && m_cwxPanel->isVisible());
     }
     if (m_voiceKeyerAction) {
-        // Same gate as the status-bar DVK indicator, and the same visibility
-        // rule as the indicator (applyCapabilitiesToUi()).
+        // Same gate as the status-bar DVK indicator. Dimmed, never hidden,
+        // with the reason in the status tip a screen reader announces
+        // (docs/agents/gui.md). Enablement follows the TX slice's mode as well
+        // as the capabilities, so ControlAvailabilityRegistry cannot own it.
         const bool dvkOpen = m_dvkPanel && m_dvkPanel->isVisible();
-        m_voiceKeyerAction->setVisible(!connected || caps.hasVoiceKeyer || caps.canTransmit);
-        m_voiceKeyerAction->setEnabled(dvkOpen || (m_dvkIndicator && m_dvkIndicator->isEnabled()));
+        const bool enabled = dvkOpen || (m_dvkIndicator && m_dvkIndicator->isEnabled());
+        m_voiceKeyerAction->setEnabled(enabled);
         m_voiceKeyerAction->setChecked(dvkOpen);
+        const QString reason =
+            enabled ? QString()
+            : !(caps.hasVoiceKeyer || caps.canTransmit)
+                ? tr("This radio can neither transmit nor host a voice keyer")
+            : !m_radioModel.txSlice()
+                ? tr("Requires a transmit slice")
+            : tr("Requires the transmit slice in a voice mode");
+        m_voiceKeyerAction->setToolTip(reason);
+        m_voiceKeyerAction->setStatusTip(reason);
     }
 #ifdef AETHER_ASR_ENABLED
     if (m_copyAssistAction) {
@@ -10722,23 +10733,34 @@ void MainWindow::updateKeyerAvailability()
     // settings button is where the source is chosen, so a Radio choice this
     // radio cannot serve must not lock the operator out of picking Local. The
     // panel then disables its controls and names the reason.
-    const bool dvkOpenable = voiceKeyerPanelOpenable(txIsSsb, hasVoiceKeyer, canTransmit);
+    // With no radio connected it opens too, for the local slots.
+    const bool connected = m_radioModel.isConnected();
+    const bool dvkOpenable = voiceKeyerPanelOpenable(connected, txIsSsb, hasVoiceKeyer,
+                                                     canTransmit);
 
     if (m_cwxPanel) {
         m_cwxPanel->setShortcutsEnabled(txIsCw
                                         && m_radioModel.hasCwTextStoredMacros());
     }
-    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable);
+    // In a voice mode, or with no radio (no TX slice, so not CW), the CWX
+    // shortcuts are off, so the panel may keep Escape and a playing slot's
+    // F-key armed to stop what is running: an offline preview included.
+    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable, txIsSsb || !connected);
     // The local keyer is verified on FlexRadio; on a radio with no voice keyer
     // of its own (Hermes-Lite 2, Icom, ...) it is Beta until those radios have
     // been tested on the air. hasVoiceKeyer() is permissive while disconnected,
     // so the word appears only once such a radio is actually connected.
     if (m_dvkPanel) {
-        m_dvkPanel->setUnavailableReason(voiceKeyerPanelUnavailableReason(
-            voiceKeyerSource(), hasVoiceKeyer, canTransmit,
-            m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
-            m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
-            m_radioModel.dvkLicenseRefused()));
+        // Offline the panel says so rather than blame the radio (the
+        // capabilities are then a default-constructed set), and the local
+        // slots stay previewable and editable.
+        m_dvkPanel->setUnavailableReason(
+            voiceKeyerPanelUnavailableReason(
+                voiceKeyerSource(), connected, hasVoiceKeyer, canTransmit,
+                m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
+                m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
+                m_radioModel.dvkLicenseRefused()),
+            voiceKeyerPanelSlotsEditableOffline(voiceKeyerSource(), connected));
         m_dvkPanel->setSourceQualifier(voiceKeyerSource() == VoiceKeyerSource::Local && !hasVoiceKeyer
                                            ? QStringLiteral("Beta") : QString());
     }

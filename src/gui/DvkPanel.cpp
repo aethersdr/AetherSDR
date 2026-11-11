@@ -58,6 +58,10 @@ constexpr const char* kPanelStyle =
     " border: 1px solid {{color.canon.lineHi}}; border-radius: 4px; font-size: 11px; font-weight: bold;"
     " padding: 0px; }"
     "QPushButton[dvkRole=\"fkey\"]:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }"
+    // A recorded slot's F-key is cyan; disabled (the keyer unavailable, or no
+    // radio connected) it must read as off, as the transport buttons do.
+    "QPushButton[dvkRole=\"fkey\"]:disabled { background: transparent; color: {{color.canon.muted}};"
+    " border-color: {{color.canon.line}}; }"
     "QPushButton[dvkRole=\"fkey\"]:focus { border-color: {{color.canon.aqua}}; }"
     "QPushButton[dvkRole=\"fkey\"][empty=\"true\"] { color: {{color.canon.muted}}; border-color: {{color.canon.line}}; }"
     "QPushButton[dvkRole=\"fkey\"][live=\"live\"] { background: {{color.titlebar.tab.active.background}};"
@@ -390,11 +394,10 @@ DvkPanel::DvkPanel(VoiceKeyer* keyer, QWidget* parent)
     }
 
     // Escape: cancel rename if active, otherwise stop DVK operation.
-    auto* esc = new QShortcut(QKeySequence(Qt::Key_Escape), window());
-    esc->setContext(Qt::ApplicationShortcut);
-    esc->setEnabled(false);
-    m_shortcuts.append(esc);
-    connect(esc, &QShortcut::activated, this, [this]() {
+    m_escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), window());
+    m_escShortcut->setContext(Qt::ApplicationShortcut);
+    m_escShortcut->setEnabled(false);
+    connect(m_escShortcut, &QShortcut::activated, this, [this]() {
         if (m_renameEdit) {
             cancelRename();
             return;
@@ -538,9 +541,25 @@ void DvkPanel::stopActiveOperation()
     }
 }
 
-void DvkPanel::setShortcutsEnabled(bool enabled)
+void DvkPanel::setShortcutsEnabled(bool enabled, bool stopKeysAllowed)
 {
-    for (auto* sc : m_shortcuts) sc->setEnabled(enabled);
+    m_shortcutsWanted = enabled;
+    m_stopKeysAllowed = stopKeysAllowed;
+    refreshTransport();
+}
+
+bool DvkPanel::slotsEditable() const
+{
+    return m_unavailableReason.isEmpty() || m_slotsEditableWhileUnavailable;
+}
+
+bool DvkPanel::operationInFlight() const
+{
+    const auto isOperation = [](VoiceKeyer::Status s) {
+        return s == VoiceKeyer::Recording || s == VoiceKeyer::Playback
+            || s == VoiceKeyer::Preview;
+    };
+    return isOperation(m_model->status()) || isOperation(m_model->pendingOperation());
 }
 
 void DvkPanel::selectSlot(int id)
@@ -562,11 +581,31 @@ void DvkPanel::refreshTransport()
     const VoiceKeyer::Status s = m_model->status();
     const bool idle = m_model->canStartOperation();
     const bool canStart = idle && m_unavailableReason.isEmpty();
+    const bool canPreview = idle && slotsEditable();   // the speakers need no radio
     const bool hasAudio = durationForSlot(m_selectedSlot) > 0;
     m_recBtn->setEnabled(canStart || s == VoiceKeyer::Recording);
     m_playBtn->setEnabled((canStart && hasAudio) || s == VoiceKeyer::Playback);
-    m_prevBtn->setEnabled((canStart && hasAudio) || s == VoiceKeyer::Preview);
+    m_prevBtn->setEnabled((canPreview && hasAudio) || s == VoiceKeyer::Preview);
     m_stopBtn->setEnabled(!idle);
+
+    // The F-key of a playing slot stops it, so it stays live with the keyer
+    // unavailable, like the running transport control; the others start
+    // playback and go dark. Their shortcuts follow, and Escape stays armed
+    // while anything runs: a licence report or refusal mid-message must not
+    // take the keyboard's way to stop it (Principle VI). In-flight arming
+    // needs the TX slice in a voice mode, where the CWX shortcuts are off.
+    const bool available = m_unavailableReason.isEmpty();
+    const bool stopKeys = m_stopKeysAllowed && operationInFlight();
+    for (int i = 0; i < m_fkeyBtns.size(); ++i) {
+        const bool stopsPlayback = s == VoiceKeyer::Playback && m_model->activeId() == i + 1;
+        m_fkeyBtns[i]->setEnabled(available || stopsPlayback);
+        if (i < m_shortcuts.size()) {
+            m_shortcuts[i]->setEnabled(m_shortcutsWanted || (stopKeys && stopsPlayback));
+        }
+    }
+    if (m_escShortcut) {
+        m_escShortcut->setEnabled(m_shortcutsWanted || stopKeys);
+    }
 }
 
 int DvkPanel::selectedSlot() const
@@ -775,7 +814,7 @@ bool DvkPanel::eventFilter(QObject* obj, QEvent* event)
 
     if (event->type() == QEvent::MouseButtonDblClick) {
         // Only name labels trigger rename (not the row frame itself)
-        if (qobject_cast<QLabel*>(obj) && m_unavailableReason.isEmpty()) {
+        if (qobject_cast<QLabel*>(obj) && slotsEditable()) {
             selectSlot(id);
             startRename(id);
             return true;
@@ -853,17 +892,23 @@ void DvkPanel::setSourceQualifier(const QString& text)
     refreshFromKeyer();
 }
 
-void DvkPanel::setUnavailableReason(const QString& reason)
+void DvkPanel::setUnavailableReason(const QString& reason, bool slotsEditable)
 {
-    if (reason == m_unavailableReason) {
+    slotsEditable = slotsEditable && !reason.isEmpty();
+    if (reason == m_unavailableReason && slotsEditable == m_slotsEditableWhileUnavailable) {
         return;
     }
-    if (!reason.isEmpty()) {
+    m_unavailableReason = reason;
+    m_slotsEditableWhileUnavailable = slotsEditable;
+    if (!this->slotsEditable()) {
         cancelRename();
     }
-    m_unavailableReason = reason;
-    for (QPushButton* fkey : m_fkeyBtns) {
-        fkey->setEnabled(reason.isEmpty());
+    // Mid-operation only the controls change: re-running onStatusChanged()
+    // would tick the elapsed time on by 100 ms. The reason shows on the status
+    // line once the operation ends.
+    if (operationInFlight()) {
+        refreshTransport();
+        return;
     }
     onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
 }
@@ -890,7 +935,7 @@ void DvkPanel::refreshFromKeyer()
 void DvkPanel::openSlotMenu(int id, const QPoint& globalPos)
 {
     // A keyer the radio cannot serve offers nothing to rename, clear or move.
-    if (!m_unavailableReason.isEmpty()) {
+    if (!slotsEditable()) {
         return;
     }
     selectSlot(id);
@@ -906,8 +951,14 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
     const quint64 revision = owner->transferRevision();
     const auto ownerIsCurrent = [this, self, owner, revision] {
         if (!self) { return false; }
+        // The menu and the file dialogs run nested event loops, in which the
+        // bound keyer can change or become unavailable.
         if (owner && owner == m_model && owner->transferRevision() == revision) {
-            return true;
+            if (slotsEditable()) {
+                return true;
+            }
+            showNotice(m_unavailableReason, true);
+            return false;
         }
         showNotice(QStringLiteral("The voice keyer changed while the slot menu was open, "
                                   "so nothing was changed — try again."), true);

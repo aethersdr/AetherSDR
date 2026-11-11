@@ -102,32 +102,53 @@ inline QString radioVoiceKeyerUnavailableReason(bool hasVoiceKeyer,
 // a source this radio cannot serve (the radio DVK unlicensed, or a radio with
 // none) must still let the operator reach it and pick Local. The TX-mode gate
 // still applies, and a radio that can neither transmit nor host a DVK has
-// nothing to choose between.
-inline bool voiceKeyerPanelOpenable(bool txModeIsVoice, bool radioHasKeyer, bool canTransmit)
+// nothing to choose between. With no radio connected it always opens: there
+// is no TX slice to have a mode, and the local slots can be previewed and
+// arranged offline.
+inline bool voiceKeyerPanelOpenable(bool connected, bool txModeIsVoice, bool radioHasKeyer,
+                                    bool canTransmit)
 {
-    return txModeIsVoice && (radioHasKeyer || canTransmit);
+    return !connected || (txModeIsVoice && (radioHasKeyer || canTransmit));
 }
 
 // Why the open panel cannot drive its keyer, for the panel's status line; empty
 // when it can. Short enough for the two lines the status area reserves, and it
 // names the way out, because the panel is where the source is changed.
 inline QString voiceKeyerPanelUnavailableReason(VoiceKeyerSource source,
+                                                bool connected,
                                                 bool radioHasKeyer,
                                                 bool canTransmit,
                                                 bool licenseSeen,
                                                 bool licenseEnabled,
                                                 bool radioRefused)
 {
+    // Offline nothing can transmit and the radio DVK's slots live on the radio.
+    // The local slots can still be previewed and edited
+    // (voiceKeyerPanelSlotsEditableOffline()).
+    if (!connected) {
+        return QStringLiteral("Not connected to a radio.");
+    }
     if (source == VoiceKeyerSource::Local) {
         return canTransmit ? QString() : QStringLiteral("This radio cannot transmit.");
     }
-    if (!radioHasKeyer) {
-        return QStringLiteral("This radio has no DVK. Choose Local with ⚙.");
+    // The rule is the source menu's, so the menu and the panel cannot drift
+    // apart on when the radio DVK is usable (#6262); only the wording differs.
+    if (radioVoiceKeyerUnavailableReason(radioHasKeyer, licenseSeen, licenseEnabled,
+                                         radioRefused).isEmpty()) {
+        return QString();
     }
-    if (radioRefused || (licenseSeen && !licenseEnabled)) {
-        return QStringLiteral("Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.");
-    }
-    return QString();
+    return radioHasKeyer
+        ? QStringLiteral("Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.")
+        : QStringLiteral("This radio has no DVK. Choose Local with ⚙.");
+}
+
+// Offline, the local keyer's slots are files on this computer: they can be
+// previewed on the speakers, renamed, cleared, imported and exported, though
+// nothing can be played on the air or recorded (the microphone is captured only
+// for a radio session).
+inline bool voiceKeyerPanelSlotsEditableOffline(VoiceKeyerSource source, bool connected)
+{
+    return !connected && source == VoiceKeyerSource::Local;
 }
 
 // Tooltip for the DVK indicator. Names the SmartSDR+ requirement directly

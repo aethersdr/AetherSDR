@@ -500,16 +500,14 @@ int main(int argc, char** argv)
         chainPanel.show();
         QCoreApplication::processEvents();
         QStringList stops;
-        QWidget* start = chainPanel.findChild<QWidget*>(QStringLiteral("dvkSettings"));
-        for (QWidget* w = start; w; ) {
+        // Walk from the panel itself, so "first" means first in the panel.
+        QWidget* start = &chainPanel;
+        for (QWidget* w = start->nextInFocusChain(); w && w != start; ) {
             if ((w->focusPolicy() & Qt::TabFocus) && w->isVisibleTo(&chainPanel)
                 && chainPanel.isAncestorOf(w)) {
                 stops << w->objectName();
             }
             w = w->nextInFocusChain();
-            if (w == start) {
-                break;
-            }
         }
         QStringList fkeys;
         for (const QString& name : stops) {
@@ -585,12 +583,160 @@ int main(int argc, char** argv)
                allFound ? bstatus->text().toStdString() : std::string());
 
         // An operation already in flight can still be ended.
+        k.addRecording(2, QStringLiteral("QRZ"), 1000);
         k.pushStatus(VoiceKeyer::Playback, 1);
+        const QString elapsedBefore = allFound ? bstatus->text() : QString();
         blockedPanel.setUnavailableReason(reason);
         QPushButton* bstop = buttonByText(blockedPanel, QString::fromUtf8("■ STOP"));
         report("unavailable_keyer_still_lets_stop_end_an_operation",
                allFound && bstop && bstop->isEnabled() && bplay->isEnabled());
+
+        // A reason that comes and goes mid-operation leaves the elapsed time
+        // alone; each pass used to tick it on by 100 ms.
+        blockedPanel.setUnavailableReason(QString());
+        blockedPanel.setUnavailableReason(reason);
+        report("reason_change_mid_operation_keeps_the_elapsed_time",
+               allFound && bstatus->text() == elapsedBefore,
+               (QStringLiteral("before=[%1] after=[%2]")
+                    .arg(elapsedBefore, allFound ? bstatus->text() : QString())).toStdString());
+
+        // The playing slot's F-key stops it; the other F-keys start, so they
+        // stay dark. With the TX slice in a voice mode, Escape and the playing
+        // slot's F-key shortcut stay armed though the keyer's are switched off.
+        QPushButton* bf2 = buttonByText(blockedPanel, QStringLiteral("F2"));
+        QShortcut* escSc = nullptr;
+        QShortcut* f1Sc = nullptr;
+        QShortcut* f2Sc = nullptr;
+        for (auto* sc : blockedPanel.findChildren<QShortcut*>()) {
+            if (sc->key() == QKeySequence(Qt::Key_Escape)) escSc = sc;
+            if (sc->key() == QKeySequence(Qt::Key_F1)) f1Sc = sc;
+            if (sc->key() == QKeySequence(Qt::Key_F2)) f2Sc = sc;
+        }
+        const bool scFound = escSc && f1Sc && f2Sc;
+        blockedPanel.setShortcutsEnabled(false, true);
+        const bool stopKeysArmed = scFound && escSc->isEnabled() && f1Sc->isEnabled()
+                                   && !f2Sc->isEnabled();
+        blockedPanel.setShortcutsEnabled(false, false);
+        const bool outsideVoiceOff = scFound && !escSc->isEnabled() && !f1Sc->isEnabled();
+        report("unavailable_keyer_keeps_the_playing_fkey_and_escape_live",
+               allFound && bf2 && bf1->isEnabled() && !bf2->isEnabled()
+                   && stopKeysArmed && outsideVoiceOff,
+               (QStringLiteral("f1=%1 f2=%2 armed=%3 offOutsideVoice=%4")
+                    .arg(allFound && bf1->isEnabled()).arg(bf2 && bf2->isEnabled())
+                    .arg(stopKeysArmed).arg(outsideVoiceOff)).toStdString());
+        blockedPanel.setShortcutsEnabled(false, true);
+        k.calls.clear();
+        if (allFound) {
+            bf1->click();
+        }
+        if (escSc) {
+            escSc->activated();
+        }
+        report("playing_fkey_and_escape_stop_the_unavailable_keyer",
+               k.calls == QStringList{QStringLiteral("playbackStop 1"),
+                                      QStringLiteral("playbackStop 1")},
+               joined(k.calls));
+
         k.pushStatus(VoiceKeyer::Idle, -1);
+        report("operation_end_darkens_the_fkey_and_disarms_escape",
+               allFound && !bf1->isEnabled() && escSc && !escSc->isEnabled()
+                   && bstatus->text() == reason);
+    }
+
+    // A slot-menu action taken after the keyer became unavailable, while the
+    // menu's own event loop ran, changes nothing and says why.
+    {
+        FakeKeyer k;
+        k.addRecording(1, QStringLiteral("CQ"), 1000);
+        DvkPanel menuPanel(&k);
+        menuPanel.show();
+        QCoreApplication::processEvents();
+        const QString reason = QStringLiteral("Radio DVK not licensed (SmartSDR+). Choose Local with ⚙.");
+        bool clearFound = false;
+        QTimer::singleShot(0, &menuPanel, [&] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu) {
+                return;
+            }
+            menuPanel.setUnavailableReason(reason);
+            for (QAction* a : menu->actions()) {
+                if (a->text() == QLatin1String("Clear")) {
+                    clearFound = true;
+                    a->trigger();
+                }
+            }
+            menu->close();
+        });
+        if (QWidget* row = menuPanel.findChild<QWidget*>(QStringLiteral("dvkSlot1"))) {
+            emit row->customContextMenuRequested(QPoint(2, 2));
+        }
+        QCoreApplication::processEvents();
+        report("slot_menu_action_rechecks_availability",
+               clearFound && k.calls.isEmpty(),
+               (QStringLiteral("menu=%1 calls=[%2]").arg(clearFound)
+                    .arg(joined(k.calls).c_str())).toStdString());
+    }
+
+    // Offline with the local keyer: nothing can go on the air or be recorded,
+    // but PREV plays on the speakers and the slot menu still works, so the
+    // operator can arrange and check their messages with no radio.
+    {
+        FakeKeyer k;
+        k.label = QStringLiteral("Local");
+        k.addRecording(1, QStringLiteral("CQ"), 1000);
+        DvkPanel offlinePanel(&k);
+        offlinePanel.show();
+        QCoreApplication::processEvents();
+        const QString reason = QStringLiteral("Not connected to a radio.");
+        offlinePanel.setUnavailableReason(reason, true);
+        QPushButton* of1 = buttonByText(offlinePanel, QStringLiteral("F1"));
+        QPushButton* orec = buttonByText(offlinePanel, QString::fromUtf8("● REC"));
+        QPushButton* oplay = buttonByText(offlinePanel, QString::fromUtf8("▶ PLAY"));
+        QPushButton* oprev = buttonByText(offlinePanel, QString::fromUtf8("◀ PREV"));
+        QLabel* ostatus = statusLabel(offlinePanel);
+        const bool found = of1 && orec && oplay && oprev && ostatus;
+        report("offline_local_previews_but_neither_transmits_nor_records",
+               found && oprev->isEnabled() && !orec->isEnabled() && !oplay->isEnabled()
+                   && !of1->isEnabled() && ostatus->text() == reason,
+               found ? (QStringLiteral("prev=%1 rec=%2 play=%3 f1=%4 status=[%5]")
+                            .arg(oprev->isEnabled()).arg(orec->isEnabled())
+                            .arg(oplay->isEnabled()).arg(of1->isEnabled())
+                            .arg(ostatus->text())).toStdString()
+                     : std::string("controls not found"));
+        if (found) {
+            oprev->click();
+        }
+        report("offline_local_prev_starts_a_preview",
+               k.calls == QStringList{QStringLiteral("previewStart 1")}, joined(k.calls));
+        k.calls.clear();
+
+        bool clearFound = false;
+        QTimer::singleShot(0, &offlinePanel, [&] {
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!menu) {
+                return;
+            }
+            for (QAction* a : menu->actions()) {
+                if (a->text() == QLatin1String("Clear")) {
+                    clearFound = true;
+                    a->trigger();
+                }
+            }
+            menu->close();
+        });
+        if (QWidget* row = offlinePanel.findChild<QWidget*>(QStringLiteral("dvkSlot1"))) {
+            emit row->customContextMenuRequested(QPoint(2, 2));
+        }
+        QCoreApplication::processEvents();
+        report("offline_local_slot_menu_still_edits",
+               clearFound && k.calls == QStringList{QStringLiteral("clear 1")},
+               (QStringLiteral("menu=%1 calls=[%2]").arg(clearFound)
+                    .arg(joined(k.calls).c_str())).toStdString());
+
+        // The same reason without the local slots (the radio DVK offline)
+        // previews nothing.
+        offlinePanel.setUnavailableReason(reason, false);
+        report("offline_radio_dvk_previews_nothing", found && !oprev->isEnabled());
     }
 
     std::printf("\n%s (%d failed)\n", g_failed ? "FAILED" : "PASSED", g_failed);
