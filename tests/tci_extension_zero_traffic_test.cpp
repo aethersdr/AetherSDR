@@ -1,23 +1,29 @@
 // A TCI client that never sends aethersdr_ext_enable:true must receive exactly
-// the bytes it would receive from a server without the extension set (RFC,
-// "SunSDR-only clients get byte-identical traffic"). This file uses only
-// TciServer API that predates the set, so the same source builds against a
-// tree without it; `--print-transcript` prints the plain client's traffic so
-// two builds can be diffed. Socket-free: the transport is injected.
+// the bytes it would receive from a server without the extension set (RFC #7181).
+// Two clients are opened as onClientOpened() opens them and every text frame is
+// read at the I/O worker's last step, init burst included. Socket-free. Without
+// the set (main) the file still builds; `--print-transcript` prints the bytes.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/TciClient.h"
+#include "core/TciIoWorker.h"
 #include "core/TciProtocol.h"
 #include "core/TciServer.h"
 #include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#if __has_include("core/TciExtensionSet.h")
+#include "core/TciExtensionSet.h"
+#define HAVE_TCI_EXTENSION_SET 1
+#endif
+
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QHash>
+#include <QHostAddress>
 #include <QObject>
-#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
@@ -25,6 +31,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <memory>
 
 namespace AetherSDR {
@@ -33,33 +40,19 @@ namespace AetherSDR {
 // dax_iq_rate_limits_test.cpp.
 class TciServerReviewTest {
 public:
-    static void attach(TciServer& server, TciClient* client, RadioModel& model)
+    // Every text frame the worker would write, by client id.
+    static void tapText(TciServer& server, std::function<void(quint64, const QString&)> tap)
     {
-        TciServer::ClientState state;
-        state.socket = client;
-        state.protocol = new TciProtocol(&model, &server.m_routingState, &server.m_trxMap);
-        server.m_clients.append(state);
-        QObject::connect(client, &TciClient::textMessageReceived,
-                         &server, &TciServer::onTextMessage);
-        QObject::connect(client, &TciClient::disconnected,
-                         &server, &TciServer::onClientDisconnected);
+        server.m_io->m_textSend = std::move(tap);
     }
 
-    // What sendInitBurst() hands the transport: one message per command.
-    static QStringList initBurst(TciServer& server, TciClient* client)
+    // Opens a client the way the worker's clientOpened signal does; no socket.
+    static TciClient* open(TciServer& server, std::shared_ptr<TciClientLifetime> lifetime,
+                           quint16 port)
     {
-        QStringList messages;
-        for (const TciServer::ClientState& state : server.m_clients) {
-            if (state.socket == client) {
-                const QStringList commands
-                    = state.protocol->generateInitBurst().split(QLatin1Char(';'),
-                                                                Qt::SkipEmptyParts);
-                for (const QString& command : commands) {
-                    messages << command + QLatin1Char(';');
-                }
-            }
-        }
-        return messages;
+        server.m_running.store(true);
+        server.onClientOpened(std::move(lifetime), QHostAddress(QStringLiteral("192.0.2.1")), port);
+        return server.m_clients.isEmpty() ? nullptr : server.m_clients.last().socket;
     }
 
     static void broadcastStatus(TciServer& server) { server.broadcastStatus(); }
@@ -88,11 +81,40 @@ void spin(int ms)
     loop.exec();
 }
 
+struct Transcripts {
+    QStringList plain;
+    QStringList peer;
+};
+
+// A stand-in command group: a read answers, a set broadcasts.
+struct Probe {
+    bool offered{true};
+#ifdef HAVE_TCI_EXTENSION_SET
+    TciExtensionSet::Group group()
+    {
+        TciExtensionSet::Group g;
+        g.token = QStringLiteral("probe");
+        g.commands = {QStringLiteral("aethersdr_probe")};
+        g.offered = [this] { return offered; };
+        g.stateLines = [] { return QStringList{QStringLiteral("aethersdr_probe:7;")}; };
+        g.handle = [](const QString&, const QStringList& args) {
+            TciExtensionSet::Result result;
+            if (args.isEmpty()) {
+                result.reply = QStringLiteral("aethersdr_probe:7;");
+            } else {
+                result.broadcast = QStringLiteral("aethersdr_probe:%1;").arg(args.first());
+            }
+            return result;
+        };
+        return g;
+    }
+#endif
+};
+
 // One script, run twice. The peer sends the same plain commands both times;
-// with `peerUsesExtensions` it also enables the set, uses it, sends malformed
-// and unknown extension commands, disables it, and sees capability edges
-// while enabled. Returns everything the plain client received, in order.
-QStringList runScript(bool peerUsesExtensions)
+// with `peerUsesExtensions` it also enables the set, uses it, malforms it and
+// disables it, across capability edges. Returns what each client received.
+Transcripts runScript(bool peerUsesExtensions)
 {
     RadioModel model;
     QString error;
@@ -102,23 +124,30 @@ QStringList runScript(bool peerUsesExtensions)
     for (SliceModel* slice : model.slices()) {
         server->wireSlice(slice->sliceId(), slice);
     }
+    Probe probe;
+#ifdef HAVE_TCI_EXTENSION_SET
+    server->registerExtensionGroup(probe.group());
+#endif
 
-    QStringList plainRx;
-    auto* plain = new TciClient;
-    QPointer<TciClient> peer(new TciClient);
-    plain->textSink = [&plainRx](const QString& text) {
-        plainRx << text;
-        return static_cast<qint64>(text.size());
-    };
-    peer->textSink = [](const QString& text) { return static_cast<qint64>(text.size()); };
-    TciServerReviewTest::attach(*server, plain, model);
-    plainRx << TciServerReviewTest::initBurst(*server, plain);
-    TciServerReviewTest::attach(*server, peer, model);
+    Transcripts rx;
+    QHash<quint64, QStringList*> byId;
+    TciServerReviewTest::tapText(*server, [&byId](quint64 id, const QString& text) {
+        if (QStringList* sink = byId.value(id)) {
+            *sink << text;
+        }
+    });
+    // Routed before open(): the init burst is written inside it.
+    auto plainLife = std::make_shared<TciClientLifetime>();
+    auto peerLife = std::make_shared<TciClientLifetime>();
+    byId.insert(plainLife->id, &rx.plain);
+    byId.insert(peerLife->id, &rx.peer);
+    TciClient* plain = TciServerReviewTest::open(*server, plainLife, 50001);
+    TciClient* peer = TciServerReviewTest::open(*server, peerLife, 50002);
 
     const auto plainSends = [plain](const char* text) {
         emit plain->textMessageReceived(QString::fromLatin1(text));
     };
-    const auto peerSends = [&peer](const char* text) {
+    const auto peerSends = [peer](const char* text) {
         emit peer->textMessageReceived(QString::fromLatin1(text));
     };
     const auto peerExtension = [&](const char* text) {
@@ -126,22 +155,28 @@ QStringList runScript(bool peerUsesExtensions)
             peerSends(text);
         }
     };
+    const auto capabilityEdge = [&](bool offered) {
+        probe.offered = offered;
+        emit model.capabilitiesChanged(true, model.backendCapabilities());
+    };
 
     plainSends("audio_samplerate:48000;rx_sensors_enable:true;vfo:0,0;modulation:0;drive;");
     peerExtension("aethersdr_ext_enable:true;");
-    peerSends("rx_sensors_enable:true;modulation:0;rx_mute:0;");
-    peerExtension("aethersdr_tx_filter_band:0;aethersdr_tx_filter_band:0,100,2900;"
-                  "aethersdr_hl2_ioboard_status;aethersdr_ext;aethersdr_ext:1;");
-    peerExtension("aethersdr_ext_enable;aethersdr_ext_enable:maybe;AETHERSDR_EXT_ENABLE:TRUE;");
-    emit model.capabilitiesChanged(true, model.backendCapabilities());
+    peerSends("rx_sensors_enable:true;modulation:0;rx_mute:0;cw_macros_speed:25;");
+    peerExtension("aethersdr_probe;aethersdr_probe:5;aethersdr_unknown:1;"
+                  "aethersdr_ext;aethersdr_ext:1;");
+    peerExtension("aethersdr_ext_enable;aethersdr_ext_enable:maybe;");
+    capabilityEdge(true);
+    capabilityEdge(false);
     TciServerReviewTest::broadcastStatus(*server);
-    plainSends("aethersdr_ext_enable;aethersdr_rx_span:0;");
+    plainSends("aethersdr_ext_enable;aethersdr_probe:3;aethersdr_rx_span:0;");
     model.slice(0)->setNb(true);
     spin(600);
-    emit model.capabilitiesChanged(false, model.backendCapabilities());
-    peerExtension("aethersdr_ext_enable:false;aethersdr_tx_filter_band:0;");
-    emit model.capabilitiesChanged(true, model.backendCapabilities());
-    peerExtension("aethersdr_ext_enable:1;");
+    capabilityEdge(true);
+    peerExtension("aethersdr_ext_enable:false;aethersdr_probe:4;");
+    capabilityEdge(false);
+    probe.offered = true;
+    peerExtension("AETHERSDR_EXT_ENABLE:1;aethersdr_probe:6;");
     emit peer->disconnected();
     spin(50);
     plainSends("vfo:0,0;");
@@ -149,9 +184,25 @@ QStringList runScript(bool peerUsesExtensions)
     spin(50);
 
     server.reset();
-    delete plain;
-    delete peer.data();
-    return plainRx;
+    return rx;
+}
+
+QStringList extensionLines(const QStringList& lines)
+{
+    QStringList out;
+    for (const QString& line : lines) {
+        if (line.contains(QLatin1String("aethersdr_"), Qt::CaseInsensitive)) {
+            out << line;
+        }
+    }
+    return out;
+}
+
+bool hasLineStarting(const QStringList& lines, const char* prefix)
+{
+    return std::any_of(lines.cbegin(), lines.cend(), [prefix](const QString& line) {
+        return line.startsWith(QLatin1String(prefix));
+    });
 }
 
 } // namespace
@@ -165,27 +216,31 @@ int main(int argc, char** argv)
     const bool printTranscript = argc > 1 && std::strcmp(argv[1], "--print-transcript") == 0;
 
     check(settingsProfile.isValid(), "isolated settings profile");
-    const QStringList quiet = runScript(false);
-    const QStringList busy = runScript(true);
+    const Transcripts quiet = runScript(false);
+    const Transcripts busy = runScript(true);
 
     if (printTranscript) {
-        for (const QString& line : busy) {
+        for (const QString& line : busy.plain) {
             std::printf("plain< %s\n", qPrintable(line));
         }
     }
 
-    check(!quiet.isEmpty() && quiet.first().startsWith(QLatin1String("vfo_limits:")),
-          "plain client's transcript starts with the init burst");
-    bool mentionsSet = false;
-    for (const QString& line : quiet + busy) {
-        mentionsSet = mentionsSet || line.contains(QLatin1String("aethersdr_"), Qt::CaseInsensitive);
-    }
-    check(!mentionsSet, "plain client never receives an aethersdr_ byte");
-    check(busy == quiet, "plain client's traffic is identical whatever the peer does with the set");
-    if (busy != quiet) {
-        for (int i = 0; i < std::max(busy.size(), quiet.size()); ++i) {
-            const QString a = i < quiet.size() ? quiet.at(i) : QStringLiteral("<none>");
-            const QString b = i < busy.size() ? busy.at(i) : QStringLiteral("<none>");
+    // Positive controls: the paths that can reach the plain client did.
+    check(!quiet.plain.isEmpty() && quiet.plain.first().startsWith(QLatin1String("vfo_limits:")),
+          "plain client's transcript starts with the init burst as the worker writes it");
+    check(hasLineStarting(busy.plain, "cw_macros_speed:25;"),
+          "plain client receives the peer's pending notification");
+    check(hasLineStarting(busy.plain, "rx_nb_enable:"),
+          "plain client receives a state-change broadcast");
+
+    check(extensionLines(quiet.plain + busy.plain).isEmpty(),
+          "plain client never receives an aethersdr_ byte");
+    check(busy.plain == quiet.plain,
+          "plain client's traffic is identical whatever the peer does with the set");
+    if (busy.plain != quiet.plain) {
+        for (int i = 0; i < std::max(busy.plain.size(), quiet.plain.size()); ++i) {
+            const QString a = i < quiet.plain.size() ? quiet.plain.at(i) : QStringLiteral("<none>");
+            const QString b = i < busy.plain.size() ? busy.plain.at(i) : QStringLiteral("<none>");
             if (a != b) {
                 std::printf("      first difference at %d: quiet=%s busy=%s\n", i,
                             qPrintable(a), qPrintable(b));
@@ -193,6 +248,28 @@ int main(int argc, char** argv)
             }
         }
     }
+
+#ifdef HAVE_TCI_EXTENSION_SET
+    // The enabled peer shows the same path carried the set to it.
+    const QStringList expected = {
+        QStringLiteral("aethersdr_ext:1,probe;"), QStringLiteral("aethersdr_probe:7;"),
+        QStringLiteral("aethersdr_probe:7;"), QStringLiteral("aethersdr_probe:5;"),
+        QStringLiteral("aethersdr_ext:1;"),
+        QStringLiteral("aethersdr_ext:1,probe;"), QStringLiteral("aethersdr_probe:7;"),
+        QStringLiteral("aethersdr_ext:1,probe;"), QStringLiteral("aethersdr_probe:7;"),
+        QStringLiteral("aethersdr_probe:6;"),
+    };
+    const QStringList peerGot = extensionLines(busy.peer);
+    check(peerGot == expected, "the enabled peer receives every extension line, in order");
+    if (peerGot != expected) {
+        for (const QString& line : peerGot) {
+            std::printf("      peer< %s\n", qPrintable(line));
+        }
+    }
+    check(!busy.peer.isEmpty() && busy.peer.first().startsWith(QLatin1String("vfo_limits:")),
+          "the peer's init burst reaches it through the worker too");
+    check(extensionLines(quiet.peer).isEmpty(), "a peer that never enables receives none");
+#endif
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
