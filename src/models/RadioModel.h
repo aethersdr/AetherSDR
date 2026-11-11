@@ -915,7 +915,9 @@ public:
     bool isSliceReserved(int sliceId) const { return m_reservedSlices.contains(sliceId); }
     // Whether a reserved slot's slice is on DAX channel `channel`. A DAX
     // channel feeds one slice, so putting it on ours would take it from them.
-    bool daxChannelReserved(int channel) const;
+    bool daxChannelReserved(int channel) const { return !daxChannelReservedBy(channel).isEmpty(); }
+    // The label of the reserved slot on DAX channel `channel`, or empty.
+    QString daxChannelReservedBy(int channel) const;
     // Runs on a LAN connect just before `client gui`, whose reply carries
     // the radio's slice statuses, so a reservation made here applies from
     // the first one. The gate must call `proceed`; registration also goes
@@ -1478,6 +1480,8 @@ signals:
     // empty states.  UI listens to this to re-style slice-tab buttons
     // (e.g. RxApplet dims foreign slots).
     void slotOccupancyChanged(int sliceId);
+    // A reserved slot gained, changed or lost its DAX channel (daxChannelReservedBy).
+    void reservedDaxChanged();
     // Emitted when the set of other connected clients changes.
     void otherClientsChanged(int count, const QStringList& names);
     // Emitted when another GUI client logs in after our known client list.

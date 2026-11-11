@@ -7091,7 +7091,10 @@ void RadioModel::stageSessionModelsForReconnect()
     }
     m_foreignSliceOwners.clear();
     m_reservedSlices.clear();
-    m_reservedDax.clear();
+    if (!m_reservedDax.isEmpty()) {
+        m_reservedDax.clear();
+        emit reservedDaxChanged();
+    }
     m_pendingPanStatuses.clear();
     m_panTransmitInhibitReasons.clear();
     m_panTransmitInhibitedTxSlices.clear();
@@ -7202,7 +7205,10 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     m_ownedSliceIds.clear();
     m_foreignSliceOwners.clear();
     m_reservedSlices.clear();
-    m_reservedDax.clear();
+    if (!m_reservedDax.isEmpty()) {
+        m_reservedDax.clear();
+        emit reservedDaxChanged();
+    }
     m_activePanId.clear();
     m_staleSessionSerial.clear();
     m_connectedSessionSerial.clear();
@@ -12807,8 +12813,10 @@ void RadioModel::reserveSlice(int sliceId, const QString& label)
     }
     const bool was = m_reservedSlices.contains(sliceId);
     m_reservedSlices.insert(sliceId, label);
-    if (const SliceModel* adopted = slice(sliceId); adopted && adopted->daxChannel() > 0) {
+    if (const SliceModel* adopted = slice(sliceId); adopted && adopted->daxChannel() > 0
+        && m_reservedDax.value(sliceId, -1) != adopted->daxChannel()) {
         m_reservedDax.insert(sliceId, adopted->daxChannel());
+        emit reservedDaxChanged();
     }
     m_ownedSliceIds.remove(sliceId);
     m_foreignSliceOwners.remove(sliceId);
@@ -12820,24 +12828,29 @@ void RadioModel::reserveSlice(int sliceId, const QString& label)
     }
 }
 
-bool RadioModel::daxChannelReserved(int channel) const
+QString RadioModel::daxChannelReservedBy(int channel) const
 {
     if (channel <= 0) {
-        return false;
+        return {};
     }
     for (auto it = m_reservedDax.constBegin(); it != m_reservedDax.constEnd(); ++it) {
-        if (it.value() == channel && m_reservedSlices.contains(it.key())) {
-            return true;
+        if (it.value() == channel) {
+            if (auto label = m_reservedSlices.constFind(it.key()); label != m_reservedSlices.constEnd()) {
+                return label.value();
+            }
         }
     }
-    return false;
+    return {};
 }
 
 void RadioModel::releaseReservedSlice(int sliceId)
 {
-    m_reservedDax.remove(sliceId);
+    const bool hadDax = m_reservedDax.remove(sliceId) > 0;
     if (m_reservedSlices.remove(sliceId)) {
         emit slotOccupancyChanged(sliceId);
+    }
+    if (hadDax) {
+        emit reservedDaxChanged();
     }
 }
 
@@ -12850,11 +12863,18 @@ void RadioModel::handleSliceStatus(int id,
     if (m_reservedSlices.contains(id)) {
         if (removed) {
             m_reservedSlices.remove(id);
-            m_reservedDax.remove(id);
+            const bool hadDax = m_reservedDax.remove(id) > 0;
             noteSliceRetirement(id);
             emit slotOccupancyChanged(id);
+            if (hadDax) {
+                emit reservedDaxChanged();
+            }
         } else if (auto dax = kvs.constFind(QStringLiteral("dax")); dax != kvs.constEnd()) {
-            m_reservedDax.insert(id, dax.value().toInt());
+            const int channel = dax.value().toInt();
+            if (m_reservedDax.value(id, -1) != channel) {
+                m_reservedDax.insert(id, channel);
+                emit reservedDaxChanged();
+            }
         }
         return;
     }
