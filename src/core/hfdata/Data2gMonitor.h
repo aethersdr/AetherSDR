@@ -82,7 +82,8 @@ public:
     void reset();
 
     // feed() calls that ended in a core exception. Each one reset the
-    // monitor.
+    // monitor. If the reset itself failed the monitor goes invalid, and every
+    // later feed() counts here too, so the failure stays visible.
     std::uint64_t faultCount() const;
 
     // Mono float32 at sampleRate(), in chunks of any size. Level does not

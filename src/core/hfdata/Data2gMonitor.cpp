@@ -91,8 +91,15 @@ std::uint64_t Data2gMonitor::faultCount() const
 std::vector<Data2gBurst> Data2gMonitor::feed(std::span<const float> mono)
 {
     std::vector<Data2gBurst> out;
-    if (!m_impl->valid || mono.empty())
+    if (mono.empty())
         return out;
+    if (!m_impl->valid) {
+        // Only a supported rate can have lost its core; an unsupported rate
+        // was never a monitor and is not a fault.
+        if (isSupportedSampleRate(m_impl->sampleRate))
+            ++m_impl->faults;
+        return out;
+    }
 
     m_impl->scratch.assign(mono.begin(), mono.end());
 
@@ -117,7 +124,15 @@ std::vector<Data2gBurst> Data2gMonitor::feed(std::span<const float> mono)
     if (fault) {
         // Whatever the core held is in an unknown state: start clean.
         ++m_impl->faults;
-        m_impl->restart();
+        try {
+            m_impl->restart();
+        } catch (const std::exception&) {
+            // Could not rebuild: stay silent rather than run on a core in an
+            // unknown state. Every later feed() counts as a fault.
+            m_impl->decimator.reset();
+            m_impl->monitor.reset();
+            m_impl->valid = false;
+        }
         return out;
     }
 

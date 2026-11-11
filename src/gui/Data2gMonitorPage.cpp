@@ -3,6 +3,7 @@
 #include "core/ThemeManager.h"
 #include "models/Data2gReceiveModel.h"
 
+#include <QAccessible>
 #include <QCheckBox>
 #include <QFontDatabase>
 #include <QFrame>
@@ -87,13 +88,22 @@ QLabel* footerLabel(const QString& text, QWidget* parent)
     return label;
 }
 
-QLabel* footerValue(const QString& objectName, const QString& accessibleName, QWidget* parent)
+QLabel* footerValue(const QString& objectName, QWidget* parent)
 {
     auto* label = new QLabel(QStringLiteral("0"), parent);
     label->setObjectName(objectName);
     label->setProperty("data2gValue", true);
-    label->setAccessibleName(accessibleName);
     return label;
+}
+
+// An accessible name replaces a label's text for a screen reader, so the name
+// has to carry the value. Counters are named silently: they change with every
+// burst, and announcing each one would talk over the operator.
+void setCounter(QLabel* label, const QString& what, quint64 value)
+{
+    const QString text = QLocale().toString(value);
+    label->setText(text);
+    label->setAccessibleName(Data2gMonitorPage::tr("%1: %2").arg(what, text));
 }
 
 } // namespace
@@ -164,7 +174,6 @@ void Data2gMonitorPage::buildHeader()
     m_stateLabel = new QLabel(frame);
     m_stateLabel->setObjectName(QStringLiteral("data2gMonitorState"));
     m_stateLabel->setProperty("data2gValue", true);
-    m_stateLabel->setAccessibleName(tr("HF Data monitor state"));
     row->addWidget(m_stateLabel, 0, Qt::AlignVCenter);
 
     m_monitorCheck = new QCheckBox(tr("Monitor"), frame);
@@ -229,19 +238,15 @@ void Data2gMonitorPage::buildFooter()
     row->setSpacing(10);
 
     row->addWidget(footerLabel(tr("BURSTS HEARD"), frame));
-    m_burstsValue = footerValue(QStringLiteral("data2gMonitorBursts"),
-                                tr("Data2G bursts heard"), frame);
+    m_burstsValue = footerValue(QStringLiteral("data2gMonitorBursts"), frame);
     row->addWidget(m_burstsValue);
     row->addSpacing(18);
     row->addWidget(footerLabel(tr("AUDIO DROPPED"), frame));
-    m_overflowsValue = footerValue(QStringLiteral("data2gMonitorOverflows"),
-                                   tr("Times the monitor dropped audio it could not keep up with"),
-                                   frame);
+    m_overflowsValue = footerValue(QStringLiteral("data2gMonitorOverflows"), frame);
     row->addWidget(m_overflowsValue);
     row->addSpacing(18);
     row->addWidget(footerLabel(tr("DECODE FAULTS"), frame));
-    m_faultsValue = footerValue(QStringLiteral("data2gMonitorFaults"),
-                                tr("Data2G bursts the decoder rejected"), frame);
+    m_faultsValue = footerValue(QStringLiteral("data2gMonitorFaults"), frame);
     row->addWidget(m_faultsValue);
     row->addStretch(1);
 
@@ -313,7 +318,9 @@ void Data2gMonitorPage::refreshState()
         state = tr("Off");
         dot = QStringLiteral("off");
     }
+    const bool stateChanged = m_stateLabel->text() != state;
     m_stateLabel->setText(state);
+    m_stateLabel->setAccessibleName(tr("HF Data monitor: %1").arg(state));
     m_stateLabel->setToolTip(reason);
     m_stateLabel->setAccessibleDescription(reason);
     m_stateDot->setToolTip(reason);
@@ -323,6 +330,10 @@ void Data2gMonitorPage::refreshState()
         m_stateDot->style()->unpolish(m_stateDot);
         m_stateDot->style()->polish(m_stateDot);
     }
+    if (stateChanged) {
+        QAccessibleEvent event(m_stateLabel, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
 }
 
 void Data2gMonitorPage::refreshStats()
@@ -331,10 +342,10 @@ void Data2gMonitorPage::refreshStats()
         return;
     }
     const Data2gReceiveModel::Stats stats = m_model->stats();
-    const QLocale locale;
-    m_burstsValue->setText(locale.toString(stats.bursts));
-    m_overflowsValue->setText(locale.toString(stats.overflows));
-    m_faultsValue->setText(locale.toString(stats.faults));
+    setCounter(m_burstsValue, tr("Data2G bursts heard"), stats.bursts);
+    setCounter(m_overflowsValue,
+               tr("Times the monitor dropped audio it could not keep up with"), stats.overflows);
+    setCounter(m_faultsValue, tr("Data2G bursts the decoder rejected"), stats.faults);
 }
 
 } // namespace AetherSDR

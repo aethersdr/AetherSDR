@@ -9,10 +9,12 @@
 #include <QMutexLocker>
 #include <QPointer>
 #include <QThread>
+#include <QTimeZone>
 
 #include <algorithm>
 #include <atomic>
 #include <deque>
+#include <limits>
 #include <span>
 #include <utility>
 
@@ -22,6 +24,7 @@ struct Data2gReceiveModel::Impl {
     struct Input {
         QVector<float> samples;
         quint64 generation = 0;
+        qint64 arrivedMs = 0;   // UTC, when the block's last sample reached feed()
     };
     struct Output {
         quint64 generation = 0;
@@ -58,8 +61,8 @@ struct Data2gReceiveModel::Impl {
         explicit Worker(std::shared_ptr<State> state)
             : m_state(std::move(state)), m_monitor(kSampleRateHz)
         {
-            m_monitor.setStamp([](double) {
-                return QDateTime::currentDateTimeUtc()
+            m_monitor.setStamp([this](double startSeconds) {
+                return startedAt(startSeconds)
                     .toString(QStringLiteral("HH:mm:ss'Z'")).toStdString();
             });
         }
@@ -83,6 +86,7 @@ struct Data2gReceiveModel::Impl {
                 if (input.generation != m_generation) {
                     m_monitor.reset();
                     m_generation = input.generation;
+                    m_originMs = kNoOrigin;
                 }
                 if (input.generation != m_state->generation.load()) {
                     continue;   // queued before a reset that has since happened
@@ -93,6 +97,21 @@ struct Data2gReceiveModel::Impl {
         }
 
     private:
+        static constexpr qint64 kNoOrigin = std::numeric_limits<qint64>::min();
+
+        // A burst is decoded only once it has arrived whole, and the queue
+        // can run behind, so "now" is late by the burst's length or more. The
+        // stream is anchored to the wall clock where it began instead, and a
+        // burst is timed by its position in the stream.
+        QDateTime startedAt(double startSeconds) const
+        {
+            if (m_originMs == kNoOrigin) {
+                return QDateTime::currentDateTimeUtc();
+            }
+            return QDateTime::fromMSecsSinceEpoch(
+                m_originMs + static_cast<qint64>(startSeconds * 1000.0), QTimeZone::UTC);
+        }
+
         // A decode cannot be abandoned once started, so feed a fraction of a
         // second at a time and look for shutdown or a reset in between.
         void decode(const Input& input)
@@ -101,15 +120,28 @@ struct Data2gReceiveModel::Impl {
             Output output;
             output.generation = input.generation;
             const quint64 faultsBefore = m_monitor.faultCount();
+            if (m_originMs == kNoOrigin) {
+                // The monitor's clock is at zero where this block starts.
+                m_originMs = input.arrivedMs
+                    - input.samples.size() * qint64(1000) / kSampleRateHz;
+            }
             for (qsizetype offset = 0; offset < input.samples.size(); offset += kChunk) {
                 if (m_state->quit.load() || input.generation != m_state->generation.load()) {
                     return;
                 }
                 const qsizetype n = std::min(kChunk, input.samples.size() - offset);
+                const quint64 faultsNow = m_monitor.faultCount();
                 const auto heard = m_monitor.feed(std::span<const float>(
                     input.samples.constData() + offset, static_cast<std::size_t>(n)));
+                if (m_monitor.faultCount() != faultsNow) {
+                    // A fault restarted the monitor: its clock is at zero
+                    // where the next chunk starts.
+                    m_originMs = input.arrivedMs
+                        - (input.samples.size() - offset - n) * qint64(1000) / kSampleRateHz;
+                }
                 for (const hfdata::Data2gBurst& burst : heard) {
-                    output.bursts.append({QDateTime::currentDateTimeUtc(),
+                    output.bursts.append({startedAt(burst.startSeconds),
+                                          QDateTime::currentDateTimeUtc(),
                                           QString::fromUtf8(burst.head),
                                           QString::fromUtf8(burst.text)});
                 }
@@ -129,6 +161,7 @@ struct Data2gReceiveModel::Impl {
         std::shared_ptr<State> m_state;
         hfdata::Data2gMonitor m_monitor;
         quint64 m_generation = 0;
+        qint64 m_originMs = kNoOrigin;   // UTC of the monitor's time zero
     };
 #endif
 
@@ -296,7 +329,8 @@ void Data2gReceiveModel::feed(const QVector<float>& mono, bool discontinuity)
             overflow = true;
         }
         if (mono.size() <= Impl::State::kMaxFrames) {
-            d.state->input.push_back({mono, d.state->generation.load()});
+            d.state->input.push_back({mono, d.state->generation.load(),
+                                      QDateTime::currentMSecsSinceEpoch()});
             d.state->frames += mono.size();
             d.scheduleWorker();
         }

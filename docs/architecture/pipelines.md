@@ -10,7 +10,7 @@ high-level routing overview; it intentionally omits many audio-stage details.
 
 ### Data Pipelines
 
-Multi-thread architecture — up to 13 threads depending on features enabled:
+Multi-thread architecture — up to 14 threads depending on features enabled:
 - **Main thread**: GUI rendering (paintEvent), RadioModel + all sub-models, TciServer control/routing/PTT, user input
 - **Connection thread**: RadioConnection (TCP 4992 I/O, kernel TCP_INFO RTT)
 - **Audio thread**: AudioEngine (RX/TX audio; NR2/RN2/NR4/DFNR/BNR/MNR DSP, QAudioSink/Source)

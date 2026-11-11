@@ -116,6 +116,35 @@ void decodes(const std::vector<float>& pcm)
           "a clean stream counts no fault or overflow");
 }
 
+// The stamp is when the burst began on the air, not when its decode finished:
+// the whole signal arrives as one block, so the burst began before that block
+// landed, by at least the burst's own length.
+void timesBurstStart(const std::vector<float>& pcm)
+{
+    Data2gReceiveModel model;
+    QVector<Data2gHeardBurst> heard;
+    QObject::connect(&model, &Data2gReceiveModel::burstHeard,
+                     [&](const Data2gHeardBurst& burst) { if (isBeacon(burst)) heard.append(burst); });
+    model.setEnabled(true);
+    const QDateTime before = QDateTime::currentDateTimeUtc();
+    model.feed(QVector<float>(pcm.begin(), pcm.end()));
+    const QDateTime fed = QDateTime::currentDateTimeUtc();
+    check(waitFor([&] { return !heard.isEmpty(); }), "start time: the burst is reported");
+    if (heard.isEmpty())
+        return;
+    const Data2gHeardBurst& burst = heard.first();
+    const qint64 lengthMs = static_cast<qint64>(pcm.size()) * 1000 / Data2gReceiveModel::kSampleRateHz;
+    check(burst.startedUtc.isValid() && burst.startedUtc.timeSpec() == Qt::UTC,
+          "start time: the burst carries a UTC start");
+    check(burst.startedUtc >= before.addMSecs(-lengthMs),
+          "start time: not before the stream began");
+    check(burst.startedUtc <= fed.addMSecs(-300),
+          "start time: before the audio finished arriving, not when the decode ended");
+    check(burst.startedUtc <= burst.heardUtc, "start time: the burst starts before it is decoded");
+    check(burst.head.startsWith(burst.startedUtc.toString(QStringLiteral("HH:mm:ss'Z'"))),
+          "start time: the burst line opens with its start");
+}
+
 // A source change mid-burst, then the whole burst: reported exactly once.
 void resets(const std::vector<float>& pcm)
 {
@@ -204,6 +233,7 @@ int main(int argc, char** argv)
 
     identity();
     decodes(pcm);
+    timesBurstStart(pcm);
     resets(pcm);
     disables(pcm);
     overflows();

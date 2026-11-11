@@ -13,6 +13,7 @@ namespace AetherSDR {
 // One Data2G burst as the monitor heard it. Everything in it came off the
 // air: treat the strings as untrusted text, never as markup.
 struct Data2gHeardBurst {
+    QDateTime startedUtc; // when the burst began on the air, from the audio's arrival time
     QDateTime heardUtc;   // when the decode finished
     QString head;         // description lines, each ending in '\n'
     QString text;         // head plus payloads, rendered for a log view
