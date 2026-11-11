@@ -541,6 +541,14 @@ void SerialPortController::baselineInputs(bool ctsRaw, bool dsrRaw, bool dcdRaw)
     m_debounceTimer.start();
 }
 
+void SerialPortController::rebaselineInPlace(bool ctsRaw, bool dsrRaw, bool dcdRaw)
+{
+    // Release what is held first: a baseline alone would drop a held key or
+    // paddle without publishing its release, leaving the radio keyed.
+    retireTxInputs();
+    baselineInputs(ctsRaw, dsrRaw, dcdRaw);
+}
+
 void SerialPortController::applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRaw,
                                             const TxCoordinator::Request& input)
 {
@@ -664,8 +672,8 @@ void SerialPortController::loadSettings()
 
         if (samePort) {
             // Port already open on the same port/baud — update settings in-place.
-            // Re-sample pin state with new polarity so next event/poll doesn't
-            // see a phantom edge from the polarity flip.
+            // Rebaseline every role with the new polarity so the next poll sees
+            // no phantom PTT, key or paddle edge from the flip.
             qCDebug(lcDevices) << "SerialPortController::loadSettings: in-place update (no reopen)";
 #ifdef Q_OS_WIN
             {
@@ -674,9 +682,7 @@ void SerialPortController::loadSettings()
                 bool cts = (modemStat & MS_CTS_ON)  != 0;
                 bool dsr = (modemStat & MS_DSR_ON)  != 0;
                 bool dcd = (modemStat & MS_RLSD_ON) != 0;
-                m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
-                m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
-                m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
+                rebaselineInPlace(cts, dsr, dcd);
             }
 #else
 #  ifdef HAVE_SERIALPORT
@@ -685,9 +691,7 @@ void SerialPortController::loadSettings()
                 bool cts = pinState.testFlag(QSerialPort::ClearToSendSignal);
                 bool dsr = pinState.testFlag(QSerialPort::DataSetReadySignal);
                 bool dcd = pinState.testFlag(QSerialPort::DataCarrierDetectSignal);
-                m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
-                m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
-                m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
+                rebaselineInPlace(cts, dsr, dcd);
             }
             updatePolling();
 #  endif

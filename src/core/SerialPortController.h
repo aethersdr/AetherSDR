@@ -153,6 +153,9 @@ private:
     // The lines as they read at open are the baseline for every role, so a line
     // already active keys nothing until it is released and pressed again.
     void baselineInputs(bool ctsRaw, bool dsrRaw, bool dcdRaw);
+    // loadSettings() with the port already open: release held inputs, then
+    // baseline under the new polarity and roles.
+    void rebaselineInPlace(bool ctsRaw, bool dsrRaw, bool dcdRaw);
     // One sample of the raw input lines, from the poll or the Win32 watcher.
     void applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRaw,
                           const TxCoordinator::Request& input);

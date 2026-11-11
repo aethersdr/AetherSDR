@@ -4,7 +4,8 @@
 // paddle lines now are too, so a line that reads active at open needs a release
 // and a press before it keys. Injected samples through the production sampling
 // path (the poll and the Win32 watcher share it); no port is opened, so open()'s
-// own call to the baseline is source, not exercised here.
+// own call to the baseline is source, not exercised here. The same holds for
+// loadSettings()'s in-place reload: its rebaseline runs here, the call does not.
 
 #include "TestSettingsProfile.h"
 #include "core/SerialPortController.h"
@@ -27,6 +28,10 @@ public:
     static void sample(SerialPortController& c, bool cts, bool dsr, bool dcd)
     {
         c.applyInputSample(cts, dsr, dcd, {});
+    }
+    static void reload(SerialPortController& c, bool cts, bool dsr, bool dcd)
+    {
+        c.rebaselineInPlace(cts, dsr, dcd);
     }
 };
 } // namespace AetherSDR
@@ -152,6 +157,57 @@ void pttUnchanged()
     check(r.ptts.empty(), "a PTT line active at open still asserts no PTT");
 }
 
+// Polarity flipped with the port open (loadSettings() in place) on an idle key.
+void polarityFlipIdleKey()
+{
+    const std::string tag = "polarity flip, key idle";
+    SerialPortController c;
+    c.setCtsFunction(Input::CwKeyInput);
+    c.setCtsPolarity(true);
+    Recorder r(c);
+    SerialInputBaselineTestAccess::open(c, false, false, false);
+    SerialInputBaselineTestAccess::sample(c, false, false, false);
+
+    c.setCtsPolarity(false);  // the idle-low line now reads active
+    SerialInputBaselineTestAccess::reload(c, false, false, false);
+    SerialInputBaselineTestAccess::sample(c, false, false, false);
+    check(!r.anyKeyDown(), tag + ": the next poll emits no key-down");
+    SerialInputBaselineTestAccess::sample(c, true, false, false);
+    SerialInputBaselineTestAccess::sample(c, false, false, false);
+    check(r.anyKeyDown() && r.keys.back(), tag + ": a release and a press key");
+}
+
+// Polarity flipped while the key is held: the hold is released, not dropped.
+void polarityFlipHeldKey()
+{
+    const std::string tag = "polarity flip, key held";
+    SerialPortController c;
+    c.setCtsFunction(Input::CwKeyInput);
+    c.setCtsPolarity(true);
+    Recorder r(c);
+    SerialInputBaselineTestAccess::open(c, false, false, false);
+    SerialInputBaselineTestAccess::sample(c, true, false, false);
+    check(r.keys.size() == 1 && r.keys.front(), tag + ": control: the press keys");
+
+    c.setCtsPolarity(false);
+    SerialInputBaselineTestAccess::reload(c, true, false, false);
+    SerialInputBaselineTestAccess::sample(c, true, false, false);
+    check(!r.keys.empty() && !r.keys.back(), tag + ": the reload publishes the key-up");
+}
+
+void polarityFlipIdlePaddle()
+{
+    SerialPortController c;
+    c.setDsrFunction(Input::CwDitInput);
+    c.setDsrPolarity(true);
+    Recorder r(c);
+    SerialInputBaselineTestAccess::open(c, false, false, false);
+    c.setDsrPolarity(false);
+    SerialInputBaselineTestAccess::reload(c, false, false, false);
+    SerialInputBaselineTestAccess::sample(c, false, false, false);
+    check(!r.anyPaddleDown(), "polarity flip, paddle idle: the next poll emits no element");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -169,6 +225,9 @@ int main(int argc, char** argv)
     paddle(false);
     paddle(true);
     pttUnchanged();
+    polarityFlipIdleKey();
+    polarityFlipHeldKey();
+    polarityFlipIdlePaddle();
 
     if (failures == 0) {
         std::printf("serial_cw_key_baseline_test: all checks passed\n");
