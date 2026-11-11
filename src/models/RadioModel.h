@@ -1949,6 +1949,8 @@ private:
     // run again on a family change — not just at construction.
     void setupBackend(const QString& family);
     void teardownBackend();
+    // Front-end overload back to Unobserved, emitting only on a change.
+    void resetFrontEndOverload();
     // The family switch itself: drop session models, tear down, build, announce.
     // One body, called by connectToRadio() and rebuildBackendForTest().
     void rebuildBackendForFamily(const QString& family);

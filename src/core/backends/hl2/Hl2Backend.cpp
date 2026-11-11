@@ -520,6 +520,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // the filter instead of blending with history.
         m_havePaTemp = false;
         m_paTempC = 0.0;
+        // A reading belongs to its connection: back to Unobserved, and the next
+        // session's first window publishes even if it equals this one's last.
+        if (m_lastFrontEndOverload != AetherSDR::FrontEndOverload {}) {
+            m_lastFrontEndOverload = {};
+            emit frontEndOverloadChanged(m_lastFrontEndOverload);
+        }
         if (m_connected) {
             m_connected = false;
             m_ceilingAnnouncer.reset();   // #5594 (M1): re-seeded on the next connect

@@ -822,7 +822,7 @@ add_test(NAME control_telemetry_test COMMAND control_telemetry_test)
 # declarations read from the production backends.
 add_executable(control_front_end_overload_test tests/control_front_end_overload_test.cpp)
 target_include_directories(control_front_end_overload_test PRIVATE src tests)
-target_link_libraries(control_front_end_overload_test PRIVATE aethercore Qt6::Core)
+target_link_libraries(control_front_end_overload_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME control_front_end_overload_test COMMAND control_front_end_overload_test)
 
 # not registered: explicit opt-in diagnostic. Launches OUR aetherd and binds

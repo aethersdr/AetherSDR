@@ -5,11 +5,14 @@
 // Nothing here ran on a radio.
 
 #include "TestSettingsProfile.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/MetisClient.h"
 #include "core/control/ControlService.h"
 #include "core/control/RadioResourceAdapter.h"
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSet>
@@ -18,6 +21,24 @@
 #include <array>
 #include <cstdio>
 #include <memory>
+
+namespace AetherSDR::hl2 {
+// Drives the HL2's own publish and link-down handler without a socket.
+struct Hl2FrontEndOverloadTestAccess {
+    static void setConnected(Hl2Backend& b, bool on) { b.m_connected = on; }
+    static void publishWindow(Hl2Backend& b, int samples, int overloads)
+    {
+        b.m_adcWindowSamples = samples;
+        b.m_adcOverloadWindowSamples = overloads;
+        b.publishFrontEndOverload();
+    }
+    static void linkDown(Hl2Backend& b)
+    {
+        QMetaObject::invokeMethod(b.m_metis, "linkDown", Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
+    }
+};
+}  // namespace AetherSDR::hl2
 
 using namespace AetherSDR;
 using namespace AetherSDR::control;
@@ -161,6 +182,58 @@ void declaringBackendIsOffered()
     check(!f.store.get(f.address), "a late reading cannot resurrect it while disconnected");
 }
 
+// A plain disconnect leaves the backend and the model alive, so a reconnect
+// must not start from the last connection's level. `viaBackendPublish` false:
+// the reading bypasses the backend's dedup, so only RadioModel can clear it.
+// True: the backend's own publish, whose dedup must also forget the session.
+void reconnectStartsUnobserved(bool viaBackendPublish)
+{
+    using Access = hl2::Hl2FrontEndOverloadTestAccess;
+    RadioModel radio;
+    if (!radio.rebuildBackendForTest(QStringLiteral("hl2"))) {
+        std::printf("[SKIP] hl2 has no backend in this build\n");
+        return;
+    }
+    auto* hl2 = static_cast<hl2::Hl2Backend*>(radio.backend());
+    ControlResourceStore store;
+    RadioResourceAdapter adapter(&radio, &store, "radio-1");
+    const ResourceAddress address{"frontEndOverload", "radio-1", {}};
+    const auto level = [&] {
+        const auto snapshot = store.get(address);
+        return snapshot ? snapshot->value.value("level").toString() : QString();
+    };
+    const QString hot = RadioResourceAdapter::frontEndLevelName(FrontEndLevel::Hot);
+    const QString unobserved = RadioResourceAdapter::frontEndLevelName(FrontEndLevel::Unobserved);
+
+    Access::setConnected(*hl2, true);
+    emit radio.connectionStateChanged(true);
+    const auto readHot = [&] {
+        if (viaBackendPublish) {
+            Access::publishWindow(*hl2, 4096, 4096);
+        } else {
+            FrontEndOverload s;
+            s.level = FrontEndLevel::Hot;
+            emit hl2->frontEndOverloadChanged(s);
+        }
+    };
+    readHot();
+    check(level() == hot, "a connected HL2 reading hot publishes hot");
+
+    Access::linkDown(*hl2);
+    check(!store.get(address) && radio.frontEndOverload() == FrontEndOverload {},
+          "the link going down withdraws the resource and clears the model");
+
+    Access::setConnected(*hl2, true);
+    emit radio.connectionStateChanged(true);
+    check(level() == unobserved,
+          viaBackendPublish ? "reconnect after the backend's own hot publish starts unobserved"
+                            : "reconnect after a hot reading starts unobserved");
+    if (viaBackendPublish) {
+        readHot();
+        check(level() == hot, "the next session's first window publishes even if it equals the last");
+    }
+}
+
 void nonDeclaringBackendIsNotOffered()
 {
     Fixture f(false);
@@ -209,6 +282,8 @@ int main(int argc, char** argv)
     }
     QCoreApplication app(argc, argv);
     declaringBackendIsOffered();
+    reconnectStartsUnobserved(true);
+    reconnectStartsUnobserved(false);
     nonDeclaringBackendIsNotOffered();
     productionDeclarations();
     return failures == 0 ? 0 : 1;

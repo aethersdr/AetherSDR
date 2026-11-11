@@ -328,6 +328,9 @@ private:
     // Reads the snapshot at a chosen instant, so hl2_adc_age_gate_test puts a
     // held slice peak on either side of kSliceStaleMs without waiting.
     friend struct Hl2AdcAgeTestAccess;
+    // Forces m_connected, publishes a window and fires linkDown, so
+    // control_front_end_overload_test follows a reconnect without a socket.
+    friend struct Hl2FrontEndOverloadTestAccess;
     // Runs loadHardwareOptions() without a socket (hl2_hardware_document_test).
     friend struct Hl2BoardIdentityTestAccess;
     // The snapshot at `nowNs`, on steadyNowNs()'s timeline. The converter rows

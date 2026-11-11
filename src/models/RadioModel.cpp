@@ -1408,12 +1408,14 @@ void RadioModel::setupBackend(const QString& family)
 
     // Front-end overload is a live readout, not stored beyond the last value: a
     // stale copy surviving a disconnect would show green for a radio that is gone.
-    // resetFrontEndOverload() clears it.
+    // resetFrontEndOverload() clears it on disconnect and on teardownBackend().
     connect(m_backend.get(), &IRadioBackend::frontEndOverloadChanged, this,
             [this](const AetherSDR::FrontEndOverload& s) {
         m_frontEndOverload = s;
         emit frontEndOverloadChanged(s);
     });
+    connect(m_backend.get(), &IRadioBackend::disconnected, this,
+            &RadioModel::resetFrontEndOverload);
     // Nothing cached: the control itself answers isArmed() and
     // lastArmRefusalReason(), and a view that arrives late asks it directly.
     connect(m_backend.get(), &IRadioBackend::autoRfGainArmSettled,
@@ -1922,6 +1924,17 @@ void RadioModel::wireBackendReceiverState()
     });
 }
 
+// Back to "no reading" rather than whatever the last radio said. A lamp left
+// showing Clean for a radio that is gone is worse than one showing nothing, and
+// a reconnect must not start from the previous connection's level.
+void RadioModel::resetFrontEndOverload()
+{
+    if (m_frontEndOverload != AetherSDR::FrontEndOverload {}) {
+        m_frontEndOverload = {};
+        emit frontEndOverloadChanged(m_frontEndOverload);
+    }
+}
+
 void RadioModel::teardownBackend()
 {
     m_txSessionClosing = true;
@@ -1950,13 +1963,7 @@ void RadioModel::teardownBackend()
         m_backend->retirePcmStreams();
     }
     expirePendingCallbacks(QStringLiteral("the radio connection was replaced"));
-    // Back to "no reading" rather than whatever the last radio said. A lamp
-    // left showing Clean for a radio that is gone is worse than one showing
-    // nothing, because it answers a question nobody can currently ask.
-    if (m_frontEndOverload != AetherSDR::FrontEndOverload {}) {
-        m_frontEndOverload = {};
-        emit frontEndOverloadChanged(m_frontEndOverload);
-    }
+    resetFrontEndOverload();
     m_memoryRefreshActive = false;
     m_memoryImportFailures = 0;
     // Drop the backend and everything it owns (RadioConnection, PanadapterStream

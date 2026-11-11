@@ -359,19 +359,20 @@ Present only while the radio session is connected to a backend that declares
 `capabilities.get` lists `frontEndOverload.read` only while it is present.
 A backend without the record is never offered it, even if it reports a reading.
 
-- `level`: `unobserved` (no converter reading in this connection yet, not the
-  same as clean), `clean`, `marginal` (the converter railed in some
-  observations), `hot` (in more of them than not), or `atFloor` (still
-  clipping with the automatic gain loop as deep as it may go).
+- `level`: `unobserved` (no converter reading in this connection yet, or a
+  window with too few samples to classify; not the same as clean), `clean`,
+  `marginal` (the converter railed in some observations), `hot` (in more of
+  them than not), or `atFloor` (still clipping with the automatic gain loop as
+  deep as it may go).
 - `autoGain`: `armed` (whether the automatic RF-gain loop runs) and `offsetDb`
   (how far below the operator's own setting the loop holds the gain, in whole
   dB; meaningful only while `armed`).
 
 The level is the backend's own classification of its converter; the resource
 changes only when the backend's reading does. The backend's free-text reason is
-not projected. Disconnect and
-backend replacement remove the resource. Changes never touch the
-`radioSession`, slice or pan revisions.
+not projected. Disconnect and backend replacement remove the resource, and a
+reconnect starts at `unobserved`. Changes never touch the `radioSession`, slice
+or pan revisions.
 
 FFT bins, waterfall rows, audio, and other high-rate streams never enter these
 JSON resources; they belong to the later bounded binary data plane.
