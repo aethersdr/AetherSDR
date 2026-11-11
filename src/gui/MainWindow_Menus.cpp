@@ -587,7 +587,8 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_MIDI
     auto* midiAction = controllersMenu->addAction("MIDI Mapping...");
     connect(midiAction, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_midiDialog, m_midiControl);
+        showOrRaiseCanon(m_midiDialog,
+                         [this] { return new MidiMappingDialog(m_midiControl, this); });
     });
 #endif
 #ifdef HAVE_HIDAPI
