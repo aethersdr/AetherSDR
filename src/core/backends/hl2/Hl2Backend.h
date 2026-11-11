@@ -108,6 +108,10 @@ public:
         TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
+    // One receive input, ANT (#4954): ANT is accepted with nothing to send, any
+    // other token is refused; when called, both republish the slice so the
+    // button shows ANT. RadioModel refuses a token outside the list before this.
+    ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
@@ -156,6 +160,8 @@ public:
     void removeNotch(int notchId) override;
     void setNotchesEnabled(bool on) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
+    ReceiveDispatch requestCwControl(const CwControlRequest& request,
+        const TxCoordinator::Command& command) override;
     void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source,
@@ -282,6 +288,7 @@ private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PanCreateTestAccess;
     friend struct Hl2PcmTestAccess;
+    friend struct Hl2RxAntennaTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
     // Hands receiver 0 a configured Hl2RxDsp so the APF and AGC-off verbs can
@@ -300,10 +307,15 @@ private:
     // socket or DSP, for hl2_rit_xit_test. Reaches nothing else.
     friend struct Hl2RitXitTestAccess;
     friend struct Hl2Cl1ReferenceTestAccess;
+    // Reads whether the connect built the transmit chain, on its own thread.
+    friend struct Hl2RxOnlyTxChainTestAccess;
     // Fires link edges through MetisClient's signals and seeds the connect
     // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
     friend struct Hl2AutoGainLawTestAccess;
     friend struct Hl2SessionMemoryTestAccess;
+    // Installs MetisClient's start() stand-in and injects the link edge, so a
+    // real connectRadio() runs without a socket (hl2_persist_*_test).
+    friend struct Hl2PersistTestAccess;
     // Feeds EP6 status frames to the backend's own MetisClient on its I/O thread,
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
@@ -401,7 +413,7 @@ private:
     std::unique_ptr<RadioConnectRequest> m_queuedConnect;
     quint64 m_connectGeneration = 0;
 
-    void emitSliceState(int ddc);   // sliceChanged(delta) from a receiver's state
+    void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
     void emitAllSliceState();
     void emitAllPanState();
@@ -514,6 +526,9 @@ private:
     // One per running DDC, holding only per-receiver state. Anything the hardware
     // shares (sample rate, LNA gain, filter board) stays in the flat members below.
     struct Receiver {
+        // Antenna echoes reset the display's noise-floor lock; publish once
+        // per receiver, or when answering an explicit antenna request/refresh.
+        bool antennasPublished = false;
         // Owns its demod + spectrum chain; created on connect, destroyed on disconnect,
         // lives on the I/O thread.
         Hl2RxDsp* dsp = nullptr;
@@ -1104,6 +1119,10 @@ private:
     bool m_txFilterFromOperator = false;
     int m_txFilterLowHz = 300;
     int m_txFilterHighHz = 2700;
+    // The passband last handed to m_txDsp, for the health row: what it runs,
+    // not what effectiveTxPassband() would say now.
+    int m_txPassbandSentLowHz = 300;
+    int m_txPassbandSentHighHz = 2700;
 
     // Loudest mic peak of this transmission, dBFS, for the unkey "went out quiet"
     // diagnostic (the ALC only reduces). -140 is Hl2TxDsp::micPeak's silence floor

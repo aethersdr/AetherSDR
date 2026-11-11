@@ -2387,7 +2387,7 @@ void VfoWidget::buildTabContent()
                 markLbl->setStyleSheet(kDimLabel);
                 markLbl->setAlignment(Qt::AlignCenter);
                 lblRow->addWidget(markLbl, 1);
-                auto* shiftLbl = new QLabel("Space");
+                auto* shiftLbl = new QLabel("Shift");
                 shiftLbl->setStyleSheet(kDimLabel);
                 shiftLbl->setAlignment(Qt::AlignCenter);
                 lblRow->addWidget(shiftLbl, 1);
@@ -2426,7 +2426,7 @@ void VfoWidget::buildTabContent()
 
                 selRow->addSpacing(4);
 
-                // Space selector: ◀ 170 ▶
+                // Shift selector: ◀ 170 ▶
                 auto* shiftMinus = new TriBtn(TriBtn::Left);
                 selRow->addWidget(shiftMinus);
                 m_shiftLabel = new ScrollableLabel("170");
@@ -2437,7 +2437,8 @@ void VfoWidget::buildTabContent()
                 selRow->addWidget(shiftPlus);
 
                 auto shiftDown = [this] {
-                    if (m_slice) m_slice->setRttyShift(m_slice->rttyShift() - SHIFT_STEP);
+                    if (m_slice && m_slice->rttyShift() > SHIFT_STEP)
+                        m_slice->setRttyShift(m_slice->rttyShift() - SHIFT_STEP);
                 };
                 auto shiftUp = [this] {
                     if (m_slice) m_slice->setRttyShift(m_slice->rttyShift() + SHIFT_STEP);

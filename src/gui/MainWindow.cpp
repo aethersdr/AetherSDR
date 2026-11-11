@@ -868,6 +868,7 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
         m_wanReconnectAttemptInProgress = false;
         return;
     }
+    m_smartLink.setAccountLocked(true);
     quint16 udpPort = m_radioModel.panStream()->localPort();
     if (udpPort == 0) {
         // Not yet bound — start WAN early to get a port
@@ -1042,6 +1043,11 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
     connect(dialog, &QObject::destroyed, this, [this, dialog] {
         if (m_reconnectDlg == dialog)
             m_reconnectDlg = nullptr;
+        // Dismissed without Reconnect: release the SmartLink account.
+        if (m_userDisconnected && !m_radioModel.isConnected()) {
+            m_smartLink.setAccountLocked(false);
+            m_pendingWanRadio = {};
+        }
     });
 
     connect(quit, &QPushButton::clicked, this, [this, dialog] {
@@ -3401,8 +3407,13 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
                     tr("TX Playback: no transmit control is available right now."), 4000);
                 return;
             }
-            toggleRxPlaybackTransmit(
-                controller->captureProgram(TxController::Activity::Mox).request());
+            const TxCoordinator::Request input =
+                controller->captureProgram(TxController::Activity::Mox).request();
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+                m_radioModel.noteDaxTxInput(input);
+            }
+            toggleRxPlaybackTransmit(input);
         });
         registerTxKeyingAction(m_rxDialog->txPlaybackAction(),
             [this](const std::shared_ptr<TxController>& controller,
@@ -3413,6 +3424,10 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
             }
             const TxCoordinator::Request input =
                 controller->captureProgram(TxController::Activity::Mox).request();
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            if (!caps.hostModulates && !caps.takesTxAudioOverSeam) {
+                m_radioModel.noteDaxTxInput(input);
+            }
             return [this, input] { toggleRxPlaybackTransmit(input); };
         });
         // Seed the EQ page with the filter it is looking at right now, rather
@@ -4721,8 +4736,10 @@ void MainWindow::showNetworkDiagnosticsDialog()
 
 void MainWindow::showSystemInfoDialog()
 {
-    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get(), m_cpuHistory.get(),
-                          m_uiTickLagMeter.get());
+    showOrRaiseCanon(m_systemInfoDialog, [this] {
+        return new SystemInfoDialog(m_memoryHistory.get(), m_cpuHistory.get(),
+                                    m_uiTickLagMeter.get(), this);
+    });
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)
@@ -5609,8 +5626,10 @@ void MainWindow::buildUI()
     // code is already in reach.
     auto& dvkModel = m_radioModel.dvkModel();
     auto* dvkTransfer = new DvkWavTransfer(&m_radioModel, this);
-    connect(&dvkModel, &DvkModel::wavUploadRequested, dvkTransfer, &DvkWavTransfer::upload);
-    connect(&dvkModel, &DvkModel::wavDownloadRequested, dvkTransfer, &DvkWavTransfer::download);
+    connect(&dvkModel, &DvkModel::wavUploadRequested, dvkTransfer,
+            [dvkTransfer](int slot, const QString& path) { dvkTransfer->upload(slot, path); });
+    connect(&dvkModel, &DvkModel::wavDownloadRequested, dvkTransfer,
+            [dvkTransfer](int slot, const QString& path) { dvkTransfer->download(slot, path); });
     connect(dvkTransfer, &DvkWavTransfer::statusChanged, &dvkModel, &VoiceKeyer::transferStatusChanged);
     connect(dvkTransfer, &DvkWavTransfer::finished, &dvkModel, &VoiceKeyer::transferFinished);
     // isBusy(), not isTransferring(): the radio's file server answers 50000053
@@ -5645,10 +5664,7 @@ void MainWindow::buildUI()
         if (!applet || !applet->spectrumWidget()) {
             return;
         }
-        applet->spectrumWidget()->setBandSegmentZoomAvailable(
-            bandSegmentZoomAvailable(
-                m_radioModel.isConnected(),
-                m_radioModel.backendCapabilities().panZoomModes.has_value()));
+        refreshPanZoomControls();
         // The two capability switches onConnectionStateChanged() applies for
         // the same reason: a pan created after connect would otherwise keep
         // the widget defaults (no edge crop, client EMA on) until the next
@@ -5665,6 +5681,8 @@ void MainWindow::buildUI()
         // not only this one's (#5750), so the whole stack is re-derived.
         syncPanSpanControlPlacement();
     });
+    // The startup pane was added before this connect; dim its B/S now.
+    refreshPanZoomControls();
     // Removing or re-keying a pane can take the span control's owner with
     // it; re-derive so exactly one pane still carries it (#5750).
     connect(m_panStack, &PanadapterStack::panRemoved, this,
@@ -6658,6 +6676,60 @@ void MainWindow::applyDarkTheme()
 
 // ─── Radio/model event handlers ───────────────────────────────────────────────
 
+void MainWindow::refreshPanZoomControls()
+{
+    if (!m_panStack) {
+        return;
+    }
+    const auto zoom = m_radioModel.backendCapabilities().panZoomModes;
+    const bool nativeSpan = zoom && zoom->control
+        == RadioCapabilities::PanZoomModes::Control::NativeScopeSpan;
+    for (auto* applet : m_panStack->allApplets()) {
+        if (!applet || !applet->spectrumWidget()) {
+            continue;
+        }
+        const auto* pan = m_radioModel.panadapter(applet->panId());
+        std::optional<QString> blocked;
+        if (!m_radioModel.isConnected()) {
+            blocked = tr("Connect to a radio to use band and segment zoom.");
+        } else if (!zoom) {
+            blocked = tr("This radio has no band or segment zoom.");
+        } else if (nativeSpan) {
+            blocked = nativePanZoomBlockedReason(pan);
+        }
+        const bool available = AetherSDR::bandSegmentZoomAvailable(
+            m_radioModel.isConnected(), zoom.has_value()) && !blocked;
+        applet->spectrumWidget()->setBandSegmentZoomAvailable(
+            available, nativeSpan, blocked.value_or(QString()));
+    }
+}
+
+std::optional<std::pair<double, double>> MainWindow::bandPlanZoomRegion(double frequencyMhz,
+                                                                      bool segment) const
+{
+    if (!m_bandPlanMgr) {
+        return std::nullopt;
+    }
+    const auto region = m_bandPlanMgr->zoomRegionAt(frequencyMhz, segment);
+    if (!region) {
+        return std::nullopt;
+    }
+    return std::pair{region->lowMhz, region->highMhz};
+}
+
+std::optional<QString> MainWindow::nativePanZoomBlockedReason(const PanadapterModel* pan) const
+{
+    if (pan && pan->zoomPlacement() == PanZoomPlacement::Unavailable) {
+        return tr("The radio's Fixed preset sets the scope edges, so band and "
+                  "segment zoom cannot change them.");
+    }
+    if (!pan || !pan->bandwidthLimitsKnown() || !pan->centerKnown()
+        || pan->zoomPlacement() == PanZoomPlacement::Unknown) {
+        return tr("Waiting for the radio's scope geometry.");
+    }
+    return std::nullopt;
+}
+
 void MainWindow::onConnectionStateChanged(bool connected)
 {
     if (m_shuttingDown) {
@@ -6676,24 +6748,16 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Band/segment zoom reads the declared RadioCapabilities::panZoomModes
-    // (FlexBackend engages it; others set nullopt), not a family check or
-    // hasCommandPlane() (the sim owns a RadioConnection but has no
-    // band_zoom=/segment_zoom=). Re-evaluated on every connect and disconnect,
-    // since backendCapabilities() reflects only the current radio.
+    // Band/segment zoom reads the backend's declared control contract. Native
+    // span zoom also waits for radio-reported pan limits before enabling.
     if (m_panStack) {
-        // One predicate with the command paths in MainWindow_Shortcuts.cpp, so
-        // "the button is grey" and "the keystroke is refused" cannot drift
-        // apart on the capability (PanZoomModeGate.h).
-        const bool zoomAvailable = AetherSDR::bandSegmentZoomAvailable(
-            connected, m_radioModel.backendCapabilities().panZoomModes.has_value());
+        refreshPanZoomControls();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
             m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
-                applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
                     AetherSDR::clientFftSmoothingEnabled(connected, backendAverages));
@@ -7212,6 +7276,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 reconnectDialog->deleteLater();
             });
             connect(dismissBtn, &QPushButton::clicked, this, [this]() {
+                m_smartLink.setAccountLocked(false);
+                m_pendingWanRadio = {};
                 m_userDisconnected = true;
                 m_wanReconnectTimer.stop();
                 m_wanReconnectAttemptInProgress = false;
@@ -9371,9 +9437,8 @@ void MainWindow::reassertUnmutedSliceAudioForPan(const QString& panId)
         }
 
         // The model already shows unmuted, so SliceModel::setAudioMute(false)
-        // would no-op. Send the command directly to rebuild radio audio routing.
-        m_radioModel.sendCommand(
-            QString("slice set %1 audio_mute=0").arg(slice->sliceId()));
+        // would no-op. Reassert through the engine without changing local mute.
+        m_radioModel.reassertSliceAudio(slice);
     }
 }
 

@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.11.1 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -882,6 +882,7 @@ set(AETHER_SETTINGS_SOURCES
 )
 
 set(CORE_SOURCES
+    src/models/ConnectionWorkspace.cpp
     src/core/control/ControlProtocolCodec.cpp # aetherd v1 bounded JSON envelopes
     src/core/control/ControlResourceStore.cpp # typed snapshots and revisions
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
@@ -906,15 +907,19 @@ set(CORE_SOURCES
     src/core/backends/LocalRadioDiscoverySource.cpp  # native discovery below the vendor seam
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/flex/FlexCwControls.cpp
     src/core/backends/flex/FlexModelControls.cpp
     src/core/backends/flex/FlexSetupControls.cpp
+    src/core/backends/flex/FlexSessionControls.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexTransferControls.cpp
     src/core/backends/flex/FlexCwxControls.cpp
     src/core/backends/flex/FlexWaveformEnvControls.cpp
     src/core/backends/flex/FlexNtpSourceControls.cpp
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
     src/core/backends/flex/FlexPanControls.cpp
+    src/core/backends/flex/FlexAudioControls.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
     src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
@@ -1258,20 +1263,25 @@ if(WIN32)
 endif()
 
 set(MODEL_SOURCES
+    src/models/RadioSwrValidityFilter.cpp
     src/models/DecoderAudioModel.cpp
     src/models/Ax25ReceiveModel.cpp
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
+    src/models/RadioModel_DaxTx.cpp
     src/models/RadioModel_Setup.cpp
+    src/models/RadioModel_SessionControls.cpp
     src/models/RadioModel_Administration.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
+    src/models/RadioModel_TransferControls.cpp
     src/models/RadioModel_WaveformEnv.cpp
     src/models/RadioModel_NtpSources.cpp
     src/models/RadioModel_SliceLifecycle.cpp
     src/models/RadioModel_PanControls.cpp
+    src/models/RadioModel_AudioControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
@@ -1478,7 +1488,6 @@ set(GUI_SOURCES
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/AnalogMeterFaceTheme.cpp
-    src/gui/RadioSwrValidityFilter.cpp
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/gui/CrossNeedleMeterGeometry.cpp

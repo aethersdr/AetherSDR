@@ -31,16 +31,24 @@ public:
     {
         const quint64 requestId = transfer.nextAsyncId();
         transfer.m_uploadPortRequestId = requestId;
-        return transfer.makeUploadPortCallback(transfer.m_operationGeneration, transfer.m_phase,
+        const FileTransferCompletion callback = transfer.makeUploadPortCallback(transfer.m_operationGeneration, transfer.m_phase,
                                                requestId);
+        return [callback](int code, const QString& body) {
+            callback({{code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed,
+                       code, body}, static_cast<quint16>(body.isEmpty() ? 42607 : body.toUShort())});
+        };
     }
 
     static std::function<void(int, const QString&)> armDownloadPortReply(ProfileTransfer& transfer)
     {
         const quint64 requestId = transfer.nextAsyncId();
         transfer.m_downloadPortRequestId = requestId;
-        return transfer.makeDownloadPortCallback(transfer.m_operationGeneration, transfer.m_phase,
+        const FileTransferCompletion callback = transfer.makeDownloadPortCallback(transfer.m_operationGeneration, transfer.m_phase,
                                                  requestId);
+        return [callback](int code, const QString& body) {
+            callback({{code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed,
+                       code, body}, static_cast<quint16>(body.isEmpty() ? 42607 : body.toUShort())});
+        };
     }
 
     static QTcpSocket* socket(const ProfileTransfer& transfer)
@@ -62,6 +70,8 @@ public:
     {
         transfer.tryFallbackUploadPort();
     }
+
+    static void timeout(ProfileTransfer& transfer) { transfer.handleTimeout(); }
 
     static void setUploadPort(ProfileTransfer& transfer, quint16 port)
     {
@@ -175,12 +185,26 @@ int main(int argc, char* argv[])
             AetherSDR::ProfileTransferTestAccess::Phase::UploadImport);
         std::function<void(int, const QString&)> reply =
             AetherSDR::ProfileTransferTestAccess::armUploadPortReply(transfer);
-        reply(0, QStringLiteral("port=42607"));
+        reply(0, QStringLiteral("42607"));
 
         ok &= expect(AetherSDR::ProfileTransferTestAccess::socket(transfer) != nullptr,
                      "current upload-port reply creates the upload socket");
         ok &= expect(AetherSDR::ProfileTransferTestAccess::uploadPort(transfer) == 42607,
                      "current upload-port reply retains its selected port");
+    }
+
+    {
+        // A port request the radio never answers falls back to the fallback
+        // transfer port, as before typed transfers.
+        AetherSDR::ProfileTransfer transfer(nullptr);
+        AetherSDR::ProfileTransferTestAccess::begin(
+            transfer, AetherSDR::ProfileTransfer::Operation::ImportDatabase,
+            AetherSDR::ProfileTransferTestAccess::Phase::UploadImport);
+        AetherSDR::ProfileTransferTestAccess::armUploadPortReply(transfer);
+        AetherSDR::ProfileTransferTestAccess::timeout(transfer);
+        ok &= expect(AetherSDR::ProfileTransferTestAccess::socket(transfer) != nullptr
+                         && AetherSDR::ProfileTransferTestAccess::uploadPort(transfer) == 42607,
+                     "an unanswered upload-port request tries the fallback port");
     }
 
     {
