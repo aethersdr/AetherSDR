@@ -76,8 +76,8 @@ const QString kDialogStyle =
     "QComboBox { background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
     "  padding: 2px 6px; color: #c8d8e8; }";
 
-// Same result-line styling as ProfileManagerDialog / ConnectionPanel so the
-// status messages read as the same kind of message app-wide.
+// Same result-line styling as ConnectionPanel's so the status messages read
+// as the same kind of message app-wide.
 const char* kResultInfoStyle =
     "QLabel { color: #9bd1ff; font-size: 11px; background: transparent; border: none; }";
 const char* kResultErrorStyle =

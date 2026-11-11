@@ -19,7 +19,8 @@
 //  3. A second receiver's own frequency, mode and passband across a restart,
 //     reopened by the link-up replay as a restart does, and opened AT the
 //     connect by the automation-only numRx param, and across a same-radio
-//     reconnect whose receivers kept their live mode.
+//     reconnect whose receivers kept their live mode, with transmit on A and
+//     on B.
 //
 // No socket: see Hl2PersistHarness.h. The radio is never keyed (the drive is a
 // setpoint; the transmit gate stays shut). The settings profile is isolated.
@@ -393,6 +394,80 @@ int main(int argc, char** argv)
                       .arg(rb.value(QStringLiteral("mode")).toString())
                       .arg(pb.first).arg(pb.second));
         }
+    }
+
+    // ======================================================================
+    // 5. The same reconnect with transmit on receiver B
+    // ======================================================================
+    // m_txDdc survives a disconnect, so on the carried road it still names B
+    // at the link-up. The flat fields are receiver A's entry and must land on
+    // A; B takes its own entry, mode included.
+    {
+        const QString serial = serialFor(205);
+        const QVariantMap twoRx{{QStringLiteral("numRx"), 2}};
+        Session s(serial, RestoredRadioState{}, k20m, twoRx);
+        check(Session::Access::receiverCount(s.backend) == 2,
+              "tx on B setup: numRx=2 opens two receivers");
+        const int b = Session::Access::sliceIdOf(s.backend, 1);
+        s.backend.setSliceFrequency(b, k40mB);
+        s.backend.setSliceMode(b, QStringLiteral("LSB"));
+        s.backend.setSliceFilter(b, -2400, -400);
+        s.backend.setTxSlice(b);
+        const QString txPassbandBefore =
+            s.backend.healthSnapshot().values.value(QStringLiteral("txPassbandHz")).toString();
+        const RestoredRadioState remembered = throughDisk(
+            RadioSettingsScope(QStringLiteral("hl2"), serial), caps,
+            s.backend.currentOperatingState());
+        const QJsonObject raMem = Session::receiverOf(remembered, 0);
+        const QJsonObject rbMem = Session::receiverOf(remembered, 1);
+        check(rbMem.value(QStringLiteral("transmit")).toBool(false)
+                  && !raMem.value(QStringLiteral("transmit")).toBool(false),
+              "tx on B setup: the remembered document marks B, not A, as the transmit receiver");
+        check(rbMem.value(QStringLiteral("mode")).toString() == QLatin1String("LSB")
+                  && rbMem.value(QStringLiteral("filterLowHz")).toInt() == -2400
+                  && rbMem.value(QStringLiteral("filterHighHz")).toInt() == -400
+                  && raMem.value(QStringLiteral("mode")).toString() == QLatin1String("USB"),
+              "tx on B setup: the document holds A in USB and B in LSB -2400..-400");
+        const std::pair<int, int> aMem{raMem.value(QStringLiteral("filterLowHz")).toInt(),
+                                       raMem.value(QStringLiteral("filterHighHz")).toInt()};
+
+        s.disconnect();
+        s.connect(serial, remembered, k20m, twoRx);
+        const RestoredRadioState up = s.backend.currentOperatingState();
+        const QJsonObject ra = Session::receiverOf(up, 0);
+        const QJsonObject rb = Session::receiverOf(up, 1);
+        check(Session::Access::receiverCount(s.backend) == 2
+                  && rb.value(QStringLiteral("transmit")).toBool(false),
+              "tx on B, reconnect: two receivers, and transmit is still on B");
+        check(rb.value(QStringLiteral("mode")).toString() == QLatin1String("LSB"),
+              QStringLiteral("tx on B, reconnect: B keeps its own LSB, not A's mode, got \"%1\"")
+                  .arg(rb.value(QStringLiteral("mode")).toString()));
+        check(rb.value(QStringLiteral("filterLowHz")).toInt() == -2400
+                  && rb.value(QStringLiteral("filterHighHz")).toInt() == -400,
+              QStringLiteral("tx on B, reconnect: B comes back on its own passband -2400..-400, "
+                             "got %1..%2")
+                  .arg(rb.value(QStringLiteral("filterLowHz")).toInt())
+                  .arg(rb.value(QStringLiteral("filterHighHz")).toInt()));
+        check(ra.value(QStringLiteral("mode")).toString() == QLatin1String("USB")
+                  && ra.value(QStringLiteral("filterLowHz")).toInt() == aMem.first
+                  && ra.value(QStringLiteral("filterHighHz")).toInt() == aMem.second,
+              QStringLiteral("tx on B, reconnect: A comes back on its own USB %1..%2, got %3 %4..%5")
+                  .arg(aMem.first).arg(aMem.second)
+                  .arg(ra.value(QStringLiteral("mode")).toString())
+                  .arg(ra.value(QStringLiteral("filterLowHz")).toInt())
+                  .arg(ra.value(QStringLiteral("filterHighHz")).toInt()));
+        // The passband alone cannot tell LSB from USB; the modulator's mode can.
+        const hl2::Hl2TxDsp::Config tx = Session::Access::txDspConfig(s.backend);
+        const QString txPassbandAfter =
+            s.backend.healthSnapshot().values.value(QStringLiteral("txPassbandHz")).toString();
+        check(tx.mode == WdspChannel::Mode::Lsb && !txPassbandBefore.isEmpty()
+                  && txPassbandAfter == txPassbandBefore,
+              QStringLiteral("tx on B, reconnect: the modulator runs B's LSB on its TX passband "
+                             "%1, got %2 on %3")
+                  .arg(txPassbandBefore)
+                  .arg(tx.mode == WdspChannel::Mode::Lsb ? QStringLiteral("LSB")
+                                                         : QStringLiteral("not LSB"))
+                  .arg(txPassbandAfter));
     }
 
     std::printf("hl2_persist_restart_test: %s\n", g_failures == 0 ? "all checks passed" : "FAILED");
