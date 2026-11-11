@@ -50,6 +50,10 @@ never put on the include path of the rest of the tree.
 
 ## Things to know
 
+- The core's headers have members named `slots`. Qt's keyword macros rewrite
+  that word, so a translation unit that needs both must include the core's
+  headers before any Qt header. `src/core/hfdata/` is Qt-free for this reason;
+  only tests include both.
 - The core reads a few `DATA2G_*` environment variables for tuning and
   debugging (`DATA2G_THREADS`, `DATA2G_DD` and others). AetherSDR sets none.
 - It runs one process-wide decode pool, `min(4, cores / 2)` threads by

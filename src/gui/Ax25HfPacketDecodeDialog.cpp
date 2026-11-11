@@ -13,6 +13,7 @@
 #include "core/ThemeManager.h"
 #include "core/aprs/AprsBeacon.h"
 #include "models/AprsDigipeaterModel.h"
+#include "models/Data2gReceiveModel.h"
 #include "core/aprs/AprsMessenger.h"
 #include "core/aprs/AprsPacket.h"
 #include "core/aprs/AprsSettings.h"
@@ -32,6 +33,7 @@
 #include "core/tnc/TncTerminal.h"
 #include "core/pms/PmsMailbox.h"
 #include "gui/DStarModemPage.h"
+#include "gui/Data2gMonitorPage.h"
 #include "gui/DStarAvailabilityGate.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -946,6 +948,11 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_terminalTab->setEnabled(true);
     m_mailboxTab->setEnabled(true);
     m_dstarTab->setEnabled(true);
+    // Never advertise the tab in a build without the decoder.
+    if (Data2gReceiveModel::available()) {
+        m_data2gTab = tabButton(QStringLiteral("HF Data"), false, tabsFrame);
+        m_data2gTab->setEnabled(true);
+    }
     auto* tabGroup = new QButtonGroup(this);
     tabGroup->setExclusive(true);
     tabGroup->addButton(m_ax25Tab, 0);
@@ -954,12 +961,14 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     tabGroup->addButton(m_terminalTab, 3);
     tabGroup->addButton(m_mailboxTab, 4);
     tabGroup->addButton(m_dstarTab, 5);
+    if (m_data2gTab) { tabGroup->addButton(m_data2gTab, 6); }
     tabs->addWidget(m_ax25Tab, 1);
     tabs->addWidget(m_digiTab, 1);
     tabs->addWidget(m_kissTab, 1);
     tabs->addWidget(m_terminalTab, 1);
     tabs->addWidget(m_mailboxTab, 1);
     tabs->addWidget(m_dstarTab, 1);
+    if (m_data2gTab) { tabs->addWidget(m_data2gTab, 1); }
     root->addWidget(tabsFrame);
 
     m_tabStack = new QStackedWidget(bodyWidget());
@@ -1071,6 +1080,13 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_tabStack->addWidget(buildMailboxPage());
     m_dstarPage = new DStarModemPage(m_radio, m_tabStack);
     m_tabStack->addWidget(m_dstarPage);
+
+    // HF Data: stack index 6, matching its tab button's group id.
+    if (m_data2gTab) {
+        m_data2g = std::make_unique<Data2gReceiveModel>();
+        m_data2gPage = new Data2gMonitorPage(m_data2g.get(), m_tabStack);
+        m_tabStack->addWidget(m_data2gPage);
+    }
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
     m_logFrame = logFrame;
@@ -1202,11 +1218,15 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             m_lastActivityAccepted = 0;
             if (m_captureActive) { finishAudioCapture(false); }
             if (!guard) { return; }
+            // The monitor must not join audio from two sources into one burst.
+            if (m_data2g) { m_data2g->reset(); }
             refreshStatus();
         });
         connect(m_receive.get(), &Ax25ReceiveModel::pcmReady, this,
             [this](const DecoderPcmBlock& block, const Ax25ReceiveContext& context) {
                 if (!context.current()) { return; }
+                // The same admitted continuous mono24 source as the modem.
+                if (m_data2g) { m_data2g->feed(block.samples, block.discontinuity); }
                 handleRxAudio(QByteArray(reinterpret_cast<const char*>(block.samples.constData()),
                     block.samples.size() * static_cast<qsizetype>(sizeof(float))),
                     DecoderPcmBlock::kSampleRateHz, context);
@@ -2073,6 +2093,8 @@ void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
     // Retire receive work before any callback from shutdown/control cleanup.
     if (m_receive) { m_receive->setEnabled(enabled); }
     if (!guard) { return; }
+    // Receive only: the monitor follows the tap and holds no TX program.
+    if (m_data2gPage) { m_data2gPage->setModemEnabled(enabled && m_receive != nullptr); }
     if (!enabled) {
         for (std::size_t i = 0; i < m_txPrograms.size(); ++i) {
             (void)setTxProgram(static_cast<TxProgram>(i), false);
@@ -4221,7 +4243,8 @@ void Ax25HfPacketDecodeDialog::updateTabChrome(int index)
     // keep the log panel below their controls.
     QWidget* page = m_tabStack ? m_tabStack->widget(index) : nullptr;
     const bool terminal = page == m_terminalPage;
-    const bool dstar = page == m_dstarPage;
+    // HF Data brings its own log and status strip, as D-STAR does.
+    const bool dstar = page == m_dstarPage || (m_data2gPage && page == m_data2gPage);
     const bool aprs = page == m_aprsPage;
     const bool digi = page == m_digiPage;
     const bool logVisible = !terminal && !dstar && !digi

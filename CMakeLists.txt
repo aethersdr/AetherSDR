@@ -1401,6 +1401,7 @@ set(GUI_SOURCES
     src/gui/AprsRateGraph.cpp
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
+    src/gui/Data2gMonitorPage.cpp
     src/gui/AprsMessagesDialog.cpp
     src/gui/AprsSymbolIcons.cpp
     src/gui/FlexControlDialog.cpp
