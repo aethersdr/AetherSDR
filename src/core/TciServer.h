@@ -396,6 +396,8 @@ private:
 
     void resolvePeerProcess(TciClient* ws);   // #5087, off-thread lookup
     void ensureDaxForTci();
+    // First DAX channel no slice of ours and no reserved slot holds; 0 if none.
+    static int freeDaxChannelForTci(const RadioModel& model);
     void releaseDaxForTci();
     void scheduleDaxRelease();   // debounced releaseDaxForTci — cancel on reconnect
     void cancelDaxRelease();

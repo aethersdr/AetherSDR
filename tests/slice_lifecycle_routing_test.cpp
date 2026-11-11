@@ -87,6 +87,7 @@ public:
         server.m_routeTransitionInFlight = false;
         server.m_routingState.bindCreatedRoute(0, 2);
     }
+    static int freeDax(const RadioModel& radio) { return TciServer::freeDaxChannelForTci(radio); }
 };
 #endif
 }
@@ -488,6 +489,20 @@ void reservedSliceForOnRadioProgram()
           "no reservation, no reserved DAX channel");
     f.radio.reserveSlice(-1, QStringLiteral("WSPR receiver"));
     check(!f.radio.isSliceReserved(-1), "no slice, no reservation");
+
+#ifdef HAVE_WEBSOCKETS
+    // TCI's DAX auto-assign skips a reserved slot's channel as well as ours.
+    f.radio.reserveSlice(5, QStringLiteral("WSPR receiver"));
+    f.radio.handleSliceStatusForTest(5, {{QStringLiteral("client_handle"), QStringLiteral("1")},
+                                         {QStringLiteral("dax"), QStringLiteral("1")}});
+    SliceDelta ourDax;
+    ourDax.daxChannel = 2;
+    emit f.backend->sliceChanged(3, ourDax);
+    const bool ours2 = f.radio.slice(3) != nullptr && f.radio.slice(3)->daxChannel() == 2;
+    check(ours2 && f.radio.daxChannelReserved(1)
+              && TciSliceLifecycleTestAccess::freeDax(f.radio) == 3,
+          "TCI's DAX auto-assign never takes a reserved slot's channel");
+#endif
 }
 
 // Registration waits for the gate, runs once, and never waits forever.
