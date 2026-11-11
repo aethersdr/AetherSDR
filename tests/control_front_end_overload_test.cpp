@@ -251,6 +251,38 @@ void nonDeclaringBackendIsNotOffered()
     check(!f.store.get(f.address) && !f.advertised(), "withdrawing the record withdraws the resource");
 }
 
+// An adapter created while a reading is already held (a control service
+// started mid-session) publishes that reading on its first publish, not
+// unobserved: the radio-session publish reads the model's current value.
+void adapterCreatedMidSessionReadsTheHeldLevel()
+{
+    using Access = hl2::Hl2FrontEndOverloadTestAccess;
+    RadioModel radio;
+    if (!radio.rebuildBackendForTest(QStringLiteral("hl2"))) {
+        std::printf("[SKIP] hl2 has no backend in this build\n");
+        return;
+    }
+    auto* hl2 = static_cast<hl2::Hl2Backend*>(radio.backend());
+    Access::setConnected(*hl2, true);
+    FrontEndOverload s;
+    s.level = FrontEndLevel::Hot;
+    s.autoArmed = true;
+    s.autoOffsetDb = 6;
+    emit hl2->frontEndOverloadChanged(s);
+    check(radio.frontEndOverload() == s && radio.isConnected(),
+          "mid-session setup: the model holds a Hot reading while connected (control)");
+
+    ControlResourceStore store;
+    RadioResourceAdapter adapter(&radio, &store, "radio-1");
+    const auto snapshot = store.get({"frontEndOverload", "radio-1", {}});
+    const QJsonObject v = snapshot ? snapshot->value : QJsonObject{};
+    check(v.value("level").toString()
+                  == RadioResourceAdapter::frontEndLevelName(FrontEndLevel::Hot)
+              && v.value("autoGain").toObject().value("armed").toBool()
+              && v.value("autoGain").toObject().value("offsetDb").toInt() == 6,
+          "an adapter created mid-session publishes the held reading, not unobserved");
+}
+
 void productionDeclarations()
 {
     // The HL2 decodes the converter's clip bit; no other family observes its ADC.
@@ -285,6 +317,7 @@ int main(int argc, char** argv)
     reconnectStartsUnobserved(true);
     reconnectStartsUnobserved(false);
     nonDeclaringBackendIsNotOffered();
+    adapterCreatedMidSessionReadsTheHeldLevel();
     productionDeclarations();
     return failures == 0 ? 0 : 1;
 }

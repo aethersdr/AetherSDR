@@ -371,8 +371,9 @@ A backend without the record is never offered it, even if it reports a reading.
 The level is the backend's own classification of its converter; the resource
 changes only when the backend's reading does. The backend's free-text reason is
 not projected. Disconnect and backend replacement remove the resource, and a
-reconnect starts at `unobserved`. Changes never touch the `radioSession`, slice
-or pan revisions.
+reconnect starts at `unobserved`. A stream interruption within a session also
+reads `unobserved` until the next window after the stream resumes. Changes never
+touch the `radioSession`, slice or pan revisions.
 
 FFT bins, waterfall rows, audio, and other high-rate streams never enter these
 JSON resources; they belong to the later bounded binary data plane.
