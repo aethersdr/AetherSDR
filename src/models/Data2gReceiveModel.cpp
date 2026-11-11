@@ -4,6 +4,7 @@
 #include "core/hfdata/Data2gMonitor.h"
 #endif
 
+#include <QElapsedTimer>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QPointer>
@@ -137,6 +138,8 @@ struct Data2gReceiveModel::Impl {
     QThread thread;
     bool enabled = false;
     Stats stats;
+    QElapsedTimer lastAudio;   // invalid until the first block since enabling
+    static constexpr qint64 kAudioStaleMs = 2000;
 
     // Caller holds State::mutex, which fences this against the owner's
     // destructor clearing State::owner.
@@ -256,6 +259,7 @@ void Data2gReceiveModel::setEnabled(bool enabled)
         return;
     }
     m_impl->enabled = enabled;
+    m_impl->lastAudio.invalidate();
     // Either way the next audio starts a new stream.
     {
         QMutexLocker lock(&m_impl->state->mutex);
@@ -274,6 +278,9 @@ void Data2gReceiveModel::feed(const QVector<float>& mono, bool discontinuity)
     Impl& d = *m_impl;
     if (!d.enabled) {
         return;
+    }
+    if (!mono.isEmpty()) {
+        d.lastAudio.start();
     }
     bool overflow = false;
     {
@@ -304,6 +311,12 @@ void Data2gReceiveModel::reset()
 {
     QMutexLocker lock(&m_impl->state->mutex);
     m_impl->state->retire();
+}
+
+bool Data2gReceiveModel::audioFlowing() const
+{
+    return m_impl->enabled && m_impl->lastAudio.isValid()
+        && m_impl->lastAudio.elapsed() < Impl::kAudioStaleMs;
 }
 
 Data2gReceiveModel::Stats Data2gReceiveModel::stats() const

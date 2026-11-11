@@ -868,7 +868,8 @@ documents how each was produced (docs/outcome-training-data.md,
 data2g/codes_data/README.md). The license texts are at
 third_party/data2g/LICENSE and third_party/data2g/LICENSE_ion.
 
-  Copyright: Andrew Rodland and the Data2G contributors
+  Copyright: the Data2G authors (upstream names no copyright holder in its
+             license file; see the repository history)
   License:   Artistic License 2.0
   Source:    https://github.com/arodland/Data2G
 

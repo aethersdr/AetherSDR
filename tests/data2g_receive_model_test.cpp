@@ -90,7 +90,9 @@ void decodes(const std::vector<float>& pcm)
 
     model.setEnabled(true);
     check(model.isEnabled(), "the model enables");
+    check(!model.audioFlowing(), "enabled with no audio yet is not flowing");
     feedBlocks(model, pcm);
+    check(model.audioFlowing(), "audio is flowing once blocks arrive");
     check(waitFor([&] { return !heard.isEmpty(); }), "an enabled model reports the burst");
     settle();
 
@@ -108,6 +110,8 @@ void decodes(const std::vector<float>& pcm)
     check(model.stats().bursts == static_cast<quint64>(heard.size()),
           "the burst count matches what was reported");
     check(statsSignals > 0, "statsChanged fired");
+    model.setEnabled(false);
+    check(!model.audioFlowing(), "a disabled model reports no audio");
     check(model.stats().faults == 0 && model.stats().overflows == 0,
           "a clean stream counts no fault or overflow");
 }

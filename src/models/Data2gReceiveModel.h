@@ -66,6 +66,11 @@ public:
 
     Stats stats() const;
 
+    // Whether audio reached feed() in the last couple of seconds. Enabled
+    // with no audio means the modem has no receive source yet, which the page
+    // must not present as monitoring.
+    bool audioFlowing() const;
+
 signals:
     void burstHeard(const AetherSDR::Data2gHeardBurst& burst);
     void statsChanged();

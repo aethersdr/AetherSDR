@@ -12,6 +12,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -121,6 +122,11 @@ Data2gMonitorPage::Data2gMonitorPage(Data2gReceiveModel* model, QWidget* parent)
         connect(m_model, &Data2gReceiveModel::enabledChanged,
                 this, &Data2gMonitorPage::refreshState);
     }
+
+    // "Monitoring" must mean audio is arriving, so the state follows the tap.
+    m_audioWatch = new QTimer(this);
+    m_audioWatch->setInterval(1000);
+    connect(m_audioWatch, &QTimer::timeout, this, &Data2gMonitorPage::refreshState);
 
     refreshState();
     refreshStats();
@@ -285,11 +291,19 @@ void Data2gMonitorPage::refreshState()
         : reason);
     // The reason goes on the accessible channel too, not only the tooltip.
     m_monitorCheck->setAccessibleDescription(reason);
-    m_stateLabel->setAccessibleDescription(reason);
+
+    if (running != m_audioWatch->isActive()) {
+        running ? m_audioWatch->start() : m_audioWatch->stop();
+    }
 
     QString state;
     QString dot;
-    if (running) {
+    if (running && !m_model->audioFlowing()) {
+        state = tr("Waiting for audio");
+        dot = QStringLiteral("blocked");
+        reason = tr("No receive audio is reaching the modem. "
+                    "Connect to a radio and select a slice.");
+    } else if (running) {
         state = tr("Monitoring");
         dot = QStringLiteral("on");
     } else if (!reason.isEmpty()) {
@@ -301,6 +315,7 @@ void Data2gMonitorPage::refreshState()
     }
     m_stateLabel->setText(state);
     m_stateLabel->setToolTip(reason);
+    m_stateLabel->setAccessibleDescription(reason);
     m_stateDot->setToolTip(reason);
     if (m_stateDot->property("state").toString() != dot) {
         m_stateDot->setProperty("state", dot);

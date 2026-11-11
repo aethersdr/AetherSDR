@@ -7,6 +7,7 @@ class QCheckBox;
 class QLabel;
 class QPlainTextEdit;
 class QPushButton;
+class QTimer;
 
 namespace AetherSDR {
 
@@ -51,6 +52,7 @@ private:
     QLabel* m_burstsValue{nullptr};
     QLabel* m_overflowsValue{nullptr};
     QLabel* m_faultsValue{nullptr};
+    QTimer* m_audioWatch{nullptr};
 };
 
 } // namespace AetherSDR

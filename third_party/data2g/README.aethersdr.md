@@ -57,7 +57,8 @@ never put on the include path of the rest of the tree.
 - The core reads a few `DATA2G_*` environment variables for tuning and
   debugging (`DATA2G_THREADS`, `DATA2G_DD` and others). AetherSDR sets none.
 - It runs one process-wide decode pool, `min(4, cores / 2)` threads by
-  default. AetherSDR sizes it through `Data2gMonitor::setDecodeThreads()`.
+  default. The app leaves that default; `Data2gMonitor::setDecodeThreads()`
+  is there to change it, and the tests pin it to 2.
 - Upstream calls the software beta and says the on-air protocol may still
   change. The protocol is versioned, so a mismatch is refused, not garbled.
 

@@ -129,13 +129,16 @@ A receive-only monitor for [Data2G](https://github.com/arodland/Data2G), an open
 
 Data2G is beta software and its on-air protocol can still change. The tab shows the Data2G version this build of AetherSDR understands; a station running a different protocol version may not decode.
 
-- Tune a slice in **DIGU** or **USB** so the Data2G signal sits in the passband. A full-speed signal is about 2.4 kHz wide, from 0.3 to 2.7 kHz above the dial, so use a filter at least that wide.
+- Tune a slice in **DIGU** or **USB** so the whole Data2G signal sits in the passband. A full-speed signal needs about 2.4 kHz, so use the widest filter you have (3 kHz or more).
 - Turn on **Enable Modem** on the APRS tab, then **Monitor** on this tab. **Monitor** is dimmed while the modem is off, because the monitor listens to the modem's receive audio. It is off again each time AetherSDR starts.
+- The status next to **Monitor** reads **Monitoring** while audio is arriving and **Waiting for audio** when the modem has no receive audio, for example with no radio connected.
 - Each burst appears as a block of text: the time in UTC, the kind of burst, the stations when they are known, and any data it carried. Data2G is not encrypted, so the monitor shows traffic whoever it is addressed to. A session the monitor joined partway through can show bytes it never heard as `<??>`.
 - **Clear** empties the list.
 - The strip at the bottom counts **BURSTS HEARD**, **AUDIO DROPPED** (the decoder fell behind and skipped audio) and **DECODE FAULTS** (a burst the decoder rejected).
 
-Receive audio that has been through noise reduction, a narrow filter or heavy AGC decodes worse. Turn noise reduction off on the slice you monitor.
+:::caution
+The monitor itself never transmits, but **Enable Modem** is shared with the rest of AetherModem. A beacon, digipeater, KISS client, terminal session or mailbox you have switched on can still transmit packet on the slice you are monitoring. Turn those off before you park the modem on a Data2G frequency.
+:::
 
 ### MQTT
 
