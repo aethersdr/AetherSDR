@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // HPSDR Protocol 1 ("Metis") wire primitives for the Hermes-Lite 2 backend.
@@ -706,6 +707,44 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
 // The gateware version as the operator reads it: "74.3", or "74" when the
 // reply carried no minor version. Both decimal, as upstream writes them.
 std::string gatewareVersionText(const DiscoveryReply& reply);
+
+// A board that names itself through VERSION_MINOR (#6806). The SQUARE SDR 2 and
+// SQUARE 3 values are fixed by their designer and kept across releases; any
+// other value, stock HL2 and first-generation SQUARE SDR included, is Unknown.
+enum class GatewareBoard : int { Unknown = 0, SquareSdr2, Square3 };
+inline constexpr std::uint8_t kGatewareMinorSquareSdr2 = 52;
+inline constexpr std::uint8_t kGatewareMinorSquare3 = 53;
+
+[[nodiscard]] constexpr GatewareBoard boardForGatewareMinor(
+    std::optional<std::uint8_t> minor) noexcept
+{
+    if (!minor) {
+        return GatewareBoard::Unknown;
+    }
+    switch (*minor) {
+    case kGatewareMinorSquareSdr2: return GatewareBoard::SquareSdr2;
+    case kGatewareMinorSquare3:    return GatewareBoard::Square3;
+    default:                       return GatewareBoard::Unknown;
+    }
+}
+
+// The board's own name, or nullptr when the gateware does not identify one.
+[[nodiscard]] constexpr const char* gatewareBoardName(GatewareBoard board) noexcept
+{
+    switch (board) {
+    case GatewareBoard::SquareSdr2: return "SQUARE SDR 2";
+    case GatewareBoard::Square3:    return "SQUARE 3";
+    case GatewareBoard::Unknown:    return nullptr;
+    }
+    return nullptr;
+}
+
+// The word shown before the version: "Gateware", or "SQUARE SDR 2 gateware".
+std::string gatewareVersionLabel(const DiscoveryReply& reply);
+
+// The minor version back out of gatewareVersionText()'s "major.minor", as it
+// arrives in RadioConnectRequest::version. nullopt for "74", empty or malformed.
+std::optional<std::uint8_t> gatewareMinorFromVersionText(std::string_view text) noexcept;
 
 // Build a 1032-byte EP2 packet carrying two C&C registers (one per frame). The
 // 504-byte payload is zero-filled, which is transmit SILENCE — ep2WriteTxIq()

@@ -8967,7 +8967,11 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
         }
     }
 
-    if (dev.isNull()) {
+    const bool inputDeviceMissing = dev.isNull();
+    if (m_txInputDeviceMissing.exchange(inputDeviceMissing) != inputDeviceMissing) {
+        emit txInputDeviceMissingChanged(inputDeviceMissing);
+    }
+    if (inputDeviceMissing) {
         qCWarning(lcAudio) << "AudioEngine: no audio input device available";
         return false;
     }
@@ -10722,6 +10726,13 @@ void AudioEngine::applyBackendAudioCapabilities(
     const bool wasSeamAudio = m_hostModulation;
     const bool seamAudio = connected && caps.takesTxAudioOverSeam && caps.canTransmit;
     setHostModulation(seamAudio);
+    // Only startTxStream() refreshes the missing-input flag. Without a radio,
+    // or once the seam route is withdrawn, it describes no capture: clear it so
+    // a reconnect does not report NoInputDevice before capture is retried.
+    if ((!connected || (wasSeamAudio && !seamAudio))
+        && m_txInputDeviceMissing.exchange(false)) {
+        emit txInputDeviceMissingChanged(false);
+    }
     if (seamAudio && pcAudioEnabled) {
         if (!isTxStreaming()) {
             startTxStream(address, 4991);
