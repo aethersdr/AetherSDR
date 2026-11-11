@@ -1,5 +1,8 @@
 #include "WaveformEnvironmentDialog.h"
 #include "CanonIndicators.h"
+#include "CanonMessageBox.h"
+#include "ScopedChildWidget.h"
+#include "TailnetShimDialog.h"
 
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
@@ -8,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSet>
@@ -480,6 +484,9 @@ void WaveformEnvironmentDialog::onApply()
         setMessage(problem, QStringLiteral("error"));
         return;
     }
+    if (isTailnetShimWaveform(m_name, true) && !confirmShimRecreate()) {
+        return;
+    }
     m_applying = true;
     updateAvailability();
     setMessage(tr("Recreating %1…").arg(m_name), QStringLiteral("pending"));
@@ -494,6 +501,24 @@ void WaveformEnvironmentDialog::onApply()
             updateAvailability();
         }
     }
+}
+
+// The shim keeps its tailnet identity in the container. A recreate rebuilds the
+// container from its image, which may drop that identity.
+bool WaveformEnvironmentDialog::confirmShimRecreate()
+{
+    const QPointer<WaveformEnvironmentDialog> self(this);
+    ScopedChildWidget<CanonMessageBox> box(
+        tr("Recreate the remote-access container?"),
+        tr("Recreating rebuilds %1 from its image, which may take the radio off your tailnet "
+           "and end any remote session.").arg(m_name),
+        this);
+    box.get()->setInformativeText(TailnetShimDialog::offTailnetWarning());
+    // Return keeps the container as it is; recreating takes a click.
+    box.get()->setDefaultButton(box.get()->addButton(tr("Cancel"), CanonMessageBox::Role::Reject));
+    QPushButton* go = box.get()->addButton(tr("Recreate"), CanonMessageBox::Role::Destructive);
+    box.get()->exec();
+    return self && box && box.get()->clickedButton() == go;
 }
 
 void WaveformEnvironmentDialog::showApplyResult(const WaveformEnvApplyResult& result)

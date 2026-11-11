@@ -76,6 +76,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #ifdef HAVE_MIDI
@@ -432,6 +433,13 @@ private slots:
     void applyOperatorTuningStep(int stepHz);
 
 private:
+    void refreshPanZoomControls();
+    // Why a native-span B/S cannot act on this pan right now, or nullopt.
+    // The B/S enable and every command path ask this one question.
+    std::optional<QString> nativePanZoomBlockedReason(const PanadapterModel* pan) const;
+    // The active band plan's zoom region (low, high MHz) at a frequency.
+    std::optional<std::pair<double, double>> bandPlanZoomRegion(double frequencyMhz,
+                                                                bool segment) const;
     enum class TuneIntent {
         IncrementalTune,
         AbsoluteJump,
@@ -944,6 +952,8 @@ private:
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
     void refreshRttyInputStatus();
+    void onRttyDecoderMarkChosen(int hz);
+    void onRttyDecoderShiftChosen(int hz);
     // The RTTY pane's ✕: persist "operator does not want this window" and
     // re-run the refresh, which stops the decoder (#5353).
     void onRttyPanelCloseRequested();
@@ -2406,6 +2416,8 @@ private:
 #if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
+    RadioControlSession m_daxMicOverrideSession{};
+    quint64 m_daxMicOverrideRevision{0};
     bool startDax();
     void stopDax();
     // #2895: react to per-slice DAX channel (re)assignment while the bridge is

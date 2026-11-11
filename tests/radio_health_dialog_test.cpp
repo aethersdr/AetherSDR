@@ -7,6 +7,7 @@
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 #include "gui/CanonWindow.h"
+#include "gui/FramelessResizer.h"
 #include "gui/RadioHealthDialog.h"
 
 #include <QApplication>
@@ -35,6 +36,7 @@ void check(bool ok, const char* name)
 void canonWorkspace()
 {
     RadioHealthDialog dialog(nullptr);
+    check(dialog.findChild<FramelessResizer*>() != nullptr, "the window installs its edge resizer");
     check(qobject_cast<CanonWindow*>(&dialog) != nullptr, "Radio Health is a CanonWindow");
     check(dialog.windowType() == Qt::Window
               && dialog.windowFlags().testFlag(Qt::FramelessWindowHint),
@@ -84,6 +86,7 @@ void pollsOnlyWhileShown()
     dialog.show();
     check(dialog.isRefreshing(), "reopening resumes the poll");
     dialog.hide();
+    check(!dialog.isRefreshing(), "hiding the window stops the poll");
 }
 
 // MainWindow opens it through showOrRaiseCanon() with WA_DeleteOnClose, so

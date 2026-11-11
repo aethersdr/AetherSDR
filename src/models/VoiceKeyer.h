@@ -49,6 +49,7 @@ public:
     // transferStatusChanged / transferFinished.
     virtual void importWav(int id, const QString& path) = 0;
     virtual void exportWav(int id, const QString& path) = 0;
+    virtual quint64 transferRevision() const { return 0; }
     virtual bool canTransferWav() const = 0;  // false: import/export unavailable
     virtual bool isTransferring() const = 0;
 

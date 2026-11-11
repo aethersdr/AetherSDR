@@ -97,6 +97,7 @@ struct Hl2Backend::DspSetupResult {
     std::vector<std::string> rxErr;
     bool txOk = false;
     std::string txErr;
+    bool txSkipped = false;   // receive-only backend: no transmit chain was built
 };
 
 namespace {
@@ -1086,6 +1087,7 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     const int ddc = m_ids.append();
 
     Receiver seed = requested;
+    seed.antennasPublished = false;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -1900,8 +1902,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     c.panLifecycleControl = PanLifecycleControl{PanLifecycleControl::Creation::Native,
         {PanLifecycleAction::Create, PanLifecycleAction::Remove}};
+    // No Flex stream plane: receive audio is native and graphic EQ is host-side.
+    c.audioStreamControl = std::nullopt;
+    c.radioGraphicEqControl = std::nullopt;
     // setTune() is the built-in test tone at ZERO offset — a single carrier
     // exactly on the TX NCO. Nothing here can produce a second tone.
     c.twoToneGenerator = std::nullopt;
@@ -2581,6 +2587,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         const auto [txLo, txHi] = effectiveTxPassband(txMode);
         tc.filterLowHz  = txLo;
         tc.filterHighHz = txHi;
+        m_txPassbandSentLowHz = txLo;
+        m_txPassbandSentHighHz = txHi;
     }
     // Remember the target the modulator is being handed, so the health snapshot
     // and the unkey diagnostic both report what it is RUNNING rather than what
@@ -2615,10 +2623,13 @@ void Hl2Backend::beginDspSetup()
         return;
 
     const int actualNumRx = m_pendingConnect->actualNumRx;
+    // No transmit chain on a receive-only backend: m_txAllowed is decided once,
+    // in the constructor, so a chain built now could never be keyed.
+    Hl2TxDsp* const txDsp = m_txAllowed ? m_txDsp : nullptr;
     // The TX chain counts as a setup step only in the TXA build, which opens a
     // WDSP transmit channel (the costliest cold-cache step). The phasing build
     // only designs two FIR kernels.
-    const int total = actualNumRx + (AETHER_HL2_TX_TXA ? 1 : 0);
+    const int total = actualNumRx + ((AETHER_HL2_TX_TXA && txDsp) ? 1 : 0);
 
     // The chains to open, snapshotted on THIS thread. m_rx is GUI-thread-only
     // (see its declaration), so the I/O thread gets a plain vector of the
@@ -2656,14 +2667,13 @@ void Hl2Backend::beginDspSetup()
     armDspSetupWatchdog();
 
     const Hl2TxDsp::Config tc = m_pendingConnect->tc;
-    Hl2TxDsp* txDsp = m_txDsp;
     // QPointer guards a backend destroyed mid-build. The cross-thread reads
     // are sound because ~Hl2Backend() blocks on the I/O thread, so this lambda
     // always finishes first; QPointer is not thread-safe, so non-blocking
     // teardown would need another mechanism (docs/HERMES.md §22.4).
     QPointer<Hl2Backend> self(this);
 
-    QMetaObject::invokeMethod(chains.empty() ? static_cast<QObject*>(txDsp)
+    QMetaObject::invokeMethod(chains.empty() ? static_cast<QObject*>(m_txDsp)
                                              : static_cast<QObject*>(chains.front()),
         [self, chains, configs, tc, txDsp, total] {
         // ---- I/O THREAD ----
@@ -2700,7 +2710,7 @@ void Hl2Backend::beginDspSetup()
         // above. In the phasing build this stays silent, because announcing a
         // step that is over before the label repaints is worse than saying
         // nothing.
-        if (AETHER_HL2_TX_TXA && self) {
+        if (AETHER_HL2_TX_TXA && txDsp && self) {
             const QString stage = tr("Preparing the transmit chain…");
             const int done = static_cast<int>(chains.size());
             QMetaObject::invokeMethod(self, [self, stage, done, total] {
@@ -2708,8 +2718,11 @@ void Hl2Backend::beginDspSetup()
                     emit self->dspSetupProgress(stage, done, total);
             }, Qt::QueuedConnection);
         }
-        if (txDsp)
+        if (txDsp) {
             result.txOk = txDsp->configure(tc, &result.txErr);
+        } else {
+            result.txSkipped = true;
+        }
 
         // ---- back to the GUI thread ----
         QMetaObject::invokeMethod(self, [self, result] {
@@ -2904,9 +2917,12 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
             ids->analyzerId = i;   // Hl2Spectrum is per-receiver and owned by it
         }
     }
-    if (!result.txOk)
+    if (result.txSkipped) {
+        qCInfo(lcHl2) << "HL2 DSP setup: no transmit chain (receive only)";
+    } else if (!result.txOk) {
         qWarning() << "Hl2Backend: TX DSP unavailable —"
                    << QString::fromStdString(result.txErr) << "(receive is unaffected)";
+    }
 
     // ---- and only now, the wire ----
     //
@@ -3455,6 +3471,19 @@ ReceiveDispatch Hl2Backend::requestSliceSquelch(int sliceId, const SliceSquelchR
     }
     setSliceSquelch(sliceId, request.enabled, request.level);
     return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch Hl2Backend::requestSliceRxAntenna(int sliceId, const QString& antenna)
+{
+    // The HL2 receives on ANT only. RF1 is a transmit output and 0x00[13] (the
+    // Alex RX-antenna bit) is left alone: no filter board known to us wires it.
+    const int ddc = ddcForSlice(sliceId);
+    if (!rx(ddc)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    emitSliceState(ddc, true);
+    return antenna == QLatin1String("ANT") ? ReceiveDispatch::LocalOnly
+                                           : ReceiveDispatch::Unsupported;
 }
 
 ReceiveDispatch Hl2Backend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
@@ -4744,6 +4773,21 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     }
 }
 
+ReceiveDispatch Hl2Backend::requestCwControl(const CwControlRequest& request,
+                                           const TxCoordinator::Command& command)
+{
+    if (request.kind == CwControlRequest::Kind::PttEnvelope) {
+        return IRadioBackend::requestCwControl(request, command);
+    }
+    if (request.kind != CwControlRequest::Kind::Carrier
+        || !cwEdgeAdmitted(request, command, capabilities().canTransmit)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setCwKeying(request.down, request.breakIn, request.breakInDelayMs,
+               command.operation, command.completion);
+    return ReceiveDispatch::Dispatched;
+}
+
 void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
     if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {
@@ -5503,6 +5547,8 @@ void Hl2Backend::pushTxPassband(const QString& mode)
 {
     const auto [lo, hi] = effectiveTxPassband(mode);
     if (m_txDsp) {
+        m_txPassbandSentLowHz = lo;
+        m_txPassbandSentHighHz = hi;
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(lo)),
             Q_ARG(double, static_cast<double>(hi)));
@@ -5541,10 +5587,13 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
     const Receiver* txRx = rx(m_txDdc);
     const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
     const auto [applyLo, applyHi] = effectiveTxPassband(txMode);
-    if (m_txDsp)
+    if (m_txDsp) {
+        m_txPassbandSentLowHz = applyLo;
+        m_txPassbandSentHighHz = applyHi;
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(applyLo)),
             Q_ARG(double, static_cast<double>(applyHi)));
+    }
 
     // Client-authoritative state moved, so the capture half has to know — the
     // radio will never report this back, and without the hook the setting only
@@ -6560,17 +6609,13 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
         std::isnan(m_alcGainDb) ? QVariant() : QVariant(m_alcGainDb));
     put("alcPeakDbfs", QStringLiteral("Post-ALC peak (dBFS)"),
         std::isnan(m_alcPeakDbfs) ? QVariant() : QVariant(m_alcPeakDbfs));
-    // The passband the modulator is running RIGHT NOW, which on any mode other
-    // than SSB voice is NOT the operator's stored pair — effectiveTxPassband()
-    // deliberately declines to apply a voice setting to CW or the digital modes.
-    // Reporting the stored pair here would explain nothing on exactly the modes
-    // where the two disagree.
+    // The passband last handed to the modulator, not one recomputed from the
+    // mode: a path that forgets to send it shows here instead of hiding (#7091).
+    // On modes other than SSB voice it is not the operator's stored pair.
     {
-        const Receiver* txRx = rx(m_txDdc);
-        const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
-        const auto [lo, hi] = effectiveTxPassband(txMode);
         put("txPassbandHz", QStringLiteral("TX passband in use (Hz)"),
-            QStringLiteral("%1 .. %2").arg(lo).arg(hi));
+            QStringLiteral("%1 .. %2").arg(m_txPassbandSentLowHz)
+                .arg(m_txPassbandSentHighHz));
         put("txPassbandFromOperator", QStringLiteral("TX passband is an operator override"),
             m_txFilterFromOperator);
     }
@@ -8031,6 +8076,9 @@ void Hl2Backend::pushInitialState()
                         defaultPassbandForMode(txRx->mode);
                     txRx->filterLowHz = pbLowHz;
                     txRx->filterHighHz = pbHighHz;
+                    // connectRadio() opened the modulator on the pre-restore
+                    // mode's passband, and setMode() below keeps it (#7091).
+                    pushTxPassband(txRx->mode);
                 }
                 if (m_restoredState.filterLowHz != 0.0
                     || m_restoredState.filterHighHz != 0.0) {
@@ -8039,6 +8087,21 @@ void Hl2Backend::pushInitialState()
                     txRx->filterHighHz =
                         static_cast<int>(m_restoredState.filterHighHz);
                 }
+            }
+            // The other receivers a numRx param opened at this connect take
+            // their own remembered pair, on the same rule: only over the mode
+            // it was saved with. The replay's receivers open after this.
+            const std::size_t count = std::min(m_rx.size(), m_restoredReceivers.size());
+            for (std::size_t i = 0; i < count; ++i) {
+                Receiver& r = m_rx[i];
+                const Receiver& memory = m_restoredReceivers[i];
+                // The mode term holds by construction where
+                // seedOpenReceiversFromMemory() ran; it decides on a same-radio
+                // reconnect whose receivers kept their live mode.
+                if (&r == rx(m_txDdc) || r.mode != memory.mode)
+                    continue;
+                r.filterLowHz = memory.filterLowHz;
+                r.filterHighHz = memory.filterHighHz;
             }
             // The start band's remembered drive, as a SETPOINT (never keys —
             // applyDrive() stays behind the TX gate). Echoed upward as a
@@ -8648,7 +8711,7 @@ void Hl2Backend::applyBandFilter(const char* reason)
         Q_ARG(int, oc));
 }
 
-void Hl2Backend::emitSliceState(int ddc)
+void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
 {
     Receiver* r = rx(ddc);
     const auto* ids = m_ids.byDdc(ddc);
@@ -8662,6 +8725,16 @@ void Hl2Backend::emitSliceState(int ddc)
     // chosen. publishedModeStrings() is a subset of knownModeStrings(), so the
     // menu never offers a mode the restore boundary rejects.
     d.modeList = publishedModeStrings();
+    // One receive input, on every slice (#4954): the RX menu offers ANT and no
+    // invented ANT1/ANT2. RF1 is transmit-only and is never in this list.
+    d.rxAntennaList = QStringList{QStringLiteral("ANT")};
+    if (!r->antennasPublished || forceAntennas) {
+        d.rxAntenna = QStringLiteral("ANT");
+        // The TX label must also replace SliceModel's ANT1 default, which
+        // knownAntennaTokens() includes in receive menus.
+        d.txAntenna = QStringLiteral("ANT");
+        r->antennasPublished = true;
+    }
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;
@@ -8728,7 +8801,7 @@ void Hl2Backend::emitPanState(int ddc)
 void Hl2Backend::emitAllSliceState()
 {
     for (const auto& ids : m_ids.all())
-        emitSliceState(ids.ddcIndex);
+        emitSliceState(ids.ddcIndex, true);
 }
 
 void Hl2Backend::emitAllPanState()

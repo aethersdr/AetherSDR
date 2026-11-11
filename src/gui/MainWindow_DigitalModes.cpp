@@ -58,6 +58,7 @@
 
 #include <QCoreApplication>
 #include <QMessageBox>
+#include <QStatusBar>
 #include <QTimer>
 
 #include <algorithm>
@@ -328,10 +329,6 @@ void MainWindow::routeRttyDecoderOutput()
                    m_rttyDecoderApplet, &PanadapterApplet::appendRttyText);
         disconnect(&m_rttyDecoder, &RttyDecoder::statsUpdated,
                    m_rttyDecoderApplet, &PanadapterApplet::setRttyStats);
-        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyMarkHzChanged,
-                   &m_rttyDecoder, &RttyDecoder::setMarkFreqHz);
-        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyShiftHzChanged,
-                   &m_rttyDecoder, &RttyDecoder::setShiftHz);
         disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyBaudChanged,
                    &m_rttyDecoder, &RttyDecoder::setBaudRate);
         disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
@@ -345,16 +342,31 @@ void MainWindow::routeRttyDecoderOutput()
                 m_rttyDecoderApplet, &PanadapterApplet::appendRttyText);
         connect(&m_rttyDecoder, &RttyDecoder::statsUpdated,
                 m_rttyDecoderApplet, &PanadapterApplet::setRttyStats);
-        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyMarkHzChanged,
-                &m_rttyDecoder, &RttyDecoder::setMarkFreqHz);
-        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyShiftHzChanged,
-                &m_rttyDecoder, &RttyDecoder::setShiftHz);
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyBaudChanged,
                 &m_rttyDecoder, &RttyDecoder::setBaudRate);
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
                 &m_rttyDecoder, &RttyDecoder::setReversePolarity);
     }
     refreshRttyInputStatus();
+}
+
+void MainWindow::onRttyDecoderMarkChosen(int hz)
+{
+    // The decoder has no mark of its own: the slice's change signal runs
+    // refreshRttyDecodeState(), which hands the mark to the decoder. Only the
+    // pane on screen speaks for the slice.
+    if (sender() != m_rttyDecoderApplet) { return; }
+    if (auto* s = activeSlice()) { s->setRttyMark(hz); }
+}
+
+void MainWindow::onRttyDecoderShiftChosen(int hz)
+{
+    // The decoder has no shift of its own: the slice's shift draws the
+    // mark/space lines, and its change signal runs refreshRttyDecodeState(),
+    // which hands it to the decoder. Only the pane on screen speaks for the
+    // slice: another pan's hidden pane still holds its last value.
+    if (sender() != m_rttyDecoderApplet) { return; }
+    if (auto* s = activeSlice()) { s->setRttyShift(hz); }
 }
 
 void MainWindow::onRttyPanelCloseRequested()
@@ -391,15 +403,14 @@ void MainWindow::refreshRttyDecodeState()
         return;
     }
 
-    // Can't push params or start without the applet — the panel combos
-    // hold the user's choices and we have no fallback source for them.
+    // Can't push params or start without the applet — Baud and REV live in
+    // its combos. Mark and Shift come from the slice.
     if (!m_rttyDecoderApplet) return;
 
-    const int markHz = m_rttyDecoderApplet->rttyMarkHz();
-    // markHz == 0 means "Auto": follow the radio's rttyMark setting
-    const int effectiveMark = (markHz > 0) ? markHz : s->rttyMark();
-    m_rttyDecoder.setMarkFreqHz(effectiveMark);
-    m_rttyDecoder.setShiftHz(m_rttyDecoderApplet->rttyShiftHz());
+    m_rttyDecoder.setMarkFreqHz(s->rttyMark());
+    m_rttyDecoderApplet->setRttyMarkHz(s->rttyMark());
+    m_rttyDecoder.setShiftHz(s->rttyShift());
+    m_rttyDecoderApplet->setRttyShiftHz(s->rttyShift());
     m_rttyDecoder.setBaudRate(m_rttyDecoderApplet->rttyBaud());
     m_rttyDecoder.setReversePolarity(m_rttyDecoderApplet->rttyReverse());
 
@@ -650,7 +661,7 @@ void MainWindow::activateRADE(int sliceId)
         m_radeEooPending = false;
         m_radeTxActive = true;
         syncKiwiSdrTransmitMute();
-        const TxCoordinator::Context context = m_radioModel.captureTxMedia(radeProducer);
+        const TxCoordinator::Context context = m_radioModel.captureDaxTxMedia(radeProducer);
         QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, context]() {
             if (context.permitsDispatch(TxCoordinator::monotonicMs())) {
                 engine->resetTx(context);
@@ -1397,7 +1408,7 @@ bool MainWindow::startDax()
     const TxCoordinator::Producer daxProducer = m_radioModel.registerTxProducer(m_daxBridge);
     connect(&m_radioModel, &RadioModel::localTransmitEngaged, m_daxBridge,
             [this, bridge = m_daxBridge, daxProducer] {
-        bridge->setTxContext(m_radioModel.captureTxMedia(daxProducer));
+        bridge->setTxContext(m_radioModel.captureDaxTxMedia(daxProducer));
     });
     connect(m_daxBridge, &DaxBridge::txAudioReady,
             this, [this](const QByteArray& pcm, const TxCoordinator::Context& context) {
@@ -1410,13 +1421,15 @@ bool MainWindow::startDax()
 
     // Save current mic selection before forcing PC audio source.
     m_savedMicSelection = m_radioModel.transmitModel().micSelection();
+    m_daxMicOverrideSession = m_radioModel.controlSession();
 
     // Default to the radio-native DAX route (dax=1, int16 mono).  RADE
     // mode overrides this to the low-latency route via setRadeMode()
     // when the user enters RADE — see AudioEngine::setRadeMode().
     m_audio->setDaxTxUseRadioRoute(true);
     m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
-    m_radioModel.sendCommand("transmit set mic_selection=PC");
+    m_daxMicOverrideRevision = m_radioModel.transmitModel().micSelectionIntentRevision() + 1;
+    m_radioModel.transmitModel().setMicSelection(QStringLiteral("PC"));
     // Don't force dax=1 here — radio-side DAX flag follows mode changes
     // via updateDaxTxMode(). Bridge up ≠ DAX TX active. (#534)
 
@@ -1458,8 +1471,11 @@ void MainWindow::stopDax()
     }
 
     // Restore original mic selection
-    if (!receiveOnly && !m_savedMicSelection.isEmpty() && m_savedMicSelection != "PC") {
-        m_radioModel.sendCommand(QString("transmit set mic_selection=%1").arg(m_savedMicSelection));
+    if (!receiveOnly && !m_savedMicSelection.isEmpty() && m_savedMicSelection != "PC"
+        && m_radioModel.controlSessionCurrent(m_daxMicOverrideSession)
+        && m_radioModel.transmitModel().micSelection() == QLatin1String("PC")
+        && m_radioModel.transmitModel().micSelectionIntentRevision() == m_daxMicOverrideRevision) {
+        m_radioModel.transmitModel().setMicSelection(m_savedMicSelection);
     }
 
     if (receiveOnly) {
@@ -1549,6 +1565,13 @@ void MainWindow::activateWFM(int sliceId)
         return;
     }
     deactivateWFM();
+    if (m_radioModel.daxIqModel().stream(WfmDemodulator::DAX_CHANNEL).exists
+        || m_radioModel.daxIqModel().createPending(WfmDemodulator::DAX_CHANNEL)) {
+        qCWarning(lcDevices) << "WFM refused: DAX IQ channel 1 is already in use";
+        statusBar()->showMessage(tr("WFM needs DAX IQ channel 1 to be free."), 5000);
+        reflectWfmButtons(false, sliceId);
+        return;
+    }
 
     m_wfmCooldown = true;
     QTimer::singleShot(1000, this, [this]{ m_wfmCooldown = false; });
@@ -1605,8 +1628,13 @@ void MainWindow::activateWFM(int sliceId)
     centerPanAtSlice();
 
     m_wfmDemod = new WfmDemodulator(this);
-    connect(m_wfmDemod, &WfmDemodulator::commandReady,
-            &m_radioModel, &RadioModel::sendCommand);
+    const RadioControlSession iqSession = m_radioModel.controlSession();
+    const QPointer<PanadapterModel> iqPan(m_radioModel.panadapter(s->panId()));
+    m_wfmDemod->setIqPanBinder([this, iqSession, iqPan](const QString& panId, int channel) {
+        return iqPan && iqPan->panId() == panId && m_radioModel.controlSessionCurrent(iqSession)
+            && m_radioModel.panadapter(panId) == iqPan
+            && m_radioModel.requestPanIqBinding(iqPan, channel) != ReceiveDispatch::Unsupported;
+    });
     m_wfmDemod->setVolume(static_cast<int>(s->audioGain()));
     connect(s, &SliceModel::audioGainChanged,
             m_wfmDemod, [demod = m_wfmDemod](float g) { demod->setVolume(static_cast<int>(g)); });
