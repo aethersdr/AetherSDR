@@ -6,7 +6,7 @@
 // to migrate, one atomic write. The legacy flat keys (WsjtxAutoStart,
 // WsjtxAddress, WsjtxPort, etc.) are grandfathered and not touched here.
 
-#include "AppSettings.h"
+#include "core/AppSettings.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
