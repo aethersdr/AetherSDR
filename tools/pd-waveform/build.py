@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Build AetherPS, the PureSignal-style predistortion waveform, as a legacy
+"""Build AetherPD, the PureSignal-style predistortion waveform, as a legacy
 waveform package holding two static binaries:
 
-  aether-ps-armv7  for FLEX-6000 radios (Cortex-A8)
-  aether-ps-arm64  for FLEX-8000 and Aurora radios (Cortex-A72), to develop
+  aether-pd-armv7  for FLEX-6000 radios (Cortex-A8)
+  aether-pd-arm64  for FLEX-8000 and Aurora radios (Cortex-A72), to develop
                    and test on; launch.sh picks one by `uname -m`.
 
     python3 -I build.py --output OUT_DIR [--host]
@@ -24,7 +24,7 @@ import zipfile
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 WDSP = ROOT / 'third_party' / 'wdsp'
-NAME = 'AetherPS'
+NAME = 'AetherPD'
 FIXED_TIME = (2026, 1, 1, 0, 0, 0)
 # A FLEX-6700's /user partition is 19 MB, shared by every legacy waveform.
 MAX_BYTES = 512 * 1024
@@ -51,30 +51,30 @@ def zig_cc(target, out, cache, static=True):
     subprocess.run(['zig', 'cc', *target, *CFLAGS, '-w', *WDSP_INC, '-c', '-o', str(o),
                     str(WDSP / 'port' / 'wdsp_port.c')], check=True, env=env)
     objs.append(str(o))
-    o = out.parent / f'{out.name}-ps_core.o'
+    o = out.parent / f'{out.name}-pd_core.o'
     subprocess.run(['zig', 'cc', *target, *CFLAGS, '-Wall', '-Wextra', '-Werror', *WDSP_INC, '-c', '-o', str(o),
-                    str(HERE / 'ps_core.c')], check=True, env=env)
+                    str(HERE / 'pd_core.c')], check=True, env=env)
     objs.append(str(o))
     link = LDFLAGS if static else ['-Wl,--gc-sections']
     subprocess.run(['zig', 'cc', *target, *CFLAGS, *link, '-Wall', '-Wextra', '-Werror', '-o', str(out),
-                    str(HERE / 'ps_waveform.c'), str(HERE / 'ps_align.c'), *objs, '-lm', '-lpthread'],
+                    str(HERE / 'pd_waveform.c'), str(HERE / 'pd_align.c'), *objs, '-lm', '-lpthread'],
                    check=True, env=env)
     for o in objs:
         os.unlink(o)
 
 
 def check_version():
-    src = re.search(r'#define WF_VERSION "([^"]+)"', (HERE / 'ps_waveform.c').read_text())
+    src = re.search(r'#define WF_VERSION "([^"]+)"', (HERE / 'pd_waveform.c').read_text())
     cfg = re.search(r'^Version: "([^"]+)"', (HERE / 'package' / f'{NAME}.cfg').read_text(), re.M)
     if not src or not cfg or src.group(1) != cfg.group(1):
-        raise SystemExit(f'{NAME}.cfg Version and WF_VERSION in ps_waveform.c disagree')
+        raise SystemExit(f'{NAME}.cfg Version and WF_VERSION in pd_waveform.c disagree')
 
 
 def licenses():
     zig_env = subprocess.run(['zig', 'env'], capture_output=True, text=True, check=True).stdout
     lib_dir = re.search(r'"?lib_dir"?\s*[:=]\s*"([^"]+)"', zig_env).group(1)
     musl = pathlib.Path(lib_dir, 'libc', 'musl', 'COPYRIGHT').read_text(encoding='utf-8')
-    return ('AetherPS is part of AetherSDR, licensed under the GNU GPL v3\n'
+    return ('AetherPD is part of AetherSDR, licensed under the GNU GPL v3\n'
             '(https://github.com/aethersdr/AetherSDR). It includes PureSignal from WDSP\n'
             '(Warren Pratt NR0V; GPL v2 or later), whose source is in third_party/wdsp\n'
             'of the AetherSDR repository. The binaries are linked statically with musl\n'
@@ -87,11 +87,11 @@ def main():
     ap.add_argument('--output', required=True, type=pathlib.Path)
     ap.add_argument('--host', action='store_true', help='also build a native binary for the selftest')
     ap.add_argument('--correction-off', action='store_true',
-                    help='package with AETHER_PS_CORRECT=0, for the before half of a transmit test')
+                    help='package with AETHER_PD_CORRECT=0, for the before half of a transmit test')
     a = ap.parse_args()
     check_version()
     a.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='aether-ps-') as t:
+    with tempfile.TemporaryDirectory(prefix='aether-pd-') as t:
         stage = pathlib.Path(t)
         cache = stage / 'zig-cache'
         files = {
@@ -100,13 +100,13 @@ def main():
         }
         if a.correction_off:
             text = files['launch.sh'][0].decode()
-            text = text.replace('export AETHER_PS_DAXIQ', 'AETHER_PS_CORRECT=0\nexport AETHER_PS_CORRECT AETHER_PS_DAXIQ', 1)
+            text = text.replace('export AETHER_PD_DAXIQ', 'AETHER_PD_CORRECT=0\nexport AETHER_PD_CORRECT AETHER_PD_DAXIQ', 1)
             files['launch.sh'] = (text.encode(), 0o755)
         for arch, target in (('armv7', ARMV7), ('arm64', ARM64)):
-            zig_cc(target, stage / f'aether-ps-{arch}', cache)
-            data = (stage / f'aether-ps-{arch}').read_bytes()
-            files[f'aether-ps-{arch}'] = (data, 0o755)
-            print(f'aether-ps-{arch}: {len(data)} bytes')
+            zig_cc(target, stage / f'aether-pd-{arch}', cache)
+            data = (stage / f'aether-pd-{arch}').read_bytes()
+            files[f'aether-pd-{arch}'] = (data, 0o755)
+            print(f'aether-pd-{arch}: {len(data)} bytes')
         files['LICENSES'] = (licenses().encode(), 0o644)
         target = a.output / (f'{NAME}-correction-off.ssdr_waveform' if a.correction_off else f'{NAME}.ssdr_waveform')
         tmp = target.with_suffix('.tmp')
@@ -124,8 +124,8 @@ def main():
         os.replace(tmp, target)
         print(f'built {target} ({size} bytes)')
         if a.host:
-            zig_cc(['-target', 'x86_64-linux-musl'], a.output / 'aether-ps-host', cache)
-            print(f'built {a.output / "aether-ps-host"}')
+            zig_cc(['-target', 'x86_64-linux-musl'], a.output / 'aether-pd-host', cache)
+            print(f'built {a.output / "aether-pd-host"}')
 
 
 if __name__ == '__main__':

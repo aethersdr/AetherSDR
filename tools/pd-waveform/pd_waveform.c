@@ -1,14 +1,14 @@
-// AetherPS: a PureSignal-style predistortion waveform for FlexRadio radios.
+// AetherPD: a PureSignal-style predistortion waveform for FlexRadio radios.
 //
-// It registers a waveform mode "PS" with the RAW underlying mode, so the
-// radio hands it I/Q and takes I/Q back at 24 kHz. With PS selected on a
+// It registers a waveform mode "PD" with the RAW underlying mode, so the
+// radio hands it I/Q and takes I/Q back at 24 kHz. With PD selected on a
 // slice:
 //   receive   RAW I/Q -> USB demodulation -> speaker audio
-//   transmit  mic audio -> USB analytic signal -> ps_core_correct -> I/Q
+//   transmit  mic audio -> USB analytic signal -> pd_core_correct -> I/Q
 //   feedback  DAX IQ from a panadapter fed by an external coupler on the
 //             transmit side's receive input (RX_A for ANT1), during TX
 //             -> mixed to the transmit frequency, decimated to 24 kHz
-//             -> ps_align -> ps_core_calibrate
+//             -> pd_align -> pd_core_calibrate
 //
 // It never keys the radio: it sends transmit samples only in answer to the
 // radio's own transmit stream, which flows while the operator transmits.
@@ -20,21 +20,21 @@
 // DAXIQStream.cs "stream set ... daxiq_rate=").
 //
 // Settings, from the environment (launch.sh sets them on the radio):
-//   AETHER_PS_RADIO        radio address (default SSDR_RADIO_ADDRESS, else 127.0.0.1)
-//   AETHER_PS_DAXIQ        DAX IQ channel of the coupler's panadapter (default 1)
-//   AETHER_PS_DAXIQ_RATE   its rate, a multiple of 24000 (default 48000)
-//   AETHER_PS_PEAK         transmit peak amplitude before correction (default 0.7)
-//   AETHER_PS_MIC_GAIN     mic gain (default 1.0)
-//   AETHER_PS_MAX_DELAY_MS longest loop delay to search (default 400)
-//   AETHER_PS_CORRECT      0 runs the waveform with the correction off (default 1)
+//   AETHER_PD_RADIO        radio address (default SSDR_RADIO_ADDRESS, else 127.0.0.1)
+//   AETHER_PD_DAXIQ        DAX IQ channel of the coupler's panadapter (default 1)
+//   AETHER_PD_DAXIQ_RATE   its rate, a multiple of 24000 (default 48000)
+//   AETHER_PD_PEAK         transmit peak amplitude before correction (default 0.7)
+//   AETHER_PD_MIC_GAIN     mic gain (default 1.0)
+//   AETHER_PD_MAX_DELAY_MS longest loop delay to search (default 400)
+//   AETHER_PD_CORRECT      0 runs the waveform with the correction off (default 1)
 //
 // Status: one JSON line per TCP connection on port 48996, LAN callers only
 // (like AetherHealth on 48994). Read-only.
 //
-//   ps_waveform            run
-//   ps_waveform selftest   checks of parsing, packing and DSP; opens no socket
-#include "ps_align.h"
-#include "ps_core.h"
+//   pd_waveform            run
+//   pd_waveform selftest   checks of parsing, packing and DSP; opens no socket
+#include "pd_align.h"
+#include "pd_core.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -53,8 +53,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define WF_NAME "AetherPS"
-#define WF_MODE "PS"
+#define WF_NAME "AetherPD"
+#define WF_MODE "PD"
 #define WF_VERSION "0.1.0"
 #define RATE 24000
 #define BLOCK 512
@@ -344,14 +344,14 @@ typedef struct {
     int seq_create, seq_daxiq;
     uint32_t tx_in, rx_in;        // stream IDs from waveform create
     uint32_t daxiq_sid;
-    int active_slice;             // slice in PS mode, or -1
+    int active_slice;             // slice in PD mode, or -1
     double tx_mhz;                // that slice's frequency
     double pan_mhz;               // centre of the pan feeding DAX IQ
     int keyed;
     int tx_count, rx_count;
     // DSP
-    ps_core* core;
-    ps_align* align;
+    pd_core* core;
+    pd_align* align;
     cbp_t mod;
     decim_t fb;
     fifo_t ref, fbk;
@@ -410,7 +410,7 @@ static void start_feedback(wf_t* w)
     w->acq_n = 0;
     w->aligned = 0;
     w->weak_blocks = 0;
-    ps_align_restart(w->align);
+    pd_align_restart(w->align);
     logf_("transmit: feedback shift %.0f Hz (tx %.6f MHz, pan %.6f MHz)", shift, w->tx_mhz, w->pan_mhz);
 }
 
@@ -421,11 +421,11 @@ static void set_keyed(wf_t* w, int keyed)
     w->keyed = keyed;
     if (keyed && w->active_slice >= 0)
         start_feedback(w);
-    ps_core_set_keyed(w->core, keyed && w->active_slice >= 0);
+    pd_core_set_keyed(w->core, keyed && w->active_slice >= 0);
     if (!keyed)
         logf_("receive: %d fits, correcting %d, delay %.2f, offset %.3f Hz",
-              ps_core_fits(w->core), ps_core_correcting(w->core),
-              ps_align_delay(w->align), ps_align_offset_hz(w->align, RATE));
+              pd_core_fits(w->core), pd_core_correcting(w->core),
+              pd_align_delay(w->align), pd_align_offset_hz(w->align, RATE));
 }
 
 /* Handles one line from the radio. Exposed to the selftest. */
@@ -467,7 +467,7 @@ static void api_line(wf_t* w, char* l)
         const char* cmd = strchr(l, '|');
         int ok = 0;
         if (cmd && strstr(cmd, " reset")) {
-            ps_core_reset(w->core);
+            pd_core_reset(w->core);
             logf_("correction reset on request");
             ok = 1;
         }
@@ -488,9 +488,9 @@ static void api_line(wf_t* w, char* l)
         if (kv(m, "mode", mode, sizeof mode)) {
             if (!strcmp(mode, WF_MODE) && w->active_slice < 0) {
                 w->active_slice = idx;
-                logf_("PS selected on slice %d", idx);
+                logf_("PD selected on slice %d", idx);
             } else if (strcmp(mode, WF_MODE) && w->active_slice == idx) {
-                logf_("PS released by slice %d", idx);
+                logf_("PD released by slice %d", idx);
                 w->active_slice = -1;
                 set_keyed(w, 0);
             }
@@ -534,36 +534,36 @@ static void calibrate(wf_t* w)
             memcpy(w->acq_rx + 2 * w->acq_n, rx, sizeof(double) * 2 * (size_t)m);
             w->acq_n += m;
             if (w->acq_n == w->acq_len) {
-                double d = ps_align_estimate_delay(w->align, w->acq_tx, w->acq_rx, w->acq_n);
+                double d = pd_align_estimate_delay(w->align, w->acq_tx, w->acq_rx, w->acq_n);
                 if (d < 0) {
                     logf_("no delay lock yet (correlation %.2f): speak, a varying envelope finds it",
-                          ps_align_estimate_corr(w->align));
+                          pd_align_estimate_corr(w->align));
                     w->acq_n = 0;
                 } else {
-                    ps_align_set_delay(w->align, d);
-                    ps_align_restart(w->align);
+                    pd_align_set_delay(w->align, d);
+                    pd_align_restart(w->align);
                     w->aligned = 1;
                     w->weak_blocks = 0;
                     logf_("loop delay %.2f samples (%.2f ms), correlation %.2f",
-                          d, d * 1000.0 / RATE, ps_align_estimate_corr(w->align));
+                          d, d * 1000.0 / RATE, pd_align_estimate_corr(w->align));
                 }
             }
             continue;
         }
-        int v = ps_align_push(w->align, tx, rx, BLOCK, atx, arx);
-        if (v > 0 && ps_align_coherence(w->align) < WEAK_COHERENCE) {
+        int v = pd_align_push(w->align, tx, rx, BLOCK, atx, arx);
+        if (v > 0 && pd_align_coherence(w->align) < WEAK_COHERENCE) {
             if (++w->weak_blocks >= WEAK_BLOCKS) {
                 logf_("feedback stopped matching (coherence %.2f): finding the delay again",
-                      ps_align_coherence(w->align));
+                      pd_align_coherence(w->align));
                 w->aligned = 0;
                 w->acq_n = 0;
                 w->weak_blocks = 0;
-                ps_align_restart(w->align);
+                pd_align_restart(w->align);
             }
             continue;   // don't calibrate on pairs that don't match
         }
         w->weak_blocks = 0;
-        ps_core_calibrate(w->core, atx, arx, v);
+        pd_core_calibrate(w->core, atx, arx, v);
     }
 }
 
@@ -610,7 +610,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
             iq[2 * k + 1] = q;
         }
         if (w->correct)
-            ps_core_correct(w->core, iq, pairs);
+            pd_core_correct(w->core, iq, pairs);
         for (int k = 0; k < pairs; k++) {
             double i = iq[2 * k], q = iq[2 * k + 1], a = hypot(i, q);
             if (a > 1.0) {
@@ -620,7 +620,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
             out[2 * k] = (float)i;
             out[2 * k + 1] = (float)q;
             // The reference is what the radio is given, after this clip:
-            // that is the amplifier's real input. AETHER_PS_PEAK (0.7)
+            // that is the amplifier's real input. AETHER_PD_PEAK (0.7)
             // leaves 3 dB for the correction to expand into before it.
             if (w->keyed && w->feedback_ok)
                 fifo_push(&w->ref, i, q);
@@ -649,7 +649,7 @@ static int wf_init(wf_t* w)
     w->udp = -1;
     w->radio.sin_family = AF_INET;
     w->radio.sin_port = htons(VITA_PORT);
-    const char* addr = getenv("AETHER_PS_RADIO");
+    const char* addr = getenv("AETHER_PD_RADIO");
     if (!addr || !*addr)
         addr = getenv("SSDR_RADIO_ADDRESS");
     if (!addr || !*addr)
@@ -658,18 +658,18 @@ static int wf_init(wf_t* w)
         logf_("bad radio address %s", addr);
         return 0;
     }
-    w->peak = env_d("AETHER_PS_PEAK", 0.7);
-    w->gain = env_d("AETHER_PS_MIC_GAIN", 1.0);
-    w->correct = (int)env_d("AETHER_PS_CORRECT", 1);
-    w->daxiq_ch = (int)env_d("AETHER_PS_DAXIQ", 1);
-    w->daxiq_rate = (int)env_d("AETHER_PS_DAXIQ_RATE", 48000);
+    w->peak = env_d("AETHER_PD_PEAK", 0.7);
+    w->gain = env_d("AETHER_PD_MIC_GAIN", 1.0);
+    w->correct = (int)env_d("AETHER_PD_CORRECT", 1);
+    w->daxiq_ch = (int)env_d("AETHER_PD_DAXIQ", 1);
+    w->daxiq_rate = (int)env_d("AETHER_PD_DAXIQ_RATE", 48000);
     if (w->daxiq_rate < RATE || w->daxiq_rate % RATE) {
-        logf_("AETHER_PS_DAXIQ_RATE must be a multiple of %d", RATE);
+        logf_("AETHER_PD_DAXIQ_RATE must be a multiple of %d", RATE);
         return 0;
     }
-    int max_delay = (int)(env_d("AETHER_PS_MAX_DELAY_MS", 400) * RATE / 1000);
-    w->core = ps_core_create(RATE, MAX_SAMPLES, w->peak);
-    w->align = ps_align_create(max_delay, max_delay + 4 * BLOCK + 512);
+    int max_delay = (int)(env_d("AETHER_PD_MAX_DELAY_MS", 400) * RATE / 1000);
+    w->core = pd_core_create(RATE, MAX_SAMPLES, w->peak);
+    w->align = pd_align_create(max_delay, max_delay + 4 * BLOCK + 512);
     w->ref.buf = calloc(2 * FIFO_LEN, sizeof(double));
     w->fbk.buf = calloc(2 * FIFO_LEN, sizeof(double));
     w->acq_len = max_delay + 8192;
@@ -706,9 +706,9 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
         w->daxiq_sid, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
         w->correct ? "true" : "false", w->aligned ? "true" : "false",
-        ps_align_delay(w->align), ps_align_estimate_corr(w->align), ps_align_coherence(w->align),
-        ps_align_offset_hz(w->align, RATE), ps_core_fits(w->core),
-        ps_core_correcting(w->core) ? "true" : "false", ps_core_state(w->core));
+        pd_align_delay(w->align), pd_align_estimate_corr(w->align), pd_align_coherence(w->align),
+        pd_align_offset_hz(w->align, RATE), pd_core_fits(w->core),
+        pd_core_correcting(w->core) ? "true" : "false", pd_core_state(w->core));
 }
 
 static void serve_status(const wf_t* w, int ls)
@@ -747,8 +747,8 @@ static int selftest(void)
     api_line(&w, r1);
     CHECK(w.tx_in == 0x84000001u && w.rx_in == 0x84000000u);
 
-    // Selecting PS on a slice, its frequency, the pan, and the interlock.
-    char s1[] = "S1|slice 1 in_use=1 mode=PS RF_frequency=14.200000 rxant=ANT1";
+    // Selecting PD on a slice, its frequency, the pan, and the interlock.
+    char s1[] = "S1|slice 1 in_use=1 mode=PD RF_frequency=14.200000 rxant=ANT1";
     api_line(&w, s1);
     CHECK(w.active_slice == 1 && fabs(w.tx_mhz - 14.2) < 1e-9);
     char s2[] = "S1|display pan 0x40000001 center=14.201000 daxiq_channel=1 rxant=RX_A";
@@ -784,7 +784,7 @@ static int selftest(void)
     api_line(&w, s6);
     CHECK(w.active_slice == -1);
     // A frequency-like key inside another word must not match.
-    char s7[] = "S1|slice 1 mode=PS xRF_frequency=1.0";
+    char s7[] = "S1|slice 1 mode=PD xRF_frequency=1.0";
     api_line(&w, s7);
     CHECK(w.tx_mhz == 14.2);
 
@@ -844,7 +844,7 @@ static int selftest(void)
     CHECK(lan_caller(&lan) && !lan_caller(&wan));
 
     close(w.api);
-    ps_core_destroy(w.core);
+    pd_core_destroy(w.core);
     w.core = NULL;
     fails += selftest_loop();
     printf(fails ? "selftest FAILED (%d)\n" : "selftest passed\n", fails);
@@ -926,7 +926,7 @@ static int selftest_loop(void)
     w.seq_daxiq = 4;
     char r1[] = "R3|0|tx_stream_in_id=0x84000001 rx_stream_in_id=0x84000000";
     char r2[] = "R4|0|0x20000001";
-    char s1[] = "S1|slice 1 mode=PS RF_frequency=14.200000";
+    char s1[] = "S1|slice 1 mode=PD RF_frequency=14.200000";
     char s2[] = "S1|display pan 0x40000001 center=14.201000 daxiq_channel=1";
     char s3[] = "S1|interlock state=TRANSMITTING";
     api_line(&w, r1);
@@ -958,14 +958,14 @@ static int selftest_loop(void)
         int len = vita_build(p, 0x84000001u, CLASS_AUDIO_24K, count++, mic, 128);
         on_packet(&w, p, len);
         // Let a running fit finish, as real time would.
-        for (int wait = 0; wait < 2000 && ps_core_state(w.core) == 6 && !ps_core_swap_pending(w.core); wait++) {
+        for (int wait = 0; wait < 2000 && pd_core_state(w.core) == 6 && !pd_core_swap_pending(w.core); wait++) {
             extern void pscc(int, int, double*, double*);
             double none[2] = { 0, 0 };
             pscc(0, 0, none, none);
             struct timespec d = { 0, 500000 };
             nanosleep(&d, NULL);
         }
-        if (ps_core_fits(w.core) >= 3)
+        if (pd_core_fits(w.core) >= 3)
             break;
         clock_gettime(CLOCK_MONOTONIC, &now);
         if (now.tv_sec - t0.tv_sec > 40)
@@ -975,13 +975,13 @@ static int selftest_loop(void)
     // seen at 24 kHz.
     double want = LOOP_DELAY / 2.0 + (TAPS - 1) / 4.0;
     CHECK(w.aligned);
-    CHECK(fabs(ps_align_delay(w.align) - want) < 2.0);
-    CHECK(ps_align_estimate_corr(w.align) > 0.8);
-    CHECK(ps_align_coherence(w.align) > 0.8);
-    CHECK(ps_core_fits(w.core) >= 1);
+    CHECK(fabs(pd_align_delay(w.align) - want) < 2.0);
+    CHECK(pd_align_estimate_corr(w.align) > 0.8);
+    CHECK(pd_align_coherence(w.align) > 0.8);
+    CHECK(pd_core_fits(w.core) >= 1);
     printf("loop: delay %.2f (want ~%.2f), correlation %.2f, coherence %.2f, fits %d, correcting %d\n",
-           ps_align_delay(w.align), want, ps_align_estimate_corr(w.align), ps_align_coherence(w.align),
-           ps_core_fits(w.core), ps_core_correcting(w.core));
+           pd_align_delay(w.align), want, pd_align_estimate_corr(w.align), pd_align_coherence(w.align),
+           pd_core_fits(w.core), pd_core_correcting(w.core));
     close(w.api);
     free(l.line);
     return fails;
@@ -1032,7 +1032,7 @@ int main(int argc, char** argv)
         logf_("setup failed");
         return 1;
     }
-    const char* addr = getenv("AETHER_PS_RADIO");
+    const char* addr = getenv("AETHER_PD_RADIO");
     if (!addr || !*addr)
         addr = getenv("SSDR_RADIO_ADDRESS");
     if (!addr || !*addr)
@@ -1109,8 +1109,8 @@ int main(int argc, char** argv)
         if (w.keyed && mono() - w.last_report > 2) {
             w.last_report = mono();
             logf_("tx: aligned %d, fits %d, correcting %d, state %d, offset %.3f Hz",
-                  w.aligned, ps_core_fits(w.core), ps_core_correcting(w.core),
-                  ps_core_state(w.core), ps_align_offset_hz(w.align, RATE));
+                  w.aligned, pd_core_fits(w.core), pd_core_correcting(w.core),
+                  pd_core_state(w.core), pd_align_offset_hz(w.align, RATE));
         }
     }
     logf_("stopping");
@@ -1118,7 +1118,7 @@ int main(int argc, char** argv)
         close(w.api);   // the radio drops the waveform with its client
     if (ls >= 0)
         close(ls);
-    ps_core_destroy(w.core);
-    ps_align_destroy(w.align);
+    pd_core_destroy(w.core);
+    pd_align_destroy(w.align);
     return 0;
 }

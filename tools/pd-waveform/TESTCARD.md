@@ -1,4 +1,4 @@
-# AetherPS transmit test card
+# AetherPD transmit test card
 
 A session at the radio, into a dummy load. The operator keys every
 transmission; the agent changes only the settings listed, records each one
@@ -59,14 +59,14 @@ from `http://<radio>:48996` (one JSON line: `aligned`, `delay_samples`,
 1. **Baseline, USB, no waveform.** The operator plays `two-tone.wav`
    (700 Hz + 1900 Hz) into DAX TX and keys for ~10 s. Note IMD3 and IMD5 on
    the RX A panadapter.
-2. **AetherPS, correction off** (`AetherPS-correction-off.ssdr_waveform`).
-   Set the slice to PS. Key for ~10 s with the two-tone. Check:
+2. **AetherPD, correction off** (`AetherPD-correction-off.ssdr_waveform`).
+   Set the slice to PD. Key for ~10 s with the two-tone. Check:
    - the transmitted signal looks like run 1 (same tones, same level);
    - status shows `feedback_ok`, `aligned`, a plausible `delay_samples`,
      `delay_corr` near 1;
    - how wide the transmit path is: whether anything appears outside the
      transmit filter (50-4000 Hz now) and below the carrier.
-3. **AetherPS, correction on** (`AetherPS.ssdr_waveform`). Same as run 2,
+3. **AetherPD, correction on** (`AetherPD.ssdr_waveform`). Same as run 2,
    keyed ~20 s. Status should show `fits` climbing and `correcting: true`.
    Compare IMD3 and IMD5 with run 2.
 4. Repeat run 3 at 10 W and 25 W on 40 m if run 3 helped, then once at
@@ -75,12 +75,12 @@ from `http://<radio>:48996` (one JSON line: `aligned`, `delay_samples`,
 ## Stop if
 
 - SWR rises, or the dummy load heats faster than expected.
-- The transmitted spectrum in PS looks wider or dirtier than in run 1.
+- The transmitted spectrum in PD looks wider or dirtier than in run 1.
 - `correcting` is true but IMD gets worse.
 
 ## Afterwards (agent)
 
-- Uninstall AetherPS.
+- Uninstall AetherPD.
 - Restore every recorded setting; confirm each one by status.
 - Write the results into README.md: the IMD figures, the loop delay, and
   what the transmit path did outside its filter.

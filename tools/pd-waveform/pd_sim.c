@@ -1,26 +1,26 @@
 // Closed-loop simulation of the predistortion core, socket-free.
 //
 // Signal path per block, at the waveform's 24 kHz complex rate:
-//   two-tone -> ps_core_correct -> radio TX filter model -> PA model
+//   two-tone -> pd_core_correct -> radio TX filter model -> PA model
 //            -> loop delay, NCO offset, gain, noise -> feedback
-//   reference (what the waveform sent) + feedback -> ps_align -> ps_core_calibrate
+//   reference (what the waveform sent) + feedback -> pd_align -> pd_core_calibrate
 //
 // The reference is taken BEFORE the radio's TX filter, because that is all a
 // waveform knows; the calibration has to cope with the filter between them.
 // Prints IMD3/IMD5 of the PA output before and after correction.
 //
-//   ps_sim [--filter-hz F] [--offset-hz F] [--delay N] [--seconds S]
+//   pd_sim [--filter-hz F] [--offset-hz F] [--delay N] [--seconds S]
 //          [--frac-delay F] [--realtime 0|1] [--expect-imd3-gain DB]
 //          [--expect-imd3-gain-below DB]
 // Exit status 0; 1 when an --expect-* bound is not met; 2 on a setup failure.
 //
 // Environment, for investigation:
-//   PS_SIM_TRACE=1  print WDSP's calibration state twice a second
-//   PS_SIM_AMPM=R   the PA's AM/PM at full drive, radians (default 0.25)
-//   PS_SIM_IDEAL=1  replace WDSP's correction by the PA model's exact
+//   PD_SIM_TRACE=1  print WDSP's calibration state twice a second
+//   PD_SIM_AMPM=R   the PA's AM/PM at full drive, radians (default 0.25)
+//   PD_SIM_IDEAL=1  replace WDSP's correction by the PA model's exact
 //                   inverse, to show the harness's own measurement floor
-#include "ps_align.h"
-#include "ps_core.h"
+#include "pd_align.h"
+#include "pd_core.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -41,7 +41,7 @@ static cpx pa(cpx x)
 {
     const double sat = 1.0, p = 2.0;
     static double am_pm = -1;
-    if (am_pm < 0) am_pm = getenv("PS_SIM_AMPM") ? atof(getenv("PS_SIM_AMPM")) : 0.25;   // rad at full drive
+    if (am_pm < 0) am_pm = getenv("PD_SIM_AMPM") ? atof(getenv("PD_SIM_AMPM")) : 0.25;   // rad at full drive
     double a = hypot(x.i, x.q);
     if (a == 0)
         return x;
@@ -139,8 +139,8 @@ int main(int argc, char** argv)
         else { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
     }
 
-    ps_core* core = ps_core_create(RATE, BLOCK, 2 * TONE_AMP);
-    ps_align* al = ps_align_create(max_delay, max_delay + 4 * BLOCK + 512);
+    pd_core* core = pd_core_create(RATE, BLOCK, 2 * TONE_AMP);
+    pd_align* al = pd_align_create(max_delay, max_delay + 4 * BLOCK + 512);
     if (!core || !al) { fprintf(stderr, "setup failed\n"); return 2; }
 
     // Fractional part of the loop delay: a 31-tap windowed-sinc delay of
@@ -185,7 +185,7 @@ int main(int argc, char** argv)
     clock_gettime(CLOCK_MONOTONIC, &t0);
     const long long total = (long long)(seconds * RATE);
     const long long after_start = total - win;
-    ps_core_set_keyed(core, 1);
+    pd_core_set_keyed(core, 1);
 
     while (t < total) {
         for (int k = 0; k < BLOCK; k++) {
@@ -203,7 +203,7 @@ int main(int argc, char** argv)
             tx[2 * k] = 2 * TONE_AMP * cos(ph);   // two tones at +-700 Hz: 2A cos(wt) on I
             tx[2 * k + 1] = 0;
         }
-        if (getenv("PS_SIM_IDEAL") && aligned) {
+        if (getenv("PD_SIM_IDEAL") && aligned) {
             // Exact inverse of pa() toward a linear gain equal to its gain at
             // the two-tone peak: shows the measurement floor of this harness.
             const double peak = 2 * TONE_AMP;
@@ -224,7 +224,7 @@ int main(int argc, char** argv)
                 tx[2 * k + 1] = g * (i0 * sin(ph) + q0 * cos(ph));
             }
         } else
-            ps_core_correct(core, tx, BLOCK);      // tx is now the reference
+            pd_core_correct(core, tx, BLOCK);      // tx is now the reference
         for (int k = 0; k < BLOCK; k++) {
             cpx d = fir_step(&filt, (cpx){ tx[2 * k], tx[2 * k + 1] });
             cpx y = pa(d);
@@ -246,17 +246,17 @@ int main(int argc, char** argv)
             memcpy(acq_rx + 2 * nacq, rx, sizeof(double) * 2 * m);
             nacq += m;
             if (nacq == acq) {
-                double d = ps_align_estimate_delay(al, acq_tx, acq_rx, acq);
+                double d = pd_align_estimate_delay(al, acq_tx, acq_rx, acq);
                 printf("delay estimate %.2f (true %.2f)\n", d,
                        total_delay + (filt.on ? (FIR_TAPS - 1) / 2 : 0) + (fd.on ? 15 + frac : 0));
                 if (d < 0) { fprintf(stderr, "no delay lock\n"); return 2; }
-                ps_align_set_delay(al, d);
+                pd_align_set_delay(al, d);
                 aligned = 1;
             }
         }
         if (aligned) {
-            int v = ps_align_push(al, tx, rx, BLOCK, atx, arx);
-            ps_core_calibrate(core, atx, arx, v);
+            int v = pd_align_push(al, tx, rx, BLOCK, atx, arx);
+            pd_core_calibrate(core, atx, arx, v);
         }
         t += BLOCK;
         // WDSP fits on its own thread by the wall clock. --realtime 1 paces
@@ -277,7 +277,7 @@ int main(int argc, char** argv)
                 GetPSInfo(0, info);
                 // Wait while a fit computes (LCALC), but not once it has
                 // finished and waits for the cross-fade, which needs us.
-                if (info[15] != 6 || ps_core_swap_pending(core)) break;
+                if (info[15] != 6 || pd_core_swap_pending(core)) break;
                 waited = 1;
                 struct timespec d = { 0, 200000 };
                 nanosleep(&d, NULL);
@@ -297,12 +297,12 @@ int main(int argc, char** argv)
             struct timespec d = { 0, (long)(ahead * 1e9) };
             nanosleep(&d, NULL);
         }
-        if (getenv("PS_SIM_TRACE") && t % (RATE / 2) < BLOCK) {
+        if (getenv("PD_SIM_TRACE") && t % (RATE / 2) < BLOCK) {
             int info[16];
             extern void GetPSInfo(int, int*);
             GetPSInfo(0, info);
             fprintf(stderr, "t=%5.2fs state=%d fits=%d correcting=%d info0=%x info6=%x off=%.3f\n",
-                    (double)t / RATE, info[15], info[7], info[14], info[0], info[6], ps_align_offset_hz(al, RATE));
+                    (double)t / RATE, info[15], info[7], info[14], info[0], info[6], pd_align_offset_hz(al, RATE));
         }
     }
 
@@ -316,8 +316,8 @@ int main(int argc, char** argv)
     }
     imd b = measure(before, nb), a = measure(after, na);
     printf("filter %s%.0f Hz, offset %.3f Hz (tracked %.3f), fits %d, correcting %d, flags 0x%x\n",
-           filt.on ? "+-" : "none ", filter_hz, offset_hz, ps_align_offset_hz(al, RATE),
-           ps_core_fits(core), ps_core_correcting(core), ps_core_fit_flags(core));
+           filt.on ? "+-" : "none ", filter_hz, offset_hz, pd_align_offset_hz(al, RATE),
+           pd_core_fits(core), pd_core_correcting(core), pd_core_fit_flags(core));
     if (fit_waits)
         printf("fit time: %.1f ms average over %d fits\n", fit_ms / fit_waits, fit_waits);
     printf("IMD3 %6.1f -> %6.1f dBc (%+.1f dB)\n", b.imd3, a.imd3, b.imd3 - a.imd3);
@@ -326,8 +326,8 @@ int main(int argc, char** argv)
 
     int ok = (expect < 0 || (b.imd3 - a.imd3) >= expect)
           && (expect_below < 0 || (b.imd3 - a.imd3) < expect_below);
-    ps_core_set_keyed(core, 0);
-    ps_core_destroy(core);
-    ps_align_destroy(al);
+    pd_core_set_keyed(core, 0);
+    pd_core_destroy(core);
+    pd_align_destroy(al);
     return ok ? 0 : 1;
 }

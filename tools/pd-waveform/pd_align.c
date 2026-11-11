@@ -1,4 +1,4 @@
-#include "ps_align.h"
+#include "pd_align.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -9,29 +9,29 @@
 // millihertz-to-hertz offsets two NCOs can have, slow enough that the
 // amplifier's AM/PM (which moves at the envelope rate, hundreds of hertz and
 // up) averages out inside each block instead of being tracked away.
-#define PS_ALIGN_KP 0.3
-#define PS_ALIGN_KI 0.05
+#define PD_ALIGN_KP 0.3
+#define PD_ALIGN_KI 0.05
 // A delay estimate is trusted only above this normalized correlation.
-#define PS_ALIGN_MIN_CORR 0.6
-// Fractional-delay interpolator: windowed sinc, PS_ALIGN_TAPS taps centred
+#define PD_ALIGN_MIN_CORR 0.6
+// Fractional-delay interpolator: windowed sinc, PD_ALIGN_TAPS taps centred
 // on the wanted instant. 16 taps keep the error well below the feedback's
 // noise for signals inside +-0.4 of the sample rate.
-#define PS_ALIGN_TAPS 16
+#define PD_ALIGN_TAPS 16
 // Envelope averaging for the coarse delay search, in samples.
-#define PS_ALIGN_COARSE 8
+#define PD_ALIGN_COARSE 8
 // The delay search needs at least this many samples past the longest lag.
-#define PS_ALIGN_MIN_SPAN 4096
+#define PD_ALIGN_MIN_SPAN 4096
 // Fine delay search step, in samples.
-#define PS_ALIGN_FINE_STEP 0.01
+#define PD_ALIGN_FINE_STEP 0.01
 
-struct ps_align {
+struct pd_align {
     int max_delay;
     int history;      // ring length, in complex samples
     double* ring;     // reference history, interleaved I/Q
     long long count;  // reference samples written since the last reset
     int delay;        // whole samples
     double frac;      // 0 <= frac < 1, extra fractional samples
-    double taps[PS_ALIGN_TAPS];
+    double taps[PD_ALIGN_TAPS];
     double phase;     // feedback de-rotation, radians
     double step;      // de-rotation per sample, radians
     double est_corr;  // correlation behind the last delay estimate
@@ -42,22 +42,22 @@ struct ps_align {
 static void frac_taps(double frac, double* h)
 {
     double sum = 0;
-    for (int k = 0; k < PS_ALIGN_TAPS; k++) {
-        double m = (k - (PS_ALIGN_TAPS / 2 - 1)) + frac;   // offset from the wanted instant
+    for (int k = 0; k < PD_ALIGN_TAPS; k++) {
+        double m = (k - (PD_ALIGN_TAPS / 2 - 1)) + frac;   // offset from the wanted instant
         double s = fabs(m) < 1e-12 ? 1.0 : sin(M_PI * m) / (M_PI * m);
-        double w = 0.5 + 0.5 * cos(M_PI * m / (PS_ALIGN_TAPS / 2 + 1));
+        double w = 0.5 + 0.5 * cos(M_PI * m / (PD_ALIGN_TAPS / 2 + 1));
         h[k] = s * w;
         sum += h[k];
     }
-    for (int k = 0; k < PS_ALIGN_TAPS; k++)
+    for (int k = 0; k < PD_ALIGN_TAPS; k++)
         h[k] /= sum;
 }
 
-ps_align* ps_align_create(int max_delay, int history)
+pd_align* pd_align_create(int max_delay, int history)
 {
     if (max_delay < 0 || history <= max_delay)
         return NULL;
-    ps_align* a = calloc(1, sizeof *a);
+    pd_align* a = calloc(1, sizeof *a);
     if (!a)
         return NULL;
     a->ring = calloc((size_t)history * 2, sizeof(double));
@@ -70,7 +70,7 @@ ps_align* ps_align_create(int max_delay, int history)
     return a;
 }
 
-void ps_align_destroy(ps_align* a)
+void pd_align_destroy(pd_align* a)
 {
     if (!a)
         return;
@@ -84,14 +84,14 @@ static double env_corr(const double* etx, const double* erx, int span, double la
     // Correlation of the feedback envelope with the reference envelope
     // delayed by a fractional lag: rx[i + lag] against tx[i].
     int whole = (int)floor(lag);
-    double frac = lag - whole, h[PS_ALIGN_TAPS];
+    double frac = lag - whole, h[PD_ALIGN_TAPS];
     frac_taps(frac, h);
     double s = 0, ptx = 0, prx = 0;
-    for (int i = PS_ALIGN_TAPS; i < span - PS_ALIGN_TAPS; i++) {
+    for (int i = PD_ALIGN_TAPS; i < span - PD_ALIGN_TAPS; i++) {
         // reference delayed by frac at instant i: taps around i
         double ri = 0, rq = 0;
-        for (int k = 0; k < PS_ALIGN_TAPS; k++) {
-            int j = i - (PS_ALIGN_TAPS / 2 - 1) + k;
+        for (int k = 0; k < PD_ALIGN_TAPS; k++) {
+            int j = i - (PD_ALIGN_TAPS / 2 - 1) + k;
             ri += h[k] * txiq[2 * j];
             rq += h[k] * txiq[2 * j + 1];
         }
@@ -107,10 +107,10 @@ static double env_corr(const double* etx, const double* erx, int span, double la
     return (ptx > 0 && prx > 0) ? s / sqrt(ptx * prx) : 0;
 }
 
-double ps_align_estimate_delay(ps_align* a, const double* tx, const double* rx, int n)
+double pd_align_estimate_delay(pd_align* a, const double* tx, const double* rx, int n)
 {
     a->est_corr = 0;
-    if (n - a->max_delay < PS_ALIGN_MIN_SPAN)
+    if (n - a->max_delay < PD_ALIGN_MIN_SPAN)
         return -1;
     double* etx = malloc(sizeof(double) * (size_t)n);
     double* erx = malloc(sizeof(double) * (size_t)n);
@@ -137,13 +137,13 @@ double ps_align_estimate_delay(ps_align* a, const double* tx, const double* rx, 
     //
     // A loop delay of up to half a second is 12,000 lags: searched sample by
     // sample that is ~10^8 multiply-adds, seconds on a Cortex-A8. So search
-    // envelopes averaged over PS_ALIGN_COARSE samples first, then only the
+    // envelopes averaged over PD_ALIGN_COARSE samples first, then only the
     // neighbourhood of the coarse peak at full rate.
     const int span = n - a->max_delay;
     int lo = 0, hi = a->max_delay;
-    if (a->max_delay > 4 * PS_ALIGN_COARSE) {
-        const int cn = n / PS_ALIGN_COARSE, cspan = span / PS_ALIGN_COARSE;
-        const int cmax = a->max_delay / PS_ALIGN_COARSE;
+    if (a->max_delay > 4 * PD_ALIGN_COARSE) {
+        const int cn = n / PD_ALIGN_COARSE, cspan = span / PD_ALIGN_COARSE;
+        const int cmax = a->max_delay / PD_ALIGN_COARSE;
         double* ctx = calloc((size_t)cn, sizeof(double));
         double* crx = calloc((size_t)cn, sizeof(double));
         if (!ctx || !crx) {
@@ -153,9 +153,9 @@ double ps_align_estimate_delay(ps_align* a, const double* tx, const double* rx, 
             free(erx);
             return -1;
         }
-        for (int i = 0; i < cn * PS_ALIGN_COARSE; i++) {
-            ctx[i / PS_ALIGN_COARSE] += etx[i];
-            crx[i / PS_ALIGN_COARSE] += erx[i];
+        for (int i = 0; i < cn * PD_ALIGN_COARSE; i++) {
+            ctx[i / PD_ALIGN_COARSE] += etx[i];
+            crx[i / PD_ALIGN_COARSE] += erx[i];
         }
         int cbest = 0;
         double cr = -2;
@@ -174,8 +174,8 @@ double ps_align_estimate_delay(ps_align* a, const double* tx, const double* rx, 
         }
         free(ctx);
         free(crx);
-        lo = cbest * PS_ALIGN_COARSE - 2 * PS_ALIGN_COARSE;
-        hi = cbest * PS_ALIGN_COARSE + 2 * PS_ALIGN_COARSE;
+        lo = cbest * PD_ALIGN_COARSE - 2 * PD_ALIGN_COARSE;
+        hi = cbest * PD_ALIGN_COARSE + 2 * PD_ALIGN_COARSE;
         if (lo < 0)
             lo = 0;
         if (hi > a->max_delay)
@@ -198,10 +198,10 @@ double ps_align_estimate_delay(ps_align* a, const double* tx, const double* rx, 
     }
     double result = -1;
     a->est_corr = bestr;
-    if (bestr >= PS_ALIGN_MIN_CORR) {
+    if (bestr >= PD_ALIGN_MIN_CORR) {
         result = best;
         double fbest = bestr;
-        for (double lag = best - 1.0; lag <= best + 1.0 + 1e-9; lag += PS_ALIGN_FINE_STEP) {
+        for (double lag = best - 1.0; lag <= best + 1.0 + 1e-9; lag += PD_ALIGN_FINE_STEP) {
             if (lag < 0)
                 continue;
             double r = env_corr(etx, erx, span, lag, n, tx, mtx);
@@ -216,36 +216,36 @@ double ps_align_estimate_delay(ps_align* a, const double* tx, const double* rx, 
     return result;
 }
 
-void ps_align_set_delay(ps_align* a, double delay)
+void pd_align_set_delay(pd_align* a, double delay)
 {
     if (!(delay >= 0))
         delay = 0;
     if (delay > a->max_delay)
         delay = a->max_delay;
-    if (delay < PS_ALIGN_MIN_DELAY)
+    if (delay < PD_ALIGN_MIN_DELAY)
         delay = floor(delay + 0.5);
     a->delay = (int)floor(delay);
     a->frac = delay - a->delay;
     frac_taps(a->frac, a->taps);
 }
 
-double ps_align_delay(const ps_align* a) { return a->delay + a->frac; }
+double pd_align_delay(const pd_align* a) { return a->delay + a->frac; }
 
-double ps_align_estimate_corr(const ps_align* a) { return a->est_corr; }
-double ps_align_coherence(const ps_align* a) { return a->coherence; }
+double pd_align_estimate_corr(const pd_align* a) { return a->est_corr; }
+double pd_align_coherence(const pd_align* a) { return a->coherence; }
 
-void ps_align_restart(ps_align* a)
+void pd_align_restart(pd_align* a)
 {
     a->count = 0;
     memset(a->ring, 0, sizeof(double) * 2 * (size_t)a->history);
 }
 
-double ps_align_offset_hz(const ps_align* a, double rate)
+double pd_align_offset_hz(const pd_align* a, double rate)
 {
     return a->step * rate / (2.0 * M_PI);
 }
 
-int ps_align_push(ps_align* a, const double* tx, const double* rx, int n,
+int pd_align_push(pd_align* a, const double* tx, const double* rx, int n,
                   double* tx_out, double* rx_out)
 {
     if (n <= 0 || n + a->delay >= a->history)
@@ -270,11 +270,11 @@ int ps_align_push(ps_align* a, const double* tx, const double* rx, int n,
             tq = a->ring[2 * r + 1];
         } else {
             // reference at src - frac, from ring[src - 7 .. src + 8]
-            long long first = src - (PS_ALIGN_TAPS / 2 - 1);
-            if (first < 0 || src + PS_ALIGN_TAPS / 2 > t)
+            long long first = src - (PD_ALIGN_TAPS / 2 - 1);
+            if (first < 0 || src + PD_ALIGN_TAPS / 2 > t)
                 continue;
             ti = tq = 0;
-            for (int k = 0; k < PS_ALIGN_TAPS; k++) {
+            for (int k = 0; k < PD_ALIGN_TAPS; k++) {
                 int r = (int)((first + k) % a->history);
                 ti += a->taps[k] * a->ring[2 * r];
                 tq += a->taps[k] * a->ring[2 * r + 1];
@@ -300,8 +300,8 @@ int ps_align_push(ps_align* a, const double* tx, const double* rx, int n,
     a->coherence = (ptx > 0 && prx > 0) ? hypot(zr, zi) / sqrt(ptx * prx) : 0;
     if (valid > 0 && (zr != 0 || zi != 0)) {
         double err = atan2(zi, zr);
-        a->phase += PS_ALIGN_KP * err;
-        a->step += PS_ALIGN_KI * err / valid;
+        a->phase += PD_ALIGN_KP * err;
+        a->step += PD_ALIGN_KI * err / valid;
     }
     a->phase = fmod(a->phase, 2.0 * M_PI);
     return valid;

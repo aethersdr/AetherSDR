@@ -1,4 +1,7 @@
-# PureSignal predistortion waveform (prototype)
+# AetherPD: a pre-distortion waveform (prototype)
+
+**AetherPD** (PD = pre-distortion) brings WDSP's PureSignal-style
+pre-distortion to FlexRadio radios.
 
 A FLEX-6000 has no internal sampler and no Adaptive Predistortion. This is a
 legacy waveform that brings WDSP's PureSignal to one: it pre-distorts the
@@ -9,17 +12,17 @@ It has to fit a FLEX-6000 legacy waveform: a static ARMv7 (Cortex-A8)
 binary on a small, shared `/user` partition. So it carries **only**
 PureSignal's own WDSP files (`calcc`, `iqc`, `delay`, the NURBS/spline
 fitter, `fir`, `utilities`, `impulse_cache`) with WDSP's POSIX port, and no
-FFTW library and no WDSP transmit channel. `ps_core.c` supplies the one
+FFTW library and no WDSP transmit channel. `pd_core.c` supplies the one
 thing those files need from the channel: the `txa[]`/`ch[]` slot holding
 their pointers and locks.
 
 | File | What it does |
 |---|---|
-| `ps_core.[ch]` | Wraps WDSP's calibration (`pscc`) and correction (`xiqc`) |
-| `ps_align.[ch]` | Lines the feedback up with the reference: loop delay to a hundredth of a sample, and a slow tracker for the NCO offset between them |
-| `ps_waveform.c` | The waveform: radio API, VITA-49, USB modulator and demodulator, DAX IQ feedback; `selftest` is the CTest `ps_waveform_selftest`, which also runs the whole transmit loop through the waveform against an amplifier model |
-| `ps_sim.c` | Closed loop against a PA model; the CTests `ps_waveform_sim_test` and `ps_waveform_sim_bandwidth_limit_test` |
-| `build.py`, `package/` | Builds `AetherPS.ssdr_waveform` with an ARMv7 (FLEX-6000) and an arm64 (FLEX-8000) binary |
+| `pd_core.[ch]` | Wraps WDSP's calibration (`pscc`) and correction (`xiqc`) |
+| `pd_align.[ch]` | Lines the feedback up with the reference: loop delay to a hundredth of a sample, and a slow tracker for the NCO offset between them |
+| `pd_waveform.c` | The waveform: radio API, VITA-49, USB modulator and demodulator, DAX IQ feedback; `selftest` is the CTest `pd_waveform_selftest`, which also runs the whole transmit loop through the waveform against an amplifier model |
+| `pd_sim.c` | Closed loop against a PA model; the CTests `pd_waveform_sim_test` and `pd_waveform_sim_bandwidth_limit_test` |
+| `build.py`, `package/` | Builds `AetherPD.ssdr_waveform` with an ARMv7 (FLEX-6000) and an arm64 (FLEX-8000) binary |
 
 ## What the simulation shows
 
@@ -37,7 +40,7 @@ waveform knows).
 Two things the radio path needs that ANAN hardware gives for free:
 
 - **Sub-sample delay.** WDSP rejects every fit when the pairs are off by a
-  quarter sample at 24 kHz. `ps_align` finds the delay to ~0.03 sample by
+  quarter sample at 24 kHz. `pd_align` finds the delay to ~0.03 sample by
   envelope correlation (immune to the NCO offset) and interpolates the
   reference.
 - **NCO offset.** The feedback comes from a separate receiver, so it rotates
@@ -45,7 +48,7 @@ Two things the radio path needs that ANAN hardware gives for free:
   offsets without tracking away the amplifier's AM/PM.
 
 One correction: WDSP's `xiqc` indexes its curves by amplitude on a scale
-where 1.0 is the transmit peak, so `ps_core_correct` scales into that range
+where 1.0 is the transmit peak, so `pd_core_correct` scales into that range
 and back.
 
 **Size and speed.** The ARMv7 static build of the core plus the simulator is
@@ -55,12 +58,12 @@ background while transmitting). Measure it on a real radio.
 
 ## The waveform
 
-`AetherPS` registers the mode **PS** with the `RAW` underlying mode, so the
-radio exchanges 24 kHz I/Q with it. With PS selected on a slice:
+`AetherPD` registers the mode **PD** with the `RAW` underlying mode, so the
+radio exchanges 24 kHz I/Q with it. With PD selected on a slice:
 
 - **Receive:** the slice's I/Q is demodulated as USB and returned as audio.
 - **Transmit:** mic audio becomes upper-sideband I/Q (200-2800 Hz), is
-  pre-distorted by `ps_core`, and goes back to the radio.
+  pre-distorted by `pd_core`, and goes back to the radio.
 - **Feedback:** while the radio transmits, a DAX IQ stream from a panadapter
   on the coupler's receive input is mixed to the transmit frequency,
   decimated to 24 kHz, and lined up with what was sent. The loop delay is
@@ -79,8 +82,8 @@ Build: `python3 -I build.py --output OUT --host` (zig 0.17). The package is
    into the transmit side's receive input (RX A for ANT1), at -20 dBm or
    lower there. Turn on full duplex.
 2. A panadapter on that input, centred on the transmit frequency, with DAX
-   IQ channel 1 (or set `AETHER_PS_DAXIQ` in `launch.sh`).
-3. Install `AetherPS.ssdr_waveform`; select PS on the transmit slice.
+   IQ channel 1 (or set `AETHER_PD_DAXIQ` in `launch.sh`).
+3. Install `AetherPD.ssdr_waveform`; select PD on the transmit slice.
 4. On a FLEX-8000, turn APD off so the two corrections don't fight.
 
 The log shows the registration reply, the loop delay it found, and the fit
@@ -88,10 +91,10 @@ count while transmitting.
 
 ## Testing on a radio, in order
 
-1. **No RF.** Install; select PS; check the registration reply has stream
+1. **No RF.** Install; select PD; check the registration reply has stream
    IDs and that receive audio comes through. This settles whether `RAW`
    exists on that firmware.
-2. **Dummy load, low power, correction off** (`AETHER_PS_CORRECT=0`): a
+2. **Dummy load, low power, correction off** (`AETHER_PD_CORRECT=0`): a
    two-tone from the mic input. Check the transmitted spectrum, how wide the
    radio's transmit path is after the waveform, and that the log finds a
    loop delay.
@@ -102,13 +105,13 @@ the radio.
 
 ## On a FLEX-8600 (SmartSDR 4.3.16), no RF, 2026-11-11
 
-- The waveform starts as a legacy waveform, connects, and registers: PS
+- The waveform starts as a legacy waveform, connects, and registers: PD
   appears in every slice's `mode_list` within a second of installing.
-- A slice set to PS reports `mode=PS chain_mode=RAW filter_lo=300
+- A slice set to the waveform's mode reports `chain_mode=RAW filter_lo=300
   filter_hi=3000`, so the RAW I/Q is cut to the slice's one-sided filter.
-- With PS selected, DAX audio from that slice flows, and the waveform is
+- With PD selected, DAX audio from that slice flows, and the waveform is
   still registered afterwards.
-- `filt <slice> -3000 3000` (and wider) is accepted with `R|0` on a PS slice,
+- `filt <slice> -3000 3000` (and wider) is accepted with `R|0` on a PD slice,
   but no status reports new edges, so whether a RAW slice takes a symmetric
   or wider filter is still open.
 - The radio's transmit filter reads `lo=50 hi=4000`. If the RAW transmit
@@ -139,5 +142,5 @@ the radio.
 - Whether DAX IQ reaches an on-radio process (it doesn't reach a container
   on the FLEX-8600) and whether a FLEX-6000 with one SCU can monitor its
   own transmit frequency in full duplex.
-- The full-scale level of `RAW` transmit samples (`AETHER_PS_PEAK`).
+- The full-scale level of `RAW` transmit samples (`AETHER_PD_PEAK`).
 - How long a fit takes on a FLEX-6000's Cortex-A8.

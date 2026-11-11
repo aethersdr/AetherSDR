@@ -19,13 +19,13 @@
 extern "C" {
 #endif
 
-typedef struct ps_align ps_align;
+typedef struct pd_align pd_align;
 
 // max_delay: the largest loop delay to search, in samples.
 // history: how many reference samples to keep; must exceed max_delay plus
-// the largest block passed to ps_align_push().
-ps_align* ps_align_create(int max_delay, int history);
-void ps_align_destroy(ps_align* a);
+// the largest block passed to pd_align_push().
+pd_align* pd_align_create(int max_delay, int history);
+void pd_align_destroy(pd_align* a);
 
 // Estimates the loop delay from n reference/feedback pairs captured at the
 // same instants (interleaved I/Q), to a fraction of a sample: the
@@ -33,35 +33,35 @@ void ps_align_destroy(ps_align* a);
 // sample at 24 kHz. Returns the delay in samples, or -1 when the
 // correlation peak is not clear enough to trust. n must exceed the largest
 // delay by at least 4096 samples.
-double ps_align_estimate_delay(ps_align* a, const double* tx, const double* rx, int n);
+double pd_align_estimate_delay(pd_align* a, const double* tx, const double* rx, int n);
 
 // The normalized envelope correlation behind the last delay estimate, 0..1.
-double ps_align_estimate_corr(const ps_align* a);
+double pd_align_estimate_corr(const pd_align* a);
 
-// How well the pairs from the last ps_align_push() match: the normalized
+// How well the pairs from the last pd_align_push() match: the normalized
 // complex correlation of feedback against reference, 0..1. It stays near 1
 // with the right delay and drops toward 0 with a wrong one.
-double ps_align_coherence(const ps_align* a);
+double pd_align_coherence(const pd_align* a);
 
-// Delays below PS_ALIGN_MIN_DELAY samples are rounded to whole samples: the
+// Delays below PD_ALIGN_MIN_DELAY samples are rounded to whole samples: the
 // fractional interpolator needs that much reference ahead of its output.
-#define PS_ALIGN_MIN_DELAY 8
-void ps_align_set_delay(ps_align* a, double delay);
-double ps_align_delay(const ps_align* a);
+#define PD_ALIGN_MIN_DELAY 8
+void pd_align_set_delay(pd_align* a, double delay);
+double pd_align_delay(const pd_align* a);
 
 // Feeds one block: n new reference samples and the n feedback samples
 // received over the same interval. Writes n aligned pairs (reference delayed
 // by the loop delay, feedback de-rotated) to tx_out/rx_out and returns how
 // many are valid; the first `delay` samples after a reset are not.
-int ps_align_push(ps_align* a, const double* tx, const double* rx, int n,
+int pd_align_push(pd_align* a, const double* tx, const double* rx, int n,
                   double* tx_out, double* rx_out);
 
 // Starts a new transmission: forgets the reference history and the pairing,
 // keeps the delay and the NCO-offset estimate (both belong to the radio).
-void ps_align_restart(ps_align* a);
+void pd_align_restart(pd_align* a);
 
 // Current estimate of the feedback's frequency offset in Hz, given the rate.
-double ps_align_offset_hz(const ps_align* a, double rate);
+double pd_align_offset_hz(const pd_align* a, double rate);
 
 #ifdef __cplusplus
 }
