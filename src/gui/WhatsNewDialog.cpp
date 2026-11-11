@@ -341,6 +341,25 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
     m_browser->setOpenExternalLinks(false);
     m_browser->setOpenLinks(false);
     m_browser->setReadOnly(true);
+    // A stylesheet reflow can clamp the scrollbar before themeChanged reaches
+    // rerender(). Keep the reader's last position, excluding range clamps.
+    connect(m_browser->verticalScrollBar(), &QScrollBar::rangeChanged, this,
+            [this](int, int maximum) {
+        if (!m_rendering && m_browser->verticalScrollBar()->value() > maximum) {
+            m_scrollClamping = true;
+        }
+    });
+    connect(m_browser->verticalScrollBar(), &QScrollBar::valueChanged, this,
+            [this](int value) {
+        if (m_rendering) {
+            return;
+        }
+        if (m_scrollClamping) {
+            m_scrollClamping = false;
+            return;
+        }
+        m_notesScroll = value;
+    });
     connect(m_browser, &QTextBrowser::anchorClicked, this, [](const QUrl& url) {
         if (const auto target = whatsNewLinkTarget(url)) {
             QDesktopServices::openUrl(*target);
@@ -489,7 +508,11 @@ void WhatsNewDialog::rerender()
 {
     if (!m_browser)
         return;
-    const int scroll = m_browser->verticalScrollBar() ? m_browser->verticalScrollBar()->value() : 0;
+    const int scroll = m_notesScroll;
+    const QTextCursor selection = m_browser->textCursor();
+    const int anchor = selection.anchor();
+    const int position = selection.position();
+    m_rendering = true;
     const QString muted = tokenColour(this, "color.canon.muted");
     switch (m_content) {
     case Content::Loading:
@@ -522,8 +545,19 @@ void WhatsNewDialog::rerender()
         break;
     }
     }
-    if (m_browser->verticalScrollBar())
+    if (m_content == Content::Notes) {
+        QTextCursor restored(m_browser->document());
+        const int last = m_browser->document()->characterCount() - 1;
+        restored.setPosition(qMin(anchor, last));
+        restored.setPosition(qMin(position, last), QTextCursor::KeepAnchor);
+        m_browser->setTextCursor(restored);
+    }
+    if (m_browser->verticalScrollBar()) {
         m_browser->verticalScrollBar()->setValue(scroll);
+    }
+    m_notesScroll = m_browser->verticalScrollBar()->value();
+    m_scrollClamping = false;
+    m_rendering = false;
 }
 
 void WhatsNewDialog::promptFind()
@@ -553,8 +587,10 @@ void WhatsNewDialog::promptFind()
     auto* buttons = new QHBoxLayout;
     buttons->addStretch(1);
     auto* cancel = new QPushButton(QStringLiteral("Cancel"), prompt.bodyWidget());
+    cancel->setObjectName(QStringLiteral("whatsNewFindCancel"));
     cancel->setAutoDefault(false);
     auto* find = new QPushButton(QStringLiteral("Find"), prompt.bodyWidget());
+    find->setObjectName(QStringLiteral("whatsNewFindConfirm"));
     find->setDefault(true);
     connect(cancel, &QPushButton::clicked, &prompt, &QDialog::reject);
     connect(find, &QPushButton::clicked, &prompt, &QDialog::accept);

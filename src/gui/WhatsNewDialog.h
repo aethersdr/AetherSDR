@@ -53,6 +53,9 @@ private:
     enum class Content { Loading, Error, Notes } m_content{Content::Loading};
     QString m_errorMessage;
     QString m_notesMarkdown;
+    int m_notesScroll{0};
+    bool m_rendering{false};
+    bool m_scrollClamping{false};
     // Tests build the window without reaching GitHub (socket-free).
     static inline bool s_fetchReleaseNotes = true;
     bool m_isWelcome{false};

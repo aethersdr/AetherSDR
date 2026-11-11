@@ -14,6 +14,10 @@
 #include <QColor>
 #include <QDialog>
 #include <QKeySequence>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTextCursor>
 #include <QLabel>
 #include <QLineEdit>
 #include <QTextBlock>
@@ -109,13 +113,23 @@ void canonWindow()
     // A theme change while the window is open re-renders the notes.
     tm.setActiveTheme(QStringLiteral("Default Dark"));
     QPointer<WhatsNewDialog> d = make();
-    WhatsNewDialogTestAccess::notes(*d, QStringLiteral("# Heading\n\nBody."));
+    WhatsNewDialogTestAccess::notes(*d, QStringLiteral("# Heading\n\nBody with [a link](https://example.com)."));
     tm.setActiveTheme(QStringLiteral("Default Light"));
     QCoreApplication::processEvents();
     auto* browser = d->findChild<QTextBrowser*>("whatsNewNotes");
-    check(browser && browser->document()->defaultStyleSheet()
-                         .contains(tm.color(d, QStringLiteral("color.canon.ink")).name()),
-          "switching theme while open re-renders the notes in the new colours");
+    const QColor lightCyan = tm.color(d, QStringLiteral("color.canon.cyan"));
+    int switchedLinks = 0;
+    int switchedCyan = 0;
+    for (QTextBlock block = browser->document()->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            if (it.fragment().charFormat().isAnchor()) {
+                ++switchedLinks;
+                switchedCyan += it.fragment().charFormat().foreground().color() == lightCyan;
+            }
+        }
+    }
+    check(switchedLinks > 0 && switchedCyan == switchedLinks,
+          "switching theme while open redraws the links in the new theme's cyan");
     WhatsNewDialogTestAccess::error(*d, QStringLiteral("offline <b>"));
     check(browser && browser->toPlainText().contains("offline <b>"),
           "the load error shows its message as text, not markup");
@@ -171,6 +185,36 @@ void themeChangeKeepsScroll()
     check(bar->value() == target, "a theme change keeps the notes' scroll position");
     QCoreApplication::processEvents();
     check(bar->value() == target, "the scroll position holds once events settle");
+    QFile realNotes(QFINDTESTDATA("fixtures/release/v26.10.3.json"));
+    const bool fixtureLoaded = realNotes.open(QIODevice::ReadOnly);
+    check(fixtureLoaded, "the published release-notes fixture loads");
+    if (fixtureLoaded) {
+        const QString markdown = QJsonDocument::fromJson(realNotes.readAll())
+                                     .object().value(QStringLiteral("body")).toString();
+        check(!markdown.isEmpty(), "the fixture contains release notes");
+        WhatsNewDialogTestAccess::notes(*d, markdown);
+        QCoreApplication::processEvents();
+        check(browser->find(QStringLiteral("73, Pat")), "Find selects text in the published notes");
+        const QTextCursor selected = browser->textCursor();
+        const int selectedAnchor = selected.anchor();
+        const int selectedPosition = selected.position();
+        bar->setValue(bar->maximum());
+        const int bottom = bar->value();
+        tm.setActiveTheme(QStringLiteral("Default Dark"));
+        QCoreApplication::processEvents();
+        std::printf("  published notes: before=%d after=%d max=%d\n", bottom, bar->value(), bar->maximum());
+        check(bottom > 0 && bar->value() == bottom,
+              "a theme change preserves the bottom of published release notes");
+        check(browser->textCursor().anchor() == selectedAnchor
+                  && browser->textCursor().position() == selectedPosition,
+              "a theme change preserves the Find selection");
+        const int nearBottom = bar->maximum() - 20;
+        bar->setValue(nearBottom);
+        tm.setActiveTheme(QStringLiteral("Default Light"));
+        check(bar->value() == nearBottom, "switching back preserves a position near the bottom");
+        QCoreApplication::processEvents();
+        check(bar->value() == nearBottom, "the published notes stay in place after events settle");
+    }
     delete d.data();
     tm.setActiveTheme(before);
 }
