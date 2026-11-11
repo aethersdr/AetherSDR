@@ -144,6 +144,12 @@ void resetMidBurst()
     check(feedInChunks(monitor, head).empty(), "reset: half a burst decodes nothing");
     monitor.reset();
 
+    // The rest of the old stream must not complete the burst the reset forgot:
+    // a reset that kept the first half would decode it here.
+    const std::vector<float> tail(pcm.begin() + static_cast<std::ptrdiff_t>(loudest), pcm.end());
+    check(feedInChunks(monitor, tail).empty(), "reset: the old stream's remainder cannot finish its burst");
+    monitor.reset();
+
     int heard = 0;
     bool stamped = false;
     bool timedFromReset = false;
