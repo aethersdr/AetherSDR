@@ -7,12 +7,21 @@ first, and restores it at the end. Stop at any step if anything looks wrong.
 ## Hardware (operator)
 
 - Dummy load on ANT1, rated for the test power with margin.
-- Sampler in line between ANT1 and the dummy load (e.g. a CleanRF RF-S2K),
-  its sample port through an attenuator into **RX A**.
-- Attenuation so RX A sees **-20 dBm or less** at the highest test power.
-  Work it out from the sampler's coupling before keying; check it on the
-  RX A panadapter at the first, lowest power.
+- Sampler in line between ANT1 and the dummy load, its sample port into
+  **RX A** (not XVTR, which also transmits).
+- RX A must see **-20 dBm or less** at the highest test power, because full
+  duplex leaves it unprotected. Work it out from the sampler's measured
+  coupling, and check it on the RX A panadapter at 5 W before going higher.
 - Start at **5 W**.
+
+On the AetherSDR bench (FLEX-8600, 2026-11-11) the sampler is a CleanRF
+RF-S2K+ with no pad, knob fully counter-clockwise. Its measured coupling
+(aether-fabric `bench/rf-s2k/records/2026-11-11-coupling.md`) is -67.8 dB on
+40 m, -61.4 dB on 20 m and -56.5 dB on 10 m, so RX A sees about -31 dBm at
+5 W and -24 dBm at 25 W on 40 m, and -24 dBm at 5 W on 20 m. The runs below
+are on **40 m (7.150 MHz) at 5, 10 and 25 W**, with **20 m at 5 W** as a
+cross-check; 10 m needs a pad. The waveform is USB only, which is fine into
+a dummy load on 40 m.
 
 ## Settings (agent records, changes, restores)
 
@@ -26,11 +35,20 @@ first, and restores it at the end. Stop at any step if anything looks wrong.
 The operator's AetherSDR does the rest, so nothing else on the radio
 changes behind it:
 
-- a panadapter on **RX A**, centred on the transmit frequency (e.g. 14.200
-  MHz), with **DAX IQ channel 1**;
+- a panadapter on **RX A**, centred on the transmit frequency (7.150 MHz),
+  with **DAX IQ channel 1**;
 - the transmit slice on ANT1, USB at first, at the transmit frequency.
 
 AetherWSPR keeps its own slice; it only receives.
+
+## Before the runs
+
+1. **Leakage:** terminate the RX A cable instead of the sampler. Full duplex
+   on; key 5 W on 7.150 MHz for a few seconds and read RX A at that
+   frequency. That is the radio's own leakage into RX A.
+2. **Sample level:** reconnect the sampler, key 5 W again and read RX A
+   (expect about -31 dBm). Go on only if it sits more than about 30 dB above
+   the leakage.
 
 ## Runs
 
@@ -51,8 +69,8 @@ from `http://<radio>:48996` (one JSON line: `aligned`, `delay_samples`,
 3. **AetherPS, correction on** (`AetherPS.ssdr_waveform`). Same as run 2,
    keyed ~20 s. Status should show `fits` climbing and `correcting: true`.
    Compare IMD3 and IMD5 with run 2.
-4. Repeat run 3 at 25 W and 50 W if run 3 helped and RX A stays at or
-   below -20 dBm.
+4. Repeat run 3 at 10 W and 25 W on 40 m if run 3 helped, then once at
+   5 W on 20 m (14.200 MHz, with the RX A pan moved there).
 
 ## Stop if
 
