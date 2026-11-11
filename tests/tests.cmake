@@ -2493,6 +2493,28 @@ set_tests_properties(whats_new_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     TIMEOUT 90)
 
+# Import/Export Profiles on CanonWindow (#7032): the "transfer still running"
+# question guards Esc, Ctrl+W and the corner close alike, and the import
+# confirmation defaults to Cancel. Socket-free: transfers are only marked busy.
+add_executable(profile_import_export_dialog_test
+    tests/profile_import_export_dialog_test.cpp
+    src/gui/ProfileImportExportDialog.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(profile_import_export_dialog_test PRIVATE src tests)
+target_link_libraries(profile_import_export_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(profile_import_export_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME profile_import_export_dialog_test COMMAND profile_import_export_dialog_test)
+set_tests_properties(profile_import_export_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
+
 # MIDI Controller Mapping on CanonWindow (#7040): a canon workspace whose
 # manual editor is a canon dialog, whose shared-source question defaults to
 # Cancel, and whose every close path cancels a waiting Learn. No port opened.
@@ -11135,6 +11157,7 @@ set(AETHER_SETTINGS_CONSUMERS
     callsign_lookup_dialog_test
     radio_health_dialog_test
     whats_new_dialog_test
+    profile_import_export_dialog_test
     midi_mapping_dialog_test
     support_dialog_test
     theme_editor_dialog_test
