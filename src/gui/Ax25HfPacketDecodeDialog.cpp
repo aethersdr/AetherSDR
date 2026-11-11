@@ -1219,6 +1219,10 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             if (m_captureActive) { finishAudioCapture(false); }
             if (!guard) { return; }
             // The monitor must not join audio from two sources into one burst.
+            // Deliberately over-broad: this also fires for a packet profile
+            // change and a modem queue overflow, where the audio is still one
+            // stream, and costs the monitor its burst in progress and the
+            // sessions it had learned. All of its triggers are local.
             if (m_data2g) { m_data2g->reset(); }
             refreshStatus();
         });
