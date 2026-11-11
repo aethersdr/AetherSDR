@@ -63,6 +63,12 @@ struct Hl2DspChainsCacheTestAccess {
         backend.acceptDspChains(chains, generation, epoch);
     }
     static quint64 generation(const Hl2Backend& backend) { return backend.m_connectGeneration; }
+    // A verb's publish request: the 0 ms timer armed, the gather not yet posted.
+    static bool publishRequested(const Hl2Backend& backend)
+    {
+        return backend.m_dspChainsPublishTimer && backend.m_dspChainsPublishTimer->isActive();
+    }
+    static void clearPublishRequest(Hl2Backend& backend) { backend.m_dspChainsPublishTimer->stop(); }
     static quint64 epoch(const Hl2Backend& backend) { return backend.m_dspChainsEpoch; }
 };
 
@@ -200,6 +206,18 @@ int main(int argc, char** argv)
         check(Access::refreshTick(backend), "a refresh tick fires");
         Access::drain(backend);
         check(txConfigured(backend.dspChains()), "one refresh tick publishes it");
+    }
+
+    // 6. A CW pitch change re-pushes every receiver's shift and filter, so it
+    //    requests a publish; the same pitch again changes no chain and does not.
+    {
+        Hl2Backend backend;
+        Access::clearPublishRequest(backend);
+        backend.setCwPitch(700);
+        check(Access::publishRequested(backend), "a CW pitch change requests a publish");
+        Access::clearPublishRequest(backend);
+        backend.setCwPitch(700);
+        check(!Access::publishRequested(backend), "the same pitch again requests none");
     }
 
     std::printf("\n  %s (%d failure%s)\n\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,
