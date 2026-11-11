@@ -353,7 +353,9 @@ void MainWindow::routeRttyDecoderOutput()
 void MainWindow::onRttyDecoderMarkChosen(int hz)
 {
     // The decoder has no mark of its own: the slice's change signal runs
-    // refreshRttyDecodeState(), which hands the mark to the decoder.
+    // refreshRttyDecodeState(), which hands the mark to the decoder. Only the
+    // pane on screen speaks for the slice.
+    if (sender() != m_rttyDecoderApplet) { return; }
     if (auto* s = activeSlice()) { s->setRttyMark(hz); }
 }
 

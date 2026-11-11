@@ -431,7 +431,8 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_rttyMarkCombo->setObjectName(QStringLiteral("rttyMarkCombo"));
     m_rttyMarkCombo->setStyleSheet(comboStyle);
     m_rttyMarkCombo->setFixedWidth(68);
-    m_rttyMarkCombo->setToolTip("Mark (idle) tone audio frequency");
+    m_rttyMarkCombo->setToolTip("Mark (idle) tone. Sets the slice's RTTY mark on the radio.");
+    m_rttyMarkCombo->setAccessibleName(QStringLiteral("RTTY decoder mark"));
     for (int hz : kRttyMarkPresetsHz) {
         m_rttyMarkCombo->addItem(QString::number(hz), hz);
     }
@@ -454,6 +455,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_rttyShiftCombo->setStyleSheet(comboStyle);
     m_rttyShiftCombo->setFixedWidth(52);
     m_rttyShiftCombo->setToolTip("Mark-to-space shift. Sets the slice's RTTY shift on the radio.");
+    m_rttyShiftCombo->setAccessibleName(QStringLiteral("RTTY decoder shift"));
     for (int hz : kRttyShiftPresetsHz) {
         m_rttyShiftCombo->addItem(QString::number(hz), hz);
     }
