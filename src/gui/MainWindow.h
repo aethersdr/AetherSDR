@@ -2230,7 +2230,8 @@ private:
     SwrSweepState m_swrSweep;
     QTimer m_swrSweepTimer;
     // Polls the shared client compressor for the TX:COMPPEAK meter and mirrors
-    // its enable state back onto PROC. ClientComp has no change notification.
+    // its enable state back onto PROC, and the shared ClientEq enables back onto
+    // the graphic EQ. Neither has a change notification.
     QTimer m_hostVoiceChainTimer;
     // Last PROC state pushed onto that compressor, so the NOR/DX/DX+ presets are
     // only written when the operator actually changed the level (they overwrite
