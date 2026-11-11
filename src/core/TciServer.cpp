@@ -632,6 +632,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     m_meterTimer = new QTimer(this);
     m_meterTimer->setInterval(200);
     connect(m_meterTimer, &QTimer::timeout, this, &TciServer::broadcastStatus);
+    m_hwSensorsTimer = new QTimer(this);
+    m_hwSensorsTimer->setSingleShot(true);
+    connect(m_hwSensorsTimer, &QTimer::timeout, this, &TciServer::serviceHwSensors);
 
     // Rate limiter for drive:/tune_drive: — see queuePowerBroadcast().
     m_powerRateTimer = new QTimer(this);
@@ -715,6 +718,7 @@ bool TciServer::start(quint16 requestedPort)
 void TciServer::stopIo()
 {
     m_meterTimer->stop();
+    m_hwSensorsTimer->stop();
     m_daxReleaseTimer->stop();
     m_powerRateTimer->stop();
     m_pendingTrxRequest.reset();
@@ -1517,6 +1521,21 @@ void TciServer::onTextMessage(const QString& msg)
                                     .arg(client.txSensorsEnabled ? "true" : "false"));
             qCInfo(lcCat) << "TCI: tx_sensors" << (client.txSensorsEnabled ? "enabled" : "disabled");
             emit clientsChanged();
+            continue;
+        }
+        // §HW_SENSORS_ENABLE is unidirectional: no reply is defined.
+        if (trimmed.startsWith("hw_sensors_enable:")) {
+            const std::optional<TciProtocol::HwSensorsEnable> request =
+                TciProtocol::parseHwSensorsEnable(trimmed.mid(trimmed.indexOf(':') + 1));
+            if (request) {
+                client.hwSensorsEnabled = request->enabled;
+                client.hwSensorsIntervalMs = request->intervalMs;
+                client.hwSensorsDueAtMs = m_tciPttTelemetryClock.elapsed();
+                qCInfo(lcCat) << "TCI: hw_sensors"
+                              << (request->enabled ? "enabled" : "disabled")
+                              << request->intervalMs << "ms";
+                m_hwSensorsTimer->start(0);
+            }
             continue;
         }
 
@@ -4191,6 +4210,38 @@ void TciServer::broadcastStatus()
                     .arg(m_cachedAlc, 0, 'f', 1);
             sendClientText(cs.socket, message);
         }
+    }
+}
+
+void TciServer::serviceHwSensors()
+{
+    const qint64 now = m_tciPttTelemetryClock.elapsed();
+    std::optional<QString> message;
+    bool built = false;
+    qint64 nextDue = -1;
+    for (ClientState& cs : m_clients) {
+        if (!cs.hwSensorsEnabled) {
+            continue;
+        }
+        if (cs.hwSensorsDueAtMs <= now) {
+            if (!built) {
+                built = true;
+                if (m_model && m_model->isConnected()) {
+                    message = TciProtocol::hwSensorsMessage(TciProtocol::hwSensorReadings(
+                        m_model->backendCapabilities(), m_model->meterModel()));
+                }
+            }
+            if (message) {
+                sendClientText(cs.socket, *message);
+            }
+            cs.hwSensorsDueAtMs = now + cs.hwSensorsIntervalMs;
+        }
+        nextDue = nextDue < 0 ? cs.hwSensorsDueAtMs : std::min(nextDue, cs.hwSensorsDueAtMs);
+    }
+    if (nextDue >= 0 && m_running.load(std::memory_order_acquire)) {
+        m_hwSensorsTimer->start(static_cast<int>(std::max<qint64>(0, nextDue - now)));
+    } else {
+        m_hwSensorsTimer->stop();
     }
 }
 
