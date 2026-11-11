@@ -19,6 +19,7 @@
 #include <memory>
 #include <thread>
 
+
 using namespace AetherSDR;
 
 namespace {
@@ -185,7 +186,11 @@ int main(int argc, char** argv)
     const ParsedMessage rawGps = CommandParser::parseLine(QStringLiteral(
         "S0|gps status=Fine Lock#fix=3D#lat=48.27#lon=-116.56"));
     RadioConnection* lan = model.connection();
-    std::thread queuedLanReport([lan, rawGps] { emit lan->messageReceived(rawGps); });
+    const quint64 lanEpoch = lan->lineEpoch();
+    auto* lanBackend = dynamic_cast<FlexBackend*>(model.backend());
+    check(lanBackend && lanBackend->statusIngress()->epoch() == lanEpoch,
+          "the queued LAN report carries the live status epoch");
+    std::thread queuedLanReport([lan, rawGps, lanEpoch] { emit lan->lineReceived(rawGps, lanEpoch); });
     queuedLanReport.join();
     check(reports.isEmpty(), "raw LAN GPS report is queued before disconnect");
     check(QMetaObject::invokeMethod(&model, "onDisconnected", Qt::DirectConnection),
@@ -197,7 +202,7 @@ int main(int argc, char** argv)
           "repeated empty reset remains reachable");
     check(reports.count() == 1 && timeSettings.count() == clearedTimeSettings,
           "reset of already empty GPS state emits no duplicate notifications");
-    QCoreApplication::sendPostedEvents(&model, QEvent::MetaCall);
+    QCoreApplication::sendPostedEvents();
     checkCleared(model);
     check(reports.count() == 1, "queued raw LAN GPS cannot undo disconnect reset");
 
@@ -235,31 +240,32 @@ int main(int argc, char** argv)
     // the epoch transition. No transport is connected or opened.
     check(model.rebuildBackendForTest(QStringLiteral("flex")), "raw-message test installs Flex decoder");
     model.connectViaWan(&wan, QStringLiteral("192.0.2.3"), 4992);
-    // WAN source stays unopened. Only its real messageReceived subscription is
-    // exercised, including a repeated session with exactly the same objects.
+    // WAN source stays unopened. Only its real line route through the status
+    // ingress is exercised, including a repeated session with the same objects.
     QSignalSpy profiles(&model, &RadioModel::globalProfilesChanged);
     const ParsedMessage queuedProfile = CommandParser::parseLine(QStringLiteral(
         "S0|profile global list=Profile one^Profile two"));
-    std::thread queuedWanReport([&wan, rawGps, queuedProfile] {
-        emit wan.messageReceived(rawGps);
-        emit wan.messageReceived(queuedProfile);
+    const quint64 oldWanEpoch = wan.lineEpoch();
+    std::thread queuedWanReport([&wan, rawGps, queuedProfile, oldWanEpoch] {
+        emit wan.lineReceived(rawGps, oldWanEpoch);
+        emit wan.lineReceived(queuedProfile, oldWanEpoch);
     });
     queuedWanReport.join();
-    check(profiles.isEmpty(), "raw profile delivery is queued before GPS epoch reset");
+    check(profiles.isEmpty(), "raw profile delivery is queued before the next WAN session");
     model.connectViaWan(&wan, QStringLiteral("192.0.2.2"), 4992);
     reports.clear();
-    QCoreApplication::sendPostedEvents(&model, QEvent::MetaCall);
+    QCoreApplication::sendPostedEvents();
     checkCleared(model);
     check(reports.isEmpty(), "queued raw WAN GPS cannot undo same-family session reset");
-    check(profiles.count() == 1
-          && model.globalProfiles() == QStringList{QStringLiteral("Profile one"), QStringLiteral("Profile two")},
-          "GPS epoch reset preserves queued non-GPS profile dispatch exactly once");
-    emit wan.messageReceived(CommandParser::parseLine(QStringLiteral(
-        "S0|profile global current=Fresh profile")));
-    check(profiles.count() == 2 && model.activeGlobalProfile() == QLatin1String("Fresh profile"),
-          "fresh raw non-GPS status reaches one receiver after session rebind");
+    check(profiles.isEmpty(), "a line queued by the previous WAN session is dropped, GPS or not");
+    emit wan.lineReceived(CommandParser::parseLine(QStringLiteral(
+        "S0|profile global current=Fresh profile")), wan.lineEpoch());
+    QCoreApplication::sendPostedEvents();
+    check(profiles.count() == 1 && model.activeGlobalProfile() == QLatin1String("Fresh profile"),
+          "a live-session raw status reaches one receiver after session rebind");
 
-    emit wan.messageReceived(rawGps);
+    emit wan.lineReceived(rawGps, wan.lineEpoch());
+    QCoreApplication::sendPostedEvents();
     check(reports.count() == 1, "fresh raw GPS reaches one receiver after session rebind");
     check(model.gpsFixState() == GpsFixState::ThreeD && model.gpsPositionValid()
           && model.gpsTimeValid(), "fresh raw GPS still reaches the model after session rebind");

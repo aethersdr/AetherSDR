@@ -920,6 +920,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
     src/core/backends/flex/FlexPanControls.cpp
     src/core/backends/flex/FlexAudioControls.cpp
+    src/core/backends/flex/FlexStatusIngress.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
     src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire

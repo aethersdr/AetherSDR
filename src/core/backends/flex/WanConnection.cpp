@@ -434,7 +434,7 @@ void WanConnection::processLine(const QString& line)
     }
 
     ParsedMessage msg = CommandParser::parseLine(line);
-    emit messageReceived(msg);
+    emit lineReceived(msg, m_lineEpoch);
 
     switch (msg.type) {
     case MessageType::Version:
@@ -461,10 +461,6 @@ void WanConnection::processLine(const QString& line)
         }
         break;
     }
-
-    case MessageType::Status:
-        emit statusReceived(msg.object, msg.kvs);
-        break;
 
     default:
         break;

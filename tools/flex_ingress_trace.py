@@ -4,7 +4,7 @@
 import re, sys
 # Normalize a QtTest -vs trace: keep model-visible signals per fed line.
 drop = re.compile(r'QFileDevice|QSaveFile|QFile\(|QEventDispatcher|QThread\(|QTimer\(|QSocketNotifier|objectNameChanged|destroyed \(|'
-                  r'AetherSDR::RadioConnection\(|AetherSDR::WanConnection\(|QAbstractEventDispatcher|deleteLater')
+                  r'AetherSDR::RadioConnection\(|AetherSDR::WanConnection\(|AetherSDR::FlexStatusIngress\(|statusLineAccepted|RadioModel\([0-9a-f]*\) statusReceived|QAbstractEventDispatcher|deleteLater')
 out = []
 started = False
 for raw in open(sys.argv[1], errors='replace'):
@@ -18,5 +18,6 @@ for raw in open(sys.argv[1], errors='replace'):
     sig = line.split('Signal: ', 1)[1]
     sig = re.sub(r'\b(0x)?[0-9a-f]{8,16}\b', 'ADDR', sig)
     sig = re.sub(r'\(([A-Za-z_]+ )?ADDR\)', r'(\1)', sig)
+    sig = sig.replace('(QMap<QString,QString>())', '()')
     out.append('  ' + sig)
 print('\n'.join(out))

@@ -1555,11 +1555,24 @@ void RadioModel::setupBackend(const QString& family)
     if (m_connection) {
     // Each goes through a generation-checked lambda rather than straight to
     // the member slot: see the rule-5 note at the top of this function.
-    connect(m_connection, &RadioConnection::statusReceived, this,
-            [this, generation](const QString& object, const QMap<QString, QString>& kvs) {
-        if (generation != m_backendReceiverGeneration) return;
-        onStatusReceived(object, kvs);
-    });
+    // Every wire line arrives once, through the backend's status ingress,
+    // already fenced to the live session and in wire order. The ingress dies
+    // with its backend; the re-check covers a message handler that replaced it.
+    const auto deliverLine = [this, generation](const ParsedMessage& line) {
+        handleMessageReceived(line);
+        if (generation != m_backendReceiverGeneration || line.type != MessageType::Status) return;
+        onStatusReceived(line.object, line.kvs);
+    };
+    if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
+        m_statusIngress = flex->statusIngress();
+    } else if (auto* sim = dynamic_cast<SimBackend*>(m_backend.get())) {
+        m_statusIngress = sim->statusIngress();
+    }
+    if (m_statusIngress) {
+        connect(m_statusIngress, &FlexStatusIngress::lineAccepted, this, deliverLine);
+        // A backend rebuilt under a live SmartLink session takes over its route.
+        if (m_wanConn) { m_statusEpoch = m_statusIngress->bindLive(m_wanConn); }
+    }
     connect(m_connection, &RadioConnection::connected, this,
             [this, generation] {
         if (generation != m_backendReceiverGeneration) return;
@@ -2293,6 +2306,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateAtuAvailability);
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateAtuAvailability);
     qRegisterMetaType<PcmFrame>();
+    qRegisterMetaType<ParsedMessage>();
     qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
@@ -2899,7 +2913,8 @@ RadioModel::RadioModel(QObject* parent)
                 m_maxSlices = m_declaredMaxSlices;
             clearAutomationSliceFixtures();
             if (m_connection) {
-                QMetaObject::invokeMethod(m_connection, [this] {
+                QMetaObject::invokeMethod(m_connection, [this, epoch = beginStatusSession()] {
+                    m_connection->setLineEpoch(epoch);
                     m_connection->connectToRadio(m_lastInfo);
                 });
             } else if (m_backend) {
@@ -3940,6 +3955,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     discardTuneInhibit();
     resetTuneOutputControl();
     cancelRadioWake();
+    releaseWanStatus();
     m_wanConn = nullptr;  // LAN mode
     // aetherd Gap B: the backend follows the radio the operator selected. A Flex
     // and a Hermes-Lite 2 need different backends, and the picker is where that
@@ -4047,7 +4063,8 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // instead of dialing a socket, while a real radio dials as before. Families
     // that own no RadioConnection (HL2) take the seam path below.
     if (m_connection) {
-        QMetaObject::invokeMethod(m_connection, [conn = m_connection, info] {
+        QMetaObject::invokeMethod(m_connection, [conn = m_connection, info, epoch = beginStatusSession()] {
+            conn->setLineEpoch(epoch);
             conn->connectToRadio(info);
         });
     } else if (m_backend) {
@@ -4113,20 +4130,39 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
     m_announcedClientConnections.clear();
     m_reconnectTimer.stop();
 
-    // Wire WAN connection signals (same as RadioConnection)
-    connect(wan, &WanConnection::connected, this, &RadioModel::onConnected);
-    connect(wan, &WanConnection::disconnected, this, &RadioModel::onDisconnected);
-    connect(wan, &WanConnection::errorOccurred, this, &RadioModel::onConnectionError);
+    // Lines come through the backend's status ingress, one queued hop. The
+    // lifecycle takes the same queued hop, so it keeps its wire order with the
+    // lines: a forced-disconnect notice lands before the session ends, and
+    // nothing from a WAN that is no longer ours gets through.
+    if (m_statusIngress) {
+        m_statusEpoch = m_statusIngress->bindLive(wan);
+    } else {
+        qCWarning(lcProtocol) << "RadioModel: SmartLink session without a Flex backend; status ignored";
+    }
+    // A lifecycle call queued for an earlier bind of this (reused) connection
+    // is refused, even though the object is the same.
+    const auto current = [this, wan, route = ++m_wanRoute] { return m_wanConn == wan && m_wanRoute == route; };
+    connect(wan, &WanConnection::connected, this, [this, current] {
+        if (current()) { onConnected(); }
+    }, Qt::QueuedConnection);
+    connect(wan, &WanConnection::disconnected, this, [this, current] {
+        if (current()) { onDisconnected(); }
+    }, Qt::QueuedConnection);
+    connect(wan, &WanConnection::errorOccurred, this, [this, current](const QString& message) {
+        if (current()) { onConnectionError(message); }
+    }, Qt::QueuedConnection);
     connect(wan, &WanConnection::certFingerprintMismatch,
             this, &RadioModel::certFingerprintMismatch);
-    connect(wan, &WanConnection::versionReceived, this, &RadioModel::onVersionReceived);
-    connect(wan, &WanConnection::statusReceived, this, &RadioModel::onStatusReceived);
-    connect(wan, &WanConnection::pingRttMeasured, this, [this](int ms) {
+    connect(wan, &WanConnection::versionReceived, this, [this, current](const QString& version) {
+        if (current()) { onVersionReceived(version); }
+    }, Qt::QueuedConnection);
+    connect(wan, &WanConnection::pingRttMeasured, this, [this, current](int ms) {
+        if (!current()) { return; }
         m_pingMissCount = 0;
         m_lastPingRtt = ms;
         evaluateNetworkQuality();
         emit pingReceived();
-    });
+    }, Qt::QueuedConnection);
 
     // The WAN connection is already established (TLS + wan validate done)
     // and has already received V/H. Trigger onConnected manually.
@@ -6895,6 +6931,7 @@ void RadioModel::setSleepInhibitWhileConnected(bool on)
 
 void RadioModel::onConnected()
 {
+    m_connectedStatusEpoch = m_statusEpoch;
     resetSessionControls();
     m_sessionCommands = SessionCommandGuard::create();
     m_sessionWire = m_wanConn ? static_cast<QObject*>(m_wanConn) : m_connection;
@@ -8205,6 +8242,11 @@ void RadioModel::restoreTuneInhibit()
 
 void RadioModel::onDisconnected()
 {
+    // The session that ended is the one that connected, unless a new connect
+    // has already begun (a late disconnect): that newer epoch stays open.
+    if (m_statusIngress && m_connectedStatusEpoch == m_statusEpoch) {
+        m_statusIngress->retire(m_statusEpoch);
+    }
     m_txSessionClosing = true;
     resetSessionControls();
     resetAudioControls();
@@ -8337,7 +8379,7 @@ void RadioModel::onDisconnected()
     m_gpsdoPresent = false;
     m_tcxoPresent = false;
     emit oscillatorChanged();
-    resetGpsState(false);
+    resetGpsState();
     // Cleared beside m_version rather than relying on the next connect to
     // reassign it: this block's contract is that everything here is re-derived
     // from the new radio's status, and a path that reaches a Flex without
@@ -8477,7 +8519,7 @@ void RadioModel::onDisconnected()
 
     if (m_wanConn) {
         qCDebug(lcProtocol) << "RadioModel: WAN disconnected";
-        m_wanConn->disconnect(this);
+        releaseWanStatus();
         m_wanConn = nullptr;
     } else if (!m_intentionalDisconnect && !m_radioWakeActive && !m_lastInfo.address.isNull()) {
         qCDebug(lcProtocol) << "RadioModel: unexpected disconnect — reconnecting in 3s";
@@ -9579,7 +9621,7 @@ void RadioModel::applyMemoryChanges(const MemoryDelta& d)
 
 // ─── Raw message handler (for meter status with '#' separators) ──────────────
 
-void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSessionGeneration)
+void RadioModel::handleMessageReceived(const ParsedMessage& msg)
 {
     if (msg.type == MessageType::Handle) {
         // The radio can send routine "Client connected from IP ..." M-messages
@@ -9656,18 +9698,13 @@ void RadioModel::handleMessageReceived(const ParsedMessage& msg, quint64 gpsSess
         return;
     }
 
-    // Objects the Flex backend reads from the raw line itself (ntp_sources),
-    // from this session only.
-    if (m_flexBackend && gpsSessionGeneration == m_gpsSessionGeneration
-        && m_flexBackend->decodeRawStatus(body)) {
+    // Objects the Flex backend reads from the raw line itself (ntp_sources).
+    if (m_flexBackend && m_flexBackend->decodeRawStatus(body)) {
         return;
     }
 
     // GPS status: "gps lat=...#lon=...#grid=...#tracked=...#visible=...#status=..."
     if (body.startsWith("gps ")) {
-        if (gpsSessionGeneration != m_gpsSessionGeneration) {
-            return;
-        }
         handleGpsStatus(body.mid(4));  // skip "gps "
         return;
     }
@@ -12947,11 +12984,23 @@ void RadioModel::handleGpsStatus(const QString& rawBody)
     if (m_flexBackend) m_flexBackend->decodeGpsStatus(rawBody);
 }
 
-void RadioModel::wireGpsSessionReceivers(bool receiveMessages)
+quint64 RadioModel::beginStatusSession()
+{
+    m_statusEpoch = m_statusIngress ? m_statusIngress->beginSession() : 0;
+    return m_statusEpoch;
+}
+
+void RadioModel::releaseWanStatus()
+{
+    if (!m_wanConn) { return; }
+    ++m_wanRoute;
+    m_wanConn->disconnect(this);
+    if (m_statusIngress) { m_statusIngress->bind(m_connection); }
+}
+
+void RadioModel::wireGpsSessionReceivers()
 {
     QObject::disconnect(m_gpsBackendConnection);
-    QObject::disconnect(m_gpsLanMessageConnection);
-    QObject::disconnect(m_gpsWanMessageConnection);
     const quint64 backendGeneration = m_backendReceiverGeneration;
     const quint64 gpsGeneration = m_gpsSessionGeneration;
     if (m_backend) {
@@ -12963,33 +13012,12 @@ void RadioModel::wireGpsSessionReceivers(bool receiveMessages)
             }
         });
     }
-    if (!receiveMessages) {
-        return;
-    }
-    // Disconnecting a Qt connection leaves its posted calls queued. Capture the
-    // GPS session at subscription time so only GPS dispatch rejects those calls;
-    // the existing meter/profile raw-message behavior is preserved.
-    if (m_wanConn) {
-        m_gpsWanMessageConnection = connect(m_wanConn, &WanConnection::messageReceived,
-                this, [this, backendGeneration, gpsGeneration](const ParsedMessage& msg) {
-            if (backendGeneration == m_backendReceiverGeneration) {
-                handleMessageReceived(msg, gpsGeneration);
-            }
-        });
-    } else if (m_connection) {
-        m_gpsLanMessageConnection = connect(m_connection, &RadioConnection::messageReceived,
-                this, [this, backendGeneration, gpsGeneration](const ParsedMessage& msg) {
-            if (backendGeneration == m_backendReceiverGeneration) {
-                handleMessageReceived(msg, gpsGeneration);
-            }
-        });
-    }
 }
 
-void RadioModel::resetGpsState(bool receiveMessages)
+void RadioModel::resetGpsState()
 {
     ++m_gpsSessionGeneration;
-    wireGpsSessionReceivers(receiveMessages);
+    wireGpsSessionReceivers();
     const bool telemetryChanged = !m_gpsStatus.isEmpty() || m_gpsPositionValid
         || m_gpsFixState != GpsFixState::Unknown || !m_gpsSource.isEmpty()
         || m_gpsTracked != 0 || m_gpsVisible != 0 || !m_gpsGrid.isEmpty()

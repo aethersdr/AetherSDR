@@ -25,7 +25,7 @@ public:
     static void profile(RadioModel& model, const ProfileDelta& delta) { model.applyProfileChanges(delta); }
     static void message(RadioModel& model, const QString& line)
     {
-        model.handleMessageReceived(CommandParser::parseLine(line), model.m_gpsSessionGeneration);
+        model.handleMessageReceived(CommandParser::parseLine(line));
     }
     static void status(RadioModel& model, const QString& line)
     {

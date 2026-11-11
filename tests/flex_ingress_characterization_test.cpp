@@ -20,7 +20,11 @@ public:
     static void process(RadioConnection& connection, const QString& line) { connection.processLine(line); }
     // Our handle without the H line, whose connected() would run the full
     // session bootstrap (sleep inhibitor, network lookups).
-    static void identity(RadioConnection& connection, quint32 handle) { connection.m_handle.store(handle); }
+    static void identity(RadioConnection& connection, quint32 handle)
+    {
+        connection.resetSessionState();   // a live session, as a connect starts
+        connection.m_handle.store(handle);
+    }
 };
 }
 
@@ -42,7 +46,9 @@ private slots:
         QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
         RadioConnection* connection = model.connection();
         QVERIFY(connection);
-        RadioConnectionSessionTestAccess::identity(*connection, 0x71);
+        QMetaObject::invokeMethod(connection, [connection] {
+            RadioConnectionSessionTestAccess::identity(*connection, 0x71);
+        }, Qt::BlockingQueuedConnection);
         int fed = 0;
         while (!file.atEnd()) {
             const QString line = QString::fromUtf8(file.readLine()).trimmed();

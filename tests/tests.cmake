@@ -8306,6 +8306,14 @@ target_include_directories(gps_fix_state_test PRIVATE src tests)
 target_link_libraries(gps_fix_state_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME gps_fix_state_test COMMAND gps_fix_state_test)
 
+# Socket-free: the Flex status ingress session fence and wire order, with
+# transports that are never opened, and RadioModel's production binding.
+add_executable(flex_status_ingress_test tests/flex_status_ingress_test.cpp)
+target_include_directories(flex_status_ingress_test PRIVATE src tests)
+target_link_libraries(flex_status_ingress_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(flex_status_ingress_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_status_ingress_test COMMAND flex_status_ingress_test)
+
 # Socket-free scaffolding for the FlexStatusIngress move: feeds a wire corpus
 # (AETHER_INGRESS_CORPUS) below the socket through production processLine; skips without it.
 # not registered: a characterization harness run by hand with -vs, not a regression test.

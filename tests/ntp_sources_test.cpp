@@ -8,6 +8,7 @@
 #include "core/QsoRecorder.h"
 #include "core/AutomationServer.h"
 #include "core/backends/flex/CommandParser.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "gui/NtpSourcesPage.h"
 
 #include <QApplication>
@@ -36,10 +37,15 @@ class NtpSourcesTestAccess {
 public:
     static void publish(RadioModel& radio) { radio.publishCapabilities(radio.isConnected()); }
     static void apply(RadioModel& radio, const NtpSourceDelta& d) { radio.applyNtpSourceChanges(d); }
-    static void message(RadioModel& radio, const QString& line, int generationsAgo = 0)
+    // Through the production transport signal and status ingress, tagged with
+    // the live session's epoch, or (previousSession) with the epoch a new
+    // connect has just retired.
+    static void message(RadioModel& radio, const QString& line, bool previousSession = false)
     {
-        radio.handleMessageReceived(CommandParser::parseLine(line),
-                                    radio.m_gpsSessionGeneration - quint64(generationsAgo));
+        if (previousSession) { radio.beginStatusSession(); }
+        emit radio.connection()->lineReceived(CommandParser::parseLine(line),
+                                              radio.m_statusEpoch - (previousSession ? 1 : 0));
+        QCoreApplication::sendPostedEvents();
     }
 };
 } // namespace AetherSDR
@@ -295,7 +301,7 @@ void productionRoute()
               && list.at(0).description == QLatin1String("Debian NTP pool") && list.at(0).inUse()
               && list.at(0).reach == 255,
           "the measured status line reaches the model through the production route");
-    NtpSourcesTestAccess::message(radio, QStringLiteral("S0|ntp_sources id=stale address=old.example enabled=1"), 1);
+    NtpSourcesTestAccess::message(radio, QStringLiteral("S0|ntp_sources id=stale address=old.example enabled=1"), true);
     check(radio.ntpSources().size() == 1, "a status queued from a previous session adds no row");
     FlexBackend flex;
     check(!flex.decodeRawStatus(QStringLiteral("gps lat=1")) && flex.decodeRawStatus(QStringLiteral("ntp_sources id=a removed")),

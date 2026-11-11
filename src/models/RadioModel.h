@@ -76,6 +76,7 @@
 namespace AetherSDR {
 class TxController;
 class WanConnection;
+class FlexStatusIngress;
 class IAutoRfGainControl;
 
 
@@ -1747,9 +1748,18 @@ private:
     // (IRadioBackend::gpsChanged / memoryChanged / profileChanged). aetherd RFC
     // 2.3 — RadioModel residual.
     void applyGpsChanges(const GpsDelta& delta);
-    void resetGpsState(bool receiveMessages = true);
-    void wireGpsSessionReceivers(bool receiveMessages = true);
-    void handleMessageReceived(const ParsedMessage& msg, quint64 gpsSessionGeneration);
+    void resetGpsState();
+    void wireGpsSessionReceivers();
+    // A fresh status epoch for the connect about to be issued: every wire line
+    // queued so far is refused (one strict fence for status and message lines).
+    quint64 beginStatusSession();
+    // Return the status ingress from a SmartLink session to the LAN connection.
+    void releaseWanStatus();
+    QPointer<FlexStatusIngress> m_statusIngress;   // the backend's; model thread
+    quint64 m_statusEpoch{0};            // the epoch of the session being run
+    quint64 m_connectedStatusEpoch{0};   // the epoch onConnected() last ran for
+    quint64 m_wanRoute{0};               // fences queued SmartLink lifecycle per bind
+    void handleMessageReceived(const ParsedMessage& msg);
     // Asks for the CW profile list once per session, whenever the backend's CW
     // capability is (or later becomes) engaged.
     void refreshCwProfilesIfSupported();
@@ -2508,8 +2518,6 @@ private:
     GpsFixState m_gpsFixState{GpsFixState::Unknown};
     quint64 m_gpsSessionGeneration{0};
     QMetaObject::Connection m_gpsBackendConnection;
-    QMetaObject::Connection m_gpsLanMessageConnection;
-    QMetaObject::Connection m_gpsWanMessageConnection;
     QString m_gpsSource;
     int     m_gpsTracked{0};
     int     m_gpsVisible{0};

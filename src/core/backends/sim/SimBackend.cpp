@@ -130,15 +130,15 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // Seam geometry for dynamically created pans (#4887 phase 4): each needs the
     // panCenterBandwidthChanged bridge pan 0 gets in emitInitialState(), but only
     // after RadioModel has claimed the pan or the geometry is cached by index and
-    // the pane starts blank. The zero-timer hop runs after RadioModel's own queued
-    // copy of this status, regardless of connection order.
-    connect(m_connection, &RadioConnection::statusReceived, this,
-            [this](const QString& object, const QMap<QString, QString>& kvs) {
-        Q_UNUSED(kvs);
-        if (m_pansAwaitingGeometry.isEmpty()
-            || !object.startsWith(QLatin1String("display pan ")))
+    // the pane starts blank. The zero-timer hop runs after RadioModel has handled
+    // the accepted line, regardless of connection order.
+    m_statusIngress.bind(m_connection);
+    connect(&m_statusIngress, &FlexStatusIngress::lineAccepted, this,
+            [this](const ParsedMessage& line) {
+        if (line.type != MessageType::Status || m_pansAwaitingGeometry.isEmpty()
+            || !line.object.startsWith(QLatin1String("display pan ")))
             return;
-        const QString panId = object.section(QLatin1Char(' '), 2, 2).toLower();
+        const QString panId = line.object.section(QLatin1Char(' '), 2, 2).toLower();
         if (!m_pansAwaitingGeometry.remove(panId))
             return;
         QTimer::singleShot(0, this, [this, panId]() {
@@ -158,6 +158,7 @@ SimBackend::~SimBackend()
     // quit/wait), then panStream — the #502 order.
     if (m_connection)
         disconnect(m_connection, nullptr, this, nullptr);
+    m_statusIngress.unbind();
 
     // The producer goes first: stop the tick on its own thread, then let the
     // thread drain — the same BlockingQueued-stop shape as the two below.
@@ -939,7 +940,7 @@ bool SimBackend::createPanadapterWithId(QString* createdId)
     // the SAME "display pan"/"display waterfall" status shape the synthetic
     // connect script uses (RadioConnection::startSyntheticDemoConnect), so
     // RadioModel claims it over the wire and ONE path creates a demo pane.
-    // The normalized geometry bridge is emitted by the ctor's statusReceived
+    // The normalized geometry bridge is emitted by the ctor's status-ingress
     // listener once the claim has landed.
     if (!m_connected)
         return false;

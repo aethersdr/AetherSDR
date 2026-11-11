@@ -109,6 +109,7 @@ FlexBackend::FlexBackend(QObject* parent)
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
     m_cwControls = std::make_unique<FlexCwControls>(m_panStream);
+    m_statusIngress.bind(m_connection);
 
     // Observe wire lifecycle and re-emit as the interface's own signals. Queued
     // (auto) connections: the connection lives on its worker thread.
@@ -134,6 +135,7 @@ FlexBackend::~FlexBackend()
     // destroyed, auto-disconnecting these links, before the wire teardown ran).
     // Otherwise disconnectFromRadio below could re-emit connected/disconnected
     // through this half-destroyed backend. (#4058 review)
+    m_statusIngress.unbind();
     if (m_connection) {
         disconnect(m_connection, nullptr, this, nullptr);
     }

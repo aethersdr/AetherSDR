@@ -2,6 +2,7 @@
 
 #include <functional>
 #include "FlexCwControls.h"
+#include "FlexStatusIngress.h"
 #include <optional>
 
 #include <QMap>
@@ -47,6 +48,11 @@ public:
     // and its connection()/panStream() getters delegate to them.
     RadioConnection*  connection() const { return m_connection; }
     PanadapterStream* panStream()  const { return m_panStream; }
+
+    // Every Flex wire line reaches the model through this status ingress: one
+    // queued hop on the owner's thread, fenced by route and epoch, in wire
+    // order. It lives on this thread, not a worker's.
+    FlexStatusIngress* statusIngress() { return &m_statusIngress; }
 
     // Core verbs share RadioModel's guarded command funnel and wire-write path.
     using CommandReply = std::function<void(int, const QString&)>;
@@ -334,6 +340,7 @@ private:
     void sendSliceTune(int sliceId, const SliceTuneRequest& request);
 
     std::unique_ptr<FlexCwControls> m_cwControls;
+    FlexStatusIngress m_statusIngress;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
