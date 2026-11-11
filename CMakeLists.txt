@@ -40,6 +40,7 @@ option(REQUIRE_ASR_GPU "Fail if no ASR GPU backend (Vulkan/Metal) is enabled (us
 option(REQUIRE_ASR_SHERPA "Fail if sherpa-onnx is not found (non-whisper ASR backend; use for release builds)" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 option(ENABLE_DSTAR "Build the local D-STAR waveform helper (vendored smartsdr-dsp/ThumbDV)" ON)
+option(ENABLE_DATA2G "Build the Data2G HF data modem core (vendored, receive-only monitor; RFC #7159)" ON)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
@@ -1821,6 +1822,64 @@ target_include_directories(aether_afskdemod PUBLIC
 )
 target_compile_features(aether_afskdemod PUBLIC cxx_std_20)
 message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-later")
+
+# Data2G HF data modem core (RFC #7159). The data2g_core target's sources from
+# upstream release v0.4.3, verbatim: see third_party/data2g/README.aethersdr.md.
+# Artistic-2.0, with pocketfft (BSD-3-Clause) vendored by upstream.
+#
+# The flags below are upstream's and are load-bearing: the on-air format is
+# checked bit for bit against a Python reference, so no fast-math and no FMA
+# contraction. GCC's -O2 cost model leaves three hot loops scalar, hence -O3
+# on those files only (optimization never reassociates without fast-math).
+#
+# aether_hfdata is the only consumer. It keeps the core's include root to
+# itself: that root has audio/, tnc/, host/ and util/ directories that would
+# shadow AetherSDR's own.
+if(ENABLE_DATA2G)
+    file(GLOB_RECURSE AETHER_DATA2G_CORE_SOURCES CONFIGURE_DEPENDS
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core/*.cpp)
+    add_library(aether_data2g_core STATIC ${AETHER_DATA2G_CORE_SOURCES})
+    target_include_directories(aether_data2g_core PUBLIC
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core)
+    target_include_directories(aether_data2g_core SYSTEM PUBLIC
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/third_party/pocketfft)
+    target_compile_features(aether_data2g_core PUBLIC cxx_std_20)
+    target_compile_definitions(aether_data2g_core PUBLIC DATA2G_VERSION="0.4.3")
+    set_target_properties(aether_data2g_core PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        CXX_EXTENSIONS OFF)
+    if(MSVC)
+        target_compile_options(aether_data2g_core PRIVATE /fp:precise /w)
+    else()
+        target_compile_options(aether_data2g_core PRIVATE
+            -fno-fast-math -ffp-contract=off -w)
+    endif()
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core/polar/polar.cpp
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core/arq/predictor.cpp
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core/gfldpc/gfldpc.cpp
+        PROPERTIES COMPILE_OPTIONS
+        "$<$<AND:$<CXX_COMPILER_ID:GNU>,$<NOT:$<CONFIG:Debug>>>:-O3>")
+    find_package(Threads REQUIRED)
+    target_link_libraries(aether_data2g_core PUBLIC Threads::Threads)
+    if(USE_SYSTEM_ZLIB)
+        target_link_libraries(aether_data2g_core PUBLIC PkgConfig::zlib)
+    else()
+        target_link_libraries(aether_data2g_core PUBLIC zlibstatic)
+    endif()
+
+    # The AetherSDR side of the seam: Qt-free, receive only.
+    add_library(aether_hfdata STATIC
+        src/core/hfdata/Data2gMonitor.cpp
+    )
+    target_include_directories(aether_hfdata PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(aether_hfdata PUBLIC cxx_std_20)
+    set_target_properties(aether_hfdata PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(aether_hfdata PRIVATE aether_data2g_core)
+    message(STATUS "Data2G: vendored core 0.4.3 (receive-only monitor), Artistic-2.0")
+else()
+    message(STATUS "Data2G: disabled (-DENABLE_DATA2G=OFF)")
+endif()
 
 # Vendored SQLite amalgamation (public domain) — the client settings store
 # (RFC #4603). Deliberately NOT Qt6::Sql: the amalgamation needs no runtime
