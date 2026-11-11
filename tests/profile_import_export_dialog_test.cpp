@@ -16,6 +16,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QDialog>
+#include <QEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -245,6 +246,65 @@ void busyClosePathsAsk()
     }
 }
 
+void reentrantCloseAsksOnce()
+{
+    class QuestionCounter : public QObject {
+    public:
+        int count{0};
+        bool eventFilter(QObject* object, QEvent* event) override
+        {
+            if (event->type() == QEvent::Show && qobject_cast<CanonMessageBox*>(object)) {
+                ++count;
+            }
+            return false;
+        }
+    } counter;
+    RadioModel model;
+    ProfileImportExportDialog dialog(&model);
+    dialog.show();
+    QTest::qWaitForWindowExposed(&dialog);
+    auto* transfer = dialog.findChild<ProfileTransfer*>();
+    if (!transfer) {
+        check(false, "the window owns a transfer for the re-entry check");
+        return;
+    }
+    ProfileTransferTestAccess::markBusy(*transfer);
+    qApp->installEventFilter(&counter);
+    BoxDriver driver(dialog.windowTitle(), [&](CanonMessageBox* box) {
+        const QPointer<CanonMessageBox> question(box);
+        dialog.close();
+        if (question) {
+            clickButton("Keep Transferring")(question);
+        }
+    });
+    dialog.close();
+    qApp->removeEventFilter(&counter);
+    check(driver.seen && counter.count == 1 && dialog.isVisible() && transfer->isBusy(),
+          "a programmatic close during the busy question does not stack another question");
+}
+
+void cancelSurvivesOwnerDeletion()
+{
+    RadioModel model;
+    QPointer<ProfileImportExportDialog> dialog = new ProfileImportExportDialog(&model);
+    dialog->show();
+    QTest::qWaitForWindowExposed(dialog);
+    auto* transfer = dialog->findChild<ProfileTransfer*>();
+    if (!transfer) {
+        check(false, "the window owns a transfer for the lifetime check");
+        delete dialog.data();
+        return;
+    }
+    ProfileTransferTestAccess::markBusy(*transfer);
+    QObject::connect(transfer, &ProfileTransfer::failed, qApp, [&] {
+        delete dialog.data();
+    });
+    BoxDriver driver(dialog->windowTitle(), clickButton("Cancel Transfer"));
+    dialog->close();
+    check(driver.seen && dialog.isNull(),
+          "Cancel Transfer survives an observer deleting the owner synchronously");
+}
+
 // The import confirmation: Cancel is the default, and Cancel, Return, Esc and
 // closing it import nothing; Import says yes. Not connected, so no Export
 // Backup First is offered.
@@ -358,6 +418,8 @@ int main(int argc, char** argv)
     controlsLegibleAtMinimum();
     idleClosePaths();
     busyClosePathsAsk();
+    reentrantCloseAsksOnce();
+    cancelSurvivesOwnerDeletion();
     importConfirmDefaultsToCancel();
     geometryCarriesOver();
 

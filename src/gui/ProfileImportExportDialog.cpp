@@ -185,8 +185,7 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
     buttonRow->addWidget(m_cancelButton);
     root->addLayout(buttonRow);
 
-    // 40 px taller than before for the canon header, and never smaller than
-    // the layout needs at this theme's font.
+    // A lower bound until showEvent() measures the polished layout.
     setMinimumSize(QSize(560, 470).expandedTo(minimumSizeHint()));
 
     connect(m_cancelButton, &QPushButton::clicked, m_transfer, &ProfileTransfer::cancel);
@@ -262,11 +261,8 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
 void ProfileImportExportDialog::showEvent(QShowEvent* event)
 {
     CanonWindow::showEvent(event);
-    // The constructor's minimumSizeHint() is taken before the canon sheet has
-    // polished anything, and a layout's minimum ignores height-for-width, so
-    // the word-wrapped intros were not counted: the window could be shrunk
-    // until the category check boxes were crushed. Measure the shown layout
-    // at the minimum width instead, wrapped text included.
+    // Measure the polished layout at its minimum width, including wrapped
+    // intros that a constructor-time minimumSizeHint() cannot account for.
     if (QLayout* l = layout()) {
         l->activate();
         const int width = qMax(minimumWidth(), l->totalMinimumSize().width());
@@ -304,8 +300,10 @@ void ProfileImportExportDialog::done(int result)
         if (transferGuard && self->m_transfer == transferGuard.data() && transferGuard->isBusy()) {
             self->m_closingAfterCancel = true;
             transferGuard->cancel();      // emits failed() synchronously
-            if (self)
-                self->m_closingAfterCancel = false;
+            if (!self) {
+                return;
+            }
+            self->m_closingAfterCancel = false;
         }
     }
     CanonWindow::done(result);
