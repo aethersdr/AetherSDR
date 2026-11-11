@@ -1713,6 +1713,9 @@ void RadioModel::wireStatusIngress(quint64 generation)
                 [this, generation](const FirmwareUpdateStatus& status) {
             if (generation == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
         });
+        connect(flex, &FlexBackend::cwxStatusObserved, this, [this, generation](const CwxStatusDelta& cwx) {
+            if (generation == m_backendReceiverGeneration) { m_cwxModel.applyStatusDelta(cwx); }
+        });
         connect(flex, &FlexBackend::spotStatusObserved, this, [this, generation](const SpotStatusDelta& spot) {
             if (generation != m_backendReceiverGeneration) { return; }
             switch (spot.kind) {
@@ -2364,6 +2367,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TxBandDelta>();
     qRegisterMetaType<StreamStatusDelta>();
     qRegisterMetaType<SpotStatusDelta>();
+    qRegisterMetaType<CwxStatusDelta>();
     qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
@@ -12203,11 +12207,8 @@ void RadioModel::onStatusReceived(const QString& object,
         return;
     }
 
-    // CWX status: "cwx sent=0", "cwx wpm=20", "cwx macro1=CQ\u007fCQ"
-    if (object == "cwx") {
-        m_cwxModel.applyStatus(kvs);
-        return;
-    }
+    // CWX status ("cwx …") is decoded by the status ingress.
+    if (object == "cwx") { return; }
 
     // DVK status: "dvk status=idle enabled=1" or "dvk added id=1 name="Recording 1" duration=0"
     if (object.startsWith("dvk")) {

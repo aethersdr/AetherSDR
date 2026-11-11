@@ -299,6 +299,8 @@ signals:
     void streamStatusObserved(const AetherSDR::StreamStatusDelta& delta);
     // A radio spot's status (Flex-only; SpotModel keeps the spots).
     void spotStatusObserved(const AetherSDR::SpotStatusDelta& delta);
+    // The radio's CWX status (Flex-only; CwxModel applies it).
+    void cwxStatusObserved(const AetherSDR::CwxStatusDelta& delta);
 
 private:
     void send(const QString& cmd);

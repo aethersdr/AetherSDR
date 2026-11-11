@@ -2,6 +2,7 @@
 
 #include "CommandParser.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/CwxStatusDelta.h"
 #include "core/backends/SpotStatusDelta.h"
 #include "core/backends/StreamStatusDelta.h"
 #include "core/backends/TxBandDelta.h"
@@ -109,6 +110,7 @@ public:
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
     // "tnf N …" → a notch (absolute Hz) or its removal: the seam's notch signals.
     void decodeTnfStatus(int notchId, bool removed, const QMap<QString, QString>& kvs);
+
     bool tuneOutputBandKnown(int bandId) const { return m_tuneOutputKnownBands.contains(bandId); }
     void clearTuneOutputBands() { m_tuneOutputKnownBands.clear(); }
 
@@ -147,6 +149,7 @@ signals:
     void notchChanged(int notchId, const AetherSDR::NotchDelta& delta);
     void notchRemoved(int notchId);
     void spotStatusObserved(const AetherSDR::SpotStatusDelta& delta);
+    void cwxStatusObserved(const AetherSDR::CwxStatusDelta& delta);
     void tuneOutputSuppressionObserved(int bandId, bool suppressed);
 
 private:
