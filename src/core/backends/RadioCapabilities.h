@@ -39,6 +39,13 @@ struct TxPowerBand {
     double maxWatts = 0.0;
 };
 
+// The transmit output is chosen on its own (#4954). Engaged, it moves only on an
+// explicit TX antenna choice: hamlib set_ant writes the RX antenna alone and a
+// band-stack recall leaves it. Absent, both write it as before.
+struct IndependentTxAntenna {
+    bool operator==(const IndependentTxAntenna&) const = default;
+};
+
 // A backend-declared native band. The canonical name remains the model/UI key;
 // the limits let clients present hardware-specific coverage without guessing
 // from a family/model string or overloading a transmit-power capability.
@@ -496,6 +503,10 @@ struct RadioCapabilities {
     // band. Empty means txPowerMaxWatts applies everywhere. The ranges are
     // inclusive and expressed in Hz, matching the tuning fields above.
     QVector<TxPowerBand> txPowerBands;
+
+    // See IndependentTxAntenna. Read by RigctlProtocol::cmdSetAnt() and
+    // RadioModel::recallBandStack().
+    std::optional<IndependentTxAntenna> independentTxAntenna;
 
     // Who owns the drive value TransmitModel::rfPower() carries (#5518). Absent: no
     // drive at all (Sim, RTL). Radio: parsed back off the wire (Flex `transmit

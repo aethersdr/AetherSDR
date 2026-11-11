@@ -1315,7 +1315,7 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
             append(token);
         }
         if (m_radioModel) {
-            for (const QString& token : m_radioModel->knownAntennaTokens()) {
+            for (const QString& token : m_radioModel->rxAntennaMenuTokens()) {
                 append(token);
             }
         }
