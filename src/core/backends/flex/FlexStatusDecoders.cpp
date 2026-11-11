@@ -133,6 +133,11 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
         return;
     }
     if (object == QLatin1String("transmit")) { decodeTransmitStatus(kvs); return; }
+    static const QRegularExpression txBandRe(QStringLiteral(R"(^transmit band\s+(\d+)$)"));
+    if (object.startsWith(QLatin1String("transmit band"))) {
+        if (const auto m = txBandRe.match(object); m.hasMatch()) { decodeTxBandStatus(m.captured(1).toInt(), kvs); }
+        return;
+    }
     // Untyped profile objects: the space-free flags ("profile importing=1").
     if (object.startsWith(QLatin1String("profile"))) { decodeProfileFlags(kvs); return; }
     if (const auto memory = memoryStatus(object, kvs)) { decodeMemoryStatus(memory->first, memory->second); return; }
@@ -684,5 +689,17 @@ void FlexStatusIngress::decodeStreamStatus(const QString& object, const QMap<QSt
     }
     decodeAudioStreamStatus(object, kvs);
     if (alive) { decodeDaxTxStatus(object, kvs); }
+}
+void FlexStatusIngress::decodeTxBandStatus(int bandId, const QMap<QString, QString>& kvs)
+{
+    // Read as RadioModel did: numbers by toInt(), flags by "1".
+    TxBandDelta d;
+    d.bandId = bandId;
+    if (kvs.contains(QStringLiteral("band_name")))     { d.bandName = kvs.value(QStringLiteral("band_name")); }
+    if (kvs.contains(QStringLiteral("rfpower")))       { d.rfPower = kvs.value(QStringLiteral("rfpower")).toInt(); }
+    if (kvs.contains(QStringLiteral("tunepower")))     { d.tunePower = kvs.value(QStringLiteral("tunepower")).toInt(); }
+    if (kvs.contains(QStringLiteral("inhibit")))       { d.inhibit = kvs.value(QStringLiteral("inhibit")) == QLatin1String("1"); }
+    if (kvs.contains(QStringLiteral("hwalc_enabled"))) { d.hwAlc = kvs.value(QStringLiteral("hwalc_enabled")) == QLatin1String("1"); }
+    emit txBandChanged(d);
 }
 } // namespace AetherSDR

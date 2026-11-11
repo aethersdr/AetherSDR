@@ -1684,6 +1684,24 @@ void RadioModel::applyBackendLinkStats(const IRadioBackend::LinkStats& stats)
 // already fenced to the live session and in wire order, and so do the
 // ingress's Flex-only typed results. Reached by setupBackend() and by
 // setBackendForTest(), so fixtures see what a session sees.
+void RadioModel::applyTxBandChanges(const TxBandDelta& d)
+{
+    auto& b = m_txBandSettings[d.bandId];
+    b.bandId = d.bandId;
+    if (d.bandName)  { b.bandName = *d.bandName; }
+    if (d.rfPower)   { b.rfPower = *d.rfPower; }
+    if (d.tunePower) { b.tunePower = *d.tunePower; }
+    if (d.inhibit)   { b.inhibit = *d.inhibit; }
+    if (d.hwAlc)     { b.hwAlc = *d.hwAlc; }
+    if (d.accTxReq)  { b.accTxReq = *d.accTxReq; }
+    if (d.rcaTxReq)  { b.rcaTxReq = *d.rcaTxReq; }
+    if (d.accTx)     { b.accTx = *d.accTx; }
+    if (d.tx1)       { b.tx1 = *d.tx1; }
+    if (d.tx2)       { b.tx2 = *d.tx2; }
+    if (d.tx3)       { b.tx3 = *d.tx3; }
+    emit txBandSettingsChanged();
+}
+
 void RadioModel::wireStatusIngress(quint64 generation)
 {
     m_statusIngress = nullptr;
@@ -1692,6 +1710,9 @@ void RadioModel::wireStatusIngress(quint64 generation)
         connect(flex, &FlexBackend::fileUpdateReported, this,
                 [this, generation](const FirmwareUpdateStatus& status) {
             if (generation == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
+        });
+        connect(flex, &FlexBackend::txBandChanged, this, [this, generation](const TxBandDelta& delta) {
+            if (generation == m_backendReceiverGeneration) { applyTxBandChanges(delta); }
         });
     } else if (auto* sim = dynamic_cast<SimBackend*>(m_backend.get())) {
         m_statusIngress = sim->statusIngress();
@@ -2322,6 +2343,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<PcmFrame>();
     qRegisterMetaType<ParsedMessage>();
     qRegisterMetaType<FirmwareUpdateStatus>();
+    qRegisterMetaType<TxBandDelta>();
     qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
@@ -12124,23 +12146,9 @@ void RadioModel::onStatusReceived(const QString& object,
     // "transmit" and "profile …" are decoded by the status ingress.
     if (object == "transmit" || object.startsWith("profile")) { return; }
 
-    // Per-band TX settings: "transmit band 9 band_name=20 rfpower=100 ..."
-    static const QRegularExpression txBandRe(R"(^transmit band\s+(\d+)$)");
-    if (object.startsWith("transmit band")) {
-        const auto m = txBandRe.match(object);
-        if (m.hasMatch()) {
-            int id = m.captured(1).toInt();
-            auto& b = m_txBandSettings[id];
-            b.bandId = id;
-            if (kvs.contains("band_name"))    b.bandName  = kvs["band_name"];
-            if (kvs.contains("rfpower"))      b.rfPower   = kvs["rfpower"].toInt();
-            if (kvs.contains("tunepower"))    b.tunePower = kvs["tunepower"].toInt();
-            if (kvs.contains("inhibit"))      b.inhibit   = kvs["inhibit"] == "1";
-            if (kvs.contains("hwalc_enabled"))b.hwAlc     = kvs["hwalc_enabled"] == "1";
-            emit txBandSettingsChanged();
-        }
-        return;
-    }
+    // Per-band TX settings ("transmit band N …") are decoded by the status
+    // ingress and land in applyTxBandChanges().
+    if (object.startsWith("transmit band")) { return; }
 
     // Per-band interlock: "interlock band 9 band_name=20 acc_txreq_enable=0 ..."
     static const QRegularExpression ilBandRe(R"(^interlock band\s+(\d+)$)");

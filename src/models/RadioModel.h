@@ -77,6 +77,7 @@ namespace AetherSDR {
 class TxController;
 class WanConnection;
 class FlexStatusIngress;
+struct TxBandDelta;
 class IAutoRfGainControl;
 
 
@@ -1770,6 +1771,7 @@ private:
     // Return the status ingress from a SmartLink session to the LAN connection.
     void releaseWanStatus();
     void wireStatusIngress(quint64 generation);
+    void applyTxBandChanges(const TxBandDelta& delta);
     QPointer<FlexStatusIngress> m_statusIngress;   // the backend's; model thread
     quint64 m_statusEpoch{0};            // the epoch of the session being run
     quint64 m_connectedStatusEpoch{0};   // the epoch onConnected() last ran for

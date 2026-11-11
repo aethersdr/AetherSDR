@@ -294,6 +294,8 @@ public:
 signals:
     // The radio's report on a firmware image (Flex-only; RadioModel relays it).
     void fileUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
+    // A band's TX settings (Flex-only; RadioModel keeps the table).
+    void txBandChanged(const AetherSDR::TxBandDelta& delta);
 
 private:
     void send(const QString& cmd);

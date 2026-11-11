@@ -2,6 +2,7 @@
 
 #include "CommandParser.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/TxBandDelta.h"
 
 #include <QMetaObject>
 #include <QObject>
@@ -95,6 +96,8 @@ public:
     void decodeStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
     void decodeAudioStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
     void decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs);
+    // "transmit band N …" → the band's transmit plane.
+    void decodeTxBandStatus(int bandId, const QMap<QString, QString>& kvs);
 
     // The DAX TX streams the radio reported, as decodeDaxTxStatus keeps them.
     // FlexBackend's ownership requests read them; a stream's incarnation
@@ -126,6 +129,7 @@ signals:
     // The radio removed a NetCW stream (FlexCwControls retires it).
     void cwStreamRemoved(quint32 streamId);
     void fileUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
+    void txBandChanged(const AetherSDR::TxBandDelta& delta);
 
 private:
     template <typename Transport> void route(Transport* transport);

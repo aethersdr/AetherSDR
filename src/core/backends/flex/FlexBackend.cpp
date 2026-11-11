@@ -93,6 +93,7 @@ FlexBackend::FlexBackend(QObject* parent)
     connect(&m_statusIngress, &FlexStatusIngress::audioStreamChanged, this, &IRadioBackend::audioStreamChanged);
     connect(&m_statusIngress, &FlexStatusIngress::daxTxStreamChanged, this, &IRadioBackend::daxTxStreamChanged);
     connect(&m_statusIngress, &FlexStatusIngress::fileUpdateReported, this, &FlexBackend::fileUpdateReported);
+    connect(&m_statusIngress, &FlexStatusIngress::txBandChanged, this, &FlexBackend::txBandChanged);
     connect(&m_statusIngress, &FlexStatusIngress::cwStreamRemoved, this,
             [this](quint32 streamId) { if (m_cwControls) { m_cwControls->observeStreamRemoved(streamId); } });
 
