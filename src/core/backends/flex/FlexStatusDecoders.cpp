@@ -7,6 +7,7 @@
 #include "core/backends/flex/FlexCwControls.h"
 #include "core/backends/flex/FlexKvCarry.h"
 #include "core/backends/TuneOutputPolicy.h"
+#include "core/backends/flex/FlexStreamStatus.h"
 #include "models/RadioStatusOwnership.h"
 
 #include <QPointer>
@@ -120,6 +121,10 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
     const QPointer<FlexStatusIngress> alive(this);
     decodeStreamStatus(object, kvs);
     if (!alive) { return; }
+    if (const auto stream = flexStreamStatus(object, kvs)) {
+        emit streamStatusObserved(*stream);
+        return;
+    }
     if (object.startsWith(QLatin1String("atu"))) { decodeAtuStatus(kvs); return; }
     // "apd sampler …" is its own object; any other leading bare words
     // ("apd equalizer_reset") are flags the parser folded into the object.

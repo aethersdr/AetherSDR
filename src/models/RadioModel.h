@@ -78,6 +78,7 @@ class TxController;
 class WanConnection;
 class FlexStatusIngress;
 struct TxBandDelta;
+struct StreamStatusDelta;
 class IAutoRfGainControl;
 
 
@@ -1805,10 +1806,9 @@ private:
     void releaseWsprDaxTxOwnership();
     void finishWsprDaxTxRelease();
     bool acceptDaxTxCreate(quint32 id, quint64 startRevision);
-    void traceDaxStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
-    void handleDaxRxStreamRegistry(const QString& object, const QMap<QString, QString>& kvs);
-    bool handleRemoteAudioRxStreamStatus(const QString& object,
-                                         const QMap<QString, QString>& kvs);
+    void traceDaxStreamStatus(const StreamStatusDelta& stream);
+    void handleDaxRxStreamRegistry(const StreamStatusDelta& stream);
+    bool handleRemoteAudioRxStreamStatus(const StreamStatusDelta& stream);
     void scheduleRxAudioStreamEnsure(const QString& reason);
     void logRemoteAudioRxSummary(const QString& reason) const;
 

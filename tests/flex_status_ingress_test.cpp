@@ -10,6 +10,7 @@
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
@@ -311,6 +312,25 @@ private slots:
         model.handleLineForTest(QStringLiteral("S0|transmit rfpower=50"));
         model.handleLineForTest(QStringLiteral("S0|transmit band x rfpower=1"));
         QCOMPARE(bands.size(), 2);
+    }
+
+    // Stream status reaches the model's stream rules typed through the
+    // Flex relay: our remote audio is adopted and its removal clears it.
+    void streamRulesRunFromTheIngress()
+    {
+        TestSettingsProfile profile(QStringLiteral("flex-status-ingress-stream"));
+        QVERIFY(profile.isValid());
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
+        const auto remoteAudio = [&model] {
+            return model.troubleshootingSnapshot()[QStringLiteral("radio")].toObject()
+                [QStringLiteral("remote_audio_rx")].toObject();
+        };
+        model.handleLineForTest(QStringLiteral(
+            "S0|stream 0x04000010 type=remote_audio_rx client_handle=0x00000000 compression=none"));
+        QVERIFY(remoteAudio()[QStringLiteral("stream_id_known")].toBool());
+        model.handleLineForTest(QStringLiteral("S0|stream 0x04000010 removed"));
+        QVERIFY(!remoteAudio()[QStringLiteral("stream_id_known")].toBool());
     }
 
     // The H line reaches the model before connected(): both take one queued

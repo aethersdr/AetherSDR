@@ -16,6 +16,7 @@
 #include "BandSettings.h"
 #include "DeclaredBands.h"
 #include "core/backends/flex/CommandParser.h"
+#include "core/backends/flex/FlexStreamStatus.h"
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
@@ -1715,6 +1716,14 @@ void RadioModel::wireStatusIngress(quint64 generation)
         connect(flex, &FlexBackend::txBandChanged, this, [this, generation](const TxBandDelta& delta) {
             if (generation == m_backendReceiverGeneration) { applyTxBandChanges(delta); }
         });
+        connect(flex, &FlexBackend::streamStatusObserved, this,
+                [this, generation](const StreamStatusDelta& stream) {
+            if (generation != m_backendReceiverGeneration) { return; }
+            handleRemoteAudioRxStreamStatus(stream);
+            if (generation != m_backendReceiverGeneration) { return; }
+            traceDaxStreamStatus(stream);
+            handleDaxRxStreamRegistry(stream);
+        });
     } else if (auto* sim = dynamic_cast<SimBackend*>(m_backend.get())) {
         m_statusIngress = sim->statusIngress();
     }
@@ -2345,6 +2354,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<ParsedMessage>();
     qRegisterMetaType<FirmwareUpdateStatus>();
     qRegisterMetaType<TxBandDelta>();
+    qRegisterMetaType<StreamStatusDelta>();
     qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
@@ -10041,20 +10051,16 @@ void RadioModel::scheduleRxAudioStreamEnsure(const QString& reason)
     });
 }
 
-bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
-                                                 const QMap<QString, QString>& kvs)
+bool RadioModel::handleRemoteAudioRxStreamStatus(const StreamStatusDelta& stream)
 {
     const bool allowUnknownOwner = m_clientInfoMap.size() <= 1;
     const auto action = RadioStatusOwnership::applyRemoteAudioRxStatus(
-        m_rxAudio, object, kvs, clientHandle(), allowUnknownOwner);
+        m_rxAudio, stream, clientHandle(), allowUnknownOwner);
 
     if (action == RadioStatusOwnership::RemoteAudioRxAction::NotRemoteAudio)
         return false;
 
-    const auto stream = RadioStatusOwnership::parseStreamObject(object);
-    const QString streamText = stream.valid
-        ? RadioStatusOwnership::hexId(stream.streamId)
-        : QStringLiteral("(unknown)");
+    const QString streamText = RadioStatusOwnership::hexId(stream.streamId);
 
     switch (action) {
     case RadioStatusOwnership::RemoteAudioRxAction::DeferredUnknownOwner:
@@ -11229,12 +11235,11 @@ void RadioModel::emitOtherClientsChanged()
     emit otherClientsChanged(names.size(), names);
 }
 
-void RadioModel::traceDaxStreamStatus(const QString& object,
-                                      const QMap<QString, QString>& kvs)
+void RadioModel::traceDaxStreamStatus(const StreamStatusDelta& stream)
 {
-    const auto stream = parseStreamObject(object, QStringLiteral("stream"));
-    if (stream.valid) {
-        const QString incomingType = kvs.value(QStringLiteral("type"));
+    const QString keys = stream.keys.join(QLatin1Char(','));
+    if (stream.object == StreamStatusDelta::Object::Stream) {
+        const QString& incomingType = stream.type;
         const QString knownType = m_daxStreamDebug.value(stream.streamId).type;
         const bool daxRelated = isDaxStreamType(incomingType)
             || isDaxStreamType(knownType)
@@ -11242,14 +11247,14 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
         if (!daxRelated)
             return;
 
-        const bool removed = streamStatusRemoved(stream, kvs);
+        const bool removed = stream.removed;
         const QString type = incomingType.isEmpty() ? knownType : incomingType;
         if (removed) {
             qCDebug(lcDax).noquote()
                 << "RadioModel: DAX stream removed"
                 << QStringLiteral("stream=%1").arg(hexId(stream.streamId))
                 << QStringLiteral("type=%1").arg(type.isEmpty() ? QStringLiteral("(unknown)") : type)
-                << QStringLiteral("keys=%1").arg(kvs.keys().join(QLatin1Char(',')));
+                << QStringLiteral("keys=%1").arg(keys);
             m_deadDaxRxSeen.remove(stream.streamId);
             m_externalDaxTxSeen.remove(stream.streamId);
             m_externalDaxRxSeen.remove(stream.streamId);
@@ -11260,30 +11265,32 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
         auto& state = m_daxStreamDebug[stream.streamId];
         if (!incomingType.isEmpty())
             state.type = incomingType;
-        if (kvs.contains(QStringLiteral("client_handle")))
-            state.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
-        if (kvs.contains(QStringLiteral("dax_channel")))
-            state.daxChannel = kvs.value(QStringLiteral("dax_channel")).toInt();
-        if (kvs.contains(QStringLiteral("daxiq_channel")))
-            state.daxIqChannel = kvs.value(QStringLiteral("daxiq_channel")).toInt();
-        if (kvs.contains(QStringLiteral("slice")))
-            state.sliceId = kvs.value(QStringLiteral("slice")).toInt();
-        if (kvs.contains(QStringLiteral("daxiq_rate")))
-            state.daxIqRate = kvs.value(QStringLiteral("daxiq_rate")).toInt();
-        if (kvs.contains(QStringLiteral("pan")))
-            state.panId = kvs.value(QStringLiteral("pan"));
-        if (kvs.contains(QStringLiteral("ip")))
-            state.ip = kvs.value(QStringLiteral("ip")).trimmed();
-        if (kvs.contains(QStringLiteral("active"))) {
-            state.active = kvs.value(QStringLiteral("active")) == QStringLiteral("1");
+        if (stream.ownerReported)
+            state.clientHandle = stream.owner;
+        if (stream.daxChannel)
+            state.daxChannel = *stream.daxChannel;
+        if (stream.daxIqChannel)
+            state.daxIqChannel = *stream.daxIqChannel;
+        if (stream.slice)
+            state.sliceId = stream.slice->toInt();
+        if (stream.daxIqRate)
+            state.daxIqRate = *stream.daxIqRate;
+        if (stream.pan)
+            state.panId = *stream.pan;
+        if (stream.ip)
+            state.ip = *stream.ip;
+        if (stream.active) {
+            state.active = *stream.active;
             state.activeKnown = true;
         }
-        if (kvs.contains(QStringLiteral("tx"))) {
-            state.tx = kvs.value(QStringLiteral("tx")) == QStringLiteral("1");
+        if (stream.tx) {
+            state.tx = *stream.tx;
             state.txKnown = true;
         }
 
-        if (state.type == QStringLiteral("dax_rx") && isDeadOrphanDaxRxStatus(kvs)) {
+        const bool deadOrphan = stream.ownerReported && stream.owner == 0
+            && stream.ip.value_or(QString()) == QStringLiteral("0.0.0.0");
+        if (state.type == QStringLiteral("dax_rx") && deadOrphan) {
             if (!m_deadDaxRxSeen.contains(stream.streamId)) {
                 m_deadDaxRxSeen.insert(stream.streamId);
                 qCWarning(lcDax).noquote()
@@ -11347,23 +11354,19 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             fields << QStringLiteral("active=%1").arg(state.active ? 1 : 0);
         if (state.txKnown)
             fields << QStringLiteral("tx=%1").arg(state.tx ? 1 : 0);
-        fields << QStringLiteral("keys=%1").arg(kvs.keys().join(QLatin1Char(',')));
+        fields << QStringLiteral("keys=%1").arg(keys);
 
         qCDebug(lcDax).noquote()
             << "RadioModel: DAX stream status" << fields.join(QLatin1Char(' '));
         return;
     }
 
-    const auto txAudioStream = parseStreamObject(object, QStringLiteral("tx_audio_stream"));
-    if (!txAudioStream.valid)
-        return;
-
-    const bool removed = streamStatusRemoved(txAudioStream, kvs);
-    if (removed) {
+    const StreamStatusDelta& txAudioStream = stream;
+    if (stream.removed) {
         qCDebug(lcDax).noquote()
             << "RadioModel: DAX tx_audio_stream removed"
             << QStringLiteral("stream=%1").arg(hexId(txAudioStream.streamId))
-            << QStringLiteral("keys=%1").arg(kvs.keys().join(QLatin1Char(',')));
+            << QStringLiteral("keys=%1").arg(keys);
         m_daxStreamDebug.remove(txAudioStream.streamId);
         m_externalDaxTxSeen.remove(txAudioStream.streamId);
         return;
@@ -11371,10 +11374,10 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
 
     auto& state = m_daxStreamDebug[txAudioStream.streamId];
     state.type = QStringLiteral("dax_tx");
-    if (kvs.contains(QStringLiteral("client_handle")))
-        state.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
-    if (kvs.contains(QStringLiteral("tx"))) {
-        state.tx = kvs.value(QStringLiteral("tx")) == QStringLiteral("1");
+    if (stream.ownerReported)
+        state.clientHandle = stream.owner;
+    if (stream.tx) {
+        state.tx = *stream.tx;
         state.txKnown = true;
     }
     const bool ownerKnown = state.clientHandle != 0;
@@ -11394,7 +11397,7 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
                                                     : QStringLiteral("?"))
         << QStringLiteral("tx=%1").arg(state.txKnown ? (state.tx ? QStringLiteral("1") : QStringLiteral("0"))
                                                      : QStringLiteral("?"))
-        << QStringLiteral("keys=%1").arg(kvs.keys().join(QLatin1Char(',')));
+        << QStringLiteral("keys=%1").arg(keys);
 }
 
 // Single registration path for dax_rx streams (#3305): every consumer used to
@@ -11402,12 +11405,10 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
 // filtering — RADE's had no client_handle check at all, so an external DAX
 // app's broadcast stream status could shadow the channel and suppress our own
 // `stream create` (state-machines.md §7.2: stream statuses go to ALL clients).
-void RadioModel::handleDaxRxStreamRegistry(const QString& object,
-                                           const QMap<QString, QString>& kvs)
+void RadioModel::handleDaxRxStreamRegistry(const StreamStatusDelta& stream)
 {
-    const auto stream = parseStreamObject(object, QStringLiteral("stream"));
-    if (!stream.valid) return;
-    if (streamStatusRemoved(stream, kvs)) {
+    if (stream.object != StreamStatusDelta::Object::Stream) return;
+    if (stream.removed) {
         // The removed form carries no type= (state-machines.md §7.6) — route
         // by id; a non-dax_rx id is a harmless no-op in the registry.
         m_panStream->unregisterDaxStream(stream.streamId);
@@ -11424,15 +11425,20 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
         m_nudgedDaxStreams.remove(stream.streamId);
         return;
     }
-    if (kvs.value(QStringLiteral("type")) != QStringLiteral("dax_rx")) return;
-    if (!streamStatusBelongsToUs(kvs, ourClientHandle())) {
+    if (stream.type != QStringLiteral("dax_rx")) return;
+    // No owner field is ours; 0x0 (or an unparseable owner) is ours unless
+    // it is a dead orphan at 0.0.0.0.
+    const bool ours = !stream.ownerReported
+        || (stream.owner == 0 ? stream.ip.value_or(QString()) != QStringLiteral("0.0.0.0")
+                              : stream.owner == ourClientHandle());
+    if (!ours) {
         qCDebug(lcDax).noquote()
             << "RadioModel: ignoring foreign DAX RX stream"
             << QStringLiteral("stream=%1").arg(hexId(stream.streamId))
-            << QStringLiteral("owner=%1").arg(kvs.value(QStringLiteral("client_handle")));
+            << QStringLiteral("owner=%1").arg(hexId(stream.owner));
         return;
     }
-    const int ch = kvs.value(QStringLiteral("dax_channel")).toInt();
+    const int ch = stream.daxChannel.value_or(0);
     if (ch >= 1 && ch <= 8) {
         m_panStream->registerDaxStream(stream.streamId, ch);
         // #1439 legacy re-assert of `slice set dax=`, decided here because this status is
@@ -11440,8 +11446,7 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
         // the radio auto-bound it (fw >= 4.2.18). Only when it did not and a slice
         // carries this channel. The per-stream one-shot below keeps this status-echo edge
         // from oscillating (#3305, #4009, #4383).
-        const bool autoBound =
-            !kvs.value(QStringLiteral("slice")).trimmed().isEmpty();
+        const bool autoBound = !stream.slice.value_or(QString()).trimmed().isEmpty();
         // One-shot gate (#4383): a re-assert of a live binding provokes the
         // radio into a transient dax=0/dax=1 unbind→rebind, and during the
         // unbind it re-broadcasts this stream status with an empty slice= —
@@ -11472,11 +11477,9 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
 void RadioModel::onStatusReceived(const QString& object,
                                   const QMap<QString, QString>& kvs)
 {
-    // Stream lifecycle (audio streams, DAX TX ownership, NetCW) was decoded by
-    // the status ingress before this line reached the model.
-    handleRemoteAudioRxStreamStatus(object, kvs);
-    traceDaxStreamStatus(object, kvs);
-    handleDaxRxStreamRegistry(object, kvs);
+    // Stream lifecycle (audio streams, DAX TX ownership, NetCW, remote audio
+    // ownership, the DAX RX registry) was handled from the status ingress
+    // before this line reached the model.
 
     if (object == "radio") {
         handleRadioStatus(kvs);
@@ -12884,8 +12887,17 @@ void RadioModel::deliverLineForTest(const ParsedMessage& message)
         return;
     }
     // A fixture that aliased a Flex backend without setupBackend(): run its
-    // decoders, then this model's own handling.
-    if (m_flexBackend) { m_flexBackend->statusIngress()->decodeForTest(message); }
+    // decoders, then this model's own handling. Without one, the stream rules
+    // still run on the same parse (a fixture driving them on another family).
+    if (m_flexBackend) {
+        m_flexBackend->statusIngress()->decodeForTest(message);
+    } else if (message.type == MessageType::Status) {
+        if (const auto stream = flexStreamStatus(message.object, message.kvs)) {
+            handleRemoteAudioRxStreamStatus(*stream);
+            traceDaxStreamStatus(*stream);
+            handleDaxRxStreamRegistry(*stream);
+        }
+    }
     handleMessageReceived(message);
     if (message.type == MessageType::Status) { onStatusReceived(message.object, message.kvs); }
 }

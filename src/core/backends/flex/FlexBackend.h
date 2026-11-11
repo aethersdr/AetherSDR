@@ -295,6 +295,8 @@ signals:
     void fileUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
     // A band's TX settings (Flex-only; RadioModel keeps the table).
     void txBandChanged(const AetherSDR::TxBandDelta& delta);
+    // A stream's status facts (Flex-only; the model's stream rules read them).
+    void streamStatusObserved(const AetherSDR::StreamStatusDelta& delta);
 
 private:
     void send(const QString& cmd);

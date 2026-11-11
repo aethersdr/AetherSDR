@@ -2,6 +2,7 @@
 
 #include "CommandParser.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/StreamStatusDelta.h"
 #include "core/backends/TxBandDelta.h"
 
 #include <QMetaObject>
@@ -49,6 +50,7 @@ public:
     // other object.
     static std::optional<FirmwareUpdateStatus>
     fileUpdateStatus(const QString& object, const QMap<QString, QString>& kvs);
+
     // A line as an accepted one is handled (decoders, then lineAccepted),
     // without the fence: RadioModel::handleLineForTest().
     void deliverForTest(const ParsedMessage& line)
@@ -138,6 +140,7 @@ signals:
     void cwStreamRemoved(quint32 streamId);
     void fileUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
     void txBandChanged(const AetherSDR::TxBandDelta& delta);
+    void streamStatusObserved(const AetherSDR::StreamStatusDelta& delta);
     void tuneOutputSuppressionObserved(int bandId, bool suppressed);
 
 private:
