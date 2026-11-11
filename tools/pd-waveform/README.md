@@ -165,7 +165,44 @@ meter must never share the waveform's channel.
   correlates perfectly and the delay keeps being re-found. Next: open each
   test transmission with a noise burst for acquisition, as the simulator
   does, and check for sample slips between a LAN host and the radio.
-- No correction was applied on air yet.
+  (Done: each test transmission now opens with noise.)
+
+## Correction on air, FLEX-8600, 2026-11-11 (40 m, 5 W, dummy load)
+
+**WDSP accepts no fit without a transmit-path fit.** The radio filters the
+waveform's I/Q before its amplifier. Below x = 0.1, the reference/feedback
+pairs scattered 39 degrees in phase, so every fit failed WDSP's
+sin^2+cos^2 check (off by 0.06-0.07; the limit is 0.05). `pd_eq` fits a
+31-tap FIR from reference to feedback on the first second after each delay
+lock, and calibration sees the reference through it. That brought the
+scatter to 6 degrees, and fits are accepted. `pd_waveform_replay` replays
+an `AETHER_PD_DUMP` capture through this offline.
+
+**Train it on noise across the correction band.** The fit is only right
+where it was excited. With a 300-3000 Hz preamble, the first fit took IMD3
+from -29.3 to -50.1 dBc, and later fits drifted it back to -42 dBc. With
+the preamble at -4500 to +7500 Hz:
+
+| Run 3f, two-tone 710/1900 Hz | IMD3 lo/hi | IMD5 lo/hi | IMD7 lo/hi |
+|---|---|---|---|
+| Uncorrected | -31.0 / -30.5 | -44.3 / -44.7 | -56.0 / -56.1 dBc |
+| First fit | -44.5 / -58.1 | -57.4 / -61.8 | -74.2 / -66.0 dBc |
+| After 17 s | -48.0 / -51.5 | -59.8 / -61.4 | -72.7 / -69.5 dBc |
+
+The transmit-path fit still left -10.6 dB of the feedback unexplained.
+Something in its training data isn't linear, and the
+cause is open. On speech it would train on 200-2800 Hz only, the same gap
+that caused the drift. Voice use needs a fit regularized toward a pure
+delay, or a stored measurement of the radio's path.
+
+**A waveform must stop sending at UNKEY_REQUESTED.** Until this was fixed,
+the waveform answered every transmit packet whatever the interlock state.
+On every key-down it held the interlock in UNKEY_REQUESTED for 28-531 s,
+with the two-tone still on the air. `xmit 0` and the client's PTT off were
+both accepted and changed nothing; only taking the slice out of PD
+released it. Now it goes silent, as the waveform-sdk example does, and
+the radio reaches READY 0.1 s after unkey. Bench keying checks for READY
+after every key-down.
 
 ## Not yet known
 
