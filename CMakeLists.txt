@@ -1265,6 +1265,7 @@ set(MODEL_SOURCES
     src/models/RadioSwrValidityFilter.cpp
     src/models/DecoderAudioModel.cpp
     src/models/Ax25ReceiveModel.cpp
+    src/models/Data2gReceiveModel.cpp
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
@@ -1969,6 +1970,12 @@ target_compile_definitions(aethercore PRIVATE
     AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>
     AETHER_UPDATE_DEV_OVERRIDES=$<BOOL:${AETHER_UPDATE_DEV_OVERRIDES}>)
 target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration
+if(ENABLE_DATA2G)
+    # models: Data2gReceiveModel. Without it the model still builds and
+    # reports itself unavailable.
+    target_link_libraries(aethercore PRIVATE aether_hfdata)
+    target_compile_definitions(aethercore PRIVATE HAVE_DATA2G)
+endif()
 
 # Desktop-only implementations kept out of libaethercore. Their public headers
 # remain temporarily in src/core while call sites migrate. A library keeps the
