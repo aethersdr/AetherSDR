@@ -6,7 +6,9 @@
 //   - a request for ANT is accepted with nothing to send, anything else is
 //     refused, and both republish ANT so the button cannot keep a refused label;
 //   - every slice publishes txAntenna ANT, so a slice in a RadioModel puts no
-//     ANT1 into knownAntennaTokens(), which all three RX menus merge in.
+//     ANT1 into knownAntennaTokens(), which all three RX menus merge in;
+//   - a tune step on an unchanged ANT emits no rxAntennaChanged/txAntennaChanged,
+//     and a differing echo still does.
 // Socket-free: a constructed backend; nothing is keyed.
 
 #include "RadioSetupControlFixture.h"
@@ -139,6 +141,67 @@ int main(int argc, char** argv)
     check(refused, "ANT1, ANT2, RF1 and junk are refused and ANT is republished");
     check(b.requestSliceRxAntenna(7, QStringLiteral("ANT")) == ReceiveDispatch::Unsupported,
           "a slice that does not exist is refused");
+
+    // Tuning does not republish unchanged HL2 antennas. A full refresh and an
+    // explicit request still reconcile the labels, without shared-model guards.
+    {
+        SliceModel tuned(0);
+        QObject::connect(&b, &IRadioBackend::sliceChanged, &tuned,
+                         [&tuned](int id, const SliceDelta& d) {
+            if (id == 0) {
+                tuned.applyChanges(d);
+            }
+        });
+        A::publishAll(b);
+        int rxEmits = 0;
+        int txEmits = 0;
+        QObject::connect(&tuned, &SliceModel::rxAntennaChanged, [&rxEmits] { ++rxEmits; });
+        QObject::connect(&tuned, &SliceModel::txAntennaChanged, [&txEmits] { ++txEmits; });
+        for (int step = 1; step <= 10; ++step) {
+            b.setSliceFrequency(0, 7'100'000.0 + 100.0 * step);
+        }
+        std::printf("  (10 tune steps: rxAntennaChanged=%d txAntennaChanged=%d)\n", rxEmits,
+                    txEmits);
+        check(rxEmits == 0 && txEmits == 0 && tuned.rxAntenna() == QLatin1String("ANT"),
+              "tune steps on an unchanged ANT emit no rxAntennaChanged or txAntennaChanged");
+
+        // A differing echo still reaches the listeners: a refused pick moved the
+        // label, and the republished ANT moves it back.
+        QObject::connect(&tuned, &SliceModel::receiveRxAntennaRequested, &b,
+                         [&b](const QString& ant) { b.requestSliceRxAntenna(0, ant); });
+        QStringList heardRx;
+        QObject::connect(&tuned, &SliceModel::rxAntennaChanged,
+                         [&heardRx](const QString& ant) { heardRx << ant; });
+        tuned.setRxAntenna(QStringLiteral("ANT2"));
+        check(heardRx == QStringList({QStringLiteral("ANT2"), QStringLiteral("ANT")})
+                  && tuned.rxAntenna() == QLatin1String("ANT"),
+              "a refused pick shows, then the differing ANT echo snaps the label back");
+        txEmits = 0;
+        SliceDelta moved;
+        moved.txAntenna = QStringLiteral("RF1");
+        tuned.applyChanges(moved);
+        A::publishAll(b);
+        check(txEmits == 2 && tuned.txAntenna() == QLatin1String("ANT"),
+              "a differing txAntenna echo emits, each way");
+    }
+
+    // Preserve the status-notification contract other backends already use.
+    {
+        SliceModel shared(0);
+        int rxEmits = 0;
+        int txEmits = 0;
+        QObject::connect(&shared, &SliceModel::rxAntennaChanged, &shared,
+                         [&rxEmits] { ++rxEmits; });
+        QObject::connect(&shared, &SliceModel::txAntennaChanged, &shared,
+                         [&txEmits] { ++txEmits; });
+        SliceDelta echo;
+        echo.rxAntenna = QStringLiteral("ANT1");
+        echo.txAntenna = QStringLiteral("ANT1");
+        shared.applyChanges(echo);
+        shared.applyChanges(echo);
+        check(rxEmits == 2 && txEmits == 2,
+              "shared antenna echoes retain their existing notification behavior");
+    }
 
     std::printf("\n  %s (%d failure%s)\n\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,
                 g_failures == 1 ? "" : "s");

@@ -1086,6 +1086,7 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     const int ddc = m_ids.append();
 
     Receiver seed = requested;
+    seed.antennasPublished = false;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -3465,7 +3466,7 @@ ReceiveDispatch Hl2Backend::requestSliceRxAntenna(int sliceId, const QString& an
     if (!rx(ddc)) {
         return ReceiveDispatch::Unsupported;
     }
-    emitSliceState(ddc);
+    emitSliceState(ddc, true);
     return antenna == QLatin1String("ANT") ? ReceiveDispatch::LocalOnly
                                            : ReceiveDispatch::Unsupported;
 }
@@ -8661,7 +8662,7 @@ void Hl2Backend::applyBandFilter(const char* reason)
         Q_ARG(int, oc));
 }
 
-void Hl2Backend::emitSliceState(int ddc)
+void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
 {
     Receiver* r = rx(ddc);
     const auto* ids = m_ids.byDdc(ddc);
@@ -8678,10 +8679,13 @@ void Hl2Backend::emitSliceState(int ddc)
     // One receive input, on every slice (#4954): the RX menu offers ANT and no
     // invented ANT1/ANT2. RF1 is transmit-only and is never in this list.
     d.rxAntennaList = QStringList{QStringLiteral("ANT")};
-    d.rxAntenna = QStringLiteral("ANT");
-    // The label only: the HL2 transmits on ANT. Without it the slice keeps its
-    // "ANT1" default, which knownAntennaTokens() adds to every RX menu.
-    d.txAntenna = QStringLiteral("ANT");
+    if (!r->antennasPublished || forceAntennas) {
+        d.rxAntenna = QStringLiteral("ANT");
+        // The TX label must also replace SliceModel's ANT1 default, which
+        // knownAntennaTokens() includes in receive menus.
+        d.txAntenna = QStringLiteral("ANT");
+        r->antennasPublished = true;
+    }
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;
@@ -8748,7 +8752,7 @@ void Hl2Backend::emitPanState(int ddc)
 void Hl2Backend::emitAllSliceState()
 {
     for (const auto& ids : m_ids.all())
-        emitSliceState(ids.ddcIndex);
+        emitSliceState(ids.ddcIndex, true);
 }
 
 void Hl2Backend::emitAllPanState()
