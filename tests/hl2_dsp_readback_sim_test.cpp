@@ -68,8 +68,9 @@ static void spin(int ms)
 }
 
 // The rx-wdsp entry for receiver 0, or an empty map.
-static QVariantMap rxChain(const Hl2Backend& b)
+static QVariantMap rxChain(Hl2Backend& b)
 {
+    b.settleDspChainsForTest();   // the cache, as of every control queued so far
     for (const QVariant& v : b.dspChains()) {
         const QVariantMap m = v.toMap();
         if (m.value(QStringLiteral("chain")).toString() == QLatin1String("rx-wdsp")

@@ -30,6 +30,8 @@
 #include "core/backends/hl2/Hl2Settings.h"
 
 #include <QByteArray>
+#include <QCoreApplication>
+#include <QEvent>
 #include <QHostAddress>
 #include <QLoggingCategory>
 #include <QPointer>
@@ -306,6 +308,13 @@ QByteArray floatBytes(const std::vector<float>& v)
 {
     return {reinterpret_cast<const char*>(v.data()),
             static_cast<qsizetype>(v.size() * sizeof(float))};
+}
+
+// The TX entry gatherDspChains() writes for an unconfigured modulator.
+QVariantMap notConfiguredTxChain()
+{
+    return {{QStringLiteral("chain"), QStringLiteral("hl2-tx")},
+            {QStringLiteral("level"), QStringLiteral("not-configured")}};
 }
 
 }  // namespace
@@ -752,6 +761,21 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_linkStatsTimer = new QTimer(this);
     m_linkStatsTimer->setInterval(kLinkStatsIntervalMs);
     connect(m_linkStatsTimer, &QTimer::timeout, this, &Hl2Backend::publishLinkStats);
+
+    // A fresh modulator is unconfigured and m_ioDsps is empty, so this is what
+    // the first gather would return.
+    m_dspChains = {notConfiguredTxChain()};
+    m_dspChainsPublishTimer = new QTimer(this);
+    m_dspChainsPublishTimer->setSingleShot(true);
+    m_dspChainsPublishTimer->setInterval(0);
+    connect(m_dspChainsPublishTimer, &QTimer::timeout, this,
+            &Hl2Backend::postDspChainsGather);
+    // Never stopped, like the poll-state timer: the cache has no connected state.
+    m_dspChainsRefreshTimer = new QTimer(this);
+    m_dspChainsRefreshTimer->setInterval(kDspChainsRefreshIntervalMs);
+    connect(m_dspChainsRefreshTimer, &QTimer::timeout, this,
+            &Hl2Backend::postDspChainsGather);
+    m_dspChainsRefreshTimer->start();
 }
 
 void Hl2Backend::publishLinkStats()
@@ -1821,6 +1845,7 @@ void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
         && QThread::currentThread() != m_ioThread) {
         QMetaObject::invokeMethod(m_metis, [this, next] { m_ioDsps = next; },
                                   Qt::BlockingQueuedConnection);
+        requestDspChainsPublish();
         return;
     }
     // No I/O thread to hand it to: before it starts, after it is joined, or when
@@ -2942,6 +2967,7 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // UI yet, so anything higher would be an un-commanded power level chosen by
     // a default. An operator raising it explicitly is the only way it should go up.
     setTxDriveLevel(0);
+    requestDspChainsPublish();
     emit dspSetupFinished();
 
     // Initial slice/pan state is published from the linkUp handler above, once
@@ -2953,6 +2979,7 @@ void Hl2Backend::invalidateTxDspConfiguration()
     if (!m_txDsp) {
         return;
     }
+    withdrawCachedTxChain();
     if (!m_ioThread || !m_ioThread->isRunning()
         || QThread::currentThread() == m_txDsp->thread()) {
         m_txDsp->invalidateConfiguration();
@@ -3235,6 +3262,7 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
             Q_ARG(WdspChannel::Mode, wdsp));
         pushTxPassband(mode);
     }
+    requestDspChainsPublish();
     emitSliceState(ddc);
     notifyOperatingStateChanged();
 }
@@ -3255,6 +3283,7 @@ void Hl2Backend::setSliceFilter(int sliceId, int lowHz, int highHz)
         const auto [dspLo, dspHi] = dspFilterHz(*r);
         QMetaObject::invokeMethod(r->dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, dspLo), Q_ARG(double, dspHi));
+        requestDspChainsPublish();
     }
     emitSliceState(ddc);
     notifyOperatingStateChanged();
@@ -3305,9 +3334,11 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // threshold-only change), which used to send medium over whatever mode the
     // receiver was actually running.
     const double ceilingDb = m_dbRef.agcCeilingDb(r->agcThresholdDb);
-    if (r->dsp)
+    if (r->dsp) {
         QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgcMode(r->agcMode)), Q_ARG(double, ceilingDb));
+        requestDspChainsPublish();
+    }
     emitSliceState(ddc);
     // The capture half. setSliceMode/setSliceFilter next door have always said
     // this and AGC never did, so the operator's AGC was the one control on this
@@ -3741,6 +3772,7 @@ void Hl2Backend::pushNoiseBlanker(const Receiver& r)
         Q_ARG(WdspChannel::NoiseBlanker, AetherSDR::toWdsp(r.nbKind)),
         Q_ARG(int, r.nbLevel),
         Q_ARG(WdspChannel::NoiseBlankerFill, AetherSDR::toWdsp(r.nbFill)));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::pushApf(const Receiver& r)
@@ -3754,6 +3786,7 @@ void Hl2Backend::pushApf(const Receiver& r)
     QMetaObject::invokeMethod(r.dsp, "setApf", Qt::QueuedConnection,
         Q_ARG(bool, r.apfOn), Q_ARG(int, r.apfLevel),
         Q_ARG(double, static_cast<double>(m_cwPitchHz)));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::pushAgcOffLevel(const Receiver& r)
@@ -3762,6 +3795,7 @@ void Hl2Backend::pushAgcOffLevel(const Receiver& r)
         return;
     QMetaObject::invokeMethod(r.dsp, "setAgcOffLevel", Qt::QueuedConnection,
         Q_ARG(int, r.agcOffLevel));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::pushSquelch(const Receiver& r)
@@ -3794,6 +3828,7 @@ void Hl2Backend::seedNotches(const Receiver& r)
     }
     QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
         Q_ARG(bool, m_notchesEnabled));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::createNotch(double centerHz, double widthHz)
@@ -3833,6 +3868,7 @@ void Hl2Backend::createNotch(double centerHz, double widthHz)
     // The id is minted HERE, so nothing above knows about this notch until it
     // is told. Same contract as a Flex, where the radio assigns the id and
     // reports it back as status.
+    requestDspChainsPublish();
     AetherSDR::NotchDelta delta;
     delta.centerHz = notch.centerHz;
     delta.widthHz = notch.widthHz;
@@ -3876,6 +3912,7 @@ void Hl2Backend::setNotch(int notchId, const AetherSDR::NotchDelta& delta)
     // Echo the APPLIED values, which may differ from what was asked (width
     // clamping). Reporting the request instead would let the overlay drift away
     // from the audio a little more with every drag.
+    requestDspChainsPublish();
     AetherSDR::NotchDelta applied;
     applied.centerHz = notch.centerHz;
     applied.widthHz = notch.widthHz;
@@ -3898,6 +3935,7 @@ void Hl2Backend::removeNotch(int notchId)
             QMetaObject::invokeMethod(r.dsp, "removeNotch", Qt::QueuedConnection,
                 Q_ARG(int, index));
     }
+    requestDspChainsPublish();
     emit notchRemoved(notchId);
     notifyOperatingStateChanged();
 }
@@ -3910,6 +3948,7 @@ void Hl2Backend::setNotchesEnabled(bool on)
             QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
                 Q_ARG(bool, on));
     }
+    requestDspChainsPublish();
 }
 
 // Intent ignored — the HL2's DDC window is independent of any slice.
@@ -4325,6 +4364,7 @@ void Hl2Backend::finishRateChange(bool ok, quint64 generation, int targetRate,
     // installed nothing — this one only stops the REPORT.
     if (!m_rateLedger.isCurrent(generation))
         return;
+    requestDspChainsPublish();
 
     if (!ok) {
         // NOTHING TO UNDO ON THE RADIO. The register is written only on the
@@ -4993,6 +5033,7 @@ void Hl2Backend::setCwPitch(int hz)
         QMetaObject::invokeMethod(r.dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, lo), Q_ARG(double, hi));
     }
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::repushAllFrequencies()
@@ -5686,6 +5727,7 @@ void Hl2Backend::pushTxPassband(const QString& mode)
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(lo)),
             Q_ARG(double, static_cast<double>(hi)));
+        requestDspChainsPublish();
     }
     TransmitDelta delta;
     delta.txFilterLow = lo;
@@ -5727,6 +5769,7 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(applyLo)),
             Q_ARG(double, static_cast<double>(applyHi)));
+        requestDspChainsPublish();
     }
 
     // Client-authoritative state moved, so the capture half has to know — the
@@ -5748,9 +5791,11 @@ void Hl2Backend::setMicGain(int level)
 
     const double linear = micSliderToLinear(level);
 
-    if (m_txDsp)
+    if (m_txDsp) {
         QMetaObject::invokeMethod(m_txDsp, "setMicGain", Qt::QueuedConnection,
             Q_ARG(double, linear));
+        requestDspChainsPublish();
+    }
 
     // Capture half of TxSetpoints memory; RadioModel debounces the store.
     // Only on change: setupBackend() re-asserts the level on every rebuild,
@@ -5882,8 +5927,8 @@ QString agcModeName(int wdspMode)
 //
 // The gather is a STATIC member taking the two lists it may read, so it has no
 // `this` and cannot reach m_rx — see the declaration in the header for why that
-// is the enforcement rather than a comment. dspChains() below is the one place
-// that chooses what to hand it.
+// is the enforcement rather than a comment. postDspChainsGather() below is the
+// one place that chooses what to hand it.
 QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
                                          Hl2TxDsp* txDsp)
 {
@@ -6001,31 +6046,69 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
     return chains;
 }
 
-// Gathered on the I/O thread, because that is where both chains live and this
-// is called from the GUI thread. Same shape as AutomationServer's
-// dspSnapshotOnObjectThread(): a same-thread fast path, otherwise a blocking
-// queued invocation. A failed invocation returns empty rather than a
-// half-filled list — "we could not ask" and "it answered zero" must not look
-// alike, which is the same rule healthSnapshot() follows.
+// A plain read, per IRadioBackend rule 3: the I/O thread publishes into
+// m_dspChains (postDspChainsGather()), so this never waits on it. The answer is
+// as of the last publish; a withdraw is visible at once (withdrawCachedTxChain()).
 QVariantList Hl2Backend::dspChains() const
 {
-    // THE ONE LINE THAT CHOOSES. m_ioDsps, never m_rx: the I/O side gets its own
-    // DDC-indexed list, rebuilt by publishIoDsps() when the receiver set
-    // changes, and the EP6 fan-out reads it for the same reason. Nothing in the
-    // gather needs Receiver anyway — every field it reports comes from the DSP
-    // object, which was the point of reading the DSP rather than the mirror.
-    if (!m_txDsp || m_txDsp->thread() == QThread::currentThread()) {
-        return gatherDspChains(m_ioDsps, m_txDsp);
-    }
-    if (!m_ioThread || !m_ioThread->isRunning()) {
-        return {};  // no event loop can answer a blocking invocation
-    }
+    return m_dspChains;
+}
 
-    QVariantList out;
-    const bool invoked = QMetaObject::invokeMethod(
-        m_txDsp, [this, &out]() { out = gatherDspChains(m_ioDsps, m_txDsp); },
-        Qt::BlockingQueuedConnection);
-    return invoked ? out : QVariantList{};
+void Hl2Backend::requestDspChainsPublish()
+{
+    if (m_dspChainsPublishTimer && !m_dspChainsPublishTimer->isActive()) {
+        m_dspChainsPublishTimer->start();
+    }
+}
+
+// Posted to the I/O thread, so it runs after every DSP change already queued
+// there. m_ioDsps, never m_rx: see gatherDspChains().
+void Hl2Backend::postDspChainsGather()
+{
+    if (!m_metis || !m_ioThread || !m_ioThread->isRunning()) {
+        return;
+    }
+    const quint64 generation = m_connectGeneration;
+    const quint64 epoch = m_dspChainsEpoch;
+    QMetaObject::invokeMethod(m_metis, [this, generation, epoch] {
+        QVariantList chains = gatherDspChains(m_ioDsps, m_txDsp);
+        QMetaObject::invokeMethod(this, [this, chains = std::move(chains), generation, epoch] {
+            acceptDspChains(chains, generation, epoch);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
+void Hl2Backend::acceptDspChains(const QVariantList& chains, quint64 connectGeneration,
+                                 quint64 epoch)
+{
+    if (connectGeneration != m_connectGeneration || epoch != m_dspChainsEpoch) {
+        return;
+    }
+    m_dspChains = chains;
+}
+
+void Hl2Backend::withdrawCachedTxChain()
+{
+    ++m_dspChainsEpoch;
+    for (QVariant& entry : m_dspChains) {
+        if (entry.toMap().value(QStringLiteral("chain")).toString()
+            == QLatin1String("hl2-tx")) {
+            entry = notConfiguredTxChain();
+        }
+    }
+    // The receivers' half re-converges once the queued invalidation has run.
+    requestDspChainsPublish();
+}
+
+void Hl2Backend::settleDspChainsForTest()
+{
+    if (!m_metis || !m_ioThread || !m_ioThread->isRunning()
+        || QThread::currentThread() == m_ioThread) {
+        return;
+    }
+    postDspChainsGather();
+    QMetaObject::invokeMethod(m_metis, [] {}, Qt::BlockingQueuedConnection);
+    QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
 }
 
 void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
@@ -8142,6 +8225,7 @@ void Hl2Backend::pushEffectiveLnaGain()
         // The squelch gate is referred to the LNA the same way.
         pushSquelch(r);
     }
+    requestDspChainsPublish();
     // Echo what the hardware actually took, to every pan — a slider that
     // asked for something outside the register's range finds out here, and so
     // does an operator whose gain is being held down by an automatic control.
@@ -8409,6 +8493,7 @@ void Hl2Backend::pushInitialState()
                   modeFromString(txRx ? txRx->mode : QStringLiteral("USB"))));
         QMetaObject::invokeMethod(m_txDsp, "reset", Qt::QueuedConnection);
     }
+    requestDspChainsPublish();
 
     // This radio's remembered mic level, staged by applyRestoredState() for one
     // connect-time application. Applied here because m_txDsp is built by

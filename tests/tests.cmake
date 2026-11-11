@@ -9685,6 +9685,15 @@ target_include_directories(hl2_dsp_readback_test PRIVATE src)
 target_link_libraries(hl2_dsp_readback_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_dsp_readback_test COMMAND hl2_dsp_readback_test)
 
+# dspChains() answers from cache and never waits on the I/O thread (#7164);
+# a stale publish cannot land over a withdrawal. Socket-free, nothing keyed.
+add_executable(hl2_dspchains_cache_test
+    tests/hl2_dspchains_cache_test.cpp
+)
+target_include_directories(hl2_dspchains_cache_test PRIVATE src tests)
+target_link_libraries(hl2_dspchains_cache_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_dspchains_cache_test COMMAND hl2_dspchains_cache_test)
+
 # The bridge half of the same read-back: `get dsp` and `get dsp … backend` must
 # answer from one object, because assert_state and wait_for only ever issue the
 # property form (#5401 review). Socket-free — the line dispatcher is called
