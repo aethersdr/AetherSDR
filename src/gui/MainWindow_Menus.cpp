@@ -1134,7 +1134,8 @@ void MainWindow::buildMenuBar()
     });
     auto* profileImportExportAct = m_profilesMenu->addAction("Import/Export Profiles...");
     connect(profileImportExportAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_profileImportExportDialog, &m_radioModel);
+        showOrRaiseCanon(m_profileImportExportDialog,
+                         [this] { return new ProfileImportExportDialog(&m_radioModel, this); });
     });
     m_profilesMenu->addSeparator();
 
