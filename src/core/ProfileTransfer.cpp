@@ -1130,20 +1130,33 @@ void ProfileTransfer::handleTimeout()
 
 bool ProfileTransfer::commitExportFile(QString* error)
 {
-    if (!m_saveFile || !m_saveFile->flush() || !m_saveFile->seek(0)
-        || m_saveFile->size() <= 0 || m_saveFile->size() > kMaxImportSize) {
+    const qint64 size = m_saveFile ? m_saveFile->size() : 0;
+    if (!m_saveFile || !m_saveFile->flush() || size <= 0 || size > kMaxImportSize) {
         *error = QStringLiteral("Export package is unavailable or exceeds the size limit.");
         return false;
     }
-    const QByteArray payload = m_saveFile->read(kMaxImportSize + 1);
-    if (payload.size() != m_saveFile->size() || readZipEntries(payload, error).isEmpty()) {
+    // Validate through a mapped view of the staged file, not a heap copy.
+    uchar* mapped = m_saveFile->map(0, size);
+    QByteArray copied;
+    if (!mapped && m_saveFile->seek(0)) { copied = m_saveFile->read(size + 1); }
+    const QByteArray payload = mapped
+        ? QByteArray::fromRawData(reinterpret_cast<const char*>(mapped), size) : copied;
+    const bool valid = payload.size() == size && !readZipEntries(payload, error).isEmpty();
+    if (mapped) { m_saveFile->unmap(mapped); }
+    if (!valid) {
         if (error->isEmpty()) { *error = QStringLiteral("Invalid or incomplete export package."); }
         return false;
     }
+    // Stream it into place; QSaveFile replaces the destination atomically.
     QSaveFile destination(m_path);
     destination.setDirectWriteFallback(false);
-    if (!destination.open(QIODevice::WriteOnly)
-        || destination.write(payload) != payload.size() || !destination.commit()) {
+    bool written = destination.open(QIODevice::WriteOnly) && m_saveFile->seek(0);
+    for (qint64 done = 0; written && done < size;) {
+        const QByteArray chunk = m_saveFile->read(qMin<qint64>(1024 * 1024, size - done));
+        written = !chunk.isEmpty() && destination.write(chunk) == chunk.size();
+        done += chunk.size();
+    }
+    if (!written || !destination.commit()) {
         *error = QStringLiteral("Could not finalize export package: %1").arg(destination.errorString());
         return false;
     }

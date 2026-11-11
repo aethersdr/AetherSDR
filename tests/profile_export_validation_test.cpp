@@ -43,6 +43,14 @@ private slots:
         QVERIFY(ProfileTransferTestAccess::commit(transfer,path,valid,&error));
         QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
         QCOMPARE(file.readAll(),valid);
+        file.close();
+        // A package larger than one copy chunk arrives whole.
+        const QByteArray large = writeStoredZip({{QStringLiteral("meta_data"),"settings"},
+                                                {QStringLiteral("flex_payload"),QByteArray(3 * 1024 * 1024 + 7,'p')}});
+        ProfileTransfer big(nullptr);
+        QVERIFY(ProfileTransferTestAccess::commit(big,path,large,&error));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(file.readAll(),large);
     }
 };
 QTEST_GUILESS_MAIN(ProfileExportValidationTest)
