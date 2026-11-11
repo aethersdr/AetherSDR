@@ -21,8 +21,10 @@ delivers only to a separate computer on its LAN.
   slice and stream and waits up to 1.5 s for the radio to answer. After a
   crash, the next start removes the slice at the index it saved, but only
   if that slice still looks like its own: no panadapter, DIGU, on a WSPR
-  dial frequency, on DAX channel 0 or its own. A GUI client can take the
-  slice over (#7139), so every retune sets `mode=DIGU` and `tx=0` again.
+  dial frequency, on DAX channel 0 or its own. The radio reports the slice
+  as the connected GUI client's own (#7139). `/v1/status` names it as
+  `slice_index`, and AetherSDR leaves that slice alone. Other clients may
+  still take it over, so every retune sets `mode=DIGU` and `tx=0` again.
 - **Capture:** each even UTC minute, 114 s, timed by the system clock. It
   waits for a trusted clock; on an 8000-series radio that comes from its
   GPS-disciplined stratum-1 NTP. A FLEX-6000 runs kernel 2.6.37, where
