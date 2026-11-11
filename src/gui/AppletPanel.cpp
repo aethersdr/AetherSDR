@@ -486,7 +486,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // container to the viewport. Reporting kRailWidth instead pins it at
     // max(viewport, 260) and clips each applet header's close button.
     // Viewport width: kStackedApplet with the scrollbar showing, kRailWidth
-    // less the gutter without it (the policy is ScrollBarAsNeeded).
+    // without it (the policy is ScrollBarAsNeeded).
     struct FlexContainer : QWidget {
         using QWidget::QWidget;
         QSize sizeHint() const override

@@ -3916,8 +3916,11 @@ void MainWindow::applyNonClientBandInsets()
         return;
     }
     // QMainWindow's layout honours the window's own margins, so this insets
-    // the central widget AND the status bar, leaving the title bar's row to
-    // TitleBar::updateChromeLayout().
+    // the central widget — the title bar included, since it sits in the
+    // central widget's vbox — and the status bar. Only the top is left alone,
+    // for the caption's own row. The title bar's side bands are lost the same
+    // way, and nothing doubles: TitleBar::updateChromeLayout() adds
+    // contentInsets(), which is safeAreaMargins() and 0 on those edges here.
     setContentsMargins(insets);
 }
 
@@ -4179,6 +4182,13 @@ void MainWindow::updateStatusBarMinimumWidth()
 void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);
+
+    // Changing the CURRENT monitor's scale in Settings sends WM_DPICHANGED
+    // with no screenChanged, so the screenChanged connection alone would leave
+    // the inset at the old DPI's band until the next show.
+    if (event && event->type() == QEvent::DevicePixelRatioChange) {
+        applyNonClientBandInsets();
+    }
 
     // Principle VI fail-safe (#3888): if a momentary keying key (PTT-hold, CW
     // straight key / paddles) is held when the window is deactivated, its

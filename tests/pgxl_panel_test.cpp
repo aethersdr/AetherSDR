@@ -38,7 +38,7 @@
 #include "gui/AppletRailMetrics.h"
 
 // A fit check at the rail's own 260 px can pass while the real docked width
-// clips: the outer gutter and the scrollbar track come off it.
+// clips: the scrollbar track comes off it.
 static constexpr int kDockedAppletWidth = AetherSDR::AppletRailMetrics::kStackedApplet;
 
 using namespace AetherSDR;
