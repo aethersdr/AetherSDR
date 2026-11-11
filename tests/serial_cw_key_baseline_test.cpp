@@ -270,11 +270,79 @@ void reloadHeldPaddle()
     SerialInputBaselineTestAccess::sample(c, false, true, false);
     check(r.paddles.size() == 1 && r.paddles.front().first, tag + ": control: the press sends dit");
     const quint64 epoch = SerialInputBaselineTestAccess::portEpoch(c);
+    c.setPaddleSwap(true);  // a paddle setting changed, so the reload releases
     SerialInputBaselineTestAccess::reload(c, false, true, false);
     check(r.paddles.size() == 2 && !r.paddles.back().first && !r.paddles.back().second,
-          tag + ": the reload publishes the release");
+          tag + ": a reload that swaps the paddles publishes the release");
     check(SerialInputBaselineTestAccess::portEpoch(c) == epoch,
           tag + ": the in-place reload keeps the port epoch");
+}
+
+// A reload that changed nothing leaves every held input keyed, as before the
+// in-place rebaseline existed; the release still comes from the line.
+void reloadUnchangedKeepsHolds()
+{
+    const std::string tag = "reload, nothing changed";
+    SerialPortController c;
+    c.setCtsFunction(Input::PttInput);
+    c.setDsrFunction(Input::CwKeyInput);
+    c.setDcdFunction(Input::CwDitInput);
+    c.setCtsPolarity(true);
+    c.setDsrPolarity(true);
+    c.setDcdPolarity(true);
+    Recorder r(c);
+    SerialInputBaselineTestAccess::open(c, false, false, false);
+    SerialInputBaselineTestAccess::settleDebounce();
+    SerialInputBaselineTestAccess::sample(c, true, true, true);
+    check(r.ptts == std::vector<bool>{true} && r.keys == std::vector<bool>{true}
+              && r.paddles.size() == 1 && r.paddles.front().first,
+          tag + ": control: PTT, key and dit are held");
+    SerialInputBaselineTestAccess::reload(c, true, true, true);
+    SerialInputBaselineTestAccess::sample(c, true, true, true);
+    check(r.ptts.size() == 1 && r.keys.size() == 1 && r.paddles.size() == 1,
+          tag + ": the reload publishes nothing and the holds continue");
+    SerialInputBaselineTestAccess::settleDebounce();
+    SerialInputBaselineTestAccess::sample(c, false, false, false);
+    check(r.ptts == std::vector<bool>{true, false} && r.keys == std::vector<bool>{true, false}
+              && r.paddles.size() == 2 && !r.paddles.back().first,
+          tag + ": releasing the lines unkeys each one");
+}
+
+// A change on one pin releases only what that pin carries.
+void reloadOtherPinKeepsKey()
+{
+    const std::string tag = "reload, CTS role changed";
+    SerialPortController c;
+    c.setDsrFunction(Input::CwKeyInput);
+    c.setDsrPolarity(true);
+    Recorder r(c);
+    SerialInputBaselineTestAccess::open(c, false, false, false);
+    SerialInputBaselineTestAccess::sample(c, false, true, false);
+    check(r.keys == std::vector<bool>{true}, tag + ": control: the DSR key is held");
+    c.setCtsFunction(Input::PttInput);
+    SerialInputBaselineTestAccess::reload(c, false, true, false);
+    SerialInputBaselineTestAccess::sample(c, false, true, false);
+    check(r.keys == std::vector<bool>{true} && r.ptts.empty(),
+          tag + ": the key held on DSR stays down");
+}
+
+// PTT on DCD: a release inside the debounce window is not lost.
+void dcdPttReleaseInsideDebounce()
+{
+    const std::string tag = "PTT on DCD";
+    SerialPortController c;
+    c.setDcdFunction(Input::PttInput);
+    c.setDcdPolarity(true);
+    Recorder r(c);
+    SerialInputBaselineTestAccess::open(c, false, false, false);
+    SerialInputBaselineTestAccess::settleDebounce();
+    SerialInputBaselineTestAccess::sample(c, false, false, true);
+    SerialInputBaselineTestAccess::sample(c, false, false, false);  // inside the window
+    check(r.ptts == std::vector<bool>{true}, tag + ": control: a release inside the debounce is held back");
+    SerialInputBaselineTestAccess::settleDebounce();
+    SerialInputBaselineTestAccess::sample(c, false, false, false);
+    check(r.ptts == std::vector<bool>{true, false},
+          tag + ": the release is published on the next sample after the debounce");
 }
 
 // Control for the epoch check: closing the port does move it.
@@ -318,6 +386,9 @@ int main(int argc, char** argv)
     paddle(true);
     pttUnchanged();
     pttReleaseOfHeldAtOpen();
+    reloadUnchangedKeepsHolds();
+    reloadOtherPinKeepsKey();
+    dcdPttReleaseInsideDebounce();
     paddleOtherSideWhileOneHeldAtOpen();
     polarityFlipIdleKey();
     polarityFlipHeldKey();

@@ -140,6 +140,16 @@ private:
     bool          m_lastKeyDown{false};
     bool          m_lastDitActive{false};
     bool          m_lastDahActive{false};
+    // The roles, polarities and paddle swap the current baseline was taken
+    // under. An in-place reload acts only on the pins whose settings differ.
+    InputFunction m_baseCtsFn{InputFunction::None};
+    InputFunction m_baseDsrFn{InputFunction::None};
+    InputFunction m_baseDcdFn{InputFunction::None};
+    bool          m_baseCtsActiveHigh{false};
+    bool          m_baseDsrActiveHigh{false};
+    bool          m_baseDcdActiveHigh{false};
+    bool          m_basePaddleSwap{false};
+    void          recordBaselineSettings();
     // A paddle line active at open, ignored until it is released.
     bool          m_ditHeldAtOpen{false};
     bool          m_dahHeldAtOpen{false};

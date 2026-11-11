@@ -547,15 +547,83 @@ void SerialPortController::baselineInputs(bool ctsRaw, bool dsrRaw, bool dcdRaw)
     m_lastDahActive = false;
     m_ditHeldAtOpen = lines.dit;
     m_dahHeldAtOpen = lines.dah;
+    recordBaselineSettings();
+}
+
+void SerialPortController::recordBaselineSettings()
+{
+    m_baseCtsFn = m_ctsFn;
+    m_baseDsrFn = m_dsrFn;
+    m_baseDcdFn = m_dcdFn;
+    m_baseCtsActiveHigh = m_ctsActiveHigh;
+    m_baseDsrActiveHigh = m_dsrActiveHigh;
+    m_baseDcdActiveHigh = m_dcdActiveHigh;
+    m_basePaddleSwap = m_paddleSwap;
 }
 
 void SerialPortController::rebaselineInPlace(bool ctsRaw, bool dsrRaw, bool dcdRaw)
 {
-    // Release what is held first: a baseline alone would drop a held key or
-    // paddle without publishing its release, leaving the radio keyed. The port
-    // stays open, so the epoch is kept: the Win32 watcher captured it at start.
-    releaseHeldTxInputs();
-    baselineInputs(ctsRaw, dsrRaw, dcdRaw);
+    // Only a pin whose role or polarity changed (or the paddle swap) is acted
+    // on: a reload that changed nothing on a pin leaves its held input keyed.
+    // The port stays open, so the epoch is kept: the Win32 watcher captured it
+    // at start.
+    const bool ctsChanged = m_ctsFn != m_baseCtsFn || m_ctsActiveHigh != m_baseCtsActiveHigh;
+    const bool dsrChanged = m_dsrFn != m_baseDsrFn || m_dsrActiveHigh != m_baseDsrActiveHigh;
+    const bool dcdChanged = m_dcdFn != m_baseDcdFn || m_dcdActiveHigh != m_baseDcdActiveHigh;
+    const bool swapChanged = m_paddleSwap != m_basePaddleSwap;
+    if (!ctsChanged && !dsrChanged && !dcdChanged && !swapChanged) {
+        return;
+    }
+    // A role is touched when a changed pin had it before the reload or has it now.
+    const auto touched = [&](InputFunction a, InputFunction b) {
+        const auto has = [&](bool changed, InputFunction before, InputFunction now) {
+            return changed && (before == a || before == b || now == a || now == b);
+        };
+        return has(ctsChanged, m_baseCtsFn, m_ctsFn) || has(dsrChanged, m_baseDsrFn, m_dsrFn)
+            || has(dcdChanged, m_baseDcdFn, m_dcdFn);
+    };
+    const bool pttTouched = touched(InputFunction::PttInput, InputFunction::PttInput);
+    const bool keyTouched = touched(InputFunction::CwKeyInput, InputFunction::CwKeyInput);
+    const bool paddleTouched =
+        swapChanged || touched(InputFunction::CwDitInput, InputFunction::CwDahInput);
+
+    // Release what a touched role holds; a baseline alone would drop it without
+    // publishing the release and leave the radio keyed. When every held role is
+    // touched, cancel the producer's inputs too, as close() does.
+    const bool keepsAHold = (m_pttInputHeld && !pttTouched) || (m_keyInputHeld && !keyTouched)
+                         || (m_paddleInputHeld && !paddleTouched);
+    if (!keepsAHold) {
+        releaseHeldTxInputs();
+    } else {
+        if (pttTouched && m_pttInputHeld) {
+            publishPttInput(false);
+        }
+        if (keyTouched && m_keyInputHeld) {
+            publishKeyInput(false);
+        }
+        if (paddleTouched && m_paddleInputHeld) {
+            publishPaddleInput(false, false);
+        }
+    }
+
+    // Rebaseline the changed pins under their new polarity; an input active
+    // now keys nothing until it is released and pressed again.
+    if (ctsChanged) { m_lastCtsActive = m_ctsActiveHigh ? ctsRaw : !ctsRaw; }
+    if (dsrChanged) { m_lastDsrActive = m_dsrActiveHigh ? dsrRaw : !dsrRaw; }
+    if (dcdChanged) { m_lastDcdActive = m_dcdActiveHigh ? dcdRaw : !dcdRaw; }
+    const CwLines lines = cwLines(m_ctsActiveHigh ? ctsRaw : !ctsRaw,
+                                  m_dsrActiveHigh ? dsrRaw : !dsrRaw,
+                                  m_dcdActiveHigh ? dcdRaw : !dcdRaw);
+    if (keyTouched) {
+        m_lastKeyDown = lines.keyDown;
+    }
+    if (paddleTouched) {
+        m_lastDitActive = false;
+        m_lastDahActive = false;
+        m_ditHeldAtOpen = lines.dit;
+        m_dahHeldAtOpen = lines.dah;
+    }
+    recordBaselineSettings();
 }
 
 void SerialPortController::applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRaw,
@@ -602,9 +670,12 @@ void SerialPortController::applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRa
         }
     }
 
-    // Track DCD regardless of role so close-time stuck-PTT detection and
-    // polarity-flip rebaselines see fresh state.
-    m_lastDcdActive = dcdActive;
+    // Track DCD for the other roles so close-time stuck-PTT detection sees
+    // fresh state. As the PTT input its baseline moves only with a published
+    // edge, or a release inside the debounce window would be lost for good.
+    if (m_dcdFn != InputFunction::PttInput) {
+        m_lastDcdActive = dcdActive;
+    }
 
     // ── CW paddle (dit/dah) ──────────────────────────────────────────────
     // A line active at open counts as open until it is released, so a paddle
@@ -696,8 +767,8 @@ void SerialPortController::loadSettings()
 
         if (samePort) {
             // Port already open on the same port/baud — update settings in-place.
-            // Rebaseline every role with the new polarity so the next poll sees
-            // no phantom PTT, key or paddle edge from the flip.
+            // rebaselineInPlace() acts only on pins whose role or polarity changed
+            // (or the paddle swap), so the next poll sees no phantom edge.
             qCDebug(lcDevices) << "SerialPortController::loadSettings: in-place update (no reopen)";
 #ifdef Q_OS_WIN
             {
