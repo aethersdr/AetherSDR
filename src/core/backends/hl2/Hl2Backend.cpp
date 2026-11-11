@@ -2545,6 +2545,10 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     const int actualNumRx = MetisClient::effectiveNumRx(mp);
     mp.numRx = actualNumRx;
 
+    // Every connect starts with transmit on receiver A, which the restored flat
+    // fields and pushInitialState() assume; the replay's setTxSlice() moves it
+    // back, with mode, passband and TX NCO, to the receiver that held it.
+    m_txDdc = 0;
     buildReceivers(actualNumRx);
     for (Receiver& r : m_rx) {
         r.sliceFreqHz = startFreqHz;
