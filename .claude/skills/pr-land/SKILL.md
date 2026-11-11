@@ -779,8 +779,8 @@ what was tried and undone.
 ## 13. Post-merge CI — the maintainer's follow-up, not a wait
 
 Under Principle XI a fix is demonstrated by CI re-running on the
-**squash-merge commit on `main`**, not on the PR branch. That run is
-independent of this pass, and **the pass does not wait for it**. `main`'s
+**squash-merge commit on `main`**, not on the PR branch, with every required
+status check green. That run is independent of this pass, and **the pass does not wait for it**. `main`'s
 push-triggered workflows (CI, Full Suite, CodeQL, the system-libraries
 canary) take up to about an hour. The maintainer checks the result later and
 comes back if anything fails.
