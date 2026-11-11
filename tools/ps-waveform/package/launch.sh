@@ -7,7 +7,7 @@
 # channel 1. Change the defaults here if your setup differs.
 : "${AETHER_PS_DAXIQ:=1}"
 : "${AETHER_PS_DAXIQ_RATE:=48000}"
-: "${AETHER_PS_PEAK:=0.8}"
+: "${AETHER_PS_PEAK:=0.7}"
 export AETHER_PS_DAXIQ AETHER_PS_DAXIQ_RATE AETHER_PS_PEAK
 case "$0" in
   */*) dir=${0%/*} ;;

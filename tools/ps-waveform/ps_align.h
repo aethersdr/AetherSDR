@@ -33,7 +33,15 @@ void ps_align_destroy(ps_align* a);
 // sample at 24 kHz. Returns the delay in samples, or -1 when the
 // correlation peak is not clear enough to trust. n must exceed the largest
 // delay by at least 4096 samples.
-double ps_align_estimate_delay(const ps_align* a, const double* tx, const double* rx, int n);
+double ps_align_estimate_delay(ps_align* a, const double* tx, const double* rx, int n);
+
+// The normalized envelope correlation behind the last delay estimate, 0..1.
+double ps_align_estimate_corr(const ps_align* a);
+
+// How well the pairs from the last ps_align_push() match: the normalized
+// complex correlation of feedback against reference, 0..1. It stays near 1
+// with the right delay and drops toward 0 with a wrong one.
+double ps_align_coherence(const ps_align* a);
 
 // Delays below PS_ALIGN_MIN_DELAY samples are rounded to whole samples: the
 // fractional interpolator needs that much reference ahead of its output.

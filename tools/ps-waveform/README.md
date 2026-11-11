@@ -17,7 +17,7 @@ their pointers and locks.
 |---|---|
 | `ps_core.[ch]` | Wraps WDSP's calibration (`pscc`) and correction (`xiqc`) |
 | `ps_align.[ch]` | Lines the feedback up with the reference: loop delay to a hundredth of a sample, and a slow tracker for the NCO offset between them |
-| `ps_waveform.c` | The waveform: radio API, VITA-49, USB modulator and demodulator, DAX IQ feedback; `selftest` is the CTest `ps_waveform_selftest` |
+| `ps_waveform.c` | The waveform: radio API, VITA-49, USB modulator and demodulator, DAX IQ feedback; `selftest` is the CTest `ps_waveform_selftest`, which also runs the whole transmit loop through the waveform against an amplifier model |
 | `ps_sim.c` | Closed loop against a PA model; the CTests `ps_waveform_sim_test` and `ps_waveform_sim_bandwidth_limit_test` |
 | `build.py`, `package/` | Builds `AetherPS.ssdr_waveform` with an ARMv7 (FLEX-6000) and an arm64 (FLEX-8000) binary |
 
@@ -65,7 +65,8 @@ radio exchanges 24 kHz I/Q with it. With PS selected on a slice:
   on the coupler's receive input is mixed to the transmit frequency,
   decimated to 24 kHz, and lined up with what was sent. The loop delay is
   found again on each transmission (the first ~0.75 s), then the
-  calibration runs.
+  calibration runs. If the pairs stop matching (coherence under 0.3 for 8
+  blocks), it finds the delay again rather than calibrating on bad pairs.
 
 It never keys the radio. It only answers the radio's own transmit stream.
 

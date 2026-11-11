@@ -34,6 +34,8 @@ struct ps_align {
     double taps[PS_ALIGN_TAPS];
     double phase;     // feedback de-rotation, radians
     double step;      // de-rotation per sample, radians
+    double est_corr;  // correlation behind the last delay estimate
+    double coherence; // match of the last pushed block
 };
 
 // Taps that read x(t0 - frac) from x[t0 - 7 .. t0 + 8] (tap k reads t0 - 7 + k).
@@ -105,8 +107,9 @@ static double env_corr(const double* etx, const double* erx, int span, double la
     return (ptx > 0 && prx > 0) ? s / sqrt(ptx * prx) : 0;
 }
 
-double ps_align_estimate_delay(const ps_align* a, const double* tx, const double* rx, int n)
+double ps_align_estimate_delay(ps_align* a, const double* tx, const double* rx, int n)
 {
+    a->est_corr = 0;
     if (n - a->max_delay < PS_ALIGN_MIN_SPAN)
         return -1;
     double* etx = malloc(sizeof(double) * (size_t)n);
@@ -194,6 +197,7 @@ double ps_align_estimate_delay(const ps_align* a, const double* tx, const double
         }
     }
     double result = -1;
+    a->est_corr = bestr;
     if (bestr >= PS_ALIGN_MIN_CORR) {
         result = best;
         double fbest = bestr;
@@ -227,6 +231,9 @@ void ps_align_set_delay(ps_align* a, double delay)
 
 double ps_align_delay(const ps_align* a) { return a->delay + a->frac; }
 
+double ps_align_estimate_corr(const ps_align* a) { return a->est_corr; }
+double ps_align_coherence(const ps_align* a) { return a->coherence; }
+
 void ps_align_restart(ps_align* a)
 {
     a->count = 0;
@@ -244,7 +251,7 @@ int ps_align_push(ps_align* a, const double* tx, const double* rx, int n,
     if (n <= 0 || n + a->delay >= a->history)
         return 0;
     int valid = 0;
-    double zr = 0, zi = 0;
+    double zr = 0, zi = 0, ptx = 0, prx = 0;
     for (int i = 0; i < n; i++) {
         // Store the new reference sample first: with zero delay the pair is
         // the sample that just arrived.
@@ -286,8 +293,11 @@ int ps_align_push(ps_align* a, const double* tx, const double* rx, int n,
         // de-rotated feedback against the reference.
         zr += ri * ti + rq * tq;
         zi += rq * ti - ri * tq;
+        ptx += ti * ti + tq * tq;
+        prx += ri * ri + rq * rq;
     }
     a->count += n;
+    a->coherence = (ptx > 0 && prx > 0) ? hypot(zr, zi) / sqrt(ptx * prx) : 0;
     if (valid > 0 && (zr != 0 || zi != 0)) {
         double err = atan2(zi, zr);
         a->phase += PS_ALIGN_KP * err;

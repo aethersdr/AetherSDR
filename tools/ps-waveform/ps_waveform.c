@@ -23,7 +23,7 @@
 //   AETHER_PS_RADIO        radio address (default SSDR_RADIO_ADDRESS, else 127.0.0.1)
 //   AETHER_PS_DAXIQ        DAX IQ channel of the coupler's panadapter (default 1)
 //   AETHER_PS_DAXIQ_RATE   its rate, a multiple of 24000 (default 48000)
-//   AETHER_PS_PEAK         transmit peak amplitude before correction (default 0.8)
+//   AETHER_PS_PEAK         transmit peak amplitude before correction (default 0.7)
 //   AETHER_PS_MIC_GAIN     mic gain (default 1.0)
 //   AETHER_PS_MAX_DELAY_MS longest loop delay to search (default 400)
 //   AETHER_PS_CORRECT      0 runs the waveform with the correction off (default 1)
@@ -62,6 +62,12 @@
 #define INFO_CLASS 0x534Cu
 #define CLASS_AUDIO_24K 0x03E3u  // audio, float, 24 kHz, 32-bit, 2 per frame
 #define FIFO_LEN (RATE * 2)
+#define CLASS_FLOAT_BIT 0x0200u  // packet class: 32-bit float samples
+// The delay is found again after this many consecutive blocks whose pairs
+// don't match, e.g. after an estimate taken on a two-tone, whose envelope
+// repeats every 1/(tone spacing) and can lock a wrong lag.
+#define WEAK_COHERENCE 0.3
+#define WEAK_BLOCKS 8
 
 static volatile sig_atomic_t g_stop;
 static void on_term(int sig) { (void)sig; g_stop = 1; }
@@ -167,9 +173,9 @@ static float word_float(const unsigned char* p)
     return f;
 }
 
-// Builds a 24 kHz float pair packet like the waveform SDK's
+// Builds a float-pair packet of class cls like the waveform SDK's
 // vita_send_data_packet: UTC + real-time timestamps from the system clock.
-static int vita_build(unsigned char* out, uint32_t sid, int count, const float* pairs, int n)
+static int vita_build(unsigned char* out, uint32_t sid, unsigned cls, int count, const float* pairs, int n)
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -180,7 +186,7 @@ static int vita_build(unsigned char* out, uint32_t sid, int count, const float* 
     put32(out, w0);
     put32(out + 4, sid);
     put32(out + 8, FLEX_OUI);
-    put32(out + 12, INFO_CLASS << 16 | CLASS_AUDIO_24K);
+    put32(out + 12, INFO_CLASS << 16 | cls);
     put32(out + 16, (uint32_t)ts.tv_sec);
     uint64_t ps = (uint64_t)ts.tv_nsec * 1000u;
     put32(out + 20, (uint32_t)(ps >> 32));
@@ -338,6 +344,12 @@ typedef struct {
     double* acq_rx;
     int acq_n, acq_len, aligned;
     int feedback_ok;              // the DAX IQ pan covers this transmission
+    int weak_blocks;              // consecutive blocks of poor coherence
+    int daxiq_format_logged;
+    struct sockaddr_in radio;     // where VITA packets go
+    // Selftest only: sees every transmit block the waveform sends.
+    void (*tx_tap)(void* ctx, const float* iq, int n);
+    void* tap_ctx;
     double peak, gain;
     int correct, daxiq_ch, daxiq_rate;
     double last_report;
@@ -382,6 +394,7 @@ static void start_feedback(wf_t* w)
     w->ref.n = w->fbk.n = 0;
     w->acq_n = 0;
     w->aligned = 0;
+    w->weak_blocks = 0;
     ps_align_restart(w->align);
     logf_("transmit: feedback shift %.0f Hz (tx %.6f MHz, pan %.6f MHz)", shift, w->tx_mhz, w->pan_mhz);
 }
@@ -443,7 +456,9 @@ static void api_line(wf_t* w, char* l)
             logf_("correction reset on request");
             ok = 1;
         }
-        api_send(w, ok ? "waveform response %d|0" : "waveform response %d|50000016", seq);
+        // The SDK answers a command its callback refuses with 0x50000000 + the
+        // callback's code; 1 is "not handled".
+        api_send(w, ok ? "waveform response %d|0" : "waveform response %d|50000001", seq);
         return;
     }
     if (l[0] != 'S')
@@ -483,15 +498,11 @@ static void api_line(wf_t* w, char* l)
 static void send_pairs(wf_t* w, uint32_t sid, int* count, const float* pairs, int n)
 {
     unsigned char pkt[28 + 4 * MAX_SAMPLES];
-    struct sockaddr_in to = { .sin_family = AF_INET, .sin_port = htons(VITA_PORT) };
-    const char* addr = getenv("AETHER_PS_RADIO");
-    if (!addr || !*addr)
-        addr = getenv("SSDR_RADIO_ADDRESS");
-    inet_pton(AF_INET, addr && *addr ? addr : "127.0.0.1", &to.sin_addr);
     for (int off = 0; off < n; off += MAX_SAMPLES / 2) {
         int m = n - off < MAX_SAMPLES / 2 ? n - off : MAX_SAMPLES / 2;
-        int len = vita_build(pkt, sid, (*count)++, pairs + 2 * off, m);
-        sendto(w->udp, pkt, (size_t)len, 0, (struct sockaddr*)&to, sizeof to);
+        int len = vita_build(pkt, sid, CLASS_AUDIO_24K, (*count)++, pairs + 2 * off, m);
+        if (w->udp >= 0)
+            sendto(w->udp, pkt, (size_t)len, 0, (struct sockaddr*)&w->radio, sizeof w->radio);
     }
 }
 
@@ -510,17 +521,33 @@ static void calibrate(wf_t* w)
             if (w->acq_n == w->acq_len) {
                 double d = ps_align_estimate_delay(w->align, w->acq_tx, w->acq_rx, w->acq_n);
                 if (d < 0) {
-                    logf_("no delay lock yet (speak or send a two-tone)");
+                    logf_("no delay lock yet (correlation %.2f): speak, a varying envelope finds it",
+                          ps_align_estimate_corr(w->align));
                     w->acq_n = 0;
                 } else {
                     ps_align_set_delay(w->align, d);
+                    ps_align_restart(w->align);
                     w->aligned = 1;
-                    logf_("loop delay %.2f samples (%.2f ms)", d, d * 1000.0 / RATE);
+                    w->weak_blocks = 0;
+                    logf_("loop delay %.2f samples (%.2f ms), correlation %.2f",
+                          d, d * 1000.0 / RATE, ps_align_estimate_corr(w->align));
                 }
             }
             continue;
         }
         int v = ps_align_push(w->align, tx, rx, BLOCK, atx, arx);
+        if (v > 0 && ps_align_coherence(w->align) < WEAK_COHERENCE) {
+            if (++w->weak_blocks >= WEAK_BLOCKS) {
+                logf_("feedback stopped matching (coherence %.2f): finding the delay again",
+                      ps_align_coherence(w->align));
+                w->aligned = 0;
+                w->acq_n = 0;
+                w->weak_blocks = 0;
+                ps_align_restart(w->align);
+            }
+            continue;   // don't calibrate on pairs that don't match
+        }
+        w->weak_blocks = 0;
         ps_core_calibrate(w->core, atx, arx, v);
     }
 }
@@ -531,6 +558,12 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
     if (!vita_parse(p, n, &v))
         return;
     if (v.sid == w->daxiq_sid && w->daxiq_sid) {
+        if (!(v.cls & CLASS_FLOAT_BIT)) {
+            if (!w->daxiq_format_logged)
+                logf_("DAX IQ arrives as class 0x%04x, not float samples: feedback off", v.cls);
+            w->daxiq_format_logged = 1;
+            return;
+        }
         if (!w->keyed || w->active_slice < 0 || !w->feedback_ok)
             return;
         for (int k = 0; k + 1 < v.words; k += 2) {
@@ -571,10 +604,15 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
             }
             out[2 * k] = (float)i;
             out[2 * k + 1] = (float)q;
+            // The reference is what the radio is given, after this clip:
+            // that is the amplifier's real input. AETHER_PS_PEAK (0.7)
+            // leaves 3 dB for the correction to expand into before it.
             if (w->keyed && w->feedback_ok)
                 fifo_push(&w->ref, i, q);
         }
         send_pairs(w, v.sid, &w->tx_count, out, pairs);
+        if (w->tx_tap)
+            w->tx_tap(w->tap_ctx, out, pairs);
         if (w->keyed && w->feedback_ok)
             calibrate(w);
     } else {
@@ -593,7 +631,19 @@ static int wf_init(wf_t* w)
 {
     memset(w, 0, sizeof *w);
     w->active_slice = -1;
-    w->peak = env_d("AETHER_PS_PEAK", 0.8);
+    w->udp = -1;
+    w->radio.sin_family = AF_INET;
+    w->radio.sin_port = htons(VITA_PORT);
+    const char* addr = getenv("AETHER_PS_RADIO");
+    if (!addr || !*addr)
+        addr = getenv("SSDR_RADIO_ADDRESS");
+    if (!addr || !*addr)
+        addr = "127.0.0.1";
+    if (inet_pton(AF_INET, addr, &w->radio.sin_addr) != 1) {
+        logf_("bad radio address %s", addr);
+        return 0;
+    }
+    w->peak = env_d("AETHER_PS_PEAK", 0.7);
     w->gain = env_d("AETHER_PS_MIC_GAIN", 1.0);
     w->correct = (int)env_d("AETHER_PS_CORRECT", 1);
     w->daxiq_ch = (int)env_d("AETHER_PS_DAXIQ", 1);
@@ -618,6 +668,8 @@ static int wf_init(wf_t* w)
 }
 
 /* ----------------------------------------------------------- selftest */
+
+static int selftest_loop(void);
 
 static int selftest(void)
 {
@@ -679,7 +731,7 @@ static int selftest(void)
     // VITA: build then parse round-trips stream, class, count and samples.
     float pairs[6] = { 0.5f, -0.25f, 1.0f, 0.0f, -1.0f, 0.125f };
     unsigned char pkt[28 + 4 * 6];
-    int len = vita_build(pkt, 0x84000001u, 5, pairs, 3);
+    int len = vita_build(pkt, 0x84000001u, CLASS_AUDIO_24K, 5, pairs, 3);
     vita_t v;
     CHECK(len == 28 + 24 && vita_parse(pkt, len, &v));
     CHECK(v.sid == 0x84000001u && v.cls == CLASS_AUDIO_24K && v.count == 5 && v.words == 6);
@@ -721,8 +773,139 @@ static int selftest(void)
     CHECK(got > 0 && hypot(dc_r, dc_i) / got > 0.95 && pw / got > 0.9);
 
     close(w.api);
+    ps_core_destroy(w.core);
+    w.core = NULL;
+    fails += selftest_loop();
     printf(fails ? "selftest FAILED (%d)\n" : "selftest passed\n", fails);
     return fails ? 1 : 0;
+#undef CHECK
+}
+
+
+/* The whole transmit loop through on_packet: mic packets in, the waveform's
+ * I/Q through an amplifier model, back as 48 kHz DAX IQ packets with a loop
+ * delay and the pan 1 kHz above the carrier. The waveform has to find the
+ * delay, keep the pairs coherent, and complete fits. */
+#define LOOP_DELAY 1234        // samples at 48 kHz on the DAX IQ side
+typedef struct {
+    wf_t* w;
+    double* line;              // delayed PA output at 48 kHz, interleaved
+    int pos, len, count;
+    double nco, last_i, last_q;
+    float pkt[2 * 128];
+    int npkt;
+} loop_t;
+
+static void loop_emit(loop_t* l, double i, double q)
+{
+    // delay, then shift by -1 kHz: the pan is centred 1 kHz above the carrier
+    int r = l->pos;
+    double di = l->line[2 * r], dq = l->line[2 * r + 1];
+    l->line[2 * r] = i;
+    l->line[2 * r + 1] = q;
+    l->pos = (l->pos + 1) % l->len;
+    double c = cos(l->nco), s = sin(l->nco);
+    l->nco = fmod(l->nco - 2 * M_PI * 1000.0 / 48000, 2 * M_PI);
+    l->pkt[2 * l->npkt] = (float)(0.6 * (di * c - dq * s));
+    l->pkt[2 * l->npkt + 1] = (float)(0.6 * (di * s + dq * c));
+    if (++l->npkt == 128) {
+        unsigned char p[28 + 4 * 256];
+        int len = vita_build(p, l->w->daxiq_sid, 0x02E4u, l->count++, l->pkt, 128);
+        on_packet(l->w, p, len);
+        l->npkt = 0;
+    }
+}
+
+static void loop_tap(void* ctx, const float* iq, int n)
+{
+    loop_t* l = ctx;
+    for (int k = 0; k < n; k++) {
+        double i = iq[2 * k], q = iq[2 * k + 1], a = hypot(i, q);
+        double g = a > 0 ? 1.0 / pow(1.0 + pow(a, 4), 0.25) : 1;   // Rapp p=2
+        double ph = 0.25 * a * a / (1 + a * a);                      // AM/PM
+        double yi = g * (i * cos(ph) - q * sin(ph)), yq = g * (i * sin(ph) + q * cos(ph));
+        // to 48 kHz by linear interpolation
+        loop_emit(l, 0.5 * (l->last_i + yi), 0.5 * (l->last_q + yq));
+        loop_emit(l, yi, yq);
+        l->last_i = yi;
+        l->last_q = yq;
+    }
+}
+
+static int selftest_loop(void)
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
+    wf_t w;
+    CHECK(wf_init(&w));
+    w.api = open("/dev/null", O_WRONLY);
+    loop_t l = { .w = &w, .len = LOOP_DELAY };
+    l.line = calloc(2 * LOOP_DELAY, sizeof(double));
+    w.tx_tap = loop_tap;
+    w.tap_ctx = &l;
+    w.seq_create = 3;
+    w.seq_daxiq = 4;
+    char r1[] = "R3|0|tx_stream_in_id=0x84000001 rx_stream_in_id=0x84000000";
+    char r2[] = "R4|0|0x20000001";
+    char s1[] = "S1|slice 1 mode=PS RF_frequency=14.200000";
+    char s2[] = "S1|display pan 0x40000001 center=14.201000 daxiq_channel=1";
+    char s3[] = "S1|interlock state=TRANSMITTING";
+    api_line(&w, r1);
+    api_line(&w, r2);
+    api_line(&w, s1);
+    api_line(&w, s2);
+    api_line(&w, s3);
+    CHECK(w.feedback_ok);
+
+    unsigned seed = 7;
+    double lp = 0, env = 0.5;
+    float mic[2 * 128];
+    unsigned char p[28 + 4 * 256];
+    int count = 0;
+    struct timespec t0, now;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (long k = 0; k < 24000L * 30; k += 128) {
+        for (int j = 0; j < 128; j++) {
+            // Speech-like: band noise with a slowly wandering envelope.
+            seed = seed * 1664525u + 1013904223u;
+            double u = ((seed >> 8) / 16777216.0) - 0.5;
+            lp = 0.7 * lp + 0.3 * u;
+            if (((k + j) % 2400) == 0) {
+                seed = seed * 1664525u + 1013904223u;
+                env = 0.2 + 0.8 * ((seed >> 8) / 16777216.0);
+            }
+            mic[2 * j] = mic[2 * j + 1] = (float)(4.0 * env * lp);
+        }
+        int len = vita_build(p, 0x84000001u, CLASS_AUDIO_24K, count++, mic, 128);
+        on_packet(&w, p, len);
+        // Let a running fit finish, as real time would.
+        for (int wait = 0; wait < 2000 && ps_core_state(w.core) == 6 && !ps_core_swap_pending(w.core); wait++) {
+            extern void pscc(int, int, double*, double*);
+            double none[2] = { 0, 0 };
+            pscc(0, 0, none, none);
+            struct timespec d = { 0, 500000 };
+            nanosleep(&d, NULL);
+        }
+        if (ps_core_fits(w.core) >= 3)
+            break;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (now.tv_sec - t0.tv_sec > 40)
+            break;
+    }
+    // 1234 samples at 48 kHz, plus the feedback decimator's half length,
+    // seen at 24 kHz.
+    double want = LOOP_DELAY / 2.0 + (TAPS - 1) / 4.0;
+    CHECK(w.aligned);
+    CHECK(fabs(ps_align_delay(w.align) - want) < 2.0);
+    CHECK(ps_align_estimate_corr(w.align) > 0.8);
+    CHECK(ps_align_coherence(w.align) > 0.8);
+    CHECK(ps_core_fits(w.core) >= 1);
+    printf("loop: delay %.2f (want ~%.2f), correlation %.2f, coherence %.2f, fits %d, correcting %d\n",
+           ps_align_delay(w.align), want, ps_align_estimate_corr(w.align), ps_align_coherence(w.align),
+           ps_core_fits(w.core), ps_core_correcting(w.core));
+    close(w.api);
+    free(l.line);
+    return fails;
 #undef CHECK
 }
 
