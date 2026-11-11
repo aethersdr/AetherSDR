@@ -4,8 +4,10 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
+#include <QPalette>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QTextCharFormat>
@@ -148,6 +150,9 @@ CopyAssistPanel::CopyAssistPanel(QWidget* parent)
     m_text->setObjectName(QStringLiteral("CopyAssistTranscript"));
     m_text->setAccessibleName(tr("Copy Assist transcript"));
     m_text->setReadOnly(true);
+    // The live preview rewrites the tail twice a second; with undo on, every
+    // rewrite would be kept for an undo the read-only view never offers.
+    m_text->setUndoRedoEnabled(false);
     m_text->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_text->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_text->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
@@ -369,6 +374,7 @@ void CopyAssistPanel::appendText(const QString& text, float confidence)
     if (trimmed.isEmpty()) {
         return;
     }
+    deletePreviewTail();
     m_text->moveCursor(QTextCursor::End);
     // Each appendText is one utterance, emitted when the VAD ends it on silence.
     // With newline-on-silence on, start it on a fresh line (skip for the very
@@ -382,6 +388,93 @@ void CopyAssistPanel::appendText(const QString& text, float confidence)
                            .arg(colorForConfidence(confidence), QString::number(m_fontPx),
                                 trimmed.toHtmlEscaped()));
     m_text->moveCursor(QTextCursor::End);
+    m_committedEnd = m_text->document()->characterCount() - 1;
+    if (!m_preview.empty()) {
+        renderPreviewTail();
+    }
+}
+
+void CopyAssistPanel::markPreviewDone(quint64 segmentId)
+{
+    m_preview.erase(m_preview.begin(), m_preview.upper_bound(segmentId));
+    m_previewHighWater = m_havePreviewHighWater ? std::max(m_previewHighWater, segmentId)
+                                                : segmentId;
+    m_havePreviewHighWater = true;
+}
+
+void CopyAssistPanel::deletePreviewTail()
+{
+    // A separate cursor: moving the widget's own cursor would clear the
+    // operator's selection on every preview update.
+    QTextCursor tail(m_text->document());
+    tail.setPosition(m_committedEnd);
+    tail.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+    if (tail.hasSelection()) {
+        tail.removeSelectedText();
+    }
+}
+
+void CopyAssistPanel::renderPreviewTail()
+{
+    QScrollBar* bar = m_text->verticalScrollBar();
+    const bool wasAtBottom = bar->value() >= bar->maximum();
+
+    deletePreviewTail();
+    const QString grey = m_text->palette().color(QPalette::PlaceholderText).name();
+    QTextCursor tail(m_text->document());
+    for (const auto& entry : m_preview) {
+        tail.movePosition(QTextCursor::End);
+        if (m_newlineOnSilence && !m_text->document()->isEmpty()) {
+            tail.insertHtml(QStringLiteral("<br>"));
+        }
+        tail.insertHtml(QStringLiteral("<span style=\"color:%1; font-style:italic; "
+                                       "font-size:%2px\">%3</span> ")
+                            .arg(grey, QString::number(m_fontPx), entry.second.toHtmlEscaped()));
+    }
+
+    if (wasAtBottom) {
+        bar->setValue(bar->maximum());
+    }
+}
+
+void CopyAssistPanel::setPreviewText(quint64 segmentId, const QString& text)
+{
+    if (m_havePreviewHighWater && segmentId <= m_previewHighWater) {
+        return;
+    }
+    const QString trimmed = text.trimmed();
+    if (trimmed.isEmpty()) {
+        if (m_preview.erase(segmentId) == 0) {
+            return;
+        }
+    } else {
+        m_preview[segmentId] = trimmed;
+    }
+    renderPreviewTail();
+}
+
+void CopyAssistPanel::commitText(quint64 segmentId, const QString& text, float confidence)
+{
+    markPreviewDone(segmentId);
+    if (text.trimmed().isEmpty()) {
+        renderPreviewTail();
+        return;
+    }
+    appendText(text, confidence);
+}
+
+void CopyAssistPanel::discardPreview(quint64 segmentId)
+{
+    markPreviewDone(segmentId);
+    renderPreviewTail();
+}
+
+void CopyAssistPanel::resetPreview()
+{
+    deletePreviewTail();
+    m_preview.clear();
+    m_havePreviewHighWater = false;
+    m_previewHighWater = 0;
 }
 
 void CopyAssistPanel::setNewlineOnSilence(bool on)
@@ -408,6 +501,10 @@ void CopyAssistPanel::setContextCarryAvailable(bool available)
 void CopyAssistPanel::clearText()
 {
     m_text->clear();
+    m_preview.clear();
+    m_committedEnd = 0;
+    m_havePreviewHighWater = false;
+    m_previewHighWater = 0;
 }
 
 } // namespace AetherSDR

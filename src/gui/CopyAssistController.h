@@ -137,6 +137,7 @@ private:
     void reconcileAfterGpuFallback();
     void buildEngine();  // (re)create the engine+tap for the current backend
     void applyTuning();  // push saved VAD tuning into the engine
+    void applyLivePreview(); // switch the engine's live preview to the saved setting
     void abandonEnable(const QString& reason);
     void requestEnable(); // defer local Whisper until async GPU discovery finishes
     void beginEnable();

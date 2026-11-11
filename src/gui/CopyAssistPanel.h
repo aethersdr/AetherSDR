@@ -3,6 +3,8 @@
 #include <QString>
 #include <QWidget>
 
+#include <map>
+
 class QHBoxLayout;
 class QLabel;
 class QProgressBar;
@@ -78,6 +80,17 @@ public:
 public slots:
     // Append one transcribed utterance, colored by confidence in [0, 1].
     void appendText(const QString& text, float confidence);
+    // Provisional grey text for a segment still being decoded; replaces any
+    // earlier text for the same id and is ignored once that id was committed or
+    // discarded. Empty text removes the block.
+    void setPreviewText(quint64 segmentId, const QString& text);
+    // Append the segment's final text, dropping its (and any older) grey text.
+    void commitText(quint64 segmentId, const QString& text, float confidence);
+    // The segment produced no final text: drop its (and any older) grey text.
+    void discardPreview(quint64 segmentId);
+    // The engine restarted its segment ids at 0: drop all grey text and the
+    // record of resolved ids. The committed transcript stays.
+    void resetPreview();
     void clearText();
 
 signals:
@@ -101,7 +114,17 @@ private:
                              const QString& accessibleName, int lo, int hi, int value,
                              QLabel** valueLabelOut);
 
+    // The document is [committed content][grey preview tail]; m_committedEnd is
+    // the character position where the tail starts.
+    void markPreviewDone(quint64 segmentId);
+    void deletePreviewTail();
+    void renderPreviewTail();
+
     QTextEdit* m_text = nullptr;
+    std::map<quint64, QString> m_preview;
+    int m_committedEnd = 0;
+    bool m_havePreviewHighWater = false;
+    quint64 m_previewHighWater = 0; // highest id committed or discarded
     QPushButton* m_enable = nullptr;   // checkable: "Enable" / "Disable"
     QPushButton* m_newline = nullptr;  // checkable ↵: newline on each silence
     QPushButton* m_contextCarry = nullptr; // checkable: carry context across segments

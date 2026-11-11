@@ -75,6 +75,11 @@ launch** button appear under **Compute** (see *GPU acceleration*).
     blank line) is written when ASR starts, whenever you retune, and at the top
     of each new day's file — so every block of decoded text is labeled with the
     frequency it came from.
+- **Show a live preview while the model decodes (Apple speech recognition)** — **off by default, macOS 26+**. Gray provisional text from
+  Apple's on-device `SpeechTranscriber` appears ~0.6 s after speech and is
+  replaced, segment by segment, by the selected backend's final text. Works
+  with every backend; the transcript file gets finals only. Dimmed, with the
+  reason, where unavailable. See *Live preview* under Architecture.
 - **Transcribe from unprocessed audio (bypasses NR and RX effects)** — **off by
   default**, and a fresh profile transcribes after noise reduction exactly as
   every earlier build did. Ticked, the recogniser is fed the receive audio from
@@ -296,6 +301,54 @@ AudioEngine (aethercore, 24 kHz post-NR RX, or pre-NR when opted in)
   today; over the aetherd wire later — the thin UI never links whisper).
 - All inference + resampling + verification run off the audio/UI threads.
 
+### Live preview
+
+The backend still produces every final word. A streaming recogniser only fills
+the wait for a segment to close:
+
+```
+AsrWorker (ASR thread)                         AsrEngine (main thread)
+  pcm16k ─▶ ILivePreview::feed(start = samplesFed)        ▲ previewResult (from the
+         ─▶ AsrSegmenter ─▶ segment N closes:             │  recogniser's own threads)
+              previewBlockClosed(N, endSample) ──────────▶ LivePreviewAssembler
+              ILivePreview::finalizeThrough(endSample)     │  block N = (end N-1, end N]
+              backend.transcribe(N) ─▶ segmentText(N) ───▶ resolve(N) ─▶ finalText(.., N)
+                                   or segmentDiscarded(N) ▶ resolve(N) ─▶ previewDiscarded(N)
+                                                           └▶ previewText(N, text)
+```
+
+- **Results never pass through the worker's queue.** A whisper decode blocks
+  the worker for a second or more; the recogniser emits on its own thread and
+  the signal queues straight to the engine (`asr_live_preview_engine_test`
+  pins this with a 1.5 s decode).
+- **Block N** is the audio between the ends of segments N-1 and N, keyed by
+  `AsrSegmenter::ClosedSegment::id`. The recogniser is finalised at every
+  segment close, so its text splits at the same edges, and the panel replaces
+  block N's gray text with segment N's final. A segment that yields nothing
+  removes its block.
+- **Forced finalisation every 10 s.** In weak signal Apple's end-of-utterance
+  detection may never fire; an utterance left open for minutes finalises
+  nearly empty. Measured on an off-air ragchew: unbounded streaming lost a
+  194 s stretch entirely (69.6% WER); with forced finals the longest stretch
+  without new text was 19 s.
+- **Why not stream the finals too.** On the same recording, every streaming
+  configuration finalised worse than decoding each 5 s window afresh (best
+  39.9% WER against 33.5% for Apple's own windowed decode, and 22.7% for
+  whisper large-v3-turbo). Longer windows did not help either engine. So the
+  preview supplies speed (first text 0.57 s median, 0.91 s p90) and the
+  backend keeps its accuracy.
+- **Generations.** A reset or Clear retires the session; results carry the
+  generation they were started under and stale ones are dropped.
+
+Apple's API is Swift-only. `src/asr/apple/AppleLivePreview.swift` exports a C
+interface (`AppleLivePreviewC.h`) that `AppleLivePreview.cpp` wraps as an
+`ILivePreview`. CMake compiles the Swift file with `swiftc` through a custom
+command (CMake's own Swift support needs the Ninja or Xcode generator), once
+per architecture, then `lipo`s the slices. Everything Swift-side is gated on
+macOS 26 at runtime, so the app's deployment floor is unchanged. Elsewhere
+`appleLivePreviewSupported()` is false and the setting is dimmed with the
+reason.
+
 ### Build flags
 
 | Flag | Default | Effect |
@@ -305,6 +358,7 @@ AudioEngine (aethercore, 24 kHz post-NR RX, or pre-NR when opted in)
 | `ENABLE_ASR_METAL` | ON (Apple) | Metal GPU backend (macOS). |
 | `REQUIRE_ASR_ONNX` | OFF | **Release guard** — fail configure if ONNX Runtime is missing (else VAD/speaker/classifier silently compile out). |
 | `REQUIRE_ASR_GPU` | OFF | **Release guard** — fail configure if no GPU backend (Vulkan/Metal) is enabled. |
+| `ENABLE_ASR_APPLE_LIVE_PREVIEW` | ON (Apple) | Build the Swift live-preview bridge. It runs on macOS 26+; older macOS gets the dimmed setting. |
 | `USE_SYSTEM_LIBWHISPER` | OFF | Link a distro libwhisper (**≥ 1.8.0**) via pkg-config instead of the vendored snapshot. |
 
 The ONNX features (Silero VAD, speaker labeling) and the signal classifier need
@@ -336,3 +390,10 @@ remote backend (mock endpoint), whisper linkage, speaker clustering
 `asr_speaker_embedder_test` (built only with ONNX Runtime; env-gated on a model +
 WAV(s)) validate the Silero VAD and the speaker embedder end-to-end. Real GPU/CPU inference is exercised by the env-gated
 `asr_whisper_backend_test` (`AETHER_ASR_TEST_MODEL` + `AETHER_ASR_TEST_PCM`).
+
+Live preview: `asr_live_preview_assembler_test` (block assignment and
+resolution, pure) and `asr_live_preview_engine_test` (feed timeline,
+finalisation at close, delivery during a slow decode, generations, off/unavailable),
+both with a fake recogniser. The real bridge is exercised by hand with
+`apple_live_preview_smoke <file.16k.wav> [seconds] [language]` (macOS 26+; a
+16 kHz mono float32 WAV), which prints every result and its timing.

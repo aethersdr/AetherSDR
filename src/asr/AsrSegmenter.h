@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -63,6 +64,12 @@ public:
         std::vector<float> samples;
         bool continuesPrevious = false;
         int overlapMs = 0;
+        // Consecutive from 0 after reset(), counting emitted segments only.
+        std::uint64_t id = 0;
+        // Position on the samplesFed() timeline: endSample is where the
+        // segment closed, startSample = endSample - samples.size().
+        std::int64_t startSample = 0;
+        std::int64_t endSample = 0;
     };
 
     AsrSegmenter() : AsrSegmenter(Config{}) {}
@@ -109,6 +116,10 @@ public:
     // backend's carried context so a real pause starts the next utterance clean.
     bool consumeLongGap();
 
+    // Samples fed since construction or reset(): the timeline that
+    // ClosedSegment positions and the live preview share.
+    std::int64_t samplesFed() const { return m_samplesFed; }
+
 private:
     int framesToSamples(int ms) const;
     // forceCap: true when this close is the maxSegmentMs cap firing mid-speech
@@ -131,6 +142,8 @@ private:
     bool m_pendingContinues = false; // next emitted segment was seeded with carried overlap audio
     int m_pendingOverlapMs = 0;      // ms of audio carried into that next segment (for its overlapMs)
     int m_longGapSamples = 0;       // Config::longGapMs in samples (0 = disabled)
+    std::int64_t m_samplesFed = 0;
+    std::uint64_t m_nextSegmentId = 0;
     int m_idleSilence = 0;          // contiguous silence samples while NOT in speech
     bool m_longGapFired = false;    // latched when the current idle gap crossed the threshold
     bool m_longGapPending = false;  // consumable one-shot for consumeLongGap()

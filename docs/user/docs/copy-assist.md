@@ -118,6 +118,19 @@ Noise-reduction artifacts can confuse the speech model more than noise does. On 
 - A real pause, **Clear**, or a retune starts fresh.
 - Context works with the whisper models only. It is grayed out on the sherpa-onnx and remote backends.
 
+### Live preview
+
+On macOS 26 and later, Copy Assist can show a quick first look at what is being said while the selected model is still waiting for its segment to finish. Turn on **Show a live preview while the model decodes (Apple speech recognition)** in Copy Assist Settings.
+
+- Gray italic text appears about half a second after each word is spoken.
+- When the model has decoded that stretch of audio, its text replaces the gray text and is colored by confidence as usual. A stretch is decoded when the speaker pauses (**Silence**) or when the **Buffer** fills, whichever comes first, so a shorter Buffer brings the colored text sooner.
+- The preview comes from Apple's on-device speech recognition. It is less accurate than the whisper models on noisy signals, so treat it as a first look. The colored text is the transcript; only it is saved to the transcript file.
+- It works with every model, including the sherpa-onnx and remote backends.
+- Audio never leaves the Mac. The first use may download Apple's speech model for your language; the status line says so while it does.
+- The preview follows the **Language** setting. **Auto** uses the Mac's system language.
+
+On other systems the setting is dimmed and says why.
+
 ### The Queue readout
 
 The status line shows **Queue: N s** — seconds of received audio not yet transcribed. It stays near zero when the engine keeps up and climbs (amber, then red) when it cannot, for example a large model on a Raspberry Pi.
@@ -152,6 +165,7 @@ The ⚙ button opens a small modeless settings window that can stay open while y
 | **Compute** | Which device runs the model: a GPU or the CPU. Shows **Detecting…** while GPU discovery runs in the background. |
 | **Language** | The spoken language to transcribe (multilingual models only). |
 | **Save transcript to a file** | Appends each finished utterance as a timestamped line. A date is inserted before the extension, so `net.txt` writes to `net-2026-07-21.txt` and rolls over daily. A frequency marker line is written when ASR starts, on every retune, and at the top of each day's file. |
+| **Show a live preview while the model decodes (Apple speech recognition)** | Off by default; macOS 26 and later. Shows gray provisional text from Apple's on-device speech recognition while the model decodes, then replaces it with the model's text (see [Live preview](#live-preview)). Applies immediately. |
 | **Transcribe from unprocessed audio (bypasses NR and RX effects)** | Off by default. Transcribes the receive audio before AetherSDR's noise reduction and RX effects instead of after them. What you hear is unchanged, and processing done by the radio itself still applies. On a noisy band the unprocessed audio has little level difference between speech and noise, so leave **Sens** high; Silero VAD rejects most real speech on a noisy HF signal. Switching starts the transcription over. |
 | **Use Silero VAD (ONNX)** | Replaces the built-in energy detector with the small Silero neural voice-activity model, which segments real speech far better in HF noise. Downloads on demand; **Browse…** lets you use your own `.onnx`. |
 | **Label speakers (A/B/C…)** | Tags each utterance with a speaker label (`[A] …`, `[B] …`) using a downloaded speaker-embedding model. **Match threshold** (0.00–1.00) sets how strict the matching is: higher splits voices more finely, lower merges them. Labels reset on retune or re-enable. |
@@ -212,6 +226,16 @@ The computer has no internet access, for example in an air-gapped shack.
 
 1. Copy a `ggml-*.bin` model file into the models folder by hand (on Linux, `~/.local/share/AetherSDR/models/`).
 2. Or choose **Custom model…** and point it at a whisper `ggml-*.bin` or `.gguf` file.
+
+### The live preview setting is dimmed
+
+The live preview needs macOS 26 or later on a Mac that supports Apple's on-device speech recognition. Hover the setting, or read its description with a screen reader, for the reason on your system. Copy Assist works normally without it.
+
+### The live preview shows nothing
+
+- The status line reports why, for example a language Apple's recognition does not support. Pick a supported **Language**, or use **Auto**.
+- On first use the status line may say the Apple speech model is downloading. Text appears once it finishes.
+- The preview only appears while Copy Assist is **Enabled** and audio is arriving.
 
 ## See also
 

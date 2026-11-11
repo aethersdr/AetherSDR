@@ -114,6 +114,22 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     logHint->setEnabled(false); // dimmed, informational
     form->addRow(QString(), logHint);
 
+    // Provisional grey text from Apple's on-device recogniser while the selected
+    // model waits for its segment to close. The controller sets availability.
+    m_livePreview = new QCheckBox(
+        tr("Show a live preview while the model decodes (Apple speech recognition)"), this);
+    m_livePreview->setObjectName(QStringLiteral("CopyAssistLivePreview"));
+    m_livePreviewToolTip = tr(
+        "Grey text appears within about half a second of speech and is replaced by the "
+        "selected model's text when each segment is decoded. The preview is less "
+        "accurate than the model and is only a first look. It uses Apple's on-device "
+        "speech recognition, so audio never leaves the Mac, and the first use may "
+        "download Apple's speech model.");
+    m_livePreview->setToolTip(m_livePreviewToolTip);
+    connect(m_livePreview, &QCheckBox::toggled, this,
+            &CopyAssistSettingsDialog::livePreviewToggled);
+    form->addRow(m_livePreview);
+
     // Where in the RX chain Copy Assist listens (RFC #4861). Unchecked is the
     // historical behaviour and the default: the recogniser hears what the
     // speaker plays. The operator's audio is unaffected either way.
@@ -415,6 +431,35 @@ void CopyAssistSettingsDialog::setNativeAudioRoute(bool native)
     } else {
         m_rawAudio->setToolTip(m_presentationAudioToolTip);
     }
+}
+
+void CopyAssistSettingsDialog::setLivePreviewChecked(bool on)
+{
+    // Seeding from the store must not echo back as an operator edit.
+    const QSignalBlocker block(m_livePreview);
+    m_livePreview->setChecked(on);
+}
+
+bool CopyAssistSettingsDialog::livePreviewChecked() const
+{
+    return m_livePreview->isChecked();
+}
+
+void CopyAssistSettingsDialog::setLivePreviewAvailable(bool available, const QString& reason)
+{
+    m_livePreview->setEnabled(available);
+    if (available) {
+        m_livePreview->setAccessibleDescription(QString());
+        m_livePreview->setToolTip(m_livePreviewToolTip);
+    } else {
+        m_livePreview->setAccessibleDescription(reason);
+        m_livePreview->setToolTip(m_livePreviewToolTip + QStringLiteral("\n\n") + reason);
+    }
+}
+
+QWidget* CopyAssistSettingsDialog::livePreviewControl() const
+{
+    return m_livePreview;
 }
 
 QWidget* CopyAssistSettingsDialog::rawAudioControl() const

@@ -696,6 +696,45 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- Live preview checkbox ---------------------------------------------
+    {
+        auto* box = dlg.findChild<QCheckBox*>(QStringLiteral("CopyAssistLivePreview"));
+        expect(box != nullptr && dlg.livePreviewControl() == box,
+               "the live-preview checkbox exists");
+        auto* raw = dlg.findChild<QCheckBox*>(QStringLiteral("CopyAssistRawAudio"));
+        auto* form = dlg.findChild<QFormLayout*>();
+        if (box != nullptr && raw != nullptr && form != nullptr) {
+            int liveRow = -1;
+            int rawRow = -1;
+            QFormLayout::ItemRole role = QFormLayout::SpanningRole;
+            form->getWidgetPosition(box, &liveRow, &role);
+            form->getWidgetPosition(raw, &rawRow, &role);
+            expect(liveRow >= 0 && rawRow == liveRow + 1,
+                   "live preview is the row directly before unprocessed-audio");
+
+            QSignalSpy liveSpy(&dlg, &CopyAssistSettingsDialog::livePreviewToggled);
+            dlg.setLivePreviewChecked(true);
+            expect(dlg.livePreviewChecked() && liveSpy.isEmpty(),
+                   "setLivePreviewChecked reflects state without emitting");
+            box->click();
+            expect(!dlg.livePreviewChecked() && liveSpy.count() == 1
+                       && liveSpy.last().at(0).toBool() == false,
+                   "clicking emits livePreviewToggled with the new state");
+
+            const QString baseTip = box->toolTip();
+            dlg.setLivePreviewAvailable(false, QStringLiteral("Needs macOS 26"));
+            expect(!box->isEnabled(), "unavailable disables the checkbox");
+            expect(box->accessibleDescription() == QStringLiteral("Needs macOS 26"),
+                   "the reason reaches a screen reader via accessibleDescription");
+            expect(box->toolTip().contains(QStringLiteral("Needs macOS 26")),
+                   "the reason is also in the tooltip");
+            dlg.setLivePreviewAvailable(true, QString());
+            expect(box->isEnabled() && box->accessibleDescription().isEmpty()
+                       && box->toolTip() == baseTip,
+                   "available re-enables it and clears the reason");
+        }
+    }
+
     dlg.resize(520, 360);
     app.processEvents();
     dlg.close();
