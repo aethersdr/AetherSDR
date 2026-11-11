@@ -1130,7 +1130,8 @@ void MainWindow::buildMenuBar()
     m_profilesMenu = menuBar()->addMenu("&Profiles");
     auto* profileMgrAct = m_profilesMenu->addAction("Profile Manager...");
     connect(profileMgrAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_profileManagerDialog, &m_radioModel);
+        showOrRaiseCanon(m_profileManagerDialog,
+                         [this] { return new ProfileManagerDialog(&m_radioModel, this); });
     });
     auto* profileImportExportAct = m_profilesMenu->addAction("Import/Export Profiles...");
     connect(profileImportExportAct, &QAction::triggered, this, [this] {
