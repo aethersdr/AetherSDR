@@ -3894,6 +3894,33 @@ void MainWindow::restoreNativeClientRect(const QString& role)
     }
 }
 
+void MainWindow::applyNonClientBandInsets()
+{
+    // The band is only lost under the expanded client area: with native chrome
+    // the frame is outside the window rect entirely, and on Windows 10
+    // nativeEvent's WM_NCCALCSIZE branch already claims it back.
+    QMargins insets;
+#ifdef Q_OS_WIN
+    if (windowFlags().testFlag(Qt::ExpandedClientAreaHint) && !isFullScreen()
+        && !WindowChrome::claimsWholeWindowAsClient(windowFlags(),
+                                                    QOperatingSystemVersion::current())) {
+        if (const HWND hwnd = reinterpret_cast<HWND>(winId())) {
+            const UINT dpi = GetDpiForWindow(hwnd);
+            const int band = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                           + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            insets = WindowChrome::nonClientBandInsets(band, devicePixelRatioF());
+        }
+    }
+#endif
+    if (contentsMargins() == insets) {
+        return;
+    }
+    // QMainWindow's layout honours the window's own margins, so this insets
+    // the central widget AND the status bar, leaving the title bar's row to
+    // TitleBar::updateChromeLayout().
+    setContentsMargins(insets);
+}
+
 void MainWindow::applyWindowsFrameColor()
 {
     // DWMWA_BORDER_COLOR exists from Windows 11 (build 22000). Windows 10 has
@@ -4005,6 +4032,18 @@ void MainWindow::showEvent(QShowEvent* event)
     // native window with Qt's own style set.
     applyWindowsCaptionStyles();
     applyWindowsFrameColor();
+    applyNonClientBandInsets();
+    // The band is per-monitor device pixels, so moving to a screen with
+    // different scaling changes it. windowHandle() only exists once shown,
+    // and setWindowFlags() re-creates it, so re-check the handle every show.
+    if (QWindow* handle = windowHandle(); handle && handle != m_bandInsetWindow) {
+        if (m_bandInsetWindow) {
+            disconnect(m_bandInsetWindow, nullptr, this, nullptr);
+        }
+        m_bandInsetWindow = handle;
+        connect(handle, &QWindow::screenChanged,
+                this, [this]() { applyNonClientBandInsets(); });
+    }
 #endif
 
     // AetherTX left open last session. toggleAetherialStrip() lazy-creates and
@@ -9858,12 +9897,6 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
         if (left) m_splitter->insertWidget(panIdx, m_appletPanel);
         else      m_splitter->addWidget(m_appletPanel);
     }
-
-    // Move the rail's outer gutter to the wall it is now docked to. Called
-    // even when the slot did not change, because the persisted side can
-    // already agree with the live slot on entry (alreadyOnWall); setDockedLeft
-    // itself no-ops when the side is unchanged.
-    m_appletPanel->setDockedLeft(left);
 
     // Re-apply stretch/collapse rules by widget identity (indices shifted).
     for (int i = 0; i < m_splitter->count(); ++i) {

@@ -308,13 +308,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     setFixedWidth(kRailWidth);
 
-    m_root = new QVBoxLayout(this);
-    // Every layout between this panel and the window edge is margin-free, so
-    // the rail reserves the gutter itself. setDockedLeft() moves it to the
-    // facing side; the panel is not always the splitter's last widget.
-    m_root->setContentsMargins(0, 0, kRailOuterGutter, 0);
-    m_root->setSpacing(0);
-    auto* root = m_root;
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
 
     // Top button bar: kFavoriteCount (5) favourite buttons in one row plus a
     // drawer toggle (▾/▴) revealing every other button; right-click opens the
@@ -2455,18 +2451,6 @@ void AppletPanel::openFavoritesPicker()
     m_favoritesPicker->show();
     m_favoritesPicker->raise();
     m_favoritesPicker->activateWindow();
-}
-
-void AppletPanel::setDockedLeft(bool left)
-{
-    // The gutter keeps applet content off the WINDOW edge, so it follows the
-    // wall the rail is docked to. The early return is safe because the
-    // constructor's margin (right) matches the m_dockedLeft default (false).
-    if (!m_root || m_dockedLeft == left)
-        return;
-    m_dockedLeft = left;
-    m_root->setContentsMargins(left ? kRailOuterGutter : 0, 0,
-                               left ? 0 : kRailOuterGutter, 0);
 }
 
 } // namespace AetherSDR

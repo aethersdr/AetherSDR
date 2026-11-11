@@ -88,14 +88,9 @@ class AppletPanel : public QWidget {
 public:
     explicit AppletPanel(QWidget* parent = nullptr);
 
-    // The outer gutter faces the wall the rail is docked to; the panel is not
-    // always the splitter's last widget.
-    void setDockedLeft(bool left);
-
-    static constexpr int kRailWidth       = AppletRailMetrics::kRailWidth;
-    static constexpr int kRailOuterGutter = AppletRailMetrics::kRailOuterGutter;
-    static constexpr int kRailScrollBarW  = AppletRailMetrics::kRailScrollBarW;
-    static constexpr int kStackedApplet   = AppletRailMetrics::kStackedApplet;
+    static constexpr int kRailWidth      = AppletRailMetrics::kRailWidth;
+    static constexpr int kRailScrollBarW = AppletRailMetrics::kRailScrollBarW;
+    static constexpr int kStackedApplet  = AppletRailMetrics::kStackedApplet;
 
     void setSlice(SliceModel* slice);
     void setAntennaList(const QStringList& ants);
@@ -498,8 +493,6 @@ private:
     QPushButton* m_agBtn{nullptr};
     QPushButton* m_ssBtn{nullptr};
     QVBoxLayout* m_stack{nullptr};
-    QVBoxLayout* m_root{nullptr};
-    bool m_dockedLeft{false};
     QScrollArea* m_scrollArea{nullptr};
     QTimer*      m_scrollDimTimer{nullptr};
     QWidget*     m_dropIndicator{nullptr};
