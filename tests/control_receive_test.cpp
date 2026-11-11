@@ -54,7 +54,9 @@ public:
     QJsonObject args;
     SliceFilterRequest::Origin filterOrigin{SliceFilterRequest::Origin::ModeNormalization};
     mutable int reads{0};
+    ReceiveControlPolicy policy{ReceiveControlPolicy::Optimistic};
     RadioCapabilities capabilities() const override { ++reads; return caps; }
+    ReceiveControlPolicy receiveControlPolicy() const override { return policy; }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override { connected = true; }
     void disconnectRadio() override { connected = false; }
@@ -115,10 +117,11 @@ struct Fixture {
     const ResourceAddress panAddress{QStringLiteral("panadapter"), QStringLiteral("radio-1"), pan};
     const ResourceAddress sessionAddress{QStringLiteral("radioSession"), {}, QStringLiteral("radio-1")};
 
-    Fixture()
+    explicit Fixture(ReceiveControlPolicy policy = ReceiveControlPolicy::Optimistic)
     {
         auto owned = std::make_unique<Backend>();
         backend = owned.get();
+        backend->policy = policy;
         using Authority = SliceFrequencyControl::Authority;
         backend->caps.canTransmit = false;
         backend->caps.receiveModeControl = ReceiveModeControl{Authority::Engine, {"USB", "LSB", "AM"}};
@@ -1020,6 +1023,33 @@ void cwPitchControl()
         f.reject(ReceiveOperation::CwPitch, f.params(ReceiveOperation::CwPitch), "capability.unavailable");
         check(f.target->available(ReceiveOperation::AudioGain),
               "the other receive controls stay offered without a pitch record");
+    }
+#ifdef AETHER_BACKEND_RTL
+    {
+        rtl::RtlSdrBackend rtl;
+        const auto pitch = rtl.capabilities().receiveCwPitchControl;
+        check(pitch && pitch->minimumHz == 100 && pitch->maximumHz == 6000 && pitch->stepHz == 10
+                  && rtl.receiveControlPolicy() == ReceiveControlPolicy::Confirmed,
+              "RTL declares a 100..6000 Hz pitch in 10 Hz steps and confirms it");
+    }
+#endif
+    {
+        // A confirmed backend (RTL's shape) is offered the verb on the same terms.
+        Fixture f(ReceiveControlPolicy::Confirmed);
+        check(f.radio.transmitModel().confirmsReceiveCwPitch()
+                  && f.service.capabilities(f.controller).value("capabilities").toArray()
+                         .contains(QStringLiteral("radioSession.setCwPitch")),
+              "a confirmed backend with the record takes the confirmed route and is offered pitch");
+        const int before = f.backend->intents;
+        check(f.send(ReceiveOperation::CwPitch, f.params(ReceiveOperation::CwPitch)).contains("result")
+                  && f.backend->intents == before + 1 && f.backend->method == "pitch"
+                  && f.backend->args.value("hz").toInt() == 700
+                  && f.radio.transmitModel().cwPitch() == 600,
+              "a confirmed backend gets one pitch intent and the model waits for its report");
+        f.reportPitch(700);
+        check(f.store.get(f.sessionAddress)->value.value("receiveObservation").toObject()
+                  .value("cwPitch").toObject().value("hz").toInt() == 700,
+              "the confirmed report updates the published observation");
     }
 }
 
