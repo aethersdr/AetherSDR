@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/PcmFrame.h"
+
 #include <QDateTime>
 #include <QMetaType>
 #include <QObject>
@@ -22,9 +24,9 @@ struct Data2gHeardBurst {
 // Receive-only Data2G monitor for AetherModem (RFC #7159, Stage 1).
 //
 // Takes the modem's continuous 24 kHz mono receive audio and reports every
-// Data2G burst heard on it. Decoding runs on this model's own thread; the
-// model itself lives on its owner's thread and all its signals are emitted
-// there.
+// Data2G burst heard on it. Decoding runs on a worker thread that exists
+// only while the monitor is enabled; the model itself lives on its owner's
+// thread and all its signals are emitted there.
 //
 // It owns no audio source, no sound device and no transmit authority, and
 // nothing reachable from it can key a radio.
@@ -36,8 +38,8 @@ class Data2gReceiveModel final : public QObject {
 public:
     // Audio held for the decoder, at most. A Data2G burst runs up to 16 s and
     // is decoded only once it has arrived whole, so the bound is in seconds
-    // of audio, not blocks. Past it the queue is dropped and the monitor
-    // starts clean (counted in Stats::overflows).
+    // of audio, not blocks. Past it the queued audio is dropped and the
+    // monitor starts clean (counted in Stats::overflows).
     static constexpr int kSampleRateHz = 24000;
     static constexpr int kMaxQueuedSeconds = 30;
 
@@ -57,13 +59,17 @@ public:
     bool isEnabled() const;
 
     // Mono float32 at kSampleRateHz, in blocks of any size. `discontinuity`
-    // means this block does not follow the previous one. Ignored while
-    // disabled.
+    // means this block comes from a different stream than the previous one:
+    // the audio not yet decoded is dropped, and a burst in progress and the
+    // sessions learned are forgotten. Bursts already decoded are still
+    // reported. Ignored while disabled.
     void feed(const QVector<float>& mono, bool discontinuity = false);
 
-    // The audio is no longer one stream (source change, slice change): drop
-    // what is queued, forget a burst in progress and the sessions learned.
-    void reset();
+    // The same, for a caller that knows where each block came from. The
+    // monitor resets only when `source` differs from the previous block's. A
+    // gap in one stream (a lost audio packet) is not a reset: the burst it
+    // lands in is lost, and the sessions learned so far are kept.
+    void feedFrom(const PcmStreamDescriptor& source, const QVector<float>& mono);
 
     Stats stats() const;
 

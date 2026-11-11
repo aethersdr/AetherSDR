@@ -56,9 +56,14 @@ never put on the include path of the rest of the tree.
   only tests include both.
 - The core reads a few `DATA2G_*` environment variables for tuning and
   debugging (`DATA2G_THREADS`, `DATA2G_DD` and others). AetherSDR sets none.
-- It runs one process-wide decode pool, `min(4, cores / 2)` threads by
-  default. The app leaves that default; `Data2gMonitor::setDecodeThreads()`
-  is there to change it, and the tests pin it to 2.
+- Left alone, the core keeps helper threads for the life of the process once
+  it has decoded anything: a decode pool of `min(4, cores / 2)` threads, and
+  pocketfft's own pool of one thread per CPU core. AetherSDR runs neither.
+  The app sets the decode pool to one thread
+  (`Data2gMonitor::setDecodeThreads(1)`), and the build defines
+  `POCKETFFT_NO_MULTITHREADING`. Measured on the monitor, decode time is the
+  same with and without them. The adapter's own test pins the pool to 2 so
+  the pooled path stays exercised.
 - Upstream calls the software beta and says the on-air protocol may still
   change. The protocol is versioned, so a mismatch is refused, not garbled.
 

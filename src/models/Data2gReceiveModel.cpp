@@ -15,8 +15,11 @@
 #include <atomic>
 #include <deque>
 #include <limits>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace AetherSDR {
 
@@ -27,14 +30,14 @@ struct Data2gReceiveModel::Impl {
         qint64 arrivedMs = 0;   // UTC, when the block's last sample reached feed()
     };
     struct Output {
-        quint64 generation = 0;
         QVector<Data2gHeardBurst> bursts;
         quint64 faults = 0;
     };
-    // Shared with the worker, which can outlive a queued call to the owner.
+    // One monitoring run, from enable to disable. Shared with the run's
+    // worker, which can outlive both the run and a queued call to the owner.
     struct State {
         QMutex mutex;
-        Data2gReceiveModel* owner = nullptr;   // null once the model is going
+        Data2gReceiveModel* owner = nullptr;   // null once the run is over
         std::atomic<quint64> generation{1};    // bumped by every reset
         std::atomic<bool> quit{false};
         std::deque<Input> input;
@@ -45,12 +48,13 @@ struct Data2gReceiveModel::Impl {
         static constexpr qsizetype kMaxFrames =
             static_cast<qsizetype>(kSampleRateHz) * kMaxQueuedSeconds;
 
-        // Called under mutex.
+        // Called under mutex. Audio not yet decoded belongs to the stream
+        // that just ended and goes. Bursts already decoded were heard whole
+        // and stay queued for the owner.
         void retire()
         {
             ++generation;
             input.clear();
-            output.clear();
             frames = 0;
         }
     };
@@ -61,6 +65,11 @@ struct Data2gReceiveModel::Impl {
         explicit Worker(std::shared_ptr<State> state)
             : m_state(std::move(state)), m_monitor(kSampleRateHz)
         {
+            // Decode on this thread alone: the core's pool would otherwise
+            // leave helper threads behind for the life of the process, for
+            // no measurable gain on the monitor.
+            static std::once_flag poolSized;
+            std::call_once(poolSized, [] { hfdata::Data2gMonitor::setDecodeThreads(1); });
             m_monitor.setStamp([this](double startSeconds) {
                 return startedAt(startSeconds)
                     .toString(QStringLiteral("HH:mm:ss'Z'")).toStdString();
@@ -87,6 +96,7 @@ struct Data2gReceiveModel::Impl {
                     m_monitor.reset();
                     m_generation = input.generation;
                     m_originMs = kNoOrigin;
+                    m_fed = 0;
                 }
                 if (input.generation != m_state->generation.load()) {
                     continue;   // queued before a reset that has since happened
@@ -100,9 +110,10 @@ struct Data2gReceiveModel::Impl {
         static constexpr qint64 kNoOrigin = std::numeric_limits<qint64>::min();
 
         // A burst is decoded only once it has arrived whole, and the queue
-        // can run behind, so "now" is late by the burst's length or more. The
-        // stream is anchored to the wall clock where it began instead, and a
-        // burst is timed by its position in the stream.
+        // can run behind, so "now" is late by the burst's length or more. A
+        // burst is timed by its position in the stream instead, and the
+        // stream is anchored to the wall clock by each block's arrival, so a
+        // gap in the audio moves the anchor and not the bursts after it.
         QDateTime startedAt(double startSeconds) const
         {
             if (m_originMs == kNoOrigin) {
@@ -118,24 +129,24 @@ struct Data2gReceiveModel::Impl {
         {
             static constexpr qsizetype kChunk = kSampleRateHz / 5;
             Output output;
-            output.generation = input.generation;
             const quint64 faultsBefore = m_monitor.faultCount();
-            if (m_originMs == kNoOrigin) {
-                // The monitor's clock is at zero where this block starts.
-                m_originMs = input.arrivedMs
-                    - input.samples.size() * qint64(1000) / kSampleRateHz;
-            }
+            // The block's last sample arrived at arrivedMs, and the monitor's
+            // clock will read m_fed + size there.
+            m_originMs = input.arrivedMs
+                - (m_fed + input.samples.size()) * qint64(1000) / kSampleRateHz;
             for (qsizetype offset = 0; offset < input.samples.size(); offset += kChunk) {
                 if (m_state->quit.load() || input.generation != m_state->generation.load()) {
-                    return;
+                    break;   // what the earlier chunks completed is still reported
                 }
                 const qsizetype n = std::min(kChunk, input.samples.size() - offset);
                 const quint64 faultsNow = m_monitor.faultCount();
                 const auto heard = m_monitor.feed(std::span<const float>(
                     input.samples.constData() + offset, static_cast<std::size_t>(n)));
+                m_fed += n;
                 if (m_monitor.faultCount() != faultsNow) {
                     // A fault restarted the monitor: its clock is at zero
                     // where the next chunk starts.
+                    m_fed = 0;
                     m_originMs = input.arrivedMs
                         - (input.samples.size() - offset - n) * qint64(1000) / kSampleRateHz;
                 }
@@ -150,8 +161,10 @@ struct Data2gReceiveModel::Impl {
             if (output.bursts.isEmpty() && output.faults == 0) {
                 return;
             }
+            // A reset since this block was queued does not unhear a burst
+            // that completed; only the end of the run does.
             QMutexLocker lock(&m_state->mutex);
-            if (!m_state->owner || output.generation != m_state->generation.load()) {
+            if (!m_state->owner) {
                 return;
             }
             m_state->output.push_back(std::move(output));
@@ -162,20 +175,72 @@ struct Data2gReceiveModel::Impl {
         hfdata::Data2gMonitor m_monitor;
         quint64 m_generation = 0;
         qint64 m_originMs = kNoOrigin;   // UTC of the monitor's time zero
+        qint64 m_fed = 0;                // samples fed since the monitor's time zero
     };
 #endif
 
     Data2gReceiveModel* owner = nullptr;
-    std::shared_ptr<State> state = std::make_shared<State>();
+    // The current run: all null while disabled. The worker thread exists only
+    // while the monitor is on.
+    std::shared_ptr<State> state;
     QObject* worker = nullptr;
-    QThread thread;
+    QThread* thread = nullptr;
+    // Threads of ended runs that are still finishing a decode chunk.
+    std::vector<QThread*> stopping;
     bool enabled = false;
     Stats stats;
+    std::optional<PcmStreamDescriptor> lastSource;
     QElapsedTimer lastAudio;   // invalid until the first block since enabling
     static constexpr qint64 kAudioStaleMs = 2000;
 
-    // Caller holds State::mutex, which fences this against the owner's
-    // destructor clearing State::owner.
+    void startRun()
+    {
+#ifdef HAVE_DATA2G
+        state = std::make_shared<State>();
+        state->owner = owner;
+        thread = new QThread;
+        thread->setObjectName(QStringLiteral("Data2gReceive"));
+        auto* created = new Worker(state);
+        worker = created;
+        created->moveToThread(thread);
+        QObject::connect(thread, &QThread::finished, created, &QObject::deleteLater);
+        thread->start();
+#endif
+    }
+
+    // Ends the run. A decode chunk in flight cannot be abandoned, so unless
+    // `wait` is set the thread is left to finish it and is reaped when it has.
+    void endRun(bool wait)
+    {
+        if (!state) {
+            return;
+        }
+        {
+            QMutexLocker lock(&state->mutex);
+            state->owner = nullptr;
+            state->quit = true;
+            state->retire();
+            state->output.clear();
+        }
+        QThread* ending = std::exchange(thread, nullptr);
+        worker = nullptr;
+        state.reset();
+        if (wait) {
+            ending->quit();
+            ending->wait();
+            delete ending;
+            return;
+        }
+        stopping.push_back(ending);
+        QObject::connect(ending, &QThread::finished, owner, [this, ending] {
+            std::erase(stopping, ending);
+            ending->deleteLater();
+        });
+        ending->quit();
+    }
+
+    // Caller holds State::mutex, which fences this against the run ending
+    // and clearing State::owner.
     static void scheduleOutput(const std::shared_ptr<State>& state)
     {
         if (!state->owner || state->outputScheduled) {
@@ -203,6 +268,9 @@ struct Data2gReceiveModel::Impl {
 
     void publish(const std::shared_ptr<State>& box)
     {
+        if (box != state) {
+            return;   // a run that has ended
+        }
         std::deque<Output> output;
         {
             QMutexLocker lock(&box->mutex);
@@ -217,8 +285,8 @@ struct Data2gReceiveModel::Impl {
                 changed = true;
             }
             for (const Data2gHeardBurst& burst : item.bursts) {
-                // A listener may disable or reset the model from this signal.
-                if (!enabled || item.generation != box->generation.load()) {
+                // A listener may disable the model from this signal.
+                if (box != state) {
                     break;
                 }
                 ++stats.bursts;
@@ -239,32 +307,18 @@ Data2gReceiveModel::Data2gReceiveModel(QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>())
 {
     qRegisterMetaType<AetherSDR::Data2gHeardBurst>();
-    Impl& d = *m_impl;
-    d.owner = this;
-    d.state->owner = this;
-#ifdef HAVE_DATA2G
-    auto* worker = new Impl::Worker(d.state);
-    d.worker = worker;
-    worker->moveToThread(&d.thread);
-    connect(&d.thread, &QThread::finished, worker, &QObject::deleteLater);
-    d.thread.setObjectName(QStringLiteral("Data2gReceive"));
-    d.thread.start();
-#endif
+    m_impl->owner = this;
 }
 
 Data2gReceiveModel::~Data2gReceiveModel()
 {
     Impl& d = *m_impl;
-    {
-        QMutexLocker lock(&d.state->mutex);
-        d.state->owner = nullptr;
-        d.state->quit = true;
-        d.state->retire();
+    d.endRun(/*wait=*/true);
+    for (QThread* ending : d.stopping) {
+        ending->wait();
+        delete ending;
     }
-    if (d.thread.isRunning()) {
-        d.thread.quit();
-        d.thread.wait();
-    }
+    d.stopping.clear();
 }
 
 bool Data2gReceiveModel::available()
@@ -288,15 +342,18 @@ QString Data2gReceiveModel::upstreamVersion()
 void Data2gReceiveModel::setEnabled(bool enabled)
 {
     enabled = enabled && available();
-    if (m_impl->enabled == enabled) {
+    Impl& d = *m_impl;
+    if (d.enabled == enabled) {
         return;
     }
-    m_impl->enabled = enabled;
-    m_impl->lastAudio.invalidate();
+    d.enabled = enabled;
+    d.lastAudio.invalidate();
+    d.lastSource.reset();
     // Either way the next audio starts a new stream.
-    {
-        QMutexLocker lock(&m_impl->state->mutex);
-        m_impl->state->retire();
+    if (enabled) {
+        d.startRun();
+    } else {
+        d.endRun(/*wait=*/false);
     }
     emit enabledChanged(enabled);
 }
@@ -309,7 +366,7 @@ bool Data2gReceiveModel::isEnabled() const
 void Data2gReceiveModel::feed(const QVector<float>& mono, bool discontinuity)
 {
     Impl& d = *m_impl;
-    if (!d.enabled) {
+    if (!d.enabled || !d.state) {
         return;
     }
     if (!mono.isEmpty()) {
@@ -341,10 +398,15 @@ void Data2gReceiveModel::feed(const QVector<float>& mono, bool discontinuity)
     }
 }
 
-void Data2gReceiveModel::reset()
+void Data2gReceiveModel::feedFrom(const PcmStreamDescriptor& source, const QVector<float>& mono)
 {
-    QMutexLocker lock(&m_impl->state->mutex);
-    m_impl->state->retire();
+    Impl& d = *m_impl;
+    if (!d.enabled) {
+        return;
+    }
+    const bool changed = d.lastSource && *d.lastSource != source;
+    d.lastSource = source;
+    feed(mono, changed);
 }
 
 bool Data2gReceiveModel::audioFlowing() const

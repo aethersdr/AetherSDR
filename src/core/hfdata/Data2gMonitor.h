@@ -56,9 +56,10 @@ public:
     // The vendored Data2G release, e.g. "0.4.3".
     static const char* upstreamVersion();
 
-    // The core runs one process-wide decode pool. Set its size (threads
+    // The core runs one process-wide decode pool whose threads, once
+    // started, live for the rest of the process. Set its size (threads
     // including the caller) once, before the first feed() anywhere; the
-    // core's own default is min(4, cores / 2).
+    // core's own default is min(4, cores / 2), and 1 means no helper threads.
     static void setDecodeThreads(int threads);
 
     // Unsupported rates leave the monitor invalid: feed() then returns

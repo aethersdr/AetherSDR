@@ -156,12 +156,9 @@ void Data2gMonitorPage::buildHeader()
     title->setObjectName(QStringLiteral("Data2gPageTitle"));
     titles->addWidget(title);
     const QString version = Data2gReceiveModel::upstreamVersion();
-    auto* mode = new QLabel(
-        tr("Data2G %1 · Beta · Receive only").arg(version.isEmpty() ? tr("unavailable") : version),
-        frame);
+    auto* mode = new QLabel(tr("Data2G %1 · Beta · Receive only").arg(version), frame);
     mode->setObjectName(QStringLiteral("Data2gModeLabel"));
-    mode->setAccessibleName(
-        tr("Data2G version %1, beta, receive only").arg(version.isEmpty() ? tr("unavailable") : version));
+    mode->setAccessibleName(tr("Data2G version %1, beta, receive only").arg(version));
     titles->addWidget(mode);
     row->addLayout(titles);
     row->addStretch(1);
@@ -278,14 +275,11 @@ void Data2gMonitorPage::appendBurst(const Data2gHeardBurst& burst)
 
 void Data2gMonitorPage::refreshState()
 {
-    const bool available = m_model && Data2gReceiveModel::available();
     const bool wanted = m_monitorCheck->isChecked();
-    const bool running = available && m_model->isEnabled();
+    const bool running = m_model && m_model->isEnabled();
 
     QString reason;
-    if (!available) {
-        reason = tr("This build does not include the Data2G decoder.");
-    } else if (!m_modemEnabled) {
+    if (!m_modemEnabled) {
         reason = tr("Enable the modem on the APRS tab first. "
                     "The monitor listens to the modem's receive audio.");
     }
@@ -312,7 +306,7 @@ void Data2gMonitorPage::refreshState()
         state = tr("Monitoring");
         dot = QStringLiteral("on");
     } else if (!reason.isEmpty()) {
-        state = !available ? tr("Unavailable") : tr("Modem is off");
+        state = tr("Modem is off");
         dot = wanted ? QStringLiteral("blocked") : QStringLiteral("off");
     } else {
         state = tr("Off");

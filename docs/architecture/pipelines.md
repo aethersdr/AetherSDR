@@ -21,7 +21,7 @@ Multi-thread architecture — up to 14 threads depending on features enabled:
 - **CwDecoder thread**: ggmorse decode loop (QThread::create, on-demand)
 - **DAX IQ thread**: DaxIqModel worker (byte-swap + pipe I/O)
 - **AX.25 TNC thread**: AetherAx25LibmodemShim worker (HDLC/AX.25 + AFSK decode, on-demand when the AetherModem/packet tab is active)
-- **Data2G receive thread** (`Data2gReceive`): Data2gReceiveModel worker for AetherModem's receive-only HF Data monitor (HAVE_DATA2G). The vendored core also runs its own decode pool, min(4, cores / 2) threads, used only while a burst is decoded.
+- **Data2G receive thread** (`Data2gReceive`): Data2gReceiveModel worker for AetherModem's receive-only HF Data monitor (on-demand: runs only while Monitor is on, HAVE_DATA2G). The vendored core's own helper threads are switched off (decode pool of one, pocketfft threading compiled out), so this is the only thread the monitor adds.
 - **RADE thread**: RADEEngine neural encoder/decoder (on-demand, HAVE_RADE)
 - **BNR**: NvidiaAfxFilter — in-process NVIDIA Maxine AFX GPU denoiser (runtime-loaded, HAVE_NVIDIA_AFX; runs inline on the audio thread, no dedicated thread)
 - **DXCC parse thread**: DxccColorProvider ADIF log parser (one-shot at startup)
@@ -228,7 +228,7 @@ SPOT PIPELINES:                             ◄── SPOT WORKER THREAD
 | **CwDecoder** | ggmorse decode loop | ~0% | QThread::create | On-demand start/stop per CW mode |
 | **DAX IQ** | DaxIqModel worker | ~0% | moveToThread | Byte-swap + pipe I/O |
 | **AX.25 TNC** | AetherAx25LibmodemShim worker | ~0% | moveToThread | HDLC/AX.25 + AFSK decode; on-demand when the packet tab is active |
-| **Data2G receive** | Data2gReceiveModel worker (+ the core's decode pool) | not yet measured in-app | moveToThread | Receive-only HF Data monitor; idle unless Monitor is on |
+| **Data2G receive** | Data2gReceiveModel worker | not yet measured in-app | moveToThread | Receive-only HF Data monitor; exists only while Monitor is on |
 | **DXCC** | DxccColorProvider ADIF parser | ~0% | moveToThread | One-shot at startup |
 | **RADE** | RADEEngine neural encoder/decoder | ~0% | moveToThread | On-demand, HAVE_RADE |
 | **BNR** | NvidiaAfxFilter in-process AFX denoiser | varies | audio thread | local NVIDIA GPU, HAVE_NVIDIA_AFX |

@@ -9,11 +9,13 @@
 #include "models/Data2gReceiveModel.h"
 
 #include <QCoreApplication>
+#include <QThread>
 #include <QDeadlineTimer>
 #include <QEventLoop>
 #include <QVector>
 
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 
@@ -119,7 +121,8 @@ void decodes(const std::vector<float>& pcm)
 // The stamp is when the burst began on the air, not when its decode finished:
 // the whole signal arrives as one block, so the burst began before that block
 // landed, by at least the burst's own length.
-void timesBurstStart(const std::vector<float>& pcm)
+// Returns where the burst sits in the signal, in ms from its first sample.
+qint64 timesBurstStart(const std::vector<float>& pcm)
 {
     Data2gReceiveModel model;
     QVector<Data2gHeardBurst> heard;
@@ -131,7 +134,7 @@ void timesBurstStart(const std::vector<float>& pcm)
     const QDateTime fed = QDateTime::currentDateTimeUtc();
     check(waitFor([&] { return !heard.isEmpty(); }), "start time: the burst is reported");
     if (heard.isEmpty())
-        return;
+        return 0;
     const Data2gHeardBurst& burst = heard.first();
     const qint64 lengthMs = static_cast<qint64>(pcm.size()) * 1000 / Data2gReceiveModel::kSampleRateHz;
     check(burst.startedUtc.isValid() && burst.startedUtc.timeSpec() == Qt::UTC,
@@ -143,9 +146,42 @@ void timesBurstStart(const std::vector<float>& pcm)
     check(burst.startedUtc <= burst.heardUtc, "start time: the burst starts before it is decoded");
     check(burst.head.startsWith(burst.startedUtc.toString(QStringLiteral("HH:mm:ss'Z'"))),
           "start time: the burst line opens with its start");
+    return fed.addMSecs(-lengthMs).msecsTo(burst.startedUtc);
 }
 
-// A source change mid-burst, then the whole burst: reported exactly once.
+// A gap in one stream is not a reset, and it does not shift the clock: a burst
+// heard after a pause with no audio is stamped by when it arrived, not by how
+// much audio came before the pause.
+void survivesGap(const std::vector<float>& pcm, qint64 burstOffsetMs)
+{
+    AetherSDR::PcmStreamDescriptor slice;
+    slice.source = 1;
+    slice.sliceId = 0;
+    const qint64 lengthMs = static_cast<qint64>(pcm.size()) * 1000 / Data2gReceiveModel::kSampleRateHz;
+    const QVector<float> signal(pcm.begin(), pcm.end());
+
+    Data2gReceiveModel model;
+    QVector<Data2gHeardBurst> heard;
+    QObject::connect(&model, &Data2gReceiveModel::burstHeard,
+                     [&](const Data2gHeardBurst& burst) { if (isBeacon(burst)) heard.append(burst); });
+    model.setEnabled(true);
+    model.feedFrom(slice, signal);
+    check(waitFor([&] { return heard.size() == 1; }), "gap: the burst before it is reported");
+    settle(2500);   // the gap: wall time passes, no audio does
+    model.feedFrom(slice, signal);
+    const QDateTime fed = QDateTime::currentDateTimeUtc();
+    check(waitFor([&] { return heard.size() == 2; }), "gap: the burst after it is reported");
+    settle();
+    check(heard.size() == 2, "gap: each burst is reported exactly once");
+    check(model.stats().faults == 0, "gap: no fault was counted");
+    if (heard.size() < 2)
+        return;
+    const QDateTime expected = fed.addMSecs(-lengthMs + burstOffsetMs);
+    check(std::llabs(expected.msecsTo(heard.at(1).startedUtc)) < 500,
+          "gap: the burst after it is stamped by when it arrived");
+}
+
+// A stream change mid-burst, then the whole burst: reported exactly once.
 void resets(const std::vector<float>& pcm)
 {
     Data2gReceiveModel model;
@@ -159,22 +195,98 @@ void resets(const std::vector<float>& pcm)
         if (std::fabs(pcm[i]) > std::fabs(pcm[loudest]))
             loudest = i;
     }
-    feedBlocks(model, pcm, 0, loudest);
-    settle();
-    model.reset();
-    feedBlocks(model, pcm);
-    check(waitFor([&] { return beacons > 0; }), "after a reset the whole burst is reported");
-    settle();
-    check(beacons == 1, "after a reset the burst is reported exactly once");
+    for (int round = 1; round <= 2; ++round) {
+        feedBlocks(model, pcm, 0, loudest);
+        settle();
+        model.feed(QVector<float>(256, 0.0f), true);
+        feedBlocks(model, pcm);
+        check(waitFor([&] { return beacons == round; }),
+              "after a stream change the whole burst is reported");
+        settle();
+        check(beacons == round, "after a stream change the burst is reported exactly once");
+    }
+}
 
-    // The same through a block marked discontinuous.
-    feedBlocks(model, pcm, 0, loudest);
+// A burst that finished decoding is still reported when a stream change lands before
+// it is published. The owner's event loop is held off while the worker
+// decodes, so the result is queued when the reset arrives. How long the decode
+// takes depends on the machine, so the wait doubles until it was long enough.
+void keepsDecodedAcrossReset(const std::vector<float>& pcm)
+{
+    bool reported = false;
+    for (int waitMs = 500; waitMs <= 16000 && !reported; waitMs *= 2) {
+        Data2gReceiveModel model;
+        int beacons = 0;
+        QObject::connect(&model, &Data2gReceiveModel::burstHeard,
+                         [&](const Data2gHeardBurst& burst) { beacons += isBeacon(burst) ? 1 : 0; });
+        model.setEnabled(true);
+        feedBlocks(model, pcm);
+        QThread::msleep(static_cast<unsigned long>(waitMs));   // no events: nothing is published
+        model.feed(QVector<float>(256, 0.0f), true);
+        settle(500);
+        reported = beacons == 1;
+    }
+    check(reported, "a burst decoded before a stream change is still reported");
+}
+
+// The monitor resets when the stream changes, and only then. Half a burst
+// from one stream and the rest from the same stream is one burst; the rest
+// from another stream is not.
+void resetsOnSourceChangeOnly(const std::vector<float>& pcm)
+{
+    std::size_t loudest = 0;
+    for (std::size_t i = 0; i < pcm.size(); ++i) {
+        if (std::fabs(pcm[i]) > std::fabs(pcm[loudest]))
+            loudest = i;
+    }
+    const auto part = [&](std::size_t from, std::size_t to) {
+        return QVector<float>(pcm.begin() + static_cast<std::ptrdiff_t>(from),
+                              pcm.begin() + static_cast<std::ptrdiff_t>(to));
+    };
+    AetherSDR::PcmStreamDescriptor sliceA;
+    sliceA.source = 1;
+    sliceA.sliceId = 0;
+    AetherSDR::PcmStreamDescriptor sliceB = sliceA;
+    sliceB.sliceId = 1;
+
+    Data2gReceiveModel model;
+    int beacons = 0;
+    QObject::connect(&model, &Data2gReceiveModel::burstHeard,
+                     [&](const Data2gHeardBurst& burst) { beacons += isBeacon(burst) ? 1 : 0; });
+    model.setEnabled(true);
+
+    model.feedFrom(sliceA, part(0, loudest));
+    model.feedFrom(sliceA, part(loudest, pcm.size()));
+    check(waitFor([&] { return beacons > 0; }), "one stream in two blocks is one burst");
     settle();
-    model.feed(QVector<float>(256, 0.0f), true);
-    feedBlocks(model, pcm);
-    check(waitFor([&] { return beacons > 1; }), "after a discontinuity the whole burst is reported");
+    check(beacons == 1, "one stream in two blocks is reported exactly once");
+
+    model.feedFrom(sliceA, part(0, loudest));
+    model.feedFrom(sliceB, part(loudest, pcm.size()));
+    settle(1500);
+    check(beacons == 1, "a burst is not joined across a change of stream");
+
+    model.feedFrom(sliceB, part(0, pcm.size()));
+    check(waitFor([&] { return beacons > 1; }), "the new stream decodes on its own");
+}
+
+// Each enable is a new run with its own worker: off and on again decodes again.
+void restarts(const std::vector<float>& pcm)
+{
+    Data2gReceiveModel model;
+    int beacons = 0;
+    QObject::connect(&model, &Data2gReceiveModel::burstHeard,
+                     [&](const Data2gHeardBurst& burst) { beacons += isBeacon(burst) ? 1 : 0; });
+    for (int run = 1; run <= 3; ++run) {
+        model.setEnabled(true);
+        feedBlocks(model, pcm);
+        check(waitFor([&] { return beacons == run; }), "each run reports the burst");
+        model.setEnabled(false);
+        model.feed(QVector<float>(256, 0.0f));
+        model.feed(QVector<float>(256, 0.0f), true);
+    }
     settle();
-    check(beacons == 2, "after a discontinuity the burst is reported exactly once");
+    check(beacons == 3, "three runs report three bursts");
 }
 
 // Disabling drops what is queued: nothing is reported afterwards.
@@ -233,8 +345,12 @@ int main(int argc, char** argv)
 
     identity();
     decodes(pcm);
-    timesBurstStart(pcm);
+    const qint64 burstOffsetMs = timesBurstStart(pcm);
+    survivesGap(pcm, burstOffsetMs);
     resets(pcm);
+    keepsDecodedAcrossReset(pcm);
+    resetsOnSourceChangeOnly(pcm);
+    restarts(pcm);
     disables(pcm);
     overflows();
     destroyedBusy(pcm);

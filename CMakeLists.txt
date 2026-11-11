@@ -1834,6 +1834,12 @@ message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-
 # contraction. GCC's -O2 cost model leaves three hot loops scalar, hence -O3
 # on those files only (optimization never reassociates without fast-math).
 #
+# One definition is ours: POCKETFFT_NO_MULTITHREADING. pocketfft otherwise
+# starts a pool of one thread per CPU core on the first batched transform and
+# keeps it for the life of the process. Measured, the monitor decodes no
+# faster with it. PUBLIC, because pocketfft is header-only and every
+# translation unit that sees it must agree.
+#
 # aether_hfdata is the only consumer. It keeps the core's include root to
 # itself: that root has audio/, tnc/, host/ and util/ directories that would
 # shadow AetherSDR's own.
@@ -1846,7 +1852,9 @@ if(ENABLE_DATA2G)
     target_include_directories(aether_data2g_core SYSTEM PUBLIC
         ${CMAKE_SOURCE_DIR}/third_party/data2g/third_party/pocketfft)
     target_compile_features(aether_data2g_core PUBLIC cxx_std_20)
-    target_compile_definitions(aether_data2g_core PUBLIC DATA2G_VERSION="0.4.3")
+    target_compile_definitions(aether_data2g_core PUBLIC
+        DATA2G_VERSION="0.4.3"
+        POCKETFFT_NO_MULTITHREADING)
     set_target_properties(aether_data2g_core PROPERTIES
         POSITION_INDEPENDENT_CODE ON
         CXX_EXTENSIONS OFF)
