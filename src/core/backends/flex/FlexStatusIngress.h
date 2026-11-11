@@ -5,6 +5,7 @@
 
 #include <QMetaObject>
 #include <QObject>
+#include <QPointer>
 
 namespace AetherSDR {
 
@@ -36,9 +37,21 @@ public:
     // Refuse the given epoch from now on, if it is still the current one.
     void retire(quint64 epoch);
     quint64 epoch() const { return m_epoch; }
+    // Off: accepted lines skip the value decoders and only reach lineAccepted
+    // (SimBackend, whose native producer owns those values).
+    void setDecodeValues(bool on) { m_decodeValues = on; }
+    // "memory N [words…]" → the slot index and its key/values, with trailing
+    // bare words folded in; nullopt when the index does not parse.
+    static std::optional<std::pair<int, QMap<QString, QString>>>
+    memoryStatus(const QString& object, const QMap<QString, QString>& kvs);
     // A line as an accepted one is handled (decoders, then lineAccepted),
     // without the fence: RadioModel::handleLineForTest().
-    void deliverForTest(const ParsedMessage& line) { decodeLine(line); emit lineAccepted(line); }
+    void deliverForTest(const ParsedMessage& line)
+    {
+        const QPointer<FlexStatusIngress> alive(this);
+        decodeLine(line);
+        if (alive) { emit lineAccepted(line); }
+    }
     void decodeForTest(const ParsedMessage& line) { decodeLine(line); }
 
     // ---- Decoders (FlexStatusDecoders.cpp) ----
@@ -116,6 +129,7 @@ private:
     quint64 m_route{0};    // the current route's token; 0 = none
     quint64 m_routes{0};
     quint64 m_epoch{0};
+    bool m_decodeValues{true};
     QMap<quint32, DaxTxStreamState> m_daxTxStreams;
     quint64 m_daxTxIncarnation{0};
 };

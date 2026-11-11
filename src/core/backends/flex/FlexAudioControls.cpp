@@ -3,7 +3,6 @@
 
 #include <QPointer>
 #include <QThread>
-#include <QRegularExpression>
 #include <array>
 #include <memory>
 #include <optional>

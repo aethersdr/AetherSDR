@@ -133,6 +133,7 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // the pane starts blank. The zero-timer hop runs after RadioModel has handled
     // the accepted line, regardless of connection order.
     m_statusIngress.bind(m_connection);
+    m_statusIngress.setDecodeValues(false);   // the native producer owns the values
     connect(&m_statusIngress, &FlexStatusIngress::lineAccepted, this,
             [this](const ParsedMessage& line) {
         if (line.type != MessageType::Status || m_pansAwaitingGeometry.isEmpty()

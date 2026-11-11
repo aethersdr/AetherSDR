@@ -42,7 +42,7 @@ QStringList splitStatusTokens(const QString& body)
     return tokens;
 }
 
-std::optional<bool> parseFlag(const QString& value)
+std::optional<bool> parseNtpFlag(const QString& value)
 {
     bool ok = false;
     const int v = value.toInt(&ok);
@@ -50,7 +50,7 @@ std::optional<bool> parseFlag(const QString& value)
     return v == 1;
 }
 
-std::optional<int> parseInt(const QString& value)
+std::optional<int> parseNtpInt(const QString& value)
 {
     bool ok = false;
     const int v = value.toInt(&ok);
@@ -90,7 +90,7 @@ std::optional<quint32> daxTxIdentity(const QString& text)
 
 void FlexStatusIngress::decodeLine(const ParsedMessage& line)
 {
-    if (line.type != MessageType::Status) { return; }
+    if (!m_decodeValues || line.type != MessageType::Status) { return; }
     // Raw route: objects whose values carry spaces or '#' separators, read
     // from the line after its S<handle>| prefix.
     const int pipe = line.raw.indexOf(QLatin1Char('|'));
@@ -134,23 +134,28 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
     if (object == QLatin1String("transmit")) { decodeTransmitStatus(kvs); return; }
     // Untyped profile objects: the space-free flags ("profile importing=1").
     if (object.startsWith(QLatin1String("profile"))) { decodeProfileFlags(kvs); return; }
+    if (const auto memory = memoryStatus(object, kvs)) { decodeMemoryStatus(memory->first, memory->second); }
+}
+
+std::optional<std::pair<int, QMap<QString, QString>>>
+FlexStatusIngress::memoryStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
     // "memory 7" or "memory 7 removed": trailing bare words are folded in.
-    if (object.startsWith(QLatin1String("memory "))) {
-        const QString rest = object.mid(7);
-        const int sp = rest.indexOf(QLatin1Char(' '));
-        bool ok = false;
-        const int index = ((sp >= 0) ? rest.left(sp) : rest).toInt(&ok);
-        if (!ok) { return; }
-        QMap<QString, QString> merged = kvs;
-        if (sp >= 0) {
-            for (const auto& token : rest.mid(sp + 1).split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
-                const int eq = token.indexOf(QLatin1Char('='));
-                if (eq < 0) { merged.insert(token, QString{}); }
-                else { merged.insert(token.left(eq), token.mid(eq + 1)); }
-            }
+    if (!object.startsWith(QLatin1String("memory "))) { return std::nullopt; }
+    const QString rest = object.mid(7);
+    const int sp = rest.indexOf(QLatin1Char(' '));
+    bool ok = false;
+    const int index = ((sp >= 0) ? rest.left(sp) : rest).toInt(&ok);
+    if (!ok) { return std::nullopt; }
+    QMap<QString, QString> merged = kvs;
+    if (sp >= 0) {
+        for (const auto& token : rest.mid(sp + 1).split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+            const int eq = token.indexOf(QLatin1Char('='));
+            if (eq < 0) { merged.insert(token, QString{}); }
+            else { merged.insert(token.left(eq), token.mid(eq + 1)); }
         }
-        decodeMemoryStatus(index, merged);
     }
+    return std::make_pair(index, merged);
 }
 
 // ── Transmit-family decoders (aetherd RFC 2.3 — TransmitModel touchpoint) ──
@@ -349,6 +354,7 @@ void FlexStatusIngress::decodeProfileFlags(const QMap<QString, QString>& kvs)
     // kv-parser (e.g. "profile importing=1"). Only the database flags land here;
     // list/current always route through decodeProfileStatus. Emit nothing when
     // neither flag is present (matches the old handler's no-op path).
+    const QPointer<FlexStatusIngress> alive(this);   // a handler may end the backend
     ProfileDelta d;
     carry(kvs, "importing", d.importing);
     carry(kvs, "exporting", d.exporting);
@@ -361,6 +367,7 @@ void FlexStatusIngress::decodeProfileFlags(const QMap<QString, QString>& kvs)
             ProfileDelta unsaved;
             unsaved.type = it.key().mid(unsavedPrefix.size());
             unsaved.unsavedChanges = it.value() == QLatin1String("1");
+            if (!alive) { return; }
             emit profileChanged(unsaved);
         }
     }
@@ -429,6 +436,7 @@ void FlexStatusIngress::decodeGpsStatus(const QString& rawBody)
 }
 void FlexStatusIngress::decodeMeterStatus(const QString& rawBody)
 {
+    const QPointer<FlexStatusIngress> alive(this);
     // Meter status body (FlexLib Radio.cs ParseMeterStatus):
     //   Tokens separated by '#', each token is "index.key=value".
     //   e.g. "7.src=SLC#7.num=0#7.nam=LEVEL#7.unit=dBm#7.low=-150.0#7.hi=20.0"
@@ -490,6 +498,7 @@ void FlexStatusIngress::decodeMeterStatus(const QString& rawBody)
         carry(f, "low", def.low);
         carry(f, "hi", def.high);
         carry(f, "desc", def.description);
+        if (!alive) { return; }   // a meter handler may end the backend
         emit meterDefined(def);
     }
 }
@@ -524,12 +533,12 @@ void FlexStatusIngress::decodeNtpSourceStatus(const QString& rawBody)
         if (key == QLatin1String("address")) { d.address = value; }
         else if (key == QLatin1String("directive")) { d.directive = value; }
         else if (key == QLatin1String("description")) { d.description = value; }
-        else if (key == QLatin1String("enabled")) { d.enabled = parseFlag(value); }
-        else if (key == QLatin1String("selected")) { d.selected = parseFlag(value); }
-        else if (key == QLatin1String("prefer")) { d.prefer = parseFlag(value); }
+        else if (key == QLatin1String("enabled")) { d.enabled = parseNtpFlag(value); }
+        else if (key == QLatin1String("selected")) { d.selected = parseNtpFlag(value); }
+        else if (key == QLatin1String("prefer")) { d.prefer = parseNtpFlag(value); }
         else if (key == QLatin1String("state")) { d.state = value; }
-        else if (key == QLatin1String("stratum")) { d.stratum = parseInt(value); }
-        else if (key == QLatin1String("reach")) { d.reach = parseInt(value); }
+        else if (key == QLatin1String("stratum")) { d.stratum = parseNtpInt(value); }
+        else if (key == QLatin1String("reach")) { d.reach = parseNtpInt(value); }
     }
     emit ntpSourceChanged(d);
 }

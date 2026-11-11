@@ -36,7 +36,6 @@ using namespace flexkv;
 
 namespace {
 
-
 struct DaxTxReplyState {
     DaxTxOwnershipCompletion completion;
     bool sinkReturned{false};
@@ -305,7 +304,6 @@ ReceiveDispatch FlexBackend::requestDaxTxOwnership(const DaxTxOwnershipRequest& 
     }
     return ReceiveDispatch::Dispatched;
 }
-
 
 void FlexBackend::requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId)
 {
@@ -1778,7 +1776,6 @@ void FlexBackend::decodeInterlockStatus(const QMap<QString, QString>& kvs)
     emit transmitChanged(d);
 }
 
-
 void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& model,
                                         const QMap<QString, QString>& kvs, bool removed)
 {
@@ -1922,8 +1919,6 @@ void FlexBackend::clearExtensionHandles()
     m_reportedMaxPanadapters = 0;
 }
 
-
-
 void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
 {
     // Radio-global status → typed RadioDelta (aetherd RFC 2.3 — RadioModel
@@ -1976,10 +1971,6 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
         emit capabilitiesChanged();
     }
 }
-
-
-
-
 
 void FlexBackend::send(const QString& cmd)
 {

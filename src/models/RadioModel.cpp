@@ -11731,8 +11731,16 @@ void RadioModel::onStatusReceived(const QString& object,
     // Memory channels: "memory <index> key=val ..." or "memory <index> removed"
     // When there are no KV pairs (e.g., "memory 7 removed"), the parser puts
     // everything into the object name. Extract the index from the first token.
-    // "memory N" is decoded by the status ingress.
-    if (object.startsWith("memory ")) { return; }
+    // A Flex backend's status ingress decodes "memory N"; without one, a
+    // locally banked radio folds it through the same decode.
+    if (object.startsWith("memory ")) {
+        if (!m_flexBackend) {
+            if (const auto memory = FlexStatusIngress::memoryStatus(object, kvs)) {
+                handleMemoryStatus(memory->first, memory->second);
+            }
+        }
+        return;
+    }
 
 
     // "display pan 0x40000000 center=14.1 bandwidth=0.2 ..."
@@ -12038,6 +12046,7 @@ void RadioModel::onStatusReceived(const QString& object,
     }
 
     // APD status ("apd …", "apd sampler …") is decoded by the status ingress.
+    if (object == "apd" || object.startsWith("apd ")) { return; }
 
     // Amplifier status: TGXL and PGXL both report via "amplifier"; FlexLib tells them
     // apart by model=TunerGeniusXL / PowerGeniusXL. Removal arrives bare ("amplifier

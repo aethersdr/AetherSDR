@@ -161,6 +161,35 @@ private slots:
         QCOMPARE(ntp.size(), 1);
     }
 
+    // With value decoding off (SimBackend) a line reaches only lineAccepted:
+    // no deltas, no DAX TX state.
+    void valueDecodingCanBeOff()
+    {
+        FlexStatusIngress ingress;
+        ingress.setDecodeValues(false);
+        QSignalSpy transmit(&ingress, &FlexStatusIngress::transmitChanged);
+        QSignalSpy dax(&ingress, &FlexStatusIngress::daxTxStreamChanged);
+        QSignalSpy accepted(&ingress, &FlexStatusIngress::lineAccepted);
+        ingress.deliverForTest(line("S0|transmit rfpower=42"));
+        ingress.deliverForTest(line("S0|stream 0x84000001 type=dax_tx client_handle=0x00000071 tx=1"));
+        QCOMPARE(transmit.size(), 0);
+        QCOMPARE(dax.size(), 0);
+        QVERIFY(!ingress.daxTxStream(0x84000001));
+        QCOMPARE(accepted.size(), 2);
+    }
+
+    // Without a Flex backend, a locally banked radio still folds memory status.
+    void memoryWithoutFlexUsesTheLocalBank()
+    {
+        TestSettingsProfile profile(QStringLiteral("flex-status-ingress-memory"));
+        QVERIFY(profile.isValid());
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("sim")));
+        model.handleLineForTest(QStringLiteral("S0|memory 3 name=Repeater freq=146.940000"));
+        QVERIFY(model.memories().contains(3));
+        QCOMPARE(model.memories().value(3).name, QStringLiteral("Repeater"));
+    }
+
     // The H line reaches the model before connected(): both take one queued
     // hop from the connection's thread, in the order the wire produced them.
     void handleLineArrivesBeforeConnected()

@@ -2066,7 +2066,9 @@ public:
     // must not upsert it back into TnfModel.
     // One wire line as the status ingress delivers it (decoders, then the
     // model's own handling), without the session fence. handleStatusForTest()
-    // rebuilds the line from its object and key/value pairs.
+    // rebuilds the line from its object and key/value pairs, in key order, so
+    // raw-line objects (typed profile, gps, meter, ntp_sources) need
+    // handleLineForTest().
     void handleLineForTest(const QString& line);
     void deliverLineForTest(const ParsedMessage& message);
     void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs);
