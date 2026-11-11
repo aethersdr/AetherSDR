@@ -7823,6 +7823,20 @@ target_include_directories(hl2_rit_xit_test PRIVATE src tests)
 target_link_libraries(hl2_rit_xit_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rit_xit_test COMMAND hl2_rit_xit_test)
 
+# #4954: the HL2 transmit output, ANT or RF1 (PA off). Wire banks from the
+# transport's own builder and a constructed backend — no socket, nothing keyed.
+add_executable(hl2_tx_route_test tests/hl2_tx_route_test.cpp)
+target_include_directories(hl2_tx_route_test PRIVATE src tests)
+target_link_libraries(hl2_tx_route_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_route_test COMMAND hl2_tx_route_test)
+
+# #4954: hamlib set_ant and a band-stack recall leave an independent TX output
+# alone. Production CAT parser and recall, injected backend — no socket, nothing keyed.
+add_executable(independent_tx_antenna_test tests/independent_tx_antenna_test.cpp)
+target_include_directories(independent_tx_antenna_test PRIVATE src tests)
+target_link_libraries(independent_tx_antenna_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME independent_tx_antenna_test COMMAND independent_tx_antenna_test)
+
 # #6105: RIT/XIT cross the seam with the slice id; the Flex command text is
 # unchanged. Injected recording backend — no socket, nothing keyed.
 add_executable(slice_rit_xit_seam_test tests/slice_rit_xit_seam_test.cpp)
@@ -11035,6 +11049,8 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_persist_restart_test
     hl2_persist_two_radios_test
     hl2_rit_xit_test
+    hl2_tx_route_test
+    independent_tx_antenna_test
     slice_rit_xit_seam_test
     hl2_rx_antenna_test
     hl2_tx_gate_test

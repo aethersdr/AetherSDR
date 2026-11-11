@@ -270,6 +270,14 @@ Cc ccTxFreq(std::uint32_t hz) noexcept;
 //              N2ADR IO board (Hl2HardwareOptions::atuGateware).
 Cc ccTxDrive(int level, bool paEnable = false, bool atuTune = false) noexcept;
 
+// Where the transmit signal leaves the board (#4954): ANT through the onboard PA,
+// or RF1, the AD9866 output alone, with the PA held off. 0x09[19] (pa_enable)
+// selects it; control.v also moves the RF switch with it, keyed or not.
+enum class TxRoute : std::uint8_t { Ant, Rf1 };
+// The 0x09 bank for `route`. A closed gate forces drive 0; the PA is on only for
+// ANT with a non-zero drive, so RF1 never biases it. 0x09[18] stays clear.
+Cc ccTxDriveForRoute(TxRoute route, int level, bool txAllowed, bool atuTune) noexcept;
+
 // Direct I2C writes: 0x3c (I2C1, internal: Versa clock, AD9866) and 0x3d
 // (I2C2, external companion bus). Payload per gateware/rtl/i2c.v:
 //   C1 = DATA[31:24] cookie 0x06 write / 0x07 read

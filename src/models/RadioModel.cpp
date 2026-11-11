@@ -3510,6 +3510,21 @@ QStringList RadioModel::knownAntennaTokens() const
     return tokens;
 }
 
+QStringList RadioModel::rxAntennaMenuTokens() const
+{
+    QStringList tokens = knownAntennaTokens();
+    if (!backendCapabilities().independentTxAntenna) {
+        return tokens;
+    }
+    // Receive-side means published by the radio, not the slice's current label.
+    QStringList rxSide = m_antList;
+    for (SliceModel* s : m_slices) {
+        if (s) { rxSide += s->rxAntennaList(); }
+    }
+    tokens.removeIf([&rxSide](const QString& t) { return !rxSide.contains(t); });
+    return tokens;
+}
+
 SliceModel* RadioModel::txSlice() const
 {
     for (auto* s : m_slices) {
