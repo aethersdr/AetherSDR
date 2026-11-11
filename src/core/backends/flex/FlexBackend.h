@@ -96,7 +96,6 @@ public:
     ReceiveDispatch requestCwAutoTune(int sliceId, CwAutoTuneAction action,
         const RadioControlCompletion& completion, const RadioControlFence& current) override;
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
-    void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
     void setCwControlSink(FlexCwControls::ControlSink sink);
     ReceiveDispatch requestCwControl(const CwControlRequest& request,
         const TxCoordinator::Command& command) override;
@@ -324,7 +323,6 @@ private:
     quint64 m_nicknameAppliedRequest{0};
     quint64 m_tuneOutputSession = 0;
     QMap<int, quint64> m_tuneOutputRequests;
-    QSet<int> m_tuneOutputKnownBands;
     std::function<bool(const QString&, const TxCoordinator::Command&)> m_txSink;
     CwxCommandSink m_cwxSink;
     CwxConfigurationSink m_cwxConfigurationSink;

@@ -1686,6 +1686,7 @@ void RadioModel::applyBackendLinkStats(const IRadioBackend::LinkStats& stats)
 // setBackendForTest(), so fixtures see what a session sees.
 void RadioModel::applyTxBandChanges(const TxBandDelta& d)
 {
+    for (const QString& output : d.reportedOutputs) { m_tuneInhibitKnownOutputs[d.bandId].insert(output); }
     auto& b = m_txBandSettings[d.bandId];
     b.bandId = d.bandId;
     if (d.bandName)  { b.bandName = *d.bandName; }
@@ -12150,31 +12151,10 @@ void RadioModel::onStatusReceived(const QString& object,
     // ingress and land in applyTxBandChanges().
     if (object.startsWith("transmit band")) { return; }
 
-    // Per-band interlock: "interlock band 9 band_name=20 acc_txreq_enable=0 ..."
-    static const QRegularExpression ilBandRe(R"(^interlock band\s+(\d+)$)");
+    // Per-band interlock ("interlock band N …"): the status ingress decoded
+    // the band's interlock plane (applyTxBandChanges()) and its TUNE output
+    // suppression before the line reached here.
     if (object.startsWith("interlock band")) {
-        const auto m = ilBandRe.match(object);
-        if (m.hasMatch()) {
-            int id = m.captured(1).toInt();
-            auto& b = m_txBandSettings[id];
-            b.bandId = id;
-            if (kvs.contains("band_name"))       b.bandName = kvs["band_name"];
-            if (kvs.contains("acc_txreq_enable"))b.accTxReq = kvs["acc_txreq_enable"] == "1";
-            if (kvs.contains("rca_txreq_enable"))b.rcaTxReq = kvs["rca_txreq_enable"] == "1";
-            for (const char* field : {"acc_tx_enabled", "tx1_enabled", "tx2_enabled", "tx3_enabled"}) {
-                if (kvs.contains(QLatin1String(field))) {
-                    m_tuneInhibitKnownOutputs[id].insert(QLatin1String(field));
-                }
-            }
-            if (kvs.contains("acc_tx_enabled"))  b.accTx    = kvs["acc_tx_enabled"] == "1";
-            if (kvs.contains("tx1_enabled"))     b.tx1      = kvs["tx1_enabled"] == "1";
-            if (kvs.contains("tx2_enabled"))     b.tx2      = kvs["tx2_enabled"] == "1";
-            if (kvs.contains("tx3_enabled"))     b.tx3      = kvs["tx3_enabled"] == "1";
-            emit txBandSettingsChanged();
-        }
-        if (m_flexBackend) {
-            m_flexBackend->decodeTuneOutputStatus(object, kvs);
-        }
         emit tuneOutputControlChanged();
         return;
     }

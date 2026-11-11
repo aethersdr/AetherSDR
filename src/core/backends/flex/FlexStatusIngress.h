@@ -98,6 +98,14 @@ public:
     void decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs);
     // "transmit band N …" → the band's transmit plane.
     void decodeTxBandStatus(int bandId, const QMap<QString, QString>& kvs);
+    // "interlock band N …" → the band's interlock plane.
+    void decodeInterlockBandStatus(int bandId, const QMap<QString, QString>& kvs);
+    // "interlock band N tune_tx_suppress=…" → whether TUNE keys that band's
+    // outputs (tuneOutputSuppressionObserved); the bands seen so far gate
+    // FlexBackend's TUNE-output edits.
+    void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
+    bool tuneOutputBandKnown(int bandId) const { return m_tuneOutputKnownBands.contains(bandId); }
+    void clearTuneOutputBands() { m_tuneOutputKnownBands.clear(); }
 
     // The DAX TX streams the radio reported, as decodeDaxTxStatus keeps them.
     // FlexBackend's ownership requests read them; a stream's incarnation
@@ -130,6 +138,7 @@ signals:
     void cwStreamRemoved(quint32 streamId);
     void fileUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
     void txBandChanged(const AetherSDR::TxBandDelta& delta);
+    void tuneOutputSuppressionObserved(int bandId, bool suppressed);
 
 private:
     template <typename Transport> void route(Transport* transport);
@@ -141,6 +150,7 @@ private:
     bool m_decodeValues{true};
     QMap<quint32, DaxTxStreamState> m_daxTxStreams;
     quint64 m_daxTxIncarnation{0};
+    QSet<int> m_tuneOutputKnownBands;
 };
 
 } // namespace AetherSDR

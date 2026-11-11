@@ -6,6 +6,7 @@
 #include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexCwControls.h"
 #include "core/backends/flex/FlexKvCarry.h"
+#include "core/backends/TuneOutputPolicy.h"
 #include "models/RadioStatusOwnership.h"
 
 #include <QPointer>
@@ -136,6 +137,15 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
     static const QRegularExpression txBandRe(QStringLiteral(R"(^transmit band\s+(\d+)$)"));
     if (object.startsWith(QLatin1String("transmit band"))) {
         if (const auto m = txBandRe.match(object); m.hasMatch()) { decodeTxBandStatus(m.captured(1).toInt(), kvs); }
+        return;
+    }
+    static const QRegularExpression interlockBandRe(QStringLiteral(R"(^interlock band\s+(\d+)$)"));
+    if (object.startsWith(QLatin1String("interlock band"))) {
+        if (const auto m = interlockBandRe.match(object); m.hasMatch()) {
+            decodeInterlockBandStatus(m.captured(1).toInt(), kvs);
+            if (!alive) { return; }
+        }
+        decodeTuneOutputStatus(object, kvs);
         return;
     }
     // Untyped profile objects: the space-free flags ("profile importing=1").
@@ -701,5 +711,43 @@ void FlexStatusIngress::decodeTxBandStatus(int bandId, const QMap<QString, QStri
     if (kvs.contains(QStringLiteral("inhibit")))       { d.inhibit = kvs.value(QStringLiteral("inhibit")) == QLatin1String("1"); }
     if (kvs.contains(QStringLiteral("hwalc_enabled"))) { d.hwAlc = kvs.value(QStringLiteral("hwalc_enabled")) == QLatin1String("1"); }
     emit txBandChanged(d);
+}
+void FlexStatusIngress::decodeInterlockBandStatus(int bandId, const QMap<QString, QString>& kvs)
+{
+    // Read as RadioModel did: flags by "1".
+    TxBandDelta d;
+    d.bandId = bandId;
+    const auto flag = [&kvs](const char* key) -> std::optional<bool> {
+        if (!kvs.contains(QLatin1String(key))) { return std::nullopt; }
+        return kvs.value(QLatin1String(key)) == QLatin1String("1");
+    };
+    if (kvs.contains(QStringLiteral("band_name"))) { d.bandName = kvs.value(QStringLiteral("band_name")); }
+    d.accTxReq = flag("acc_txreq_enable");
+    d.rcaTxReq = flag("rca_txreq_enable");
+    for (const char* field : {"acc_tx_enabled", "tx1_enabled", "tx2_enabled", "tx3_enabled"}) {
+        if (kvs.contains(QLatin1String(field))) { d.reportedOutputs.insert(QLatin1String(field)); }
+    }
+    d.accTx = flag("acc_tx_enabled");
+    d.tx1 = flag("tx1_enabled");
+    d.tx2 = flag("tx2_enabled");
+    d.tx3 = flag("tx3_enabled");
+    emit txBandChanged(d);
+}
+void FlexStatusIngress::decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    // Subscription readback can precede info's software_ver on reconnect or
+    // manual-IP connections. Validate observations now; gate edits on capability.
+    static const QRegularExpression bandPattern(QStringLiteral("^interlock band ([0-9]{1,3})$"));
+    const QRegularExpressionMatch match = bandPattern.match(object);
+    if (!match.hasMatch()) {
+        return;
+    }
+    const int bandId = match.captured(1).toInt();
+    const QString value = kvs.value(QStringLiteral("tune_tx_suppress"));
+    if (TuneOutputPolicy::validBandId(bandId)
+        && (value == QLatin1String("0") || value == QLatin1String("1"))) {
+        m_tuneOutputKnownBands.insert(bandId);
+        emit tuneOutputSuppressionObserved(bandId, value == QLatin1String("1"));
+    }
 }
 } // namespace AetherSDR

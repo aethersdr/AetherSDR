@@ -94,6 +94,8 @@ FlexBackend::FlexBackend(QObject* parent)
     connect(&m_statusIngress, &FlexStatusIngress::daxTxStreamChanged, this, &IRadioBackend::daxTxStreamChanged);
     connect(&m_statusIngress, &FlexStatusIngress::fileUpdateReported, this, &FlexBackend::fileUpdateReported);
     connect(&m_statusIngress, &FlexStatusIngress::txBandChanged, this, &FlexBackend::txBandChanged);
+    connect(&m_statusIngress, &FlexStatusIngress::tuneOutputSuppressionObserved,
+            this, &IRadioBackend::tuneOutputSuppressionObserved);
     connect(&m_statusIngress, &FlexStatusIngress::cwStreamRemoved, this,
             [this](quint32 streamId) { if (m_cwControls) { m_cwControls->observeStreamRemoved(streamId); } });
 
@@ -311,7 +313,7 @@ void FlexBackend::requestTuneOutputSuppression(int bandId, bool suppressed, quin
 {
     const QString version = m_firmwareVersionProvider ? m_firmwareVersionProvider() : QString();
     if (!TuneOutputPolicy::firmwareSupportsSuppression(version)
-        || !TuneOutputPolicy::validBandId(bandId) || !m_tuneOutputKnownBands.contains(bandId)
+        || !TuneOutputPolicy::validBandId(bandId) || !m_statusIngress.tuneOutputBandKnown(bandId)
         || requestId == 0 || !m_sink) {
         emit tuneOutputSuppressionCommandFinished(requestId, false,
             QStringLiteral("TUNE output suppression requires SmartSDR 4.3 or later and a reported band row."));
@@ -348,23 +350,6 @@ void FlexBackend::requestTuneOutputSuppression(int bandId, bool suppressed, quin
     }
 }
 
-void FlexBackend::decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs)
-{
-    // Subscription readback can precede info's software_ver on reconnect or
-    // manual-IP connections. Validate observations now; gate edits on capability.
-    static const QRegularExpression bandPattern(QStringLiteral("^interlock band ([0-9]{1,3})$"));
-    const QRegularExpressionMatch match = bandPattern.match(object);
-    if (!match.hasMatch()) {
-        return;
-    }
-    const int bandId = match.captured(1).toInt();
-    const QString value = kvs.value(QStringLiteral("tune_tx_suppress"));
-    if (TuneOutputPolicy::validBandId(bandId)
-        && (value == QLatin1String("0") || value == QLatin1String("1"))) {
-        m_tuneOutputKnownBands.insert(bandId);
-        emit tuneOutputSuppressionObserved(bandId, value == QLatin1String("1"));
-    }
-}
 
 void FlexBackend::setFirmwareVersionProvider(std::function<QString()> provider)
 {
@@ -1901,7 +1886,7 @@ void FlexBackend::clearExtensionHandles()
     ++m_nicknameSession;
     ++m_tuneOutputSession;
     m_tuneOutputRequests.clear();
-    m_tuneOutputKnownBands.clear();
+    m_statusIngress.clearTuneOutputBands();
     // #4198: forget the amp/tuner encode handles on disconnect/reset so a stale
     // handle can't survive into a reconnect (possibly a different radio).
     m_ampHandle.clear();
