@@ -18,6 +18,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMetaObject>
 #include <QPointer>
 #include <QPalette>
 #include <QPushButton>
