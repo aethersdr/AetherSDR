@@ -44,6 +44,10 @@ public:
     // bare words folded in; nullopt when the index does not parse.
     static std::optional<std::pair<int, QMap<QString, QString>>>
     memoryStatus(const QString& object, const QMap<QString, QString>& kvs);
+    // "file update …" → the radio's firmware-install report; nullopt for any
+    // other object.
+    static std::optional<FirmwareUpdateStatus>
+    fileUpdateStatus(const QString& object, const QMap<QString, QString>& kvs);
     // A line as an accepted one is handled (decoders, then lineAccepted),
     // without the fence: RadioModel::handleLineForTest().
     void deliverForTest(const ParsedMessage& line)
@@ -121,6 +125,7 @@ signals:
     void daxTxStreamChanged(const AetherSDR::DaxTxStreamDelta& delta);
     // The radio removed a NetCW stream (FlexCwControls retires it).
     void cwStreamRemoved(quint32 streamId);
+    void fileUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
 
 private:
     template <typename Transport> void route(Transport* transport);

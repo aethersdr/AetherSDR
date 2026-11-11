@@ -65,6 +65,16 @@ struct FileTransferRequest {
     }
 };
 
+// The radio's report on a firmware image it received ("file update …").
+// failed: true when the install failed, false when the radio accepted the
+// image and is rebooting; absent while it is still receiving. transfer is
+// its received fraction (0..1) when reported.
+struct FirmwareUpdateStatus {
+    std::optional<bool> failed;
+    QString reason;
+    std::optional<double> transfer;
+};
+
 struct FileTransferReply {
     RadioControlReply result;
     quint16 port{0};
@@ -97,3 +107,5 @@ class FileTransferOperation;
 using FileTransferHandle = std::shared_ptr<FileTransferOperation>;
 
 } // namespace AetherSDR
+
+Q_DECLARE_METATYPE(AetherSDR::FirmwareUpdateStatus)

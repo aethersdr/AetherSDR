@@ -14,6 +14,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace AetherSDR {
@@ -134,7 +135,23 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
     if (object == QLatin1String("transmit")) { decodeTransmitStatus(kvs); return; }
     // Untyped profile objects: the space-free flags ("profile importing=1").
     if (object.startsWith(QLatin1String("profile"))) { decodeProfileFlags(kvs); return; }
-    if (const auto memory = memoryStatus(object, kvs)) { decodeMemoryStatus(memory->first, memory->second); }
+    if (const auto memory = memoryStatus(object, kvs)) { decodeMemoryStatus(memory->first, memory->second); return; }
+    if (const auto update = fileUpdateStatus(object, kvs)) { emit fileUpdateReported(*update); }
+}
+
+std::optional<FirmwareUpdateStatus>
+FlexStatusIngress::fileUpdateStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    if (object != QLatin1String("file update")) { return std::nullopt; }
+    FirmwareUpdateStatus status;
+    // FlexLib treats a parseable failed as terminal (Radio.cs:12626-12630).
+    bool parsed = false;
+    const int failed = kvs.value(QStringLiteral("failed")).toInt(&parsed);
+    if (parsed && (failed == 0 || failed == 1)) { status.failed = failed == 1; }
+    status.reason = kvs.value(QStringLiteral("reason")).trimmed();
+    const double transfer = kvs.value(QStringLiteral("transfer")).toDouble(&parsed);
+    if (parsed && std::isfinite(transfer) && transfer >= 0.0 && transfer <= 1.0) { status.transfer = transfer; }
+    return status;
 }
 
 std::optional<std::pair<int, QMap<QString, QString>>>

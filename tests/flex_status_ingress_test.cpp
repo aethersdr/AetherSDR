@@ -257,6 +257,26 @@ private slots:
         QCOMPARE(calibration.at(2), QList<QVariant>({true, QString()}));
     }
 
+    // A "file update" line reaches FirmwareUploader typed: progress, the
+    // radio's verdict with its reason, and out-of-range values dropped.
+    void firmwareUpdateIsTyped()
+    {
+        TestSettingsProfile profile(QStringLiteral("flex-status-ingress-fw"));
+        QVERIFY(profile.isValid());
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
+        QSignalSpy updates(&model, &RadioModel::firmwareUpdateReported);
+        model.handleLineForTest(QStringLiteral("S0|file update transfer=0.42"));
+        model.handleLineForTest(QStringLiteral("S0|file update failed=2 transfer=1.5"));
+        model.handleLineForTest(QStringLiteral("S0|file update failed=1 reason=bad_image"));
+        QCOMPARE(updates.size(), 3);
+        const auto at = [&updates](int i) { return updates.at(i).at(0).value<FirmwareUpdateStatus>(); };
+        QVERIFY(!at(0).failed && at(0).transfer && qFuzzyCompare(*at(0).transfer, 0.42));
+        QVERIFY(!at(1).failed && !at(1).transfer);
+        QVERIFY(at(2).failed && *at(2).failed);
+        QCOMPARE(at(2).reason, QStringLiteral("bad_image"));
+    }
+
     // The H line reaches the model before connected(): both take one queued
     // hop from the connection's thread, in the order the wire produced them.
     void handleLineArrivesBeforeConnected()

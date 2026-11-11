@@ -291,6 +291,10 @@ public:
     // to a *different* radio and be used to build a bogus relay command.
     void clearExtensionHandles();
 
+signals:
+    // The radio's report on a firmware image (Flex-only; RadioModel relays it).
+    void fileUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
+
 private:
     void send(const QString& cmd);
     void sendTx(const QString& cmd, const TxCoordinator::Command& command);

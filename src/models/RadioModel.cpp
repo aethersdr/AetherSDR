@@ -985,6 +985,10 @@ void RadioModel::setupBackend(const QString& family)
             m_backend->setOfflineHealthSource(offline);
 
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
+            connect(flex, &FlexBackend::fileUpdateReported, this,
+                    [this, receiver = m_backendReceiverGeneration](const FirmwareUpdateStatus& status) {
+                if (receiver == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
+            });
             // One wire funnel for the backend's verbs, with or without the
             // radio's answer: the answered sink is the same write with the
             // reply routed back.
@@ -2309,6 +2313,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateAtuAvailability);
     qRegisterMetaType<PcmFrame>();
     qRegisterMetaType<ParsedMessage>();
+    qRegisterMetaType<FirmwareUpdateStatus>();
     qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
