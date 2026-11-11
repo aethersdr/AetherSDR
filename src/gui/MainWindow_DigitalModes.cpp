@@ -357,7 +357,9 @@ void MainWindow::onRttyDecoderShiftChosen(int hz)
 {
     // The decoder has no shift of its own: the slice's shift draws the
     // mark/space lines, and its change signal runs refreshRttyDecodeState(),
-    // which hands it to the decoder.
+    // which hands it to the decoder. Only the pane on screen speaks for the
+    // slice: another pan's hidden pane still holds its last value.
+    if (sender() != m_rttyDecoderApplet) { return; }
     if (auto* s = activeSlice()) { s->setRttyShift(hz); }
 }
 
