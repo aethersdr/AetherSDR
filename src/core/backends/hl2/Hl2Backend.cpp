@@ -1881,6 +1881,13 @@ AetherSDR::WidebandConverterView widebandConverterViewRecord() noexcept
     return wide;
 }
 
+namespace {
+// The TX antenna tokens the slice's txAntenna carries; capabilities() names RF1
+// as unmetered with the same token.
+QString txRouteAntToken() { return QStringLiteral("ANT"); }
+QString txRouteRf1Token() { return QStringLiteral("RF1"); }
+} // namespace
+
 RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
@@ -2022,7 +2029,7 @@ RadioCapabilities Hl2Backend::capabilities() const
                                   static_cast<double>(kHl2RatedOutputWatts)}};
     // ANT or RF1 is the operator's own choice; a CAT antenna select must not move it.
     // RF1 has no forward-power detector, so its gauges read "not measured".
-    c.independentTxAntenna = IndependentTxAntenna{{QStringLiteral("RF1")}};
+    c.independentTxAntenna = IndependentTxAntenna{{txRouteRf1Token()}};
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
@@ -5565,9 +5572,6 @@ int Hl2Backend::operatorDrivePercent() const noexcept
 }
 
 namespace {
-QString txRouteAntToken() { return QStringLiteral("ANT"); }
-QString txRouteRf1Token() { return QStringLiteral("RF1"); }
-
 QString txRouteToken(hl2::TxRoute route)
 {
     return route == hl2::TxRoute::Rf1 ? txRouteRf1Token() : txRouteAntToken();

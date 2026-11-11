@@ -9,7 +9,6 @@
 #include "TxOutputMetering.h"
 #include "core/TxKeyingMarker.h"
 #include "models/RadioModel.h"
-#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
 

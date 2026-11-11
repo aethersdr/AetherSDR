@@ -12,7 +12,7 @@
 //     tooltip and accessibleDescription; back to ANT restores every text; the
 //     same slice on a backend without the record is unchanged; a slice that is
 //     not the TX slice does not label the gauges; the meter keeps drawing what
-//     it is sent on RF1.
+//     it is sent on RF1; retiring the RF1 TX slice restores the gauges.
 //   * the HL2 backend declares RF1, and only RF1, as unmetered.
 // NOT covered: pixels (the dimming is HGauge's existing !isEnabled() paint).
 
@@ -170,7 +170,7 @@ static void appletCases()
 
         f.setTxAntenna(QStringLiteral("RF1"));
         check(!f.applet.txOutputMetered() && f.gaugesNotMeasuredOn(QStringLiteral("RF1")),
-              "applet HL2 RF1: both gauges dimmed, labelled not measured, reason announced");
+              "applet HL2 RF1: both gauges dimmed, labeled not measured, reason announced");
 
         // Still draws what the meter sends: a reading on RF1 is not hidden.
         f.applet.setTransmitting(true);
@@ -215,6 +215,13 @@ static void appletCases()
         TxApplet applet;
         applet.setRadioModel(&radio);
         check(!applet.txOutputMetered(), "applet attached while on RF1: not metered at once");
+
+        // The TX slice on RF1 is retired by the backend: no TX slice is left,
+        // so nothing is unmetered and the gauges come back.
+        emit backend->sliceRemoved(0);
+        QCoreApplication::processEvents();
+        check(!radio.txSlice() && applet.txOutputMetered(),
+              "applet: retiring the RF1 TX slice restores the gauges");
     }
 }
 
