@@ -31,6 +31,14 @@ int main()
                              QStringView(u"DIGL"), QStringView(u"digu")}) {
         check("CW and data modes are not voice keys", isMicVoiceKey(true, false, mode), false);
     }
+    // RADE encodes the computer mic on a DIGU/DIGL slice.
+    for (QStringView mode : {QStringView(u"DIGU"), QStringView(u"DIGL")}) {
+        check("a RADE key on a data slice is a voice key",
+              isMicVoiceKey(true, false, mode, /*radeActive=*/true), true);
+    }
+    check("RADE with no operator key is not a voice key",
+          isMicVoiceKey(false, false, u"DIGU", true), false);
+    check("RADE under WSPR is not a voice key", isMicVoiceKey(true, true, u"DIGU", true), false);
 
     // Capability shapes, as the backends declare them. Only a radio this
     // computer modulates and may key gets either follow-up (#7168 review).

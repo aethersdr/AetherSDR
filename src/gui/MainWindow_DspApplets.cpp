@@ -40,6 +40,8 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QAccessible>
+#include <QAccessibleEvent>
 #include <QMessageBox>
 #include <QStatusBar>
 #include <QTimer>
@@ -207,7 +209,7 @@ void MainWindow::noticeVoiceKeyWithoutInput()
         m_radioModel.isOperatorTransmitting(),
         m_radioModel.transmitModel().activePttSource()
             == TransmitModel::PttSource::Wspr,
-        txMode);
+        txMode, m_audio && m_audio->isRadeMode());
     if (!voiceKey) {
         return;
     }
@@ -218,6 +220,13 @@ void MainWindow::noticeVoiceKeyWithoutInput()
     }
     const QString message = txAudioPathBlockMessage(block);
     qCWarning(lcAudio) << "MainWindow: voice key started with no audio input device";
+    // The card is painted on the panadapter, which a screen reader cannot
+    // read (#3957), so the notice is announced as well.
+    if (QAccessible::isActive()) {
+        QAccessibleAnnouncementEvent announcement(this, message);
+        announcement.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
+        QAccessible::updateAccessibility(&announcement);
+    }
     SpectrumWidget* where = nullptr;
     if (m_panStack) {
         if (txSlice && !txSlice->panId().isEmpty()) {

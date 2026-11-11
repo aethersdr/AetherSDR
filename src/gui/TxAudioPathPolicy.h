@@ -81,13 +81,19 @@ enum class NoInputDeviceWording { NoVoiceRf, NoComputerVoice };
 
 // A key only the computer mic can modulate. operatorKeyed is
 // RadioModel::isOperatorTransmitting(), which already leaves out TUNE/ATU,
-// CW, DAX and TCI; WSPR and the data modes have sources of their own.
+// CW, DAX and TCI; WSPR and the data modes have sources of their own, except
+// RADE, which encodes the computer mic on a DIGU/DIGL slice.
 [[nodiscard]] inline bool isMicVoiceKey(bool operatorKeyed, bool sourceIsWspr,
-                                        QStringView txMode)
+                                        QStringView txMode, bool radeActive = false)
 {
+    if (!operatorKeyed || sourceIsWspr) {
+        return false;
+    }
+    if (radeActive) {
+        return true;
+    }
     const QStringView mode = txMode.trimmed();
-    return operatorKeyed && !sourceIsWspr
-        && !mode.startsWith(u"CW", Qt::CaseInsensitive)
+    return !mode.startsWith(u"CW", Qt::CaseInsensitive)
         && mode.compare(u"DIGU", Qt::CaseInsensitive) != 0
         && mode.compare(u"DIGL", Qt::CaseInsensitive) != 0;
 }
