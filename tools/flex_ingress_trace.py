@@ -15,6 +15,14 @@ for raw in open(sys.argv[1], errors='replace'):
     if m:
         started = True
         out.append('== ' + m.group(1)); continue
+    for tag in ('WRITE ', 'STATE '):
+        if started and tag in line and 'Signal:' not in line:
+            out.append('  ' + line[line.index(tag):])
+            break
+    else:
+        tag = None
+    if tag:
+        continue
     if not started or 'Signal:' not in line or drop.search(line):
         continue
     sig = line.split('Signal: ', 1)[1]
@@ -22,4 +30,12 @@ for raw in open(sys.argv[1], errors='replace'):
     sig = re.sub(r'\(([A-Za-z_]+ )?ADDR\)', r'(\1)', sig)
     sig = sig.replace('(QMap<QString,QString>())', '()')
     out.append('  ' + sig)
-print('\n'.join(out))
+# Writes are logged from the connection's thread, so they interleave with
+# the model's signals; each line's writes are sorted to the end of its block.
+blocks, cur = [], None
+for l in out:
+    if l.startswith('== '):
+        cur = [l, [], []]; blocks.append(cur)
+    elif cur:
+        (cur[2] if l.lstrip().startswith('WRITE ') else cur[1]).append(l)
+print('\n'.join('\n'.join([b[0]] + b[1] + sorted(b[2])) for b in blocks))

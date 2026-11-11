@@ -985,10 +985,6 @@ void RadioModel::setupBackend(const QString& family)
             m_backend->setOfflineHealthSource(offline);
 
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
-            connect(flex, &FlexBackend::fileUpdateReported, this,
-                    [this, receiver = m_backendReceiverGeneration](const FirmwareUpdateStatus& status) {
-                if (receiver == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
-            });
             // One wire funnel for the backend's verbs, with or without the
             // radio's answer: the answered sink is the same write with the
             // reply routed back.
@@ -1559,24 +1555,6 @@ void RadioModel::setupBackend(const QString& family)
     if (m_connection) {
     // Each goes through a generation-checked lambda rather than straight to
     // the member slot: see the rule-5 note at the top of this function.
-    // Every wire line arrives once, through the backend's status ingress,
-    // already fenced to the live session and in wire order. The ingress dies
-    // with its backend; the re-check covers a message handler that replaced it.
-    const auto deliverLine = [this, generation](const ParsedMessage& line) {
-        handleMessageReceived(line);
-        if (generation != m_backendReceiverGeneration || line.type != MessageType::Status) return;
-        onStatusReceived(line.object, line.kvs);
-    };
-    if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
-        m_statusIngress = flex->statusIngress();
-    } else if (auto* sim = dynamic_cast<SimBackend*>(m_backend.get())) {
-        m_statusIngress = sim->statusIngress();
-    }
-    if (m_statusIngress) {
-        connect(m_statusIngress, &FlexStatusIngress::lineAccepted, this, deliverLine);
-        // A backend rebuilt under a live SmartLink session takes over its route.
-        if (m_wanConn) { m_statusEpoch = m_statusIngress->bindLive(m_wanConn); }
-    }
     connect(m_connection, &RadioConnection::connected, this,
             [this, generation] {
         if (generation != m_backendReceiverGeneration) return;
@@ -1702,6 +1680,35 @@ void RadioModel::applyBackendLinkStats(const IRadioBackend::LinkStats& stats)
         emit pingReceived();
 }
 
+// Every Flex wire line arrives once, through the backend's status ingress,
+// already fenced to the live session and in wire order, and so do the
+// ingress's Flex-only typed results. Reached by setupBackend() and by
+// setBackendForTest(), so fixtures see what a session sees.
+void RadioModel::wireStatusIngress(quint64 generation)
+{
+    m_statusIngress = nullptr;
+    if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
+        m_statusIngress = flex->statusIngress();
+        connect(flex, &FlexBackend::fileUpdateReported, this,
+                [this, generation](const FirmwareUpdateStatus& status) {
+            if (generation == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
+        });
+    } else if (auto* sim = dynamic_cast<SimBackend*>(m_backend.get())) {
+        m_statusIngress = sim->statusIngress();
+    }
+    if (!m_statusIngress) { return; }
+    // The ingress dies with its backend; the re-check covers a message
+    // handler that replaced it.
+    connect(m_statusIngress, &FlexStatusIngress::lineAccepted, this,
+            [this, generation](const ParsedMessage& line) {
+        handleMessageReceived(line);
+        if (generation != m_backendReceiverGeneration || line.type != MessageType::Status) return;
+        onStatusReceived(line.object, line.kvs);
+    });
+    // A backend rebuilt under a live SmartLink session takes over its route.
+    if (m_wanConn) { m_statusEpoch = m_statusIngress->bindLive(m_wanConn); }
+}
+
 void RadioModel::wireBackendReceiverState()
 {
     wireTuneOutputControl();
@@ -1710,6 +1717,7 @@ void RadioModel::wireBackendReceiverState()
     }
     const quint64 generation = m_backendReceiverGeneration;
     wireGpsSessionReceivers();
+    wireStatusIngress(generation);
     connect(m_backend.get(), &IRadioBackend::audioStreamChanged, this,
         [this, generation](const AudioStreamDelta& delta) {
             if (generation != m_backendReceiverGeneration) { return; }
