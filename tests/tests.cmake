@@ -8428,6 +8428,16 @@ endif()
 set_target_properties(hl2_tci_signaling_test PROPERTIES AUTOMOC ON)
 add_test(NAME hl2_tci_signaling_test COMMAND hl2_tci_signaling_test)
 
+# #7063 — a backend-suppressed meter is INCONCLUSIVE naming its gate, never
+# "defined but never fed". Guards the band between MeterModel's consumer floor
+# and a producer's own (much higher) gate, where radiocert condemned a healthy
+# TX:SWR and recommended deleting it.
+add_executable(radiocert_gated_meter_test tests/radiocert_gated_meter_test.cpp)
+target_include_directories(radiocert_gated_meter_test PRIVATE src tests)
+target_link_libraries(radiocert_gated_meter_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(radiocert_gated_meter_test PROPERTIES AUTOMOC ON)
+add_test(NAME radiocert_gated_meter_test COMMAND radiocert_gated_meter_test)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
