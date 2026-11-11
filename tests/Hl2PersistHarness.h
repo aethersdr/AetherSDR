@@ -30,6 +30,7 @@
 #include <QJsonObject>
 #include <QSignalSpy>
 #include <QString>
+#include <QVariantMap>
 
 #include <atomic>
 #include <cstdio>
@@ -146,18 +147,21 @@ public:
     using Access = hl2::Hl2PersistTestAccess;
 
     // `restored` empty means a radio with nothing remembered, which comes up on
-    // `startHz`. A non-empty one comes up on what it remembers.
-    Session(const QString& serial, const RestoredRadioState& restored, double startHz)
+    // `startHz`. A non-empty one comes up on what it remembers. `extraParams`
+    // go into the connect request as given (e.g. numRx).
+    Session(const QString& serial, const RestoredRadioState& restored, double startHz,
+            const QVariantMap& extraParams = {})
     {
         Access::installStartStandIn(backend, m_starts);
-        connect(serial, restored, startHz);
+        connect(serial, restored, startHz, extraParams);
     }
     ~Session() { backend.disconnectRadio(); }
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
 
     // restore -> connectRadio() -> DSP build -> start() stand-in -> link-up.
-    void connect(const QString& serial, const RestoredRadioState& restored, double startHz)
+    void connect(const QString& serial, const RestoredRadioState& restored, double startHz,
+                 const QVariantMap& extraParams = {})
     {
         const int startsBefore = m_starts->load();
         QSignalSpy finished(&backend, &hl2::Hl2Backend::dspSetupFinished);
@@ -169,6 +173,8 @@ public:
         request.params.insert(QStringLiteral("boardMaxRx"), 4);   // no discovery probe
         if (restored.isEmpty())
             request.params.insert(QStringLiteral("rxFrequencyHz"), startHz);
+        for (auto it = extraParams.constBegin(); it != extraParams.constEnd(); ++it)
+            request.params.insert(it.key(), it.value());
         backend.connectRadio(request);
         test::awaitDspBuild("hl2_persist", [&] { return !finished.isEmpty(); });
         check(m_starts->load() == startsBefore + 1,
