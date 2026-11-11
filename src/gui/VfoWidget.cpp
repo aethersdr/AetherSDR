@@ -3163,6 +3163,7 @@ void VfoWidget::buildTabContent()
         lbl->setStyleSheet(kLabelStyle);
         row->addWidget(lbl);
         m_daxCmb = new GuardedComboBox;
+        m_daxCmb->setObjectName(QStringLiteral("vfoDaxChannel"));
         populateDaxCombo();  // capacity-gated; rebuilt on connect (setRadioModel)
         AetherSDR::applyComboStyle(m_daxCmb);
         row->addWidget(m_daxCmb, 1);
@@ -6981,8 +6982,13 @@ void VfoWidget::populateDaxCombo()
     const int want = (dc >= 1 && dc <= n) ? dc : 0;
     m_daxCmb->clear();
     QStringList items{QStringLiteral("Off")};
-    for (int i = 1; i <= n; ++i)
-        items << QString::number(i);
+    for (int i = 1; i <= n; ++i) {
+        // A program on the radio holding a channel (#7139): still selectable,
+        // but choosing it takes the channel from that program.
+        const QString holder = m_radioModel ? m_radioModel->daxChannelReservedBy(i) : QString();
+        items << (holder.isEmpty() ? QString::number(i)
+                                   : QStringLiteral("%1 (%2)").arg(i).arg(holder));
+    }
     m_daxCmb->addItems(items);
     m_daxCmb->setCurrentIndex(want);
 }
@@ -7055,6 +7061,8 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         disconnect(m_radioModel, &RadioModel::infoChanged,
                    this, &VfoWidget::populateDaxCombo);
         disconnect(m_radioModel, &RadioModel::connectionStateChanged,
+                   this, &VfoWidget::populateDaxCombo);
+        disconnect(m_radioModel, &RadioModel::reservedDaxChanged,
                    this, &VfoWidget::populateDaxCombo);
         disconnect(m_radioModel, &RadioModel::capabilitiesChanged,
                    this, nullptr);
@@ -7176,6 +7184,8 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
         connect(m_radioModel, &RadioModel::infoChanged,
                 this, &VfoWidget::populateDaxCombo);
         connect(m_radioModel, &RadioModel::connectionStateChanged,
+                this, &VfoWidget::populateDaxCombo);
+        connect(m_radioModel, &RadioModel::reservedDaxChanged,
                 this, &VfoWidget::populateDaxCombo);
         connect(m_radioModel, &RadioModel::capabilitiesChanged, this,
                 [this](bool connected, const RadioCapabilities& caps) {

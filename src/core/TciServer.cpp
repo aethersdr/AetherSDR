@@ -4571,6 +4571,24 @@ bool TciServer::hostModulatingBackend() const
     return m_model && m_model->backendCapabilities().hostModulates;
 }
 
+int TciServer::freeDaxChannelForTci(const RadioModel& model)
+{
+    QSet<int> used;
+    for (auto* sl : model.slices()) {
+        if (sl->daxChannel() > 0) {
+            used.insert(sl->daxChannel());
+        }
+    }
+    // A program on the radio holding a slot keeps its channel (#7139):
+    // giving it to our slice would take it off theirs.
+    for (int ch = 1; ch <= 8; ++ch) {
+        if (!used.contains(ch) && !model.daxChannelReserved(ch)) {
+            return ch;
+        }
+    }
+    return 0;
+}
+
 void TciServer::ensureDaxForTci()
 {
     if (!m_model || !m_model->isConnected()) return;
@@ -4584,23 +4602,12 @@ void TciServer::ensureDaxForTci()
     for (auto* s : m_model->slices()) {
         if (s->daxChannel() == 0) {
             // Slice has no DAX channel — auto-assign one
-            QSet<int> used;
-            for (auto* sl : m_model->slices()) {
-                if (sl->daxChannel() > 0) {
-                    used.insert(sl->daxChannel());
-                }
-            }
-            for (int ch = 1; ch <= 8; ++ch) {
-                if (!used.contains(ch)) {
-                    qCDebug(lcCat) << "TCI: auto-assigning DAX channel" << ch
-                                   << "to slice" << s->sliceId();
-                    qCInfo(lcCat) << "TCI: auto-assigning DAX channel" << ch
-                                  << "to slice" << s->sliceId() << "for TCI audio (#1331)";
-                    s->setDaxChannel(ch);
-                    m_tciDaxSlices.insert(s->sliceId());
-                    channelsNeeded.insert(ch);
-                    break;
-                }
+            if (const int ch = freeDaxChannelForTci(*m_model); ch > 0) {
+                qCInfo(lcCat) << "TCI: auto-assigning DAX channel" << ch
+                              << "to slice" << s->sliceId() << "for TCI audio (#1331)";
+                s->setDaxChannel(ch);
+                m_tciDaxSlices.insert(s->sliceId());
+                channelsNeeded.insert(ch);
             }
         } else {
             // Slice already has a DAX channel (from radio profile) —

@@ -87,6 +87,7 @@ Open **Settings → SpotHub...** and choose the **WSPR** tab, then click **Start
 ## Good to know
 
 - AetherSDR leaves the receiver's slice alone: its letter shows as taken, labeled **WSPR receiver**, and AetherSDR opens a slice of its own. Other programs, SmartSDR among them, may still show it as theirs. Don't tune it there, because the receiver moves it back on its next cycle.
+- AetherSDR doesn't give the receiver's DAX channel to its own slices when it picks one itself: when restoring your last session, or when a TCI program asks for audio. In the slice's **DAX** list, the receiver's channel is labeled **WSPR receiver**. You can still choose it, but that takes it from the receiver, which then stops recording. If the receiver starts over while you're connected, AetherSDR finds its new slice within a second or so. While SpotHub's WSPR reading runs, each status read also checks which slice the receiver is using.
 - The radio removes the receiver's slice when its last GUI client disconnects, so closing SmartSDR or AetherSDR can lose the cycle in progress. The receiver makes a new slice at once and carries on with the next cycle.
 - It waits for the radio's clock to be set before it starts recording, up to about a minute and a half after the radio boots.
 - Removing or updating the receiver starts it over with default settings, and any computer can claim it again.

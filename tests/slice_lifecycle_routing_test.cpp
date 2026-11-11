@@ -4,6 +4,7 @@
 #include "RadioSetupControlFixture.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/RigctlProtocol.h"
+#include "core/WsprAgentClient.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #ifdef HAVE_WEBSOCKETS
@@ -87,6 +88,7 @@ public:
         server.m_routeTransitionInFlight = false;
         server.m_routingState.bindCreatedRoute(0, 2);
     }
+    static int freeDax(const RadioModel& radio) { return TciServer::freeDaxChannelForTci(radio); }
 };
 #endif
 }
@@ -488,6 +490,45 @@ void reservedSliceForOnRadioProgram()
           "no reservation, no reserved DAX channel");
     f.radio.reserveSlice(-1, QStringLiteral("WSPR receiver"));
     check(!f.radio.isSliceReserved(-1), "no slice, no reservation");
+
+#ifdef HAVE_WEBSOCKETS
+    // TCI's DAX auto-assign skips a reserved slot's channel as well as ours.
+    f.radio.reserveSlice(5, QStringLiteral("WSPR receiver"));
+    f.radio.handleSliceStatusForTest(5, {{QStringLiteral("client_handle"), QStringLiteral("1")},
+                                         {QStringLiteral("dax"), QStringLiteral("1")}});
+    SliceDelta ourDax;
+    ourDax.daxChannel = 2;
+    emit f.backend->sliceChanged(3, ourDax);
+    const bool ours2 = f.radio.slice(3) != nullptr && f.radio.slice(3)->daxChannel() == 2;
+    check(ours2 && f.radio.daxChannelReserved(1)
+              && TciSliceLifecycleTestAccess::freeDax(f.radio) == 3,
+          "TCI's DAX auto-assign never takes a reserved slot's channel");
+#endif
+}
+
+// The spot feed's status reads reserve the receiver's slice; the feed is never
+// started, so nothing is requested.
+void receiverSliceFromFeed()
+{
+    Fixture f;
+    f.backend->live = true;
+    f.publish(2);
+    WsprSpotFeed feed;
+    wspr::reserveReceiverSlice(&feed, &f.radio, QStringLiteral("WSPR receiver"));
+    WsprStatus status;
+    status.sliceIndex = -1;
+    emit feed.statusReceived(status);
+    status.sliceIndex = 2;
+    const bool adopted = f.radio.slice(2) != nullptr;
+    emit feed.statusReceived(status);
+    check(adopted && !f.radio.slice(2) && f.radio.isSliceReserved(2)
+              && f.radio.foreignSliceOwnerStation(2) == QStringLiteral("WSPR receiver")
+              && !f.radio.isSliceReserved(-1),
+          "a feed status naming an adopted slice reserves it and drops its SliceModel");
+    f.backend->live = false;
+    status.sliceIndex = 3;
+    emit feed.statusReceived(status);
+    check(!f.radio.isSliceReserved(3), "a feed status while disconnected reserves nothing");
 }
 
 // Registration waits for the gate, runs once, and never waits forever.
@@ -824,6 +865,7 @@ int main(int argc, char** argv)
     boundedRetirementHistory();
     foreignRetirementBeforePublication();
     reservedSliceForOnRadioProgram();
+    receiverSliceFromFeed();
     registrationGate();
     completedCreationReleasesState();
     answeredSelectionAndInhibit();

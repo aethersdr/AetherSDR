@@ -789,6 +789,7 @@ void MainWindow::wireSpotSubsystem()
     m_radioModel.setRegistrationGate([this](const QHostAddress& radio, std::function<void()> proceed) {
         readWsprReceiverSlice(radio, std::move(proceed));
     });
+    wspr::reserveReceiverSlice(m_wsprFeed, &m_radioModel, tr("WSPR receiver"));
     connect(&m_radioModel, &RadioModel::sliceAdded, this, [this](SliceModel*) {
         QTimer::singleShot(kWsprSliceRecheckMs, this, [this] {
             if (m_radioModel.isConnected()) {
