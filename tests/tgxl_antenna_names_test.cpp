@@ -6,6 +6,7 @@
 // cap, control-character strip), and the TunerApplet setText wiring are all
 // exercised end-to-end through the live signal chain.
 
+#include "core/ThemeManager.h"
 #include "core/TgxlConnection.h"
 #include "core/backends/TunerDelta.h"
 #include "gui/TunerApplet.h"
@@ -202,6 +203,10 @@ int main(int argc, char** argv)
     CHECK(b2->styleSheet().contains(QLatin1String("#1a2a3a")));   // inactive = dark
     CHECK(b3->styleSheet().contains(QLatin1String("#1a2a3a")));
 
+    // TX coloring: active button turns red while transmitting ──────────
+    const QString txFill = AetherSDR::ThemeManager::instance()
+        .color(b1, QStringLiteral("color.highlight.tx")).name();
+
     // TX: fwd=50 dBm (100 W) crosses the 5 W threshold — active button goes red.
     CHECK(inject(&direct, QStringLiteral(
         "S101|status fwd=50.0 peak=50.0 max=63.00 swr=-20.0000 "
@@ -211,7 +216,7 @@ int main(int argc, char** argv)
         "bypassB=0 bypassRxB=0 antB=0 "
         "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
     settle();
-    CHECK(b1->styleSheet().contains(QLatin1String("#ff4d4d")));   // active TX = color.accent.danger
+    CHECK(b1->styleSheet().contains(txFill));   // active TX = color.highlight.tx
     CHECK(b2->styleSheet().contains(QLatin1String("#1a2a3a")));   // inactive still dark
     CHECK(b3->styleSheet().contains(QLatin1String("#1a2a3a")));
 
@@ -225,10 +230,10 @@ int main(int argc, char** argv)
         "bypassB=0 bypassRxB=0 antB=0 "
         "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
     settle(120);
-    CHECK(b1->styleSheet().contains(QLatin1String("#ff4d4d")));  // hold: still red inside 800 ms window
+    CHECK(b1->styleSheet().contains(txFill));  // hold: still red inside 800 ms window
     settle(780);
     CHECK(b1->styleSheet().contains(QLatin1String("#006030")));   // back to green
-    CHECK(!b1->styleSheet().contains(QLatin1String("#ff4d4d")));  // not red
+    CHECK(!b1->styleSheet().contains(txFill));  // not red
 
     // PTT fallback: pttA=1 at low power also reddens the button (interlock cable present).
     CHECK(inject(&direct, QStringLiteral(
@@ -239,7 +244,7 @@ int main(int argc, char** argv)
         "bypassB=0 bypassRxB=0 antB=0 "
         "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=0 relayL=2 relayC2=8")));
     settle();
-    CHECK(b1->styleSheet().contains(QLatin1String("#ff4d4d")));  // pttA=1 at low power → red
+    CHECK(b1->styleSheet().contains(txFill));  // pttA=1 at low power → red
 
     CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
     settle();
