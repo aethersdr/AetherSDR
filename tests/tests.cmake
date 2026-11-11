@@ -8744,9 +8744,10 @@ add_test(NAME transmit_model_apd_test COMMAND transmit_model_apd_test)
 add_executable(system_info_dialog_test
     tests/system_info_dialog_test.cpp
     src/gui/SystemInfoDialog.cpp
-    src/gui/PersistentDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp
-    src/gui/FramelessWindowTitleBar.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
     src/core/SystemInfo.cpp
@@ -8757,9 +8758,10 @@ add_executable(system_info_dialog_test
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_settings>
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(system_info_dialog_test PRIVATE src tests)
-target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets)
+target_link_libraries(system_info_dialog_test PRIVATE Qt6::Widgets Qt6::Test)
 if(WIN32)
     target_link_libraries(system_info_dialog_test PRIVATE shell32 ole32 uuid)
 endif()
