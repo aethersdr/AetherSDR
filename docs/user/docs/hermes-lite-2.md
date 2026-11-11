@@ -30,7 +30,7 @@ The HL2 has no on-board DSP, so AetherSDR does the demodulation, filtering, AGC,
 
 ### Connecting
 
-The HL2 is found automatically on your LAN: open **File → Connect to Radio...** → **On This Network**, select it and click **Connect Selected Radio**. AetherSDR probes from every active IPv4 interface, so a computer with several network adapters finds the HL2 on the one it is connected to, and keeps using that interface for the session and its reconnects.
+The HL2 is found automatically on your LAN: open **File → Connect to Radio...** → **Nearby radios**, select it and click **Connect Selected Radio**. AetherSDR probes from every active IPv4 interface, so a computer with several network adapters finds the HL2 on the one it is connected to, and keeps using that interface for the session and its reconnects.
 
 Across a VPN or another subnet, use **Connect by IP** with **Radio type:** set to **Hermes-Lite 2** (see [Manual Connection](./manual-connection.md)).
 
@@ -72,7 +72,7 @@ One value corrects every band, receive and transmit. It is stored per radio (by 
 ## Receivers and Panadapters
 
 - **Up to four receivers** (A–D), each with its own slice, panadapter, audio and S-meter. Add one with **Tools → Add Panadapter...**; close its pane to remove it.
-- The receivers share one converter, so the **span (sample rate), LNA gain, band and antenna are radio-wide**. Mode, passband, AGC and frequency are per receiver.
+- The receivers share one converter, so the **span (sample rate), LNA gain, band and antenna are radio-wide**. Mode, passband, AGC and frequency are per receiver. The RX antenna menu offers **ANT**, the one receive input; KiwiSDR receivers, when configured, are listed beside it.
 - **After a restart** the receivers you had open come back, each with its own frequency, mode, passband, noise blanker, APF, squelch, RIT/XIT, audio gain and pan, and transmit returns to the receiver that had it. If the span allows fewer receivers than you had, the others are kept and come back on a later connect with room for them, unless you add or close a receiver first.
 - **Span** snaps to 48, 96, 192 or 384 kHz. Four receivers run up to 192 kHz, three at 384 kHz. **Use low bandwidth mode** caps the span at 96 kHz. Only the pane holding the TX slice (otherwise the first docked pane) has live span buttons; the others are dimmed with the reason.
 - **Band buttons** switch the hardware filters and preamp as well as the frequency.
@@ -193,9 +193,22 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 ## Known issues
 
-- Only one Hermes-Lite 2 (gateware 74) on macOS, transmitting into a dummy load, has been tested for this page. Linux, Windows and other HL2 boards have not. If you run an HL2 there, reports of what works and what does not are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)).
 - Keying with the HL2's hardware PTT jack shows as transmit in AetherSDR and mutes the receiver, but does not carry host audio: only the radio is keyed, and AetherSDR sends no modulation ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
-- Each over starts with about 100 ms of keyed silence before your audio is transmitted ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
+- Each over starts with keyed silence before your audio is transmitted: about 125 ms from the microphone and 175 to 195 ms from a TCI client, longer when the client's audio arrives unevenly ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
+- A CW key on the HL2's own key jack gives no sidetone in AetherSDR: the radio makes the CW itself, the receiver is muted while it does, and the client sidetone follows only AetherSDR's own keyer ([#5909](https://github.com/aethersdr/AetherSDR/issues/5909)).
+- Paddle CW timing can vary with load: each dit and dah edge from AetherSDR's keyer waits in the app's main event queue before it reaches the radio, so a busy computer can stretch or shorten elements ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
+- One user reports a row of evenly spaced peaks on the 10 m panadapter while transmitting FT8 at 28.074 MHz. It is not confirmed: a receive-only check of 10 m on another HL2 found none on a dummy load ([#6577](https://github.com/aethersdr/AetherSDR/issues/6577)).
+
+### What has not been tested
+
+This page was checked with one Hermes-Lite 2 (gateware 74) on macOS, at one station. Reports from other setups are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)). Not yet tested:
+
+- Windows, and boards built on the HL2. Linux has had one short check, without a desktop or sound hardware.
+- Transmitting into an antenna: every transmit test went into a dummy load.
+- Calibrated power: the forward power and SWR readings are not checked against a calibrated meter, so they are not calibrated watts.
+- CW sent with a key on the radio's own jack.
+- What the radio does when AetherSDR disconnects or crashes while transmitting.
+- Two HL2s used from one computer.
 
 ## Troubleshooting
 

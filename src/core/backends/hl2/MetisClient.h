@@ -889,6 +889,8 @@ private:
     friend struct MetisClientTestAccess; // socket-free transport-state injection
     std::function<qint64(const std::array<std::uint8_t, kUsbPacketSize>&)> m_packetSinkForTest;
     std::function<qint64(const std::array<std::uint8_t, 64>&)> m_commandSinkForTest;
+    // Replaces the socket in start(), which then returns this (hl2_persist_*_test).
+    std::function<bool(const Params&)> m_startTransportForTest;
     std::deque<Cc> m_oneShot;           // which register pair to send next
     // The single RQST slot. Drained AFTER m_oneShot, never before: a one-shot is
     // a write the operator asked for, and letting a read-back overtake it would

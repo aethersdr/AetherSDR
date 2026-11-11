@@ -6,6 +6,7 @@
 #include <QJsonValue>
 #include <QtGlobal>
 #include <algorithm>
+#include <QThread>
 
 namespace AetherSDR {
 
@@ -72,32 +73,36 @@ void EqualizerModel::applyEqStatus(const QMap<QString, QString>& kvs, bool isTx)
 
 void EqualizerModel::setTxEnabled(bool on)
 {
+    if (QThread::currentThread() != thread()) { return; }
     m_txEnabled = on;
-    emit commandReady(QString("eq TXsc mode=%1").arg(on ? "True" : "False"));
+    emit controlRequested({GraphicEqRequest::Path::Transmit, GraphicEqRequest::Field::Enabled, 0, int(on)});
     emit txStateChanged();
     emit operatorEdited();
 }
 
 void EqualizerModel::setRxEnabled(bool on)
 {
+    if (QThread::currentThread() != thread()) { return; }
     m_rxEnabled = on;
-    emit commandReady(QString("eq RXsc mode=%1").arg(on ? "True" : "False"));
+    emit controlRequested({GraphicEqRequest::Path::Receive, GraphicEqRequest::Field::Enabled, 0, int(on)});
     emit rxStateChanged();
     emit operatorEdited();
 }
 
 void EqualizerModel::setTxBand(Band b, int dB)
 {
+    if (QThread::currentThread() != thread() || b < B63 || b >= BandCount || dB < kMinBandDb || dB > kMaxBandDb) { return; }
     m_txBands[b] = dB;
-    emit commandReady(QString("eq TXsc %1Hz=%2").arg(kBandKeys[b]).arg(dB));
+    emit controlRequested({GraphicEqRequest::Path::Transmit, GraphicEqRequest::Field::BandGain, int(b), dB});
     emit txStateChanged();
     emit operatorEdited();
 }
 
 void EqualizerModel::setRxBand(Band b, int dB)
 {
+    if (QThread::currentThread() != thread() || b < B63 || b >= BandCount || dB < kMinBandDb || dB > kMaxBandDb) { return; }
     m_rxBands[b] = dB;
-    emit commandReady(QString("eq RXsc %1Hz=%2").arg(kBandKeys[b]).arg(dB));
+    emit controlRequested({GraphicEqRequest::Path::Receive, GraphicEqRequest::Field::BandGain, int(b), dB});
     emit rxStateChanged();
     emit operatorEdited();
 }
