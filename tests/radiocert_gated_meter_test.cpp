@@ -226,13 +226,11 @@ int main(int argc, char** argv)
               "the report carries the drive the run keyed at");
     }
 
-    // ---- THE CASE AN EARLIER REVISION GOT WRONG: peak above the gate, no
-    // window actually cleared it. The producer gates on each window's LAST
-    // value, so this state is real on hardware (w5jwp's finding 2 on #7064):
-    // peak 900, gate 320, zero clears, SWR correctly withheld. Judging on the
-    // peak called this a defect and recommended deleting a working meter --
-    // #7063 all over again, one revision in. The clears count is what makes
-    // the verdict exact, so this must read INCONCLUSIVE.
+    // ---- Peak above the floor, no window passed the producer's gates: the
+    // HL2's key-on and speech-pause gate withheld every window (peak 900,
+    // floor 320, zero passes). Judging on the peak would call a working meter
+    // a defect, so this must read INCONCLUSIVE, and the reason must name the
+    // gate that held rather than advise more drive.
     {
         RadioModel radio;
         std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(new GatedBackend()));
@@ -260,6 +258,12 @@ int main(int argc, char** argv)
         check(!concern.contains(QLatin1String("stop defining them"))
                   || !concern.contains(QLatin1String("TX:SWR")),
               "and the report does not recommend deleting the meter");
+        const QString reason = swr.value(QStringLiteral("inconclusiveReason")).toString();
+        check(reason.contains(QLatin1String("key-on and speech-pause gate"))
+                  && reason.contains(QLatin1String("900")),
+              "a peak above the floor names the key-on and speech-pause gate");
+        check(!reason.contains(QLatin1String("raise drive")),
+              "a peak above the floor does not advise raising drive");
     }
 
     // ---- NIT 4: at full drive, "raise drive" is not a remedy. A forward

@@ -1205,12 +1205,12 @@ private:
     // Drops keyed SWR from speech-pause windows; see KeyedSwrGate.
     KeyedSwrGate m_swrGate;
 
-    // Keyed publish windows that cleared the SWR gate, counted on the SAME value
-    // publishTelemetry() gates (*t.forwardPowerRaw, the window's last reading) and
-    // not on the window peak, which the gate is never applied to. That is what
-    // makes it exact in both directions for a consumer (#7063). Per-over: reset on
-    // key-down by setKeying(), not on key-up, since a diagnostic samples the
-    // snapshot after unkeying as well as during.
+    // Keyed publish windows that passed every gate publishTelemetry() applies to
+    // TX:SWR: the forward reading it uses (the window peak when both peaks are
+    // present), the kMinForwardCountsForSwr floor, and m_swrGate. Only the
+    // reverse reading is left out, so a counted window that published nothing is
+    // a real defect (#7063). Per-over: reset on key-down by setKeying(), not on
+    // key-up, since a diagnostic samples the snapshot after unkeying as well.
     int m_keyedSwrGateClears = 0;
 
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept

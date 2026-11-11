@@ -111,8 +111,6 @@ struct Hl2TxGateTestAccess {
         else
             b.m_rxAdvanceClock.invalidate();
     }
-    static void setKeyed(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
-    static int swrGateClears(const Hl2Backend& b) { return b.m_keyedSwrGateClears; }
     static double fwdPeakReleaseAlpha() { return Hl2Backend::kFwdPeakReleaseAlpha; }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
     // Stops the timer first, so this proves what the callback decides, not
@@ -739,52 +737,70 @@ static void swrGateHealthRows()
               && health(b, kClears).isValid(),
           "swr gate: a peak publishes the gate, the clears count and the peak");
 
-    // THE CASE THE VERDICT TURNS ON. The gate is applied to the window's LAST
-    // value, so a peak above it does NOT mean it was cleared: here the peak is
-    // 400 against a gate of 320 while the gated value is 90, SWR stays
-    // withheld, and the clears count must stay 0. A consumer reading the peak
-    // would call this a defect; reading the count it correctly calls it
-    // suppressed (#7063).
-    Access::setKeyed(b, true);
-    hl2::Hl2Telemetry peakOnly;
-    peakOnly.forwardPowerRaw = 90;
-    peakOnly.reversePowerRaw = 5;
-    peakOnly.forwardPowerPeakRaw = 400;
-    Access::publish(b, peakOnly);
-    check(health(b, kClears).toInt() == 0
-              && health(b, kPeak).toInt() == 400
-              && !health(b, "swr").isValid(),
-          "swr gate: a gate-clearing PEAK with a below-gate last value "
-          "counts no clears and publishes no SWR");
+    // THE COUNT IS "WINDOWS WHERE SWR WAS DUE": every gate publishTelemetry()
+    // applies to TX:SWR except the reverse reading. Keyed, with both peaks, the
+    // forward value is the window peak, and m_swrGate withholds the key-on and
+    // speech-pause windows even above the floor. The count must not move for a
+    // withheld window, or radiocert would call a correctly suppressed meter a
+    // defect (#7063).
+    const auto publishSwr = [](Hl2Backend& backend, const hl2::Hl2Telemetry& t) {
+        QSignalSpy spy(&backend, &IRadioBackend::meterUpdate);
+        Access::publish(backend, t);
+        for (const QList<QVariant>& args : spy) {
+            if (args.at(0).toString() == QStringLiteral("TX:SWR"))
+                return true;
+        }
+        return false;
+    };
+    const auto keyedPair = [](int fwd, int rev) {
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = fwd;
+        t.forwardPowerPeakRaw = fwd;
+        t.reversePowerRaw = rev;
+        t.reversePowerPeakRaw = rev;
+        return t;
+    };
+    Access::setKeyedFlag(b, true);
+    const hl2::Hl2Telemetry loud = keyedPair(1000, 10);
+    bool keyOnFed = false;
+    for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+        keyOnFed = publishSwr(b, loud) || keyOnFed;
+    check(health(b, kClears).toInt() == 0 && health(b, kPeak).toInt() == 1000 && !keyOnFed,
+          "swr gate: key-on windows above the floor are withheld by m_swrGate and "
+          "count nothing");
 
-    // The gated value clears it: the count moves, and a missing SWR from here
-    // on is a real defect rather than a suppression.
-    hl2::Hl2Telemetry gated;
-    gated.forwardPowerRaw = hl2::kMinForwardCountsForSwr;
-    gated.reversePowerRaw = 10;
-    gated.forwardPowerPeakRaw = 500;
-    Access::publish(b, gated);
-    check(health(b, kClears).toInt() == 1 && health(b, "swr").isValid(),
-          "swr gate: a last value AT the gate counts a clear and feeds SWR");
+    check(publishSwr(b, loud) && health(b, kClears).toInt() == 1,
+          "swr gate: the first window past key-on counts and feeds TX:SWR");
 
-    // COUNTED ON THE GATE, NOT ON THE RATIO. A window that cleared the gate
-    // with no reverse reading publishes no SWR, and must still count — that is
-    // the fault a diagnostic has to stay free to call, so defining the counter
-    // as "windows that published SWR" would hide it.
+    // A speech pause above the floor: 400 counts is under 0.7 of the envelope
+    // the 1000-count windows left, so m_swrGate withholds it.
+    check(!publishSwr(b, keyedPair(400, 5)) && health(b, kClears).toInt() == 1,
+          "swr gate: a window m_swrGate rejects above the floor does not count");
+
+    // BELOW THE FLOOR, on an over whose envelope m_swrGate would accept: only
+    // the floor withholds it.
+    Access::pastKeyOn(b);
+    check(!publishSwr(b, keyedPair(hl2::kMinForwardCountsForSwr - 20, 3))
+              && health(b, kClears).toInt() == 1,
+          "swr gate: a window below the forward floor does not count");
+
+    // COUNTED ON THE GATES, NOT ON THE RATIO. A window with no reverse reading
+    // publishes no SWR and must still count: that is the fault a diagnostic has
+    // to stay free to call. With no reverse peak the pair falls back to the
+    // last values, which m_swrGate does not judge.
     hl2::Hl2Telemetry noReverse;
     noReverse.forwardPowerRaw = hl2::kMinForwardCountsForSwr + 50;
     noReverse.forwardPowerPeakRaw = 500;
-    Access::publish(b, noReverse);
-    check(health(b, kClears).toInt() == 2 && !health(b, "swr").isValid(),
-          "swr gate: a cleared gate with no reverse reading still counts");
+    check(!publishSwr(b, noReverse) && health(b, kClears).toInt() == 2,
+          "swr gate: a window that passed the gates with no reverse reading still counts");
 
     // UNKEYED WINDOWS DO NOT COUNT. The count answers "did this transmission
-    // reach the level where SWR is meaningful", and the idle ADC artefact must
-    // not be able to answer it yes.
-    Access::setKeyed(b, false);
-    Access::publish(b, gated);
+    // reach the level where SWR is due", and the idle ADC artefact must not be
+    // able to answer it yes.
+    Access::setKeyedFlag(b, false);
+    Access::publish(b, keyedPair(1000, 10));
     check(health(b, kClears).toInt() == 2,
-          "swr gate: an unkeyed window clearing the gate does not count");
+          "swr gate: an unkeyed window above the floor does not count");
 
     Access::fakeStreamingLink(b, false);
     check(!health(b, kGate).isValid() && !health(b, kClears).isValid()

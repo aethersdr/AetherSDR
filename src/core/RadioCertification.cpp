@@ -370,14 +370,15 @@ void RadioCertification::observeKeyedRf()
         if (ok)
             m_swrGateCounts = counts;
     }
-    // HOW MANY KEYED WINDOWS CLEARED THE GATE — what the verdict turns on,
-    // because the producer counts it on the value it gates, so it is exact in BOTH
-    // directions: 0 means the gate was never cleared and a silent meter is
-    // explained, above 0 means it was cleared and a silent meter is a real defect.
-    // The window peak cannot say the second thing — the gate is not applied to
-    // it. The count is cumulative in the backend over the whole over, so sampling
-    // it a few times per run cannot miss a window. A negative count means no gate
-    // was declared, which is NOT a cleared gate: the branch below then declines.
+    // HOW MANY KEYED WINDOWS PASSED THE PRODUCER'S GATES — what the verdict turns
+    // on. The backend counts the windows its own suppression decision let through
+    // (everything but the reverse reading), so it is exact in BOTH directions: 0
+    // means SWR was never due and a silent meter is explained, above 0 means it
+    // was due and a silent meter is a real defect. The window peak cannot say the
+    // second thing: a peak above the floor can still be withheld by the key-on
+    // and speech-pause gate. The count is cumulative over the whole over, so
+    // sampling it a few times per run cannot miss a window. A negative count means
+    // no gate was declared, which is NOT a passed gate: the branch below declines.
     const QVariant clears =
         health.values.value(
             QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed));
@@ -1307,13 +1308,13 @@ void RadioCertification::stageMeterInventory()
         // same as a gate that was cleared.
         {QStringLiteral("backendSwrGateCounts"),
          m_swrGateCounts >= 0 ? QJsonValue(m_swrGateCounts) : QJsonValue()},
-        // THE FIELD THE VERDICT TURNS ON: windows that cleared that gate,
-        // counted by the producer on the value it gates. 0 explains a silent
+        // THE FIELD THE VERDICT TURNS ON: keyed windows that passed every gate
+        // the producer applies before publishing SWR. 0 explains a silent
         // meter; above 0 means a silent meter is a defect.
         {QStringLiteral("backendSwrGateClearsWhileKeyed"),
          m_swrGateClears >= 0 ? QJsonValue(m_swrGateClears) : QJsonValue()},
-        // Reported for scale only — how far below the gate the run sat. No
-        // verdict rests on it; the gate is not applied to a peak.
+        // Reported for scale only — how far below the floor the run sat. No
+        // verdict rests on it: a peak above the floor can still be withheld.
         {QStringLiteral("maxForwardCountsWhileKeyed"),
          m_keyedFwdCountsMax >= 0 ? QJsonValue(m_keyedFwdCountsMax) : QJsonValue()},
         {QStringLiteral("maxDrivePercentWhileKeyed"),
@@ -1374,11 +1375,12 @@ void RadioCertification::stageMeterInventory()
             // than reporting as merely stale".
             //
             // == 0, NOT "the peak was below the gate". The producer counts the
-            // windows that cleared its gate on the value it gates, so 0 is a
-            // fact about every window of the over rather than an inference from
-            // a quantity the gate was never applied to. Above 0 is equally
-            // conclusive the other way, which is why this branch declines then
-            // and lets the real-defect verdict stand.
+            // windows its own suppression decision let through, so 0 is a fact
+            // about every window of the over rather than an inference from the
+            // peak. Above 0 is equally conclusive the other way, which is why
+            // this branch declines then and lets the real-defect verdict stand.
+            // A peak at or above the floor with 0 passes means the key-on and
+            // speech-pause gate withheld every window, which drive cannot fix.
             //
             // THE REMEDY DEPENDS ON DRIVE. At less than full drive, "raise it"
             // is both true and actionable. At full drive it is neither: a
@@ -1387,10 +1389,22 @@ void RadioCertification::stageMeterInventory()
             // and excusing it with "raise drive" would be a softer verdict than
             // this diagnostic gave before the change.
             const bool atFullDrive = m_keyedDrivePercentMax >= 100;
-            untestedBecause = QStringLiteral(
+            const bool peakReachedFloor = m_keyedFwdCountsMax >= m_swrGateCounts;
+            untestedBecause = peakReachedFloor
+                ? QStringLiteral(
+                      "the backend suppressed this meter: it publishes it only on "
+                      "keyed windows that reach %1 forward counts and pass its "
+                      "key-on and speech-pause gate. The sampled window peak "
+                      "reached %2, but no keyed window in this run passed that "
+                      "gate. That is the backend working as designed, not a dead "
+                      "meter: the first windows of every over are withheld, so key "
+                      "a steady carrier for longer to exercise it")
+                      .arg(m_swrGateCounts)
+                      .arg(m_keyedFwdCountsMax)
+                : QStringLiteral(
                 "the backend suppressed this meter: it publishes it only above "
-                "%1 forward counts, and no keyed window in this run cleared "
-                "that gate (the sampled window peak reached %2). %3")
+                "%1 forward counts, and no keyed window in this run reached "
+                "that floor (the sampled window peak reached %2). %3")
                 .arg(m_swrGateCounts)
                 .arg(m_keyedFwdCountsMax)
                 .arg(atFullDrive

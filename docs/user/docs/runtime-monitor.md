@@ -78,12 +78,12 @@ On a [Hermes-Lite 2](./hermes-lite-2.md), the **Directional coupler (uncalibrate
 | Row | What it means |
 |-----|---------------|
 | **Forward counts required for SWR** | The threshold the forward reading must reach before SWR is published. Below it, the **SWR** row stays blank by design. |
-| **Keyed windows clearing the SWR gate** | How many readings in this transmission reached that threshold. **0** means SWR has not been measured yet this transmission; any higher number means it has. Reset each time you key. |
+| **Keyed windows clearing the SWR gate** | How many readings in this transmission were due an SWR measurement. **0** means SWR has not been measured yet this transmission; any higher number means it has. Reset each time you key. |
 | **Forward (raw counts, window peak)** | The highest forward reading seen, so you can tell whether you are just short of the threshold or far below it. |
 
-**A peak above the threshold does not mean SWR was measured.** The peak is the highest reading in a period; the threshold is applied to the reading AetherSDR publishes at the end of each period, which is usually lower. On speech or CW, peaks can sit well above the threshold while every published reading stays under it. **Keyed windows clearing the SWR gate** is the row that answers the question — if it reads 0, no SWR measurement has been taken, however high the peak went.
+**A peak above the threshold does not mean SWR was measured.** AetherSDR also holds SWR back for the first moments of each transmission and through pauses in speech, when the reading would describe the start of the carrier or a gap rather than your antenna. On speech, peaks can sit well above the threshold while those readings are withheld. **Keyed windows clearing the SWR gate** is the row that answers the question: if it reads 0, no SWR measurement has been taken, however high the peak went.
 
-To get a reading, key into a load at more power: a few watts is plenty on an HL2. If the count stays at 0 with the power slider at maximum, that points at the forward-power reading itself rather than at SWR. See [Before You Transmit](./before-you-transmit.md).
+To get a reading, key a steady carrier into a load for a second or more, at a few watts: that is plenty on an HL2. If the count stays at 0 with the power slider at maximum, that points at the forward-power reading itself rather than at SWR. See [Before You Transmit](./before-you-transmit.md).
 
 Radio Health is a different thing from the **HLTH** (Antenna Health) applet, which trends SWR and forward power for your antenna system.
 
