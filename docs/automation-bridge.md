@@ -254,7 +254,9 @@ unrelated operator, DAX, or TCI transmissions; the force-unkey watchdog arms
 when the bridge actually accepts a TX-capable action.
 
 For proof-build process owners, `AETHER_AUTOMATION_NO_TX=1` pins this gate off
-even when the operator preference was previously enabled. The Radio Setup
+even when the operator preference was previously enabled. The HL2 backend
+reads the same answer (`AutomationBridgeSettings::launchTxAllowed()`) for its
+own transmit gate in an automation run, so the two layers agree. The Radio Setup
 checkbox is disabled for that process and live attempts to enable it are
 ignored. `app_instance launch` always sets this pin and verifies it through
 authenticated `whoami` before returning success.

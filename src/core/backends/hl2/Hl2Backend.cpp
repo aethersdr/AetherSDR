@@ -333,19 +333,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_rx.assign(1, Receiver{});
 
     // Transmit availability, decided once so it cannot change under a key.
-    // Interactive runs can transmit; automation runs defer to the bridge's TX
-    // gate (AETHER_AUTOMATION_ALLOW_TX) rather than an HL2-specific variable.
+    // Interactive runs can transmit; automation runs take the bridge's own
+    // launch answer (ALLOW_TX, the persisted toggle, NO_TX), so the two gates agree.
     const bool automation = qEnvironmentVariableIsSet("AETHER_AUTOMATION");
-    // The bridge's TX gate has TWO sources and both must be honoured, or this
-    // backend disagrees with the layer the operator actually configured:
-    // AutomationServer::start() reads the env var, and MainWindow applies the
-    // persisted GUI toggle through setTxAllowed(). Checking only the env var
-    // meant the bridge would accept a key, log "key ptt ON" and return ok:true
-    // while nothing keyed — a silent disagreement, which is worse than either
-    // answer on its own.
-    const bool automationAllowsTx =
-        qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
-        || AutomationBridgeSettings::txAllowed();
+    const bool automationAllowsTx = AutomationBridgeSettings::launchTxAllowed();
     m_txAllowed = g_hostOffersTransmit.load() && (!automation || automationAllowsTx);
     if (m_txAllowed) {
         m_metis->enableTransmit(true);
@@ -355,7 +346,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         qInfo() << "Hl2Backend: receive only — this host has no HL2 transmit path";
     } else {
         qInfo() << "Hl2Backend: transmit BLOCKED — automation bridge active "
-                   "without AETHER_AUTOMATION_ALLOW_TX";
+                   "without AETHER_AUTOMATION_ALLOW_TX, or with AETHER_AUTOMATION_NO_TX";
     }
 
     m_ioThread = new QThread(this);

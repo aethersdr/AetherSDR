@@ -3344,14 +3344,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         }
         // TX-automation gate — set AFTER start(), which reads
         // AETHER_AUTOMATION_ALLOW_TX into m_txAllowed and would otherwise
-        // clobber a pre-start value. Fold in the persisted operator opt-in so
-        // a GUI enable survives restart; accepted TX actions arm the watchdog.
-        const bool txPinnedOff =
-            qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
-        guard->setTxAllowed(
-            !txPinnedOff
-            && (qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
-                || AutomationBridgeSettings::txAllowed()));
+        // clobber a pre-start value. The same answer closes the HL2's own gate,
+        // so the two layers cannot disagree; accepted TX actions arm the watchdog.
+        guard->setTxAllowed(AutomationBridgeSettings::launchTxAllowed());
         // Observe-only gate (#4188) — apply the persisted operator opt-in after
         // start() so the bridge comes up read-only if the box is checked. An env
         // override lets headless/CI pin the bridge observe-only regardless.

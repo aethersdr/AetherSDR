@@ -987,8 +987,8 @@ private:
     QObject* m_dspBuildContext = nullptr;
 
     // Process-wide TX availability, decided at construction: interactive runs may
-    // transmit; automation defers to AETHER_AUTOMATION_ALLOW_TX. Mirrored into
-    // MetisClient, which refuses independently at the wire.
+    // transmit; automation defers to AutomationBridgeSettings::launchTxAllowed().
+    // Mirrored into MetisClient, which refuses independently at the wire.
     bool m_txAllowed = false;
     Hl2Telemetry m_telemetry;
     // Cumulative EP6 sequence gaps, mirrored here from MetisClient::dropsUpdated

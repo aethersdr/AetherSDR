@@ -9759,6 +9759,12 @@ add_executable(hl2_rx_only_tx_chain_test tests/hl2_rx_only_tx_chain_test.cpp)
 target_include_directories(hl2_rx_only_tx_chain_test PRIVATE src tests)
 target_link_libraries(hl2_rx_only_tx_chain_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rx_only_tx_chain_test COMMAND hl2_rx_only_tx_chain_test)
+# AETHER_AUTOMATION_NO_TX closes the HL2's own transmit gate as well as the
+# bridge's. Constructed backend only — no socket, no DSP, nothing keyed.
+add_executable(hl2_automation_no_tx_gate_test tests/hl2_automation_no_tx_gate_test.cpp)
+target_include_directories(hl2_automation_no_tx_gate_test PRIVATE src tests)
+target_link_libraries(hl2_automation_no_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_automation_no_tx_gate_test COMMAND hl2_automation_no_tx_gate_test)
 # What an HL2 comes back with after a restart, through the operator's setters
 # and the production store/load: every offered mode with its passband, the last
 # band, per-band drive and LNA gain, a second receiver's own passband; and two
@@ -11124,6 +11130,7 @@ set(AETHER_SETTINGS_CONSUMERS
     weather_radar_loading_test
     hl2_gain_restore_test
     hl2_rx_only_tx_chain_test
+    hl2_automation_no_tx_gate_test
     hl2_persist_restart_test
     hl2_tx_mode_reconnect_test
     hl2_persist_two_radios_test
