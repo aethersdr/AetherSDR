@@ -82,6 +82,7 @@ class TciServer : public QObject {
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
     friend class TciExtensionSetTest;
+    friend class TciTxPassbandExtensionTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -249,6 +250,14 @@ private:
     void announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
+    // Extension group `tx_filter_band` (TciTxPassbandExtension.h).
+    void registerTxPassbandGroup();
+    TciExtensionSet::Result handleTxPassband(const QStringList& args);
+    bool txPassbandOffered() const;
+    QString txPassbandStateLine() const;
+    int extensionTxTrx() const;
+    void queueTxPassbandNotice();
+    bool broadcastTxPassband();
     void broadcastBinary(const QByteArray& data);
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
@@ -515,6 +524,10 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Extension set, TX passband notice: posted, then rate-limited.
+    QTimer*           m_txPassbandRateTimer{nullptr};
+    bool              m_txPassbandPending{false};
+    bool              m_txPassbandSendPosted{false};
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};

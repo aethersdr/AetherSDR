@@ -172,7 +172,7 @@ void productionSetIsEmpty()
     Wire a;
     TciExtensionSetTest::attach(server, a.client, model);
     check(TciExtensionSetTest::offeredTokens(server).isEmpty(),
-          "no command group is offered yet");
+          "a radio that is not connected is offered no group");
     a.send("aethersdr_ext_enable:true;");
     check(a.take() == QStringList{QStringLiteral("aethersdr_ext:1;")},
           "enabling answers aethersdr_ext:1; and nothing else");

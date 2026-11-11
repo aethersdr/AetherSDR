@@ -3,6 +3,7 @@
 #include "core/backends/RadioCapabilities.h"
 #include "AppActivity.h"
 #include "TciProtocol.h"
+#include "TciTxPassbandExtension.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
 #include "AppSettings.h"
@@ -646,6 +647,17 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         broadcastPower();
         m_powerRateTimer->start();
     });
+
+    // Extension set, TX passband: the same limiter for its notification.
+    m_txPassbandRateTimer = new QTimer(this);
+    m_txPassbandRateTimer->setSingleShot(true);
+    m_txPassbandRateTimer->setInterval(kPowerRateLimitMs);
+    connect(m_txPassbandRateTimer, &QTimer::timeout, this, [this]() {
+        if (m_txPassbandPending && broadcastTxPassband()) {
+            m_txPassbandRateTimer->start();
+        }
+    });
+    registerTxPassbandGroup();
 
     // Debounced DAX RX teardown — see scheduleDaxRelease(). Single-shot; a
     // reconnecting audio client cancels it before it fires.
@@ -3797,6 +3809,101 @@ void TciServer::handleExtensionCommand(TciClient* ws, const QString& cmd)
     if (!result.broadcast.isEmpty()) {
         broadcastExtension(result.broadcast);
     }
+}
+
+int TciServer::extensionTxTrx() const
+{
+    const int trx = m_trxMap.txSliceTrxOrNone(m_model);
+    return trx < 0 ? m_lastTxTrx : trx;
+}
+
+bool TciServer::txPassbandOffered() const
+{
+    return m_model
+        && TciTxPassbandExtension::offered(m_model->isConnected(),
+                                           m_model->backendCapabilities());
+}
+
+QString TciServer::txPassbandStateLine() const
+{
+    const TransmitModel& tx = m_model->transmitModel();
+    return TciTxPassbandExtension::stateLine(extensionTxTrx(), tx.txFilterLow(), tx.txFilterHigh());
+}
+
+// The TX passband group (RFC #7181). A set goes through
+// TransmitModel::setTxFilter(), the desktop control's path and clamps.
+void TciServer::registerTxPassbandGroup()
+{
+    TciExtensionSet::Group group;
+    group.token = QString::fromLatin1(TciTxPassbandExtension::kToken);
+    group.commands = QStringList{QString::fromLatin1(TciTxPassbandExtension::kCommand)};
+    group.offered = [this] { return txPassbandOffered(); };
+    group.stateLines = [this] { return QStringList{txPassbandStateLine()}; };
+    group.handle = [this](const QString&, const QStringList& args) {
+        return handleTxPassband(args);
+    };
+    registerExtensionGroup(std::move(group));
+    if (m_model) {
+        connect(&m_model->transmitModel(), &TransmitModel::txFilterCutoffChanged,
+                this, [this](int, int) { queueTxPassbandNotice(); });
+    }
+}
+
+TciExtensionSet::Result TciServer::handleTxPassband(const QStringList& args)
+{
+    const std::optional<TciTxPassbandExtension::Request> request
+        = TciTxPassbandExtension::parse(args);
+    if (!request || request->trx != extensionTxTrx() || !txPassbandOffered()) {
+        return {};
+    }
+    TciExtensionSet::Result result;
+    if (!request->isSet) {
+        result.reply = txPassbandStateLine();
+        return result;
+    }
+    TransmitModel& tx = m_model->transmitModel();
+    const auto wanted = TciTxPassbandExtension::normalise(
+        request->lowHz, request->highHz, m_model->backendCapabilities());
+    const int lowBefore = tx.txFilterLow();
+    const int highBefore = tx.txFilterHigh();
+    tx.setTxFilter(wanted.lowHz, wanted.highHz);
+    // A change is notified to every enabled client. A clamp that changed
+    // nothing still tells the requester what was applied.
+    const bool changed = tx.txFilterLow() != lowBefore || tx.txFilterHigh() != highBefore;
+    const bool clamped = tx.txFilterLow() != request->lowHz || tx.txFilterHigh() != request->highHz;
+    if (!changed && clamped) {
+        result.reply = txPassbandStateLine();
+    }
+    return result;
+}
+
+// Posted, so a ClientEq drag step (low, then high) goes out as one pair,
+// then rate-limited like drive:. Built on #7070's relay.
+void TciServer::queueTxPassbandNotice()
+{
+    m_txPassbandPending = true;
+    if (m_txPassbandSendPosted || m_txPassbandRateTimer->isActive()) {
+        return;
+    }
+    m_txPassbandSendPosted = true;
+    QMetaObject::invokeMethod(this, [this]() {
+        m_txPassbandSendPosted = false;
+        if (broadcastTxPassband()) {
+            m_txPassbandRateTimer->start();
+        }
+    }, Qt::QueuedConnection);
+}
+
+bool TciServer::broadcastTxPassband()
+{
+    m_txPassbandPending = false;
+    const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
+        [](const ClientState& client) { return client.extensionsEnabled; });
+    if (!anyEnabled || !txPassbandOffered()) {
+        return false;
+    }
+    broadcastExtension(txPassbandStateLine());
+    return true;
 }
 
 void TciServer::broadcastBinary(const QByteArray& data)
