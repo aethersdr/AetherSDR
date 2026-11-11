@@ -100,10 +100,26 @@ count while transmitting.
 Every transmit is keyed by a person, into a dummy load. Nothing here keys
 the radio.
 
+## On a FLEX-8600 (SmartSDR 4.3.16), no RF, 2026-11-11
+
+- The waveform starts as a legacy waveform, connects, and registers: PS
+  appears in every slice's `mode_list` within a second of installing.
+- A slice set to PS reports `mode=PS chain_mode=RAW filter_lo=300
+  filter_hi=3000`, so the RAW I/Q is cut to the slice's one-sided filter.
+- With PS selected, DAX audio from that slice flows, and the waveform is
+  still registered afterwards.
+- `filt <slice> -3000 3000` (and wider) is accepted with `R|0` on a PS slice,
+  but no status reports new edges, so whether a RAW slice takes a symmetric
+  or wider filter is still open.
+- The radio's transmit filter reads `lo=50 hi=4000`. If the RAW transmit
+  path is cut to that one-sided band, only the products above the carrier
+  inside it can be corrected; the first transmit test settles it.
+
 ## Not yet known
 
 - Whether the radio's transmit filter or ALC still acts on a `RAW`
-  waveform's output, and how wide that path is.
+  waveform's output, how wide that path is, and whether it can be made
+  symmetric about the carrier.
 - Whether DAX IQ reaches an on-radio process (it doesn't reach a container
   on the FLEX-8600) and whether a FLEX-6000 with one SCU can monitor its
   own transmit frequency in full duplex.
