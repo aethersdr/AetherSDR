@@ -94,6 +94,11 @@ Right-click any slot row to access:
 
 If an import or export fails, the destination is left intact — a failed export never leaves a half-written file over an existing one. With the Radio DVK, **Import WAV…** and **Export WAV…** stay grayed out for about 3 seconds after an import while the radio's file server finishes.
 
+Radio WAV transfers stay with the connection and slot selected when the file
+dialog opened. If the radio reconnects while that dialog is open, choose the
+operation again. Firmware, waveform and profile transfers also use the radio's
+file server, so a competing transfer can report that it is busy.
+
 ## Reference
 
 ### Recording slots

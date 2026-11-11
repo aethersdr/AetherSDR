@@ -76,6 +76,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #ifdef HAVE_MIDI
@@ -172,6 +173,7 @@ class UiTickLagMeter;
 class WhatsNewDialog;
 class Nr2WisdomDialog;
 class ProfileManagerDialog;
+class RadioHealthDialog;
 class HelpDialog;
 class SupportDialog;
 class SettingsBrowserDialog;
@@ -431,6 +433,13 @@ private slots:
     void applyOperatorTuningStep(int stepHz);
 
 private:
+    void refreshPanZoomControls();
+    // Why a native-span B/S cannot act on this pan right now, or nullopt.
+    // The B/S enable and every command path ask this one question.
+    std::optional<QString> nativePanZoomBlockedReason(const PanadapterModel* pan) const;
+    // The active band plan's zoom region (low, high MHz) at a frequency.
+    std::optional<std::pair<double, double>> bandPlanZoomRegion(double frequencyMhz,
+                                                                bool segment) const;
     enum class TuneIntent {
         IncrementalTune,
         AbsoluteJump,
@@ -710,6 +719,10 @@ private:
     QString txAudioPathBlockMessage(TxAudioPathBlock block) const;
     bool showTxAudioPathErrorIfBlocked(); // MainWindow_DspApplets.cpp
     void updateTxAudioPathNotice(); // MainWindow_DspApplets.cpp
+    bool txMicChainReady() const;   // MainWindow_DspApplets.cpp
+    void refreshTxMicReadyIndicators(); // MainWindow_DspApplets.cpp
+    void noticeVoiceKeyWithoutInput(); // MainWindow_DspApplets.cpp
+    NoInputVoiceKeyNotice m_noInputVoiceKeyNotice;
     // Binds the Flex-shaped voice controls — PROC and its NOR/DX/DX+ level — to
     // the client-side compressor on a backend that modulates on this host, and
     // publishes that compressor's gain reduction as the TX:COMPPEAK meter.
@@ -943,6 +956,8 @@ private:
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
     void refreshRttyInputStatus();
+    void onRttyDecoderMarkChosen(int hz);
+    void onRttyDecoderShiftChosen(int hz);
     // The RTTY pane's ✕: persist "operator does not want this window" and
     // re-run the refresh, which stops the decoder (#5353).
     void onRttyPanelCloseRequested();
@@ -999,7 +1014,7 @@ private:
     // propagate the frameless toggle without an explicit qobject_cast branch.
     //
     // Slot must be typed QPointer<ConcreteDialog> so the ctor args match.
-    // Example: showOrRaisePersistent(m_profileManagerDialog, &m_radioModel);
+    // Example: showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
     template <class T, class... Args>
     void showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs);
 
@@ -1435,6 +1450,12 @@ private:
     // The WSPR receiver on the radio (tools/wspr-agent): its spots for
     // SpotHub and the panadapter. Main thread; it only polls HTTP.
     WsprSpotFeed*        m_wsprFeed{nullptr};
+    // Reserves the WSPR receiver's slice in RadioModel when the receiver
+    // at `radio` names one, then calls `done`. Waits at most
+    // kWsprSliceReadMs: a radio without the receiver refuses at once.
+    void readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done);
+    static constexpr int kWsprSliceReadMs = 1000;
+    static constexpr int kWsprSliceRecheckMs = 500;
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
@@ -1782,6 +1803,7 @@ private:
     // invokes the verb that record names.
     QPointer<BandscopeDialog> m_bandscopeDialog;
     QPointer<MemoryDialog> m_memoryDialog;
+    QPointer<RadioHealthDialog> m_radioHealthDialog;
     QPointer<NetSchedulerDialog> m_netSchedulerDialog;
     NetScheduler* m_netScheduler{nullptr};
     NetReminderBanner* m_netReminderBanner{nullptr};
@@ -2208,7 +2230,8 @@ private:
     SwrSweepState m_swrSweep;
     QTimer m_swrSweepTimer;
     // Polls the shared client compressor for the TX:COMPPEAK meter and mirrors
-    // its enable state back onto PROC. ClientComp has no change notification.
+    // its enable state back onto PROC, and the shared ClientEq enables back onto
+    // the graphic EQ. Neither has a change notification.
     QTimer m_hostVoiceChainTimer;
     // Last PROC state pushed onto that compressor, so the NOR/DX/DX+ presets are
     // only written when the operator actually changed the level (they overwrite
@@ -2404,6 +2427,8 @@ private:
 #if defined(Q_OS_MACOS) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
+    RadioControlSession m_daxMicOverrideSession{};
+    quint64 m_daxMicOverrideRevision{0};
     bool startDax();
     void stopDax();
     // #2895: react to per-slice DAX channel (re)assignment while the bridge is

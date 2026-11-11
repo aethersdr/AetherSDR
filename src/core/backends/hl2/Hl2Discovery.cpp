@@ -401,7 +401,7 @@ void Hl2Discovery::onReadyRead()
         info.nickname = effectiveNickname(QStringLiteral("hl2"), info.serial, info.model);
         info.version  = QString::fromStdString(gatewareVersionText(*reply));
         // A bare revision number is not self-describing in a status bar.
-        info.versionLabel = QStringLiteral("Gateware");
+        info.versionLabel = QString::fromStdString(gatewareVersionLabel(*reply));
         // A radio already streaming to another client answers with 0x03. Show it
         // as present-but-taken rather than hiding it.
         info.inUse    = reply->streaming;

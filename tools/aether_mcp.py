@@ -435,8 +435,11 @@ TOOLS = [
             "proof build owned by this MCP server. Launch accepts an absolute "
             "AetherSDR worktree and runs only its canonical build artifact, "
             "handing the existing AETHER_MCP_TOKEN to the child in memory. It "
-            "uses a unique explicit socket/label, disables radio autoconnect, "
-            "pins TX automation off, and succeeds only after authenticated "
+            "uses a unique explicit socket/label, preserves the selected saved "
+            "profile (including AETHER_SETTINGS_DIR), and honors "
+            "AutoConnectToLastRadio. Launch can connect the saved radio; use "
+            "only a profile and connection authorized for the task. It pins "
+            "TX automation off and succeeds only after authenticated "
             "whoami matches the child PID and identity. No token is returned, "
             "logged, passed on the command line, or written to settings."),
         "inputSchema": {"type": "object", "properties": {
@@ -520,13 +523,26 @@ TOOLS = [
             "Live JSON snapshot of app/radio state — assert on state "
             "without screenshots. model = audio | dsp | radio | "
             "transmit | slice <selector: id|active|tx> | slices | pan "
-            "<selector: id|active> | pans | flags | kiwi | sync | clock. "
+            "<selector: id|active> | pans | flags | kiwi | sync | clock | daxtx. "
             "Optional `property` returns just that field."),
         "inputSchema": {"type": "object", "properties": {
             "model": {"type": "string"},
             "selector": {"type": "string"},
             "property": {"type": "string"},
         }, "required": ["model"]},
+    },
+    {
+        "name": "dax_tx",
+        "description": (
+            "Request selection or release of this client's DAX TX stream, or "
+            "read its ownership status. take/release require an idle supported "
+            "radio and pass the model's live guards. ok means request admission; "
+            "pending and daxtx report asynchronous progress. Ownership changes "
+            "only on radio status. This does not key TX, change the global DAX "
+            "input flag, move the TX slice, or start audio."),
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["take", "release", "status"]},
+        }, "required": ["action"], "additionalProperties": False},
     },
     {
         "name": "shortcut",
@@ -1095,6 +1111,12 @@ def handle_tool(name, args):
         if args.get("property"):
             req["property"] = str(args["property"])
         return text_result(bridge_request(req))
+
+    if name == "dax_tx":
+        action = str(args.get("action") or "").strip().lower()
+        if action not in ("take", "release", "status") or set(args) - {"action"}:
+            return error_result("dax_tx accepts only action take, release, or status")
+        return text_result(bridge_request({"cmd": "daxTx", "action": action}))
 
     if name == "shortcut":
         # The registry's shortcut verb reads `id` (or `target`), not `value` —

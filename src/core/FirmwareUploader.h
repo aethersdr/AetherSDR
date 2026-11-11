@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/backends/FileTransferRequest.h"
+#include <optional>
+
 #include <QByteArray>
 #include <QMap>
 #include <QMetaObject>
@@ -29,7 +32,7 @@ class FirmwareUploader : public QObject {
 public:
     explicit FirmwareUploader(RadioModel* model, QObject* parent = nullptr);
 
-    void upload(const QString& filePath);
+    void upload(const QString& filePath, std::optional<RadioControlSession> session = {});
     void cancel();
 
     bool isUploading() const { return m_uploading; }
@@ -57,6 +60,7 @@ signals:
     void finished(Outcome outcome, const QString& message);
 
 private:
+    bool m_uploadConnected{false};
     friend class FirmwareUploaderTestAccess;
 
     using Generation = quint64;
@@ -64,7 +68,7 @@ private:
 
     bool beginOperation(const QByteArray& fileData, const QString& fileName);
     void requestUploadPort(Generation generation);
-    void onUploadPortReceived(Generation generation, int code, const QString& body);
+    void onUploadPortReceived(Generation generation, const FileTransferReply& reply);
     void connectUploadSocket(Generation generation, quint16 port);
     void tryFallbackPort(Generation generation);
     void onConnected(Generation generation, QTcpSocket* socket);
@@ -94,6 +98,7 @@ private:
     Generation nextGeneration();
 
     QPointer<RadioModel> m_model;
+    FileTransferHandle m_transfer;
     QPointer<QTcpSocket> m_socket;
     QByteArray m_fileData;
     QString m_fileName;

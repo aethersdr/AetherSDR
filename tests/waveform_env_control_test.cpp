@@ -6,6 +6,9 @@
 #include "RadioSetupControlFixture.h"
 #include "AutomationSensitiveLineEdit.h"
 #include "core/backends/flex/CommandParser.h"
+#include "core/TailnetShimClient.h"
+#include "gui/CanonMessageBox.h"
+#include "gui/TailnetShimDialog.h"
 #include "gui/WaveformEnvironmentDialog.h"
 #include "models/FlexWaveformModel.h"
 
@@ -19,6 +22,7 @@
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTest>
+#include <QTimer>
 
 #include <cstdio>
 #include <optional>
@@ -209,9 +213,9 @@ struct ApplyRig {
         const RadioSetupCompletion callback = backend->replies.at(index);
         callback({kind, kind == RadioSetupReply::Kind::Accepted ? 0 : 0x50000015, message});
     }
-    void container(const QByteArray& json)
+    void container(const QByteArray& json, const QString& name = QStringLiteral("wf-x"))
     {
-        Kvs kvs{{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("version"), QStringLiteral("1")}};
+        Kvs kvs{{QStringLiteral("name"), name}, {QStringLiteral("version"), QStringLiteral("1")}};
         if (!json.isEmpty()) { kvs.insert(QStringLiteral("env"), b64(json)); }
         status(radio, QStringLiteral("waveform container"), kvs);
     }
@@ -812,6 +816,37 @@ void editor()
               && oldApply->accessibleDescription() == oldApply->toolTip(),
           "on older firmware Apply is dimmed with the reason in its tooltip and accessible description");
 }
+// Recreating the tailnet shim's container asks first, and Cancel is the default.
+void shimRecreateAsks()
+{
+    const QString shim = QString::fromLatin1(kTailnetShimContainerName);
+    for (const bool confirm : {false, true}) {
+        ApplyRig rig;
+        rig.container(R"({"OLD":"1"})", shim);
+        WaveformEnvironmentDialog dialog(&rig.radio, shim);
+        int handed = 0;
+        dialog.setApplyHandler([&](const QString&, const WaveformEnvironment&) { ++handed; return true; });
+        QString question;
+        bool cancelDefault = false;
+        QTimer::singleShot(0, [&] {
+            for (QWidget* w : QApplication::topLevelWidgets()) {
+                auto* box = qobject_cast<CanonMessageBox*>(w);
+                if (!box || !box->isVisible()) { continue; }
+                for (QLabel* label : box->findChildren<QLabel*>()) { question += label->text() + QLatin1Char('\n'); }
+                for (QPushButton* b : box->findChildren<QPushButton*>()) {
+                    if (b->text() == QLatin1String("Cancel")) { cancelDefault = b->isDefault(); }
+                    if (b->text() == (confirm ? QLatin1String("Recreate") : QLatin1String("Cancel"))) { b->click(); }
+                }
+            }
+        });
+        buttonNamed(dialog, QStringLiteral("wfEnvApply"))->click();
+        check(question.contains(QLatin1String("off your tailnet"))
+                  && question.contains(TailnetShimDialog::offTailnetWarning()) && cancelDefault,
+              "recreating the shim's container asks, names the tailnet and defaults to Cancel");
+        check(handed == (confirm ? 1 : 0), confirm ? "Recreate in the question applies"
+                                                   : "Cancel in the question recreates nothing");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -825,6 +860,7 @@ int main(int argc, char** argv)
     recreateReplyTimeout();
     stagingFollowsTheRadio();
     editor();
+    shimRecreateAsks();
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

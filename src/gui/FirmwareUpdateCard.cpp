@@ -462,6 +462,7 @@ void FirmwareUpdateCard::startInstall()
     if (!m_model || release.isEmpty() || isBusy()) {
         return;
     }
+    const RadioControlSession session = m_model->controlSession();
     const QPointer<FirmwareUpdateCard> self(this);
     ScopedChildWidget<CanonPrompt> boxOwner(
         tr("Firmware Update"),
@@ -470,9 +471,11 @@ void FirmwareUpdateCard::startInstall()
             .arg(release, m_model->model()),
         tr("Install"), window());
     const int reply = boxOwner.get()->exec();
-    if (!self || !boxOwner || reply != QDialog::Accepted || !m_model) {
+    if (!self || !boxOwner || reply != QDialog::Accepted || !m_model
+        || !m_model->controlSessionCurrent(session)) {
         return;
     }
+    m_preparationSession = std::make_shared<const RadioControlSession>(session);
     m_staging = true;
     m_uploadAfterStage = true;
     setBusy(true);
@@ -487,15 +490,17 @@ void FirmwareUpdateCard::openInstaller()
     if (!m_model || isBusy()) {
         return;
     }
+    const RadioControlSession session = m_model->controlSession();
     const QPointer<FirmwareUpdateCard> self(this);
     const QPointer<RadioModel> model(m_model);
     const QString path = QFileDialog::getOpenFileName(
         window(), tr("Select SmartSDR Installer or Firmware File"), QString(),
         tr("SmartSDR installer or firmware (*.msi *.exe *.ssdr);;MSI installer (*.msi);;"
            "EXE installer (*.exe);;Extracted firmware (*.ssdr);;All files (*)"));
-    if (!self || !model || path.isEmpty()) {
+    if (!self || !model || path.isEmpty() || !model->controlSessionCurrent(session)) {
         return;
     }
+    m_preparationSession = std::make_shared<const RadioControlSession>(session);
     m_staging = true;
     m_uploadAfterStage = false;
     setBusy(true);
@@ -508,8 +513,9 @@ void FirmwareUpdateCard::openInstaller()
 
 void FirmwareUpdateCard::uploadStaged(const QString& path, bool confirmFirst, bool unverifiedDownload)
 {
-    if (!m_model) {
+    if (!m_model || !m_preparationSession || !m_model->controlSessionCurrent(*m_preparationSession)) {
         setBusy(false);
+        setStatus(tr("Original radio session ended; start firmware preparation again."), QStringLiteral("danger"));
         return;
     }
     if (confirmFirst) {
@@ -528,7 +534,8 @@ void FirmwareUpdateCard::uploadStaged(const QString& path, bool confirmFirst, bo
         if (!self || !boxOwner) {
             return;
         }
-        if (reply != QDialog::Accepted || !m_model) {
+        if (reply != QDialog::Accepted || !m_model
+            || !m_model->controlSessionCurrent(*m_preparationSession)) {
             setStep(Step::Idle);
             m_progress->hide();
             setStatus(tr("Firmware is ready; the upload was not started."), QStringLiteral("muted"));
@@ -539,7 +546,7 @@ void FirmwareUpdateCard::uploadStaged(const QString& path, bool confirmFirst, bo
     ensureUploader();
     setStep(Step::Upload);
     m_progress->setValue(0);
-    m_uploader->upload(path);
+    m_uploader->upload(path, *m_preparationSession);
 }
 
 void FirmwareUpdateCard::ensureUploader()

@@ -19,6 +19,14 @@ class PanadapterModel : public QObject {
 
 public:
     explicit PanadapterModel(const QString& panId, QObject* parent = nullptr);
+    ~PanadapterModel() override { cancelIqBinding(); }
+    AudioControlGuard beginIqBinding()
+    {
+        cancelIqBinding();
+        m_iqBindingGuard = AudioControlGuard::create(30000);
+        return m_iqBindingGuard;
+    }
+    void cancelIqBinding() { m_iqBindingGuard.revoke(); }
 
     // Identity
     QString panId() const { return m_panId; }
@@ -159,6 +167,9 @@ public:
     int scopeModeIndex() const { return m_scopeModeIndex; }
     void setScopeModeLabels(const QStringList& labels);
     void setScopeModeIndex(int index);
+    // IRadioBackend::panZoomPlacementChanged; Unknown until the backend reports.
+    PanZoomPlacement zoomPlacement() const { return m_zoomPlacement; }
+    void setZoomPlacement(PanZoomPlacement placement);
     // Normalized setters driven by the backend (aetherd RFC 2.3 — rfgain +
     // antenna promoted to universal typed signals). Each emits its existing
     // change-signal only on an actual change; the wire decode lives in
@@ -262,6 +273,7 @@ signals:
     void attenuatorStepChanged(int step);
     void scopeModeLabelsChanged(const QStringList& labels);
     void scopeModeIndexChanged(int index);
+    void zoomPlacementChanged(AetherSDR::PanZoomPlacement placement);
     void wnbChanged(bool active, int level);
     void wnbStateChanged(bool active, int level, bool updating);
     void wideChanged(bool active);
@@ -287,6 +299,7 @@ signals:
     void noiseFloorRangeChanged(double db);
 
 private:
+    AudioControlGuard m_iqBindingGuard;
     quint64 m_controlRevision{0};
     quint64 m_ownershipRevision{0};
     quint64 m_fftObservationRevision{0};
@@ -321,6 +334,7 @@ private:
     int         m_attenuatorStep{0};
     QStringList m_scopeModeLabels;
     int         m_scopeModeIndex{-1};
+    PanZoomPlacement m_zoomPlacement{PanZoomPlacement::Unknown};
     bool        m_wnbActive{false};
     bool        m_wnbUpdating{false};
     bool        m_wideActive{false};

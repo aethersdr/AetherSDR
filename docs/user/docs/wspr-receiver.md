@@ -19,7 +19,7 @@ It is receive-only: it never transmits, and its slice is never the transmit slic
 
 ## Requirements
 
-- A FLEX-8000 series or Aurora radio, where it runs as a container and so needs the radio's Waveform Processor ready. A FLEX-6000 can install it as a legacy waveform, but this hasn't been tested: its single processor core may not finish decoding a busy band within the two-minute cycle, and the receiver records only once the radio's clock is synchronized, which may not happen on a radio with no time source.
+- A FLEX-8000 series or Aurora radio, where it runs as a container and so needs the radio's Waveform Processor ready. A FLEX-6000 can install it as a legacy waveform, but this hasn't been tested: its single processor core may not finish decoding a busy band within the two-minute cycle. The receiver records only once the radio's clock is synchronized; on a FLEX-6000 it takes the radio's own report that it has settled on an NTP source, so a radio with no time source never starts recording.
 - AetherSDR connected to the radio over its **local network** or through [Remote Access](./tailscale-remote-access.md) version 0.5.2 or later. SmartLink can't reach the receiver.
 - One free slice. The receiver takes one of the radio's slices for as long as it runs.
 
@@ -31,6 +31,10 @@ It is receive-only: it never transmits, and its slice is never the transmit slic
 The receiver ships inside AetherSDR, so nothing is downloaded. It takes less than 500 KB on the radio. It starts within seconds, and listens on 20 m until you change that.
 
 To remove it, click **Remove** (FLEX-8000 and Aurora) or **Uninstall** (FLEX-6000) on its **AetherWSPR** row. This also removes its settings.
+
+## Updating it
+
+When the radio runs an older receiver than the one in this AetherSDR, its **Configure...** window shows **Update**. Click it and confirm: AetherSDR removes the old receiver, installs the new one, and gives it the old one's settings once it starts, which can take a minute or two. Keep the window open until it says the update is done. Updating claims the new receiver for this computer.
 
 ## Configuring it
 
@@ -82,6 +86,8 @@ Open **Settings → SpotHub...** and choose the **WSPR** tab, then click **Start
 
 ## Good to know
 
+- AetherSDR leaves the receiver's slice alone: its letter shows as taken, labeled **WSPR receiver**, and AetherSDR opens a slice of its own. Other programs, SmartSDR among them, may still show it as theirs. Don't tune it there, because the receiver moves it back on its next cycle.
+- AetherSDR doesn't give the receiver's DAX channel to its own slices when it picks one itself: when restoring your last session, or when a TCI program asks for audio. In the slice's **DAX** list, the receiver's channel is labeled **WSPR receiver**. You can still choose it, but that takes it from the receiver, which then stops recording. If the receiver starts over while you're connected, AetherSDR finds its new slice within a second or so. While SpotHub's WSPR reading runs, each status read also checks which slice the receiver is using.
 - The radio removes the receiver's slice when its last GUI client disconnects, so closing SmartSDR or AetherSDR can lose the cycle in progress. The receiver makes a new slice at once and carries on with the next cycle.
 - It waits for the radio's clock to be set before it starts recording, up to about a minute and a half after the radio boots.
 - Removing or updating the receiver starts it over with default settings, and any computer can claim it again.

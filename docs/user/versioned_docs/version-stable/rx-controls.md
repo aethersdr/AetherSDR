@@ -156,6 +156,8 @@ or manual selection on reconnect.
 **AGC-T calibration:** right-click the AGC-T slider, or use
 **Tools → Calibrate AGC-T...**, to calibrate the threshold against the
 measured noise floor on the active slice. It does not transmit.
+It listens to this computer's audio, so turn **PC Audio** on first: with it
+off, Auto Sweep stops at its first step, puts the setting back and says so.
 Close the window with the corner ✕, Esc or Ctrl+W; closing it during
 an Auto Sweep stops the sweep and puts back the AGC-T it started from.
 Select manual AGC-T before calibrating. If radio Auto AGC-T or an external

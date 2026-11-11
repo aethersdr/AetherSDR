@@ -27,14 +27,14 @@ struct WsprPackage {
         const char* sha256;
         qint64 size;
     };
-    static constexpr const char* kVersion = "0.1.0";
+    static constexpr const char* kVersion = "0.1.10";
     // FLEX-6000: a legacy waveform, whose settings persist on /user.
     static constexpr Pin kLegacy{":/waveforms/AetherWSPR.ssdr_waveform", "AetherWSPR.ssdr_waveform",
-                                 "db0d5d29b55c0941d9ebcde0a4cfbff0dd12d939be2e4cd1b9a6b337175ae54c", 141994};
+                                 "cb0c42898fde018579992ab5249a905b6012187fbe5d1cf8a2666dcf0c337a19", 146255};
     // FLEX-8000 and Aurora: a container, because a legacy waveform has only
     // RAM there and the container's writable layer survives a reboot.
     static constexpr Pin kContainer{":/waveforms/AetherWSPR.tar.gz", "AetherWSPR.tar.gz",
-                                    "08fb92338e5ee9bd0cf0d3ea663314d85e73d969a2c626633fc3e25d0b11be9d", 155020};
+                                    "c6f7227c7cca97f1bd3676169d4967f3ed83ec240262b174a3dc11aefde775fc", 160226};
 };
 
 // The receiver's waveform name, in both packages.
@@ -86,6 +86,10 @@ struct WsprStatus {
     QString hopPeriod;      // sunrise, day, sunset, night; empty when not hopping
     QString depth;
     bool slice{false};
+    // The radio's index for the receiver's slice, which the radio reports as
+    // the connected GUI client's own (#7139); -1 when it has none or is too
+    // old to say (before 0.1.9).
+    int sliceIndex{-1};
     bool audio{false};
     struct Upload {
         bool enabled{false};
@@ -185,6 +189,10 @@ bool reachableRadio(bool overWan, const QHostAddress& address);
 // copy already there. Only bytes matching the pin are written: empty, with
 // `error` set, otherwise.
 QString writeBundledPackage(const WsprPackage::Pin& pin, const QString& dir, QString* error);
+
+// Whether a receiver reporting `installed` is older than the one bundled
+// (WsprPackage::kVersion). Unreadable versions are never older.
+bool updateAvailable(const QString& installed);
 
 }  // namespace wspr
 }  // namespace AetherSDR
