@@ -69,6 +69,7 @@ struct Hl2DspChainsCacheTestAccess {
         return backend.m_dspChainsPublishTimer && backend.m_dspChainsPublishTimer->isActive();
     }
     static void clearPublishRequest(Hl2Backend& backend) { backend.m_dspChainsPublishTimer->stop(); }
+    static void publishIoDsps(Hl2Backend& backend) { backend.publishIoDsps(); }
     static quint64 epoch(const Hl2Backend& backend) { return backend.m_dspChainsEpoch; }
 };
 
@@ -218,6 +219,17 @@ int main(int argc, char** argv)
         Access::clearPublishRequest(backend);
         backend.setCwPitch(700);
         check(!Access::publishRequested(backend), "the same pitch again requests none");
+    }
+
+    // 7. A receiver-set change retires a gather already queued: that gather
+    //    runs before the new list is handed over and would report the old set.
+    {
+        Hl2Backend backend;
+        Access::drain(backend);
+        const quint64 epoch = Access::epoch(backend);
+        Access::publishIoDsps(backend);
+        check(Access::epoch(backend) != epoch,
+              "a receiver-set change moves the epoch, so a queued gather is dropped");
     }
 
     std::printf("\n  %s (%d failure%s)\n\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,

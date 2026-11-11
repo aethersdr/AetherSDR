@@ -1849,6 +1849,8 @@ void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
     // the thread that CREATED it, which is this one).
     if (m_metis && m_ioThread && m_ioThread->isRunning()
         && QThread::currentThread() != m_ioThread) {
+        // A gather already queued runs first and sees the old list: retire it.
+        ++m_dspChainsEpoch;
         QMetaObject::invokeMethod(m_metis, [this, next] { m_ioDsps = next; },
                                   Qt::BlockingQueuedConnection);
         requestDspChainsPublish();

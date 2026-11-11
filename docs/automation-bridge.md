@@ -1723,9 +1723,10 @@ inside AetherSDR on the host, not in radio firmware (#5401).
   reported field schedules a publish, which is gathered on the I/O thread
   behind the verb's own DSP change and lands on the next GUI-thread turn after
   that, so the new value is one round trip through the I/O thread late. A
-  withdrawal (disconnect, receiver teardown, connect failure) turns the
-  `hl2-tx` entry `not-configured` at once; the `rx-wdsp` entries follow with
-  the next publish. The live readings — `wdspNotchCount`,
+  disconnect or a connect failure turns the `hl2-tx` entry `not-configured` at
+  once. A disconnect leaves the receivers' channels in place, so their `rx-wdsp`
+  entries keep reporting them; a receiver teardown or a connect failure changes
+  them with the next publish. The live readings — `wdspNotchCount`,
   `appliedNoiseBlanker`, `modulatorBlocks`, `modulatorFaultBlocks` — are
   re-gathered every second, so they are up to about 1 s old, and longer while
   the I/O thread is busy (a cold WDSP open). After a verb, **poll** until the
@@ -1737,8 +1738,8 @@ inside AetherSDR on the host, not in radio firmware (#5401).
   configuration and still report `dsp-config`; for link state read
   [`connectState`](#connectstate) on `get radio`.
 - **`backend` is absent entirely when the gather is empty.** No backend
-  attached, a backend that does not implement the read-back, and, on a backend
-  that gathers on demand, a gather that could not be made all produce **no `backend` key at all** — never an empty
+  attached and a backend that does not implement the read-back both produce
+  **no `backend` key at all** — never an empty
   object and never an empty `chains` list, because an empty object would read as
   "we asked, and the answer is nothing". `get dsp backend` errors with
   `unknown property 'backend' for dsp` in exactly the cases the bare form omits
