@@ -5,6 +5,7 @@
 #include "core/backends/CwxStatusDelta.h"
 #include "core/backends/SpotStatusDelta.h"
 #include "core/backends/StreamStatusDelta.h"
+#include "core/backends/WaveformStatusDelta.h"
 #include "core/backends/TxBandDelta.h"
 
 #include <QMetaObject>
@@ -151,6 +152,7 @@ signals:
     void spotStatusObserved(const AetherSDR::SpotStatusDelta& delta);
     void cwxStatusObserved(const AetherSDR::CwxStatusDelta& delta);
     void graphicEqStatusObserved(const AetherSDR::GraphicEqStatus& status);
+    void waveformStatusObserved(const AetherSDR::WaveformStatusDelta& status);
     void tuneOutputSuppressionObserved(int bandId, bool suppressed);
 
 private:

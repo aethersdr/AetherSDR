@@ -1713,6 +1713,10 @@ void RadioModel::wireStatusIngress(quint64 generation)
                 [this, generation](const FirmwareUpdateStatus& status) {
             if (generation == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
         });
+        connect(flex, &FlexBackend::waveformStatusObserved, this,
+                [this, generation](const WaveformStatusDelta& waveform) {
+            if (generation == m_backendReceiverGeneration) { m_flexWaveformModel.applyStatus(waveform); }
+        });
         connect(flex, &FlexBackend::graphicEqStatusObserved, this, [this, generation](const GraphicEqStatus& eq) {
             if (generation == m_backendReceiverGeneration) { m_equalizerModel.applyEqStatus(eq); }
         });
@@ -2372,6 +2376,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SpotStatusDelta>();
     qRegisterMetaType<CwxStatusDelta>();
     qRegisterMetaType<GraphicEqStatus>();
+    qRegisterMetaType<WaveformStatusDelta>();
     qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
@@ -12326,27 +12331,9 @@ void RadioModel::onStatusReceived(const QString& object,
     static const QRegularExpression tnfRe(R"(^tnf\s+(\d+)(?:\s+removed)?$)");
     if (tnfRe.match(object).hasMatch()) { return; }
 
-    // Waveform status — three sub-shapes introduced in firmware v4.2.18.
-    // CommandParser already disambiguates via the object field; no regex needed.
-    // FlexLib Radio.cs ParseWaveformStatus (line 11247). (#2136)
-    if (object == QLatin1String("waveform")) {
-        m_flexWaveformModel.handleInstalledList(kvs);
-        return;
-    }
-    if (object == QLatin1String("waveform container")) {
-        m_flexWaveformModel.handleContainerStatus(kvs);
-        return;
-    }
-    if (object == QLatin1String("waveform wfp_status")) {
-        m_flexWaveformModel.handleWfpStatus(kvs);
-        return;
-    }
-    if (object == QLatin1String("waveform status")) {
-        m_flexWaveformModel.handleGenericStatus(kvs);
-        return;
-    }
-    if (object == QLatin1String("waveform restarted")) {
-        m_flexWaveformModel.handleRestarted(kvs);
+    // Waveform status ("waveform", container, wfp_status, status, restarted)
+    // is decoded by the status ingress.
+    if (object == QLatin1String("waveform") || object.startsWith(QLatin1String("waveform "))) {
         return;
     }
 

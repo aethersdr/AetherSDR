@@ -7,6 +7,7 @@
 #include "core/backends/flex/FlexCwControls.h"
 #include "core/backends/flex/FlexCwxStatus.h"
 #include "core/backends/flex/FlexGraphicEqStatus.h"
+#include "core/backends/flex/FlexWaveformStatus.h"
 #include "core/backends/flex/FlexKvCarry.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include "core/backends/flex/FlexStreamStatus.h"
@@ -159,6 +160,10 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
     if (object.startsWith(QLatin1String("profile"))) { decodeProfileFlags(kvs); return; }
     if (const auto memory = memoryStatus(object, kvs)) { decodeMemoryStatus(memory->first, memory->second); return; }
     if (object == QLatin1String("cwx")) { emit cwxStatusObserved(flexCwxStatus(kvs)); return; }
+    if (object == QLatin1String("waveform") || object.startsWith(QLatin1String("waveform "))) {
+        if (const auto waveform = flexWaveformStatus(object, kvs)) { emit waveformStatusObserved(*waveform); }
+        return;
+    }
     if (object == QLatin1String("eq txsc") || object == QLatin1String("eq rxsc")) {
         emit graphicEqStatusObserved(flexGraphicEqStatus(object == QLatin1String("eq txsc")
             ? GraphicEqRequest::Path::Transmit : GraphicEqRequest::Path::Receive, kvs));

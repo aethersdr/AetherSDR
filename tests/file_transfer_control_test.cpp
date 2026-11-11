@@ -260,7 +260,7 @@ private slots:
         Fixture docker;
         docker.backend->setModelProvider([] { return QStringLiteral("FLEX-8600"); });
         QVERIFY(!docker.begin(FileTransferPurpose::DockerWaveform));
-        docker.model.flexWaveformModel().handleWfpStatus({{"power","on"},{"ready","true"}});
+        docker.model.handleLineForTest(QStringLiteral("S0|waveform wfp_status power=on ready=true"));
         QVERIFY(docker.begin(FileTransferPurpose::DockerWaveform));
     }
 
