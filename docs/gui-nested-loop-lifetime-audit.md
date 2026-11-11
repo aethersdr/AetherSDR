@@ -50,7 +50,7 @@ the baseline, so they remain reproducible after this patch.
 | `RxApplet.cpp:454` | Scoped TX-antenna menu with original-slice survival/identity check. Ordinary owner deletion is not claimed as a production route; slice rebinding is the stale-intent hazard. |
 | `RxApplet.cpp:1064` | AGC menu retained: ordinary applet ownership; the callback uses current calibration state. |
 | `RxApplet.cpp:3235` | Scoped custom-filter dialog/menu and original slice/preset-button checks. Actions are connected with the preset button as context so a rebuilt preset cannot retain a callback. The menu itself was **parentless** (`QMenu menu;`) at the baseline, so it was never the invalid-free case #5568 warns against conflating by grep; it is parented here only to give the nested dialog scoped cleanup. Re-parenting adds no styling: `RxApplet`'s sole widget-level stylesheet is `QSlider::sub-page` (`RxApplet.cpp:306`), which a `QMenu` cannot match. |
-| `SettingsBrowserDialog.cpp:666,799` | Scoped document viewer and Add Key; browser is delete-on-close. Double-click opening is deferred one event turn so Qt's table handler finishes before its table can be deleted. |
+| `SettingsBrowserDialog.cpp:786,928` | Scoped document viewer and Add Key; browser is delete-on-close. Double-click opening is deferred one event turn so Qt's table handler finishes before its table can be deleted. |
 | `StripChainWidget.cpp:688` | Retained: retained strip owns the chain. |
 | `StripRxChainWidget.cpp:593` | Retained: retained strip owns the chain. |
 | `TciApplet.cpp:157` | Retained: ordinary applet ownership. |
@@ -69,7 +69,7 @@ post-loop accesses. File/color pickers likewise require caller survival checks.
 | Site / owner | Disposition |
 | --- | --- |
 | Shared `FramelessMessageBox::showMessage` | Scoped allocation; callers receive cancellation when the parent destroys the box. |
-| Settings Browser confirmations/export | Owner checks after confirmation/picker; the Add Key child must also survive a second confirmation. |
+| Settings Browser confirmations/export | `confirmCanon()` answers no when its scoped `CanonMessageBox` died with the browser; owner checks after confirmation/picker; the Add Key child must also survive a second confirmation. |
 | MIDI import/export | Scoped file pickers/messages and owner, manager and editor survival checks; snapshot exported bindings before the picker. |
 | Net Scheduler import/export/remove | Scoped messages, owner checks after pickers, and ID relookup before changing a schedule. |
 | Radio Setup TX acknowledgment / Kiwi picker / CSV transfer | Scoped exact dialog constructors and owner/child/manager guards. Closing the acknowledgment does not persist TX permission. |
@@ -97,8 +97,8 @@ Socket-free tests exercise real Settings Browser Add Key, document viewer and
 shared warning paths, with the production delete-on-close flag and a timer that
 closes the owner while the child runs. The original source fails with an ASan
 bad-free in `QObjectPrivate::deleteChildren`; the fixed GUI sources pass.
-AddressSanitizer instruments the test, SettingsBrowserDialog and
-FramelessMessageBox; Qt and the linked engine library are not instrumented.
+AddressSanitizer instruments the test, SettingsBrowserDialog,
+CanonMessageBox and FramelessMessageBox; Qt and the linked engine library are not instrumented.
 
 The Rx component test separately injects owner destruction and slice rebinding;
 it does not claim a production applet-deletion route. Paired accepted-dialog
@@ -106,10 +106,15 @@ cases require one write to the live original slice and zero writes after rebind.
 The scoped-widget test checks parent deletion and forwarded constructor values
 against the direct Qt constructor under the same parent, including
 platform-specific title behavior. The shared-warning case additionally asserts
-that a box whose parent dies mid-loop reports `NoButton` rather than a pressed
-button: `SettingsBrowserDialog::addKey()` and `deleteSelected()` only write to
-the store on `Yes`, so that return value is the barrier against a post-teardown
-write, not a detail. Net Scheduler Add and actual table double-click Edit both close the delete-on-close parent while the editor is active.
+that a `FramelessMessageBox` whose parent dies mid-loop reports `NoButton`
+rather than a pressed button. The Settings Browser's *Delete Setting?* and
+*Create Raw Key?* are `CanonMessageBox` questions asked through `confirmCanon()`
+in `SettingsBrowserDialog.cpp`, which returns `owner && box.clickedButton() == yes`:
+the owner check comes first, so a box destroyed with its parent answers no
+without being read. `SettingsBrowserDialog::addKey()` and `deleteSelected()`
+only write to the store on that yes, so the order is the barrier against a
+post-teardown write, not a detail. A case closes the delete-on-close browser
+from inside each question and asserts both die and the store is unchanged. Net Scheduler Add and actual table double-click Edit both close the delete-on-close parent while the editor is active.
 
 Native macOS verification used a fresh `AETHER_SETTINGS_DIR`,
 `AETHER_AUTOMATION_NO_TX=1` and the explicit `connect local serial DEMO-0001`

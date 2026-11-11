@@ -719,6 +719,10 @@ private:
     QString txAudioPathBlockMessage(TxAudioPathBlock block) const;
     bool showTxAudioPathErrorIfBlocked(); // MainWindow_DspApplets.cpp
     void updateTxAudioPathNotice(); // MainWindow_DspApplets.cpp
+    bool txMicChainReady() const;   // MainWindow_DspApplets.cpp
+    void refreshTxMicReadyIndicators(); // MainWindow_DspApplets.cpp
+    void noticeVoiceKeyWithoutInput(); // MainWindow_DspApplets.cpp
+    NoInputVoiceKeyNotice m_noInputVoiceKeyNotice;
     // Binds the Flex-shaped voice controls — PROC and its NOR/DX/DX+ level — to
     // the client-side compressor on a backend that modulates on this host, and
     // publishes that compressor's gain reduction as the TX:COMPPEAK meter.
@@ -1125,10 +1129,8 @@ private:
     void wireLocalVoiceKeyer();
     VoiceKeyerSource voiceKeyerSource() const;
     void applyVoiceKeyerSource();
+    // The keyer-source chooser behind the DVK panel's settings button.
     void showVoiceKeyerSourceMenu(const QPoint& globalPos);
-    // Where to pop the chooser when it is opened from the keyboard: under the
-    // DVK indicator when that is on screen, otherwise the window's centre.
-    QPoint voiceKeyerSourceMenuAnchor() const;
     void showNr2ParamPopup(const QPoint& globalPos);
     void showNr4ParamPopup(const QPoint& globalPos);
     void showDfnrParamPopup(const QPoint& globalPos);
@@ -1446,6 +1448,12 @@ private:
     // The WSPR receiver on the radio (tools/wspr-agent): its spots for
     // SpotHub and the panadapter. Main thread; it only polls HTTP.
     WsprSpotFeed*        m_wsprFeed{nullptr};
+    // Reserves the WSPR receiver's slice in RadioModel when the receiver
+    // at `radio` names one, then calls `done`. Waits at most
+    // kWsprSliceReadMs: a radio without the receiver refuses at once.
+    void readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done);
+    static constexpr int kWsprSliceReadMs = 1000;
+    static constexpr int kWsprSliceRecheckMs = 500;
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
@@ -1859,6 +1867,7 @@ private:
     QAction*         m_aetherialAction{nullptr};
     QAction*         m_cwKeyerAction{nullptr};
     QAction*         m_copyAssistAction{nullptr};
+    QAction*         m_voiceKeyerAction{nullptr};
     QAction*         m_gpsDashboardAction{nullptr};
     QAction*         m_agcTCalibrationMenuAction{nullptr};
     // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from
@@ -2220,7 +2229,8 @@ private:
     SwrSweepState m_swrSweep;
     QTimer m_swrSweepTimer;
     // Polls the shared client compressor for the TX:COMPPEAK meter and mirrors
-    // its enable state back onto PROC. ClientComp has no change notification.
+    // its enable state back onto PROC, and the shared ClientEq enables back onto
+    // the graphic EQ. Neither has a change notification.
     QTimer m_hostVoiceChainTimer;
     // Last PROC state pushed onto that compressor, so the NOR/DX/DX+ presets are
     // only written when the operator actually changed the level (they overwrite

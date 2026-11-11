@@ -163,13 +163,14 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **Session safety:** MOX, CW PTT and TUNE requests are refused while the radio session is stopped. Stopping the session clears a held software key; reconnecting requires a fresh transmit request.
 - **Show TX in Waterfall:** **Settings → Radio Setup... → Transmit → Show TX in Waterfall** lets the waterfall draw spectrum rows over the TX passband while transmitting. It starts off, and AetherSDR remembers your choice separately for each HL2 across reconnects and restarts. The control does not key the radio.
 - **Max Power:** **Settings → Radio Setup... → Transmit → Max Power** shows the HL2's rated watts, read-only. The power gauge uses a 5 W scale, and forward power reads near PEP on speech.
+- **SWR while transmitting** is the ratio of the highest forward and the highest reflected reading in each 0.1 s telemetry window, so it reads the load rather than the speech envelope. It appears about 0.2 s after keying and holds its last reading through short pauses in speech; when the carrier drops to a lower level and stays there, it also holds for a moment before following. This applies to overs AetherSDR keys (MOX, PTT from a client, tune); an over keyed on the radio's own PTT input still shows the latest pair. Unkeyed, and in **Tools → Radio Health...**, SWR is the ratio of the latest pair of readings.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
 - **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
 - **TX drive and LNA gain** are remembered per band.
 - **TX output, ANT or RF1:** the slice's TX antenna button chooses where transmit leaves the board. **ANT**, the default, uses the onboard PA. **RF1** is the low-power output with the PA off. The choice is remembered per radio and comes back on the next connect; RF1's drive starts at 0 % each time. The choice cannot change while the radio transmits.
 - **RF power on RF1** is a separate setting. It starts at 0 % each time you select RF1 and is not remembered per band; your ANT drive for each band is kept and returns when you select ANT. TUNE on RF1 runs at the RF1 setting, and Tune Power has no effect there.
-- **On RF1 the power and SWR gauges read about 0.** That is expected, not a fault. An amplifier keyed from EXTTR still keys on RF1, the IO board still receives the TX frequency, and the gateware tuner request is not raised. A CAT program's antenna command (`set_ant`) changes only the receive antenna, and recalling a band-stack entry leaves the TX output where it is.
+- **On RF1 the TX applet's power and SWR gauges are dimmed and say "not measured on RF1".** The HL2 has no power detector on RF1, so they cannot show what RF1 sends; a reading near 0 is expected, not a fault. Screen readers announce the same reason. An amplifier keyed from EXTTR still keys on RF1, the IO board still receives the TX frequency, and the gateware tuner request is not raised. A CAT program's antenna command (`set_ant`) changes only the receive antenna, and recalling a band-stack entry leaves the TX output where it is.
 - **MON** and its volume slider, and **VOX** and its level slider, are disabled because these controls are unavailable on the HL2. Their tooltips and accessible descriptions explain why.
 
 > **Upgrading from an older version:** CW keys at the same carrier level as TUNE, about 6 dB (four times the power) above earlier versions at the same RF power setting. Check your RF power before you key CW into an amplifier or a low-power load.
@@ -200,6 +201,8 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - Keying with the HL2's hardware PTT jack shows as transmit in AetherSDR and mutes the receiver, but does not carry host audio: only the radio is keyed, and AetherSDR sends no modulation ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
 - RF1's output level against the RF power slider, and its harmonics, have not been measured ([#4954](https://github.com/aethersdr/AetherSDR/issues/4954)). Start low and use a fixed attenuator before any receiver or analyzer.
 - Each over starts with keyed silence before your audio is transmitted: about 125 ms from the microphone and 175 to 195 ms from a TCI client, longer when the client's audio arrives unevenly ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
+- One user reported spill beside the SSB signal while transmitting, and a busy ALC gauge. The distorted audio in the same report was clean from v26.10.1. A later side-by-side on that station, with a 300 to 2700 Hz transmit filter, showed the same output from AetherSDR as from deskHPSDR; no retest since then is on record ([#5198](https://github.com/aethersdr/AetherSDR/issues/5198)).
+- With no audio input device on the computer, a voice transmit still keys the HL2 but sends no RF. The AetherTX notice says so, and the first voice transmission in that state also shows the notice on the panadapter; CW, TUNE and TCI audio are not affected. See [Aetherial Audio](./aetherial-audio.md#requirements) ([#7078](https://github.com/aethersdr/AetherSDR/issues/7078)).
 - A CW key on the HL2's own key jack gives no sidetone in AetherSDR: the radio makes the CW itself, the receiver is muted while it does, and the client sidetone follows only AetherSDR's own keyer ([#5909](https://github.com/aethersdr/AetherSDR/issues/5909)).
 - Paddle CW timing can vary with load: each dit and dah edge from AetherSDR's keyer waits in the app's main event queue before it reaches the radio, so a busy computer can stretch or shorten elements ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
 - One user reports a row of evenly spaced peaks on the 10 m panadapter while transmitting FT8 at 28.074 MHz. It is not confirmed: a receive-only check of 10 m on another HL2 found none on a dummy load ([#6577](https://github.com/aethersdr/AetherSDR/issues/6577)).
@@ -211,9 +214,15 @@ This page was checked with one Hermes-Lite 2 (gateware 74) on macOS, at one stat
 - Windows, and boards built on the HL2. Linux has had one short check, without a desktop or sound hardware.
 - Transmitting into an antenna: every transmit test went into a dummy load.
 - Calibrated power: the forward power and SWR readings are not checked against a calibrated meter, so they are not calibrated watts.
+- Transmit linearity: intermodulation (IMD) has not been measured with a calibrated instrument.
 - CW sent with a key on the radio's own jack.
-- What the radio does when AetherSDR disconnects or crashes while transmitting.
+- What the radio does when AetherSDR disconnects, hangs or crashes while transmitting. Refusing to transmit while the session is stopped is checked by automated tests only, not on a radio.
+- Receive audio in each mode, end to end on a radio. AGC, a manual notch and squelch are checked by automated tests without a radio, in USB only.
+- Receive on 10 m free of spurs from the radio itself.
+- A change made from a CAT or TCI program reaching both the on-screen control and the radio.
+- Modes, filters and bands coming back after a restart are checked by automated tests without a radio; saved filter presets are not covered.
 - Two HL2s used from one computer.
+- aetherd, the headless server: only connecting and receive controls have been checked, with one HL2. aetherd does not transmit with an HL2.
 
 ## Troubleshooting
 

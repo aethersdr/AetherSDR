@@ -74,6 +74,13 @@ The token decides which client you have deliberately let in. It is not a wall ag
 
 It offers typed tools (`bridge_status`, `dump_tree`, `grab_widget`, `get_state`, `get_log`, `invoke`, `tune`, `slice`, `pan`, `record`, `menu`, `connect`, `capture_audio`, `wait_for`, `assert_state` and more), plus a raw `bridge_command` for everything else, a `validate_ui_change` prompt, and read-only state resources. The transmit verbs are deliberately reachable only through `bridge_command`.
 
+The `app_instance` tool can launch the build in a specified AetherSDR worktree.
+It preserves the selected saved profile, including an inherited
+`AETHER_SETTINGS_DIR`, and honors `AutoConnectToLastRadio`. The app can connect
+your saved radio during startup; use only a profile and connection authorized
+for the task. The launcher leaves saved preferences unchanged and pins TX
+automation off. It does not force simulator mode.
+
 ### Editing the radio nickname
 
 Open **Settings → Radio Setup... → Radio**. Use `invoke` with target

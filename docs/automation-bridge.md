@@ -217,6 +217,12 @@ child process environment using the app's existing `AETHER_MCP_TOKEN` runtime
 override; the token is never a command-line argument, MCP result, discovery
 field, log message, or settings value.
 
+Launch preserves an inherited `AETHER_SETTINGS_DIR`, or uses the normal saved
+profile when it is unset. It honors `AutoConnectToLastRadio` and can connect
+the saved radio during startup. Use a profile and connection authorized for
+the task. The launcher does not disable autoconnect, change saved preferences,
+or force simulator mode.
+
 Each launch gets a unique explicit local socket and safe label. The wrapper
 pins TX automation off with `AETHER_AUTOMATION_NO_TX=1`, removes any inherited
 TX-enable flag, and refuses success unless token-free `ping` reports that auth

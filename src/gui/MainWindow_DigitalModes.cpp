@@ -1791,17 +1791,19 @@ void MainWindow::applyVoiceKeyerSource()
         m_voiceKeyer->refreshBinding();
 }
 
-QPoint MainWindow::voiceKeyerSourceMenuAnchor() const
-{
-    if (m_dvkIndicator && m_dvkIndicator->isVisible())
-        return m_dvkIndicator->mapToGlobal(QPoint(0, m_dvkIndicator->height()));
-    return mapToGlobal(rect().center());
-}
-
 void MainWindow::showVoiceKeyerSourceMenu(const QPoint& globalPos)
 {
     const VoiceKeyerSourceSetting setting = m_voiceKeyer->sourceSetting();
-    const bool resolvedLocal = voiceKeyerSource() == VoiceKeyerSource::Local;
+    // What Automatic would pick on this radio, not the keyer bound now: with
+    // Radio chosen on an unlicensed radio, "now: Radio" would hide that
+    // Automatic is the way to Local.
+    const bool autoLocal = resolveVoiceKeyerSource(
+                               VoiceKeyerSourceSetting::Auto,
+                               m_radioModel.hasVoiceKeyer(),
+                               m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
+                               m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
+                               m_radioModel.dvkLicenseRefused())
+                           == VoiceKeyerSource::Local;
 
     QMenu menu(this);
     // The app-wide menu style sets one text colour for every item, which hides
@@ -1819,8 +1821,8 @@ void MainWindow::showVoiceKeyerSourceMenu(const QPoint& globalPos)
         group->addAction(a);
         return a;
     };
-    addChoice(QStringLiteral("Automatic by radio licence (now: %1)")
-                  .arg(resolvedLocal ? QStringLiteral("Local") : QStringLiteral("Radio")),
+    addChoice(QStringLiteral("Automatic by radio license (now: %1)")
+                  .arg(autoLocal ? QStringLiteral("Local") : QStringLiteral("Radio")),
               VoiceKeyerSourceSetting::Auto);
     // The radio's own DVK can only be chosen when this radio has one and has
     // not said the entitlement is off; a disabled action cannot be triggered.

@@ -42,7 +42,10 @@ public:
     // the active slice's mode in MainWindow so the keys fire regardless
     // of panel visibility, while staying mutually exclusive with CwxPanel
     // to avoid Qt shortcut ambiguity. (#2582)
-    void setShortcutsEnabled(bool enabled);
+    // stopKeysAllowed: the TX slice is in a voice mode, so CwxPanel's set is
+    // off and Escape and a playing slot's F-key may stay armed to stop an
+    // operation in flight even when `enabled` is false.
+    void setShortcutsEnabled(bool enabled, bool stopKeysAllowed = false);
 
     // Show one line in the panel's status area. For notices the keyer itself
     // does not raise — a source change waiting on the operation in flight.
@@ -61,6 +64,24 @@ public:
     // A word after the source in the title, e.g. "Beta" for the local keyer on
     // a radio it has not yet been verified on. Empty for none.
     void setSourceQualifier(const QString& text);
+
+    // Why the bound keyer cannot be driven (the radio DVK unlicensed, or a
+    // radio with none), shown on the status line; empty when it can. While set,
+    // every slot and transport control is disabled and only the settings
+    // button acts, because choosing another source is the way out.
+    // slotsEditable keeps what needs no radio: PREV on the speakers and the
+    // slot menu and rename (the local keyer with no radio connected). Nothing
+    // that transmits or records comes back.
+    void setUnavailableReason(const QString& reason, bool slotsEditable = false);
+    QString unavailableReason() const { return m_unavailableReason; }
+
+    // Where the keyer-source menu opens: under the settings button.
+    QPoint settingsMenuAnchor() const;
+
+signals:
+    // The settings button was pressed. MainWindow owns the keyer-source
+    // choice, which needs the radio's license state the panel never sees.
+    void settingsRequested();
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -84,12 +105,17 @@ private:
     // The title carries the keyer's source ("(Radio)" / "(Local)") so the
     // operator can always see which keyer the panel drives.
     QLabel* m_titleLabel{nullptr};
+    QPushButton* m_settingsBtn{nullptr};
     QLabel* m_statusLabel;
     QLabel* m_statusDot{nullptr};
     int m_selectedSlot{1};
     bool m_voxHeldOff{false};
     QString m_pendingSourceNotice;
     QString m_sourceQualifier;
+    QString m_unavailableReason;
+    bool m_slotsEditableWhileUnavailable{false};
+    bool m_shortcutsWanted{false};
+    bool m_stopKeysAllowed{false};
     QLineEdit* m_renameEdit{nullptr};
     int m_renameSlot{-1};
 
@@ -99,11 +125,12 @@ private:
     int m_timerSlotId{-1};
     int m_timerStatus{0};  // VoiceKeyer::Status cast to int
 
-    // F1-F12 + ESC shortcuts — ApplicationShortcut on window(), enabled
+    // F1-F12 and ESC shortcuts — ApplicationShortcut on window(), enabled
     // by MainWindow based on the active slice's mode (mutually exclusive
     // with CwxPanel's set) so they fire regardless of panel visibility
     // (#2464, #2582).
     QVector<QShortcut*> m_shortcuts;
+    QShortcut* m_escShortcut{nullptr};
 
 
     // Connect the bound keyer's signals, and drop the previous keyer's.
@@ -120,8 +147,15 @@ private:
     // pending source change.
     QString statusSuffix() const;
     void refreshTransport();
+    // A recording, playback or preview is running or has been asked for.
+    bool operationInFlight() const;
+    // Preview, rename and the slot menu: everything that needs no radio.
+    bool slotsEditable() const;
     void togglePlayback(int id);
     void stopActiveOperation();
+    // The slot menu from a right-click on the row, or the Menu key or
+    // Shift+F10 on the slot's F-key; nothing while the keyer is unavailable.
+    void openSlotMenu(int id, const QPoint& globalPos);
     void showContextMenu(int id, const QPoint& globalPos);
     void startRename(int id);
     void commitRename();

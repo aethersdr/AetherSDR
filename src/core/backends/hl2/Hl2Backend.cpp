@@ -529,6 +529,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // the filter instead of blending with history.
         m_havePaTemp = false;
         m_paTempC = 0.0;
+        // A reading belongs to its connection: back to Unobserved, and the next
+        // session's first window publishes even if it equals this one's last.
+        if (m_lastFrontEndOverload != AetherSDR::FrontEndOverload {}) {
+            m_lastFrontEndOverload = {};
+            emit frontEndOverloadChanged(m_lastFrontEndOverload);
+        }
         if (m_connected) {
             m_connected = false;
             m_ceilingAnnouncer.reset();   // #5594 (M1): re-seeded on the next connect
@@ -1906,6 +1912,13 @@ AetherSDR::WidebandConverterView widebandConverterViewRecord() noexcept
     return wide;
 }
 
+namespace {
+// The TX antenna tokens the slice's txAntenna carries; capabilities() names RF1
+// as unmetered with the same token.
+QString txRouteAntToken() { return QStringLiteral("ANT"); }
+QString txRouteRf1Token() { return QStringLiteral("RF1"); }
+} // namespace
+
 RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
@@ -2034,6 +2047,10 @@ RadioCapabilities Hl2Backend::capabilities() const
         {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
         {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    // The BFO pitch is host DSP: setCwPitch adopts it and reports it back as
+    // TransmitDelta::cwPitch. Same range and step as cwPitchMinHz..cwPitchMaxHz.
+    c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine,
+        c.cwPitchMinHz, c.cwPitchMaxHz, c.cwPitchStepHz};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
@@ -2046,7 +2063,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {TxPowerBand{c.tuningMinHz, c.tuningMaxHz,
                                   static_cast<double>(kHl2RatedOutputWatts)}};
     // ANT or RF1 is the operator's own choice; a CAT antenna select must not move it.
-    c.independentTxAntenna = IndependentTxAntenna{};
+    // RF1 has no forward-power detector, so its gauges read "not measured".
+    c.independentTxAntenna = IndependentTxAntenna{{txRouteRf1Token()}};
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
@@ -2072,6 +2090,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // declared as an observation of the radio's own inputs only.
     c.hasRadioPttReadback = false;
     c.radioPttObservation = RadioCapabilities::RadioPttObservation{};
+    // The pre-DDC clip bit (address 0, bit 24) feeds publishFrontEndOverload().
+    c.frontEndOverloadObservation = RadioCapabilities::FrontEndOverloadObservation{};
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
@@ -4636,6 +4656,8 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // can arrive before any no-carrier sample does, and the new over would
         // open displaying the old one's peak.
         m_fwdPeakWatts = 0.0;
+        // Likewise the SWR gate's envelope: the new over sets its own.
+        m_swrGate.reset();
     }
 
     const bool keyChanged = m_keyed != key;
@@ -4646,6 +4668,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     // gain control reads this; nothing else does.
     if (keyChanged && !key) {
         m_sinceUnkey.start();
+    }
+    // Per-over, so a reader of healthSnapshot() is told about THIS transmission
+    // rather than about every one since connect. Zeroed on key-DOWN and left
+    // alone on key-up, because a diagnostic reads the snapshot after unkeying
+    // as often as during (radiocert samples it per keyed stage).
+    if (keyChanged && key) {
+        m_keyedSwrGateClears = 0;
     }
     m_keyed = key;
     // Manual PTT is already mirrored optimistically by RadioModel, but CW
@@ -5007,8 +5036,19 @@ void Hl2Backend::setCwPitch(int hz)
     // seam, and a pitch of 0 would silently turn CW back into the
     // marker-on-DC geometry this whole path exists to remove.
     hz = std::clamp(hz, 100, 6000);
-    if (hz == m_cwPitchHz)
+    // The adopted pitch is reported on every call while connected, same value
+    // included, so a connect-time push establishes the observation.
+    const auto reportPitch = [this, hz] {
+        if (m_connected) {
+            TransmitDelta delta;
+            delta.cwPitch = hz;
+            emit transmitChanged(delta);
+        }
+    };
+    if (hz == m_cwPitchHz) {
+        reportPitch();
         return;
+    }
     m_cwPitchHz = hz;
 
     // Re-push every CW receiver. The pitch moves the BFO, and the BFO is baked
@@ -5034,6 +5074,7 @@ void Hl2Backend::setCwPitch(int hz)
             Q_ARG(double, lo), Q_ARG(double, hi));
     }
     requestDspChainsPublish();
+    reportPitch();
 }
 
 void Hl2Backend::repushAllFrequencies()
@@ -5609,9 +5650,6 @@ int Hl2Backend::operatorDrivePercent() const noexcept
 }
 
 namespace {
-QString txRouteAntToken() { return QStringLiteral("ANT"); }
-QString txRouteRf1Token() { return QStringLiteral("RF1"); }
-
 QString txRouteToken(hl2::TxRoute route)
 {
     return route == hl2::TxRoute::Rf1 ? txRouteRf1Token() : txRouteAntToken();
@@ -6909,6 +6947,41 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
         t.reversePowerRaw
             ? QVariant(directionalWatts(*t.reversePowerRaw)) : QVariant());
+    // The gate TX:SWR is suppressed below, published alongside the reading it
+    // gates (#7063). A consumer that only sees "no SWR" cannot tell a
+    // deliberately suppressed ratio from a dead meter, and `radiocert` reported
+    // a healthy TX:SWR as DEFINED BUT NEVER FED for exactly that reason. The
+    // VALUE is published, not just the comparison, so a reader can say how far
+    // below the gate a run sat rather than only that it was below it.
+    //
+    // All THREE rows are gated on the SAME optional, so they are genuinely
+    // present or absent together. forwardPowerRaw would be the wrong one:
+    // Hl2Telemetry::apply() takes it from every RADDR-1 response while the peak
+    // window skips the non-measurement ones, so a unit whose temperature word
+    // always reads 0 has forwardPowerRaw and no peak (MetisProtocol.h:515-517).
+    // Gating on that would publish a known threshold beside an absent reading —
+    // a half-state a consumer cannot act on, and on that unit class it would
+    // leave radiocert reporting the very "DEFINED BUT NEVER FED" verdict this
+    // change exists to remove. Pinned by hl2_backend_seam_test's
+    // swrGateHealthRows().
+    put(HealthSnapshot::kSwrGateCounts,
+        QStringLiteral("Forward counts required for SWR"),
+        t.forwardPowerPeakRaw ? QVariant(kMinForwardCountsForSwr) : QVariant());
+    // HOW MANY KEYED WINDOWS PASSED THE SWR GATES — the key a consumer reasons
+    // with, and the reason the peak below is not. A peak above the floor can
+    // still be withheld by m_swrGate (key-on and speech-pause windows), so
+    // "peak above gate" does not mean SWR was due. Counted outside the
+    // reverse-reading and swrFromRaw() conditions so "passed the gates but
+    // published nothing" stays visible. Per-over; see m_keyedSwrGateClears.
+    put(HealthSnapshot::kSwrGateClearsWhileKeyed,
+        QStringLiteral("Keyed windows clearing the SWR gate"),
+        t.forwardPowerPeakRaw ? QVariant(m_keyedSwrGateClears) : QVariant());
+    // THE WINDOW'S PEAK, for a human reading HOW FAR below the floor a run sat.
+    // Not a gate verdict — see the counter above for why. FWDPWR already takes
+    // the peak while keyed for the same display reason (publishTelemetry()).
+    put(HealthSnapshot::kForwardWindowPeakRaw,
+        QStringLiteral("Forward (raw counts, window peak)"),
+        opt(t.forwardPowerPeakRaw));
     // SWR from linearized counts (#4578), absent below kMinForwardCountsForSwr
     // like the TX:SWR meter, where the ratio would be noise.
     {
@@ -8549,6 +8622,7 @@ void Hl2Backend::pushInitialState()
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
     m_radioPtt = false;
+    m_swrGate.reset();
     publishTransmitState();
     m_tuning = false;
     m_tuneOperation = {};
@@ -8652,9 +8726,25 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // detectorVolts(), #4578), and only meaningful with real forward power:
     // below kMinForwardCountsForSwr (MetisProtocol.h, shared with Radio Health)
     // noise drives the ratio to 255.99:1.
-    if (t.forwardPowerRaw && t.reversePowerRaw
-        && *t.forwardPowerRaw >= kMinForwardCountsForSwr) {
-        if (const auto swr = swrFromRaw(*t.forwardPowerRaw, *t.reversePowerRaw))
+    // Keyed, the pair is the window's two maxima: forward (RADDR 1) and reverse
+    // (RADDR 2) come in different responses, so the last two can sit on
+    // different points of the speech envelope. Unkeyed, the last values, as
+    // for FWDPWR below. m_swrGate drops the key-on and speech-pause windows;
+    // the meter then holds its last reading.
+    const bool windowPair = m_keyed && t.forwardPowerPeakRaw && t.reversePowerPeakRaw;
+    const std::optional<int> swrFwd = windowPair ? t.forwardPowerPeakRaw : t.forwardPowerRaw;
+    const std::optional<int> swrRev = windowPair ? t.reversePowerPeakRaw : t.reversePowerRaw;
+    const bool swrModulated = !windowPair || m_swrGate.accept(*swrFwd);
+    // The keyed windows that pass every suppression gate, counted apart from
+    // the ratio: a window counted here that publishes no SWR (no reverse
+    // reading, or swrFromRaw() declining) is a real defect radiocert must call,
+    // so the reverse conditions stay out of the count.
+    const bool swrGatesPassed =
+        swrFwd && *swrFwd >= kMinForwardCountsForSwr && swrModulated;
+    if (m_keyed && swrGatesPassed)
+        ++m_keyedSwrGateClears;
+    if (swrGatesPassed && swrRev) {
+        if (const auto swr = swrFromRaw(*swrFwd, *swrRev))
             emit meterUpdate(QStringLiteral("TX:SWR"), *swr);
     }
     // Forward/reverse power through directionalWatts()'s uncalibrated reference
@@ -8691,6 +8781,7 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
                          << "(uncalibrated reference curve);"
                          << "window peak" << t.forwardPowerPeakRaw.value_or(-1)
+                         << "rev peak" << t.reversePowerPeakRaw.value_or(-1)
                          << "of" << t.forwardPowerSamples << "RADDR-1 samples ("
                          << t.forwardPowerSkipped << "skipped) in"
                          << t.adcWindowMs << "ms";

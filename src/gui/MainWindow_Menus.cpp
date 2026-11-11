@@ -363,15 +363,6 @@ void MainWindow::buildMenuBar()
         openRadioSetupPage();
     });
 
-    // The keyer-source chooser is otherwise only on the DVK indicator's
-    // right-click, which no keyboard or screen-reader operator can reach
-    // (docs/a11y.md: every interactive widget needs a non-mouse activation
-    // path). Same menu, same handler.
-    auto* voiceKeyerSourceAct = settingsMenu->addAction("Voice Keyer Source...");
-    connect(voiceKeyerSourceAct, &QAction::triggered, this, [this] {
-        showVoiceKeyerSourceMenu(voiceKeyerSourceMenuAnchor());
-    });
-
     // Every controller's settings in one submenu, so the Settings menu does
     // not grow by one entry per supported device.
     auto* controllersMenu = settingsMenu->addMenu("Controllers");
@@ -587,7 +578,8 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_MIDI
     auto* midiAction = controllersMenu->addAction("MIDI Mapping...");
     connect(midiAction, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_midiDialog, m_midiControl);
+        showOrRaiseCanon(m_midiDialog,
+                         [this] { return new MidiMappingDialog(m_midiControl, this); });
     });
 #endif
 #ifdef HAVE_HIDAPI
@@ -1027,7 +1019,8 @@ void MainWindow::buildMenuBar()
     settingsBrowserAction->setMenuRole(QAction::NoRole);  // "Settings" in the
                                                           // title — macOS #883
     connect(settingsBrowserAction, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_settingsBrowserDialog);
+        showOrRaiseCanon(m_settingsBrowserDialog,
+                         [this] { return new SettingsBrowserDialog(this); });
     });
     // RX chain DSP tile double-click also opens the full AetherDSP
     // Settings dialog — same entry point as the Settings menu action.
@@ -1622,6 +1615,16 @@ void MainWindow::buildMenuBar()
         updateToolsMenuState();
     });
 #endif
+
+    // Outside the ASR guard: without Copy Assist it follows CW Keyer.
+    auto* voiceKeyerAction = toolsMenu->addAction("Digital Voice Keyer");
+    m_voiceKeyerAction = voiceKeyerAction;
+    voiceKeyerAction->setCheckable(true);
+    voiceKeyerAction->setEnabled(false);
+    connect(voiceKeyerAction, &QAction::triggered, this, [this] {
+        toggleVoiceKeyerPanel();
+        updateToolsMenuState();
+    });
 
     viewMenu->removeAction(packetDecoderAction);
     toolsMenu->addAction(packetDecoderAction);
