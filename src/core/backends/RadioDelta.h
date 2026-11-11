@@ -41,6 +41,8 @@ struct RadioDelta {
     // Calibration / defaults
     std::optional<int>     freqErrorPpb;
     std::optional<double>  calFreqMhz;            // cal_freq
+    // pll_done: false while the PLL calibrates, true when it has finished.
+    std::optional<bool>    pllDone;
     std::optional<int>     rttyMarkDefault;
 
     // Audio outputs

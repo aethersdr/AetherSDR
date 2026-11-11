@@ -1947,6 +1947,9 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
     // Calibration / defaults
     carry(kvs, "freq_error_ppb", d.freqErrorPpb);
     carry(kvs, "cal_freq", d.calFreqMhz);
+    if (const QString pll = kvs.value(QStringLiteral("pll_done")); pll == QLatin1String("0") || pll == QLatin1String("1")) {
+        d.pllDone = pll == QLatin1String("1");
+    }
     carry(kvs, "rtty_mark_default", d.rttyMarkDefault);
     // Audio outputs
     carry(kvs, "lineout_gain", d.lineoutGain);

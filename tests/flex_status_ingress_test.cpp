@@ -238,6 +238,25 @@ private slots:
         DaxIqModel::setPactlRunnerForTest({});
     }
 
+    // A radio status line's pll_done reaches the setup dialog typed: running,
+    // finished with that line's error, and nothing for a malformed value.
+    void frequencyCalibrationIsTyped()
+    {
+        TestSettingsProfile profile(QStringLiteral("flex-status-ingress-pll"));
+        QVERIFY(profile.isValid());
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
+        QSignalSpy calibration(&model, &RadioModel::frequencyCalibrationReported);
+        model.handleLineForTest(QStringLiteral("S0|radio pll_done=0"));
+        model.handleLineForTest(QStringLiteral("S0|radio pll_done=2"));
+        model.handleLineForTest(QStringLiteral("S0|radio pll_done=1 freq_error_ppb=-23"));
+        model.handleLineForTest(QStringLiteral("S0|radio pll_done=1"));
+        QCOMPARE(calibration.size(), 3);
+        QCOMPARE(calibration.at(0), QList<QVariant>({false, QString()}));
+        QCOMPARE(calibration.at(1), QList<QVariant>({true, QStringLiteral("-23")}));
+        QCOMPARE(calibration.at(2), QList<QVariant>({true, QString()}));
+    }
+
     // The H line reaches the model before connected(): both take one queued
     // hop from the connection's thread, in the order the wire produced them.
     void handleLineArrivesBeforeConnected()

@@ -3567,20 +3567,15 @@ QWidget* RadioSetupDialog::buildRxTab()
                 ppbEdit->setText(QString::number(m_model->freqErrorPpb()));
         });
 
-        connect(m_model, &RadioModel::statusReceived, this,
-                [startBtn, calStatus, calibrationActive, pllRunningSeen](
-                    const QString& object, const QMap<QString, QString>& kvs) {
-            if (object != QStringLiteral("radio") || !kvs.contains(QStringLiteral("pll_done")))
-                return;
-
-            const QString pllDone = kvs.value(QStringLiteral("pll_done"));
-            const QString freqError = kvs.value(QStringLiteral("freq_error_ppb"));
-            const QString calFreq = kvs.value(QStringLiteral("cal_freq"));
+        connect(m_model, &RadioModel::frequencyCalibrationReported, this,
+                [this, startBtn, calStatus, calibrationActive, pllRunningSeen](
+                    bool done, const QString& freqError) {
+            const QString pllDone = done ? QStringLiteral("1") : QStringLiteral("0");
             qCDebug(lcProtocol)
                 << "RadioSetupDialog: frequency calibration status"
                 << "pll_done=" << pllDone
                 << "freq_error_ppb=" << freqError
-                << "cal_freq=" << calFreq
+                << "cal_freq=" << m_model->calFreqMhz()
                 << "active=" << *calibrationActive
                 << "running_seen=" << *pllRunningSeen;
 
@@ -3598,7 +3593,7 @@ QWidget* RadioSetupDialog::buildRxTab()
                 qCDebug(lcProtocol)
                     << "RadioSetupDialog: ignoring pll_done=1 before pll_done=0 for active calibration"
                     << "freq_error_ppb=" << freqError
-                    << "cal_freq=" << calFreq;
+                    << "cal_freq=" << m_model->calFreqMhz();
                 return;
             }
 
@@ -3613,7 +3608,7 @@ QWidget* RadioSetupDialog::buildRxTab()
                 qCDebug(lcProtocol)
                     << "RadioSetupDialog: frequency calibration completed"
                     << "freq_error_ppb=" << freqError
-                    << "cal_freq=" << calFreq;
+                    << "cal_freq=" << m_model->calFreqMhz();
             }
         });
 

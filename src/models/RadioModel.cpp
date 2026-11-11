@@ -12579,6 +12579,10 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
 
     if (audioChanged) emit audioOutputChanged();
     if (changed) emit infoChanged();
+    if (d.pllDone) {
+        emit frequencyCalibrationReported(*d.pllDone,
+            d.freqErrorPpb ? QString::number(*d.freqErrorPpb) : QString());
+    }
 }
 
 int RadioModel::activeOutputVolumePercent() const
