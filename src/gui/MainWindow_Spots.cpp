@@ -21,7 +21,7 @@
 #include "core/MqttSettings.h"
 #endif
 #include "core/AppSettings.h"
-#include "core/WsjtxOverlayConfig.h"
+#include "WsjtxOverlayConfig.h"
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"

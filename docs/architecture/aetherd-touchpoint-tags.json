@@ -917,12 +917,6 @@
   "split": "",
   "confidence": "medium"
  },
- "core/WsjtxOverlayConfig.h": {
-  "tag": "ui-support",
-  "note": "AppSettings-backed per-pan WSJT-X Rx/Tx overlay toggles and spot-posting switch; pure desktop preference, no radio state",
-  "split": "",
-  "confidence": "high"
- },
  "core/aprs/AprsBeacon.h": {
   "tag": "universal",
   "note": "APRS position/status beacon composition; radio-agnostic packet operating feature.",

@@ -257,7 +257,7 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
-#include "core/WsjtxOverlayConfig.h"
+#include "WsjtxOverlayConfig.h"
 #include "core/AudioDevicePreferencePolicy.h"
 #include "core/NnrSettings.h"
 #include "core/AutomationServer.h"

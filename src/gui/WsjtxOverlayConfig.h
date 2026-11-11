@@ -62,7 +62,7 @@ inline bool wsjtxOverlayAnyPanEnabled()
 }
 
 // App-global "Post decoded stations as spots" toggle. Default true so
-// existing installs keep today's behaviour unless the box is unchecked.
+// existing installs keep today's behavior unless the box is unchecked.
 inline bool wsjtxOverlayPostSpots()
 {
     return wsjtxOverlayRead().value("postSpots").toBool(true);

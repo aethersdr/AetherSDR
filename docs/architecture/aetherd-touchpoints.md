@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 286 touchpoint headers (231 core, 55 models) — 286/286 tagged, 0/286 converted.
+**Totals:** 285 touchpoint headers (230 core, 55 models) — 285/285 tagged, 0/285 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -18,7 +18,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/AetherTxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the transmit DSP chain; operates on core-profile DSP state only. Mirror of core/AetherRxProfiles.h, and shares ChannelStripPresets' TX capture/apply. | unconverted |
 | `core/AgcTCalibrator.h` | 1 | universal — Engine algo sweeping slice AGC threshold vs audio RMS/S-meter to recommend a value; only canonical state. | unconverted |
 | `core/AppActivity.h` | 3 | ui-support — Process-lifetime activity hold (App Nap opt-out on macOS, process power-throttling opt-out on Windows; never blocks sleep) and startStreamThread(), the High-QoS thread start for stream threads; app plumbing, not radio state. | unconverted |
-| `core/AppSettings.h` | 111 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
+| `core/AppSettings.h` | 112 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
 | `core/AudioDevicePreferencePolicy.h` | 1 | ui-support — Header-only policy over PC audio device ids: whether a device-list change keeps the engine's device, falls back to the system default or returns to the saved device, and whether a selection is written to the saved id (#6040); also which enumerable ids count as present and which as arrivals. Host audio, no radio state. | unconverted |
 | `core/AudioEngine.h` | 48 | mixed(flex) — Client audio I/O + full RX/TX DSP chain (universal) fused with Flex VITA-49/DAX/Opus TX and Kiwi buffering | unconverted |
 | `core/AudioOutputRouter.h` | 1 | ui-support — Registry fanning the user-selected QAudioDevice to local playback sinks; OS device plumbing, no radio state | unconverted |
@@ -193,7 +193,6 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/WfmSettings.h` | 1 | ui-support — Client-side settings blob (AppSettings JSON) storing WFM audio output device id + legacy-key migration. | unconverted |
 | `core/WindowsFirewall.h` | 1 | ui-support — Reads Windows Defender Firewall's rules for the AetherSDR executable and runs the UAC netsh fix. Host-OS plumbing, not radio state; read only by the Network Diagnostics Windows Firewall page. | unconverted |
 | `core/WsjtxClient.h` | 2 | ui-support — UDP listener for local WSJT-X app decodes/status; desktop-side integration feeding the universal spot surface | unconverted |
-| `core/WsjtxOverlayConfig.h` | 4 | ui-support — AppSettings-backed per-pan WSJT-X Rx/Tx overlay toggles and spot-posting switch; pure desktop preference, no radio state | unconverted |
 | `core/WsprAgent.h` | 2 | peripheral(wspr-agent) — The WSPR receiver's status, spots and settings (types, bounded JSON parsing, the settings body, the SpotHub DxSpot) and its pinned package. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h). | unconverted |
 | `core/WsprAgentClient.h` | 4 | peripheral(wspr-agent) — Polls the WSPR receiver's /v1/status and reads and saves its /v1/config at the radio's LAN or tailnet-shim address. Not SmartSDR wire: AetherSDR's own HTTP service on TCP 48995 (the WSPR receiver, tools/wspr-agent) that happens to run on the radio as a legacy waveform, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/RadioHealthClient.h). | unconverted |
 | `core/WsprBeacon.h` | 1 | universal — WSPR type-1 message encoder and sample-accurate continuous-phase 4-FSK generator (lock-free, allocation-free on the audio thread). Radio-agnostic engine DSP. | unconverted |

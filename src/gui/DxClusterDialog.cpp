@@ -15,7 +15,7 @@
 #include "core/DxSpotLineParser.h"
 #include "core/GoClusterSettings.h"
 #include "core/AppSettings.h"
-#include "core/WsjtxOverlayConfig.h"
+#include "WsjtxOverlayConfig.h"
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"

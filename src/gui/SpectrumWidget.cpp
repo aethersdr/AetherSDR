@@ -80,7 +80,7 @@
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
-#include "core/WsjtxOverlayConfig.h"
+#include "WsjtxOverlayConfig.h"
 #include "core/DisplayPresence.h"
 #include "core/KiwiSdrProtocol.h"
 #include "InteractionSettings.h"
