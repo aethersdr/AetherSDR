@@ -7,6 +7,9 @@
 #include <QApplication>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QTextCharFormat>
+#include <QTextCursor>
+#include <QTextDocument>
 #include <QTextEdit>
 
 #include <cstdio>
@@ -38,6 +41,16 @@ QString transcriptText(CopyAssistPanel& panel)
     return edit != nullptr ? edit->toPlainText() : QString();
 }
 
+// Character format of the first character of `needle` in the transcript.
+QTextCharFormat formatAt(CopyAssistPanel& panel, const QString& needle)
+{
+    QTextEdit* edit = panel.findChild<QTextEdit*>(QStringLiteral("CopyAssistTranscript"));
+    const int pos = edit->toPlainText().indexOf(needle);
+    QTextCursor cursor(edit->document());
+    cursor.setPosition(pos + 1); // the format of the character before the cursor
+    return cursor.charFormat();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -66,6 +79,92 @@ int main(int argc, char** argv)
     // ---- Clear -------------------------------------------------------------
     panel.clearText();
     expect(transcriptText(panel).trimmed().isEmpty(), "clearText empties the transcript");
+
+    // ---- Live preview (grey provisional text) -----------------------------
+    {
+        CopyAssistPanel p;
+        p.setPreviewText(1, QStringLiteral("hello wor"));
+        expect(transcriptText(p).contains("hello wor"), "preview text appears in the transcript");
+
+        p.setPreviewText(1, QStringLiteral("hello world"));
+        expect(transcriptText(p).contains("hello world") && !transcriptText(p).contains("hello wor "),
+               "a newer preview for the same id replaces the old text");
+
+        p.setPreviewText(2, QStringLiteral("second"));
+        p.commitText(1, QStringLiteral("Hello World"), 0.95f);
+        const QString text = transcriptText(p);
+        expect(text.contains("Hello World") && !text.contains("hello world"),
+               "commitText replaces the grey block with the final");
+        expect(text.indexOf("Hello World") < text.indexOf("second"),
+               "a later segment's grey text stays after the committed text");
+
+        expect(formatAt(p, QStringLiteral("Hello")).foreground().color()
+                   != formatAt(p, QStringLiteral("second")).foreground().color(),
+               "committed text and grey text differ in colour");
+        expect(formatAt(p, QStringLiteral("second")).fontItalic()
+                   && !formatAt(p, QStringLiteral("Hello")).fontItalic(),
+               "grey text is italic, committed text is not");
+
+        p.discardPreview(2);
+        expect(!transcriptText(p).contains("second"), "discardPreview removes the grey block");
+
+        p.setPreviewText(1, QStringLiteral("late"));
+        p.setPreviewText(2, QStringLiteral("later"));
+        expect(!transcriptText(p).contains("late"),
+               "a late preview for a committed or discarded id is ignored");
+
+        p.setPreviewText(3, QStringLiteral("pending"));
+        expect(transcriptText(p).contains("pending"), "a newer id is still accepted");
+        p.setPreviewText(3, QString());
+        expect(!transcriptText(p).contains("pending"), "empty preview text removes the block");
+
+        p.setPreviewText(4, QStringLiteral("gone"));
+        p.clearText();
+        expect(transcriptText(p).trimmed().isEmpty(), "clearText clears the preview");
+        p.setPreviewText(0, QStringLiteral("fresh"));
+        expect(transcriptText(p).contains("fresh") && !transcriptText(p).contains("gone"),
+               "after clearText ids restart and the old grey text is gone");
+    }
+    for (const bool newline : {false, true}) {
+        CopyAssistPanel a;
+        CopyAssistPanel b;
+        a.setNewlineOnSilence(newline);
+        b.setNewlineOnSilence(newline);
+        a.appendText(QStringLiteral("one"), 0.8f);
+        b.commitText(0, QStringLiteral("one"), 0.8f);
+        a.appendText(QStringLiteral("two <b>"), 0.3f);
+        b.commitText(1, QStringLiteral("two <b>"), 0.3f);
+        expect(transcriptHtml(a) == transcriptHtml(b) && transcriptText(a) == transcriptText(b),
+               newline ? "commitText matches appendText (newline on)"
+                       : "commitText matches appendText (newline off)");
+    }
+    {
+        // The engine restarts segment ids at 0 on every reset (disable,
+        // tap-point switch) without clearing the transcript.
+        CopyAssistPanel p;
+        p.commitText(5, QStringLiteral("kept"), 0.9f);
+        p.setPreviewText(6, QStringLiteral("stale grey"));
+        p.resetPreview();
+        expect(transcriptText(p).contains("kept") && !transcriptText(p).contains("stale grey"),
+               "resetPreview drops grey text and keeps the committed transcript");
+        p.setPreviewText(0, QStringLiteral("restarted"));
+        expect(transcriptText(p).contains("restarted"),
+               "after resetPreview a restarted id 0 is shown again");
+        for (int i = 0; i < 20; ++i) {
+            p.setPreviewText(1, QStringLiteral("update %1").arg(i));
+        }
+        const auto* view = p.findChild<QTextEdit*>();
+        expect(view != nullptr && view->document()->availableUndoSteps() == 0,
+               "preview rewrites keep no undo history");
+    }
+    {
+        CopyAssistPanel p;
+        p.setNewlineOnSilence(true);
+        p.commitText(0, QStringLiteral("first"), 0.9f);
+        p.setPreviewText(1, QStringLiteral("grey"));
+        expect(transcriptText(p).contains("\n") || transcriptText(p).contains(QChar(0x2028)),
+               "a grey block starts a new line when newline-on-silence is on");
+    }
 
     // ---- Settings (⚙) button emits its request ----------------------------
     // (Model/GPU selection now lives in CopyAssistSettingsDialog — see

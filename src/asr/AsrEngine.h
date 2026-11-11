@@ -2,6 +2,8 @@
 
 #include "asr/AsrSegmenter.h"
 #include "asr/IAsrBackend.h"
+#include "asr/LivePreview.h"
+#include "asr/LivePreviewAssembler.h"
 #include "asr/SpeakerClusterer.h"
 #include "core/PcmFrame.h"
 
@@ -51,6 +53,10 @@ public:
     void setCancelPending(bool cancel) { m_cancelPending.store(cancel, std::memory_order_relaxed); }
     void setInputGeneration(quint64 generation) { m_requestedGeneration.store(generation); }
 
+    // Worker-thread only (AsrEngine posts it). An empty factory turns the live
+    // preview off; a non-empty one starts a session on the next audio.
+    void setLivePreviewFactory(LivePreviewFactory factory);
+
     // Thread-safe; set once by ~AsrEngine() before it joins this thread. Distinct
     // from setCancelPending() above, which is ALSO raised on every ASR-disable
     // (i.e. whenever the audio tap goes off) and so cannot mean "shutting down".
@@ -92,7 +98,16 @@ signals:
     void speakerModelLoaded(const QString& modelPath, bool loaded);
     // speaker: 0-based cluster index (A/B/C…), or -1 when labeling is off.
     void segmentText(const QString& text, float confidence, int speaker, quint64 generation,
-                     const AetherSDR::PcmEpochLease& source);
+                     const AetherSDR::PcmEpochLease& source, quint64 segmentId);
+    // A segment closed but produced no text (empty, failed, all overlap, or no
+    // model): its live-preview block is resolved with nothing.
+    void segmentDiscarded(quint64 segmentId, quint64 generation);
+    // Every closed segment, before its decode starts (live-preview block edge).
+    void previewBlockClosed(quint64 segmentId, qint64 endSample, quint64 generation);
+    // Emitted from the recogniser's own threads; queued to the engine.
+    void previewResult(qint64 startSample, qint64 endSample, const QString& text, bool isFinal,
+                       quint64 generation);
+    void previewState(int state, const QString& message, quint64 generation);
     void processedMs(double ms); // this chunk fully handled (for the backlog meter)
     void errorOccurred(const QString& error);
 
@@ -104,6 +119,15 @@ private:
     // speaker label). Requires a loaded backend. Shared by processAudio() and
     // markDiscontinuity().
     void decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segments);
+    // Live preview: feed this chunk (call BEFORE m_segmenter.feed so its start
+    // is samplesFed()), and mark the segments that chunk closed.
+    void feedPreview(const std::vector<float>& pcm16k);
+    void closePreviewBlocks(const std::vector<AsrSegmenter::ClosedSegment>& segments);
+    void discardSegments(const std::vector<AsrSegmenter::ClosedSegment>& segments);
+
+    LivePreviewFactory m_previewFactory;
+    std::unique_ptr<ILivePreview> m_preview;
+    qint64 m_lastPreviewFinalize = 0;
 
     AsrBackendFactory m_factory;
     AsrSpeakerEmbedderFactory m_speakerEmbedderFactory;
@@ -204,12 +228,30 @@ public:
     // at the backlog boundary and new-chain audio is never dropped.
     void restartSession();
 
+    // Live preview (docs/asr-copy-assist.md): provisional text from a streaming
+    // recogniser while the backend waits for its segment to close. Applied
+    // live; an empty factory turns it off.
+    void setLivePreviewFactory(LivePreviewFactory factory);
+    bool isLivePreviewEnabled() const { return m_livePreviewEnabled; }
+
 signals:
     void ready();
     void loadFailed(const QString& error);
     void speakerModelLoaded(const QString& modelPath, bool loaded);
     // speaker: 0-based speaker index (A/B/C…), or -1 when labeling is off.
-    void finalText(const QString& text, float confidence, int speaker);
+    // segmentId: the segment this text decodes; it resolves that segment's
+    // live-preview block (previewText) when a preview is running.
+    void finalText(const QString& text, float confidence, int speaker, quint64 segmentId);
+    // Live preview (setLivePreviewFactory): provisional text for one segment,
+    // replacing any earlier previewText for the same id.
+    void previewText(quint64 segmentId, const QString& text);
+    // That segment produced no final text: drop its provisional text.
+    void previewDiscarded(quint64 segmentId);
+    // LivePreviewState as int, with a message for the status line.
+    void livePreviewStatus(int state, const QString& message);
+    // reset() restarted the segment-id timeline at 0: drop every provisional
+    // block and forget which ids were already resolved.
+    void livePreviewReset();
     // Transcription backlog: seconds of received audio not yet handled by the
     // worker (grows when it can't keep up with real time).
     void backlogChanged(double seconds);
@@ -248,6 +290,8 @@ private:
 
     QThread* m_thread = nullptr;
     AsrWorker* m_worker = nullptr;
+    LivePreviewAssembler m_previewAssembler;
+    bool m_livePreviewEnabled = false;
     bool m_enabled = false;
     bool m_ready = false;
     QString m_modelPath;

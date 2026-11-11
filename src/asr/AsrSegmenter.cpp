@@ -37,6 +37,8 @@ void AsrSegmenter::reset()
     m_idleSilence = 0;
     m_longGapFired = false;
     m_longGapPending = false;
+    m_samplesFed = 0;
+    m_nextSegmentId = 0;
     if (m_vad != nullptr) {
         m_vad->reset();
     }
@@ -112,6 +114,9 @@ void AsrSegmenter::closeSegment(std::vector<ClosedSegment>& out, bool forceCap)
         cs.samples = std::move(m_segment);
         cs.continuesPrevious = m_pendingContinues; // this segment itself began with carried audio
         cs.overlapMs = m_pendingContinues ? m_pendingOverlapMs : 0; // window carried into THIS segment
+        cs.id = m_nextSegmentId++;
+        cs.endSample = m_samplesFed;
+        cs.startSample = m_samplesFed - static_cast<std::int64_t>(cs.samples.size());
         out.push_back(std::move(cs));
     }
 
@@ -142,6 +147,7 @@ std::vector<AsrSegmenter::ClosedSegment> AsrSegmenter::feed(const float* samples
 
     for (int i = 0; i < count; ++i) {
         m_frame.push_back(samples[i]);
+        ++m_samplesFed;
         if (static_cast<int>(m_frame.size()) < m_frameSamples) {
             continue;
         }

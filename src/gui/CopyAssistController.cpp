@@ -10,6 +10,7 @@
 #include "asr/AsrModelCatalog.h"
 #include "asr/AsrModelManager.h"
 #include "asr/AsrStageTrace.h"
+#include "asr/LivePreview.h"
 #include "asr/RemoteAsrBackend.h"
 #include "asr/SherpaOnnxBackend.h"
 #include "asr/WhisperAsrBackend.h"
@@ -451,6 +452,19 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         if (m_tap) {
             m_tap->setTapPoint(point);
         }
+    });
+
+    // Live preview: the setting only switches the engine's factory, so no rebuild.
+    m_settings->setLivePreviewAvailable(appleLivePreviewSupported(),
+                                        appleLivePreviewUnavailableReason());
+    m_settings->setLivePreviewChecked(
+        CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
+            .toString()
+        == QStringLiteral("True"));
+    connect(m_settings, &CopyAssistSettingsDialog::livePreviewToggled, this, [this](bool on) {
+        CopyAssistSettings::setValue(QStringLiteral("AsrLivePreview"),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+        applyLivePreview();
     });
 
     // Model download → engine load (the handlers read m_asr at call time, so they
@@ -1159,15 +1173,27 @@ void CopyAssistController::buildEngine()
         abandonEnable(tr("Model load failed: %1").arg(err));
     });
     connect(m_asr, &AsrEngine::finalText, this,
-            [this](const QString& text, float confidence, int speaker) {
+            [this](const QString& text, float confidence, int speaker, quint64 segmentId) {
                 // Prefix a speaker label ([A], [B]…) when labeling is on.
                 const QString labeled =
                     m_settings->labelSpeakers() && speaker >= 0
                         ? QStringLiteral("[%1] %2").arg(QChar(u'A' + speaker)).arg(text)
                         : text;
-                m_panel->appendText(labeled, confidence);
+                m_panel->commitText(segmentId, labeled, confidence);
                 appendToLogFile(labeled);
             });
+    connect(m_asr, &AsrEngine::previewText, m_panel, &CopyAssistPanel::setPreviewText);
+    connect(m_asr, &AsrEngine::previewDiscarded, m_panel, &CopyAssistPanel::discardPreview);
+    connect(m_asr, &AsrEngine::livePreviewReset, m_panel, &CopyAssistPanel::resetPreview);
+    connect(m_asr, &AsrEngine::livePreviewStatus, this, [this](int state, const QString& message) {
+        const auto previewState = static_cast<LivePreviewState>(state);
+        if (previewState == LivePreviewState::Failed
+            || (previewState == LivePreviewState::Preparing && !message.isEmpty())) {
+            m_panel->setStatus(message);
+        } else if (previewState == LivePreviewState::Ready && m_enabled) {
+            m_panel->setStatus(listeningStatus());
+        }
+    });
     connect(m_asr, &AsrEngine::error, this, [this](const QString& err) {
         m_panel->setStatus(err);
         // A decode-time GPU failure latches the device in
@@ -1189,6 +1215,26 @@ void CopyAssistController::buildEngine()
 
     applyTuning();
     replaySpeakerConfiguration();
+    applyLivePreview();
+}
+
+void CopyAssistController::applyLivePreview()
+{
+    if (m_asr == nullptr) {
+        return;
+    }
+    const bool on =
+        CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
+            .toString()
+        == QStringLiteral("True");
+    // "auto" or empty means the system language.
+    QString lang =
+        CopyAssistSettings::value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
+    if (lang == QStringLiteral("auto")) {
+        lang.clear();
+    }
+    m_asr->setLivePreviewFactory(on && appleLivePreviewSupported() ? appleLivePreviewFactory(lang)
+                                                                   : LivePreviewFactory{});
 }
 
 void CopyAssistController::applyTuning()
