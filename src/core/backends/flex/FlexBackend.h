@@ -297,6 +297,8 @@ signals:
     void txBandChanged(const AetherSDR::TxBandDelta& delta);
     // A stream's status facts (Flex-only; the model's stream rules read them).
     void streamStatusObserved(const AetherSDR::StreamStatusDelta& delta);
+    // A radio spot's status (Flex-only; SpotModel keeps the spots).
+    void spotStatusObserved(const AetherSDR::SpotStatusDelta& delta);
 
 private:
     void send(const QString& cmd);

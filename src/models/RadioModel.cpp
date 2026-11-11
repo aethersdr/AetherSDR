@@ -1713,6 +1713,14 @@ void RadioModel::wireStatusIngress(quint64 generation)
                 [this, generation](const FirmwareUpdateStatus& status) {
             if (generation == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
         });
+        connect(flex, &FlexBackend::spotStatusObserved, this, [this, generation](const SpotStatusDelta& spot) {
+            if (generation != m_backendReceiverGeneration) { return; }
+            switch (spot.kind) {
+            case SpotStatusDelta::Kind::Removed: m_spotModel.removeSpot(spot.index); break;
+            case SpotStatusDelta::Kind::Triggered: emit m_spotModel.spotTriggered(spot.index, spot.pan); break;
+            case SpotStatusDelta::Kind::Status: m_spotModel.applySpotStatus(spot.index, spot.record); break;
+            }
+        });
         connect(flex, &FlexBackend::txBandChanged, this, [this, generation](const TxBandDelta& delta) {
             if (generation == m_backendReceiverGeneration) { applyTxBandChanges(delta); }
         });
@@ -2355,6 +2363,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<FirmwareUpdateStatus>();
     qRegisterMetaType<TxBandDelta>();
     qRegisterMetaType<StreamStatusDelta>();
+    qRegisterMetaType<SpotStatusDelta>();
     qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
@@ -12162,25 +12171,9 @@ void RadioModel::onStatusReceived(const QString& object,
         return;
     }
 
-    // Spot status: "spot 42 callsign=W1AW rx_freq=14.074000 ..."
-    //              "spot 42 removed"
-    //              "spot 42 triggered pan=0x40000000"
-    if (object.startsWith("spot ")) {
-        static const QRegularExpression spotRe(R"(^spot\s+(\d+))");
-        const auto sm = spotRe.match(object);
-        if (sm.hasMatch()) {
-            int idx = sm.captured(1).toInt();
-            if (kvs.isEmpty() && object.contains("removed")) {
-                m_spotModel.removeSpot(idx);
-            } else if (object.contains("triggered")) {
-                // CommandParser separates pan= from the event's object text.
-                emit m_spotModel.spotTriggered(idx, kvs.value("pan"));
-            } else {
-                m_spotModel.applySpotStatus(idx, kvs);
-            }
-        }
-        return;
-    }
+    // Spot status ("spot N …", removed, triggered) is decoded by the status
+    // ingress and reaches SpotModel from wireStatusIngress().
+    if (object.startsWith("spot ")) { return; }
 
     // USB cable status: "usb_cable FTDI-1234 type=cat enable=1 ..."
     //                   "usb_cable FTDI-1234 bit 0 enable=1 source=active_slice ..."

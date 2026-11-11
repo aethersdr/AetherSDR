@@ -156,6 +156,24 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
     // Untyped profile objects: the space-free flags ("profile importing=1").
     if (object.startsWith(QLatin1String("profile"))) { decodeProfileFlags(kvs); return; }
     if (const auto memory = memoryStatus(object, kvs)) { decodeMemoryStatus(memory->first, memory->second); return; }
+    // "spot N …", bare "spot N removed", or "spot N triggered pan=…".
+    if (object.startsWith(QLatin1String("spot "))) {
+        static const QRegularExpression spotRe(QStringLiteral(R"(^spot\s+(\d+))"));
+        if (const auto m = spotRe.match(object); m.hasMatch()) {
+            SpotStatusDelta spot;
+            spot.index = m.captured(1).toInt();
+            if (kvs.isEmpty() && object.contains(QLatin1String("removed"))) {
+                spot.kind = SpotStatusDelta::Kind::Removed;
+            } else if (object.contains(QLatin1String("triggered"))) {
+                spot.kind = SpotStatusDelta::Kind::Triggered;
+                spot.pan = kvs.value(QStringLiteral("pan"));
+            } else {
+                spot.record = kvs;
+            }
+            emit spotStatusObserved(spot);
+        }
+        return;
+    }
     // "tnf N …"; a removal arrives bare ("tnf N removed") or as removed=1.
     static const QRegularExpression tnfRe(QStringLiteral(R"(^tnf\s+(\d+)(?:\s+removed)?$)"));
     if (const auto m = tnfRe.match(object); m.hasMatch()) {

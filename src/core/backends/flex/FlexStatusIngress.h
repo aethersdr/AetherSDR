@@ -2,6 +2,7 @@
 
 #include "CommandParser.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/SpotStatusDelta.h"
 #include "core/backends/StreamStatusDelta.h"
 #include "core/backends/TxBandDelta.h"
 
@@ -145,6 +146,7 @@ signals:
     void streamStatusObserved(const AetherSDR::StreamStatusDelta& delta);
     void notchChanged(int notchId, const AetherSDR::NotchDelta& delta);
     void notchRemoved(int notchId);
+    void spotStatusObserved(const AetherSDR::SpotStatusDelta& delta);
     void tuneOutputSuppressionObserved(int bandId, bool suppressed);
 
 private:
