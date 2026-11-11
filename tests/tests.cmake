@@ -7745,6 +7745,13 @@ if(AETHER_ENABLE_HL2_SIGNAL_STOP_TEST)
     endif()
 endif()
 
+# #4954 RX half: the HL2 publishes one receive input, ANT, on every slice; RF1 is
+# never offered for receive. Constructed backend, no socket, nothing keyed.
+add_executable(hl2_rx_antenna_test tests/hl2_rx_antenna_test.cpp)
+target_include_directories(hl2_rx_antenna_test PRIVATE src tests)
+target_link_libraries(hl2_rx_antenna_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_rx_antenna_test COMMAND hl2_rx_antenna_test)
+
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -10969,6 +10976,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_persist_two_radios_test
     hl2_rit_xit_test
     slice_rit_xit_seam_test
+    hl2_rx_antenna_test
     hl2_tx_gate_test
     hl2_pan_limits_declaration_test
     hl2_fm_controls_declaration_test

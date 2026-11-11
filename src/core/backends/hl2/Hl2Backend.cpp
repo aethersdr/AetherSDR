@@ -1087,6 +1087,7 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     const int ddc = m_ids.append();
 
     Receiver seed = requested;
+    seed.antennasPublished = false;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -3470,6 +3471,19 @@ ReceiveDispatch Hl2Backend::requestSliceSquelch(int sliceId, const SliceSquelchR
     }
     setSliceSquelch(sliceId, request.enabled, request.level);
     return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch Hl2Backend::requestSliceRxAntenna(int sliceId, const QString& antenna)
+{
+    // The HL2 receives on ANT only. RF1 is a transmit output and 0x00[13] (the
+    // Alex RX-antenna bit) is left alone: no filter board known to us wires it.
+    const int ddc = ddcForSlice(sliceId);
+    if (!rx(ddc)) {
+        return ReceiveDispatch::Unsupported;
+    }
+    emitSliceState(ddc, true);
+    return antenna == QLatin1String("ANT") ? ReceiveDispatch::LocalOnly
+                                           : ReceiveDispatch::Unsupported;
 }
 
 ReceiveDispatch Hl2Backend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
@@ -8697,7 +8711,7 @@ void Hl2Backend::applyBandFilter(const char* reason)
         Q_ARG(int, oc));
 }
 
-void Hl2Backend::emitSliceState(int ddc)
+void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
 {
     Receiver* r = rx(ddc);
     const auto* ids = m_ids.byDdc(ddc);
@@ -8711,6 +8725,16 @@ void Hl2Backend::emitSliceState(int ddc)
     // chosen. publishedModeStrings() is a subset of knownModeStrings(), so the
     // menu never offers a mode the restore boundary rejects.
     d.modeList = publishedModeStrings();
+    // One receive input, on every slice (#4954): the RX menu offers ANT and no
+    // invented ANT1/ANT2. RF1 is transmit-only and is never in this list.
+    d.rxAntennaList = QStringList{QStringLiteral("ANT")};
+    if (!r->antennasPublished || forceAntennas) {
+        d.rxAntenna = QStringLiteral("ANT");
+        // The TX label must also replace SliceModel's ANT1 default, which
+        // knownAntennaTokens() includes in receive menus.
+        d.txAntenna = QStringLiteral("ANT");
+        r->antennasPublished = true;
+    }
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;
@@ -8777,7 +8801,7 @@ void Hl2Backend::emitPanState(int ddc)
 void Hl2Backend::emitAllSliceState()
 {
     for (const auto& ids : m_ids.all())
-        emitSliceState(ids.ddcIndex);
+        emitSliceState(ids.ddcIndex, true);
 }
 
 void Hl2Backend::emitAllPanState()

@@ -108,6 +108,10 @@ public:
         TunePowerContext context = TunePowerContext::Deferred) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
+    // One receive input, ANT (#4954): ANT is accepted with nothing to send, any
+    // other token is refused; when called, both republish the slice so the
+    // button shows ANT. RadioModel refuses a token outside the list before this.
+    ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
@@ -284,6 +288,7 @@ private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PanCreateTestAccess;
     friend struct Hl2PcmTestAccess;
+    friend struct Hl2RxAntennaTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
     // Hands receiver 0 a configured Hl2RxDsp so the APF and AGC-off verbs can
@@ -408,7 +413,7 @@ private:
     std::unique_ptr<RadioConnectRequest> m_queuedConnect;
     quint64 m_connectGeneration = 0;
 
-    void emitSliceState(int ddc);   // sliceChanged(delta) from a receiver's state
+    void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
     void emitAllSliceState();
     void emitAllPanState();
@@ -521,6 +526,9 @@ private:
     // One per running DDC, holding only per-receiver state. Anything the hardware
     // shares (sample rate, LNA gain, filter board) stays in the flat members below.
     struct Receiver {
+        // Antenna echoes reset the display's noise-floor lock; publish once
+        // per receiver, or when answering an explicit antenna request/refresh.
+        bool antennasPublished = false;
         // Owns its demod + spectrum chain; created on connect, destroyed on disconnect,
         // lives on the I/O thread.
         Hl2RxDsp* dsp = nullptr;
