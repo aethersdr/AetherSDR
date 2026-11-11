@@ -817,6 +817,14 @@ target_include_directories(control_telemetry_test PRIVATE src tests)
 target_link_libraries(control_telemetry_test PRIVATE aethercore Qt6::Core)
 add_test(NAME control_telemetry_test COMMAND control_telemetry_test)
 
+# Socket-free frontEndOverload resource: offered only to a backend declaring
+# frontEndOverloadObservation, withdrawn on disconnect, and the per-family
+# declarations read from the production backends.
+add_executable(control_front_end_overload_test tests/control_front_end_overload_test.cpp)
+target_include_directories(control_front_end_overload_test PRIVATE src tests)
+target_link_libraries(control_front_end_overload_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME control_front_end_overload_test COMMAND control_front_end_overload_test)
+
 # not registered: explicit opt-in diagnostic. Launches OUR aetherd and binds
 # its unique QLocalServer endpoint (Unix-domain socket / Windows named pipe).
 # Built-in Demo only; no third-party firmware peer. Exit 77 on listen refusal.
@@ -11193,6 +11201,7 @@ set(AETHER_SETTINGS_CONSUMERS
     control_slice_frequency_test
     control_receive_test
     control_telemetry_test
+    control_front_end_overload_test
     aetherd_discovery_startup_test
     automation_bridge_start_outcome_test
     slice_label_test

@@ -817,6 +817,13 @@ struct RadioCapabilities {
     struct AdcFrontEnd {};
     std::optional<AdcFrontEnd> adcFrontEnd;
 
+    // Engaged: the backend observes its own converter and emits
+    // frontEndOverloadChanged, so aetherd publishes the frontEndOverload
+    // resource. Absent: no reading exists and none is offered. A record, not a
+    // bool, because the boolean count is frozen (#5262 M2).
+    struct FrontEndOverloadObservation {};
+    std::optional<FrontEndOverloadObservation> frontEndOverloadObservation;
+
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an
     // instrument that can never receive a sample. This is independent of PA

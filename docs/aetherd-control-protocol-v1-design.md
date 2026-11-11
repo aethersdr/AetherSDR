@@ -209,6 +209,8 @@ V1 begins with the smallest useful canonical set:
 - `meter` — definitions and bounded latest values;
 - `transmitState` — read-only interlock, PTT/VOX/MOX/tune state and inhibit
   reason.  No v1 method can mutate this resource during Stage 3.
+- `frontEndOverload` — the receive converter's overload level and the
+  automatic RF-gain loop's hold, only for a backend that declares it.
 
 Every field is documented in a method/resource catalogue and covered by a
 schema test before it is exported.  Credentials, backend pointers, raw vendor

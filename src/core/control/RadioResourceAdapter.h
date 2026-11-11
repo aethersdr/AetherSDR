@@ -3,6 +3,7 @@
 #include "ControlResourceStore.h"
 #include "RadioConnectionTarget.h"
 #include "RadioTelemetryAdapter.h"
+#include "core/backends/FrontEndOverload.h"
 
 #include <QObject>
 #include <QSet>
@@ -33,6 +34,8 @@ public:
 
     [[nodiscard]] QString radioSessionId() const { return m_radioSessionId; }
     void publishAll();
+    // The wire name of each level in the frontEndOverload resource.
+    [[nodiscard]] static QString frontEndLevelName(FrontEndLevel level);
 
 private:
     void attachSlice(SliceModel* slice);
@@ -43,6 +46,7 @@ private:
     void publishRadioSession();
     void publishSlice(SliceModel* slice);
     void publishPanadapter(PanadapterModel* panadapter);
+    void publishFrontEndOverload();
 
     RadioModel* m_radio{nullptr};
     ControlResourceStore* m_resources{nullptr};
@@ -55,6 +59,9 @@ private:
     // connection). Empty means "read it on the next publish".
     QString m_frequencyAuthority;
     QJsonObject m_receiveAuthorities;
+    // Refilled with the radio session; only a declaring backend is offered it.
+    bool m_frontEndOverloadOffered{false};
+    FrontEndOverload m_frontEndOverload;
     std::unique_ptr<RadioTelemetryAdapter> m_telemetry;
     QSet<PanadapterModel*> m_panadapters;
 };

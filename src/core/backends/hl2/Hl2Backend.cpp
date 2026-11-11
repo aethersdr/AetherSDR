@@ -520,6 +520,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // the filter instead of blending with history.
         m_havePaTemp = false;
         m_paTempC = 0.0;
+        // A reading belongs to its connection: back to Unobserved, and the next
+        // session's first window publishes even if it equals this one's last.
+        if (m_lastFrontEndOverload != AetherSDR::FrontEndOverload {}) {
+            m_lastFrontEndOverload = {};
+            emit frontEndOverloadChanged(m_lastFrontEndOverload);
+        }
         if (m_connected) {
             m_connected = false;
             m_ceilingAnnouncer.reset();   // #5594 (M1): re-seeded on the next connect
@@ -2047,6 +2053,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // declared as an observation of the radio's own inputs only.
     c.hasRadioPttReadback = false;
     c.radioPttObservation = RadioCapabilities::RadioPttObservation{};
+    // The pre-DDC clip bit (address 0, bit 24) feeds publishFrontEndOverload().
+    c.frontEndOverloadObservation = RadioCapabilities::FrontEndOverloadObservation{};
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
