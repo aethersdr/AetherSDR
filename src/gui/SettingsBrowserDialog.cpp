@@ -1,13 +1,17 @@
 #include "SettingsBrowserDialog.h"
 #include "ScopedChildWidget.h"
-#include "FramelessMessageBox.h"
+#include "CanonIndicators.h"
+#include "CanonMessageBox.h"
+#include "CanonScrollBarStyle.h"
+#include "CanonTableStyle.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
 #include "core/AppSettings.h"
 #include "core/SettingsCredentialPolicy.h"
 #include "core/SettingsSanitizer.h"
 #include "core/ThemeManager.h"
 
 #include <QComboBox>
-#include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
@@ -20,6 +24,7 @@
 #include <QJsonParseError>
 #include <QLabel>
 #include <QLineEdit>
+#include <QStyle>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
@@ -50,41 +55,135 @@ constexpr int kRoleSecret = Qt::UserRole + 4;    // bool: rendered redacted
 // never carries a flat value, so no plaintext is stashed for a copy action.
 constexpr int kRoleRawValue = Qt::UserRole + 5;
 
-const QString kDialogStyle =
-    "QDialog { background: #0f0f1a; color: #c8d8e8; }"
-    "QLabel { color: #c8d8e8; }"
-    "QLineEdit { background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  padding: 4px 6px; color: #c8d8e8; }"
-    "QTreeWidget { background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  color: #c8d8e8; outline: none; }"
-    "QTreeWidget::item { min-height: 22px; padding: 1px 4px; }"
-    "QTreeWidget::item:selected { background: #0070c0; color: #ffffff; }"
-    "QTreeWidget::item:hover:!selected { background: #1a2a3a; }"
-    "QTableWidget { background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  color: #c8d8e8; gridline-color: #14202f;"
-    "  selection-background-color: #1b3650; selection-color: #e8f4ff; }"
-    "QHeaderView::section { color: #8d99ad; background: #101c2a; border: none;"
-    "  border-bottom: 1px solid #233246; padding: 4px 8px; font-size: 11px; }"
-    "QPlainTextEdit { background: #0a0a18; border: 1px solid #1e2e3e;"
-    "  border-radius: 3px; color: #c8d8e8;"
-    "  font-family: \"SF Mono\", \"Menlo\", \"Consolas\", monospace; }"
-    "QPushButton { background: #1a2a3a; border: 1px solid #203040;"
-    "  border-radius: 3px; padding: 4px 12px; color: #c8d8e8; }"
-    "QPushButton:hover { background: #2a3a4a; }"
-    "QPushButton:disabled { background: #141c26; border: 1px solid #1a2632;"
-    "  color: #5a6a78; }"
-    "QComboBox { background: #0a0a18; border: 1px solid #1e2e3e; border-radius: 3px;"
-    "  padding: 2px 6px; color: #c8d8e8; }";
+// What the shared canon dialog sheet (fields, buttons, combo boxes) leaves
+// out, after the canon table rules: the scope tree and the document pane on
+// nested cards; the table's selection ink; the "Advanced" banner, a warning
+// on a nested card; the status line, whose tone (info or error) is a property
+// the sheet matches; and right-click menus, children of the fields and panes
+// that the sheet's transparent rule would otherwise leave with no panel.
+constexpr const char* kSettingsBrowserRules = R"(
+QTreeWidget {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 6px;
+    outline: none;
+}
+QTreeWidget::item {
+    min-height: 22px;
+    padding: 1px 4px;
+}
+QTreeWidget::item:selected {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+}
+QTreeWidget::item:hover:!selected {
+    background: {{color.canon.raised}};
+}
+QTableView::item:selected {
+    color: {{color.canon.ink}};
+}
+QPlainTextEdit {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    selection-background-color: {{color.canon.control}};
+    selection-color: {{color.canon.ink}};
+}
+QLineEdit {
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QLabel#settingsBrowserBanner {
+    color: {{color.accent.warning}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.accent.warning}};
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 11px;
+}
+QLabel#settingsBrowserStatus {
+    color: {{color.canon.cyan}};
+    font-size: 11px;
+}
+QLabel#settingsBrowserStatus[resultTone="error"] {
+    color: {{color.accent.danger}};
+}
+QPushButton:default {
+    color: {{color.canon.cyan}};
+    border-color: {{color.canon.cyan}};
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+)";
 
-// Same result-line styling as ConnectionPanel's so the status messages read
-// as the same kind of message app-wide.
-const char* kResultInfoStyle =
-    "QLabel { color: #9bd1ff; font-size: 11px; background: transparent; border: none; }";
-const char* kResultErrorStyle =
-    "QLabel { color: #ff8f8f; font-size: 11px; background: transparent; border: none; }";
-const char* kBannerStyle =
-    "QLabel { color: #ffc978; font-size: 11px; background: #241c10;"
-    "  border: 1px solid #4a3a1a; border-radius: 3px; padding: 5px 8px; }";
+QString settingsBrowserSheet()
+{
+    return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+         + canonTableRules() + canonScrollBarRules()
+         + QString::fromLatin1(kSettingsBrowserRules);
+}
+
+// A canon notice with one OK button, for the browser's refusals.
+void showNotice(QWidget* parent, const QString& title, const QString& text)
+{
+    ScopedChildWidget<CanonMessageBox> box(title, text, parent);
+    box.get()->setDefaultButton(box.get()->addButton(QStringLiteral("OK"),
+                                                     CanonMessageBox::Role::Accept));
+    box.get()->exec();
+}
+
+// A canon question whose default is Cancel: true only when the operator chose
+// `confirm`. Return, Esc and the ✕ answer no.
+bool confirmCanon(QWidget* parent, const QString& title, const QString& text,
+                  const QString& informative, const QString& confirm,
+                  CanonMessageBox::Role role)
+{
+    ScopedChildWidget<CanonMessageBox> owner(title, text, parent);
+    CanonMessageBox& box = *owner.get();
+    if (!informative.isEmpty())
+        box.setInformativeText(informative);
+    auto* cancel = box.addButton(QStringLiteral("Cancel"), CanonMessageBox::Role::Reject);
+    auto* yes = box.addButton(confirm, role);
+    box.setDefaultButton(cancel);
+    box.exec();
+    return owner && box.clickedButton() == yes;
+}
+
+// A canon sub-dialog in the browser's scope, with the canon header.
+CanonWindow* makeCanonSubDialog(ScopedChildWidget<CanonWindow>& owner, const QString& title,
+                                QVBoxLayout** bodyLayout)
+{
+    CanonWindow& dlg = *owner.get();
+    dlg.setModal(true);
+    applyCanonSheet(dlg.bodyWidget(), [] { return settingsBrowserSheet(); });
+    auto* layout = new QVBoxLayout(dlg.bodyWidget());
+    layout->setContentsMargins(14, 12, 14, 14);
+    layout->setSpacing(8);
+    layout->addWidget(makeCanonHeader(title));
+    *bodyLayout = layout;
+    return &dlg;
+}
 
 const char* kAdvancedBannerText =
     "Advanced — edits apply immediately and bypass each feature's own "
@@ -167,17 +266,23 @@ QString nicknameFor(const QList<AppSettings::RadioFeatureEntry>& rows,
 } // namespace
 
 SettingsBrowserDialog::SettingsBrowserDialog(QWidget* parent)
-    : PersistentDialog("Settings Browser", "SettingsBrowserDialogGeometry", parent)
+    : CanonWindow(QStringLiteral("Settings Browser"), parent, Kind::Workspace)
 {
-    theme::setContainer(this, QStringLiteral("dialog/settingsBrowser"));
-    setMinimumSize(760, 480);
-    setStyleSheet(kDialogStyle);
+    setObjectName(QStringLiteral("SettingsBrowserDialog"));
+    theme::setContainer(this, QStringLiteral("canon/settingsBrowser"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("SettingsBrowserDialogGeometry"));
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] { return settingsBrowserSheet(); });
 
     auto* root = new QVBoxLayout(bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(9);
+    root->addWidget(makeCanonHeader(QStringLiteral("Settings Browser")));
 
     m_banner = new QLabel(kAdvancedBannerText);
-    m_banner->setStyleSheet(kBannerStyle);
+    m_banner->setObjectName(QStringLiteral("settingsBrowserBanner"));
     m_banner->setWordWrap(true);
     root->addWidget(m_banner);
 
@@ -246,7 +351,8 @@ SettingsBrowserDialog::SettingsBrowserDialog(QWidget* parent)
     root->addWidget(splitter, 1);
 
     m_status = new QLabel;
-    m_status->setStyleSheet(kResultInfoStyle);
+    m_status->setObjectName(QStringLiteral("settingsBrowserStatus"));
+    m_status->setTextFormat(Qt::PlainText);
     m_status->setVisible(false);
     m_status->setWordWrap(true);
     root->addWidget(m_status);
@@ -279,18 +385,19 @@ SettingsBrowserDialog::SettingsBrowserDialog(QWidget* parent)
     connect(m_exportBtn, &QPushButton::clicked, this,
             &SettingsBrowserDialog::exportSanitized);
     buttons->addWidget(m_exportBtn);
-
-    auto* closeBtn = new QPushButton("Close");
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-    buttons->addWidget(closeBtn);
     root->addLayout(buttons);
+
+    // 40 px taller than before for the canon header, and never smaller than
+    // the layout needs.
+    resize(900, 600);
+    setMinimumSize(QSize(760, 520).expandedTo(minimumSizeHint()));
 
     rebuildTree();
 }
 
 void SettingsBrowserDialog::showEvent(QShowEvent* event)
 {
-    PersistentDialog::showEvent(event);
+    CanonWindow::showEvent(event);
     // The store changes underneath us (features write documents debounced) —
     // re-read on every show so a re-raised dialog isn't showing stale rows.
     rebuildTree();
@@ -674,13 +781,14 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
     }
 
     const QPointer<SettingsBrowserDialog> self(this);
-    ScopedChildWidget<QDialog> viewerOwner(this);
-    QDialog& viewer = *viewerOwner.get();
-    viewer.setWindowTitle(QStringLiteral("%1 — %2 / %3").arg(
-        feature, family, scopeLabelForRadioId(radioId)));
-    viewer.setMinimumSize(520, 420);
-    viewer.setStyleSheet(kDialogStyle);
-    auto* layout = new QVBoxLayout(&viewer);
+    const QString viewerTitle = QStringLiteral("%1 — %2 / %3").arg(
+        feature, family, scopeLabelForRadioId(radioId));
+    ScopedChildWidget<CanonWindow> viewerOwner(viewerTitle, this);
+    QVBoxLayout* layout = nullptr;
+    CanonWindow& viewer = *makeCanonSubDialog(viewerOwner, viewerTitle, &layout);
+    viewer.setObjectName(QStringLiteral("settingsDocumentViewer"));
+    // Return in the JSON editor is a newline, never a click.
+    viewer.setReturnClicksDefault(false);
 
     auto* header = new QLabel(
         QStringLiteral("%1 / %2 / %3 — schema v%4%5")
@@ -729,14 +837,23 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
             "through the owning feature's UI, which keeps the secret in the "
             "OS keychain");
     }
+    editBtn->setAccessibleDescription(editBtn->toolTip());
     auto* saveBtn = new QPushButton("Save");
     saveBtn->setEnabled(false);
     auto* closeBtn = new QPushButton("Close");
+    for (QPushButton* b : {editBtn, saveBtn, closeBtn})
+        b->setAutoDefault(false);
     buttons->addWidget(editBtn);
     buttons->addStretch();
     buttons->addWidget(saveBtn);
     buttons->addWidget(closeBtn);
     layout->addLayout(buttons);
+    viewer.resize(620, 520);
+    viewer.setMinimumSize(QSize(520, 460).expandedTo(viewer.minimumSizeHint()));
+    // A separate frameless top-level: CanonWindow only moves it, and the
+    // browser's own resizer does not own this window, so the viewer installs
+    // its own to keep its edges draggable, as the framed QDialog's were.
+    FramelessResizer::install(&viewer);
 
     connect(editBtn, &QPushButton::clicked, &viewer, [text, saveBtn, editBtn] {
         text->setReadOnly(false);
@@ -752,7 +869,7 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
         const QJsonDocument parsed = QJsonDocument::fromJson(
             text->toPlainText().toUtf8(), &parseError);
         if (parsed.isNull() || !parsed.isObject()) {
-            FramelessMessageBox::warning(
+            showNotice(
                 &viewer, "Invalid JSON",
                 parseError.error != QJsonParseError::NoError
                     ? QStringLiteral("Not saved — %1 at offset %2.")
@@ -773,7 +890,7 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
         const QJsonObject nowDoc = AppSettings::instance().radioFeatureExact(
             family, radioId, feature, &nowVersion);
         if (nowVersion != schemaVersion || nowDoc != openTimeDoc) {
-            FramelessMessageBox::warning(
+            showNotice(
                 &viewer, "Document Changed",
                 "This document was rewritten by its owning feature while the "
                 "viewer was open. Nothing saved — close and re-open to edit "
@@ -782,7 +899,7 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
         }
         if (!AppSettings::instance().setRadioFeature(
                 family, radioId, feature, schemaVersion, parsed.object())) {
-            FramelessMessageBox::warning(
+            showNotice(
                 &viewer, "Write Refused",
                 "The store refused this write (read-only session, or the "
                 "stored document is from a newer version). Nothing changed.");
@@ -812,11 +929,12 @@ void SettingsBrowserDialog::addKey()
                                         AppSettings::instance().stationName());
 
     const QPointer<SettingsBrowserDialog> self(this);
-    ScopedChildWidget<QDialog> dialogOwner(this);
-    QDialog& dlg = *dialogOwner.get();
-    dlg.setWindowTitle("Add Key");
-    dlg.setStyleSheet(kDialogStyle);
-    auto* form = new QFormLayout(&dlg);
+    ScopedChildWidget<CanonWindow> dialogOwner(QStringLiteral("Add Key"), this);
+    QVBoxLayout* addLayout = nullptr;
+    CanonWindow& dlg = *makeCanonSubDialog(dialogOwner, QStringLiteral("Add Key"), &addLayout);
+    dlg.setObjectName(QStringLiteral("settingsAddKeyDialog"));
+    auto* form = new QFormLayout;
+    addLayout->addLayout(form);
     auto* keyEdit = new QLineEdit;
     keyEdit->setAccessibleName("New key name");
     auto* valueEdit = new QLineEdit;
@@ -824,11 +942,23 @@ void SettingsBrowserDialog::addKey()
     form->addRow(new QLabel(QStringLiteral("Scope: %1").arg(scopeName)));
     form->addRow("Key:", keyEdit);
     form->addRow("Value:", valueEdit);
-    auto* box = new QDialogButtonBox(QDialogButtonBox::Ok
-                                     | QDialogButtonBox::Cancel);
-    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    form->addRow(box);
+    // Cancel, then OK at the far right, as CanonMessageBox lays out its row.
+    // OK is the default: Return in a field adds the key.
+    auto* buttonRow = new QHBoxLayout;
+    buttonRow->addStretch(1);
+    auto* cancelBtn = new QPushButton(QStringLiteral("Cancel"));
+    cancelBtn->setAutoDefault(false);
+    auto* okBtn = new QPushButton(QStringLiteral("OK"));
+    okBtn->setDefault(true);
+    connect(cancelBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+    connect(okBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+    buttonRow->addWidget(cancelBtn);
+    buttonRow->addWidget(okBtn);
+    addLayout->addLayout(buttonRow);
+    dlg.setMinimumWidth(qMax(420, dlg.minimumSizeHint().width()));
+    // The canon header's ✕ comes first in the focus chain; without this the
+    // operator's first keystrokes land on it instead of the key name.
+    keyEdit->setFocus();
     const int result = dlg.exec();
     if (!self || !dialogOwner || result != QDialog::Accepted) {
         return;
@@ -841,7 +971,7 @@ void SettingsBrowserDialog::addKey()
     auto& s = AppSettings::instance();
     if (SettingsCredentialPolicy::isFlatCredentialKey(key)
         || SettingsSanitizer::isSecretKey(key)) {
-        FramelessMessageBox::warning(
+        showNotice(
             this, "Credential Key Refused",
             "Credentials are never stored in the settings database — they "
             "belong in the OS keychain, via the owning feature's own UI.");
@@ -851,12 +981,10 @@ void SettingsBrowserDialog::addKey()
                             ? s.contains(key)
                             : s.stationKeysForDiagnostics().contains(key);
     if (!exists
-        && FramelessMessageBox::question(
-               this, "Create Raw Key?",
-               QStringLiteral("Create %1 in %2?\n\nThis writes a raw key the "
-                              "app may never read. Continue?")
-                   .arg(key, scopeName))
-               != FramelessMessageBox::Yes) {
+        && !confirmCanon(this, QStringLiteral("Create Raw Key?"),
+                         QStringLiteral("Create %1 in %2?").arg(key, scopeName),
+                         QStringLiteral("This writes a raw key the app may never read."),
+                         QStringLiteral("Create"), CanonMessageBox::Role::Accept)) {
         return;
     }
     if (!self || !dialogOwner) {
@@ -917,8 +1045,14 @@ void SettingsBrowserDialog::deleteSelected()
     case ScopeKind::None:
         return;
     }
-    const auto answer = FramelessMessageBox::question(this, "Delete Setting?", prompt);
-    if (!self || answer != FramelessMessageBox::Yes) {
+    // Destructive: Cancel is the default, so Return, Esc and the ✕ delete
+    // nothing (QMessageBox's Yes / No defaulted to Yes).
+    const QStringList parts = prompt.split(QStringLiteral("\n\n"));
+    const bool confirmed = confirmCanon(this, QStringLiteral("Delete Setting?"), parts.value(0),
+                                        parts.mid(1).join(QStringLiteral("\n\n")),
+                                        QStringLiteral("Delete"),
+                                        CanonMessageBox::Role::Destructive);
+    if (!self || !confirmed) {
         return;
     }
 
@@ -977,7 +1111,9 @@ void SettingsBrowserDialog::exportSanitized()
 
 void SettingsBrowserDialog::setStatus(const QString& text, bool error)
 {
-    m_status->setStyleSheet(error ? kResultErrorStyle : kResultInfoStyle);
+    m_status->setProperty("resultTone", error ? "error" : "info");
+    m_status->style()->unpolish(m_status);
+    m_status->style()->polish(m_status);
     m_status->setText(text);
     m_status->setVisible(!text.isEmpty());
 }

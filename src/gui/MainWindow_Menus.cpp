@@ -1028,7 +1028,8 @@ void MainWindow::buildMenuBar()
     settingsBrowserAction->setMenuRole(QAction::NoRole);  // "Settings" in the
                                                           // title — macOS #883
     connect(settingsBrowserAction, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_settingsBrowserDialog);
+        showOrRaiseCanon(m_settingsBrowserDialog,
+                         [this] { return new SettingsBrowserDialog(this); });
     });
     // RX chain DSP tile double-click also opens the full AetherDSP
     // Settings dialog — same entry point as the Settings menu action.
