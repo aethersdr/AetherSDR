@@ -4784,6 +4784,39 @@ void SpectrumWidget::clearKiwiSdrSquelchLine()
     }
 }
 
+void SpectrumWidget::setDbmAxisCalibrated(bool calibrated)
+{
+    if (m_dbmAxisCalibrated == calibrated) { return; }
+    m_dbmAxisCalibrated = calibrated;
+    markOverlayDirty();
+}
+
+QString SpectrumWidget::noiseFloorLabel(float floorDbm) const
+{
+    return QStringLiteral("Floor %1 %2").arg(static_cast<int>(floorDbm))
+        .arg(m_dbmAxisCalibrated ? QStringLiteral("dBm") : QStringLiteral("dB (relative)"));
+}
+
+QString SpectrumWidget::amplitudeScaleToolTip(bool is3D) const
+{
+#ifdef Q_OS_MACOS
+    const QString rangeDragTip =
+        "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>";
+#else
+    const QString rangeDragTip =
+        "Ctrl-drag &mdash; zoom span (anchor at bottom)<br>";
+#endif
+    const QString unit = m_dbmAxisCalibrated ? QStringLiteral("dBm") : QStringLiteral("relative dB");
+    return QString(is3D
+        ? "<b>3D %1 scale</b><br>"
+          "Drag &mdash; adjust 3D Floor<br>%2"
+          "&#9650; / &#9660; &mdash; &plusmn;10 dB steps"
+        : "<b>%1 scale</b><br>"
+          "Drag &mdash; pan reference level<br>%2"
+          "&#9650; / &#9660; &mdash; &plusmn;10 dB steps")
+        .arg(unit, rangeDragTip);
+}
+
 void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
 {
     const bool useKiwiFloor =
@@ -4802,7 +4835,7 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
     f.setBold(true);
     p.setFont(f);
     p.setPen(AetherSDR::theme::withAlpha("color.accent.warning", 200));
-    const QString lbl = QString("Floor %1 dBm").arg(static_cast<int>(floorDbm));
+    const QString lbl = noiseFloorLabel(floorDbm);
     p.drawText(specRect.right() - p.fontMetrics().horizontalAdvance(lbl) - 4, y - 2, lbl);
 }
 
@@ -11520,28 +11553,9 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 else
                     setSpectrumCursor(Qt::SizeVerCursor);
                 // Surface the Ctrl-drag span-zoom affordance (#2724).
-                // Use a plain string literal (not QStringLiteral) so the
-                // platform-conditional #ifdef block sits at the preprocessor
-                // level rather than inside a macro call — MSVC strictly
-                // rejects preprocessor directives inside macro arguments.
                 const QRect stripRect(stripX, 0, DBM_STRIP_W, specH);
                 const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
-#ifdef Q_OS_MACOS
-                const QString rangeDragTip =
-                    "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>";
-#else
-                const QString rangeDragTip =
-                    "Ctrl-drag &mdash; zoom span (anchor at bottom)<br>";
-#endif
-                const QString tip =
-                    QString(is3D
-                        ? "<b>3D dBm scale</b><br>"
-                          "Drag &mdash; adjust 3D Floor<br>%1"
-                          "&#9650; / &#9660; &mdash; &plusmn;10 dB steps"
-                        : "<b>dBm scale</b><br>"
-                          "Drag &mdash; pan reference level<br>%1"
-                          "&#9650; / &#9660; &mdash; &plusmn;10 dB steps")
-                    .arg(rangeDragTip);
+                const QString tip = amplitudeScaleToolTip(is3D);
                 QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
                                    tip, this, stripRect);
             } else {
@@ -12414,15 +12428,14 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
     // above so zoom direction stays natural; only frequency tuning is flipped.
     if (reverseMouseWheel()) steps = -steps;
 
-    const auto* ao = activeOverlay();
-    const double vfoMhz = ao ? ao->freqMhz : m_centerMhz;
-    // Snap the base frequency to the step grid first, then add the delta.
-    // This ensures every scroll moves by exactly m_stepHz rather than snapping
-    // the destination, which would cause an alignment artifact on the first
-    // scroll (e.g. step=500 Hz at .100 MHz → effective 400 Hz jump).
-    const double baseMhz = snapToStep(vfoMhz, m_stepHz);
-    const double newMhz  = baseMhz + steps * m_stepHz / 1e6;
-    emit incrementalTuneRequested(newMhz);
+    if (m_pendingTuneInteractionEnabled) {
+        emit incrementalTuneDeltaRequested(steps * m_stepHz / 1e6, m_stepHz);
+    } else {
+        const auto* overlay = activeOverlay();
+        const double vfoMhz = overlay ? overlay->freqMhz : m_centerMhz;
+        const double baseMhz = snapToStep(vfoMhz, m_stepHz);
+        emit incrementalTuneRequested(baseMhz + steps * m_stepHz / 1e6);
+    }
     ev->accept();
 }
 

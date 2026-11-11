@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 284 touchpoint headers (230 core, 54 models) — 284/284 tagged, 0/284 converted.
+**Totals:** 286 touchpoint headers (230 core, 56 models) — 286/286 tagged, 0/286 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -268,14 +268,16 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/Kxpa100RadioAssociation.h` | 2 | peripheral(elecraft) — Explicit per-radio amplifier telemetry association; no radio or tuner commands. | unconverted |
 | `models/Kxpa100Types.h` | 2 | peripheral(elecraft) — Typed KXPA100 accessory state, configuration, backup and fault records; no radio-family protocol. | unconverted |
 | `models/MemoryEntry.h` | 1 | universal — POD memory-channel record (freq/mode/offset/tone/squelch/filter/digital offsets) — canonical memories surface | unconverted |
-| `models/MeterModel.h` | 7 | mixed(flex) — Meter registry+values are core-profile; VITA-49 raw scaling, TGXL/PGXL amp routing, COMPPEAK quirks are Flex | unconverted |
+| `models/MeterModel.h` | 9 | mixed(flex) — Meter registry+values are core-profile; VITA-49 raw scaling, TGXL/PGXL amp routing, COMPPEAK quirks are Flex | unconverted |
 | `models/ModeVocabulary.h` | 1 | universal — Canonical mode vocabulary: which slice modes count as voice (SSB, AM/SAM, the FM family) and which as CW (CW/CWU/CWL). Radio-family-neutral state and validation data - every backend reports these spellings - split out of gui/VoiceModeGate.h so the engine can answer the question without reaching into the UI. Same precedent as core/CtcssTones.h. The panel-policy half (shouldAutoHideCopyAssist) stayed in gui. | unconverted |
 | `models/ModelCapabilities.h` | 1 | mixed(flex) — Per-model capability table mirroring FlexLib ModelInfo.cs (RadioPlatform, has2Meters/has4Meters, loop A/B). This is the universal question 'what can this radio do', answered exclusively from a vendor table — and its band-availability half is precisely the band truth RFC §4.1 assigns to the capability descriptor. Consumed above the seam by SpectrumOverlayMenu, XvtrPolicy, WaveformInstallGate and MainWindow_Wiring. | unconverted |
 | `models/NetEntry.h` | 2 | ui-support — Net scheduler entry: RRULE/timezone/reminder metadata, operator-scoped local JSON; radio state only via embedded MemoryEntry | unconverted |
+| `models/NetworkRadioLogin.h` | 1 | ui-support — Network radio connection descriptors and secure login staging; no wire commands. | unconverted |
+| `models/NetworkRadioLookup.h` | 1 | ui-support — Bounded asynchronous IPv4 name lookup for connection forms, with cancellation and generation retirement. Generic Qt DNS only; no radio wire, credentials or GUI dependencies. | unconverted |
 | `models/Nr2SettingsModel.h` | 5 | universal — Process-wide owner of client-side NR2 configuration as one versioned object (Principle V), so every editing surface shares state. Engine DSP configuration; radio-agnostic. | unconverted |
 | `models/PanadapterModel.h` | 5 | mixed(flex) — Per-pan display state is core-profile; DAX IQ ch, client_handle, VITA stream IDs, SmartSDR kv parsing are flex. | unconverted |
 | `models/ProfileLoadCommand.h` | 1 | vendor(flex) — Parses SmartSDR 'profile global/tx/mic load' wire command + recall-hold timing/suppression sentinels; Flex-only | unconverted |
-| `models/RadioModel.h` | 60 | mixed(flex) — Central radio aggregate: core slice/pan/TX/meter/memory state fused with Flex protocol, DAX, SmartLink, Multi-Flex | unconverted |
+| `models/RadioModel.h` | 81 | mixed(flex) — Central radio aggregate: core slice/pan/TX/meter/memory state fused with Flex protocol, DAX, SmartLink, Multi-Flex | unconverted |
 | `models/RadioSession.h` | 1 | universal — Per-radio session aggregate: owns RadioModel + id/label; session concept is core-profile, no vendor surface | unconverted |
 | `models/RadioStatusOwnership.h` | 1 | vendor(flex) — SmartSDR status parsing helpers: Flex hex handles, client_handle ownership, remote_audio_rx, interlock gate | unconverted |
 | `models/RadioSwrValidityFilter.h` | 1 | universal — Trust gate for a radio's SWR stream against instantaneous forward power (attack-immediately/timed-release envelope, low-SWR and below-unity confirmation). Pure value logic, no vendor ties; consumed by the S-meter and by TCI tx_sensors. | unconverted |

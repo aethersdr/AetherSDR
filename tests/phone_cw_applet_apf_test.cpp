@@ -312,9 +312,10 @@ int main(int argc, char** argv)
           !apfRow->isHidden());
 
     applet.setHasAudioPeakingFilter(false);
-    check("4.2  a radio with no audio peaking filter hides the row entirely",
+    check("4.2  a legacy radio without APF keeps its existing hidden row",
           apfRow->isHidden());
-    check("4.3  ...and the hidden control cannot be driven", !apfBtn->isEnabled());
+    check("4.3  the unavailable control is disabled with an accessible reason",
+          !apfBtn->isEnabled() && !apfBtn->accessibleDescription().isEmpty());
 
     // A gated row must not keep SENDING, which is the half that makes this a
     // capability gate rather than a cosmetic hide. Hiding and disabling stops a

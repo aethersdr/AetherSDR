@@ -8019,7 +8019,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // the session and leave a Flex's continuous control stepping through
         // another radio's list.
         if (auto* phone = m_appletPanel->phoneApplet()) {
-            phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
+            phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls,
+                connected && caps.radioTransmitSettings.has_value());
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
             phone->setVoxAvailable(!connected || caps.voxControl.has_value());
@@ -8046,6 +8047,14 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         for (SpectrumWidget* spectrum : spectra) {
             spectrum->setRadioOwnsDbmScale(radioOwnsScale);
             spectrum->setPanBinsAbsolute(binsAbsolute);
+            spectrum->setDbmAxisCalibrated(!connected || !caps.panAmplitude
+                || caps.panAmplitude->axisUnit == PanAmplitudeModel::AxisUnit::Dbm);
+            spectrum->setPendingTuneInteractionEnabled(connected
+                && m_radioModel.supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune));
+            if (SpectrumOverlayMenu* menu = spectrum->overlayMenu()) {
+                menu->setScopeModeHelp(connected && caps.scopeModePresentation
+                    ? caps.scopeModePresentation->help : QString{});
+            }
         }
     }
     syncSquelchScaleToUi();
@@ -8170,7 +8179,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_appletPanel->phoneCwApplet()->setAlcMeterUnit(cwCaps.alcMeterUnit);
         m_appletPanel->phoneCwApplet()->setCwControlLimits(
             cwCaps.cwSpeedMinWpm, cwCaps.cwSpeedMaxWpm,
-            cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz);
+            cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz,
+            cwCaps.cwDelayControl ? cwCaps.cwDelayControl->maximumMs : 2000,
+            cwCaps.cwDelayControl ? cwCaps.cwDelayControl->stepMs : 1);
         m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
             m_radioModel.hasAudioPeakingFilter());
         // The ALC Gain gauge, on the meter EXISTING rather than on a
@@ -8408,8 +8419,15 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
         return;
     }
     sw->setPanGeometryConfirmationRequired(m_radioModel.confirmsReceiveControls());
+    const RadioCapabilities presentation = m_radioModel.backendCapabilities();
+    sw->setDbmAxisCalibrated(!m_radioModel.isConnected() || !presentation.panAmplitude
+        || presentation.panAmplitude->axisUnit == PanAmplitudeModel::AxisUnit::Dbm);
+    sw->setPendingTuneInteractionEnabled(m_radioModel.isConnected()
+        && m_radioModel.supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune));
     auto* menu = sw->overlayMenu();
     if (menu) {
+        menu->setScopeModeHelp(m_radioModel.isConnected() && presentation.scopeModePresentation
+            ? presentation.scopeModePresentation->help : QString{});
         menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
         // The Black Level button's HW position, which is a radio-side display
         // computation rather than radio-side audio DSP — so it needs its own

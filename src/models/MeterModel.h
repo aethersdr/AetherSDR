@@ -14,6 +14,18 @@
 
 namespace AetherSDR {
 
+// Uncalibrated radio display deflection, with the radio's declared scale.
+// value is absent until a finite in-range sample is fresh and available.
+struct DisplayDeflectionReading {
+    std::optional<float> value;
+    QString unit;
+    double low{0};
+    double high{0};
+    QString description;
+    QString unavailableReason;
+    qint64 sampleAgeMs{-1};
+};
+
 // Central meter value store. Meters are defined via TCP status (parsed by
 // RadioModel); values stream as VITA-49 PCC 0x8002: N pairs of (uint16 id,
 // int16 raw). Scaling per FlexLib Meter.cs UpdateValue: dBm/dB/dBFS/SWR raw/128,
@@ -117,6 +129,7 @@ public:
     std::optional<float> sLevelForSlice(int sliceIndex) const;
     // ADC-relative RF only. Never usable as calibrated dBm/S units.
     std::optional<float> relativeLevelForSlice(int sliceIndex) const;
+    std::optional<DisplayDeflectionReading> displayDeflectionForSlice(int sliceIndex) const;
 
     // The radio-wide S-meter reading — what `get meters` publishes as a scalar
     // — WHEN THERE IS ONE. Exactly one slice declaring a LEVEL meter is the

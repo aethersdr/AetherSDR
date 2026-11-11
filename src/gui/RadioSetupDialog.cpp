@@ -9,6 +9,27 @@
 #include <utility>
 #include "NtpSourcesPage.h"
 #include "RtlReceiverSettingsWidget.h"
+#include "NativeVfoSettingsWidget.h"
+#include "NativeFilterSettingsWidget.h"
+#include "NativeReceiveEqWidget.h"
+#include "NativeReceiveAgcWidget.h"
+#include "NativeReceiveRoutingWidget.h"
+#include "NativeReceiveSettingsWidget.h"
+#include "NativeScopeSettingsWidget.h"
+#include "NativeRadioMessagesWidget.h"
+#include "NativeMemoryReadWidget.h"
+#include "NativeAutoModeWidget.h"
+#include "NativeOperatingDisplayWidget.h"
+#include "NativeCwReceiveWidget.h"
+#include "NativeTransverterWidget.h"
+#include "NativeVfoScanWidget.h"
+#include "NativeScanPreferencesWidget.h"
+#include "NativeReceiverOptionsWidget.h"
+#include "NativePskReceiveWidget.h"
+#include "NetworkAudioLevelsWidget.h"
+#include "NativePowerLimitsWidget.h"
+#include "NativeTransmitInputsWidget.h"
+#include "ControlAvailabilityRegistry.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
 #include "RttyDecodeSettings.h"
@@ -75,6 +96,7 @@
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QLabel>
+#include <QMetaType>
 #include <QLineEdit>
 #include <QList>
 #include <QPushButton>
@@ -1338,6 +1360,71 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addPage(radioCategory, QStringLiteral("RTL Receiver"),
         QStringLiteral("rtl receiver ppm oscillator frequency correction calibration iq dc suppression serial"),
         [this] { return new RtlReceiverSettingsWidget(*m_model); });
+    const auto addNativePage = [&addPage, radioCategory](const QString& id, const QString& name,
+            const QString& keywords, std::function<QWidget*()> builder) {
+        QTreeWidgetItem* item = addPage(radioCategory, name, keywords, std::move(builder));
+        item->setData(0, Qt::UserRole + 2, id);
+    };
+    addNativePage(QStringLiteral("vfo"), QStringLiteral("Native VFOs"),
+        QStringLiteral("vfo a b receive transmit split frequency tuning memory kenwood"),
+        [this] { return new NativeVfoSettingsWidget(*m_model); });
+    addNativePage(QStringLiteral("filters"), QStringLiteral("Native Filters"),
+        QStringLiteral("receive filter width shift low high cut am fm fsk psk native"),
+        [this] { return new NativeFilterSettingsWidget(*m_model); });
+    addNativePage(QStringLiteral("scope"), QStringLiteral("Native Scope"),
+        QStringLiteral("scope bandscope spectrum waterfall radio display native rf audio fixed range output rate"),
+        [this] { return new NativeScopeSettingsWidget(*m_model); });
+    addNativePage(QStringLiteral("messages"), QStringLiteral("Native Radio Messages"),
+        QStringLiteral("radio messages notifications popup beep volume native"),
+        [this] { return new NativeRadioMessagesWidget(*m_model); });
+    addNativePage(QStringLiteral("memories"), QStringLiteral("Native Memories"),
+        QStringLiteral("radio memory channels quick program extended read inventory scan status native"),
+        [this] { return new NativeMemoryReadWidget(*m_model); });
+    addNativePage(QStringLiteral("autoMode"), QStringLiteral("Native Auto Mode"),
+        QStringLiteral("auto mode automatic frequency divisions boundary policy native radio"),
+        [this] { return new NativeAutoModeWidget(*m_model); });
+    addNativePage(QStringLiteral("operatingDisplay"), QStringLiteral("Native Operating Display"),
+        QStringLiteral("native operating display standard swl screen edit escape kenwood"),
+        [this] { return new NativeOperatingDisplayWidget(*m_model); });
+    addNativePage(QStringLiteral("cwReceive"), QStringLiteral("Native CW Receive"),
+        QStringLiteral("native cw receive morse decode threshold filter screen characters transcript"),
+        [this] { return new NativeCwReceiveWidget(*m_model); });
+    addNativePage(QStringLiteral("transverter"), QStringLiteral("Native Transverter"),
+        QStringLiteral("native transverter xv xo offset direction magnitude frequency if rf display"),
+        [this] { return new NativeTransverterWidget(*m_model); });
+    addNativePage(QStringLiteral("vfoScan"), QStringLiteral("Native VFO Scan"),
+        QStringLiteral("native vfo scan speed tone ctcss receive scanning"),
+        [this] { return new NativeVfoScanWidget(*m_model); });
+    addNativePage(QStringLiteral("scanPreferences"), QStringLiteral("Native Scan Preferences"),
+        QStringLiteral("native scan hold resume radio preference configuration bank menu"),
+        [this] { return new NativeScanPreferencesWidget(*m_model); });
+    addNativePage(QStringLiteral("pskReceive"), QStringLiteral("Native PSK Receive"),
+        QStringLiteral("native psk receive afc tuning range bank radio preference"),
+        [this] { return new NativePskReceiveWidget(*m_model); });
+    addNativePage(QStringLiteral("receiverOptions"), QStringLiteral("Native Receiver Options"),
+        QStringLiteral("native receiver speaker mute signal blanking busy indicator physical"),
+        [this] { return new NativeReceiverOptionsWidget(*m_model); });
+    addNativePage(QStringLiteral("receiveDsp"), QStringLiteral("Native Receive DSP"),
+        QStringLiteral("receive noise reduction blanker notch audio peak filter apf nr nb beat cancellation native"),
+        [this] { return new NativeReceiveSettingsWidget(*m_model); });
+    addNativePage(QStringLiteral("receiveRouting"), QStringLiteral("Native Receive Routing"),
+        QStringLiteral("receive rx ant antenna external receiver routing hf 50 70 native radio"),
+        [this] { return new NativeReceiveRoutingWidget(*m_model); });
+    addNativePage(QStringLiteral("receiveAgc"), QStringLiteral("Native Receive AGC"),
+        QStringLiteral("receive agc slow mid fast preset quick recovery threshold native radio"),
+        [this] { return new NativeReceiveAgcWidget(*m_model); });
+    addNativePage(QStringLiteral("receiveEq"), QStringLiteral("Native Receive EQ"),
+        QStringLiteral("receive equalizer eq effect user preset curve bands native radio"),
+        [this] { return new NativeReceiveEqWidget(*m_model); });
+    addNativePage(QStringLiteral("networkAudio"), QStringLiteral("Network Audio Levels"),
+        QStringLiteral("voip network lan audio input output level administrator gain"),
+        [this] { return new NetworkAudioLevelsWidget(*m_model); });
+    addNativePage(QStringLiteral("transmitInputs"), QStringLiteral("Native Transmit Inputs"),
+        QStringLiteral("send ptt data microphone acc usb lan front rear audio input"),
+        [this] { return new NativeTransmitInputsWidget(*m_model); });
+    addNativePage(QStringLiteral("powerLimits"), QStringLiteral("Native Power Limits"),
+        QStringLiteral("power max po limiter tune ssb cw fsk psk fm am data band"),
+        [this] { return new NativePowerLimitsWidget(*m_model); });
     m_rtlReceiverPageIndex = m_pageIndexes.value(QStringLiteral("RTL Receiver"));
     setNavigationItemHidden(m_pageItems.value(m_rtlReceiverPageIndex),
         !isCapabilityPageAvailable(m_pageItems.value(m_rtlReceiverPageIndex)));
@@ -1484,7 +1571,9 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
                     || (droopRow && !droopCalibrationAvailable(m_model->backend()))
                     || (hl2HwRow && !declaresHl2Extension())
-                    || (ananRow && !ananFrontEndAvailable());
+                    || (ananRow && !ananFrontEndAvailable())
+                    || (!item->data(0, Qt::UserRole + 2).toString().isEmpty()
+                        && !isCapabilityPageAvailable(item));
                 if (!gated) {
                     navigationChanged |= setNavigationItemHidden(item, !matches);
                 }
@@ -1596,6 +1685,15 @@ bool RadioSetupDialog::isCapabilityPageAvailable(const QTreeWidgetItem* item) co
         return false;
     }
     const int index = item->data(0, Qt::UserRole).toInt();
+    const QString nativePage = item->data(0, Qt::UserRole + 2).toString();
+    if (!nativePage.isEmpty()) {
+        const RadioCapabilities caps = m_model->backendCapabilities();
+        for (const QString& space : caps.extensionNamespaces) {
+            const QVariant pages = caps.extensions.value(space).toMap().value(QStringLiteral("nativeSettingsPages"));
+            if (pages.typeId() == QMetaType::QStringList && pages.toStringList().contains(nativePage)) { return true; }
+        }
+        return false;
+    }
     if (index == m_rtlReceiverPageIndex) {
         return m_model->backendDeclaresExtension(QStringLiteral("rtl"))
             && m_model->backendCapabilities().extensions.value(QStringLiteral("rtl")).toMap()
@@ -1733,6 +1831,14 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
                             || (!needle.isEmpty()
                                 && !haystack.contains(needle, Qt::CaseInsensitive)));
         }
+    }
+
+    for (QTreeWidgetItem* item : m_pageItems) {
+        if (item->data(0, Qt::UserRole + 2).toString().isEmpty()) { continue; }
+        const QString haystack = item->text(0) + QStringLiteral(" ")
+            + item->data(0, Qt::UserRole + 1).toString();
+        navigationChanged |= setNavigationItemHidden(item, !isCapabilityPageAvailable(item)
+            || (!needle.isEmpty() && !haystack.contains(needle, Qt::CaseInsensitive)));
     }
 
     if (QTreeWidgetItem* gpsItem = m_pageItems.value(m_gpsPageIndex, nullptr)) {
@@ -3172,6 +3278,22 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
 {
     auto& tx = m_model->transmitModel();
     auto* page = new QWidget;
+    auto* availability = new ControlAvailabilityRegistry(*m_model, page);
+    const auto setting = [availability](QWidget* widget, TransmitControlRequest::Field field) {
+        availability->registerRestriction(widget,
+            tr("This setting is not implemented by the connected radio backend"),
+            [field](bool, const RadioCapabilities& caps) {
+                return !caps.radioTransmitSettings || caps.radioTransmitSettings->fields.contains(field);
+            });
+    };
+    const auto setupSetting = [availability](QWidget* widget, RadioSetupField field) {
+        availability->registerRestriction(widget,
+            tr("This setting is not implemented by the connected radio backend"),
+            [field](bool, const RadioCapabilities& caps) {
+                return !caps.radioTransmitSettings
+                    || (caps.radioSetupControl && caps.radioSetupControl->supports(field));
+            });
+    };
     auto* vbox = new QVBoxLayout(page);
     vbox->setSpacing(8);
 
@@ -3214,6 +3336,7 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         };
 
         auto* biasBtn = mkTogBtn("BIAS", tx.micBias());
+        biasBtn->setObjectName(QStringLiteral("radioMicBias"));
         connect(biasBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->transmitModel().setMicBias(on);
         });
@@ -3222,6 +3345,9 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
             m_model->transmitModel().setMicBoost(on);
         });
         auto* metBtn = mkTogBtn(tx.metInRx() ? "Enabled" : "Disabled", tx.metInRx());
+        setting(biasBtn, TransmitControlRequest::Field::MicBias);
+        setting(boostBtn, TransmitControlRequest::Field::MicBoost);
+        setupSetting(metBtn, RadioSetupField::MeterDuringReceive);
         connect(metBtn, &QPushButton::toggled, this, [this, metBtn](bool on) {
             metBtn->setText(on ? "Enabled" : "Disabled");
             m_model->requestRadioSetup({SetupField::MeterDuringReceive, on});
@@ -3240,16 +3366,14 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
-        // The keyer controls commit through TransmitModel setters, never raw
-        // wire text: the setter updates the model and emits phoneStateChanged
-        // before sending, which is the only update on a backend that never
-        // echoes `iambic`/`iambic_mode` (parsed only in
-        // FlexBackend::decodeTransmitState) (#5256).
+        // Native keyer controls wait for readback. Legacy setters retain their
+        // optimistic updates for radios without incremental keyer status.
         // Iambic: Enabled | A | B
         auto* iamLbl = new QLabel("Iambic:");
         applyLabelStyle(iamLbl);
         grid->addWidget(iamLbl, 0, 0);
         auto* iamBtn = mkTogBtn(tx.cwIambic() ? "Enabled" : "Disabled", tx.cwIambic());
+        iamBtn->setObjectName(QStringLiteral("radioCwIambicEnabled"));
         connect(iamBtn, &QPushButton::toggled, this, [this, iamBtn](bool on) {
             iamBtn->setText(on ? "Enabled" : "Disabled");
             m_model->transmitModel().setCwIambic(on);
@@ -3262,6 +3386,11 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         grid->addLayout(iambicRow, 0, 1);
         auto* modeA = mkTogBtn("A", tx.cwIambicMode() == 0);
         auto* modeB = mkTogBtn("B", tx.cwIambicMode() == 1);
+        modeA->setObjectName(QStringLiteral("radioCwModeA"));
+        modeB->setObjectName(QStringLiteral("radioCwModeB"));
+        setting(iamBtn, TransmitControlRequest::Field::CwIambic);
+        setting(modeA, TransmitControlRequest::Field::CwIambicMode);
+        setting(modeB, TransmitControlRequest::Field::CwIambicMode);
         connect(modeA, &QPushButton::clicked, this, [this, modeA, modeB] {
             modeA->setChecked(true); modeB->setChecked(false);
             m_model->transmitModel().setCwIambicMode(0);
@@ -3278,6 +3407,8 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         applyLabelStyle(swapLbl);
         grid->addWidget(swapLbl, 0, 2);
         auto* swapBtn = mkTogBtn("Dot/Dash", tx.cwSwapPaddles());
+        swapBtn->setObjectName(QStringLiteral("radioCwPaddleSwap"));
+        setting(swapBtn, TransmitControlRequest::Field::CwSwap);
         connect(swapBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->transmitModel().setCwSwapPaddles(on);
         });
@@ -3289,6 +3420,8 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         grid->addWidget(sbLbl, 1, 0);
         auto* cwuBtn = mkTogBtn("CWU", !tx.cwlEnabled());
         auto* cwlBtn = mkTogBtn("CWL", tx.cwlEnabled());
+        setting(cwuBtn, TransmitControlRequest::Field::CwlEnabled);
+        setting(cwlBtn, TransmitControlRequest::Field::CwlEnabled);
         connect(cwuBtn, &QPushButton::clicked, this, [this, cwuBtn, cwlBtn] {
             cwuBtn->setChecked(true); cwlBtn->setChecked(false);
             m_model->transmitModel().setCwlEnabled(false);
@@ -3308,10 +3441,26 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         applyLabelStyle(cwxLbl);
         grid->addWidget(cwxLbl, 1, 2);
         auto* syncBtn = mkTogBtn("Sync", tx.syncCwx());
+        setupSetting(syncBtn, RadioSetupField::SyncCwx);
         connect(syncBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->requestRadioSetup({SetupField::SyncCwx, on});
         });
         grid->addWidget(syncBtn, 1, 3);
+        const auto syncNativeKeyer = [this, iamBtn, modeA, modeB, swapBtn, cwuBtn, cwlBtn] {
+            const TransmitModel& state = m_model->transmitModel();
+            if (!state.radioOwnsSettings()) { return; }
+            const QSignalBlocker iambicBlock(iamBtn), aBlock(modeA), bBlock(modeB), swapBlock(swapBtn),
+                upperBlock(cwuBtn), lowerBlock(cwlBtn);
+            iamBtn->setChecked(state.cwIambic());
+            iamBtn->setText(state.cwIambic() ? tr("Enabled") : tr("Disabled"));
+            modeA->setChecked(state.cwIambicMode() == 0);
+            modeB->setChecked(state.cwIambicMode() == 1);
+            swapBtn->setChecked(state.cwSwapPaddles());
+            cwuBtn->setChecked(!state.cwlEnabled());
+            cwlBtn->setChecked(state.cwlEnabled());
+        };
+        connect(&tx, &TransmitModel::phoneStateChanged, page, syncNativeKeyer);
+        connect(&tx, &TransmitModel::controlRequested, page, syncNativeKeyer, Qt::QueuedConnection);
 
         // CW Decode — independent RX / TX toggles (#2417).  RX keeps the
         // legacy behaviour of decoding the received CW slice; TX decodes

@@ -144,9 +144,12 @@ private:
     QString rprt(int code) const;
 
     // Mode conversion tables
+    QString receiveModeToHamlib(const SliceModel* slice) const;
+    QString receiveModeFromHamlib(const SliceModel* slice, const QString& mode) const;
+    QString receiveModeTokens(const SliceModel* slice) const;
     static QString smartsdrToHamlib(const QString& mode);
     static QString hamlibToSmartSDR(const QString& mode);
-    static int     hamlibModeFlag(const QString& mode);
+    static quint64 hamlibModeFlag(const QString& mode);
 
     RadioModel* m_model;
     TxCoordinator::Producer m_txProducer;

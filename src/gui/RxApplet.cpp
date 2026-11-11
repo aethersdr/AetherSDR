@@ -449,19 +449,33 @@ void RxApplet::buildUI()
                 act->setToolTip(ant);
                 act->setStatusTip(ant);
             }
-            connect(menu, &QMenu::triggered, this, [this, slice](QAction* sel) {
-                if (!sel || !slice) {
+            const QPointer<RxApplet> self(this);
+            const QPointer<RadioModel> model(m_radioModel);
+            const bool confirmed = slice->supportsReceiveInteraction(ReceiveInteractionControl::Feature::AntennaReadback);
+            const quint64 receiverEpoch = slice->receiveSessionGeneration();
+            const RadioControlSession session = model ? model->controlSession() : RadioControlSession{};
+            const auto current = [self, model, slice, confirmed, receiverEpoch, session] {
+                if (!self || !slice) { return false; }
+                if (!confirmed) { return true; }
+                if (self->m_slice != slice || !slice->supportsReceiveInteraction(
+                        ReceiveInteractionControl::Feature::AntennaReadback)) { return false; }
+                return model && self->m_radioModel == model && model->isConnected()
+                    && model->slice(slice->sliceId()) == slice && model->controlSessionCurrent(session)
+                    && slice->receiveSessionGeneration() == receiverEpoch;
+            };
+            connect(menu, &QMenu::triggered, this, [self, slice, confirmed, current](QAction* sel) {
+                if (!sel || !current()) {
                     return;
                 }
                 const QString token = sel->data().toString();
-                const QString profileId = m_kiwiSdrManager
-                    ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
+                const QString profileId = self->m_kiwiSdrManager
+                    ? self->m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
                     : QString();
                 if (!profileId.isEmpty()) {
-                    emit kiwiRxAntennaSelected(slice->sliceId(), profileId);
+                    emit self->kiwiRxAntennaSelected(slice->sliceId(), profileId);
                 } else {
-                    emit flexRxAntennaSelected(slice->sliceId());
-                    if (slice->rxAntenna() != token) { slice->setRxAntenna(token); }
+                    emit self->flexRxAntennaSelected(slice->sliceId());
+                    if ((!confirmed || current()) && (confirmed || slice->rxAntenna() != token)) { slice->setRxAntenna(token); }
                 }
             });
             menu->popup(
@@ -2192,6 +2206,11 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     }
     if (m_radioModel) {
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
+        m_filterAvailability->registerRestriction(m_modeCombo,
+            tr("Receive mode changes are unavailable in the current radio state"),
+            [](bool connected, const RadioCapabilities& caps) {
+                return !connected || !caps.receiveModeControl || !caps.receiveModeControl->modes.isEmpty();
+            });
         m_filterAvailability->registerRestriction(m_txAntBtn,
             tr("This radio is receive-only; no transmit antenna is available"),
             [](bool connected, const RadioCapabilities& caps) {
@@ -3463,6 +3482,8 @@ bool RxApplet::acceptsFilterEdges(int low, int high) const
 
 QVector<int> RxApplet::defaultFilterWidths(const QString& mode) const
 {
+    if (!ModeFilters::fmFilterAdjustable(mode,
+        m_receiveFilterControl ? &*m_receiveFilterControl : nullptr, !m_radioFilterWidths.isEmpty())) { return {}; }
     if (ModeFilters::isFmMode(mode)) {
         const QVector<int> widths = ModeFilters::widthsForMode(mode,
             m_receiveFilterControl ? &*m_receiveFilterControl : nullptr);
@@ -3558,6 +3579,21 @@ void RxApplet::rebuildFilterButtons()
         // and Auto button within the dock's 248 px viewport.
         btn->setStyleSheet(kButtonBase() + kBlueActive()
             + QStringLiteral("QPushButton { padding: 1px; }"));
+        if (m_filterAvailability && m_receiveFilterControl
+            && m_receiveFilterControl->modePolicy == ReceiveFilterControl::ModePolicy::ListedOnly) {
+            const bool hasCustom = customisable && i < m_filterCustomLo.size()
+                && i < m_filterCustomHi.size() && m_filterCustomLo[i] != INT_MIN;
+            const ModeFilters::Edges custom{hasCustom ? m_filterCustomLo[i] : 0,
+                                            hasCustom ? m_filterCustomHi[i] : 0};
+            m_filterAvailability->registerWidget(btn,
+                tr("This filter preset is outside the receiver's supported passband range"),
+                [this, w, hasCustom, custom](bool, const RadioCapabilities&) {
+                    if (!m_slice) { return false; }
+                    const ModeFilters::Edges edges = hasCustom ? custom : ModeFilters::edgesForWidth(
+                        m_slice->mode(), w, {m_slice->diguOffset(), m_slice->diglOffset(), m_slice->rttyShift()});
+                    return acceptsFilterEdges(edges.lo, edges.hi);
+                });
+        }
         connect(btn, &QPushButton::clicked, this,
                 [this, i, customisable, stablePresets, preset](bool) {
             if (!m_slice) {
@@ -3969,7 +4005,9 @@ bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
         if (place == 0.0)
             place = m_stepSizes[m_stepIdx] / 1.0e6;
 
-        m_slice->setFrequency(m_slice->frequency() + place * steps);
+        const double target = m_slice->supportsReceiveInteraction(ReceiveInteractionControl::Feature::PendingTune)
+            ? m_slice->incrementalTuneTarget(place * steps) : m_slice->frequency() + place * steps;
+        m_slice->setFrequency(target);
         we->accept();
         return true;
     }

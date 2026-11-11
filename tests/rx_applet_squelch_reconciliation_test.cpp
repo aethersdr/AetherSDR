@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/kenwood/KenwoodBackend.h"
 #include "core/backends/SquelchLevelScale.h"
 #include "core/backends/SliceDelta.h"
 #include "gui/RxApplet.h"
@@ -12,6 +13,10 @@
 #include "models/RadioModel.h"
 
 #include <QApplication>
+#include <QByteArray>
+#include <QDir>
+#include <QList>
+#include <QPixmap>
 #include <QDate>
 #include <QDateTime>
 #include <QPushButton>
@@ -19,7 +24,26 @@
 #include <QSlider>
 #include <QtTest>
 
+#include <memory>
+
 using namespace AetherSDR;
+
+namespace AetherSDR::kenwood {
+struct KenwoodBackendTestAccess {
+    static void authenticate(KenwoodBackend& backend)
+    {
+        backend.m_clock.start();
+        backend.m_protocol.start("fixture", "fixture-only", false, 0);
+        backend.m_protocol.receive("##CN1;", 1);
+        backend.m_protocol.receive("##ID1;", 2);
+        backend.ready();
+    }
+    static void observe(KenwoodBackend& backend, const QByteArray& message)
+    {
+        backend.adopt(message);
+    }
+};
+}
 
 namespace AetherSDR {
 class RadioAdministrationTestAccess {
@@ -126,6 +150,61 @@ class RxAppletSquelchReconciliationTest : public QObject
     Q_OBJECT
 
 private slots:
+    void kenwoodNativeSliderRoute()
+    {
+        QList<QByteArray> commands;
+        RadioModel radio;
+        auto owned = std::make_unique<kenwood::KenwoodBackend>(kenwood::KenwoodBackend::Transport{
+            [&commands](const QByteArray& wire) { commands.append(wire); return true; }, {}});
+        kenwood::KenwoodBackend* backend = owned.get();
+        radio.setBackendForTest(std::move(owned), QStringLiteral("kenwood"));
+        kenwood::KenwoodBackendTestAccess::authenticate(*backend);
+        for (const QByteArray& message : {QByteArray("ID024"), QByteArray("RX"),
+                 QByteArray("FR0"), QByteArray("SF0000142000002"), QByteArray("SQ128")}) {
+            kenwood::KenwoodBackendTestAccess::observe(*backend, message);
+        }
+        SliceModel* slice = radio.slice(0);
+        QVERIFY(slice);
+        QVERIFY(slice->squelchOn());
+        QCOMPARE(slice->squelchLevel(), 50);
+        RxApplet rx;
+        rx.setRadioModel(&radio);
+        rx.setSlice(slice);
+        rx.resize(360, 720);
+        rx.show();
+        QSlider* slider = control<QSlider>(rx, QStringLiteral("Squelch threshold"));
+        QPushButton* button = control<QPushButton>(rx, QStringLiteral("Squelch mode"));
+        QVERIFY(slider && button);
+        QVERIFY(slider->isEnabled());
+        QCOMPARE(slider->value(), 50);
+        commands.clear();
+        slider->setFocus();
+        QTest::keyClick(slider, Qt::Key_End);
+        QCOMPARE(commands, (QList<QByteArray>{"SQ255;", "SQ;"}));
+        QCOMPARE(slice->squelchLevel(), 50);
+        kenwood::KenwoodBackendTestAccess::observe(*backend, "SQ255");
+        QCOMPARE(slice->squelchLevel(), 100);
+        QCOMPARE(slider->value(), 100);
+        const QString captureDir = qEnvironmentVariable("AETHER_TS890_SQL_CAPTURE_DIR");
+        if (!captureDir.isEmpty()) {
+            QCOMPARE(QApplication::platformName(), QStringLiteral("cocoa"));
+            QVERIFY(QTest::qWaitForWindowExposed(&rx));
+            QVERIFY(QDir().mkpath(captureDir));
+            QVERIFY(rx.grab().save(captureDir + QStringLiteral("/manual-maximum.png")));
+        }
+        commands.clear();
+        QTest::keyClick(slider, Qt::Key_Home);
+        QCOMPARE(commands, (QList<QByteArray>{"SQ000;", "SQ;"}));
+        QVERIFY(slice->squelchOn());
+        QCOMPARE(slice->squelchLevel(), 100);
+        kenwood::KenwoodBackendTestAccess::observe(*backend, "SQ000");
+        QVERIFY(!slice->squelchOn());
+        QCOMPARE(slice->squelchLevel(), 0);
+        QVERIFY(!slider->isEnabled());
+        if (!captureDir.isEmpty()) {
+            QVERIFY(rx.grab().save(captureDir + QStringLiteral("/confirmed-off.png")));
+        }
+    }
     void cwLoopSurvivesWidgetRebuildAndStopsAfterEligibilityLoss()
     {
         RadioModel radio;

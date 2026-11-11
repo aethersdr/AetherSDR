@@ -1,6 +1,7 @@
 #include "TxApplet.h"
 #include "AtuPreTuneDialog.h"
 #include "ScopedChildWidget.h"
+#include "ControlAvailabilityRegistry.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "HGauge.h"
@@ -21,6 +22,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
+#include <QPointer>
 #include <cmath>
 #include "core/ThemeManager.h"
 
@@ -541,6 +543,11 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     if (m_model == model) return;
     m_model = model;
     if (!m_model) return;
+    const QPointer<TransmitModel> source(m_model);
+    connect(source, &TransmitModel::controlRequested, this,
+        [this, source](const TransmitControlRequest&) {
+            if (source && source == m_model && source->radioOwnsSettings()) { syncFromModel(); }
+        }, Qt::QueuedConnection);
     m_lastAtuStatus = ATUStatus::None;
     m_atuTunedFreqMhz = -1.0;
 
@@ -550,8 +557,13 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     const auto updateTuneAvailability = [this]() {
         const bool available = m_model->tuneAvailable() || m_model->isTuning();
         m_tuneBtn->setEnabled(available);
+        const QString reason = !m_model->radioOwnsSettings() || m_model->tuneUnavailableReason().isEmpty()
+            ? tr("Tune carrier is unavailable in this mode through the current radio backend")
+            : m_model->tuneUnavailableReason();
         m_tuneBtn->setToolTip(available ? tr("Start or stop tune carrier")
-            : tr("Tune carrier is unavailable in this mode through the current radio backend"));
+            : reason);
+        m_tuneBtn->setAccessibleDescription(available || !m_model->radioOwnsSettings()
+            ? tr("Start or stop tune carrier") : reason);
     };
     connect(m_model, &TransmitModel::tuneAvailabilityChanged, this, updateTuneAvailability);
     connect(m_model, &TransmitModel::tuneChanged, this, updateTuneAvailability);
@@ -840,6 +852,8 @@ void TxApplet::setTransmitting(bool tx)
     }
 }
 
+TxApplet::~TxApplet() { m_settingAvailability.reset(); }
+
 void TxApplet::setRadioModel(RadioModel* radio)
 {
     if (m_radioModel == radio) {
@@ -849,6 +863,7 @@ void TxApplet::setRadioModel(RadioModel* radio)
         disconnect(m_capabilitiesConnection);
         m_capabilitiesConnection = {};
     }
+    m_settingAvailability.reset();
     m_txController.reset();
     m_radioModel = radio;
     m_forwardPowerRequiresSmoothing = !radio || !radio->isConnected()
@@ -856,6 +871,17 @@ void TxApplet::setRadioModel(RadioModel* radio)
     m_forwardPowerScaleFollowsBandRating = radio && radio->isConnected()
         && !radio->backendCapabilities().txPowerBands.isEmpty();
     if (radio) {
+        m_settingAvailability = std::make_unique<ControlAvailabilityRegistry>(*radio, this);
+        using Field = TransmitControlRequest::Field;
+        for (const auto& [widget, field] : QList<QPair<QWidget*, Field>>{
+            {m_rfPowerSlider, Field::RfPower}, {m_tunePowerSlider, Field::TunePower},
+            {m_profileCombo, Field::TxProfile}}) {
+            m_settingAvailability->registerRestriction(widget,
+                tr("This setting is not implemented by the connected radio backend"),
+                [field](bool, const RadioCapabilities& caps) {
+                    return !caps.radioTransmitSettings || caps.radioTransmitSettings->fields.contains(field);
+                });
+        }
         m_capabilitiesConnection = connect(
             radio, &RadioModel::capabilitiesChanged, this,
             [this](bool connected, const RadioCapabilities& caps) {

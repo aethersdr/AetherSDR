@@ -958,6 +958,32 @@ set(CORE_SOURCES
     src/core/backends/anan/AnanDroopDefaults.cpp   # derived per-gateware droop defaults (generated data)
     src/core/backends/anan/AnanBackend.cpp   # aetherd ANAN P2 Phase 1b (IRadioBackend impl)
     src/core/backends/anan/AnanSettings.cpp  # owned config object, "Anan" root key (Principle V)
+    src/core/backends/kenwood/KnsProtocol.cpp
+    src/core/backends/kenwood/KenwoodFilter.cpp
+    src/core/backends/kenwood/KenwoodReceiveControls.cpp
+    src/core/backends/kenwood/KenwoodScopeControls.cpp
+    src/core/backends/kenwood/KenwoodRadioMessages.cpp
+    src/core/backends/kenwood/KenwoodMemoryInventory.cpp
+    src/core/backends/kenwood/KenwoodAutoMode.cpp
+    src/core/backends/kenwood/KenwoodOperatingDisplay.cpp
+    src/core/backends/kenwood/KenwoodCwReceive.cpp
+    src/core/backends/kenwood/KenwoodTransverter.cpp
+    src/core/backends/kenwood/KenwoodVfoScan.cpp
+    src/core/backends/kenwood/KenwoodScanPreferences.cpp
+    src/core/backends/kenwood/KenwoodReceiverOptions.cpp
+    src/core/backends/kenwood/KenwoodPskReceive.cpp
+    src/core/backends/kenwood/KenwoodTuningControls.cpp
+    src/core/backends/kenwood/KenwoodFilterBanks.cpp
+    src/core/backends/kenwood/KenwoodReceiveEq.cpp
+    src/core/backends/kenwood/KenwoodReceiveAgc.cpp
+    src/core/backends/kenwood/KenwoodReceiveRouting.cpp
+    src/core/backends/kenwood/KenwoodPowerLimits.cpp
+    src/core/backends/kenwood/KenwoodBackend.cpp
+    src/core/backends/kenwood/KenwoodTransmit.cpp
+    src/core/backends/kenwood/KenwoodTune.cpp
+    src/core/backends/AdditionalRadioBackends.cpp
+    src/models/NetworkRadioLogin.cpp
+    src/models/NetworkRadioLookup.cpp
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
     src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
     src/core/backends/icom/IcomMemoryCodec.cpp # profile-gated Icom radio memories (1A 00)
@@ -1393,8 +1419,28 @@ set(GUI_SOURCES
     src/gui/FirmwareUpdateCard.cpp
     src/gui/CanonPrompt.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
     src/gui/NtpSourcesPage.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/RadioSetupDialog_Peripherals.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/SystemInfoDialog.cpp

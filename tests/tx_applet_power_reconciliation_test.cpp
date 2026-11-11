@@ -394,6 +394,7 @@ void testAtuMenuHonoursTransverterAvailability()
 // Inject the production backend seam, not a firmware peer. No sockets or RF.
 class TxActionBackend final : public IRadioBackend {
 public:
+    std::optional<RadioTransmitSettings> settings;
     QStringList commands;
     bool connected{false};
     RadioCapabilities capabilities() const override
@@ -401,6 +402,7 @@ public:
         RadioCapabilities caps;
         caps.canTransmit = true;
         caps.hasTuner = true;
+        caps.radioTransmitSettings = settings;
         // The MIDI two-tone case below exercises a radio that has the generator.
         caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{QStringLiteral("test")};
         return caps;
@@ -494,6 +496,37 @@ void testMidiProducerDispatch()
            recorder->commands == QStringList{"tune:off"} && !radio.transmitModel().isTuning()
                && modeCommands.count() == 1
                && modeCommands.at(0).at(0).toString() == "transmit set tune_mode=single_tone");
+}
+
+void testNativePowerSettingAvailability()
+{
+    RadioModel radio;
+    auto owned = std::make_unique<TxActionBackend>();
+    TxActionBackend* source = owned.get();
+    source->connected = true;
+    source->settings = RadioTransmitSettings{{TransmitControlRequest::Field::RfPower}};
+    radio.setBackendForTest(std::move(owned), QStringLiteral("native-settings"));
+    radio.transmitModel().setRadioTransmitSettings(source->settings);
+    radio.transmitModel().applyChanges(TransmitDelta{.rfPower = 25});
+    TxApplet applet;
+    applet.setTransmitModel(&radio.transmitModel());
+    applet.setRadioModel(&radio);
+    QSlider* rf = powerSlider(applet, QStringLiteral("RF power"));
+    QSlider* tune = powerSlider(applet, QStringLiteral("Tune power"));
+    QWidget* profile = namedWidget(applet, QStringLiteral("TX profile"));
+    report("native settings expose only implemented power fields",
+        rf && tune && profile && rf->isEnabled() && !tune->isEnabled() && !profile->isEnabled());
+    if (!rf || !tune || !profile) { return; }
+    rf->setValue(60);
+    QCoreApplication::processEvents();
+    report("native power edit reconciles to observed state while pending",
+        radio.transmitModel().rfPower() == 25 && rf->value() == 25);
+    report("unsupported tune setting has an accessible reason", !tune->accessibleDescription().isEmpty());
+    source->settings.reset();
+    radio.transmitModel().setRadioTransmitSettings(std::nullopt);
+    emit radio.capabilitiesChanged(true, source->capabilities());
+    report("legacy backend restores power and profile controls",
+        rf->isEnabled() && tune->isEnabled() && profile->isEnabled());
 }
 
 void testScopedControllerActions()
@@ -1279,6 +1312,7 @@ int main(int argc, char** argv)
     testAtuRedrawPreservesMatchedFrequency();
     testAtuMenuHonoursTransverterAvailability();
     testMidiProducerDispatch();
+    testNativePowerSettingAvailability();
     testScopedControllerActions();
     testScopedPointerActivation();
     testOptionalReceiveControlActivation();

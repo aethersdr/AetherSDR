@@ -15,6 +15,7 @@
 #include <functional>
 #include <atomic>
 #include <memory>
+#include <optional>
 
 class QTimer;
 
@@ -51,6 +52,10 @@ public:
     }
     explicit TransmitModel(QObject* parent = nullptr);
     ~TransmitModel() override;
+    void setRadioTransmitSettings(const std::optional<RadioTransmitSettings>& settings);
+    bool supportsSetting(TransmitControlRequest::Field field) const
+    { return !m_radioTransmitSettings || m_radioTransmitSettings->fields.contains(field); }
+    bool radioOwnsSettings() const { return m_radioTransmitSettings.has_value(); }
 
     // ── Transmit getters ────────────────────────────────────────────────────
     int     rfPower()       const { return m_rfPower; }
@@ -208,7 +213,8 @@ public:
     QString tuneMode()        const { return m_tuneMode; }
     QString txSliceMode()     const { return m_txSliceMode; }
     bool tuneAvailable() const { return m_tuneAvailable; }
-    void setTuneAvailable(bool available);
+    QString tuneUnavailableReason() const { return m_tuneUnavailableReason; }
+    void setTuneAvailable(bool available, const QString& reason = {});
     // Whether the selected TX antenna passes through the internal ATU.
     bool atuAvailable() const { return m_atuAvailable; }
     void setAtuAvailable(bool available);
@@ -614,6 +620,7 @@ signals:
     // model setters no longer emit wire text.
     void commandReady(const QString& cmd);
     void controlRequested(const AetherSDR::TransmitControlRequest& request);
+    void settingSupportChanged();
     void pttBlocked(const QString& message);
     void atuTuneFailed(AetherSDR::ATUStatus status, const QString& message);
     // Quindar active-phase signal (#2262).  Emitted on the GUI thread
@@ -625,6 +632,7 @@ signals:
 
 private:
     friend class RadioModel;
+    void retirePendingTuneIntent();
     void resetDaxSessionState();
     auto captureControlIntent(TransmitControlRequest::Field field)
     {
@@ -635,6 +643,8 @@ private:
         };
     }
     bool refuseControlOffThread() const;
+    bool dispatchRadioSetting(const TransmitControlRequest& request);
+    std::optional<RadioTransmitSettings> m_radioTransmitSettings;
     std::array<quint64, static_cast<size_t>(TransmitControlRequest::Field::Count)> m_controlIntentRevisions{};
     // requestVoxEnable() tickets still waiting on an answer, with what each
     // asked for and the VOX intent revision it was issued at.
@@ -758,6 +768,7 @@ private:
     int     m_maxPowerLevel{100};
     QString m_tuneMode{"single_tone"};
     bool m_tuneAvailable = true;
+    QString m_tuneUnavailableReason;
     bool m_atuAvailable = true;
     QString m_txSliceMode;   // empty until first transmit status; "FDVU", "FDVL", "USB", etc.
     bool    m_showTxInWaterfall{false};

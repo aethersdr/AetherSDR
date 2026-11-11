@@ -8,6 +8,8 @@
 #include <limits>
 #include <memory>
 #include <vector>
+#include <thread>
+#include <atomic>
 
 using AetherSDR::TxCoordinator;
 using Activity = TxCoordinator::Activity;
@@ -635,9 +637,84 @@ void capturedProducerRequests()
 }
 } // namespace
 
+namespace {
+void localIntentRetirement()
+{
+    TxCoordinator coordinator([](const TxCoordinator::Operation&, TxCoordinator::StopReason) {});
+    const TxCoordinator::Actor actor = coordinator.registerActor({true, 0});
+    const TxCoordinator::Actor competitor = coordinator.registerActor({true, 0});
+    const TxCoordinator::Operation root = coordinator.acquire(actor, 100).operation;
+    const TxCoordinator::Intent tune = coordinator.beginIntent(root, {}, Activity::Tune);
+    const TxCoordinator::Intent mox = coordinator.beginIntent(root, {}, Activity::Mox);
+    int retired = 0;
+    TxCoordinator::LocalIntentEnd observed = TxCoordinator::LocalIntentEnd::MayHaveKeyed;
+    const TxCoordinator::Operation bound = coordinator.bindLocalIntentRetirement(root, tune,
+        [&](TxCoordinator::LocalIntentEnd phase) {
+            ++retired;
+            observed = phase;
+            (void)coordinator.endIntent(tune);
+        });
+    check(bound.hasLocalIntentRetirement() && bound.sameOperation(root) && !bound.sameAuthority(root)
+        && bound.permitsDispatch(100), "retirement binding restricts an existing operation without new authority");
+    const TxCoordinator::Operation duplicate = coordinator.bindLocalIntentRetirement(root, tune,
+        [](TxCoordinator::LocalIntentEnd) {});
+    const TxCoordinator::Operation other = coordinator.bindLocalIntentRetirement(root, mox,
+        [](TxCoordinator::LocalIntentEnd) {});
+    check(bound.sameLocalIntent(duplicate) && !bound.sameLocalIntent(other), "retirement identity is the captured contribution, not the shared operation");
+    const TxCoordinator::Operation copy = bound;
+    bound.retireLocalIntent(TxCoordinator::LocalIntentEnd::BeforeKeying);
+    copy.retireLocalIntent(TxCoordinator::LocalIntentEnd::MayHaveKeyed);
+    check(retired == 1 && observed == TxCoordinator::LocalIntentEnd::BeforeKeying && !tune.pending() && mox.pending(),
+          "copies retire one original intent once and preserve another producer's hold");
+    check(!bound.permitsDispatch(100) && bound.permitsCleanup() && root.permitsDispatch(100)
+        && coordinator.acquire(competitor, 100).refusal == TxCoordinator::Refusal::Busy,
+          "local retirement blocks stale keying but preserves cleanup and the owner barrier");
+    check(!coordinator.bindLocalIntentRetirement(bound, tune, [](TxCoordinator::LocalIntentEnd) {}).permitsDispatch(100),
+          "rebinding cannot remove a retired fence");
+    const TxCoordinator::Intent fresh = coordinator.beginIntent(root, {}, Activity::Tune);
+    const TxCoordinator::Operation freshBound = coordinator.bindLocalIntentRetirement(root, fresh,
+        [](TxCoordinator::LocalIntentEnd) {});
+    bound.retireLocalIntent(TxCoordinator::LocalIntentEnd::BeforeKeying);
+    check(fresh.pending() && freshBound.permitsDispatch(100) && !freshBound.sameLocalIntent(bound),
+          "late retirement cannot end a fresh contribution on the same operation");
+    std::atomic<int> workerRetired{0};
+    {
+        const TxCoordinator::Operation worker = coordinator.bindLocalIntentRetirement(root, fresh,
+            [&](TxCoordinator::LocalIntentEnd) { workerRetired.fetch_add(1); });
+        std::thread thread([worker] { worker.retireLocalIntent(TxCoordinator::LocalIntentEnd::MayHaveKeyed); });
+        thread.join();
+        check(workerRetired == 1 && !worker.permitsDispatch(100) && worker.permitsCleanup(),
+              "worker retirement immediately fences its own copies without coordinator mutation");
+    }
+    int dropped = 0;
+    TxCoordinator::Operation terminal;
+    terminal = coordinator.bindLocalIntentRetirement(root, fresh, [](TxCoordinator::LocalIntentEnd) {});
+    terminal = terminal.withKeyingPermit([&] {
+        terminal.retireLocalIntent(TxCoordinator::LocalIntentEnd::BeforeKeying);
+        return true;
+    });
+    check(!terminal.beginDispatch(100), "retirement inside a terminal predicate wins before keying dispatch");
+    { const TxCoordinator::Operation unused = coordinator.bindLocalIntentRetirement(root, fresh,
+        [&](TxCoordinator::LocalIntentEnd) { ++dropped; }); }
+    TxCoordinator::Completion queue([] {});
+    queue.finish();
+    check(dropped == 0 && fresh.pending(), "dropping a receipt or consuming a queue is not intent retirement");
+    TxCoordinator foreign([](const TxCoordinator::Operation&, TxCoordinator::StopReason) {});
+    const TxCoordinator::Actor outsider = foreign.registerActor({true, 0});
+    const TxCoordinator::Operation foreignRoot = foreign.acquire(outsider, 100).operation;
+    const TxCoordinator::Intent foreignIntent = foreign.beginIntent(foreignRoot, {}, Activity::Tune);
+    check(coordinator.cleanupFence().permitsCleanupOf(root) && !coordinator.cleanupFence().permitsCleanupOf(foreignRoot)
+        && !coordinator.cleanupFence().permitsDispatch(100), "global cleanup covers only its own coordinator session and cannot key");
+    check(!coordinator.bindLocalIntentRetirement(root, foreignIntent, [](TxCoordinator::LocalIntentEnd) {}).hasLocalIntentRetirement()
+        && !foreign.bindLocalIntentRetirement(root, tune, [](TxCoordinator::LocalIntentEnd) {}).hasLocalIntentRetirement(),
+          "retirement cannot bind foreign coordinator or contribution identity");
+}
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    localIntentRetirement();
     ownershipAndRecovery();
     expiryAndRevocation();
     unconfirmedCompletion();

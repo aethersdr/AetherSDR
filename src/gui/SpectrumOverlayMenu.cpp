@@ -1900,10 +1900,8 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
-    // Scope mode, for a radio whose panadapter is its own scope (Icom). First in
-    // the group because it changes what every spectrum gesture does. An
-    // Icom-only cluster: built for that family alone (setRadioFamily), and
-    // dimmed with a reason on an Icom whose model or firmware has no choice.
+    // Native scope mode comes from the backend's labels. Icom also keeps the
+    // row visible, dimmed with a reason, when its model offers no mode choice.
     {
         m_scopeModeRow = new QWidget;
         // The label and the buttons rebuilt per radio share the row's one
@@ -1919,15 +1917,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         m_scopeModeLayout->setContentsMargins(0, 2, 0, 2);
         m_scopeModeLayout->setSpacing(3);
         m_scopeModeLayout->addWidget(new QLabel(tr("Scope:")));
-        m_scopeModeRow->setToolTip(tr(
-            "How the radio's scope window follows the VFO.\n"
-            "Center: the window is centered on the VFO; dragging retunes.\n"
-            "Scroll-F: the window stays put; click to tune, drag to scroll.\n"
-            "  A drag stops before the VFO leaves the screen.\n"
-            "Fixed: as Scroll-F, but the window can be dragged away from\n"
-            "  the VFO; AetherSDR follows the VFO when you tune off-screen.\n"
-            "Scroll-F and Fixed rewrite the radio's stored Fixed Edges\n"
-            "preset 4; presets 1-3 are left as you set them."));
+        m_scopeModeRow->setToolTip(scopeModeToolTip());
         rebuildScopeModeButtons();
         grid->addWidget(m_scopeModeRow, row, 0, 1, 4);
         ++row;
@@ -3406,6 +3396,31 @@ void SpectrumOverlayMenu::refreshFrontEndButtons()
 
 // The buttons do not own their state: a click emits the request and they
 // repaint from the index the backend reports.
+QString SpectrumOverlayMenu::scopeModeToolTip() const
+{
+    if (!m_scopeModeHelp.isEmpty()) {
+        return tr("How the radio's scope window follows the VFO.\n") + m_scopeModeHelp;
+    }
+    return tr(
+        "How the radio's scope window follows the VFO.\n"
+        "Center: the window is centered on the VFO; dragging retunes.\n"
+        "Scroll-F: the window stays put; click to tune, drag to scroll.\n"
+        "  A drag stops before the VFO leaves the screen.\n"
+        "Fixed: as Scroll-F, but the window can be dragged away from\n"
+        "  the VFO; AetherSDR follows the VFO when you tune off-screen.\n"
+        "Scroll-F and Fixed rewrite the radio's stored Fixed Edges\n"
+        "preset 4; presets 1-3 are left as you set them.");
+}
+
+void SpectrumOverlayMenu::setScopeModeHelp(const QString& help)
+{
+    m_scopeModeHelp = help;
+    if (m_scopeModeRow) {
+        m_scopeModeRow->setToolTip(scopeModeToolTip());
+        refreshScopeModeButtons();
+    }
+}
+
 void SpectrumOverlayMenu::setScopeModeLabels(const QStringList& labels)
 {
     if (labels == m_scopeModeLabels && m_scopeModeBtns.size() == labels.size()) {
@@ -3468,12 +3483,10 @@ void SpectrumOverlayMenu::refreshScopeModeButtons()
     if (!m_scopeModeRow) {
         return;
     }
-    // Shown for the Icom family only (a maintainer-ruled exception to
-    // dim-never-hide); within it the backend's label list decides: fewer than
-    // two = an Icom whose model or firmware has no choice, dimmed with the
-    // reason; two or more = the choice.
-    m_scopeModeRow->setVisible(m_radioFamily.compare(QLatin1String("icom"),
-                                                     Qt::CaseInsensitive) == 0);
+    // Backend labels admit native scope controls. Preserve the Icom exception:
+    // its row stays discoverable even when the model offers no mode choice.
+    m_scopeModeRow->setVisible(!m_scopeModeLabels.isEmpty()
+        || m_radioFamily.compare(QLatin1String("icom"), Qt::CaseInsensitive) == 0);
     const bool available = m_scopeModeLabels.size() > 1;
     const QString reason = available ? QString{}
         : tr("Scope mode selection is unavailable for this radio or firmware.");

@@ -336,8 +336,8 @@ applets), `src/core/backends/` (one directory per radio family).
   + `MainWindow_*.cpp` sibling TUs. New feature code goes in a sibling, NOT
   `MainWindow.cpp` ([`docs/agents/gui.md`](docs/agents/gui.md))
 - `PanadapterStream` — VITA-49 UDP parsing, routes FFT/waterfall/audio/meters
-- `IRadioBackend` — the radio seam; six implementors (flex, hl2, icom, sim,
-  anan, rtl) ([`docs/agents/backends.md`](docs/agents/backends.md))
+- `IRadioBackend` — the radio seam; seven implementors (flex, hl2, icom, kenwood,
+  sim, anan, rtl) ([`docs/agents/backends.md`](docs/agents/backends.md))
 
 **Threading:** up to 13 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.

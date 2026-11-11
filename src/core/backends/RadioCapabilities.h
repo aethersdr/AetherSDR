@@ -10,6 +10,7 @@
 #include "CwTextRequest.h"
 #include "PanDisplayRequest.h"
 #include "PanLifecycleRequest.h"
+#include "ModelControlRequest.h"
 #include "AudioControlRequest.h"
 
 #include <QFlags>
@@ -70,6 +71,24 @@ struct SliceFrequencyControl {
 // Optional per-feature records (#5262 M2). Absence means no headless verb;
 // neither UI ranges nor an inherited no-op establish support. Authority is
 // configuration provenance, never hardware acknowledgement/DSP completion.
+// Desktop receive behavior is opt-in independently of radio-authoritative state.
+struct ReceiveInteractionControl {
+    enum class Feature { PendingTune, AntennaReadback, ContextRetirement };
+    QList<Feature> features;
+    bool supports(Feature feature) const { return features.contains(feature); }
+    bool operator==(const ReceiveInteractionControl&) const = default;
+};
+struct ReceiveClientControl {
+    enum class Feature { NativeModes, ConfirmedNotifications, FrequencyLimits, QualifiedMeters, QueuedIntentFencing };
+    QList<Feature> features;
+    bool supports(Feature feature) const { return features.contains(feature); }
+    bool operator==(const ReceiveClientControl&) const = default;
+};
+
+struct ScopeModePresentation {
+    QString help;
+};
+
 struct ReceiveModeControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     QStringList modes;
@@ -84,8 +103,10 @@ struct ReceiveFilterMode {
     int maximumWidthHz{0};
 };
 struct ReceiveFilterControl {
+    enum class ModePolicy { LegacyFallback, ListedOnly };
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     QList<ReceiveFilterMode> modes;
+    ModePolicy modePolicy{ModePolicy::LegacyFallback};
 };
 // Supported host receive signal controls and their qualified mode family.
 // An absent record preserves existing radio-side capability semantics.
@@ -96,11 +117,18 @@ struct ReceiveDspControl {
     // An entry narrows a declared feature to a subset of the qualified modes.
     // An absent entry uses all modes; an empty entry disables that feature.
     QMap<Feature, QStringList> featureModes;
+    // Level edits can be narrower than enable/disable (e.g. native algorithms
+    // whose level field has no shared mapping). Absent entries retain support.
+    QList<Feature> unavailableLevels{};
     bool supports(Feature feature, const QString& mode) const
     {
         const auto restriction = featureModes.constFind(feature);
         return features.contains(feature) && modes.contains(mode)
             && (restriction == featureModes.cend() || restriction.value().contains(mode));
+    }
+    bool supportsLevel(Feature feature, const QString& mode) const
+    {
+        return supports(feature, mode) && !unavailableLevels.contains(feature);
     }
 };
 
@@ -201,11 +229,13 @@ struct BackendPanAveraging {
 
 // Meaning of the panadapter's vertical axis. Absent means no backend has been
 // read, and the two fields then fall to opposite legacy answers, so consumers use
-// RadioCapabilities::dbmAxisIsCalibrated() / panBinsAbsolute(), never this.
+// RadioCapabilities::dbmAxisIsCalibrated() / panBinsAbsolute() for those facts.
+// Display units are the independent, explicit axisUnit presentation choice.
 struct PanAmplitudeModel {
+    enum class AxisUnit { Dbm, RelativeDb };
     // The axis is absolute dBm at the antenna from a per-unit factory calibration
-    // (Flex). False means dBFS under a dBm label: relative levels hold but the zero
-    // point is arbitrary, so no value may be compared across stations, published as
+    // (Flex). When false, only relative level differences hold and the
+    // zero point is arbitrary, so no value may be compared across stations, published as
     // a spot level or used as an absolute threshold. The Icom scope is uncalibrated
     // (IcomScope.h) and its record is absent. A backend sets this from its own
     // reference where it has one (HL2: Hl2DbReference::isCalibrated()).
@@ -225,6 +255,10 @@ struct PanAmplitudeModel {
     // limits the operator sets). False preserves a family's existing settings
     // behavior. Read through RadioCapabilities::clientPersistsDbmRange().
     bool clientPersistsDbmRange = false;
+    // Existing profiles retain their established label; native presentations
+    // can explicitly request relative units without changing calibration truth.
+    AxisUnit axisUnit = AxisUnit::Dbm;
+
 };
 
 // Wideband converter view: raw ADC output before the DDC, spanning the
@@ -456,12 +490,19 @@ struct RadioCapabilities {
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
     SliceFrequencyControl sliceFrequencyControl;
+    std::optional<ReceiveInteractionControl> receiveInteractionControl;
+    std::optional<ReceiveClientControl> receiveClientControl;
+    std::optional<ScopeModePresentation> scopeModePresentation;
     std::optional<ReceiveModeControl> receiveModeControl;
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
     std::optional<ReceiveCwPitchControl> receiveCwPitchControl;
     std::optional<ReceiveDspControl> receiveDspControl;
     std::optional<ReceiveAudioExport> receiveAudioExport;
+    // Operator edits and connect-time observations use distinct backend verbs.
+    // Presence never authorizes keying or restores a radio-owned modulation input.
+    struct PcAudioRoutingControl {};
+    std::optional<PcAudioRoutingControl> pcAudioRoutingControl;
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
@@ -576,6 +617,26 @@ struct RadioCapabilities {
     bool hasFmRepeaterOffset = true;
     // Some audio-tone tune implementations cannot key a CW carrier.
     bool hasCwTune = true;
+    // Desktop TUNE qualification. Absence preserves established backends;
+    // an empty mode list explicitly withdraws TUNE until its power contract exists.
+    struct TuneCarrierControl {
+        enum class IntentLifetime { Caller, Backend };
+        QStringList modes;
+        QString unavailableReason;
+        // Desktop lifetime only; never keying or daemon authority. Backend
+        // means setTune retains the original local-intent retirement receipt.
+        IntentLifetime intentLifetime = IntentLifetime::Caller;
+    };
+    std::optional<TuneCarrierControl> tuneCarrierControl;
+    // Lifecycle of radio-owned generators after their local command handoff.
+    // Backend ownership uses Operation's exact-intent retirement receipt;
+    // completion never stands for a drained buffer, RF idle or ATU success.
+    struct TransmitIntentControl {
+        enum class Lifetime { Caller, Backend };
+        Lifetime cwText = Lifetime::Caller;
+        Lifetime atu = Lifetime::Caller;
+    };
+    std::optional<TransmitIntentControl> transmitIntentControl;
 
     // The radio generates a genuine two-tone test signal, not a tune carrier (Flex
     // `transmit set tune_mode=two_tone`; other backends key a single carrier).
@@ -611,8 +672,8 @@ struct RadioCapabilities {
 
     // WHETHER THOSE NUMBERS MEAN ANYTHING is a SEPARATE question from who owns
     // the scale, and it lives in PanAmplitudeModel::calibratedDbm above, read
-    // through dbmAxisIsCalibrated(). A radio can own its scale and still label
-    // dBFS as dBm; a radio that owns nothing can still be calibrated.
+    // through dbmAxisIsCalibrated(). A radio can own an uncalibrated relative
+    // scale; a radio that owns nothing can still be calibrated.
 
     // Memory channels live in the radio and are re-dumped on connect (Flex). False
     // (default) gives the client-side memory bank; set true only when the radio
@@ -877,6 +938,14 @@ struct RadioCapabilities {
     std::optional<VoxControl> voxControl;
     struct TxMonitorControl {};
     std::optional<TxMonitorControl> txMonitorControl;
+    std::optional<RadioTransmitSettings> radioTransmitSettings;
+    // Native keyer delay shape, applied through the CwDelay typed request.
+    // Absent retains the desktop's continuous 0..2000 ms control.
+    struct CwDelayControl {
+        int maximumMs;
+        int stepMs;
+    };
+    std::optional<CwDelayControl> cwDelayControl;
     // The radio's own line-out mixer (Flex by its command plane; otherwise
     // IRadioBackend::setLineoutGain / setLineoutMute must apply it). Absent: the
     // radio has no line out, so `mixer lineout` text reaches nothing (#4665).

@@ -3,6 +3,7 @@
 #include "core/backends/RadioCapabilities.h"
 #include "AppActivity.h"
 #include "TciProtocol.h"
+#include "ReceiveModeVocabulary.h"
 #include "StreamStatus.h"
 #include "AudioEngine.h"
 #include "AppSettings.h"
@@ -269,13 +270,18 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::backendRebuilt, this, &TciServer::retireAllRxRoutes);
     }
 
-    // Cache S-meter values for periodic broadcast (avoid flooding clients)
+    // Legacy clients retain their cached levels. Opt-in profiles additionally
+    // bind calibrated arrivals to the exact session and slice object.
     if (m_model) {
         connect(&m_model->meterModel(), &MeterModel::sLevelChanged,
                 this, [this](int sliceIndex, float dbm) {
-            if (sliceIndex >= 0 && sliceIndex < 8)
-                m_cachedSLevel[sliceIndex] = dbm;
+            if (sliceIndex >= 0 && sliceIndex < 8) { m_cachedSLevel[sliceIndex] = dbm; }
+            if (!usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::QualifiedMeters)) { return; }
+            if (SliceModel* slice = m_model->slice(sliceIndex); slice && m_model->isConnected()) {
+                m_receiveMeterEpochs.insert(sliceIndex, {m_model->controlSession(), slice->receiveSessionGeneration(), slice});
+            }
         });
+        connect(m_model, &RadioModel::backendRebuilt, this, [this] { m_receiveMeterEpochs.clear(); broadcastReceiveModulations(); });
     }
 
     // Cache TX meter values
@@ -350,8 +356,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // ensureDaxForTci() and would otherwise never get an RX stream (#3270).
         connect(m_model, &RadioModel::connectionStateChanged,
                 this, [this](bool connected) {
+            broadcastReceiveModulations();
             updateLineOutCapture();
             if (!connected) {
+                m_receiveMeterEpochs.clear();
                 // A backend may retain its capabilities while disconnected.
                 // Tell clients that every receiver is unavailable before the
                 // reconnect teardown clears the stable receiver map.
@@ -403,6 +411,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         });
         connect(m_model, &RadioModel::sliceAdded,
                 this, [this](SliceModel* s) {
+            broadcastReceiveModulations();
             // Bind receiver numbers first, before anything derives a trx (#4567). Walk
             // every live slice in list order, not just the new one: after a reconnect the
             // status replay reclaims slices without sliceAdded while the map was cleared.
@@ -474,6 +483,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // re-arm above re-acquires when a replacement slice appears.
         connect(m_model, &RadioModel::sliceRemoved,
                 this, [this](int sliceId) {
+            m_receiveMeterEpochs.remove(sliceId);
             m_createdVfoBSlices.remove(sliceId);
             m_createdVfoBPans.remove(sliceId);
             retireSliceRx(sliceId);
@@ -571,6 +581,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
 
         connect(m_model, &RadioModel::capabilitiesChanged, this,
                 [this](bool, const RadioCapabilities&) {
+            broadcastReceiveModulations();
             updateLineOutCapture();
             broadcastTxPermissions();
             announceEffectiveIqSampleRate();
@@ -1726,7 +1737,36 @@ void TciServer::onTextMessage(const QString& msg)
             handleTuneRequest(ws, *request);
         }
         if (const auto request = client.protocol->takeCenterLockRequest()) {
-            if (m_centerLockSet) m_centerLockSet(request->sliceId, request->locked);
+            if (!usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) {
+                if (m_centerLockSet) { m_centerLockSet(request->sliceId, request->locked); }
+            } else {
+                ClientState* const originalClient = &client;
+                const QPointer<TciServer> self(this);
+                const QPointer<RadioModel> owner(m_model);
+                const QPointer<SliceModel> slice(owner ? owner->slice(request->sliceId) : nullptr);
+                const RadioControlSession session = owner ? owner->controlSession() : RadioControlSession{};
+                const quint64 receiverSession = slice ? slice->receiveSessionGeneration() : 0;
+                const bool confirmed = !slice.isNull();
+                const auto set = m_centerLockSet;
+                const auto query = m_centerLockQuery;
+                if (set) { set(request->sliceId, request->locked); }
+                if (!self) { return; }
+                const auto currentTarget = [&] {
+                    return owner && slice && owner->controlSessionCurrent(session)
+                        && owner->slice(request->sliceId) == slice && slice->receiveSessionGeneration() == receiverSession;
+                };
+                if (confirmed && set && query && currentTarget()) {
+                    const bool locked = query(request->sliceId);
+                    if (!self) { return; }
+                    if (currentTarget()) {
+                        const int trx = m_trxMap.trxForSlice(m_model, slice);
+                        if (trx >= 0) {
+                            broadcast(QStringLiteral("rx_ctun_ex:%1,%2;").arg(trx).arg(locked ? "false" : "true"));
+                        }
+                    }
+                }
+                if (!self || !socket || !socket->live() || clientStateFor(socket) != originalClient) { return; }
+            }
         }
 
         // If the command changed radio state, broadcast to all other clients
@@ -3297,11 +3337,12 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         broadcastTxPermission(slice);
     });
 
-    connect(slice, &SliceModel::modeChanged, this, [this, slice](const QString& mode) {
+    connect(slice, &SliceModel::modeChanged, this, [this, slice](const QString& observedMode) {
         if (m_clients.isEmpty()) return;
         const int trx = m_trxMap.trxForSlice(m_model,slice);
-        broadcast(QStringLiteral("modulation:%1,%2;")
-                      .arg(trx).arg(TciProtocol::smartsdrToTci(mode)));
+        const QString mode = usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::NativeModes)
+            ? TciProtocol::receiveModeToTci(m_model, slice) : TciProtocol::smartsdrToTci(observedMode);
+        if (!mode.isEmpty()) { broadcast(QStringLiteral("modulation:%1,%2;").arg(trx).arg(mode)); }
         broadcastTxPermission(slice);
     });
 
@@ -3374,8 +3415,12 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     connect(slice, &SliceModel::audioGainChanged, this, [this, slice](float gain) {
         if (m_clients.isEmpty()) return;
         const int trx = m_trxMap.trxForSlice(m_model, slice);
-        broadcast(QStringLiteral("rx_volume:%1,0,%2;")
-                      .arg(trx).arg(TciProtocol::volumeDbFromPercent(qRound(gain))));
+        if (usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) {
+            broadcast(QStringLiteral("rx_volume:%1,%2;").arg(trx).arg(static_cast<int>(gain)));
+        } else {
+            broadcast(QStringLiteral("rx_volume:%1,0,%2;")
+                          .arg(trx).arg(TciProtocol::volumeDbFromPercent(qRound(gain))));
+        }
     });
 
     // Squelch level → `sql_level:trx,dB;`, since the sql_enable relay below
@@ -3432,10 +3477,11 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     };
 
     auto wireFlag = [this, slice, emitFlag](auto signal, const char* cmd,
-                                            std::function<bool()> read) {
+                                            std::function<bool()> read, std::function<bool()> available = {}) {
         auto last = std::make_shared<int>(-1);  // -1 = nothing announced yet
         // Change handler. A 1-arg slot binds both bool and (bool,int) signals.
-        connect(slice, signal, this, [slice, cmd, emitFlag, last](bool on) {
+        connect(slice, signal, this, [slice, cmd, emitFlag, last, available](bool on) {
+            if (available && !available()) { return; }
             const int v = on ? 1 : 0;
             if (*last == v) {
                 return;
@@ -3445,8 +3491,8 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         });
         // Deferred settled seed, sharing `last` so it can't double-announce.
         QPointer<SliceModel> guard(slice);
-        QTimer::singleShot(400, this, [this, guard, cmd, emitFlag, last, read]() {
-            if (!guard || m_clients.isEmpty()) {
+        QTimer::singleShot(400, this, [this, guard, cmd, emitFlag, last, read, available]() {
+            if (!guard || m_clients.isEmpty() || (available && !available())) {
                 return;
             }
             const bool on = read();
@@ -3462,8 +3508,17 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     wireFlag(&SliceModel::nbChanged,        "rx_nb_enable",  [slice]{ return slice->nbOn(); });
     wireFlag(&SliceModel::nrChanged,        "rx_nr_enable",  [slice]{ return slice->nrOn(); });
     wireFlag(&SliceModel::anfChanged,       "rx_anf_enable", [slice]{ return slice->anfOn(); });
-    wireFlag(&SliceModel::apfChanged,       "rx_apf_enable", [slice]{ return slice->apfOn(); });
+    wireFlag(&SliceModel::apfChanged, "rx_apf_enable", [slice]{ return slice->apfOn(); }, [this, slice] {
+        return !usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications) || (m_model && m_model->isConnected()
+            && m_model->backendCapabilities().hasAudioPeakingFilter);
+    });
     wireFlag(&SliceModel::audioMuteChanged, "mute",          [slice]{ return slice->audioMute(); });
+    const auto confirmedReceiver = [this] {
+        return usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications);
+    };
+    wireFlag(&SliceModel::audioMuteChanged, "rx_mute",       [slice]{ return slice->audioMute(); }, confirmedReceiver);
+    wireFlag(&SliceModel::recordOnChanged, "rx_record",      [slice]{ return slice->recordOn(); }, confirmedReceiver);
+    wireFlag(&SliceModel::playOnChanged, "rx_play",          [slice]{ return slice->playOn(); }, confirmedReceiver);
 
     // Known KiwiSDR quirk: with m_externalReceiveAudioReplacement set, the burst
     // and seed report receiveSquelchOn() while squelchChanged carries squelchOn(),
@@ -3482,9 +3537,10 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     // is read the way the GET reads (an external receive source can replace
     // the slice's own).
     auto wireValue = [this, slice](auto signal, const char* cmd,
-                                   std::function<QString()> read) {
+                                   std::function<QString()> read, std::function<bool()> available = {}) {
         auto last = std::make_shared<QString>();  // nothing announced yet
-        auto announce = [this, cmd, last, read](SliceModel* s) {
+        auto announce = [this, cmd, last, read, available](SliceModel* s) {
+            if (available && !available()) { return; }
             const QString v = read();
             if (*last == v) {
                 return;
@@ -3515,9 +3571,25 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     wireValue(&SliceModel::agcModeChanged, "agc_mode",
               [slice] { return slice->receiveAgcMode().toLower(); });
     const auto announceAgcGain = wireValue(&SliceModel::agcThresholdChanged, "agc_gain",
-        [slice] { return QString::number(TciProtocol::agcGainDb(slice)); });
+        [this, slice] { return QString::number(usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications) ? slice->receiveAgcThreshold() : TciProtocol::agcGainDb(slice)); });
     connect(slice, &SliceModel::externalReceiveAgcThresholdChanged, this,
             [slice, announceAgcGain] { announceAgcGain(slice); });
+    wireValue(&SliceModel::audioPanChanged, "rx_balance",
+              [slice] { return QString::number(slice->audioPan() - 50); }, confirmedReceiver);
+    wireValue(&SliceModel::nbLevelChanged, "rx_nb_param",
+              [slice] { return QStringLiteral("0,%1").arg(slice->nbLevel()); }, confirmedReceiver);
+    connect(slice, &SliceModel::diglOffsetChanged, this, [this, slice](int hz) {
+        if (usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)
+            && m_trxMap.trxForSlice(m_model, slice) == 0) {
+            broadcast(QStringLiteral("digl_offset:%1;").arg(hz));
+        }
+    });
+    connect(slice, &SliceModel::diguOffsetChanged, this, [this, slice](int hz) {
+        if (usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)
+            && m_trxMap.trxForSlice(m_model, slice) == 0) {
+            broadcast(QStringLiteral("digu_offset:%1;").arg(hz));
+        }
+    });
 
     // Deferred state sync on (re)wire: a Flex band change recreates the slice, and
     // if the restored frequency equals the init value no frequencyChanged fires,
@@ -4143,6 +4215,37 @@ void TciServer::teardownTciRoute()
     });
 }
 
+void TciServer::broadcastReceiveModulations()
+{
+    if (!usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::NativeModes)) {
+        m_lastReceiveModulations.clear();
+        return;
+    }
+    if (m_clients.isEmpty()) { m_lastReceiveModulations.clear(); return; }
+    const QString message = TciProtocol::receiveModulationsList(m_model);
+    if (message == m_lastReceiveModulations) { return; }
+    m_lastReceiveModulations = message;
+    broadcast(message);
+}
+
+std::optional<float> TciServer::calibratedReceiveLevel(const SliceModel* slice) const
+{
+    if (!m_model || !slice) { return std::nullopt; }
+    if (!usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::QualifiedMeters)) {
+        const int index = slice->sliceId();
+        if (index >= 0 && index < 8 && m_cachedSLevel[index] > -200.0f) { return m_cachedSLevel[index]; }
+        return std::nullopt;
+    }
+    if (m_model->slice(slice->sliceId()) != slice) { return std::nullopt; }
+    const auto epoch = m_receiveMeterEpochs.constFind(slice->sliceId());
+    if (epoch == m_receiveMeterEpochs.cend() || !m_model->controlSessionCurrent(epoch->session)
+        || epoch->receiverSession != slice->receiveSessionGeneration() || epoch->slice != slice) { return std::nullopt; }
+    const MeterModel& meters = m_model->meterModel();
+    const MeterDef* def = meters.meterDef(meters.findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"), slice->sliceId()));
+    if (!def || !def->unavailableReason.isEmpty()) { return std::nullopt; }
+    return meters.sLevelForSlice(slice->sliceId());
+}
+
 void TciServer::broadcastStatus()
 {
     if (m_clients.isEmpty() || !m_model || !m_model->isConnected())
@@ -4152,12 +4255,10 @@ void TciServer::broadcastStatus()
     // TCI spec: rx_smeter:receiver,value; (2 args)
     for (auto* s : m_model->slices()) {
         const int trx = m_trxMap.trxForSlice(m_model,s);
-        const int meterIndex = s->sliceId();
-        if (trx >= 0 && meterIndex >= 0 && meterIndex < 8) {
-            float dbm = m_cachedSLevel[meterIndex];
-            if (dbm > -200.0f)
-                broadcast(QStringLiteral("rx_smeter:%1,%2;")
-                              .arg(trx).arg(static_cast<int>(dbm)));
+        const std::optional<float> dbm = calibratedReceiveLevel(s);
+        if (trx >= 0 && dbm) {
+            broadcast(QStringLiteral("rx_smeter:%1,%2;")
+                .arg(trx).arg(static_cast<int>(*dbm)));
         }
     }
 
@@ -4166,15 +4267,11 @@ void TciServer::broadcastStatus()
         if (cs.rxSensorsEnabled) {
             for (auto* s : m_model->slices()) {
                 const int trx = m_trxMap.trxForSlice(m_model,s);
-                const int meterIndex = s->sliceId();
-                if (trx >= 0 && meterIndex >= 0 && meterIndex < 8) {
-                    float dbm = m_cachedSLevel[meterIndex];
-                    if (dbm > -200.0f) {
-                        const QString message =
-                            QStringLiteral("rx_channel_sensors:%1,0,%2;")
-                                .arg(trx).arg(dbm, 0, 'f', 1);
-                        sendClientText(cs.socket, message);
-                    }
+                const std::optional<float> dbm = calibratedReceiveLevel(s);
+                if (trx >= 0 && dbm) {
+                    const QString message = QStringLiteral("rx_channel_sensors:%1,0,%2;")
+                        .arg(trx).arg(*dbm, 0, 'f', 1);
+                    sendClientText(cs.socket, message);
                 }
             }
         }

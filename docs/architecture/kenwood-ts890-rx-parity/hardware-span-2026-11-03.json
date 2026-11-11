@@ -1,0 +1,254 @@
+{
+  "purpose": "bounded all-eight span measurement with restoration",
+  "authenticated": true,
+  "queries": {
+    "PS": "PS1",
+    "ID": "ID024",
+    "FV": "FV1.01",
+    "IF": "IF00014269900      000000000020000000",
+    "FR": "FR0",
+    "FT": "FT0",
+    "SF0": "SF0000142699002",
+    "SF1": "SF1000140386402",
+    "TS": "TS0",
+    "BS3": "BS30",
+    "BS4": "BS45",
+    "BSK": "BSK4",
+    "BSO": "BSO0",
+    "BSM0": "BSM01400000014500000"
+  },
+  "errors": [],
+  "mutations": [
+    "BS32",
+    "BS40",
+    "BS41",
+    "BS42",
+    "BS43",
+    "BS44",
+    "BS45",
+    "BS46",
+    "BS47",
+    "BS45",
+    "BS30"
+  ],
+  "before": {
+    "PS": "PS1",
+    "ID": "ID024",
+    "FV": "FV1.01",
+    "IF": "IF00014269900      000000000020000000",
+    "FR": "FR0",
+    "FT": "FT0",
+    "SF0": "SF0000142699002",
+    "SF1": "SF1000140386402",
+    "TS": "TS0",
+    "BS3": "BS30",
+    "BS4": "BS45",
+    "BSK": "BSK4",
+    "BSO": "BSO0"
+  },
+  "measurements": [
+    {
+      "index": 0,
+      "reads": [
+        {
+          "response": "BSM01426750014272500",
+          "lower_hz": 14267500,
+          "upper_hz": 14272500,
+          "width_hz": 5000,
+          "span_response": "BS40"
+        },
+        {
+          "response": "BSM01426750014272500",
+          "lower_hz": 14267500,
+          "upper_hz": 14272500,
+          "width_hz": 5000,
+          "span_response": "BS40"
+        }
+      ],
+      "width_hz": 5000
+    },
+    {
+      "index": 1,
+      "reads": [
+        {
+          "response": "BSM01426500014275000",
+          "lower_hz": 14265000,
+          "upper_hz": 14275000,
+          "width_hz": 10000,
+          "span_response": "BS41"
+        },
+        {
+          "response": "BSM01426500014275000",
+          "lower_hz": 14265000,
+          "upper_hz": 14275000,
+          "width_hz": 10000,
+          "span_response": "BS41"
+        }
+      ],
+      "width_hz": 10000
+    },
+    {
+      "index": 2,
+      "reads": [
+        {
+          "response": "BSM01426000014280000",
+          "lower_hz": 14260000,
+          "upper_hz": 14280000,
+          "width_hz": 20000,
+          "span_response": "BS42"
+        },
+        {
+          "response": "BSM01426000014280000",
+          "lower_hz": 14260000,
+          "upper_hz": 14280000,
+          "width_hz": 20000,
+          "span_response": "BS42"
+        }
+      ],
+      "width_hz": 20000
+    },
+    {
+      "index": 3,
+      "reads": [
+        {
+          "response": "BSM01425600014286000",
+          "lower_hz": 14256000,
+          "upper_hz": 14286000,
+          "width_hz": 30000,
+          "span_response": "BS43"
+        },
+        {
+          "response": "BSM01425600014286000",
+          "lower_hz": 14256000,
+          "upper_hz": 14286000,
+          "width_hz": 30000,
+          "span_response": "BS43"
+        }
+      ],
+      "width_hz": 30000
+    },
+    {
+      "index": 4,
+      "reads": [
+        {
+          "response": "BSM01424500014295000",
+          "lower_hz": 14245000,
+          "upper_hz": 14295000,
+          "width_hz": 50000,
+          "span_response": "BS44"
+        },
+        {
+          "response": "BSM01424500014295000",
+          "lower_hz": 14245000,
+          "upper_hz": 14295000,
+          "width_hz": 50000,
+          "span_response": "BS44"
+        }
+      ],
+      "width_hz": 50000
+    },
+    {
+      "index": 5,
+      "reads": [
+        {
+          "response": "BSM01422000014320000",
+          "lower_hz": 14220000,
+          "upper_hz": 14320000,
+          "width_hz": 100000,
+          "span_response": "BS45"
+        },
+        {
+          "response": "BSM01422000014320000",
+          "lower_hz": 14220000,
+          "upper_hz": 14320000,
+          "width_hz": 100000,
+          "span_response": "BS45"
+        }
+      ],
+      "width_hz": 100000
+    },
+    {
+      "index": 6,
+      "reads": [
+        {
+          "response": "BSM01416000014360000",
+          "lower_hz": 14160000,
+          "upper_hz": 14360000,
+          "width_hz": 200000,
+          "span_response": "BS46"
+        },
+        {
+          "response": "BSM01416000014360000",
+          "lower_hz": 14160000,
+          "upper_hz": 14360000,
+          "width_hz": 200000,
+          "span_response": "BS46"
+        }
+      ],
+      "width_hz": 200000
+    },
+    {
+      "index": 7,
+      "reads": [
+        {
+          "response": "BSM01400000014500000",
+          "lower_hz": 14000000,
+          "upper_hz": 14500000,
+          "width_hz": 500000,
+          "span_response": "BS47"
+        },
+        {
+          "response": "BSM01400000014500000",
+          "lower_hz": 14000000,
+          "upper_hz": 14500000,
+          "width_hz": 500000,
+          "span_response": "BS47"
+        }
+      ],
+      "width_hz": 500000
+    }
+  ],
+  "measurement_complete": true,
+  "after": {
+    "PS": "PS1",
+    "ID": "ID024",
+    "FV": "FV1.01",
+    "IF": "IF00014269900      000000000020000000",
+    "FR": "FR0",
+    "FT": "FT0",
+    "SF0": "SF0000142699002",
+    "SF1": "SF1000140386402",
+    "TS": "TS0",
+    "BS3": "BS30",
+    "BS4": "BS45",
+    "BSK": "BSK4",
+    "BSO": "BSO0"
+  },
+  "restored": true,
+  "elapsed_seconds": 9.016,
+  "evidence_scope": "Direct KNS protocol measurement, not production GUI/backend convergence or RF calibration.",
+  "observed_finished_utc": "2026-11-03T15:32:44.235606+00:00",
+  "qualification": {
+    "model": "TS-890S / ID024",
+    "firmware": "1.01",
+    "receive_mode": "USB",
+    "mode_bank": "voice",
+    "expand": "off",
+    "scope_shift": 4,
+    "tested_indices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "other_mode_banks": "NOT_TESTED",
+    "other_firmware": "NOT_TESTED",
+    "restore_scope": "All before/after fields in this record matched; no assertion about unobserved hidden state."
+  },
+  "probe_source_sha256": "75f02b87c79dd47969898c1030dc123dbe166553282fc2c78e077e324e432ee7",
+  "no_transmit_evidence": "The complete mutation allowlist was BS32, BS40..BS47, original BS45 and BS30. PS was queried; PS1 appears only as a radio response. No TX, power or frequency setter was admitted by this probe."
+}

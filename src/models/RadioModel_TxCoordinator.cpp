@@ -3,7 +3,10 @@
 #include "core/LogManager.h"
 
 #include <QPointer>
+#include <QMetaObject>
 #include <QScopeGuard>
+#include <QThread>
+#include <optional>
 #include <vector>
 
 namespace AetherSDR {
@@ -541,8 +544,37 @@ bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* reque
         }) : std::function<void()>{};
         releaseQueued = request && !on;
         dispatched = true;
-        m_backend->setTune(on, m_transmitModel.tunePower(), on ? operation : cleanup,
+        TxCoordinator::Operation routed = on ? operation : cleanup;
+        const QPointer<IRadioBackend> source(m_backend.get());
+        const quint64 backendGeneration = m_backendReceiverGeneration;
+        const std::optional<RadioCapabilities::TuneCarrierControl> carrier = source->capabilities().tuneCarrierControl;
+        if (!receiver || !source || source != receiver->m_backend.get()
+            || backendGeneration != receiver->m_backendReceiverGeneration) { return false; }
+        if ((on || request) && carrier
+            && carrier->intentLifetime == RadioCapabilities::TuneCarrierControl::IntentLifetime::Backend) {
+            const RadioControlSession session = controlSession();
+            routed = m_txCoordinator.bindLocalIntentRetirement(routed, intent,
+                [receiver, source, session, intent, commandEpoch](TxCoordinator::LocalIntentEnd phase) {
+                    if (!receiver) { return; }
+                    const auto retire = [receiver, source, session, intent, commandEpoch, phase] {
+                        if (!receiver || !source || source != receiver->m_backend.get()
+                            || !receiver->controlSessionCurrent(session)) { return; }
+                        receiver->endLocalTxActivity(intent);
+                        if (!receiver || !source || source != receiver->m_backend.get()
+                            || !receiver->controlSessionCurrent(session)
+                            || commandEpoch != receiver->m_tuneCommandEpoch) { return; }
+                        if (phase == TxCoordinator::LocalIntentEnd::BeforeKeying) {
+                            receiver->m_transmitModel.retirePendingTuneIntent();
+                        }
+                    };
+                    if (QThread::currentThread() == receiver->thread()) { retire(); }
+                    else { QMetaObject::invokeMethod(receiver, retire, Qt::QueuedConnection); }
+                });
+        }
+        m_backend->setTune(on, m_transmitModel.tunePower(), routed,
                            trackTxQueue(operation, finished));
+        if (!receiver || !source || source != receiver->m_backend.get()
+            || backendGeneration != receiver->m_backendReceiverGeneration) { return dispatched; }
         if (commandEpoch == m_tuneCommandEpoch) {
             publishCommandedBackendTransmitEdge(on);
         }
@@ -555,6 +587,24 @@ bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* reque
         endLocalTxActivity(holder);
     }
     return dispatched;
+}
+
+TxCoordinator::Operation RadioModel::bindBackendTxIntentRetirement(const TxCoordinator::Operation& operation,
+    const TxCoordinator::Intent& intent)
+{
+    const QPointer<RadioModel> receiver(this);
+    const QPointer<IRadioBackend> source(m_backend.get());
+    const RadioControlSession session = controlSession();
+    return m_txCoordinator.bindLocalIntentRetirement(operation, intent,
+        [receiver, source, session, intent](TxCoordinator::LocalIntentEnd) {
+            if (!receiver) { return; }
+            const auto retire = [receiver, source, session, intent] {
+                if (receiver && source && source == receiver->m_backend.get()
+                    && receiver->controlSessionCurrent(session)) { receiver->endLocalTxActivity(intent); }
+            };
+            if (QThread::currentThread() == receiver->thread()) { retire(); }
+            else { QMetaObject::invokeMethod(receiver, retire, Qt::QueuedConnection); }
+        });
 }
 
 bool RadioModel::dispatchAtuIntent(bool start, const TxCoordinator::Request* request)
@@ -590,6 +640,9 @@ bool RadioModel::dispatchAtuIntent(bool start, const TxCoordinator::Request* req
         }
         m_atuCommandIntent = intent;
         const QPointer<RadioModel> receiver(this);
+        const QPointer<IRadioBackend> source(m_backend.get());
+        const RadioControlSession session = controlSession();
+        const quint64 backendGeneration = m_backendReceiverGeneration;
         const auto finished = request && !start ? std::function<void()>([receiver, intent] {
             if (receiver) {
                 receiver->endLocalTxActivity(intent);
@@ -597,7 +650,17 @@ bool RadioModel::dispatchAtuIntent(bool start, const TxCoordinator::Request* req
         }) : std::function<void()>{};
         releaseQueued = request && !start;
         dispatched = true;
-        m_backend->setAtu(start, start ? operation : cleanup, trackTxQueue(operation, finished));
+        TxCoordinator::Operation routed = start ? operation : cleanup;
+        const std::optional<RadioCapabilities::TransmitIntentControl> lifecycle = backendCapabilities().transmitIntentControl;
+        if ((start || request) && lifecycle
+            && lifecycle->atu == RadioCapabilities::TransmitIntentControl::Lifetime::Backend) {
+            routed = bindBackendTxIntentRetirement(routed, intent);
+        }
+        m_backend->setAtu(start, routed, trackTxQueue(operation, finished));
+        if (!receiver || !source || source != receiver->m_backend.get()
+            || backendGeneration != receiver->m_backendReceiverGeneration
+            || !receiver->controlSessionCurrent(session)
+            || commandEpoch != receiver->m_atuCommandEpoch) { return dispatched; }
     }
     if (!start && !releaseQueued) {
         endLocalTxActivity(intent);
@@ -924,7 +987,11 @@ bool RadioModel::dispatchCwxText(const QString& text, TxCoordinator::Operation o
         || !original.permitsDispatch(txMonotonicMs())) {
         return false;
     }
-    const TxCoordinator::Operation operation = original.withKeyingPermit(m_cwxModel.queuedTransmissionPermit());
+    TxCoordinator::Operation operation = original.withKeyingPermit(m_cwxModel.queuedTransmissionPermit());
+    const std::optional<RadioCapabilities::TransmitIntentControl> lifecycle = backendCapabilities().transmitIntentControl;
+    if (lifecycle && lifecycle->cwText == RadioCapabilities::TransmitIntentControl::Lifetime::Backend) {
+        operation = bindBackendTxIntentRetirement(operation, m_cwxCommandIntent);
+    }
     const QString rejection = m_backend->sendCwText(text, operation, trackCwxQueue(operation));
     if (!rejection.isEmpty()) {
         emit radioMessageReceived(tr("CW text not sent: %1").arg(rejection), MessageSeverity::Warning);
@@ -946,7 +1013,9 @@ void RadioModel::finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator
             m_cwxModel.abandonDrainWatch();
         }
         m_cwxHandoffComplete = true;
-        if (m_cwxPendingDeliveries == 0) {
+        const std::optional<RadioCapabilities::TransmitIntentControl> lifecycle = backendCapabilities().transmitIntentControl;
+        if (m_cwxPendingDeliveries == 0 && (!lifecycle
+            || lifecycle->cwText != RadioCapabilities::TransmitIntentControl::Lifetime::Backend)) {
             endLocalTxActivity(intent);
         }
     }
@@ -963,7 +1032,9 @@ TxCoordinator::Completion RadioModel::trackCwxQueue(const TxCoordinator::Operati
             return;
         }
         --receiver->m_cwxPendingDeliveries;
-        if (receiver->m_cwxHandoffComplete && receiver->m_cwxPendingDeliveries == 0) {
+        const std::optional<RadioCapabilities::TransmitIntentControl> lifecycle = receiver->backendCapabilities().transmitIntentControl;
+        if (receiver->m_cwxHandoffComplete && receiver->m_cwxPendingDeliveries == 0 && (!lifecycle
+            || lifecycle->cwText != RadioCapabilities::TransmitIntentControl::Lifetime::Backend)) {
             receiver->endLocalTxActivity(intent);
         }
     });

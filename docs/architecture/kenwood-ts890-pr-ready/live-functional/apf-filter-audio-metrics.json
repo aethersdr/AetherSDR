@@ -1,0 +1,333 @@
+{
+  "qualification": "Finite PCM and averaged noise spectral shape; not calibrated filter response. 4096-frame Hann windows,50percent overlap, integrated300to1000Hz10to90percent power interval.",
+  "captures": {
+    "apf-on160-current": {
+      "sha256": "d67970853fea8f578646306beda230e283d867fe7ac6fa20d8285caa18ec3050",
+      "stages": {
+        "raw": {
+          "frames": 72960,
+          "sampleRate": 24000,
+          "rms": 0.04720835080129776,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 644.53125,
+          "powerCentroidHz300to1000": 630.9868657378883,
+          "bandwidth10to90Hz300to1000": 111.328125,
+          "low10Hz": 574.21875,
+          "high90Hz": 685.546875
+        },
+        "post": {
+          "frames": 144960,
+          "sampleRate": 48000,
+          "rms": 0.04644943064464087,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 644.53125,
+          "powerCentroidHz300to1000": 631.1295839945911,
+          "bandwidth10to90Hz300to1000": 117.1875,
+          "low10Hz": 574.21875,
+          "high90Hz": 691.40625
+        },
+        "final": {
+          "frames": 144960,
+          "sampleRate": 48000,
+          "rms": 0.04644943064464087,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 644.53125,
+          "powerCentroidHz300to1000": 631.1295839945911,
+          "bandwidth10to90Hz300to1000": 117.1875,
+          "low10Hz": 574.21875,
+          "high90Hz": 691.40625
+        }
+      }
+    },
+    "apf-off250": {
+      "sha256": "8acee4cc3eee691c8b5dbc4b4c1a97b5a4bef89c12c382156a15a27fd02a2563",
+      "stages": {
+        "raw": {
+          "frames": 72000,
+          "sampleRate": 24000,
+          "rms": 0.06592036272811139,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 603.515625,
+          "powerCentroidHz300to1000": 621.9813676911604,
+          "bandwidth10to90Hz300to1000": 158.203125,
+          "low10Hz": 544.921875,
+          "high90Hz": 703.125
+        },
+        "post": {
+          "frames": 141876,
+          "sampleRate": 48000,
+          "rms": 0.0656728754226159,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 597.65625,
+          "powerCentroidHz300to1000": 622.4109144291359,
+          "bandwidth10to90Hz300to1000": 164.0625,
+          "low10Hz": 539.0625,
+          "high90Hz": 703.125
+        },
+        "final": {
+          "frames": 141876,
+          "sampleRate": 48000,
+          "rms": 0.0656728754226159,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 597.65625,
+          "powerCentroidHz300to1000": 622.4109144291359,
+          "bandwidth10to90Hz300to1000": 164.0625,
+          "low10Hz": 539.0625,
+          "high90Hz": 703.125
+        }
+      }
+    },
+    "apf-off500": {
+      "sha256": "66d092de3b20eb35389b59c9d2c721794d83889a394665c9d163e0acf3299336",
+      "stages": {
+        "raw": {
+          "frames": 72000,
+          "sampleRate": 24000,
+          "rms": 0.060162297240426627,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 626.953125,
+          "powerCentroidHz300to1000": 641.2352537924237,
+          "bandwidth10to90Hz300to1000": 351.5625,
+          "low10Hz": 462.890625,
+          "high90Hz": 814.453125
+        },
+        "post": {
+          "frames": 144000,
+          "sampleRate": 48000,
+          "rms": 0.06032292210343078,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 632.8125,
+          "powerCentroidHz300to1000": 638.0011377704886,
+          "bandwidth10to90Hz300to1000": 363.28125,
+          "low10Hz": 457.03125,
+          "high90Hz": 820.3125
+        },
+        "final": {
+          "frames": 144000,
+          "sampleRate": 48000,
+          "rms": 0.06032292210343078,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 632.8125,
+          "powerCentroidHz300to1000": 638.0011377704886,
+          "bandwidth10to90Hz300to1000": 363.28125,
+          "low10Hz": 457.03125,
+          "high90Hz": 820.3125
+        }
+      }
+    },
+    "apf-on80": {
+      "sha256": "4f491f8b89f495ba5e4698cf8ddce103b6971e58fab4c689c84e79fa33d8fda7",
+      "stages": {
+        "raw": {
+          "frames": 71520,
+          "sampleRate": 24000,
+          "rms": 0.036643266935084004,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 632.8125,
+          "powerCentroidHz300to1000": 633.3204480262551,
+          "bandwidth10to90Hz300to1000": 82.03125,
+          "low10Hz": 591.796875,
+          "high90Hz": 673.828125
+        },
+        "post": {
+          "frames": 140066,
+          "sampleRate": 48000,
+          "rms": 0.036734933091339864,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 632.8125,
+          "powerCentroidHz300to1000": 633.5202821137356,
+          "bandwidth10to90Hz300to1000": 82.03125,
+          "low10Hz": 585.9375,
+          "high90Hz": 667.96875
+        },
+        "final": {
+          "frames": 140066,
+          "sampleRate": 48000,
+          "rms": 0.036734933091339864,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 632.8125,
+          "powerCentroidHz300to1000": 633.5202821137356,
+          "bandwidth10to90Hz300to1000": 82.03125,
+          "low10Hz": 585.9375,
+          "high90Hz": 667.96875
+        }
+      }
+    },
+    "apf-parameters-baseline": {
+      "sha256": "dbdb8af27854c215f9fa3425f7ebcc48a981c711b3351ca3e5d0dda9288bd449",
+      "stages": {
+        "raw": {
+          "frames": 73440,
+          "sampleRate": 24000,
+          "rms": 0.04956670374554585,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 632.8125,
+          "powerCentroidHz300to1000": 630.257684242007,
+          "bandwidth10to90Hz300to1000": 105.46875,
+          "low10Hz": 574.21875,
+          "high90Hz": 679.6875
+        },
+        "post": {
+          "frames": 145920,
+          "sampleRate": 48000,
+          "rms": 0.0490063135078759,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 644.53125,
+          "powerCentroidHz300to1000": 630.2729818914114,
+          "bandwidth10to90Hz300to1000": 105.46875,
+          "low10Hz": 574.21875,
+          "high90Hz": 679.6875
+        },
+        "final": {
+          "frames": 145920,
+          "sampleRate": 48000,
+          "rms": 0.0490063135078759,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 644.53125,
+          "powerCentroidHz300to1000": 630.2729818914114,
+          "bandwidth10to90Hz300to1000": 105.46875,
+          "low10Hz": 574.21875,
+          "high90Hz": 679.6875
+        }
+      }
+    },
+    "apf-shift40-real": {
+      "sha256": "f0c37745d634c6a15bf1da34a0e367b6856912332d38922d4550ceaa88b5773d",
+      "stages": {
+        "raw": {
+          "frames": 72000,
+          "sampleRate": 24000,
+          "rms": 0.045431202320153824,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 662.109375,
+          "powerCentroidHz300to1000": 653.8842389654548,
+          "bandwidth10to90Hz300to1000": 111.328125,
+          "low10Hz": 591.796875,
+          "high90Hz": 703.125
+        },
+        "post": {
+          "frames": 144000,
+          "sampleRate": 48000,
+          "rms": 0.0449320207044375,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 667.96875,
+          "powerCentroidHz300to1000": 655.0234755651231,
+          "bandwidth10to90Hz300to1000": 105.46875,
+          "low10Hz": 597.65625,
+          "high90Hz": 703.125
+        },
+        "final": {
+          "frames": 144000,
+          "sampleRate": 48000,
+          "rms": 0.0449320207044375,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 667.96875,
+          "powerCentroidHz300to1000": 655.0234755651231,
+          "bandwidth10to90Hz300to1000": 105.46875,
+          "low10Hz": 597.65625,
+          "high90Hz": 703.125
+        }
+      }
+    },
+    "apf-gain3-real": {
+      "sha256": "9308eb26b7bbada190be75020b1333654e53f84063d5a20f755657a81072d0ff",
+      "stages": {
+        "raw": {
+          "frames": 71520,
+          "sampleRate": 24000,
+          "rms": 0.055578638685462534,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 632.8125,
+          "powerCentroidHz300to1000": 631.4047156136696,
+          "bandwidth10to90Hz300to1000": 93.75,
+          "low10Hz": 585.9375,
+          "high90Hz": 679.6875
+        },
+        "post": {
+          "frames": 144960,
+          "sampleRate": 48000,
+          "rms": 0.05670874762438756,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 632.8125,
+          "powerCentroidHz300to1000": 631.0114859543869,
+          "bandwidth10to90Hz300to1000": 93.75,
+          "low10Hz": 585.9375,
+          "high90Hz": 679.6875
+        },
+        "final": {
+          "frames": 144960,
+          "sampleRate": 48000,
+          "rms": 0.05670874762438756,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 632.8125,
+          "powerCentroidHz300to1000": 631.0114859543869,
+          "bandwidth10to90Hz300to1000": 93.75,
+          "low10Hz": 585.9375,
+          "high90Hz": 679.6875
+        }
+      }
+    },
+    "apf-wide320-real": {
+      "sha256": "b0d86830a9b3455eeb62f01913fc8a02c428894ea6f4fa0c4b0577d551b963d4",
+      "stages": {
+        "raw": {
+          "frames": 72000,
+          "sampleRate": 24000,
+          "rms": 0.06355980128048952,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 603.515625,
+          "powerCentroidHz300to1000": 626.2319044548242,
+          "bandwidth10to90Hz300to1000": 134.765625,
+          "low10Hz": 556.640625,
+          "high90Hz": 691.40625
+        },
+        "post": {
+          "frames": 144000,
+          "sampleRate": 48000,
+          "rms": 0.06390921507143672,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 609.375,
+          "powerCentroidHz300to1000": 626.62177116165,
+          "bandwidth10to90Hz300to1000": 128.90625,
+          "low10Hz": 562.5,
+          "high90Hz": 691.40625
+        },
+        "final": {
+          "frames": 144000,
+          "sampleRate": 48000,
+          "rms": 0.06390921507143672,
+          "nonfinite": 0,
+          "clipped": 0,
+          "peakHz300to1000": 609.375,
+          "powerCentroidHz300to1000": 626.62177116165,
+          "bandwidth10to90Hz300to1000": 128.90625,
+          "low10Hz": 562.5,
+          "high90Hz": 691.40625
+        }
+      }
+    }
+  }
+}

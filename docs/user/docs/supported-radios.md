@@ -31,6 +31,7 @@ The rest of this documentation describes FlexRadio operation unless a page says 
 |--------|--------|-------------|------|
 | Hermes-Lite 2 | **Experimental** | LAN discovery, or Connect by IP | [Hermes-Lite 2](./hermes-lite-2.md) |
 | Networked Icom (IC-705, IC-7300MK2, IC-9700 …) | **Early**; the **IC-7300MK2 is supported** | Connect by IP | [Networked Icom](./networked-icom.md) |
+| Kenwood TS-890S (development fork) | **Experimental; hardware validation pending** | Connect by IP, KNS account | [Kenwood TS-890S](./kenwood-ts890.md) |
 | ANAN-G2 | **Experimental, receive-only** | LAN discovery, or Connect by IP | [ANAN-G2](./anan-g2.md) |
 | RTL-SDR USB dongles | **Experimental, receive-only** | USB discovery (builds with the RTL-SDR backend) | [RTL-SDR](./rtl-sdr.md) |
 | KiwiSDR and Web-888 | Public receivers used as receive-only antennas for a slice | Radio Setup → Antennas | [KiwiSDR and Web-888](./kiwisdr-and-web-888.md) |

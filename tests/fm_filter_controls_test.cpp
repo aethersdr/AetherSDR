@@ -5,6 +5,10 @@
 #include "core/KiwiSdrManager.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/kenwood/KenwoodBackend.h"
+#include "core/backends/rtl/RtlSdrBackend.h"
+#include <QWheelEvent>
+#include <cmath>
 #include "gui/ModeFilterPresets.h"
 #include "gui/RxApplet.h"
 #include "gui/FilterPassbandWidget.h"
@@ -17,14 +21,29 @@
 #include <QComboBox>
 #include <QImage>
 #include <QMenu>
+#include <QLabel>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QSlider>
 #include <QtTest>
 
 using namespace AetherSDR;
 
 namespace AetherSDR {
+namespace kenwood {
+struct KenwoodBackendTestAccess {
+    static void authenticate(KenwoodBackend& backend)
+    {
+        backend.m_clock.start();
+        backend.m_protocol.start("user", "password", false, 0);
+        backend.m_protocol.receive("##CN1;", 1);
+        backend.m_protocol.receive("##ID1;", 2);
+        backend.ready();
+    }
+    static void message(KenwoodBackend& backend, const QByteArray& bytes) { backend.adopt(bytes); }
+};
+}
 struct RadioModelWakeTestAccess {
     static void identity(RadioModel& radio, const QString& serial)
     { radio.m_lastInfo.serial = serial; }
@@ -77,6 +96,211 @@ QPushButton* button(QWidget& widget, const QString& text)
 class FmFilterControlsTest : public QObject {
     Q_OBJECT
 private slots:
+    void pendingVfoWheelBehaviorRequiresAnExplicitInteractionOptIn()
+    {
+        rtl::RtlSdrBackend rtl;
+        kenwood::KenwoodBackend kenwood;
+        using Feature = ReceiveInteractionControl::Feature;
+        QVERIFY(!rtl.capabilities().receiveInteractionControl);
+        QVERIFY(kenwood.capabilities().receiveInteractionControl
+            && kenwood.capabilities().receiveInteractionControl->supports(Feature::PendingTune));
+        for (const RadioCapabilities& caps : {rtl.capabilities(), kenwood.capabilities()}) {
+            RadioModel model;
+            auto owned = std::make_unique<FilterBackend>();
+            FilterBackend* source = owned.get();
+            source->caps = caps;
+            model.setBackendForTest(std::move(owned), QStringLiteral("interaction-fixture"));
+            SliceDelta state;
+            state.frequency = 14.074;
+            state.mode = QStringLiteral("CW");
+            emit source->sliceChanged(0, state);
+            SliceModel* slice = model.slice(0);
+            QVERIFY(slice);
+            QCOMPARE(slice->stepHz(), 100);
+            const bool pending = slice->supportsReceiveInteraction(Feature::PendingTune);
+            slice->recordTuneIntent(14.0741);
+            VfoWidget widget;
+            widget.setSlice(slice);
+            widget.setCollapsed(true);
+            QSignalSpy requests(&widget, &VfoWidget::stepTuneRequested);
+            const QPointF point(10, 10);
+            QWheelEvent event(point, point, {}, QPoint(0, 120), Qt::NoButton,
+                Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(&widget, &event);
+            QCOMPARE(requests.size(), 1);
+            const double expected = pending ? 14.0742 : 14.0741;
+            QVERIFY(std::abs(requests.at(0).at(0).toDouble() - expected) < 1e-9);
+            QCOMPARE(slice->frequency(), 14.074);
+        }
+    }
+
+    void nativeApfHasNoSharedPercentLevel()
+    {
+        RadioModel model;
+        auto owned = std::make_unique<FilterBackend>();
+        FilterBackend* backend = owned.get();
+        using Feature = ReceiveDspControl::Feature;
+        backend->caps.hasAudioPeakingFilter = true;
+        backend->caps.receiveDspControl = ReceiveDspControl{{"CW"}, {Feature::Apf}, {}, {Feature::Apf}};
+        model.setBackendForTest(std::move(owned), QStringLiteral("test"));
+        SliceModel slice(0);
+        SliceDelta delta;
+        delta.mode = QStringLiteral("CW");
+        delta.apf = true;
+        delta.apfLevel = 37;
+        slice.applyChanges(delta);
+        VfoWidget widget;
+        widget.setSlice(&slice);
+        widget.setRadioModel(&model);
+        QSlider* level = nullptr;
+        for (QSlider* candidate : widget.findChildren<QSlider*>()) {
+            if (candidate->accessibleName() == QStringLiteral("APF bandwidth")) { level = candidate; break; }
+        }
+        QVERIFY(level);
+        QVERIFY(!level->isEnabled());
+        QVERIFY(level->accessibleDescription().contains(QStringLiteral("native receive DSP settings")));
+        QLabel* value = widget.findChild<QLabel*>(QStringLiteral("apfLevelValue"));
+        QVERIFY(value);
+        QCOMPARE(value->text(), QStringLiteral("--"));
+        level->setValue(60);
+        QCOMPARE(value->text(), QStringLiteral("--"));
+        QCOMPARE(slice.apfLevel(), 37);
+        backend->caps.receiveDspControl->unavailableLevels.clear();
+        emit model.capabilitiesChanged(true, backend->caps);
+        QVERIFY(level->isEnabled());
+        QCOMPARE(value->text(), QStringLiteral("37"));
+    }
+    void modeRestrictedApfKeepsLegacyReason()
+    {
+        RadioModel model;
+        auto owned = std::make_unique<FilterBackend>();
+        FilterBackend* backend = owned.get();
+        using Feature = ReceiveDspControl::Feature;
+        backend->caps.hasAudioPeakingFilter = true;
+        backend->caps.receiveDspControl = ReceiveDspControl{{"CW", "CWR"}, {Feature::Apf}, {}, {}};
+        model.setBackendForTest(std::move(owned), QStringLiteral("test"));
+        SliceModel slice(0);
+        SliceDelta delta;
+        delta.mode = QStringLiteral("USB");
+        slice.applyChanges(delta);
+        VfoWidget widget;
+        widget.setSlice(&slice);
+        widget.setRadioModel(&model);
+        QSlider* level = nullptr;
+        for (QSlider* candidate : widget.findChildren<QSlider*>()) {
+            if (candidate->accessibleName() == QStringLiteral("APF bandwidth")) { level = candidate; break; }
+        }
+        QVERIFY(level);
+        QVERIFY(!level->isEnabled());
+        QCOMPARE(level->accessibleDescription(), QStringLiteral("This receive control is unavailable in the current mode"));
+        QCOMPARE(level->toolTip(), level->accessibleDescription());
+    }
+    void nativeNrAlgorithmControlsLevelAvailability()
+    {
+        RadioModel model;
+        auto owned = std::make_unique<kenwood::KenwoodBackend>(kenwood::KenwoodBackend::Transport{
+            [](const QByteArray&) { return true; }, {}});
+        kenwood::KenwoodBackend* backend = owned.get();
+        model.setBackendForTest(std::move(owned), QStringLiteral("kenwood"));
+        SliceModel slice(0);
+        QObject::connect(backend, &IRadioBackend::sliceChanged, &slice,
+            [&](int id, const SliceDelta& delta) { if (id == 0) { slice.applyChanges(delta); } });
+        QObject::connect(backend, &IRadioBackend::capabilitiesChanged, &model,
+            [&] { emit model.capabilitiesChanged(true, backend->capabilities()); });
+        using Access = kenwood::KenwoodBackendTestAccess;
+        Access::authenticate(*backend);
+        for (const QByteArray& message : {QByteArray("ID024"), QByteArray("FR0"), QByteArray("SF0000140740002"), QByteArray("NR1")}) {
+            Access::message(*backend, message);
+        }
+        VfoWidget widget;
+        widget.setSlice(&slice);
+        widget.setRadioModel(&model);
+        QSlider* level = widget.findChild<QSlider*>(QStringLiteral("dspLevelSlider"));
+        QPushButton* nr = button(widget, QStringLiteral("NR"));
+        QVERIFY(level && nr);
+        QVERIFY(level->isEnabled() && nr->isEnabled());
+        Access::message(*backend, "NR2");
+        QVERIFY(nr->isEnabled() && !level->isEnabled());
+        QVERIFY(!level->accessibleDescription().isEmpty());
+        Access::message(*backend, "NR1");
+        QVERIFY(level->isEnabled() && nr->isEnabled());
+        Access::message(*backend, "NR2");
+        VfoWidget late;
+        late.setSlice(&slice);
+        late.setRadioModel(&model);
+        QSlider* lateLevel = late.findChild<QSlider*>(QStringLiteral("dspLevelSlider"));
+        QVERIFY(lateLevel && !lateLevel->isEnabled() && !lateLevel->accessibleDescription().isEmpty());
+    }
+    void modeSelectorsRespectCurrentDeclaredChoices()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        FilterBackend* source = backend.get();
+        source->caps.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Radio, {}};
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, QStringLiteral("USB"));
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice); vfo.setSlice(&slice);
+        rx.setRadioModel(&model); vfo.setRadioModel(&model);
+        QList<QComboBox*> selectors;
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            for (QComboBox* combo : surface->findChildren<QComboBox*>()) {
+                if (combo->findText("USB") >= 0 && combo->findText("CW") >= 0) { selectors.append(combo); }
+            }
+        }
+        QCOMPARE(selectors.size(), 2);
+        for (QComboBox* selector : selectors) {
+            QVERIFY(!selector->isHidden());
+            QVERIFY(!selector->isEnabled());
+            QVERIFY(!selector->accessibleDescription().isEmpty());
+        }
+        source->caps.receiveModeControl->modes = {"USB", "CW"};
+        emit model.capabilitiesChanged(model.isConnected(), source->caps);
+        for (QComboBox* selector : selectors) { QVERIFY(selector->isEnabled()); }
+        source->caps.receiveModeControl = std::nullopt;
+        emit model.capabilitiesChanged(model.isConnected(), source->caps);
+        for (QComboBox* selector : selectors) { QVERIFY(selector->isEnabled()); }
+    }
+    void exhaustiveFilterModesDimUnmappedNonFmControls()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        backend->caps.receiveFilterControl = ReceiveFilterControl{
+            SliceFrequencyControl::Authority::Radio,
+            {{QStringLiteral("USB"), 0, 2000, 600, 3000, 100, 3000}},
+            ReceiveFilterControl::ModePolicy::ListedOnly};
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        SliceModel slice(0);
+        setMode(slice, QStringLiteral("AM"));
+        RxApplet rx;
+        VfoWidget vfo;
+        rx.setSlice(&slice);
+        vfo.setSlice(&slice);
+        rx.setRadioModel(&model);
+        vfo.setRadioModel(&model);
+        FilterPassbandWidget* passband = rx.findChild<FilterPassbandWidget*>();
+        QVERIFY(passband);
+        QVERIFY(!passband->isEnabled());
+        QVERIFY(!passband->accessibleDescription().isEmpty());
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QPushButton* unavailable = button(*surface, QStringLiteral("Filter unavailable"));
+            QVERIFY(unavailable);
+            QVERIFY(!unavailable->isEnabled());
+            QVERIFY(!unavailable->accessibleDescription().isEmpty());
+        }
+        setMode(slice, QStringLiteral("USB"));
+        QVERIFY(passband->isEnabled());
+        for (QWidget* surface : {static_cast<QWidget*>(&rx), static_cast<QWidget*>(&vfo)}) {
+            QVERIFY(!button(*surface, QStringLiteral("Filter unavailable")));
+            QPushButton* tooWide = button(*surface, QStringLiteral("3.3K"));
+            QVERIFY(tooWide);
+            QVERIFY(!tooWide->isEnabled());
+            QVERIFY(!tooWide->accessibleDescription().isEmpty());
+        }
+    }
+
     void receiveOnlyAntennaControlsUsePublishedPorts()
     {
         RadioModel model;

@@ -15,6 +15,8 @@ class QPainter;
 
 namespace AetherSDR {
 
+struct DisplayDeflectionReading;
+
 // Analog S-Meter gauge widget matching the SmartSDR look.
 //
 // S-unit scale:
@@ -47,6 +49,9 @@ public:
     // compact fixed-height sidebar layout when docked.
     void setFloating(bool floating);
     void setFaceTheme(AnalogMeterFaceTheme theme);
+
+    void setDisplayDeflection(const DisplayDeflectionReading& reading, int receiverId);
+    bool displayDeflection() const { return m_displayDeflection; }
 
     enum class TxMode { Power, SWR, Level, Compression };
     enum class RxMode { SMeter, SMeterPeak };
@@ -129,6 +134,9 @@ private:
     bool m_backgroundCacheValid{false};
     QTimer m_accessibilityTimer;
     QString m_lastAccessibleValue;
+    bool m_displayDeflection = false;
+    double m_deflectionLow{0};
+    double m_deflectionHigh{70};
     bool m_relativeLevel = false;
     bool m_relativeValid = false;
     QString m_relativeUnavailableReason;

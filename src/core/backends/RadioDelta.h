@@ -15,6 +15,7 @@ namespace AetherSDR {
 struct RadioDelta {
     // Identity / capability
     std::optional<QString> model;
+    std::optional<QString> softwareVersion;
     std::optional<int>     slicesAvailable;   // "slices=N" free-slot count
     std::optional<QString> callsign;
     std::optional<QString> nickname;

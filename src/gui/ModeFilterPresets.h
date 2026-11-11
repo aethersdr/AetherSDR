@@ -44,7 +44,8 @@ bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Ed
 
 // Whether an FM-family passband is operator-adjustable: a declared row for the
 // mode (range checked per edit); not if other FM rows are declared or the radio
-// owns the filter; otherwise as before.
+// owns the filter; otherwise as before. An explicitly exhaustive control list
+// also excludes unmapped non-FM modes.
 bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control,
                         bool radioPublishesWidths);
 bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,

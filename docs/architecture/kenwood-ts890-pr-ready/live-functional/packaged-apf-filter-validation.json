@@ -1,0 +1,26 @@
+{
+  "status": "REPRESENTATIVE_APF_FILTER_EFFECTS_AND_LISTED_RX_RESTORATION_VERIFIED_ROUTING_UNVERIFIED",
+  "checks": {
+    "APF narrows relative noise band": true,
+    "CW500 broadens relative noise band": true,
+    "Narrow80 narrows relative noise band": true,
+    "Positive APF shift moves noise centroid upward": true,
+    "Gain3 captured higher RMS": true
+  },
+  "finalNativeValues": {
+    "nativeReceive_apf.enabled": "On",
+    "nativeReceive_apf.shift": "0 Hz",
+    "nativeReceive_apf.bandwidth": "Medium (160 Hz)",
+    "nativeReceive_apf.gain": "1 dB"
+  },
+  "restoredSliceDifferences": {},
+  "pcPlaybackRestoredOff": true,
+  "parameterPhaseSeconds": 194.65491658303654,
+  "qualification": [
+    "Ambient receive-noise spectral response and finite nonzero PCM, not calibrated RF/filter/gain accuracy",
+    "Shift readback40Hz; measured centroid shift23.6Hz under finite250Hz IF filter, not a calibrated40Hz transfer measurement",
+    "Gain readback3dB; measured RMS increase~1dB over an earlier noisy baseline, not exact2dB calibration",
+    "Earlier UI selection failure and bounded partial attempt retained; failed taggedshift40 capture hadactualshift0 and is excluded from effect conclusions",
+    "Restoration covers the recorded APF/filter/slice fields and host PC playback flag. Earlier PC Audio toggles can write persistent DATA SEND routing MS103; the original MS1 routing was not recorded here and its restoration is unverified. No route correction is attempted while the radio is offline."
+  ]
+}

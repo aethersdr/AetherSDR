@@ -445,6 +445,7 @@ void MainWindow::wireDspApplets()
         });
     }
     m_appletPanel->phoneCwApplet()->setTransmitModel(&m_radioModel.transmitModel());
+    m_appletPanel->phoneCwApplet()->setRadioModel(&m_radioModel);
     const auto updatePhoneCwReceiveOnly = [this](bool connected, const RadioCapabilities& caps) {
         m_appletPanel->phoneCwApplet()->setTransmitControlsAvailable(!connected || caps.canTransmit);
     };

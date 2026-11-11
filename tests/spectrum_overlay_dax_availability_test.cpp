@@ -1,6 +1,6 @@
 // The overlay menu's DAX button stays hidden on a radio with no DAX plane,
 // across expand/collapse; the Scope row appears only for a radio with a scope
-// mode (Icom).
+// mode declaration, while preserving the Icom unavailable-row exception.
 //
 // setDaxStreamsAvailable(false) hid the button with a bare setVisible(), and
 // updateLayout() -- which runs on every expand/collapse and assigns every menu
@@ -91,17 +91,47 @@ int main(int argc, char* argv[])
     setExpanded(addRx, true);
     check(!dax->isHidden(), "DAX available -> shown again on expand");
 
-    // The Scope row is an Icom-only cluster (#6168): it exists for that family
-    // alone (the applet-level hide gui.md allows), and within it the backend's
-    // label list dims it with a reason when the model or firmware has no choice.
+    // Explicit backend mode labels admit the scope row; the Icom exception
+    // keeps its row discoverable even when the model offers no mode choice.
     auto* scopeRow = parent.findChild<QWidget*>(QStringLiteral("displayScopeModeRow"));
     check(scopeRow != nullptr, "the Scope row is discoverable");
     if (scopeRow) {
         menu.setRadioFamily(QStringLiteral("flex"));
-        menu.setScopeModeLabels({QStringLiteral("Center"), QStringLiteral("Scroll-F"),
-                                 QStringLiteral("Fixed")});
-        check(scopeRow->isHidden(), "a non-Icom family -> no Scope row, whatever is published");
+        menu.setScopeModeLabels({});
+        check(scopeRow->isHidden(), "default Flex without native mode labels keeps the Scope row hidden");
+        menu.setRadioFamily(QStringLiteral("kenwood"));
+        menu.setScopeModeHelp(QStringLiteral("Backend-declared native scope help."));
+        menu.setScopeModeLabels({QStringLiteral("Center"), QStringLiteral("Fixed"),
+                                 QStringLiteral("Auto-scroll")});
+        check(!scopeRow->isHidden() && scopeRow->isEnabled(),
+              "a backend declaring native mode labels exposes the Scope row for Kenwood");
+        check(scopeRow->toolTip().contains(QStringLiteral("Backend-declared native scope help."))
+                  && !scopeRow->toolTip().contains(QStringLiteral("preset 4")),
+              "native help comes from an explicit descriptor rather than Icom instructions");
+        auto* nativeFixed = parent.findChild<QPushButton*>(QStringLiteral("displayScopeMode_fixed"));
+        auto* nativeCenter = parent.findChild<QPushButton*>(QStringLiteral("displayScopeMode_center"));
+        auto* nativeScroll = parent.findChild<QPushButton*>(QStringLiteral("displayScopeMode_autoscroll"));
+        check(nativeFixed && nativeCenter && nativeScroll, "all three declared native mode buttons exist");
+        if (nativeFixed && nativeCenter && nativeScroll) {
+            menu.setScopeModeIndex(1);
+            check(nativeFixed->isChecked() && !nativeCenter->isChecked() && !nativeScroll->isChecked(),
+                  "native Fixed readback selects its declared index");
+            std::vector<int> nativePicks;
+            const auto nativeConnection = QObject::connect(&menu, &SpectrumOverlayMenu::scopeModeChanged,
+                [&nativePicks](int index) { nativePicks.push_back(index); });
+            nativeCenter->click();
+            check(nativePicks.size() == 1 && nativePicks.back() == 0 && nativeFixed->isChecked()
+                      && !nativeCenter->isChecked(),
+                  "clicking native Center requests its index while keeping confirmed Fixed lit");
+            menu.setScopeModeIndex(0);
+            check(nativeCenter->isChecked() && !nativeFixed->isChecked(),
+                  "native Center readback, rather than the click, updates the checked mode");
+            QObject::disconnect(nativeConnection);
+        }
+        menu.setScopeModeHelp({});
         menu.setRadioFamily(QStringLiteral("icom"));
+        check(scopeRow->toolTip().contains(QStringLiteral("preset 4; presets 1-3 are left as you set them.")),
+              "undeclared scope help restores the existing Icom preset instructions");
         menu.setScopeModeLabels({QStringLiteral("Center")});
         check(!scopeRow->isHidden() && !scopeRow->isEnabled()
                   && !scopeRow->accessibleDescription().isEmpty(),
@@ -127,8 +157,9 @@ int main(int argc, char* argv[])
             fixedBtn->click();
             check(picks.size() == 1, "with Fixed already lit, clicking it asks for nothing");
         }
+        menu.setScopeModeLabels({});
         menu.setRadioFamily(QStringLiteral("hl2"));
-        check(scopeRow->isHidden(), "the next non-Icom radio -> no Scope row again");
+        check(scopeRow->isHidden(), "the next radio without a native mode declaration has no Scope row");
     }
 
     std::printf("spectrum_overlay_dax_availability_test: %s\n",

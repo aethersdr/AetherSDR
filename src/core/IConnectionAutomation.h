@@ -31,6 +31,15 @@ public:
                                        const QString& family = QString(),
                                        QString* error = nullptr) = 0;
     virtual bool automationDisconnect(QString* error = nullptr) = 0;
+    // Explicit operator intents advance this epoch; backend retries do not.
+    virtual quint64 automationConnectionIntentEpoch() const { return 0; }
+    // Deferred authenticated network login needs cancellation before a model
+    // is connected. Established connection flows retain their existing policy.
+    virtual bool automationUsesDeferredNetworkLogin(const QString& = {}) const { return false; }
+    // Reserve a deferred native intent before queueing an IP connect, so a
+    // newer Disconnect can cancel it even when the dialog kept an idle form.
+    virtual void automationReserveIpConnect(const QString&) {}
+    virtual quint64 automationNativeConnectionEpoch() const { return 0; }
     virtual QJsonObject automationConnectionProfiles() const { return {}; }
     virtual bool automationSelectConnectionProfile(const QString&, const QString&, QString* error)
     {

@@ -168,6 +168,54 @@ string(REGEX REPLACE "add_executable[ \t\r\n]*\\([ \t\r\n]*" ""
 unset(_aether_tests_listfile)
 
 
+# Kenwood protocol/control fixtures and explicit transport diagnostic.
+add_executable(kenwood_protocol_test
+    tests/kenwood_protocol_test.cpp
+    src/core/backends/kenwood/KenwoodFilter.cpp
+    src/core/backends/kenwood/KenwoodPowerLimits.cpp
+    src/core/backends/kenwood/KnsProtocol.cpp)
+target_include_directories(kenwood_protocol_test PRIVATE src)
+target_link_libraries(kenwood_protocol_test PRIVATE Qt6::Core)
+add_test(NAME kenwood_protocol_test COMMAND kenwood_protocol_test)
+
+add_executable(kenwood_backend_test tests/kenwood_backend_test.cpp)
+target_include_directories(kenwood_backend_test PRIVATE src)
+target_link_libraries(kenwood_backend_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_backend_test COMMAND kenwood_backend_test)
+
+add_executable(transmit_radio_settings_test tests/transmit_radio_settings_test.cpp)
+target_include_directories(transmit_radio_settings_test PRIVATE src tests)
+target_link_libraries(transmit_radio_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME transmit_radio_settings_test COMMAND transmit_radio_settings_test)
+
+add_executable(phone_cw_setting_support_test
+    tests/phone_cw_setting_support_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/DragValuePopup.cpp)
+target_include_directories(phone_cw_setting_support_test PRIVATE src tests)
+target_link_libraries(phone_cw_setting_support_test PRIVATE aethercore Qt6::Core Qt6::Widgets)
+add_test(NAME phone_cw_setting_support_test COMMAND phone_cw_setting_support_test)
+set_tests_properties(phone_cw_setting_support_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Opt-in synthetic KNS peer: loopback TCP ephemeral port and client UDP
+# 60001/60002. Never part of the default graph or proof of radio conformance.
+option(AETHER_ENABLE_KENWOOD_NETWORK_TEST "Build localhost Kenwood transport diagnostic" OFF)
+if(AETHER_ENABLE_KENWOOD_NETWORK_TEST)
+    add_executable(kenwood_network_test tests/kenwood_network_test.cpp)
+    target_include_directories(kenwood_network_test PRIVATE src)
+    target_link_libraries(kenwood_network_test PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME kenwood_network_test COMMAND kenwood_network_test)
+    set_tests_properties(kenwood_network_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
+endif()
+
+# Injected resolver only: no DNS request, socket or radio peer.
+add_executable(network_radio_lookup_test tests/network_radio_lookup_test.cpp src/models/NetworkRadioLookup.cpp)
+target_include_directories(network_radio_lookup_test PRIVATE src)
+target_link_libraries(network_radio_lookup_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME network_radio_lookup_test COMMAND network_radio_lookup_test)
+set_tests_properties(network_radio_lookup_test PROPERTIES TIMEOUT 10)
+
 # Typed producer PCM, queued lifetime and compatibility: QtCore only, no sockets.
 add_executable(pcm_frame_test tests/pcm_frame_test.cpp)
 target_include_directories(pcm_frame_test PRIVATE src)
@@ -4239,6 +4287,26 @@ add_executable(flex_control_visibility_test
     tests/flex_control_visibility_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4268,6 +4336,26 @@ add_executable(radio_setup_no_transient_window_test
     tests/radio_setup_no_transient_window_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4309,6 +4397,26 @@ add_executable(radio_setup_region_field_test
     tests/radio_setup_region_field_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4338,6 +4446,26 @@ add_executable(radio_setup_operations_test
     tests/radio_setup_operations_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/TxBandDialog.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
@@ -4374,6 +4502,26 @@ add_executable(radio_setup_label_theme_token_test
     tests/radio_setup_label_theme_token_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4403,6 +4551,26 @@ add_executable(radio_setup_window_size_test
     tests/radio_setup_window_size_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4432,6 +4600,26 @@ add_executable(radio_setup_pair_grid_test
     tests/radio_setup_pair_grid_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4467,6 +4655,26 @@ add_executable(radio_setup_max_power_field_test
     tests/radio_setup_max_power_field_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4499,6 +4707,26 @@ add_executable(radio_setup_tx_timing_fields_test
     tests/radio_setup_tx_timing_fields_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4532,6 +4760,26 @@ add_executable(radio_setup_recording_mode_dim_test
     tests/radio_setup_recording_mode_dim_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4566,6 +4814,26 @@ add_executable(radio_setup_headphone_output_gate_test
     tests/radio_setup_headphone_output_gate_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -4635,6 +4903,26 @@ add_executable(radio_nickname_test
     src/gui/CanonWindow.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
     src/gui/CanonMessageBox.cpp
@@ -4705,6 +4993,26 @@ add_executable(radio_setup_show_tx_waterfall_test
     src/gui/CanonWindow.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
     src/gui/CanonMessageBox.cpp
@@ -6221,6 +6529,28 @@ add_test(NAME s_meter_geometry_test COMMAND s_meter_geometry_test)
 set_tests_properties(s_meter_geometry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(s_meter_display_deflection_test
+    tests/s_meter_display_deflection_test.cpp
+    src/gui/AnalogMeterFaceTheme.cpp
+    src/models/RadioSwrValidityFilter.cpp
+    src/gui/SMeterGeometry.cpp
+    src/gui/SMeterWidget.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    ${CROSS_NEEDLE_METER_TEST_RESOURCES}
+)
+target_include_directories(s_meter_display_deflection_test PRIVATE src)
+target_link_libraries(s_meter_display_deflection_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(s_meter_display_deflection_test PROPERTIES AUTOMOC ON)
+add_test(NAME s_meter_display_deflection_test COMMAND s_meter_display_deflection_test)
+set_tests_properties(s_meter_display_deflection_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(hgauge_range_test
     tests/hgauge_range_test.cpp
     src/gui/DragValuePopup.cpp
@@ -6340,6 +6670,26 @@ add_executable(peripheral_auth_dialog_test
     tests/fakes/PeripheralAuthStoreFake.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
     src/gui/CanonWindow.cpp
     src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/NtpSourcesPage.cpp
@@ -7422,6 +7772,13 @@ target_include_directories(generated_audio_transmitter_test PRIVATE src tests)
 target_link_libraries(generated_audio_transmitter_test PRIVATE Qt6::Core)
 add_test(NAME generated_audio_transmitter_test COMMAND generated_audio_transmitter_test)
 
+add_executable(meter_display_deflection_test
+    tests/meter_display_deflection_test.cpp
+)
+target_include_directories(meter_display_deflection_test PRIVATE src)
+target_link_libraries(meter_display_deflection_test PRIVATE aethercore Qt6::Core)
+add_test(NAME meter_display_deflection_test COMMAND meter_display_deflection_test)
+
 add_executable(meter_model_test
     tests/meter_model_test.cpp
     src/models/MeterModel.cpp
@@ -7736,6 +8093,18 @@ target_link_libraries(tci_rx_converter_test PRIVATE Qt6::Core)
 add_test(NAME tci_rx_converter_test COMMAND tci_rx_converter_test)
 
 if(Qt6WebSockets_FOUND)
+
+    # Production confirmed RX requests/readback and fresh meter broadcasts; no sockets.
+    add_executable(tci_confirmed_receive_test tests/tci_confirmed_receive_test.cpp)
+    target_include_directories(tci_confirmed_receive_test PRIVATE src tests)
+    target_link_libraries(tci_confirmed_receive_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_confirmed_receive_test COMMAND tci_confirmed_receive_test)
+
+    # Capability-derived TCI limits; injected backends, no sockets or radio.
+    add_executable(tci_receive_limits_test tests/tci_receive_limits_test.cpp)
+    target_include_directories(tci_receive_limits_test PRIVATE src tests)
+    target_link_libraries(tci_receive_limits_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_receive_limits_test COMMAND tci_receive_limits_test)
 
     # Socket-free production TCI RX routing/encoding. The binary transport is
     # injected; QWebSocket objects remain unopened and no radio is connected.
@@ -8351,6 +8720,16 @@ target_link_libraries(rtl_slice_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_slice_settings_test COMMAND rtl_slice_settings_test)
 
 # Exact-device controls, without hardware or transport.
+add_executable(phone_cw_delay_limits_test
+    tests/phone_cw_delay_limits_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/DragValuePopup.cpp)
+target_include_directories(phone_cw_delay_limits_test PRIVATE src tests)
+target_link_libraries(phone_cw_delay_limits_test PRIVATE aethercore Qt6::Core Qt6::Widgets)
+add_test(NAME phone_cw_delay_limits_test COMMAND phone_cw_delay_limits_test)
+set_tests_properties(phone_cw_delay_limits_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Production settings widget through an injected extension seam; no socket/device.
 add_executable(rtl_receiver_settings_widget_test
     tests/rtl_receiver_settings_widget_test.cpp
@@ -8360,6 +8739,44 @@ target_include_directories(rtl_receiver_settings_widget_test PRIVATE src tests)
 target_link_libraries(rtl_receiver_settings_widget_test PRIVATE aetherdesktop_support Qt6::Widgets)
 add_test(NAME rtl_receiver_settings_widget_test COMMAND rtl_receiver_settings_widget_test)
 set_tests_properties(rtl_receiver_settings_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(native_vfo_settings_widget_test
+    tests/native_vfo_settings_widget_test.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/NetworkAudioLevelsWidget.cpp
+    src/gui/NativePowerLimitsWidget.cpp
+    src/gui/NativeTransmitInputsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_vfo_settings_widget_test PRIVATE src tests)
+target_link_libraries(native_vfo_settings_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_vfo_settings_widget_test COMMAND native_vfo_settings_widget_test)
+set_tests_properties(native_vfo_settings_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native backend/model TUNE lifetime through injected transport; no sockets or RF.
+add_executable(kenwood_tune_intent_test tests/kenwood_tune_intent_test.cpp)
+target_include_directories(kenwood_tune_intent_test PRIVATE src tests)
+target_link_libraries(kenwood_tune_intent_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_tune_intent_test COMMAND kenwood_tune_intent_test)
+
+add_executable(kenwood_generator_intent_test tests/kenwood_generator_intent_test.cpp)
+target_include_directories(kenwood_generator_intent_test PRIVATE src tests)
+target_link_libraries(kenwood_generator_intent_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_generator_intent_test COMMAND kenwood_generator_intent_test)
+
+# Real generated-audio pacing and EOF chain; injected transport, no sockets/devices.
+add_executable(kenwood_generated_audio_completion_test tests/kenwood_generated_audio_completion_test.cpp)
+target_include_directories(kenwood_generated_audio_completion_test PRIVATE src tests)
+target_link_libraries(kenwood_generated_audio_completion_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_generated_audio_completion_test COMMAND kenwood_generated_audio_completion_test)
+set_tests_properties(kenwood_generated_audio_completion_test PROPERTIES TIMEOUT 15)
+
+# Injected KNS RX through the model demod bus into a real temporary WAV.
+add_executable(kenwood_rx_recording_test tests/kenwood_rx_recording_test.cpp)
+target_include_directories(kenwood_rx_recording_test PRIVATE src tests)
+target_link_libraries(kenwood_rx_recording_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_rx_recording_test COMMAND kenwood_rx_recording_test)
 
 # Socket-free numerical IQ correction: real samples, no radio peer.
 add_executable(rtl_dc_blocker_test tests/rtl_dc_blocker_test.cpp)
@@ -10649,7 +11066,8 @@ set_tests_properties(net_scheduler_modes_test PROPERTIES
 
 # Injected serial transport and backend only: no sockets, serial ports or RF.
 add_executable(kxpa100_tx_controls_test tests/kxpa100_tx_controls_test.cpp
-    src/gui/TxApplet.cpp src/gui/AtuPreTuneDialog.cpp src/gui/DragValuePopup.cpp
+    src/gui/TxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp src/gui/AtuPreTuneDialog.cpp src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp src/gui/FramelessWindowTitleBar.cpp)
 target_include_directories(kxpa100_tx_controls_test PRIVATE src tests)
 target_link_libraries(kxpa100_tx_controls_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
@@ -10657,7 +11075,8 @@ add_test(NAME kxpa100_tx_controls_test COMMAND kxpa100_tx_controls_test)
 set_tests_properties(kxpa100_tx_controls_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(kat500_tx_controls_test tests/kat500_tx_controls_test.cpp
-    src/gui/TxApplet.cpp src/gui/AtuPreTuneDialog.cpp src/gui/DragValuePopup.cpp
+    src/gui/TxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp src/gui/AtuPreTuneDialog.cpp src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp src/gui/FramelessWindowTitleBar.cpp)
 target_include_directories(kat500_tx_controls_test PRIVATE src tests)
 target_link_libraries(kat500_tx_controls_test PRIVATE aethercore Qt6::Widgets Qt6::Test)
@@ -10667,6 +11086,7 @@ set_tests_properties(kat500_tx_controls_test PROPERTIES ENVIRONMENT "QT_QPA_PLAT
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/AtuPreTuneDialog.cpp
     src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp
@@ -10688,6 +11108,7 @@ set_tests_properties(tx_applet_power_reconciliation_test PROPERTIES
 add_executable(two_tone_tune_gate_test
     tests/two_tone_tune_gate_test.cpp
     src/gui/TxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/AtuPreTuneDialog.cpp
     src/gui/DragValuePopup.cpp
     src/gui/FramelessResizer.cpp
@@ -10706,6 +11127,7 @@ set_tests_properties(two_tone_tune_gate_test PROPERTIES
 add_executable(phone_tx_filter_numeric_entry_test
     tests/phone_tx_filter_numeric_entry_test.cpp
     src/gui/PhoneApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
@@ -10724,6 +11146,7 @@ set_tests_properties(phone_tx_filter_numeric_entry_test PROPERTIES
 add_executable(phone_applet_dexp_visibility_test
     tests/phone_applet_dexp_visibility_test.cpp
     src/gui/PhoneApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
@@ -10745,6 +11168,7 @@ set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
 add_executable(phone_applet_vox_disarm_test
     tests/phone_applet_vox_disarm_test.cpp
     src/gui/PhoneApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
 )
@@ -10763,6 +11187,7 @@ set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
 add_executable(phone_cw_applet_apf_test
     tests/phone_cw_applet_apf_test.cpp
     src/gui/PhoneCwApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(phone_cw_applet_apf_test PRIVATE src)
@@ -10777,6 +11202,7 @@ set_tests_properties(phone_cw_applet_apf_test PROPERTIES
 add_executable(phone_cw_mic_gain_authority_test
     tests/phone_cw_mic_gain_authority_test.cpp
     src/gui/PhoneCwApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(phone_cw_mic_gain_authority_test PRIVATE src)
@@ -10794,6 +11220,7 @@ set_tests_properties(phone_cw_mic_gain_authority_test PROPERTIES
 add_executable(phone_cw_level_meter_state_test
     tests/phone_cw_level_meter_state_test.cpp
     src/gui/PhoneCwApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(phone_cw_level_meter_state_test PRIVATE src)
@@ -10812,6 +11239,7 @@ set_tests_properties(phone_cw_level_meter_state_test PROPERTIES
 add_executable(phone_cw_alc_gauge_fill_test
     tests/phone_cw_alc_gauge_fill_test.cpp
     src/gui/PhoneCwApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(phone_cw_alc_gauge_fill_test PRIVATE src)
@@ -10829,6 +11257,7 @@ set_tests_properties(phone_cw_alc_gauge_fill_test PROPERTIES
 add_executable(phone_cw_acc_availability_test
     tests/phone_cw_acc_availability_test.cpp
     src/gui/PhoneCwApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/DragValuePopup.cpp
 )
 target_include_directories(phone_cw_acc_availability_test PRIVATE src)
@@ -10846,6 +11275,7 @@ set_tests_properties(phone_cw_acc_availability_test PROPERTIES
 add_executable(phone_mon_vox_availability_test
     tests/phone_mon_vox_availability_test.cpp
     src/gui/PhoneApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PhoneCwApplet.cpp
     src/gui/DragValuePopup.cpp
     src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
@@ -10938,6 +11368,329 @@ if(NOT WIN32)
     set_tests_properties(dax_receive_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+add_executable(connection_panel_network_login_test
+    tests/connection_panel_network_login_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(connection_panel_network_login_test PRIVATE src tests)
+target_link_libraries(connection_panel_network_login_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test)
+set_target_properties(connection_panel_network_login_test PROPERTIES AUTOMOC ON)
+add_test(NAME connection_panel_network_login_test COMMAND connection_panel_network_login_test)
+set_tests_properties(connection_panel_network_login_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Injected lookup and local automation dispatch; no radio or listening socket.
+add_executable(automation_disconnect_pending_test
+    tests/automation_disconnect_pending_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(automation_disconnect_pending_test PRIVATE src tests)
+target_link_libraries(automation_disconnect_pending_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test)
+set_target_properties(automation_disconnect_pending_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_disconnect_pending_test COMMAND automation_disconnect_pending_test)
+set_tests_properties(automation_disconnect_pending_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+
+# Native RX DSP controls through injected transport; no radio, sockets or RF.
+add_executable(kenwood_receive_controls_test tests/kenwood_receive_controls_test.cpp)
+target_include_directories(kenwood_receive_controls_test PRIVATE src tests)
+target_link_libraries(kenwood_receive_controls_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_receive_controls_test COMMAND kenwood_receive_controls_test)
+
+# Production RX DSP page/model/backend route, with injected transport and no RF.
+add_executable(native_receive_settings_test
+    tests/native_receive_settings_test.cpp
+    src/gui/NativeReceiveSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_receive_settings_test PRIVATE src tests)
+target_link_libraries(native_receive_settings_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_receive_settings_test COMMAND native_receive_settings_test)
+set_tests_properties(native_receive_settings_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native RX tuning via injected transport; no radio, sockets or RF.
+add_executable(kenwood_tuning_controls_test tests/kenwood_tuning_controls_test.cpp)
+target_include_directories(kenwood_tuning_controls_test PRIVATE src tests)
+target_link_libraries(kenwood_tuning_controls_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_tuning_controls_test COMMAND kenwood_tuning_controls_test)
+
+# Production widget/model/native tuning path with injected transport.
+add_executable(native_vfo_tuning_test
+    tests/native_vfo_tuning_test.cpp
+    src/gui/NativeVfoSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_vfo_tuning_test PRIVATE src tests)
+target_link_libraries(native_vfo_tuning_test PRIVATE aetherdesktop_support Qt6::Widgets)
+add_test(NAME native_vfo_tuning_test COMMAND native_vfo_tuning_test)
+set_tests_properties(native_vfo_tuning_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native filter-bank descriptors and state via injected transport; no sockets/RF.
+add_executable(kenwood_filter_banks_test tests/kenwood_filter_banks_test.cpp)
+target_include_directories(kenwood_filter_banks_test PRIVATE src tests)
+target_link_libraries(kenwood_filter_banks_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_filter_banks_test COMMAND kenwood_filter_banks_test)
+
+# Actual native filter page/model/backend route without a firmware peer.
+add_executable(native_filter_banks_test
+    tests/native_filter_banks_test.cpp
+    src/gui/NativeFilterSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_filter_banks_test PRIVATE src tests)
+target_link_libraries(native_filter_banks_test PRIVATE aetherdesktop_support Qt6::Widgets)
+add_test(NAME native_filter_banks_test COMMAND native_filter_banks_test)
+set_tests_properties(native_filter_banks_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Socket-free active filter-style ownership and queued protocol readback.
+add_executable(kenwood_filter_style_context_test tests/kenwood_filter_style_context_test.cpp)
+target_include_directories(kenwood_filter_style_context_test PRIVATE src tests)
+target_link_libraries(kenwood_filter_style_context_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_filter_style_context_test COMMAND kenwood_filter_style_context_test)
+
+# Real RX/VFO antenna selectors with injected Kenwood transport; no sockets/RF.
+add_executable(kenwood_rx_antenna_widget_test
+    tests/kenwood_rx_antenna_widget_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(kenwood_rx_antenna_widget_test PRIVATE src tests)
+target_link_libraries(kenwood_rx_antenna_widget_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME kenwood_rx_antenna_widget_test
+         COMMAND kenwood_rx_antenna_widget_test)
+set_tests_properties(kenwood_rx_antenna_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native receive equalizer codec/state through injected transport; no sockets/RF.
+add_executable(kenwood_receive_eq_test tests/kenwood_receive_eq_test.cpp)
+target_include_directories(kenwood_receive_eq_test PRIVATE src tests)
+target_link_libraries(kenwood_receive_eq_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_receive_eq_test COMMAND kenwood_receive_eq_test)
+
+# Production native EQ page/model/backend route with isolated test settings.
+add_executable(native_receive_eq_widget_test
+    tests/native_receive_eq_widget_test.cpp
+    src/gui/NativeReceiveEqWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_receive_eq_widget_test PRIVATE src tests)
+target_link_libraries(native_receive_eq_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_receive_eq_widget_test COMMAND native_receive_eq_widget_test)
+set_tests_properties(native_receive_eq_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native receive AGC parser/state and real page/model/backend routes.
+add_executable(kenwood_receive_agc_test tests/kenwood_receive_agc_test.cpp)
+target_include_directories(kenwood_receive_agc_test PRIVATE src tests)
+target_link_libraries(kenwood_receive_agc_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_receive_agc_test COMMAND kenwood_receive_agc_test)
+
+add_executable(native_receive_agc_widget_test
+    tests/native_receive_agc_widget_test.cpp
+    src/gui/NativeReceiveAgcWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_receive_agc_widget_test PRIVATE src tests)
+target_link_libraries(native_receive_agc_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_receive_agc_widget_test COMMAND native_receive_agc_widget_test)
+set_tests_properties(native_receive_agc_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Isolated receive antenna routing over injected transport and real widgets.
+add_executable(kenwood_receive_routing_test tests/kenwood_receive_routing_test.cpp)
+target_include_directories(kenwood_receive_routing_test PRIVATE src tests)
+target_link_libraries(kenwood_receive_routing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kenwood_receive_routing_test COMMAND kenwood_receive_routing_test)
+
+add_executable(native_receive_routing_widget_test
+    tests/native_receive_routing_widget_test.cpp
+    src/gui/NativeReceiveRoutingWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_receive_routing_widget_test PRIVATE src tests)
+target_link_libraries(native_receive_routing_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_receive_routing_widget_test COMMAND native_receive_routing_widget_test)
+set_tests_properties(native_receive_routing_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native radio scope controls with injected transport, no radio sockets or RF.
+add_executable(kenwood_scope_controls_test tests/kenwood_scope_controls_test.cpp)
+target_include_directories(kenwood_scope_controls_test PRIVATE src tests)
+target_link_libraries(kenwood_scope_controls_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_scope_controls_test COMMAND kenwood_scope_controls_test)
+
+# Production native scope page/model/backend route; no third-party peer.
+add_executable(native_scope_settings_widget_test
+    tests/native_scope_settings_widget_test.cpp
+    src/gui/NativeScopeSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_scope_settings_widget_test PRIVATE src tests)
+target_link_libraries(native_scope_settings_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_scope_settings_widget_test COMMAND native_scope_settings_widget_test)
+set_tests_properties(native_scope_settings_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native radio diagnostics and beep controls: injected transport, no peer or RF.
+add_executable(kenwood_radio_messages_test tests/kenwood_radio_messages_test.cpp)
+target_include_directories(kenwood_radio_messages_test PRIVATE src tests)
+target_link_libraries(kenwood_radio_messages_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_radio_messages_test COMMAND kenwood_radio_messages_test)
+
+add_executable(native_radio_messages_widget_test
+    tests/native_radio_messages_widget_test.cpp
+    src/gui/NativeRadioMessagesWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_radio_messages_widget_test PRIVATE src tests)
+target_link_libraries(native_radio_messages_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_radio_messages_widget_test COMMAND native_radio_messages_widget_test)
+set_tests_properties(native_radio_messages_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native memory reads: injected transport, no third-party socket peer or RF.
+add_executable(kenwood_memory_inventory_test tests/kenwood_memory_inventory_test.cpp)
+target_include_directories(kenwood_memory_inventory_test PRIVATE src tests)
+target_link_libraries(kenwood_memory_inventory_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_memory_inventory_test COMMAND kenwood_memory_inventory_test)
+
+add_executable(native_memory_read_widget_test
+    tests/native_memory_read_widget_test.cpp
+    src/gui/NativeMemoryReadWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_memory_read_widget_test PRIVATE src tests)
+target_link_libraries(native_memory_read_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_memory_read_widget_test COMMAND native_memory_read_widget_test)
+set_tests_properties(native_memory_read_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native auto-mode AM/AS wire/state and actual widget routes; injected only.
+add_executable(kenwood_auto_mode_test tests/kenwood_auto_mode_test.cpp)
+target_include_directories(kenwood_auto_mode_test PRIVATE src tests)
+target_link_libraries(kenwood_auto_mode_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_auto_mode_test COMMAND kenwood_auto_mode_test)
+
+add_executable(native_auto_mode_widget_test
+    tests/native_auto_mode_widget_test.cpp
+    src/gui/NativeAutoModeWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_auto_mode_widget_test PRIVATE src tests)
+target_link_libraries(native_auto_mode_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_auto_mode_widget_test COMMAND native_auto_mode_widget_test)
+set_tests_properties(native_auto_mode_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(kenwood_operating_display_test tests/kenwood_operating_display_test.cpp)
+target_include_directories(kenwood_operating_display_test PRIVATE src tests)
+target_link_libraries(kenwood_operating_display_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_operating_display_test COMMAND kenwood_operating_display_test)
+
+add_executable(native_operating_display_widget_test
+    tests/native_operating_display_widget_test.cpp
+    src/gui/NativeOperatingDisplayWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_operating_display_widget_test PRIVATE src tests)
+target_link_libraries(native_operating_display_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_operating_display_widget_test COMMAND native_operating_display_widget_test)
+set_tests_properties(native_operating_display_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native CW receive: socket-free production backend and actual widget routes.
+add_executable(kenwood_cw_receive_test tests/kenwood_cw_receive_test.cpp)
+target_include_directories(kenwood_cw_receive_test PRIVATE src tests)
+target_link_libraries(kenwood_cw_receive_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_cw_receive_test COMMAND kenwood_cw_receive_test)
+
+add_executable(native_cw_receive_widget_test
+    tests/native_cw_receive_widget_test.cpp
+    src/gui/NativeCwReceiveWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_cw_receive_widget_test PRIVATE src tests)
+target_link_libraries(native_cw_receive_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_cw_receive_widget_test COMMAND native_cw_receive_widget_test)
+set_tests_properties(native_cw_receive_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native transverter observations, strict typed controls and real widget routes.
+add_executable(kenwood_transverter_test tests/kenwood_transverter_test.cpp)
+target_include_directories(kenwood_transverter_test PRIVATE src tests)
+target_link_libraries(kenwood_transverter_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_transverter_test COMMAND kenwood_transverter_test)
+
+add_executable(native_transverter_widget_test
+    tests/native_transverter_widget_test.cpp
+    src/gui/NativeTransverterWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_transverter_widget_test PRIVATE src tests)
+target_link_libraries(native_transverter_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_transverter_widget_test COMMAND native_transverter_widget_test)
+set_tests_properties(native_transverter_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native VFO scan uses injected transport; no fake firmware sockets.
+add_executable(kenwood_vfo_scan_test tests/kenwood_vfo_scan_test.cpp)
+target_include_directories(kenwood_vfo_scan_test PRIVATE src tests)
+target_link_libraries(kenwood_vfo_scan_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_vfo_scan_test COMMAND kenwood_vfo_scan_test)
+
+add_executable(native_vfo_scan_widget_test
+    tests/native_vfo_scan_widget_test.cpp
+    src/gui/NativeVfoScanWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_vfo_scan_widget_test PRIVATE src tests)
+target_link_libraries(native_vfo_scan_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_vfo_scan_widget_test COMMAND native_vfo_scan_widget_test)
+set_tests_properties(native_vfo_scan_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native bank-owned scan preferences use injected transport.
+add_executable(kenwood_scan_preferences_test tests/kenwood_scan_preferences_test.cpp)
+target_include_directories(kenwood_scan_preferences_test PRIVATE src tests)
+target_link_libraries(kenwood_scan_preferences_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_scan_preferences_test COMMAND kenwood_scan_preferences_test)
+
+add_executable(native_scan_preferences_widget_test
+    tests/native_scan_preferences_widget_test.cpp
+    src/gui/NativeScanPreferencesWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_scan_preferences_widget_test PRIVATE src tests)
+target_link_libraries(native_scan_preferences_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_scan_preferences_widget_test COMMAND native_scan_preferences_widget_test)
+set_tests_properties(native_scan_preferences_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native receiver-wide options use injected transport; no radio sockets.
+add_executable(kenwood_receiver_options_test tests/kenwood_receiver_options_test.cpp)
+target_include_directories(kenwood_receiver_options_test PRIVATE src tests)
+target_link_libraries(kenwood_receiver_options_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_receiver_options_test COMMAND kenwood_receiver_options_test)
+
+add_executable(native_receiver_options_widget_test
+    tests/native_receiver_options_widget_test.cpp
+    src/gui/NativeReceiverOptionsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_receiver_options_widget_test PRIVATE src tests)
+target_link_libraries(native_receiver_options_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_receiver_options_widget_test COMMAND native_receiver_options_widget_test)
+set_tests_properties(native_receiver_options_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Native bank-owned PSK range uses injected transport, no radio sockets.
+add_executable(kenwood_psk_receive_test tests/kenwood_psk_receive_test.cpp)
+target_include_directories(kenwood_psk_receive_test PRIVATE src tests)
+target_link_libraries(kenwood_psk_receive_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME kenwood_psk_receive_test COMMAND kenwood_psk_receive_test)
+
+add_executable(native_psk_receive_widget_test
+    tests/native_psk_receive_widget_test.cpp
+    src/gui/NativePskReceiveWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(native_psk_receive_widget_test PRIVATE src tests)
+target_link_libraries(native_psk_receive_widget_test PRIVATE aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME native_psk_receive_widget_test COMMAND native_psk_receive_widget_test)
+set_tests_properties(native_psk_receive_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # Socket-free DAX ownership: production encoder, model/bridge handler and PCM
 # packetizers with injected observations/replies; no firmware peer or listener.
 add_executable(dax_tx_backend_test tests/dax_tx_backend_test.cpp)
@@ -10985,6 +11738,50 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    kenwood_psk_receive_test
+    native_psk_receive_widget_test
+    kenwood_receiver_options_test
+    native_receiver_options_widget_test
+    kenwood_scan_preferences_test
+    native_scan_preferences_widget_test
+    kenwood_vfo_scan_test
+    native_vfo_scan_widget_test
+    kenwood_transverter_test
+    native_transverter_widget_test
+    kenwood_cw_receive_test
+    native_cw_receive_widget_test
+    kenwood_operating_display_test
+    native_operating_display_widget_test
+    kenwood_auto_mode_test
+    native_auto_mode_widget_test
+    kenwood_memory_inventory_test
+    native_memory_read_widget_test
+    kenwood_radio_messages_test
+    native_radio_messages_widget_test
+    kenwood_scope_controls_test
+    native_scope_settings_widget_test
+    kenwood_receive_routing_test
+    native_receive_routing_widget_test
+    kenwood_receive_agc_test
+    native_receive_agc_widget_test
+    kenwood_rx_antenna_widget_test
+    kenwood_receive_eq_test
+    native_receive_eq_widget_test
+    kenwood_filter_style_context_test
+    kenwood_filter_banks_test
+    native_filter_banks_test
+    kenwood_tuning_controls_test
+    native_vfo_tuning_test
+    automation_disconnect_pending_test
+    tci_confirmed_receive_test
+    tci_receive_limits_test
+    native_receive_settings_test
+    kenwood_receive_controls_test
+    kenwood_rx_recording_test
+    kenwood_generated_audio_completion_test
+    kenwood_generator_intent_test
+    kenwood_network_test
+    connection_panel_network_login_test
     session_control_test
     audio_control_routing_test
     dax_tx_backend_test
@@ -11114,6 +11911,11 @@ set(AETHER_SETTINGS_CONSUMERS
     rtl_slice_settings_test
     rtl_device_settings_test
     rtl_receiver_settings_widget_test
+    native_vfo_settings_widget_test
+    phone_cw_delay_limits_test
+    transmit_radio_settings_test
+    kenwood_tune_intent_test
+    phone_cw_setting_support_test
     rtl_runtime_settings_test
     rtl_device_controls_test
     rtl_model_acceptance_test
@@ -11196,6 +11998,7 @@ set(AETHER_SETTINGS_CONSUMERS
     ole_compound_file_test
     copy_assist_settings_dialog_test
     copy_assist_failure_test
+    s_meter_display_deflection_test
     s_meter_geometry_test
     qrz_callsign_test
     shortcut_manager_test
@@ -11218,6 +12021,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dvk_panel_test
     local_voice_keyer_test
     generated_audio_transmitter_test
+    meter_display_deflection_test
     meter_model_test
     health_applet_test
     meter_applet_capability_test

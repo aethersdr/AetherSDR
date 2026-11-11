@@ -50,9 +50,9 @@ public:
     // With the list, one click is one reachable edge.
     void setTxFilterEdges(const QList<int>& lowEdgesHz, const QList<int>& highEdgesHz);
 
-    // Hides the complete TX cutoff editor when the backend has no independent
-    // low/high cutoff command. Unsupported controls are absent, not inert.
-    void setTxFilterControlsAvailable(bool available);
+    // Native settings surfaces may retain unavailable controls with a reason.
+    // Other radios keep their existing hidden unsupported TX filter region.
+    void setTxFilterControlsAvailable(bool available, bool keepUnavailableVisible = false);
 
 private:
     void buildUI();
@@ -84,6 +84,7 @@ private:
 
     // TX filter
     QWidget* m_txFilterWidget{nullptr};
+    bool m_keepUnavailableTxFilterVisible{false};
     QSlider* m_lowCutSlider{nullptr};
     ScrollableLabel* m_lowCutLabel{nullptr};
     QPushButton* m_lowCutDown{nullptr};

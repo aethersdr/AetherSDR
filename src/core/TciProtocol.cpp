@@ -1,5 +1,7 @@
 #ifdef HAVE_WEBSOCKETS
 #include "TciProtocol.h"
+#include "ReceiveModeVocabulary.h"
+#include "backends/IRadioBackend.h"
 #include "AppSettings.h"
 #include "LogManager.h"
 #include "TciRoutingState.h"
@@ -15,8 +17,11 @@
 
 #include <QList>
 #include <QMetaObject>
+#include <QPointer>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <QtGlobal>
 #include <utility>
 
 namespace AetherSDR {
@@ -30,6 +35,15 @@ int activeOutputVolumePercent(const RadioModel* model)
     return model ? model->activeOutputVolumePercent()
                  : AppSettings::instance()
                        .value(QStringLiteral("MasterVolume"), QStringLiteral("100")).toInt();
+}
+
+bool receiveTargetCurrent(const QPointer<RadioModel>& owner, const QPointer<SliceModel>& slice,
+                          const RadioControlSession& session, quint64 receiverSession, bool confirmed)
+{
+    return owner && slice && owner->controlSession() == session
+        && slice->receiveSessionGeneration() == receiverSession
+        && owner->slice(slice->sliceId()) == slice
+        && (!confirmed || owner->controlSessionCurrent(session));
 }
 
 }  // namespace
@@ -107,6 +121,37 @@ QString TciProtocol::smartsdrToTci(const QString& mode)
         {"FDVU", "digu"},  {"FDVL", "digl"},
     };
     return map.value(mode.toUpper(), "usb");
+}
+
+QString TciProtocol::receiveModulationsList(RadioModel* model)
+{
+    if (!usesReceiveClientFeature(model, ReceiveClientControl::Feature::NativeModes)) {
+        return QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,dsb,fm,nfm,digu,digl,rtty;");
+    }
+    QStringList tokens;
+    const auto control = model->backendCapabilities().receiveModeControl;
+    if (model->isConnected() && control) {
+        QStringList supported;
+        for (const SliceModel* slice : model->slices()) {
+            for (const QString& mode : declaredReceiveModes(model, slice, false)) {
+                if (!supported.contains(mode)) { supported.append(mode); }
+            }
+        }
+        if (model->slices().isEmpty()) { supported = control->modes; }
+        for (const QString& mode : supported) {
+            const QString token = mode.toLower();
+            if (!tokens.contains(token)) { tokens.append(token); }
+        }
+    }
+    return QStringLiteral("modulations_list:%1;").arg(tokens.join(','));
+}
+
+QString TciProtocol::receiveModeToTci(const RadioModel* model, const SliceModel* slice)
+{
+    if (!slice) { return {}; }
+    if (!usesDeclaredReceiveModes(model, slice)) { return smartsdrToTci(slice->mode()); }
+    const QString mode = slice->mode();
+    return declaredReceiveModes(model, slice, false).contains(mode) ? mode.toLower() : QString();
 }
 
 QString TciProtocol::tciToSmartSDR(const QString& mode, bool* ok)
@@ -338,6 +383,85 @@ long long TciProtocol::ddsCenterHz(RadioModel* model, const SliceModel* slice)
     return mhzToHz(slice->frequency());
 }
 
+void TciProtocol::queueReceiveChange(SliceModel* slice, std::function<void()> change)
+{
+    if (!slice) { return; }
+    if (!usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::QueuedIntentFencing)) {
+        QMetaObject::invokeMethod(slice, std::move(change), Qt::QueuedConnection);
+        return;
+    }
+    const QPointer<RadioModel> owner(m_model);
+    const QPointer<SliceModel> target(slice);
+    const RadioControlSession session = m_model->controlSession();
+    const quint64 receiverSession = slice->receiveSessionGeneration();
+    const bool confirmed = slice->receiveControlsConfirmed();
+    QMetaObject::invokeMethod(slice, [owner, target, session, receiverSession, confirmed, change = std::move(change)] {
+        if (receiveTargetCurrent(owner, target, session, receiverSession, confirmed)) { change(); }
+    }, Qt::QueuedConnection);
+}
+
+void TciProtocol::queueReceiveFilterChange(SliceModel* slice, std::function<void()> change)
+{
+    if (!slice || !usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::QueuedIntentFencing)) { queueReceiveChange(slice, std::move(change)); return; }
+    const QPointer<SliceModel> target(slice);
+    const quint64 context = slice->receiveFilterContextGeneration();
+    queueReceiveChange(slice, [target, context, change = std::move(change)] {
+        if (target && target->receiveFilterContextGeneration() == context) { change(); }
+    });
+}
+
+QString TciProtocol::receiveFilterBandResponse(int trx, const SliceModel* slice) const
+{
+    if (!slice) { return {}; }
+    int low = slice->filterLow();
+    int high = slice->filterHigh();
+    if (usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::NativeModes)) {
+        if (!m_model || m_model->slice(slice->sliceId()) != slice
+            || !m_model->controlSessionCurrent(m_model->controlSession())) { return {}; }
+        const SliceModel::ReceiveObservation& observed = slice->receiveObservation();
+        if (!observed.mode || *observed.mode != slice->mode() || !observed.filterLowHz || !observed.filterHighHz) { return {}; }
+        low = *observed.filterLowHz;
+        high = *observed.filterHighHz;
+        const qint64 width = qint64(high) - qint64(low);
+        if (width <= 0 || width > std::numeric_limits<int>::max()) { return {}; }
+    }
+    return QStringLiteral("rx_filter_band:%1,%2,%3;").arg(trx).arg(low).arg(high);
+}
+
+void TciProtocol::setReceiveNotification(const SliceModel* slice, const QString& notification)
+{
+    // Confirmed receivers announce accepted state through the model relays,
+    // rather than echoing a request which may be refused or retired in queue.
+    Q_UNUSED(slice);
+    if (!usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) { m_pendingNotification = notification; }
+}
+
+bool TciProtocol::apfStateAvailable(const SliceModel* slice) const
+{
+    return slice && (!usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)
+        || (m_model && m_model->isConnected() && m_model->backendCapabilities().hasAudioPeakingFilter));
+}
+
+QString TciProtocol::vfoLimitsResponse(const QString& legacyUnknown) const
+{
+    if (!usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::FrequencyLimits)) { return legacyUnknown; }
+    const RadioCapabilities caps = m_model->backendCapabilities();
+    // Zero/zero means unreported in the seam. Keep existing client assumptions
+    // for that case; a malformed declared interval must not acquire a fallback.
+    if (caps.tuningMinHz == 0.0 && caps.tuningMaxHz == 0.0) { return legacyUnknown; }
+    constexpr double kUpperExclusive = -static_cast<double>(std::numeric_limits<qint64>::min());
+    if (!std::isfinite(caps.tuningMinHz) || !std::isfinite(caps.tuningMaxHz)
+        || caps.tuningMinHz < 0 || caps.tuningMaxHz <= caps.tuningMinHz
+        || caps.tuningMaxHz >= kUpperExclusive) { return {}; }
+    // TCI 2.1 §4.1 (p.14) carries device frequency limits in Hz. Round inward
+    // to integer wire Hz without advertising frequencies beyond the capability.
+    const double low = std::ceil(caps.tuningMinHz);
+    const double high = std::floor(caps.tuningMaxHz);
+    if (low > high) { return {}; }
+    return QStringLiteral("vfo_limits:%1,%2;")
+        .arg(static_cast<qint64>(low)).arg(static_cast<qint64>(high));
+}
+
 // ── Init burst ─────────────────────────────────────────────────────────────
 
 QString TciProtocol::generateInitBurst()
@@ -348,7 +472,7 @@ QString TciProtocol::generateInitBurst()
     // state including stream parameters, as ExpertSDR3 does: SDC / CW Skimmer
     // latch settings on READY, so an early READY gives them defaults (notably a
     // wrong iq_samplerate). eesdr-tci imposes no pre-READY grammar.
-    burst += QStringLiteral("vfo_limits:1000,75000000;");
+    burst += vfoLimitsResponse(QStringLiteral("vfo_limits:1000,75000000;"));
     burst += QStringLiteral("if_limits:-48000,48000;");
 
     const auto slices = m_model ? m_model->slices() : QList<SliceModel*>{};
@@ -376,7 +500,7 @@ QString TciProtocol::generateInitBurst()
     // identity is #2806.
     burst += QStringLiteral("device:AetherSDR;");
     burst += QStringLiteral("receive_only:false;");
-    burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,dsb,fm,nfm,digu,digl,rtty;");
+    burst += receiveModulationsList(m_model);
     burst += QStringLiteral("protocol:ExpertSDR3,2.1;");
 
     // ── Phase 2: Current state notifications ──────────────────────────
@@ -402,13 +526,12 @@ QString TciProtocol::generateInitBurst()
             // IQ center only from this; without it every spot is mis-mapped by
             // (slice − panCenter) Hz. (#3910)
             burst += QStringLiteral("dds:%1,%2;").arg(trx).arg(ddsCenterHz(m_model, s));
-            burst += QStringLiteral("modulation:%1,%2;")
-                         .arg(trx).arg(smartsdrToTci(s->mode()));
+            const QString mode = receiveModeToTci(m_model, s);
+            if (!mode.isEmpty()) { burst += QStringLiteral("modulation:%1,%2;").arg(trx).arg(mode); }
             burst += QStringLiteral("rx_enable:%1,true;").arg(trx);
 
             // Filter
-            burst += QStringLiteral("rx_filter_band:%1,%2,%3;")
-                         .arg(trx).arg(s->filterLow()).arg(s->filterHigh());
+            burst += receiveFilterBandResponse(trx, s);
 
             // RIT/XIT
             burst += QStringLiteral("rit_enable:%1,%2;")
@@ -450,7 +573,7 @@ QString TciProtocol::generateInitBurst()
             burst += QStringLiteral("agc_mode:%1,%2;")
                          .arg(trx).arg(s->receiveAgcMode().toLower());
             burst += QStringLiteral("agc_gain:%1,%2;")
-                         .arg(trx).arg(agcGainDb(s));
+                         .arg(trx).arg(usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications) ? s->receiveAgcThreshold() : agcGainDb(s));
 
             // DSP
             burst += QStringLiteral("rx_nb_enable:%1,%2;")
@@ -459,8 +582,10 @@ QString TciProtocol::generateInitBurst()
                          .arg(trx).arg(s->nrOn() ? "true" : "false");
             burst += QStringLiteral("rx_anf_enable:%1,%2;")
                          .arg(trx).arg(s->anfOn() ? "true" : "false");
-            burst += QStringLiteral("rx_apf_enable:%1,%2;")
-                         .arg(trx).arg(s->apfOn() ? "true" : "false");
+            if (apfStateAvailable(s)) {
+                burst += QStringLiteral("rx_apf_enable:%1,%2;")
+                    .arg(trx).arg(s->apfOn() ? "true" : "false");
+            }
 
             // Mute. Seeded here for the same reason sql/DSP are: without it a
             // connecting client's mute mirror starts at a default guess, and
@@ -609,7 +734,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "digu_offset")      return cmdDiguOffset(args, isSet);
     if (name == "set_in_focus")     return cmdSetInFocus();
     if (name == "tx_frequency")     return cmdTxFrequency();
-    if (name == "vfo_limits")       return QStringLiteral("vfo_limits:30000,54000000;");
+    if (name == "vfo_limits")       return vfoLimitsResponse(QStringLiteral("vfo_limits:30000,54000000;"));
     if (name == "if_limits")        return QStringLiteral("if_limits:-10000,10000;");
     if (name == "vfo_lock")         return cmdLock(args, isSet);  // alias
 
@@ -753,13 +878,19 @@ QString TciProtocol::cmdModulation(const QStringList& args, bool isSet)
     if (!s) return {};
 
     if (!isSet) {
-        return QStringLiteral("modulation:%1,%2;")
-                   .arg(trx).arg(smartsdrToTci(s->mode()));
+        const QString mode = receiveModeToTci(m_model, s);
+        return mode.isEmpty() ? QString() : QStringLiteral("modulation:%1,%2;").arg(trx).arg(mode);
     }
 
     if (args.size() < 2) return {};
     bool modOk = false;
     QString sdrMode = tciToSmartSDR(args[1], &modOk);
+    if (usesDeclaredReceiveModes(m_model, s)) {
+        const QStringList modes = declaredReceiveModes(m_model, s, true);
+        const QString exact = args[1].toUpper();
+        if (modes.contains(exact)) { sdrMode = exact; modOk = true; }
+        else { modOk = modOk && modes.contains(sdrMode); }
+    }
     if (!modOk) {
         // Unrecognised modulation name. The server already advertises the
         // accepted set in modulations_list at connect time, so anything
@@ -772,12 +903,12 @@ QString TciProtocol::cmdModulation(const QStringList& args, bool isSet)
         // already takes for unrecognised commands.
         return {};
     }
-    QMetaObject::invokeMethod(s, [s, sdrMode]() {
+    queueReceiveChange(s, [s, sdrMode]() {
         s->setMode(sdrMode);
-    }, Qt::QueuedConnection);
+    });
 
-    m_pendingNotification = QStringLiteral("modulation:%1,%2;")
-                                .arg(trx).arg(args[1].toLower());
+    setReceiveNotification(s, QStringLiteral("modulation:%1,%2;")
+                                .arg(trx).arg(args[1].toLower()));
     return {};
 }
 
@@ -987,11 +1118,10 @@ QString TciProtocol::cmdRitEnable(const QStringList& args, bool isSet)
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
     int hz = s->ritFreq();
-    QMetaObject::invokeMethod(s, [s, on, hz]() { s->setRit(on, hz); },
-                              Qt::QueuedConnection);
+    queueReceiveChange(s, [s, on, hz]() { s->setRit(on, hz); });
 
-    m_pendingNotification = QStringLiteral("rit_enable:%1,%2;")
-                                .arg(trx).arg(on ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("rit_enable:%1,%2;")
+                                .arg(trx).arg(on ? "true" : "false"));
     return {};
 }
 
@@ -1012,12 +1142,12 @@ QString TciProtocol::cmdRitOffset(const QStringList& args, bool isSet)
     int offset = 0;
     if (!argToInt(args, 1, offset)) return {};
     bool on = s->ritOn();
-    QMetaObject::invokeMethod(s, [s, on, offset]() {
+    queueReceiveChange(s, [s, on, offset]() {
         s->setRit(on, offset);
-    }, Qt::QueuedConnection);
+    });
 
-    m_pendingNotification = QStringLiteral("rit_offset:%1,%2;")
-                                .arg(trx).arg(offset);
+    setReceiveNotification(s, QStringLiteral("rit_offset:%1,%2;")
+                                .arg(trx).arg(offset));
     return {};
 }
 
@@ -1115,20 +1245,19 @@ QString TciProtocol::cmdRxFilterBand(const QStringList& args, bool isSet)
     if (!s) return {};
 
     if (!isSet) {
-        return QStringLiteral("rx_filter_band:%1,%2,%3;")
-                   .arg(trx).arg(s->filterLow()).arg(s->filterHigh());
+        return receiveFilterBandResponse(trx, s);
     }
 
     if (args.size() < 3) return {};
     int lo = 0;
     int hi = 0;
     if (!argToInt(args, 1, lo) || !argToInt(args, 2, hi)) return {};
-    QMetaObject::invokeMethod(s, [s, lo, hi]() {
+    queueReceiveFilterChange(s, [s, lo, hi]() {
         s->setFilterWidth(lo, hi);
-    }, Qt::QueuedConnection);
+    });
 
-    m_pendingNotification = QStringLiteral("rx_filter_band:%1,%2,%3;")
-                                .arg(trx).arg(lo).arg(hi);
+    setReceiveNotification(s, QStringLiteral("rx_filter_band:%1,%2,%3;")
+                                .arg(trx).arg(lo).arg(hi));
     return {};
 }
 
@@ -1203,11 +1332,10 @@ QString TciProtocol::cmdLock(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
-    QMetaObject::invokeMethod(s, [s, on]() { s->setLocked(on); },
-                              Qt::QueuedConnection);
+    queueReceiveChange(s, [s, on]() { s->setLocked(on); });
 
-    m_pendingNotification = QStringLiteral("lock:%1,%2;")
-                                .arg(trx).arg(on ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("lock:%1,%2;")
+                                .arg(trx).arg(on ? "true" : "false"));
     return {};
 }
 
@@ -1242,8 +1370,8 @@ QString TciProtocol::cmdRxCtunEx(const QStringList& args, bool isSet)
     if (!argToBool(args, 1, ctun)) return {};
     m_centerLockRequest = CenterLockRequest{trx, s->sliceId(), !ctun};
 
-    m_pendingNotification = QStringLiteral("rx_ctun_ex:%1,%2;")
-                                .arg(trx).arg(ctun ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("rx_ctun_ex:%1,%2;")
+                                .arg(trx).arg(ctun ? "true" : "false"));
     return {};
 }
 
@@ -1267,11 +1395,19 @@ QString TciProtocol::cmdSqlEnable(const QStringList& args, bool isSet)
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
     auto& pending = (*m_pendingSquelch)[trx];
+    if (usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::QueuedIntentFencing)) {
+        const RadioControlSession session = m_model->controlSession();
+        const quint64 receiverSession = s->receiveSessionGeneration();
+        if (pending.source != s || pending.session != session || pending.receiverSession != receiverSession) { pending = {}; }
+        pending.source = s;
+        pending.session = session;
+        pending.receiverSession = receiverSession;
+    }
     pending.on = on;
     queueSquelch(s, trx, on, pending.level.value_or(s->receiveSquelchLevel()));
 
-    m_pendingNotification = QStringLiteral("sql_enable:%1,%2;")
-                                .arg(trx).arg(on ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("sql_enable:%1,%2;")
+                                .arg(trx).arg(on ? "true" : "false"));
     return {};
 }
 
@@ -1302,19 +1438,43 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
         ? 0
         : sqlScaleFor(m_model, s).levelForThresholdDb(value);
     auto& pending = (*m_pendingSquelch)[trx];
+    if (usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::QueuedIntentFencing)) {
+        const RadioControlSession session = m_model->controlSession();
+        const quint64 receiverSession = s->receiveSessionGeneration();
+        if (pending.source != s || pending.session != session || pending.receiverSession != receiverSession) { pending = {}; }
+        pending.source = s;
+        pending.session = session;
+        pending.receiverSession = receiverSession;
+    }
     pending.level = level;
     queueSquelch(s, trx, pending.on.value_or(s->receiveSquelchOn()), level);
 
-    m_pendingNotification = QStringLiteral("sql_level:%1,%2;")
-                                .arg(trx).arg(sqlLevelDb(m_model, s, level));
+    setReceiveNotification(s, QStringLiteral("sql_level:%1,%2;")
+                                .arg(trx).arg(sqlLevelDb(m_model, s, level)));
     return {};
 }
 
 void TciProtocol::queueSquelch(SliceModel* s, int trx, bool on, int level)
 {
-    QMetaObject::invokeMethod(s, [s, on, level, trx, pending = m_pendingSquelch]() {
-        pending->erase(trx);
-        s->setSquelch(on, level);
+    if (!usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::QueuedIntentFencing)) {
+        QMetaObject::invokeMethod(s, [s, on, level, trx, pending = m_pendingSquelch]() {
+            pending->erase(trx);
+            s->setSquelch(on, level);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    const QPointer<RadioModel> owner(m_model);
+    const QPointer<SliceModel> target(s);
+    const RadioControlSession session = m_model ? m_model->controlSession() : RadioControlSession{};
+    const quint64 receiverSession = s->receiveSessionGeneration();
+    const bool confirmed = s->receiveControlsConfirmed();
+    QMetaObject::invokeMethod(s, [owner, target, session, receiverSession, confirmed, on, level, trx, pending = m_pendingSquelch]() {
+        const auto entry = pending->find(trx);
+        if (entry != pending->end() && entry->second.source == target.data() && entry->second.session == session
+            && entry->second.receiverSession == receiverSession) {
+            pending->erase(entry);
+        }
+        if (receiveTargetCurrent(owner, target, session, receiverSession, confirmed)) { target->setSquelch(on, level); }
     }, Qt::QueuedConnection);
 }
 
@@ -1395,12 +1555,11 @@ QString TciProtocol::cmdMute(const QStringList& args, bool isSet)
     if (!argToBool(args, 1, mute)) return {};
     auto* s = sliceForTrx(trx);
     if (s) {
-        QMetaObject::invokeMethod(s, [s, mute]() { s->setAudioMute(mute); },
-                                  Qt::QueuedConnection);
+        queueReceiveChange(s, [s, mute]() { s->setAudioMute(mute); });
     }
 
-    m_pendingNotification = QStringLiteral("mute:%1,%2;")
-                                .arg(trx).arg(mute ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("mute:%1,%2;")
+                                .arg(trx).arg(mute ? "true" : "false"));
     return {};
 }
 
@@ -1422,11 +1581,10 @@ QString TciProtocol::cmdAgcMode(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     QString mode = args[1].toLower();
     // Map TCI AGC names to FlexRadio: off, slow, med, fast
-    QMetaObject::invokeMethod(s, [s, mode]() { s->setAgcMode(mode); },
-                              Qt::QueuedConnection);
+    queueReceiveChange(s, [s, mode]() { s->setAgcMode(mode); });
 
-    m_pendingNotification = QStringLiteral("agc_mode:%1,%2;")
-                                .arg(trx).arg(mode);
+    setReceiveNotification(s, QStringLiteral("agc_mode:%1,%2;")
+                                .arg(trx).arg(mode));
     return {};
 }
 
@@ -1438,9 +1596,19 @@ QString TciProtocol::cmdAgcGain(const QStringList& args, bool isSet)
     auto* s = sliceForTrx(trx);
     if (!s) return {};
 
+    if (usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) {
+        if (!isSet) {
+            return QStringLiteral("agc_gain:%1,%2;").arg(trx).arg(s->receiveAgcThreshold());
+        }
+        int gain = 0;
+        if (args.size() < 2 || !argToInt(args, 1, gain)) { return {}; }
+        queueReceiveChange(s, [s, gain]() { s->setAgcThreshold(gain); });
+        return {};
+    }
+
     if (!isSet) {
         return QStringLiteral("agc_gain:%1,%2;")
-                   .arg(trx).arg(agcGainDb(s));
+                   .arg(trx).arg(usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications) ? s->receiveAgcThreshold() : agcGainDb(s));
     }
 
     if (args.size() < 2) return {};
@@ -1486,11 +1654,10 @@ QString TciProtocol::cmdRxNbEnable(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
-    QMetaObject::invokeMethod(s, [s, on]() { s->setNb(on); },
-                              Qt::QueuedConnection);
+    queueReceiveChange(s, [s, on]() { s->setNb(on); });
 
-    m_pendingNotification = QStringLiteral("rx_nb_enable:%1,%2;")
-                                .arg(trx).arg(on ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("rx_nb_enable:%1,%2;")
+                                .arg(trx).arg(on ? "true" : "false"));
     return {};
 }
 
@@ -1513,14 +1680,13 @@ QString TciProtocol::cmdRxNrEnable(const QStringList& args, bool isSet)
     // A radio with no radio-side NR (HL2, ANAN) cannot turn it on. TCI has no
     // error reply, so the refusal is the truth broadcast back: NR is off.
     if (on && m_model && !m_model->radioSideNoiseReductionAvailable()) {
-        m_pendingNotification = QStringLiteral("rx_nr_enable:%1,false;").arg(trx);
+        setReceiveNotification(s, QStringLiteral("rx_nr_enable:%1,false;").arg(trx));
         return {};
     }
-    QMetaObject::invokeMethod(s, [s, on]() { s->setNr(on); },
-                              Qt::QueuedConnection);
+    queueReceiveChange(s, [s, on]() { s->setNr(on); });
 
-    m_pendingNotification = QStringLiteral("rx_nr_enable:%1,%2;")
-                                .arg(trx).arg(on ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("rx_nr_enable:%1,%2;")
+                                .arg(trx).arg(on ? "true" : "false"));
     return {};
 }
 
@@ -1542,14 +1708,13 @@ QString TciProtocol::cmdRxAnfEnable(const QStringList& args, bool isSet)
     if (!argToBool(args, 1, on)) return {};
     // Same refusal as rx_nr_enable, where the radio has no auto notch.
     if (on && m_model && !m_model->radioSideAutoNotchAvailable()) {
-        m_pendingNotification = QStringLiteral("rx_anf_enable:%1,false;").arg(trx);
+        setReceiveNotification(s, QStringLiteral("rx_anf_enable:%1,false;").arg(trx));
         return {};
     }
-    QMetaObject::invokeMethod(s, [s, on]() { s->setAnf(on); },
-                              Qt::QueuedConnection);
+    queueReceiveChange(s, [s, on]() { s->setAnf(on); });
 
-    m_pendingNotification = QStringLiteral("rx_anf_enable:%1,%2;")
-                                .arg(trx).arg(on ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("rx_anf_enable:%1,%2;")
+                                .arg(trx).arg(on ? "true" : "false"));
     return {};
 }
 
@@ -1561,6 +1726,7 @@ QString TciProtocol::cmdRxApfEnable(const QStringList& args, bool isSet)
     auto* s = sliceForTrx(trx);
     if (!s) return {};
 
+    if (!apfStateAvailable(s)) { return {}; }
     if (!isSet) {
         return QStringLiteral("rx_apf_enable:%1,%2;")
                    .arg(trx).arg(s->apfOn() ? "true" : "false");
@@ -1569,11 +1735,10 @@ QString TciProtocol::cmdRxApfEnable(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
-    QMetaObject::invokeMethod(s, [s, on]() { s->setApf(on); },
-                              Qt::QueuedConnection);
+    queueReceiveChange(s, [s, on]() { s->setApf(on); });
 
-    m_pendingNotification = QStringLiteral("rx_apf_enable:%1,%2;")
-                                .arg(trx).arg(on ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("rx_apf_enable:%1,%2;")
+                                .arg(trx).arg(on ? "true" : "false"));
     return {};
 }
 
@@ -1595,11 +1760,10 @@ QString TciProtocol::cmdRxRecord(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
-    QMetaObject::invokeMethod(s, [s, on]() { s->setRecordOn(on); },
-                              Qt::QueuedConnection);
+    queueReceiveChange(s, [s, on]() { s->setRecordOn(on); });
 
-    m_pendingNotification = QStringLiteral("rx_record:%1,%2;")
-                                .arg(trx).arg(on ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("rx_record:%1,%2;")
+                                .arg(trx).arg(on ? "true" : "false"));
     return {};
 }
 
@@ -1619,11 +1783,10 @@ QString TciProtocol::cmdRxPlay(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool on = false;
     if (!argToBool(args, 1, on)) return {};
-    QMetaObject::invokeMethod(s, [s, on]() { s->setPlayOn(on); },
-                              Qt::QueuedConnection);
+    queueReceiveChange(s, [s, on]() { s->setPlayOn(on); });
 
-    m_pendingNotification = QStringLiteral("rx_play:%1,%2;")
-                                .arg(trx).arg(on ? "true" : "false");
+    setReceiveNotification(s, QStringLiteral("rx_play:%1,%2;")
+                                .arg(trx).arg(on ? "true" : "false"));
     return {};
 }
 
@@ -1895,13 +2058,23 @@ QString TciProtocol::cmdRxChannelEnable(const QStringList& args, bool isSet)
 // Before this, the channel was read as the gain, so every spec SET muted the
 // slice. Older builds took `rx_volume:trx,N;` with N as percent; a second
 // argument that cannot be a channel (>= 2) is still read that way.
-QString TciProtocol::cmdRxVolume(const QStringList& args, bool /*isSet*/)
+QString TciProtocol::cmdRxVolume(const QStringList& args, bool isSet)
 {
     if (args.isEmpty()) return {};
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
     auto* s = sliceForTrx(trx);
     if (!s) return {};
+
+    if (usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) {
+        if (!isSet) {
+            return QStringLiteral("rx_volume:%1,%2;").arg(trx).arg(static_cast<int>(s->audioGain()));
+        }
+        int gain = 0;
+        if (args.size() < 2 || !argToInt(args, 1, gain)) { return {}; }
+        queueReceiveChange(s, [s, gain]() { s->setAudioGain(gain); });
+        return {};
+    }
 
     int channel = 0;
     int pct = -1;   // -1 = GET
@@ -1953,10 +2126,9 @@ QString TciProtocol::cmdRxMute(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     bool mute = false;
     if (!argToBool(args, 1, mute)) return {};
-    QMetaObject::invokeMethod(s, [s, mute]() { s->setAudioMute(mute); },
-                              Qt::QueuedConnection);
-    m_pendingNotification = QStringLiteral("rx_mute:%1,%2;")
-                                .arg(trx).arg(mute ? "true" : "false");
+    queueReceiveChange(s, [s, mute]() { s->setAudioMute(mute); });
+    setReceiveNotification(s, QStringLiteral("rx_mute:%1,%2;")
+                                .arg(trx).arg(mute ? "true" : "false"));
     return {};
 }
 
@@ -1980,10 +2152,9 @@ QString TciProtocol::cmdRxBalance(const QStringList& args, bool isSet)
     int tciBalance = 0;  // -40 to +40
     if (!argToInt(args, 1, tciBalance)) return {};
     int flexPan = qBound(0, tciBalance + 50, 100);
-    QMetaObject::invokeMethod(s, [s, flexPan]() { s->setAudioPan(flexPan); },
-                              Qt::QueuedConnection);
-    m_pendingNotification = QStringLiteral("rx_balance:%1,%2;")
-                                .arg(trx).arg(tciBalance);
+    queueReceiveChange(s, [s, flexPan]() { s->setAudioPan(flexPan); });
+    setReceiveNotification(s, QStringLiteral("rx_balance:%1,%2;")
+                                .arg(trx).arg(tciBalance));
     return {};
 }
 
@@ -2061,10 +2232,9 @@ QString TciProtocol::cmdRxNbParam(const QStringList& args, bool isSet)
     if (args.size() < 3) return {};
     int level = 0;
     if (!argToInt(args, 2, level)) return {};
-    QMetaObject::invokeMethod(s, [s, level]() { s->setNbLevel(level); },
-                              Qt::QueuedConnection);
-    m_pendingNotification = QStringLiteral("rx_nb_param:%1,0,%2;")
-                                .arg(trx).arg(level);
+    queueReceiveChange(s, [s, level]() { s->setNbLevel(level); });
+    setReceiveNotification(s, QStringLiteral("rx_nb_param:%1,0,%2;")
+                                .arg(trx).arg(level));
     return {};
 }
 
@@ -2075,6 +2245,8 @@ QString TciProtocol::cmdRxBinEnable(const QStringList& args, bool isSet)
     if (args.isEmpty()) return {};
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
+    const SliceModel* slice = sliceForTrx(trx);
+    if (slice && usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) { return {}; }
     if (!isSet)
         return QStringLiteral("rx_bin_enable:%1,%2;")
                    .arg(trx).arg(binEnabled ? "true" : "false");
@@ -2090,6 +2262,8 @@ QString TciProtocol::cmdRxAncEnable(const QStringList& args, bool isSet)
     if (args.isEmpty()) return {};
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
+    const SliceModel* slice = sliceForTrx(trx);
+    if (slice && usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) { return {}; }
     if (!isSet)
         return QStringLiteral("rx_anc_enable:%1,%2;")
                    .arg(trx).arg(ancEnabled ? "true" : "false");
@@ -2105,6 +2279,8 @@ QString TciProtocol::cmdRxDseEnable(const QStringList& args, bool isSet)
     if (args.isEmpty()) return {};
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
+    const SliceModel* slice = sliceForTrx(trx);
+    if (slice && usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) { return {}; }
     if (!isSet)
         return QStringLiteral("rx_dse_enable:%1,%2;")
                    .arg(trx).arg(dseEnabled ? "true" : "false");
@@ -2122,6 +2298,8 @@ QString TciProtocol::cmdRxNfEnable(const QStringList& args, bool isSet)
     if (args.isEmpty()) return {};
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
+    const SliceModel* slice = sliceForTrx(trx);
+    if (slice && usesReceiveClientFeature(m_model, ReceiveClientControl::Feature::ConfirmedNotifications)) { return {}; }
     if (!isSet)
         return QStringLiteral("rx_nf_enable:%1,%2;")
                    .arg(trx).arg(nfEnabled ? "true" : "false");
@@ -2149,9 +2327,8 @@ QString TciProtocol::cmdDiglOffset(const QStringList& args, bool /*isSet*/)
 
     int hz = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, hz)) return {};
-    QMetaObject::invokeMethod(s, [s, hz]() { s->setDiglOffset(hz); },
-                              Qt::QueuedConnection);
-    m_pendingNotification = QStringLiteral("digl_offset:%1;").arg(hz);
+    queueReceiveChange(s, [s, hz]() { s->setDiglOffset(hz); });
+    setReceiveNotification(s, QStringLiteral("digl_offset:%1;").arg(hz));
     return {};
 }
 
@@ -2167,9 +2344,8 @@ QString TciProtocol::cmdDiguOffset(const QStringList& args, bool /*isSet*/)
 
     int hz = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, hz)) return {};
-    QMetaObject::invokeMethod(s, [s, hz]() { s->setDiguOffset(hz); },
-                              Qt::QueuedConnection);
-    m_pendingNotification = QStringLiteral("digu_offset:%1;").arg(hz);
+    queueReceiveChange(s, [s, hz]() { s->setDiguOffset(hz); });
+    setReceiveNotification(s, QStringLiteral("digu_offset:%1;").arg(hz));
     return {};
 }
 

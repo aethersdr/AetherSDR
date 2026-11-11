@@ -1,0 +1,134 @@
+{
+  "status": "ALL_EIGHT_CW_SPANS_PASS_ORIGINAL10K_RESTORED",
+  "startMonotonic": 343376.960837708,
+  "elapsedSeconds": 1.5393230830086395,
+  "cases": [
+    {
+      "action": "panZoomInBtn",
+      "beforeHz": 10000.0,
+      "expectedHz": 5000,
+      "observedHz": 5000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.05637391598429531,
+      "passed": true
+    },
+    {
+      "action": "panZoomOutBtn",
+      "beforeHz": 5000.0,
+      "expectedHz": 10000,
+      "observedHz": 10000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.05181520798942074,
+      "passed": true
+    },
+    {
+      "action": "panZoomOutBtn",
+      "beforeHz": 10000.0,
+      "expectedHz": 20000,
+      "observedHz": 20000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.05680954200215638,
+      "passed": true
+    },
+    {
+      "action": "panZoomOutBtn",
+      "beforeHz": 20000.0,
+      "expectedHz": 30000,
+      "observedHz": 30000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.05496704101096839,
+      "passed": true
+    },
+    {
+      "action": "panZoomOutBtn",
+      "beforeHz": 30000.0,
+      "expectedHz": 50000,
+      "observedHz": 50000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.055816249980125576,
+      "passed": true
+    },
+    {
+      "action": "panZoomOutBtn",
+      "beforeHz": 50000.0,
+      "expectedHz": 100000,
+      "observedHz": 100000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.05553187499754131,
+      "passed": true
+    },
+    {
+      "action": "panZoomOutBtn",
+      "beforeHz": 100000.0,
+      "expectedHz": 200000,
+      "observedHz": 200000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.055511832993943244,
+      "passed": true
+    },
+    {
+      "action": "panZoomOutBtn",
+      "beforeHz": 200000.0,
+      "expectedHz": 500000,
+      "observedHz": 500000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.05219791701529175,
+      "passed": true
+    },
+    {
+      "action": "panZoomInBtn",
+      "beforeHz": 500000.0,
+      "expectedHz": 200000,
+      "observedHz": 200000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.0555208750301972,
+      "passed": true
+    },
+    {
+      "action": "panZoomInBtn",
+      "beforeHz": 200000.0,
+      "expectedHz": 100000,
+      "observedHz": 100000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.06905816600192338,
+      "passed": true
+    },
+    {
+      "action": "panZoomInBtn",
+      "beforeHz": 100000.0,
+      "expectedHz": 50000,
+      "observedHz": 50000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.05537529103457928,
+      "passed": true
+    },
+    {
+      "action": "panZoomInBtn",
+      "beforeHz": 50000.0,
+      "expectedHz": 30000,
+      "observedHz": 30000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.056118124979548156,
+      "passed": true
+    },
+    {
+      "action": "panZoomInBtn",
+      "beforeHz": 30000.0,
+      "expectedHz": 20000,
+      "observedHz": 20000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.054471249983180314,
+      "passed": true
+    },
+    {
+      "action": "panZoomInBtn",
+      "beforeHz": 20000.0,
+      "expectedHz": 10000,
+      "observedHz": 10000.0,
+      "centerMhz": 1.827,
+      "seconds": 0.05302554200170562,
+      "passed": true
+    }
+  ],
+  "qualification": "Real zoom buttons and radio-authoritative model geometry in CW firmware1.01; no other firmware/bank claim."
+}

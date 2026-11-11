@@ -1591,7 +1591,12 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
     connect(relativeTimer, &QTimer::timeout, vfo, [this, vfo, id = s->sliceId()] {
         const auto& meters = m_radioModel.meterModel();
         const MeterDef* def = meters.meterDef(meters.findMeter("SLC", "LEVEL", id));
-        if ((def && def->unit == "dBFS") || vfo->relativeSignalLevel()) {
+        const std::optional<DisplayDeflectionReading> deflection = meters.displayDeflectionForSlice(id);
+        if (deflection) {
+            vfo->setDisplayDeflection(*deflection);
+        } else if (vfo->displayDeflection() && (!def || def->unit != "dBFS")) {
+            vfo->setDisplayDeflection(DisplayDeflectionReading{});
+        } else if ((def && def->unit == "dBFS") || vfo->relativeSignalLevel()) {
             vfo->setRelativeSignalLevel(meters.relativeLevelForSlice(id), def ? def->unavailableReason : QString());
         }
     });
@@ -5334,6 +5339,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             queueActiveSliceForSpectrumTarget(target->sliceId());
             applyTuneRequest(target, mhz, TuneIntent::IncrementalTune, "spectrum-incremental");
         }
+    });
+    connect(sw, &SpectrumWidget::incrementalTuneDeltaRequested,
+            this, [this, resolveSpectrumTuneTarget](double deltaMhz, int snapStepHz) {
+        if (auto* target = resolveSpectrumTuneTarget()) {
+            queueActiveSliceForSpectrumTarget(target->sliceId());
+            applyTuneRequest(target, target->incrementalTuneTarget(deltaMhz, snapStepHz),
+                             TuneIntent::IncrementalTune, "spectrum-incremental");
+        }
         // Empty pan + wheel scroll → no-op. A stray scroll gesture shouldn't
         // conjure a slice; click is the explicit "create here" affordance.
     });
@@ -6524,7 +6537,12 @@ void MainWindow::wireMeters()
         auto* meter = m_appletPanel->sMeterWidget();
         const auto& meters = m_radioModel.meterModel();
         const MeterDef* def = meters.meterDef(meters.findMeter("SLC", "LEVEL", m_activeSliceId));
-        if ((def && def->unit == "dBFS") || meter->relativeLevel()) {
+        const std::optional<DisplayDeflectionReading> deflection = meters.displayDeflectionForSlice(m_activeSliceId);
+        if (deflection) {
+            meter->setDisplayDeflection(*deflection, m_activeSliceId);
+        } else if (meter->displayDeflection() && (!def || def->unit != "dBFS")) {
+            meter->setDisplayDeflection(DisplayDeflectionReading{}, m_activeSliceId);
+        } else if ((def && def->unit == "dBFS") || meter->relativeLevel()) {
             meter->setRelativeLevel(meters.relativeLevelForSlice(m_activeSliceId), m_activeSliceId,
                 def ? def->unavailableReason : QString());
         }

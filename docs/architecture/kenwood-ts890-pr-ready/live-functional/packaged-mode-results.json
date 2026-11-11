@@ -1,0 +1,119 @@
+{
+  "status": "MODE_SELECTION_PASS_RESTORED",
+  "cases": [
+    {
+      "requestedMode": "LSB",
+      "beforeMode": "CW",
+      "afterMode": "LSB",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.3695520830224268,
+      "passed": true
+    },
+    {
+      "requestedMode": "USB",
+      "beforeMode": "LSB",
+      "afterMode": "USB",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.18955170799745247,
+      "passed": true
+    },
+    {
+      "requestedMode": "FM",
+      "beforeMode": "USB",
+      "afterMode": "FM",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.22845808399142697,
+      "passed": true
+    },
+    {
+      "requestedMode": "AM",
+      "beforeMode": "FM",
+      "afterMode": "AM",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.11392066697590053,
+      "passed": true
+    },
+    {
+      "requestedMode": "RTTY",
+      "beforeMode": "AM",
+      "afterMode": "RTTY",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.24157449998892844,
+      "passed": true
+    },
+    {
+      "requestedMode": "CWR",
+      "beforeMode": "RTTY",
+      "afterMode": "CWR",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.24749187502311543,
+      "passed": true
+    },
+    {
+      "requestedMode": "RTTYR",
+      "beforeMode": "CWR",
+      "afterMode": "RTTYR",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.18995899998117238,
+      "passed": true
+    },
+    {
+      "requestedMode": "PSK",
+      "beforeMode": "RTTYR",
+      "afterMode": "PSK",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.11397754203062505,
+      "passed": true
+    },
+    {
+      "requestedMode": "PSKR",
+      "beforeMode": "PSK",
+      "afterMode": "PSKR",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.11340116604696959,
+      "passed": true
+    },
+    {
+      "requestedMode": "DIGL",
+      "beforeMode": "PSKR",
+      "afterMode": "DIGL",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.12313220900250599,
+      "passed": true
+    },
+    {
+      "requestedMode": "DIGU",
+      "beforeMode": "DIGL",
+      "afterMode": "DIGU",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.15069195796968415,
+      "passed": true
+    },
+    {
+      "requestedMode": "DFM",
+      "beforeMode": "DIGU",
+      "afterMode": "DFM",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.12196716596372426,
+      "passed": true
+    },
+    {
+      "requestedMode": "DAM",
+      "beforeMode": "DFM",
+      "afterMode": "DAM",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.11268575000576675,
+      "passed": true
+    },
+    {
+      "requestedMode": "CW",
+      "beforeMode": "DAM",
+      "afterMode": "CW",
+      "frequencyMhz": 1.827,
+      "elapsedSeconds": 0.2527785829734057,
+      "passed": true
+    }
+  ],
+  "qualification": "Real RX applet route and radio-authoritative mode adoption only; no calibrated modulation-source or decoder quality claim.",
+  "restorationDifferences": {}
+}

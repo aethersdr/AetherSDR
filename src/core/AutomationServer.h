@@ -906,6 +906,7 @@ private:
     // The last deferred connect/disconnect failure (verbs reply before the work runs),
     // handed back by `connect wait` (#4912). The reply carries its AGE so a stale
     // failure is distinguishable without a client clock.
+    quint64 m_connectionIntentRevision{0};
     QString m_lastConnectError;
     qint64 m_lastConnectErrorMs{-1};
     // answerPendingWaits: whether this failure should complete outstanding

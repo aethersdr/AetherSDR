@@ -1,4 +1,5 @@
 #include "SmartCatProtocol.h"
+#include "ReceiveModeVocabulary.h"
 #include "LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -6,6 +7,8 @@
 #include "models/CwxModel.h"
 
 #include <algorithm>
+#include <QMap>
+#include <QStringList>
 
 namespace AetherSDR {
 
@@ -363,16 +366,52 @@ QString SmartCatProtocol::cmdFB(const QString& arg)
     return {};
 }
 
+QString SmartCatProtocol::encodeReceiveMode(const SliceModel* slice, bool zz) const
+{
+    if (!slice) { return {}; }
+    if (!usesDeclaredReceiveModes(m_model, slice)) {
+        return zz ? modeToZZ(slice->mode()) : modeToKenwood(slice->mode());
+    }
+    if (!declaredReceiveModes(m_model, slice, false).contains(slice->mode())) { return {}; }
+    const QString mode = slice->mode();
+    if (zz) {
+        if (mode == "CWR") { return QStringLiteral("03"); }
+        static const QStringList supported{"LSB", "USB", "CW", "FM", "AM", "DIGU", "DIGL", "SAM", "NFM", "DFM", "RTTY"};
+        return supported.contains(mode) ? modeToZZ(mode) : QString();
+    }
+    // This endpoint retains the SmartSDR CAT dialect (6=DIGL, 9=DIGU),
+    // not a vendor radio's wider raw MD register.
+    static const QStringList supported{"LSB", "USB", "CW", "FM", "AM", "DIGL", "DIGU"};
+    return supported.contains(mode) ? modeToKenwood(mode) : QString();
+}
+
+QString SmartCatProtocol::decodeReceiveMode(const SliceModel* slice, const QString& code, bool zz) const
+{
+    if (!usesDeclaredReceiveModes(m_model, slice)) {
+        return zz ? zzToSSDR(code) : kenwoodToSSDR(code[0]);
+    }
+    static const QMap<QString, QString> plain{{"1", "LSB"}, {"2", "USB"}, {"3", "CW"},
+        {"4", "FM"}, {"5", "AM"}, {"6", "DIGL"}, {"9", "DIGU"}};
+    static const QMap<QString, QString> extended{{"00", "LSB"}, {"01", "USB"}, {"03", "CWR"},
+        {"04", "CW"}, {"05", "FM"}, {"06", "AM"}, {"07", "DIGU"}, {"09", "DIGL"},
+        {"10", "SAM"}, {"11", "NFM"}, {"12", "DFM"}, {"30", "RTTY"}};
+    const QString mode = (zz ? extended : plain).value(code);
+    return !mode.isEmpty() && declaredReceiveModes(m_model, slice, true).contains(mode) ? mode : QString();
+}
+
 // ── MD — mode get/set (Kenwood 1-digit) ──────────────────────────────────────
 
 QString SmartCatProtocol::cmdMD(const QString& arg)
 {
     SliceModel* a = sliceA();
     if (!a) return "?;";
-    if (arg.isEmpty())
-        return "MD" + modeToKenwood(a->mode()) + ";";
+    if (arg.isEmpty()) {
+        const QString mode = encodeReceiveMode(a, false);
+        return mode.isEmpty() ? QStringLiteral("?;") : "MD" + mode + ";";
+    }
     if (arg.size() != 1) return "?;";
-    QString mode = kenwoodToSSDR(arg[0]);
+    QString mode = decodeReceiveMode(a, arg, false);
+    if (mode.isEmpty()) { return "?;"; }
     // A FreeDV slice reports its sideband's digital code; the same code coming
     // back must not switch the slice out of FreeDV.
     if (a->mode().startsWith("FDV") && modeToKenwood(a->mode()) == arg)
@@ -387,10 +426,13 @@ QString SmartCatProtocol::cmdZZMD(const QString& arg)
 {
     SliceModel* a = sliceA();
     if (!a) return "?;";
-    if (arg.isEmpty())
-        return "ZZMD" + modeToZZ(a->mode()) + ";";
+    if (arg.isEmpty()) {
+        const QString mode = encodeReceiveMode(a, true);
+        return mode.isEmpty() ? QStringLiteral("?;") : "ZZMD" + mode + ";";
+    }
     if (arg.size() != 2) return "?;";
-    QString mode = zzToSSDR(arg);
+    QString mode = decodeReceiveMode(a, arg, true);
+    if (mode.isEmpty()) { return "?;"; }
     if (mode == "FDV")
         mode = freeDvModeFor(a->mode(), a->modeList());
     a->setMode(mode);
@@ -403,10 +445,13 @@ QString SmartCatProtocol::cmdZZME(const QString& arg)
 {
     SliceModel* b = sliceB();
     if (!b) return "?;";
-    if (arg.isEmpty())
-        return "ZZME" + modeToZZ(b->mode()) + ";";
+    if (arg.isEmpty()) {
+        const QString mode = encodeReceiveMode(b, true);
+        return mode.isEmpty() ? QStringLiteral("?;") : "ZZME" + mode + ";";
+    }
     if (arg.size() != 2) return "?;";
-    QString mode = zzToSSDR(arg);
+    QString mode = decodeReceiveMode(b, arg, true);
+    if (mode.isEmpty()) { return "?;"; }
     if (mode == "FDV")
         mode = freeDvModeFor(b->mode(), b->modeList());
     b->setMode(mode);
@@ -434,7 +479,9 @@ QString SmartCatProtocol::cmdIF()
     body += '0';
     body += QStringLiteral("00");
     body += m_model->isRadioTransmitting() ? '1' : '0';
-    body += modeToKenwood(a->mode());
+    const QString mode = encodeReceiveMode(a, false);
+    if (mode.isEmpty()) { return "?;"; }
+    body += mode;
     body += '0';
     body += '0';
     body += m_splitEnabled ? '1' : '0';
@@ -1452,7 +1499,9 @@ QString SmartCatProtocol::cmdOI()
     body += '0';
     body += QStringLiteral("00");
     body += m_model->isRadioTransmitting() ? '1' : '0';
-    body += modeToKenwood(s->mode());
+    const QString mode = encodeReceiveMode(s, false);
+    if (mode.isEmpty()) { return "?;"; }
+    body += mode;
     body += '0';
     body += '0';
     body += m_splitEnabled ? '1' : '0';

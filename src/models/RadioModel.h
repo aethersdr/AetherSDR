@@ -1095,6 +1095,7 @@ public:
                               IRadioBackend::PanCenterIntent::Range);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
     bool confirmsReceiveControls() const;
+    bool supportsReceiveInteraction(ReceiveInteractionControl::Feature feature) const;
     bool requestConfirmedReceiveTune(int sliceId, double mhz, IRadioBackend::ReceiveTuneView view);
     bool requestReceiveCaptureRecenter(const QString& panId);
     bool requestPanAverage(const QString& panId, int average);
@@ -2294,6 +2295,8 @@ private:
     bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request);
     TransmitModel::KeyingRoute producerKeyingRoute(const TxCoordinator::Request& request,
                                                   TxActivity activity, bool& dispatched);
+    TxCoordinator::Operation bindBackendTxIntentRetirement(const TxCoordinator::Operation& operation,
+        const TxCoordinator::Intent& intent);
     bool dispatchTuneIntent(bool on, const TxCoordinator::Request* request = nullptr);
     bool dispatchAtuIntent(bool start, const TxCoordinator::Request* request = nullptr);
     bool setTransmitImpl(bool tx, TransmitModel::PttSource source,

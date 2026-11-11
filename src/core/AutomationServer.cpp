@@ -6696,12 +6696,24 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
             QPointer<QObject> guard(conn->asQObject());
             QPointer<AutomationServer> self(this);
-            QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, selectedSerial] {
-                if (!guard) {
+            const bool ordered = conn->automationUsesDeferredNetworkLogin();
+            const quint64 revision = ++m_connectionIntentRevision;
+            const quint64 intentEpoch = conn->automationConnectionIntentEpoch();
+            const quint64 nativeEpoch = conn->automationNativeConnectionEpoch();
+            QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, selectedSerial, revision, intentEpoch, nativeEpoch, ordered] {
+                if (!guard || conn->automationNativeConnectionEpoch() != nativeEpoch
+                    || (self && self->connection() != conn && self->connection()
+                        && self->connection()->automationUsesDeferredNetworkLogin()) || (ordered && (!self || self->connection() != conn
+                    || self->m_connectionIntentRevision != revision
+                    || conn->automationConnectionIntentEpoch() != intentEpoch))) {
                     return;
                 }
                 QString error;
-                if (!conn->automationConnectLocalSerial(selectedSerial, &error) && self) {
+                if (!conn->automationConnectLocalSerial(selectedSerial, &error) && self
+                    && guard && conn->automationNativeConnectionEpoch() == nativeEpoch
+                    && (self->connection() == conn || !self->connection()
+                        || !self->connection()->automationUsesDeferredNetworkLogin())
+                    && (!ordered || (self->m_connectionIntentRevision == revision && self->connection() == conn))) {
                     self->noteConnectFailure(QStringLiteral("connect local first"), error);
                 }
             });
@@ -6726,12 +6738,24 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
                 QPointer<QObject> guard(conn->asQObject());
                 QPointer<AutomationServer> self(this);
-                QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, serial] {
-                    if (!guard) {
+                const bool ordered = conn->automationUsesDeferredNetworkLogin();
+                const quint64 revision = ++m_connectionIntentRevision;
+                const quint64 intentEpoch = conn->automationConnectionIntentEpoch();
+                const quint64 nativeEpoch = conn->automationNativeConnectionEpoch();
+                QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, serial, revision, intentEpoch, nativeEpoch, ordered] {
+                    if (!guard || conn->automationNativeConnectionEpoch() != nativeEpoch
+                    || (self && self->connection() != conn && self->connection()
+                        && self->connection()->automationUsesDeferredNetworkLogin()) || (ordered && (!self || self->connection() != conn
+                        || self->m_connectionIntentRevision != revision
+                        || conn->automationConnectionIntentEpoch() != intentEpoch))) {
                         return;
                     }
                     QString error;
-                    if (!conn->automationConnectLocalSerial(serial, &error) && self) {
+                    if (!conn->automationConnectLocalSerial(serial, &error) && self
+                        && guard && conn->automationNativeConnectionEpoch() == nativeEpoch
+                    && (self->connection() == conn || !self->connection()
+                        || !self->connection()->automationUsesDeferredNetworkLogin())
+                    && (!ordered || (self->m_connectionIntentRevision == revision && self->connection() == conn))) {
                         self->noteConnectFailure(QStringLiteral("connect local serial"),
                                                  error);
                     }
@@ -6813,12 +6837,29 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
         QPointer<QObject> guard(conn->asQObject());
         QPointer<AutomationServer> self(this);
-        QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, target, family] {
-            if (!guard) {
+        const quint64 revision = ++m_connectionIntentRevision;
+        conn->automationReserveIpConnect(family);
+        if (!self || !guard || self->connection() != conn
+            || self->m_connectionIntentRevision != revision) {
+            return err(QStringLiteral("connection request superseded during native login preparation"));
+        }
+        const bool ordered = conn->automationUsesDeferredNetworkLogin(family);
+        const quint64 intentEpoch = conn->automationConnectionIntentEpoch();
+        const quint64 nativeEpoch = conn->automationNativeConnectionEpoch();
+        QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, target, family, revision, intentEpoch, nativeEpoch, ordered] {
+            if (!guard || conn->automationNativeConnectionEpoch() != nativeEpoch
+                    || (self && self->connection() != conn && self->connection()
+                        && self->connection()->automationUsesDeferredNetworkLogin()) || (ordered && (!self || self->connection() != conn
+                || self->m_connectionIntentRevision != revision
+                || conn->automationConnectionIntentEpoch() != intentEpoch))) {
                 return;
             }
             QString error;
-            if (!conn->automationConnectByIp(target, family, &error) && self) {
+            if (!conn->automationConnectByIp(target, family, &error) && self
+                && guard && conn->automationNativeConnectionEpoch() == nativeEpoch
+                    && (self->connection() == conn || !self->connection()
+                        || !self->connection()->automationUsesDeferredNetworkLogin())
+                    && (!ordered || (self->m_connectionIntentRevision == revision && self->connection() == conn))) {
                 self->noteConnectFailure(QStringLiteral("connect ip ") + target, error);
             }
         });
@@ -6892,18 +6933,32 @@ QJsonObject AutomationServer::doDisconnect()
     if (!conn) {
         return err(QStringLiteral("connection panel unavailable"));
     }
-    if (!m_radioModel || !m_radioModel->isConnected()) {
+    const bool ordered = conn->automationUsesDeferredNetworkLogin();
+    if ((!m_radioModel || !m_radioModel->isConnected()) && !ordered) {
         return err(QStringLiteral("not connected to a radio"));
     }
-
     QPointer<QObject> guard(conn->asQObject());
     QPointer<AutomationServer> self(this);
-    QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn] {
-        if (!guard) {
+    const QPointer<RadioModel> model(m_radioModel);
+    const bool hadModel = !model.isNull();
+    const quint64 revision = ++m_connectionIntentRevision;
+    const quint64 intentEpoch = conn->automationConnectionIntentEpoch();
+    const quint64 nativeEpoch = conn->automationNativeConnectionEpoch();
+    QTimer::singleShot(0, QCoreApplication::instance(), [guard, self, conn, model, hadModel, intentEpoch, revision, nativeEpoch, ordered] {
+        if (!guard || conn->automationNativeConnectionEpoch() != nativeEpoch
+                    || (self && self->connection() != conn && self->connection()
+                        && self->connection()->automationUsesDeferredNetworkLogin()) || (ordered && (!self || self->connection() != conn
+            || (hadModel && !model) || self->m_radioModel.data() != model.data()
+            || conn->automationConnectionIntentEpoch() != intentEpoch
+            || self->m_connectionIntentRevision != revision))) {
             return;
         }
         QString error;
-        if (!conn->automationDisconnect(&error) && self) {
+        if (!conn->automationDisconnect(&error) && self
+            && guard && conn->automationNativeConnectionEpoch() == nativeEpoch
+                    && (self->connection() == conn || !self->connection()
+                        || !self->connection()->automationUsesDeferredNetworkLogin())
+                    && (!ordered || (self->m_connectionIntentRevision == revision && self->connection() == conn))) {
             self->noteConnectFailure(QStringLiteral("disconnect"), error,
                                      /*answerPendingWaits=*/false);
         }

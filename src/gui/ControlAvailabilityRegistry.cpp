@@ -136,6 +136,15 @@ ControlAvailabilityRegistry::~ControlAvailabilityRegistry()
 {
     for (Entry& entry : m_entries) {
         restoreRestriction(entry);
+        if (entry.releasePresentationOnDestruction && entry.widget) {
+            QWidget* widget = entry.widget;
+            const auto release = [](const QString&) { return QString(); };
+            applyText(widget, kToolTipHold, widget->toolTip(), release,
+                [widget](const QString& text) { widget->setToolTip(text); });
+            applyText(widget, kDescriptionHold, widget->accessibleDescription(), release,
+                [widget](const QString& text) { widget->setAccessibleDescription(text); });
+            ThemeManager::instance().setWidgetForegroundToken(widget, {});
+        }
     }
 }
 
@@ -172,7 +181,8 @@ void ControlAvailabilityRegistry::registerWidget(QWidget* widget,
                                                  QString reason,
                                                  AvailabilityPredicate available,
                                                  EngagedPredicate engaged,
-                                                 bool availableWhenDisconnected)
+                                                 bool availableWhenDisconnected,
+                                                 bool releasePresentationOnDestruction)
 {
     if (!widget || !available) {
         return;
@@ -180,6 +190,7 @@ void ControlAvailabilityRegistry::registerWidget(QWidget* widget,
     Entry entry;
     entry.widget = widget;
     entry.availableWhenDisconnected = availableWhenDisconnected;
+    entry.releasePresentationOnDestruction = releasePresentationOnDestruction;
     entry.reason = std::move(reason);
     entry.available = std::move(available);
     entry.engaged = std::move(engaged);

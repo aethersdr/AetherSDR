@@ -37,6 +37,7 @@ class QShowEvent;
 
 namespace AetherSDR {
 
+struct DisplayDeflectionReading;
 class SliceModel;
 class TransmitModel;
 class RadioModel;
@@ -73,6 +74,8 @@ public:
     void setSignalLevel(float dbm);
     void setRelativeSignalLevel(std::optional<float> dbfs, const QString& unavailableReason = {});
     bool relativeSignalLevel() const { return m_relativeSignal; }
+    void setDisplayDeflection(const DisplayDeflectionReading& reading);
+    bool displayDeflection() const { return m_displayDeflection; }
     void setReceiveMeterReading(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
     // SmartMTR feeds: live mic level + separately-measured mic peak (both dBFS)
@@ -452,6 +455,9 @@ private:
     QStringList    m_antList;
     bool           m_updatingFromModel{false};
     bool           m_lastOnLeft{true};
+    bool m_displayDeflection = false;
+    double m_deflectionLow{0};
+    double m_deflectionHigh{70};
     bool m_relativeSignal = false;
     bool m_relativeSignalValid = false;
     QString m_relativeUnavailableReason;
@@ -684,6 +690,7 @@ private:
     QLabel* m_agcValueLbl{nullptr};
     QPushButton* m_autoAgcTButton{nullptr};
     void updateDspParameterResetControls();
+    bool sharedApfLevelSupported() const;
     std::optional<DspParameterResetTarget> dspParameterResetTarget(int index) const;
     QPointer<SliceModel> m_dspResetSlice;
     QPointer<SliceModel> m_dspResetIntentSlice;

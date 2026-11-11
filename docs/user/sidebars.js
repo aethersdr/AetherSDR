@@ -37,6 +37,7 @@ const sidebars = {
         "wspr-receiver",
         "hermes-lite-2",
         "networked-icom",
+        "kenwood-ts890",
         "anan-g2",
         "rtl-sdr",
         "kiwisdr-and-web-888",

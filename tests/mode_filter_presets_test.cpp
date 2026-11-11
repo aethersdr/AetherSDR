@@ -26,6 +26,7 @@ private slots:
     void fmLaddersRequireDeclaredControl();
     void fmPresetsRespectDeclaredEdges();
     void broadcastFmPresetsRespectDeclaredEdges();
+    void listedFilterModesExcludeUnmappedControls();
 };
 
 void ModeFilterPresetsTest::ssbPinsItsLowCutAndDerivesTheHigh()
@@ -210,6 +211,28 @@ void ModeFilterPresetsTest::broadcastFmPresetsRespectDeclaredEdges()
         QVERIFY(!acceptsFmEdges(mode, &control, {-90000, 90000}));
     }
     QVERIFY(widthsForMode(QStringLiteral("FM"), &control).isEmpty());
+}
+
+void ModeFilterPresetsTest::listedFilterModesExcludeUnmappedControls()
+{
+    AetherSDR::ReceiveFilterControl control{
+        AetherSDR::SliceFrequencyControl::Authority::Radio,
+        {{QStringLiteral("USB"), 0, 2000, 600, 5000, 100, 5000}},
+        AetherSDR::ReceiveFilterControl::ModePolicy::ListedOnly};
+    QVERIFY(fmFilterAdjustable(QStringLiteral("USB"), &control, false));
+    QVERIFY(acceptsFilterEdges(QStringLiteral("USB"), &control, false, {300, 2700}));
+    QVERIFY(!acceptsFilterEdges(QStringLiteral("USB"), &control, false, {300, 6000}));
+    for (const char* spelling : {"AM", "RTTY", "FM", "DFM"}) {
+        const QString mode = QString::fromLatin1(spelling);
+        QVERIFY(!fmFilterAdjustable(mode, &control, false));
+        QVERIFY(!fmFilterAdjustable(mode, &control, true));
+        QVERIFY(!acceptsFilterEdges(mode, &control, true, {-3000, 3000}));
+        QVERIFY(widthsForMode(mode, &control).isEmpty());
+    }
+    control.modePolicy = AetherSDR::ReceiveFilterControl::ModePolicy::LegacyFallback;
+    QVERIFY(fmFilterAdjustable(QStringLiteral("AM"), &control, false));
+    QVERIFY(acceptsFilterEdges(QStringLiteral("AM"), &control, false, {-3000, 3000}));
+    QVERIFY(!widthsForMode(QStringLiteral("AM"), &control).isEmpty());
 }
 
 QTEST_MAIN(ModeFilterPresetsTest)

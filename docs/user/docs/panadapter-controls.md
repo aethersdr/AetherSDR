@@ -108,6 +108,10 @@ Drag the divider between the spectrum and the waterfall to resize them. The spli
 
 ### dBm scale
 
+The experimental [TS-890S](./kenwood-ts890.md) backend identifies its native
+amplitude as **relative dB scale**, including 3D tooltips and noise-floor labels.
+These levels show signal differences, not calibrated antenna power.
+
 - **Drag** the scale up or down to shift the reference level.
 - **Ctrl+drag** (Cmd+drag on macOS) to zoom the dB span; the bottom stays anchored.
 - Click the **▲ / ▼** arrows at the top to step the reference level by 10 dB.
@@ -244,6 +248,8 @@ or double-clicking empty panel space does not tune the spectrum behind it.
 ### Display panel
 
 Click **Display** in the overlay menu. The panel is divided into sections and scrolls when the window is short. Settings apply to the panadapter you opened it from.
+
+For radios with a **Scope:** row, it selects how the radio’s scope window follows the VFO. Available modes, dragging behavior and stored-range updates vary by radio; see the radio-specific guide.
 
 <img src="/img/screens/display-panel.png" width="381" alt="The Display panel open beside the overlay menu, with the Display button lit. It has sections Panadapter (Heat Map and Grid on, Wt Avg off, FFT averaging, FPS, line and fill colors and floor), Waterfall (NB blanker, black level, gain and rate), Background (Choose, Clear, Off, opacity and color), Appearance (grid, scale text and scheme), 3D View (Spectrum set to 2D Waterfall, 3D floor, gain and span), and System (GPU set to Auto (system default)), with Clone to all Pans and Reset to Defaults buttons at the bottom." />
 

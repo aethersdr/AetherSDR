@@ -50,6 +50,8 @@ TxCoordinator::Dispatch& TxCoordinator::Dispatch::operator=(Dispatch&& other) no
 bool TxCoordinator::Operation::permitsDispatch(qint64 now) const
 {
     if (!m_state || m_state->cancelled.load(std::memory_order_acquire)
+        || (m_localRetirement && (m_localRetirement->retired.load(std::memory_order_acquire)
+            || m_localRetirement->intent->ended.load(std::memory_order_acquire)))
         || (m_producer && !m_producer->valid.load(std::memory_order_acquire))
         || (m_intent && (m_intent->ended.load(std::memory_order_acquire)
             || (m_intent->producer && m_intent->producerEpoch != m_intent->producer->inputEpoch.load(std::memory_order_acquire))
@@ -63,6 +65,8 @@ bool TxCoordinator::Operation::permitsDispatch(qint64 now) const
     if (!actor.permitsDispatch(now)) {
         return false;
     }
+    if (m_localRetirement && (m_localRetirement->retired.load(std::memory_order_acquire)
+        || m_localRetirement->intent->ended.load(std::memory_order_acquire))) { return false; }
     // Subtract only after validating nonnegative, ordered clock values. Avoid
     // deadline addition, which overflows for a large trusted-clock test input.
     return m_state->maximumMs == 0
@@ -77,7 +81,38 @@ bool TxCoordinator::Operation::sameOperation(const Operation& other) const
 bool TxCoordinator::Operation::sameAuthority(const Operation& other) const
 {
     return sameOperation(other) && m_producer == other.m_producer && m_intent == other.m_intent
-        && m_keyingPermit == other.m_keyingPermit;
+        && m_keyingPermit == other.m_keyingPermit && m_localRetirement == other.m_localRetirement;
+}
+
+bool TxCoordinator::Operation::sameLocalIntent(const Operation& other) const
+{
+    return sameOperation(other) && m_localRetirement && other.m_localRetirement
+        && m_localRetirement->intent == other.m_localRetirement->intent;
+}
+
+bool TxCoordinator::Operation::hasLocalIntentRetirement() const { return bool(m_localRetirement); }
+
+void TxCoordinator::Operation::retireLocalIntent(LocalIntentEnd phase) const
+{
+    const std::shared_ptr<LocalRetirementState> retirement = m_localRetirement;
+    if (retirement && !retirement->retired.exchange(true, std::memory_order_acq_rel)) {
+        retirement->callback(phase);
+    }
+}
+
+TxCoordinator::Operation TxCoordinator::bindLocalIntentRetirement(const Operation& operation, const Intent& intent,
+    std::function<void(LocalIntentEnd)> retired)
+{
+    Actor actor;
+    if (operation.m_state) { actor.m_state = operation.m_state->actor; }
+    if (!onThread() || !validActor(actor) || operation.m_localRetirement
+        || !operation.permitsCleanup() || !intent.m_state || !retired
+        || !intent.m_state->operation.sameOperation(operation)) { return {}; }
+    Operation bound = operation;
+    bound.m_localRetirement = std::make_shared<LocalRetirementState>();
+    bound.m_localRetirement->intent = intent.m_state;
+    bound.m_localRetirement->callback = std::move(retired);
+    return bound;
 }
 
 TxCoordinator::Operation TxCoordinator::Operation::withKeyingPermit(std::function<bool()> permit) const
@@ -152,6 +187,14 @@ bool TxCoordinator::Operation::permitsCleanup() const
     const std::shared_ptr<Identity> identity = m_state->actor->coordinator.lock();
     return identity && identity->alive.load(std::memory_order_acquire)
         && identity->generation.load(std::memory_order_acquire) == m_state->generation;
+}
+
+bool TxCoordinator::Operation::permitsCleanupOf(const Operation& operation) const
+{
+    if (!permitsCleanup() || !operation.permitsCleanup()) { return false; }
+    return sameOperation(operation) || (m_state->cleanupOnly
+        && m_state->generation == operation.m_state->generation
+        && m_state->actor->coordinator.lock() == operation.m_state->actor->coordinator.lock());
 }
 
 TxCoordinator::Dispatch TxCoordinator::Operation::beginDispatch(qint64 now, bool keying) const
@@ -969,6 +1012,7 @@ TxCoordinator::Operation TxCoordinator::cleanupFence() const
     fence.m_state->actor->coordinator = m_identity;
     fence.m_state->actor->revoked.store(true, std::memory_order_release);
     fence.m_state->cancelled.store(true, std::memory_order_release);
+    fence.m_state->cleanupOnly = true;
     fence.m_state->generation = m_identity->generation.load(std::memory_order_acquire);
     return fence;
 }

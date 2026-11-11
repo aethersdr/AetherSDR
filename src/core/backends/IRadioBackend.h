@@ -378,6 +378,8 @@ public:
     virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
+    virtual ReceiveDispatch requestPcAudioRouting(bool) { return ReceiveDispatch::Unsupported; }
+    virtual void observePcAudioRouting(bool) {}
 
     // A session with the radio is up, WHATEVER TRANSPORT CARRIED IT.
     //
@@ -873,6 +875,8 @@ public:
         Q_UNUSED(text);
         return QStringLiteral("radio has no text keyer");
     }
+    // A backend-owned CW lifetime retains the supplied exact-intent receipt
+    // beyond command handoff and retires it on abort/loss, never on guessed drain.
     // Buffered text control is optional. Keying retains an admitted operation;
     // operator configuration uses session/edit fences without an operation;
     // original-intent cleanup retains its operation and never acquires one here.
@@ -916,6 +920,8 @@ public:
     // steady carrier. `start` true begins a cycle, false bypasses; the result comes
     // back on transmitChanged's ATU fields. KEYS THE TRANSMITTER on a radio with a
     // real ATU, so it sits behind the same TX gate as every other keying intent.
+    // A backend-owned ATU lifetime retires the supplied receipt on qualified
+    // cycle completion or explicit stop; retirement is not RF-idle/result evidence.
     virtual void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) { Q_UNUSED(start); Q_UNUSED(operation); Q_UNUSED(completion); }
 
     // RECEIVE DSP THE RADIO'S OWN FIRMWARE RUNS, the set gated by

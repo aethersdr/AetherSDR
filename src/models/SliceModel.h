@@ -1,11 +1,14 @@
 #pragma once
 #include "core/backends/ModelControlRequest.h"
+#include "core/backends/RadioCapabilities.h"
 
 #include <QObject>
 #include <QString>
 #include <QStringList>
 #include <QMap>
 #include <QTimer>
+#include <QElapsedTimer>
+#include <QList>
 #include <QPointer>
 #include <array>
 #include <functional>
@@ -72,6 +75,10 @@ public:
     double reportedFrequency() const { return m_reportedFrequency; } // MHz
     bool frequencyReportedKnown() const { return m_frequencyReportedKnown; }
     void invalidateFrequencyObservation();
+    // Pending operator intent is separate from radio-observed live state.
+    double incrementalTuneTarget(double deltaMhz, int snapStepHz = 0);
+    quint64 recordTuneIntent(double mhz);
+    void retireTuneIntent(quint64 token = 0);
     QString mode()       const { return m_mode; }
     // Radio-reported processing chain; empty means unknown, never inferred from mode.
     QString chainMode() const { return m_chainMode; }
@@ -94,6 +101,8 @@ public:
     bool    isActive()   const { return m_active; }
     bool    inCapture()  const { return m_inCapture; }
     bool receiveControlsConfirmed() const { return confirmsControls(); }
+    bool supportsReceiveInteraction(ReceiveInteractionControl::Feature feature) const
+    { return m_receiveInteractionControl && m_receiveInteractionControl->supports(feature); }
     bool    isTxSlice()  const { return m_txSlice; }
     float   rfGain()     const { return m_rfGain; }
     float   audioGain()  const { return m_externalReceiveAudioReplacement
@@ -150,7 +159,11 @@ public:
     void requestAgcThresholdMode(AgcThresholdMode mode);
     bool automaticAgcThresholdActiveOrPending() const;
     bool agcCalibrationAllowed() const;
+    // Confirmed inputs retire queued work when physical source or mode changes,
+    // even when the logical slice id and frequency remain unchanged.
     quint64 receiveSessionGeneration() const { return m_receiveSessionGeneration; }
+    // Bank/style boundaries retire only queued filter work, not tuning or audio.
+    quint64 receiveFilterContextGeneration() const { return m_receiveFilterContextGeneration; }
     void setAgcThresholdFromCalibration(int value);
     void recallAgcThreshold(int value);
     int     agcThreshold() const { return m_agcThreshold; }
@@ -624,19 +637,43 @@ private:
     bool refuseOffThread(const char* setter) const;
     void setNrsLevelMaximum(int maximum);
     int m_nrsLevelMaximum = 100;
-    void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
+    void setControlPolicy(ReceiveControlPolicy policy)
+    {
+        if (m_controlPolicy != policy) {
+            m_controlPolicy = policy;
+            if (supportsReceiveInteraction(ReceiveInteractionControl::Feature::AntennaReadback)) {
+                m_rxAntennaKnown = false;
+                ++m_rxAntennaIntentRevision;
+            }
+            if (supportsReceiveInteraction(ReceiveInteractionControl::Feature::ContextRetirement)) {
+                ++m_receiveFilterContextGeneration;
+                ++m_filterIntentRevision;
+            }
+        }
+    }
+    void setReceiveInteractionControl(const std::optional<ReceiveInteractionControl>& control)
+    {
+        if (m_receiveInteractionControl == control) { return; }
+        retireTuneIntent();
+        m_receiveInteractionControl = control;
+    }
+    std::optional<ReceiveInteractionControl> m_receiveInteractionControl;
     bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
     ReceiveControlPolicy m_controlPolicy = ReceiveControlPolicy::Optimistic;
     // Local notifications can synchronously trigger a newer edit or reconnect.
     // Do not dispatch the superseded intent when that notification returns.
     // AGC fields are independent: a threshold edit must not cancel a mode edit.
     quint64 m_tuneIntentRevision{0};
+    QList<double> m_pendingTuneTargets;
+    QElapsedTimer m_pendingTuneClock;
+    quint64 m_pendingTuneEpoch{0};
     quint64 m_modeIntentRevision{0};
     quint64 m_filterIntentRevision{0};
     std::optional<AgcThresholdMode> m_agcThresholdMode;
     bool m_automaticAgcThresholdPending{false};
     bool m_autoAgcThresholdSupported{false};
     quint64 m_receiveSessionGeneration{0};
+    quint64 m_receiveFilterContextGeneration{0};
     std::function<bool()> m_agcCalibrationAuthority;
     void setAutomaticAgcThresholdPending(bool pending);
     quint64 m_agcModeIntentRevision{0};
@@ -714,6 +751,7 @@ private:
 
     // Slice control state
     QString m_rxAntenna{"ANT1"};
+    bool m_rxAntennaKnown = false;
     QString m_txAntenna{"ANT1"};
     QStringList m_rxAntennaList;
     QStringList m_txAntennaList;

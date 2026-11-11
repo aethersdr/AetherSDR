@@ -27,6 +27,13 @@ enum class WfmStereoStatus { Unavailable, Acquiring, Mono, Stereo };
 // SmartSDR wire→canonical translation. Kept out of model headers so the backend
 // interface has no model dependency.
 struct SliceDelta {
+    // Event: the physical receive source changed while retaining this slice id.
+    // Pending tune intent belongs to the previous source and must be retired.
+    bool receiveTuneContextChanged{false};
+    // Event: bank or filter interpretation changed on the same receive source.
+    // Retire filter authority without discarding unrelated receive intent.
+    bool receiveFilterContextChanged{false};
+
     // Identity / tuning
     std::optional<QString>     panId;
     std::optional<QString>     letter;

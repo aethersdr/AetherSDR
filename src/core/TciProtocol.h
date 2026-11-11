@@ -1,6 +1,7 @@
 #pragma once
 #ifdef HAVE_WEBSOCKETS
 
+#include "backends/RadioControlTypes.h"
 #include <QString>
 #include <QStringList>
 #include <functional>
@@ -119,6 +120,13 @@ public:
     int activeTrx() const { return m_activeTrx; }
 
 private:
+    QString vfoLimitsResponse(const QString& legacyUnknown) const;
+    void setReceiveNotification(const SliceModel* slice, const QString& notification);
+    void queueReceiveChange(SliceModel* slice, std::function<void()> change);
+    void queueReceiveFilterChange(SliceModel* slice, std::function<void()> change);
+    QString receiveFilterBandResponse(int trx, const SliceModel* slice) const;
+    bool apfStateAvailable(const SliceModel* slice) const;
+
     // Resolves the focused slice into its trx and display letter, falling
     // back to a slice scan while m_activeTrx is -1. Returns false when there
     // is no model or no slice reports active.
@@ -196,6 +204,8 @@ private:
 public:
     // Mode conversion (public for TciServer broadcast use)
     static QString smartsdrToTci(const QString& mode);
+    static QString receiveModeToTci(const RadioModel* model, const SliceModel* slice);
+    static QString receiveModulationsList(RadioModel* model);
     // `ok` reports whether `mode` was a recognised TCI modulation name. The
     // return value falls back to "USB" when it isn't, so a caller that must
     // reject an unrecognised name rather than silently substitute USB has to
@@ -297,7 +307,13 @@ private:
     // queued hop, so a burst carrying both would read the slice's old value
     // for the other half and undo its partner. Each half is held here until
     // its queued setSquelch runs; shared because that hop can outlive us.
-    struct PendingSquelch { std::optional<bool> on; std::optional<int> level; };
+    struct PendingSquelch {
+        std::optional<bool> on;
+        std::optional<int> level;
+        RadioControlSession session{};
+        quint64 receiverSession{0};
+        const SliceModel* source{nullptr};
+    };
     std::shared_ptr<std::map<int, PendingSquelch>> m_pendingSquelch{
         std::make_shared<std::map<int, PendingSquelch>>()};
 };
