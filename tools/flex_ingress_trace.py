@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Normalize flex_ingress_characterization_test -vs output: model-visible signals per fed line.
-# Usage: AETHER_INGRESS_CORPUS=tests/data/flex_ingress_corpus.txt build/flex_ingress_characterization_test -vs > raw; tools/flex_ingress_trace.py raw
+# Usage: AETHER_INGRESS_CORPUS=tests/data/flex_ingress_corpus.txt build/flex_ingress_characterization_test -vs -maxwarnings 0 > raw; tools/flex_ingress_trace.py raw
 import re, sys
 # Normalize a QtTest -vs trace: keep model-visible signals per fed line.
 # RadioModel's statusReceived relay is gone; it stays filtered so a trace
@@ -17,7 +17,7 @@ for raw in open(sys.argv[1], errors='replace'):
         out.append('== ' + m.group(1)); continue
     for tag in ('WRITE ', 'STATE '):
         if started and tag in line and 'Signal:' not in line:
-            out.append('  ' + line[line.index(tag):])
+            out.append('  ' + re.sub(r'\d{4}-\d\d-\d\dZ\d\d:\d\d:\d\d', 'TIME', line[line.index(tag):]))
             break
     else:
         tag = None

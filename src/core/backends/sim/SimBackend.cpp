@@ -134,6 +134,9 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // the accepted line, regardless of connection order.
     m_statusIngress.bind(m_connection);
     m_statusIngress.setDecodeValues(false);   // the native producer owns the values
+    // Identity only: a TGXL named in replayed captured status.
+    connect(&m_statusIngress, &FlexStatusIngress::tunerChanged, this, &IRadioBackend::tunerChanged);
+    connect(&m_statusIngress, &FlexStatusIngress::amplifierChanged, this, &IRadioBackend::amplifierChanged);
     connect(&m_statusIngress, &FlexStatusIngress::lineAccepted, this,
             [this](const ParsedMessage& line) {
         if (line.type != MessageType::Status || m_pansAwaitingGeometry.isEmpty()

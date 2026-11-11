@@ -96,7 +96,13 @@ std::optional<quint32> daxTxIdentity(const QString& text)
 
 void FlexStatusIngress::decodeLine(const ParsedMessage& line)
 {
-    if (!m_decodeValues || line.type != MessageType::Status) { return; }
+    if (line.type != MessageType::Status) { return; }
+    if (!m_decodeValues) {
+        // Identity only (SimBackend): a TGXL's handle, which replayed captured
+        // status relies on; nothing else.
+        if (line.object.startsWith(QLatin1String("amplifier"))) { routeAmplifierStatus(line.object, line.kvs); }
+        return;
+    }
     // Raw route: objects whose values carry spaces or '#' separators, read
     // from the line after its S<handle>| prefix.
     const int pipe = line.raw.indexOf(QLatin1Char('|'));
@@ -128,7 +134,24 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
         emit streamStatusObserved(*stream);
         return;
     }
-    if (object.startsWith(QLatin1String("atu"))) { decodeAtuStatus(kvs); return; }
+    if (object.startsWith(QLatin1String("atu"))) {
+        decodeAtuStatus(kvs);   // the radio's own ATU → TransmitModel
+        if (!alive) { return; }
+        // An external TGXL also reports through atu (#4092/#4198): the handle
+        // it was last named, else the one this object names. Without either,
+        // RadioModel applies it only while a tuner is present (a direct TGXL
+        // connection counts).
+        static const QRegularExpression atuRe(QStringLiteral(R"(^atu\s+(\S+)$)"));
+        QString tunerHandle = m_tunerHandle;
+        if (const auto m = atuRe.match(object); m.hasMatch() && tunerHandle.isEmpty()) { tunerHandle = m.captured(1); }
+        if (!tunerHandle.isEmpty()) {
+            decodeTunerStatus(tunerHandle, kvs);
+        } else {
+            emit unaddressedTunerStatus(tunerStatus(QString(), kvs));
+        }
+        return;
+    }
+    if (object.startsWith(QLatin1String("amplifier"))) { routeAmplifierStatus(object, kvs); return; }
     // "apd sampler …" is its own object; any other leading bare words
     // ("apd equalizer_reset") are flags the parser folded into the object.
     if (object == QLatin1String("apd sampler")) { decodeApdSamplerStatus(kvs); return; }
@@ -813,5 +836,158 @@ void FlexStatusIngress::decodeTnfStatus(int notchId, bool removed, const QMap<QS
     if (kvs.contains(QStringLiteral("depth"))) { d.depthDb = kvs.value(QStringLiteral("depth")).toInt(); }
     if (kvs.contains(QStringLiteral("permanent"))) { d.permanent = kvs.value(QStringLiteral("permanent")) == QLatin1String("1"); }
     emit notchChanged(notchId, d);
+}
+// Amplifier status: TGXL and PGXL both report via "amplifier"; FlexLib tells
+// them apart by model=TunerGeniusXL / PowerGeniusXL. Removal arrives bare
+// ("amplifier <handle> removed") or as removed=1 (FlexLib Radio.cs:14060/14073
+// matches the substring "removed").
+void FlexStatusIngress::routeAmplifierStatus(const QString& object, const QMap<QString, QString>& kvs)
+{
+    static const QRegularExpression ampRe(QStringLiteral(R"(^amplifier\s+(\S+)$)"));
+    static const QRegularExpression ampRemovedRe(QStringLiteral(R"(^amplifier\s+(\S+)\s+removed$)"));
+    if (const auto rm = ampRemovedRe.match(object); rm.hasMatch()) {
+        decodeAmplifierStatus(rm.captured(1), QString(), {}, /*removed=*/true);
+        return;
+    }
+    const auto m = ampRe.match(object);
+    if (!m.hasMatch()) { return; }
+    const QString handle = m.captured(1);
+    const QString model = kvs.value(QStringLiteral("model"));
+    if (kvs.contains(QStringLiteral("removed"))) {
+        decodeAmplifierStatus(handle, QString(), {}, /*removed=*/true);
+        return;
+    }
+    // The TGXL by its model, or by the handle it was last named (a later
+    // status may omit model=); every other amp is a power amplifier.
+    if (model == QLatin1String("TunerGeniusXL") || (!m_tunerHandle.isEmpty() && handle == m_tunerHandle)) {
+        if (m_decodeValues) {
+            decodeTunerStatus(handle, kvs);
+        } else if (!handle.isEmpty() && handle != QLatin1String("0x00000000")) {
+            m_tunerHandle = handle;
+            TunerDelta identity;
+            identity.handle = handle;
+            emit tunerChanged(identity);
+        }
+    } else if (m_decodeValues) {
+        decodeAmplifierStatus(handle, model, kvs, /*removed=*/false);
+    }
+}
+void FlexStatusIngress::decodeAmplifierStatus(const QString& handle, const QString& model,
+                                        const QMap<QString, QString>& kvs, bool removed)
+{
+    // Translation of the SmartSDR "amplifier <handle> …" wire → AmpDelta
+    // (#4094). Placeholder handles are normalized here so the vendor-neutral
+    // model never needs SmartSDR sentinel knowledge. The presence latch, operate
+    // change-gating, and handle matching are the model's job
+    // (AmpModel::applyChanges). Command/encode is the reverse path — invokeExtension("flex",
+    // "amp.operate", …) below translates AmpModel's neutral intent (#4094).
+    AmpDelta d;
+    d.handle = handle;
+    if (removed) {
+        // Drop the cached handle for the encode path (#4198) when the device it
+        // names goes away. TGXL removal also arrives on the amplifier-removed
+        // wire (routed here by RadioModel), so clear whichever handle matches.
+        if (handle == m_ampHandle) m_ampHandle.clear();
+        if (handle == m_tunerHandle) m_tunerHandle.clear();
+        d.removed = true;
+        emit amplifierChanged(d);
+        return;
+    }
+    if (handle == QLatin1String("0x00000000")) {
+        d.handle.clear();
+    }
+    // RadioModel routes only power amps (PGXL) into this decode, so the handle is
+    // the amp's — cache it for the encode path (#4198). Ignore the placeholder
+    // handle a first status can carry before the real one is assigned. Defense in
+    // depth (#4203): a pre-existing routing edge — a model-less TGXL status arriving
+    // before its handle is known — can fall through to here; refuse to cache a
+    // known-tuner handle so a later amp.operate can never mis-target the TGXL.
+    if (!d.handle.isEmpty() && d.handle != m_tunerHandle) {
+        m_ampHandle = d.handle;
+    }
+    // A non-empty, non-TGXL model marks a power amp (PGXL); the TunerGeniusXL is
+    // the tuner and routes to TunerModel, not here.
+    if (!model.isEmpty() && model != QLatin1String("TunerGeniusXL")) {
+        d.detectedModel = model;
+        if (kvs.contains(QStringLiteral("ip")))
+            d.ip = kvs.value(QStringLiteral("ip"));
+    }
+    // Operate/standby from the wire "state": IDLE/OPERATE/TRANSMIT* → on, else off.
+    // Gate on non-empty VALUE (not just key presence) to match the prior
+    // AmpModel::applyStatus exactly — a bare "state=" must not flip operate.
+    const QString state = kvs.value(QStringLiteral("state")).toUpper();
+    if (!state.isEmpty()) {
+        d.operate = (state == QLatin1String("IDLE")
+                     || state == QLatin1String("OPERATE")
+                     || state.startsWith(QLatin1String("TRANSMIT")));
+    }
+    d.telemetry = kvs;
+    emit amplifierChanged(d);
+}
+void FlexStatusIngress::decodeTunerStatus(const QString& handle, const QMap<QString, QString>& kvs)
+{
+    // Cache the TGXL handle for the encode path (#4198). A first status can
+    // carry 0x00000000 before the real handle is assigned; keep that SmartSDR
+    // placeholder out of both the neutral delta and outgoing tuner commands.
+    if (!handle.isEmpty() && handle != QLatin1String("0x00000000"))
+        m_tunerHandle = handle;
+    emit tunerChanged(tunerStatus(handle, kvs));
+}
+
+TunerDelta FlexStatusIngress::tunerStatus(const QString& handle, const QMap<QString, QString>& kvs)
+{
+    // Present-only, strict parity with the prior TunerModel::applyStatus: bools
+    // are "1"-equality, ints are unguarded toInt() (matching val.toInt()), text
+    // is verbatim. The change-gating / edge signals live in TunerModel::applyChanges.
+    TunerDelta d;
+    if (!handle.isEmpty() && handle != QLatin1String("0x00000000")) {
+        d.handle = handle;
+    }
+    if (kvs.contains(QStringLiteral("serial_num")))
+        d.serialNum = kvs.value(QStringLiteral("serial_num"));
+    if (kvs.contains(QStringLiteral("model")))
+        d.model = kvs.value(QStringLiteral("model"));
+    if (kvs.contains(QStringLiteral("ip")))
+        d.ip = kvs.value(QStringLiteral("ip"));
+    // Per-port antenna, "ANT1,ANT2". Split exactly as FlexLib's
+    // Tuner.ParseAntenna does: first field is port A, second is port B, a
+    // missing second field leaves B empty, and anything past the second is
+    // ignored rather than treated as an error.
+    if (kvs.contains(QStringLiteral("ant"))) {
+        // split() always yields at least one element, so at(0) is safe.
+        const QStringList ants = kvs.value(QStringLiteral("ant")).split(QLatin1Char(','));
+        d.portAAnt = ants.at(0).trimmed();
+        d.portBAnt = ants.size() > 1 ? ants.at(1).trimmed() : QString();
+    }
+
+    // PTT-per-port. Casing unconfirmed — FlexLib lower-cases every key before
+    // matching, so its "ptta"/"pttb" cases do not pin the wire's spelling.
+    // Both are accepted; a string compare is cheaper than a lamp that stays
+    // dark with no way to tell why.
+    if (kvs.contains(QStringLiteral("pttA")))
+        d.pttA = (kvs.value(QStringLiteral("pttA")) == QLatin1String("1"));
+    else if (kvs.contains(QStringLiteral("ptta")))
+        d.pttA = (kvs.value(QStringLiteral("ptta")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("pttB")))
+        d.pttB = (kvs.value(QStringLiteral("pttB")) == QLatin1String("1"));
+    else if (kvs.contains(QStringLiteral("pttb")))
+        d.pttB = (kvs.value(QStringLiteral("pttb")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("operate")))
+        d.operate = (kvs.value(QStringLiteral("operate")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("bypass")))
+        d.bypass = (kvs.value(QStringLiteral("bypass")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("tuning")))
+        d.tuning = (kvs.value(QStringLiteral("tuning")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("relayC1")))
+        d.relayC1 = kvs.value(QStringLiteral("relayC1")).toInt();
+    if (kvs.contains(QStringLiteral("relayC2")))
+        d.relayC2 = kvs.value(QStringLiteral("relayC2")).toInt();
+    if (kvs.contains(QStringLiteral("relayL")))
+        d.relayL = kvs.value(QStringLiteral("relayL")).toInt();
+    if (kvs.contains(QStringLiteral("antA")))
+        d.antennaA = kvs.value(QStringLiteral("antA")).toInt();
+    if (kvs.contains(QStringLiteral("one_by_three")))
+        d.oneByThree = (kvs.value(QStringLiteral("one_by_three")) == QLatin1String("1"));
+    return d;
 }
 } // namespace AetherSDR

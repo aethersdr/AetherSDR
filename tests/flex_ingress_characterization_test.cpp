@@ -1,7 +1,8 @@
 // Characterization harness for the FlexStatusIngress move (scaffolding, not a
 // regression test): feeds a corpus of wire lines through the production
 // RadioConnection::processLine on its own thread into a RadioModel with a real
-// FlexBackend. Run with QtTest's -vs to trace every signal emitted; the
+// FlexBackend. Run with QtTest's -vs -maxwarnings 0 (the default limit of
+// 2000 messages silently drops the rest) to trace every signal emitted; the
 // normalized trace (tools/flex_ingress_trace.py, corpus in
 // tests/data/flex_ingress_corpus.txt) is diffed before and after each stage.
 // No socket is opened: lines enter below the socket.

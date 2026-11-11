@@ -270,20 +270,6 @@ public:
     // residual). Present-only, ok-guarded numeric parses.
     void decodeRadioStatus(const QMap<QString, QString>& kvs);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
-    // Translate a SmartSDR "amplifier <handle> …" status into a typed AmpDelta
-    // and emit amplifierChanged (aetherd 2.4 — AmpModel decode split, #4094).
-    // `model` is the wire "model" key (TunerGeniusXL routes to the tuner, not
-    // here); `removed` marks an "amplifier <handle> removed". Stateless — the
-    // presence latch / operate change-gating live in AmpModel::applyChanges.
-    void decodeAmplifierStatus(const QString& handle, const QString& model,
-                               const QMap<QString, QString>& kvs, bool removed);
-    // Translate a SmartSDR TGXL tuner status (the "atu <handle> …" and
-    // "amplifier <handle> model=TunerGeniusXL …" kv-sets) into a typed
-    // TunerDelta and emit tunerChanged (aetherd 2.4 — TunerModel decode split,
-    // #4092). Present-only, strict-parity with the prior TunerModel::applyStatus.
-    // `handle` is the (sanitized) TGXL object handle RadioModel extracted; it is
-    // cached here to source the tuner encode path (#4198).
-    void decodeTunerStatus(const QString& handle, const QMap<QString, QString>& kvs);
     // Drop the cached amp/tuner encode handles (#4198). Called on radio
     // disconnect/reset, where RadioModel clears the model-side presence outside
     // the decode path — without this the stale handle could survive a reconnect
@@ -305,6 +291,9 @@ signals:
     void graphicEqStatusObserved(const AetherSDR::GraphicEqStatus& status);
     // The radio's waveform status (Flex-only; FlexWaveformModel applies it).
     void waveformStatusObserved(const AetherSDR::WaveformStatusDelta& status);
+    // An ATU status for a tuner whose handle the radio has not named yet
+    // (Flex-only); RadioModel applies it only while a tuner is present.
+    void unaddressedTunerStatus(const AetherSDR::TunerDelta& delta);
 
 private:
     void send(const QString& cmd);
@@ -352,8 +341,6 @@ private:
     // so RadioModel no longer threads the Flex handle through the encode arg.
     // Touched only on the main thread — both the decode (RadioModel::handleStatus)
     // and the encode intent lambdas run there — so a plain QString needs no sync.
-    QString m_ampHandle;
-    QString m_tunerHandle;
 
     // Radio-declared capacity (#5594 item 3), 0 until the radio says. Cleared by
     // clearExtensionHandles() on disconnect so a different radio cannot inherit

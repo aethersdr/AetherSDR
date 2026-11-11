@@ -111,6 +111,18 @@ public:
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
     // "tnf N …" → a notch (absolute Hz) or its removal: the seam's notch signals.
     void decodeTnfStatus(int notchId, bool removed, const QMap<QString, QString>& kvs);
+    // "amplifier <handle> …" → a power amplifier (AmpDelta) or the TGXL tuner
+    // (TunerDelta); FlexLib tells them apart by model=TunerGeniusXL. `removed`
+    // marks an "amplifier <handle> removed". The handles each names are kept
+    // for FlexBackend's encode path (#4198).
+    void decodeAmplifierStatus(const QString& handle, const QString& model,
+                               const QMap<QString, QString>& kvs, bool removed);
+    void decodeTunerStatus(const QString& handle, const QMap<QString, QString>& kvs);
+    // The tuner fields of a TGXL status, without naming its handle as the tuner.
+    static TunerDelta tunerStatus(const QString& handle, const QMap<QString, QString>& kvs);
+    const QString& ampHandle() const { return m_ampHandle; }
+    const QString& tunerHandle() const { return m_tunerHandle; }
+    void clearExtensionHandles() { m_ampHandle.clear(); m_tunerHandle.clear(); }
 
     bool tuneOutputBandKnown(int bandId) const { return m_tuneOutputKnownBands.contains(bandId); }
     void clearTuneOutputBands() { m_tuneOutputKnownBands.clear(); }
@@ -153,6 +165,9 @@ signals:
     void cwxStatusObserved(const AetherSDR::CwxStatusDelta& delta);
     void graphicEqStatusObserved(const AetherSDR::GraphicEqStatus& status);
     void waveformStatusObserved(const AetherSDR::WaveformStatusDelta& status);
+    void amplifierChanged(const AetherSDR::AmpDelta& delta);
+    void tunerChanged(const AetherSDR::TunerDelta& delta);
+    void unaddressedTunerStatus(const AetherSDR::TunerDelta& delta);
     void tuneOutputSuppressionObserved(int bandId, bool suppressed);
 
 private:
@@ -166,6 +181,9 @@ private:
     QMap<quint32, DaxTxStreamState> m_daxTxStreams;
     quint64 m_daxTxIncarnation{0};
     QSet<int> m_tuneOutputKnownBands;
+    QString m_ampHandle;
+    QString m_tunerHandle;
+    void routeAmplifierStatus(const QString& object, const QMap<QString, QString>& kvs);
 };
 
 } // namespace AetherSDR

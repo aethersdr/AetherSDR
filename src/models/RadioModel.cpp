@@ -1455,6 +1455,10 @@ void RadioModel::setupBackend(const QString& family)
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
     connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,
             [this](const AmpDelta& delta) {
+        // A TGXL's removal also arrives on the amplifier wire.
+        if (delta.removed && !delta.handle.isEmpty() && delta.handle == m_tunerModel.handle()) {
+            m_tunerModel.setHandle({});
+        }
         m_amplifier.applyChanges(delta);
         // AMP meters reach the amplifier by matching its handle.
         m_meterModel.setAmpHandle(m_amplifier.handle().toUInt(nullptr, 0));
@@ -1462,7 +1466,13 @@ void RadioModel::setupBackend(const QString& family)
 
     // aetherd 2.4 (#4092): TGXL tuner status decoded in the backend drives TunerModel.
     connect(m_backend.get(), &IRadioBackend::tunerChanged, this,
-            [this](const TunerDelta& delta) { m_tunerModel.applyChanges(delta); });
+            [this](const TunerDelta& delta) {
+        // A newly named TGXL: its meters reach it by handle.
+        if (delta.handle && *delta.handle != m_tunerModel.handle()) {
+            m_meterModel.setTgxlHandle(delta.handle->toUInt(nullptr, 0));
+        }
+        m_tunerModel.applyChanges(delta);
+    });
 
     // aetherd RFC 2.3 (RadioModel residual): memory-slot / profile status
     // decoded in the backend drive RadioModel's own state via the apply* methods.
@@ -1712,6 +1722,11 @@ void RadioModel::wireStatusIngress(quint64 generation)
         connect(flex, &FlexBackend::fileUpdateReported, this,
                 [this, generation](const FirmwareUpdateStatus& status) {
             if (generation == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
+        });
+        connect(flex, &FlexBackend::unaddressedTunerStatus, this, [this, generation](const TunerDelta& delta) {
+            if (generation == m_backendReceiverGeneration && m_tunerModel.isPresent()) {
+                m_tunerModel.applyChanges(delta);
+            }
         });
         connect(flex, &FlexBackend::waveformStatusObserved, this,
                 [this, generation](const WaveformStatusDelta& waveform) {
@@ -12088,85 +12103,17 @@ void RadioModel::onStatusReceived(const QString& object,
     // ATU status: "atu <handle> status=TUNE_SUCCESSFUL atu_enabled=1 ..."
     // Routes to TransmitModel for the TX applet ATU controls.
     // Also forwards to TunerModel if an external TGXL is connected.
-    static const QRegularExpression atuRe(R"(^atu\s+(\S+)$)");
-    if (object.startsWith("atu")) {
-        const auto m = atuRe.match(object);
-        // The radio's own ATU (TransmitModel) is decoded by the status ingress.
-        QString tunerHandle = m_tunerModel.handle();
-        if (m.hasMatch() && tunerHandle.isEmpty()) {
-            tunerHandle = m.captured(1);
-        }
-        if ((!tunerHandle.isEmpty() || m_tunerModel.isPresent()) && m_flexBackend) {
-            m_flexBackend->decodeTunerStatus(tunerHandle, kvs);  // external TGXL → TunerModel (#4092/#4198)
-        }
-        return;
-    }
+    // ATU status ("atu …") is decoded by the status ingress: the radio's own
+    // ATU, and an external TGXL reporting through it.
+    if (object.startsWith("atu")) { return; }
 
     // APD status ("apd …", "apd sampler …") is decoded by the status ingress.
     if (object == "apd" || object.startsWith("apd ")) { return; }
 
-    // Amplifier status: TGXL and PGXL both report via "amplifier"; FlexLib tells them
-    // apart by model=TunerGeniusXL / PowerGeniusXL. Removal arrives bare ("amplifier
-    // <handle> removed", lands in `object`) or as removed=1 in kvs (FlexLib
-    // Radio.cs:14060/14073 matches the substring "removed").
-    static const QRegularExpression ampRe(R"(^amplifier\s+(\S+)$)");
-    static const QRegularExpression ampRemovedRe(R"(^amplifier\s+(\S+)\s+removed$)");
-    if (object.startsWith("amplifier")) {
-        // The radio reports both TGXL and PGXL via the "amplifier" API; route
-        // TunerGeniusXL to TunerModel and every other (power) amp to AmpModel.
-        // (#4094: amp state extracted from RadioModel into AmpModel.)
-        const auto rm = ampRemovedRe.match(object);
-        if (rm.hasMatch()) {
-            const QString handle = rm.captured(1);
-            qCDebug(lcProtocol) << "RadioModel: amplifier removed (bare) handle=" << handle;
-            if (handle == m_tunerModel.handle())
-                m_tunerModel.setHandle({});
-            if (m_flexBackend) m_flexBackend->decodeAmplifierStatus(handle, QString(), {}, /*removed=*/true);
-            return;
-        }
-        const auto m = ampRe.match(object);
-        if (m.hasMatch()) {
-            const QString handle = m.captured(1);
-            const QString model = kvs.value("model");
-            qCDebug(lcProtocol) << "RadioModel: amplifier status handle=" << handle << "model=" << model;
-
-            // Handle removal (kvs form)
-            if (kvs.contains("removed")) {
-                if (handle == m_tunerModel.handle())
-                    m_tunerModel.setHandle({});
-                if (m_flexBackend) m_flexBackend->decodeAmplifierStatus(handle, QString(), {}, /*removed=*/true);
-                return;
-            }
-
-            // Route TunerGeniusXL to TunerModel
-            if (model == "TunerGeniusXL" || handle == m_tunerModel.handle()) {
-                // Decode identity and state as one delta so first presence
-                // observers cannot read default operate/bypass values.
-                if (handle != "0x00000000"
-                    && handle != m_tunerModel.handle()) {
-                    m_meterModel.setTgxlHandle(handle.toUInt(nullptr, 0));
-                }
-                if (m_flexBackend) {
-                    m_flexBackend->decodeTunerStatus(handle, kvs);   // #4092/#4198
-                } else if (!handle.isEmpty()
-                           && handle != QLatin1String("0x00000000")) {
-                    // Captured status replay in demo/sim has no Flex decoder.
-                    // Preserve the old backend-neutral identity path without
-                    // teaching RadioModel to decode SmartSDR tuner fields.
-                    TunerDelta identity;
-                    identity.handle = handle;
-                    m_tunerModel.applyChanges(identity);
-                }
-            }
-            // Power amplifier (PGXL / any non-TGXL amp) → AmpModel. `else` of the
-            // tuner branch: a TGXL status is already routed above and would only
-            // no-op the amp decode — skip it to avoid the per-status AmpDelta copy.
-            else if (m_flexBackend) {
-                m_flexBackend->decodeAmplifierStatus(handle, model, kvs, /*removed=*/false);
-            }
-        }
-        return;
-    }
+    // Amplifier status ("amplifier <handle> …", PGXL or TGXL) is decoded and
+    // routed by the status ingress; it reaches AmpModel and TunerModel through
+    // the seam's amplifierChanged/tunerChanged.
+    if (object.startsWith("amplifier")) { return; }
 
     // Transmit status: "transmit rfpower=93 tunepower=38 tune=0 ..."
     // "transmit" and "profile …" are decoded by the status ingress.
