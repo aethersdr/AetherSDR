@@ -331,6 +331,9 @@ private:
     // Reads the snapshot at a chosen instant, so hl2_adc_age_gate_test puts a
     // held slice peak on either side of kSliceStaleMs without waiting.
     friend struct Hl2AdcAgeTestAccess;
+    // Forces m_connected, publishes a window and fires linkDown, so
+    // control_front_end_overload_test follows a reconnect without a socket.
+    friend struct Hl2FrontEndOverloadTestAccess;
     // Runs loadHardwareOptions() without a socket (hl2_hardware_document_test).
     friend struct Hl2BoardIdentityTestAccess;
     // The snapshot at `nowNs`, on steadyNowNs()'s timeline. The converter rows
@@ -1205,6 +1208,16 @@ private:
     // tracks the gauge fill on an HL2.
     static constexpr double kFwdPeakReleaseAlpha = 0.05;
     double m_fwdPeakWatts = 0.0;
+    // Drops keyed SWR from speech-pause windows; see KeyedSwrGate.
+    KeyedSwrGate m_swrGate;
+
+    // Keyed publish windows that passed every gate publishTelemetry() applies to
+    // TX:SWR: the forward reading it uses (the window peak when both peaks are
+    // present), the kMinForwardCountsForSwr floor, and m_swrGate. Only the
+    // reverse reading is left out, so a counted window that published nothing is
+    // a real defect (#7063). Per-over: reset on key-down by setKeying(), not on
+    // key-up, since a diagnostic samples the snapshot after unkeying as well.
+    int m_keyedSwrGateClears = 0;
 
     // Operator's MIC slider position, 0..100 (50 = unity; see setMicGain()), kept
     // for reporting alongside the linear gain it maps to.

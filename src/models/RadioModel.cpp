@@ -1414,12 +1414,14 @@ void RadioModel::setupBackend(const QString& family)
 
     // Front-end overload is a live readout, not stored beyond the last value: a
     // stale copy surviving a disconnect would show green for a radio that is gone.
-    // resetFrontEndOverload() clears it.
+    // resetFrontEndOverload() clears it on disconnect and on teardownBackend().
     connect(m_backend.get(), &IRadioBackend::frontEndOverloadChanged, this,
             [this](const AetherSDR::FrontEndOverload& s) {
         m_frontEndOverload = s;
         emit frontEndOverloadChanged(s);
     });
+    connect(m_backend.get(), &IRadioBackend::disconnected, this,
+            &RadioModel::resetFrontEndOverload);
     // Nothing cached: the control itself answers isArmed() and
     // lastArmRefusalReason(), and a view that arrives late asks it directly.
     connect(m_backend.get(), &IRadioBackend::autoRfGainArmSettled,
@@ -1928,6 +1930,17 @@ void RadioModel::wireBackendReceiverState()
     });
 }
 
+// Back to "no reading" rather than whatever the last radio said. A lamp left
+// showing Clean for a radio that is gone is worse than one showing nothing, and
+// a reconnect must not start from the previous connection's level.
+void RadioModel::resetFrontEndOverload()
+{
+    if (m_frontEndOverload != AetherSDR::FrontEndOverload {}) {
+        m_frontEndOverload = {};
+        emit frontEndOverloadChanged(m_frontEndOverload);
+    }
+}
+
 void RadioModel::teardownBackend()
 {
     m_txSessionClosing = true;
@@ -1956,13 +1969,7 @@ void RadioModel::teardownBackend()
         m_backend->retirePcmStreams();
     }
     expirePendingCallbacks(QStringLiteral("the radio connection was replaced"));
-    // Back to "no reading" rather than whatever the last radio said. A lamp
-    // left showing Clean for a radio that is gone is worse than one showing
-    // nothing, because it answers a question nobody can currently ask.
-    if (m_frontEndOverload != AetherSDR::FrontEndOverload {}) {
-        m_frontEndOverload = {};
-        emit frontEndOverloadChanged(m_frontEndOverload);
-    }
+    resetFrontEndOverload();
     m_memoryRefreshActive = false;
     m_memoryImportFailures = 0;
     // Drop the backend and everything it owns (RadioConnection, PanadapterStream
@@ -3080,11 +3087,14 @@ bool RadioModel::isSlotOurs(int sliceId) const
 
 bool RadioModel::isSlotForeign(int sliceId) const
 {
-    return m_foreignSliceOwners.contains(sliceId);
+    return m_foreignSliceOwners.contains(sliceId) || m_reservedSlices.contains(sliceId);
 }
 
 QString RadioModel::foreignSliceOwnerStation(int sliceId) const
 {
+    if (auto r = m_reservedSlices.constFind(sliceId); r != m_reservedSlices.constEnd()) {
+        return r.value();
+    }
     auto it = m_foreignSliceOwners.constFind(sliceId);
     if (it == m_foreignSliceOwners.constEnd()) return {};
     return m_clientStations.value(it.value(), {});
@@ -7036,7 +7046,9 @@ void RadioModel::onConnected()
             // On LAN: peek at radio/client status before sending client gui so we
             // can detect a multiFLEX conflict regardless of what discovery provided.
             peekForMultiFlexConflictThen([this] {
-                registerAsGuiClient(AppSettings::instance().effectiveGuiClientId());
+                runRegistrationGateThen([this] {
+                    registerAsGuiClient(AppSettings::instance().effectiveGuiClientId());
+                });
             });
         }
     });
@@ -7091,6 +7103,11 @@ void RadioModel::stageSessionModelsForReconnect()
         emit rawSliceModeListsChanged();
     }
     m_foreignSliceOwners.clear();
+    m_reservedSlices.clear();
+    if (!m_reservedDax.isEmpty()) {
+        m_reservedDax.clear();
+        emit reservedDaxChanged();
+    }
     m_pendingPanStatuses.clear();
     m_panTransmitInhibitReasons.clear();
     m_panTransmitInhibitedTxSlices.clear();
@@ -7200,6 +7217,11 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     // a reclaim candidate for the new one.
     m_ownedSliceIds.clear();
     m_foreignSliceOwners.clear();
+    m_reservedSlices.clear();
+    if (!m_reservedDax.isEmpty()) {
+        m_reservedDax.clear();
+        emit reservedDaxChanged();
+    }
     m_activePanId.clear();
     m_staleSessionSerial.clear();
     m_connectedSessionSerial.clear();
@@ -7288,6 +7310,28 @@ void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHand
     };
 
     (*step)();
+}
+
+void RadioModel::runRegistrationGateThen(std::function<void()> continuation)
+{
+    runRegistrationGateThen(std::move(continuation), sessionControlFence());
+}
+
+void RadioModel::runRegistrationGateThen(std::function<void()> continuation, RadioControlFence current)
+{
+    if (!m_registrationGate) {
+        continuation();
+        return;
+    }
+    // Once, from the gate or from the cap, and only for this session.
+    auto once = std::make_shared<std::function<void()>>(std::move(continuation));
+    auto proceed = [once, current = std::move(current)] {
+        if (auto run = std::exchange(*once, nullptr); run && current()) {
+            run();
+        }
+    };
+    QTimer::singleShot(kRegistrationGateCapMs, this, proceed);
+    m_registrationGate(radioAddress(), proceed);
 }
 
 void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation)
@@ -11203,7 +11247,7 @@ void RadioModel::noteForeignPanWriteIfAny(const QString& object,
 
 bool RadioModel::sliceMayBelongToUs(int sliceId) const
 {
-    if (m_foreignSliceOwners.contains(sliceId)) {
+    if (m_foreignSliceOwners.contains(sliceId) || m_reservedSlices.contains(sliceId)) {
         return false;
     }
     return m_ownedSliceIds.isEmpty() || m_ownedSliceIds.contains(sliceId);
@@ -12755,10 +12799,99 @@ void RadioModel::setFrontSpeakerMute(bool m)
     }
 }
 
+bool RadioModel::dropSliceModelForForeignSlot(int sliceId)
+{
+    SliceModel* existing = slice(sliceId);
+    if (existing) {
+        m_slices.removeOne(existing);
+    } else {
+        existing = m_staleSlices.take(sliceId);
+    }
+    if (!existing) {
+        return false;
+    }
+    const bool wasTxSlice = existing->isTxSlice();
+    emit sliceRemoved(sliceId);
+    existing->deleteLater();
+    if (wasTxSlice)
+        m_meterModel.setActiveTxSlice(activeTxSliceNum());
+    syncDigitalVoiceTxSelection();
+    return true;
+}
+
+void RadioModel::reserveSlice(int sliceId, const QString& label)
+{
+    if (sliceId < 0) {
+        return;
+    }
+    const bool was = m_reservedSlices.contains(sliceId);
+    m_reservedSlices.insert(sliceId, label);
+    if (const SliceModel* adopted = slice(sliceId); adopted && adopted->daxChannel() > 0
+        && m_reservedDax.value(sliceId, -1) != adopted->daxChannel()) {
+        m_reservedDax.insert(sliceId, adopted->daxChannel());
+        emit reservedDaxChanged();
+    }
+    m_ownedSliceIds.remove(sliceId);
+    m_foreignSliceOwners.remove(sliceId);
+    const bool dropped = dropSliceModelForForeignSlot(sliceId);
+    qCDebug(lcProtocol) << "RadioModel: slice" << sliceId << "is reserved for" << label
+                        << (dropped ? "(dropped the SliceModel made for it)" : "");
+    if (!was || dropped) {
+        emit slotOccupancyChanged(sliceId);
+    }
+}
+
+QString RadioModel::daxChannelReservedBy(int channel) const
+{
+    if (channel <= 0) {
+        return {};
+    }
+    for (auto it = m_reservedDax.constBegin(); it != m_reservedDax.constEnd(); ++it) {
+        if (it.value() == channel) {
+            if (auto label = m_reservedSlices.constFind(it.key()); label != m_reservedSlices.constEnd()) {
+                return label.value();
+            }
+        }
+    }
+    return {};
+}
+
+void RadioModel::releaseReservedSlice(int sliceId)
+{
+    const bool hadDax = m_reservedDax.remove(sliceId) > 0;
+    if (m_reservedSlices.remove(sliceId)) {
+        emit slotOccupancyChanged(sliceId);
+    }
+    if (hadDax) {
+        emit reservedDaxChanged();
+    }
+}
+
 void RadioModel::handleSliceStatus(int id,
                                     const QMap<QString, QString>& kvs,
                                     bool removed)
 {
+    // A slot reserved for a program on the radio is never ours, whatever
+    // client_handle the radio reports for it (reserveSlice).
+    if (m_reservedSlices.contains(id)) {
+        if (removed) {
+            m_reservedSlices.remove(id);
+            const bool hadDax = m_reservedDax.remove(id) > 0;
+            noteSliceRetirement(id);
+            emit slotOccupancyChanged(id);
+            if (hadDax) {
+                emit reservedDaxChanged();
+            }
+        } else if (auto dax = kvs.constFind(QStringLiteral("dax")); dax != kvs.constEnd()) {
+            const int channel = dax.value().toInt();
+            if (m_reservedDax.value(id, -1) != channel) {
+                m_reservedDax.insert(id, channel);
+                emit reservedDaxChanged();
+            }
+        }
+        return;
+    }
+
     // Track slice ownership via client_handle (only present in some messages).
     bool ownershipConfirmed = false;
     if (kvs.contains("client_handle")) {
@@ -12781,20 +12914,7 @@ void RadioModel::handleSliceStatus(int id,
             m_foreignSliceOwners.insert(id, owner);
             // If we already have a SliceModel for this ID, remove it.  We
             // keep the foreign-owner record so UI can dim the slot.
-            SliceModel* existing = slice(id);
-            if (existing) {
-                m_slices.removeOne(existing);
-            } else {
-                existing = m_staleSlices.take(id);
-            }
-            if (existing) {
-                const bool wasTxSlice = existing->isTxSlice();
-                emit sliceRemoved(id);
-                existing->deleteLater();
-                if (wasTxSlice)
-                    m_meterModel.setActiveTxSlice(activeTxSliceNum());
-                syncDigitalVoiceTxSelection();
-            } else if (removed || !wasForeign) {
+            if (!dropSliceModelForForeignSlot(id) && (removed || !wasForeign)) {
                 noteSliceRetirement(id);
             }
             if (!wasForeign) emit slotOccupancyChanged(id);

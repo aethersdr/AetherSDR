@@ -363,15 +363,6 @@ void MainWindow::buildMenuBar()
         openRadioSetupPage();
     });
 
-    // The keyer-source chooser is otherwise only on the DVK indicator's
-    // right-click, which no keyboard or screen-reader operator can reach
-    // (docs/a11y.md: every interactive widget needs a non-mouse activation
-    // path). Same menu, same handler.
-    auto* voiceKeyerSourceAct = settingsMenu->addAction("Voice Keyer Source...");
-    connect(voiceKeyerSourceAct, &QAction::triggered, this, [this] {
-        showVoiceKeyerSourceMenu(voiceKeyerSourceMenuAnchor());
-    });
-
     // Every controller's settings in one submenu, so the Settings menu does
     // not grow by one entry per supported device.
     auto* controllersMenu = settingsMenu->addMenu("Controllers");
@@ -1624,6 +1615,16 @@ void MainWindow::buildMenuBar()
         updateToolsMenuState();
     });
 #endif
+
+    // Outside the ASR guard: without Copy Assist it follows CW Keyer.
+    auto* voiceKeyerAction = toolsMenu->addAction("Digital Voice Keyer");
+    m_voiceKeyerAction = voiceKeyerAction;
+    voiceKeyerAction->setCheckable(true);
+    voiceKeyerAction->setEnabled(false);
+    connect(voiceKeyerAction, &QAction::triggered, this, [this] {
+        toggleVoiceKeyerPanel();
+        updateToolsMenuState();
+    });
 
     viewMenu->removeAction(packetDecoderAction);
     toolsMenu->addAction(packetDecoderAction);

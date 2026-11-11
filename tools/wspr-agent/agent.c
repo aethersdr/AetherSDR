@@ -53,7 +53,7 @@
 #include "grayline.h"
 #include "wsprd/wsprsim_utils.h"
 
-#define AGENT_VERSION "0.1.8"
+#define AGENT_VERSION "0.1.13"
 #define STATUS_PORT 48995
 #define AUDIO_RATE 24000
 #define BB_RATE 375
@@ -474,6 +474,7 @@ static struct {
     long long dial_hz;
     int hop_period;             /* period of the tuned cycle, -1 when not hopping */
     int slice_ok, stream_ok;
+    int slice_index;      /* the radio's index for our slice; read only while slice_ok */
     spot_t spots[MAX_SPOTS];
     int nspots, spot_head;
     cycle_t cycles[MAX_CYCLES];
@@ -1004,8 +1005,10 @@ static void status_json(buf_t *b, long long since)
     bjson_str(b, call);
     bputs(b, ",\"grid\":"); bjson_str(b, grid);
     bputs(b, ",\"band\":"); bjson_str(b, G.band);
-    bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"audio\":%s", G.dial_hz, G.slice_ok ? "true" : "false",
-            G.stream_ok ? "true" : "false");
+    /* slice_index lets a GUI client leave our slice alone: the radio reports
+     * it as that client's own (#7139). -1 while we have none. */
+    bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"slice_index\":%d,\"audio\":%s", G.dial_hz,
+            G.slice_ok ? "true" : "false", G.slice_ok ? G.slice_index : -1, G.stream_ok ? "true" : "false");
     bputs(b, ",\"hop_period\":");
     bjson_str(b, G.hop_period >= 0 ? PERIOD_NAME[G.hop_period] : "");
     bputs(b, ",\"depth\":");
@@ -1256,6 +1259,20 @@ typedef struct {
      * `sub slice all` dump only (want_dump is that request), -1 none. */
     int orphan;
     int want_dump;
+    /* Our last `slice tune` and where it asked for. The radio sends a
+     * slice's status to the other clients, not to the one that changed it
+     * (measured on a FLEX-8600, 4.3.16), so its success reply is the only
+     * word that our slice is where we tuned it. */
+    int want_tune;
+    long long tune_hz;
+    /* Each slice's DAX channel, from the radio's statuses and from the reply
+     * to our own `slice set … dax=`. A DAX channel feeds one slice: another
+     * client that picks ours moves it to their slice, and our stream then
+     * carries their audio, which would decode under our band (measured on a
+     * FLEX-8600, 2026-11-11). */
+    int dax[MAX_SLICES];
+    int want_dax, dax_ask;
+    int dax_moved;        /* our channel left our slice since the capture began */
 } api_t;
 
 /* ------------------------------------------------- our slice across restarts
@@ -1436,12 +1453,62 @@ static void make_slice(api_t *a, long long dial_hz, const char *ant, int dax)
  * them (a connecting AetherSDR set it to LSB and made it its TX slice, #7139),
  * and a band change can recall that band's mode. WSPR decodes only from DIGU,
  * and this slice must never be the one that transmits. */
-static void retune_slice(api_t *a, long long dial_hz, const char *ant)
+static void set_dax(api_t *a, int channel)
 {
-    api_send(a, "slice tune %d %.6f", a->slice, dial_hz / 1e6);
+    a->dax_ask = channel;
+    a->want_dax = api_send(a, "slice set %d dax=%d", a->slice, channel);
+}
+
+static int on_dax(const api_t *a, int channel)
+{
+    return a->slice >= 0 && a->slice < MAX_SLICES && a->dax[a->slice] == channel;
+}
+
+/* A cycle's audio is ours only from our slice at the cycle's dial, fed by our
+ * DAX channel for the whole capture; anything else would publish another
+ * slice's or band's signals under ours. */
+enum { CAPTURE_OK, CAPTURE_OFF_DIAL, CAPTURE_DAX_GONE };
+
+static int on_dial(const api_t *a, long long dial_hz);
+
+static int capture_start_check(api_t *a, long long dial_hz, int dax)
+{
+    if (!on_dial(a, dial_hz)) return CAPTURE_OFF_DIAL;
+    if (!on_dax(a, dax)) return CAPTURE_DAX_GONE;
+    a->dax_moved = 0;
+    return CAPTURE_OK;
+}
+
+static int capture_end_check(const api_t *a, long long dial_hz)
+{
+    if (!on_dial(a, dial_hz)) return CAPTURE_OFF_DIAL;
+    if (a->dax_moved) return CAPTURE_DAX_GONE;
+    return CAPTURE_OK;
+}
+
+/* Our slice is muted: its audio would otherwise go into the connected GUI
+ * client's audio stream, which the radio sends to that client's computer
+ * (measured on a FLEX-8600, 2026-11-11). DAX, which we record from, is not
+ * affected by the mute. */
+static void mute_slice(api_t *a)
+{
+    api_send(a, "slice set %d audio_mute=1", a->slice);
+}
+
+/* The retune also mutes the slice again, and takes our DAX channel back when
+ * another client has it. */
+static void retune_slice(api_t *a, long long dial_hz, const char *ant, int dax)
+{
+    a->want_tune = api_send(a, "slice tune %d %.6f", a->slice, dial_hz / 1e6);
+    a->tune_hz = dial_hz;
     api_send(a, "slice set %d mode=DIGU", a->slice);
     api_send(a, "slice set %d tx=0", a->slice);
+    mute_slice(a);
     if (ant[0]) api_send(a, "slice set %d rxant=%s", a->slice, ant);
+    if (!a->want_dax && !on_dax(a, dax)) {
+        logf_("DAX channel %d is not on our slice; taking it back", dax);
+        set_dax(a, dax);
+    }
 }
 
 static void field(const char *s, const char *key, char *out, size_t cap)
@@ -1474,16 +1541,25 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             for (char *q = call; *q; q++) *q = (char)toupper((unsigned char)*q);
             snprintf(G.radio_call, sizeof G.radio_call, "%s", call);
             pthread_mutex_unlock(&G.mu);
+        } else if (seq == a->want_tune) {
+            a->want_tune = 0;
+            if (code) logf_("slice tune refused: %08lx %s", code, msg);
+            else if (a->slice >= 0 && a->slice < MAX_SLICES) a->rf_hz[a->slice] = a->tune_hz;
+        } else if (seq == a->want_dax) {
+            a->want_dax = 0;
+            if (code) logf_("DAX channel refused: %08lx %s", code, msg);
+            else if (a->slice >= 0 && a->slice < MAX_SLICES) a->dax[a->slice] = a->dax_ask;
         } else if (seq == a->want_slice) {
             a->want_slice = 0;
             if (code) { logf_("slice create refused: %08lx %s", code, msg); return; }
             a->slice = atoi(msg);
             save_slice_index(a->slice);
             api_send(a, "slice set %d tx=0", a->slice);
-            api_send(a, "slice set %d dax=%d", a->slice, cfg->dax_channel);
+            mute_slice(a);
+            set_dax(a, cfg->dax_channel);
             a->want_stream = api_send(a, "stream create type=dax_rx dax_channel=%d", cfg->dax_channel);
             if (a->slice < MAX_SLICES && !a->rf_hz[a->slice]) a->rf_hz[a->slice] = a->create_hz;
-            pthread_mutex_lock(&G.mu); G.slice_ok = 1; pthread_mutex_unlock(&G.mu);
+            pthread_mutex_lock(&G.mu); G.slice_ok = 1; G.slice_index = a->slice; pthread_mutex_unlock(&G.mu);
             logf_("slice %d on %s", a->slice, G.band);
         } else if (seq == a->want_stream) {
             a->want_stream = 0;
@@ -1546,7 +1622,23 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             char mhz[24];
             field(body, "RF_frequency=", mhz, sizeof mhz);
             if (mhz[0]) a->rf_hz[index] = llround(atof(mhz) * 1e6);
-            if (strstr(body, " in_use=0")) a->rf_hz[index] = 0;
+            char dax[8];
+            field(body, " dax=", dax, sizeof dax);
+            if (dax[0]) {
+                a->dax[index] = atoi(dax);
+                if (index == a->slice && a->dax[index] != cfg->dax_channel) a->dax_moved = 1;
+            }
+            if (strstr(body, " in_use=0")) {
+                a->rf_hz[index] = 0;
+                a->dax[index] = 0;
+            }
+            /* Another client unmuted our slice: its audio is on its way to
+             * that client's computer, so mute it again now, not at the next
+             * retune. */
+            if (index == a->slice && strstr(body, " audio_mute=0") && !strstr(body, " in_use=0")) {
+                logf_("slice %d was unmuted; muting it again", index);
+                mute_slice(a);
+            }
         }
         if (index == a->orphan && index != a->slice && strstr(body, " in_use=1")) {
             /* The one full status for the index a previous run of ours saved.
@@ -2050,17 +2142,168 @@ static int selftest_retune_mode(void)
     a.fd = sv[0];
     a.slice = 3;
     a.orphan = -1;
-    retune_slice(&a, 14095600, "");
-    retune_slice(&a, 21094600, "ANT2");
+    a.dax[3] = 4;
+    retune_slice(&a, 14095600, "", 4);
+    retune_slice(&a, 21094600, "ANT2", 4);
     char wire[512];
     drain_wire(sv[1], wire, sizeof wire);
     close(sv[0]);
     close(sv[1]);
     const char *want = "C1|slice tune 3 14.095600\nC2|slice set 3 mode=DIGU\nC3|slice set 3 tx=0\n"
-                       "C4|slice tune 3 21.094600\nC5|slice set 3 mode=DIGU\nC6|slice set 3 tx=0\n"
-                       "C7|slice set 3 rxant=ANT2\n";
-    if (strcmp(wire, want)) { printf("selftest FAIL: a retune does not put the slice back in DIGU, off TX:\n%s", wire); return 1; }
+                       "C4|slice set 3 audio_mute=1\n"
+                       "C5|slice tune 3 21.094600\nC6|slice set 3 mode=DIGU\nC7|slice set 3 tx=0\n"
+                       "C8|slice set 3 audio_mute=1\nC9|slice set 3 rxant=ANT2\n";
+    if (strcmp(wire, want)) { printf("selftest FAIL: a retune does not put the slice back in DIGU, off TX, muted:\n%s", wire); return 1; }
+
+    /* The radio answers our tune but sends its status only to other
+     * clients, so the reply is what says the slice moved. */
+    int p[2];
+    if (pipe(p)) return 1;
+    fcntl(p[1], F_SETFL, O_NONBLOCK);
+    api_t b;
+    memset(&b, 0, sizeof b);
+    b.fd = p[1];
+    b.slice = 2;
+    b.orphan = -1;
+    b.rf_hz[2] = 14095600;
+    b.dax[2] = 4;
+    config_t c;
+    config_default(&c);
+    char l[64];
+    retune_slice(&b, 1836600, "", 4);
+    int before = on_dial(&b, 1836600);
+    snprintf(l, sizeof l, "R%d|0|", b.want_tune);
+    api_line(&b, l, &c);
+    int moved = on_dial(&b, 1836600);
+    retune_slice(&b, 3568600, "", 4);
+    snprintf(l, sizeof l, "R%d|50000016|", b.want_tune);
+    api_line(&b, l, &c);
+    int refused_stays = on_dial(&b, 1836600) && !on_dial(&b, 3568600);
+    close(p[0]);
+    close(p[1]);
+    if (before || !moved || !refused_stays) {
+        printf("selftest FAIL: the tune's reply does not move our slice (before %d, after %d, refused %d)\n",
+               before, moved, refused_stays);
+        return 1;
+    }
     return 0;
+}
+
+/* Another client taking our DAX channel shows in its status; the next retune
+ * takes it back, and the reply to that, not a status, says it is ours again.
+ * A refusal leaves it lost. Driven through the real sender and parser. */
+static int selftest_dax_reclaim(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = sv[0];
+    a.slice = 2;
+    a.orphan = -1;
+    a.dax[2] = 4;
+    config_t c;
+    config_default(&c);   /* dax_channel 4 */
+    char l[96], wire[1024];
+    int fail = 0;
+
+    strcpy(l, "S1|slice 0 dax=4 dax_clients=1");
+    api_line(&a, l, &c);
+    strcpy(l, "S1|slice 2 dax=0 dax_clients=0");
+    api_line(&a, l, &c);
+    if (on_dax(&a, 4) || !a.dax_moved) { printf("selftest FAIL: a status moving our DAX channel away is missed\n"); fail = 1; }
+
+    retune_slice(&a, 7038600, "", 4);
+    drain_wire(sv[1], wire, sizeof wire);
+    if (!strstr(wire, "|slice set 2 dax=4\n") || on_dax(&a, 4)) {
+        printf("selftest FAIL: the retune does not take the DAX channel back:\n%s", wire); fail = 1;
+    }
+    snprintf(l, sizeof l, "R%d|0|", a.want_dax);
+    api_line(&a, l, &c);
+    if (!on_dax(&a, 4) || a.want_dax) { printf("selftest FAIL: the reply does not give the channel back\n"); fail = 1; }
+
+    retune_slice(&a, 10138700, "", 4);
+    drain_wire(sv[1], wire, sizeof wire);
+    if (strstr(wire, "dax=")) { printf("selftest FAIL: a retune re-sends a DAX channel we hold:\n%s", wire); fail = 1; }
+
+    strcpy(l, "S1|slice 2 dax=1");
+    api_line(&a, l, &c);
+    retune_slice(&a, 14095600, "", 4);
+    snprintf(l, sizeof l, "R%d|50000016|", a.want_dax);
+    api_line(&a, l, &c);
+    if (on_dax(&a, 4) || a.dax[2] != 1) { printf("selftest FAIL: a refused reclaim counts as ours\n"); fail = 1; }
+
+    /* The capture gates: no start without the channel, no decode after
+     * losing it mid-cycle even if it came back, and another slice's channel
+     * change doesn't count. */
+    a.dax[2] = 0;
+    a.rf_hz[2] = 7038600;
+    int refused = capture_start_check(&a, 7038600, 4) == CAPTURE_DAX_GONE;
+    a.dax[2] = 4;
+    a.dax_moved = 1;
+    int started = capture_start_check(&a, 7038600, 4) == CAPTURE_OK && !a.dax_moved;
+    strcpy(l, "S1|slice 0 dax=0 dax_clients=0");
+    api_line(&a, l, &c);
+    int other_ok = capture_end_check(&a, 7038600) == CAPTURE_OK;
+    strcpy(l, "S1|slice 2 dax=0 dax_clients=0");
+    api_line(&a, l, &c);
+    strcpy(l, "S1|slice 2 dax=4 dax_clients=1");
+    api_line(&a, l, &c);
+    int discarded = capture_end_check(&a, 7038600) == CAPTURE_DAX_GONE;
+    int off_dial = capture_start_check(&a, 14095600, 4) == CAPTURE_OFF_DIAL;
+    if (!refused || !started || !other_ok || !discarded || !off_dial) {
+        printf("selftest FAIL: capture gates (refused %d, started %d, other slice %d, lost-and-back discarded %d, off dial %d)\n",
+               refused, started, other_ok, discarded, off_dial);
+        fail = 1;
+    }
+
+    a.dax_moved = 0;
+    strcpy(l, "S1|slice 2 in_use=0");
+    api_line(&a, l, &c);
+    if (a.dax[2] != 0) { printf("selftest FAIL: a removed slice keeps its DAX channel\n"); fail = 1; }
+    close(sv[0]);
+    close(sv[1]);
+    return fail;
+}
+
+/* The slice we make is muted, and muted again as soon as anyone unmutes it;
+ * another slice's mute is none of ours. Through the real parser and sender. */
+static int selftest_mute(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = sv[0];
+    a.slice = -1;
+    a.orphan = -1;
+    a.want_slice = 7;
+    config_t c;
+    config_default(&c);
+    char l[96], wire[1024];
+    int fail = 0;
+
+    strcpy(l, "R7|0|3");
+    api_line(&a, l, &c);
+    drain_wire(sv[1], wire, sizeof wire);
+    if (a.slice != 3 || !strstr(wire, "|slice set 3 audio_mute=1\n")) {
+        printf("selftest FAIL: a new slice is not muted:\n%s", wire); fail = 1;
+    }
+    strcpy(l, "S1|slice 3 audio_mute=0 audio_level=50");
+    api_line(&a, l, &c);
+    drain_wire(sv[1], wire, sizeof wire);
+    if (strcmp(wire, "C5|slice set 3 audio_mute=1\n")) {
+        printf("selftest FAIL: an unmuted slice of ours is not muted again:\n%s", wire); fail = 1;
+    }
+    strcpy(l, "S1|slice 3 audio_mute=1");
+    api_line(&a, l, &c);
+    strcpy(l, "S1|slice 1 audio_mute=0");
+    api_line(&a, l, &c);
+    drain_wire(sv[1], wire, sizeof wire);
+    if (wire[0]) { printf("selftest FAIL: a muted slice, or another client's, is muted again:\n%s", wire); fail = 1; }
+    close(sv[0]);
+    close(sv[1]);
+    return fail;
 }
 
 static long elapsed_ms(const struct timespec *t0)
@@ -2111,6 +2354,40 @@ static int selftest_release_on_term(void)
         return 1;
     }
     return 0;
+}
+
+/* The status names the radio's index for our slice, so a GUI client can
+ * leave it alone (#7139), and -1 once the radio has removed it. */
+static int selftest_slice_index(void)
+{
+    int p[2];
+    if (pipe(p)) return 1;
+    fcntl(p[1], F_SETFL, O_NONBLOCK);
+    api_t a;
+    memset(&a, 0, sizeof a);
+    a.fd = p[1];
+    a.slice = -1;
+    a.orphan = -1;
+    config_t c;
+    config_default(&c);
+    char l[160];
+    static char out[512 * 1024];
+    a.want_slice = 8;
+    a.create_hz = 14095600;
+    strcpy(l, "R8|0|5");
+    api_line(&a, l, &c);
+    buf_t b = {out, 0, sizeof out, 0};
+    status_json(&b, 0);
+    int fail = b.full || !strstr(out, "\"slice_index\":5,");
+    strcpy(l, "S1|slice 5 in_use=0");
+    api_line(&a, l, &c);
+    buf_t e = {out, 0, sizeof out, 0};
+    status_json(&e, 0);
+    fail |= e.full || !strstr(out, "\"slice_index\":-1,");
+    close(p[0]);
+    close(p[1]);
+    if (fail) printf("selftest FAIL: the status does not name our slice's index\n");
+    return fail;
 }
 
 /* At start, the saved index is removed only when its status in the
@@ -2221,8 +2498,8 @@ static int selftest(double snr_db)
 {
     if (selftest_persistence() || selftest_spots() || selftest_upload_off()
         || selftest_busy_cycle() || selftest_radio_lines() || selftest_ntp_fallback()
-        || selftest_save_failure() || selftest_retune_mode() || selftest_release_on_term()
-        || selftest_orphan() || selftest_slice_file()) return 1;
+        || selftest_save_failure() || selftest_retune_mode() || selftest_dax_reclaim() || selftest_mute() || selftest_release_on_term()
+        || selftest_orphan() || selftest_slice_file() || selftest_slice_index()) return 1;
     for (size_t i = 0; i < sizeof BAD_GRIDS / sizeof BAD_GRIDS[0]; i++)
         if (valid_grid(BAD_GRIDS[i])) { printf("selftest FAIL: grid %s\n", BAD_GRIDS[i]); return 1; }
     if (!valid_grid("") || !valid_grid("DN18") || !valid_grid("dn18pg") || !valid_grid("RR99xx")) { printf("selftest FAIL: good grid\n"); return 1; }
@@ -2533,7 +2810,7 @@ int main(int argc, char *argv[])
                 const char *band = band_for_cycle(&cfg, grid, target, cur, &period);
                 long long dial = band_dial(band);
                 if (a.slice < 0) make_slice(&a, dial, cfg.rxant, cfg.dax_channel);
-                else retune_slice(&a, dial, cfg.rxant);
+                else retune_slice(&a, dial, cfg.rxant, cfg.dax_channel);
                 pthread_mutex_lock(&G.mu);
                 snprintf(G.band, sizeof G.band, "%s", band);
                 G.dial_hz = dial;
@@ -2557,8 +2834,10 @@ int main(int argc, char *argv[])
             pthread_mutex_lock(&G.mu);
             long long want = G.dial_hz;
             pthread_mutex_unlock(&G.mu);
-            if (!on_dial(&a, want)) {
-                logf_("cycle %lld skipped: the slice isn't at %lld Hz", cyc, want);
+            int why = capture_start_check(&a, want, cfg.dax_channel);
+            if (why != CAPTURE_OK) {
+                if (why == CAPTURE_OFF_DIAL) logf_("cycle %lld skipped: the slice isn't at %lld Hz", cyc, want);
+                else logf_("cycle %lld skipped: DAX channel %d isn't on our slice", cyc, cfg.dax_channel);
                 skipped = cyc;
                 continue;
             }
@@ -2572,8 +2851,11 @@ int main(int argc, char *argv[])
         }
         if (capture_t && (d.n >= CAPTURE_SAMPLES || now - capture_t >= CAPTURE_SECONDS + 1)) {
             int pct = (int)(100.0 * d.n / CAPTURE_SAMPLES);
-            if (!on_dial(&a, capture_dial)) {
+            int why = capture_end_check(&a, capture_dial);
+            if (why == CAPTURE_OFF_DIAL) {
                 logf_("cycle %lld discarded: the slice moved during it", capture_t);
+            } else if (why == CAPTURE_DAX_GONE) {
+                logf_("cycle %lld discarded: DAX channel %d left our slice during it", capture_t, cfg.dax_channel);
             } else if (dc.pid) {
                 logf_("previous decode still running; skipping cycle %lld", capture_t);
             } else if (pct < 80) {

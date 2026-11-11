@@ -43,6 +43,11 @@ struct TxPowerBand {
 // explicit TX antenna choice: hamlib set_ant writes the RX antenna alone and a
 // band-stack recall leaves it. Absent, both write it as before.
 struct IndependentTxAntenna {
+    // TX antenna tokens with no forward-power detector behind them (HL2: RF1).
+    // On these the TX applet labels its power and SWR gauges "not measured"
+    // rather than presenting about 0 W as a reading. Empty: every output is
+    // measured.
+    QStringList unmeteredOutputs;
     bool operator==(const IndependentTxAntenna&) const = default;
 };
 
@@ -817,6 +822,13 @@ struct RadioCapabilities {
     // above: RadioCapabilities is at its frozen boolean count (#5262 M2).
     struct AdcFrontEnd {};
     std::optional<AdcFrontEnd> adcFrontEnd;
+
+    // Engaged: the backend observes its own converter and emits
+    // frontEndOverloadChanged, so aetherd publishes the frontEndOverload
+    // resource. Absent: no reading exists and none is offered. A record, not a
+    // bool, because the boolean count is frozen (#5262 M2).
+    struct FrontEndOverloadObservation {};
+    std::optional<FrontEndOverloadObservation> frontEndOverloadObservation;
 
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an

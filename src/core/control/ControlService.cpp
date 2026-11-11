@@ -49,7 +49,8 @@ std::optional<ProtocolError> parseSelector(
         QStringLiteral("server"), QStringLiteral("radioSession"),
         QStringLiteral("radioCatalogue"),
         QStringLiteral("slice"), QStringLiteral("panadapter"),
-        QStringLiteral("meter"), QStringLiteral("transmitState")};
+        QStringLiteral("meter"), QStringLiteral("transmitState"),
+        QStringLiteral("frontEndOverload")};
     if (!supportedTypes.contains(type)) {
         return ProtocolError{QStringLiteral("request.invalid_params"),
                              QStringLiteral("unsupported resource type"),
@@ -85,6 +86,11 @@ std::optional<ProtocolError> parseSelector(
         if (radioSession.isEmpty() || !idValue.isUndefined()) {
             return ProtocolError{QStringLiteral("request.invalid_params"),
                                  QStringLiteral("transmitState requires radioSession only"), {}, false};
+        }
+    } else if (type == QStringLiteral("frontEndOverload")) {
+        if (radioSession.isEmpty() || !idValue.isUndefined()) {
+            return ProtocolError{QStringLiteral("request.invalid_params"),
+                                 QStringLiteral("frontEndOverload requires radioSession only"), {}, false};
         }
     } else if (radioSession.isEmpty() || (!wildcardAllowed && id.isEmpty())) {
         return ProtocolError{QStringLiteral("request.invalid_params"),
@@ -664,6 +670,9 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
     }
     if (observe && m_resources->get({QStringLiteral("transmitState"), QStringLiteral("radio-1"), {}})) {
         available.append(QStringLiteral("transmitState.read"));
+    }
+    if (observe && m_resources->get({QStringLiteral("frontEndOverload"), QStringLiteral("radio-1"), {}})) {
+        available.append(QStringLiteral("frontEndOverload.read"));
     }
     if (observe && !m_resources->snapshot({{QStringLiteral("meter"), QStringLiteral("radio-1"), {}}}).isEmpty()) {
         available.append(QStringLiteral("meter.read"));

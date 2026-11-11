@@ -202,6 +202,8 @@ std::optional<WsprStatus> parseStatus(const QByteArray& json)
     st.hopPeriod = boundedString(o.value(QLatin1String("hop_period")), 16);
     st.depth = o.value(QLatin1String("depth")).toString();
     st.slice = o.value(QLatin1String("slice")).toBool();
+    st.sliceIndex = st.slice && inRange(o.value(QLatin1String("slice_index")), 0, 63)
+        ? o.value(QLatin1String("slice_index")).toInt(-1) : -1;
     st.audio = o.value(QLatin1String("audio")).toBool();
     if (!validBand(st.band)
         || (!st.depth.isEmpty() && !depths().contains(st.depth))) {

@@ -91,7 +91,26 @@ struct Hl2TxGateTestAccess {
     static int receiverCeiling(const Hl2Backend& b) { return b.receiverCeiling(); }
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
     static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
+    // A new over whose key-on windows have passed, with an empty envelope.
+    static void pastKeyOn(Hl2Backend& b)
+    {
+        b.m_swrGate.reset();
+        for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+            b.m_swrGate.accept(0);
+    }
     static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
+    // Streaming as telemetryLinkState() judges it, with no socket: connected, and
+    // the EP6 counter "just advanced" (hl2LinkStateFor() consults only those two
+    // while connected; the held-by-other branch needs disconnected). Nothing in
+    // production widens for this — it is the test's own friend struct.
+    static void fakeStreamingLink(Hl2Backend& b, bool on)
+    {
+        b.m_connected = on;
+        if (on)
+            b.m_rxAdvanceClock.start();
+        else
+            b.m_rxAdvanceClock.invalidate();
+    }
     static double fwdPeakReleaseAlpha() { return Hl2Backend::kFwdPeakReleaseAlpha; }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
     // Stops the timer first, so this proves what the callback decides, not
@@ -519,6 +538,90 @@ static void forwardPowerWindowPeakWhileKeyed()
     Access::setKeyedFlag(b, false);
 }
 
+// TX:SWR keyed is the ratio of the window's two maxima; the last values, taken
+// in different responses, are used only unkeyed or when a maximum is missing.
+static void swrFromWindowPairWhileKeyed()
+{
+    Hl2Backend b;
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    auto swrOf = [&](bool keyed, int fwdLast, int revLast,
+                     std::optional<int> fwdPeak, std::optional<int> revPeak) {
+        Access::setKeyedFlag(b, keyed);
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = fwdLast;
+        t.reversePowerRaw = revLast;
+        t.forwardPowerPeakRaw = fwdPeak;
+        t.reversePowerPeakRaw = revPeak;
+        meters.clear();
+        Access::publish(b, t);
+        for (const auto& args : meters) {
+            if (args.at(0).toString() == QStringLiteral("TX:SWR"))
+                return args.at(1).toDouble();
+        }
+        return std::nan("");
+    };
+    const double matched = *hl2::swrFromRaw(3000, 150);
+    const double trough = *hl2::swrFromRaw(400, 150);
+    check(trough > matched + 0.5,
+          "control: a trough forward beside a peak reverse reads a high SWR");
+    for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+        check(std::isnan(swrOf(true, 400, 150, 3000, 150)),
+              "SWR keyed: a key-on window publishes no SWR");
+    check(swrOf(true, 400, 150, 3000, 150) == matched,
+          "SWR keyed: the window's forward and reverse maxima, not the last pair");
+    check(swrOf(false, 400, 150, 3000, 150) == trough,
+          "SWR unkeyed: the last pair");
+    check(swrOf(true, 400, 150, 3000, std::nullopt) == trough,
+          "SWR keyed without a reverse maximum: falls back to the last pair");
+    Access::pastKeyOn(b);
+    check(std::isnan(swrOf(true, 3000, 150, 200, 10)),
+          "SWR keyed: the forward-count threshold reads the forward maximum");
+    Access::pastKeyOn(b);
+    check(swrOf(true, 400, 150, 3000, 150) == matched,
+          "SWR keyed: past the key-on windows, a fresh over publishes");
+    check(std::isnan(swrOf(true, 3000, 150, 1000, 50)),
+          "SWR keyed: a speech-pause window well below the envelope publishes none");
+    Access::setKeyedFlag(b, false);
+}
+
+// The key-on drop holds for every over, not only a session's first: each key
+// through applyKeying() restarts the gate. Keyed through the real seam.
+static void swrKeyOnWindowsEveryOver()
+{
+    TxTestAuthority authority;
+    Hl2Backend b;
+    Access::startSession(b);
+    Access::parkTxTail(b);
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    auto publishesSwr = [&](int fwd, int rev) {
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = fwd;
+        t.reversePowerRaw = rev;
+        t.forwardPowerPeakRaw = fwd;
+        t.reversePowerPeakRaw = rev;
+        meters.clear();
+        Access::publish(b, t);
+        for (const auto& args : meters) {
+            if (args.at(0).toString() == QStringLiteral("TX:SWR"))
+                return true;
+        }
+        return false;
+    };
+    for (int over = 1; over <= 2; ++over) {
+        b.setKeying(true, authority.operation);
+        check(Access::keyed(b), "the over keys");
+        // 2900 reverse stands in for a key-on junk word: a very high SWR if let through.
+        for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+            check(!publishesSwr(3000, 2900),
+                  over == 1 ? "first over: a key-on window publishes no SWR"
+                            : "second over: a key-on window publishes no SWR");
+        check(publishesSwr(3000, 150), "past its key-on windows, the over publishes SWR");
+        b.setKeying(false, authority.operation);
+        Access::expireTxTail(b);
+        check(!Access::keyed(b), "the over unkeys");
+    }
+}
+
 // The Radio Health row for responses the peak window skipped: a session total,
 // absent until a RADDR-1 response arrived. No radio: telemetry is handed in.
 static void forwardPowerSkippedHealthRow()
@@ -557,6 +660,152 @@ static void forwardPowerSkippedHealthRow()
     publish(dead, 0, 19);
     check(health(dead, kRow).isValid() && health(dead, kRow).toULongLong() == 19,
           "skipped row: reported when every response so far was skipped");
+}
+
+// #7063: the three SWR-gate health rows, and the two properties a diagnostic
+// reading them depends on.
+//
+// 1. ALL THREE KEY ON forwardPowerPeakRaw, so they are present or absent
+//    together. forwardPowerRaw would look equivalent and is not: apply() takes
+//    that from every RADDR-1 response while the peak window skips the
+//    non-measurement ones, so a unit whose temperature word reads 0 has
+//    forwardPowerRaw and no peak (MetisProtocol.h:515-517). The gate would then
+//    be published beside an absent reading, radiocert's sentinel would never
+//    clear, its gate branch could never fire, and TX:SWR would be reported
+//    DEFINED BUT NEVER FED on that unit class — the verdict #7063 removes.
+//
+// 2. THE CLEARS COUNT IS COUNTED ON THE GATED VALUE, not on the peak and not
+//    on whether SWR was published. That is what makes it exact in both
+//    directions, which is the whole basis of radiocert's verdict.
+//
+// Checked ON-STREAM via Access::fakeStreamingLink(), which is load-bearing: these
+// rows sit behind the directional block's `inBandLive`, so off-stream they are
+// absent whichever optional they key on and no check here can tell them apart.
+// The consumer half is in radiocert_gated_meter_test, which stubs the snapshot;
+// this is the producer half.
+static void swrGateHealthRows()
+{
+    using HS = IRadioBackend::HealthSnapshot;
+    static const char* const kGate = HS::kSwrGateCounts;
+    static const char* const kClears = HS::kSwrGateClearsWhileKeyed;
+    static const char* const kPeak = HS::kForwardWindowPeakRaw;
+
+    Hl2Backend b;
+    const QStringList order = b.healthSnapshot().order;
+    check(order.contains(QString::fromLatin1(kGate))
+              && order.contains(QString::fromLatin1(kClears))
+              && order.contains(QString::fromLatin1(kPeak)),
+          "swr gate: all three rows are declared");
+
+    // DECLARED ADJACENTLY, which is the structural half of "published together".
+    // A later edit that moves one row out of the directional block — the shape
+    // that would let the gate publish while the reading does not — separates
+    // them here.
+    check(order.indexOf(QString::fromLatin1(kClears))
+              == order.indexOf(QString::fromLatin1(kGate)) + 1
+          && order.indexOf(QString::fromLatin1(kPeak))
+              == order.indexOf(QString::fromLatin1(kGate)) + 2,
+          "swr gate: the clears count and the reading follow their gate");
+
+    // ON-STREAM, because off-stream proves nothing. All three rows sit behind
+    // the directional block's `inBandLive`, so without a Streaming link they
+    // are absent whichever optional they are keyed on — an off-stream check
+    // passes for the right reason and the wrong one alike. fakeStreamingLink()
+    // reaches Streaming with no socket, which is what makes the rest testable.
+    Access::fakeStreamingLink(b, true);
+
+    // THE ZERO-TEMPERATURE UNIT CLASS, which is the regression this pins.
+    // Hl2Telemetry::apply() takes forwardPowerRaw from every RADDR-1 response
+    // while the peak window skips the non-measurement ones, so this unit has
+    // the raw value and no peak (MetisProtocol.h:515-517). Keying the gate row
+    // on forwardPowerRaw would publish a known threshold beside an absent
+    // reading here, and radiocert would report TX:SWR DEFINED BUT NEVER FED on
+    // that unit — the exact verdict #7063 removes.
+    hl2::Hl2Telemetry noPeak;
+    noPeak.forwardPowerRaw = 76;
+    Access::publish(b, noPeak);
+    check(!health(b, kGate).isValid() && !health(b, kClears).isValid()
+              && !health(b, kPeak).isValid(),
+          "swr gate: on-stream, forwardPowerRaw alone reports none of the rows");
+
+    hl2::Hl2Telemetry withPeak;
+    withPeak.forwardPowerRaw = 76;
+    withPeak.forwardPowerPeakRaw = 76;
+    Access::publish(b, withPeak);
+    check(health(b, kGate).toInt() == hl2::kMinForwardCountsForSwr
+              && health(b, kPeak).toInt() == 76
+              && health(b, kClears).isValid(),
+          "swr gate: a peak publishes the gate, the clears count and the peak");
+
+    // THE COUNT IS "WINDOWS WHERE SWR WAS DUE": every gate publishTelemetry()
+    // applies to TX:SWR except the reverse reading. Keyed, with both peaks, the
+    // forward value is the window peak, and m_swrGate withholds the key-on and
+    // speech-pause windows even above the floor. The count must not move for a
+    // withheld window, or radiocert would call a correctly suppressed meter a
+    // defect (#7063).
+    const auto publishSwr = [](Hl2Backend& backend, const hl2::Hl2Telemetry& t) {
+        QSignalSpy spy(&backend, &IRadioBackend::meterUpdate);
+        Access::publish(backend, t);
+        for (const QList<QVariant>& args : spy) {
+            if (args.at(0).toString() == QStringLiteral("TX:SWR"))
+                return true;
+        }
+        return false;
+    };
+    const auto keyedPair = [](int fwd, int rev) {
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = fwd;
+        t.forwardPowerPeakRaw = fwd;
+        t.reversePowerRaw = rev;
+        t.reversePowerPeakRaw = rev;
+        return t;
+    };
+    Access::setKeyedFlag(b, true);
+    const hl2::Hl2Telemetry loud = keyedPair(1000, 10);
+    bool keyOnFed = false;
+    for (int i = 0; i < hl2::KeyedSwrGate::kKeyOnWindows; ++i)
+        keyOnFed = publishSwr(b, loud) || keyOnFed;
+    check(health(b, kClears).toInt() == 0 && health(b, kPeak).toInt() == 1000 && !keyOnFed,
+          "swr gate: key-on windows above the floor are withheld by m_swrGate and "
+          "count nothing");
+
+    check(publishSwr(b, loud) && health(b, kClears).toInt() == 1,
+          "swr gate: the first window past key-on counts and feeds TX:SWR");
+
+    // A speech pause above the floor: 400 counts is under 0.7 of the envelope
+    // the 1000-count windows left, so m_swrGate withholds it.
+    check(!publishSwr(b, keyedPair(400, 5)) && health(b, kClears).toInt() == 1,
+          "swr gate: a window m_swrGate rejects above the floor does not count");
+
+    // BELOW THE FLOOR, on an over whose envelope m_swrGate would accept: only
+    // the floor withholds it.
+    Access::pastKeyOn(b);
+    check(!publishSwr(b, keyedPair(hl2::kMinForwardCountsForSwr - 20, 3))
+              && health(b, kClears).toInt() == 1,
+          "swr gate: a window below the forward floor does not count");
+
+    // COUNTED ON THE GATES, NOT ON THE RATIO. A window with no reverse reading
+    // publishes no SWR and must still count: that is the fault a diagnostic has
+    // to stay free to call. With no reverse peak the pair falls back to the
+    // last values, which m_swrGate does not judge.
+    hl2::Hl2Telemetry noReverse;
+    noReverse.forwardPowerRaw = hl2::kMinForwardCountsForSwr + 50;
+    noReverse.forwardPowerPeakRaw = 500;
+    check(!publishSwr(b, noReverse) && health(b, kClears).toInt() == 2,
+          "swr gate: a window that passed the gates with no reverse reading still counts");
+
+    // UNKEYED WINDOWS DO NOT COUNT. The count answers "did this transmission
+    // reach the level where SWR is due", and the idle ADC artefact must not be
+    // able to answer it yes.
+    Access::setKeyedFlag(b, false);
+    Access::publish(b, keyedPair(1000, 10));
+    check(health(b, kClears).toInt() == 2,
+          "swr gate: an unkeyed window above the floor does not count");
+
+    Access::fakeStreamingLink(b, false);
+    check(!health(b, kGate).isValid() && !health(b, kClears).isValid()
+              && !health(b, kPeak).isValid(),
+          "swr gate: off-stream reports none of the rows");
 }
 
 // What one key-on replay published, window by window.
@@ -838,7 +1087,10 @@ int main(int argc, char** argv)
     driveGateHealthRows();
     notchIdsAreNeverReused();
     forwardPowerWindowPeakWhileKeyed();
+    swrFromWindowPairWhileKeyed();
+    swrKeyOnWindowsEveryOver();
     forwardPowerSkippedHealthRow();
+    swrGateHealthRows();
     forwardPowerKeyOnReplay();
     panAveragingSeam();
     restoredDiguTxPassband();

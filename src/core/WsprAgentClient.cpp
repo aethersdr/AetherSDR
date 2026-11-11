@@ -2,6 +2,7 @@
 
 #include "AppSettings.h"
 #include "DxSpot.h"
+#include "models/RadioModel.h"
 
 #include <QDateTime>
 #include <QTimer>
@@ -240,6 +241,18 @@ void saveSpotHubSettings(const WsprSpotHubSettings& settings)
     auto& s = AppSettings::instance();
     s.setValue(QStringLiteral("WsprSpots"), serializeSpotHubSettings(settings));
     s.save();
+}
+
+QMetaObject::Connection reserveReceiverSlice(WsprSpotFeed* feed, RadioModel* radio,
+                                             const QString& label)
+{
+    return QObject::connect(feed, &WsprSpotFeed::statusReceived, radio,
+                            [radio, label](const WsprStatus& status) {
+        if (status.sliceIndex >= 0 && radio->isConnected()
+            && !radio->isSliceReserved(status.sliceIndex)) {
+            radio->reserveSlice(status.sliceIndex, label);
+        }
+    });
 }
 
 }  // namespace wspr

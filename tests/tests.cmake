@@ -817,6 +817,14 @@ target_include_directories(control_telemetry_test PRIVATE src tests)
 target_link_libraries(control_telemetry_test PRIVATE aethercore Qt6::Core)
 add_test(NAME control_telemetry_test COMMAND control_telemetry_test)
 
+# Socket-free frontEndOverload resource: offered only to a backend declaring
+# frontEndOverloadObservation, withdrawn on disconnect, and the per-family
+# declarations read from the production backends.
+add_executable(control_front_end_overload_test tests/control_front_end_overload_test.cpp)
+target_include_directories(control_front_end_overload_test PRIVATE src tests)
+target_link_libraries(control_front_end_overload_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME control_front_end_overload_test COMMAND control_front_end_overload_test)
+
 # not registered: explicit opt-in diagnostic. Launches OUR aetherd and binds
 # its unique QLocalServer endpoint (Unix-domain socket / Windows named pipe).
 # Built-in Demo only; no third-party firmware peer. Exit 77 on listen refusal.
@@ -4200,6 +4208,12 @@ add_executable(tx_audio_path_policy_test tests/tx_audio_path_policy_test.cpp)
 target_include_directories(tx_audio_path_policy_test PRIVATE src)
 target_link_libraries(tx_audio_path_policy_test PRIVATE Qt6::Core)
 add_test(NAME tx_audio_path_policy_test COMMAND tx_audio_path_policy_test)
+
+# #7078: socket-free voice-key notice and MIC readiness policy.
+add_executable(tx_voice_key_notice_test tests/tx_voice_key_notice_test.cpp)
+target_include_directories(tx_voice_key_notice_test PRIVATE src)
+target_link_libraries(tx_voice_key_notice_test PRIVATE Qt6::Core)
+add_test(NAME tx_voice_key_notice_test COMMAND tx_voice_key_notice_test)
 
 # #5958: production CHAIN visibility under injected route notices; no sockets.
 add_executable(client_chain_audio_path_test
@@ -8422,6 +8436,16 @@ endif()
 set_target_properties(hl2_tci_signaling_test PROPERTIES AUTOMOC ON)
 add_test(NAME hl2_tci_signaling_test COMMAND hl2_tci_signaling_test)
 
+# #7063 — a backend-suppressed meter is INCONCLUSIVE naming its gate, never
+# "defined but never fed". Guards the band between MeterModel's consumer floor
+# and a producer's own (much higher) gate, where radiocert condemned a healthy
+# TX:SWR and recommended deleting it.
+add_executable(radiocert_gated_meter_test tests/radiocert_gated_meter_test.cpp)
+target_include_directories(radiocert_gated_meter_test PRIVATE src tests)
+target_link_libraries(radiocert_gated_meter_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(radiocert_gated_meter_test PROPERTIES AUTOMOC ON)
+add_test(NAME radiocert_gated_meter_test COMMAND radiocert_gated_meter_test)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -10403,6 +10427,35 @@ add_test(NAME vfo_meter_overlay_invalidation_test
 set_tests_properties(vfo_meter_overlay_invalidation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Socket-free: the VFO DAX list names a reserved slot's channel (#7139).
+add_executable(vfo_dax_reserved_test
+    tests/vfo_dax_reserved_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(vfo_dax_reserved_test PRIVATE src)
+target_link_libraries(vfo_dax_reserved_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME vfo_dax_reserved_test
+         COMMAND vfo_dax_reserved_test)
+set_tests_properties(vfo_dax_reserved_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # FM filter capability and edge routing through the real RX and VFO widgets.
 # Injects capability data; no socket, USB access or synthetic firmware peer.
 add_executable(fm_filter_controls_test
@@ -10703,6 +10756,27 @@ add_test(NAME two_tone_tune_gate_test
 set_tests_properties(two_tone_tune_gate_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #4954: on a TX output the backend cannot meter (the HL2's RF1) the TX
+# applet's power and SWR gauges say "not measured" instead of reading 0 W.
+# Same link set as two_tone_tune_gate_test; no socket, nothing keyed.
+add_executable(tx_output_metering_test
+    tests/tx_output_metering_test.cpp
+    src/gui/TxApplet.cpp
+    src/gui/AtuPreTuneDialog.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(tx_output_metering_test PRIVATE src tests)
+target_link_libraries(tx_output_metering_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(tx_output_metering_test PROPERTIES AUTOMOC ON)
+add_test(NAME tx_output_metering_test
+         COMMAND tx_output_metering_test)
+set_tests_properties(tx_output_metering_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_tx_filter_numeric_entry_test
     tests/phone_tx_filter_numeric_entry_test.cpp
     src/gui/PhoneApplet.cpp
@@ -10993,6 +11067,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_tx_applet_test
     bandstack_cat_controls_test
     two_tone_tune_gate_test
+    tx_output_metering_test
     update_controller_test
     update_installer_test
     update_stager_test
@@ -11105,6 +11180,7 @@ set(AETHER_SETTINGS_CONSUMERS
     net_scheduler_modes_test
     rx_applet_squelch_reconciliation_test
     vfo_meter_overlay_invalidation_test
+    vfo_dax_reserved_test
     fm_filter_controls_test
     wfm_controls_test
     spectrum_confirmed_geometry_test
@@ -11147,6 +11223,7 @@ set(AETHER_SETTINGS_CONSUMERS
     control_slice_frequency_test
     control_receive_test
     control_telemetry_test
+    control_front_end_overload_test
     aetherd_discovery_startup_test
     automation_bridge_start_outcome_test
     slice_label_test

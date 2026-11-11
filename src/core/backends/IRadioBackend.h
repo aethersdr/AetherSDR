@@ -1111,6 +1111,36 @@ public:
         // displayed under its own name.
         QMap<QString, QString> labels;
         [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
+
+        // Keys a DIAGNOSTIC reads back, named here rather than spelled twice
+        // (#7063). Most rows in a snapshot are for a human to read, so their
+        // keys live at the producer; these two are a contract between a backend
+        // and `radiocert`, and a snapshot is a QVariantMap, so a typo on either
+        // side is a silent lookup miss that no test of the consumer can see.
+        // One definition makes the join unspellable-wrong instead.
+        //
+        // kSwrGateCounts: the forward-count threshold below which the backend
+        // withholds a derived SWR, so a consumer can report "suppressed" rather
+        // than "never fed".
+        //
+        // kSwrGateClearsWhileKeyed: how many of the backend's own publish
+        // windows in THIS over cleared that threshold, judged on the value the
+        // backend actually applies the gate to. This is the key a consumer
+        // should reason with, because it is exact in both directions — 0 means
+        // the gate was never cleared and an absent ratio is explained, above 0
+        // means it was cleared and an absent ratio is a defect.
+        //
+        // kForwardWindowPeakRaw: the maximum forward count over the backend's
+        // own publish window, for a human reading how far below a gate a run
+        // sat. NOT the quantity a gate is applied to, so a consumer must not
+        // conclude "the gate was cleared" from it; that is what the clears
+        // count is for.
+        //
+        // Publish the gate with at least one of the other two, never alone; a
+        // known gate beside an absent reading names no state.
+        static constexpr char kSwrGateCounts[] = "forwardPowerSwrGateCounts";
+        static constexpr char kSwrGateClearsWhileKeyed[] = "forwardPowerSwrGateClears";
+        static constexpr char kForwardWindowPeakRaw[] = "forwardPowerWindowPeakRaw";
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }
 

@@ -984,32 +984,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         toggleConnectionDialog();
         return true;
     }
-    // The context-menu key and Shift+F10 open the keyer-source chooser on the
-    // DVK indicator, so the choice is reachable without a mouse there too, not
-    // only from Settings.
-    if (obj == m_dvkIndicator && event->type() == QEvent::KeyPress) {
-        auto* key = static_cast<QKeyEvent*>(event);
-        if (key->key() == Qt::Key_Menu
-            || (key->key() == Qt::Key_F10 && key->modifiers().testFlag(Qt::ShiftModifier))) {
-            showVoiceKeyerSourceMenu(voiceKeyerSourceMenuAnchor());
-            return true;
-        }
-    }
     // Status-bar indicators: a press and the keyboard (StatusIndicator's
     // Return/Enter/Space and the accessible Press action) run one action.
     if (event->type() == QEvent::MouseButtonPress && isStatusIndicator(obj)) {
-        // Right-click on the DVK indicator chooses the keyer (radio DVK or
-        // local recordings). It is handled here, not in
-        // activateStatusIndicator(), because that path is shared with the
-        // keyboard and cannot see which button was pressed; and it runs ahead
-        // of the enabled check because a dimmed indicator on an unlicensed
-        // radio is exactly where an operator needs to reach "Local".
-        if (obj == m_dvkIndicator
-            && static_cast<QMouseEvent*>(event)->button() == Qt::RightButton) {
-            showVoiceKeyerSourceMenu(
-                static_cast<QMouseEvent*>(event)->globalPosition().toPoint());
-            return true;
-        }
         // Left button only for these two: TX must not key from a stray
         // right-click, and the firmware row must not open a browser out from
         // under a context menu.
@@ -1169,11 +1146,15 @@ void MainWindow::showAddPanadapterDialog()
 // disabled state too — the old inline copy could only express two of three.
 void MainWindow::toggleVoiceKeyerPanel()
 {
-    if (!m_dvkPanel || !m_dvkIndicator || !m_dvkIndicator->isEnabled()) {
+    if (!m_dvkPanel) {
         return;
     }
-
+    // Opening follows the indicator's gate; closing an open panel is always
+    // allowed, so Tools never offers a tick that cannot be cleared.
     const bool show = !m_dvkPanel->isVisible();
+    if (show && (!m_dvkIndicator || !m_dvkIndicator->isEnabled())) {
+        return;
+    }
     if (show && m_cwxPanel && m_cwxPanel->isVisible()) {
         m_cwxPanel->hide();
     }
