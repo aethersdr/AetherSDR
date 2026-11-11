@@ -2414,7 +2414,8 @@ void VfoWidget::buildTabContent()
                 selRow->addWidget(markPlus);
 
                 auto markDown = [this] {
-                    if (m_slice) m_slice->setRttyMark(m_slice->rttyMark() - MARK_STEP);
+                    if (m_slice && m_slice->rttyMark() > MARK_STEP)
+                        m_slice->setRttyMark(m_slice->rttyMark() - MARK_STEP);
                 };
                 auto markUp = [this] {
                     if (m_slice) m_slice->setRttyMark(m_slice->rttyMark() + MARK_STEP);
