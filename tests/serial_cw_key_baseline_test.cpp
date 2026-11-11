@@ -6,6 +6,7 @@
 // path (the poll and the Win32 watcher share it); no port is opened, so open()'s
 // own call to the baseline is source, not exercised here. The same holds for
 // loadSettings()'s in-place reload: its rebaseline runs here, the call does not.
+// The Win32 watcher's epoch filter is not run either; its input, the epoch, is.
 
 #include "TestSettingsProfile.h"
 #include "core/SerialPortController.h"
@@ -33,6 +34,11 @@ public:
     {
         c.rebaselineInPlace(cts, dsr, dcd);
     }
+    static quint64 portEpoch(const SerialPortController& c)
+    {
+        return c.m_inputPortEpoch.load();
+    }
+    static void close(SerialPortController& c) { c.retireTxInputs(); }
 };
 } // namespace AetherSDR
 
@@ -104,7 +110,7 @@ void straightKey(bool activeHigh)
     check(!r.anyKeyDown(), tag + ": a line active at open emits no key-down at the first polls");
 
     SerialInputBaselineTestAccess::sample(c, !pressed, false, false);
-    check(!r.anyKeyDown(), tag + ": its release emits no key-down");
+    check(r.keys.empty(), tag + ": its release emits nothing, no unpaired key-up");
     SerialInputBaselineTestAccess::sample(c, pressed, false, false);
     check(r.anyKeyDown() && r.keys.back(), tag + ": the next press keys");
 }
@@ -138,7 +144,7 @@ void paddle(bool swap)
     check(!r.anyPaddleDown(), tag + ": a paddle line active at open emits no element");
 
     SerialInputBaselineTestAccess::sample(c, false, false, false);
-    check(!r.anyPaddleDown(), tag + ": its release emits no element");
+    check(r.paddles.empty(), tag + ": its release emits nothing, no unpaired release");
     SerialInputBaselineTestAccess::sample(c, false, true, false);
     const bool wantDit = !swap;
     check(!r.paddles.empty() && r.paddles.back().first == wantDit
@@ -190,9 +196,43 @@ void polarityFlipHeldKey()
     check(r.keys.size() == 1 && r.keys.front(), tag + ": control: the press keys");
 
     c.setCtsPolarity(false);
+    const quint64 epoch = SerialInputBaselineTestAccess::portEpoch(c);
     SerialInputBaselineTestAccess::reload(c, true, false, false);
     SerialInputBaselineTestAccess::sample(c, true, false, false);
-    check(!r.keys.empty() && !r.keys.back(), tag + ": the reload publishes the key-up");
+    check(r.keys.size() == 2 && !r.keys.back(), tag + ": the reload publishes the key-up");
+    // The Win32 watcher captured the epoch at start and drops samples from
+    // any other one: the port stays open, so the reload must keep it.
+    check(SerialInputBaselineTestAccess::portEpoch(c) == epoch,
+          tag + ": the in-place reload keeps the port epoch");
+}
+
+// A held paddle is released by the reload too, with the epoch kept.
+void reloadHeldPaddle()
+{
+    const std::string tag = "reload, paddle held";
+    SerialPortController c;
+    c.setDsrFunction(Input::CwDitInput);
+    c.setDsrPolarity(true);
+    Recorder r(c);
+    SerialInputBaselineTestAccess::open(c, false, false, false);
+    SerialInputBaselineTestAccess::sample(c, false, true, false);
+    check(r.paddles.size() == 1 && r.paddles.front().first, tag + ": control: the press sends dit");
+    const quint64 epoch = SerialInputBaselineTestAccess::portEpoch(c);
+    SerialInputBaselineTestAccess::reload(c, false, true, false);
+    check(r.paddles.size() == 2 && !r.paddles.back().first && !r.paddles.back().second,
+          tag + ": the reload publishes the release");
+    check(SerialInputBaselineTestAccess::portEpoch(c) == epoch,
+          tag + ": the in-place reload keeps the port epoch");
+}
+
+// Control for the epoch check: closing the port does move it.
+void closeMovesEpoch()
+{
+    SerialPortController c;
+    const quint64 epoch = SerialInputBaselineTestAccess::portEpoch(c);
+    SerialInputBaselineTestAccess::close(c);
+    check(SerialInputBaselineTestAccess::portEpoch(c) != epoch,
+          "control: closing the port moves the port epoch");
 }
 
 void polarityFlipIdlePaddle()
@@ -228,6 +268,8 @@ int main(int argc, char** argv)
     polarityFlipIdleKey();
     polarityFlipHeldKey();
     polarityFlipIdlePaddle();
+    reloadHeldPaddle();
+    closeMovesEpoch();
 
     if (failures == 0) {
         std::printf("serial_cw_key_baseline_test: all checks passed\n");

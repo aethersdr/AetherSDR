@@ -103,6 +103,8 @@ private:
     void publishKeyInput(bool down, const TxCoordinator::Request& input = {});
     void publishPaddleInput(bool dit, bool dah, const TxCoordinator::Request& input = {});
     void retireTxInputs();
+    // Discard queued input and publish the release of held PTT, key and paddle.
+    void releaseHeldTxInputs();
     TxCoordinator::Producer m_txProducer;
     TxCoordinator::Request m_pttInput;
     TxCoordinator::Request m_keyInput;

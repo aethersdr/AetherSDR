@@ -74,6 +74,11 @@ void SerialPortController::retireTxInputs()
     // thread must not key after close. Original releases still clear held
     // paddle state/TUNE exclusion (#5422) and straight-key sidetone.
     ++m_inputPortEpoch;
+    releaseHeldTxInputs();
+}
+
+void SerialPortController::releaseHeldTxInputs()
+{
     m_txProducer.discardInputs();
     emit txInputsCancelled();
     if (m_pttInputHeld) {
@@ -544,8 +549,9 @@ void SerialPortController::baselineInputs(bool ctsRaw, bool dsrRaw, bool dcdRaw)
 void SerialPortController::rebaselineInPlace(bool ctsRaw, bool dsrRaw, bool dcdRaw)
 {
     // Release what is held first: a baseline alone would drop a held key or
-    // paddle without publishing its release, leaving the radio keyed.
-    retireTxInputs();
+    // paddle without publishing its release, leaving the radio keyed. The port
+    // stays open, so the epoch is kept: the Win32 watcher captured it at start.
+    releaseHeldTxInputs();
     baselineInputs(ctsRaw, dsrRaw, dcdRaw);
 }
 
@@ -581,7 +587,10 @@ void SerialPortController::applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRa
     // ── CW straight key ──────────────────────────────────────────────────
     if (lines.hasKey && lines.keyDown != m_lastKeyDown) {
         m_lastKeyDown = lines.keyDown;
-        publishKeyInput(lines.keyDown, input);
+        // A release of a key held at open was never published as down.
+        if (lines.keyDown || m_keyInputHeld) {
+            publishKeyInput(lines.keyDown, input);
+        }
     }
 
     // Track DCD regardless of role so close-time stuck-PTT detection and
@@ -592,7 +601,9 @@ void SerialPortController::applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRa
     if (lines.hasPaddle && (lines.dit != m_lastDitActive || lines.dah != m_lastDahActive)) {
         m_lastDitActive = lines.dit;
         m_lastDahActive = lines.dah;
-        publishPaddleInput(lines.dit, lines.dah, input);
+        if (lines.dit || lines.dah || m_paddleInputHeld) {
+            publishPaddleInput(lines.dit, lines.dah, input);
+        }
     }
 }
 #endif
