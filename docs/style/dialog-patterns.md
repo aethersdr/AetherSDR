@@ -224,7 +224,6 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 ## Existing dialogs that follow this pattern (look at these for reference)
 
 - `src/gui/AetherDspDialog.{h,cpp}`
-- `src/gui/MidiMappingDialog.{h,cpp}`
 - `src/gui/PanLayoutDialog.{h,cpp}`
 - `src/gui/ProfileManagerDialog.{h,cpp}` — most complete reference; has the move/resize event saving
 
@@ -233,12 +232,12 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 A window built on `CanonWindow` (`src/gui/CanonWindow.{h,cpp}`, RFC #6226)
 deliberately opts out of frameless chrome integration, and by default of
 geometry persistence too. About AetherSDR, Remote Access (Tailscale),
-Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup, TX Band Settings, Callsign Lookup, Connect to Radio (`ConnectionPanel`), AGC-T Calibration, Icom RC-28 Button Mapping, NR2's FFTW Wisdom window, MQTT Settings, Keyboard Shortcuts (`ShortcutDialog`), Ulanzi Dial — Control Mapping, Net Scheduler, Memory Channels, Theme Editor, Support & Diagnostics, the Help guides (`HelpDialog`), Runtime Monitor (`SystemInfoDialog`), MIDI Controller Mapping and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
+Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Radio Setup, TX Band Settings, Callsign Lookup, Connect to Radio (`ConnectionPanel`), AGC-T Calibration, Icom RC-28 Button Mapping, NR2's FFTW Wisdom window, MQTT Settings, Keyboard Shortcuts (`ShortcutDialog`), Ulanzi Dial — Control Mapping, Net Scheduler, Memory Channels, Theme Editor, Support & Diagnostics, the Help guides (`HelpDialog`), Runtime Monitor (`SystemInfoDialog`), What's New (`WhatsNewDialog`), MIDI Controller Mapping and the AetherRX / AetherTX Settings (profile library) dialogs are built on it.
 
 | Concern | `CanonWindow` | Why |
 |---|---|---|
 | Frameless chrome integration | Always frameless; ignores `FramelessWindow` and is not tracked by `trackPersistentDialog()` | The style guide's rounded, title-bar-less window *is* the design; native chrome would put a title bar over it |
-| Geometry persistence | None by default: asks to open centered on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and whenever the window hides (flushed — Escape and ⌘W / Ctrl+W close it through `QDialog::reject()`, which hides it and honours `WA_DeleteOnClose` but delivers no close event), and restored in place of the centering. Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup, TX Band Settings and Callsign Lookup, Net Scheduler, Memory Channels, Theme Editor, Support & Diagnostics, the Help guides (one key per guide), Runtime Monitor and MIDI Controller Mapping opt in. `setLaunchSize()` pins the size on every open while the position is still restored; AetherRX and AetherTX use it, for now | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
+| Geometry persistence | None by default: asks to open centered on its parent every time (Wayland compositors place top-level windows themselves and may ignore it). `setGeometryKey()` opts in: size and position are saved under that AppSettings key on move and resize (in memory) and whenever the window hides (flushed — Escape and ⌘W / Ctrl+W close it through `QDialog::reject()`, which hides it and honours `WA_DeleteOnClose` but delivers no close event), and restored in place of the centering. Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup, TX Band Settings and Callsign Lookup, Net Scheduler, Memory Channels, Theme Editor, Support & Diagnostics, the Help guides (one key per guide), Runtime Monitor, What's New and MIDI Controller Mapping opt in. `setLaunchSize()` pins the size on every open while the position is still restored; AetherRX and AetherTX use it, for now | A short-lived window has nothing to restore; a workspace tool keeps the size its operator gave it |
 
 What it keeps:
 
@@ -270,7 +269,7 @@ What it keeps:
 It is translucent, so the rounded corners need a compositor; an X11 session
 without one shows square black corners. Use `CanonWindow` only for windows the
 style guide covers: short-lived windows, and the tool windows the maintainer
-has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup, TX Band Settings, FFTW Wisdom, Callsign Lookup, Ulanzi Dial — Control Mapping, Net Scheduler, Memory Channels, Theme Editor, Support & Diagnostics, the Help guides, Runtime Monitor, MIDI Controller Mapping). A tool window on it also
+has moved to it (Waveforms, Network Diagnostics, AetherRX, AetherTX, AetherModem, AetherMap, AetherGPS, SpotHub, FreeDV Reporter, AetherControl, the multiFLEX Dashboard, Icom RC-28 Button Mapping, Radio Setup, TX Band Settings, FFTW Wisdom, Callsign Lookup, Ulanzi Dial — Control Mapping, Net Scheduler, Memory Channels, Theme Editor, Support & Diagnostics, the Help guides, Runtime Monitor, What's New, MIDI Controller Mapping). A tool window on it also
 installs `FramelessResizer`, since `CanonWindow` itself only moves, unless its
 contents are placed at fixed positions: Ulanzi Dial — Control Mapping keeps a
 fixed size, because its pills sit at fixed points on the dial picture. A
@@ -286,7 +285,7 @@ null when the box is closed any other way; the default button is outlined in
 cyan and a destructive one is drawn in gold. `setDetailedText()` adds a
 read-only list to scroll and copy below the texts, in place of `QMessageBox`'s
 detailed text. The CTR2 window's questions, the Keyboard Shortcuts editor's
-questions, the Net Scheduler's and Reset Settings' failure notice use it. Reset Settings'
+questions, the Net Scheduler's and MIDI Controller Mapping's questions and notices, and Reset Settings' failure notice use it. Reset Settings'
 confirmation lists the files it will remove in a nested list, which the box has
 no place for, so it is its own `CanonWindow` dialog (`ResetSettingsPrompts`)
 with the same buttons.
