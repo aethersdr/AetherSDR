@@ -40,8 +40,9 @@ Center and bandwidth must leave a positive-frequency viewport.
 CW pitch `hz` is an int32 receive BFO offset shared by every CW receiver of the
 session; it must lie inside the backend's declared `receiveCwPitchControl`
 range and on its step. The backend must have reported a pitch in this session
-(`receiveObservation.cwPitch` on the `radioSession` resource); the client's own
-cached pitch is not an observation.
+(`receiveObservation.cwPitch` on the `radioSession` resource). A saved pitch
+restored at connect counts as reported; a pitch the client set but no backend
+or restore has reported does not.
 
 ```json
 {"v":1,"id":"mode-1","sessionId":"<negotiated>","method":"slice.setMode","params":{"radioSession":"radio-1","slice":"0","expectedRevision":42,"mode":"LSB"}}
