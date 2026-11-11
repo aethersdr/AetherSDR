@@ -188,6 +188,44 @@ void broadcast()
     }
 }
 
+// A source change mid-burst: the first half is forgotten, and the burst that
+// follows decodes exactly once, timed from the reset.
+void resetMidBurst()
+{
+    const std::vector<std::uint8_t> frame = uiFrame();
+    bool sent = false;
+    const std::vector<float> pcm = broadcastOnAir(frame, sent);
+    check(sent, "reset: the transmitting station sent its frame");
+
+    Data2gMonitor monitor;
+    monitor.setStamp([](double) { return std::string("STAMP"); });
+
+    // Where the burst sits: the loudest sample is well inside it.
+    std::size_t loudest = 0;
+    for (std::size_t i = 0; i < pcm.size(); ++i) {
+        if (std::fabs(pcm[i]) > std::fabs(pcm[loudest]))
+            loudest = i;
+    }
+    const std::vector<float> head(pcm.begin(), pcm.begin() + static_cast<std::ptrdiff_t>(loudest));
+    check(feedInChunks(monitor, head).empty(), "reset: half a burst decodes nothing");
+    monitor.reset();
+
+    int heard = 0;
+    bool stamped = false;
+    bool timedFromReset = false;
+    for (const Data2gBurst& burst : feedInChunks(monitor, pcm)) {
+        if (burst.head.find("BCAST \"KISS 0\": 1 frame(s)") == std::string::npos)
+            continue;
+        ++heard;
+        stamped = burst.head.rfind("STAMP", 0) == 0;
+        timedFromReset = burst.startSeconds < static_cast<double>(pcm.size()) / 24000.0;
+    }
+    check(heard == 1, "reset: the whole burst after it decodes exactly once");
+    check(stamped, "reset: the caller's stamp opens the burst's first line");
+    check(timedFromReset, "reset: burst time restarts at the reset");
+    check(monitor.faultCount() == 0, "reset: no fault was counted");
+}
+
 } // namespace
 
 int main()
@@ -196,6 +234,7 @@ int main()
     rates();
     noiseOnly();
     broadcast();
+    resetMidBurst();
     if (g_failures) {
         std::fprintf(stderr, "data2g_monitor_test: %d failure(s)\n", g_failures);
         return 1;

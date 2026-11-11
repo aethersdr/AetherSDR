@@ -19,8 +19,12 @@
 // decode on the calling thread and can block for a noticeable fraction of a
 // second on a long burst, so call it from a worker, never from the audio or
 // GUI thread.
+// A decode in flight cannot be abandoned from outside: the core's cancellation
+// hook only shortens its optional refinement pass. Feed short chunks and check
+// for shutdown between them.
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -37,7 +41,7 @@ struct Data2gPayload {
 };
 
 struct Data2gBurst {
-    double startSeconds{0.0};          // burst start, seconds of audio fed so far
+    double startSeconds{0.0};          // burst start, seconds of audio since the last reset()
     std::string head;                  // description lines, each ending in '\n'
     std::vector<Data2gPayload> payloads;
     std::string text;                  // head plus payloads, rendered for a log view
@@ -66,6 +70,20 @@ public:
 
     bool isValid() const;
     int sampleRate() const;
+
+    // The stamp that opens each burst's first line, given the burst's start
+    // in seconds since the last reset(). Default: those seconds, "12.3".
+    using Stamp = std::function<std::string(double startSeconds)>;
+    void setStamp(Stamp stamp);
+
+    // Forget everything heard: filter history, a burst in progress, and the
+    // session keys learned so far. Call it whenever the audio is no longer
+    // one continuous stream — a source change, a dropout, a retune.
+    void reset();
+
+    // feed() calls that ended in a core exception. Each one reset the
+    // monitor.
+    std::uint64_t faultCount() const;
 
     // Mono float32 at sampleRate(), in chunks of any size. Level does not
     // need to be normalized. Returns the bursts completed by this chunk.

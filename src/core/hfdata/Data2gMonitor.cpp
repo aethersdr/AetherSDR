@@ -16,8 +16,16 @@ struct Data2gMonitor::Impl {
     int sampleRate{0};
     bool valid{false};
     std::optional<data2g::audio::Decimator> decimator;
-    data2g::monitor::Monitor monitor;
+    std::optional<data2g::monitor::Monitor> monitor;
     std::vector<double> scratch;
+    Stamp stamp;
+    std::uint64_t faults{0};
+
+    void restart()
+    {
+        decimator.emplace(sampleRate);
+        monitor.emplace();
+    }
 };
 
 bool Data2gMonitor::isSupportedSampleRate(int sampleRate)
@@ -44,10 +52,11 @@ Data2gMonitor::Data2gMonitor(int sampleRate)
     if (!isSupportedSampleRate(sampleRate))
         return;
     try {
-        m_impl->decimator.emplace(sampleRate);
+        m_impl->restart();
         m_impl->valid = true;
     } catch (const std::exception&) {
         m_impl->decimator.reset();
+        m_impl->monitor.reset();
     }
 }
 
@@ -63,6 +72,22 @@ int Data2gMonitor::sampleRate() const
     return m_impl->sampleRate;
 }
 
+void Data2gMonitor::setStamp(Stamp stamp)
+{
+    m_impl->stamp = std::move(stamp);
+}
+
+void Data2gMonitor::reset()
+{
+    if (m_impl->valid)
+        m_impl->restart();
+}
+
+std::uint64_t Data2gMonitor::faultCount() const
+{
+    return m_impl->faults;
+}
+
 std::vector<Data2gBurst> Data2gMonitor::feed(std::span<const float> mono)
 {
     std::vector<Data2gBurst> out;
@@ -73,17 +98,26 @@ std::vector<Data2gBurst> Data2gMonitor::feed(std::span<const float> mono)
 
     std::vector<double> starts;
     std::vector<data2g::monitor::Dump> dumps;
+    bool fault = false;
     try {
         const std::vector<double> atFs = (*m_impl->decimator)(m_impl->scratch);
-        dumps = m_impl->monitor.feed(atFs, [&starts](double t) {
+        dumps = m_impl->monitor->feed(atFs, [this, &starts](double t) {
             starts.push_back(t);
+            if (m_impl->stamp)
+                return m_impl->stamp(t);
             char stamp[32];
             std::snprintf(stamp, sizeof stamp, "%.1f", t);
             return std::string(stamp);
         });
     } catch (const std::exception&) {
         // The audio is untrusted (Principle VII): a burst the core rejects
-        // is dropped, and the stream carries on with the next chunk.
+        // is dropped, not allowed to take the stream down with it.
+        fault = true;
+    }
+    if (fault) {
+        // Whatever the core held is in an unknown state: start clean.
+        ++m_impl->faults;
+        m_impl->restart();
         return out;
     }
 
