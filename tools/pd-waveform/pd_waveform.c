@@ -13,9 +13,10 @@
 // It never keys the radio: it sends transmit samples only in answer to the
 // radio's own transmit stream, and only while the interlock is PTT_REQUESTED
 // or TRANSMITTING. At UNKEY_REQUESTED it goes silent at once, as the
-// waveform-sdk example does: the radio finishes unkeying only when the
-// waveform stops sending (FLEX-8600, 2026-11-11: answering on through
-// UNKEY_REQUESTED held a test two-tone on the air until the slice left PD).
+// waveform-sdk example does. On a FLEX-8600 (2026-11-11), a waveform that
+// kept answering held the interlock in UNKEY_REQUESTED for 28 to 531 s after
+// each unkey, with the test two-tone still on the air, until the slice left
+// PD.
 //
 // Protocol: the waveform API as FlexRadio's public waveform-sdk uses it
 // (waveform create / set, slice and interlock status, VITA-49 float
@@ -88,9 +89,20 @@
 #define SETTLE_SAMPLES RATE
 // A test two-tone repeats (710/1900 Hz every 100 ms), so every multiple of
 // that lag correlates perfectly and the loop delay is ambiguous. Each test
-// transmission, and each re-acquisition, opens with this much band-limited
-// noise instead: long enough to cover SETTLE_SAMPLES and an acquisition.
-#define TEST_NOISE_SAMPLES (2 * RATE)
+// transmission, and each re-acquisition, opens with this much noise instead:
+// long enough to cover SETTLE_SAMPLES, an acquisition at the longest delay,
+// and EQ_TRAIN_SAMPLES of transmit-path fit after it.
+#define TEST_NOISE_SAMPLES (7 * RATE / 2)
+// The preamble spans the correction's band, IMD3 to IMD7 of the test
+// two-tone (-2860 to +5470 Hz): the transmit-path fit is only right where it
+// was excited, and the correction puts its energy there. A 300-3000 Hz
+// preamble left the fit wrong there; fits after the first then drifted IMD3
+// back from -50 to -42 dBc.
+#define TEST_NOISE_LO_HZ (-4500)
+#define TEST_NOISE_HI_HZ 7500
+// Noise amplitude: the 300-3000 Hz preamble's RMS (about 0.16 at a 0.7 peak)
+// over the wider band.
+#define TEST_NOISE_GAIN 0.57
 // The radio filters the waveform's I/Q before its amplifier, so the
 // reference is not the amplifier's input; WDSP then sees the low-amplitude
 // pairs scatter in phase and rejects every fit (FLEX-8600: sin^2+cos^2 off by
@@ -406,7 +418,7 @@ typedef struct {
     double test_f1, test_f2;      // AETHER_PD_TEST_TONES, Hz; 0 = use the mic
     long long test_n;             // samples of the test two-tone sent so far
     int test_noise_left;          // samples of noise preamble still to send
-    cbp_t noise_bp;               // band-limits the preamble to 300-3000 Hz
+    cbp_t noise_bp;               // band-limits the preamble to the correction band
     unsigned noise_seed;
     int correct, daxiq_ch, daxiq_rate;
     double last_report;
@@ -707,7 +719,7 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
                 w->test_noise_left--;
                 w->noise_seed = w->noise_seed * 1664525u + 1013904223u;
                 double u = ((w->noise_seed >> 8) / 16777216.0) - 0.5;
-                cbp_step(&w->noise_bp, 1.2 * w->peak * u, &i, &q);
+                cbp_step(&w->noise_bp, TEST_NOISE_GAIN * w->peak * u, &i, &q);
             } else if (w->test_f1 > 0) {
                 // Each tone at half the peak, so the envelope peaks at it.
                 double t = (double)w->test_n++ / RATE, a = w->peak / 2;
@@ -808,7 +820,7 @@ static int wf_init(wf_t* w)
     if (!w->core || !w->align || !w->eq || !w->ref.buf || !w->fbk.buf || !w->acq_tx || !w->acq_rx)
         return 0;
     cbp_init(&w->mod, 200, 2800);
-    cbp_init(&w->noise_bp, 300, 3000);
+    cbp_init(&w->noise_bp, TEST_NOISE_LO_HZ, TEST_NOISE_HI_HZ);
     w->noise_seed = 12345;
     decim_init(&w->fb, w->daxiq_rate, 0);
     return 1;
