@@ -135,7 +135,7 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **Printable Manual (PDF)** | Downloads the [printable manual](pathname:///AetherSDR-Manual.pdf), all of these pages in one PDF. |
 | **Log Analyzer** | Opens the [Log Analyzer](/log-analyzer), which checks a log or support bundle for known problems in your browser. |
 | **Getting Started...**, **AetherSDR Help...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. Choosing an open guide restores it if minimized and brings it to the front. Close a guide with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). |
-| **What's New...** | Offline release notes. Choosing this entry again brings the open window to the front. Only web links (http and https) open; any other kind of link in the release notes is ignored. |
+| **What's New...** | Release notes fetched from GitHub. Switching themes keeps your reading position and Find selection. Choosing this entry again brings the open window to the front. Only web links (http and https) open; any other kind of link in the release notes is ignored. **Find** searches the notes, and the window closes with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). |
 | **Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...** | Topic guides, also offline. |
 | **AetherSDR Website**, **Donate to AetherSDR** | Open the web pages. |
 | **Submit your Idea... 💡** | The AI-assisted feature-request helper. |
