@@ -3218,6 +3218,13 @@
         },
         {
           "cmd": "invoke",
+          "target": "rttySensSlider",
+          "action": "setValue",
+          "value": "38",
+          "_sleep": 0.5
+        },
+        {
+          "cmd": "invoke",
           "target": "panZoomInBtn",
           "action": "click",
           "_sleep": 0.7
@@ -3283,6 +3290,13 @@
       "cleanup": [
         {
           "cmd": "invoke",
+          "target": "rttySensSlider",
+          "action": "setValue",
+          "value": "0",
+          "_sleep": 0.5
+        },
+        {
+          "cmd": "invoke",
           "target": "panZoomOutBtn",
           "action": "click",
           "_sleep": 0.7
@@ -3346,7 +3360,7 @@
         }
       ],
       "caption": "The RTTY decoder pane under the waterfall.",
-      "alt": "The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: Auto, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area."
+      "alt": "The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: 2125, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area."
     },
     {
       "id": "offscreen-vfo-indicator",

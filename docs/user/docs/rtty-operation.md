@@ -72,7 +72,7 @@ When the selected slice is in **RTTY**, a decoder pane opens below the waterfall
 
 The stats bar updates about twice a second with the mark and space levels, the SNR and **LOCKED** / **UNLOCK**. Baud, REV and Sens are remembered. Mark and Shift are not: they are the slice's mark and shift, which the radio holds, and a new slice starts at a 170 Hz shift.
 
-<img src="/img/screens/rtty-decoder-pane.png" width="1331" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: Auto, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
+<img src="/img/screens/rtty-decoder-pane.png" width="1226" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: 2125, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
 
 *The RTTY decoder pane under the waterfall.*
 
