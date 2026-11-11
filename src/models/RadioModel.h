@@ -900,6 +900,22 @@ public:
     // Station name of the client occupying a foreign slot, or empty string
     // if not foreign / not known yet.
     QString foreignSliceOwnerStation(int sliceId) const;
+    // A slot held by a program running on the radio itself, such as the WSPR
+    // receiver. The radio reports such a slice as the connected GUI client's
+    // own, so only the program can say which one it is. A reserved slot is
+    // foreign under `label`: no SliceModel is made for it (one already made
+    // is dropped), and the reservation ends when the radio removes the
+    // slice. Session resets clear it.
+    void reserveSlice(int sliceId, const QString& label);
+    void releaseReservedSlice(int sliceId);
+    bool isSliceReserved(int sliceId) const { return m_reservedSlices.contains(sliceId); }
+    // Runs on a LAN connect just before `client gui`, whose reply carries
+    // the radio's slice statuses, so a reservation made here applies from
+    // the first one. The gate must call `proceed`; registration also goes
+    // ahead after kRegistrationGateCapMs if it doesn't.
+    using RegistrationGate = std::function<void(const QHostAddress& radio, std::function<void()> proceed)>;
+    void setRegistrationGate(RegistrationGate gate) { m_registrationGate = std::move(gate); }
+    static constexpr int kRegistrationGateCapMs = 2000;
     bool automationApplySliceFixture(int sliceId,
                                      const QString& radioLetter,
                                      QString* error = nullptr);
@@ -1829,6 +1845,13 @@ private:
     // the radio status burst, then check for a multiFLEX conflict before
     // sending client gui. Calls continuation() if no conflict is found.
     void peekForMultiFlexConflictThen(std::function<void()> continuation);
+    void runRegistrationGateThen(std::function<void()> continuation);
+    // `current` is the session the gate was asked for: a proceed that comes
+    // after a reconnect must not register into the new session.
+    void runRegistrationGateThen(std::function<void()> continuation, RadioControlFence current);
+    // Drops the SliceModel (live or stale) for a slot another owner holds.
+    // Returns whether there was one.
+    bool dropSliceModelForForeignSlot(int sliceId);
     void handleForcedClientDisconnect();
     void handleDuplicateClientIdDisconnect();
     // Shared transport teardown for a terminal session failure (forced,
@@ -2811,6 +2834,8 @@ private:
     quint16  m_wanUdpPort{4991};
     QSet<int>          m_ownedSliceIds;   // slice IDs that belong to our client
     QHash<int, quint32> m_foreignSliceOwners;  // slot id → owning client handle
+    QHash<int, QString> m_reservedSlices;      // slot id → on-radio program (reserveSlice)
+    RegistrationGate   m_registrationGate;
     QSet<int>          m_automationSliceFixtures; // disconnected bridge fixtures
     bool               m_automationSliceFixtureBaselineActive{false};
     QString            m_automationSliceFixtureBaselineModel;

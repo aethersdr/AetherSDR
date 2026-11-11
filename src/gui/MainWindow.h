@@ -1443,6 +1443,12 @@ private:
     // The WSPR receiver on the radio (tools/wspr-agent): its spots for
     // SpotHub and the panadapter. Main thread; it only polls HTTP.
     WsprSpotFeed*        m_wsprFeed{nullptr};
+    // Reserves the WSPR receiver's slice in RadioModel when the receiver
+    // at `radio` names one, then calls `done`. Waits at most
+    // kWsprSliceReadMs: a radio without the receiver refuses at once.
+    void readWsprReceiverSlice(const QHostAddress& radio, std::function<void()> done);
+    static constexpr int kWsprSliceReadMs = 1000;
+    static constexpr int kWsprSliceRecheckMs = 500;
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
