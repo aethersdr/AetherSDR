@@ -909,6 +909,9 @@ public:
     void reserveSlice(int sliceId, const QString& label);
     void releaseReservedSlice(int sliceId);
     bool isSliceReserved(int sliceId) const { return m_reservedSlices.contains(sliceId); }
+    // Whether a reserved slot's slice is on DAX channel `channel`. A DAX
+    // channel feeds one slice, so putting it on ours would take it from them.
+    bool daxChannelReserved(int channel) const;
     // Runs on a LAN connect just before `client gui`, whose reply carries
     // the radio's slice statuses, so a reservation made here applies from
     // the first one. The gate must call `proceed`; registration also goes
@@ -2835,6 +2838,7 @@ private:
     QSet<int>          m_ownedSliceIds;   // slice IDs that belong to our client
     QHash<int, quint32> m_foreignSliceOwners;  // slot id → owning client handle
     QHash<int, QString> m_reservedSlices;      // slot id → on-radio program (reserveSlice)
+    QHash<int, int>    m_reservedDax;         // reserved slot id → its DAX channel, as the radio reports
     RegistrationGate   m_registrationGate;
     QSet<int>          m_automationSliceFixtures; // disconnected bridge fixtures
     bool               m_automationSliceFixtureBaselineActive{false};

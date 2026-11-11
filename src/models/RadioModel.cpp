@@ -7308,6 +7308,7 @@ void RadioModel::stageSessionModelsForReconnect()
     }
     m_foreignSliceOwners.clear();
     m_reservedSlices.clear();
+    m_reservedDax.clear();
     m_pendingPanStatuses.clear();
     m_panTransmitInhibitReasons.clear();
     m_panTransmitInhibitedTxSlices.clear();
@@ -7418,6 +7419,7 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     m_ownedSliceIds.clear();
     m_foreignSliceOwners.clear();
     m_reservedSlices.clear();
+    m_reservedDax.clear();
     m_activePanId.clear();
     m_staleSessionSerial.clear();
     m_connectedSessionSerial.clear();
@@ -13029,6 +13031,9 @@ void RadioModel::reserveSlice(int sliceId, const QString& label)
     }
     const bool was = m_reservedSlices.contains(sliceId);
     m_reservedSlices.insert(sliceId, label);
+    if (const SliceModel* adopted = slice(sliceId); adopted && adopted->daxChannel() > 0) {
+        m_reservedDax.insert(sliceId, adopted->daxChannel());
+    }
     m_ownedSliceIds.remove(sliceId);
     m_foreignSliceOwners.remove(sliceId);
     const bool dropped = dropSliceModelForForeignSlot(sliceId);
@@ -13039,8 +13044,22 @@ void RadioModel::reserveSlice(int sliceId, const QString& label)
     }
 }
 
+bool RadioModel::daxChannelReserved(int channel) const
+{
+    if (channel <= 0) {
+        return false;
+    }
+    for (auto it = m_reservedDax.constBegin(); it != m_reservedDax.constEnd(); ++it) {
+        if (it.value() == channel && m_reservedSlices.contains(it.key())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void RadioModel::releaseReservedSlice(int sliceId)
 {
+    m_reservedDax.remove(sliceId);
     if (m_reservedSlices.remove(sliceId)) {
         emit slotOccupancyChanged(sliceId);
     }
@@ -13055,8 +13074,11 @@ void RadioModel::handleSliceStatus(int id,
     if (m_reservedSlices.contains(id)) {
         if (removed) {
             m_reservedSlices.remove(id);
+            m_reservedDax.remove(id);
             noteSliceRetirement(id);
             emit slotOccupancyChanged(id);
+        } else if (auto dax = kvs.constFind(QStringLiteral("dax")); dax != kvs.constEnd()) {
+            m_reservedDax.insert(id, dax.value().toInt());
         }
         return;
     }

@@ -461,13 +461,19 @@ void reservedSliceForOnRadioProgram()
     check(!f.radio.slice(3) && f.radio.isSlotForeign(3) && !f.radio.sliceMayBelongToUs(3)
               && f.radio.foreignSliceOwnerStation(3) == QStringLiteral("WSPR receiver"),
           "a reserved slice reported as ours is another program's slot, never a SliceModel");
+    check(f.radio.daxChannelReserved(2) && !f.radio.daxChannelReserved(4) && !f.radio.daxChannelReserved(0),
+          "a reserved slot's DAX channel follows the radio's statuses for it");
 
     // Adopted first, reserved after: the SliceModel goes.
     f.radio.handleSliceStatusForTest(2, ours("18.104600"));
-    const bool adopted = f.radio.slice(2) != nullptr;
+    SliceDelta onDax;   // the backend's typed status carries the DAX channel
+    onDax.daxChannel = 4;
+    emit f.backend->sliceChanged(2, onDax);
+    const bool adopted = f.radio.slice(2) != nullptr && f.radio.slice(2)->daxChannel() == 4;
     f.radio.reserveSlice(2, QStringLiteral("WSPR receiver"));
     check(adopted && !f.radio.slice(2) && removed.contains(2) && f.radio.isSlotForeign(2),
           "reserving a slice already adopted drops its SliceModel");
+    check(f.radio.daxChannelReserved(4), "a slice adopted before its reservation keeps its DAX channel reserved");
 
     // The radio removes it: the reservation ends and the index is free.
     f.radio.handleSliceStatusForTest(3, {{QStringLiteral("in_use"), QStringLiteral("0")}}, true);
@@ -478,6 +484,8 @@ void reservedSliceForOnRadioProgram()
 
     f.radio.releaseReservedSlice(2);
     check(!f.radio.isSliceReserved(2) && !f.radio.isSlotForeign(2), "releasing a reservation frees the slot");
+    check(!f.radio.daxChannelReserved(2) && !f.radio.daxChannelReserved(4),
+          "no reservation, no reserved DAX channel");
     f.radio.reserveSlice(-1, QStringLiteral("WSPR receiver"));
     check(!f.radio.isSliceReserved(-1), "no slice, no reservation");
 }
