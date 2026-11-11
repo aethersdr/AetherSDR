@@ -4,6 +4,7 @@
 #include "RadioSetupControlFixture.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/RigctlProtocol.h"
+#include "core/WsprAgentClient.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #ifdef HAVE_WEBSOCKETS
@@ -505,6 +506,31 @@ void reservedSliceForOnRadioProgram()
 #endif
 }
 
+// The spot feed's status reads reserve the receiver's slice; the feed is never
+// started, so nothing is requested.
+void receiverSliceFromFeed()
+{
+    Fixture f;
+    f.backend->live = true;
+    f.publish(2);
+    WsprSpotFeed feed;
+    wspr::reserveReceiverSlice(&feed, &f.radio, QStringLiteral("WSPR receiver"));
+    WsprStatus status;
+    status.sliceIndex = -1;
+    emit feed.statusReceived(status);
+    status.sliceIndex = 2;
+    const bool adopted = f.radio.slice(2) != nullptr;
+    emit feed.statusReceived(status);
+    check(adopted && !f.radio.slice(2) && f.radio.isSliceReserved(2)
+              && f.radio.foreignSliceOwnerStation(2) == QStringLiteral("WSPR receiver")
+              && !f.radio.isSliceReserved(-1),
+          "a feed status naming an adopted slice reserves it and drops its SliceModel");
+    f.backend->live = false;
+    status.sliceIndex = 3;
+    emit feed.statusReceived(status);
+    check(!f.radio.isSliceReserved(3), "a feed status while disconnected reserves nothing");
+}
+
 // Registration waits for the gate, runs once, and never waits forever.
 void registrationGate()
 {
@@ -839,6 +865,7 @@ int main(int argc, char** argv)
     boundedRetirementHistory();
     foreignRetirementBeforePublication();
     reservedSliceForOnRadioProgram();
+    receiverSliceFromFeed();
     registrationGate();
     completedCreationReleasesState();
     answeredSelectionAndInhibit();

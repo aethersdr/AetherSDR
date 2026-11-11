@@ -789,14 +789,7 @@ void MainWindow::wireSpotSubsystem()
     m_radioModel.setRegistrationGate([this](const QHostAddress& radio, std::function<void()> proceed) {
         readWsprReceiverSlice(radio, std::move(proceed));
     });
-    // The spot feed reads the same status on every poll, so a recheck that
-    // timed out is healed by the next one.
-    connect(m_wsprFeed, &WsprSpotFeed::statusReceived, this, [this](const WsprStatus& status) {
-        if (status.sliceIndex >= 0 && m_radioModel.isConnected()
-            && !m_radioModel.isSliceReserved(status.sliceIndex)) {
-            m_radioModel.reserveSlice(status.sliceIndex, tr("WSPR receiver"));
-        }
-    });
+    wspr::reserveReceiverSlice(m_wsprFeed, &m_radioModel, tr("WSPR receiver"));
     connect(&m_radioModel, &RadioModel::sliceAdded, this, [this](SliceModel*) {
         QTimer::singleShot(kWsprSliceRecheckMs, this, [this] {
             if (m_radioModel.isConnected()) {
