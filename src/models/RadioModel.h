@@ -79,6 +79,7 @@ class WanConnection;
 class FlexStatusIngress;
 struct TxBandDelta;
 struct StreamStatusDelta;
+struct InterlockStatusDelta;
 class IAutoRfGainControl;
 
 
@@ -2622,7 +2623,8 @@ private:
     void sendSliceCommand(SliceModel* slice, const QString& cmd);
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
-    QString radioInterlockNotificationMessage(const QMap<QString, QString>& kvs) const;
+    QString radioInterlockNotificationMessage(const QString& reason, const QString& state) const;
+    void applyInterlockStatus(const InterlockStatusDelta& delta);
     void evaluateTxFilterAudioLoss(float scFilt1, float scFilt2);
     void armInterlockNotification(TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
     // Recompute the operator-transmit predicate and emit operatorTransmitChanged

@@ -1723,6 +1723,10 @@ void RadioModel::wireStatusIngress(quint64 generation)
                 [this, generation](const FirmwareUpdateStatus& status) {
             if (generation == m_backendReceiverGeneration) { emit firmwareUpdateReported(status); }
         });
+        connect(flex, &FlexBackend::interlockStatusObserved, this,
+                [this, generation](const InterlockStatusDelta& interlock) {
+            if (generation == m_backendReceiverGeneration) { applyInterlockStatus(interlock); }
+        });
         connect(flex, &FlexBackend::unaddressedTunerStatus, this, [this, generation](const TunerDelta& delta) {
             if (generation == m_backendReceiverGeneration && m_tunerModel.isPresent()) {
                 m_tunerModel.applyChanges(delta);
@@ -2392,6 +2396,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<CwxStatusDelta>();
     qRegisterMetaType<GraphicEqStatus>();
     qRegisterMetaType<WaveformStatusDelta>();
+    qRegisterMetaType<InterlockStatusDelta>();
     qRegisterMetaType<PanZoomPlacement>();
     qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<SpectrumDecodeScale>();
@@ -3917,10 +3922,94 @@ QString RadioModel::txFilterFrequencyLimitMessage(int lowHz, int highHz) const
     return QString();
 }
 
-QString RadioModel::radioInterlockNotificationMessage(const QMap<QString, QString>& kvs) const
+void RadioModel::applyInterlockStatus(const InterlockStatusDelta& d)
 {
-    const QString reason = kvs.value(QStringLiteral("reason")).toUpper();
-    const QString state = kvs.value(QStringLiteral("state")).toUpper();
+    {
+        // Track TX ownership — only show TX state if we own the transmitter
+        if (d.txClientHandle) {
+            const quint32 txOwner = *d.txClientHandle;
+            m_txClientHandle = txOwner;
+            m_txOwnedByUs = (txOwner == clientHandle() || txOwner == 0);
+        }
+        // Interlock timing fields into TransmitModel (#498)
+        applyBackendTransmitDelta(d.timing);
+
+        // FlexLib 4.3.16 reports all latched PTT sources as a comma-separated
+        // list, hardware first. VOX has its own token; older firmware uses SW.
+        // Interlock fields are deltas: retain the list when source is absent.
+        // An empty source= replaces it; terminal states below also clear it.
+        // Reconciliation reads tokens without turning status into TX intent.
+        if (d.source) {
+            m_lastInterlockSource = *d.source;
+        }
+
+        if (d.state) {
+            const QString state = *d.state;
+
+            // Emit raw radio TX state regardless of ownership — used by DAX
+            // passthrough when an external app triggers PTT (#752).
+            const bool radioTx = (state == "TRANSMITTING");
+            m_radioTransmitting = radioTx;
+            m_interlockState = state;
+            m_daxTxSelectionRxObserved = radioReceivingForTransmitDax();
+            emit radioTransmittingChanged(radioTx);
+
+            // Hardware PTT (mic, ACC, RCA TXREQ) and VOX key the radio without
+            // setTransmit(), so they count as owned-TX paths alongside CW key, CWX and tune
+            // (#3861). SW source still requires m_txRequested, so a stale TRANSMITTING after
+            // setTransmit(false) falls through to the force-off branch. See
+            // RadioStatusOwnership::interlockKeepsLocalTxOn.
+            const bool keepLocalTx = RadioStatusOwnership::interlockKeepsLocalTxOn(
+                m_txOwnedByUs, m_txRequested, m_cwKeyActive, m_cwxActive,
+                m_transmitModel.isTuning(), m_lastInterlockSource, m_transmitModel.voxEnable());
+            reconcileInterlockTx(m_transmitModel, m_txAudioGate, m_cwxActive, state, keepLocalTx,
+                                 [this](bool on) { emit txAudioGateChanged(on); });
+
+            // Clear persisted PTT source once interlock confirms we're fully
+            // out of TX, so a stale hardware-PTT source can't outlive the
+            // actual key release if a later status update omits source=.
+            // (#2373)
+            if (state != "TRANSMITTING" && !state.contains("REQUESTED")
+                && !state.contains("DELAY")) {
+                m_lastInterlockSource.clear();
+            }
+
+            if (state == QStringLiteral("READY") || state == QStringLiteral("RECEIVE")) {
+                m_lastInterlockNotificationKey.clear();
+                m_lastInterlockNotificationMs = 0;
+                m_interlockNotificationArmedUntilMs = 0;
+                m_interlockNotificationSource = TransmitModel::PttSource::Mox;
+            } else if (interlockNotificationArmed()) {
+                // Interlock sequence: PTT_REQUESTED (reason=AMP:TG while the amp/tuner relays
+                // settle) -> TRANSMITTING -> UNKEY_REQUESTED -> RECEIVE. The transitional states
+                // carry tx_allowed=1; only tx_allowed=0 means TX is denied and warrants the
+                // operator popup.
+                const bool txDenied = (d.txAllowed == QStringLiteral("0"));
+                if (txDenied) {
+                    const QString message = radioInterlockNotificationMessage(d.reason, state);
+                    if (!message.isEmpty()) {
+                        emitInterlockNotification(
+                            message,
+                            QStringLiteral("radio:%1:%2").arg(state, d.reason));
+                        m_interlockNotificationArmedUntilMs = 0;
+                        m_interlockNotificationSource = TransmitModel::PttSource::Mox;
+                    }
+                }
+            }
+        }
+        // Emit TX ownership state for title bar indicator
+        // txOwnerChanged(otherIsTx, stationName) — true when ANOTHER client has TX
+        if (!m_txOwnedByUs) {
+            QString station = m_clientStations.value(m_txClientHandle, "TX Not Ready");
+            emit txOwnerChanged(true, station);  // another client has TX
+        } else {
+            emit txOwnerChanged(false, {});  // we own TX (or nobody does)
+        }
+    }
+}
+
+QString RadioModel::radioInterlockNotificationMessage(const QString& reason, const QString& state) const
+{
 
     auto withDebugName = [reason, state](const QString& message) {
         const QString debugName = reason.isEmpty() ? state : reason;
@@ -12180,92 +12269,9 @@ void RadioModel::onStatusReceived(const QString& object,
     }
 
     // Interlock status: "interlock tx_client_handle=0x... state=TRANSMITTING ..."
-    if (object == "interlock") {
-        // Track TX ownership — only show TX state if we own the transmitter
-        if (kvs.contains("tx_client_handle")) {
-            quint32 txOwner = kvs["tx_client_handle"].toUInt(nullptr, 16);
-            m_txClientHandle = txOwner;
-            m_txOwnedByUs = (txOwner == clientHandle() || txOwner == 0);
-        }
-        // Parse interlock timing fields into TransmitModel (#498)
-        if (m_flexBackend) m_flexBackend->decodeInterlockStatus(kvs);
-
-        // FlexLib 4.3.16 reports all latched PTT sources as a comma-separated
-        // list, hardware first. VOX has its own token; older firmware uses SW.
-        // Interlock fields are deltas: retain the list when source is absent.
-        // An empty source= replaces it; terminal states below also clear it.
-        // Reconciliation reads tokens without turning status into TX intent.
-        if (kvs.contains("source")) {
-            m_lastInterlockSource = kvs["source"].toUpper();
-        }
-
-        if (kvs.contains("state")) {
-            const QString state = kvs["state"].toUpper();
-
-            // Emit raw radio TX state regardless of ownership — used by DAX
-            // passthrough when an external app triggers PTT (#752).
-            const bool radioTx = (state == "TRANSMITTING");
-            m_radioTransmitting = radioTx;
-            m_interlockState = state;
-            m_daxTxSelectionRxObserved = radioReceivingForTransmitDax();
-            emit radioTransmittingChanged(radioTx);
-
-            // Hardware PTT (mic, ACC, RCA TXREQ) and VOX key the radio without
-            // setTransmit(), so they count as owned-TX paths alongside CW key, CWX and tune
-            // (#3861). SW source still requires m_txRequested, so a stale TRANSMITTING after
-            // setTransmit(false) falls through to the force-off branch. See
-            // RadioStatusOwnership::interlockKeepsLocalTxOn.
-            const bool keepLocalTx = RadioStatusOwnership::interlockKeepsLocalTxOn(
-                m_txOwnedByUs, m_txRequested, m_cwKeyActive, m_cwxActive,
-                m_transmitModel.isTuning(), m_lastInterlockSource, m_transmitModel.voxEnable());
-            reconcileInterlockTx(m_transmitModel, m_txAudioGate, m_cwxActive, state, keepLocalTx,
-                                 [this](bool on) { emit txAudioGateChanged(on); });
-
-            // Clear persisted PTT source once interlock confirms we're fully
-            // out of TX, so a stale hardware-PTT source can't outlive the
-            // actual key release if a later status update omits source=.
-            // (#2373)
-            if (state != "TRANSMITTING" && !state.contains("REQUESTED")
-                && !state.contains("DELAY")) {
-                m_lastInterlockSource.clear();
-            }
-
-            if (state == QStringLiteral("READY") || state == QStringLiteral("RECEIVE")) {
-                m_lastInterlockNotificationKey.clear();
-                m_lastInterlockNotificationMs = 0;
-                m_interlockNotificationArmedUntilMs = 0;
-                m_interlockNotificationSource = TransmitModel::PttSource::Mox;
-            } else if (interlockNotificationArmed()) {
-                // Interlock sequence: PTT_REQUESTED (reason=AMP:TG while the amp/tuner relays
-                // settle) -> TRANSMITTING -> UNKEY_REQUESTED -> RECEIVE. The transitional states
-                // carry tx_allowed=1; only tx_allowed=0 means TX is denied and warrants the
-                // operator popup.
-                const QString txAllowed = kvs.value(QStringLiteral("tx_allowed"));
-                const bool txDenied = (txAllowed == QStringLiteral("0"));
-                if (txDenied) {
-                    const QString message = radioInterlockNotificationMessage(kvs);
-                    if (!message.isEmpty()) {
-                        emitInterlockNotification(
-                            message,
-                            QStringLiteral("radio:%1:%2")
-                                .arg(state, kvs.value(QStringLiteral("reason")).toUpper()));
-                        m_interlockNotificationArmedUntilMs = 0;
-                        m_interlockNotificationSource = TransmitModel::PttSource::Mox;
-                    }
-                }
-            }
-        }
-        // Emit TX ownership state for title bar indicator
-        // txOwnerChanged(otherIsTx, stationName) — true when ANOTHER client has TX
-        if (!m_txOwnedByUs) {
-            QString station = m_clientStations.value(m_txClientHandle, "TX Not Ready");
-            emit txOwnerChanged(true, station);  // another client has TX
-        } else {
-            emit txOwnerChanged(false, {});  // we own TX (or nobody does)
-        }
-        if (m_flexBackend) m_flexBackend->decodeInterlockStatus(kvs);
-        return;
-    }
+    // Interlock status ("interlock …") is decoded by the status ingress and
+    // applied in applyInterlockStatus().
+    if (object == "interlock") { return; }
 
     // EQ status: "eq txsc mode=1 63Hz=0 125Hz=5 ..." or "eq rxsc ..."
     // Graphic EQ status ("eq txsc …", "eq rxsc …") is decoded by the status
@@ -12813,6 +12819,11 @@ void RadioModel::deliverLineForTest(const ParsedMessage& message)
             traceDaxStreamStatus(*stream);
             handleDaxRxStreamRegistry(*stream);
         }
+    }
+    // The model's TX-ownership rules on an interlock line, for a fixture whose
+    // backend has no wired ingress.
+    if (message.type == MessageType::Status && message.object == QLatin1String("interlock")) {
+        applyInterlockStatus(FlexStatusIngress::interlockStatus(message.kvs));
     }
     handleMessageReceived(message);
     if (message.type == MessageType::Status) { onStatusReceived(message.object, message.kvs); }

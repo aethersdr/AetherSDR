@@ -3,6 +3,7 @@
 #include "CommandParser.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/CwxStatusDelta.h"
+#include "core/backends/InterlockStatusDelta.h"
 #include "core/backends/SpotStatusDelta.h"
 #include "core/backends/StreamStatusDelta.h"
 #include "core/backends/WaveformStatusDelta.h"
@@ -118,6 +119,10 @@ public:
     void decodeAmplifierStatus(const QString& handle, const QString& model,
                                const QMap<QString, QString>& kvs, bool removed);
     void decodeTunerStatus(const QString& handle, const QMap<QString, QString>& kvs);
+    // "interlock …" → InterlockStatusDelta; its timing fields alone are
+    // interlockTiming().
+    static InterlockStatusDelta interlockStatus(const QMap<QString, QString>& kvs);
+    static TransmitDelta interlockTiming(const QMap<QString, QString>& kvs);
     // The tuner fields of a TGXL status, without naming its handle as the tuner.
     static TunerDelta tunerStatus(const QString& handle, const QMap<QString, QString>& kvs);
     const QString& ampHandle() const { return m_ampHandle; }
@@ -168,6 +173,7 @@ signals:
     void amplifierChanged(const AetherSDR::AmpDelta& delta);
     void tunerChanged(const AetherSDR::TunerDelta& delta);
     void unaddressedTunerStatus(const AetherSDR::TunerDelta& delta);
+    void interlockStatusObserved(const AetherSDR::InterlockStatusDelta& delta);
     void tuneOutputSuppressionObserved(int bandId, bool suppressed);
 
 private:

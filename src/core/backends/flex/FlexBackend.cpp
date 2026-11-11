@@ -102,6 +102,7 @@ FlexBackend::FlexBackend(QObject* parent)
     connect(&m_statusIngress, &FlexStatusIngress::amplifierChanged, this, &IRadioBackend::amplifierChanged);
     connect(&m_statusIngress, &FlexStatusIngress::tunerChanged, this, &IRadioBackend::tunerChanged);
     connect(&m_statusIngress, &FlexStatusIngress::unaddressedTunerStatus, this, &FlexBackend::unaddressedTunerStatus);
+    connect(&m_statusIngress, &FlexStatusIngress::interlockStatusObserved, this, &FlexBackend::interlockStatusObserved);
     connect(&m_statusIngress, &FlexStatusIngress::notchChanged, this, &IRadioBackend::notchChanged);
     connect(&m_statusIngress, &FlexStatusIngress::notchRemoved, this, &IRadioBackend::notchRemoved);
     connect(&m_statusIngress, &FlexStatusIngress::tuneOutputSuppressionObserved,
@@ -1758,22 +1759,6 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
 
     emit sliceChanged(sliceId, d);
 }
-
-void FlexBackend::decodeInterlockStatus(const QMap<QString, QString>& kvs)
-{
-    TransmitDelta d;
-    carry(kvs, "acc_tx_delay", d.accTxDelay);
-    carry(kvs, "tx1_delay", d.tx1Delay);
-    carry(kvs, "tx2_delay", d.tx2Delay);
-    carry(kvs, "tx3_delay", d.tx3Delay);
-    carry(kvs, "tx_delay", d.txDelay);
-    carry(kvs, "timeout", d.interlockTimeout);
-    carry(kvs, "acc_txreq_polarity", d.accTxReqPolarity);
-    carry(kvs, "rca_txreq_polarity", d.rcaTxReqPolarity);
-    emit transmitChanged(d);
-}
-
-
 
 void FlexBackend::clearExtensionHandles()
 {

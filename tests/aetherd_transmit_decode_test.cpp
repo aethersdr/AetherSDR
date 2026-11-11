@@ -118,10 +118,8 @@ int main(int argc, char** argv)
 
     // ---- interlock ----
     {
-        const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeInterlockStatus({{QStringLiteral("tx1_delay"), QStringLiteral("25")},
-                                      {QStringLiteral("timeout"), QStringLiteral("120")}});
-        });
+        const TransmitDelta d = FlexStatusIngress::interlockTiming(
+            {{QStringLiteral("tx1_delay"), QStringLiteral("25")}, {QStringLiteral("timeout"), QStringLiteral("120")}});
         CHECK(d.tx1Delay.has_value() && *d.tx1Delay == 25);
         CHECK(d.interlockTimeout.has_value() && *d.interlockTimeout == 120);
         CHECK(!d.rfPower.has_value());   // core fields untouched

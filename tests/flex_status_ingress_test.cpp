@@ -8,6 +8,7 @@
 #include "core/backends/flex/WanConnection.h"
 #include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
+#include "models/TransmitModel.h"
 
 #include <QCoreApplication>
 #include <QJsonObject>
@@ -331,6 +332,25 @@ private slots:
         QVERIFY(remoteAudio()[QStringLiteral("stream_id_known")].toBool());
         model.handleLineForTest(QStringLiteral("S0|stream 0x04000010 removed"));
         QVERIFY(!remoteAudio()[QStringLiteral("stream_id_known")].toBool());
+    }
+
+    // Interlock status runs the model's TX-ownership rules typed: another
+    // client keying is reported as such, and the timing reaches TransmitModel.
+    void interlockOwnershipFromTheIngress()
+    {
+        TestSettingsProfile profile(QStringLiteral("flex-status-ingress-interlock"));
+        QVERIFY(profile.isValid());
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
+        QSignalSpy owner(&model, &RadioModel::txOwnerChanged);
+        QSignalSpy transmitting(&model, &RadioModel::radioTransmittingChanged);
+        model.handleLineForTest(QStringLiteral(
+            "S0|interlock tx_client_handle=0x0000AB12 state=TRANSMITTING source=MIC tx1_delay=25"));
+        QCOMPARE(owner.size(), 1);
+        QCOMPARE(owner.at(0).at(0).toBool(), true);
+        QCOMPARE(transmitting.size(), 1);
+        QCOMPARE(transmitting.at(0).at(0).toBool(), true);
+        QCOMPARE(model.transmitModel().tx1Delay(), 25);
     }
 
     // The H line reaches the model before connected(): both take one queued

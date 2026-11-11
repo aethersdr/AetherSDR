@@ -165,6 +165,7 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
         return;
     }
     if (object == QLatin1String("transmit")) { decodeTransmitStatus(kvs); return; }
+    if (object == QLatin1String("interlock")) { emit interlockStatusObserved(interlockStatus(kvs)); return; }
     static const QRegularExpression txBandRe(QStringLiteral(R"(^transmit band\s+(\d+)$)"));
     if (object.startsWith(QLatin1String("transmit band"))) {
         if (const auto m = txBandRe.match(object); m.hasMatch()) { decodeTxBandStatus(m.captured(1).toInt(), kvs); }
@@ -988,6 +989,34 @@ TunerDelta FlexStatusIngress::tunerStatus(const QString& handle, const QMap<QStr
         d.antennaA = kvs.value(QStringLiteral("antA")).toInt();
     if (kvs.contains(QStringLiteral("one_by_three")))
         d.oneByThree = (kvs.value(QStringLiteral("one_by_three")) == QLatin1String("1"));
+    return d;
+}
+TransmitDelta FlexStatusIngress::interlockTiming(const QMap<QString, QString>& kvs)
+{
+    TransmitDelta d;
+    carry(kvs, "acc_tx_delay", d.accTxDelay);
+    carry(kvs, "tx1_delay", d.tx1Delay);
+    carry(kvs, "tx2_delay", d.tx2Delay);
+    carry(kvs, "tx3_delay", d.tx3Delay);
+    carry(kvs, "tx_delay", d.txDelay);
+    carry(kvs, "timeout", d.interlockTimeout);
+    carry(kvs, "acc_txreq_polarity", d.accTxReqPolarity);
+    carry(kvs, "rca_txreq_polarity", d.rcaTxReqPolarity);
+    return d;
+}
+
+InterlockStatusDelta FlexStatusIngress::interlockStatus(const QMap<QString, QString>& kvs)
+{
+    // Read as RadioModel did: the owner in hex, state and source upper-cased.
+    InterlockStatusDelta d;
+    if (kvs.contains(QStringLiteral("tx_client_handle"))) {
+        d.txClientHandle = kvs.value(QStringLiteral("tx_client_handle")).toUInt(nullptr, 16);
+    }
+    if (kvs.contains(QStringLiteral("state"))) { d.state = kvs.value(QStringLiteral("state")).toUpper(); }
+    if (kvs.contains(QStringLiteral("source"))) { d.source = kvs.value(QStringLiteral("source")).toUpper(); }
+    d.txAllowed = kvs.value(QStringLiteral("tx_allowed"));
+    d.reason = kvs.value(QStringLiteral("reason")).toUpper();
+    d.timing = interlockTiming(kvs);
     return d;
 }
 } // namespace AetherSDR

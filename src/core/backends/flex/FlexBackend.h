@@ -269,7 +269,6 @@ public:
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
     // residual). Present-only, ok-guarded numeric parses.
     void decodeRadioStatus(const QMap<QString, QString>& kvs);
-    void decodeInterlockStatus(const QMap<QString, QString>& kvs);
     // Drop the cached amp/tuner encode handles (#4198). Called on radio
     // disconnect/reset, where RadioModel clears the model-side presence outside
     // the decode path — without this the stale handle could survive a reconnect
@@ -294,6 +293,8 @@ signals:
     // An ATU status for a tuner whose handle the radio has not named yet
     // (Flex-only); RadioModel applies it only while a tuner is present.
     void unaddressedTunerStatus(const AetherSDR::TunerDelta& delta);
+    // The radio's interlock status (Flex-only; RadioModel owns TX ownership).
+    void interlockStatusObserved(const AetherSDR::InterlockStatusDelta& delta);
 
 private:
     void send(const QString& cmd);
