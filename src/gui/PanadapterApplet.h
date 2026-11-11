@@ -102,9 +102,10 @@ public:
     void  setRttyStats(float markLevel, float spaceLevel, float snrDb, bool locked);
     void  setRttyInputHint(const QString& hint, const QString& reason);
     void  clearRttyText();
-    int   rttyMarkHz()  const;
-    // Shows the slice's shift without emitting rttyShiftHzChanged. A value
-    // off the preset list gets its own entry, replacing any earlier one.
+    // Show the slice's mark / shift without emitting rttyMarkHzChanged /
+    // rttyShiftHzChanged. A value off the preset list gets its own entry,
+    // replacing any earlier one.
+    void  setRttyMarkHz(int hz);
     void  setRttyShiftHz(int hz);
     float rttyBaud()    const;
     bool  rttyReverse() const;

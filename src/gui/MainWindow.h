@@ -951,6 +951,7 @@ private:
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
     void refreshRttyInputStatus();
+    void onRttyDecoderMarkChosen(int hz);
     void onRttyDecoderShiftChosen(int hz);
     // The RTTY pane's ✕: persist "operator does not want this window" and
     // re-run the refresh, which stops the decoder (#5353).
