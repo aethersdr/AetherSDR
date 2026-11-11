@@ -4183,12 +4183,15 @@ void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);
 
+#ifdef Q_OS_WIN
     // Changing the CURRENT monitor's scale in Settings sends WM_DPICHANGED
     // with no screenChanged, so the screenChanged connection alone would leave
-    // the inset at the old DPI's band until the next show.
+    // the inset at the old DPI's band until the next show. Guarded because
+    // applyNonClientBandInsets() is declared only under Q_OS_WIN.
     if (event && event->type() == QEvent::DevicePixelRatioChange) {
         applyNonClientBandInsets();
     }
+#endif
 
     // Principle VI fail-safe (#3888): if a momentary keying key (PTT-hold, CW
     // straight key / paddles) is held when the window is deactivated, its
