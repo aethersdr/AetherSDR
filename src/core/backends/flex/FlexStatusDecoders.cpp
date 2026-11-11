@@ -572,6 +572,7 @@ void FlexStatusIngress::decodeAudioStreamStatus(const QString& object, const QMa
         const bool zero = owner == 0 && digits.toUInt(&parsed, 16) == 0 && parsed;
         if (owner != 0) { delta.clientHandle = owner; }
         else if (!zero) { delta.invalidOwner = true; }
+        else { delta.orphaned = kvs.value(QStringLiteral("ip")).trimmed() == QLatin1String("0.0.0.0"); }
     }
     const bool iqChannel = kvs.contains(QStringLiteral("daxiq_channel"));
     const QString channelKey = iqChannel ? QStringLiteral("daxiq_channel") : QStringLiteral("dax_channel");
@@ -582,6 +583,13 @@ void FlexStatusIngress::decodeAudioStreamStatus(const QString& object, const QMa
         bool valid = false;
         const int channel = kvs.value(channelKey).toInt(&valid);
         if (valid && channel >= 1 && channel <= (iqChannel ? 4 : 8)) { delta.channel = channel; }
+    }
+    if (delta.kind == AudioStreamKind::Iq) {
+        bool valid = false;
+        const int rate = kvs.value(QStringLiteral("daxiq_rate")).toInt(&valid);
+        if (valid) { delta.iqRate = rate; }
+        if (kvs.contains(QStringLiteral("pan"))) { delta.pan = kvs.value(QStringLiteral("pan")); }
+        if (kvs.contains(QStringLiteral("active"))) { delta.active = kvs.value(QStringLiteral("active")) == QLatin1String("1"); }
     }
     emit audioStreamChanged(delta);
 }

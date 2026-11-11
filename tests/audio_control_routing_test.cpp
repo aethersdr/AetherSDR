@@ -13,6 +13,21 @@
 #include <thread>
 #include <vector>
 
+// The IQ stream delta the status decoder produces for these fields.
+static AetherSDR::AudioStreamDelta iqStatus(quint32 streamId, const QMap<QString, QString>& fields)
+{
+    AetherSDR::AudioStreamDelta delta;
+    delta.streamId = streamId;
+    delta.kind = AetherSDR::AudioStreamKind::Iq;
+    bool ok = false;
+    if (const int ch = fields.value(QStringLiteral("daxiq_channel")).toInt(&ok); ok) { delta.channel = ch; }
+    if (const int rate = fields.value(QStringLiteral("daxiq_rate")).toInt(&ok); ok) { delta.iqRate = rate; }
+    if (fields.contains(QStringLiteral("pan"))) { delta.pan = fields.value(QStringLiteral("pan")); }
+    if (fields.contains(QStringLiteral("active"))) { delta.active = fields.value(QStringLiteral("active")) == QLatin1String("1"); }
+    return delta;
+}
+
+
 using namespace AetherSDR;
 
 namespace {
@@ -252,7 +267,7 @@ void iqAndBinding()
     check(!f.guards.front().permits(), "IQ Off revokes the unanswered create at the terminal writer");
     iq.createStream(1);
     f.answer(0, 0x100);
-    iq.applyStreamStatus(0x100, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}});
+    iq.applyStreamDelta(iqStatus(0x100, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}}));
     check(!iq.stream(1).exists, "canceled late stream cannot flash the applet back On");
     events();
     check(f.backend->commands().count(QStringLiteral("stream create type=dax_iq daxiq_channel=1")) == 2,
@@ -260,7 +275,7 @@ void iqAndBinding()
     const size_t create = f.backend->writes.size() - 1;
     f.answer(create, 0x101);
     f.stream(0x101);
-    iq.applyStreamStatus(0x101, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}});
+    iq.applyStreamDelta(iqStatus(0x101, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}}));
     check(iq.stream(1).exists && iq.stream(1).streamId == 0x101 && !iq.createPending(1), "only the current allocation becomes active");
     PanadapterModel* pan = f.publish(QStringLiteral("0x40000001"));
     check(f.radio.requestPanIqBinding(pan, 1) == ReceiveDispatch::Dispatched

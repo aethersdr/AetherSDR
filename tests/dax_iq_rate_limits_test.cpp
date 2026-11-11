@@ -38,6 +38,21 @@
 #include <memory>
 #include <cstdio>
 
+// The IQ stream delta the status decoder produces for these fields.
+static AetherSDR::AudioStreamDelta iqStatus(quint32 streamId, const QMap<QString, QString>& fields)
+{
+    AetherSDR::AudioStreamDelta delta;
+    delta.streamId = streamId;
+    delta.kind = AetherSDR::AudioStreamKind::Iq;
+    bool ok = false;
+    if (const int ch = fields.value(QStringLiteral("daxiq_channel")).toInt(&ok); ok) { delta.channel = ch; }
+    if (const int rate = fields.value(QStringLiteral("daxiq_rate")).toInt(&ok); ok) { delta.iqRate = rate; }
+    if (fields.contains(QStringLiteral("pan"))) { delta.pan = fields.value(QStringLiteral("pan")); }
+    if (fields.contains(QStringLiteral("active"))) { delta.active = fields.value(QStringLiteral("active")) == QLatin1String("1"); }
+    return delta;
+}
+
+
 using namespace AetherSDR;
 
 #ifdef HAVE_WEBSOCKETS
@@ -84,7 +99,7 @@ public:
             && server.achievedIqSampleRate() == 96000 && server.ensureIqStream(0)
             && sent.contains(QStringLiteral("iq_samplerate:96000;")), "identified limited model creates");
         commands.clear();
-        model.daxIqModel().applyStreamStatus(0x110, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}});
+        model.daxIqModel().applyStreamDelta(iqStatus(0x110, {{"daxiq_channel", "1"}, {"daxiq_rate", "48000"}}));
         expect(commands.size() == 1
             && qvariant_cast<AudioStreamRequest>(commands.first().first()).sampleRate == 96000, "limited rate reapply");
         model.daxIqModel().handleDisconnect();
@@ -133,7 +148,7 @@ public:
         server.releaseIqChannel(2);
         iq.createStream(2);
         QSignalSpy requests(&iq, &DaxIqModel::controlRequested);
-        iq.applyStreamStatus(0x120, {{"daxiq_channel", "2"}, {"daxiq_rate", "48000"}});
+        iq.applyStreamDelta(iqStatus(0x120, {{"daxiq_channel", "2"}, {"daxiq_rate", "48000"}}));
         bool removed = false;
         for (const QList<QVariant>& args : requests) {
             const AudioStreamRequest request = qvariant_cast<AudioStreamRequest>(args.first());
@@ -177,7 +192,7 @@ public:
         emit client.textMessageReceived(QStringLiteral("iq_samplerate:192000;"));
         ok = ok && sent.last() == QStringLiteral("iq_samplerate:96000;");
         QSignalSpy requests(&model.daxIqModel(), &DaxIqModel::controlRequested);
-        model.daxIqModel().applyStreamStatus(0x100, {{"daxiq_channel","1"}, {"daxiq_rate","48000"}});
+        model.daxIqModel().applyStreamDelta(iqStatus(0x100, {{"daxiq_channel","1"}, {"daxiq_rate","48000"}}));
         ok = ok && model.daxIqModel().stream(1).rateSettling
             && requests.size() == 1 && qvariant_cast<AudioStreamRequest>(requests.first().first()).sampleRate == 96000;
         model.daxIqModel().handleDisconnect();
@@ -334,8 +349,8 @@ int main(int argc, char** argv)
     }
     QSignalSpy commands(&iq, &DaxIqModel::controlRequested);
     auto status = [&iq](quint32 id, int ch, int rate) {
-        iq.applyStreamStatus(id, {{"daxiq_channel",QString::number(ch)},
-                                 {"daxiq_rate",QString::number(rate)}});
+        iq.applyStreamDelta(iqStatus(id, {{"daxiq_channel",QString::number(ch)},
+                                 {"daxiq_rate",QString::number(rate)}}));
     };
     for (const int rate : {24000, 48000, 96000, 192000}) {
         check(iq.supportsSampleRate(rate), "all FLEX-6700 IQ rates admitted");
@@ -458,8 +473,8 @@ int main(int argc, char** argv)
     otherSource->model = QStringLiteral("AU-510M");
     replacement.setBackendForTest(std::move(other),QStringLiteral("test"));
     iq.setSampleRate(1, 192000);
-    iq.applyStreamStatus(0x201, {{"daxiq_channel", "1"}, {"daxiq_rate", "192000"},
-                               {"pan", "0x40000000"}});
+    iq.applyStreamDelta(iqStatus(0x201, {{"daxiq_channel", "1"}, {"daxiq_rate", "192000"},
+                               {"pan", "0x40000000"}}));
     applet.setDaxIqLevel(1, 32768.0f);
     check(applet.findChild<QPushButton*>("daxIqEnable1")->text() == "On",
           "old model starts with a confirmed live IQ channel");
@@ -503,7 +518,7 @@ int main(int argc, char** argv)
     otherSource->model = QStringLiteral("FLEX-6400M");
     DaxIqModel& replacementIq = replacement.daxIqModel();
     replacementIq.setSampleRate(2, 24000);
-    replacementIq.applyStreamStatus(0x202, {{"daxiq_channel", "2"}, {"daxiq_rate", "24000"}});
+    replacementIq.applyStreamDelta(iqStatus(0x202, {{"daxiq_channel", "2"}, {"daxiq_rate", "24000"}}));
     applet.setRadioModel(&replacement);
     check(applet.findChild<QPushButton*>("daxIqEnable2")->text() == "On",
           "late applet binding seeds already-confirmed stream state");
@@ -517,7 +532,7 @@ int main(int argc, char** argv)
     check(enable->text() == "Off"
               && enable->styleSheet().contains(QStringLiteral("background: #1a2a3a;")),
           "On to Off updates the rendered background after availability refresh");
-    replacementIq.applyStreamStatus(0x202, {{"daxiq_channel", "2"}, {"daxiq_rate", "24000"}});
+    replacementIq.applyStreamDelta(iqStatus(0x202, {{"daxiq_channel", "2"}, {"daxiq_rate", "24000"}}));
     check(enable->text() == "On"
               && enable->styleSheet().contains(QStringLiteral("background: #00b4d8;")),
           "Off to On updates the rendered background after availability refresh");
@@ -525,7 +540,7 @@ int main(int argc, char** argv)
 
     // A live rate request has not yet been echoed when a theme refresh occurs.
     replacementIq.setSampleRate(2, 24000);
-    replacementIq.applyStreamStatus(0x202, {{"daxiq_rate", "24000"}});
+    replacementIq.applyStreamDelta(iqStatus(0x202, {{"daxiq_rate", "24000"}}));
     DaxIqApplet pendingApplet;
     pendingApplet.setRadioModel(&replacement);
     auto* pendingCombo = pendingApplet.findChild<QComboBox*>("daxIqRate2");
@@ -542,7 +557,7 @@ int main(int argc, char** argv)
     emit ThemeManager::instance().themeChanged();
     check(pendingCombo->currentData().toInt() == 48000,
           "refresh reflects pending rate intent from a non-GUI consumer");
-    replacementIq.applyStreamStatus(0x202, {{"daxiq_rate", "48000"}});
+    replacementIq.applyStreamDelta(iqStatus(0x202, {{"daxiq_rate", "48000"}}));
     check(!replacementIq.stream(2).rateSettling && pendingCombo->currentData().toInt() == 48000,
           "radio-confirmed rate clears pending state");
     pendingApplet.setRadioModel(nullptr);
@@ -551,7 +566,7 @@ int main(int argc, char** argv)
     QSignalSpy recoveryCommands(&replacementIq, &DaxIqModel::controlRequested);
     replacementIq.setSampleRate(4, replacementIq.sampleRateForPreference(192000));
     replacementIq.createStream(4);
-    replacementIq.applyStreamStatus(0x204, {{"daxiq_channel", "4"}, {"daxiq_rate", "48000"}});
+    replacementIq.applyStreamDelta(iqStatus(0x204, {{"daxiq_channel", "4"}, {"daxiq_rate", "48000"}}));
     bool recoveredAt96k = false;
     for (const QList<QVariant>& command : recoveryCommands) {
         recoveredAt96k = recoveredAt96k || qvariant_cast<AudioStreamRequest>(command.first()).sampleRate == 96000;

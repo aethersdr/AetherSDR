@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "core/LogManager.h"
 
 #include <QPointer>
 #include <QThread>
@@ -36,6 +37,39 @@ void RadioModel::resetAudioControls()
             }
             if (!alive) { return; }
         }
+    }
+}
+
+void RadioModel::applyIqStreamDelta(const AudioStreamDelta& delta)
+{
+    const quint32 streamId = delta.streamId;
+    const auto leave = [this, streamId] {
+        if (m_panStream) { m_panStream->unregisterIqStream(streamId); }
+        m_daxIqModel.handleStreamRemoved(streamId);
+    };
+    // Any removed stream leaves the registry, whatever its type.
+    if (delta.removed || delta.invalidOwner) {
+        leave();
+        qCDebug(lcDax) << "RadioModel: unregistered removed DAX IQ stream" << "0x" + QString::number(streamId, 16);
+        return;
+    }
+    if (delta.kind != AudioStreamKind::Iq) { return; }
+    // A stream with no owner field is taken as ours, as is 0x0 unless it is a
+    // dead orphan at 0.0.0.0.
+    const bool ours = delta.clientHandle ? *delta.clientHandle == ourClientHandle() : !delta.orphaned;
+    if (!ours) {
+        leave();
+        qCDebug(lcDax) << "RadioModel: ignoring DAX IQ stream for another client"
+                       << "stream=0x" + QString::number(streamId, 16);
+        return;
+    }
+    m_daxIqModel.applyStreamDelta(delta);
+    // panStream is null on a backend that carries its own IQ; there is no
+    // VITA-49 stream to register against.
+    const int ch = delta.channel.value_or(0);
+    if (streamId && ch >= 1 && ch <= 4 && m_panStream
+        && m_daxIqModel.stream(ch).exists && m_daxIqModel.stream(ch).streamId == streamId) {
+        m_panStream->registerIqStream(streamId, ch);
     }
 }
 

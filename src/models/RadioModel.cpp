@@ -1708,7 +1708,9 @@ void RadioModel::wireBackendReceiverState()
     wireGpsSessionReceivers();
     connect(m_backend.get(), &IRadioBackend::audioStreamChanged, this,
         [this, generation](const AudioStreamDelta& delta) {
-            if (generation == m_backendReceiverGeneration) { applyAudioStreamDelta(delta); }
+            if (generation != m_backendReceiverGeneration) { return; }
+            applyAudioStreamDelta(delta);
+            if (m_daxIqRegistry && generation == m_backendReceiverGeneration) { applyIqStreamDelta(delta); }
         });
     // The radio's answer to a transmit setting the caller waits on. Queued, so
     // an answer never lands inside the request that asked for it, and a

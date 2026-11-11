@@ -6,6 +6,7 @@
 #include "core/backends/flex/FlexStatusIngress.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/WanConnection.h"
+#include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
@@ -188,6 +189,53 @@ private slots:
         model.handleLineForTest(QStringLiteral("S0|memory 3 name=Repeater freq=146.940000"));
         QVERIFY(model.memories().contains(3));
         QCOMPARE(model.memories().value(3).name, QStringLiteral("Repeater"));
+    }
+
+    // The DAX IQ registry is the model's: an IQ stream with no owner of its
+    // own is ours, another client's or a dead orphan's is not, and a removal
+    // leaves it, whatever its type.
+    void iqStreamRegistry()
+    {
+        TestSettingsProfile profile(QStringLiteral("flex-status-ingress-iq"));
+        QVERIFY(profile.isValid());
+        // Each IQ stream would load a PipeWire pipe module; record instead.
+        int pactl = 0;
+        DaxIqModel::setPactlRunnerForTest([&pactl](const QStringList&) { return quint32(++pactl); });
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
+        model.enableDaxIqRegistry();
+        model.handleLineForTest(QStringLiteral(
+            "S0|stream 0x20000001 type=dax_iq daxiq_channel=1 daxiq_rate=96000 pan=0x40000000 client_handle=0x00000000 ip=10.0.0.5"));
+        QVERIFY(model.daxIqModel().stream(1).exists);
+        QCOMPARE(model.daxIqModel().stream(1).streamId, quint32(0x20000001));
+        QCOMPARE(model.daxIqModel().stream(1).sampleRate, 96000);
+        QCOMPARE(model.daxIqModel().stream(1).panId, QStringLiteral("0x40000000"));
+        model.handleLineForTest(QStringLiteral(
+            "S0|stream 0x20000002 type=dax_iq daxiq_channel=2 client_handle=0x0000AB12"));
+        QVERIFY(!model.daxIqModel().stream(2).exists);
+        model.handleLineForTest(QStringLiteral(
+            "S0|stream 0x20000003 type=dax_iq daxiq_channel=3 client_handle=0x00000000 ip=0.0.0.0"));
+        QVERIFY(!model.daxIqModel().stream(3).exists);
+        model.handleLineForTest(QStringLiteral("S0|stream 0x20000001 removed"));
+        QVERIFY(!model.daxIqModel().stream(1).exists);
+        DaxIqModel::setPactlRunnerForTest({});
+    }
+
+    // Until the desktop enables it, an IQ stream reaches neither DaxIqModel
+    // nor PipeWire (headless, tests).
+    void iqRegistryIsOffByDefault()
+    {
+        TestSettingsProfile profile(QStringLiteral("flex-status-ingress-iq-off"));
+        QVERIFY(profile.isValid());
+        int pactl = 0;
+        DaxIqModel::setPactlRunnerForTest([&pactl](const QStringList&) { return quint32(++pactl); });
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
+        model.handleLineForTest(QStringLiteral("S0|stream 0x20000001 type=dax_iq daxiq_channel=1"));
+        QVERIFY(!model.daxIqModel().stream(1).exists);
+        QCoreApplication::processEvents();
+        QCOMPARE(pactl, 0);
+        DaxIqModel::setPactlRunnerForTest({});
     }
 
     // The H line reaches the model before connected(): both take one queued

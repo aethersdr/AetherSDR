@@ -53,9 +53,15 @@ struct AudioStreamDelta {
     quint32 streamId{0};
     bool removed{false};
     bool invalidOwner{false};
+    // Owner reported as 0x0 at address 0.0.0.0: a dead orphan, nobody's stream.
+    bool orphaned{false};
     std::optional<AudioStreamKind> kind;
     std::optional<quint32> clientHandle;
     std::optional<int> channel;
+    // IQ streams: sample rate, pan, and whether the radio is sending.
+    std::optional<int> iqRate;
+    std::optional<QString> pan;
+    std::optional<bool> active;
 };
 using AudioStreamCompletion = std::function<void(const AudioStreamReply&)>;
 

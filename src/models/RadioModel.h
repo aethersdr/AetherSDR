@@ -169,6 +169,9 @@ public:
     NavtexModel&      navtexModel()      { return m_navtexModel; }
     UsbCableModel&    usbCableModel()    { return m_usbCableModel; }
     DaxIqModel&       daxIqModel()       { return m_daxIqModel; }
+    // Route our DAX IQ streams to DaxIqModel and the stream router (the
+    // desktop's DAX IQ applet turns this on; each stream makes a PipeWire pipe).
+    void enableDaxIqRegistry() { m_daxIqRegistry = true; }
     FlexWaveformModel& flexWaveformModel() { return m_flexWaveformModel; }
     DStarModel&        dstarModel()        { return m_dstarModel; }
     const DigitalVoiceWaveformMetrics& digitalVoiceWaveformMetrics() const;
@@ -1702,6 +1705,12 @@ private slots:
 private:
     void resetAudioControls();
     void applyAudioStreamDelta(const AudioStreamDelta& delta);
+    // The DAX IQ registry: our IQ streams reach DaxIqModel and the VITA-49
+    // stream router; a removed or foreign one leaves both. Off until the
+    // desktop's DAX IQ applet enables it (enableDaxIqRegistry()), since an IQ
+    // stream there creates a PipeWire pipe.
+    void applyIqStreamDelta(const AudioStreamDelta& delta);
+    bool m_daxIqRegistry{false};
     struct AudioStreamIdentity {
         AudioStreamKind kind;
         int channel{0};
