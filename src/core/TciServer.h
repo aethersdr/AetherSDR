@@ -27,6 +27,8 @@
 #include <QPair>
 #include <QSet>
 #include <QString>
+#include <QVariant>
+#include <QVariantMap>
 #include <QVector>
 #include <atomic>
 #include <functional>
@@ -40,6 +42,7 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
+class IRadioBackend;
 class AudioEngine;
 class SliceModel;
 class PanadapterModel;
@@ -82,6 +85,7 @@ class TciServer : public QObject {
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
     friend class TciExtensionSetTest;
+    friend class TciHl2ExtensionTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -249,6 +253,26 @@ private:
     void announceExtensionSet();
     void handleExtensionEnable(TciClient* ws, const QString& cmd);
     void handleExtensionCommand(TciClient* ws, const QString& cmd);
+    // Extension group `hl2` (TciHl2Extension.h).
+    void registerHl2Group();
+    TciExtensionSet::Result handleHl2(const QString& name, const QStringList& args);
+    bool hl2Offered() const;
+    QStringList hl2StateLines();
+    // hw.get, answered synchronously by the backend; nullopt if it did not.
+    std::optional<QVariantMap> hl2Hardware();
+    QString hl2FilterBoardLine();
+    // The health snapshot as the Radio Health dialog merges it.
+    QVariantMap hl2HealthValues();
+    void bindHl2Backend();
+    void onHl2ExtensionResult(quint64 requestId, const QVariant& result);
+    void onHl2ExtensionError(quint64 requestId, const QString& reason);
+    void onHl2ExtensionStatus(const QString& ns, const QString& kind, const QVariantMap& fields);
+    void queueHl2FilterNotice();
+    bool broadcastHl2FilterBoard();
+    void checkHl2Readings();
+    // Transmitting, tuning, or a transmit operation still held: the sources
+    // ReceiveControlGuard::checkTransmit() reads.
+    bool extensionKeyed() const;
     void broadcastBinary(const QByteArray& data);
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
@@ -450,6 +474,24 @@ private:
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
     TciExtensionSet m_extensions;
+    // The client whose extension command is being handled, for a group whose
+    // answer arrives later (aethersdr_hl2_ioboard_status).
+    QPointer<TciClient> m_extensionRequester;
+    // Extension set, HL2 group. Request ids in their own decade (0x07..), so
+    // they cannot answer or be answered by the setup page's or the bridge's.
+    quint64           m_hl2NextRequestId{0x0700000000000000ull};
+    QPointer<IRadioBackend> m_hl2Backend;
+    QList<QMetaObject::Connection> m_hl2Connections;
+    QHash<quint64, QPointer<TciClient>> m_hl2IoBoardPending;
+    QTimer*           m_hl2FilterRateTimer{nullptr};
+    bool              m_hl2FilterPending{false};
+    bool              m_hl2FilterSendPosted{false};
+    // Filter board and HPF from the last hw status seen; a notice is queued
+    // when a status moves them.
+    std::optional<QPair<int, bool>> m_hl2LastFilter;
+    QTimer*           m_hl2ReadingTimer{nullptr};
+    QString           m_hl2LastTxTiming;
+    QString           m_hl2LastExtTr;
     std::function<void(int, bool)> m_centerLockSet;
     std::function<bool(int)> m_centerLockQuery;
     // #6352: the newest removal per slice id. A close timer that finds a newer

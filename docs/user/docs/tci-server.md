@@ -333,7 +333,10 @@ The server answers with the set's version and the items this radio offers,
 then one line with the current state of each item:
 
 ```
-aethersdr_ext:1;
+aethersdr_ext:1,hl2;
+aethersdr_hl2_filter_board:n2adr_rxtx,false;
+aethersdr_hl2_tx_timing:-1,-1,-1;
+aethersdr_hl2_exttr:-1;
 ```
 
 - Every command of the set starts with `aethersdr_`. Before the enable, the
@@ -343,9 +346,54 @@ aethersdr_ext:1;
   not in the list is ignored.
 - The enable is per connection. `aethersdr_ext_enable:false;` stops all
   extension traffic to that client, and so does disconnecting.
-- No commands are in the set yet, so the list is empty.
 - The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
   `rx_ctun_ex`) work without the enable, as before.
+
+#### Hermes-Lite 2 hardware: `hl2`
+
+Offered while a Hermes-Lite 2 is connected (a radio that answers the HL2
+settings of **Radio Setup → HL2 Hardware**). Not on any other radio.
+
+```
+aethersdr_hl2_filter_board;                     # read
+aethersdr_hl2_filter_board:n2adr_txonly,true;   # set the board and its HPF
+aethersdr_hl2_ioboard_status;                   # read the IO board, once
+aethersdr_hl2_tx_timing;                        # read
+aethersdr_hl2_exttr;                            # read
+```
+
+- **Filter board.** `<board>` is `none`, `n2adr_rxtx` (N2ADR, receive and
+  transmit) or `n2adr_txonly` (N2ADR, transmit only); `<hpf>` is the 3 MHz
+  high-pass, `true` or `false`. This is the HL2 Hardware page's setting and is
+  saved the same way. The high-pass applies to `n2adr_txonly` only, as on that
+  page; with another board a set leaves it as it is. A set is refused while
+  transmitting or tuning, because the board's relays follow the transmit
+  filter: the client that sent it gets the setting that stands, and AetherSDR
+  shows the reason. It is also refused before the radio has an identity to
+  save the setting against. Every change, from the page or another client, is
+  sent as `aethersdr_hl2_filter_board:<board>,<hpf>;` to every client that
+  enabled the set. A set that changes nothing gets no answer.
+- **IO board status.** Read from the N2ADR IO board when asked, and answered
+  only to the client that asked:
+  `aethersdr_hl2_ioboard_status:<pins>,<receiving>,<in1>,<in2>,<in3>,<in4>,<in5>,<tuner>,<fault>,<firmware>;`
+  (`<pins>` the input pin byte, `<tuner>` 238 = send RF, 0 = tuned, 240 or
+  more = failed). `aethersdr_hl2_ioboard_status:none;` when no IO board
+  answers, the radio is not connected, or another read is still pending. It is
+  never sent unasked.
+- **Transmit timing.** `aethersdr_hl2_tx_timing:<ptt_hang_ms>,<auto_unkey>,<tx_buffer_latency_ms>;`,
+  read from the radio. `<auto_unkey>` is `false` when the PTT hang reads 31,
+  which turns off the radio's own PTT time-out. AetherSDR does not change
+  these values, so there is no set.
+- **External T/R.** `aethersdr_hl2_exttr:<bool>;`: whether the radio's external
+  T/R output is in transmit. There is no set.
+- Both readings come from the radio's status reply on its second control port,
+  which AetherSDR reads only while its own receive stream is not arriving; they
+  are also shown in **Tools → Radio Health...**. While the stream runs, the timing is
+  the last reading taken before it, if there was one, and the external T/R
+  state is not known.
+  A value not read is sent as `-1`, and the external T/R state as `-1` once its
+  reading is more than 3 seconds old. A change is sent to every client that
+  enabled the set within about a second.
 
 ## Known issues
 

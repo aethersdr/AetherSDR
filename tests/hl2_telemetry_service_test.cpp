@@ -209,6 +209,34 @@ int main(int argc, char** argv)
               "with nothing received, the degrees row is absent — not 0 °C");
     }
 
+    // ---- 8. the transmit timing readings are published, absent until read ----
+    //
+    // The TCI extension set reads register 0x17 (PTT hang, TX buffer latency)
+    // and the external T/R bit from these rows (RFC #7181). A reply that did
+    // not carry a field leaves its row absent, never a zero or a false.
+    {
+        DiscoveryReply r;
+        r.pttHangTimeMs = 31;
+        r.txBufferLatencyMs = 10;
+        r.paExtTr = true;
+
+        Hl2TelemetryService svc;
+        Hl2TelemetryServiceTestAccess::placeReply(svc, r);
+        const auto rows = svc.healthRows();
+        check(rowValue(rows, "pttHangTimeMs").toInt() == 31
+                  && rowValue(rows, "txBufferLatencyMs").toInt() == 10
+                  && rowValue(rows, "paExtTr").isValid()
+                  && rowValue(rows, "paExtTr").toBool(),
+              "PTT hang, TX buffer latency and external T/R are published from the reply");
+
+        Hl2TelemetryService shortReply;
+        Hl2TelemetryServiceTestAccess::placeReply(shortReply, DiscoveryReply{});
+        const auto none = shortReply.healthRows();
+        check(!rowValue(none, "txBufferLatencyMs").isValid()
+                  && !rowValue(none, "paExtTr").isValid(),
+              "a reply without them leaves both rows absent");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_service_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

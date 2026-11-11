@@ -533,6 +533,9 @@ private:
     // wire, and re-evaluate the band filter. The single path for a hardware
     // change whoever asked for it (setup dialog, automation bridge, connect).
     void applyHardwareOptions(const Hl2HardwareOptions& next, bool persist);
+    // The options as hw.get, hw.set and the `hl2`/`hw` extensionStatus report
+    // them: one map, so the three cannot disagree.
+    [[nodiscard]] QVariantMap hardwareOptionsReport() const;
     // Raise or clear the gateware ATU request, honouring m_hw.atuGateware.
     // Called from the same two places that start and end a TUNE.
     void applyAtuTuneRequest(bool tuning);

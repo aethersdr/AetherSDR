@@ -5136,6 +5136,30 @@ void Hl2Backend::loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor)
     }
 }
 
+QVariantMap Hl2Backend::hardwareOptionsReport() const
+{
+    return QVariantMap{
+        {QStringLiteral("codec"), static_cast<int>(m_hw.codec)},
+        {QStringLiteral("ditherBit"), m_hw.ditherBit},
+        // The intent AND the wire value. No variant overrides the operator any
+        // more (Hl2HardwareOptions::ditherBitOnWire), so the two agree today —
+        // reported as a pair anyway so a caller reads the wire from the field
+        // that names it, and a future override cannot change this reply's
+        // meaning without changing its shape.
+        {QStringLiteral("ditherBitOnWire"), m_hw.ditherBitOnWire()},
+        {QStringLiteral("randomBit"), m_hw.randomBit},
+        {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},
+        {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
+        {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
+        {QStringLiteral("atuGateware"), m_hw.atuGateware},
+        {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
+        {QStringLiteral("codecSuggested"), m_hwCodecSuggested},
+        {QStringLiteral("filterBoardSuggested"), m_hwFilterBoardSuggested},
+        {QStringLiteral("detectedBoard"),
+         QString::fromLatin1(hl2::gatewareBoardName(m_gatewareBoard))},
+    };
+}
+
 void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persist)
 {
     const Hl2HardwareOptions before = m_hw;
@@ -5155,6 +5179,12 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
                 /*writeCodec=*/!m_hwCodecSuggested,
                 /*writeFilterBoard=*/!m_hwFilterBoardSuggested);
         }
+    }
+    // Whoever set it (the setup page, the bridge, a TCI client), every listener
+    // learns of a change; the setup page's writes expect no reply.
+    if (m_hw != before) {
+        emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("hw"),
+                             hardwareOptionsReport());
     }
     if (!m_metis)
         return;
@@ -6087,27 +6117,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         // with them is visible on the air, not in a reply.
         if (verb == QLatin1String("hw.get")) {
             if (requestId != 0) {
-                emit extensionResult(requestId, QVariantMap{
-                    {QStringLiteral("codec"), static_cast<int>(m_hw.codec)},
-                    {QStringLiteral("ditherBit"), m_hw.ditherBit},
-                    // The intent AND the wire value. No variant overrides the
-                    // operator any more (Hl2HardwareOptions::ditherBitOnWire),
-                    // so the two agree today — reported as a pair anyway so a
-                    // caller reads the wire from the field that names it, and
-                    // a future override cannot change this reply's meaning
-                    // without changing its shape.
-                    {QStringLiteral("ditherBitOnWire"), m_hw.ditherBitOnWire()},
-                    {QStringLiteral("randomBit"), m_hw.randomBit},
-                    {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},
-                    {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
-                    {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
-                    {QStringLiteral("atuGateware"), m_hw.atuGateware},
-                    {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
-                    {QStringLiteral("codecSuggested"), m_hwCodecSuggested},
-                    {QStringLiteral("filterBoardSuggested"), m_hwFilterBoardSuggested},
-                    {QStringLiteral("detectedBoard"),
-                     QString::fromLatin1(hl2::gatewareBoardName(m_gatewareBoard))},
-                });
+                emit extensionResult(requestId, hardwareOptionsReport());
             }
             return;
         }
@@ -6151,21 +6161,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     in.value(QStringLiteral("speakerLevelPercent")).toInt());
             applyHardwareOptions(next, /*persist=*/true);
             if (requestId != 0) {
-                emit extensionResult(requestId, QVariantMap{
-                    {QStringLiteral("codec"), static_cast<int>(m_hw.codec)},
-                    {QStringLiteral("ditherBit"), m_hw.ditherBit},
-                    {QStringLiteral("ditherBitOnWire"), m_hw.ditherBitOnWire()},
-                    {QStringLiteral("randomBit"), m_hw.randomBit},
-                    {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},
-                    {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
-                    {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
-                    {QStringLiteral("atuGateware"), m_hw.atuGateware},
-                    {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
-                    {QStringLiteral("codecSuggested"), m_hwCodecSuggested},
-                    {QStringLiteral("filterBoardSuggested"), m_hwFilterBoardSuggested},
-                    {QStringLiteral("detectedBoard"),
-                     QString::fromLatin1(hl2::gatewareBoardName(m_gatewareBoard))},
-                });
+                emit extensionResult(requestId, hardwareOptionsReport());
             }
             return;
         }

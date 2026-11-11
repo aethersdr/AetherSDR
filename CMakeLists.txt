@@ -1100,6 +1100,7 @@ set(CORE_SOURCES
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
     src/core/TciExtensionSet.cpp
+    src/core/TciHl2Extension.cpp
     src/core/RadioCertification.cpp
     src/core/TciTrxMap.cpp
     src/core/MqttClient.cpp

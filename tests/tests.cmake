@@ -7792,6 +7792,13 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tci_extension_zero_traffic_test PRIVATE
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
     add_test(NAME tci_extension_zero_traffic_test COMMAND tci_extension_zero_traffic_test)
+
+    # The extension set's HL2 hardware group (aethersdr_hl2_*).
+    add_executable(tci_ext_hl2_hw_test tests/tci_ext_hl2_hw_test.cpp)
+    target_include_directories(tci_ext_hl2_hw_test PRIVATE src tests)
+    target_link_libraries(tci_ext_hl2_hw_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_hl2_hw_test COMMAND tci_ext_hl2_hw_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
@@ -11082,6 +11089,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_audio_test
     tci_extension_set_test
     tci_extension_zero_traffic_test
+    tci_ext_hl2_hw_test
     tci_applet_test
     tci_rx_applet_test
     bandscope_trace_render_test
