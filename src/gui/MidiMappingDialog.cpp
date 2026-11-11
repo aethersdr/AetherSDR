@@ -143,14 +143,14 @@ QString midiMappingSheet()
 // The fixed-size square glyph buttons in the table rows. The shared sheet's
 // button padding exceeds a 24 px button's width and would leave no room for
 // the glyph, so they carry their own. The delete glyph is drawn as destructive,
-// in the gold CanonMessageBox gives a destructive button.
+// using the danger token for destructive actions.
 // {{token}} templates: apply via ThemeManager::applyStyleSheet.
 static const QString kBtnGlyphStyle =
     "QPushButton { background: {{color.canon.control}}; color: {{color.canon.cyan}}; "
     "border: 1px solid {{color.canon.lineHi}}; padding: 0; border-radius: 4px; }"
     "QPushButton:hover { background: {{color.canon.nested}}; color: {{color.canon.aqua}}; }";
 static const QString kBtnGlyphDestructiveStyle =
-    "QPushButton { background: {{color.canon.control}}; color: {{color.canon.sparkGold}}; "
+    "QPushButton { background: {{color.canon.control}}; color: {{color.accent.danger}}; "
     "border: 1px solid {{color.canon.lineHi}}; padding: 0; border-radius: 4px; font-weight: bold; }"
     "QPushButton:hover { background: {{color.canon.nested}}; }";
 
@@ -757,8 +757,13 @@ void MidiMappingDialog::hideEvent(QHideEvent* event)
     // window is still alive to save what Learn captures, and the operator may
     // be reaching for the controller, so Learn stays armed. Closing sends a
     // real hide, minimised or not.
-    if (!event->spontaneous() && m_manager && m_manager->isLearning())
-        m_manager->cancelLearn();
+    if (!event->spontaneous() && m_manager) {
+        QMetaObject::invokeMethod(m_manager, [manager = m_manager] {
+            if (manager->isLearning()) {
+                manager->cancelLearn();
+            }
+        }, Qt::AutoConnection);
+    }
     CanonWindow::hideEvent(event);
 }
 

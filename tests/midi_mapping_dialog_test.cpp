@@ -19,6 +19,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPointer>
+#include <QPalette>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTableWidget>
@@ -28,6 +29,9 @@
 #include <QToolButton>
 #include <QtTest/qtestspontaneevent.h>
 #include <QTimer>
+#include <QThread>
+#include <QSignalSpy>
+#include <atomic>
 #include <cstdio>
 #include <functional>
 
@@ -113,6 +117,13 @@ std::function<void(T*)> key(Qt::Key k)
 void canonWorkspace()
 {
     MidiControlManager manager;
+    registerParams(manager);
+    MidiBinding binding;
+    binding.channel = 0;
+    binding.msgType = MidiBinding::CC;
+    binding.number = 7;
+    binding.paramId = QStringLiteral("rx.afGain");
+    manager.addBinding(binding);
     auto& tm = ThemeManager::instance();
     const QString before = tm.activeTheme();
     for (const char* theme : {"Default Dark", "Default Light"}) {
@@ -161,6 +172,11 @@ void canonWorkspace()
             if (b->text() == "Refresh") refresh = b;
         check(refresh && !edgeIsCyan(refresh),
               "no other button is outlined as primary (QDialog's implicit default is not)");
+        auto* table = dialog.findChild<QTableWidget*>("midiBindingTable");
+        auto* remove = table ? qobject_cast<QPushButton*>(table->cellWidget(0, 6)) : nullptr;
+        check(remove && remove->palette().color(QPalette::ButtonText)
+                            == tm.color(remove, QStringLiteral("color.accent.danger")),
+              "the binding delete glyph uses the destructive danger ink in each theme");
         dialog.hide();
         auto* status = dialog.findChild<QLabel*>("midiPortStatus");
         check(status && status->text() == "Disconnected"
@@ -280,6 +296,40 @@ void closePathsCancelLearn()
         check(!manager.isLearning(), "closing the window cancels a Learn still waiting");
         delete dialog.data();
     }
+}
+
+void workerOwnedManagerCancelsOnItsThread()
+{
+    QThread worker;
+    MidiControlManager manager;
+    registerParams(manager);
+    manager.moveToThread(&worker);
+    worker.start();
+    QSignalSpy cancelled(&manager, &MidiControlManager::learnCancelled);
+    std::atomic<QThread*> cancellationThread{nullptr};
+    QObject::connect(&manager, &MidiControlManager::learnCancelled, &manager, [&] {
+        cancellationThread.store(QThread::currentThread());
+    }, Qt::DirectConnection);
+    QMetaObject::invokeMethod(&manager, [&] {
+        manager.startLearn(QStringLiteral("rx.afGain"));
+    }, Qt::BlockingQueuedConnection);
+    {
+        MidiMappingDialog dialog(&manager);
+        dialog.show();
+        QTest::qWaitForWindowExposed(&dialog);
+        dialog.hide();
+        if (cancelled.isEmpty()) {
+            cancelled.wait(1000);
+        }
+        check(cancelled.count() == 1 && cancellationThread.load() == &worker,
+              "closing dispatches Learn cancellation on the manager's owning thread");
+    }
+    QThread* guiThread = QThread::currentThread();
+    QMetaObject::invokeMethod(&manager, [&] {
+        manager.moveToThread(guiThread);
+    }, Qt::BlockingQueuedConnection);
+    worker.quit();
+    worker.wait();
 }
 
 // Return in the editable profile field clicks nothing: a workspace never
@@ -421,6 +471,7 @@ int main(int argc, char** argv)
     saveSaysWhy();
     minimiseKeepsLearn();
     closePathsCancelLearn();
+    workerOwnedManagerCancelsOnItsThread();
     returnInProfileFieldClicksNothing();
     manualEditorAndSourceQuestion();
     geometryCarriesOver();
