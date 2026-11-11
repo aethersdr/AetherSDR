@@ -28,6 +28,9 @@
 //   AETHER_PS_MAX_DELAY_MS longest loop delay to search (default 400)
 //   AETHER_PS_CORRECT      0 runs the waveform with the correction off (default 1)
 //
+// Status: one JSON line per TCP connection on port 48996, LAN callers only
+// (like AetherHealth on 48994). Read-only.
+//
 //   ps_waveform            run
 //   ps_waveform selftest   checks of parsing, packing and DSP; opens no socket
 #include "ps_align.h"
@@ -62,6 +65,7 @@
 #define INFO_CLASS 0x534Cu
 #define CLASS_AUDIO_24K 0x03E3u  // audio, float, 24 kHz, 32-bit, 2 per frame
 #define FIFO_LEN (RATE * 2)
+#define STATUS_PORT 48996
 #define CLASS_FLOAT_BIT 0x0200u  // packet class: 32-bit float samples
 // The delay is found again after this many consecutive blocks whose pairs
 // don't match, e.g. after an estimate taken on a two-tone, whose envelope
@@ -667,6 +671,51 @@ static int wf_init(wf_t* w)
     return 1;
 }
 
+
+/* ------------------------------------------------------------- status */
+
+static int lan_caller(const struct sockaddr_in* a)
+{
+    unsigned long ip = ntohl(a->sin_addr.s_addr);
+    return (ip >> 24) == 10 || (ip >> 24) == 127
+        || (ip >> 20) == (172UL << 4 | 1)          // 172.16.0.0/12
+        || (ip >> 16) == (192UL << 8 | 168)        // 192.168.0.0/16
+        || (ip >> 16) == (169UL << 8 | 254);       // 169.254.0.0/16
+}
+
+// What the operator needs to see during a transmit test.
+static int status_json(const wf_t* w, char* out, size_t cap)
+{
+    return snprintf(out, cap,
+        "{\"name\":\"%s\",\"version\":\"%s\",\"registered\":%s,\"active_slice\":%d,"
+        "\"tx_mhz\":%.6f,\"pan_mhz\":%.6f,\"daxiq_stream\":\"0x%08x\",\"keyed\":%s,"
+        "\"feedback_ok\":%s,\"correction\":%s,\"aligned\":%s,\"delay_samples\":%.2f,"
+        "\"delay_corr\":%.3f,\"coherence\":%.3f,\"offset_hz\":%.4f,\"fits\":%d,"
+        "\"correcting\":%s,\"calc_state\":%d}\n",
+        WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
+        w->daxiq_sid, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
+        w->correct ? "true" : "false", w->aligned ? "true" : "false",
+        ps_align_delay(w->align), ps_align_estimate_corr(w->align), ps_align_coherence(w->align),
+        ps_align_offset_hz(w->align, RATE), ps_core_fits(w->core),
+        ps_core_correcting(w->core) ? "true" : "false", ps_core_state(w->core));
+}
+
+static void serve_status(const wf_t* w, int ls)
+{
+    struct sockaddr_in a;
+    socklen_t al = sizeof a;
+    int fd = accept(ls, (struct sockaddr*)&a, &al);
+    if (fd < 0)
+        return;
+    if (lan_caller(&a)) {
+        char body[1024];
+        int n = status_json(w, body, sizeof body);
+        if (n > 0 && (size_t)n < sizeof body && write(fd, body, (size_t)n) != n)
+            logf_("status write short");
+    }
+    close(fd);
+}
+
 /* ----------------------------------------------------------- selftest */
 
 static int selftest_loop(void);
@@ -771,6 +820,17 @@ static int selftest(void)
         }
     }
     CHECK(got > 0 && hypot(dc_r, dc_i) / got > 0.95 && pw / got > 0.9);
+
+    // Status: valid-looking JSON with the fields a test session reads.
+    char js[1024];
+    int jn = status_json(&w, js, sizeof js);
+    CHECK(jn > 0 && (size_t)jn < sizeof js && js[0] == '{' && js[jn - 2] == '}');
+    CHECK(strstr(js, "\"registered\":true") && strstr(js, "\"daxiq_stream\":\"0x20000001\"")
+          && strstr(js, "\"delay_samples\":") && strstr(js, "\"coherence\":"));
+    struct sockaddr_in lan = { .sin_family = AF_INET }, wan = { .sin_family = AF_INET };
+    inet_pton(AF_INET, "192.168.50.20", &lan.sin_addr);
+    inet_pton(AF_INET, "100.109.252.61", &wan.sin_addr);
+    CHECK(lan_caller(&lan) && !lan_caller(&wan));
 
     close(w.api);
     ps_core_destroy(w.core);
@@ -968,6 +1028,17 @@ int main(int argc, char** argv)
     logf_("%s %s starting, radio %s, udp %d, DAX IQ %d at %d Hz, peak %.2f, correction %s",
           WF_NAME, WF_VERSION, addr, udp_port, w.daxiq_ch, w.daxiq_rate, w.peak, w.correct ? "on" : "off");
 
+    int ls = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in la = { .sin_family = AF_INET, .sin_port = htons(STATUS_PORT), .sin_addr.s_addr = htonl(INADDR_ANY) };
+    int one = 1;
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    if (ls < 0 || bind(ls, (struct sockaddr*)&la, sizeof la) || listen(ls, 4)) {
+        logf_("status port %d unavailable: %s", STATUS_PORT, strerror(errno));
+        if (ls >= 0)
+            close(ls);
+        ls = -1;
+    }
+
     double next_try = 0;
     w.api = -1;
     while (!g_stop) {
@@ -977,17 +1048,19 @@ int main(int argc, char** argv)
                 logf_("radio not answering at %s; retrying", addr);
             }
         }
-        struct pollfd pf[2] = { { w.udp, POLLIN, 0 }, { w.api, POLLIN, 0 } };
-        int np = w.api >= 0 ? 2 : 1;
+        struct pollfd pf[3] = { { w.udp, POLLIN, 0 }, { ls, POLLIN, 0 }, { w.api, POLLIN, 0 } };
+        int np = w.api >= 0 ? 3 : 2;
         if (poll(pf, (nfds_t)np, 200) < 0 && errno != EINTR)
             break;
+        if (ls >= 0 && (pf[1].revents & POLLIN))
+            serve_status(&w, ls);
         if (pf[0].revents & POLLIN) {
             unsigned char p[2048];
             ssize_t n;
             while ((n = recv(w.udp, p, sizeof p, MSG_DONTWAIT)) > 0)
                 on_packet(&w, p, n);
         }
-        if (np == 2 && (pf[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+        if (np == 3 && (pf[2].revents & (POLLIN | POLLHUP | POLLERR))) {
             ssize_t n = read(w.api, w.rbuf + w.rlen, sizeof w.rbuf - w.rlen - 1);
             if (n <= 0) {
                 logf_("radio closed the API connection");
@@ -1024,6 +1097,8 @@ int main(int argc, char** argv)
     logf_("stopping");
     if (w.api >= 0)
         close(w.api);   // the radio drops the waveform with its client
+    if (ls >= 0)
+        close(ls);
     ps_core_destroy(w.core);
     ps_align_destroy(w.align);
     return 0;

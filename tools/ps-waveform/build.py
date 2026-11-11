@@ -86,6 +86,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--output', required=True, type=pathlib.Path)
     ap.add_argument('--host', action='store_true', help='also build a native binary for the selftest')
+    ap.add_argument('--correction-off', action='store_true',
+                    help='package with AETHER_PS_CORRECT=0, for the before half of a transmit test')
     a = ap.parse_args()
     check_version()
     a.output.mkdir(parents=True, exist_ok=True)
@@ -96,13 +98,17 @@ def main():
             f'{NAME}.cfg': ((HERE / 'package' / f'{NAME}.cfg').read_bytes(), 0o644),
             'launch.sh': ((HERE / 'package' / 'launch.sh').read_bytes(), 0o755),
         }
+        if a.correction_off:
+            text = files['launch.sh'][0].decode()
+            text = text.replace('export AETHER_PS_DAXIQ', 'AETHER_PS_CORRECT=0\nexport AETHER_PS_CORRECT AETHER_PS_DAXIQ', 1)
+            files['launch.sh'] = (text.encode(), 0o755)
         for arch, target in (('armv7', ARMV7), ('arm64', ARM64)):
             zig_cc(target, stage / f'aether-ps-{arch}', cache)
             data = (stage / f'aether-ps-{arch}').read_bytes()
             files[f'aether-ps-{arch}'] = (data, 0o755)
             print(f'aether-ps-{arch}: {len(data)} bytes')
         files['LICENSES'] = (licenses().encode(), 0o644)
-        target = a.output / f'{NAME}.ssdr_waveform'
+        target = a.output / (f'{NAME}-correction-off.ssdr_waveform' if a.correction_off else f'{NAME}.ssdr_waveform')
         tmp = target.with_suffix('.tmp')
         with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
             for name, (data, mode) in files.items():
