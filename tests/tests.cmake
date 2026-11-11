@@ -186,6 +186,31 @@ target_link_libraries(decoder_audio_routing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME decoder_audio_routing_test COMMAND decoder_audio_routing_test)
 set_tests_properties(decoder_audio_routing_test PROPERTIES TIMEOUT 30)
 
+# Data2G receive-only monitor (RFC #7159): the vendored core's own Engine
+# transmits a broadcast frame; the AetherSDR adapter decodes it from 24 kHz
+# float32 fed in uneven chunks. Links the core directly as well, for the
+# transmitting half only.
+if(ENABLE_DATA2G)
+    add_executable(data2g_monitor_test tests/data2g_monitor_test.cpp)
+    target_link_libraries(data2g_monitor_test PRIVATE aether_hfdata aether_data2g_core)
+    add_test(NAME data2g_monitor_test COMMAND data2g_monitor_test)
+    set_tests_properties(data2g_monitor_test PROPERTIES TIMEOUT 120)
+
+    # The threaded model on the same signal: injected PCM, the real worker
+    # thread, no radio fixture. The model source is compiled in rather than
+    # taken from aethercore, so the binary carries one copy of the core.
+    add_executable(data2g_receive_model_test
+        tests/data2g_receive_model_test.cpp
+        src/models/Data2gReceiveModel.cpp
+    )
+    target_include_directories(data2g_receive_model_test PRIVATE src)
+    target_compile_definitions(data2g_receive_model_test PRIVATE HAVE_DATA2G)
+    target_link_libraries(data2g_receive_model_test PRIVATE
+        aether_hfdata aether_data2g_core Qt6::Core)
+    add_test(NAME data2g_receive_model_test COMMAND data2g_receive_model_test)
+    set_tests_properties(data2g_receive_model_test PROPERTIES TIMEOUT 120)
+endif()
+
 # Injected typed PCM and the real modem worker; no sockets, sound device or RF.
 add_executable(ax25_receive_model_test tests/ax25_receive_model_test.cpp)
 target_link_libraries(ax25_receive_model_test PRIVATE aethercore Qt6::Core)
