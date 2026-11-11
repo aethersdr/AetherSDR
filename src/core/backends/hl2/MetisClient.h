@@ -903,6 +903,7 @@ private:
     bool m_cwKeyDown = false;
     double m_cwEnvelope = 0.0;  // 0..1 raised-cosine ramp position
     bool m_mox = false;         // requested key state, only honoured if m_txAllowed
+    // Empty once the first OFF frame after an unkey is written (sendControlPacket).
     TxCoordinator::Operation m_moxOperation;
     TxCoordinator::Operation m_cwOperation;
     TxCoordinator::Operation m_toneOperation;

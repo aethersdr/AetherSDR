@@ -1872,12 +1872,14 @@ void MetisClient::sendControlPacket()
     // until it has seen it. Re-asserting it rather than sending it once keeps a
     // device that reconnects or resets mid-session from silently going quiet.
     TxCoordinator::Dispatch audioDispatch;
-    // Count the writer through sendTo(), including CW/TUNE packets which have
-    // no queued PCM. Cancellation cannot retract an already-entered write.
+    // Count the writer through sendTo() for keyed frames (CW/TUNE included) and
+    // for the first written OFF frame, which then retires m_moxOperation: an idle
+    // frame must not hold the counter acquire() needs at zero.
     TxCoordinator::Dispatch keyDispatch = m_moxOperation.beginDispatch(
         TxCoordinator::monotonicMs(), m_mox);
     if (m_mox && !keyDispatch) {
         m_mox = false;
+        keyDispatch = m_moxOperation.beginDispatch(TxCoordinator::monotonicMs(), false);
     }
     if (!m_txIq.empty()) {
         audioDispatch = m_txIqContext.beginDispatch(TxCoordinator::monotonicMs());
@@ -1888,6 +1890,9 @@ void MetisClient::sendControlPacket()
     const auto packet = buildNextControlPacket();
     const qint64 written = m_packetSinkForTest ? m_packetSinkForTest(packet)
                                               : sendTo(*m_socket, packet, m_host, m_port);
+    if (written > 0 && !m_mox) {
+        m_moxOperation = {};
+    }
     countTx(written);
     // AFTER the write, and taking its return value: this is the seam where a
     // RQST bank stops being something we intend to send and becomes something
