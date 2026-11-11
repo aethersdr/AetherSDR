@@ -272,6 +272,12 @@ target_link_libraries(audio_engine_pcm_lifetime_test PRIVATE aethercore Qt6::Cor
 add_test(NAME audio_engine_pcm_lifetime_test COMMAND audio_engine_pcm_lifetime_test)
 set_tests_properties(audio_engine_pcm_lifetime_test PROPERTIES TIMEOUT 120)
 
+# #7078: a disconnect or withdrawn seam route clears the missing-input flag.
+add_executable(audio_engine_tx_input_missing_test tests/audio_engine_tx_input_missing_test.cpp)
+target_link_libraries(audio_engine_tx_input_missing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_tx_input_missing_test COMMAND audio_engine_tx_input_missing_test)
+set_tests_properties(audio_engine_tx_input_missing_test PROPERTIES TIMEOUT 120)
+
 # #5687 follow-up: managed Kiwi sources must actually be given an NNR filter.
 # Drives the real DSP initializer through the friend seam; no sockets/devices.
 add_executable(nnr_external_source_test tests/nnr_external_source_test.cpp)
@@ -2465,6 +2471,27 @@ set_tests_properties(radio_health_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     TIMEOUT 60)
 
+# What's New on CanonWindow (#7045): canon colours for the rich-text notes in
+# each theme, a canon Find prompt, and every close path. Socket-free: the
+# GitHub fetch is switched off through WhatsNewDialogTestAccess.
+add_executable(whats_new_dialog_test
+    tests/whats_new_dialog_test.cpp
+    src/gui/WhatsNewDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(whats_new_dialog_test PRIVATE src tests)
+target_link_libraries(whats_new_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test)
+set_target_properties(whats_new_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME whats_new_dialog_test COMMAND whats_new_dialog_test)
+set_tests_properties(whats_new_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90)
+
 # Support & Diagnostics on CanonWindow (#7051): no layout warnings, a plain
 # selectable log path, every close path and a legible floor. No radio, no
 # sockets: the window only reads the log file.
@@ -4512,6 +4539,37 @@ target_link_libraries(radio_setup_headphone_output_gate_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME radio_setup_headphone_output_gate_test COMMAND radio_setup_headphone_output_gate_test)
 set_tests_properties(radio_setup_headphone_output_gate_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# HL2 Hardware page: a suggested codec or filter board is labeled; choosing stores it (#6806).
+# Injected hl2 extension backend; no socket and no radio.
+add_executable(hl2_codec_suggestion_dialog_test
+    tests/hl2_codec_suggestion_dialog_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/NtpSourcesPage.cpp
+    src/gui/CanonMessageBox.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/RadioSetupDialog_Peripherals.cpp
+    src/gui/Kxpa100AdvancedWidget.cpp
+    src/gui/Kat500AdvancedWidget.cpp  # Kat500Model links through aetherdesktop_support -> aethercore
+    src/gui/Kpa500AdvancedWidget.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(hl2_codec_suggestion_dialog_test PRIVATE src tests)
+target_link_libraries(hl2_codec_suggestion_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME hl2_codec_suggestion_dialog_test COMMAND hl2_codec_suggestion_dialog_test)
+set_tests_properties(hl2_codec_suggestion_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # Recorded status and injected command/reply sinks; no synthetic radio or sockets.
@@ -10913,6 +10971,7 @@ set(AETHER_SETTINGS_CONSUMERS
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
+    audio_engine_tx_input_missing_test
     nnr_external_source_test
     nnr_model_publication_test
     automation_nnr_probe_test
@@ -10928,6 +10987,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_max_power_field_test
     radio_setup_recording_mode_dim_test
     radio_setup_headphone_output_gate_test
+    hl2_codec_suggestion_dialog_test
     radio_setup_show_tx_waterfall_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
@@ -11027,6 +11087,7 @@ set(AETHER_SETTINGS_CONSUMERS
     canon_window_test
     callsign_lookup_dialog_test
     radio_health_dialog_test
+    whats_new_dialog_test
     support_dialog_test
     theme_editor_dialog_test
     canon_message_box_test
