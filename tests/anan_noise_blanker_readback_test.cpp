@@ -184,7 +184,7 @@ void testReadback()
           "in-flight readback preserves applied state separately from the deferred request");
     // THE KIND AND THE FILL ARE READ FROM THE CHANNEL, not echoed from the
     // request — and a deferred request is the only place the two can be told
-    // apart. A payload that reported m_nbKind as the applied kind would pass
+    // apart. A payload that reported rx.nbKind as the applied kind would pass
     // every other assertion in this file and fail these three.
     check(state.value("kind").toInt()
               == static_cast<int>(AetherSDR::NoiseBlankerKind::Impulse),

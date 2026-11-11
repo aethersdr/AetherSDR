@@ -271,7 +271,7 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
-        // The receiver's audio stage (AnanSliceAudio.h). 100/50 = unity, centred.
+        // The receiver's audio stage (AnanSliceAudio.h). 100/50 = unity, centered.
         bool audioMuted = false;
         int audioGainPercent = 100;
         int audioPanPercent = 50;

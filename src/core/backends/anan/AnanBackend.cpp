@@ -1242,7 +1242,7 @@ void AnanBackend::setLineoutMute(bool mute)
 void AnanBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent intent)
 {
     Q_UNUSED(intent);  // ignored, matching Hl2Backend::setPanCenter
-    // The pan is its receiver's DDC, so its centre IS that receiver's tune.
+    // The pan is its receiver's DDC, so its center IS that receiver's tune.
     if (const Receiver* rx = receiverForPan(panId))
         setSliceFrequency(rx->index, hz);
 }

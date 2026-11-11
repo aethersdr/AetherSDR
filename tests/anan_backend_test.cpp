@@ -408,6 +408,9 @@ int main(int argc, char** argv)
                                          90, 80, SliceAgcRequest::Origin::Operator});
         backend.setSliceNoiseBlanker(absent, AetherSDR::NoiseBlankerKind::Impulse, 70,
                                      AetherSDR::NoiseBlankerFill::Interpolate);
+        const double freqBefore = backend.currentOperatingState().rfFrequencyHz;
+        backend.setSliceFrequency(absent, 7'074'000.0);
+        backend.setPanCenter(absentPan, 7'074'000.0, IRadioBackend::PanCenterIntent::Range);
         backend.setPanRfGain(absentPan, -20);
 
         const AnanRxDsp::Config after = backend.liveRxConfigForTest();
@@ -423,6 +426,8 @@ int main(int argc, char** argv)
               "a noise blanker for a missing slice leaves RX1's off");
         check(backend.attenuationDbForTest() == 6,
               "an RF gain for a pan this backend does not have leaves RX1's attenuator alone");
+        check(backend.currentOperatingState().rfFrequencyHz == freqBefore,
+              "a tune or pan center for a receiver this backend does not have leaves RX1's dial alone");
         check(backend.requestSliceDsp(absent, {SliceDspRequest::Feature::Nb,
                   SliceDspRequest::Field::Enabled, true, 80}) == ReceiveDispatch::Unsupported
                   && backend.requestSliceAudio(absent, {SliceAudioRequest::Field::Gain, 37})
