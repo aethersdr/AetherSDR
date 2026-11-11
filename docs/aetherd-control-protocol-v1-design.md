@@ -260,10 +260,10 @@ The registry exposes metadata for each method:
 Initial non-TX methods are `capabilities.get`, `resource.get`,
 `resource.subscribe`, `resource.unsubscribe`, `radio.connect`,
 `radio.disconnect`, `slice.setFrequency`, `slice.setMode`, `slice.setFilter`,
-`slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`, and
-`panadapter.setBandwidth`.  Connect requests use typed family-neutral fields;
-backend-specific connection data lives in a namespaced validated object and
-never includes a persistent plaintext credential.
+`slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`,
+`panadapter.setBandwidth`, and `radioSession.setCwPitch`.  Connect requests use
+typed family-neutral fields; backend-specific connection data lives in a
+namespaced validated object and never includes a persistent plaintext credential.
 
 Advertised capabilities are the intersection of protocol support, build-time
 features, authenticated grants, active backend capabilities, and current

@@ -2022,6 +2022,10 @@ RadioCapabilities Hl2Backend::capabilities() const
         {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
         {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    // The BFO pitch is host DSP: setCwPitch adopts it and reports it back as
+    // TransmitDelta::cwPitch. Same range and step as cwPitchMinHz..cwPitchMaxHz.
+    c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine,
+        c.cwPitchMinHz, c.cwPitchMaxHz, c.cwPitchStepHz};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
@@ -4992,8 +4996,19 @@ void Hl2Backend::setCwPitch(int hz)
     // seam, and a pitch of 0 would silently turn CW back into the
     // marker-on-DC geometry this whole path exists to remove.
     hz = std::clamp(hz, 100, 6000);
-    if (hz == m_cwPitchHz)
+    // The adopted pitch is reported on every call while connected, same value
+    // included, so a connect-time push establishes the observation.
+    const auto reportPitch = [this, hz] {
+        if (m_connected) {
+            TransmitDelta delta;
+            delta.cwPitch = hz;
+            emit transmitChanged(delta);
+        }
+    };
+    if (hz == m_cwPitchHz) {
+        reportPitch();
         return;
+    }
     m_cwPitchHz = hz;
 
     // Re-push every CW receiver. The pitch moves the BFO, and the BFO is baked
@@ -5018,6 +5033,7 @@ void Hl2Backend::setCwPitch(int hz)
         QMetaObject::invokeMethod(r.dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, lo), Q_ARG(double, hi));
     }
+    reportPitch();
 }
 
 void Hl2Backend::repushAllFrequencies()
