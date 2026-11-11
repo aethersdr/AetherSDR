@@ -787,10 +787,7 @@ public:
         const TxCoordinator::Command& command)
     {
         if (request.kind != CwControlRequest::Kind::PttEnvelope
-            || (request.down && !capabilities().canTransmit) || request.down != command.keying
-            || command.operation.independent()
-            || !command.permitsDispatch(std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count())) {
+            || !cwEdgeAdmitted(request, command, capabilities().canTransmit)) {
             return ReceiveDispatch::Unsupported;
         }
         setKeying(request.down, command.operation, command.completion);

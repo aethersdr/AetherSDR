@@ -1,6 +1,7 @@
 #include "FlexCwControls.h"
 #include "PanadapterStream.h"
 #include "core/LogManager.h"
+#include "models/RadioStatusOwnership.h"
 #include <QtEndian>
 #include <QRegularExpression>
 #include <algorithm>
@@ -8,13 +9,6 @@
 #include <utility>
 
 namespace AetherSDR {
-namespace {
-qint64 monotonicMs()
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-}
 FlexCwControls::FlexCwControls(PanadapterStream* stream, QObject* parent)
     : QObject(parent), m_stream(stream)
 {
@@ -179,7 +173,7 @@ QString FlexCwControls::decorate(const QString& baseCmd, const CwControlRequest&
     ++m_index;
     const QString time = QStringLiteral("%1").arg(stamp.value, 4, 16, QLatin1Char('0')).toUpper();
     const QString handle = QStringLiteral("%1").arg(m_handle, 8, 16, QLatin1Char('0')).toUpper();
-    const quint64 sourceNow = quint64(monotonicMs());
+    const quint64 sourceNow = quint64(TxCoordinator::monotonicMs());
     const qint64 sourceAge = request.debugSourceMs == 0 ? -1
         : qint64(sourceNow - std::min(sourceNow, request.debugSourceMs));
     qCDebug(lcCw).noquote() << "CW netcw schedule trace=" << request.debugTraceId
@@ -191,11 +185,21 @@ QString FlexCwControls::decorate(const QString& baseCmd, const CwControlRequest&
         .arg(baseCmd, time, QString::number(index), handle);
 }
 
+quint32 FlexCwControls::removedStreamId(const QString& object, const QMap<QString, QString>& values)
+{
+    const QStringList parts = object.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() < 2 || parts[0] != QLatin1String("stream")) { return 0; }
+    const bool removed = (parts.size() >= 3 && parts[2] == QLatin1String("removed"))
+        || values.contains(QStringLiteral("removed"))
+        || values.value(QStringLiteral("in_use")) == QLatin1String("0");
+    return removed ? RadioStatusOwnership::parseFlexId(parts[1]) : 0;
+}
+
 ReceiveDispatch FlexCwControls::request(const CwControlRequest& request,
                                        const TxCoordinator::Command& command)
 {
-    if (request.down != command.keying || command.operation.independent()
-        || !command.permitsDispatch(monotonicMs()) || !m_txSink
+    // A Flex radio always transmits; the session fence and sink are Flex-only.
+    if (!cwEdgeAdmitted(request, command, true) || !m_txSink
         || (request.down && m_current && !m_current())) { return ReceiveDispatch::Unsupported; }
     // Closing admission must not suppress release. Its original operation's
     // cleanup fence still prevents an old key-up reaching a replacement session.
@@ -210,8 +214,7 @@ ReceiveDispatch FlexCwControls::request(const CwControlRequest& request,
         // Published FlexLib exposes CWKeyImmediate. Firmware support varies;
         // retain the compatibility attempt without claiming radio acceptance.
         const QString fallback = carrier ? QStringLiteral("cw key immediate %1").arg(int(request.down)) : base;
-        tx(fallback, command);
-        return ReceiveDispatch::Dispatched;
+        return tx(fallback, command) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
     }
     const QString encoded = decorate(base, request);
     // Each branch retains the aggregate until all queued closures are destroyed,
@@ -220,17 +223,17 @@ ReceiveDispatch FlexCwControls::request(const CwControlRequest& request,
     const QPointer<PanadapterStream> stream = m_stream;
     const SessionCommandGuard session = m_session;
     const SessionCommandGuard streamGuard = m_streamGuard;
-    const qint64 scheduledMs = monotonicMs();
+    const qint64 scheduledMs = TxCoordinator::monotonicMs();
     for (int copy = 0; copy < 4; ++copy) {
         const QByteArray bytes = packet(encoded.toLatin1());
         const auto send = [stream, session, streamGuard, operation = command.operation,
                            down = request.down, bytes, aggregate, copy, scheduledMs, trace = request.debugTraceId] {
             if (!stream || !session.current() || !streamGuard.current()) { return; }
             QMetaObject::invokeMethod(stream, [stream, session, streamGuard, operation, down, bytes, aggregate, copy, scheduledMs, trace] {
-                const TxCoordinator::Dispatch dispatch = operation.beginDispatch(monotonicMs(), down);
+                const TxCoordinator::Dispatch dispatch = operation.beginDispatch(TxCoordinator::monotonicMs(), down);
                 if (stream && session.current() && streamGuard.current() && dispatch) {
                     qCDebug(lcCw) << "CW netcw udp-send trace=" << trace << "copy=" << copy
-                        << "delayMs=" << copy * 5 << "actualDelayMs=" << monotonicMs() - scheduledMs
+                        << "delayMs=" << copy * 5 << "actualDelayMs=" << TxCoordinator::monotonicMs() - scheduledMs
                         << "bytes=" << bytes.size();
                     stream->sendToRadio(bytes);
                 }

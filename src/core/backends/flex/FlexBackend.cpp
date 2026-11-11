@@ -174,16 +174,6 @@ FlexBackend::~FlexBackend()
     m_panStream = nullptr;
 }
 
-void FlexBackend::decodeCwTransportStatus(const QString& object, const QMap<QString, QString>& values)
-{
-    if (!object.startsWith(QStringLiteral("stream "))
-        || (!object.endsWith(QStringLiteral(" removed"))
-            && values.value(QStringLiteral("removed")) != QStringLiteral("1"))) { return; }
-    bool valid = false;
-    const quint32 id = object.section(QLatin1Char(' '), 1, 1).toUInt(&valid, 16);
-    if (valid) { m_cwControls->observeStreamRemoved(id); }
-}
-
 void FlexBackend::setCwControlSink(FlexCwControls::ControlSink sink)
 {
     m_cwControls->setControlSink(std::move(sink));
@@ -553,7 +543,7 @@ void FlexBackend::setSetupCommandSink(
     m_setupSink = std::move(sink);
 }
 
-void FlexBackend::setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink)
+void FlexBackend::setTxCommandSink(std::function<bool(const QString&, const TxCoordinator::Command&)> sink)
 {
     m_txSink = std::move(sink);
     m_cwControls->setTxSink(m_txSink);

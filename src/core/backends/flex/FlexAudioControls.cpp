@@ -14,6 +14,9 @@ namespace AetherSDR {
 void FlexBackend::decodeStreamStatus(const QString& object, const QMap<QString, QString>& kvs)
 {
     const QPointer<FlexBackend> alive(this);
+    if (const quint32 netCw = FlexCwControls::removedStreamId(object, kvs)) {
+        m_cwControls->observeStreamRemoved(netCw);
+    }
     decodeAudioStreamStatus(object, kvs);
     if (alive) { decodeDaxTxStatus(object, kvs); }
 }

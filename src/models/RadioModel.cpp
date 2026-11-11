@@ -3,6 +3,7 @@
 #include <QScopedValueRollback>
 #include "TxController.h"
 #include "models/AprsDigipeaterModel.h"
+#include "models/ModeVocabulary.h"
 #include <QPointer>
 #include <QScopeGuard>
 #include "core/AudioCompressionPolicy.h"
@@ -823,60 +824,6 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
     return std::make_unique<FlexBackend>();
 }
 
-bool RadioModel::dispatchCwSessionCommand(const QString& command,
-    const SessionCommandGuard& guard, const RadioControlCompletion& completion)
-{
-    const RadioControlSession session = controlSession();
-    if (!guard.current() || !controlSessionCurrent(session) || (!m_connection && !m_wanConn)) { return false; }
-    const QPointer<RadioModel> self(this);
-    const QPointer<WanConnection> connection(m_wanConn);
-    const quint64 wireGeneration = connection ? connection->commandSessionGeneration() : m_connection->commandSessionGeneration();
-    const auto sequence = std::make_shared<quint32>(0);
-    const auto finished = std::make_shared<bool>(false);
-    const QPointer<QTimer> deadline(new QTimer(this));
-    deadline->setSingleShot(true);
-    const auto finish = [self, connection, wireGeneration, sequence, finished, deadline, guard,
-                         session, completion](RadioControlReply reply) {
-        if (*finished) { return; }
-        *finished = true;
-        if (deadline) { deadline->stop(); deadline->deleteLater(); }
-        if (!self) { return; }
-        if (connection) { connection->forgetSessionReply(*sequence, wireGeneration); }
-        else { self->m_pendingCallbacks.remove(*sequence); }
-        if (!guard.current() || !self->controlSessionCurrent(session)) {
-            reply = {RadioControlReply::Kind::Cancelled, -1, QStringLiteral("The original request expired.")};
-        }
-        if (completion) { completion(reply); }
-        guard.cancel();
-    };
-    connect(deadline, &QTimer::timeout, this, [finish] {
-        finish({RadioControlReply::Kind::Failed, -1, QStringLiteral("No radio response; outcome unknown.")});
-    });
-    deadline->start(30000);
-    const ResponseCallback reply = [finish](int code, const QString& body) {
-        finish({code == 0 ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed, code, body});
-    };
-    if (connection) {
-        *sequence = connection->sendCommand(command, reply);
-        if (*sequence == 0) { finish({RadioControlReply::Kind::Cancelled, -1, QStringLiteral("No active command transport.")}); }
-        return *sequence != 0;
-    }
-    const QPointer<RadioConnection> lan(m_connection);
-    *sequence = m_seqCounter.fetch_add(1);
-    m_pendingCallbacks.insert(*sequence, reply);
-    return QMetaObject::invokeMethod(lan, [lan, self, guard, wireGeneration,
-                                                seq = *sequence, command, finish] {
-        if (lan && guard.current() && lan->isConnected()
-            && lan->commandSessionGeneration() == wireGeneration) {
-            lan->writeCommand(seq, command);
-        } else if (self) {
-            QMetaObject::invokeMethod(self, [finish] {
-                finish({RadioControlReply::Kind::Cancelled, -1, QStringLiteral("The original command transport ended.")});
-            }, Qt::QueuedConnection);
-        }
-    }, Qt::QueuedConnection);
-}
-
 bool RadioModel::dispatchAdministrationCommand(const QString& command,
     const RadioControlCompletion& completion, const RadioControlFence& current,
     const std::function<void()>& written)
@@ -1053,13 +1000,7 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
-            connect(this, &RadioModel::statusReceived, flex, &FlexBackend::decodeCwTransportStatus);
-            flex->setCwControlSink([this, generation](const QString& command,
-                    const SessionCommandGuard& guard, const RadioControlCompletion& completion) {
-                return generation == m_backendReceiverGeneration
-                    && dispatchCwSessionCommand(command, guard, completion);
-            });
-            flex->setSessionCommandSink([this, generation](const QString& command,
+            const auto sessionSink = [this, generation](const QString& command,
                     const SessionCommandGuard& guard, const RadioControlCompletion& completion) {
                 if (generation != m_backendReceiverGeneration || !guard.current()
                     || !controlSessionCurrent(controlSession())) { return false; }
@@ -1073,7 +1014,9 @@ void RadioModel::setupBackend(const QString& family)
                     };
                 }
                 return sendCmd(command, std::move(reply), guard, {}, /*expireReply=*/true) != 0;
-            });
+            };
+            flex->setSessionCommandSink(sessionSink);
+            flex->setCwControlSink(sessionSink);
             flex->setAudioCommandSink(audioCommandSink());
             flex->setDaxTxClientHandleProvider([this] { return ourClientHandle(); });
             flex->setDaxTxCommandSink([this](const QString& command, ResponseCallback reply,
@@ -1086,7 +1029,7 @@ void RadioModel::setupBackend(const QString& family)
                 return dispatchAdministrationCommand(command, completion, current, written);
             });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
-                sendTxKeyingCommand(cmd, fence);
+                return sendTxKeyingCommand(cmd, fence);
             });
             flex->setCwxCommandSink([this](const QString& command, const TxCoordinator::Command& fence,
                                            const RadioControlFence& current, FlexBackend::CommandReply reply) {
@@ -5596,6 +5539,32 @@ bool RadioModel::sendCwInput(bool down, bool ptt, bool notifySidetone,
                             std::chrono::steady_clock::time_point scheduledAt,
                             const TxCoordinator::Request* request)
 {
+    const bool accepted = dispatchCwInput(down, ptt, notifySidetone, debugSource, debugTraceId,
+                                          debugSourceMs, scheduledAt, request);
+    if (QThread::currentThread() != thread() || ptt || !notifySidetone) { return accepted; }
+    if (accepted) {
+        m_cwPracticeKeyDown = false;
+        return accepted;
+    }
+    // Practice: in CW with break-in off and sidetone on, a key the radio does
+    // not take still sounds the local sidetone, and never keys anything. A
+    // key-up always ends a practice tone.
+    const SliceModel* ts = txSlice();
+    const QString mode = (ts ? ts->mode() : m_transmitModel.txSliceMode()).trimmed().toUpper();
+    const bool practice = isCwMode(mode) && !m_transmitModel.cwBreakIn()
+        && m_transmitModel.cwSidetone() && !m_transmitModel.isTuning();
+    if ((practice || !down) && m_cwPracticeKeyDown != down) {
+        m_cwPracticeKeyDown = down;
+        emit cwKeyDownChanged(down);
+    }
+    return accepted;
+}
+
+bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
+                                 const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
+                                 std::chrono::steady_clock::time_point scheduledAt,
+                                 const TxCoordinator::Request* request)
+{
     if (QThread::currentThread() != thread()) {
         return false;
     }
@@ -5654,11 +5623,8 @@ bool RadioModel::sendCwInput(bool down, bool ptt, bool notifySidetone,
     {
         const TxCoordinator::Completion completion = trackTxQueue(original, finished);
         if (m_backend && TxCoordinator::Command{operation, down}.permitsDispatch(txMonotonicMs())) {
-            if (!ptt) { emit backendCwKeyingForwarded(down); }
-            if (receiver && epoch == m_cwCommandEpoch && m_backend) {
-                accepted = m_backend->requestCwControl(edge, {operation, down, completion})
-                    == ReceiveDispatch::Dispatched;
-            }
+            accepted = m_backend->requestCwControl(edge, {operation, down, completion})
+                == ReceiveDispatch::Dispatched;
         }
     }
     if (!receiver) { return accepted; }

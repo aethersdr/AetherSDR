@@ -6,6 +6,7 @@
 #include "core/backends/SessionCommandGuard.h"
 
 #include <QByteArray>
+#include <QMap>
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
@@ -23,7 +24,8 @@ class FlexCwControls final : public QObject {
 public:
     using ControlSink = std::function<bool(const QString&, const SessionCommandGuard&,
                                            const RadioControlCompletion&)>;
-    using TxSink = std::function<void(const QString&, const TxCoordinator::Command&)>;
+    // Returns whether the command was handed to the transport.
+    using TxSink = std::function<bool(const QString&, const TxCoordinator::Command&)>;
     explicit FlexCwControls(PanadapterStream* stream, QObject* parent = nullptr);
     ~FlexCwControls() override;
     void setControlSink(ControlSink sink) { m_controlSink = std::move(sink); }
@@ -34,6 +36,9 @@ public:
     ReceiveDispatch requestLocalPtt(const RadioControlCompletion& completion,
                                     const RadioControlFence& current);
     void observeStreamRemoved(quint32 streamId);
+    // The stream a `stream 0x… removed`, `removed` or `in_use=0` status retires;
+    // 0 when the status is not a stream removal.
+    static quint32 removedStreamId(const QString& object, const QMap<QString, QString>& values);
 private:
     QByteArray packet(const QByteArray& payload);
     QString decorate(const QString& command, const CwControlRequest& request);

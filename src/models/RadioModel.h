@@ -1323,10 +1323,6 @@ signals:
     // generator. Not emitted for the iambic keyer's sendCwKeyEdge (#4976) or
     // for CWX, which drive the sidetone gate themselves.
     void cwKeyDownChanged(bool down);
-    // Non-Flex diagnostic edge emitted only after transmit preflight, directly
-    // before IRadioBackend::setCwKeying(). Lets tests and diagnostics prove a
-    // refused key-down did not cross the radio seam.
-    void backendCwKeyingForwarded(bool down);
     void sliceAdded(SliceModel* slice);
     void sliceRemoved(int sliceId);
     // Emitted immediately before "sub slice all" is dispatched during connect
@@ -2300,7 +2296,7 @@ private:
     void acknowledgeIndependentTxStop(const TxStopEvidence& evidence);
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
-    void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
+    bool sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
     ReceiveDispatch dispatchCwxRequest(const CwTextRequest& request, TxCoordinator::Operation operation,
@@ -2351,8 +2347,6 @@ private:
     void syncNtpSources(bool connected, const RadioCapabilities& caps);
     DStarModel          m_dstarModel{nullptr, true};
 
-    bool dispatchCwSessionCommand(const QString& command, const SessionCommandGuard& guard,
-                                   const RadioControlCompletion& completion);
 
     QString     m_name;
     QString     m_model;
@@ -2624,6 +2618,11 @@ private:
                      const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                      std::chrono::steady_clock::time_point scheduledAt,
                      const TxCoordinator::Request* request = nullptr);
+    bool dispatchCwInput(bool down, bool ptt, bool notifySidetone,
+                         const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
+                         std::chrono::steady_clock::time_point scheduledAt,
+                         const TxCoordinator::Request* request);
+    bool m_cwPracticeKeyDown{false};
     quint64 m_cwCommandEpoch{0};
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,

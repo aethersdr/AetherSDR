@@ -71,6 +71,7 @@ struct Fixture {
     QStringList tcp;
     QList<RadioControlCompletion> replies;
     QList<SessionCommandGuard> guards;
+    bool tcpWrites = true;
     PanadapterStream stream;
     FlexCwControls cw{&stream};
     TxTestAuthority authority;
@@ -80,7 +81,10 @@ struct Fixture {
         cw.setControlSink([this](const QString&, const SessionCommandGuard& guard, const RadioControlCompletion& reply) {
             guards << guard; replies << reply; return true;
         });
-        cw.setTxSink([this](const QString& text, const TxCoordinator::Command&) { tcp << text; });
+        cw.setTxSink([this](const QString& text, const TxCoordinator::Command&) {
+            if (tcpWrites) { tcp << text; }
+            return tcpWrites;
+        });
     }
     void prepare(quint32 handle = 0xAu)
     {
@@ -156,6 +160,30 @@ void transport()
     f.cw.retire();
     check(waitFor([&] { return completions == 1; }) && f.packets.isEmpty(), "retirement drops queued copies and completes once");
 }
+// Without a NetCW stream the edge goes out as TCP "cw key immediate"; when
+// that write cannot be made, the edge is refused rather than reported sent.
+// Every removal form the radio uses retires the NetCW stream, as it does for
+// every other stream type.
+void streamRemovalForms()
+{
+    using C = FlexCwControls;
+    check(C::removedStreamId("stream 0x12345678 removed", {}) == 0x12345678u, "trailing removed word");
+    check(C::removedStreamId("stream 0x12345678", {{"removed", ""}}) == 0x12345678u, "bare removed key");
+    check(C::removedStreamId("stream 0x12345678", {{"removed", "1"}}) == 0x12345678u, "removed=1");
+    check(C::removedStreamId("stream 0x12345678", {{"in_use", "0"}}) == 0x12345678u, "in_use=0");
+    check(C::removedStreamId("stream 0x12345678", {{"type", "netcw"}}) == 0, "a live status is not a removal");
+    check(C::removedStreamId("slice 0", {{"in_use", "0"}}) == 0, "only stream objects retire a stream");
+}
+void unwrittenFallbackIsRefused()
+{
+    Fixture f;
+    f.tcpWrites = false;
+    check(f.edge(true) == ReceiveDispatch::Unsupported && f.tcp.isEmpty(),
+          "a key-down the TCP fallback cannot write is refused");
+    f.tcpWrites = true;
+    check(f.edge(true) == ReceiveDispatch::Dispatched && f.tcp.last() == "cw key immediate 1",
+          "a written fallback key-down is dispatched");
+}
 void localPtt()
 {
     Fixture f;
@@ -206,7 +234,7 @@ void retirementAndDispatch()
     FlexCwControlsTestAccess::record(stream, packets);
     TxTestAuthority authority;
     auto cw = std::make_unique<FlexCwControls>(&stream);
-    cw->setTxSink([](const QString&, const TxCoordinator::Command& command) { command.completion.finish(); });
+    cw->setTxSink([](const QString&, const TxCoordinator::Command& command) { command.completion.finish(); return true; });
     cw->setControlSink([](const QString&, const SessionCommandGuard&, const RadioControlCompletion& reply) {
         reply({RadioControlReply::Kind::Accepted, 0, "12345678"}); return true;
     });
@@ -231,7 +259,7 @@ int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("flex-cw-controls-test"));
     QCoreApplication app(argc, argv);
-    lifecycle(); transport(); localPtt(); retirementAndDispatch();
+    lifecycle(); transport(); unwrittenFallbackIsRefused(); streamRemovalForms(); localPtt(); retirementAndDispatch();
     check(WanConnectionTestAccess::reentrantReply(), "WAN callback may retire its own request safely");
     check(FlexCwControlsTestAccess::timestampVectors(), "clock reset/clamp/order/wrap vectors");
     std::printf("flex_cw_controls_test: %d failures\n", failures);

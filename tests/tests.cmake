@@ -1969,6 +1969,13 @@ target_include_directories(cw_mode_gate_test PRIVATE src)
 target_link_libraries(cw_mode_gate_test PRIVATE Qt6::Core)
 add_test(NAME cw_mode_gate_test COMMAND cw_mode_gate_test)
 
+# Socket-free: CW practice sidetone through the production RadioModel key path
+# with no transmit-capable backend.
+add_executable(cw_practice_sidetone_test tests/cw_practice_sidetone_test.cpp)
+target_include_directories(cw_practice_sidetone_test PRIVATE src tests)
+target_link_libraries(cw_practice_sidetone_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME cw_practice_sidetone_test COMMAND cw_practice_sidetone_test)
+
 # Socket-free production parser/seam/model and bridge dispatcher regression.
 add_executable(flex_readonly_metadata_test tests/flex_readonly_metadata_test.cpp)
 target_include_directories(flex_readonly_metadata_test PRIVATE src tests)

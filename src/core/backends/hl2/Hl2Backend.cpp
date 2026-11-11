@@ -4757,10 +4757,7 @@ ReceiveDispatch Hl2Backend::requestCwControl(const CwControlRequest& request,
         return IRadioBackend::requestCwControl(request, command);
     }
     if (request.kind != CwControlRequest::Kind::Carrier
-        || (request.down && !capabilities().canTransmit) || request.down != command.keying
-        || command.operation.independent()
-        || !command.permitsDispatch(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count())) {
+        || !cwEdgeAdmitted(request, command, capabilities().canTransmit)) {
         return ReceiveDispatch::Unsupported;
     }
     setCwKeying(request.down, request.breakIn, request.breakInDelayMs,

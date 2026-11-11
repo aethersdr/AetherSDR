@@ -84,7 +84,6 @@ public:
         const RadioControlCompletion& completion, const RadioControlFence& current) override;
     void requestTuneOutputSuppression(int bandId, bool suppressed, quint64 requestId) override;
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
-    void decodeCwTransportStatus(const QString& object, const QMap<QString, QString>& values);
     void setCwControlSink(FlexCwControls::ControlSink sink);
     ReceiveDispatch requestCwControl(const CwControlRequest& request,
         const TxCoordinator::Command& command) override;
@@ -95,7 +94,7 @@ public:
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
-    void setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink);
+    void setTxCommandSink(std::function<bool(const QString&, const TxCoordinator::Command&)> sink);
     // Queue admission and radio reply are separate. Replies run on the owner
     // thread; current is an immutable worker-safe fence at the terminal writer.
     using CwxCommandSink = std::function<bool(const QString&, const TxCoordinator::Command&,
@@ -354,7 +353,7 @@ private:
     quint64 m_tuneOutputSession = 0;
     QMap<int, quint64> m_tuneOutputRequests;
     QSet<int> m_tuneOutputKnownBands;
-    std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
+    std::function<bool(const QString&, const TxCoordinator::Command&)> m_txSink;
     CwxCommandSink m_cwxSink;
     CwxConfigurationSink m_cwxConfigurationSink;
     std::function<void(const QString&)> m_sliceSink;

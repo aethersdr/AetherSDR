@@ -756,15 +756,16 @@ TxCoordinator::Completion RadioModel::trackTxQueue(const TxCoordinator::Operatio
     });
 }
 
-void RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence)
+bool RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence)
 {
     const TxCoordinator::Operation operation = fence.operation;
     const auto completed = [completion = fence.completion] { completion.finish(); };
     if (fence.keying) {
         if (!sendTxTcpCommand(command, operation, true, completed)) {
             completed();
+            return false;
         }
-        return;
+        return true;
     }
     // Retain a short, normally released operation until its queued key-up is
     // consumed, just as NetCW does. Otherwise completion cancels an earlier
@@ -772,7 +773,9 @@ void RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator
     // This is local queue completion, not qualified radio-idle evidence.
     if (!sendTxTcpCommand(command, operation, false, completed)) {
         completed();
+        return false;
     }
+    return true;
 }
 
 bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const QString& text,

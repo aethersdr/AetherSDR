@@ -59,9 +59,6 @@ public:
     static void connectInert(RadioConnection& connection)
     { connection.m_state.store(ConnectionState::Connected); }
     static void resetInert(RadioConnection& connection) { connection.resetSessionState(); }
-    static bool managementWrite(RadioModel& radio, const SessionCommandGuard& guard,
-                                const RadioControlCompletion& done)
-    { return radio.dispatchCwSessionCommand(QStringLiteral("test-owned-command"), guard, done); }
     static void setClientIdentity(RadioConnection& connection, quint32 handle)
     {
         connection.m_handle.store(handle);
@@ -261,7 +258,7 @@ public:
     static void bindTxEncoder(RadioModel& radio, FlexBackend& encoder)
     {
         encoder.setTxCommandSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
-            radio.sendTxKeyingCommand(command, fence);
+            return radio.sendTxKeyingCommand(command, fence);
         });
     }
     static void bindCwxEncoder(RadioModel& radio, FlexBackend& encoder)
@@ -520,7 +517,7 @@ void TxOperationIntegrationTestAccess::injectTcp(RadioModel& radio, RadioConnect
     auto* backend = static_cast<RecordingBackend*>(radio.m_backend.get());
     if (!backend->cwControls) { backend->cwControls = std::make_unique<FlexCwControls>(nullptr); }
     backend->cwControls->setTxSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
-        radio.sendTxKeyingCommand(command, fence);
+        return radio.sendTxKeyingCommand(command, fence);
     });
 }
 void TxOperationIntegrationTestAccess::captureCwLifecycle(RadioModel& radio, QStringList& commands)
@@ -530,6 +527,7 @@ void TxOperationIntegrationTestAccess::captureCwLifecycle(RadioModel& radio, QSt
     controls.setTxSink([&commands](const QString& command, const TxCoordinator::Command& fence) {
         const TxCoordinator::Dispatch dispatch = fence.beginDispatch(TxCoordinator::monotonicMs());
         if (dispatch) { commands << command; }
+        return bool(dispatch);
     });
 }
 void TxOperationIntegrationTestAccess::setNetCwIdentity(RadioModel& radio, RadioConnection& connection, quint32 handle)
@@ -555,7 +553,7 @@ void TxOperationIntegrationTestAccess::injectNetCwTransport(RadioModel& radio, P
     backend->cwControls->m_stream = &stream;
     backend->cwControls->m_streamId = 0x12345678;
     backend->cwControls->setTxSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
-        radio.sendTxKeyingCommand(command, fence);
+        return radio.sendTxKeyingCommand(command, fence);
     });
 }
 } // namespace AetherSDR
@@ -1267,6 +1265,7 @@ void flexEncoding()
     backend.setTxCommandSink([&](const QString& command, const TxCoordinator::Command& fence) {
         commands << command;
         keying.push_back(fence.keying);
+        return true;
     });
     backend.setKeying(true, authority.operation);
     backend.setKeying(false, authority.operation);
@@ -2180,30 +2179,6 @@ void localPttAuthoritativeOwnership()
     check(!f.radio.clientInfoMap().value(0xBu).localPtt, "old handle reply cannot claim a new client");
     check(tcp.isEmpty() && !f.radio.transmitOperation().permitsDispatch(TxCoordinator::monotonicMs()),
           "PTT ownership never grants TX or writes keying");
-}
-
-void cwManagementTerminalFence()
-{
-    QStringList tcp;
-    RadioConnection connection;
-    Fixture f;
-    TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
-    TxOperationIntegrationTestAccess::connectInert(connection);
-    int completions = 0;
-    const auto done = [&](const RadioControlReply&) { ++completions; };
-    const SessionCommandGuard cancelled = SessionCommandGuard::create().request();
-    check(TxOperationIntegrationTestAccess::managementWrite(f.radio, cancelled, done), "management request queued");
-    cancelled.cancel();
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-    check(tcp.isEmpty() && completions == 1, "cancelled management request refused at terminal writer");
-    const SessionCommandGuard stale = SessionCommandGuard::create().request();
-    check(TxOperationIntegrationTestAccess::managementWrite(f.radio, stale, done), "old transport request queued");
-    TxOperationIntegrationTestAccess::resetInert(connection);
-    TxOperationIntegrationTestAccess::connectInert(connection);
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-    check(tcp.isEmpty() && completions == 2, "same-object reconnect rejects old transport generation");
 }
 
 void closingCwAdmissionRetainsCleanup()
@@ -3765,7 +3740,6 @@ int main(int argc, char** argv)
     cwxFailureAndSpeedRestore();
     flexCwxLifecycle();
     localPttAuthoritativeOwnership();
-    cwManagementTerminalFence();
     closingCwAdmissionRetainsCleanup();
     queuedCwxConfiguration();
     queuedCwxErase();
