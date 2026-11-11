@@ -12327,22 +12327,11 @@ void RadioModel::onStatusReceived(const QString& object,
         return;
     }
 
-    // TNF status: "tnf <id> freq=14.100000 width=100 depth=1 permanent=0". SmartSDR
-    // does send a removal on `tnf remove`, bare ("tnf <id> removed") or removed=1.
-    // Route it to removeTnf(): applyTnfStatus() would re-create the entry via
-    // QMap::operator[]. A no-op if requestRemoveTnf() already dropped it.
+    // TNF status ("tnf <id> …") is decoded by the status ingress into the
+    // seam's notchChanged/notchRemoved, which reach TnfModel like any
+    // backend's notches.
     static const QRegularExpression tnfRe(R"(^tnf\s+(\d+)(?:\s+removed)?$)");
-    auto tnfMatch = tnfRe.match(object);
-    if (tnfMatch.hasMatch()) {
-        const int tnfId = tnfMatch.captured(1).toInt();
-        if (kvs.contains(QStringLiteral("removed"))
-            || object.endsWith(QLatin1String("removed"))) {
-            m_tnfModel.removeTnf(tnfId);
-        } else {
-            m_tnfModel.applyTnfStatus(tnfId, kvs);
-        }
-        return;
-    }
+    if (tnfRe.match(object).hasMatch()) { return; }
 
     // Waveform status — three sub-shapes introduced in firmware v4.2.18.
     // CommandParser already disambiguates via the object field; no regex needed.

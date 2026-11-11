@@ -156,6 +156,13 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
     // Untyped profile objects: the space-free flags ("profile importing=1").
     if (object.startsWith(QLatin1String("profile"))) { decodeProfileFlags(kvs); return; }
     if (const auto memory = memoryStatus(object, kvs)) { decodeMemoryStatus(memory->first, memory->second); return; }
+    // "tnf N …"; a removal arrives bare ("tnf N removed") or as removed=1.
+    static const QRegularExpression tnfRe(QStringLiteral(R"(^tnf\s+(\d+)(?:\s+removed)?$)"));
+    if (const auto m = tnfRe.match(object); m.hasMatch()) {
+        decodeTnfStatus(m.captured(1).toInt(),
+                        kvs.contains(QStringLiteral("removed")) || object.endsWith(QLatin1String("removed")), kvs);
+        return;
+    }
     if (const auto update = fileUpdateStatus(object, kvs)) { emit fileUpdateReported(*update); }
 }
 
@@ -754,5 +761,26 @@ void FlexStatusIngress::decodeTuneOutputStatus(const QString& object, const QMap
         m_tuneOutputKnownBands.insert(bandId);
         emit tuneOutputSuppressionObserved(bandId, value == QLatin1String("1"));
     }
+}
+void FlexStatusIngress::decodeTnfStatus(int notchId, bool removed, const QMap<QString, QString>& kvs)
+{
+    if (removed) {
+        emit notchRemoved(notchId);
+        return;
+    }
+    // Read as TnfModel did: freq in MHz, width in Hz (a fractional value is
+    // the older MHz form; anything under 10 Hz falls back to 100).
+    NotchDelta d;
+    if (kvs.contains(QStringLiteral("freq"))) { d.centerHz = kvs.value(QStringLiteral("freq")).toDouble() * 1.0e6; }
+    if (kvs.contains(QStringLiteral("width"))) {
+        const double rawWidth = kvs.value(QStringLiteral("width")).toDouble();
+        int widthHz = rawWidth > 0.0 && rawWidth < 1.0 ? static_cast<int>(rawWidth * 1.0e6 + 0.5)
+                                                       : static_cast<int>(rawWidth + 0.5);
+        if (widthHz < 10) { widthHz = 100; }
+        d.widthHz = widthHz;
+    }
+    if (kvs.contains(QStringLiteral("depth"))) { d.depthDb = kvs.value(QStringLiteral("depth")).toInt(); }
+    if (kvs.contains(QStringLiteral("permanent"))) { d.permanent = kvs.value(QStringLiteral("permanent")) == QLatin1String("1"); }
+    emit notchChanged(notchId, d);
 }
 } // namespace AetherSDR

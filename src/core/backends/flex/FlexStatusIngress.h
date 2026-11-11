@@ -106,6 +106,8 @@ public:
     // outputs (tuneOutputSuppressionObserved); the bands seen so far gate
     // FlexBackend's TUNE-output edits.
     void decodeTuneOutputStatus(const QString& object, const QMap<QString, QString>& kvs);
+    // "tnf N …" → a notch (absolute Hz) or its removal: the seam's notch signals.
+    void decodeTnfStatus(int notchId, bool removed, const QMap<QString, QString>& kvs);
     bool tuneOutputBandKnown(int bandId) const { return m_tuneOutputKnownBands.contains(bandId); }
     void clearTuneOutputBands() { m_tuneOutputKnownBands.clear(); }
 
@@ -141,6 +143,8 @@ signals:
     void fileUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
     void txBandChanged(const AetherSDR::TxBandDelta& delta);
     void streamStatusObserved(const AetherSDR::StreamStatusDelta& delta);
+    void notchChanged(int notchId, const AetherSDR::NotchDelta& delta);
+    void notchRemoved(int notchId);
     void tuneOutputSuppressionObserved(int bandId, bool suppressed);
 
 private:
