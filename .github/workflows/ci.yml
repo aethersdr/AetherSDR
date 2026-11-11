@@ -1,10 +1,12 @@
 name: CI
 
 # ── THE TEST GATE IN THIS FILE IS FROZEN ─────────────────────────────────────
-# This workflow does not run the test suite. The Linux `build` job runs NO
-# tests; the only `ctest -R` steps are the ones listed in
-# .github/ci-test-gate.txt, kept on the macOS and Windows jobs because the
-# claim each pins is about THAT platform's toolchain (Apple Metal, MSVC
+# This workflow does not run the test suite, and on pull requests it does
+# not build it either: Linux builds aether_non_test_targets (declared in
+# tests/tests.cmake), macOS builds that plus its gate tests, and Windows
+# lists its targets explicitly. The Linux `build` job runs NO tests; the only
+# `ctest -R` steps are the ones listed in .github/ci-test-gate.txt, kept on
+# the macOS and Windows jobs because the claim each pins is about THAT platform's toolchain (Apple Metal, MSVC
 # portability, #4559's Windows-only separator failure) — not because Linux
 # cannot run them; most of them also run on the weekly Linux lane. That list
 # does not grow. The full suite runs unfiltered in two places, and a test that
@@ -260,9 +262,10 @@ jobs:
           # AETHER_GPU_SPECTRUM=ON is stated rather than left to the CMake
           # default so the assertion below has a request to check against.
           #
-          # AETHER_SHARED_CORE=ON: the ~250 test executables link one
-          # libaethercore.so instead of each carrying a static copy of the
-          # core, which keeps the tree at ~4 GB instead of ~53 GB (#6962).
+          # AETHER_SHARED_CORE=ON: on pushes to main, where this job builds
+          # `all`, the test executables link one libaethercore.so instead of
+          # each carrying a static copy of the core, which keeps the tree at
+          # ~4 GB instead of ~53 GB (#6962). Pull requests build no tests.
           # Release workflows still link the core statically.
           # -g1, not RelWithDebInfo's -g: line tables only, so backtraces keep
           # file:line at a fraction of the debug size.
@@ -305,8 +308,16 @@ jobs:
           }
           grep "GPU spectrum rendering enabled" configure.log
 
+      # PRs build aether_non_test_targets (tests/tests.cmake): the root-directory
+      # apps, tools and libraries, without anything from tests/tests.cmake.
+      # This job runs none of those tests, and they were about two thirds of
+      # its build time. Pushes to main still build `all`, because
+      # full-suite.yml restores the ccache this job saves from main. So a PR
+      # that breaks only a test's compile merges green, then turns this job
+      # and full-suite.yml red on main, and the ccache (saved only from a
+      # green main build) stays frozen until the test is fixed. Fix forward.
       - name: Build
-        run: cmake --build build -j$(nproc)
+        run: cmake --build build -j$(nproc) ${{ github.event_name == 'pull_request' && '--target aether_non_test_targets' || '' }}
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
@@ -1170,8 +1181,13 @@ jobs:
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)
 
+      # PRs build aether_non_test_targets plus the two gate tests run
+      # below; same reasoning as the Linux job's Build step. Main builds `all`
+      # so the ccache it saves stays warm for test sources. A gate test added
+      # to a ctest -R step here must also join this --target list: its PR
+      # otherwise fails at ctest with "Could not find executable".
       - name: Build
-        run: cmake --build build -j$(sysctl -n hw.ncpu)
+        run: cmake --build build -j$(sysctl -n hw.ncpu) ${{ github.event_name == 'pull_request' && '--target aether_non_test_targets mac_nr_filter_test asr_gpu_probe_test' || '' }}
 
       - name: Run macOS MNR regression test
         run: ctest --test-dir build -R '^mac_nr_filter_test$' --no-tests=error --output-on-failure

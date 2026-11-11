@@ -453,7 +453,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_rttyShiftCombo->setObjectName(QStringLiteral("rttyShiftCombo"));
     m_rttyShiftCombo->setStyleSheet(comboStyle);
     m_rttyShiftCombo->setFixedWidth(52);
-    m_rttyShiftCombo->setToolTip("Mark-to-space frequency shift");
+    m_rttyShiftCombo->setToolTip("Mark-to-space shift. Sets the slice's RTTY shift on the radio.");
     for (int hz : kRttyShiftPresetsHz) {
         m_rttyShiftCombo->addItem(QString::number(hz), hz);
     }

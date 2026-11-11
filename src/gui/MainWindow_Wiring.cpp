@@ -4189,6 +4189,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // connect — the local radio's limit clamping a zoom the Kiwi can fill.
         // (#4470)
         applyPanBandwidthLimitsToWidget(panId, sw, minMhz, maxMhz);
+        refreshPanZoomControls();
     });
 
     // Set panId on the overlay menu so +RX routes to the correct pan
@@ -4821,9 +4822,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, applet](int channel) {
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (!pan) return;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 daxiq_channel=%2")
-                .arg(applet->panId()).arg(channel));
+        m_radioModel.requestPanIqBinding(pan, channel);
     });
 
     // WFM software-demod toggle from the DAX panel. Acts on the menu's slice;

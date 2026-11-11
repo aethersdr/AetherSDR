@@ -177,10 +177,14 @@ int main(int argc, char** argv)
     // would go quiet here with nothing logged — the spectrum for receiver 0 simply
     // stops arriving.
     spectrumFrom.clear();
-    spin(600);
+    // Churn may leave asynchronous channel builds and teardown queued. Wait
+    // for fresh output from the survivor, not a fixed amount of CPU time;
+    // the short add/remove windows above still exercise overlapping work.
+    const bool resumed = AetherSDR::test::spinUntil(
+        [&] { return spectrumFrom.contains(0); });
     check(backend.isConnected(), "still connected after the churn");
     check(pans.size() == 1, "back to one pan");
-    check(spectrumFrom.contains(0), "receiver 0 still produces spectrum after the churn");
+    check(resumed, "receiver 0 still produces spectrum after the churn");
 
     // ---- closing the last receiver is refused, not obeyed ----
     check(!backend.removePanadapter(*pans.cbegin()),

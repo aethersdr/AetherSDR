@@ -2,6 +2,7 @@
 
 #include "CanonWindow.h"
 
+#include <QCoreApplication>
 #include <QHostAddress>
 #include "core/TailnetShimClient.h"
 
@@ -28,6 +29,17 @@ class TailnetShimDialog : public CanonWindow {
 public:
     // `native`: the shim is installed as a legacy waveform, not a container.
     explicit TailnetShimDialog(RadioModel* model, bool native, QWidget* parent = nullptr);
+
+    // For every confirmation that takes the radio off the tailnet: signing it
+    // in again takes the radio's local network. Inline, so the environment
+    // editor can show it without linking this dialog.
+    static QString offTailnetWarning()
+    {
+        return QCoreApplication::translate(
+            "TailnetShimDialog",
+            "Don't do this while you're away from the radio. Until it's signed in again from its local "
+            "network, you can't reach it remotely.");
+    }
 
 signals:
     // The operator chose Reset: this computer can't change the radio's

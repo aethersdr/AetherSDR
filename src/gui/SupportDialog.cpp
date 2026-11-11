@@ -191,18 +191,22 @@ void SupportDialog::buildUI()
     categoryScroll->setWidgetResizable(true);
     categoryScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     categoryScroll->setWidget(categoryPage);
-    // Every column stays readable; about six rows show at the floor.
+
+    auto* groupLayout = new QVBoxLayout(logGroup);
+    groupLayout->addWidget(categoryScroll, 1);
+    groupLayout->addLayout(btnRow);
+    layout->addWidget(logGroup, 1);
+
+    // Measure after parenting and polishing: the inherited canon sheet changes
+    // the checkbox font, indicator and scrollbar widths. All three columns
+    // must fit while about six rows show at the floor.
+    ensurePolished();
     const int rowHeight = categoryPage->findChild<QCheckBox*>()
         ? categoryPage->findChild<QCheckBox*>()->sizeHint().height() + gridLayout->verticalSpacing()
         : 22;
     categoryScroll->setMinimumWidth(categoryPage->minimumSizeHint().width()
                                     + categoryScroll->verticalScrollBar()->sizeHint().width());
     categoryScroll->setMinimumHeight(6 * rowHeight);
-
-    auto* groupLayout = new QVBoxLayout(logGroup);
-    groupLayout->addWidget(categoryScroll, 1);
-    groupLayout->addLayout(btnRow);
-    layout->addWidget(logGroup, 1);
 
     // ── Log file info ─────────────────────────────────────────────────────
     auto* fileRow = new QHBoxLayout;

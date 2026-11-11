@@ -441,7 +441,11 @@ RadioCapabilities AnanBackend::capabilities() const
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage,
         PanDisplayField::SpectrumPoints}, {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
+    c.sessionControl = std::nullopt;  // no SmartSDR client session to bootstrap
     c.panLifecycleControl = std::nullopt;  // fixed receiver topology: no pan create/remove
+    // No Flex stream plane: receive audio is native and graphic EQ is host-side.
+    c.audioStreamControl = std::nullopt;
+    c.radioGraphicEqControl = std::nullopt;
     // No setTune() implementation, so no tune generator to select a mode on.
     c.twoToneGenerator = std::nullopt;
     c.firmwareUpdateSource = std::nullopt;  // gateware number; no published list covers it.

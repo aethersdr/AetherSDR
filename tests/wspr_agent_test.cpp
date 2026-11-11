@@ -214,6 +214,20 @@ int main(int argc, char** argv)
               "a resource that doesn't match the pin is refused and nothing is written");
     }
 
+    // ── Update: only a receiver older than the bundled one ────────────────
+    {
+        const QString bundled = QString::fromLatin1(WsprPackage::kVersion);
+        check(wspr::updateAvailable(QStringLiteral("0.1.0")), "0.1.0 is older than the bundled receiver");
+        check(wspr::updateAvailable(QStringLiteral("0.0.99")), "a lower minor version is older");
+        check(!wspr::updateAvailable(bundled), "the bundled version itself is not");
+        check(!wspr::updateAvailable(QStringLiteral("0.1.10")) && !wspr::updateAvailable(QStringLiteral("1.0.0")),
+              "a newer receiver is not, compared by number and not as text");
+        check(!wspr::updateAvailable(QString()) && !wspr::updateAvailable(QStringLiteral("dev")),
+              "an empty or unreadable version is never older");
+        check(!wspr::updateAvailable(bundled + QStringLiteral("-dev2")),
+              "a build of the bundled version with a suffix is not older");
+    }
+
     std::printf("%s\n", g_failed ? "FAILED" : "PASSED");
     return g_failed ? 1 : 0;
 }

@@ -37,6 +37,9 @@ class FlexBackend : public IRadioBackend {
 public:
     explicit FlexBackend(QObject* parent = nullptr);
     ~FlexBackend() override;
+    ReceiveDispatch requestAudioStream(const AudioStreamRequest& request,
+                                       const AudioStreamCompletion& completion = {}) override;
+    ReceiveDispatch requestGraphicEq(const GraphicEqRequest& request) override;
 
     // The owned wire objects, on their worker threads. Non-owning to callers;
     // valid for the backend's lifetime. RadioModel grabs these post-construction
@@ -46,9 +49,16 @@ public:
 
     // Core verbs share RadioModel's guarded command funnel and wire-write path.
     using CommandReply = std::function<void(int, const QString&)>;
+    using AudioCommandSink = std::function<bool(const QString&, CommandReply, const AudioControlGuard&)>;
+    void setAudioCommandSink(AudioCommandSink sink);
     void setCommandSink(std::function<bool(const QString&, CommandReply)> sink);
     // Encoding-only observers cannot dispatch requests that need a radio reply.
     void setCommandSink(std::function<void(const QString&)> sink);
+    void setDaxTxClientHandleProvider(std::function<quint32()> provider);
+    // The writer must recheck this guard immediately before writing LAN/WAN
+    // text; the generic command sink cannot dispatch an ownership mutation.
+    void setDaxTxCommandSink(
+        std::function<bool(const QString&, CommandReply, const DaxTxRequestGuard&)> sink);
     // The same funnel for a write whose caller waits on the radio's answer
     // (TransmitControlRequest::answerTicket). The sink reports the reply code;
     // with none installed, such a request goes out unanswered.
@@ -57,6 +67,11 @@ public:
     void setAnsweredCommandSink(AnsweredCommandSink sink) { m_answeredSink = std::move(sink); }
     bool answersTransmitControl() const override { return bool(m_answeredSink); }
     // Configuration writes share LAN/WAN sequencing and report actual dispatch.
+    using SessionCommandSink = std::function<bool(const QString&, const SessionCommandGuard&,
+                                                   const RadioControlCompletion&)>;
+    void setSessionCommandSink(SessionCommandSink sink) { m_sessionSink = std::move(sink); }
+    ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
+        const SessionCommandGuard& guard, const SessionControlCompletion& completion = {}) override;
     void setSetupCommandSink(std::function<bool(const QString&, const RadioSetupCompletion&)> sink);
     using AdministrationCommandSink = std::function<bool(const QString&,
         const RadioControlCompletion&, const RadioControlFence&, const std::function<void()>&)>;
@@ -132,6 +147,8 @@ public:
                                                  const RadioControlFence& current = {}) override;
     ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
         TunePowerContext context = TunePowerContext::Deferred) override;
+    ReceiveDispatch requestDaxTxOwnership(const DaxTxOwnershipRequest& request,
+                                         DaxTxOwnershipCompletion completion = {}) override;
     ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
                                       const RadioSetupCompletion& completion = {},
                                       const RadioControlFence& current = {}) override;
@@ -238,12 +255,13 @@ public:
     // clamped numeric parses, uppercase, and list split; the model applies the
     // present fields. Called from the matching RadioModel status choke points.
     void decodeTransmitStatus(const QMap<QString, QString>& kvs);
+    void decodeDaxTxStatus(const QString& object, const QMap<QString, QString>& kvs);
+    void decodeAudioStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
+    void decodeStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
     // Decode radio-global status ("radio …" / "radio slices …" etc.) into the
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
     // residual). Present-only, ok-guarded numeric parses.
     void decodeRadioStatus(const QMap<QString, QString>& kvs);
-    // Full info reply: missing/invalid region clears the observation.
-    void decodeRadioInfoMetadata(const QString& body);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
     void decodeAtuStatus(const QMap<QString, QString>& kvs);
     void decodeApdStatus(const QMap<QString, QString>& kvs);
@@ -305,8 +323,20 @@ private:
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<bool(const QString&, CommandReply)> m_sink;
+    AudioCommandSink m_audioSink;
+    std::function<bool(const QString&, CommandReply, const DaxTxRequestGuard&)> m_daxTxSink;
+    struct DaxTxStreamState {
+        std::optional<quint32> clientHandle;
+        std::optional<bool> tx;
+        quint64 incarnation{0};
+    };
+    QMap<quint32, DaxTxStreamState> m_daxTxStreams;
+    std::function<quint32()> m_daxTxClientHandleProvider;
+    quint64 m_daxTxSession{0};
+    quint64 m_daxTxIncarnation{0};
     AnsweredCommandSink m_answeredSink;
     std::function<bool(const QString&, const RadioSetupCompletion&)> m_setupSink;
+    SessionCommandSink m_sessionSink;
     AdministrationCommandSink m_administrationSink;
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};
