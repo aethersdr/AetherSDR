@@ -90,7 +90,7 @@ The computer's selected microphone is not your microphone, for example a virtual
 
 ### Voice transmits no RF and a notice says no audio input device was found
 
-The radio is modulated by this computer (such as a Hermes-Lite 2), and the computer has no microphone or other audio input device. The notice appears on the panadapter at the first voice transmission; the transmission itself goes ahead.
+The radio is modulated by this computer (a Hermes-Lite 2), and the computer has no microphone or other audio input device. The notice appears on the panadapter at the first voice transmission; the transmission itself goes ahead. Other radios do not show it.
 
 1. Connect a microphone to this computer, or make sure the operating system offers an audio input device.
 2. Reconnect the radio, then check that the **Mic level** gauge moves when you speak.

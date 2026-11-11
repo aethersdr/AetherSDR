@@ -179,8 +179,8 @@ void MainWindow::updateTxAudioPathNotice()
 bool MainWindow::txMicChainReady() const
 {
     const TransmitModel& tx = m_radioModel.transmitModel();
-    return pcMicChainReady(tx.micSelection(), tx.daxOn(),
-                           m_audio && m_audio->txInputDeviceMissing());
+    return pcMicChainReady(m_radioModel.backendCapabilities(), tx.micSelection(),
+                           tx.daxOn(), m_audio && m_audio->txInputDeviceMissing());
 }
 
 void MainWindow::refreshTxMicReadyIndicators()
@@ -212,7 +212,8 @@ void MainWindow::noticeVoiceKeyWithoutInput()
         return;
     }
     const TxAudioPathBlock block = txAudioPathBlock();
-    if (!m_noInputVoiceKeyNotice.takeVoiceKey(block)) {
+    if (!m_noInputVoiceKeyNotice.takeVoiceKey(m_radioModel.backendCapabilities(),
+                                              block)) {
         return;
     }
     const QString message = txAudioPathBlockMessage(block);
@@ -347,7 +348,10 @@ void MainWindow::wirePooDooTiles()
         connect(m_audio, &AudioEngine::txInputDeviceMissingChanged, this,
                 [this](bool) {
             updateTxAudioPathNotice();
-            refreshTxMicReadyIndicators();
+            // Only a host-modulated radio's MIC tile reads the device state.
+            if (hostModulatesTxAudio()) {
+                refreshTxMicReadyIndicators();
+            }
         });
         connect(&m_radioModel, &RadioModel::operatorTransmitChanged, this,
                 [this](bool keyed) {

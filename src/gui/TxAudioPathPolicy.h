@@ -61,12 +61,22 @@ enum class NoInputDeviceWording { NoVoiceRf, NoComputerVoice };
         && (pcAudioEnabled || caps.hostModulates);
 }
 
+// A radio this computer modulates and may key: the HL2 today. The two #7078
+// follow-ups below apply to it only; Flex and Icom keep their behaviour.
+[[nodiscard]] inline bool hostModulatedTransmit(const RadioCapabilities& caps)
+{
+    return caps.hostModulates && caps.canTransmit;
+}
+
 // The chain's MIC endpoint: the computer mic feeds the client DSP only with
-// PC selected, radio DAX TX off and a capture device present (#7078).
-[[nodiscard]] inline bool pcMicChainReady(QStringView micSelection, bool daxOn,
+// PC selected and radio DAX TX off. On a host-modulated radio it also needs a
+// capture device (#7078).
+[[nodiscard]] inline bool pcMicChainReady(const RadioCapabilities& caps,
+                                          QStringView micSelection, bool daxOn,
                                           bool txInputDeviceMissing)
 {
-    return micSelection == u"PC" && !daxOn && !txInputDeviceMissing;
+    const bool deviceMissing = hostModulatedTransmit(caps) && txInputDeviceMissing;
+    return micSelection == u"PC" && !daxOn && !deviceMissing;
 }
 
 // A key only the computer mic can modulate. operatorKeyed is
@@ -82,9 +92,10 @@ enum class NoInputDeviceWording { NoVoiceRf, NoComputerVoice };
         && mode.compare(u"DIGL", Qt::CaseInsensitive) != 0;
 }
 
-// Once per stretch of NoInputDevice: a voice key raises the notice the first
-// time only, and it re-arms when the route leaves that state (an input device
-// is found, PC Audio goes off, the radio disconnects). It never refuses a key.
+// Once per stretch of NoInputDevice on a host-modulated radio: a voice key
+// raises the notice the first time only, and it re-arms when the route leaves
+// that state (an input device is found, PC Audio goes off, the radio
+// disconnects). Other radios never raise it. It never refuses a key.
 class NoInputVoiceKeyNotice {
 public:
     void observe(TxAudioPathBlock block)
@@ -93,10 +104,11 @@ public:
             m_shown = false;
         }
     }
-    [[nodiscard]] bool takeVoiceKey(TxAudioPathBlock block)
+    [[nodiscard]] bool takeVoiceKey(const RadioCapabilities& caps, TxAudioPathBlock block)
     {
         observe(block);
-        if (block != TxAudioPathBlock::NoInputDevice || m_shown) {
+        if (!hostModulatedTransmit(caps) || block != TxAudioPathBlock::NoInputDevice
+            || m_shown) {
             return false;
         }
         m_shown = true;
