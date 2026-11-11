@@ -140,6 +140,9 @@ private:
     bool          m_lastKeyDown{false};
     bool          m_lastDitActive{false};
     bool          m_lastDahActive{false};
+    // A paddle line active at open, ignored until it is released.
+    bool          m_ditHeldAtOpen{false};
+    bool          m_dahHeldAtOpen{false};
     QElapsedTimer m_debounceTimer;
     static constexpr int DEBOUNCE_MS = 20;
 

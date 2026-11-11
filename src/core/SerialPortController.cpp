@@ -177,6 +177,7 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     bool dsr = (modemStat & MS_DSR_ON)  != 0;
     bool dcd = (modemStat & MS_RLSD_ON) != 0;   // RLSD = Receive Line Signal Detect = DCD
     baselineInputs(cts, dsr, dcd);
+    m_debounceTimer.start();
 
     m_hWin        = static_cast<void*>(hPort);
     m_winPortName = portName;
@@ -352,6 +353,7 @@ bool SerialPortController::open(const QString& portName, int baudRate,
         bool dsr = pinState.testFlag(QSerialPort::DataSetReadySignal);
         bool dcd = pinState.testFlag(QSerialPort::DataCarrierDetectSignal);
         baselineInputs(cts, dsr, dcd);
+        m_debounceTimer.start();
         qCDebug(lcDevices) << "SerialPortController: open() initial pin sample —"
                            << "raw=" << Qt::hex << static_cast<int>(pinState)
                            << "DSR=" << dsr << "CTS=" << cts << "DCD=" << dcd
@@ -541,9 +543,10 @@ void SerialPortController::baselineInputs(bool ctsRaw, bool dsrRaw, bool dcdRaw)
     m_lastDcdActive = m_dcdActiveHigh ? dcdRaw : !dcdRaw;
     const CwLines lines = cwLines(m_lastCtsActive, m_lastDsrActive, m_lastDcdActive);
     m_lastKeyDown = lines.keyDown;
-    m_lastDitActive = lines.dit;
-    m_lastDahActive = lines.dah;
-    m_debounceTimer.start();
+    m_lastDitActive = false;
+    m_lastDahActive = false;
+    m_ditHeldAtOpen = lines.dit;
+    m_dahHeldAtOpen = lines.dah;
 }
 
 void SerialPortController::rebaselineInPlace(bool ctsRaw, bool dsrRaw, bool dcdRaw)
@@ -568,19 +571,25 @@ void SerialPortController::applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRa
         qCDebug(lcDevices) << "SerialPortController: CTS PTT edge →" << ctsActive;
         m_lastCtsActive = ctsActive;
         m_debounceTimer.restart();
-        publishPttInput(ctsActive, input);
+        if (ctsActive || m_pttInputHeld) {
+            publishPttInput(ctsActive, input);
+        }
     }
     if (m_dsrFn == InputFunction::PttInput && dsrActive != m_lastDsrActive && debounceOk) {
         qCDebug(lcDevices) << "SerialPortController: DSR PTT edge →" << dsrActive;
         m_lastDsrActive = dsrActive;
         m_debounceTimer.restart();
-        publishPttInput(dsrActive, input);
+        if (dsrActive || m_pttInputHeld) {
+            publishPttInput(dsrActive, input);
+        }
     }
     if (m_dcdFn == InputFunction::PttInput && dcdActive != m_lastDcdActive && debounceOk) {
         qCDebug(lcDevices) << "SerialPortController: DCD PTT edge →" << dcdActive;
         m_lastDcdActive = dcdActive;
         m_debounceTimer.restart();
-        publishPttInput(dcdActive, input);
+        if (dcdActive || m_pttInputHeld) {
+            publishPttInput(dcdActive, input);
+        }
     }
 
     const CwLines lines = cwLines(ctsActive, dsrActive, dcdActive);
@@ -598,12 +607,16 @@ void SerialPortController::applyInputSample(bool ctsRaw, bool dsrRaw, bool dcdRa
     m_lastDcdActive = dcdActive;
 
     // ── CW paddle (dit/dah) ──────────────────────────────────────────────
-    if (lines.hasPaddle && (lines.dit != m_lastDitActive || lines.dah != m_lastDahActive)) {
-        m_lastDitActive = lines.dit;
-        m_lastDahActive = lines.dah;
-        if (lines.dit || lines.dah || m_paddleInputHeld) {
-            publishPaddleInput(lines.dit, lines.dah, input);
-        }
+    // A line active at open counts as open until it is released, so a paddle
+    // resting on one contact keys nothing when the other paddle is pressed.
+    if (!lines.dit) { m_ditHeldAtOpen = false; }
+    if (!lines.dah) { m_dahHeldAtOpen = false; }
+    const bool dit = lines.dit && !m_ditHeldAtOpen;
+    const bool dah = lines.dah && !m_dahHeldAtOpen;
+    if (lines.hasPaddle && (dit != m_lastDitActive || dah != m_lastDahActive)) {
+        m_lastDitActive = dit;
+        m_lastDahActive = dah;
+        publishPaddleInput(dit, dah, input);
     }
 }
 #endif

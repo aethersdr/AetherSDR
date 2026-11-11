@@ -13,6 +13,7 @@
 
 #include <QCoreApplication>
 #include <QObject>
+#include <QThread>
 
 #include <cstdio>
 #include <string>
@@ -22,9 +23,15 @@
 namespace AetherSDR {
 class SerialInputBaselineTestAccess {
 public:
+    // The PTT debounce window that follows open() or an accepted PTT edge.
+    static void settleDebounce()
+    {
+        QThread::msleep(SerialPortController::DEBOUNCE_MS + 5);
+    }
     static void open(SerialPortController& c, bool cts, bool dsr, bool dcd)
     {
         c.baselineInputs(cts, dsr, dcd);
+        c.m_debounceTimer.start();
     }
     static void sample(SerialPortController& c, bool cts, bool dsr, bool dcd)
     {
@@ -163,6 +170,51 @@ void pttUnchanged()
     check(r.ptts.empty(), "a PTT line active at open still asserts no PTT");
 }
 
+// A PTT line held at open: its release publishes nothing, and the next press
+// and release pair normally.
+void pttReleaseOfHeldAtOpen()
+{
+    SerialPortController c;
+    c.setCtsFunction(Input::PttInput);
+    c.setCtsPolarity(true);
+    Recorder r(c);
+    SerialInputBaselineTestAccess::open(c, true, false, false);
+    SerialInputBaselineTestAccess::settleDebounce();
+    SerialInputBaselineTestAccess::sample(c, false, false, false);
+    check(r.ptts.empty(), "a PTT line held at open: its release publishes no unpaired unkey");
+    SerialInputBaselineTestAccess::settleDebounce();
+    SerialInputBaselineTestAccess::sample(c, true, false, false);
+    SerialInputBaselineTestAccess::settleDebounce();
+    SerialInputBaselineTestAccess::sample(c, false, false, false);
+    check(r.ptts == std::vector<bool>{true, false},
+          "a PTT line held at open: the next press keys and its release unkeys");
+}
+
+// One paddle resting on its contact at open: the other paddle's press sends
+// only its own element, and the resting one keys after a release and a press.
+void paddleOtherSideWhileOneHeldAtOpen()
+{
+    const std::string tag = "paddle, dit held at open";
+    SerialPortController c;
+    c.setDsrFunction(Input::CwDitInput);
+    c.setDcdFunction(Input::CwDahInput);
+    c.setDsrPolarity(true);
+    c.setDcdPolarity(true);
+    Recorder r(c);
+    SerialInputBaselineTestAccess::open(c, false, true, false);
+    SerialInputBaselineTestAccess::sample(c, false, true, true);
+    bool anyDit = false;
+    for (const auto& [dit, dah] : r.paddles) {
+        anyDit = anyDit || dit;
+    }
+    check(!anyDit && !r.paddles.empty() && r.paddles.back() == std::pair<bool, bool>{false, true},
+          tag + ": pressing dah sends dah alone, never the resting dit");
+    SerialInputBaselineTestAccess::sample(c, false, false, false);
+    SerialInputBaselineTestAccess::sample(c, false, true, false);
+    check(!r.paddles.empty() && r.paddles.back() == std::pair<bool, bool>{true, false},
+          tag + ": after a release, pressing dit sends dit");
+}
+
 // Polarity flipped with the port open (loadSettings() in place) on an idle key.
 void polarityFlipIdleKey()
 {
@@ -265,6 +317,8 @@ int main(int argc, char** argv)
     paddle(false);
     paddle(true);
     pttUnchanged();
+    pttReleaseOfHeldAtOpen();
+    paddleOtherSideWhileOneHeldAtOpen();
     polarityFlipIdleKey();
     polarityFlipHeldKey();
     polarityFlipIdlePaddle();
