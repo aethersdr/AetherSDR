@@ -68,6 +68,28 @@ int main(int argc, char** argv)
         check(st->spots.size() == 2, "spots with an impossible SNR or a callsign that isn't one are dropped");
         check(st->spots.size() == 2 && st->spots[1].call.isEmpty() && st->spots[1].grid == "EM32re",
               "a hashed call (empty) is kept with its grid");
+        check(st->slice && st->sliceIndex == -1, "a receiver before 0.1.9 names no slice index");
+    }
+    // 0.1.9 names its slice's index (#7139); anything else is no index.
+    {
+        auto withIndex = [](const char* value, bool slice = true) {
+            QByteArray j(kStatus);
+            j.replace("\"slice\":true,", QByteArray("\"slice\":") + (slice ? "true" : "false")
+                                            + ",\"slice_index\":" + value + ",");
+            return wspr::parseStatus(j);
+        };
+        const auto five = withIndex("5");
+        check(five && five->sliceIndex == 5, "the receiver's slice index comes through");
+        const auto zero = withIndex("0");
+        check(zero && zero->sliceIndex == 0, "slice index 0 is an index");
+        const auto none = withIndex("-1", false);
+        check(none && none->sliceIndex == -1, "no slice, no index");
+        const auto stale = withIndex("5", false);
+        check(stale && stale->sliceIndex == -1, "an index without a slice is ignored");
+        for (const char* bad : {"64", "-7", "2.5", "\"3\"", "null"}) {
+            const auto b = withIndex(bad);
+            check(b && b->sliceIndex == -1, (QByteArray("an unusable slice index is none: ") + bad).constData());
+        }
     }
     check(!wspr::parseStatus("not json"), "non-JSON is refused");
     check(!wspr::parseStatus(R"({"agent":"AetherHealth"})"), "another agent's JSON is refused");

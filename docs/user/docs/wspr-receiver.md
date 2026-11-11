@@ -86,6 +86,7 @@ Open **Settings → SpotHub...** and choose the **WSPR** tab, then click **Start
 
 ## Good to know
 
+- AetherSDR leaves the receiver's slice alone: its letter shows as taken, labeled **WSPR receiver**, and AetherSDR opens a slice of its own. Other programs, SmartSDR among them, may still show it as theirs. Don't tune it there, because the receiver moves it back on its next cycle.
 - The radio removes the receiver's slice when its last GUI client disconnects, so closing SmartSDR or AetherSDR can lose the cycle in progress. The receiver makes a new slice at once and carries on with the next cycle.
 - It waits for the radio's clock to be set before it starts recording, up to about a minute and a half after the radio boots.
 - Removing or updating the receiver starts it over with default settings, and any computer can claim it again.
