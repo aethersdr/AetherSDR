@@ -9239,6 +9239,15 @@ if(TARGET Qt6::SerialPort)
     add_test(NAME flex_control_recovery_test COMMAND flex_control_recovery_test)
 endif()
 
+# A serial CW key or paddle line already active at port open keys nothing until
+# released and pressed (the PTT pins' rule). Injected samples; no port opened.
+if(TARGET Qt6::SerialPort)
+    add_executable(serial_cw_key_baseline_test tests/serial_cw_key_baseline_test.cpp)
+    target_include_directories(serial_cw_key_baseline_test PRIVATE src tests)
+    target_link_libraries(serial_cw_key_baseline_test PRIVATE aethercore Qt6::Core Qt6::SerialPort)
+    add_test(NAME serial_cw_key_baseline_test COMMAND serial_cw_key_baseline_test)
+endif()
+
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
     src/gui/PanLayoutDialog.cpp
@@ -11131,6 +11140,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_gain_restore_test
     hl2_rx_only_tx_chain_test
     hl2_automation_no_tx_gate_test
+    serial_cw_key_baseline_test
     hl2_persist_restart_test
     hl2_tx_mode_reconnect_test
     hl2_persist_two_radios_test
