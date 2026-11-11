@@ -201,7 +201,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - RF1's output level against the RF power slider, and its harmonics, have not been measured ([#4954](https://github.com/aethersdr/AetherSDR/issues/4954)). Start low and use a fixed attenuator before any receiver or analyzer.
 - Each over starts with keyed silence before your audio is transmitted: about 125 ms from the microphone and 175 to 195 ms from a TCI client, longer when the client's audio arrives unevenly ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
 - One user reported spill beside the SSB signal while transmitting, and a busy ALC gauge. The distorted audio in the same report was clean from v26.10.1. A later side-by-side on that station, with a 300 to 2700 Hz transmit filter, showed the same output from AetherSDR as from deskHPSDR; no retest since then is on record ([#5198](https://github.com/aethersdr/AetherSDR/issues/5198)).
-- With no audio input device on the computer, a voice transmit still keys the HL2 but sends no RF. The AetherTX notice says so; CW, TUNE and TCI audio are not affected. See [Aetherial Audio](./aetherial-audio.md#requirements) ([#7078](https://github.com/aethersdr/AetherSDR/issues/7078)).
+- With no audio input device on the computer, a voice transmit still keys the HL2 but sends no RF. The AetherTX notice says so, and the first voice transmission in that state also shows the notice on the panadapter; CW, TUNE and TCI audio are not affected. See [Aetherial Audio](./aetherial-audio.md#requirements) ([#7078](https://github.com/aethersdr/AetherSDR/issues/7078)).
 - A CW key on the HL2's own key jack gives no sidetone in AetherSDR: the radio makes the CW itself, the receiver is muted while it does, and the client sidetone follows only AetherSDR's own keyer ([#5909](https://github.com/aethersdr/AetherSDR/issues/5909)).
 - Paddle CW timing can vary with load: each dit and dah edge from AetherSDR's keyer waits in the app's main event queue before it reaches the radio, so a busy computer can stretch or shorten elements ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
 - One user reports a row of evenly spaced peaks on the 10 m panadapter while transmitting FT8 at 28.074 MHz. It is not confirmed: a receive-only check of 10 m on another HL2 found none on a dummy load ([#6577](https://github.com/aethersdr/AetherSDR/issues/6577)).
@@ -216,7 +216,7 @@ This page was checked with one Hermes-Lite 2 (gateware 74) on macOS, at one stat
 - Transmit linearity: intermodulation (IMD) has not been measured with a calibrated instrument.
 - CW sent with a key on the radio's own jack.
 - What the radio does when AetherSDR disconnects, hangs or crashes while transmitting. Refusing to transmit while the session is stopped is checked by automated tests only, not on a radio.
-- Receive audio in each mode, end to end on a radio. AGC, a manual notch and squelch are checked by automated tests without a radio, the notch and squelch in USB only.
+- Receive audio in each mode, end to end on a radio. AGC, a manual notch and squelch are checked by automated tests without a radio, in USB only.
 - Receive on 10 m free of spurs from the radio itself.
 - A change made from a CAT or TCI program reaching both the on-screen control and the radio.
 - Modes, filters and bands coming back after a restart are checked by automated tests without a radio; saved filter presets are not covered.
