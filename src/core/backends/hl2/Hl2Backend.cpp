@@ -507,6 +507,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         }
     });
     connect(m_metis, &MetisClient::radioPttChanged, this, &Hl2Backend::onRadioPttChanged);
+    connect(m_metis, &MetisClient::txRouteRefused, this, &Hl2Backend::onMetisTxRouteRefused);
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         // No link, no observation: a PTT the radio last reported ends here, so the
         // model never stays in transmit on a radio it can no longer hear.
@@ -1087,6 +1088,7 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     const int ddc = m_ids.append();
 
     Receiver seed = requested;
+    seed.publishedTxAntenna.clear();
     seed.antennasPublished = false;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
@@ -2015,10 +2017,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Power class for every forward-power gauge, via the band-table seam
     // (RadioModel::refreshTxPowerLimit; TxApplet scales from a non-empty
     // table). One band: the HL2 is rated 5 W on all HF bands (HL2 wiki FAQ).
-    // The +17 dBm RF1 instrumentation output is hardware-selected with no
-    // readback, so it is not described.
+    // RF1 (TX route, #4954) has no rated power, so it is not described here.
     c.txPowerBands = {TxPowerBand{c.tuningMinHz, c.tuningMaxHz,
                                   static_cast<double>(kHl2RatedOutputWatts)}};
+    // ANT or RF1 is the operator's own choice; a CAT antenna select must not move it.
+    c.independentTxAntenna = IndependentTxAntenna{};
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
@@ -2406,24 +2409,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
                           << m_lnaDbByBand.value(m_currentBandKey) << "dB";
         }
     }
-    // Seed the DRIVE from the start band's memory and echo it upward NOW —
-    // before linkUp — so TransmitModel carries the restored value when its
-    // connect-time push fires (PR #4619 bench, nigelfenton: the push arrived
-    // as apparent operator intent at the model default of 100 and overwrote
-    // the stored per-band drive on every reconnect; Ozy311 traced the same
-    // seam). With the model seeded, that push becomes a value-identical echo
-    // — which setTxPower() now recognizes and declines to record.
-    if (m_haveRestoredState) {
-        const int drive =
-            m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
-        if (drive >= 0) {
-            m_rfPowerPercent = drive;
-            TransmitDelta delta;
-            delta.rfPower = drive;
-            emit transmitChanged(delta);
-        }
-        applyTuneMemoryFor(m_currentBandKey);
-    }
+    seedConnectDrive();
 
     // Receiver count: the smallest of what the operator asked for, what the
     // board has (discovery byte 0x13: hl2b5up_main reports 4, skimmer variants
@@ -2528,6 +2514,9 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.cl1RefClock = m_hw.cl1RefClock;
     // Identity for the CL1 latch, which is per-radio while MetisClient is not.
     mp.radioSerial = m_radioSerial;
+    // The TX route is this radio's own, restored by applyRestoredState() (#4954):
+    // a transverter on RF1 must not come back to up to 5 W out of ANT.
+    mp.txRoute     = m_txRoute;
     qCInfo(lcHl2).nospace()
         << "HL2 band filter: " << QString::asprintf("0x%02X", m_ocFilterByte)
         << " (" << ocFilterName(mp.ocFilterByte) << ") for "
@@ -3385,7 +3374,15 @@ ReceiveDispatch Hl2Backend::requestSliceControl(int sliceId, const SliceControlR
     case Field::TxSlice:
         if (std::get<bool>(request.value)) { setTxSlice(sliceId); }
         break;
-    case Field::TxAntenna: case Field::DaxChannel: case Field::RttyMark:
+    case Field::TxAntenna: {
+        const ReceiveDispatch result = requestTxRoute(std::get<QString>(request.value));
+        // SliceModel publishes the requested label after synchronous dispatch.
+        // Reconcile on the next turn, using the route then in force rather
+        // than capturing a value that another request could supersede.
+        QMetaObject::invokeMethod(this, [this] { emitAllSliceState(); }, Qt::QueuedConnection);
+        return result;
+    }
+    case Field::DaxChannel: case Field::RttyMark:
     case Field::RttyShift: case Field::DiglOffset: case Field::DiguOffset:
     case Field::Record: case Field::Play: case Field::FmToneMode:
     case Field::FmToneValue: case Field::FmRxToneValue: case Field::FmDtcs:
@@ -5104,7 +5101,8 @@ void Hl2Backend::applyAtuTuneRequest(bool tuning)
     // (hermeslite_core.v: tx_en(tx_on & ~atu_txinhibit)) and TRY drives
     // `start` low to begin an external tune. Clearing is never gated: `tuning`
     // false always clears the bit.
-    const bool request = tuning && m_hw.atuGateware && m_txAllowed;
+    const bool request = tuning && m_hw.atuGateware && m_txAllowed
+                      && m_txRoute == hl2::TxRoute::Ant;
     QMetaObject::invokeMethod(m_metis, "setAtuTuneRequest", Qt::QueuedConnection,
                               Q_ARG(bool, request));
 }
@@ -5429,11 +5427,12 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
         applyAtuTuneRequest(true);
         // Straight to the drive register rather than through setTxPower(), which
         // would overwrite the saved RF power we have to restore on release.
+        // On RF1 the carrier runs at RF1's drive; recordTunePower() refuses there.
         if (tunePowerPercent >= 0) {
             if (recordTunePower(tunePowerPercent)) {
                 notifyOperatingStateChanged();
             }
-            applyDrive(tunePowerPercent);
+            applyDrive(m_txRoute == hl2::TxRoute::Rf1 ? m_rf1DrivePercent : tunePowerPercent);
             m_rfDriveOwed = true;
         }
         setTxTestTone(0.0, kHl2CarrierAmplitude, operation);
@@ -5456,7 +5455,7 @@ void Hl2Backend::setTunePower(int percent)
     if (recordTunePower(percent)) {
         notifyOperatingStateChanged();
     }
-    if (!m_tuning
+    if (!m_tuning || m_txRoute == hl2::TxRoute::Rf1
         || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
@@ -5466,6 +5465,10 @@ void Hl2Backend::setTunePower(int percent)
 
 bool Hl2Backend::recordTunePower(int percent)
 {
+    // The tune slider has no effect on RF1 and is not recorded there.
+    if (m_txRoute == hl2::TxRoute::Rf1) {
+        return false;
+    }
     const int clamped = std::clamp(percent, 0, 100);
     if (clamped == m_tunePowerPercent) {
         return false;
@@ -5529,7 +5532,7 @@ void Hl2Backend::finishTxTail()
     applyBandFilter("unkey");
     if (m_rfDriveOwed && !m_tuning) {
         m_rfDriveOwed = false;
-        applyDrive(m_rfPowerPercent);
+        applyDrive(operatorDrivePercent());
     }
 }
 
@@ -5539,16 +5542,118 @@ void Hl2Backend::finishTxTail()
 void Hl2Backend::applyDrive(int percent)
 {
     // Drive is gated exactly like keying. setTxDriveLevel writes the PA-enable
-    // bit (0x09[19]) every frame, so an ungated call — e.g. the push-current-
+    // bit (0x09[19]) with the drive, so an ungated call — e.g. the push-current-
     // power-on-connect path with a default rfPower of 100 — would bias the PA on
     // uncommanded in a transmit-BLOCKED session, defeating connectRadio()'s
     // deliberate drive=0 safety seed. Assert drive off instead. (#4449 review)
+    setTxDriveLevel(driveLevelFor(percent));
+}
+
+int Hl2Backend::driveLevelFor(int percent) const noexcept
+{
     if (!m_txAllowed) {
-        setTxDriveLevel(0);
-        return;
+        return 0;
     }
     const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
-    setTxDriveLevel(clamped * kTxDriveMax / 100);
+    return clamped * kTxDriveMax / 100;
+}
+
+int Hl2Backend::operatorDrivePercent() const noexcept
+{
+    return m_txRoute == hl2::TxRoute::Rf1 ? m_rf1DrivePercent : m_rfPowerPercent;
+}
+
+namespace {
+QString txRouteAntToken() { return QStringLiteral("ANT"); }
+QString txRouteRf1Token() { return QStringLiteral("RF1"); }
+
+QString txRouteToken(hl2::TxRoute route)
+{
+    return route == hl2::TxRoute::Rf1 ? txRouteRf1Token() : txRouteAntToken();
+}
+} // namespace
+
+ReceiveDispatch Hl2Backend::requestTxRoute(const QString& token)
+{
+    std::optional<hl2::TxRoute> want;
+    if (token == txRouteAntToken()) {
+        want = hl2::TxRoute::Ant;
+    } else if (token == txRouteRf1Token()) {
+        want = hl2::TxRoute::Rf1;
+    }
+    if (!want) {
+        refuseTxRoute(QStringLiteral("HL2: \"%1\" is not a transmit output of this radio "
+                                     "(it has ANT and RF1); the output stays %2")
+                          .arg(token, txRouteToken(m_txRoute)));
+        return ReceiveDispatch::Dispatched;
+    }
+    if (*want == m_txRoute) {
+        for (int ddc = 0; ddc < static_cast<int>(m_rx.size()); ++ddc) {
+            emitSliceState(ddc, true);
+        }
+        return ReceiveDispatch::Dispatched;
+    }
+    // The tail counts: the radio still radiates after MOX-off, and the route bit
+    // also moves the RF switch.
+    if (m_keyed || m_radioPtt || m_tuning || m_txTailPending) {
+        refuseTxRoute(QStringLiteral("HL2: the transmit output cannot change while "
+                                     "transmitting; it stays %1. Unkey first.")
+                          .arg(txRouteToken(m_txRoute)));
+        return ReceiveDispatch::Dispatched;
+    }
+    applyTxRoute(*want);
+    return ReceiveDispatch::Dispatched;
+}
+
+void Hl2Backend::applyTxRoute(hl2::TxRoute next)
+{
+    m_txRoute = next;
+    if (next == hl2::TxRoute::Rf1) {
+        m_rf1DrivePercent = kRf1StartDrivePercent;
+    }
+    const int percent = operatorDrivePercent();
+    const int level = driveLevelFor(percent);
+    if (m_metis) {
+        m_txDriveRegister = level;
+        QMetaObject::invokeMethod(m_metis, "setTxRoute", Qt::QueuedConnection,
+                                  Q_ARG(int, static_cast<int>(next)), Q_ARG(int, level));
+    }
+    qCInfo(lcHl2) << "HL2: TX output" << txRouteToken(next) << "— drive" << percent << '%'
+                  << (next == hl2::TxRoute::Rf1 ? "(PA off; RF1's own drive)" : "(band drive)");
+    // The slider shows the drive in force. TransmitModel's applyChanges() does not
+    // request control, so this echo is not an operator change.
+    TransmitDelta delta;
+    delta.rfPower = percent;
+    emit transmitChanged(delta);
+    for (int ddc = 0; ddc < static_cast<int>(m_rx.size()); ++ddc) {
+        emitSliceState(ddc, true);
+    }
+    notifyOperatingStateChanged();
+}
+
+void Hl2Backend::refuseTxRoute(const QString& why)
+{
+    qCWarning(lcHl2).noquote() << why;
+    emit configurationWarning(why);
+    for (int ddc = 0; ddc < static_cast<int>(m_rx.size()); ++ddc) {
+        emitSliceState(ddc, true);
+    }
+}
+
+void Hl2Backend::onMetisTxRouteRefused(int actual)
+{
+    const hl2::TxRoute route = actual == static_cast<int>(hl2::TxRoute::Rf1)
+        ? hl2::TxRoute::Rf1 : hl2::TxRoute::Ant;
+    if (route != m_txRoute) {
+        m_txRoute = route;
+        applyDrive(operatorDrivePercent());
+        TransmitDelta delta;
+        delta.rfPower = operatorDrivePercent();
+        emit transmitChanged(delta);
+        notifyOperatingStateChanged();
+    }
+    refuseTxRoute(QStringLiteral("HL2: the radio was transmitting; the transmit output "
+                                 "stays %1").arg(txRouteToken(m_txRoute)));
 }
 
 std::pair<int, int> Hl2Backend::effectiveTxPassband(const QString& mode) const
@@ -5662,6 +5767,20 @@ void Hl2Backend::setTxPower(int percent)
     // tuning: a power change made mid-tune, or while TX is blocked, is still
     // what the operator wants once the carrier drops or the gate opens.
     const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+    // RF1 has its own drive and never touches the band maps (#4954): a band-memory
+    // apply is ANT's and is skipped, an operator change is RF1's value only.
+    if (m_txRoute == hl2::TxRoute::Rf1) {
+        if (m_applyingBandMemory) {
+            return;
+        }
+        m_rf1DrivePercent = clamped;
+        if (m_tuning || (m_rfDriveOwed && m_txTailPending)) {
+            return;
+        }
+        m_rfDriveOwed = false;
+        applyDrive(m_rf1DrivePercent);
+        return;
+    }
     // OPERATOR intent only — and only on CHANGE: internal band-memory applies
     // (m_applyingBandMemory) and value-identical echoes (RadioModel's
     // connect-time power push re-asserting what we just seeded) must neither
@@ -6582,6 +6701,11 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
     // positively denying responsibility for the exact divergence it exists to
     // explain. The gate is a session property, so it is always knowable.
     put("txDriveGated", QStringLiteral("Drive held at 0 by the TX gate"), !m_txAllowed);
+    // On RF1 the PA is off and forward power reads about 0: not a fault (#4954).
+    put("txRoute", QStringLiteral("TX output (RF1: PA off, forward power not measured)"),
+        txRouteToken(m_txRoute));
+    put("rf1DrivePercent", QStringLiteral("Drive requested on RF1 (0-100)"),
+        m_txRoute == hl2::TxRoute::Rf1 ? QVariant(m_rf1DrivePercent) : QVariant());
 
     // The voice chain as the modulator runs it, read from this backend rather
     // than TransmitModel, so request and applied value can be compared.
@@ -6968,6 +7092,11 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // cannot leak radio A's state into radio B.
     m_restoredState = RestoredRadioState{};
     m_haveRestoredState = false;
+    // The TX route is per radio (#4954): radio B starts on ANT unless its own
+    // document says RF1, and RF1's drive always starts at its start value.
+    const bool wasRf1 = m_txRoute == hl2::TxRoute::Rf1;
+    m_txRoute = hl2::TxRoute::Ant;
+    m_rf1DrivePercent = kRf1StartDrivePercent;
     m_lnaDbByBand.clear();
     m_driveByBand.clear();
     m_lnaGainDb = hl2::kLnaDefaultGainDb;
@@ -7159,6 +7288,27 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         txSetpoints.value(QStringLiteral("tuneByBand")).toObject();
     for (auto it = tuneByBand.constBegin(); it != tuneByBand.constEnd(); ++it)
         m_tuneByBand.insert(it.key(), qBound(0, it.value().toInt(), 100));
+
+    // TX route: exactly "ANT" or "RF1"; absent or anything else reads ANT, the
+    // radio's own default. Reaches the client in Params at start(), before the
+    // first non-zero drive.
+    if (txSetpoints.contains(QStringLiteral("txRoute"))) {
+        const QString route = txSetpoints.value(QStringLiteral("txRoute")).toString();
+        if (route == txRouteRf1Token()) {
+            m_txRoute = hl2::TxRoute::Rf1;
+        } else if (route != txRouteAntToken()) {
+            qCInfo(lcHl2) << "HL2 restore: dropping unknown TX route"
+                          << txSetpoints.value(QStringLiteral("txRoute")).toVariant()
+                          << "- ANT";
+        }
+    }
+    // Leaving RF1 hands ANT's drive back to the model, so the connect-time
+    // power push cannot carry RF1's value onto ANT as an operator change.
+    if (wasRf1 && m_txRoute == hl2::TxRoute::Ant) {
+        TransmitDelta delta;
+        delta.rfPower = m_rfPowerPercent;
+        emit transmitChanged(delta);
+    }
 
     // Mic level is dropped, not clamped, when out of range: the floor is mute,
     // so a clamped bad value would silently take the operator off the air.
@@ -7566,6 +7716,9 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         txSetpoints.insert(QStringLiteral("tuneByBand"), tuneByBand);
     if (m_tuneDefaultPercent >= 0)
         txSetpoints.insert(QStringLiteral("tuneDefaultPercent"), m_tuneDefaultPercent);
+    // The TX route, per radio (#4954). RF1's drive is not stored: it starts at
+    // its start value on every connect, like every selection of RF1.
+    txSetpoints.insert(QStringLiteral("txRoute"), txRouteToken(m_txRoute));
 
     // The TX passband is flat, not per band or mode: it is one pair of
     // sliders, and per-band memory would move them on their own. Written only
@@ -8043,7 +8196,10 @@ void Hl2Backend::applyPerBandStateFor(double freqHz, const char* reason)
                       << "with no drive baseline — drive set to 0 until the"
                          " operator chooses one";
     }
-    if (drive != m_rfPowerPercent) {
+    if (m_txRoute == hl2::TxRoute::Rf1) {
+        // ANT's drive follows the band without reaching the wire; RF1 keeps its own.
+        m_rfPowerPercent = drive;
+    } else if (drive != m_rfPowerPercent) {
         // A drive SETPOINT — applyDrive() itself stays behind the TX gate, so
         // a transmit-blocked session records the value without touching the PA.
         m_applyingBandMemory = true;
@@ -8059,6 +8215,38 @@ void Hl2Backend::applyPerBandStateFor(double freqHz, const char* reason)
                   << newBand << "lna" << m_lnaGainDb << "dB drive"
                   << m_rfPowerPercent << "% tune" << m_tunePowerPercent << '%';
     notifyOperatingStateChanged();
+}
+
+// The connect-time drive seed, before linkUp. Called from connectRadio() only.
+void Hl2Backend::seedConnectDrive()
+{
+    // Seed the DRIVE from the start band's memory and echo it upward NOW —
+    // before linkUp — so TransmitModel carries the restored value when its
+    // connect-time push fires (PR #4619 bench, nigelfenton: the push arrived
+    // as apparent operator intent at the model default of 100 and overwrote
+    // the stored per-band drive on every reconnect; Ozy311 traced the same
+    // seam). With the model seeded, that push becomes a value-identical echo
+    // — which setTxPower() now recognizes and declines to record.
+    if (m_haveRestoredState) {
+        const int drive =
+            m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
+        if (drive >= 0) {
+            m_rfPowerPercent = drive;
+            if (m_txRoute == hl2::TxRoute::Ant) {
+                TransmitDelta delta;
+                delta.rfPower = drive;
+                emit transmitChanged(delta);
+            }
+        }
+        applyTuneMemoryFor(m_currentBandKey);
+    }
+    // On a restored RF1 the model is seeded with RF1's drive instead, so the
+    // connect-time power push is RF1's own value and never ANT's band drive.
+    if (m_txRoute == hl2::TxRoute::Rf1) {
+        TransmitDelta delta;
+        delta.rfPower = m_rf1DrivePercent;
+        emit transmitChanged(delta);
+    }
 }
 
 void Hl2Backend::notifyOperatingStateChanged()
@@ -8146,7 +8334,7 @@ void Hl2Backend::pushInitialState()
             // the remembered per-band value wins over the session default.
             const int drive =
                 m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
-            if (drive >= 0) {
+            if (drive >= 0 && m_txRoute == hl2::TxRoute::Ant) {
                 m_applyingBandMemory = true;
                 setTxPower(drive);
                 m_applyingBandMemory = false;
@@ -8766,9 +8954,6 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     d.rxAntennaList = QStringList{QStringLiteral("ANT")};
     if (!r->antennasPublished || forceAntennas) {
         d.rxAntenna = QStringLiteral("ANT");
-        // The TX label must also replace SliceModel's ANT1 default, which
-        // knownAntennaTokens() includes in receive menus.
-        d.txAntenna = QStringLiteral("ANT");
         r->antennasPublished = true;
     }
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
@@ -8815,6 +9000,13 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     // Exactly one slice is active, so consumers (e.g. the RX Controls applet)
     // resolve the receiver the operator is working on.
     d.active = (ddc == m_activeDdc);
+    // The transmit output is radio-wide, so every slice carries it (#4954).
+    d.txAntennaList = QStringList{txRouteAntToken(), txRouteRf1Token()};
+    const QString txAntenna = txRouteToken(m_txRoute);
+    if (forceAntennas || r->publishedTxAntenna != txAntenna) {
+        d.txAntenna = txAntenna;
+        r->publishedTxAntenna = txAntenna;
+    }
     emit sliceChanged(ids->uiNumber, d);
 }
 

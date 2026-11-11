@@ -2450,6 +2450,27 @@ add_test(NAME callsign_lookup_dialog_test COMMAND callsign_lookup_dialog_test)
 set_tests_properties(callsign_lookup_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Radio Health on CanonWindow (#7027): a frameless workspace in the canon
+# scope that keeps its old geometry key and polls only while shown. No radio
+# model: the window is built with none.
+add_executable(radio_health_dialog_test
+    tests/radio_health_dialog_test.cpp
+    src/gui/RadioHealthDialog.cpp
+    src/gui/CanonWindow.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_health_dialog_test PRIVATE src tests)
+target_link_libraries(radio_health_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+set_target_properties(radio_health_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME radio_health_dialog_test COMMAND radio_health_dialog_test)
+set_tests_properties(radio_health_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 60)
+
 # What's New on CanonWindow (#7045): canon colours for the rich-text notes in
 # each theme, a canon Find prompt, and every close path. Socket-free: the
 # GitHub fetch is switched off through WhatsNewDialogTestAccess.
@@ -7845,6 +7866,20 @@ target_include_directories(hl2_rit_xit_test PRIVATE src tests)
 target_link_libraries(hl2_rit_xit_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rit_xit_test COMMAND hl2_rit_xit_test)
 
+# #4954: the HL2 transmit output, ANT or RF1 (PA off). Wire banks from the
+# transport's own builder and a constructed backend — no socket, nothing keyed.
+add_executable(hl2_tx_route_test tests/hl2_tx_route_test.cpp)
+target_include_directories(hl2_tx_route_test PRIVATE src tests)
+target_link_libraries(hl2_tx_route_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_route_test COMMAND hl2_tx_route_test)
+
+# #4954: hamlib set_ant and a band-stack recall leave an independent TX output
+# alone. Production CAT parser and recall, injected backend — no socket, nothing keyed.
+add_executable(independent_tx_antenna_test tests/independent_tx_antenna_test.cpp)
+target_include_directories(independent_tx_antenna_test PRIVATE src tests)
+target_link_libraries(independent_tx_antenna_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME independent_tx_antenna_test COMMAND independent_tx_antenna_test)
+
 # #6105: RIT/XIT cross the seam with the slice id; the Flex command text is
 # unchanged. Injected recording backend — no socket, nothing keyed.
 add_executable(slice_rit_xit_seam_test tests/slice_rit_xit_seam_test.cpp)
@@ -11057,6 +11092,8 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_persist_restart_test
     hl2_persist_two_radios_test
     hl2_rit_xit_test
+    hl2_tx_route_test
+    independent_tx_antenna_test
     slice_rit_xit_seam_test
     hl2_rx_antenna_test
     hl2_tx_gate_test
@@ -11087,6 +11124,7 @@ set(AETHER_SETTINGS_CONSUMERS
     theme_manager_test
     canon_window_test
     callsign_lookup_dialog_test
+    radio_health_dialog_test
     whats_new_dialog_test
     profile_import_export_dialog_test
     support_dialog_test

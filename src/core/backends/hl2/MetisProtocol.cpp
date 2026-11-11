@@ -208,6 +208,12 @@ Cc ccTxDrive(int level, bool paEnable, bool atuTune) noexcept
     return {kC0TxDrive, static_cast<std::uint8_t>(level), c2, 0x00, 0x00};
 }
 
+Cc ccTxDriveForRoute(TxRoute route, int level, bool txAllowed, bool atuTune) noexcept
+{
+    const int applied = txAllowed ? level : 0;
+    return ccTxDrive(applied, route == TxRoute::Ant && applied > 0, atuTune);
+}
+
 Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept
 {
     // The chip address is MASKED to 7 bits rather than asserted, because C2
