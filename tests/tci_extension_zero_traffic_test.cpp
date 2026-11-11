@@ -2,7 +2,8 @@
 // the bytes it would receive from a server without the extension set (RFC #7181).
 // Two clients are opened as onClientOpened() opens them and every text frame is
 // read at the I/O worker's last step, init burst included. Socket-free. Without
-// the set (main) the file still builds; `--print-transcript` prints the bytes.
+// the set it still builds against main plus the worker's m_textSend write step
+// it taps, which this change adds; `--print-transcript` prints the bytes.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -26,6 +27,7 @@
 #include <QEventLoop>
 #include <QHash>
 #include <QHostAddress>
+#include <QList>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -36,6 +38,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -112,7 +115,27 @@ void spin(int ms)
 struct Transcripts {
     QStringList plain;
     QStringList peer;
+    // [begin, end) of the plain lines written while the event loop ran timers.
+    QList<std::pair<qsizetype, qsizetype>> plainTimed;
 };
+
+// Lines from timers that fire together (wireSlice()'s 400 ms seeds, per slice)
+// come in no guaranteed order; on Windows it changes from run to run. Each such
+// stretch is compared as a sorted, delimited block, everything else in order.
+QStringList canonical(const Transcripts& rx)
+{
+    QStringList out;
+    qsizetype pos = 0;
+    for (const auto& [begin, end] : rx.plainTimed) {
+        out << rx.plain.mid(pos, begin - pos);
+        QStringList timed = rx.plain.mid(begin, end - begin);
+        timed.sort();
+        out << QStringLiteral("<timed>") << timed << QStringLiteral("</timed>");
+        pos = end;
+    }
+    out << rx.plain.mid(pos);
+    return out;
+}
 
 // A stand-in command group: a read answers, a set broadcasts.
 struct Probe {
@@ -188,6 +211,11 @@ Transcripts runScript(bool peerUsesExtensions, bool txFilterRadio)
             peerSends(text);
         }
     };
+    const auto settle = [&rx](int ms) {
+        const qsizetype begin = rx.plain.size();
+        spin(ms);
+        rx.plainTimed.append({begin, rx.plain.size()});
+    };
     const auto capabilityEdge = [&](bool offered) {
         probe.offered = offered;
         emit model.capabilitiesChanged(true, model.backendCapabilities());
@@ -211,17 +239,17 @@ Transcripts runScript(bool peerUsesExtensions, bool txFilterRadio)
     }
     model.transmitModel().setTxFilterLow(150);
     model.transmitModel().setTxFilterHigh(2600);
-    spin(600);
+    settle(600);
     capabilityEdge(true);
     peerExtension("aethersdr_ext_enable:false;aethersdr_probe:4;");
     capabilityEdge(false);
     probe.offered = true;
     peerExtension("AETHERSDR_EXT_ENABLE:1;aethersdr_probe:6;");
     emit peer->disconnected();
-    spin(50);
+    settle(50);
     plainSends("vfo:0,0;");
     TciServerReviewTest::broadcastStatus(*server);
-    spin(50);
+    settle(50);
 
     server.reset();
     return rx;
@@ -277,21 +305,22 @@ int main(int argc, char** argv)
 
     check(extensionLines(quiet.plain + busy.plain + quietTx.plain + busyTx.plain).isEmpty(),
           "plain client never receives an aethersdr_ byte");
-    const auto same = [](const QStringList& quietRun, const QStringList& busyRun, const char* what) {
-        check(busyRun == quietRun, what);
-        for (int i = 0; busyRun != quietRun && i < std::max(busyRun.size(), quietRun.size()); ++i) {
-            const QString a = i < quietRun.size() ? quietRun.at(i) : QStringLiteral("<none>");
-            const QString b = i < busyRun.size() ? busyRun.at(i) : QStringLiteral("<none>");
-            if (a != b) {
+    const auto same = [](const Transcripts& quietRun, const Transcripts& busyRun, const char* what) {
+        const QStringList a = canonical(quietRun);
+        const QStringList b = canonical(busyRun);
+        check(a == b, what);
+        for (int i = 0; a != b && i < std::max(a.size(), b.size()); ++i) {
+            const QString q = i < a.size() ? a.at(i) : QStringLiteral("<none>");
+            const QString u = i < b.size() ? b.at(i) : QStringLiteral("<none>");
+            if (q != u) {
                 std::printf("      first difference at %d: quiet=%s busy=%s\n", i,
-                            qPrintable(a), qPrintable(b));
+                            qPrintable(q), qPrintable(u));
                 break;
             }
         }
     };
-    same(quiet.plain, busy.plain,
-         "plain client's traffic is identical whatever the peer does with the set");
-    same(quietTx.plain, busyTx.plain,
+    same(quiet, busy, "plain client's traffic is identical whatever the peer does with the set");
+    same(quietTx, busyTx,
          "and with the TX passband group offered, set by the peer and moved by the desktop");
 
 #ifdef HAVE_TCI_EXTENSION_SET
