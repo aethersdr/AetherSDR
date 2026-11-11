@@ -57,7 +57,7 @@ QString NtpSourcesPage::unavailableReason(bool connected, const RadioCapabilitie
     if (!connected) { return tr("Connect to a radio to see its NTP time sources."); }
     if (!caps.ntpSourceControl) {
         return tr("This radio does not keep its own NTP time sources. They need SmartSDR 4.3.16 "
-                  "or later on a FLEX-8000-series, Aurora, ML-9600 or CL-9300 radio.");
+                  "or later.");
     }
     return {};
 }
@@ -230,8 +230,7 @@ NtpSourcesPage::NtpSourcesPage(RadioModel& model, QWidget* parent)
 
     // True whether or not a radio is connected; m_reason names the specific one.
     m_availability->registerWidget(m_body,
-        tr("NTP time sources need a connection to a FLEX-8000-series, Aurora, ML-9600 or CL-9300 "
-           "radio running SmartSDR 4.3.16 or later."),
+        tr("NTP time sources need a connection to a radio running SmartSDR 4.3.16 or later."),
         [](bool connected, const RadioCapabilities& caps) {
             return unavailableReason(connected, caps).isEmpty();
         }, {}, false);

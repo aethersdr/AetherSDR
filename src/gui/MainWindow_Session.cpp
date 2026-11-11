@@ -72,6 +72,8 @@
 #include "core/AutomationServer.h"
 
 #include <QDialogButtonBox>
+#include <QMediaDevices>
+#include <QAudioDevice>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -520,6 +522,34 @@ void MainWindow::wireDiscovery()
         }
     });
 
+    m_connPanel->setTransmittingProbe([this] { return m_radioModel.transmitModel().isTransmitting(); });
+    connect(m_connPanel, &ConnectionPanel::operatorPreferencesRequested, this,
+            [this](const QJsonObject& preferences) {
+        const auto deviceFor = [](const QList<QAudioDevice>& devices, const QString& encoded) {
+            const QByteArray id = QByteArray::fromBase64(encoded.toLatin1());
+            for (const QAudioDevice& device : devices) {
+                if (!id.isEmpty() && device.id() == id) { return device; }
+            }
+            return QAudioDevice{};
+        };
+        const QAudioDevice input = deviceFor(QMediaDevices::audioInputs(), preferences.value("inputDeviceId").toString());
+        const QAudioDevice output = deviceFor(QMediaDevices::audioOutputs(), preferences.value("outputDeviceId").toString());
+        const bool missingInput = input.isNull() && !preferences.value("inputDeviceId").toString().isEmpty();
+        const bool missingOutput = output.isNull() && !preferences.value("outputDeviceId").toString().isEmpty();
+        auto& settings = AppSettings::instance();
+        if (missingInput) { settings.setValue("AudioInputDeviceId", QByteArray::fromBase64(preferences.value("inputDeviceId").toString().toLatin1())); }
+        if (missingOutput) { settings.setValue("AudioOutputDeviceId", QByteArray::fromBase64(preferences.value("outputDeviceId").toString().toLatin1())); }
+        applyAudioDeviceSelection(input, output,
+            missingInput ? AudioDeviceSelection::Fallback : AudioDeviceSelection::OperatorChoice,
+            missingOutput ? AudioDeviceSelection::Fallback : AudioDeviceSelection::OperatorChoice, false);
+        if (missingInput || missingOutput) {
+            statusBar()->showMessage(tr("Saved audio device unavailable; using the system default temporarily. Saved preferences are kept."), 10000);
+        }
+        const QString layout = preferences.value("layout").toString("1");
+        settings.setValue("PanadapterLayout", layout);
+        settings.save();
+        if (m_panStack) { m_panStack->rearrangeLayout(layout); }
+    });
     connect(m_connPanel, &ConnectionPanel::connectRequested,
             this, [this](const RadioInfo& info){
         QList<quint32> disconnectHandles;
@@ -746,6 +776,8 @@ void MainWindow::wireDiscovery()
 
         m_wanReconnectTimer.stop();
         m_wanReconnectAttemptInProgress = false;
+        m_smartLink.setAccountLocked(false);
+        m_pendingWanRadio = {};
         m_connPanel->setStatusText("SmartLink sign-in required");
         statusBar()->showMessage("SmartLink reconnect stopped: " + err, 5000);
         setPanadapterConnectionAnimation(false);
@@ -838,14 +870,21 @@ void MainWindow::wireDiscovery()
     });
     connect(&m_wanConnection, &WanConnection::errorOccurred, this, [this](const QString& err) {
         m_connPanel->setStatusText("SmartLink error: " + err);
-        if (!m_reconnectDlg)
+        if (!m_reconnectDlg) {
             setPanadapterConnectionAnimation(false);
+            if (!m_radioModel.isConnected()) {
+                m_smartLink.setAccountLocked(false);
+                m_pendingWanRadio = {};
+            }
+        }
     });
 
 }
 
 void MainWindow::disconnectFromRadioByUser()
 {
+    m_smartLink.setAccountLocked(false);
+    m_pendingWanRadio = {};
     m_userDisconnected = true;
     m_wanReconnectTimer.stop();
     m_wanReconnectAttemptInProgress = false;
@@ -1099,6 +1138,11 @@ void MainWindow::wireRadioModel()
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
         if (!connected) {
             m_pendingDisplayWrites.flush();
+            // No automatic reconnect follows, so nothing depends on the account.
+            if (m_userDisconnected) {
+                m_smartLink.setAccountLocked(false);
+                m_pendingWanRadio = {};
+            }
         }
     });
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
@@ -1112,6 +1156,8 @@ void MainWindow::wireRadioModel()
     // set its visibility.
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, &MainWindow::applyCapabilitiesToUi);
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged,
+            this, [this] { refreshPanZoomControls(); });
     // Icom's connected edge precedes its verified CI-V model identity. Re-run
     // only when the canonical capability picture changes so the family-wide
     // experimental treatment can settle model-specifically without exposing a
@@ -1196,6 +1242,8 @@ void MainWindow::wireRadioModel()
         m_wanReconnectTimer.stop();
         m_wanReconnectAttemptInProgress = false;
         m_terminalConnectionError = message;
+        m_smartLink.setAccountLocked(false);
+        m_pendingWanRadio = {};
         setPanadapterConnectionAnimation(false);
         if (m_reconnectDlg) {
             QDialog* reconnectDialog = m_reconnectDlg;
@@ -1405,9 +1453,12 @@ void MainWindow::wireRadioModel()
     // also calls (aetherd Gap B; #4448).
     wirePanStreamTxSink();
 
+    connect(&m_radioModel, &RadioModel::daxTxAudioRouteChanged,
+            m_audio, &AudioEngine::setDaxTxAudioRoute);
     connect(&m_radioModel, &RadioModel::txAudioStreamReady,
             this, [this](quint32 streamId) {
-        m_audio->setTxStreamId(streamId);
+        // Stream allocation does not establish DAX ownership. The separate
+        // radio-confirmed route signal controls the DAX packetizers.
         // TX audio on remote_audio_tx always requires Opus (radio enforces compression=OPUS)
         m_audio->setOpusTxEnabled(true);
         qDebug() << "MainWindow: DAX TX stream ID set to" << Qt::hex << streamId;
@@ -1888,10 +1939,18 @@ void MainWindow::wirePanLifecycle()
                 static_cast<double>(PerfTelemetry::nowNs() - emittedNs) / 1000000.0);
         }
         const PanFrameGuard frameGuard = capturePanFrame(streamId, false);
+        // A held frame reaches the widget after its pan may have moved, so
+        // `get tracedebug <pan> bins` refuses it (#6720). Every backend's
+        // spectrum (HL2 too) arrives here as the Flex source.
+        const bool heldForPresentation =
+            receivePresentationDelayMs(ReceivePresentationSource::Flex,
+                                       ReceivePresentationSurface::Spectrum,
+                                       QString::number(streamId)) > 0;
         deferReceivePresentation(
             ReceivePresentationSource::Flex,
             ReceivePresentationSurface::Spectrum,
-            [this, profileLoadFrameReady, streamId, bins, decodeScale, frameGuard]() {
+            [this, profileLoadFrameReady, streamId, bins, decodeScale, frameGuard,
+             heldForPresentation]() {
                 if (m_shuttingDown || !m_panStack || !frameGuard.isCurrent()) {
                     return;
                 }
@@ -1902,7 +1961,7 @@ void MainWindow::wirePanLifecycle()
                                                        bins.size())) {
                                 return;
                             }
-                            sw->updateSpectrum(bins, decodeScale);
+                            sw->updateSpectrum(bins, decodeScale, heldForPresentation);
                             finishPanadapterConnectionAnimation();
                         }
                         return;
@@ -1916,7 +1975,7 @@ void MainWindow::wirePanLifecycle()
                 if (m_radioModel.panadapters().isEmpty()
                     && !profileLoadRadioStateWritesHeld()) {
                     if (auto* sw = spectrum()) {
-                        sw->updateSpectrum(bins, decodeScale);
+                        sw->updateSpectrum(bins, decodeScale, heldForPresentation);
                         finishPanadapterConnectionAnimation();
                     }
                 } else {
@@ -2332,6 +2391,19 @@ void MainWindow::wirePanLifecycle()
         connect(pan, &PanadapterModel::scopeModeIndexChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setScopeModeIndex);
+        connect(pan, &PanadapterModel::zoomPlacementChanged,
+                this, [this] { refreshPanZoomControls(); });
+        connect(pan, &PanadapterModel::bandwidthLimitsChanged,
+                this, [this] { refreshPanZoomControls(); });
+        // Geometry moves on every sweep; only the first confirmed centre can
+        // change B/S availability.
+        connect(pan, &PanadapterModel::infoChanged,
+                this, [this, pan, known = pan->centerKnown()]() mutable {
+            if (pan->centerKnown() != known) {
+                known = pan->centerKnown();
+                refreshPanZoomControls();
+            }
+        });
         connect(applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::scopeModeChanged,
                 this, [this, panId = pan->panId()](int index) {
@@ -2839,9 +2911,10 @@ void MainWindow::wirePanStreamTxSink()
     if (!ps || !m_audio)
         return;
     connect(m_audio, &AudioEngine::txPacketReady, ps,
-            [ps](const QByteArray& packet, const TxCoordinator::Context& context) {
+            [ps](const QByteArray& packet, const TxCoordinator::Context& context,
+                 const DaxTxAudioPermit& ownership) {
         const TxCoordinator::Dispatch dispatch = context.beginDispatch(TxCoordinator::monotonicMs());
-        if (dispatch) {
+        if (dispatch && ownership.permits()) {
             ps->sendToRadio(packet);
         }
     });
@@ -2924,6 +2997,8 @@ void MainWindow::wireDaxIq()
             }
             if (kvs.value("type") != "dax_iq") return;
             if (!streamStatusBelongsToUs(kvs, m_radioModel.ourClientHandle())) {
+                m_radioModel.panStream()->unregisterIqStream(streamId);
+                m_radioModel.daxIqModel().handleStreamRemoved(streamId);
                 qCDebug(lcDax) << "MainWindow: ignoring DAX IQ stream for another client"
                                 << "stream=0x" + QString::number(streamId, 16)
                                 << "owner=" << kvs.value("client_handle");
@@ -2937,7 +3012,9 @@ void MainWindow::wireDaxIq()
             int ch = kvs.value("daxiq_channel").toInt();
             // panStream() is null on a backend that carries its own IQ; there
             // is no VITA-49 stream to register against.
-            if (streamId && ch >= 1 && ch <= 4 && m_radioModel.panStream())
+            if (streamId && ch >= 1 && ch <= 4 && m_radioModel.panStream()
+                && m_radioModel.daxIqModel().stream(ch).exists
+                && m_radioModel.daxIqModel().stream(ch).streamId == streamId)
                 m_radioModel.panStream()->registerIqStream(streamId, ch);
         });
 

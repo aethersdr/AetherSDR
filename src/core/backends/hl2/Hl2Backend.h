@@ -156,6 +156,8 @@ public:
     void removeNotch(int notchId) override;
     void setNotchesEnabled(bool on) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
+    ReceiveDispatch requestCwControl(const CwControlRequest& request,
+        const TxCoordinator::Command& command) override;
     void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source,
@@ -300,10 +302,15 @@ private:
     // socket or DSP, for hl2_rit_xit_test. Reaches nothing else.
     friend struct Hl2RitXitTestAccess;
     friend struct Hl2Cl1ReferenceTestAccess;
+    // Reads whether the connect built the transmit chain, on its own thread.
+    friend struct Hl2RxOnlyTxChainTestAccess;
     // Fires link edges through MetisClient's signals and seeds the connect
     // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
     friend struct Hl2AutoGainLawTestAccess;
     friend struct Hl2SessionMemoryTestAccess;
+    // Installs MetisClient's start() stand-in and injects the link edge, so a
+    // real connectRadio() runs without a socket (hl2_persist_*_test).
+    friend struct Hl2PersistTestAccess;
     // Feeds EP6 status frames to the backend's own MetisClient on its I/O thread,
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
@@ -1104,6 +1111,10 @@ private:
     bool m_txFilterFromOperator = false;
     int m_txFilterLowHz = 300;
     int m_txFilterHighHz = 2700;
+    // The passband last handed to m_txDsp, for the health row: what it runs,
+    // not what effectiveTxPassband() would say now.
+    int m_txPassbandSentLowHz = 300;
+    int m_txPassbandSentHighHz = 2700;
 
     // Loudest mic peak of this transmission, dBFS, for the unkey "went out quiet"
     // diagnostic (the ALC only reduces). -140 is Hl2TxDsp::micPeak's silence floor

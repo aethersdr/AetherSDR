@@ -4,6 +4,8 @@
 #include "core/backends/WaveformEnvRequest.h"
 
 #include <QHash>
+
+#include <functional>
 #include <QPointer>
 #include <QSet>
 
@@ -40,6 +42,10 @@ private slots:
     void onInstallRemoteAccessClicked();
     // The WSPR receiver (tools/wspr-agent), bundled in AetherSDR.
     void onInstallWsprClicked();
+    // Removes an older WSPR receiver and installs the bundled one, for
+    // WsprConfigureWindow's Update, which then puts its settings back.
+    // `done(false)`: the removal or the install didn't start.
+    void updateWspr(bool container, const std::function<void(bool)>& done);
     // Removes the installed remote-access shim (the container, or on a radio
     // without a Waveform Processor the legacy waveform) and installs the
     // pinned one again, for a computer that lacks the radio's admin token
@@ -73,6 +79,9 @@ private:
     // container, or the legacy waveform for a radio without a Waveform
     // Processor.
     void installRemoteAccess(bool container);
+    // Writes the bundled WSPR package and installs it; false when nothing was
+    // started (the reason has been shown).
+    bool installWspr(bool docker);
     // The bottom bar: "Install radio health tools" mirrors whether the radio
     // lists the agent; the readout polls it while installed.
     void updateHealthBar();

@@ -11,9 +11,19 @@ for both kinds of radio, as static binaries with the licenses:
 
     python3 -I build.py --output OUT_DIR [--host]
 
-Needs zig 0.17 (it bundles the linker and musl for both targets). The
-packages are reproducible byte for byte with the same zig. --host also builds
-a native binary for the tests.
+Needs zig **0.17.0** exactly -- not 0.17.1, which generates an ARMv7 binary
+32 bytes larger from identical source (372760 -> 372792, measured on Linux),
+so the FLEX-6000 package will not match its pin. The arm64 container is NOT
+affected: it builds byte-identical under both. --host also builds a native
+binary for the tests.
+
+One more thing the packages are reproducible ACROSS only if it matches: the
+zlib that Python's zipfile uses. CPython 3.14 bundles zlib-ng, which deflates
+identical input to different bytes than stock zlib -- enough to change the
+package sha without changing a single member byte. The pins are built with
+**stock zlib**, which a Linux distribution Python has; a zlib-ng Python, such
+as python.org's Windows CPython 3.14, will not match. The zlib patch level
+does not matter: 1.3 and 1.3.2 give the same bytes.
 
 AetherSDR ships both as Qt resources: copy them to resources/waveforms/ and
 update the version, SHA-256s and sizes in src/core/WsprAgent.h together.
@@ -69,7 +79,10 @@ def check_version():
 def licenses():
     zig_lib = subprocess.run(['zig', 'env'], capture_output=True, text=True, check=True).stdout
     lib_dir = re.search(r'"?lib_dir"?\s*[:=]\s*"([^"]+)"', zig_lib).group(1)
-    musl = pathlib.Path(lib_dir, 'libc', 'musl', 'COPYRIGHT').read_text()
+    # UTF-8 whatever the locale: under cp1252 its 14 non-ASCII characters
+    # would be re-encoded into a different LICENSES. (`python3 -I` ignores
+    # PYTHONUTF8, so the locale can't be fixed from outside.)
+    musl = pathlib.Path(lib_dir, 'libc', 'musl', 'COPYRIGHT').read_text(encoding='utf-8')
     return ('AetherWSPR is part of AetherSDR, licensed under the GNU GPL v3\n'
             '(https://github.com/aethersdr/AetherSDR). It includes the wsprd decoder\n'
             'from WSJT-X 2.7.0 (Joe Taylor K1JT, Steven Franke K9AN and others;\n'
