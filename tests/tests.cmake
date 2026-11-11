@@ -9288,6 +9288,15 @@ if(TARGET Qt6::SerialPort)
     add_test(NAME flex_control_recovery_test COMMAND flex_control_recovery_test)
 endif()
 
+# A serial CW key or paddle line already active at port open keys nothing until
+# released and pressed (the PTT pins' rule). Injected samples; no port opened.
+if(TARGET Qt6::SerialPort)
+    add_executable(serial_cw_key_baseline_test tests/serial_cw_key_baseline_test.cpp)
+    target_include_directories(serial_cw_key_baseline_test PRIVATE src tests)
+    target_link_libraries(serial_cw_key_baseline_test PRIVATE aethercore Qt6::Core Qt6::SerialPort)
+    add_test(NAME serial_cw_key_baseline_test COMMAND serial_cw_key_baseline_test)
+endif()
+
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
     src/gui/PanLayoutDialog.cpp
@@ -9817,6 +9826,19 @@ add_executable(hl2_rx_only_tx_chain_test tests/hl2_rx_only_tx_chain_test.cpp)
 target_include_directories(hl2_rx_only_tx_chain_test PRIVATE src tests)
 target_link_libraries(hl2_rx_only_tx_chain_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rx_only_tx_chain_test COMMAND hl2_rx_only_tx_chain_test)
+# AETHER_AUTOMATION_NO_TX closes the HL2's own transmit gate as well as the
+# bridge's. Constructed backend only — no socket, no DSP, nothing keyed.
+add_executable(hl2_automation_no_tx_gate_test tests/hl2_automation_no_tx_gate_test.cpp)
+target_include_directories(hl2_automation_no_tx_gate_test PRIVATE src tests)
+target_link_libraries(hl2_automation_no_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_automation_no_tx_gate_test COMMAND hl2_automation_no_tx_gate_test)
+# An HL2 with its gate open refuses MOX, TUNE, TCI, CW PTT and a CW key in every
+# receive-only mode it declares. Production backend, no socket, nothing keyed.
+add_executable(hl2_receive_only_mode_key_test tests/hl2_receive_only_mode_key_test.cpp)
+target_include_directories(hl2_receive_only_mode_key_test PRIVATE src tests)
+target_link_libraries(hl2_receive_only_mode_key_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_receive_only_mode_key_test COMMAND hl2_receive_only_mode_key_test)
 # What an HL2 comes back with after a restart, through the operator's setters
 # and the production store/load: every offered mode with its passband, the last
 # band, per-band drive and LNA gain, a second receiver's own passband; and two
@@ -11234,6 +11256,9 @@ set(AETHER_SETTINGS_CONSUMERS
     weather_radar_loading_test
     hl2_gain_restore_test
     hl2_rx_only_tx_chain_test
+    hl2_automation_no_tx_gate_test
+    serial_cw_key_baseline_test
+    hl2_receive_only_mode_key_test
     hl2_persist_restart_test
     hl2_tx_mode_reconnect_test
     hl2_persist_two_radios_test
