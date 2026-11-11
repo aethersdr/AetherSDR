@@ -242,8 +242,9 @@ int main(int argc, char** argv)
         check(wspr::updateAvailable(QStringLiteral("0.1.0")), "0.1.0 is older than the bundled receiver");
         check(wspr::updateAvailable(QStringLiteral("0.0.99")), "a lower minor version is older");
         check(!wspr::updateAvailable(bundled), "the bundled version itself is not");
-        check(!wspr::updateAvailable(QStringLiteral("0.1.10")) && !wspr::updateAvailable(QStringLiteral("1.0.0")),
+        check(!wspr::updateAvailable(QStringLiteral("0.1.100")) && !wspr::updateAvailable(QStringLiteral("1.0.0")),
               "a newer receiver is not, compared by number and not as text");
+        check(wspr::updateAvailable(QStringLiteral("0.1.9")), "0.1.9 is older, compared by number and not as text");
         check(!wspr::updateAvailable(QString()) && !wspr::updateAvailable(QStringLiteral("dev")),
               "an empty or unreadable version is never older");
         check(!wspr::updateAvailable(bundled + QStringLiteral("-dev2")),
