@@ -13,8 +13,10 @@
 #include "core/TciTxPassbandExtension.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/SliceDelta.h"
 #include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
 #include <QCoreApplication>
@@ -103,11 +105,22 @@ void check(bool ok, const char* what)
 }
 
 // Past the posted send and the 100 ms notice window.
-void settle()
+void settle(int ms = 160)
 {
     QEventLoop loop;
-    QTimer::singleShot(160, &loop, &QEventLoop::quit);
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
+}
+
+QStringList extensionLines(const QStringList& lines)
+{
+    QStringList out;
+    for (const QString& line : lines) {
+        if (line.startsWith(QLatin1String("aethersdr_"))) {
+            out << line;
+        }
+    }
+    return out;
 }
 
 struct Wire {
@@ -334,6 +347,78 @@ void serverBehaviour()
           "a disconnected radio is not offered it");
 }
 
+// Two receivers: moving TX re-sends the state line with the new trx, because a
+// set is only taken for the trx that transmits and the line is how a client
+// learns it.
+void txMove()
+{
+    RadioModel model;
+    auto owner = std::make_unique<FilterBackend>();
+    FilterBackend* backend = owner.get();
+    backend->caps.hasTxFilterControls = true;
+    backend->connected = false;  // slice fixtures are applied while disconnected
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    QString error;
+    const bool fixtures = model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+        && model.automationApplySliceFixture(1, QStringLiteral("B"), &error);
+    backend->connected = true;
+    SliceModel* s0 = model.slice(0);
+    SliceModel* s1 = model.slice(1);
+    check(fixtures && s0 && s1 && model.isConnected(), "two fixture slices on a connected radio");
+    if (!fixtures || !s0 || !s1) {
+        std::printf("      fixture: %s\n", qPrintable(error));
+        return;
+    }
+    SliceDelta on;
+    on.txSlice = true;
+    SliceDelta off;
+    off.txSlice = false;
+    s0->applyChanges(on);
+    TransmitModel& tx = model.transmitModel();
+    tx.setTxFilter(100, 2900);
+    TciServer server(&model);
+    server.wireSlice(s0->sliceId(), s0);
+    server.wireSlice(s1->sliceId(), s1);
+    Wire a;  // enabled
+    Wire b;  // plain
+    TciTxPassbandExtensionTest::attach(server, a.client, model);
+    TciTxPassbandExtensionTest::attach(server, b.client, model);
+    settle(600);  // past wireSlice()'s 400 ms seeds
+    a.take();
+    b.take();
+    a.send("aethersdr_ext_enable:true;");
+    check(a.take() == QStringList({QStringLiteral("aethersdr_ext:1,tx_filter_band;"),
+                                   QStringLiteral("aethersdr_tx_filter_band:0,100,2900;")}),
+          "with TX on trx 0 the enable reply names trx 0");
+
+    // The radio reports the move: B gains TX, then A loses it.
+    s1->applyChanges(on);
+    s0->applyChanges(off);
+    settle(600);  // past kSplitSettleMs (450 ms)
+    const QStringList heard = extensionLines(a.take());
+    check(heard == one("aethersdr_tx_filter_band:1,100,2900;"),
+          "moving TX to trx 1 sends the enabled client the line for trx 1, unasked");
+    if (heard != one("aethersdr_tx_filter_band:1,100,2900;")) {
+        for (const QString& line : heard) {
+            std::printf("      a< %s\n", qPrintable(line));
+        }
+    }
+    check(extensionLines(b.take()).isEmpty(), "and the plain client hears no aethersdr_ line");
+
+    const int requests = backend->filterRequests.size();
+    a.send("aethersdr_tx_filter_band:0,300,2400;");
+    settle();
+    check(a.take().isEmpty() && passbandIs(tx, 100, 2900)
+              && backend->filterRequests.size() == requests,
+          "a set on the old trx 0 is dropped");
+    a.send("aethersdr_tx_filter_band:1,300,2400;");
+    settle();
+    check(passbandIs(tx, 300, 2400) && backend->filterRequests.size() == requests + 1
+              && extensionLines(a.take()) == one("aethersdr_tx_filter_band:1,300,2400;")
+              && extensionLines(b.take()).isEmpty(),
+          "a set on the new trx 1 is applied and notified with trx 1");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -347,6 +432,7 @@ int main(int argc, char** argv)
     offeredPerBackend();
     normalisation();
     serverBehaviour();
+    txMove();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;

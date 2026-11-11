@@ -359,6 +359,8 @@ aethersdr_tx_filter_band:0,100,2900;    # set low and high cut, audio Hz
 ```
 
 - `<trx>` is the transmit receiver. A read or set for another one is ignored.
+  When transmit moves to another receiver, the line is sent again with the new
+  `<trx>`.
 - Values are positive audio Hz, as in the Phone applet; the sideband follows the
   mode. A negative value is taken as positive and a reversed pair is swapped.
 - The value is set the way the Phone applet sets it: 0 to 10000 Hz, at least
