@@ -35,7 +35,6 @@
 #include "core/ClientEq.h"
 #include "core/HostVoiceChainPolicy.h"
 #include "core/LogManager.h"
-#include "models/EqualizerModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -1077,7 +1076,7 @@ void MainWindow::wireHostModulatedVoiceChain()
         // does not leave the EQ applet's ON button lying. Only while the
         // graphic EQ may own the ClientEq bands; the reload guard keeps the
         // silent restore from writing the bands back into ClientEq.
-        if (m_hostVoiceChainOwned) {
+        if (graphicEqMirrorAllowed(hostModulatesTxAudio(), m_hostVoiceChainOwned)) {
             EqualizerModel& eqModel = m_radioModel.equalizerModel();
             EqualizerModel::State mirrored = eqModel.state();
             if (const ClientEq* eqTx = m_audio->clientEqTx())
