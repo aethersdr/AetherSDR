@@ -103,9 +103,9 @@ void PersistentDialog::closeEvent(QCloseEvent* event)
 {
     saveGeometryToSettings();
     // Move/resize saves are in-memory only; close-time save flushes to disk.
-    // Matches the crash-resilient persistence contract established by
-    // ProfileManagerDialog: if AetherSDR is force-quit, the last known
-    // position is already in AppSettings even if the disk flush never ran.
+    // The crash-resilient persistence contract: if AetherSDR is force-quit,
+    // the last known position is already in AppSettings even if the disk
+    // flush never ran.
     if (!m_geomKey.isEmpty()) {
         AppSettings::instance().save();
     }
@@ -130,7 +130,7 @@ void PersistentDialog::resizeEvent(QResizeEvent* event)
 
 // AppSettings serializes via XML strings, so window geometry round-trips
 // through base64 to preserve binary data.  Matches the project convention
-// used by MainWindow{Geometry,State} and ProfileManagerDialog.
+// used by MainWindow{Geometry,State}.
 void PersistentDialog::saveGeometryToSettings()
 {
     if (m_geomKey.isEmpty()) return;
