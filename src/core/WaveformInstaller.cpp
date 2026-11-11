@@ -169,13 +169,12 @@ void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, 
     m_activeGeneration = m_uploadState.begin(fileSize);
     const Generation generation = m_activeGeneration;
 
-    QTimer::singleShot(30 * 60 * 1000, this, [this, generation] {
+    m_fileSize = fileSize;
+    QTimer::singleShot(operationBudgetMs(fileSize), this, [this, generation] {
         finishOperation(generation, false, tr("Waveform installation exceeded its operation limit."));
     });
-    const QPointer<WaveformInstaller> self(this);
     emit progressChanged(0, tr("Reading and validating waveform package..."));
     if (!alive || !m_uploadState.isCurrent(generation)) { return; }
-    if (!self || !m_uploadState.isCurrent(generation)) { return; }
 
     auto* watcher = new QFutureWatcher<PackagePreparationResult>(this);
     connect(watcher, &QFutureWatcher<PackagePreparationResult>::finished,
@@ -198,24 +197,28 @@ void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind, 
         }));
 }
 
+int WaveformInstaller::operationBudgetMs(qint64 fileBytes)
+{
+    const qint64 sizeAllowanceMs = (qMax<qint64>(0, fileBytes) * 1000LL) / kMinExpectedBytesPerSec;
+    return static_cast<int>(qBound(qint64{kOperationBaseMs}, sizeAllowanceMs, qint64{kOperationCeilingMs}));
+}
+
 void WaveformInstaller::requestUploadPort(Generation generation)
 {
     const QPointer<WaveformInstaller> alive(this);
     if (!m_uploadState.isCurrent(generation)) { return; }
     const FileTransferPurpose purpose = m_packageKind == PackageKind::Legacy
         ? FileTransferPurpose::LegacyWaveform : FileTransferPurpose::DockerWaveform;
-    if (m_model) { m_transfer = m_model->beginFileTransfer(purpose, this, m_session, 30 * 60 * 1000); }
+    if (m_model) { m_transfer = m_model->beginFileTransfer(purpose, this, m_session, operationBudgetMs(m_fileSize)); }
     if (!m_transfer) {
         finishOperation(generation, false, tr("Transfer unavailable, busy, or original radio session ended."));
         return;
     }
-    const QPointer<WaveformInstaller> self(this);
     emit progressChanged(0, tr("Requesting upload port..."));
     if (!alive || !m_uploadState.isCurrent(generation)) { return; }
-    if (!self || !m_uploadState.isCurrent(generation)) { return; }
     m_model->requestFileTransfer(m_transfer, {purpose, m_fileData.size(), m_fileName, 0},
-        [self, generation](const FileTransferReply& reply) {
-            if (self) { self->onUploadPortReceived(generation, reply); }
+        [alive, generation](const FileTransferReply& reply) {
+            if (alive) { alive->onUploadPortReceived(generation, reply); }
         });
 }
 

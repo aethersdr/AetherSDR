@@ -639,7 +639,12 @@ void FirmwareUploader::finishOperation(Generation generation,
     m_generation = nextGeneration();
     m_timeoutTimer.stop();
     m_overallTimeoutTimer.stop();
-    if (m_transfer) { m_transfer->cancel(); m_transfer.reset(); }
+    if (m_transfer) {
+        // Bytes sent leave the radio's file server busy for a moment.
+        if (m_model) { m_model->finishFileTransfer(m_transfer, m_bytesQueued > 0 ? 3000 : 0); }
+        else { m_transfer->cancel(); }
+        m_transfer.reset();
+    }
     destroySocket(!m_waitingForConfirmation);
     disconnectStatusRelay();
     m_writer = {};

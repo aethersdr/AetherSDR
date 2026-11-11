@@ -109,6 +109,13 @@ private:
     static constexpr quint16 kFallbackPort = 42607;
     static constexpr int kConnectDelayMs = 200;
     static constexpr int kConnectTimeoutMs = 10000;
+    // The image's size at a pessimistic uplink rate, never under 30 minutes
+    // and capped so a wedged transfer cannot run forever.
+    static constexpr int kOperationBaseMs = 30 * 60 * 1000;
+    static constexpr qint64 kMinExpectedBytesPerSec = 64LL * 1024LL;
+    static constexpr int kOperationCeilingMs = 2 * 60 * 60 * 1000;
+    static int operationBudgetMs(qint64 fileBytes);
+    qint64 m_fileSize{0};
 };
 
 } // namespace AetherSDR

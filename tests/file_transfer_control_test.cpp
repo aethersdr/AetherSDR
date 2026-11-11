@@ -1,16 +1,37 @@
 // Production encoder and admission; no socket is initialized. The queued
 // writer is pinned in session_control_test.
 #include "RadioSetupControlFixture.h"
+#include "core/FirmwareUploader.h"
 #include "core/backends/FileTransferOperation.h"
 #include <QCoreApplication>
 #include <QtTest>
 
 using namespace AetherSDR;
+namespace AetherSDR {
+class FirmwareUploaderTestAccess {
+public:
+    // A radio-settled failure after bytes were sent, which releases the
+    // firmware retry barrier.
+    static void settleAfterBytes(FirmwareUploader& uploader, FileTransferHandle transfer)
+    {
+        uploader.beginOperation(QByteArray(4, 'x'), QStringLiteral("test.ssdr"));
+        uploader.m_transfer = std::move(transfer);
+        uploader.m_bytesQueued = 4;
+        uploader.m_outcomeSettledByRadio = true;
+        uploader.finishOperation(uploader.m_generation, FirmwareUploader::Outcome::Failed, {});
+    }
+};
+}
+
+class Owner : public QObject {
+public:
+    int destroyedLinks() const { return receivers(SIGNAL(destroyed(QObject*))); }
+};
 
 struct Fixture {
     RadioModel model;
     RadioSetupTestBackend* backend{installRadioSetupBackend(model)};
-    QObject owner;
+    Owner owner;
     QStringList commands;
     QList<std::function<void(int, const QString&)>> replies;
     Fixture()
@@ -157,6 +178,19 @@ private slots:
         QVERIFY(!transferPeerMatches(QHostAddress("192.0.2.2"), QHostAddress("192.0.2.1")));
     }
 
+    // A firmware attempt that sent bytes holds the file server's settle window
+    // like every other transfer owner.
+    void firmwareBytesHoldSettleWindow()
+    {
+        Fixture f;
+        FirmwareUploader uploader(&f.model);
+        auto operation = f.begin(FileTransferPurpose::Firmware);
+        QVERIFY(operation);
+        FirmwareUploaderTestAccess::settleAfterBytes(uploader, operation);
+        QVERIFY(!f.model.firmwareRetryBlocked());
+        QVERIFY(!f.begin(FileTransferPurpose::ProfileImport));
+    }
+
     void cancelledPreludeDoesNotSendNextStep()
     {
         Fixture f;
@@ -238,6 +272,18 @@ private slots:
         }
         QCOMPARE(f.commands, QStringList({"waveform restart ThumbDV", "waveform uninstall ThumbDV", "waveform remove_container ThumbDV"}));
         QCOMPARE(f.model.requestWaveform({WaveformAction::Restart,"bad\nname"}, &f.owner, {}), ReceiveDispatch::Unsupported);
+    }
+    // An answered waveform action leaves no connection behind on its owner.
+    void answeredWaveformActionReleasesOwner()
+    {
+        Fixture f;
+        const int before = f.owner.destroyedLinks();
+        for (int i = 0; i < 3; ++i) {
+            QCOMPARE(f.model.requestWaveform({WaveformAction::Restart,"ThumbDV"}, &f.owner, {}),
+                     ReceiveDispatch::Dispatched);
+            f.reply();
+        }
+        QCOMPARE(f.owner.destroyedLinks(), before);
     }
 };
 QTEST_GUILESS_MAIN(FileTransferControlTest)

@@ -208,7 +208,7 @@ void FlexWaveformModel::clear()
 
 void FlexWaveformModel::requestUninstall(const QString& name)
 {
-    if (!transferTokenValid(name, 64)) {
+    if (!waveformNameTokenValid(name)) {
         qWarning() << "FlexWaveformModel: refusing unsafe waveform uninstall name:" << name;
         return;
     }
@@ -217,7 +217,7 @@ void FlexWaveformModel::requestUninstall(const QString& name)
 
 void FlexWaveformModel::requestRemoveContainer(const QString& name)
 {
-    if (!transferTokenValid(name, 64)) {
+    if (!waveformNameTokenValid(name)) {
         qWarning() << "FlexWaveformModel: refusing unsafe waveform container removal name:" << name;
         return;
     }
@@ -226,16 +226,13 @@ void FlexWaveformModel::requestRemoveContainer(const QString& name)
 
 void FlexWaveformModel::handleCommandReply(const WaveformRequest& request, const RadioControlReply& reply)
 {
-    const QString action = request.action == WaveformAction::Uninstall ? QStringLiteral("uninstall")
-        : request.action == WaveformAction::RemoveContainer ? QStringLiteral("remove_container")
-        : QStringLiteral("restart");
-    emit commandFinished(action, request.name, reply.kind == RadioControlReply::Kind::Accepted,
+    emit commandFinished(waveformActionVerb(request.action), request.name, reply.kind == RadioControlReply::Kind::Accepted,
                          reply.message.trimmed());
 }
 
 void FlexWaveformModel::requestRestart(const QString& name)
 {
-    if (!transferTokenValid(name, 64)) {
+    if (!waveformNameTokenValid(name)) {
         qWarning() << "FlexWaveformModel: refusing unsafe waveform restart name:" << name;
         return;
     }

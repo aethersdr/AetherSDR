@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FileTransferRequest.h"
+#include "WaveformEnvRequest.h"
 
 namespace AetherSDR {
 
@@ -15,9 +16,19 @@ struct WaveformRequest {
     bool valid() const
     {
         return action >= WaveformAction::Uninstall && action <= WaveformAction::Restart
-            && transferTokenValid(name, 64);
+            && waveformNameTokenValid(name);
     }
 };
+// The radio's verb for each action (`waveform <verb> <name>`).
+inline QString waveformActionVerb(WaveformAction action)
+{
+    switch (action) {
+    case WaveformAction::Uninstall: return QStringLiteral("uninstall");
+    case WaveformAction::RemoveContainer: return QStringLiteral("remove_container");
+    case WaveformAction::Restart: break;
+    }
+    return QStringLiteral("restart");
+}
 
 } // namespace AetherSDR
 

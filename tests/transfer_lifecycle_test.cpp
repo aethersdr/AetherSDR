@@ -21,6 +21,7 @@ public:
         transfer.m_uploadState.recordQueued(transfer.m_activeGeneration, 4, 4);
         transfer.onBytesWritten(transfer.m_activeGeneration, transfer.m_socket, 4);
     }
+    static int budgetMs(qint64 bytes) { return WaveformInstaller::operationBudgetMs(bytes); }
 };
 class FirmwareUploaderTestAccess {
 public:
@@ -77,6 +78,14 @@ private slots:
         QCOMPARE(done.size(), 1);
         QCOMPARE(done.at(0).at(0).toBool(), false);
         QVERIFY(!cancelled.isInstalling());
+    }
+    // A large image on a slow uplink gets time in proportion to its size, up
+    // to the transfer reservation's two-hour ceiling.
+    void waveformBudgetScalesWithSize()
+    {
+        QCOMPARE(WaveformInstallerTestAccess::budgetMs(4), 30 * 60 * 1000);
+        QCOMPARE(WaveformInstallerTestAccess::budgetMs(200LL * 1024 * 1024), 3200 * 1000);
+        QCOMPARE(WaveformInstallerTestAccess::budgetMs(500LL * 1024 * 1024), 2 * 60 * 60 * 1000);
     }
     void firmwareProgressCanDestroy()
     {

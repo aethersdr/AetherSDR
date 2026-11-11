@@ -71,6 +71,8 @@ public:
         transfer.tryFallbackUploadPort();
     }
 
+    static void timeout(ProfileTransfer& transfer) { transfer.handleTimeout(); }
+
     static void setUploadPort(ProfileTransfer& transfer, quint16 port)
     {
         transfer.m_uploadPort = port;
@@ -189,6 +191,20 @@ int main(int argc, char* argv[])
                      "current upload-port reply creates the upload socket");
         ok &= expect(AetherSDR::ProfileTransferTestAccess::uploadPort(transfer) == 42607,
                      "current upload-port reply retains its selected port");
+    }
+
+    {
+        // A port request the radio never answers falls back to the fallback
+        // transfer port, as before typed transfers.
+        AetherSDR::ProfileTransfer transfer(nullptr);
+        AetherSDR::ProfileTransferTestAccess::begin(
+            transfer, AetherSDR::ProfileTransfer::Operation::ImportDatabase,
+            AetherSDR::ProfileTransferTestAccess::Phase::UploadImport);
+        AetherSDR::ProfileTransferTestAccess::armUploadPortReply(transfer);
+        AetherSDR::ProfileTransferTestAccess::timeout(transfer);
+        ok &= expect(AetherSDR::ProfileTransferTestAccess::socket(transfer) != nullptr
+                         && AetherSDR::ProfileTransferTestAccess::uploadPort(transfer) == 42607,
+                     "an unanswered upload-port request tries the fallback port");
     }
 
     {

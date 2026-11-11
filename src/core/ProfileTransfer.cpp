@@ -1110,8 +1110,9 @@ void ProfileTransfer::handleTimeout()
     switch (m_phase) {
     case Phase::UploadMetaSubset:
     case Phase::UploadImport:
-        if (m_socket && !m_uploadConnected && m_bytesQueued == 0
-            && m_socket->state() != QAbstractSocket::ConnectedState)
+        // An unanswered port request also tries the fallback port.
+        if (!m_socket || (!m_uploadConnected && m_bytesQueued == 0
+            && m_socket->state() != QAbstractSocket::ConnectedState))
             tryFallbackUploadPort();
         else
             fail(QStringLiteral("Timed out while uploading to the radio."));

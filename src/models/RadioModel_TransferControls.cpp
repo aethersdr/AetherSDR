@@ -3,6 +3,8 @@
 
 #include <QThread>
 #include <QTimer>
+#include <array>
+#include <memory>
 
 namespace AetherSDR {
 
@@ -27,7 +29,7 @@ FileTransferHandle RadioModel::beginFileTransfer(FileTransferPurpose purpose, QO
     operation->m_purpose = purpose;
     m_fileTransferOperation = operation;
     const std::weak_ptr<FileTransferOperation> weak = operation;
-    connect(owner, &QObject::destroyed, this, [weak] {
+    const QMetaObject::Connection ownerGone = connect(owner, &QObject::destroyed, this, [weak] {
         if (const auto active = weak.lock()) { active->cancel(); }
     });
     const auto connection = std::make_shared<QMetaObject::Connection>();
@@ -38,9 +40,10 @@ FileTransferHandle RadioModel::beginFileTransfer(FileTransferPurpose purpose, QO
             QObject::disconnect(*connection);
         }
     });
-    QTimer::singleShot(timeoutMs, owner, [weak, connection] {
+    QTimer::singleShot(timeoutMs, owner, [weak, connection, ownerGone] {
         if (const auto active = weak.lock()) { active->cancel(); }
         QObject::disconnect(*connection);
+        QObject::disconnect(ownerGone);
     });
     return operation;
 }
@@ -152,8 +155,11 @@ ReceiveDispatch RadioModel::requestWaveform(const WaveformRequest& request, QObj
         return ReceiveDispatch::Unsupported;
     }
     const FileTransferGuard guard(30000);
-    connect(owner, &QObject::destroyed, this, [guard] { guard.cancel(); });
-    connect(m_backend.get(), &QObject::destroyed, this, [guard] { guard.cancel(); });
+    // Released when the reply lands, so repeated actions don't pile up
+    // connections on the long-lived owner and backend.
+    const auto links = std::make_shared<std::array<QMetaObject::Connection, 2>>();
+    (*links)[0] = connect(owner, &QObject::destroyed, this, [guard] { guard.cancel(); });
+    (*links)[1] = connect(m_backend.get(), &QObject::destroyed, this, [guard] { guard.cancel(); });
     const RadioControlSession session = controlSession();
     const QPointer<RadioModel> model(this);
     const QPointer<QObject> caller(owner);
@@ -161,8 +167,9 @@ ReceiveDispatch RadioModel::requestWaveform(const WaveformRequest& request, QObj
         return model && caller && guard.current() && model->controlSessionCurrent(session);
     };
     const RadioControlCompletion reply = fencedSetupCompletion(owner,
-        [guard, completion](const RadioControlReply& result) {
+        [guard, completion, links](const RadioControlReply& result) {
             guard.cancel();
+            for (const QMetaObject::Connection& link : *links) { QObject::disconnect(link); }
             if (completion) { completion(result); }
         });
     const ReceiveDispatch result = m_backend->requestWaveform(request, reply, guard, current);
