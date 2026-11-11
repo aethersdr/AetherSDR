@@ -173,6 +173,7 @@ class UiTickLagMeter;
 class WhatsNewDialog;
 class Nr2WisdomDialog;
 class ProfileManagerDialog;
+class RadioHealthDialog;
 class HelpDialog;
 class SupportDialog;
 class SettingsBrowserDialog;
@@ -1792,6 +1793,7 @@ private:
     // invokes the verb that record names.
     QPointer<BandscopeDialog> m_bandscopeDialog;
     QPointer<MemoryDialog> m_memoryDialog;
+    QPointer<RadioHealthDialog> m_radioHealthDialog;
     QPointer<NetSchedulerDialog> m_netSchedulerDialog;
     NetScheduler* m_netScheduler{nullptr};
     NetReminderBanner* m_netReminderBanner{nullptr};
