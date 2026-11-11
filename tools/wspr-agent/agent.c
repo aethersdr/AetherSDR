@@ -53,7 +53,7 @@
 #include "grayline.h"
 #include "wsprd/wsprsim_utils.h"
 
-#define AGENT_VERSION "0.1.11"
+#define AGENT_VERSION "0.1.12"
 #define STATUS_PORT 48995
 #define AUDIO_RATE 24000
 #define BB_RATE 375
@@ -1464,6 +1464,28 @@ static int on_dax(const api_t *a, int channel)
     return a->slice >= 0 && a->slice < MAX_SLICES && a->dax[a->slice] == channel;
 }
 
+/* A cycle's audio is ours only from our slice at the cycle's dial, fed by our
+ * DAX channel for the whole capture; anything else would publish another
+ * slice's or band's signals under ours. */
+enum { CAPTURE_OK, CAPTURE_OFF_DIAL, CAPTURE_DAX_GONE };
+
+static int on_dial(const api_t *a, long long dial_hz);
+
+static int capture_start_check(api_t *a, long long dial_hz, int dax)
+{
+    if (!on_dial(a, dial_hz)) return CAPTURE_OFF_DIAL;
+    if (!on_dax(a, dax)) return CAPTURE_DAX_GONE;
+    a->dax_moved = 0;
+    return CAPTURE_OK;
+}
+
+static int capture_end_check(const api_t *a, long long dial_hz)
+{
+    if (!on_dial(a, dial_hz)) return CAPTURE_OFF_DIAL;
+    if (a->dax_moved) return CAPTURE_DAX_GONE;
+    return CAPTURE_OK;
+}
+
 /* The retune also takes our DAX channel back when another client has it. */
 static void retune_slice(api_t *a, long long dial_hz, const char *ant, int dax)
 {
@@ -2191,6 +2213,30 @@ static int selftest_dax_reclaim(void)
     api_line(&a, l, &c);
     if (on_dax(&a, 4) || a.dax[2] != 1) { printf("selftest FAIL: a refused reclaim counts as ours\n"); fail = 1; }
 
+    /* The capture gates: no start without the channel, no decode after
+     * losing it mid-cycle even if it came back, and another slice's channel
+     * change doesn't count. */
+    a.dax[2] = 0;
+    a.rf_hz[2] = 7038600;
+    int refused = capture_start_check(&a, 7038600, 4) == CAPTURE_DAX_GONE;
+    a.dax[2] = 4;
+    a.dax_moved = 1;
+    int started = capture_start_check(&a, 7038600, 4) == CAPTURE_OK && !a.dax_moved;
+    strcpy(l, "S1|slice 0 dax=0 dax_clients=0");
+    api_line(&a, l, &c);
+    int other_ok = capture_end_check(&a, 7038600) == CAPTURE_OK;
+    strcpy(l, "S1|slice 2 dax=0 dax_clients=0");
+    api_line(&a, l, &c);
+    strcpy(l, "S1|slice 2 dax=4 dax_clients=1");
+    api_line(&a, l, &c);
+    int discarded = capture_end_check(&a, 7038600) == CAPTURE_DAX_GONE;
+    int off_dial = capture_start_check(&a, 14095600, 4) == CAPTURE_OFF_DIAL;
+    if (!refused || !started || !other_ok || !discarded || !off_dial) {
+        printf("selftest FAIL: capture gates (refused %d, started %d, other slice %d, lost-and-back discarded %d, off dial %d)\n",
+               refused, started, other_ok, discarded, off_dial);
+        fail = 1;
+    }
+
     a.dax_moved = 0;
     strcpy(l, "S1|slice 2 in_use=0");
     api_line(&a, l, &c);
@@ -2728,17 +2774,13 @@ int main(int argc, char *argv[])
             pthread_mutex_lock(&G.mu);
             long long want = G.dial_hz;
             pthread_mutex_unlock(&G.mu);
-            if (!on_dial(&a, want)) {
-                logf_("cycle %lld skipped: the slice isn't at %lld Hz", cyc, want);
+            int why = capture_start_check(&a, want, cfg.dax_channel);
+            if (why != CAPTURE_OK) {
+                if (why == CAPTURE_OFF_DIAL) logf_("cycle %lld skipped: the slice isn't at %lld Hz", cyc, want);
+                else logf_("cycle %lld skipped: DAX channel %d isn't on our slice", cyc, cfg.dax_channel);
                 skipped = cyc;
                 continue;
             }
-            if (!on_dax(&a, cfg.dax_channel)) {
-                logf_("cycle %lld skipped: DAX channel %d isn't on our slice", cyc, cfg.dax_channel);
-                skipped = cyc;
-                continue;
-            }
-            a.dax_moved = 0;
             dsp_reset(&d);
             capture_t = cyc;
             pthread_mutex_lock(&G.mu);
@@ -2749,9 +2791,10 @@ int main(int argc, char *argv[])
         }
         if (capture_t && (d.n >= CAPTURE_SAMPLES || now - capture_t >= CAPTURE_SECONDS + 1)) {
             int pct = (int)(100.0 * d.n / CAPTURE_SAMPLES);
-            if (!on_dial(&a, capture_dial)) {
+            int why = capture_end_check(&a, capture_dial);
+            if (why == CAPTURE_OFF_DIAL) {
                 logf_("cycle %lld discarded: the slice moved during it", capture_t);
-            } else if (a.dax_moved) {
+            } else if (why == CAPTURE_DAX_GONE) {
                 logf_("cycle %lld discarded: DAX channel %d left our slice during it", capture_t, cfg.dax_channel);
             } else if (dc.pid) {
                 logf_("previous decode still running; skipping cycle %lld", capture_t);
