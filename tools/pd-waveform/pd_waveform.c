@@ -27,6 +27,9 @@
 //   AETHER_PD_MIC_GAIN     mic gain (default 1.0)
 //   AETHER_PD_MAX_DELAY_MS longest loop delay to search (default 400)
 //   AETHER_PD_CORRECT      0 runs the waveform with the correction off (default 1)
+//   AETHER_PD_TEST_TONES   "f1,f2" in Hz: while keyed, send an equal two-tone
+//                          at f1 and f2 above the carrier instead of the mic,
+//                          at AETHER_PD_PEAK (a bench test signal)
 //
 // Status: one JSON line per TCP connection on port 48996, LAN callers only
 // (like AetherHealth on 48994). Read-only.
@@ -366,6 +369,8 @@ typedef struct {
     void (*tx_tap)(void* ctx, const float* iq, int n);
     void* tap_ctx;
     double peak, gain;
+    double test_f1, test_f2;      // AETHER_PD_TEST_TONES, Hz; 0 = use the mic
+    long long test_n;             // samples of the test two-tone sent so far
     int correct, daxiq_ch, daxiq_rate;
     double last_report;
 } wf_t;
@@ -600,7 +605,14 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
         double iq[2 * MAX_SAMPLES];
         for (int k = 0; k < pairs; k++) {
             double i, q;
-            cbp_step(&w->mod, w->gain * word_float(v.payload + 8 * k), &i, &q);
+            if (w->test_f1 > 0) {
+                // Each tone at half the peak, so the envelope peaks at it.
+                double t = (double)w->test_n++ / RATE, a = w->peak / 2;
+                i = a * (cos(2 * M_PI * w->test_f1 * t) + cos(2 * M_PI * w->test_f2 * t));
+                q = a * (sin(2 * M_PI * w->test_f1 * t) + sin(2 * M_PI * w->test_f2 * t));
+            } else {
+                cbp_step(&w->mod, w->gain * word_float(v.payload + 8 * k), &i, &q);
+            }
             double a = hypot(i, q);
             if (a > w->peak) {        // never past the peak the correction knows
                 i *= w->peak / a;
@@ -660,6 +672,15 @@ static int wf_init(wf_t* w)
     }
     w->peak = env_d("AETHER_PD_PEAK", 0.7);
     w->gain = env_d("AETHER_PD_MIC_GAIN", 1.0);
+    const char* tones = getenv("AETHER_PD_TEST_TONES");
+    if (tones && *tones && sscanf(tones, "%lf,%lf", &w->test_f1, &w->test_f2) != 2) {
+        logf_("AETHER_PD_TEST_TONES must be \"f1,f2\" in Hz");
+        return 0;
+    }
+    if (w->test_f1 < 0 || w->test_f2 < 0 || w->test_f1 > 10000 || w->test_f2 > 10000) {
+        logf_("AETHER_PD_TEST_TONES out of range");
+        return 0;
+    }
     w->correct = (int)env_d("AETHER_PD_CORRECT", 1);
     w->daxiq_ch = (int)env_d("AETHER_PD_DAXIQ", 1);
     w->daxiq_rate = (int)env_d("AETHER_PD_DAXIQ_RATE", 48000);

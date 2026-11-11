@@ -86,6 +86,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--output', required=True, type=pathlib.Path)
     ap.add_argument('--host', action='store_true', help='also build a native binary for the selftest')
+    ap.add_argument('--test-tones', metavar='F1,F2',
+                    help='package with AETHER_PD_TEST_TONES set: a bench two-tone instead of the mic')
     ap.add_argument('--correction-off', action='store_true',
                     help='package with AETHER_PD_CORRECT=0, for the before half of a transmit test')
     a = ap.parse_args()
@@ -108,7 +110,12 @@ def main():
             files[f'aether-pd-{arch}'] = (data, 0o755)
             print(f'aether-pd-{arch}: {len(data)} bytes')
         files['LICENSES'] = (licenses().encode(), 0o644)
-        target = a.output / (f'{NAME}-correction-off.ssdr_waveform' if a.correction_off else f'{NAME}.ssdr_waveform')
+        if a.test_tones:
+            text = files['launch.sh'][0].decode()
+            text = text.replace('export AETHER_PD', f'AETHER_PD_TEST_TONES={a.test_tones}\nexport AETHER_PD_TEST_TONES AETHER_PD', 1)
+            files['launch.sh'] = (text.encode(), 0o755)
+        suffix = ('-correction-off' if a.correction_off else '') + ('-test-tones' if a.test_tones else '')
+        target = a.output / f'{NAME}{suffix}.ssdr_waveform'
         tmp = target.with_suffix('.tmp')
         with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
             for name, (data, mode) in files.items():
