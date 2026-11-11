@@ -4459,10 +4459,8 @@ void SpectrumWidget::propagateGlobalDisplayToggle(
 void SpectrumWidget::setShowWsjtxFreq(bool on) {
     // Deliberately per-pan, NOT propagated to siblings (unlike
     // setShowTuneGuides/setExtendedFrequencyLine above) — see the header
-    // comment. settingsKey() suffixes the AppSettings key by pan index
-    // (m_panIndex == 0 keeps the bare key for backward compat), the same
-    // scheme DisplayWfColorScheme/Display3DGain already use for per-pan
-    // display appearance.
+    // comment. Persisted via the WsjtxOverlay config object (WsjtxOverlayConfig.h),
+    // keyed by pan index.
     m_showWsjtxFreq = on;
     wsjtxOverlaySetShowFreq(m_panIndex, on);  // Principle V: writes to owned config object
     if (on)
@@ -18296,29 +18294,28 @@ double wsjtxModeWidthHz(const QString& mode)
 
 void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect)
 {
-    Q_UNUSED(specRect);
-    if (!m_showWsjtxFreq || m_wsjtxMarkers.isEmpty() || wfRect.isEmpty()) {
+    if (!m_showWsjtxFreq || m_wsjtxMarkers.isEmpty() ||
+            (specRect.isEmpty() && wfRect.isEmpty())) {
         return;
     }
 
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
     const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
 
-    // Green/red follows the issue's own suggested scheme and matches the
-    // existing RTTY mark/space cue colors (drawSliceMarkers, above) rather
-    // than inventing a third color pair for "two related but different
-    // frequencies" on the same panadapter.
-    const QColor rxColor = AetherSDR::ThemeManager::instance().color("color.accent.success");
-    const QColor txColor = AetherSDR::ThemeManager::instance().color("color.accent.danger");
+    // docs/style/theme-style-guide.md names these roles explicitly:
+    // Receive / RX marker → color.highlight.rx
+    // Transmit-active / TX marker → color.highlight.tx
+    const QColor rxColor = AetherSDR::ThemeManager::instance().color("color.highlight.rx");
+    const QColor txColor = AetherSDR::ThemeManager::instance().color("color.highlight.tx");
 
-    // Waterfall-only (2026-09-16): the spectrum trace already shows the live
-    // signal shape, so a persistent Rx/Tx cue there duplicates information
-    // and competes visually with the FFT peaks. The waterfall is the
-    // historical record (#1270-style reasoning, see drawSliceMarkers'
-    // passband fill above), so that's where a standing position cue belongs.
+    // Draw on both the panadapter (specRect) and the waterfall (wfRect) as
+    // approved in RFC #5586: same per-pan toggle, same color tokens.
     auto drawFrequencyLine = [&](int x, const QColor& col) {
         p.setPen(QPen(col, 1));
-        p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+        if (!specRect.isEmpty())
+            p.drawLine(x, specRect.top(), x, specRect.bottom());
+        if (!wfRect.isEmpty())
+            p.drawLine(x, wfRect.top(), x, wfRect.bottom());
     };
 
     // Double line: one at each edge of the mode's occupied bandwidth,
@@ -18337,7 +18334,9 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
     labelFont.setBold(true);
     p.setFont(labelFont);
     const QFontMetrics fm(labelFont);
-    const int labelY = wfRect.top() + fm.height();
+    // Labels: near the top of the waterfall and near the top of the spectrum.
+    const int wfLabelY   = wfRect.isEmpty()   ? 0 : wfRect.top()   + fm.height();
+    const int specLabelY = specRect.isEmpty() ? 0 : specRect.top()  + fm.height();
 
     for (const auto& marker : std::as_const(m_wsjtxMarkers)) {
         // No dial-frequency gate here: WSJT-X Rx DF is an audio offset above
@@ -18353,10 +18352,15 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
         if (rxMhz <= endMhz && rxMhz + modeWidthMhz >= startMhz) {
             drawModeWidthLines(rxMhz, rxColor, marker.mode);
             p.setPen(rxColor);
-            // Label at the centre of the bracket (lower edge + half width).
+            // Label at the center of the bracket (lower edge + half width).
             const double rxCenterMhz = rxMhz + modeWidthMhz / 2.0;
-            p.drawText(mhzToX(rxCenterMhz) + 3, labelY,
-                       QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
+            const int labelX = mhzToX(rxCenterMhz) + 3;
+            if (!wfRect.isEmpty())
+                p.drawText(labelX, wfLabelY,
+                           QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
+            if (!specRect.isEmpty())
+                p.drawText(labelX, specLabelY,
+                           QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
         }
 
         // Tx marker only when it means something: actively transmitting, or
