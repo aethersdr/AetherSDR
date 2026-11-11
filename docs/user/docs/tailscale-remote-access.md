@@ -170,6 +170,12 @@ The container can run alongside other waveform containers, such as FreeDV.
 AetherSDR has its own RADE digital voice, so it doesn't need the FreeDV
 container (see [RADE Digital Voice](./rade-digital-voice.md)).
 
+Waveform installation stays with the radio connection that started it. If the
+radio reconnects while you choose or prepare the package, start the install
+again. Another firmware, profile or Radio DVK transfer must finish first.
+Upload completion means the bytes were sent; the radio's installed-waveform
+list confirms when the waveform becomes available.
+
 ## Part 4 — Sign the radio in to your tailnet
 
 ### Scan the code

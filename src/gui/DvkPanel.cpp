@@ -813,9 +813,13 @@ void DvkPanel::refreshFromKeyer()
 void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
 {
     QMenu menu;
+    const QPointer<DvkPanel> self(this);
     const QPointer<VoiceKeyer> owner = m_model;
-    const auto ownerIsCurrent = [this, owner] {
-        if (owner && owner == m_model) {
+    if (!owner) { return; }
+    const quint64 revision = owner->transferRevision();
+    const auto ownerIsCurrent = [this, self, owner, revision] {
+        if (!self) { return false; }
+        if (owner && owner == m_model && owner->transferRevision() == revision) {
             return true;
         }
         showNotice(QStringLiteral("The voice keyer changed while the slot menu was open, "
@@ -852,7 +856,7 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
 
     // The file dialogs run a nested event loop, in which the bound keyer can
     // change; the transfer belongs to the keyer the menu was opened on.
-    connect(importAct, &QAction::triggered, this, [this, id, owner, ownerIsCurrent]() {
+    connect(importAct, &QAction::triggered, this, [this, self, id, owner, ownerIsCurrent]() {
         if (!ownerIsCurrent()) {
             return;
         }
@@ -860,16 +864,12 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
             "Import WAV to DVK Slot",
             QDir::homePath(),
             "WAV Files (*.wav)");
-        if (path.isEmpty()) return;
-        if (owner != m_model) {
-            showNotice(keyerChangedNotice(), true);
-            return;
-        }
+        if (!self || path.isEmpty() || !ownerIsCurrent()) { return; }
 
         m_model->importWav(id, path);
     });
 
-    connect(exportAct, &QAction::triggered, this, [this, id, owner, ownerIsCurrent]() {
+    connect(exportAct, &QAction::triggered, this, [this, self, id, owner, ownerIsCurrent]() {
         if (!ownerIsCurrent()) {
             return;
         }
@@ -884,11 +884,7 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
             "Export DVK Recording",
             QDir::homePath() + "/" + name + ".wav",
             "WAV Files (*.wav)");
-        if (path.isEmpty()) return;
-        if (owner != m_model) {
-            showNotice(keyerChangedNotice(), true);
-            return;
-        }
+        if (!self || path.isEmpty() || !ownerIsCurrent()) { return; }
 
         m_model->exportWav(id, path);
     });

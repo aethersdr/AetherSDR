@@ -10,6 +10,7 @@
 
 #include <QCoreApplication>
 #include <QSemaphore>
+#include <QThread>
 #include <QSignalSpy>
 #include <QTimer>
 #include <QtTest>
@@ -54,6 +55,7 @@ public:
     static void startMonitor(RadioModel& model) { model.startNetworkMonitor(); }
     static void changeTransport(RadioModel& model) { ++model.m_connection->m_sessionGeneration; }
     static SessionCommandGuard sessionRequest(RadioModel& model) { return model.m_sessionCommands.request(); }
+    static RadioModel::TransferCommandSink transferSink(RadioModel& model) { return model.transferCommandSink(); }
     static quint32 send(RadioModel& model, const QString& command, const SessionCommandGuard& guard)
     { return model.sendCmd(command, {}, guard); }
     static quint32 sendAnswered(RadioModel& model, const QString& command, bool expireReply,
@@ -217,6 +219,31 @@ private slots:
             hold.release();
             QMetaObject::invokeMethod(connection, [] {}, Qt::BlockingQueuedConnection);
             QCOMPARE(writes.load(), replace ? 0 : 1);
+        }
+    }
+    // A transfer write rechecks its transfer guard and transport on the
+    // connection thread: cancelled, expired or replaced after dispatch, it
+    // never reaches the wire.
+    void transferWriteRechecksGuardAndTransport()
+    {
+        enum class Change { None, Cancel, Expire, Replace };
+        for (Change change : {Change::None, Change::Cancel, Change::Expire, Change::Replace}) {
+            RadioModel model;
+            RecordingSessionBackend* backend = install(model);
+            RadioConnection* connection = backend->connection();
+            std::atomic<int> writes{0};
+            SessionControlTestAccess::installWriter(*connection, [&writes](quint32, const QString&) { ++writes; });
+            const FileTransferGuard guard(change == Change::Expire ? 50 : 30000);
+            QSemaphore hold;
+            QMetaObject::invokeMethod(connection, [&hold] { hold.acquire(); });
+            QVERIFY(SessionControlTestAccess::transferSink(model)(
+                QStringLiteral("file download db_package"), guard, {}));
+            if (change == Change::Cancel) { guard.cancel(); }
+            if (change == Change::Expire) { QThread::msleep(80); }
+            if (change == Change::Replace) { SessionControlTestAccess::changeTransport(model); }
+            hold.release();
+            QMetaObject::invokeMethod(connection, [] {}, Qt::BlockingQueuedConnection);
+            QCOMPARE(writes.load(), change == Change::None ? 1 : 0);
         }
     }
     // Only session controls drop an unanswered reply after 30 s; a guarded

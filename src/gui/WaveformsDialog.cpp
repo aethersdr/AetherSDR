@@ -1718,7 +1718,7 @@ bool WaveformsDialog::installWspr(bool docker)
         box.get()->exec();
         return false;
     }
-    installWaveformPath(docker, path, m_radioModel);
+    installWaveformPath(docker, path, m_radioModel, m_radioModel->controlSession());
     return true;
 }
 
@@ -1867,7 +1867,7 @@ void WaveformsDialog::installRemoteAccess(bool container)
         updateInstallButtonState();
         // A reconnect during the download may have brought a different radio.
         if (RadioModel* radio = radioStillChosen(modelGuard, chosenSession)) {
-            installWaveformPath(docker, path, radio);
+            installWaveformPath(docker, path, radio, chosenSession);
         }
     });
     *failConn = connect(m_shimDownloader, &TailnetShimDownloader::failed, this,
@@ -2091,7 +2091,7 @@ void WaveformsDialog::onHealthToggled(bool install)
         m_healthLabel->setText(error);
         return;
     }
-    installWaveformPath(false, path, m_radioModel, true);
+    installWaveformPath(false, path, m_radioModel, m_radioModel->controlSession(), true);
     updateHealthBar();
 }
 
@@ -2118,14 +2118,14 @@ void WaveformsDialog::installWaveformFile(const QString& title,
         return;
     }
 
-    installWaveformPath(docker, path, modelGuard);
+    installWaveformPath(docker, path, modelGuard, chosenSession);
 }
 
 void WaveformsDialog::installWaveformPath(bool docker, const QString& path, RadioModel* model,
-                                          bool quiet)
+                                          const RadioControlSession& session, bool quiet)
 {
     const QPointer<RadioModel> modelGuard(model);
-    if (!modelGuard || m_radioModel != modelGuard.data() || !modelGuard->isConnected()) {
+    if (!modelGuard || m_radioModel != modelGuard.data() || !modelGuard->controlSessionCurrent(session)) {
         return;
     }
 
@@ -2168,7 +2168,7 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
                                                    .arg(msg));
                     }
                 }, Qt::SingleShotConnection);
-        m_installer->installLegacyWaveform(path);
+        m_installer->installLegacyWaveform(path, session);
         return;
     }
 
@@ -2212,9 +2212,9 @@ void WaveformsDialog::installWaveformPath(bool docker, const QString& path, Radi
     progress->show();
 
     if (docker) {
-        m_installer->installDockerWaveform(path);
+        m_installer->installDockerWaveform(path, session);
     } else {
-        m_installer->installLegacyWaveform(path);
+        m_installer->installLegacyWaveform(path, session);
     }
 }
 
@@ -2690,9 +2690,12 @@ void WaveformsDialog::refreshWaveformList()
         auto* removeBtn = new QPushButton(removeLabel, actionWidget);
         removeBtn->setAccessibleName(tr("%1 waveform %2").arg(removeLabel, name));
         connect(removeBtn, &QPushButton::clicked, this, [this, name, isContainer]() {
-            if (!confirmRadioWaveformRemoval(this, name, isContainer)) {
-                return;
-            }
+            const QPointer<WaveformsDialog> self(this);
+            const QPointer<RadioModel> model(m_radioModel);
+            if (!model) { return; }
+            const RadioControlSession session = model->controlSession();
+            if (!confirmRadioWaveformRemoval(this, name, isContainer) || !self || !model
+                || !model->controlSessionCurrent(session)) { return; }
             setRowNotice(name, isContainer ? tr("Removing…") : tr("Uninstalling…"),
                          QStringLiteral("pending"), true);
             if (isContainer) {

@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "core/backends/FileTransferOperation.h"
 #include "core/backends/TuneOutputPolicy.h"
 #include <QScopedValueRollback>
 #include "TxController.h"
@@ -1000,6 +1001,7 @@ void RadioModel::setupBackend(const QString& family)
                 }
             });
             flex->setSetupCommandSink(setupCommandSink());
+            flex->setTransferCommandSink(transferCommandSink());
             const auto sessionSink = [this, generation](const QString& command,
                     const SessionCommandGuard& guard, const RadioControlCompletion& completion) {
                 if (generation != m_backendReceiverGeneration || !guard.current()
@@ -1923,6 +1925,7 @@ void RadioModel::wireBackendReceiverState()
 void RadioModel::teardownBackend()
 {
     m_txSessionClosing = true;
+    if (m_fileTransferOperation) { m_fileTransferOperation->cancel(); }
     if (m_backend) { m_backend->retireCwTransport(); }
     resetSessionControls();
     resetAudioControls();
@@ -2800,9 +2803,11 @@ RadioModel::RadioModel(QObject* parent)
             m_dvkModel.handleCommandResponse(verb, id, static_cast<uint>(respVal), body);
         });
     });
-    connect(&m_flexWaveformModel, &FlexWaveformModel::commandReady, this, [this](const QString& cmd){
-        sendCmd(cmd, [this, cmd](int code, const QString& body) {
-            m_flexWaveformModel.handleCommandReply(cmd, code, body);
+    connect(&m_flexWaveformModel, &FlexWaveformModel::controlRequested, this,
+            [this](const WaveformRequest& request) {
+        const QPointer<FlexWaveformModel> model(&m_flexWaveformModel);
+        requestWaveform(request, &m_flexWaveformModel, [model, request](const RadioControlReply& reply) {
+            if (model) { model->handleCommandReply(request, reply); }
         });
     });
     connect(&m_navtexModel, &NavtexModel::commandReady, this, [this](const QString& cmd){
@@ -9756,24 +9761,6 @@ bool RadioModel::sendCmdPublic(const QString& cmd, ResponseCallback cb)
     return sendCmd(cmd, std::move(cb)) != 0;
 }
 
-void RadioModel::requestFileUploadPort(qint64 size, const QString& uploadKind,
-                                        ResponseCallback cb)
-{
-    qCInfo(lcProtocol).noquote()
-        << "RadioModel: file upload requested"
-        << QStringLiteral("kind=%1").arg(uploadKind)
-        << QStringLiteral("bytes=%1").arg(size);
-    sendCmd(QStringLiteral("file upload %1 %2").arg(size).arg(uploadKind), cb);
-}
-
-void RadioModel::requestFileDownloadPort(const QString& downloadKind, ResponseCallback cb)
-{
-    qCInfo(lcProtocol).noquote()
-        << "RadioModel: file download requested"
-        << QStringLiteral("kind=%1").arg(downloadKind);
-    sendCmd(QStringLiteral("file download %1").arg(downloadKind), cb);
-}
-
 void RadioModel::refreshProfiles()
 {
     for (const ProfileRequest::Kind kind : {ProfileRequest::Kind::Global,
@@ -10121,6 +10108,29 @@ void RadioModel::logRemoteAudioRxSummary(const QString& reason) const
 
     qCInfo(lcProtocol).noquote()
         << "RadioModel: remote_audio_rx summary" << fields.join(QLatin1Char(' '));
+}
+
+RadioModel::TransferCommandSink RadioModel::transferCommandSink(const TransferCommandWriter& writer)
+{
+    const QPointer<RadioModel> model(this);
+    const quint64 generation = m_backendReceiverGeneration;
+    return [model, generation, writer](const QString& command, const FileTransferGuard& guard,
+                                     const RadioControlCompletion& completion) {
+        if (!model || generation != model->m_backendReceiverGeneration || !guard.current()
+            || !model->controlSessionCurrent(model->controlSession())) { return false; }
+        const ResponseCallback reply = [completion](int code, const QString& body) {
+            if (!completion) { return; }
+            // A write the transport refused never reached the radio, so it
+            // cannot count as a definitive refusal.
+            const RadioControlReply::Kind kind = commandNeverReachedRadio(code)
+                ? RadioControlReply::Kind::Cancelled : code == 0
+                    ? RadioControlReply::Kind::Accepted : RadioControlReply::Kind::Failed;
+            completion({kind, code, body});
+        };
+        if (writer) { return writer(command, guard, reply); }
+        return model->sendCmd(command, reply, model->m_sessionCommands,
+                              [guard] { return guard.current(); }) != 0;
+    };
 }
 
 bool RadioModel::sessionTransportCurrent() const
