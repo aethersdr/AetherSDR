@@ -1087,6 +1087,7 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     const int ddc = m_ids.append();
 
     Receiver seed = requested;
+    seed.publishedTxAntenna.clear();
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -3362,8 +3363,14 @@ ReceiveDispatch Hl2Backend::requestSliceControl(int sliceId, const SliceControlR
     case Field::TxSlice:
         if (std::get<bool>(request.value)) { setTxSlice(sliceId); }
         break;
-    case Field::TxAntenna:
-        return requestTxRoute(std::get<QString>(request.value));
+    case Field::TxAntenna: {
+        const ReceiveDispatch result = requestTxRoute(std::get<QString>(request.value));
+        // SliceModel publishes the requested label after synchronous dispatch.
+        // Reconcile on the next turn, using the route then in force rather
+        // than capturing a value that another request could supersede.
+        QMetaObject::invokeMethod(this, [this] { emitAllSliceState(); }, Qt::QueuedConnection);
+        return result;
+    }
     case Field::DaxChannel: case Field::RttyMark:
     case Field::RttyShift: case Field::DiglOffset: case Field::DiguOffset:
     case Field::Record: case Field::Play: case Field::FmToneMode:
@@ -5518,7 +5525,7 @@ ReceiveDispatch Hl2Backend::requestTxRoute(const QString& token)
     }
     if (*want == m_txRoute) {
         for (int ddc = 0; ddc < static_cast<int>(m_rx.size()); ++ddc) {
-            emitSliceState(ddc);
+            emitSliceState(ddc, true);
         }
         return ReceiveDispatch::Dispatched;
     }
@@ -5555,7 +5562,7 @@ void Hl2Backend::applyTxRoute(hl2::TxRoute next)
     delta.rfPower = percent;
     emit transmitChanged(delta);
     for (int ddc = 0; ddc < static_cast<int>(m_rx.size()); ++ddc) {
-        emitSliceState(ddc);
+        emitSliceState(ddc, true);
     }
     notifyOperatingStateChanged();
 }
@@ -5565,7 +5572,7 @@ void Hl2Backend::refuseTxRoute(const QString& why)
     qCWarning(lcHl2).noquote() << why;
     emit configurationWarning(why);
     for (int ddc = 0; ddc < static_cast<int>(m_rx.size()); ++ddc) {
-        emitSliceState(ddc);
+        emitSliceState(ddc, true);
     }
 }
 
@@ -8838,7 +8845,7 @@ void Hl2Backend::applyBandFilter(const char* reason)
         Q_ARG(int, oc));
 }
 
-void Hl2Backend::emitSliceState(int ddc)
+void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
 {
     Receiver* r = rx(ddc);
     const auto* ids = m_ids.byDdc(ddc);
@@ -8898,7 +8905,11 @@ void Hl2Backend::emitSliceState(int ddc)
     d.active = (ddc == m_activeDdc);
     // The transmit output is radio-wide, so every slice carries it (#4954).
     d.txAntennaList = QStringList{txRouteAntToken(), txRouteRf1Token()};
-    d.txAntenna = txRouteToken(m_txRoute);
+    const QString txAntenna = txRouteToken(m_txRoute);
+    if (forceAntennas || r->publishedTxAntenna != txAntenna) {
+        d.txAntenna = txAntenna;
+        r->publishedTxAntenna = txAntenna;
+    }
     emit sliceChanged(ids->uiNumber, d);
 }
 
@@ -8921,7 +8932,7 @@ void Hl2Backend::emitPanState(int ddc)
 void Hl2Backend::emitAllSliceState()
 {
     for (const auto& ids : m_ids.all())
-        emitSliceState(ids.ddcIndex);
+        emitSliceState(ids.ddcIndex, true);
 }
 
 void Hl2Backend::emitAllPanState()

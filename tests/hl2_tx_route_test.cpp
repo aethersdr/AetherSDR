@@ -639,7 +639,10 @@ void testPersistence()
 
 void testSliceModelOrdering()
 {
-    std::printf("\n  SliceModel: the last txAntennaChanged is the route in force\n");
+    std::printf("\n  HL2: reconcile the route after SliceModel's request notification\n");
+    Hl2Backend b;
+    A::prepare(b);
+    A::setKeyed(b, true);
     SliceModel s(0);
     SliceDelta init;
     init.txAntennaList = QStringList{QStringLiteral("ANT"), QStringLiteral("RF1")};
@@ -647,18 +650,32 @@ void testSliceModelOrdering()
     s.applyChanges(init);
     QStringList heard;
     QObject::connect(&s, &SliceModel::txAntennaChanged, &s, [&](const QString& a) { heard << a; });
-    // A backend that refuses answers synchronously with the route still in force.
-    QObject::connect(&s, &SliceModel::controlRequested, &s, [&s](const SliceControlRequest& r) {
+    QObject::connect(&b, &IRadioBackend::sliceChanged, &s, [&s](int id, const SliceDelta& d) {
+        if (id == 0) { s.applyChanges(d); }
+    });
+    QObject::connect(&s, &SliceModel::controlRequested, &b, [&b](const SliceControlRequest& r) {
         if (r.field != SliceControlRequest::Field::TxAntenna) {
             return;
         }
-        SliceDelta d;
-        d.txAntenna = QStringLiteral("ANT");
-        s.applyChanges(d);
+        b.requestSliceControl(0, r);
     }, Qt::DirectConnection);
     s.setTxAntenna(QStringLiteral("RF1"));
+    QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
     check(s.txAntenna() == QLatin1String("ANT") && !heard.isEmpty() && heard.last() == QLatin1String("ANT"),
-          "RT6: listeners hear the refused value first and the actual route last");
+          "RT6: an HL2 refusal leaves listeners on the actual route after dispatch");
+    A::setKeyed(b, false);
+
+    heard.clear();
+    s.setTxAntenna(QStringLiteral("RF1"));
+    s.setTxAntenna(QStringLiteral("ANT"));
+    QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
+    check(s.txAntenna() == QLatin1String("ANT") && heard.last() == QLatin1String("ANT"),
+          "RT6: a deferred echo uses the newest route, not an earlier selection");
+    heard.clear();
+    for (int step = 1; step <= 10; ++step) {
+        b.setSliceFrequency(0, 7'100'000.0 + 100.0 * step);
+    }
+    check(heard.isEmpty(), "RT6: tuning does not republish the unchanged TX antenna");
 }
 
 } // namespace

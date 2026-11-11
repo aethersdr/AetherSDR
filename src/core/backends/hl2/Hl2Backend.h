@@ -402,7 +402,7 @@ private:
     std::unique_ptr<RadioConnectRequest> m_queuedConnect;
     quint64 m_connectGeneration = 0;
 
-    void emitSliceState(int ddc);   // sliceChanged(delta) from a receiver's state
+    void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
     void emitAllSliceState();
     void emitAllPanState();
@@ -526,6 +526,8 @@ private:
     // One per running DDC, holding only per-receiver state. Anything the hardware
     // shares (sample rate, LNA gain, filter board) stays in the flat members below.
     struct Receiver {
+        // Repeated TX antenna echoes retrigger display listeners on tune.
+        QString publishedTxAntenna;
         // Owns its demod + spectrum chain; created on connect, destroyed on disconnect,
         // lives on the I/O thread.
         Hl2RxDsp* dsp = nullptr;

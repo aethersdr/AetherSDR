@@ -397,9 +397,7 @@ void SliceModel::setTxAntenna(const QString& ant)
     m_txAntenna = ant;
     emit controlRequested({field, ant});
     if (!current()) { return; }
-    // The member, not the argument: a backend that refuses answers synchronously
-    // with the antenna still in force, and listeners must hear that one last.
-    emit txAntennaChanged(m_txAntenna);
+    emit txAntennaChanged(ant);
 }
 
 void SliceModel::setLocked(bool locked)
