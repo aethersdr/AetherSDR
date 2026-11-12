@@ -15,6 +15,7 @@
 #include "models/EqualizerModel.h"
 #include "models/FlexWaveformModel.h"
 #include "models/NavtexModel.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SpotModel.h"
 #include "models/TnfModel.h"
@@ -28,6 +29,7 @@
 #endif
 
 #include <QCoreApplication>
+#include <algorithm>
 #include <QFile>
 #include <QtTest>
 
@@ -98,6 +100,17 @@ void dumpState(RadioModel& model)
           qPrintable(model.amplifier().stateText()), qPrintable(model.amplifier().fanMode()), qPrintable(model.amplifier().meffa()));
     qInfo("STATE tuner model=%s serial=%s operate=%d present=%d", qPrintable(model.tunerModel().modelName()),
           qPrintable(model.tunerModel().serialNum()), int(model.tunerModel().isOperate()), int(model.tunerModel().isPresent()));
+    QStringList pans;
+    QList<PanadapterModel*> models = model.panadapters();
+    std::sort(models.begin(), models.end(), [](auto* a, auto* b) { return a->panId() < b->panId(); });
+    for (const PanadapterModel* pan : models) {
+        pans << QStringLiteral("%1[c=%2 bw=%3 dbm=%4..%5 fps=%6 avg=%7 rf=%8 ant=%9 wnb=%10/%11 wf=%12 line=%13 owner=%14]")
+            .arg(pan->panId()).arg(pan->centerMhz()).arg(pan->bandwidthMhz()).arg(pan->minDbm()).arg(pan->maxDbm())
+            .arg(pan->fps()).arg(pan->average()).arg(pan->rfGain()).arg(pan->rxAntenna()).arg(int(pan->wnbActive()))
+            .arg(pan->wnbLevel()).arg(pan->waterfallId()).arg(pan->waterfallLineDuration())
+            .arg(pan->ownerHandle(), 0, 16);
+    }
+    qInfo("STATE pans %s", qPrintable(pans.join(QLatin1Char(' '))));
 }
 } // namespace
 
