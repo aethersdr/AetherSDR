@@ -220,6 +220,33 @@ released it. Now it goes silent, as the waveform-sdk example does, and
 the radio reaches READY 0.1 s after unkey. Bench keying checks for READY
 after every key-down.
 
+## Feedback on the radio itself (FLEX-8600, 2026-11-11)
+
+DAX IQ can't reach a waveform running on the radio. SmartSDR finds a DAX IQ
+client's MAC in the kernel's ARP table, which has no entry for the radio's
+own addresses. Its FPGA then sends the stream directly, with the radio's LAN
+address as the source, which the kernel drops for a local destination. Both
+fixes need root, so they're bench-only.
+
+A waveform-mode slice's own receive stream reaches the waveform (complex,
+about +-10.5 kHz), but **stops while the radio transmits**.
+
+**DAX audio from a receive-only slice works**, and is now the default
+(`AETHER_PD_FEEDBACK=audio`):
+- AetherPD creates a slice on `AETHER_PD_FB_ANT` (RX_A) 3.5 kHz below the
+  carrier: DIGU, AGC off, 0-10 kHz filter, audio muted, on DAX channel
+  `AETHER_PD_DAX` (4).
+- It follows the transmit frequency and removes the slice when PD is
+  released or the waveform stops.
+- It rebuilds I/Q from the audio with a 300-10000 Hz complex bandpass and a
+  3.5 kHz downshift, covering -3.2 to +6.5 kHz around the carrier.
+
+Measured on the radio: DAX audio follows the slice filter up to 0-10.3 kHz
+(the radio refuses DIGU above 12 kHz), and keeps flowing during transmit with
+a two-tone about 63 dB over the noise. Full duplex must be on.
+
+`AETHER_PD_FEEDBACK=iq` keeps the DAX IQ route for a LAN host.
+
 ## Not yet known
 
 - Whether the radio's transmit filter or ALC still acts on a `RAW`

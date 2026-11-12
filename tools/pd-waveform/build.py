@@ -104,7 +104,7 @@ def main():
         }
         if a.correction_off:
             text = files['launch.sh'][0].decode()
-            text = text.replace('export AETHER_PD_DAXIQ', 'AETHER_PD_CORRECT=0\nexport AETHER_PD_CORRECT AETHER_PD_DAXIQ', 1)
+            text = text.replace('export AETHER_PD', 'AETHER_PD_CORRECT=0\nexport AETHER_PD_CORRECT AETHER_PD', 1)
             files['launch.sh'] = (text.encode(), 0o755)
         for arch, target in (('armv7', ARMV7), ('arm64', ARM64)):
             zig_cc(target, stage / f'aether-pd-{arch}', cache)

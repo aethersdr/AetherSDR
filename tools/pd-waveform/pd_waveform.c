@@ -5,9 +5,17 @@
 // slice:
 //   receive   RAW I/Q -> USB demodulation -> speaker audio
 //   transmit  mic audio -> USB analytic signal -> pd_core_correct -> I/Q
-//   feedback  DAX IQ from a panadapter fed by an external coupler on the
-//             transmit side's receive input (RX_A for ANT1), during TX
-//             -> mixed to the transmit frequency, decimated to 24 kHz
+//   feedback  from an external coupler on the transmit side's receive input
+//             (RX_A for ANT1), during TX, by one of two routes:
+//             audio (default): a receive-only slice the waveform creates,
+//               FB_OFFSET_HZ below the carrier, DIGU, AGC off, 0-10 kHz,
+//               audio muted, on a DAX channel -> its DAX audio -> analytic
+//               signal -> shifted to the carrier. This works for a waveform
+//               on the radio itself; DAX IQ doesn't (FLEX-8600: the radio
+//               can't resolve its own MAC for it), and a waveform-mode
+//               slice's own receive stream stops while transmitting.
+//             iq: DAX IQ from a panadapter on that input (LAN host only)
+//               -> mixed to the transmit frequency, decimated to 24 kHz
 //             -> pd_align -> pd_eq -> pd_core_calibrate
 //
 // It never keys the radio: it sends transmit samples only in answer to the
@@ -26,7 +34,10 @@
 //
 // Settings, from the environment (launch.sh sets them on the radio):
 //   AETHER_PD_RADIO        radio address (default SSDR_RADIO_ADDRESS, else 127.0.0.1)
-//   AETHER_PD_DAXIQ        DAX IQ channel of the coupler's panadapter (default 1)
+//   AETHER_PD_FEEDBACK     audio (default) or iq
+//   AETHER_PD_DAX          DAX audio channel for the feedback slice (default 4)
+//   AETHER_PD_FB_ANT       the feedback slice's receive input (default RX_A)
+//   AETHER_PD_DAXIQ        DAX IQ channel of the coupler's panadapter, iq route (default 1)
 //   AETHER_PD_DAXIQ_RATE   its rate, a multiple of 24000 (default 48000)
 //   AETHER_PD_PEAK         transmit peak amplitude before correction (default 0.7)
 //   AETHER_PD_MIC_GAIN     mic gain (default 1.0)
@@ -112,6 +123,13 @@
 // capture that took the phase spread below x = 0.1 from 39 to 6 degrees and
 // every fit was accepted.
 #define EQ_TAPS 31
+// The audio route's feedback slice sits this far below the carrier, so its
+// 0..FB_AUDIO_HI_HZ audio covers -3.5 to +6.5 kHz around the carrier: the
+// test two-tone's IMD3 to IMD7. The radio refuses a DIGU filter above 12 kHz,
+// and its DAX audio measured 0-10.3 kHz at that setting.
+#define FB_OFFSET_HZ 3500.0
+#define FB_AUDIO_LO_HZ 300
+#define FB_AUDIO_HI_HZ 10000
 #define EQ_TRAIN_SAMPLES RATE
 
 static volatile sig_atomic_t g_stop;
@@ -406,7 +424,17 @@ typedef struct {
     double* acq_rx;
     int acq_n, acq_len, aligned;
     pd_eq* eq;                    // reference -> feedback linear path, per delay lock
-    int feedback_ok;              // the DAX IQ pan covers this transmission
+    int feedback_ok;              // the feedback covers this transmission
+    // Audio route: our own receive-only feedback slice and its DAX audio.
+    int fb_audio;                 // 1 = audio route, 0 = DAX IQ
+    int dax_ch;                   // DAX audio channel for it
+    char fb_ant[16];
+    int fb_slice;                 // its index, or -1
+    int seq_fbslice, seq_daxrx;
+    uint32_t fb_dax_sid;          // its dax_rx stream
+    double fb_mhz;                // its frequency, from its status
+    cbp_t fb_bp;                  // real audio -> analytic, FB_AUDIO_LO..HI
+    double fb_nco;                // shifts that down by FB_OFFSET_HZ
     int weak_blocks;              // consecutive blocks of poor coherence
     int settle_left;              // samples still to skip after key-up
     int daxiq_format_logged;
@@ -449,8 +477,61 @@ static double mono(void)
     return (double)t.tv_sec + t.tv_nsec * 1e-9;
 }
 
+static double fb_target_mhz(const wf_t* w) { return w->tx_mhz - FB_OFFSET_HZ * 1e-6; }
+
+static void fb_slice_create(wf_t* w)
+{
+    if (!w->fb_audio || w->fb_slice >= 0 || w->seq_fbslice || w->api < 0 || !(w->tx_mhz > 0))
+        return;
+    w->seq_fbslice = api_send(w, "slice create freq=%.6f rxant=%s mode=DIGU", fb_target_mhz(w), w->fb_ant);
+}
+
+static void fb_slice_follow(wf_t* w)
+{
+    if (w->fb_slice >= 0 && w->api >= 0 && fabs(w->fb_mhz - fb_target_mhz(w)) > 0.5e-6)
+        api_send(w, "slice tune %d %.6f", w->fb_slice, fb_target_mhz(w));
+}
+
+static void fb_slice_remove(wf_t* w)
+{
+    if (w->api >= 0) {
+        if (w->fb_dax_sid)
+            api_send(w, "stream remove 0x%08X", w->fb_dax_sid);
+        if (w->fb_slice >= 0) {
+            api_send(w, "slice remove %d", w->fb_slice);
+            logf_("feedback slice %d removed", w->fb_slice);
+        }
+    }
+    w->fb_dax_sid = 0;
+    w->fb_slice = -1;
+    w->seq_fbslice = w->seq_daxrx = 0;
+    w->fb_mhz = 0;
+}
+
 static void start_feedback(wf_t* w)
 {
+    if (w->fb_audio) {
+        double off = (fb_target_mhz(w) - w->fb_mhz) * 1e6;
+        w->feedback_ok = w->fb_dax_sid && w->fb_slice >= 0 && fabs(off) < 1.0;
+        if (!w->feedback_ok) {
+            logf_("transmit without feedback: the feedback slice isn't ready (slice %d, DAX stream 0x%08x, %.0f Hz off)",
+                  w->fb_slice, w->fb_dax_sid, off);
+            return;
+        }
+        cbp_init(&w->fb_bp, FB_AUDIO_LO_HZ, FB_AUDIO_HI_HZ);
+        w->fb_nco = 0;
+        w->ref.n = w->fbk.n = 0;
+        w->acq_n = 0;
+        w->aligned = 0;
+        pd_eq_reset(w->eq);
+        w->weak_blocks = 0;
+        w->settle_left = SETTLE_SAMPLES;
+        w->test_noise_left = TEST_NOISE_SAMPLES;
+        pd_align_restart(w->align);
+        logf_("transmit: feedback from slice %d DAX %d, %.0f Hz below the carrier (tx %.6f MHz)",
+              w->fb_slice, w->dax_ch, FB_OFFSET_HZ, w->tx_mhz);
+        return;
+    }
     double shift = (w->tx_mhz - w->pan_mhz) * 1e6;
     // The correction spans about +-10 kHz around the carrier; that band has
     // to sit inside the DAX IQ stream.
@@ -507,6 +588,28 @@ static void api_line(wf_t* w, char* l)
             kv_u32(msg, "tx_stream_in_id", &w->tx_in);
             kv_u32(msg, "rx_stream_in_id", &w->rx_in);
             logf_("registered %s: tx_in 0x%08x rx_in 0x%08x", WF_NAME, w->tx_in, w->rx_in);
+        } else if (seq && seq == w->seq_fbslice) {
+            w->seq_fbslice = 0;
+            if (code) {
+                logf_("feedback slice refused: %08lx %s", code, msg);
+            } else {
+                w->fb_slice = atoi(msg);
+                w->fb_mhz = fb_target_mhz(w);
+                api_send(w, "slice set %d agc_mode=off", w->fb_slice);
+                api_send(w, "filt %d 0 %d", w->fb_slice, FB_AUDIO_HI_HZ);
+                api_send(w, "slice set %d audio_mute=1", w->fb_slice);
+                api_send(w, "slice set %d dax=%d", w->fb_slice, w->dax_ch);
+                w->seq_daxrx = api_send(w, "stream create type=dax_rx dax_channel=%d", w->dax_ch);
+                logf_("feedback slice %d at %.6f MHz on %s, DAX %d", w->fb_slice, w->fb_mhz, w->fb_ant, w->dax_ch);
+            }
+        } else if (seq && seq == w->seq_daxrx) {
+            w->seq_daxrx = 0;
+            if (code)
+                logf_("DAX audio stream refused: %08lx %s", code, msg);
+            else {
+                w->fb_dax_sid = (uint32_t)strtoul(msg, NULL, 16);
+                logf_("feedback DAX audio stream 0x%08x", w->fb_dax_sid);
+            }
         } else if (seq == w->seq_daxiq) {
             snprintf(w->daxiq_reply, sizeof w->daxiq_reply, "%08lx %s", code, msg);
             if (code)
@@ -554,20 +657,35 @@ static void api_line(wf_t* w, char* l)
                 logf_("PD selected on slice %d", idx);
                 // Ask for the feedback stream again if the first request,
                 // made at connect, didn't produce one.
-                if (!w->daxiq_sid && w->api >= 0)
+                if (w->fb_audio)
+                    fb_slice_create(w);
+                else if (!w->daxiq_sid && w->api >= 0)
                     w->seq_daxiq = api_send(w, "stream create type=dax_iq daxiq_channel=%d", w->daxiq_ch);
             } else if (strcmp(mode, WF_MODE) && w->active_slice == idx) {
                 logf_("PD released by slice %d", idx);
                 w->active_slice = -1;
                 w->tx_on = 0;
                 set_keyed(w, 0);
+                fb_slice_remove(w);
             }
         }
         if (kv(m, "RF_frequency", v, sizeof v)) {
             if (idx >= 0 && idx < 16)
                 w->slice_mhz[idx] = atof(v);
-            if (idx == w->active_slice)
+            if (idx == w->fb_slice && w->fb_slice >= 0)
+                w->fb_mhz = atof(v);
+            if (idx == w->active_slice) {
                 w->tx_mhz = atof(v);
+                if (w->fb_audio) {
+                    fb_slice_create(w);
+                    fb_slice_follow(w);
+                }
+            }
+        }
+        if (idx == w->fb_slice && w->fb_slice >= 0 && kv(m, "in_use", v, sizeof v) && !strcmp(v, "0")) {
+            logf_("feedback slice %d went away", w->fb_slice);
+            w->fb_slice = -1;
+            w->fb_dax_sid = 0;
         }
         return;
     }
@@ -676,6 +794,24 @@ static void on_packet(wf_t* w, const unsigned char* p, ssize_t n)
     vita_t v;
     if (!vita_parse(p, n, &v))
         return;
+    if (w->fb_dax_sid && v.sid == w->fb_dax_sid) {
+        w->n_fb_pkts++;
+        if (!w->keyed || w->active_slice < 0 || !w->feedback_ok)
+            return;
+        // DAX audio: big-endian float stereo frames at 24 kHz; the left
+        // channel is the slice's audio, the RF FB_OFFSET_HZ below the carrier
+        // up. Analytic signal, then down by FB_OFFSET_HZ to the carrier.
+        const double step = 2 * M_PI * FB_OFFSET_HZ / RATE;
+        for (int k = 0; k + 1 < v.words; k += 2) {
+            double ai, aq;
+            cbp_step(&w->fb_bp, word_float(v.payload + 4 * k), &ai, &aq);
+            double c = cos(w->fb_nco), s = sin(w->fb_nco);
+            fifo_push(&w->fbk, ai * c + aq * s, aq * c - ai * s);
+            w->fb_nco = fmod(w->fb_nco + step, 2 * M_PI);
+        }
+        calibrate(w);
+        return;
+    }
     if (v.sid == w->daxiq_sid && w->daxiq_sid) {
         w->n_fb_pkts++;
         if (!(v.cls & CLASS_FLOAT_BIT)) {
@@ -773,6 +909,21 @@ static int wf_init(wf_t* w)
 {
     memset(w, 0, sizeof *w);
     w->active_slice = -1;
+    w->fb_slice = -1;
+    const char* fbm = getenv("AETHER_PD_FEEDBACK");
+    w->fb_audio = !(fbm && !strcmp(fbm, "iq"));
+    if (fbm && *fbm && strcmp(fbm, "iq") && strcmp(fbm, "audio")) {
+        logf_("AETHER_PD_FEEDBACK must be audio or iq, not %s", fbm);
+        return 0;
+    }
+    w->dax_ch = (int)env_d("AETHER_PD_DAX", 4);
+    const char* fba = getenv("AETHER_PD_FB_ANT");
+    snprintf(w->fb_ant, sizeof w->fb_ant, "%s", fba && *fba ? fba : "RX_A");
+    for (const char* c = w->fb_ant; *c; c++)       // it goes into a radio command
+        if (!((*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '_')) {
+            logf_("bad AETHER_PD_FB_ANT %s", w->fb_ant);
+            return 0;
+        }
     w->udp = -1;
     w->radio.sin_family = AF_INET;
     w->radio.sin_port = htons(VITA_PORT);
@@ -848,7 +999,8 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         "\"delay_corr\":%.3f,\"coherence\":%.3f,\"offset_hz\":%.4f,\"fits\":%d,"
         "\"correcting\":%s,\"calc_state\":%d,\"tx_pkts\":%ld,\"tx_held\":%ld,\"fb_pkts\":%ld,"
         "\"other_pkts\":%ld,\"other_last\":\"sid 0x%08x cls 0x%04x\",\"ref_fifo\":%d,"
-        "\"fb_fifo\":%d,\"acq\":%d,\"eq_ready\":%s,\"eq_residual_db\":%.1f}\n",
+        "\"fb_fifo\":%d,\"acq\":%d,\"eq_ready\":%s,\"eq_residual_db\":%.1f,"
+        "\"feedback\":\"%s\",\"fb_slice\":%d,\"fb_mhz\":%.6f,\"fb_dax_stream\":\"0x%08x\"}\n",
         WF_NAME, WF_VERSION, w->tx_in ? "true" : "false", w->active_slice, w->tx_mhz, w->pan_mhz,
         w->daxiq_sid, w->daxiq_reply, w->keyed ? "true" : "false", w->feedback_ok ? "true" : "false",
         w->correct ? "true" : "false", w->aligned ? "true" : "false",
@@ -856,7 +1008,8 @@ static int status_json(const wf_t* w, char* out, size_t cap)
         pd_align_offset_hz(w->align, RATE), pd_core_fits(w->core),
         pd_core_correcting(w->core) ? "true" : "false", pd_core_state(w->core),
         w->n_tx_pkts, w->n_tx_held, w->n_fb_pkts, w->n_fb_other, w->last_sid, w->last_cls, w->ref.n, w->fbk.n, w->acq_n,
-        pd_eq_ready(w->eq) ? "true" : "false", 10 * log10(pd_eq_residual(w->eq) + 1e-30));
+        pd_eq_ready(w->eq) ? "true" : "false", 10 * log10(pd_eq_residual(w->eq) + 1e-30),
+        w->fb_audio ? "audio" : "iq", w->fb_slice, w->fb_mhz, w->fb_dax_sid);
 }
 
 static void serve_status(const wf_t* w, int ls)
@@ -877,7 +1030,7 @@ static void serve_status(const wf_t* w, int ls)
 
 /* ----------------------------------------------------------- selftest */
 
-static int selftest_loop(void);
+static int selftest_loop(int audio);
 
 static int selftest(void)
 {
@@ -885,6 +1038,7 @@ static int selftest(void)
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
     wf_t w;
     CHECK(wf_init(&w));
+    w.fb_audio = 0;     // these checks cover the DAX IQ route's pan guard
     // Commands the waveform sends while handling these lines go nowhere.
     w.api = open("/dev/null", O_WRONLY);
     CHECK(w.api >= 0);
@@ -997,7 +1151,8 @@ static int selftest(void)
     close(w.api);
     pd_core_destroy(w.core);
     w.core = NULL;
-    fails += selftest_loop();
+    fails += selftest_loop(0);
+    fails += selftest_loop(1);
     printf(fails ? "selftest FAILED (%d)\n" : "selftest passed\n", fails);
     return fails ? 1 : 0;
 #undef CHECK
@@ -1016,6 +1171,7 @@ typedef struct {
     double nco, last_i, last_q;
     float pkt[2 * 128];
     int npkt;
+    int audio;                 // feedback as DAX audio from a slice FB_OFFSET_HZ below
 } loop_t;
 
 static void loop_emit(loop_t* l, double i, double q)
@@ -1046,6 +1202,26 @@ static void loop_emit(loop_t* l, double i, double q)
     }
 }
 
+// The audio route: the delayed PA output as a USB slice FB_OFFSET_HZ below
+// the carrier hears it, real audio at 24 kHz, sent as DAX audio frames.
+static void loop_emit_audio(loop_t* l, double i, double q)
+{
+    int r = l->pos;
+    double di = l->line[2 * r], dq = l->line[2 * r + 1];
+    l->line[2 * r] = i;
+    l->line[2 * r + 1] = q;
+    l->pos = (l->pos + 1) % l->len;
+    double a = 0.6 * (di * cos(l->nco) - dq * sin(l->nco));
+    l->nco = fmod(l->nco + 2 * M_PI * FB_OFFSET_HZ / RATE, 2 * M_PI);
+    l->pkt[2 * l->npkt] = l->pkt[2 * l->npkt + 1] = (float)a;
+    if (++l->npkt == 128) {
+        unsigned char p[28 + 4 * 256];
+        int len = vita_build(p, l->w->fb_dax_sid, CLASS_AUDIO_24K, l->count++, l->pkt, 128);
+        on_packet(l->w, p, len);
+        l->npkt = 0;
+    }
+}
+
 static void loop_tap(void* ctx, const float* iq, int n)
 {
     loop_t* l = ctx;
@@ -1054,9 +1230,13 @@ static void loop_tap(void* ctx, const float* iq, int n)
         double g = a > 0 ? 1.0 / pow(1.0 + pow(a, 4), 0.25) : 1;   // Rapp p=2
         double ph = 0.25 * a * a / (1 + a * a);                      // AM/PM
         double yi = g * (i * cos(ph) - q * sin(ph)), yq = g * (i * sin(ph) + q * cos(ph));
-        // to 48 kHz by linear interpolation
-        loop_emit(l, 0.5 * (l->last_i + yi), 0.5 * (l->last_q + yq));
-        loop_emit(l, yi, yq);
+        if (l->audio) {
+            loop_emit_audio(l, yi, yq);
+        } else {
+            // to 48 kHz by linear interpolation
+            loop_emit(l, 0.5 * (l->last_i + yi), 0.5 * (l->last_q + yq));
+            loop_emit(l, yi, yq);
+        }
         l->last_i = yi;
         l->last_q = yq;
     }
@@ -1069,14 +1249,16 @@ static void count_tap(void* ctx, const float* iq, int n)
     *(int*)ctx += n;
 }
 
-static int selftest_loop(void)
+static int selftest_loop(int audio)
 {
     int fails = 0;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
     wf_t w;
     CHECK(wf_init(&w));
+    w.fb_audio = audio;
     w.api = open("/dev/null", O_WRONLY);
-    loop_t l = { .w = &w, .len = LOOP_DELAY };
+    // The audio route runs at 24 kHz: half the samples for the same delay.
+    loop_t l = { .w = &w, .len = audio ? LOOP_DELAY / 2 : LOOP_DELAY, .audio = audio };
     l.line = calloc(2 * LOOP_DELAY, sizeof(double));
     w.tx_tap = loop_tap;
     w.tap_ctx = &l;
@@ -1088,10 +1270,27 @@ static int selftest_loop(void)
     char s2[] = "S1|display pan 0x40000001 center=14.201000 daxiq_channel=1";
     char s3[] = "S1|interlock state=TRANSMITTING";
     api_line(&w, r1);
-    api_line(&w, r2);
-    api_line(&w, s1);
-    api_line(&w, s2);
-    api_line(&w, s3);
+    if (audio) {
+        // Selecting PD creates the feedback slice; answer as the radio would.
+        api_line(&w, s1);
+        CHECK(w.active_slice == 1 && w.seq_fbslice > 0);
+        char rs[32], rd[48], fs[64];
+        snprintf(rs, sizeof rs, "R%d|0|5", w.seq_fbslice);
+        api_line(&w, rs);
+        CHECK(w.fb_slice == 5 && w.seq_daxrx > 0);
+        snprintf(rd, sizeof rd, "R%d|0|0x04000008", w.seq_daxrx);
+        api_line(&w, rd);
+        CHECK(w.fb_dax_sid == 0x04000008u);
+        snprintf(fs, sizeof fs, "S1|slice 5 in_use=1 RF_frequency=14.196500 mode=DIGU");
+        api_line(&w, fs);
+        CHECK(fabs(w.fb_mhz - 14.1965) < 1e-9);
+        api_line(&w, s3);
+    } else {
+        api_line(&w, r2);
+        api_line(&w, s1);
+        api_line(&w, s2);
+        api_line(&w, s3);
+    }
     CHECK(w.feedback_ok);
 
     unsigned seed = 7;
@@ -1130,15 +1329,16 @@ static int selftest_loop(void)
             break;
     }
     // 1234 samples at 48 kHz, plus the feedback decimator's half length,
-    // seen at 24 kHz.
-    double want = LOOP_DELAY / 2.0 + (TAPS - 1) / 4.0;
+    // seen at 24 kHz; on the audio route, 617 at 24 kHz plus the analytic
+    // filter's half length.
+    double want = audio ? LOOP_DELAY / 2 + (TAPS - 1) / 2.0 : LOOP_DELAY / 2.0 + (TAPS - 1) / 4.0;
     CHECK(w.aligned);
     CHECK(fabs(pd_align_delay(w.align) - want) < 2.0);
     CHECK(pd_align_estimate_corr(w.align) > 0.8);
     CHECK(pd_align_coherence(w.align) > 0.8);
     CHECK(pd_core_fits(w.core) >= 1);
-    printf("loop: delay %.2f (want ~%.2f), correlation %.2f, coherence %.2f, fits %d, correcting %d\n",
-           pd_align_delay(w.align), want, pd_align_estimate_corr(w.align), pd_align_coherence(w.align),
+    printf("loop (%s): delay %.2f (want ~%.2f), correlation %.2f, coherence %.2f, fits %d, correcting %d\n",
+           audio ? "DAX audio" : "DAX IQ", pd_align_delay(w.align), want, pd_align_estimate_corr(w.align), pd_align_coherence(w.align),
            pd_core_fits(w.core), pd_core_correcting(w.core));
 
     // Transmit output stops at UNKEY_REQUESTED and stays off until the
@@ -1158,6 +1358,12 @@ static int selftest_loop(void)
         int len = vita_build(p, 0x84000001u, CLASS_AUDIO_24K, count++, quiet, 128);
         on_packet(&w, p, len);
         CHECK((tapped > 0) == sends[k]);
+    }
+    if (audio) {
+        // Releasing PD removes the feedback slice.
+        char rel[] = "S1|slice 1 mode=USB";
+        api_line(&w, rel);
+        CHECK(w.fb_slice == -1 && w.fb_dax_sid == 0);
     }
     close(w.api);
     free(l.line);
@@ -1192,7 +1398,8 @@ static int connect_api(wf_t* w, const char* addr, int udp_port)
                              WF_NAME, WF_MODE, WF_VERSION);
     api_send(w, "waveform set %s tx=1", WF_NAME);
     api_send(w, "waveform set %s udpport=%d", WF_NAME, udp_port);
-    w->seq_daxiq = api_send(w, "stream create type=dax_iq daxiq_channel=%d", w->daxiq_ch);
+    if (!w->fb_audio)
+        w->seq_daxiq = api_send(w, "stream create type=dax_iq daxiq_channel=%d", w->daxiq_ch);
     return 1;
 }
 
@@ -1221,8 +1428,12 @@ int main(int argc, char** argv)
     socklen_t ual = sizeof ua;
     getsockname(w.udp, (struct sockaddr*)&ua, &ual);
     int udp_port = ntohs(ua.sin_port);
-    logf_("%s %s starting, radio %s, udp %d, DAX IQ %d at %d Hz, peak %.2f, correction %s",
-          WF_NAME, WF_VERSION, addr, udp_port, w.daxiq_ch, w.daxiq_rate, w.peak, w.correct ? "on" : "off");
+    if (w.fb_audio)
+        logf_("%s %s starting, radio %s, udp %d, feedback DAX audio %d from %s, peak %.2f, correction %s",
+              WF_NAME, WF_VERSION, addr, udp_port, w.dax_ch, w.fb_ant, w.peak, w.correct ? "on" : "off");
+    else
+        logf_("%s %s starting, radio %s, udp %d, feedback DAX IQ %d at %d Hz, peak %.2f, correction %s",
+              WF_NAME, WF_VERSION, addr, udp_port, w.daxiq_ch, w.daxiq_rate, w.peak, w.correct ? "on" : "off");
 
     int ls = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in la = { .sin_family = AF_INET, .sin_port = htons(STATUS_PORT), .sin_addr.s_addr = htonl(INADDR_ANY) };
@@ -1291,6 +1502,7 @@ int main(int argc, char** argv)
         }
     }
     logf_("stopping");
+    fb_slice_remove(&w);
     if (w.api >= 0)
         close(w.api);   // the radio drops the waveform with its client
     if (ls >= 0)
