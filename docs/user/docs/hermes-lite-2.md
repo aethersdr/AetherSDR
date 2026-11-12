@@ -166,6 +166,8 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **SWR while transmitting** is the ratio of the highest forward and the highest reflected reading in each 0.1 s telemetry window, so it reads the load rather than the speech envelope. It appears about 0.2 s after keying and holds its last reading through short pauses in speech; when the carrier drops to a lower level and stays there, it also holds for a moment before following. This applies to overs AetherSDR keys (MOX, PTT from a client, tune); an over keyed on the radio's own PTT input still shows the latest pair. Unkeyed, and in **Tools → Radio Health...**, SWR is the ratio of the latest pair of readings.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
+- **DSB carrier:** DSB suppresses the carrier. On one HL2 into a dummy load the remaining carrier measured 47 dB below the sidebands in one run and 20 dB below in an earlier run; the difference is not explained.
+- **FM deviation** is fixed at 5 kHz, and no control changes it. Pre-emphasis raises the deviation with audio frequency, so it is highest for loud audio near 3 kHz and well under 5 kHz below that: a full-scale 1 kHz tone deviates about 1.4 kHz. Speech deviation has not been measured.
 - **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
 - **TX drive and LNA gain** are remembered per band.
 - **TX output, ANT or RF1:** the slice's TX antenna button chooses where transmit leaves the board. **ANT**, the default, uses the onboard PA. **RF1** is the low-power output with the PA off. The choice is remembered per radio and comes back on the next connect; RF1's drive starts at 0 % each time. The choice cannot change while the radio transmits.
@@ -192,6 +194,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - DAX, SmartLink or Multi-Flex.
 - The status-bar **CWX**, **DVK** and **FDX** toggles are hidden: the HL2 has no radio-side CW text keyer, voice keyer or full duplex.
 - FM repeater duplex and CTCSS encode.
+- PureSignal.
 - Line out and headphone controls: the **Line Out:** and **Headphone:** rows under **Settings → Radio Setup... → Audio → Radio Audio Outputs** are dimmed. A codec board's speaker level is under **HL2 Hardware**.
 - Transmit timings. The fields under **Settings → Radio Setup... → Transmit → Timings (in ms)** are dimmed: "Unavailable: this radio does not accept transmit timings from here. No delay or timeout set here is applied."
 - Controls the HL2 cannot honor are dimmed with their reason, or refuse with a notice.
