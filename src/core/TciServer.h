@@ -275,8 +275,11 @@ private:
     void onHl2TransmitStateChanged();
     // Applies the newest filter board set held in the rate window.
     void flushHl2Set();
-    // Transmitting, tuning, or a transmit operation still held: the sources
-    // ReceiveControlGuard::checkTransmit() reads.
+    // Keyed, for the extension set's refusals: a transmit operation still
+    // held, the radio transmitting, TransmitModel transmitting, tuning or in
+    // MOX, or a TCI key held. Unlike ReceiveControlGuard::checkTransmit() it
+    // has no radio-confirmed idle term: in the HL2 transmit tail the backend
+    // refuses (requestTxRoute).
     bool extensionKeyed() const;
     void broadcastBinary(const QByteArray& data);
     SliceModel* sliceForTrx(int trx) const;

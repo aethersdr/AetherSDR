@@ -52,6 +52,11 @@ public:
         return server.m_extensions.offeredTokens();
     }
     static void checkReadings(TciServer& server) { server.checkHl2Readings(); }
+    // A TCI key held, as trx:...,true; leaves it, without a socket.
+    static void holdTciPtt(TciServer& server, TciClient* client)
+    {
+        server.m_tciPttClient = client;
+    }
 };
 
 // RadioModel befriends this name; the identity is what a set is stored against.
@@ -480,6 +485,15 @@ void serverBehaviour()
           "and while tuning");
     tune.tune = false;
     model.transmitModel().applyChanges(tune);
+
+    // A TCI client holding PTT is keyed too, before the radio confirms it.
+    TciHl2ExtensionTest::holdTciPtt(server, b.client);
+    a.send("aethersdr_hl2_filter_board:none,false;");
+    settle();
+    check(backend->hwSets.size() == setsBeforeKey && backend->filterBoard == 2
+              && a.take() == one("aethersdr_hl2_filter_board:n2adr_txonly,true;"),
+          "and while a TCI client holds PTT");
+    TciHl2ExtensionTest::holdTciPtt(server, nullptr);
 
     // A change from elsewhere (the setup page writes with no reply expected).
     model.invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
