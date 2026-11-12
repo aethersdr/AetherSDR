@@ -651,12 +651,22 @@ void hl2Backend()
     b.take();
     a.send("aethersdr_ext_enable:true;");
     QStringList heard = a.take();
-    check(model.isConnected()
-              && heard == lines({"aethersdr_ext:1,rx_auto_rf_gain,rx_overload;",
-                                 "aethersdr_rx_auto_rf_gain:false;",
-                                 "aethersdr_rx_overload:unobserved,false,0;"}),
-          "the HL2 is offered automatic gain and overload (no pan yet, so no RF gain)");
-    if (heard.size() != 3) {
+    // Only this group's own claim: other extension groups may be offered to
+    // an HL2 too, so the item set and the state lines are checked, not the
+    // whole reply.
+    QStringList items;
+    for (const QString& line : heard) {
+        if (line.startsWith(QLatin1String("aethersdr_ext:"))) {
+            items = line.mid(14).chopped(1).split(QLatin1Char(','));
+        }
+    }
+    const bool offered = model.isConnected() && items.value(0) == QLatin1String("1")
+        && items.contains(QStringLiteral("rx_auto_rf_gain")) && items.contains(QStringLiteral("rx_overload"))
+        && !items.contains(QStringLiteral("rx_rf_gain"))
+        && heard.contains(QStringLiteral("aethersdr_rx_auto_rf_gain:false;"))
+        && heard.contains(QStringLiteral("aethersdr_rx_overload:unobserved,false,0;"));
+    check(offered, "the HL2 is offered automatic gain and overload (no pan yet, so no RF gain)");
+    if (!offered) {
         dump("a", heard);
     }
 
