@@ -2074,6 +2074,39 @@ void MainWindow::registerMidiParams()
         },
         [this]() -> float { auto* s = activeSlice(); return s && s->anfOn() ? 1 : 0; });
 
+    // APF (#7211): the radio's CW audio peaking filter. Refused where the
+    // radio has none (Icom, HL2, ANAN, RTL); silent outside CW, where the VFO
+    // hides the APF row and an engaged flag would latch out of sight
+    // (turning it off is always allowed).
+    reg("rx.apfEnable", "APF (Audio Peaking Filter)", "RX", P::Toggle, 0, 1,
+        [this](float v) {
+            auto* s = activeSlice();
+            if (!s) return;
+            if (!m_radioModel.hasAudioPeakingFilter()) {
+                showUnsupportedControlNotice();
+                return;
+            }
+            const bool on = v > 0.5f;
+            // Disabling is always allowed, so an APF latched on in CW can be
+            // cleared after a mode change hides the row.
+            if (on && !isCwMode(s->mode())) return;
+            s->setApf(on);
+        },
+        [this]() -> float { auto* s = activeSlice(); return s && s->apfOn() ? 1 : 0; });
+
+    reg("rx.apfLevel", "APF Level", "RX", P::Slider, 0, 100,
+        [this](float v) {
+            auto* s = activeSlice();
+            if (!s) return;
+            if (!m_radioModel.hasAudioPeakingFilter()) {
+                showUnsupportedControlNotice();
+                return;
+            }
+            if (!isCwMode(s->mode())) return;
+            s->setApfLevel(std::clamp(int(v), 0, 100));
+        },
+        [this]() -> float { auto* s = activeSlice(); return s ? float(s->apfLevel()) : 0; });
+
     reg("rx.squelchEnable", "Squelch Enable", "RX", P::Toggle, 0, 1,
         [this](float v) {
             if (auto* s = activeSlice()) {

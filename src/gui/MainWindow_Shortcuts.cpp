@@ -1677,6 +1677,38 @@ void MainWindow::registerShortcutActions()
                 showUnsupportedControlNotice();
             }
         });
+    // APF (#7211): same gating as the MIDI parameters — a notice where the
+    // radio has no APF, silent outside CW. The level steps go through the
+    // WheelApf path, which carries the "Turn APF on first" hint.
+    m_shortcutManager.registerAction("apf_toggle", "APF Toggle", "DSP",
+        QKeySequence(), [this]() {
+            auto* s = activeSlice();
+            if (!s) return;
+            if (!m_radioModel.hasAudioPeakingFilter()) {
+                showUnsupportedControlNotice();
+                return;
+            }
+            // Turning it off is always allowed (see rx.apfEnable).
+            const bool on = !s->apfOn();
+            if (on && !isCwMode(s->mode())) return;
+            s->setApf(on);
+        });
+    m_shortcutManager.registerAction("apf_level_up", "APF Level Up", "DSP",
+        QKeySequence(), [this]() {
+            if (!m_radioModel.hasAudioPeakingFilter()) {
+                showUnsupportedControlNotice();
+                return;
+            }
+            applyFlexControlWheelAction(QStringLiteral("WheelApf"), 5);
+        }, true);
+    m_shortcutManager.registerAction("apf_level_down", "APF Level Down", "DSP",
+        QKeySequence(), [this]() {
+            if (!m_radioModel.hasAudioPeakingFilter()) {
+                showUnsupportedControlNotice();
+                return;
+            }
+            applyFlexControlWheelAction(QStringLiteral("WheelApf"), -5);
+        }, true);
 
     // ── AGC ─────────────────────────────────────────────────────────────
     m_shortcutManager.registerAction("agc_cycle", "AGC Mode Cycle", "AGC",
