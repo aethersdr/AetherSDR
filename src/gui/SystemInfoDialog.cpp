@@ -1238,7 +1238,7 @@ QWidget* SystemInfoDialog::buildLogsTab()
     m_logViewer->setReadOnly(true);
     m_logViewer->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_logViewer->setMaximumBlockCount(static_cast<int>(kMaxStoredLines));
-    new LogSyntaxHighlighter(m_logViewer->document());
+    new LogSyntaxHighlighter(m_logViewer->document(), m_logViewer);
     layout->addWidget(m_logViewer, 1);
 
     // Scrolling up IS the pause gesture. Reading a stall means holding still on
