@@ -253,11 +253,14 @@ public:
     // control refuses rather than clamps (#5395): it never moves the operator's number.
     static constexpr int kAutoRfGainMaxBaselineDb = hl2::kLnaGainMaxDb;
 
-    // dspChains()' gather. Static so it cannot reach m_rx: this runs on the I/O
-    // thread and m_rx is GUI-thread-owned (push_back/erase reallocate under a
-    // reader, #5401). Public as the read-back test seam.
+    // The gather behind dspChains()' cache. Static so it cannot reach m_rx: it
+    // runs on the I/O thread and m_rx is GUI-thread-owned (push_back/erase
+    // reallocate under a reader, #5401). Public as the read-back test seam.
     static QVariantList gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
                                         Hl2TxDsp* txDsp);
+    // Test seam: blocks until every DSP change queued to the I/O thread before
+    // the call is in the cache dspChains() reads. Production never waits on it.
+    void settleDspChainsForTest();
     LinkStats linkStats() const override;
 
     // Point the stream-free telemetry poller at a radio, independent of
@@ -303,6 +306,9 @@ private:
     // Marks the backend connected and reaches its MetisClient, so the
     // `ioboard.status` verb can be followed to the client and back without a socket.
     friend struct Hl2IoBoardStatusTestAccess;
+    // Marks the backend connected so control_receive_test reads the CW pitch
+    // report setCwPitch publishes. Reaches nothing else.
+    friend struct Hl2CwPitchReportTestAccess;
     // Reads the receive shift/NCO and adds a second receiver's state without a
     // socket or DSP, for hl2_rit_xit_test. Reaches nothing else.
     friend struct Hl2RitXitTestAccess;
@@ -340,6 +346,18 @@ private:
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
+    // dspChains() is a read of m_dspChains, which the I/O thread fills by queued
+    // hop. request*() coalesces to one gather per event-loop turn, posted behind
+    // every DSP change already queued; post*() gathers now. Each publish carries
+    // m_connectGeneration and m_dspChainsEpoch, and a stale one is dropped.
+    void requestDspChainsPublish();
+    void postDspChainsGather();
+    void acceptDspChains(const QVariantList& chains, quint64 connectGeneration,
+                         quint64 epoch);
+    // The GUI-side half of invalidateTxDspConfiguration(): the cached TX chain
+    // reads not-configured at once, and publishes already in flight are stale.
+    void withdrawCachedTxChain();
+    friend struct Hl2DspChainsCacheTestAccess;
     // Publish linkStats() on the seam's fixed cadence. Timer-driven so the tick
     // survives the radio going silent, which the heartbeat must detect.
     void publishLinkStats();
@@ -418,6 +436,16 @@ private:
     // rather than served inline — see the guard at the top of connectRadio().
     std::unique_ptr<RadioConnectRequest> m_queuedConnect;
     quint64 m_connectGeneration = 0;
+    // The last gatherDspChains() result the I/O thread published (rule 3).
+    QVariantList m_dspChains;
+    // Bumped by withdrawCachedTxChain(); paths that withdraw without a new
+    // connect (receiver teardown, connect failure) do not move m_connectGeneration.
+    quint64 m_dspChainsEpoch = 0;
+    QTimer* m_dspChainsPublishTimer = nullptr;   // zero-interval, single-shot
+    // Re-gathers on a cadence for the readings that move with no verb behind
+    // them: WDSP's notch count, the applied blanker, the modulator's counters.
+    QTimer* m_dspChainsRefreshTimer = nullptr;
+    static constexpr int kDspChainsRefreshIntervalMs = 1000;
 
     void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
@@ -990,8 +1018,8 @@ private:
     QObject* m_dspBuildContext = nullptr;
 
     // Process-wide TX availability, decided at construction: interactive runs may
-    // transmit; automation defers to AETHER_AUTOMATION_ALLOW_TX. Mirrored into
-    // MetisClient, which refuses independently at the wire.
+    // transmit; automation defers to AutomationBridgeSettings::launchTxAllowed().
+    // Mirrored into MetisClient, which refuses independently at the wire.
     bool m_txAllowed = false;
     Hl2Telemetry m_telemetry;
     // Cumulative EP6 sequence gaps, mirrored here from MetisClient::dropsUpdated

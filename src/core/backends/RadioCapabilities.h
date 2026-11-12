@@ -43,6 +43,11 @@ struct TxPowerBand {
 // explicit TX antenna choice: hamlib set_ant writes the RX antenna alone and a
 // band-stack recall leaves it. Absent, both write it as before.
 struct IndependentTxAntenna {
+    // TX antenna tokens with no forward-power detector behind them (HL2: RF1).
+    // On these the TX applet labels its power and SWR gauges "not measured"
+    // rather than presenting about 0 W as a reading. Empty: every output is
+    // measured.
+    QStringList unmeteredOutputs;
     bool operator==(const IndependentTxAntenna&) const = default;
 };
 
@@ -104,9 +109,11 @@ struct ReceiveDspControl {
     }
 };
 
-// Session-wide receive BFO pitch, dispatched through setCwPitch and confirmed
-// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path.
+// Session-wide receive BFO pitch, dispatched through setCwPitch and reported
+// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path;
+// the model's pitch is bypassed only under ReceiveControlPolicy::Confirmed.
 struct ReceiveCwPitchControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     int minimumHz = 100;
     int maximumHz = 6000;
     int stepHz = 10;

@@ -1972,6 +1972,9 @@ private:
     void restoreClientOwnedCwState(const RestoredRadioState& state);
     // The step rides the Tuning domain only where no command plane carries it.
     bool clientOwnsSliceStep() const;
+    // A declared receive CW pitch whose adoption the backend confirms: only then
+    // does pitch intent bypass the optimistic model value.
+    bool confirmsReceiveCwPitch() const;
     void restoreClientOwnedStep(const RestoredRadioState& state);
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend

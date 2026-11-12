@@ -548,6 +548,12 @@ void RadioModel::restoreClientOwnedCwState(const RestoredRadioState& state)
     m_transmitModel.applyChanges(delta);
 }
 
+bool RadioModel::confirmsReceiveCwPitch() const
+{
+    return m_backend && backendCapabilities().receiveCwPitchControl.has_value()
+        && m_backend->receiveControlPolicy() == ReceiveControlPolicy::Confirmed;
+}
+
 bool RadioModel::clientOwnsSliceStep() const
 {
     return m_backend && !hasCommandPlane()
@@ -2523,11 +2529,13 @@ RadioModel::RadioModel(QObject* parent)
     // The CW pitch to a backend that demodulates on this host, where the pitch is
     // the receiver's BFO offset (IRadioBackend::setCwPitch()). cwPitchChanged, not
     // phoneStateChanged, which fires on every TX edit and would rebuild every CW
-    // passband. Not for Flex, which applies `cw pitch` on-radio.
+    // passband. Not for Flex, which applies `cw pitch` on-radio. A declared
+    // receiveCwPitchControl takes the command route below only with confirmed
+    // receive control; an optimistic backend (HL2) declares it and stays here.
     connect(&m_transmitModel, &TransmitModel::cwPitchChanged, this,
             [this](int hz) {
         if (m_backend && backendCapabilities().hostModulates
-            && !backendCapabilities().receiveCwPitchControl) {
+            && !confirmsReceiveCwPitch()) {
             const QPointer<RadioModel> alive(this);
             const QPointer<IRadioBackend> backend(m_backend.get());
             const quint64 generation = m_backendReceiverGeneration;
@@ -2539,7 +2547,7 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(&m_transmitModel, &TransmitModel::cwPitchCommandIssued, this,
             [this](int hz) {
-        if (m_backend && isConnected() && backendCapabilities().receiveCwPitchControl) {
+        if (m_backend && isConnected() && confirmsReceiveCwPitch()) {
             const auto pitch = backendCapabilities().receiveCwPitchControl;
             if (pitch && (hz < pitch->minimumHz || hz > pitch->maximumHz)) { return; }
             const QPointer<RadioModel> alive(this);
@@ -4841,9 +4849,7 @@ void RadioModel::publishCapabilities(bool connected)
 
     // Capability-driven, not family()!="flex": only a backend that both
     // host-modulates and may transmit collapses the mic source to PC. (#4449)
-    m_transmitModel.setReceiveCwPitchConfirmation(connected
-        && caps.receiveCwPitchControl.has_value()
-        && m_backend->receiveControlPolicy() == ReceiveControlPolicy::Confirmed);
+    m_transmitModel.setReceiveCwPitchConfirmation(connected && confirmsReceiveCwPitch());
     m_transmitModel.setHostModulation(connected
                                       && caps.hostModulates && caps.canTransmit);
     // Whether an antenna tuner exists at all. Same shape and the same

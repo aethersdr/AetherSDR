@@ -235,11 +235,18 @@ commands. Create a new instance to restart discovery.
   - `canTransmit`, `maximumTransmitWatts`, `hasTuner`, `hasAmplifier`;
   - `extensions`, containing namespace names only, never extension payloads.
   - Optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`,
-    `receivePanCenterControl`, `receivePanBandwidthControl`: null when
-    unqualified. Records carry `authority` (`radio`, `engine`, `unknown`). Mode
-    carries `modes`; filter carries per-mode minimum/maximum low cut, high cut
-    and width; audio carries gain bounds 0–100; pan records carry inclusive
-    `minimumHz`/`maximumHz`. See the receive-control contract for eligibility.
+    `receivePanCenterControl`, `receivePanBandwidthControl`,
+    `receiveCwPitchControl`: null when unqualified. Records carry `authority`
+    (`radio`, `engine`, `unknown`). `receiveCwPitchControl` also carries
+    inclusive `minimumHz`/`maximumHz` and `stepHz` for the session-wide
+    receive BFO pitch. Mode carries `modes`; filter carries per-mode
+    minimum/maximum low cut, high cut and width; audio carries gain bounds
+    0–100; pan records carry inclusive `minimumHz`/`maximumHz`. See the
+    receive-control contract for eligibility.
+- `receiveObservation.cwPitch`: `{known, hz}`, the pitch the backend last
+  reported in this session, with `known:false` and `hz:null` while unknown or
+  disconnected. It is session-wide, shared by every CW receiver, so it lives
+  here rather than on each slice.
 
 `canTransmit` is observation only. It does not advertise a protocol TX method
 or grant and cannot key a radio.
