@@ -2392,6 +2392,7 @@ if (ENABLE_ASR)
         src/asr/SherpaOnnxBackend.cpp # sherpa-onnx offline models (stub unless HAVE_SHERPA)
         src/asr/LivePreviewAssembler.cpp # live-preview results -> per-segment text
         src/asr/AppleLivePreview.cpp # Apple SpeechTranscriber preview (stub off macOS)
+        src/asr/SherpaLivePreview.cpp # sherpa-onnx streaming preview (stub unless HAVE_SHERPA)
         src/core/Resampler.cpp   # standalone r8brain wrapper (24k->16k on the ASR worker)
     )
     target_include_directories(aetherasr PUBLIC src PRIVATE ${CMAKE_SOURCE_DIR}/third_party/r8brain)

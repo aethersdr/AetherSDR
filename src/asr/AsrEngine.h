@@ -288,6 +288,8 @@ public:
     // live; an empty factory turns it off.
     void setLivePreviewFactory(LivePreviewFactory factory);
     bool isLivePreviewEnabled() const { return m_livePreviewEnabled; }
+    // The generation previewText currently carries (livePreviewReset moves it).
+    quint64 previewGeneration() const { return m_generation; }
 
 signals:
     void ready();
@@ -298,15 +300,18 @@ signals:
     // live-preview block (previewText) when a preview is running.
     void finalText(const QString& text, float confidence, int speaker, quint64 segmentId);
     // Live preview (setLivePreviewFactory): provisional text for one segment,
-    // replacing any earlier previewText for the same id.
-    void previewText(quint64 segmentId, const QString& text);
+    // replacing any earlier previewText for the same id. This is the preview's
+    // stream seam, beside finalText: segment ids restart at 0 with each
+    // generation (livePreviewReset), so a consumer away from the engine can
+    // tell a stale update from a current one.
+    void previewText(quint64 segmentId, const QString& text, quint64 generation);
     // That segment produced no final text: drop its provisional text.
-    void previewDiscarded(quint64 segmentId);
+    void previewDiscarded(quint64 segmentId, quint64 generation);
     // LivePreviewState as int, with a message for the status line.
     void livePreviewStatus(int state, const QString& message);
-    // reset() restarted the segment-id timeline at 0: drop every provisional
-    // block and forget which ids were already resolved.
-    void livePreviewReset();
+    // reset() restarted the segment-id timeline at 0 under a new generation:
+    // drop every provisional block and forget which ids were already resolved.
+    void livePreviewReset(quint64 generation);
     // Transcription backlog: seconds of received audio not yet handled by the
     // worker (grows when it can't keep up with real time).
     void backlogChanged(double seconds);

@@ -12,9 +12,10 @@ namespace AetherSDR {
 // backend is still waiting for its segment to close (docs/asr-copy-assist.md,
 // "Live preview"). It never produces Copy Assist's final text.
 //
-// Positions are 16 kHz sample indices on the caller's timeline (AsrSegmenter's
-// samplesFed()). The worker owns the object and calls it from the ASR thread;
-// results arrive through LivePreviewCallbacks on any thread.
+// Positions are 16 kHz sample indices on AsrEngine's timeline. LivePreviewFeeder
+// owns the object and calls it from its own thread; results arrive through
+// LivePreviewCallbacks on any thread (sherpa-onnx delivers them from inside
+// feed() and finalizeThrough(), Apple from its own tasks).
 
 struct LivePreviewResult {
     qint64 startSample = 0;
@@ -55,5 +56,13 @@ bool appleLivePreviewSupported();
 // Empty when it is supported.
 QString appleLivePreviewUnavailableReason();
 LivePreviewFactory appleLivePreviewFactory(const QString& language);
+
+// sherpa-onnx streaming (online) transducer from a model directory holding
+// encoder/decoder/joiner*.onnx and tokens.txt; the default recogniser, on every
+// platform with a sherpa-onnx build. The factory reports Failed with the reason
+// and returns nullptr when the model is missing or will not load.
+bool sherpaLivePreviewSupported();
+QString sherpaLivePreviewUnavailableReason();
+LivePreviewFactory sherpaLivePreviewFactory(const QString& modelDir, int numThreads = 1);
 
 } // namespace AetherSDR

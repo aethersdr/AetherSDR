@@ -74,6 +74,24 @@ bool AsrModelManager::isPresent(const AsrModelTier& tier) const
     return info.exists() && info.size() == tier.sizeBytes;
 }
 
+QString AsrModelManager::bundlePath(const QVector<AsrModelTier>& files) const
+{
+    return files.isEmpty() ? QString() : QFileInfo(modelPath(files.first())).absolutePath();
+}
+
+bool AsrModelManager::isBundlePresent(const QVector<AsrModelTier>& files) const
+{
+    if (files.isEmpty()) {
+        return false;
+    }
+    for (const AsrModelTier& tier : files) {
+        if (!isPresent(tier)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool AsrModelManager::verifyFile(const QString& path, const AsrModelTier& tier,
                                  QString* error) const
 {
@@ -122,10 +140,85 @@ bool AsrModelManager::verify(const AsrModelTier& tier, QString* error) const
 void AsrModelManager::ensure(const AsrModelTier& tier)
 {
     if (isBusy()) {
+        // Not fail(): that would tear down the bundle that is running.
         emit failed(QStringLiteral("A model download is already in progress."));
         return;
     }
+    ensureFile(tier);
+}
 
+void AsrModelManager::ensureBundle(const QVector<AsrModelTier>& files)
+{
+    if (isBusy()) {
+        emit failed(QStringLiteral("A model download is already in progress."));
+        return;
+    }
+    if (files.isEmpty()) {
+        emit failed(QStringLiteral("No files in the model bundle."));
+        return;
+    }
+    const QString folder = bundlePath(files);
+    qint64 total = 0;
+    for (const AsrModelTier& tier : files) {
+        if (QFileInfo(modelPath(tier)).absolutePath() != folder) {
+            emit failed(QStringLiteral("Model bundle files are not all in one folder: %1")
+                            .arg(tier.fileName));
+            return;
+        }
+        total += tier.sizeBytes;
+    }
+
+    m_bundle = files;
+    m_bundleIndex = 0;
+    m_bundleTotalBytes = total;
+    m_bundleDoneBytes = 0;
+    m_bundleFetched = false;
+    ensureFile(m_bundle.first());
+}
+
+void AsrModelManager::completeFile(const QString& path, bool fetched)
+{
+    if (m_bundle.isEmpty()) {
+        if (fetched) {
+            emit finished(path);
+        } else {
+            emit alreadyPresent(path);
+        }
+        return;
+    }
+
+    m_bundleDoneBytes += m_tier.sizeBytes;
+    m_bundleFetched = m_bundleFetched || fetched;
+    // Progress belongs to a download. A bundle that is all cached reports none,
+    // so a caller showing "Downloading…" never flashes it for a verify.
+    if (m_bundleFetched) {
+        emit progress(m_bundleDoneBytes, m_bundleTotalBytes);
+    }
+
+    if (++m_bundleIndex < m_bundle.size()) {
+        // The reply is gone and m_verifying is clear by the time we get here.
+        ensureFile(m_bundle.at(m_bundleIndex));
+        return;
+    }
+
+    const QString folder = bundlePath(m_bundle);
+    const bool anyFetched = m_bundleFetched;
+    m_bundle.clear();
+    if (anyFetched) {
+        emit finished(folder);
+    } else {
+        emit alreadyPresent(folder);
+    }
+}
+
+void AsrModelManager::fail(const QString& error)
+{
+    m_bundle.clear();
+    emit failed(error);
+}
+
+void AsrModelManager::ensureFile(const AsrModelTier& tier)
+{
     m_tier = tier;
     m_sourceErrors.clear();
     m_canceled = false;
@@ -135,7 +228,7 @@ void AsrModelManager::ensure(const AsrModelTier& tier)
     if (isPresent(tier)) {
         verifyInBackground(modelPath(tier), [this](bool ok) {
             if (ok) {
-                emit alreadyPresent(modelPath(m_tier));
+                completeFile(modelPath(m_tier), false);
             } else {
                 QFile::remove(modelPath(m_tier)); // corrupt cache — re-fetch
                 beginDownload();
@@ -150,11 +243,12 @@ void AsrModelManager::ensure(const AsrModelTier& tier)
 void AsrModelManager::beginDownload()
 {
     if (m_tier.sources.isEmpty()) {
-        emit failed(QStringLiteral("No download sources for tier '%1'.").arg(m_tier.id));
+        fail(QStringLiteral("No download sources for tier '%1'.").arg(m_tier.id));
         return;
     }
-    if (!QDir().mkpath(m_cacheDir)) {
-        emit failed(QStringLiteral("Cannot create model cache directory: %1").arg(m_cacheDir));
+    const QString dir = QFileInfo(modelPath(m_tier)).absolutePath();
+    if (!QDir().mkpath(dir)) {
+        fail(QStringLiteral("Cannot create model cache directory: %1").arg(dir));
         return;
     }
     startSource(0);
@@ -185,7 +279,7 @@ void AsrModelManager::startSource(int index)
         const QString detail = m_sourceErrors.isEmpty()
                                    ? QStringLiteral("all sources failed")
                                    : m_sourceErrors.join(QStringLiteral("; "));
-        emit failed(QStringLiteral("Could not download %1: %2").arg(m_tier.fileName, detail));
+        fail(QStringLiteral("Could not download %1: %2").arg(m_tier.fileName, detail));
         return;
     }
 
@@ -214,7 +308,13 @@ void AsrModelManager::startSource(int index)
     connect(m_reply, &QNetworkReply::readyRead, this, &AsrModelManager::onReadyRead);
     connect(m_reply, &QNetworkReply::finished, this, &AsrModelManager::onReplyFinished);
     connect(m_reply, &QNetworkReply::downloadProgress, this,
-            [this](qint64 received, qint64 total) { emit progress(received, total); });
+            [this](qint64 received, qint64 total) {
+                if (m_bundle.isEmpty()) {
+                    emit progress(received, total);
+                } else {
+                    emit progress(m_bundleDoneBytes + received, m_bundleTotalBytes);
+                }
+            });
 }
 
 void AsrModelManager::onReadyRead()
@@ -240,7 +340,7 @@ void AsrModelManager::onReplyFinished()
     if (m_canceled) {
         cleanupReply();
         abandonPartFile();
-        emit failed(QStringLiteral("Download canceled."));
+        fail(QStringLiteral("Download canceled."));
         return;
     }
 
@@ -274,12 +374,12 @@ void AsrModelManager::onReplyFinished()
         QFile::remove(finalPath); // rename() won't overwrite on some platforms
         if (!QFile::rename(partFilePath, finalPath)) {
             QFile::remove(partFilePath);
-            emit failed(QStringLiteral("Verified %1 but could not move it into the cache.")
-                            .arg(m_tier.fileName));
+            fail(QStringLiteral("Verified %1 but could not move it into the cache.")
+                     .arg(m_tier.fileName));
             return;
         }
         qCInfo(lcAsrModel) << "Cached verified model" << finalPath;
-        emit finished(finalPath);
+        completeFile(finalPath, true);
     });
 }
 

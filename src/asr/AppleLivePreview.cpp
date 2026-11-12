@@ -82,8 +82,8 @@ QString appleLivePreviewUnavailableReason()
                ? QString()
                : QCoreApplication::translate(
                      "AetherSDR::LivePreview",
-                     "Live preview needs macOS 26 or later on a Mac that supports "
-                     "Apple's on-device speech recognition.");
+                     "Apple's speech recognition needs macOS 26 or later on a Mac "
+                     "that supports its on-device speech model.");
 }
 
 LivePreviewFactory appleLivePreviewFactory(const QString& language)
@@ -108,8 +108,8 @@ QString appleLivePreviewUnavailableReason()
 {
     return QCoreApplication::translate(
         "AetherSDR::LivePreview",
-        "Live preview uses Apple's on-device speech recognition and is available "
-        "only on macOS 26 or later.");
+        "Apple's speech recognition needs macOS 26 or later and a build made "
+        "with the macOS 26 SDK.");
 }
 
 LivePreviewFactory appleLivePreviewFactory(const QString&)

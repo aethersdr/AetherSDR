@@ -577,16 +577,22 @@ void LivePreviewFeeder::feed(const QVector<float>& monoSamples, int sampleRate,
         callbacks.onResult = [this, generation](const LivePreviewResult& r) {
             emit previewResult(r.startSample, r.endSample, r.text, r.isFinal, generation);
         };
-        callbacks.onState = [this, generation](LivePreviewState state, const QString& message) {
+        auto saidWhy = std::make_shared<bool>(false);
+        callbacks.onState = [this, generation, saidWhy](LivePreviewState state,
+                                                        const QString& message) {
+            *saidWhy = *saidWhy || (state == LivePreviewState::Failed && !message.isEmpty());
             emit previewState(static_cast<int>(state), message, generation);
         };
         m_preview = m_factory(std::move(callbacks));
         if (!m_preview) {
-            // Unavailable here: say so once rather than retrying every chunk.
+            // Unavailable here: say so once rather than retrying every chunk,
+            // unless the factory already reported why.
             m_factory = {};
-            emit previewState(static_cast<int>(LivePreviewState::Failed),
-                              QStringLiteral("Live preview is not available on this system."),
-                              generation);
+            if (!*saidWhy) {
+                emit previewState(static_cast<int>(LivePreviewState::Failed),
+                                  QStringLiteral("Live preview is not available on this system."),
+                                  generation);
+            }
             return;
         }
         m_fedAny = false;
@@ -723,7 +729,7 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
                 });
                 if (const auto update = m_previewAssembler.discardOpenThrough(endSample)) {
                     if (m_enabled && m_livePreviewEnabled) {
-                        emit previewText(update->block, update->text);
+                        emit previewText(update->block, update->text, m_generation);
                     }
                 }
             });
@@ -731,7 +737,7 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
             [this](quint64 segmentId, quint64 generation) {
                 if (!m_enabled || generation != m_generation) { return; }
                 m_previewAssembler.resolve(segmentId);
-                emit previewDiscarded(segmentId);
+                emit previewDiscarded(segmentId, m_generation);
             });
     connect(m_worker, &AsrWorker::processedMs, this, [this](double ms) {
         // Reports for chunks that were queued at the last reset() arrive after
@@ -805,7 +811,7 @@ void AsrEngine::startPreviewThread()
                     return;
                 }
                 if (const auto update = m_previewAssembler.addResult(start, end, text, isFinal)) {
-                    emit previewText(update->block, update->text);
+                    emit previewText(update->block, update->text, m_generation);
                 }
             });
     connect(m_feeder, &LivePreviewFeeder::previewState, this,
@@ -1016,7 +1022,7 @@ void AsrEngine::reset()
     updateDropped();
     m_timeline16k = 0.0;
     m_previewAssembler.reset();
-    emit livePreviewReset();
+    emit livePreviewReset(m_generation);
     postToFeeder([generation = m_generation](LivePreviewFeeder* f) { f->reset(generation); });
     emit requestReset(m_generation);
 }

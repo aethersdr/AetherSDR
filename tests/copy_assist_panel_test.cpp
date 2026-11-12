@@ -4,14 +4,18 @@
 
 #include "gui/CopyAssistPanel.h"
 
+#include <QAccessible>
 #include <QApplication>
+#include <QImage>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalSpy>
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextEdit>
 
+#include <algorithm>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -51,6 +55,27 @@ QTextCharFormat formatAt(CopyAssistPanel& panel, const QString& needle)
     return cursor.charFormat();
 }
 
+// An unmistakable draft colour, so the drawing can be found in a grab.
+const QColor kDraft(255, 0, 255);
+
+// Bounding box, in viewport pixels, of everything drawn in the draft colour.
+QRect draftBounds(QTextEdit* view)
+{
+    const QImage image = view->viewport()->grab().toImage();
+    QRect bounds;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QColor c = image.pixelColor(x, y);
+            if (c.red() > 180 && c.blue() > 180 && c.green() < 90) {
+                bounds |= QRect(x, y, 1, 1);
+            }
+        }
+    }
+    // grab() is in device pixels on a high-DPI screen.
+    const qreal dpr = image.devicePixelRatio();
+    return bounds.isValid() ? QRect(bounds.topLeft() / dpr, bounds.size() / dpr) : QRect();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -81,48 +106,47 @@ int main(int argc, char** argv)
     expect(transcriptText(panel).trimmed().isEmpty(), "clearText empties the transcript");
 
     // ---- Live preview (grey provisional text) -----------------------------
+    // Provisional text is drawn over the transcript, never written into its
+    // document: the document is what a screen reader reads.
     {
         CopyAssistPanel p;
-        p.setPreviewText(1, QStringLiteral("hello wor"));
-        expect(transcriptText(p).contains("hello wor"), "preview text appears in the transcript");
+        p.setPreviewText(1, QStringLiteral("hello wor"), 0);
+        expect(p.previewBlocks() == QStringList{QStringLiteral("hello wor")},
+               "preview text is shown");
+        expect(transcriptText(p).isEmpty(), "preview text never enters the transcript document");
 
-        p.setPreviewText(1, QStringLiteral("hello world"));
-        expect(transcriptText(p).contains("hello world") && !transcriptText(p).contains("hello wor "),
+        p.setPreviewText(1, QStringLiteral("hello world"), 0);
+        expect(p.previewBlocks() == QStringList{QStringLiteral("hello world")},
                "a newer preview for the same id replaces the old text");
 
-        p.setPreviewText(2, QStringLiteral("second"));
+        p.setPreviewText(2, QStringLiteral("second"), 0);
         p.commitText(1, QStringLiteral("Hello World"), 0.95f);
-        const QString text = transcriptText(p);
-        expect(text.contains("Hello World") && !text.contains("hello world"),
+        expect(transcriptText(p).contains("Hello World")
+                   && p.previewBlocks() == QStringList{QStringLiteral("second")},
                "commitText replaces the grey block with the final");
-        expect(text.indexOf("Hello World") < text.indexOf("second"),
-               "a later segment's grey text stays after the committed text");
+        expect(!transcriptText(p).contains("second"),
+               "a later segment's grey text stays out of the document");
 
-        expect(formatAt(p, QStringLiteral("Hello")).foreground().color()
-                   != formatAt(p, QStringLiteral("second")).foreground().color(),
-               "committed text and grey text differ in colour");
-        expect(formatAt(p, QStringLiteral("second")).fontItalic()
-                   && !formatAt(p, QStringLiteral("Hello")).fontItalic(),
-               "grey text is italic, committed text is not");
+        p.discardPreview(2, 0);
+        expect(p.previewBlocks().isEmpty(), "discardPreview removes the grey block");
 
-        p.discardPreview(2);
-        expect(!transcriptText(p).contains("second"), "discardPreview removes the grey block");
-
-        p.setPreviewText(1, QStringLiteral("late"));
-        p.setPreviewText(2, QStringLiteral("later"));
-        expect(!transcriptText(p).contains("late"),
+        p.setPreviewText(1, QStringLiteral("late"), 0);
+        p.setPreviewText(2, QStringLiteral("later"), 0);
+        expect(p.previewBlocks().isEmpty(),
                "a late preview for a committed or discarded id is ignored");
 
-        p.setPreviewText(3, QStringLiteral("pending"));
-        expect(transcriptText(p).contains("pending"), "a newer id is still accepted");
-        p.setPreviewText(3, QString());
-        expect(!transcriptText(p).contains("pending"), "empty preview text removes the block");
+        p.setPreviewText(3, QStringLiteral("pending"), 0);
+        expect(p.previewBlocks() == QStringList{QStringLiteral("pending")},
+               "a newer id is still accepted");
+        p.setPreviewText(3, QString(), 0);
+        expect(p.previewBlocks().isEmpty(), "empty preview text removes the block");
 
-        p.setPreviewText(4, QStringLiteral("gone"));
+        p.setPreviewText(4, QStringLiteral("gone"), 0);
         p.clearText();
-        expect(transcriptText(p).trimmed().isEmpty(), "clearText clears the preview");
-        p.setPreviewText(0, QStringLiteral("fresh"));
-        expect(transcriptText(p).contains("fresh") && !transcriptText(p).contains("gone"),
+        expect(transcriptText(p).trimmed().isEmpty() && p.previewBlocks().isEmpty(),
+               "clearText clears the preview");
+        p.setPreviewText(0, QStringLiteral("fresh"), 0);
+        expect(p.previewBlocks() == QStringList{QStringLiteral("fresh")},
                "after clearText ids restart and the old grey text is gone");
     }
     for (const bool newline : {false, true}) {
@@ -140,30 +164,134 @@ int main(int argc, char** argv)
     }
     {
         // The engine restarts segment ids at 0 on every reset (disable,
-        // tap-point switch) without clearing the transcript.
+        // tap-point switch) without clearing the transcript, under a new
+        // generation.
         CopyAssistPanel p;
         p.commitText(5, QStringLiteral("kept"), 0.9f);
-        p.setPreviewText(6, QStringLiteral("stale grey"));
-        p.resetPreview();
-        expect(transcriptText(p).contains("kept") && !transcriptText(p).contains("stale grey"),
+        p.setPreviewText(6, QStringLiteral("stale grey"), 0);
+        p.resetPreview(1);
+        expect(transcriptText(p).contains("kept") && p.previewBlocks().isEmpty(),
                "resetPreview drops grey text and keeps the committed transcript");
-        p.setPreviewText(0, QStringLiteral("restarted"));
-        expect(transcriptText(p).contains("restarted"),
+        p.setPreviewText(0, QStringLiteral("restarted"), 1);
+        expect(p.previewBlocks() == QStringList{QStringLiteral("restarted")},
                "after resetPreview a restarted id 0 is shown again");
+        p.setPreviewText(7, QStringLiteral("old generation"), 0);
+        p.discardPreview(0, 0);
+        expect(p.previewBlocks() == QStringList{QStringLiteral("restarted")},
+               "updates from an earlier generation are ignored");
+    }
+
+    // ---- Screen readers never see provisional text ------------------------
+    {
+        static int s_textEvents = 0;
+        static QObject* s_watched = nullptr;
+        static QAccessible::UpdateHandler s_previous = nullptr;
+        CopyAssistPanel p;
+        auto* view = p.findChild<QTextEdit*>(QStringLiteral("CopyAssistTranscript"));
+        s_watched = view;
+        QAccessible::setActive(true);
+        s_previous = QAccessible::installUpdateHandler([](QAccessibleEvent* event) {
+            const auto type = event->type();
+            if (event->object() == s_watched
+                && (type == QAccessible::TextInserted || type == QAccessible::TextRemoved
+                    || type == QAccessible::TextUpdated)) {
+                ++s_textEvents;
+            }
+            if (s_previous != nullptr) {
+                s_previous(event);
+            }
+        });
+
+        p.commitText(0, QStringLiteral("CQ CQ"), 0.9f);
+        const int afterCommit = s_textEvents;
+        const int revision = view->document()->revision();
         for (int i = 0; i < 20; ++i) {
-            p.setPreviewText(1, QStringLiteral("update %1").arg(i));
+            p.setPreviewText(1, QStringLiteral("this is update %1").arg(i), 0);
         }
-        const auto* view = p.findChild<QTextEdit*>();
-        expect(view != nullptr && view->document()->availableUndoSteps() == 0,
-               "preview rewrites keep no undo history");
+        p.setPreviewText(2, QStringLiteral("and more"), 0);
+        p.discardPreview(2, 0);
+        expect(afterCommit > 0, "committing text is reported to the screen reader");
+        expect(s_textEvents == afterCommit,
+               "provisional updates send the screen reader no text events");
+        expect(view->document()->revision() == revision,
+               "provisional updates leave the document untouched");
+
+        QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(view);
+        QAccessibleTextInterface* text = iface != nullptr ? iface->textInterface() : nullptr;
+        expect(text != nullptr
+                   && text->text(0, text->characterCount()).trimmed() == QStringLiteral("CQ CQ"),
+               "the transcript's accessible text is the committed text only");
+
+        QAccessible::installUpdateHandler(s_previous);
+        QAccessible::setActive(false);
+    }
+
+    // ---- Provisional text is painted after the committed text -------------
+    for (const bool newline : {false, true}) {
+        CopyAssistPanel p;
+        p.setNewlineOnSilence(newline);
+        p.setPreviewColor(kDraft);
+        p.resize(400, 300);
+        p.show();
+        p.commitText(0, QStringLiteral("CQ"), 0.95f);
+        auto* view = p.findChild<QTextEdit*>(QStringLiteral("CopyAssistTranscript"));
+        const QRect committedLine = view->cursorRect(view->textCursor());
+        expect(!draftBounds(view).isValid(), newline ? "nothing drawn before a preview (newline on)"
+                                                     : "nothing drawn before a preview (newline off)");
+        p.setPreviewText(1, QStringLiteral("this is the draft"), 0);
+        const QRect drawn = draftBounds(view);
+        if (newline) {
+            expect(drawn.isValid() && drawn.top() >= committedLine.bottom() - 1,
+                   "with newline-on-silence the draft is drawn on the next line");
+        } else {
+            expect(drawn.isValid() && drawn.top() < committedLine.bottom()
+                       && drawn.left() >= committedLine.left() - 1,
+                   "the draft is drawn on the committed line, after its text");
+        }
+        p.commitText(1, QStringLiteral("this is the final"), 0.95f);
+        expect(!draftBounds(view).isValid(), newline ? "the final replaces the drawing (newline on)"
+                                                     : "the final replaces the drawing (newline off)");
     }
     {
+        // A draft longer than the view: the scroll range grows to reach it and
+        // a view that was at the bottom follows it. One committed line per
+        // segment, so the transcript is taller than the view whatever width the
+        // panel's controls force.
         CopyAssistPanel p;
         p.setNewlineOnSilence(true);
-        p.commitText(0, QStringLiteral("first"), 0.9f);
-        p.setPreviewText(1, QStringLiteral("grey"));
-        expect(transcriptText(p).contains("\n") || transcriptText(p).contains(QChar(0x2028)),
-               "a grey block starts a new line when newline-on-silence is on");
+        p.setPreviewColor(kDraft);
+        p.resize(300, 200);
+        p.show();
+        for (int i = 0; i < 30; ++i) {
+            p.commitText(quint64(i), QStringLiteral("line %1 of committed text").arg(i), 0.9f);
+        }
+        auto* view = p.findChild<QTextEdit*>(QStringLiteral("CopyAssistTranscript"));
+        const int documentMax = view->verticalScrollBar()->maximum();
+        QString longDraft;
+        for (int i = 0; i < 400; ++i) {
+            longDraft += QStringLiteral("draft words ");
+        }
+        p.setPreviewText(30, longDraft, 0);
+        expect(documentMax > 0, "(setup) the committed transcript alone scrolls");
+        expect(view->verticalScrollBar()->maximum() > documentMax,
+               "the scroll range grows to make room for the draft");
+        expect(view->verticalScrollBar()->value() == view->verticalScrollBar()->maximum(),
+               "a view at the bottom follows the draft");
+        const QRect drawn = draftBounds(view);
+        expect(drawn.isValid() && drawn.bottom() >= view->viewport()->height() - 20,
+               "the end of the draft is in view");
+        p.commitText(30, QStringLiteral("short final"), 0.9f);
+        CopyAssistPanel twin; // the same transcript, never shown a draft
+        twin.setNewlineOnSilence(true);
+        twin.resize(300, 200);
+        twin.show();
+        for (int i = 0; i < 30; ++i) {
+            twin.commitText(quint64(i), QStringLiteral("line %1 of committed text").arg(i), 0.9f);
+        }
+        twin.commitText(30, QStringLiteral("short final"), 0.9f);
+        auto* twinView = twin.findChild<QTextEdit*>(QStringLiteral("CopyAssistTranscript"));
+        expect(view->verticalScrollBar()->maximum() == twinView->verticalScrollBar()->maximum(),
+               "the extra scroll range goes when the draft does");
     }
 
     // ---- Settings (⚙) button emits its request ----------------------------

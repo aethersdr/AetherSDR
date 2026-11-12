@@ -6060,6 +6060,10 @@ if (ENABLE_ASR)
         target_link_libraries(apple_live_preview_smoke PRIVATE aetherasr Qt6::Core)
     endif()
 
+    # sherpa-onnx live preview on a real recording and model; run by hand.
+    add_executable(sherpa_live_preview_smoke tests/sherpa_live_preview_smoke.cpp) # not registered: manual, needs a recording and a streaming model
+    target_link_libraries(sherpa_live_preview_smoke PRIVATE aetherasr Qt6::Core)
+
     # Engine orchestration: fake backend, worker thread, no whisper/model.
     add_executable(asr_engine_test
         tests/asr_engine_test.cpp
