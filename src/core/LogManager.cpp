@@ -23,10 +23,10 @@
 
 namespace AetherSDR {
 
-// Define all logging categories (disabled by default)
+// Initial logging thresholds; loadSettings() applies the saved category choices.
 Q_LOGGING_CATEGORY(lcDiscovery,  "aether.discovery",  QtDebugMsg)
 Q_LOGGING_CATEGORY(lcConnection, "aether.connection",  QtDebugMsg)
-Q_LOGGING_CATEGORY(lcProtocol,   "aether.protocol",    QtDebugMsg)
+Q_LOGGING_CATEGORY(lcProtocol,   "aether.protocol",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAudio,      "aether.audio",       QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAudioSummary, "aether.audio.summary", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcVita49,     "aether.vita49",      QtWarningMsg)
@@ -84,7 +84,7 @@ LogManager::LogManager()
     m_categories = {
         {"aether.discovery",  "Discovery",    "UDP radio discovery broadcasts"},
         {"aether.connection", "Connection / Commands", "Raw TCP command channel lines: TX commands, RX responses, and socket state"},
-        {"aether.protocol",   "Protocol / Status",     "Parsed SmartSDR protocol handling and model status updates"},
+        {"aether.protocol",   "Protocol / Status",     "Parsed SmartSDR protocol handling, model status updates, and radio-side WNB recalibration (verbose; off by default)"},
         {"aether.audio",      "Audio",        "RX/TX audio, device negotiation, volume"},
         {"aether.audio.summary", "Audio Summary", "Default support log summaries for audio routing and sink/source negotiation"},
         {"aether.vita49",     "VITA-49",      "UDP packet routing: FFT, waterfall, meters, DAX"},
@@ -426,9 +426,9 @@ void LogManager::saveSettings()
 void LogManager::loadSettings()
 {
     auto& s = AppSettings::instance();
-    // Default Discovery, Commands, and Status to on
+    // Keep verbose protocol/status debug opt-in.
     static const QStringList defaultOn = {
-        "aether.discovery", "aether.connection", "aether.protocol",
+        "aether.discovery", "aether.connection",
         "aether.audio.summary", "aether.kiwisdr", "aether.sysinfo"
     };
     for (auto& c : m_categories) {

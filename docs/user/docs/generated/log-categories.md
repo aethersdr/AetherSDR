@@ -19,7 +19,7 @@ These are the logging categories listed in **Help → Support & Diagnostics...**
 |---|---|---|
 | Discovery | `aether.discovery` | UDP radio discovery broadcasts |
 | Connection / Commands | `aether.connection` | Raw TCP command channel lines: TX commands, RX responses, and socket state |
-| Protocol / Status | `aether.protocol` | Parsed SmartSDR protocol handling and model status updates |
+| Protocol / Status | `aether.protocol` | Parsed SmartSDR protocol handling, model status updates, and radio-side WNB recalibration (verbose; off by default) |
 | Audio | `aether.audio` | RX/TX audio, device negotiation, volume |
 | Audio Summary | `aether.audio.summary` | Default support log summaries for audio routing and sink/source negotiation |
 | VITA-49 | `aether.vita49` | UDP packet routing: FFT, waterfall, meters, DAX |

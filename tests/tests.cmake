@@ -11404,6 +11404,7 @@ set(AETHER_SETTINGS_CONSUMERS
     peripheral_auth_dialog_test
     peripheral_auth_handshake_test
     automation_sensitive_grab_command_test
+    radio_connection_session_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
