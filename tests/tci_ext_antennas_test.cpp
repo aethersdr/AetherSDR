@@ -56,6 +56,11 @@ public:
     {
         return server.m_extensions.offeredTokens();
     }
+    // A TCI key accepted, before MOX is visible on the model.
+    static void holdTciPtt(TciServer& server, TciClient* client)
+    {
+        server.m_tciPttClient = client;
+    }
 };
 
 namespace {
@@ -456,6 +461,18 @@ void serverBehaviour()
           "and while tuning: unkeying re-arms the notice");
     tune.tune = false;
     model.transmitModel().applyChanges(tune);
+
+    // A TCI key held before MOX is visible is keyed too.
+    TciAntennaExtensionTest::holdTciPtt(server, b.client);
+    a.send("aethersdr_tx_antenna:0,ANT2;");
+    settle();
+    check(!model.transmitModel().isMox() && backend->txRequests.isEmpty()
+              && a.takeExtension() == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT1;")})
+              && warnings == 3,
+          "a held TCI PTT before MOX refuses a TX set");
+    TciAntennaExtensionTest::holdTciPtt(server, nullptr);
+    b.take();
+    c.take();
 
     // TX set, not keyed: the menu's path to the backend.
     a.send("aethersdr_tx_antenna:1,ant2;");

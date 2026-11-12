@@ -265,9 +265,11 @@ private:
     QStringList antennaWireList(bool tx, const SliceModel* slice) const;
     QStringList antennaStateLines(bool tx) const;
     QString antennaLine(AntennaLine kind, int trx) const;
-    // Transmitting, tuning, or a transmit operation still held. Unlike
-    // ReceiveControlGuard::checkTransmit() it has no radio-confirmed idle
-    // term: in the HL2 transmit tail the backend refuses (requestTxRoute).
+    // Keyed, for the extension set's refusals: a transmit operation still
+    // held, the radio transmitting, TransmitModel transmitting, tuning or in
+    // MOX, or a TCI key held. Unlike ReceiveControlGuard::checkTransmit() it
+    // has no radio-confirmed idle term: in the HL2 transmit tail the backend
+    // refuses (requestTxRoute).
     bool extensionKeyed() const;
     // A slice's list moved: a gate that flips re-sends the whole set, else
     // the one line is queued.

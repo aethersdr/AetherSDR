@@ -3897,7 +3897,7 @@ bool TciServer::extensionKeyed() const
 {
     const TransmitModel& tx = m_model->transmitModel();
     return m_model->transmitOwnershipPending() || m_model->isRadioTransmitting()
-        || tx.isTransmitting() || tx.isMox() || tx.isTuning();
+        || tx.isTransmitting() || tx.isMox() || tx.isTuning() || m_tciPttClient;
 }
 
 void TciServer::registerAntennaGroups()
