@@ -421,10 +421,14 @@ each file pinned by size and SHA-256 and verified like the whisper tiers.
 **Apple (`AppleLivePreview.cpp`).** The recogniser takes the Copy Assist
 language setting, so the preview has no language control of its own. That
 setting is always a whisper language code: the list has no auto-detect entry.
-`SpeechTranscriber.supportedLocale(equivalentTo:)` maps the bare code to one of
-Apple's regional variants (an empty code would mean `Locale.current`). On
-macOS 26 that covers English, Spanish, French, German, Italian, Portuguese,
-Mandarin, Cantonese, Japanese and Korean (31 locales,
+The regional variant comes from the Mac's own region (System Settings →
+General → Language & Region) when Apple has that pairing: Spanish on a US Mac
+is es-US, German on a Mac set to Germany is de-DE (`regionalLocale()` in the
+Swift bridge). Otherwise `SpeechTranscriber.supportedLocale(equivalentTo:)`
+picks one, and its pick for a bare code is arbitrary (es-CL, fr-CA, de-CH on
+macOS 26). An empty code means `Locale.current`. Ready reports the locale in
+use as its message. On macOS 26 Apple covers English, Spanish, French, German,
+Italian, Portuguese, Mandarin, Cantonese, Japanese and Korean (31 locales,
 `SpeechTranscriber.supportedLocales`); anything else reports Failed with the
 reason and shows no preview. A locale not yet installed is downloaded first,
 reported as Preparing. Apple's API is Swift-only. `src/asr/apple/AppleLivePreview.swift` exports a C

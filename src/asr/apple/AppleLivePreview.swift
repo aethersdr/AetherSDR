@@ -54,6 +54,21 @@ private final class Sink: @unchecked Sendable {
     }
 }
 
+/// The language with the Mac's own region, when Apple supports that pairing:
+/// Spanish on a US Mac is es-US, German on a Mac set to Germany is de-DE. nil
+/// (no such pairing, or the language already names a region) leaves the choice
+/// to supportedLocale(equivalentTo:), whose pick for a bare code is arbitrary
+/// on macOS 26: es-CL, fr-CA, de-CH. Internal, not private, so a test can
+/// compile it alongside this file.
+func regionalLocale(for language: String, current: Locale, supported: [Locale]) -> Locale? {
+    let wanted = Locale(identifier: language)
+    guard wanted.region == nil, let code = wanted.language.languageCode,
+          let region = current.region else {
+        return nil
+    }
+    return supported.first { $0.language.languageCode == code && $0.region == region }
+}
+
 private func samples(_ t: CMTime) -> Int64 {
     Int64((t.seconds * kRate).rounded())
 }
@@ -91,7 +106,12 @@ private final class Session: @unchecked Sendable {
 
     private func prepare() async throws {
         let wanted = language.isEmpty ? Locale.current : Locale(identifier: language)
-        guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: wanted) else {
+        var chosen = regionalLocale(for: language, current: Locale.current,
+                                    supported: await SpeechTranscriber.supportedLocales)
+        if chosen == nil {
+            chosen = await SpeechTranscriber.supportedLocale(equivalentTo: wanted)
+        }
+        guard let locale = chosen else {
             sink.state(2, "Live preview does not support the language \(wanted.identifier)")
             return
         }
@@ -154,7 +174,9 @@ private final class Session: @unchecked Sendable {
             await analyzer.cancelAndFinishNow()
             return
         }
-        sink.state(1, "")
+        // The locale in use, for logs and the smoke tool; the panel shows its
+        // own status on Ready.
+        sink.state(1, locale.identifier(.bcp47))
     }
 
     func feed(_ ptr: UnsafePointer<Float>, _ count: Int, _ startSample: Int64) {
