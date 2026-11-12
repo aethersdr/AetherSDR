@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <vector>
 
 #ifdef HAVE_SHERPA
@@ -36,21 +38,12 @@ QString pickModelFile(const QDir& dir, const QString& stem)
     return files.isEmpty() ? QString() : dir.absoluteFilePath(files.first());
 }
 
-// A sherpa-onnx streaming (online) transducer behind ILivePreview. Everything
-// runs synchronously on the caller's thread (LivePreviewFeeder's), so results
-// are delivered from inside feed() and finalizeThrough().
-//
-// The stream covers [m_origin, m_fedEnd) of the caller's timeline; m_audio
-// keeps that audio. finalizeThrough(s) has to split the text exactly at s,
-// which a sherpa stream cannot do by itself: the stream is finished (tail
-// padding, input finished, decoded out), the tokens timed before s become the
-// final result for [m_origin, s), and a fresh stream starts at s with the
-// audio from s on fed again. The re-fed audio is only the feeder's lead over
-// the worker, normally under a second.
-class SherpaLivePreview final : public ILivePreview {
+// A loaded sherpa-onnx streaming model. Loading the encoder takes about a
+// second, and the engine starts a new preview session on every retune, so one
+// model serves every session a factory starts; each session has its own stream.
+class SherpaModel {
 public:
-    SherpaLivePreview(const QString& modelDir, int numThreads, LivePreviewCallbacks callbacks)
-        : m_callbacks(std::move(callbacks))
+    SherpaModel(const QString& modelDir, int numThreads)
     {
         const QDir dir(modelDir);
         const QString tokens = dir.absoluteFilePath(QStringLiteral("tokens.txt"));
@@ -93,18 +86,50 @@ public:
         }
     }
 
-    ~SherpaLivePreview() override
+    ~SherpaModel()
     {
-        if (m_stream != nullptr) {
-            SherpaOnnxDestroyOnlineStream(m_stream);
-        }
         if (m_recognizer != nullptr) {
             SherpaOnnxDestroyOnlineRecognizer(m_recognizer);
         }
     }
 
-    bool valid() const { return m_recognizer != nullptr; }
+    SherpaModel(const SherpaModel&) = delete;
+    SherpaModel& operator=(const SherpaModel&) = delete;
+
+    const SherpaOnnxOnlineRecognizer* recognizer() const { return m_recognizer; }
     QString error() const { return m_error; }
+
+private:
+    const SherpaOnnxOnlineRecognizer* m_recognizer = nullptr;
+    QString m_error;
+};
+
+// A sherpa-onnx streaming (online) transducer behind ILivePreview. Everything
+// runs synchronously on the caller's thread (LivePreviewFeeder's), so results
+// are delivered from inside feed() and finalizeThrough().
+//
+// The stream covers [m_origin, m_fedEnd) of the caller's timeline; m_audio
+// keeps that audio. finalizeThrough(s) has to split the text exactly at s,
+// which a sherpa stream cannot do by itself: the stream is finished (tail
+// padding, input finished, decoded out), the tokens timed before s become the
+// final result for [m_origin, s), and a fresh stream starts at s with the
+// audio from s on fed again. The re-fed audio is only the feeder's lead over
+// the worker, normally under a second.
+class SherpaLivePreview final : public ILivePreview {
+public:
+    SherpaLivePreview(std::shared_ptr<const SherpaModel> model, LivePreviewCallbacks callbacks)
+        : m_callbacks(std::move(callbacks))
+        , m_model(std::move(model))
+        , m_recognizer(m_model->recognizer())
+    {
+    }
+
+    ~SherpaLivePreview() override
+    {
+        if (m_stream != nullptr) {
+            SherpaOnnxDestroyOnlineStream(m_stream);
+        }
+    }
 
     void announceReady()
     {
@@ -241,13 +266,13 @@ private:
     }
 
     LivePreviewCallbacks m_callbacks;
+    std::shared_ptr<const SherpaModel> m_model; // outlives m_stream
     const SherpaOnnxOnlineRecognizer* m_recognizer = nullptr;
     const SherpaOnnxOnlineStream* m_stream = nullptr;
     qint64 m_origin = 0;
     qint64 m_fedEnd = 0;
     std::vector<float> m_audio;
     QString m_lastText;
-    QString m_error;
 };
 
 } // namespace
@@ -259,17 +284,33 @@ bool sherpaLivePreviewSupported()
 
 LivePreviewFactory sherpaLivePreviewFactory(const QString& modelDir, int numThreads)
 {
-    return [modelDir, numThreads](LivePreviewCallbacks callbacks)
+    // The model loads on the first session the factory starts and is shared by
+    // every copy of the factory and every session after it, so a retune or an
+    // engine rebuild does not load it again. A failed load is remembered too.
+    // Copies can be called from two engines' feeder threads while one engine
+    // replaces another, hence the lock.
+    struct Cache {
+        std::mutex mutex;
+        std::shared_ptr<const SherpaModel> model;
+    };
+    auto cache = std::make_shared<Cache>();
+    return [modelDir, numThreads, cache](LivePreviewCallbacks callbacks)
                -> std::unique_ptr<ILivePreview> {
-        LivePreviewCallbacks forFailure = callbacks;
-        auto preview =
-            std::make_unique<SherpaLivePreview>(modelDir, numThreads, std::move(callbacks));
-        if (!preview->valid()) {
-            if (forFailure.onState) {
-                forFailure.onState(LivePreviewState::Failed, preview->error());
+        std::shared_ptr<const SherpaModel> model;
+        {
+            const std::lock_guard<std::mutex> lock(cache->mutex);
+            if (!cache->model) {
+                cache->model = std::make_shared<const SherpaModel>(modelDir, numThreads);
+            }
+            model = cache->model;
+        }
+        if (model->recognizer() == nullptr) {
+            if (callbacks.onState) {
+                callbacks.onState(LivePreviewState::Failed, model->error());
             }
             return nullptr;
         }
+        auto preview = std::make_unique<SherpaLivePreview>(model, std::move(callbacks));
         preview->announceReady();
         return preview;
     };

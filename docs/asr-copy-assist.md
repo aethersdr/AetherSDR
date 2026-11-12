@@ -399,7 +399,11 @@ finished, decoded out), takes the tokens timed before `s` as the final for
 `[origin, s)`, then starts a fresh stream at `s` and feeds it again the audio
 already received after `s` (the feeder's lead over the worker, normally under
 a second). A stream is replaced, never reset, so token times are always
-relative to its origin. The model is `sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06`
+relative to its origin. The model itself loads once per factory (about a
+second on an M2) and is shared by every session after it, so a retune, which
+starts a new session, costs a new stream, not a reload; the controller keeps
+the factory while the sherpa preview stays on, so engine rebuilds reuse it
+too. The model is `sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06`
 (sherpa-onnx's packaging of Banafo's Kroko community model; the model card
 at huggingface.co/Banafo/Kroko-ASR gives the licence as CC-BY-SA), fetched by
 `AsrModelManager::ensureBundle` from `AsrModelCatalog::sherpaLivePreviewModel()`:
@@ -464,8 +468,10 @@ finalisation at close, delivery during a slow decode, generations, off/unavailab
 both with a fake recogniser; `copy_assist_panel_test` (drafts painted, not in
 the document, no accessibility text events, scroll range, generations);
 `asr_model_manager_test` (bundles: fetch, cached, partly cached, failure
-stops the bundle, mixed folders, corrupt file). The real recognizers are
+stops the bundle, mixed folders, corrupt file); `asr_live_preview_assembler_test`
+also covers a segment edge reported after the recogniser ran past it. The real recognizers are
 exercised by hand: `apple_live_preview_smoke <file.16k.wav> [seconds]
 [language]` (macOS 26+) and `sherpa_live_preview_smoke <model-dir>
-<file.16k.wav> [seconds]` (checks the finals tile the timeline and that
-splitting behind the feed loses no words), each on a 16 kHz mono float32 WAV.
+<file.16k.wav> [seconds]` (checks the finals tile the timeline, that
+splitting behind the feed loses no words, and that a second session reuses
+the loaded model), each on a 16 kHz mono float32 WAV.

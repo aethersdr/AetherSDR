@@ -115,6 +115,36 @@ int main()
         expect(is(a.discardOpenThrough(2 * kSec), 0, "hello"),
                "a discard drops only the text that starts inside it");
     }
+    {
+        // The worker reports a segment's edge late (it was busy decoding the
+        // previous one) while the recogniser has already run past that edge.
+        LivePreviewAssembler a;
+        a.addResult(0, 10 * kSec, QStringLiteral("one two three"), true);
+        a.addResult(10 * kSec, 11 * kSec, QStringLiteral("four"), true);
+        a.addResult(11 * kSec, 12 * kSec, QStringLiteral("five six"), false);
+        const auto moved = a.closeBlock(0, 8 * kSec);
+        bool block0 = false;
+        bool block1 = false;
+        for (const auto& u : moved) {
+            block0 = block0 || (u.block == 0 && u.text == QStringLiteral("one two three"));
+            block1 = block1 || (u.block == 1 && u.text == QStringLiteral("four five six"));
+        }
+        expect(moved.size() == 2 && block0 && block1,
+               "a late close moves what starts after the edge into the next block");
+        expect(is(a.addResult(11 * kSec, 13 * kSec, QStringLiteral("five six seven"), false), 1,
+                  "four five six seven"),
+               "later text from past the edge joins it there, not twice");
+        a.resolve(0);
+        expect(is(a.addResult(13 * kSec, 14 * kSec, QStringLiteral("eight"), true), 1,
+                  "four five six seven eight"),
+               "resolving the closed block keeps the moved text");
+    }
+    {
+        LivePreviewAssembler a;
+        a.addResult(0, 2 * kSec, QStringLiteral("hello"), false);
+        expect(a.closeBlock(0, 5 * kSec).empty(),
+               "a close with nothing past the edge reports no change");
+    }
 
     if (g_failures == 0) {
         std::printf("Live preview assembler: ALL PASS\n");

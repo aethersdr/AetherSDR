@@ -460,7 +460,13 @@ int main(int argc, char** argv)
             const std::lock_guard<std::mutex> lock(log->mu);
             return !log->feeds.empty();
         }, 3000);
+        QSignalSpy cleared(&engine, &AsrEngine::livePreviewReset);
         engine.setLivePreviewFactory({});
+        expect(cleared.count() == 1
+                   && cleared.first().at(0).toULongLong() == engine.previewGeneration(),
+               "turning it off clears the gray text already shown, in this generation");
+        engine.setLivePreviewFactory({});
+        expect(cleared.count() == 1, "turning it off again clears nothing more");
         size_t fedBefore = 0;
         waitFor([&] {
             const std::lock_guard<std::mutex> lock(log->mu);

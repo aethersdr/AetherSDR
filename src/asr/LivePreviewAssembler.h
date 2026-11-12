@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <vector>
 
 namespace AetherSDR {
 
@@ -29,8 +30,11 @@ public:
     void reset();
 
     // Segment `id` closed at `endSample`: block `id` ends there and block
-    // id + 1 starts there.
-    void closeBlock(quint64 id, qint64 endSample);
+    // id + 1 starts there. The worker can report the edge after the recogniser
+    // has already run past it (it was decoding the previous segment), so text
+    // already filed under `id` that starts at or after the edge moves to
+    // id + 1. Returns the new text of each block that changed.
+    std::vector<Update> closeBlock(quint64 id, qint64 endSample);
 
     // A recogniser result. Returns the block's new full text when it changed;
     // nothing when the result belongs to an already-resolved block or changes

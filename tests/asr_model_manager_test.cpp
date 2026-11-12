@@ -269,7 +269,6 @@ int main(int argc, char** argv)
 
         // a) everything fetched
         const QVector<AsrModelTier> packA = bundleFor(QStringLiteral("pack"));
-        expect(!mgr.isBundlePresent(packA), "bundle not present before fetch");
         const BundleResult a = runBundle(mgr, packA);
         expect(a.finishedCount == 1 && a.failedCount == 0 && a.alreadyCount == 0,
                "bundle fetched -> finished once, no alreadyPresent/failed");
@@ -277,7 +276,6 @@ int main(int argc, char** argv)
                    && a.path == mgr.bundlePath(packA),
                "finished reports the absolute bundle folder");
         expect(allPresent(packA), "all bundle files cached with the right bytes");
-        expect(mgr.isBundlePresent(packA), "isBundlePresent after fetch");
         expect(noPartFiles(packA), "no .part left behind by the bundle");
         bool totalConstant = !a.progress.isEmpty();
         for (const auto& pr : a.progress) {
@@ -346,7 +344,6 @@ int main(int argc, char** argv)
         writeFile(mgr.modelPath(packF.at(0)), b0);
         writeFile(mgr.modelPath(packF.at(1)), QByteArray(b1.size(), 'z')); // same size, wrong
         writeFile(mgr.modelPath(packF.at(2)), b2);
-        expect(mgr.isBundlePresent(packF), "corrupt bundle passes the size-only check");
         const BundleResult f = runBundle(mgr, packF);
         expect(f.finishedCount == 1 && f.alreadyCount == 0 && f.failedCount == 0,
                "corrupt cached file -> re-fetched, finished");

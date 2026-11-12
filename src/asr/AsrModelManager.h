@@ -52,10 +52,6 @@ public:
     // *error if non-null) when the file is missing, mis-sized, or mismatched.
     bool verify(const AsrModelTier& tier, QString* error = nullptr) const;
 
-    // Cheap check for a multi-file model: every file exists at its pinned size.
-    // Does not hash.
-    bool isBundlePresent(const QVector<AsrModelTier>& files) const;
-
     // Absolute folder holding a bundle's files (that of the first file).
     QString bundlePath(const QVector<AsrModelTier>& files) const;
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "asr/AsrCrashMarker.h"
+#include "asr/LivePreview.h"
 
 #include <QObject>
 #include <QPointer>
@@ -141,8 +142,10 @@ private:
     // The recognizer the preview uses: the stored choice, or the other one when
     // this computer cannot run the stored one.
     QString livePreviewRecognizer() const;
-    // Fetch (or verify the cached) default preview model when the preview wants
-    // it and Copy Assist is on; applyLivePreview() runs again once it is ready.
+    // Copy Assist is on with the sherpa preview, so its model is needed now.
+    bool previewModelWanted() const;
+    // Fetch (or verify the cached) default preview model when it is wanted;
+    // applyLivePreview() runs again once it is ready.
     void ensurePreviewModelIfWanted();
     void abandonEnable(const QString& reason);
     void requestEnable(); // defer local Whisper until async GPU discovery finishes
@@ -191,6 +194,9 @@ private:
     AsrModelManager* m_speakerModels = nullptr; // manager for the speaker-embedding model
     AsrModelManager* m_previewModels = nullptr; // manager for the live-preview model bundle
     QString m_previewModelDir; // verified this session; empty until then
+    // Held while the sherpa preview is on, so its loaded model survives engine
+    // rebuilds; dropped when the preview is off or uses another recognizer.
+    LivePreviewFactory m_sherpaPreviewFactory;
     AsrAudioTap* m_tap = nullptr;
     bool m_constructed = false; // true after the initial buildEngine (guards restore)
     bool m_useGpuDefaultIfAvailable = false; // cleared by any explicit tier choice
