@@ -27,7 +27,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/BandStackSettings.h` | 4 | universal — Per-radio band-stack memories (freq/mode/filter/AGC/NB-NR) — canonical radio state; only the XML store is client-side | unconverted |
 | `core/CallsignInfo.h` | 1 | universal — Callsign lookup result struct (name/QTH/grid, JSON cache form); radio-agnostic spot/logging data. | unconverted |
 | `core/CallsignLookupService.h` | 3 | universal — Orchestrates QRZ/cty.dat callsign lookups + cache; radio-agnostic spot/logging integration. | unconverted |
-| `core/CallsignUtils.h` | 1 | universal — Stateless callsign parsing/validation helpers; radio-agnostic. | unconverted |
+| `core/CallsignUtils.h` | 2 | universal — Stateless callsign parsing/validation helpers; radio-agnostic. | unconverted |
 | `core/CatPort.h` | 2 | ui-support — CAT server (TCP+PTY, rigctld/TS-2000/FlexCAT dialects) for external apps; desktop integration, needs a home | unconverted |
 | `core/ClientComp.h` | 13 | universal — Client-side TX dynamics DSP (compressor/limiter/drive/phase rotator + GR meters); radio-agnostic engine DSP. | unconverted |
 | `core/ClientDeEss.h` | 9 | universal — Client TX DSP de-esser (sidechain bandpass + dynamics, meters); radio-agnostic engine DSP chain stage | unconverted |
