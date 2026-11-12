@@ -1258,6 +1258,58 @@ int main(int argc, char** argv)
         check(!independent.cwKeyDown(), "an ended CW request cannot relatch its carrier");
     }
 
+    // #7212: audio queued after the unkey, under a context that still permits
+    // dispatch, must not make an idle frame hold the counter acquire() needs at
+    // zero. MOX is keyed by a separate coordinator, so `tx` sees only the audio.
+    {
+        TxTestAuthority keyer;
+        TxTestAuthority tx;
+        MetisClient idle;
+        MetisClientTestAccess::setStreaming(idle);
+        idle.enableTransmit(true);
+        idle.setMox(true, keyer.operation);
+        idle.setMox(false, keyer.operation);
+        const std::vector<std::complex<float>> late(
+            static_cast<std::size_t>(kTxSamplesPerPacket), std::complex<float>(0.25f, -0.25f));
+        idle.queueTxIq(late, tx.context);
+        check(idle.txQueueDepth() == late.size(), "late audio under a live context is queued");
+        bool wrote = false;
+        MetisClientTestAccess::writer(idle, [&](const auto& packet) -> qint64 {
+            wrote = !anyFrameKeyed(packet);
+            check(!tx.coordinator.hasInFlightDispatches(),
+                  "#7212: an idle frame with queued audio holds no audio dispatch during the write");
+            return packet.size();
+        });
+        MetisClientTestAccess::send(idle);
+        check(wrote, "#7212: the idle frame was written unkeyed");
+        check(idle.txQueueDepth() == 0, "#7212: audio queued while unkeyed is abandoned on the idle frame");
+        check(idle.txOverflowSamples() == 0, "#7212: that abandon is not counted as overflow");
+
+        // A microphone context has no operation, so the next over reuses it
+        // and only the abandon above keeps the stale block out of that over.
+        const auto mic = tx.coordinator.registerProducer(true);
+        const auto micContext = tx.coordinator.mediaContext(mic, tx.operation);
+        check(micContext.sameContext(tx.coordinator.mediaContext(mic, keyer.operation)),
+              "#7212: a microphone context is the same across overs");
+        idle.queueTxIq(late, micContext);
+        check(idle.txQueueDepth() == late.size(), "late microphone audio is queued");
+        MetisClientTestAccess::send(idle);
+        check(idle.txQueueDepth() == 0, "#7212: stale microphone audio is abandoned before the next key");
+
+        // Positive control: a keyed frame carrying queued IQ still holds it.
+        idle.setMox(true, keyer.operation);
+        pastThePrime(idle, tx.context);
+        idle.queueTxIq(late, tx.context);
+        bool held = false;
+        MetisClientTestAccess::writer(idle, [&](const auto& packet) -> qint64 {
+            held = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(idle);
+        check(held, "#7212 control: a keyed frame with queued IQ holds the audio dispatch during the write");
+        check(idle.txQueueDepth() == 0, "#7212 control: the keyed frame carried the queued block");
+    }
+
     {
         TxTestAuthority tx;
         MetisClient entered;

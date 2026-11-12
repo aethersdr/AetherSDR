@@ -1879,7 +1879,14 @@ void MetisClient::sendControlPacket()
     if (m_mox && !keyDispatch) {
         m_mox = false;
     }
-    if (!m_txIq.empty()) {
+    // Only a keyed frame carries queued IQ, so only it takes the audio dispatch:
+    // an idle frame must not hold the counter acquire() needs at zero (#7212).
+    // Audio still queued while unkeyed is stale (setMox(true) is posted ahead of
+    // an over's audio), and a microphone context outlives the over, so it is
+    // abandoned, uncounted, rather than left to open the next one.
+    if (!m_txIq.empty() && !(m_mox && m_txAllowed)) {
+        abandonTxIq();
+    } else if (!m_txIq.empty()) {
         audioDispatch = m_txIqContext.beginDispatch(TxCoordinator::monotonicMs());
         if (!audioDispatch) {
             abandonTxIq();
