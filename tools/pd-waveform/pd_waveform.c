@@ -43,6 +43,8 @@
 //   AETHER_PD_MIC_GAIN     mic gain (default 1.0)
 //   AETHER_PD_MAX_DELAY_MS longest loop delay to search (default 400)
 //   AETHER_PD_CORRECT      0 runs the waveform with the correction off (default 1)
+//   AETHER_PD_RAW          file: write the first 15 s of reference/feedback as
+//                          paired, before alignment (float32 tx_i tx_q rx_i rx_q)
 //   AETHER_PD_DUMP         file: write the first 10 s of aligned reference/feedback
 //                          pairs (float32 tx_i tx_q rx_i rx_q), for analysis
 //   AETHER_PD_TEST_TONES   "f1,f2" in Hz: while keyed, send an equal two-tone
@@ -455,6 +457,8 @@ typedef struct {
     double last_report;
     FILE* dump;                    // AETHER_PD_DUMP: aligned pairs, for analysis
     long dump_left;                // pairs still to write
+    FILE* raw;                     // AETHER_PD_RAW: pairs before alignment
+    long raw_left;
 } wf_t;
 
 static int api_send(wf_t* w, const char* fmt, ...)
@@ -722,6 +726,14 @@ static void calibrate(wf_t* w)
     while (w->ref.n >= BLOCK && w->fbk.n >= BLOCK) {
         fifo_pop(&w->ref, tx, BLOCK);
         fifo_pop(&w->fbk, rx, BLOCK);
+        if (w->raw && w->raw_left > 0) {
+            for (int k = 0; k < BLOCK && w->raw_left > 0; k++, w->raw_left--) {
+                float f[4] = { (float)tx[2 * k], (float)tx[2 * k + 1], (float)rx[2 * k], (float)rx[2 * k + 1] };
+                fwrite(f, sizeof f, 1, w->raw);
+            }
+            if (w->raw_left == 0)
+                fflush(w->raw);
+        }
         if (w->settle_left > 0) {
             w->settle_left -= BLOCK;
             continue;
@@ -941,6 +953,11 @@ static int wf_init(wf_t* w)
     }
     w->peak = env_d("AETHER_PD_PEAK", 0.7);
     w->gain = env_d("AETHER_PD_MIC_GAIN", 1.0);
+    const char* raw = getenv("AETHER_PD_RAW");
+    if (raw && *raw) {
+        w->raw = fopen(raw, "wb");
+        w->raw_left = 15L * RATE;
+    }
     const char* dump = getenv("AETHER_PD_DUMP");
     if (dump && *dump) {
         w->dump = fopen(dump, "wb");
