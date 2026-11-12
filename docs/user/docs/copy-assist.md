@@ -131,7 +131,7 @@ Copy Assist can show a quick first look at what is being said while the selected
 **Preview recognizer** picks what draws the gray text:
 
 - **Kroko streaming, English (sherpa-onnx)** is the default, on Windows, Linux and Apple-silicon Macs. It is English only. The first time you press **Enable** with the preview on, Copy Assist downloads its model (about 71 MB, checked against a pinned SHA-256) into the models folder; the status line shows the progress.
-- **Apple speech recognition** is available on macOS 26 and later. It follows the **Language** setting (**Auto** uses the Mac's system language), and its first use may download Apple's speech model for your language.
+- **Apple speech recognition** is available on macOS 26 and later. It follows the **Language** setting; **Auto** uses the language and region set on the Mac (System Settings → General → Language & Region), so there is no separate preview language to set. It understands English, Spanish, French, German, Italian, Portuguese, Chinese (Mandarin and Cantonese), Japanese and Korean, in their main regional variants. The first use of a language may download Apple's speech model for it; the status line says so while it does. For any other language the status line says it is not supported and no gray text appears; the colored transcript is unaffected.
 
 A recognizer your computer cannot run is shown dimmed, with the reason.
 
@@ -239,7 +239,7 @@ No recognizer can run on this computer: this build has no sherpa-onnx (Intel Mac
 ### The live preview shows nothing
 
 - On first use with Kroko, the status line shows the model downloading. If the download fails, it says why and turns the preview off; turn it on again to retry.
-- With Apple's recognizer, the status line reports a language it does not support. Pick a supported **Language**, or use **Auto**. Its first use may also download Apple's speech model.
+- With Apple's recognizer, the status line reports a language it does not support (see [Live preview](#live-preview) for the list). With **Auto**, that is the Mac's own language; pick a supported **Language** instead. Its first use of a language may also download Apple's speech model.
 - The preview only appears while Copy Assist is **Enabled** and audio is arriving.
 
 ### The live preview shows nonsense
