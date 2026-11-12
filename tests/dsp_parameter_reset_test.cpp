@@ -54,13 +54,13 @@ public:
     }
     static void license(RadioModel& radio, const QString& enabled)
     {
-        radio.onStatusReceived(QStringLiteral("license feature"), {
+        radio.handleStatusForTest(QStringLiteral("license feature"), {
             {QStringLiteral("name"), QStringLiteral("noise_reduction")},
             {QStringLiteral("enabled"), enabled}, {QStringLiteral("reason"), QStringLiteral("LICENSE_FILE")}});
     }
     static void status(RadioModel& radio, const QString& object, const QMap<QString, QString>& kvs)
     {
-        radio.onStatusReceived(object, kvs);
+        radio.handleStatusForTest(object, kvs);
     }
     static bool subscriptionActive(const RadioModel& radio)
     {

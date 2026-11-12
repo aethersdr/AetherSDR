@@ -10,6 +10,14 @@ The panadapter is the main display: the FFT spectrum on top and the scrolling wa
 
 *A panadapter on 20 m with its waterfall, the slice A VFO flag and the overlay menu down the left edge.*
 
+The **B** and **S** buttons at the bottom left zoom to the active band or band-plan segment. On a scope-capable Icom, the tuned frequency never changes, and what the buttons do depends on the scope mode:
+
+- **SCROLL-F, or Fixed chosen in AetherSDR:** the scope shows the allocation itself, centered at its exact width, wherever the window was. With the ARRL US plan, **S** on 14.050 MHz shows 14.025–14.070 MHz (45 kHz). Allocations wider than 1 MHz show a 1 MHz window inside them.
+- **Center:** the scope keeps its center and picks the smallest span that covers both allocation edges. With a center of 14.050 MHz, **S** selects 50 kHz for the same segment; at 14.069 MHz it widens to 100 kHz. Allocations wider than the widest span use that span.
+- **Fixed set on the radio (presets 1–3):** the buttons are dimmed, because the radio's preset owns the scope edges.
+
+A second press at the same zoom does nothing; Icom zoom is not a toggle. FlexRadio uses its own band and segment zoom modes. The buttons remain disabled when the connected radio does not declare either control.
+
 ## Using the panadapter
 
 ### Mouse controls
@@ -148,6 +156,7 @@ It re-uses the main panadapter's data, so it uses no extra radio panadapter or s
 - **Tools → Add Panadapter...** or the **+PAN** icon in the status bar opens a layout picker and adds a pan if the radio has room.
 - **Right-click → ↗ Pop out**, or the header's **⬈** button, moves a pan into its own window; **↩ Dock** puts it back.
 - Pan layouts, including floating pans, are restored when you reconnect.
+- On Flex radios, restored display settings come from the radio. The panadapter and its waterfall can return at different times. If another client takes ownership of a display, AetherSDR keeps the existing pane quiet and stops sending it display changes.
 - With the [Workspace Canvas](./workspace-canvas.md) on, **Import pop-outs onto canvas** places floating pans on the canvas.
 
 Opening a pan waits for the connected backend to publish its actual display.

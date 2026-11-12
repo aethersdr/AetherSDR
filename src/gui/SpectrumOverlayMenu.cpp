@@ -507,9 +507,8 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     m_wheelGuard->guardTree(
         m_memoryPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
 
-    // The panel can be opened before the panadapter reaches its restored
-    // height. Re-clamp it whenever that host subsequently resizes so the
-    // QScrollArea retains a real scroll range instead of extending off-screen.
+    // An open Display or Memory panel must follow the panadapter height
+    // as it resizes so its last row stays reachable by scrolling.
     if (parentWidget()) {
         parentWidget()->installEventFilter(this);
     }
@@ -1316,7 +1315,7 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
             append(token);
         }
         if (m_radioModel) {
-            for (const QString& token : m_radioModel->knownAntennaTokens()) {
+            for (const QString& token : m_radioModel->rxAntennaMenuTokens()) {
                 append(token);
             }
         }
@@ -1573,19 +1572,30 @@ void SpectrumOverlayMenu::toggleMemoryPanel()
     hideAllSubPanels();
     if (!wasVisible && m_memoryPanel) {
         m_memoryPanelVisible = true;
-        const int panelH = m_memoryPanel->sizeHint().height();
-        int panelY = y();
-        if (auto* parent = parentWidget())
-            panelY = std::clamp(panelY, m_topLimit,
-                                qMax(m_topLimit, parent->height() - panelH));
-        else
-            panelY = std::max(m_topLimit, panelY);
-        m_memoryPanel->move(x() + width(), panelY);
+        layoutMemoryPanel();
         m_memoryPanel->raise();
         m_memoryPanel->show();
         m_menuBtns[kBtnMemoryBrowse]->setStyleSheet(kMenuBtnActive);
         m_memoryPanel->focusClosestToFrequency(m_slice ? m_slice->frequency() : -1.0);
     }
+}
+
+void SpectrumOverlayMenu::layoutMemoryPanel()
+{
+    if (!m_memoryPanel) {
+        return;
+    }
+
+    constexpr int kPreferredHeight = 460;
+    const QWidget* host = m_memoryPanel->parentWidget();
+    const int hostHeight = host ? host->height() : m_topLimit + kPreferredHeight;
+    const int panelHeight = std::min(kPreferredHeight, std::max(0, hostHeight - m_topLimit));
+    // Pin only the current available height so layout minimum hints cannot
+    // expand the table beyond the host and hide its scrollbar.
+    m_memoryPanel->setFixedHeight(panelHeight);
+    const int panelY = std::clamp(y(), m_topLimit,
+                                 std::max(m_topLimit, hostHeight - panelHeight));
+    m_memoryPanel->move(x() + width(), panelY);
 }
 
 // ── Sub-panel toggle helpers ──────────────────────────────────────────────────
@@ -3934,9 +3944,13 @@ void SpectrumOverlayMenu::updateActiveBandHighlight()
 
 bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
 {
-    if (obj == parentWidget() && event->type() == QEvent::Resize
-        && m_displayPanelVisible) {
-        layoutDisplayPanel();
+    if (obj == parentWidget() && event->type() == QEvent::Resize) {
+        if (m_displayPanelVisible) {
+            layoutDisplayPanel();
+        }
+        if (m_memoryPanelVisible) {
+            layoutMemoryPanel();
+        }
     }
     return QWidget::eventFilter(obj, event);
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IndependentTxControl.h"
+#include "CwControlRequest.h"
 
 #include "core/RadioSettingsIdentity.h"
 #include "core/RadioSettingsScope.h"
@@ -22,7 +23,10 @@
 #include <QVariant>
 #include <QVariantMap>
 
+#include "core/backends/DisplayObservation.h"
 #include "core/backends/AmpDelta.h"
+#include "core/backends/AudioControlRequest.h"
+#include "core/backends/DaxTxStream.h"
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
 #include "core/backends/MeterDef.h"
@@ -63,6 +67,7 @@ struct RadioConnectRequest {
     QString host;
     quint16 port = 0;
     QString serial;         // when a family identifies radios by serial
+    QString version;        // RadioInfo::version from discovery; empty when not reported
     QVariantMap params;     // family-specific extras (namespaced by the backend)
     RadioSerialIdentity serialIdentity;
     // Local IPv4 address that reached the radio; null lets the OS choose.
@@ -115,6 +120,8 @@ struct MemoryRecallDetails {
 //     equivalents, which RadioModel drives directly (including
 //     BlockingQueuedConnection) until #5262 M4 / #5554 §2.6. No new call site may
 //     join them, and every handler bound to them is generation-guarded per rule 5.
+//     Their statusIngress() is not a worker: it lives on this thread and is the
+//     one way their wire lines reach the model (docs/agents/backends.md).
 //  4. SEAM PAYLOADS ARE DECLARED AND REGISTERED IN ONE PLACE. Every type crossing
 //     the seam (*Delta structs, MeterDef, LinkStats) has Q_DECLARE_METATYPE in
 //     its header AND qRegisterMetaType in RadioModel's constructor. Qt 6 queued
@@ -144,6 +151,10 @@ class IRadioBackend : public QObject {
     Q_OBJECT
 
 public:
+    virtual ReceiveDispatch requestAudioStream(const AudioStreamRequest&, const AudioStreamCompletion& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestGraphicEq(const GraphicEqRequest&)
+    { return ReceiveDispatch::Unsupported; }
     // Desktop control routing only: these do not extend the daemon registry.
     virtual ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request)
     {
@@ -157,6 +168,11 @@ public:
     virtual ReceiveDispatch requestTransmitControl(const TransmitControlRequest&,
                                                     TunePowerContext = TunePowerContext::Deferred)
     { return ReceiveDispatch::Unsupported; }
+    // Requests selection of our audio stream, never a global source or PTT edit.
+    // A dispatched command's acceptance does not confirm the observed TX bit.
+    virtual ReceiveDispatch requestDaxTxOwnership(const DaxTxOwnershipRequest&,
+                                                 DaxTxOwnershipCompletion = {})
+    { return ReceiveDispatch::Unsupported; }
     // Radio-owned identity; client-owned nicknames retain their local store.
     using NicknameCompletion = std::function<void(bool accepted)>;
     virtual ReceiveDispatch requestRadioNickname(const QString&, NicknameCompletion = {})
@@ -166,6 +182,9 @@ public:
     // hear the radio's reply leaves it to RadioModel, which reports it as not
     // confirmed rather than assume the radio agreed.
     virtual bool answersTransmitControl() const { return false; }
+    virtual ReceiveDispatch requestSessionControl(const SessionControlRequest&,
+        const SessionCommandGuard&, const SessionControlCompletion& = {})
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestRadioSetup(const RadioSetupRequest& request,
                                               const RadioSetupCompletion& = {},
                                               const RadioControlFence& current = {})
@@ -250,6 +269,12 @@ public:
         }
         return ReceiveDispatch::Unsupported;
     }
+    virtual ReceiveDispatch requestWaveform(const WaveformRequest&,
+        const RadioControlCompletion&, const FileTransferGuard&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestFileTransfer(const FileTransferRequest&,
+        const FileTransferCompletion&, const FileTransferGuard&, const RadioControlFence&)
+    { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestProfile(const ProfileRequest&,
                                            const RadioControlCompletion& = {},
                                            const RadioControlFence& = {})
@@ -755,8 +780,8 @@ public:
     // setKeying is the transmitter/PTT envelope, while this is the carrier
     // inside that envelope. A host-modulating backend turns the element into
     // shaped IQ and may use breakIn to raise/drop PTT around it; a radio-side
-    // keyer translates it to its own key-line protocol. Flex keeps using its
-    // timestamped NetCW path above this seam, so the default is a no-op.
+    // keyer translates it to its own key-line protocol. The default is a no-op;
+    // requestCwControl reports whether the backend implements carrier edges.
     virtual void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(down);
@@ -765,6 +790,25 @@ public:
         Q_UNUSED(operation);
     Q_UNUSED(completion);
     }
+
+    // Native PTT adapts to the existing envelope hook. Carrier support must be
+    // explicit; a no-op setCwKeying implementation is not an accepted edge.
+    virtual ReceiveDispatch requestCwControl(const CwControlRequest& request,
+        const TxCoordinator::Command& command)
+    {
+        if (request.kind != CwControlRequest::Kind::PttEnvelope
+            || !cwEdgeAdmitted(request, command, capabilities().canTransmit)) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setKeying(request.down, command.operation, command.completion);
+        return ReceiveDispatch::Dispatched;
+    }
+    virtual void prepareCwTransport(quint32 clientHandle, const RadioControlFence& current)
+    { Q_UNUSED(clientHandle); Q_UNUSED(current); }
+    virtual void retireCwTransport() {}
+    virtual ReceiveDispatch requestLocalPtt(const RadioControlCompletion& completion,
+                                            const RadioControlFence& current)
+    { Q_UNUSED(completion); Q_UNUSED(current); return ReceiveDispatch::Unsupported; }
 
     // Let receive audio through WHILE TRANSMITTING (normally muted on TX). For
     // diagnostics: demodulating our own transmission checks the sideband convention
@@ -1070,6 +1114,36 @@ public:
         // displayed under its own name.
         QMap<QString, QString> labels;
         [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
+
+        // Keys a DIAGNOSTIC reads back, named here rather than spelled twice
+        // (#7063). Most rows in a snapshot are for a human to read, so their
+        // keys live at the producer; these two are a contract between a backend
+        // and `radiocert`, and a snapshot is a QVariantMap, so a typo on either
+        // side is a silent lookup miss that no test of the consumer can see.
+        // One definition makes the join unspellable-wrong instead.
+        //
+        // kSwrGateCounts: the forward-count threshold below which the backend
+        // withholds a derived SWR, so a consumer can report "suppressed" rather
+        // than "never fed".
+        //
+        // kSwrGateClearsWhileKeyed: how many of the backend's own publish
+        // windows in THIS over cleared that threshold, judged on the value the
+        // backend actually applies the gate to. This is the key a consumer
+        // should reason with, because it is exact in both directions — 0 means
+        // the gate was never cleared and an absent ratio is explained, above 0
+        // means it was cleared and an absent ratio is a defect.
+        //
+        // kForwardWindowPeakRaw: the maximum forward count over the backend's
+        // own publish window, for a human reading how far below a gate a run
+        // sat. NOT the quantity a gate is applied to, so a consumer must not
+        // conclude "the gate was cleared" from it; that is what the clears
+        // count is for.
+        //
+        // Publish the gate with at least one of the other two, never alone; a
+        // known gate beside an absent reading names no state.
+        static constexpr char kSwrGateCounts[] = "forwardPowerSwrGateCounts";
+        static constexpr char kSwrGateClearsWhileKeyed[] = "forwardPowerSwrGateClears";
+        static constexpr char kForwardWindowPeakRaw[] = "forwardPowerWindowPeakRaw";
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }
 
@@ -1131,6 +1205,11 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    // A Flex-shaped panadapter/waterfall report: identity, ownership, pairing
+    // and present-only values. Delivered on the owner thread behind the
+    // backend's status fence (Flex: FlexStatusIngress).
+    void displayObserved(const AetherSDR::DisplayObservation& observation);
+    void audioStreamChanged(const AetherSDR::AudioStreamDelta& delta);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose
     // answerTicket was nonzero: applied when it accepted the setting. Emitted
@@ -1216,6 +1295,7 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+    void daxTxStreamChanged(const AetherSDR::DaxTxStreamDelta& delta);
     // An explicit radio readback confirmed the keyed state. This is distinct
     // from transmitChanged because optimistic state may already equal the
     // answer and therefore produce no delta. Backends without a separate
@@ -1365,6 +1445,9 @@ signals:
     // picked on the front panel), so the UI lights none.
     void panScopeModesChanged(const QString& panId, const QStringList& labels);
     void panScopeModeChanged(const QString& panId, int index);
+    // Required of a backend declaring PanZoomModes::Control::NativeScopeSpan:
+    // until it is published the pan reads Unknown and B/S stay dimmed.
+    void panZoomPlacementChanged(const QString& panId, AetherSDR::PanZoomPlacement placement);
 
     // Panadapter antenna selection (universal). Two signals because the wire may
     // report the selected RX antenna and the available list independently.

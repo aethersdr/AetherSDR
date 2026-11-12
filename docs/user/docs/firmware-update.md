@@ -63,13 +63,18 @@ Delete firmware files staged by earlier AetherSDR versions and select the
 original installer again. Those cached **`.ssdr`** files can contain firmware
 for a different family despite their filename; renaming them cannot fix it.
 
+Firmware preparation and upload stay with the radio connection selected when
+you clicked **Install** or **Open Installer...**. If that connection ends during
+preparation, start again after reconnecting. Another radio file transfer must
+finish before firmware upload can start.
+
 ### The outcome
 
 The upload ends in one of three outcomes:
 
 | Outcome | What it means | What to do |
 |---------|---------------|------------|
-| **Succeeded** | The radio confirmed the update. | Wait for the radio to reboot, then reconnect. |
+| **Succeeded** | The radio accepted the firmware image and reported that it is rebooting. | Wait for the reboot, reconnect, and check the installed firmware version. |
 | **Unconfirmed** | The bytes were sent, but the radio did not confirm the installation. It is probably rebooting to apply the image. | Reconnect and check the firmware version. A retry is blocked until you reconnect. |
 | **Failed** | The upload did not complete, or the radio rejected it. | Read the status line, then try again. |
 
@@ -140,7 +145,7 @@ A retry is blocked until you reconnect, because the radio is probably rebooting 
 The upload did not complete, or the radio rejected it.
 
 1. Read the status line for the reason.
-2. Try the upload again.
+2. If the status asks you to reconnect, reconnect and check the firmware version before retrying. An unanswered update request can remain pending even when the upload did not complete.
 
 ## See also
 

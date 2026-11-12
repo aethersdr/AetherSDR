@@ -48,6 +48,30 @@ Family-specific operations use a reviewed namespace such as
 `extension.hl2.frequencyCalibration.get`; they are still individually typed
 registry entries.
 
+### 2.1 Local endpoint location
+
+`--socket <name>` (default `aetherd-v1`; `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`) is
+a logical name, not a path. Let `<d>` be the first 24 hex digits of SHA-256
+over the name's UTF-8 bytes. The endpoint is:
+
+| Platform | Directory (mode 0700, owned by the user) | Endpoint |
+|---|---|---|
+| Linux / other Unix | `$XDG_RUNTIME_DIR/aethersdr`; when that is unset or unusable, Qt falls back to `$TMPDIR/runtime-<user>/aethersdr` | `control-<d>.sock` |
+| macOS | `~/Library/Application Support/aethersdr` (Qt `RuntimeLocation`; the home is `CFFIXED_USER_HOME` when set; `TMPDIR` and `XDG_RUNTIME_DIR` do not move it) | `control-<d>.sock` |
+| Windows | `AppLocalDataLocation/aethersdr` holds the lock file only | named pipe `aethersdr-<d>` |
+
+A `control-<d>.lock` beside the endpoint is held while the daemon serves it.
+A client in another language computes the same path; aetherd's own clients use
+`LocalControlServer::clientEndpoint()`.
+
+**Path length.** A Unix socket path must fit `sockaddr_un.sun_path`: at most
+103 bytes on macOS and the BSDs and 106 on Linux (the array less its NUL, and
+on Linux one byte more that Qt reserves for the abstract namespace). The fixed
+tail `/aethersdr/control-<d>.sock` is 48 bytes, so the runtime directory may be
+at most 55 bytes on macOS and the BSDs and 58 on Linux. A longer path makes
+`aetherd` exit at startup naming the path, its length and the limit; point
+`XDG_RUNTIME_DIR` (Linux) or the home (macOS) at a shorter directory.
+
 ## 3. JSON envelope
 
 Text messages are UTF-8 JSON objects.  Local transport uses one JSON object per
@@ -185,6 +209,8 @@ V1 begins with the smallest useful canonical set:
 - `meter` — definitions and bounded latest values;
 - `transmitState` — read-only interlock, PTT/VOX/MOX/tune state and inhibit
   reason.  No v1 method can mutate this resource during Stage 3.
+- `frontEndOverload` — the receive converter's overload level and the
+  automatic RF-gain loop's hold, only for a backend that declares it.
 
 Every field is documented in a method/resource catalogue and covered by a
 schema test before it is exported.  Credentials, backend pointers, raw vendor
@@ -234,10 +260,10 @@ The registry exposes metadata for each method:
 Initial non-TX methods are `capabilities.get`, `resource.get`,
 `resource.subscribe`, `resource.unsubscribe`, `radio.connect`,
 `radio.disconnect`, `slice.setFrequency`, `slice.setMode`, `slice.setFilter`,
-`slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`, and
-`panadapter.setBandwidth`.  Connect requests use typed family-neutral fields;
-backend-specific connection data lives in a namespaced validated object and
-never includes a persistent plaintext credential.
+`slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`,
+`panadapter.setBandwidth`, and `radioSession.setCwPitch`.  Connect requests use
+typed family-neutral fields; backend-specific connection data lives in a
+namespaced validated object and never includes a persistent plaintext credential.
 
 Advertised capabilities are the intersection of protocol support, build-time
 features, authenticated grants, active backend capabilities, and current
