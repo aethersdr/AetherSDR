@@ -3,7 +3,9 @@
 // publishes a list (TX: on a radio that can transmit), set through
 // SliceModel::setRxAntenna()/setTxAntenna() like the RX applet's menus, the TX
 // antenna refused while transmitting, and every change, lists included, sent
-// to enabled clients only. Two slices. Socket-free; nothing keys.
+// to enabled clients only; an RX set asks first for a KiwiSDR antenna to be
+// released, and a keyed refusal warns once per keyed period. Two slices.
+// Socket-free; nothing keys.
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -300,6 +302,19 @@ void serverBehaviour()
     TciAntennaExtensionTest::attach(server, a.client, model);
     TciAntennaExtensionTest::attach(server, b.client, model);
     TciAntennaExtensionTest::attach(server, c.client, model);
+    // What MainWindow's KiwiSDR clear would see: the slice, and whether the
+    // set had already reached the slice or the backend when it ran.
+    struct KiwiRelease {
+        int sliceId;
+        QString rxAntenna;
+        int rxRequests;
+    };
+    QList<KiwiRelease> kiwiReleases;
+    QObject::connect(&server, &TciServer::rxAntennaSetByTci, [&](int sliceId) {
+        SliceModel* slice = model.slice(sliceId);
+        kiwiReleases.append({sliceId, slice ? slice->rxAntenna() : QString(),
+                             static_cast<int>(backend->rxRequests.size())});
+    });
     settle(600);  // past wireSlice()'s 400 ms seeds
     a.take();
     b.take();
@@ -380,6 +395,7 @@ void serverBehaviour()
               && backend->txRequests.isEmpty(),
           "an unknown trx, a malformed line, an unlisted name or the antenna in use: no reply, "
           "nothing written");
+    check(kiwiReleases.isEmpty(), "and no KiwiSDR release for any of them");
 
     // RX set: through SliceModel to the backend, then the notice to enabled clients.
     a.send("aethersdr_rx_antenna:0,rx_a;");
@@ -387,10 +403,22 @@ void serverBehaviour()
     check(s0->rxAntenna() == QStringLiteral("RX_A") && backend->rxRequests.size() == 1
               && backend->rxRequests.first() == qMakePair(0, QStringLiteral("RX_A")),
           "an RX set reaches the backend as the menu's receive-antenna request, listed spelling");
+    check(kiwiReleases.size() == 1 && kiwiReleases.first().sliceId == 0
+              && kiwiReleases.first().rxAntenna == QStringLiteral("ANT1")
+              && kiwiReleases.first().rxRequests == 0,
+          "it first asks for the slice's KiwiSDR antenna to be released, before the set");
     got = a.takeExtension();
     check(got == QStringList({QStringLiteral("aethersdr_rx_antenna:0,RX_A;")})
               && c.takeExtension() == got && extensionLines(b.take()).isEmpty(),
           "it is notified once to each enabled client, not to the plain one");
+    // The port in use: a KiwiSDR antenna leaves rxAntenna() on the real port,
+    // so naming it must still release the Kiwi, and write nothing else.
+    a.send("aethersdr_rx_antenna:0,RX_A;");
+    settle();
+    check(kiwiReleases.size() == 2 && kiwiReleases.last().sliceId == 0
+              && backend->rxRequests.size() == 1 && a.takeExtension().isEmpty(),
+          "an RX set naming the antenna in use still releases a KiwiSDR antenna, nothing else");
+    c.take();
 
     // The RX antenna may change while transmitting, as in the GUI.
     model.transmitModel().setTransmitting(true);
@@ -409,6 +437,13 @@ void serverBehaviour()
               && a.take() == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT1;")})
               && c.take().isEmpty() && warnings == 1,
           "a TX set while transmitting is refused, answered to the sender, and noticed");
+    a.send("aethersdr_tx_antenna:0,ANT2;aethersdr_tx_antenna:0,ANT2;");
+    settle();
+    check(backend->txRequests.isEmpty()
+              && a.take() == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT1;"),
+                                          QStringLiteral("aethersdr_tx_antenna:0,ANT1;")})
+              && c.take().isEmpty() && warnings == 1,
+          "repeated refusals in the same keyed period are each answered, and noticed once");
     model.transmitModel().setTransmitting(false);
     TransmitDelta tune;
     tune.tune = true;
@@ -418,7 +453,7 @@ void serverBehaviour()
     check(model.transmitModel().isTuning() && backend->txRequests.isEmpty()
               && a.takeExtension() == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT1;")})
               && warnings == 2,
-          "and while tuning");
+          "and while tuning: unkeying re-arms the notice");
     tune.tune = false;
     model.transmitModel().applyChanges(tune);
 
@@ -469,6 +504,7 @@ void serverBehaviour()
     // A plain or disabled client's command is dropped.
     const int rxBefore = backend->rxRequests.size();
     const int txBefore = backend->txRequests.size();
+    const int releasesBefore = kiwiReleases.size();
     b.send("aethersdr_rx_antenna:0,ANT1;aethersdr_tx_antenna:0,ANT2;aethersdr_rx_antennas:0;");
     c.send("aethersdr_ext_enable:false;");
     c.send("aethersdr_rx_antenna:0,ANT1;aethersdr_tx_antenna:0,ANT2;aethersdr_rx_antennas:0;");
@@ -476,6 +512,7 @@ void serverBehaviour()
     check(backend->rxRequests.size() == rxBefore && backend->txRequests.size() == txBefore
               && a.takeExtension().isEmpty() && b.take().isEmpty() && c.take().isEmpty(),
           "a plain or disabled client's command is dropped and writes nothing");
+    check(kiwiReleases.size() == releasesBefore, "and releases no KiwiSDR antenna");
     s1->setRxAntenna(QStringLiteral("ANT2"));
     settle();
     check(a.takeExtension() == QStringList({QStringLiteral("aethersdr_rx_antenna:1,ANT2;")})

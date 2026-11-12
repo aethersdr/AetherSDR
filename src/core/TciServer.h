@@ -208,6 +208,10 @@ signals:
     // master volume slider — m_audio->setRxVolume() (or lineout when PC
     // audio is off) plus persistence to AppSettings.
     void masterVolumeRequested(int pct);
+    // An `aethersdr_rx_antenna` set names a listed port for this slice, even
+    // the one in use: emitted before the set, as the RX antenna menus emit
+    // flexRxAntennaSelected, so MainWindow releases a KiwiSDR virtual antenna.
+    void rxAntennaSetByTci(int sliceId);
 
 private slots:
     void onClientOpened(std::shared_ptr<TciClientLifetime> lifetime, QHostAddress address, quint16 endpointPort);
@@ -261,8 +265,9 @@ private:
     QStringList antennaWireList(bool tx, const SliceModel* slice) const;
     QStringList antennaStateLines(bool tx) const;
     QString antennaLine(AntennaLine kind, int trx) const;
-    // Transmitting, tuning, or a transmit operation still held: the sources
-    // ReceiveControlGuard::checkTransmit() reads.
+    // Transmitting, tuning, or a transmit operation still held. Unlike
+    // ReceiveControlGuard::checkTransmit() it has no radio-confirmed idle
+    // term: in the HL2 transmit tail the backend refuses (requestTxRoute).
     bool extensionKeyed() const;
     // A slice's list moved: a gate that flips re-sends the whole set, else
     // the one line is queued.
@@ -539,6 +544,8 @@ private:
     QTimer*           m_antennaRateTimer{nullptr};
     QSet<int>         m_antennaPending[4];
     bool              m_antennaSendPosted{false};
+    // A refused keyed TX-antenna set warns once per keyed period; cleared on unkey.
+    bool              m_txAntennaRefusalWarned{false};
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};

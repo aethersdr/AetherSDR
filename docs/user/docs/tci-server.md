@@ -376,10 +376,14 @@ aethersdr_tx_antenna:0,RF1;       # set
   line is sent again.
 - The receive antenna may change while transmitting. The transmit antenna may
   not: while the radio transmits or tunes, a set is answered with the antenna in
-  use, to the sender only, and AetherSDR shows the reason in its status bar.
-  This is stricter than the RX applet on a Flex. On a Hermes-Lite 2, `RF1` turns
+  use, to the sender only, and AetherSDR shows the reason in its status bar
+  once per transmission. On a Hermes-Lite 2, in the short tail after it stops
+  transmitting, the refusal comes from its backend instead, and the old antenna
+  is sent to every client that enabled the set. This is stricter than the RX applet on a Flex. On a Hermes-Lite 2, `RF1` turns
   the PA off and has its own drive, which the `drive:` line reports.
 - KiwiSDR receivers that the RX applet lists as antennas are not in the list.
+  A receive-antenna set releases a KiwiSDR receiver assigned to that receiver,
+  as choosing a port in the RX applet does, even when it names the port in use.
 
 ## Known issues
 

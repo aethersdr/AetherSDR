@@ -3924,6 +3924,17 @@ void TciServer::registerAntennaGroups()
         connect(m_model, &RadioModel::sliceRemoved, this, [this](int) {
             announceExtensionSet();
         });
+        // Unkey ends the keyed period: the next refused TX set warns again.
+        const auto unkeyed = [this] {
+            if (!extensionKeyed()) {
+                m_txAntennaRefusalWarned = false;
+            }
+        };
+        TransmitModel* txModel = &m_model->transmitModel();
+        connect(txModel, &TransmitModel::transmittingChanged, this, unkeyed);
+        connect(txModel, &TransmitModel::moxChanged, this, unkeyed);
+        connect(txModel, &TransmitModel::tuneChanged, this, unkeyed);
+        connect(m_model, &RadioModel::radioTransmittingChanged, this, unkeyed);
     }
 }
 
@@ -4003,19 +4014,33 @@ TciExtensionSet::Result TciServer::handleAntenna(bool tx, const QString& name,
     }
     const QString wanted = TciAntennaExtension::listedName(wire, request->name);
     const QString current = (tx ? slice->txAntenna() : slice->rxAntenna()).trimmed();
-    if (wanted.isEmpty() || wanted == current || m_model->isSlotForeign(slice->sliceId())) {
+    if (wanted.isEmpty() || m_model->isSlotForeign(slice->sliceId())) {
+        return {};
+    }
+    if (!tx) {
+        // As the RX menus do before setRxAntenna(), and for the port in use
+        // too: a KiwiSDR virtual antenna leaves rxAntenna() on the real port.
+        emit rxAntennaSetByTci(slice->sliceId());
+    }
+    if (wanted == current) {
         return {};
     }
     if (tx && extensionKeyed()) {
         // Refused here, before any backend sees it; the HL2 would refuse again
-        // (Hl2Backend::requestTxRoute). The operator gets the reason, as from
-        // that refusal, and the client the antenna still in use.
-        const QString why = QStringLiteral("TCI: the transmit antenna cannot change while "
-                                           "transmitting; it stays %1.").arg(current);
-        qCWarning(lcCat).noquote() << why;
-        emit m_model->configurationWarning(why);
+        // (Hl2Backend::requestTxRoute). The operator gets the reason once per
+        // keyed period, the client the antenna still in use every time.
+        if (!m_txAntennaRefusalWarned) {
+            m_txAntennaRefusalWarned = true;
+            const QString why = QStringLiteral("TCI: the transmit antenna cannot change while "
+                                               "transmitting; it stays %1.").arg(current);
+            qCWarning(lcCat).noquote() << why;
+            emit m_model->configurationWarning(why);
+        }
         result.reply = antennaLine(selection, request->trx);
         return result;
+    }
+    if (tx) {
+        m_txAntennaRefusalWarned = false;
     }
     if (tx) {
         slice->setTxAntenna(wanted);
