@@ -575,7 +575,7 @@ void TgxlConnection::adjustRelay(int relay, int direction)
     if (!m_connected) return;
     if (relay < 0 || relay > 2) return;
     int move = (direction > 0) ? 1 : -1;
-    sendCommand(QString("tune relay=%1 move=%2").arg(relay + 1).arg(move));
+    sendCommand(QString("tune relay=%1 move=%2").arg(relay).arg(move));
 }
 
 void TgxlConnection::requestAutotune()

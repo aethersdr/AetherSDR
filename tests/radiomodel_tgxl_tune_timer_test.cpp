@@ -11,11 +11,25 @@
 #include "models/TunerModel.h"
 #include "models/TransmitModel.h"
 #include "core/backends/TunerDelta.h"
+#include "core/TgxlConnection.h"
 
 #include <QCoreApplication>
+#include <QStringList>
 #include <QTest>
 
 #include <cstdio>
+
+namespace AetherSDR {
+struct PeripheralConnectionTestAccess {
+    static void makeReady(TgxlConnection& connection, QStringList& lines)
+    {
+        connection.m_connected = true;
+        connection.m_commandWriter = [&lines](const QByteArray& line) {
+            lines.append(QString::fromUtf8(line));
+        };
+    }
+};
+}
 
 using namespace AetherSDR;
 
@@ -87,6 +101,26 @@ int main(int argc, char** argv)
         m.setBackendForTest({}, QStringLiteral("flex"));
         m.transmitModel().setTransmitting(true);
         check(m.isOperatorTransmitting(), "backend replacement clears the tune arm window");
+        m.transmitModel().setTransmitting(false);
+    }
+
+    for (bool operate : {false, true}) {
+        QStringList wire;
+        TgxlConnection direct;
+        PeripheralConnectionTestAccess::makeReady(direct, wire);
+        RadioModel m;
+        m.tunerModel().setDirectConnection(&direct);
+        check(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                  Q_ARG(QString, QStringLiteral("S0|state state=%1 tuning=0").arg(operate ? 1 : 0))),
+              "direct tuner status is injected without a socket peer");
+        check(m.tunerModel().handle().isEmpty() && m.tunerModel().hasDirectConnection(),
+              "direct tuner has no FlexRadio relay");
+        m.tunerModel().autoTune();
+        check(wire == QStringList{QStringLiteral("C1|autotune\n")},
+              "direct autotune dispatch is unchanged");
+        m.transmitModel().setTransmitting(true);
+        check(m.isOperatorTransmitting() == !operate,
+              "direct standby leaves operator PTT alone; operate arms a provisional tune");
         m.transmitModel().setTransmitting(false);
     }
 

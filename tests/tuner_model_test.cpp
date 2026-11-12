@@ -282,7 +282,7 @@ int main(int argc, char** argv)
         CHECK(t.isOperate() && t.isBypass()); // existing relayed optimistic state
     }
 
-    // UI relay indices are zero-based; the TGXL wire protocol uses 1/2/3.
+    // Preserve the zero-based relay numbering captured in #469.
     {
         QStringList wire;
         TgxlConnection direct;
@@ -296,10 +296,10 @@ int main(int argc, char** argv)
         t.adjustRelay(1, 1);
         t.adjustRelay(2, 1);
         t.adjustRelay(0, -1);
-        CHECK(wire == QStringList({QStringLiteral("C1|tune relay=1 move=1\n"),
-                                   QStringLiteral("C2|tune relay=2 move=1\n"),
-                                   QStringLiteral("C3|tune relay=3 move=1\n"),
-                                   QStringLiteral("C4|tune relay=1 move=-1\n")}));
+        CHECK(wire == QStringList({QStringLiteral("C1|tune relay=0 move=1\n"),
+                                   QStringLiteral("C2|tune relay=1 move=1\n"),
+                                   QStringLiteral("C3|tune relay=2 move=1\n"),
+                                   QStringLiteral("C4|tune relay=0 move=-1\n")}));
         CHECK(st.count() == 0);
     }
 

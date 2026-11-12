@@ -53,7 +53,7 @@ public:
     void setAuthCodeForAttempt(quint64 attempt, const QString& code,
                                bool credentialStoreUnavailable = false);
 
-    // UI indices: 0=C1, 1=L, 2=C2; wire indices: 1/2/3. Direction +1 or -1.
+    // Relay 0=C1, 1=L, 2=C2 (#469 capture). Direction +1 or -1.
     void adjustRelay(int relay, int direction);
 
     // Native autotune over the direct port-9010 channel. The TGXL drives

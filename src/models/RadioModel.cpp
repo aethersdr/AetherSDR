@@ -2951,11 +2951,11 @@ RadioModel::RadioModel(QObject* parent)
     // Direct port-9010 autotune bypasses autotuneRequested; arm the same window
     // so the radio's TRANSMITTING edge can't beat the tuner's tuning=1.
     connect(&m_tunerModel, &TunerModel::directAutotuneStarted, this, [this]() {
-        // Standby is assumed to refuse the tune; do not arm for it.
-        // OPERATE is only known from relayed status, so a direct-only (manual
-        // IP) tuner has no handle and is not gated.
-        if (!m_tunerModel.handle().isEmpty() && !m_tunerModel.isOperate())
+        // Standby is assumed to refuse the tune on either transport.
+        if ((m_tunerModel.hasDirectConnection() || !m_tunerModel.handle().isEmpty())
+            && !m_tunerModel.isOperate()) {
             return;
+        }
         m_tgxlTune.arm(txMonotonicMs());
     });
     // A TGXL tune latches the cycle as a tune carrier (tuning=1 may land after

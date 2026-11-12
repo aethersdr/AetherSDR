@@ -32,7 +32,7 @@ struct TunerPortInfo {
 //   tgxl set handle=<H> mode=<0|1> / bypass=<0|1>; tgxl autotune handle=<H>
 // A direct connection (port 9010) carries state and operate/bypass commands,
 // and adds Pi-network relay stepping:
-//   tune relay=<1|2|3> move=<+1|-1>   (C1/L/C2)
+//   tune relay=<0|1|2> move=<+1|-1>   (C1/L/C2)
 class TunerModel : public QObject {
     Q_OBJECT
 

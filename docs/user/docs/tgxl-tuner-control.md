@@ -79,6 +79,10 @@ state and cycles it OPERATE → BYPASS → STANDBY, like the applet's
 **OPERATE** key. Click it, or Tab to it and press Return or Enter. Screen
 readers announce it as a button with its state.
 
+The status-bar TX timer counts operator transmissions, not TGXL tune carriers.
+When the connected tuner reports STANDBY, a tune request does not suppress
+the timer for the next operator transmission, including with a direct-only tuner.
+
 ### Popped out or on the canvas
 
 Popped out into its own window, or placed on the [Workspace Canvas](./workspace-canvas.md), the
@@ -128,7 +132,7 @@ The TGXL uses a text protocol in the same format as the SmartSDR API:
 | TGXL → Client (push) | `S0\|state key=val ...\n` |
 
 Authorization: `auth <code>`. Manual relay command:
-`tune relay=<1\|2\|3> move=<+1\|-1>` (C1 / L / C2).
+`tune relay=<0\|1\|2> move=<+1\|-1>` (C1 / L / C2).
 Direct mode commands: `operate set=<0|1>` (standby / operate) and
 `bypass set=<0|1>` (in line / bypass).
 
@@ -169,6 +173,7 @@ The radio is not reporting the tuner, or AetherSDR cannot reach it.
 ### OPERATE, STANDBY or BYPASS does not change the tuner
 
 The tuner needs either a ready direct connection or a FlexRadio relay.
+If neither is available, AetherSDR reports that the command was not sent.
 
 1. Check the indicator reads `● DIRECT` or `● RADIO`.
 2. For a direct connection, check the TGXL's row in **Settings → Radio Setup... → Peripherals**
