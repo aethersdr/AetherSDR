@@ -42,7 +42,19 @@ public:
     // one, no longer takes preview text.
     void resolve(quint64 id);
 
+    // The segmenter threw away the audio up to `endSample` without closing a
+    // segment (too short to count as speech). No final will replace preview
+    // text from it, so the open block drops what starts before `endSample`
+    // and takes no more of it. Returns the open block's new text when that
+    // changed it (empty text: nothing left to show).
+    std::optional<Update> discardOpenThrough(qint64 endSample);
+
 private:
+    struct Content;
+    // The block's pieces joined in audio order, if that differs from what was
+    // last returned for it.
+    std::optional<Update> render(quint64 block, Content& c);
+
     struct Content {
         std::map<qint64, QString> finals; // by start sample
         qint64 provisionalStart = -1;
@@ -53,6 +65,7 @@ private:
     std::map<quint64, qint64> m_closedEnd; // closed, unresolved blocks: id -> end sample
     std::map<quint64, Content> m_content;
     quint64 m_openBlock = 0;
+    qint64 m_openStart = 0;     // the open block takes results starting here or later
     qint64 m_resolvedEnd = 0;   // results starting before this belong to resolved blocks
     bool m_anyResolved = false;
     quint64 m_lastResolved = 0;

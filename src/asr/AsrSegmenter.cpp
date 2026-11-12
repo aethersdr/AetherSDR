@@ -39,6 +39,7 @@ void AsrSegmenter::reset()
     m_longGapPending = false;
     m_samplesFed = 0;
     m_nextSegmentId = 0;
+    m_discardedThrough = -1;
     if (m_vad != nullptr) {
         m_vad->reset();
     }
@@ -118,6 +119,8 @@ void AsrSegmenter::closeSegment(std::vector<ClosedSegment>& out, bool forceCap)
         cs.endSample = m_samplesFed;
         cs.startSample = m_samplesFed - static_cast<std::int64_t>(cs.samples.size());
         out.push_back(std::move(cs));
+    } else {
+        m_discardedThrough = m_samplesFed;
     }
 
     m_segment.clear();
@@ -207,6 +210,13 @@ std::vector<AsrSegmenter::ClosedSegment> AsrSegmenter::feed(const float* samples
     }
 
     return out;
+}
+
+std::int64_t AsrSegmenter::consumeDiscardedThrough()
+{
+    const std::int64_t through = m_discardedThrough;
+    m_discardedThrough = -1;
+    return through;
 }
 
 std::vector<AsrSegmenter::ClosedSegment> AsrSegmenter::flush()

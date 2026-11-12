@@ -88,6 +88,34 @@ int main()
                "reset starts a new timeline at block 0");
     }
 
+    // Audio the segmenter threw away (a burst too short to be speech) never
+    // gets a final, so its preview text must go when the discard is reported.
+    {
+        LivePreviewAssembler a;
+        a.addResult(0, 1 * kSec, QStringLiteral("old"), false);
+        a.closeBlock(0, 2 * kSec);
+        a.addResult(2 * kSec, 3 * kSec, QStringLiteral("crash"), true);
+        a.addResult(3 * kSec, 4 * kSec, QStringLiteral("bang"), false);
+        expect(is(a.discardOpenThrough(5 * kSec), 1, ""),
+               "a discard empties the open block's text from before its end");
+        expect(!a.addResult(3 * kSec, 4 * kSec, QStringLiteral("bang again"), false).has_value(),
+               "a late result inside the discarded span is dropped");
+        expect(is(a.addResult(0, 1 * kSec, QStringLiteral("old revised"), true), 0, "old revised"),
+               "a discard leaves the closed, unresolved block alone");
+        expect(is(a.addResult(5 * kSec, 6 * kSec, QStringLiteral("real speech"), false), 1,
+                  "real speech"),
+               "text after the discard goes to the open block as before");
+        expect(!a.discardOpenThrough(4 * kSec).has_value(),
+               "a discard that ends before the open block starts changes nothing");
+    }
+    {
+        LivePreviewAssembler a;
+        a.addResult(0, 1 * kSec, QStringLiteral("noise"), true);
+        a.addResult(3 * kSec, 4 * kSec, QStringLiteral("hello"), false);
+        expect(is(a.discardOpenThrough(2 * kSec), 0, "hello"),
+               "a discard drops only the text that starts inside it");
+    }
+
     if (g_failures == 0) {
         std::printf("Live preview assembler: ALL PASS\n");
         return 0;

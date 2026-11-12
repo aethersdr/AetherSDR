@@ -2417,9 +2417,25 @@ if (ENABLE_ASR)
     if (APPLE AND ENABLE_ASR_APPLE_LIVE_PREVIEW)
         execute_process(COMMAND xcrun --find swiftc OUTPUT_VARIABLE _lp_swiftc
                         OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-        execute_process(COMMAND xcrun --show-sdk-path OUTPUT_VARIABLE _lp_sdk
-                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-        if (_lp_swiftc AND _lp_sdk)
+        if (CMAKE_OSX_SYSROOT AND IS_DIRECTORY "${CMAKE_OSX_SYSROOT}")
+            set(_lp_sdk "${CMAKE_OSX_SYSROOT}")
+        else()
+            execute_process(COMMAND xcrun --show-sdk-path OUTPUT_VARIABLE _lp_sdk
+                            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        endif()
+        # SpeechAnalyzer/SpeechTranscriber first appear in the macOS 26 SDK. An
+        # older Xcode (the default on GitHub's macos-15 image) cannot compile the
+        # bridge, so the build falls back to the stub instead of failing.
+        set(_lp_sdk_version "")
+        if (_lp_sdk AND EXISTS "${_lp_sdk}/SDKSettings.json")
+            file(READ "${_lp_sdk}/SDKSettings.json" _lp_sdk_settings)
+            string(JSON _lp_sdk_version ERROR_VARIABLE _lp_json_error
+                   GET "${_lp_sdk_settings}" Version)
+        endif()
+        if (_lp_swiftc AND _lp_sdk AND _lp_sdk_version VERSION_LESS 26.0)
+            message(STATUS "ASR: Copy Assist live preview disabled — needs the macOS 26 SDK "
+                           "(Xcode 26 or later); found SDK '${_lp_sdk_version}' at ${_lp_sdk}")
+        elseif (_lp_swiftc AND _lp_sdk)
             if (CMAKE_OSX_ARCHITECTURES)
                 set(_lp_archs ${CMAKE_OSX_ARCHITECTURES})
             else()
