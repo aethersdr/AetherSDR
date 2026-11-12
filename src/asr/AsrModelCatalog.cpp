@@ -77,6 +77,42 @@ const QVector<AsrModelTier>& tiers()
     return kTiers;
 }
 
+const QVector<AsrModelTier>& sherpaLivePreviewModel()
+{
+    // The model card (huggingface.co/Banafo/Kroko-ASR) puts the community models
+    // under CC-BY-SA; the folder's README points there. Sizes + SHA-256 are the
+    // Hugging Face LFS values. Single source, no mirror.
+    static const QVector<AsrModelTier> kModel = [] {
+        const QString folder =
+            QStringLiteral("sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06");
+        const auto file = [&folder](const QString& id, const QString& name, qint64 sizeBytes,
+                                    const QString& sha256) {
+            AsrModelTier tier;
+            tier.id = id;
+            tier.displayName = QStringLiteral("Kroko streaming (English)");
+            tier.fileName = folder + QLatin1Char('/') + name;
+            tier.sizeBytes = sizeBytes;
+            tier.sha256 = sha256;
+            tier.sources = {QStringLiteral("https://huggingface.co/csukuangfj/%1/resolve/main/%2"
+                                           "?download=true")
+                                .arg(folder, name)};
+            tier.family = AsrModelFamily::SherpaOnnx;
+            return tier;
+        };
+        return QVector<AsrModelTier>{
+            file(QStringLiteral("kroko-encoder"), QStringLiteral("encoder.onnx"), 70092599,
+                 QStringLiteral("d4881c57449d581e0770fd53fa66c2fdc6cd167d92ece7c715e603defc96d9d4")),
+            file(QStringLiteral("kroko-decoder"), QStringLiteral("decoder.onnx"), 617488,
+                 QStringLiteral("455ba38466fce8d5a57e7db68a323b684079ca4d9e1dd93a740d9b2429aae3b1")),
+            file(QStringLiteral("kroko-joiner"), QStringLiteral("joiner.onnx"), 336817,
+                 QStringLiteral("d406f616736350e2a7df3e39398b78eb2fc1a2ca6973a19d3853fa3227e25b52")),
+            file(QStringLiteral("kroko-tokens"), QStringLiteral("tokens.txt"), 6310,
+                 QStringLiteral("396dbeb5f4858875690716084f54e90d339679d0ba3e6b5b584f3d7589254d2d")),
+        };
+    }();
+    return kModel;
+}
+
 const AsrModelTier* tierById(const QString& id)
 {
     for (const AsrModelTier& tier : tiers()) {

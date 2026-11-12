@@ -1,6 +1,8 @@
 #pragma once
 
+#include <QColor>
 #include <QString>
+#include <QStringList>
 #include <QWidget>
 
 #include <map>
@@ -10,9 +12,10 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 class QSlider;
-class QTextEdit;
 
 namespace AetherSDR {
+
+class CopyAssistTranscriptView;
 
 // Copy Assist speech-to-text decode panel (RFC #4333), modeled on the CW decode
 // panel: read-only transcript coloured by whisper per-utterance confidence
@@ -77,20 +80,32 @@ public:
     void setFontPx(int px);
     int fontPx() const { return m_fontPx; }
 
+    // Colour of the live preview's provisional text. The controller sets it
+    // from the theme (the panel stays ThemeManager-free).
+    void setPreviewColor(const QColor& color);
+    // The transcript view, for the controller's theme-token declaration.
+    QWidget* transcriptView() const;
+    // The provisional blocks being drawn, oldest first (for tests).
+    QStringList previewBlocks() const;
+
 public slots:
     // Append one transcribed utterance, colored by confidence in [0, 1].
     void appendText(const QString& text, float confidence);
     // Provisional grey text for a segment still being decoded; replaces any
     // earlier text for the same id and is ignored once that id was committed or
-    // discarded. Empty text removes the block.
-    void setPreviewText(quint64 segmentId, const QString& text);
+    // discarded, or when it belongs to another generation than the last
+    // resetPreview(). Empty text removes the block. Provisional text is drawn
+    // over the transcript, never added to it, so a screen reader reads only
+    // committed text.
+    void setPreviewText(quint64 segmentId, const QString& text, quint64 generation);
     // Append the segment's final text, dropping its (and any older) grey text.
     void commitText(quint64 segmentId, const QString& text, float confidence);
     // The segment produced no final text: drop its (and any older) grey text.
-    void discardPreview(quint64 segmentId);
-    // The engine restarted its segment ids at 0: drop all grey text and the
-    // record of resolved ids. The committed transcript stays.
-    void resetPreview();
+    void discardPreview(quint64 segmentId, quint64 generation);
+    // The engine restarted its segment ids at 0 under a new generation: drop
+    // all grey text and the record of resolved ids, and accept provisional
+    // text only from that generation. The committed transcript stays.
+    void resetPreview(quint64 generation);
     void clearText();
 
 signals:
@@ -114,15 +129,14 @@ private:
                              const QString& accessibleName, int lo, int hi, int value,
                              QLabel** valueLabelOut);
 
-    // The document is [committed content][grey preview tail]; m_committedEnd is
-    // the character position where the tail starts.
     void markPreviewDone(quint64 segmentId);
-    void deletePreviewTail();
-    void renderPreviewTail();
+    // Hand the provisional blocks to the view, which draws them after the
+    // committed text.
+    void renderPreview();
 
-    QTextEdit* m_text = nullptr;
+    CopyAssistTranscriptView* m_text = nullptr;
     std::map<quint64, QString> m_preview;
-    int m_committedEnd = 0;
+    quint64 m_previewGeneration = 0;
     bool m_havePreviewHighWater = false;
     quint64 m_previewHighWater = 0; // highest id committed or discarded
     QPushButton* m_enable = nullptr;   // checkable: "Enable" / "Disable"

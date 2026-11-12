@@ -25,6 +25,7 @@
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
+#include <QStandardItemModel>
 
 #include <cstdio>
 #include <optional>
@@ -705,12 +706,14 @@ int main(int argc, char** argv)
         auto* form = dlg.findChild<QFormLayout*>();
         if (box != nullptr && raw != nullptr && form != nullptr) {
             int liveRow = -1;
+            int recognizerRow = -1;
             int rawRow = -1;
             QFormLayout::ItemRole role = QFormLayout::SpanningRole;
             form->getWidgetPosition(box, &liveRow, &role);
+            form->getWidgetPosition(dlg.livePreviewRecognizerControl(), &recognizerRow, &role);
             form->getWidgetPosition(raw, &rawRow, &role);
-            expect(liveRow >= 0 && rawRow == liveRow + 1,
-                   "live preview is the row directly before unprocessed-audio");
+            expect(liveRow >= 0 && recognizerRow == liveRow + 1 && rawRow == recognizerRow + 1,
+                   "live preview, then its recognizer, then unprocessed-audio");
 
             QSignalSpy liveSpy(&dlg, &CopyAssistSettingsDialog::livePreviewToggled);
             dlg.setLivePreviewChecked(true);
@@ -728,10 +731,66 @@ int main(int argc, char** argv)
                    "the reason reaches a screen reader via accessibleDescription");
             expect(box->toolTip().contains(QStringLiteral("Needs macOS 26")),
                    "the reason is also in the tooltip");
+            auto* recognizer = dlg.findChild<QComboBox*>(
+                QStringLiteral("CopyAssistLivePreviewRecognizer"));
+            expect(recognizer != nullptr && !recognizer->isEnabled(),
+                   "no preview at all dims the recognizer choice too");
             dlg.setLivePreviewAvailable(true, QString());
             expect(box->isEnabled() && box->accessibleDescription().isEmpty()
                        && box->toolTip() == baseTip,
                    "available re-enables it and clears the reason");
+            expect(recognizer != nullptr && recognizer->isEnabled(),
+                   "and re-enables the recognizer choice");
+        }
+    }
+
+    // ---- Live preview recognizer --------------------------------------------
+    {
+        auto* combo =
+            dlg.findChild<QComboBox*>(QStringLiteral("CopyAssistLivePreviewRecognizer"));
+        expect(combo != nullptr && dlg.livePreviewRecognizerControl() == combo,
+               "the recognizer combo exists");
+        if (combo != nullptr) {
+            QSignalSpy spy(&dlg, &CopyAssistSettingsDialog::livePreviewRecognizerChanged);
+            dlg.addLivePreviewRecognizer(QStringLiteral("sherpa"), QStringLiteral("Kroko"));
+            dlg.addLivePreviewRecognizer(QStringLiteral("apple"), QStringLiteral("Apple"));
+            expect(spy.isEmpty() && dlg.currentLivePreviewRecognizer() == QStringLiteral("sherpa"),
+                   "adding recognizers selects the first without emitting");
+            const QString baseTip = combo->toolTip();
+
+            dlg.setCurrentLivePreviewRecognizer(QStringLiteral("apple"));
+            expect(spy.isEmpty() && dlg.currentLivePreviewRecognizer() == QStringLiteral("apple"),
+                   "setCurrentLivePreviewRecognizer selects without emitting");
+            combo->setCurrentIndex(combo->findData(QStringLiteral("sherpa")));
+            expect(spy.count() == 1 && spy.last().at(0).toString() == QStringLiteral("sherpa"),
+                   "an operator choice emits the recognizer id");
+
+            const QString why = QStringLiteral("Needs macOS 26");
+            dlg.setLivePreviewRecognizerAvailable(QStringLiteral("apple"), false, why);
+            auto* model = qobject_cast<QStandardItemModel*>(combo->model());
+            const int appleIndex = combo->findData(QStringLiteral("apple"));
+            QStandardItem* appleItem =
+                model != nullptr && appleIndex >= 0 ? model->item(appleIndex) : nullptr;
+            expect(appleItem != nullptr && !appleItem->isEnabled(),
+                   "an unavailable recognizer is dimmed and unselectable");
+            expect(appleItem != nullptr
+                       && appleItem->data(Qt::AccessibleDescriptionRole).toString() == why
+                       && appleItem->data(Qt::ToolTipRole).toString() == why,
+                   "its reason is in the item's accessible description and tooltip");
+            expect(combo->accessibleDescription().isEmpty() && combo->toolTip() == baseTip,
+                   "the combo carries no reason while an available one is chosen");
+
+            dlg.setCurrentLivePreviewRecognizer(QStringLiteral("apple"));
+            expect(combo->accessibleDescription() == why && combo->toolTip().contains(why),
+                   "an unavailable current choice puts its reason on the combo");
+
+            dlg.setLivePreviewRecognizerAvailable(QStringLiteral("apple"), true, QString());
+            expect(appleItem != nullptr && appleItem->isEnabled()
+                       && appleItem->data(Qt::AccessibleDescriptionRole).toString().isEmpty()
+                       && combo->accessibleDescription().isEmpty()
+                       && combo->toolTip() == baseTip,
+                   "becoming available clears every reason");
+            dlg.setCurrentLivePreviewRecognizer(QStringLiteral("sherpa"));
         }
     }
 

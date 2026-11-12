@@ -65,6 +65,10 @@ namespace {
 constexpr const char* kRemoteTierId = "remote";
 constexpr const char* kCustomTierId = "custom";
 constexpr const char* kSherpaTierId = "sherpa";
+// Live preview recognizers (setting AsrLivePreviewRecognizer). sherpa-onnx is the
+// default; Apple's is the alternative on macOS 26+.
+constexpr const char* kPreviewSherpa = "sherpa";
+constexpr const char* kPreviewApple = "apple";
 constexpr int kGpuDiscoveryTimeoutMs = 30000;
 
 // Map a 1–100 "sensitivity" (higher = more sensitive) to the VAD's RMS energy
@@ -209,6 +213,17 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // The ⚙ glyph renders taller than the text buttons; pin the gear to the
     // Enabled button's height so the row stays flush.
     m_panel->settingsButton()->setFixedHeight(m_panel->enableButton()->sizeHint().height());
+
+    // Live preview's provisional text: the theme's muted label gray. It is
+    // painted, not styled, so declare the token and repaint on theme changes.
+    const auto applyPreviewColor = [this] {
+        m_panel->setPreviewColor(ThemeManager::instance().color(
+            m_panel->transcriptView(), QStringLiteral("color.text.label")));
+    };
+    applyPreviewColor();
+    ThemeManager::instance().declareWidgetTokens(m_panel->transcriptView(),
+                                                 {QStringLiteral("color.text.label")});
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, applyPreviewColor);
 
     // Language selector — every language the whisper build supports.
     // Multilingual models honor it; English-only models ignore it. (The
@@ -454,9 +469,25 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         }
     });
 
-    // Live preview: the setting only switches the engine's factory, so no rebuild.
-    m_settings->setLivePreviewAvailable(appleLivePreviewSupported(),
-                                        appleLivePreviewUnavailableReason());
+    // Live preview: the settings only switch the engine's factory, so no rebuild.
+    const QString sherpaId = QString::fromLatin1(kPreviewSherpa);
+    const QString appleId = QString::fromLatin1(kPreviewApple);
+    m_settings->addLivePreviewRecognizer(sherpaId, tr("Kroko streaming, English (sherpa-onnx)"));
+    m_settings->setLivePreviewRecognizerAvailable(sherpaId, sherpaLivePreviewSupported(),
+                                                  sherpaLivePreviewUnavailableReason());
+#ifdef Q_OS_MACOS
+    // Listed on every Mac, dimmed with its reason before macOS 26; never shown
+    // where it could not exist.
+    m_settings->addLivePreviewRecognizer(appleId, tr("Apple speech recognition"));
+    m_settings->setLivePreviewRecognizerAvailable(appleId, appleLivePreviewSupported(),
+                                                  appleLivePreviewUnavailableReason());
+#endif
+    {
+        const bool any = sherpaLivePreviewSupported() || appleLivePreviewSupported();
+        m_settings->setLivePreviewAvailable(any,
+                                            any ? QString() : sherpaLivePreviewUnavailableReason());
+    }
+    m_settings->setCurrentLivePreviewRecognizer(livePreviewRecognizer());
     m_settings->setLivePreviewChecked(
         CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
             .toString()
@@ -464,6 +495,36 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     connect(m_settings, &CopyAssistSettingsDialog::livePreviewToggled, this, [this](bool on) {
         CopyAssistSettings::setValue(QStringLiteral("AsrLivePreview"),
                                      on ? QStringLiteral("True") : QStringLiteral("False"));
+        applyLivePreview();
+    });
+    connect(m_settings, &CopyAssistSettingsDialog::livePreviewRecognizerChanged, this,
+            [this](const QString& id) {
+                CopyAssistSettings::setValue(QStringLiteral("AsrLivePreviewRecognizer"), id);
+                applyLivePreview();
+            });
+
+    // The default recognizer's model: four files fetched and SHA-verified like
+    // the others, on the first Enable that wants them (not at engine build, the
+    // same rule as the speaker model, #4737).
+    m_previewModels = new AsrModelManager(this);
+    connect(m_previewModels, &AsrModelManager::progress, this, [this](qint64 got, qint64 total) {
+        m_panel->setStatus(
+            total > 0 ? tr("Downloading live preview model… %1%").arg(static_cast<int>(got * 100 / total))
+                      : tr("Downloading live preview model…"));
+    });
+    const auto onPreviewModelReady = [this](const QString& dir) {
+        m_previewModelDir = dir;
+        applyLivePreview();
+        restoreListeningStatus(); // replace the download progress, if any was shown
+    };
+    connect(m_previewModels, &AsrModelManager::alreadyPresent, this, onPreviewModelReady);
+    connect(m_previewModels, &AsrModelManager::finished, this, onPreviewModelReady);
+    connect(m_previewModels, &AsrModelManager::failed, this, [this](const QString& err) {
+        // Same as the VAD and speaker models: say why, and turn the option off
+        // so every engine rebuild does not try (and fail) again.
+        m_panel->setStatus(tr("Live preview model download failed: %1").arg(err));
+        CopyAssistSettings::setValue(QStringLiteral("AsrLivePreview"), QStringLiteral("False"));
+        m_settings->setLivePreviewChecked(false);
         applyLivePreview();
     });
 
@@ -1182,6 +1243,8 @@ void CopyAssistController::buildEngine()
                 m_panel->commitText(segmentId, labeled, confidence);
                 appendToLogFile(labeled);
             });
+    // A new engine numbers its generations from scratch: start the panel on it.
+    m_panel->resetPreview(m_asr->previewGeneration());
     connect(m_asr, &AsrEngine::previewText, m_panel, &CopyAssistPanel::setPreviewText);
     connect(m_asr, &AsrEngine::previewDiscarded, m_panel, &CopyAssistPanel::discardPreview);
     connect(m_asr, &AsrEngine::livePreviewReset, m_panel, &CopyAssistPanel::resetPreview);
@@ -1227,14 +1290,56 @@ void CopyAssistController::applyLivePreview()
         CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
             .toString()
         == QStringLiteral("True");
-    // "auto" or empty means the system language.
-    QString lang =
-        CopyAssistSettings::value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
-    if (lang == QStringLiteral("auto")) {
-        lang.clear();
+    LivePreviewFactory factory;
+    if (on) {
+        const QString which = livePreviewRecognizer();
+        if (which == QLatin1String(kPreviewApple) && appleLivePreviewSupported()) {
+            // "auto" or empty means the system language.
+            QString lang =
+                CopyAssistSettings::value(QStringLiteral("AsrLanguage"), QStringLiteral("en"))
+                    .toString();
+            if (lang == QStringLiteral("auto")) {
+                lang.clear();
+            }
+            factory = appleLivePreviewFactory(lang);
+        } else if (which == QLatin1String(kPreviewSherpa) && sherpaLivePreviewSupported()) {
+            if (!m_previewModelDir.isEmpty()) {
+                factory = sherpaLivePreviewFactory(m_previewModelDir);
+            } else {
+                // No preview until the model is verified; this runs again then.
+                ensurePreviewModelIfWanted();
+            }
+        }
     }
-    m_asr->setLivePreviewFactory(on && appleLivePreviewSupported() ? appleLivePreviewFactory(lang)
-                                                                   : LivePreviewFactory{});
+    m_asr->setLivePreviewFactory(std::move(factory));
+}
+
+QString CopyAssistController::livePreviewRecognizer() const
+{
+    const QString sherpaId = QString::fromLatin1(kPreviewSherpa);
+    const QString appleId = QString::fromLatin1(kPreviewApple);
+    const QString stored =
+        CopyAssistSettings::value(QStringLiteral("AsrLivePreviewRecognizer"), sherpaId).toString();
+    const bool sherpaOk = sherpaLivePreviewSupported();
+    const bool appleOk = appleLivePreviewSupported();
+    if (stored == appleId) {
+        return appleOk || !sherpaOk ? appleId : sherpaId;
+    }
+    return sherpaOk || !appleOk ? sherpaId : appleId;
+}
+
+void CopyAssistController::ensurePreviewModelIfWanted()
+{
+    const bool on =
+        CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
+            .toString()
+        == QStringLiteral("True");
+    if (!m_enabled || !on || !m_previewModelDir.isEmpty()
+        || livePreviewRecognizer() != QLatin1String(kPreviewSherpa)
+        || !sherpaLivePreviewSupported() || m_previewModels->isBusy()) {
+        return;
+    }
+    m_previewModels->ensureBundle(AsrModelCatalog::sherpaLivePreviewModel());
 }
 
 void CopyAssistController::applyTuning()
@@ -1420,6 +1525,7 @@ void CopyAssistController::beginEnable()
     if (m_settings->labelSpeakers()) {
         ensureSpeakerModel();
     }
+    ensurePreviewModelIfWanted(); // first Enable with the sherpa preview on
     if (m_backend == AsrBackendKind::Remote) {
         // No local model to fetch — the remote endpoint is contacted per
         // utterance. load() just marks the backend ready.

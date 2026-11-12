@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QStandardItemModel>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -114,21 +115,33 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     logHint->setEnabled(false); // dimmed, informational
     form->addRow(QString(), logHint);
 
-    // Provisional grey text from Apple's on-device recogniser while the selected
-    // model waits for its segment to close. The controller sets availability.
-    m_livePreview = new QCheckBox(
-        tr("Show a live preview while the model decodes (Apple speech recognition)"), this);
+    // Provisional grey text from a streaming recogniser while the selected model
+    // waits for its segment to close. The controller sets availability.
+    m_livePreview = new QCheckBox(tr("Show a live preview while the model decodes"), this);
     m_livePreview->setObjectName(QStringLiteral("CopyAssistLivePreview"));
     m_livePreviewToolTip = tr(
-        "Grey text appears within about half a second of speech and is replaced by the "
+        "Grey text appears within about a second of speech and is replaced by the "
         "selected model's text when each segment is decoded. The preview is less "
-        "accurate than the model and is only a first look. It uses Apple's on-device "
-        "speech recognition, so audio never leaves the Mac, and the first use may "
-        "download Apple's speech model.");
+        "accurate than the model and is only a first look.");
     m_livePreview->setToolTip(m_livePreviewToolTip);
     connect(m_livePreview, &QCheckBox::toggled, this,
             &CopyAssistSettingsDialog::livePreviewToggled);
     form->addRow(m_livePreview);
+
+    // Which recogniser draws that preview. The controller lists them and marks
+    // the ones this computer cannot run.
+    m_previewRecognizer = new QComboBox(this);
+    m_previewRecognizer->setObjectName(QStringLiteral("CopyAssistLivePreviewRecognizer"));
+    m_previewRecognizer->setAccessibleName(tr("Live preview recognizer"));
+    m_previewRecognizerToolTip = tr(
+        "The speech recognizer that draws the live preview. Both run on this computer, "
+        "so audio never leaves it.");
+    m_previewRecognizer->setToolTip(m_previewRecognizerToolTip);
+    connect(m_previewRecognizer, &QComboBox::currentIndexChanged, this, [this](int) {
+        updatePreviewRecognizerDescription();
+        emit livePreviewRecognizerChanged(currentLivePreviewRecognizer());
+    });
+    form->addRow(tr("Preview recognizer:"), m_previewRecognizer);
 
     // Where in the RX chain Copy Assist listens (RFC #4861). Unchecked is the
     // historical behaviour and the default: the recogniser hears what the
@@ -448,6 +461,8 @@ bool CopyAssistSettingsDialog::livePreviewChecked() const
 void CopyAssistSettingsDialog::setLivePreviewAvailable(bool available, const QString& reason)
 {
     m_livePreview->setEnabled(available);
+    // No recognizer at all: the choice between them is moot too.
+    m_previewRecognizer->setEnabled(available);
     if (available) {
         m_livePreview->setAccessibleDescription(QString());
         m_livePreview->setToolTip(m_livePreviewToolTip);
@@ -460,6 +475,68 @@ void CopyAssistSettingsDialog::setLivePreviewAvailable(bool available, const QSt
 QWidget* CopyAssistSettingsDialog::livePreviewControl() const
 {
     return m_livePreview;
+}
+
+void CopyAssistSettingsDialog::addLivePreviewRecognizer(const QString& id, const QString& label)
+{
+    const QSignalBlocker block(m_previewRecognizer);
+    m_previewRecognizer->addItem(label, id);
+    updatePreviewRecognizerDescription();
+}
+
+void CopyAssistSettingsDialog::setLivePreviewRecognizerAvailable(const QString& id,
+                                                                 bool available,
+                                                                 const QString& reason)
+{
+    const int index = m_previewRecognizer->findData(id);
+    auto* model = qobject_cast<QStandardItemModel*>(m_previewRecognizer->model());
+    if (index < 0 || model == nullptr) {
+        return;
+    }
+    QStandardItem* item = model->item(index);
+    // Dimmed and unselectable, but still listed so the operator learns it exists
+    // and why it is off. The reason goes where a screen reader reads it on the
+    // item, not only in a tooltip (docs/a11y.md).
+    item->setEnabled(available);
+    item->setData(available ? QVariant() : QVariant(reason), Qt::ToolTipRole);
+    item->setData(available ? QVariant() : QVariant(reason), Qt::AccessibleDescriptionRole);
+    updatePreviewRecognizerDescription();
+}
+
+void CopyAssistSettingsDialog::setCurrentLivePreviewRecognizer(const QString& id)
+{
+    const int index = m_previewRecognizer->findData(id);
+    if (index < 0) {
+        return;
+    }
+    const QSignalBlocker block(m_previewRecognizer);
+    m_previewRecognizer->setCurrentIndex(index);
+    updatePreviewRecognizerDescription();
+}
+
+QString CopyAssistSettingsDialog::currentLivePreviewRecognizer() const
+{
+    return m_previewRecognizer->currentData().toString();
+}
+
+QWidget* CopyAssistSettingsDialog::livePreviewRecognizerControl() const
+{
+    return m_previewRecognizer;
+}
+
+void CopyAssistSettingsDialog::updatePreviewRecognizerDescription()
+{
+    // The current choice can be one this computer cannot run (a setting carried
+    // over from another machine). Say why on the combo itself.
+    const int index = m_previewRecognizer->currentIndex();
+    const QString reason =
+        index >= 0 ? m_previewRecognizer->itemData(index, Qt::AccessibleDescriptionRole).toString()
+                   : QString();
+    m_previewRecognizer->setAccessibleDescription(reason);
+    m_previewRecognizer->setToolTip(reason.isEmpty()
+                                        ? m_previewRecognizerToolTip
+                                        : m_previewRecognizerToolTip + QStringLiteral("\n\n")
+                                              + reason);
 }
 
 QWidget* CopyAssistSettingsDialog::rawAudioControl() const
