@@ -857,10 +857,11 @@ private:
             / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeTargetSamples < kTxQueueMax,
                   "the prime target must fit below the overflow bound");
-    // Depth above the target that is still steady state: one block arrives per block
-    // period, so the depth swings by one block. More than that after a mid-over
-    // starvation is a backlog, trimmed once to the target (trimTxIqAfterUnderflow()).
-    static constexpr std::size_t kTxTrimMarginSamples = kTxPrimeBlockSamples;
+    // Depth above the target that is still steady state: a producer delivers up
+    // to 2048 samples (42.67 ms) at once, whatever the DSP block: a TCI client's
+    // 2048-sample mono TX_AUDIO frame. More than that after a mid-over starvation
+    // is a backlog, trimmed once to the target (trimTxIqAfterUnderflow()).
+    static constexpr std::size_t kTxTrimMarginSamples = 2048;
     static_assert(kTxPrimeTargetSamples + kTxTrimMarginSamples < kTxQueueMax,
                   "the trim threshold must sit below the overflow bound");
     std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally

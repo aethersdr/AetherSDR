@@ -47,6 +47,12 @@ namespace {
 constexpr int kRate = MetisClientTestAccess::ep2AudioRateHz();
 constexpr int kPacket = kTxSamplesPerPacket;
 
+// The largest delivery a producer makes at once, in EP2 samples (42.67 ms): a
+// TCI client answering TX_CHRONO with 2048 mono samples at 48 kHz, which
+// TciIoWorker::receiveBinary() reads as 2048 frames. The trim margin promises to
+// hold this much; a grouping beyond it is not a producer the queue is built for.
+constexpr int kLargestDeliverySamples = 2048;
+
 // One Hl2TxDsp block as the queue receives it, in EP2 samples. Derived from
 // the real Config so that a change of block size or rate moves this test.
 int blockSamples()
@@ -116,7 +122,16 @@ struct OverResult {
 // One over. `lateness[j]` is how late block j is, in samples, against a
 // producer that delivers one block per block period starting one block after
 // the keyed edge (Hl2TxDsp has to fill a block before it can emit one).
-OverResult runOver(const std::vector<int>& lateness)
+// `group` > 1 delivers the blocks `group` at a time: block j is due at the end
+// of its group, (j / group + 1) * group * block. TCI's TX_CHRONO period is 2048
+// samples, so it reaches the queue as two 1024-sample blocks at once, as does a
+// 24 kHz mic; at a 512-sample block that is four.
+long long dueOf(long long j, int block, int group)
+{
+    return (j / group + 1) * group * static_cast<long long>(block);
+}
+
+OverResult runOver(const std::vector<int>& lateness, int group = 1)
 {
     const int block = blockSamples();
     const auto blocks = static_cast<long long>(lateness.size());
@@ -141,7 +156,7 @@ OverResult runOver(const std::vector<int>& lateness)
          ++tick) {
         const long long now = tick * kPacket;
         while (nextBlock < blocks
-               && (nextBlock + 1) * block + lateness[static_cast<std::size_t>(nextBlock)] <= now) {
+               && dueOf(nextBlock, block, group) + lateness[static_cast<std::size_t>(nextBlock)] <= now) {
             std::vector<std::complex<float>> iq(static_cast<std::size_t>(block));
             for (int n = 0; n < block; ++n)
                 iq[static_cast<std::size_t>(n)] = producerSample(nextBlock * block + n);
@@ -271,6 +286,27 @@ int main(int argc, char** argv)
         check(intact, "late blocks are delayed, never lost, repeated or reordered");
         check(keyed, "MOX is on the first packet of the over and every one after it");
         check(trimmed == 0, "the measured lateness never trims the queue");
+        // The same lateness from a producer that delivers 2 or 4 blocks at once.
+        // The gap and depth requirements above are for one block per delivery;
+        // what grouping must not do is trim.
+        for (const int group : {2, 4}) {
+            std::uint64_t groupedTrims = 0;
+            for (const auto& over : kMeasuredOversMs) {
+                std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
+                int late = 0;
+                std::size_t step = 0;
+                for (std::size_t j = 3; j < lateness.size(); ++j) {
+                    if (step < over.size() && (j - 3) % 2 == 0)
+                        late += msToSamples(over[step++]);
+                    lateness[j] = late;
+                }
+                groupedTrims += runOver(lateness, group).trimEvents;
+            }
+            std::fprintf(stderr, "PROBE  measured lateness, %d blocks per delivery: %llu trim(s)\n",
+                         group, static_cast<unsigned long long>(groupedTrims));
+            check(groupedTrims == 0,
+                  "the measured lateness never trims the queue when blocks arrive 2 or 4 at once");
+        }
         // WHAT THE DEPTH MAY COST. Two blocks plus the packet it is released
         // on: that is the latency #6052 puts to the maintainer, and a deeper
         // queue is a different proposal.
@@ -302,6 +338,13 @@ int main(int argc, char** argv)
         check(r.sequenceIntact && r.realSamples == static_cast<long long>(blocksInOver()) * block,
               "and every sample still reaches the wire once, in order");
         check(r.trimSamples == 0, "and bounded jitter is never trimmed");
+        for (const int group : {2, 4}) {
+            const OverResult g = runOver(lateness, group);
+            std::fprintf(stderr, "PROBE  jitter 1-25 ms, %d blocks per delivery: %llu trim(s)\n",
+                         group, static_cast<unsigned long long>(g.trimEvents));
+            check(g.trimEvents == 0 && g.trimSamples == 0,
+                  "bounded jitter is never trimmed when blocks arrive 2 or 4 at once");
+        }
     }
 
     // ---- POSITIVE CONTROL: the gap detector still sees a gap ----
@@ -335,16 +378,26 @@ int main(int argc, char** argv)
     const std::size_t target = MetisClientTestAccess::primeTarget();
     const std::size_t ceiling = target + MetisClientTestAccess::trimMargin();
     const auto quiet = static_cast<long long>(MetisClientTestAccess::quietPackets());
+    // `group` 2 is a 2048-sample TCI delivery on the 1024-sample block; 4 is the
+    // same on a 512-sample block. The trim lands wherever the delivery cycle is
+    // when the quiet period ends, so the margin must hold a whole delivery.
+    for (const int group : {1, 2, 4})
     for (const double pauseMs : {190.0, 300.0}) {
-        const int stalled = 40;   // the first block held back (~0.85 s into the over)
-        const long long resume = (stalled + 1) * static_cast<long long>(block) + msToSamples(pauseMs);
+        if (group * block > kLargestDeliverySamples) {
+            std::fprintf(stderr, "PROBE  %d block(s) per delivery: %d samples at once is beyond any"
+                                 " producer (%d), not run\n",
+                         group, group * block, kLargestDeliverySamples);
+            continue;
+        }
+        const int stalled = 40;   // the first block held back (~0.85 s into the over); a group start
+        const long long resume = dueOf(stalled, block, group) + msToSamples(pauseMs);
         std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
         for (std::size_t j = stalled; j < lateness.size(); ++j) {
-            const long long due = (static_cast<long long>(j) + 1) * block;
+            const long long due = dueOf(static_cast<long long>(j), block, group);
             if (due < resume)
                 lateness[j] = static_cast<int>(resume - due);
         }
-        const OverResult r = runOver(lateness);
+        const OverResult r = runOver(lateness, group);
         const long long burstTick = r.arrivalTick[static_cast<std::size_t>(stalled)];
         const long long lastTick = r.arrivalTick.back();
         std::size_t peak = 0;
@@ -359,10 +412,10 @@ int main(int argc, char** argv)
         for (const long long t : r.gapEndTick)
             gapsAfterBurst += t > burstTick ? 1 : 0;
         std::fprintf(stderr,
-            "PROBE  %.0f ms pause then a burst: peak depth %zu (%.2f ms), depth after %lld"
+            "PROBE  %d block(s) per delivery, %.0f ms pause then a burst: peak depth %zu (%.2f ms), depth after %lld"
             " packets at most %zu (%.2f ms); trimmed %llu sample(s) in %llu trim(s),"
             " overflow %llu, %d skip(s) of %lld sample(s), %d gap(s) after the burst\n",
-            pauseMs, peak, samplesToMs(static_cast<long long>(peak)), quiet + 1, after,
+            group, pauseMs, peak, samplesToMs(static_cast<long long>(peak)), quiet + 1, after,
             samplesToMs(static_cast<long long>(after)),
             static_cast<unsigned long long>(r.trimSamples),
             static_cast<unsigned long long>(r.trimEvents),
@@ -385,6 +438,35 @@ int main(int argc, char** argv)
             check(peak + kPacket >= MetisClientTestAccess::queueMax() && r.overflowSamples > 0,
                   "CONTROL: a 300 ms backlog reaches the overflow cap, which stays the bound");
         }
+    }
+
+    // ---- A SHORT PAUSE IS NOT A BACKLOG ----
+    //
+    // 45-70 ms is about the queue's own depth: it starves for a few ms at most,
+    // and the burst refills it to no more than one delivery above the target.
+    // Nothing may be trimmed, at any delivery grouping.
+    {
+        std::uint64_t shortTrims = 0;
+        for (const int group : {1, 2, 4}) {
+            for (const double pauseMs : {45.0, 55.0, 60.0, 70.0}) {
+                const int stalled = 40;
+                const long long resume = dueOf(stalled, block, group) + msToSamples(pauseMs);
+                std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
+                for (std::size_t j = stalled; j < lateness.size(); ++j) {
+                    const long long due = dueOf(static_cast<long long>(j), block, group);
+                    if (due < resume)
+                        lateness[j] = static_cast<int>(resume - due);
+                }
+                const OverResult r = runOver(lateness, group);
+                shortTrims += r.trimEvents;
+                if (r.trimEvents != 0)
+                    std::fprintf(stderr, "PROBE  %d block(s) per delivery, %.0f ms pause: %llu trim(s)\n",
+                                 group, pauseMs, static_cast<unsigned long long>(r.trimEvents));
+            }
+        }
+        std::fprintf(stderr, "PROBE  45-70 ms pauses at 1, 2 and 4 blocks per delivery: %llu trim(s)\n",
+                     static_cast<unsigned long long>(shortTrims));
+        check(shortTrims == 0, "a 45-70 ms pause is never trimmed, at 1, 2 or 4 blocks per delivery");
     }
 
     if (g_failures == 0)
