@@ -7,6 +7,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include "core/backends/CwTextRequest.h"
 #include "core/backends/ReceiveCommand.h"
 #include "core/backends/CwxStatusDelta.h"
@@ -46,6 +47,20 @@ public:
     // recognised as stale and ignored rather than re-arming the watch. (#3949)
     int   drainEpoch()  const { return m_drainEpoch; }
     QString macro(int idx) const;  // 0-based (0=F1, 11=F12)
+
+    // The DX call fills the {CALL} placeholder in stored macros and in text
+    // typed into the CWX panel. Session state only: never saved, and never
+    // written to the radio. Kept as capitals, digits and '/'.
+    QString dxCall() const { return m_dxCall; }
+    void setDxCall(const QString& call);
+    // Replaces every {NAME} placeholder (names are not case-sensitive).
+    // Returns nullopt, with *reason set, when one cannot be filled: an unknown
+    // name, or {CALL} with no DX call. Text without a placeholder is unchanged.
+    std::optional<QString> resolvePlaceholders(const QString& text, QString* reason = nullptr) const;
+    // resolvePlaceholders() for text about to be keyed: a refusal is reported
+    // through requestRejected(). Text from another program (TCI, MQTT, the
+    // bridge) is not passed through this; send() keys it as received.
+    std::optional<QString> resolveForSend(const QString& text);
 
     // Read-only TX availability for text keying (#5422). RadioModel wires this
     // to TransmitModel::admitsCwxSend() so no text is queued while TUNE is
@@ -138,6 +153,7 @@ signals:
     void charSent(int index);           // character at index was keyed
     void erased(int start, int stop);
     void macroChanged(int idx, const QString& text);  // 0-based
+    void dxCallChanged(const QString& call);
     void liveChanged(bool on);
     // Emitted whenever new text is sent to the radio's keyer — used by
     // CwxLocalKeyer to drive a sidetone-matching local Morse stream.
@@ -184,6 +200,7 @@ private:
     int     m_cwxEndIndex{-1};   // radio_index to watch for; -1 = not tracking
     int     m_drainEpoch{0};     // bumped on ESC/clear/disconnect (#3949)
     QString m_macros[12];
+    QString m_dxCall;
 };
 
 } // namespace AetherSDR

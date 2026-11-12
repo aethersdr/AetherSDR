@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QScopeGuard>
 #include <QPointer>
+#include <QRegularExpression>
 #include <algorithm>
 #include <iterator>
 #include <limits>
@@ -39,6 +40,60 @@ QString CwxModel::macro(int idx) const
 {
     if (idx < 0 || idx >= 12) return {};
     return m_macros[idx];
+}
+
+void CwxModel::setDxCall(const QString& call)
+{
+    QString kept;
+    for (const QChar ch : call.toUpper()) {
+        const ushort c = ch.unicode();
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/') { kept += ch; }
+    }
+    if (kept == m_dxCall) { return; }
+    m_dxCall = kept;
+    emit dxCallChanged(m_dxCall);
+}
+
+std::optional<QString> CwxModel::resolvePlaceholders(const QString& text, QString* reason) const
+{
+    // Any {...} pair is a placeholder, so a misspelt one is refused rather
+    // than keyed as literal characters. A brace without its partner is text.
+    static const QRegularExpression placeholder(QStringLiteral("\\{([^{}]*)\\}"));
+    QString resolved;
+    qsizetype copied = 0;
+    QRegularExpressionMatchIterator it = placeholder.globalMatch(text);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        const QString name = match.captured(1).trimmed().toUpper();
+        QString value;
+        if (name == QLatin1String("CALL")) {
+            if (m_dxCall.isEmpty()) {
+                if (reason) { *reason = tr("CWX send refused: {CALL} needs a DX call, and none is set."); }
+                return std::nullopt;
+            }
+            value = m_dxCall;
+        } else {
+            if (reason) { *reason = tr("CWX send refused: unknown placeholder %1.").arg(match.captured(0)); }
+            return std::nullopt;
+        }
+        resolved += QStringView(text).mid(copied, match.capturedStart() - copied);
+        resolved += value;
+        copied = match.capturedEnd();
+    }
+    if (copied == 0) { return text; }
+    resolved += QStringView(text).mid(copied);
+    return resolved;
+}
+
+std::optional<QString> CwxModel::resolveForSend(const QString& text)
+{
+    QString reason;
+    std::optional<QString> resolved = resolvePlaceholders(text, &reason);
+    if (!resolved) {
+        qCWarning(lcCw) << reason;
+        emit requestRejected(reason);
+    }
+    return resolved;
 }
 
 QVector<CwxModel::SpeedSegment>
@@ -353,11 +408,17 @@ void CwxModel::sendMacro(int idx)
 void CwxModel::sendMacro(int idx, const TransmissionRoute& route)
 {
     if (idx < 1 || idx > 12) return;
+    // Resolve before admission: a macro whose placeholder cannot be filled
+    // must not acquire TX.
+    const std::optional<QString> resolved = resolveForSend(m_macros[idx - 1]);
+    if (!resolved) {
+        return;
+    }
     const TransmissionPermit permit = admitTransmission(route);
     if (!permit) {
         return;
     }
-    const QString text = m_macros[idx - 1];
+    const QString text = *resolved;
     if (text.isEmpty()) {
         // Local copy not yet synced (the macroN= status is still pending in the
         // first seconds after connect) — fall back to radio-side expansion so an
