@@ -7,6 +7,7 @@
 #include "ControlAvailabilityRegistry.h"
 #include "HGauge.h"
 #include "StatusIndicator.h"
+#include "StatusBarMessageOverlay.h"
 #include "models/CwDecodeSettings.h"
 #include "PeripheralAuthStore.h"
 #include "core/backends/AutoRfGainControl.h"
@@ -80,6 +81,7 @@
 #include "core/WaterfallRate.h"
 #include "core/SpotModeResolver.h"
 #include "core/LogManager.h"
+#include "core/ThemeManager.h"
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
@@ -110,28 +112,12 @@ namespace AetherSDR {
 
 void MainWindow::wireStatusBarMessages()
 {
-    QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(m_statusBarContainer->layout());
-    const int stationIndex = layout->indexOf(m_stationNickLabel);
-    connect(statusBar(), &QStatusBar::messageChanged, this,
-            [this, layout, stationIndex](const QString& message) {
-        if (!message.isEmpty() && m_stationNickLabel->parentWidget() == m_statusBarContainer) {
-            // Only the existing Connect control is permanent while a message
-            // is shown. Making the full-width bar permanent hides Qt's text.
-            layout->removeWidget(m_stationNickLabel);
-            statusBar()->addPermanentWidget(m_stationNickLabel);
-            m_stationNickLabel->show();
-            // addPermanentWidget reformats the bar and can re-show normal
-            // children; explicitly leave Qt's temporary-message area clear.
-            m_statusBarContainer->hide();
-        } else if (message.isEmpty()
-                   && m_stationNickLabel->parentWidget() != m_statusBarContainer) {
-            statusBar()->removeWidget(m_stationNickLabel);
-            layout->insertWidget(stationIndex, m_stationNickLabel);
-            m_stationNickLabel->show();
-            m_statusBarContainer->show();
-            updateStatusBarMinimumWidth();
-        }
-    });
+    auto* messageOverlay = new StatusBarMessageOverlay(statusBar(), m_statusBarContainer);
+    ThemeManager::instance().applyStyleSheet(
+        messageOverlay,
+        QStringLiteral("QLabel#statusBarMessageOverlay { color: {{color.text.secondary}};"
+                       " background: {{color.background.1}}; font-size: 12px;"
+                       " border: 1px solid {{color.background.2}}; border-radius: 4px; }"));
     connect(&m_radioModel.transmitModel(), &TransmitModel::atuTuneFailed,
             this, [this](ATUStatus, const QString& detail) {
                 statusBar()->showMessage(

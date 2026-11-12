@@ -174,6 +174,11 @@ Status cards appear over the spectrum for things like "Center Lock released", a 
 
 The status bar at the bottom of the window starts with the band-stack indicator and **+PAN** (add a panadapter), followed by indicators such as **TNF**, **CWX**, **ASR**, **DVK** and **FDX** (each only on radios and builds that support it). Click an indicator to toggle it, or press **Tab** to reach it and **Return** or **Enter** to activate it.
 
+Temporary status messages appear as a small text notice just above the bar and
+clear automatically. The station name, controls and telemetry stay visible in
+their usual positions. Messages do not take keyboard focus or block clicks.
+Connection controls are also available in the radio tabs at the top of the window.
+
 Click a bookmark in the band-stack panel to recall its saved receive settings
 on the active slice. The recall stays with that slice and its panadapter even
 if focus changes. Disconnecting, replacing either resource, or starting another
