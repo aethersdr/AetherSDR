@@ -102,6 +102,22 @@ Contract: [`docs/aetherd-stage4-tx-coordinator.md`](../aetherd-stage4-tx-coordin
   through backend queues and retries. Producer identity does not confer an
   independent actor grant.
 
+## Display status observations
+
+`FlexStatusIngress` decodes Flex panadapter/waterfall reports, LAN and WAN
+alike, into present-only `DisplayObservation` values stamped with the status
+epoch they arrived in. RadioModel applies one, live or deferred, only while its
+display session is open for that epoch. The session closes at disconnect,
+reconnect and backend teardown, so a queued or deferred report never acquires
+new-session authority. RadioModel owns the bounded inventory, ownership,
+pairing, retirement and publication policy. Initialize available fields before
+publishing a new or reclaimed pan; optional waterfall status may follow later.
+Explicit foreign or zero ownership revokes writes while a held pan remains quiet.
+Do not clear confirmed ownership evidence to relieve cache pressure: an incomplete
+inventory refuses controls until reconnect. Repeated cadence reports remain
+observations even when their numeric values do not change. Native backend values
+and Demo's synthetic lifecycle retain their distinct existing routes.
+
 ## In-process audio and spectrum — one route each
 
 `IRadioBackend::audioFrameReady` has two possible routes to
@@ -347,9 +363,10 @@ connection.
   It is a separate site from `setupBackend()` because `setBackendForTest()`
   skips that and must still wire the ingress.
 - **Demo** turns value decoding off (`setDecodeValues(false)`): its native
-  producer owns the values, and only identity (a TGXL's handle) is decoded.
-  Its synthetic wire carries radio, display and slice status only, so the
-  Flex-only relays above are not wired for it.
+  producer owns the values. Identity and lifecycle are still decoded: a TGXL's
+  handle, and display pan/waterfall reports, whose values `SimBackend` drops
+  except their dimensions. Its synthetic wire carries radio, display and slice
+  status only, so the Flex-only relays above are not wired for it.
 - **Tests feed lines through `RadioModel::handleLineForTest()` or
   `handleStatusForTest()`**, never `onStatusReceived` directly: that skips the
   decoders. A Flex fixture installs its backend with `setBackendForTest()`,
@@ -358,8 +375,7 @@ connection.
   `-vs -maxwarnings 0` and `tools/flex_ingress_trace.py`) traces a wire
   corpus for before/after comparison of an ingress change.
 - **Still inline in `RadioModel`**, each awaiting its own PR: radio/client
-  lifecycle (#6907), slice ownership (#6878), pan/waterfall ownership and
-  foreign pan writes (#6884), setup status — transverters, USB cables, filter
+  lifecycle (#6907), slice ownership (#6878), setup status — transverters, USB cables, filter
   sharpness, licenses (#6916) — and DVK/NAVTEX (#6870). Each moves into the
   ingress as a domain decoder; none adds its own transport decoder or
   lifetime token.

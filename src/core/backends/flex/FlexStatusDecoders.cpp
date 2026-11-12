@@ -2,6 +2,7 @@
 // ingress on its owner's thread for every accepted line (FlexStatusIngress.h).
 // Moved from FlexBackend / FlexNtpSourceControls unchanged.
 #include "FlexStatusIngress.h"
+#include "FlexDisplayStatus.h"
 
 #include "core/LogManager.h"
 #include "core/backends/MemoryWireCodec.h"
@@ -98,6 +99,16 @@ std::optional<quint32> daxTxIdentity(const QString& text)
 void FlexStatusIngress::decodeLine(const ParsedMessage& line)
 {
     if (line.type != MessageType::Status) { return; }
+    // Display identity, ownership and pairing are lifecycle, which the Demo
+    // needs too; SimBackend drops the values its native producer owns.
+    if (line.object.startsWith(QLatin1String("display "))) {
+        if (auto display = decodeFlexDisplayStatus(line.object, line.kvs)) {
+            display->sourceHandle = line.handle;
+            display->statusEpoch = m_epoch;
+            emit displayObserved(*display);
+        }
+        return;
+    }
     if (!m_decodeValues) {
         // Identity only (SimBackend): a TGXL's handle, which replayed captured
         // status relies on; nothing else.

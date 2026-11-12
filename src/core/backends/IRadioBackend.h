@@ -23,6 +23,7 @@
 #include <QVariant>
 #include <QVariantMap>
 
+#include "core/backends/DisplayObservation.h"
 #include "core/backends/AmpDelta.h"
 #include "core/backends/AudioControlRequest.h"
 #include "core/backends/DaxTxStream.h"
@@ -1204,6 +1205,10 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    // A Flex-shaped panadapter/waterfall report: identity, ownership, pairing
+    // and present-only values. Delivered on the owner thread behind the
+    // backend's status fence (Flex: FlexStatusIngress).
+    void displayObserved(const AetherSDR::DisplayObservation& observation);
     void audioStreamChanged(const AetherSDR::AudioStreamDelta& delta);
     void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // The radio's own answer to a dispatched TransmitControlRequest whose

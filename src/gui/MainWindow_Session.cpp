@@ -2428,6 +2428,12 @@ void MainWindow::wirePanLifecycle()
         applet->spectrumWidget()->overlayMenu()->setRadioFamily(m_radioModel.family());
         applet->spectrumWidget()->overlayMenu()->setScopeModeLabels(pan->scopeModeLabels());
         applet->spectrumWidget()->overlayMenu()->setScopeModeIndex(pan->scopeModeIndex());
+        // A Flex pan is published after its first status is applied, so its
+        // geometry is already in the model and infoChanged has been and gone.
+        if (pan->centerKnown()) {
+            applet->spectrumWidget()->observeFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
+            refreshPanZoomControls();
+        }
 
         // Push display dimensions to the radio so it sends full-size FFT bins.
         // Without this, the radio uses xpixels=50 ypixels=20 (default) and

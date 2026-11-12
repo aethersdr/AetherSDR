@@ -408,6 +408,8 @@ void safetyAndLifetime()
         "reconnect invalidates every receive observation, not just frequency");
     f.reject(ReceiveOperation::AudioGain, old, "request.conflict");
     f.radio.panadapter(f.pan)->resetCenterKnownForReconnect();
+    // The reclaim after a reconnect publishes the pan again (ensureOwnedPanadapter).
+    f.radio.panadapter(f.pan)->setLifecyclePublished(true);
     check(!f.target->available(ReceiveOperation::PanCenter), "reconnect invalidates geometry knowledge");
     f.backend->panCenterBandwidthChanged(kBackendPan, 14.225, -1);
     check(!f.target->available(ReceiveOperation::PanCenter), "partial pan report cannot fill missing bandwidth");

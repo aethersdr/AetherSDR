@@ -137,6 +137,17 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // Identity only: a TGXL named in replayed captured status.
     connect(&m_statusIngress, &FlexStatusIngress::tunerChanged, this, &IRadioBackend::tunerChanged);
     connect(&m_statusIngress, &FlexStatusIngress::amplifierChanged, this, &IRadioBackend::amplifierChanged);
+    connect(&m_statusIngress, &FlexStatusIngress::displayObserved, this,
+            [this](DisplayObservation observation) {
+        if (!m_connected) { return; }
+        // Demo geometry/rates come from its native producer. The synthetic
+        // connection supplies resource identity and resize observations only.
+        DisplayValues dimensions;
+        dimensions.xPixels = observation.values.xPixels;
+        dimensions.yPixels = observation.values.yPixels;
+        observation.values = dimensions;
+        emit displayObserved(observation);
+    });
     connect(&m_statusIngress, &FlexStatusIngress::lineAccepted, this,
             [this](const ParsedMessage& line) {
         if (line.type != MessageType::Status || m_pansAwaitingGeometry.isEmpty()
@@ -462,25 +473,11 @@ void SimBackend::emitInitialState()
     radio.slicesAvailable = capabilities().maxSlices;
     emit radioChanged(radio);
 
-    // Pan center/bandwidth via the typed seam. On the live (hybrid) path this is
-    // what actually drives the VFO/display: RadioModel decodes real Flex pan wire
-    // status only through FlexBackend (decodePanCenterBandwidth is m_flexBackend-
-    // gated), which is null in demo mode — so the wire "display pan center=14.100"
-    // the synthetic connection sends is delivered but never decoded. Emitting the
-    // normalized panCenterBandwidthChanged here bridges that gap through the seam
-    // RadioModel already wires for every backend. panId must match the wire pan id
-    // ("0x40000000") RadioModel claimed. (RFC #4288 — the VFO=0 fix.)
+    // Native Demo values accompany the synthetic resource lifecycle; synthetic
+    // display observations carry only identity and dimensions.
     emit panCenterBandwidthChanged(QStringLiteral("0x40000000"),
                                    m_sliceFreqMhz, kDemoPanBandwidthMhz);
 
-    // …and the waterfall rate, for exactly the same reason. The synthetic connect
-    // declares it on a proper `display waterfall` status line, but RadioModel
-    // decodes that through m_flexBackend->decodeWaterfallLineDuration(), which is
-    // null in demo mode — so the value was parsed off the wire and dropped, and
-    // PanadapterModel::waterfallLineDuration() stayed 0 while the neutral row
-    // pacer fell back to its own default. panWaterfallLineDurationChanged is the
-    // universal seam signal RadioModel wires for every backend, so emitting it
-    // here closes the gap.
     emit panWaterfallLineDurationChanged(QStringLiteral("0x40000000"),
                                          kWaterfallRate);
 

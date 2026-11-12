@@ -3,6 +3,7 @@
 #include "CommandParser.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/CwxStatusDelta.h"
+#include "core/backends/DisplayObservation.h"
 #include "core/backends/InterlockStatusDelta.h"
 #include "core/backends/SpotStatusDelta.h"
 #include "core/backends/StreamStatusDelta.h"
@@ -170,6 +171,8 @@ signals:
     void streamStatusObserved(const AetherSDR::StreamStatusDelta& delta);
     void notchChanged(int notchId, const AetherSDR::NotchDelta& delta);
     void notchRemoved(int notchId);
+    // "display pan|waterfall <id> …", stamped with the epoch it arrived in.
+    void displayObserved(const AetherSDR::DisplayObservation& observation);
     void spotStatusObserved(const AetherSDR::SpotStatusDelta& delta);
     void cwxStatusObserved(const AetherSDR::CwxStatusDelta& delta);
     void graphicEqStatusObserved(const AetherSDR::GraphicEqStatus& status);

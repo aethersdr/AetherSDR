@@ -22,6 +22,7 @@ namespace AetherSDR {
 class FirmwareStager;
 
 class RadioConnection;
+class WanConnection;
 class PanadapterStream;
 
 // FlexBackend — the IRadioBackend for the SmartSDR / FlexRadio wire stack.
@@ -226,38 +227,6 @@ public:
                          quint64 requestId, const QVariant& arg = {}) override;
 
     // ---- status decode (aetherd RFC 2.3) ----
-    // Decode the universal panadapter display fields (center/bandwidth) out of
-    // a Flex "display pan" status kv-set and emit the normalized
-    // panCenterBandwidthChanged signal. RadioModel calls this from its status
-    // choke point (handlePanadapterStatus), so both live and deferred/replayed
-    // status flow through it. The Flex-specific pan fields still decode in
-    // PanadapterModel::applyPanStatus until they convert too.
-    void decodePanCenterBandwidth(const QString& panId,
-                                  const QMap<QString, QString>& kvs);
-    // Decode the universal panadapter display level range (min_dbm/max_dbm) and
-    // emit the normalized panRangeChanged signal. dBm is signed, so an omitted
-    // field is carried as NaN ("unchanged"), not a negative sentinel.
-    void decodePanRange(const QString& panId,
-                        const QMap<QString, QString>& kvs);
-    // Universal pan RF gain / antenna selection — decoded from Flex status and
-    // emitted as the normalized typed signals (aetherd RFC 2.3; rfgain+antenna
-    // promoted to universal per the 2026-07-05 classification).
-    void decodePanRfGain(const QString& panId, const QMap<QString, QString>& kvs);
-    void decodePanAntenna(const QString& panId, const QMap<QString, QString>& kvs);
-    // Waterfall line duration (universal display timing), decoded from the
-    // waterfall-status plane and emitted as panWaterfallLineDurationChanged.
-    void decodeWaterfallLineDuration(const QString& panId,
-                                     const QMap<QString, QString>& kvs);
-    // Decode the Flex-specific pan fields that are NOT part of the core profile
-    // (the WNB group) and emit them on the namespaced extensionStatus channel.
-    // (aetherd RFC 2.3 extension template.)
-    void decodePanExtensions(const QString& panId,
-                             const QMap<QString, QString>& kvs);
-    // The remaining Flex-specific display-pan status keys — wide, loop A/B, fps,
-    // preamp, DAX-IQ channel, MultiFlex client_handle ownership, waterfall
-    // stream-id — bundled onto the namespaced extensionStatus("flex","panState")
-    // channel. Present-only (each key rides only when the wire reported it).
-    void decodePanState(const QString& panId, const QMap<QString, QString>& kvs);
     // Decode a Flex slice-status kv-set into the normalized, canonically-named
     // slice change map and emit sliceChanged(sliceId, changes). Owns all the
     // Flex wire knowledge (key names like "RF_frequency"/"filter_lo", "1"→bool,

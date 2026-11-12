@@ -1802,6 +1802,12 @@ private:
     void applyTxBandChanges(const TxBandDelta& delta);
     QPointer<FlexStatusIngress> m_statusIngress;   // the backend's; model thread
     quint64 m_statusEpoch{0};            // the epoch of the session being run
+    // Display reports apply only from the session being run, and not after it
+    // has begun to end (RadioModel_DisplayObservations.cpp).
+    // How long a deferred display report stays applicable.
+    static constexpr qint64 kDeferredDisplayAgeMs = 30'000;
+    quint64 m_displayEpoch{0};
+    bool m_displaySessionOpen{true};
     quint64 m_connectedStatusEpoch{0};   // the epoch onConnected() last ran for
     quint64 m_wanRoute{0};               // fences queued SmartLink lifecycle per bind
     void handleMessageReceived(const ParsedMessage& msg);
@@ -1816,7 +1822,18 @@ private:
     void scheduleDStarRuntimeConfiguration();
     void applyPendingDStarRuntimeConfiguration();
     void syncDigitalVoiceTxSelection(bool force = false);
-    void handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs);
+    void onDisplayObservation(const DisplayObservation& observation);
+    void openDisplaySession(quint64 epoch);
+    void retireDisplaySession();
+    bool displayObservationCurrent(const DisplayObservation& observation) const;
+    void applyDisplayObservation(const DisplayObservation& observation);
+    bool applyDisplayValues(PanadapterModel* pan, const DisplayObservation& observation);
+    void deferDisplayObservation(const DisplayObservation& observation);
+    DisplayObservation takeDeferredDisplayObservation(const DisplayObservation& observation);
+    void retireDisplayPan(const QString& id);
+    void replaceDisplayWaterfall(PanadapterModel* pan, const QString& id);
+    void syncDisplayStream(PanadapterModel* pan, bool rangeChanged = false, bool scaleReported = false);
+    bool displayWaterfallOwned(const QString& id, const QString& parent) const;
     friend class DaxTxOwnershipTestAccess;
     void resetDaxTxOwnership();
     void retireDaxTxInputs();
@@ -1938,7 +1955,8 @@ private:
     quint64 m_sessionRequestId{0};
     QMap<quint64, std::function<void()>> m_sessionCancellations;
     quint32 clientHandle() const;
-    PanadapterModel* ensureOwnedPanadapter(const QString& panId);
+    PanadapterModel* ensureOwnedPanadapter(const QString& panId,
+                                          const DisplayObservation* initial = nullptr);
     void updateStreamFilters();
     void emitOtherClientsChanged();
     QString antennaAliasRadioKey() const;
@@ -2172,6 +2190,7 @@ public:
     // when the family has no backend in this build (RTL without librtlsdr).
     bool rebuildBackendForTest(const QString& family);
 private:
+    friend class FlexDisplayStatusTestAccess;
     friend class RadioModelSliceLifecycleTestAccess;
     friend class RadioNicknameTestAccess;
     friend class TuneOutputControlTestAccess;
@@ -2545,9 +2564,7 @@ private:
     QSet<quint32> m_evictedPredecessorHandles;
     QSet<quint32> m_evictionsInFlight;
     QMap<quint32, ForeignPanWrite> m_foreignPanWrites;
-    void noteForeignPanWriteIfAny(const QString& object,
-                                  const QMap<QString, QString>& kvs,
-                                  quint32 sourceHandle);
+    void noteForeignPanWriteIfAny(const QString& panId, quint32 sourceHandle);
     void evictStaleSession(quint32 handle, const QString& reason);
     QString m_activePanId;       // currently active panadapter
 
@@ -2557,17 +2574,17 @@ private:
     // holds objects WE own. A leaked waterfall (panafall closed without
     // "display panafall remove") therefore lingers here after its pan is pruned,
     // making it detectable even when the radio has stopped streaming it.
-    // Main-thread only (written in onStatusReceived, read in the bridge).
-    struct RadioDisplayPan { quint32 clientHandle{0}; QString waterfallId; };
-    struct RadioDisplayWf  { quint32 clientHandle{0}; QString parentPanId; };
+    // Main-thread only (written by display observations, read in the bridge).
+    struct RadioDisplayPan { quint32 clientHandle{0}; QString waterfallId; bool ownerKnown{false}; };
+    struct RadioDisplayWf  { quint32 clientHandle{0}; QString parentPanId; bool ownerKnown{false}; };
     QMap<QString, RadioDisplayPan> m_radioDisplayPans;        // panId → entry
     QMap<QString, RadioDisplayWf>  m_radioDisplayWaterfalls;  // wfId  → entry
-    // Deferred "display pan" status pending ownership confirmation. Paired
-    // with QDateTime::currentSecsSinceEpoch() at insert so a sweep on insert
-    // can drop entries that the radio never resolved with a client_handle
-    // frame (#2228 — would otherwise leak for non-owned pans that also never
-    // emit "removed").
-    QMap<QString, QPair<qint64, QMap<QString, QString>>> m_pendingPanStatuses;
+    struct PendingDisplayObservation { qint64 insertedMs{0}; DisplayObservation observation; };
+    QMap<QString, PendingDisplayObservation> m_pendingDisplayObservations;
+    QElapsedTimer m_displayObservationClock;
+    QList<DisplayObservation> m_displayObservationQueue;
+    bool m_applyingDisplayObservation{false};
+    bool m_displayInventoryUncertain{false};
 
     AmpModel m_amplifier;            // power amp (PGXL) state + relay (#4094)
 
