@@ -10887,6 +10887,22 @@ add_test(NAME phone_applet_vox_disarm_test COMMAND phone_applet_vox_disarm_test)
 set_tests_properties(phone_applet_vox_disarm_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# CW speed entry survives repeated capability limits between keystrokes.
+# Real applet/model, offscreen; no radio or sockets.
+add_executable(phone_cw_speed_entry_test
+    tests/phone_cw_speed_entry_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_speed_entry_test PRIVATE src)
+target_link_libraries(phone_cw_speed_entry_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_cw_speed_entry_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_speed_entry_test COMMAND phone_cw_speed_entry_test)
+set_tests_properties(phone_cw_speed_entry_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # PhoneCwApplet — the APF row on the CW face (#4879). Widget-level, offscreen:
 # slice rebind must not stack handlers, the capability gate, and the model
 # round trip in both directions. No radio, no sockets.
@@ -11115,6 +11131,7 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    phone_cw_speed_entry_test
     session_control_test
     audio_control_routing_test
     dax_tx_backend_test
