@@ -136,8 +136,9 @@ signals:
     void pitchRangeChanged(int minHz, int maxHz);
     void speedRangeChanged(int minWpm, int maxWpm);
     void cwPanelCloseRequested();
-    // RX text that passed the confidence filter and was rendered — the
-    // stream the CW callsign spotter watches for "DE <call> <call>".
+    // RX text rendered in the pane, from any decoder (ggmorse text only
+    // after its Sens filter) — the stream the CW callsign spotter watches
+    // for "DE <call> <call>".
     void cwRxTextDisplayed(const QString& text);
 
     // RTTY
