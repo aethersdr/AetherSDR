@@ -2870,7 +2870,7 @@ const QStringList& getModelNames()
         QStringLiteral("slices"),     QStringLiteral("pan"),
         QStringLiteral("pans"),       QStringLiteral("panstats"),
         QStringLiteral("gps"),        QStringLiteral("clock"),
-        QStringLiteral("renderstats"),
+        QStringLiteral("renderstats"), QStringLiteral("repaintstats"),
         QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
         QStringLiteral("display"),
         QStringLiteral("waveforms"),
@@ -3014,6 +3014,26 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("dumpTree", {}, "serialize the full widget tree as JSON",
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doDumpTree(); });
+
+        add("repaintScheduling", {}, "repaintScheduling <on|off> — compare display-paced window repaint delivery; does not change radio state",
+            parseValueOnly,
+            [](AutomationServer&, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.value != QLatin1String("on") && a.value != QLatin1String("off")) {
+                    return err(QStringLiteral("expected on or off"));
+                }
+                int count = 0;
+                const bool enabled = a.value == QLatin1String("on");
+                for (QWidget* window : QApplication::topLevelWidgets()) {
+                    for (QObject* scheduler : window->findChildren<QObject*>(
+                             QStringLiteral("windowRepaintScheduler"), Qt::FindDirectChildrenOnly)) {
+                        if (QMetaObject::invokeMethod(scheduler, "setEnabled", Qt::DirectConnection,
+                                                     Q_ARG(bool, enabled))) { ++count; }
+                    }
+                }
+                if (!count) { return err(QStringLiteral("no active window repaint schedulers")); }
+                return QJsonObject{{QStringLiteral("ok"), true},
+                    {QStringLiteral("enabled"), enabled}, {QStringLiteral("count"), count}};
+            });
 
         add("floors", {}, "per-pan measured noise + display floor (dBm)",
             parseTargetPath,
@@ -5705,6 +5725,22 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("model"), model},
                            {QStringLiteral("waveforms"), data}};
+    }
+    if (model == QLatin1String("repaintstats")) {
+        const bool reset = selector == QLatin1String("reset") || property == QLatin1String("reset");
+        QJsonArray windows;
+        for (QWidget* window : QApplication::topLevelWidgets()) {
+            for (QObject* scheduler : window->findChildren<QObject*>(
+                     QStringLiteral("windowRepaintScheduler"), Qt::FindDirectChildrenOnly)) {
+                QVariantMap snap;
+                if (QMetaObject::invokeMethod(scheduler, "statsSnapshot", Qt::DirectConnection,
+                        Q_RETURN_ARG(QVariantMap, snap), Q_ARG(bool, reset))) {
+                    snap[QStringLiteral("windowTitle")] = window->windowTitle();
+                    windows.append(QJsonObject::fromVariantMap(snap));
+                }
+            }
+        }
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("windows"), windows}};
     }
     if (model == QLatin1String("eqstats")) {
         // Per Client-EQ paint/cache counters. This keeps the bridge
@@ -9787,10 +9823,18 @@ QJsonObject AutomationServer::doWindow(const QString& action, const QString& tar
     else if (st & Qt::WindowFullScreen) ws = "fullscreen";
     else if (st & Qt::WindowMaximized)  ws = "maximized";
     qCInfo(lcAutomation).noquote() << "window" << a << "->" << ws;
+    const QScreen* screen = win->screen();
+    const QRect available = screen ? screen->availableGeometry() : QRect{};
     return QJsonObject{
         {QStringLiteral("ok"), true},
         {QStringLiteral("action"), a},
         {QStringLiteral("windowState"), QLatin1String(ws)},
+        {QStringLiteral("screenName"), screen ? screen->name() : QString{}},
+        {QStringLiteral("screenDpr"), screen ? screen->devicePixelRatio() : 1.0},
+        {QStringLiteral("screenRefreshRate"), screen ? screen->refreshRate() : 0.0},
+        {QStringLiteral("screenAvailableGeometry"), QJsonObject{
+            {QStringLiteral("x"), available.x()}, {QStringLiteral("y"), available.y()},
+            {QStringLiteral("w"), available.width()}, {QStringLiteral("h"), available.height()}}},
         {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("w"), win->width()},
                                                  {QStringLiteral("h"), win->height()}}},
     };

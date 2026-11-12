@@ -291,6 +291,25 @@ map colors (blue→cyan→green→yellow→red). Overlays (grid, band plan, scal
 markers) are painted by QPainter into a cached QImage, uploaded as a texture
 only when state changes. Main thread CPU reduced from ~97% to ~28%.
 
+**Backing-store composition:** On macOS with Qt 6.12 and newer, pans share
+the top-level Metal composition instead of each requesting a native child
+window. This avoids repeated copies of the large QWidget backing store for
+separate pan compositions. `AETHER_PAN_NATIVE_WINDOW=1` restores the legacy
+native-leaf workaround; older Qt retains it by default. Ancestor isolation
+remains paired with that workaround.
+
+`WindowRepaintScheduler` batches QWidget update-request delivery at the
+window's screen refresh cadence. Radio/model updates, input handling and
+elapsed-time meter ballistics continue normally. The existing pan scheduler
+marks pan regions dirty immediately when the window owns pacing; Qt merges
+them into its pending window update instead of adding a second frame delay. The native-leaf fallback keeps the original pan
+pacing because window pacing reduced its fresh-pan frame rate in profiling.
+The software spectrum build also keeps its original pan pacing: immediate
+dirty delivery reduced its paint throughput in profiling. Window pacing can
+still be enabled explicitly through the bridge for comparisons. VFO meter
+updates skip unchanged integer bar widths on both backends, without changing
+the numeric readout or smoother's state. No repaint timer runs while idle.
+
 **Key QRhi lesson:** `fract()` must be in the fragment shader, not vertex
 shader. Per-vertex `fract()` when UV spans 0→1 produces identical values
 at both vertices (`fract(0+offset) == fract(1+offset)`), resulting in

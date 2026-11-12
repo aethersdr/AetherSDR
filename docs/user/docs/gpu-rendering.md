@@ -77,7 +77,8 @@ A value you set yourself always wins.
 - **Waterfall** — a GPU texture used as a ring buffer. Each new row uploads one scanline; scrolling is done in the shader, with no memory copies.
 - **Spectrum trace** — drawn per pixel on the GPU from a single column texture of FFT data, so there is no per-frame vertex rebuild on the CPU. Trace width is the **FFT Line** setting (default 1.0 px).
 - **Overlays** — grid, scales, band plan, passbands, slice markers, notches and spots are painted once into a cached texture and only repainted when something changes (retune, zoom, resize, mode change).
-- Repaints are coalesced to at most one per 16 ms, so the display tops out at about **60 fps**. The spectrum rate itself is **Display → FFT FPS** (5–60, default 25).
+- Shared GPU windows batch repaint requests at the monitor's refresh cadence. CPU builds and the legacy native-window path coalesce pan requests with a 16 ms timer. Radio data and meter smoothing keep their own rates. The spectrum input rate is **Display → FFT FPS** (5–60, default 25); the achieved redraw rate also depends on window size and system load.
+- On macOS with Qt 6.12 or later, docked panadapters share their window's composition surface to reduce backing-store copying. Floating panadapters keep their own top-level window. The VFO meter skips redraws when its displayed bar pixels have not changed.
 - The **3D Stacked Trace** view (see [Panadapter Controls](./panadapter-controls.md)) also runs on the GPU.
 
 ## Known issues
@@ -89,6 +90,16 @@ A value you set yourself always wins.
 - On Windows, popping out a panadapter has crashed AetherSDR with an older AMD Radeon HD 7000 series graphics card ([#5990](https://github.com/aethersdr/AetherSDR/issues/5990)).
 
 ## Troubleshooting
+
+### A macOS panadapter becomes blank after floating or docking
+
+Quit AetherSDR and launch it from Terminal with the legacy native-window path:
+
+```bash
+AETHER_PAN_NATIVE_WINDOW=1 /Applications/AetherSDR.app/Contents/MacOS/AetherSDR
+```
+
+This diagnostic override gives each panadapter a native surface and uses the 16 ms pan repaint scheduler. It can use more CPU. It does not change saved settings.
 
 ### A "Spectrum renderer unavailable" card covers the panadapter
 

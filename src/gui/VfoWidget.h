@@ -378,6 +378,7 @@ protected:
 
 private:
     void syncShadowGeometry();
+    void updateMeterRegion();
     void updateSignalMeterTarget();
     void animateSignalMeter();
     // Build and push the current MeterInput (RX signal vs the selected TX meter)
@@ -464,6 +465,9 @@ private:
     bool           m_receiveMeterReadingActive{false};
     QTimer         m_signalMeterAnimation;
     QElapsedTimer  m_signalMeterElapsed;
+    QRect          m_lastRequestedMeterBar;
+    int            m_lastRequestedMeterFill{-1};
+    bool           m_lastRequestedMeterRelative{false};
     float          m_signalMeterFraction{0.0f};
     float          m_targetSignalMeterFraction{0.0f};
     bool           m_collapsed{false};

@@ -65,6 +65,16 @@ unset(_aether_root_code)
 unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
+# Socket-free QWidget update coalescing, trailing delivery and lifetime.
+add_executable(window_repaint_scheduler_test
+    tests/window_repaint_scheduler_test.cpp
+    src/gui/WindowRepaintScheduler.cpp)
+target_include_directories(window_repaint_scheduler_test PRIVATE src)
+target_link_libraries(window_repaint_scheduler_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME window_repaint_scheduler_test COMMAND window_repaint_scheduler_test)
+set_tests_properties(window_repaint_scheduler_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # ── Shared objects for tests that do not link aethercore (#6214) ─────────────
 # The light tests compile a few app sources themselves rather than linking the
 # engine. Each is compiled ONCE here and handed to those tests as

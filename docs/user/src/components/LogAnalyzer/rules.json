@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13216,
+          "line": 13219,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 13379,
+          "line": 13402,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {
@@ -574,7 +574,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 2064,
+          "line": 2087,
           "text": "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software"
         }
       ]
