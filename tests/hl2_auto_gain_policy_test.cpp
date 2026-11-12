@@ -1170,6 +1170,14 @@ int main()
         const AutoGainAction plain = autoGainStep(idle, o, kBandscope);
         check(plain.next.dwellRequiredMs == 0 && plain.next.offsetDb == 6,
               "27.4 without a probe in flight the same clip earns no backoff");
+        // ...and, as before, a clip below the trip offset is not a trip: it
+        // leaves the trip's age, which decides when the trip is forgotten.
+        idle.sinceTripMs = 50000;
+        const AutoGainAction aged = autoGainStep(idle, o, kBandscope);
+        check(aged.next.tripOffsetDb == 6
+                  && aged.next.sinceTripMs == 50000 + o.elapsedMs,
+              "27.6 without a probe in flight a clip below the trip offset "
+              "leaves the trip and its age alone");
 
         check(kBandscope.probeConfirmMs == 30000
               && kBandscope.releaseIntervalMs == 3000
