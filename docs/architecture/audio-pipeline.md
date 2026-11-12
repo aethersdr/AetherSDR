@@ -59,6 +59,17 @@ interleaved L/R samples. Important cases:
 
 ## RX speaker path
 
+The global AetherDSP mode policy permits automatic NR in USB, LSB, DSB, AM,
+SAM, FM, NFM, DFM, WFM and WBFM. Any receiving, unmuted, positive-gain slice
+with a populated mode outside that list restricts the mixed speaker stream;
+this includes runtime-registered digital waveforms. Empty modes during slice
+creation express no restriction. The policy remembers the selected method
+while automatically disabled and restores it when the mix becomes compatible;
+an explicit user override wins until the restriction clears. A manual method
+selection in voice mode also replaces any pending automatic-restore memory, so
+the latest selection owns persistence and the next restriction. This receive
+processing list is independent of voice-keyer and Copy Assist availability.
+
 ```mermaid
 flowchart TD
     A["Radio VITA RX audio"] --> B["PanadapterStream::processDatagram()"]
