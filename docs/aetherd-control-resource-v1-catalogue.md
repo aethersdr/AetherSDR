@@ -399,7 +399,7 @@ by the same law the automatic RF-gain loop uses (`Hl2AutoGainPolicy.h`).
 
 ### Meters
 
-`Hl2Backend::defineMeters` defines nine meters. They reach clients through the
+`Hl2Backend::defineMeters` defines eleven meters. They reach clients through the
 generic `meter` resource; the HL2 chooses the indices, since the radio assigns
 none. Each additional receiver adds one `SLC` / `LEVEL` meter at index
 100 + receiver number (`sourceIndex` is the receiver number; same unit and
@@ -416,9 +416,13 @@ range).
 | 7 | `TX` | `ALC` | `dBFS` | -100 to 0 | Post-ALC audio peak, before the modulator |
 | 8 | `TX` | `COMPPEAK` | `dB` | 0 to 25 | Speech processor compression |
 | 9 | `TX` | `ALCGAIN` | `dB` | -20 to 0 | Gain the ALC is applying |
+| 10 | `TX` | `SC_FILT_1` | `dBFS` | -140 to 0 | Transmit audio after the ALC, into the modulator |
+| 11 | `TX` | `SC_FILT_2` | `dBFS` | -140 to 0 | Modulated transmit IQ, the modulator's output |
 
 `FWDPWR` and `REFPWR` are labelled uncalibrated in their definitions: the value
 comes from an uncalibrated reference curve, not a calibrated power reading.
+`SC_FILT_1` and `SC_FILT_2` are the two levels the desktop's TX filter-loss
+check compares.
 
 ### Not offered
 
