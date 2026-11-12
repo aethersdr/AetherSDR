@@ -186,6 +186,31 @@ target_link_libraries(decoder_audio_routing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME decoder_audio_routing_test COMMAND decoder_audio_routing_test)
 set_tests_properties(decoder_audio_routing_test PROPERTIES TIMEOUT 30)
 
+# Data2G receive-only monitor (RFC #7159): the vendored core's own Engine
+# transmits a broadcast frame; the AetherSDR adapter decodes it from 24 kHz
+# float32 fed in uneven chunks. Links the core directly as well, for the
+# transmitting half only.
+if(ENABLE_DATA2G)
+    add_executable(data2g_monitor_test tests/data2g_monitor_test.cpp)
+    target_link_libraries(data2g_monitor_test PRIVATE aether_hfdata aether_data2g_core)
+    add_test(NAME data2g_monitor_test COMMAND data2g_monitor_test)
+    set_tests_properties(data2g_monitor_test PROPERTIES TIMEOUT 120)
+
+    # The threaded model on the same signal: injected PCM, the real worker
+    # thread, no radio fixture. The model source is compiled in rather than
+    # taken from aethercore, so the binary carries one copy of the core.
+    add_executable(data2g_receive_model_test
+        tests/data2g_receive_model_test.cpp
+        src/models/Data2gReceiveModel.cpp
+    )
+    target_include_directories(data2g_receive_model_test PRIVATE src)
+    target_compile_definitions(data2g_receive_model_test PRIVATE HAVE_DATA2G)
+    target_link_libraries(data2g_receive_model_test PRIVATE
+        aether_hfdata aether_data2g_core Qt6::Core)
+    add_test(NAME data2g_receive_model_test COMMAND data2g_receive_model_test)
+    set_tests_properties(data2g_receive_model_test PROPERTIES TIMEOUT 120)
+endif()
+
 # Injected typed PCM and the real modem worker; no sockets, sound device or RF.
 add_executable(ax25_receive_model_test tests/ax25_receive_model_test.cpp)
 target_link_libraries(ax25_receive_model_test PRIVATE aethercore Qt6::Core)
@@ -816,6 +841,14 @@ add_executable(control_telemetry_test tests/control_telemetry_test.cpp)
 target_include_directories(control_telemetry_test PRIVATE src tests)
 target_link_libraries(control_telemetry_test PRIVATE aethercore Qt6::Core)
 add_test(NAME control_telemetry_test COMMAND control_telemetry_test)
+
+# Socket-free frontEndOverload resource: offered only to a backend declaring
+# frontEndOverloadObservation, withdrawn on disconnect, and the per-family
+# declarations read from the production backends.
+add_executable(control_front_end_overload_test tests/control_front_end_overload_test.cpp)
+target_include_directories(control_front_end_overload_test PRIVATE src tests)
+target_link_libraries(control_front_end_overload_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME control_front_end_overload_test COMMAND control_front_end_overload_test)
 
 # not registered: explicit opt-in diagnostic. Launches OUR aetherd and binds
 # its unique QLocalServer endpoint (Unix-domain socket / Windows named pipe).
@@ -8438,6 +8471,16 @@ endif()
 set_target_properties(hl2_tci_signaling_test PROPERTIES AUTOMOC ON)
 add_test(NAME hl2_tci_signaling_test COMMAND hl2_tci_signaling_test)
 
+# #7063 — a backend-suppressed meter is INCONCLUSIVE naming its gate, never
+# "defined but never fed". Guards the band between MeterModel's consumer floor
+# and a producer's own (much higher) gate, where radiocert condemned a healthy
+# TX:SWR and recommended deleting it.
+add_executable(radiocert_gated_meter_test tests/radiocert_gated_meter_test.cpp)
+target_include_directories(radiocert_gated_meter_test PRIVATE src tests)
+target_link_libraries(radiocert_gated_meter_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(radiocert_gated_meter_test PROPERTIES AUTOMOC ON)
+add_test(NAME radiocert_gated_meter_test COMMAND radiocert_gated_meter_test)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -9255,6 +9298,15 @@ if(TARGET Qt6::SerialPort)
     add_test(NAME flex_control_recovery_test COMMAND flex_control_recovery_test)
 endif()
 
+# A serial CW key or paddle line already active at port open keys nothing until
+# released and pressed (the PTT pins' rule). Injected samples; no port opened.
+if(TARGET Qt6::SerialPort)
+    add_executable(serial_cw_key_baseline_test tests/serial_cw_key_baseline_test.cpp)
+    target_include_directories(serial_cw_key_baseline_test PRIVATE src tests)
+    target_link_libraries(serial_cw_key_baseline_test PRIVATE aethercore Qt6::Core Qt6::SerialPort)
+    add_test(NAME serial_cw_key_baseline_test COMMAND serial_cw_key_baseline_test)
+endif()
+
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
     src/gui/PanLayoutDialog.cpp
@@ -9728,6 +9780,15 @@ target_include_directories(hl2_dsp_readback_test PRIVATE src)
 target_link_libraries(hl2_dsp_readback_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_dsp_readback_test COMMAND hl2_dsp_readback_test)
 
+# dspChains() answers from cache and never waits on the I/O thread (#7164);
+# a stale publish cannot land over a withdrawal. Socket-free, nothing keyed.
+add_executable(hl2_dspchains_cache_test
+    tests/hl2_dspchains_cache_test.cpp
+)
+target_include_directories(hl2_dspchains_cache_test PRIVATE src tests)
+target_link_libraries(hl2_dspchains_cache_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_dspchains_cache_test COMMAND hl2_dspchains_cache_test)
+
 # The bridge half of the same read-back: `get dsp` and `get dsp … backend` must
 # answer from one object, because assert_state and wait_for only ever issue the
 # property form (#5401 review). Socket-free — the line dispatcher is called
@@ -9775,6 +9836,19 @@ add_executable(hl2_rx_only_tx_chain_test tests/hl2_rx_only_tx_chain_test.cpp)
 target_include_directories(hl2_rx_only_tx_chain_test PRIVATE src tests)
 target_link_libraries(hl2_rx_only_tx_chain_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rx_only_tx_chain_test COMMAND hl2_rx_only_tx_chain_test)
+# AETHER_AUTOMATION_NO_TX closes the HL2's own transmit gate as well as the
+# bridge's. Constructed backend only — no socket, no DSP, nothing keyed.
+add_executable(hl2_automation_no_tx_gate_test tests/hl2_automation_no_tx_gate_test.cpp)
+target_include_directories(hl2_automation_no_tx_gate_test PRIVATE src tests)
+target_link_libraries(hl2_automation_no_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_automation_no_tx_gate_test COMMAND hl2_automation_no_tx_gate_test)
+# An HL2 with its gate open refuses MOX, TUNE, TCI, CW PTT and a CW key in every
+# receive-only mode it declares. Production backend, no socket, nothing keyed.
+add_executable(hl2_receive_only_mode_key_test tests/hl2_receive_only_mode_key_test.cpp)
+target_include_directories(hl2_receive_only_mode_key_test PRIVATE src tests)
+target_link_libraries(hl2_receive_only_mode_key_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_receive_only_mode_key_test COMMAND hl2_receive_only_mode_key_test)
 # What an HL2 comes back with after a restart, through the operator's setters
 # and the production store/load: every offered mode with its passband, the last
 # band, per-band drive and LNA gain, a second receiver's own passband; and two
@@ -10748,6 +10822,27 @@ add_test(NAME two_tone_tune_gate_test
 set_tests_properties(two_tone_tune_gate_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #4954: on a TX output the backend cannot meter (the HL2's RF1) the TX
+# applet's power and SWR gauges say "not measured" instead of reading 0 W.
+# Same link set as two_tone_tune_gate_test; no socket, nothing keyed.
+add_executable(tx_output_metering_test
+    tests/tx_output_metering_test.cpp
+    src/gui/TxApplet.cpp
+    src/gui/AtuPreTuneDialog.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(tx_output_metering_test PRIVATE src tests)
+target_link_libraries(tx_output_metering_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(tx_output_metering_test PROPERTIES AUTOMOC ON)
+add_test(NAME tx_output_metering_test
+         COMMAND tx_output_metering_test)
+set_tests_properties(tx_output_metering_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_tx_filter_numeric_entry_test
     tests/phone_tx_filter_numeric_entry_test.cpp
     src/gui/PhoneApplet.cpp
@@ -11038,6 +11133,7 @@ set(AETHER_SETTINGS_CONSUMERS
     dax_tx_applet_test
     bandstack_cat_controls_test
     two_tone_tune_gate_test
+    tx_output_metering_test
     update_controller_test
     update_installer_test
     update_stager_test
@@ -11171,6 +11267,9 @@ set(AETHER_SETTINGS_CONSUMERS
     weather_radar_loading_test
     hl2_gain_restore_test
     hl2_rx_only_tx_chain_test
+    hl2_automation_no_tx_gate_test
+    serial_cw_key_baseline_test
+    hl2_receive_only_mode_key_test
     hl2_persist_restart_test
     hl2_tx_mode_reconnect_test
     hl2_persist_two_radios_test
@@ -11194,6 +11293,7 @@ set(AETHER_SETTINGS_CONSUMERS
     control_slice_frequency_test
     control_receive_test
     control_telemetry_test
+    control_front_end_overload_test
     aetherd_discovery_startup_test
     automation_bridge_start_outcome_test
     slice_label_test

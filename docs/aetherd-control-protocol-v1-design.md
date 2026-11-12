@@ -209,6 +209,8 @@ V1 begins with the smallest useful canonical set:
 - `meter` — definitions and bounded latest values;
 - `transmitState` — read-only interlock, PTT/VOX/MOX/tune state and inhibit
   reason.  No v1 method can mutate this resource during Stage 3.
+- `frontEndOverload` — the receive converter's overload level and the
+  automatic RF-gain loop's hold, only for a backend that declares it.
 
 Every field is documented in a method/resource catalogue and covered by a
 schema test before it is exported.  Credentials, backend pointers, raw vendor
@@ -258,10 +260,10 @@ The registry exposes metadata for each method:
 Initial non-TX methods are `capabilities.get`, `resource.get`,
 `resource.subscribe`, `resource.unsubscribe`, `radio.connect`,
 `radio.disconnect`, `slice.setFrequency`, `slice.setMode`, `slice.setFilter`,
-`slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`, and
-`panadapter.setBandwidth`.  Connect requests use typed family-neutral fields;
-backend-specific connection data lives in a namespaced validated object and
-never includes a persistent plaintext credential.
+`slice.setAudioGain`, `slice.setAudioMute`, `panadapter.setCenter`,
+`panadapter.setBandwidth`, and `radioSession.setCwPitch`.  Connect requests use
+typed family-neutral fields; backend-specific connection data lives in a
+namespaced validated object and never includes a persistent plaintext credential.
 
 Advertised capabilities are the intersection of protocol support, build-time
 features, authenticated grants, active backend capabilities, and current

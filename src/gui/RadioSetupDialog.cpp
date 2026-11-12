@@ -2399,8 +2399,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             auto* txCheck = new QCheckBox("Enable transmit control");
             const bool envForcesTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
             const bool envBlocksTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
-            txCheck->setChecked(!envBlocksTx
-                                && (AutomationBridgeSettings::txAllowed() || envForcesTx));
+            txCheck->setChecked(AutomationBridgeSettings::launchTxAllowed());
             txCheck->setToolTip(
                 "Let an MCP client key the transmitter (MOX/PTT/TUNE/ATU/CWX).\n"
                 "OFF by default — the bridge blocks all transmit-keying otherwise.\n"
