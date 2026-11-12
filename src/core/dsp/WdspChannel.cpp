@@ -1610,6 +1610,9 @@ bool WdspChannel::open() noexcept
             // unity monitor gain. Normalize inside the FM chain, including
             // pre-monitor taps. FM bypasses the main RX AGC.
             SetRXAPanelGain1(m_channelId, 1.0);
+        }
+        if (m_config.fmReceive || m_config.fmLimiter) {
+            // close() frees the fmd stage, so the limiter is pushed on every open.
             SetRXAFMLimGain(m_channelId, 0.0);
             SetRXAFMLimRun(m_channelId, 1);
         }

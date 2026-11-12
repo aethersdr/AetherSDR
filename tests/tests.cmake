@@ -1803,6 +1803,13 @@ target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_squelch_audio_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_squelch_audio_test COMMAND hl2_rxdsp_squelch_audio_test)
 
+# HL2 FM receive is bounded by WDSP's FM limiter, built or entered live, and
+# the limiter flag leaves USB and AM output unchanged (#7222).
+add_executable(hl2_rxdsp_fm_limiter_test tests/hl2_rxdsp_fm_limiter_test.cpp)
+target_include_directories(hl2_rxdsp_fm_limiter_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_fm_limiter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_fm_limiter_test COMMAND hl2_rxdsp_fm_limiter_test)
+
 add_executable(hl2_rx_dsp_declaration_test tests/hl2_rx_dsp_declaration_test.cpp)
 target_include_directories(hl2_rx_dsp_declaration_test PRIVATE src tests)
 target_link_libraries(hl2_rx_dsp_declaration_test PRIVATE aethercore Qt6::Core)
