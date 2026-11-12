@@ -50,7 +50,7 @@ Drag the grip on the panel's edge to resize it; the height is remembered. Right-
 
 ### Choosing a decoder
 
-The decoder selector in the panel's toolbar picks which decoder reads the received CW. Only the selected decoder runs. Your own sending (the **TX** toggle) is always decoded by ggmorse.
+The decoder selector in the panel's toolbar picks which decoder reads the received CW. Only the selected decoder runs. Your own sending (the **TX** toggle) is always decoded by ggmorse and follows ggmorse's Sens setting, whichever decoder is selected.
 
 | Decoder | Text appears | Typical use | Model |
 |---|---|---|---|
@@ -65,7 +65,7 @@ The neural decoders' models are not part of the AetherSDR download. The first ti
 With a neural decoder selected:
 
 - The lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
-- Characters are coloured by the model's own confidence, on the same green-to-red scale. **Sens** hides the low-confidence ones, as it does for ggmorse. Each decoder keeps its own Sens setting; DeepFist and DeepCW start at 0, which hides nothing. DeepFist text is hidden one character at a time and DeepCW text one group of characters at a time, as each is given its confidence. A word space is always shown.
+- Characters are coloured by the model's own confidence, on the same green-to-red scale. **Sens** hides the low-confidence ones, as it does for ggmorse. Each decoder keeps its own Sens setting; DeepFist and DeepCW start at 0, which hides nothing. DeepFist text is hidden one character at a time and DeepCW text one group of characters at a time, as each is given its confidence. With DeepFist a word space is always shown; a hidden DeepCW group is hidden with the spaces inside it.
 - The MQTT text stream comes from ggmorse only. The **Live CW contacts** window works with every decoder: it reads the text shown in the pane.
 - AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on a radio licensed for it through SmartSDR+, which it keeps after the subscription lapses) works with any decoder.
 

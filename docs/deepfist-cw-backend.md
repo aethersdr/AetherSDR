@@ -18,8 +18,9 @@ activity-gate threshold from the stream default 12 to 3 so weak off-air CW is
 not gated out (#5950); that value is what every user of this backend runs.
 Output has no calibrated
 ggmorse cost. Each letter is coloured by the model's own posterior (cost =
-1 − posterior, the four ggmorse colour bands) and is never filtered by the
-sensitivity slider; pitch and speed are not invented.
+1 − posterior, the four ggmorse colour bands) and is hidden at or above
+DeepFist's own Sens setting (default 0, which hides nothing); pitch and speed
+are not invented.
 DeepFist output does not feed automatic callsign spotting. Other monitored
 slices and speaker gain/mute do not alter the selected decoder input. This is
 an audio slice tap, not an RF separation claim.

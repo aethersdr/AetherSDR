@@ -995,7 +995,8 @@ void PanadapterApplet::appendColoredCwText(const QString& text, float cost)
     // The cost is 1 - the backend's own posterior (DeepFist per letter, DeepCW
     // per chunk). It picks the color (ggmorse's four bands, as theme tokens),
     // and text at or above this decoder's own Sens threshold is not shown.
-    // A word space is always shown, so hidden letters never join two words.
+    // Text that is only a space is always shown, so hidden DeepFist letters
+    // never join two words; a hidden DeepCW chunk goes with its spaces.
     QString clean = text;
     clean.replace('\n', ' ');
     if (cost >= m_cwNeuralCostThreshold && !clean.trimmed().isEmpty()) { return; }

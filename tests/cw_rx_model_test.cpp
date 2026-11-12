@@ -190,7 +190,7 @@ bool neuralSensIsSavedPerDecoder()
     auto& s = AppSettings::instance();
     auto store = [&](const char* json) { s.setValue("CwDecoder", QString::fromLatin1(json)); };
     const QString ggmorseSens = s.value("CwDecoderSensitivity", "unset").toString();
-    // CONSTRUCTED blobs: they exercise the read-side validation only.
+    // CONSTRUCTED blobs: they exercise the validation only.
     store(R"({"rx":"True","tx":"False"})");
     if (!require(CwDecodeSettings::sensitivity("deepfist") == 0
                  && CwDecodeSettings::sensitivity("deepcw") == 0,
