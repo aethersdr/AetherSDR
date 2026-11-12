@@ -4,18 +4,19 @@ namespace AetherSDR {
 
 bool aetherDspModeRequiresDisable(QStringView mode)
 {
-    // CWU is not a separate mode: AetherSDR's older neutral vocabulary spells
-    // upper-side CW as "CW", and an Icom reports the same mode as "CWU" --
-    // as the HL2 did, until Hl2Backend::setSliceMode began collapsing that
-    // spelling onto "CW" (VoiceModeGate::isCwMode carries the same three
-    // spellings, and
-    // VfoWidget had CWU fall through for the same reason). Omitting it left
-    // every client NR method running through CW on those radios — which for
-    // NNR means a measured 28 dB hole where the signal was, since it treats a
-    // steady carrier as noise.
-    return mode == u"DIGU" || mode == u"DIGL" || mode == u"RTTY"
-        || mode == u"CW" || mode == u"CWU" || mode == u"CWL" || mode == u"CWR"
-        || mode == u"NT";
+    // A slice can be audible before its initial mode arrives. Do not change
+    // the operator's NR selection while that mode is still unknown.
+    if (mode.isEmpty()) {
+        return false;
+    }
+
+    // Speech NR is safe automatically only for known analog voice modes;
+    // waveform authors can register arbitrary digital mode names. This RX
+    // processing list is independent of voice-keyer/Copy Assist availability.
+    return !(mode == u"USB" || mode == u"LSB" || mode == u"DSB"
+        || mode == u"AM" || mode == u"SAM"
+        || mode == u"FM" || mode == u"NFM" || mode == u"DFM"
+        || mode == u"WFM" || mode == u"WBFM");
 }
 
 bool aetherDspMixRequiresDisable(const QList<AetherDspSliceAudioState>& slices)
@@ -69,11 +70,13 @@ AetherDspModePolicy::Action AetherDspModePolicy::update(
 
 void AetherDspModePolicy::noteUserOverride()
 {
+    // A manual selection owns persistence and the next restriction, even if
+    // the queued automatic restore has not yet been observed in voice mode.
+    m_autoDisabledMethod.clear();
     if (!m_restricted) {
         return;
     }
     m_userOverride = true;
-    m_autoDisabledMethod.clear();
 }
 
 QString AetherDspModePolicy::methodForPersistence(QStringView enabledMethod) const
