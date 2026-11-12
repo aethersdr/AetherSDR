@@ -1010,8 +1010,10 @@ not include that component and are not directly comparable.
 `QEvent::UpdateRequest` for existing windows containing a live pan. This is a
 transient profiling control, unavailable in Observe-only mode. It changes no
 radio state, meter ballistics, or stream rate. Newly participating windows start
-enabled on the shared-window GPU path. The software and legacy native-pan
-paths start disabled. Disabling delivers any pending final update immediately.
+enabled on the shared-window QRhi path on Windows, Linux and macOS, including
+QRhi software drivers (WARP, llvmpipe, etc.). QPainter builds
+(`AETHER_GPU_SPECTRUM=OFF`) and legacy native-pan windows start disabled.
+Disabling delivers any pending final update immediately.
 
 `get repaintstats [reset]` reports one entry per participating window:
 `enabled`, `frameIntervalMs`, `requests`, `deferredRequests`,
@@ -1579,7 +1581,7 @@ hierarchy from #4339 in the same snapshot.
 | `waterfallTextureW/H` / `waterfallImageW/H` | live GPU waterfall texture and retained CPU waterfall image extents |
 | `waterfallTextureMatchesImage` | the CPU waterfall image fits within its GPU texture (texture ≥ image in both dimensions), so the upload is safe; holds across pop-out initialization even when the texture is floored larger than a small retained image (#4319) |
 | `fullFrameTexturesEvenAligned` | both full-frame textures have even width and height (the #4319 upload-safety invariant), independent of the auto-sized QRhi color buffer |
-| `nativeWindow` | macOS only: `true` when the `SpectrumWidget` has a native child window. Qt 6.12+ defaults to shared composition (`false`); `AETHER_PAN_NATIVE_WINDOW=1` restores the legacy native path. Older Qt defaults to native; `AETHER_PAN_NO_NATIVE_WINDOW=1` opts out. |
+| `nativeWindow` | macOS only: `true` when the `SpectrumWidget` has a native child window. All supported builds default to shared composition (`false`); `AETHER_PAN_NATIVE_WINDOW=1` restores the legacy native path for diagnosis. Qt older than 6.12 is unsupported; `AETHER_PAN_NO_NATIVE_WINDOW` is obsolete because sharing is the default. |
 | `nativeAncestorsBlocked` | macOS only: whether the leaf has `WA_DontCreateNativeAncestors`, preventing its native-window request from promoting the surrounding QWidget tree |
 | `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; both shared composition and the isolated native path expect `0` |
 

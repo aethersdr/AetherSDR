@@ -2071,9 +2071,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // Explicitly request Metal on macOS.
 #  ifdef Q_OS_MACOS
     setApi(QRhiWidget::Api::Metal);
-    // Older Qt needed a separate NSView to obtain a Metal surface (#714).
-    // Qt 6.12 shares the top-level composition by default; the native fallback
-    // remains paired with ancestor isolation (#4339).
+    // Share top-level Metal composition on the required Qt 6.12 stack.
+    // The native diagnostic override stays paired with ancestor isolation (#4339).
     applyNativeWindowIsolationPolicy();
 #  else
     // AETHER_NO_GPU / QT_OPENGL=software: force the OpenGL QRhi backend so the

@@ -77,8 +77,8 @@ A value you set yourself always wins.
 - **Waterfall** — a GPU texture used as a ring buffer. Each new row uploads one scanline; scrolling is done in the shader, with no memory copies.
 - **Spectrum trace** — drawn per pixel on the GPU from a single column texture of FFT data, so there is no per-frame vertex rebuild on the CPU. Trace width is the **FFT Line** setting (default 1.0 px).
 - **Overlays** — grid, scales, band plan, passbands, slice markers, notches and spots are painted once into a cached texture and only repainted when something changes (retune, zoom, resize, mode change).
-- Shared GPU windows batch repaint requests at the monitor's refresh cadence. CPU builds and the legacy native-window path coalesce pan requests with a 16 ms timer. Radio data and meter smoothing keep their own rates. The spectrum input rate is **Display → FFT FPS** (5–60, default 25); the achieved redraw rate also depends on window size and system load.
-- On macOS with Qt 6.12 or later, docked panadapters share their window's composition surface to reduce backing-store copying. Floating panadapters keep their own top-level window. The VFO meter skips redraws when its displayed bar pixels have not changed.
+- On Windows, Linux and macOS, shared QRhi windows batch repaint requests at the monitor's refresh cadence, including when QRhi uses a software graphics driver. QPainter builds (`AETHER_GPU_SPECTRUM=OFF`) and the legacy native-window path coalesce pan requests with a 16 ms timer. Radio data and meter smoothing keep their own rates. The spectrum input rate is **Display → FFT FPS** (5–60, default 25); the achieved redraw rate also depends on window size and system load.
+- On macOS, docked panadapters share their window's composition surface to reduce backing-store copying. Floating panadapters keep their own top-level window. The VFO meter skips redraws when its displayed bar pixels have not changed.
 - The **3D Stacked Trace** view (see [Panadapter Controls](./panadapter-controls.md)) also runs on the GPU.
 
 ## Known issues

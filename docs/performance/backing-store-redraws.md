@@ -34,13 +34,25 @@ The [Qt 6.12 compositor](https://github.com/qt/qtbase/blob/v6.12.0/src/gui/paint
 
 ## Limits and defaults
 
-The final default enables window pacing only for shared GPU windows. Native-child GPU and software paths keep their original pan timer. Immediate scheduling reduced the software paint-event rate to about 9/s without a CPU saving, so it is excluded from the final configuration. Software CPU is essentially unchanged; its modestly lower paint-event count cannot establish a full-frame throughput change without damage-region telemetry. A fresh restart measured 12.16 paint events/s for the original software build and 12.03 for the final build.
+The final default deliberately enables window pacing for shared QRhi windows on **Windows, Linux and macOS**. This includes software QRhi drivers (software OpenGL, WARP, llvmpipe); they use the same Qt composition path. This is a cross-platform scheduling change, not a macOS-only optimization. Native-child QRhi windows and `AETHER_GPU_SPECTRUM=OFF` QPainter builds keep their original pan timer. Immediate scheduling reduced the QPainter paint-event rate to about 9/s without a CPU saving, so it is excluded from that configuration. QPainter CPU is essentially unchanged; its modestly lower paint-event count cannot establish a full-frame throughput change without damage-region telemetry. A fresh restart measured 12.16 paint events/s for the original QPainter build and 12.03 for the final build.
 
-The shared Metal default changes the macOS composition policy and needs maintainer review and broader hardware coverage. `AETHER_PAN_NATIVE_WINDOW=1` restores the legacy native-child path; ancestor isolation remains paired with it. Windows already uses shared composition, so the Mac CPU percentage must not be projected onto Windows. Software OpenGL/WARP on Windows was not benchmarked.
+Windows and Linux already use shared composition; the new default changes their update scheduling. The Mac CPU percentage must not be projected onto either platform. Software OpenGL/WARP on Windows was not benchmarked. `repaintScheduling off` permits a transient comparison with the old scheduling on any platform. The existing native-window diagnostic override on macOS remains available; no automatic renderer fallback is added.
+
+## macOS native-window workaround
+
+Shared Metal composition is the default for **every supported macOS GPU build**. CMake requires Qt 6.12, so there is no supported older-Qt branch. `AETHER_PAN_NATIVE_WINDOW=1` explicitly restores a native child surface per pan, with ancestor isolation paired with it. The former `AETHER_PAN_NO_NATIVE_WINDOW` opt-out is obsolete because shared composition is now the default.
+
+The original report is [AetherSDR #702](https://github.com/aethersdr/AetherSDR/issues/702), and [PR #714](https://github.com/aethersdr/AetherSDR/pull/714) introduced the explicit Metal API and native NSView workaround for a QRhiWidget left without a usable Metal surface. The report also records two application/build fixes: chaining `QRhiWidget::resizeEvent` and eliminating mixed Homebrew/aqt Qt libraries. It does not identify an upstream Qt bug or a Qt 6.12 fix release.
+
+The required [Qt 6.12 implementation](https://github.com/qt/qtbase/blob/v6.12.0/src/widgets/kernel/qwidget.cpp#L10880-L10923) evaluates the reparented widget's RHI requirements, recreates the nearest native parent when its surface type differs, and creates backing-store RHI support when the type already matches. Qt's [per-surface RHI/compositor change](https://github.com/qt/qtbase/commit/eb4cb719257d3b57cd801273d4011579d8c81714) documents that mechanism and references QTBUG-119221, QTBUG-121181 and QTBUG-120096. That change predates Qt 6.12; it is supporting implementation history, not evidence that AetherSDR #702 was first fixed in 6.12.
+
+On the pinned Qt 6.12.0 stack, the original blank/no-initialization symptom no longer reproduces without the native-child guard: both pans initialize Metal, render fresh frames, and retain valid textures after float/dock, 2D/3D switches and maximize/restore. That source evidence and live validation support retiring the guard as the default on the supported stack. The evidence establishes working behavior on the tested Mac, not the first Qt release containing a fix or performance on every Mac/GPU.
 
 ## Validation
 
 Both GPU and `AETHER_GPU_SPECTRUM=OFF` app builds pass with eight build jobs. Four focused CTests pass: `window_repaint_scheduler_test`, `vfo_meter_overlay_invalidation_test`, `vfo_flag_placement_test`, and `native_widget_topology_test`. Removing the coalescing guard and unchanged-pixel guard makes the corresponding tests fail; restored sources pass.
+
+These tests are registered in `tests/tests.cmake` for the full suite on pushes to `main` and the sanitizer lanes. The repository's frozen per-PR test allow-list does not execute them; their local results are reported separately from PR build/static checks. See [test/CI policy](../agents/tests-ci.md).
 
 Live bridge checks cover the intended display/geometry, single client, receiver mode/frequency, max requested stream rates, actual drag tuning, renderer health, float/dock, maximize/restore, and GPU texture extents after settling. The software path is verified as `gpu: false`. Invalid `repaintScheduling` values are rejected. Documentation production build, generated references/bridge docs, log-rule checks, test registration/CI gate, and engine boundary/command-plane checks pass locally. Cross-platform CI is still required before merge.
 

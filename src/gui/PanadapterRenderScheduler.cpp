@@ -35,6 +35,8 @@ void PanadapterRenderScheduler::requestDataFrame(SpectrumWidget* widget, int slo
     }
 
 #ifdef AETHER_GPU_SPECTRUM
+    // Shared QRhi windows use display pacing on Windows, Linux and macOS,
+    // including software QRhi drivers. Only native child surfaces opt out.
     const bool paceWindow = !widget->testAttribute(Qt::WA_NativeWindow);
 #else
     // Raster pans need the existing timer to batch their expensive paints.

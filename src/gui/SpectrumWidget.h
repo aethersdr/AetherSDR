@@ -179,18 +179,11 @@ public:
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     QString rendererDescription() const;
     void setRenderScheduler(PanadapterRenderScheduler* scheduler);
-    // Qt 6.12 can composite Metal pans in the top-level window. Sharing that
-    // backing store avoids the per-native-pan copies used by the #714
-    // workaround. Keep the workaround on older Qt, and available explicitly
-    // for driver/platform regressions. The existing opt-out still works.
+    // The required Qt 6.12 stack supports shared top-level Metal composition.
+    // Native child surfaces are an explicit diagnostic override (#714).
+    // Source references and live evidence: docs/performance/backing-store-redraws.md.
     static bool nativeWindowPreferred() {
-        if (qEnvironmentVariableIntValue("AETHER_PAN_NATIVE_WINDOW") == 1) {
-            return true;
-        }
-        if (qEnvironmentVariableIntValue("AETHER_PAN_NO_NATIVE_WINDOW") == 1) {
-            return false;
-        }
-        return QT_VERSION < QT_VERSION_CHECK(6, 12, 0);
+        return qEnvironmentVariableIntValue("AETHER_PAN_NATIVE_WINDOW") == 1;
     }
     // macOS: apply the native-window isolation policy as one unit — request the
     // native Metal leaf (WA_NativeWindow) *and* block ancestor promotion
