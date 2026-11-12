@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFontMetrics>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMap>
 #include <QPixmap>
 #include <QPushButton>
@@ -504,6 +505,72 @@ void reproduceIssue4945MinimizedHeight()
     delete host;
 }
 
+// CONSTRUCTED callsigns and macro text: they exercise the DX call box and
+// the placeholder path through the panel only.
+void testDxCallBoxFillsCallPlaceholder()
+{
+    Fixture f;
+    QPushButton *send = nullptr, *live = nullptr, *setup = nullptr;
+    QTextEdit* input = nullptr;
+    if (!requireSendWidgets(f, send, live, setup, input))
+        return;
+    auto* dxCall = f.panel.findChild<QLineEdit*>(QStringLiteral("cwxDxCallEdit"));
+    auto* dxClear = f.panel.findChild<QPushButton*>(QStringLiteral("cwxDxCallClear"));
+    const bool present = dxCall && dxClear && !dxCall->accessibleName().isEmpty()
+        && !dxClear->accessibleName().isEmpty();
+    report("DX call box and its clear button are present and named", present);
+    if (!present) return;
+
+    const QString sendCall5nn = QStringLiteral("cwx send \"K1ABC/P") + QChar(0x7f) + QStringLiteral("5NN\" ");
+    const QString sendCallTu = QStringLiteral("cwx send \"K1ABC/P") + QChar(0x7f) + QStringLiteral("TU\" ");
+
+    setup->click();
+    QTextEdit* f1 = macroEdit(f.panel, 1);
+    QPushButton* f1Button = buttonByText(f.panel, "F1");
+    if (!f1 || !f1Button) { report("F1 macro row is reachable", false); return; }
+    f1->setPlainText("{CALL} 5NN");
+    QCoreApplication::processEvents();
+
+    f.commands.clear();
+    f1Button->click();
+    report("a {CALL} macro with an empty DX call box sends nothing and paints no bubble",
+           f.commands.isEmpty() && f.panel.historyBubbleCount() == 0);
+
+    // insert() is the programmatic edit that emits textEdited, as typing does.
+    dxCall->insert(QStringLiteral("k1abc/p !"));
+    report("typing in the box sets the model's DX call, kept as capitals, digits and '/'",
+           f.model.dxCall() == QLatin1String("K1ABC/P") && dxCall->text() == QLatin1String("K1ABC/P"));
+
+    f1Button->click();
+    const CwxBubble* bubble = f.panel.pendingBubble();
+    report("the F1 macro is sent with the DX call in place of {CALL}",
+           f.commands.size() == 1 && f.commands.first().startsWith(sendCall5nn));
+    report("the bubble shows the text as keyed",
+           bubble && bubble->text() == QLatin1String("K1ABC/P 5NN") && f.panel.historyBubbleCount() == 1);
+
+    f.commands.clear();
+    send->click();   // back to the Send view; the editor is empty, nothing is sent
+    input->setPlainText("{CALL} TU");
+    send->click();
+    report("typed text is sent with the DX call in place of {CALL}, and the editor clears",
+           f.commands.size() == 1 && f.commands.first().startsWith(sendCallTu)
+               && input->toPlainText().isEmpty());
+
+    dxClear->click();
+    report("the clear button empties the box and the model's DX call",
+           f.model.dxCall().isEmpty() && dxCall->text().isEmpty());
+
+    f.commands.clear();
+    input->setPlainText("{CALL} TU");
+    send->click();
+    report("typed {CALL} text with no DX call is not sent and stays in the editor",
+           f.commands.isEmpty() && input->toPlainText() == QLatin1String("{CALL} TU")
+               && f.panel.historyBubbleCount() == 2);
+
+    f.model.setDxCall(QStringLiteral("W1AW"));
+    report("a DX call set on the model shows in the box", dxCall->text() == QLatin1String("W1AW"));
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(QStringLiteral("aether-cwx-panel-test"));
@@ -525,6 +592,7 @@ int main(int argc, char** argv)
     testResendPreservesSpeedModifiers();
     testSetupPageUnaffectedAtNormalWindowHeight();
     testMacroEditAndFKeyClickStillWorkThroughScrollArea();
+    testDxCallBoxFillsCallPlaceholder();
     reproduceIssue4945MinimizedHeight();
 
     std::printf("\n%s\n",
