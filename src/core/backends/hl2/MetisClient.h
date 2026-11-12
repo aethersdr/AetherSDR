@@ -363,10 +363,12 @@ public:
 
     // Key / unkey. A key is refused unless enableTransmit(true) was called and the
     // session is streaming (start() until stop()); stop() drops a held key.
-    void setMox(bool keyed, const TxCoordinator::Operation& operation);
+    // Returns true when a key under a new operation ran the previous over's
+    // skipped cleanup (#7216): the caller then resets the modulator too.
+    bool setMox(bool keyed, const TxCoordinator::Operation& operation);
     // Only the backend's explicit CW break-in path uses CW holds to sustain
     // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.
-    void setCwMox(bool keyed, const TxCoordinator::Operation& operation);
+    bool setCwMox(bool keyed, const TxCoordinator::Operation& operation);
     [[nodiscard]] bool isKeyed() const noexcept { return m_mox; }
     Q_INVOKABLE void setTxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setTxDriveLevel(int level);
@@ -906,7 +908,9 @@ private:
     TxCoordinator::Operation m_moxOperation;
     TxCoordinator::Operation m_cwOperation;
     TxCoordinator::Operation m_toneOperation;
-    void setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);
+    bool setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);
+    // Set by an accepted key, cleared by flushTxIq(): the over's cleanup is owed.
+    bool m_overFlushOwed = false;
 
     std::uint32_t m_txSeq = 0;           // outgoing EP2 sequence
     unsigned m_roundRobin = 0;

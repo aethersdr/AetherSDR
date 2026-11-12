@@ -23,6 +23,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QLoggingCategory>
+#include <QSemaphore>
 #include <QString>
 #include <QStringList>
 #include <QThread>
@@ -181,6 +182,32 @@ struct Hl2TxGateTestAccess {
     {
         backend.m_cwHangTimer->stop();
         QMetaObject::invokeMethod(backend.m_cwHangTimer, "timeout", Qt::DirectConnection);
+    }
+
+    // #7216: the modulator, on the I/O thread it lives on (Hl2Backend.cpp:364).
+    static bool configureTxDsp(Hl2Backend& backend)
+    {
+        bool ok = false;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&ok, dsp = backend.m_txDsp] {
+            std::string err;
+            ok = dsp->configure(Hl2TxDsp::Config{}, &err);
+        }, Qt::BlockingQueuedConnection);
+        return ok;
+    }
+    static double txAlcGainDb(Hl2Backend& backend)
+    {
+        double db = 0.0;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&db, dsp = backend.m_txDsp] {
+            db = dsp->alcGainDb();
+        }, Qt::BlockingQueuedConnection);
+        return db;
+    }
+    // Park the I/O thread until `gate` is released, so the calls the backend
+    // posts meanwhile run back-to-back, after the test has moved the coordinator.
+    static void holdIoThread(Hl2Backend& backend, QSemaphore& gate)
+    {
+        QMetaObject::invokeMethod(backend.m_metis, [&gate] { gate.acquire(); },
+                                  Qt::QueuedConnection);
     }
 };
 }
@@ -802,6 +829,64 @@ static void testTransmitTailEdges(TxTestAuthority& authority)
     }
 }
 
+// #7216, through the real backend: a re-key whose operation acquires before the
+// I/O thread runs the unkey's posted setMox(false)/reset()/flushTxIq(). All three
+// are skipped (permitsCleanup() is false once B acquired), so the key under B
+// must run them itself, the modulator's reset included.
+static void testRekeyRunsSkippedCleanup()
+{
+    const auto loud = [] {
+        QByteArray pcm(2 * 2048 * static_cast<int>(sizeof(qint16)), Qt::Uninitialized);
+        auto* s = reinterpret_cast<qint16*>(pcm.data());
+        for (int n = 0; n < 2 * 2048; ++n) {
+            s[n] = (n / 2) % 2 ? 32000 : -32000;
+        }
+        return pcm;
+    }();
+    // skipCleanup: park the I/O thread across the unkey and B's acquire, so the
+    // posted cleanup runs only after A's operation is gone (the race).
+    const auto run = [&](bool skipCleanup, const char* premise, const char* claim) {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        if (!Hl2TxGateTestAccess::configureTxDsp(backend)) {
+            check(false, "#7216 premise: the modulator configures");
+            return;
+        }
+        const auto mic = tx.coordinator.registerProducer(true);
+        const auto a = tx.operation;
+        backend.setKeying(true, a, {});
+        backend.submitTxAudio(loud, 24000, AetherSDR::TxAudioSource::Microphone,
+                              tx.coordinator.mediaContext(mic, a));
+        check(Hl2TxGateTestAccess::txAlcGainDb(backend) < -0.5, premise);
+        QSemaphore gate;
+        if (skipCleanup) {
+            Hl2TxGateTestAccess::holdIoThread(backend, gate);
+        }
+        backend.setKeying(false, a, {});
+        if (!skipCleanup) {
+            (void)Hl2TxGateTestAccess::txAlcGainDb(backend);   // the cleanup has run
+        }
+        (void)tx.coordinator.finishLocalIntent(a);
+        const auto b = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        backend.setKeying(true, b, {});
+        gate.release();
+        check(Hl2TxGateTestAccess::txAlcGainDb(backend) > -0.01, claim);
+        std::size_t depth = 1;
+        QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+            depth = Hl2TxGateTestAccess::metis(backend)->txQueueDepth();
+        }, Qt::BlockingQueuedConnection);
+        check(depth == 0, skipCleanup ? "#7216: A's queued tail is gone before B's first frame"
+                                      : "#7216 control: the ordinary unkey left nothing queued");
+        backend.setKeying(false, b, {});
+    };
+    run(true, "#7216 premise: A's loud audio drove the ALC below unity",
+        "#7216: a re-key that skipped the unkey's cleanup still resets the modulator");
+    run(false, "#7216 control premise: A's loud audio drove the ALC below unity",
+        "#7216 control: an ordinary unkey/re-key resets the modulator as before");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-tx-gate"));
@@ -818,6 +903,7 @@ int main(int argc, char** argv)
     testTunePowerAppliesLiveWhileTuning(authority);
     testTuneReleasePostsNoDriveRestore(authority);
     testTransmitTailEdges(authority);
+    testRekeyRunsSkippedCleanup();
 
     {
         MetisClient board;
@@ -1155,6 +1241,104 @@ int main(int argc, char** argv)
         check(!anyFrameKeyed(held.buildNextControlPacket()),
               "sustaining an existing latch cannot admit a stale queued key-on");
         (void)tx.coordinator.endIntent(aIntent);
+    }
+
+    // #7216: B acquires before the I/O thread runs A's unkey. setMox(false, A)
+    // and flushTxIq() are refused/skipped, so B's key finds m_mox unchanged, and
+    // a microphone context is the same across both overs (sameContext()).
+    {
+        const std::size_t packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+        const std::vector<std::complex<float>> tail(MetisClientTestAccess::primeTarget(),
+                                                    {0.25f, -0.25f});
+        // unkeyRan: A's setMox(false) ran before B acquired, its flush did not.
+        for (const bool unkeyRan : {false, true}) {
+            TxTestAuthority tx;
+            MetisClient rekey;
+            MetisClientTestAccess::setStreaming(rekey);
+            rekey.enableTransmit(true);
+            const auto mic = tx.coordinator.registerProducer(true);
+            const auto a = tx.operation;
+            const auto micA = tx.coordinator.mediaContext(mic, a);
+            check(!rekey.setMox(true, a), "#7216 premise: a first key owes no cleanup");
+            for (int i = 0; i < 3; ++i) {
+                (void)rekey.buildNextControlPacket();   // A's own leading silence
+            }
+            rekey.queueTxIq(tail, micA);
+            if (unkeyRan) {
+                rekey.setMox(false, a);
+            }
+            (void)tx.coordinator.finishLocalIntent(a);
+            const auto b = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+            rekey.setMox(false, a);   // the posted unkey, now refused
+            check(rekey.isKeyed() != unkeyRan && rekey.txQueueDepth() == tail.size(),
+                  "#7216 premise: A's tail is still queued when B keys");
+            check(micA.sameContext(tx.coordinator.mediaContext(mic, b)),
+                  "#7216 premise: the microphone context spans both overs");
+            const auto overflow = rekey.txOverflowSamples();
+            check(rekey.setMox(true, b), "#7216: a key under a new operation runs A's skipped cleanup");
+            check(rekey.txQueueDepth() == 0 && rekey.txOverflowSamples() == overflow,
+                  "#7216: A's tail is abandoned, uncounted");
+            const auto first = rekey.buildNextControlPacket();
+            check(anyFrameKeyed(first) && !payloadNonZero(first),
+                  "#7216: B's first keyed frame carries none of A's tail");
+            const auto underflowAtB = rekey.txUnderflowSamples();
+            rekey.queueTxIq(tail, tx.coordinator.mediaContext(mic, b));
+            bool carried = false;
+            for (std::size_t i = 0; i < tail.size() / packet + 8 && !carried; ++i) {
+                carried = payloadNonZero(rekey.buildNextControlPacket());
+            }
+            check(carried, "#7216: B's own audio still reaches the wire");
+            check(rekey.lastKeyDownUnderflowSamples() == rekey.txUnderflowSamples() - underflowAtB + packet,
+                  "#7216: B's key-down report counts from B's key, not A's");
+        }
+
+        // Control: an ordinary key/unkey/key. The unkey's flush ran, so B's key
+        // owes nothing and the client behaves exactly as before.
+        {
+            TxTestAuthority tx;
+            MetisClient ordinary;
+            MetisClientTestAccess::setStreaming(ordinary);
+            ordinary.enableTransmit(true);
+            const auto mic = tx.coordinator.registerProducer(true);
+            const auto a = tx.operation;
+            check(!ordinary.setMox(true, a), "#7216 control premise: first key");
+            ordinary.queueTxIq(tail, tx.coordinator.mediaContext(mic, a));
+            check(!ordinary.setMox(false, a), "#7216 control: an ordinary unkey owes no cleanup");
+            ordinary.flushTxIq();                       // what applyKeying posts on unkey
+            (void)tx.coordinator.finishLocalIntent(a);
+            const auto b = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+            check(!ordinary.setMox(true, b),
+                  "#7216 control: an ordinary re-key after a completed unkey runs no extra cleanup");
+            check(ordinary.isKeyed(), "#7216 control: and keys");
+        }
+
+        // Control: a repeat key under the SAME operation from a second producer
+        // (the heldKeying re-anchor) is not a new over and keeps the queue.
+        {
+            TxTestAuthority tx;
+            MetisClient repeat;
+            MetisClientTestAccess::setStreaming(repeat);
+            repeat.enableTransmit(true);
+            const auto first = tx.coordinator.registerProducer();
+            const auto second = tx.coordinator.registerProducer();
+            const auto mic = tx.coordinator.registerProducer(true);
+            const auto ra = first.request();
+            const auto rb = second.request();
+            const auto aIntent = tx.coordinator.beginRequest(ra, tx.operation,
+                AetherSDR::TxCoordinator::Activity::Mox);
+            const auto bIntent = tx.coordinator.beginRequest(rb, tx.operation,
+                AetherSDR::TxCoordinator::Activity::Mox);
+            repeat.setMox(true, tx.coordinator.requestOperation(ra));
+            repeat.queueTxIq(tail, tx.coordinator.mediaContext(mic, tx.operation));
+            check(!repeat.setMox(true, tx.coordinator.requestOperation(rb)),
+                  "#7216 control: a same-operation repeat key is not a new over");
+            check(repeat.txQueueDepth() == tail.size(),
+                  "#7216 control: a same-operation repeat key keeps the queued audio");
+            check(payloadNonZero(repeat.buildNextControlPacket()),
+                  "#7216 control: and that audio goes out");
+            (void)tx.coordinator.endIntent(bIntent);
+            (void)tx.coordinator.endIntent(aIntent);
+        }
     }
 
     {
