@@ -4626,6 +4626,22 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             return;
         }
 
+        // A change from elsewhere (a TCI client, the bridge) is announced on
+        // extensionStatus("hl2", "hw"); re-read it so the page does not go
+        // stale. Bound once per backend: the reseed runs from that handler.
+        if (m_hl2HwStatusBackend != static_cast<QObject*>(backend)) {
+            QObject::disconnect(m_hl2HwStatusConnection);
+            m_hl2HwStatusBackend = backend;
+            m_hl2HwStatusConnection = connect(backend, &IRadioBackend::extensionStatus, this,
+                [this](const QString& ns, const QString& kind, const QVariantMap&) {
+                    if (ns == QLatin1String("hl2") && kind == QLatin1String("hw")
+                        && static_cast<QObject*>(m_model->backend()) == m_hl2HwStatusBackend
+                        && m_hl2HardwareReseed) {
+                        m_hl2HardwareReseed();
+                    }
+                });
+        }
+
         // REQUEST IDS ARE NOT ALLOCATED CENTRALLY — see BandscopeDialog's note.
         // This one lives in its own decade so it cannot collide with
         // AutomationServer's counter or RadioModel's reserved UINT64_MAX.
