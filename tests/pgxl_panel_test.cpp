@@ -560,8 +560,8 @@ int main(int argc, char** argv)
             CHECK(floatInset < 20);
 
             // Docked, at the width a stacked applet actually gets — the rail
-            // is 260 px but the outer gutter and scrollbar come off it, so 260
-            // here passed while the real docked width clipped (#7081).
+            // is 260 px but the scrollbar track comes off it, so 260 here
+            // passed while the real docked width clipped (#7077).
             applet.setFloating(false);
             settle(QSize(kDockedAppletWidth, 380));
             gridHolds();

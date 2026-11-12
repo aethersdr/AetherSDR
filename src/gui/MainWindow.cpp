@@ -3899,9 +3899,18 @@ void MainWindow::applyNonClientBandInsets()
     // The band is only lost under the expanded client area: with native chrome
     // the frame is outside the window rect entirely, and on Windows 10
     // nativeEvent's WM_NCCALCSIZE branch already claims it back.
+    //
+    // Maximized is excluded for the opposite reason (#7081 review): Windows
+    // pushes the frame band off-screen, so the client rect already covers the
+    // whole work area and nothing is lost. Measured here at 125%, maximized:
+    // window rect L=-3849 R=9 B=2109 against a work area of L=-3840 R=0
+    // B=2100, with the client rect equal to the work area to within a pixel.
+    // Insetting then reserves space for a band that is not there, leaving a
+    // dead strip down the edge.
     QMargins insets;
 #ifdef Q_OS_WIN
     if (windowFlags().testFlag(Qt::ExpandedClientAreaHint) && !isFullScreen()
+        && !isMaximized()
         && !WindowChrome::claimsWholeWindowAsClient(windowFlags(),
                                                     QOperatingSystemVersion::current())) {
         if (const HWND hwnd = reinterpret_cast<HWND>(winId())) {
@@ -4184,11 +4193,14 @@ void MainWindow::changeEvent(QEvent* event)
     QMainWindow::changeEvent(event);
 
 #ifdef Q_OS_WIN
-    // Changing the CURRENT monitor's scale in Settings sends WM_DPICHANGED
-    // with no screenChanged, so the screenChanged connection alone would leave
-    // the inset at the old DPI's band until the next show. Guarded because
+    // DevicePixelRatioChange: changing the CURRENT monitor's scale in Settings
+    // sends WM_DPICHANGED with no screenChanged, so the screenChanged
+    // connection alone would leave the inset at the old DPI's band.
+    // WindowStateChange: the inset applies only while restored, so maximizing
+    // and restoring have to re-run it. Guarded because
     // applyNonClientBandInsets() is declared only under Q_OS_WIN.
-    if (event && event->type() == QEvent::DevicePixelRatioChange) {
+    if (event && (event->type() == QEvent::DevicePixelRatioChange
+                  || event->type() == QEvent::WindowStateChange)) {
         applyNonClientBandInsets();
     }
 #endif
