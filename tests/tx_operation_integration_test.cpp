@@ -2408,7 +2408,7 @@ void txOffDelayHoldsPhoneRelease()
     const qsizetype afterDisconnect = f.commands.size();
     waitMs(180);
     check(f.commands.size() == afterDisconnect,
-          "nothing is sent for a TX off delay cancelled by disconnect");
+          "nothing is sent for a TX off delay canceled by disconnect");
 }
 
 void txOffDelayProducerCancellation()
@@ -2608,7 +2608,7 @@ void txOffDelayScope()
           "DAX-sourced PTT is not held even on a phone mode");
 
     tx.setTxOffDelayMs(50000);
-    check(tx.txOffDelayMs() == TxOffDelaySettings::kMaxMs, "TX off delay is capped");
+    check(tx.txOffDelayMs() == TxOffDelaySettings::kMaxMs, "TX off delay is capped at 2000 ms");
     tx.setTxOffDelayMs(-5);
     check(tx.txOffDelayMs() == 0, "a negative TX off delay reads as off");
 }
@@ -2626,6 +2626,12 @@ void txOffDelaySettingsRoundTrip()
     s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("{\"ms\":50000}"));
     check(TxOffDelaySettings::delayMs() == 0,
           "a hand-edited out-of-range TX off delay reads as off, not as a long hold");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("{\"ms\":2001}"));
+    check(TxOffDelaySettings::delayMs() == 0,
+          "a stored TX off delay just above the 2000 ms maximum is refused on read");
+    s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("{\"ms\":2000}"));
+    check(TxOffDelaySettings::delayMs() == 2000,
+          "a stored TX off delay at the 2000 ms maximum is accepted on read");
     s.setValue(QStringLiteral("TxOffDelay"), QStringLiteral("not json"));
     check(TxOffDelaySettings::delayMs() == 0, "a malformed TX off delay setting reads as off");
     s.remove(QStringLiteral("TxOffDelay"));

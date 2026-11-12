@@ -46,7 +46,7 @@ int TxOffDelaySettings::delayMs()
     }
     const double raw = v.toDouble();
     // Out-of-range is treated as corrupt, not clamped: a hand-edited 50000
-    // must not silently become a full-second hold on the operator's signal.
+    // must not silently become a multi-second hold on the operator's signal.
     if (!(raw >= kMinMs && raw <= kMaxMs)) {
         return 0;
     }

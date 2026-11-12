@@ -258,7 +258,7 @@ These status reports do not start a transmission or send a PTT command.
 **TX Off Delay (ms):** in the **Timings (in ms)** group of
 **Settings → Radio Setup... → Transmit** keeps the radio transmitting for that
 many milliseconds after you release PTT, so the end of your last word is not
-cut off. Enter 0 to 10000 (10 seconds); 0 turns it off and is the default. AetherSDR stores
+cut off. Enter 0 to 2000 (2 seconds); 0 turns it off and is the default. AetherSDR stores
 the value on this computer, not on the radio.
 
 - It applies in voice modes only (USB, LSB, AM, FM, NFM). CW, digital modes,
@@ -278,6 +278,7 @@ the value on this computer, not on the radio.
     cannot mute it. **Your mic stays live for the whole delay, and anything you
     say during it goes on the air.** Keep the delay short with these mics; a few
     hundred milliseconds is usually enough to keep your last word.
+- Pressing **TUNE** during the delay does nothing; wait for the delay to end, then press it again.
 - Disconnecting, or anything that stops transmit, ends the delay at once.
 - With **QUIN** on, the delay runs first and the outro tone follows it.
 
