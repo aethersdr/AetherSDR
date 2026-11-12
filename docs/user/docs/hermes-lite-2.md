@@ -185,6 +185,58 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **Tools → Radio Health...** shows link, temperature, PA bias current (raw counts), gateware, the TX output and the transmit voice chain.
 - Connection health in the title bar, status bar and network statistics.
 
+## Release-candidate check
+
+A short hands-on check of AetherSDR with your HL2, which you can run by hand on macOS, Linux or Windows, on a release candidate or any other build. It covers connecting, receive audio and the panadapter, a few controls and meters, one short transmission into a dummy load, and a restart. Post the result on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678); results from Windows and from more than one Linux station are especially welcome.
+
+Each step says what to do and what counts as a pass. A step you skip or cannot do is recorded as **not run**, never as a pass.
+
+### What you need
+
+- The HL2 on the same network as the computer, or reachable with **Connect by IP**.
+- An antenna for the receive steps.
+- A 50 Ω dummy load rated for at least 5 W, for the transmit step.
+
+### Safety
+
+- **Transmit only into the dummy load.** Swap the antenna for the dummy load before step 5, with nothing keyed, and take any amplifier out of line.
+- **Start low:** set **Tune Pwr:** to 10 % or less before you key. See [Before You Transmit](./before-you-transmit.md).
+- **Keep each key-down to a few seconds**, and know how to stop: press the tune button (it reads **TUNING...** while keyed) again. If the radio keeps transmitting after you unkey, remove the HL2's power.
+
+### Steps
+
+1. **Record the setup.** Write down the operating system and its version. **Help → About AetherSDR** shows the AetherSDR version followed by the commit it was built from, and the Qt version under **BUILT WITH**. Note the board (for example a Hermes-Lite 2, or a SQUARE SDR 2) and any companion boards (see [Board variant and hardware](#board-variant-and-hardware-hl2-hardware)).
+2. **Connect.** Open **File → Connect to Radio...** → **Nearby radios**, select the HL2 and click **Connect Selected Radio**. Pass: the HL2 is listed, it connects, the **EXPERIMENTAL** badge shows in the title bar and the status bar shows the gateware version (such as **Gateware 74.3**). Record the gateware, and whether you had to use **Connect by IP**.
+3. **Receive audio and panadapter.** With the antenna connected, tune to a signal you know: a broadcast station in AM, a busy SSB band, or a time station. Pass: you hear it from the computer's speaker, the panadapter and waterfall move and show the signal, and the S-meter rises on it.
+4. **Controls and meters.** Change the frequency, switch the mode between LSB, USB, AM and CW, change the filter width, move the RF gain, and turn AGC off and back on. Open **Tools → Radio Health...**. Pass: each change is heard or seen, the panadapter follows the RF gain, and Radio Health shows the temperature and the gateware.
+5. **First transmission and unkey.** With nothing keyed, replace the antenna with the dummy load. Choose USB in an amateur band and set **Tune Pwr:** to 10 % or less. Press **TUNE**, wait about 3 seconds, and press it again. Pass while keyed: the button turns red and reads **TUNING...**, the **RF Pwr** gauge shows forward power and the SWR gauge reads close to 1 on the dummy load. Pass after the unkey: the button reads **TUNE** again, the **RF Pwr** gauge falls back to zero and receive audio returns. Forward power and SWR are not calibrated; record what you see.
+6. **Restart.** Put the antenna back, open **File → Connect to Radio...** and tick **Connect to last radio on start up**. Quit with **File → Quit** (on macOS, **AetherSDR → Quit AetherSDR**) and start AetherSDR again. Pass: it reconnects to the HL2 without you selecting it, your receivers come back with their frequency and mode, you hear receive audio, and the radio is not keyed.
+
+If a step fails, note what you saw and attach the log from **Help → Support & Diagnostics...** to your report.
+
+### Result template
+
+Copy this, fill it in and post it on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678):
+
+```text
+HL2 release-candidate check
+OS and version:          (e.g. Windows 11 24H2, Ubuntu 24.04, macOS 15.6)
+AetherSDR version:       (Help -> About: version and commit)
+Qt version:              (Help -> About: BUILT WITH)
+Gateware:                (status bar, e.g. 74.3)
+Board and add-ons:       (e.g. Hermes-Lite 2, N2ADR filter board)
+Connection:              (Nearby radios / Connect by IP; wired / Wi-Fi)
+
+1. Setup recorded:        pass / fail / not run   notes:
+2. Connect:               pass / fail / not run   notes:
+3. Receive audio, scope:  pass / fail / not run   notes:
+4. Controls and meters:   pass / fail / not run   notes:
+5. First TX and unkey:    pass / fail / not run   notes: (Tune Pwr %, forward power, SWR)
+6. Restart:               pass / fail / not run   notes:
+
+Anything else:
+```
+
 ## Reference
 
 ### Not available on the HL2
