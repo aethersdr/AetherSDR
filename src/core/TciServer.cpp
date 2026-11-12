@@ -660,6 +660,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             m_hl2FilterRateTimer->start();
         }
     });
+    m_hl2SetRateTimer = new QTimer(this);
+    m_hl2SetRateTimer->setSingleShot(true);
+    m_hl2SetRateTimer->setInterval(kPowerRateLimitMs);
+    connect(m_hl2SetRateTimer, &QTimer::timeout, this, &TciServer::flushHl2Set);
+    if (m_model) {
+        TransmitModel* tx = &m_model->transmitModel();
+        connect(tx, &TransmitModel::moxChanged, this, &TciServer::onHl2TransmitStateChanged);
+        connect(tx, &TransmitModel::transmittingChanged, this,
+                &TciServer::onHl2TransmitStateChanged);
+        connect(tx, &TransmitModel::tuneChanged, this, &TciServer::onHl2TransmitStateChanged);
+        connect(m_model, &RadioModel::radioTransmittingChanged, this,
+                &TciServer::onHl2TransmitStateChanged);
+    }
     m_hl2ReadingTimer = new QTimer(this);
     m_hl2ReadingTimer->setInterval(1000);
     connect(m_hl2ReadingTimer, &QTimer::timeout, this, &TciServer::checkHl2Readings);
@@ -4007,41 +4020,127 @@ TciExtensionSet::Result TciServer::handleHl2(const QString& name, const QStringL
     const bool hpfApplies = request->board == TciHl2Extension::kBoardTxOnly;
     const bool hpfWanted = hpfApplies ? request->hpf : hpfNow;
     const bool adoptedAsAsked = hpfWanted == request->hpf;
+    // A set equal to what stands also replaces one still held in the window:
+    // the newest request is the one that counts.
     if (request->board == boardNow && hpfWanted == hpfNow) {
+        m_hl2SetPending.reset();
         if (!adoptedAsAsked) {
             result.reply = current;  // the HPF was not applied: say what stands
         }
         return result;
     }
-    // Refused while keyed: the J16 outputs switch the filter relays, and the
-    // transmit byte would change under the carrier. The setup page has no
-    // such refusal; this one is the TCI set's own (RFC #7181 appendix).
-    QString refusal;
-    if (extensionKeyed()) {
-        refusal = QStringLiteral("TCI: the HL2 filter board cannot change while transmitting; "
-                                 "it stays as set.");
-    } else if (m_model->settingsScope().radioId().isEmpty()) {
-        // The setup page dims these controls without a radio identity, since
-        // the setting is stored against it.
-        refusal = QStringLiteral("TCI: the HL2 filter board cannot change before the radio "
-                                 "has an identity to store it against.");
-    }
-    if (!refusal.isEmpty()) {
-        qCWarning(lcCat).noquote() << refusal;
-        emit m_model->configurationWarning(refusal);
+    if (const QString refusal = hl2SetRefusal(); !refusal.isEmpty()) {
+        warnHl2SetRefused(refusal);
         result.reply = current;
         return result;
     }
     // hw.set with only these keys, partial by design, saved as from the page.
+    // Coalesced through the notice's window: the newest set inside it is the
+    // one applied, so a toggling client causes one save per window, not one
+    // per command.
     QVariantMap fields{{QStringLiteral("filterBoard"), request->board}};
     if (hpfApplies) {
         fields.insert(QStringLiteral("n2adrHpf"), request->hpf);
     }
-    m_model->invokeBackendExtension(ns, QStringLiteral("hw.set"), 0, fields);
+    m_hl2SetPending = fields;
+    m_hl2SetRequester = m_extensionRequester;
+    if (!m_hl2SetRateTimer->isActive()) {
+        flushHl2Set();
+    }
+    return result;
+}
+
+// Why a filter board set cannot be applied now, or empty. Read again when a
+// held set is applied, since the radio may have keyed in between.
+QString TciServer::hl2SetRefusal() const
+{
+    // Refused while keyed: the J16 outputs switch the filter relays, and the
+    // transmit byte would change under the carrier. The setup page has no
+    // such refusal; this one is the TCI set's own (RFC #7181 appendix). The
+    // HL2 transmit tail, which none of these sources sees, is refused by the
+    // backend (refuseWhileTransmitting, flushHl2Set()).
+    if (extensionKeyed()) {
+        return QStringLiteral("TCI: the HL2 filter board cannot change while transmitting; "
+                              "it stays as set.");
+    }
+    if (m_model->settingsScope().radioId().isEmpty()) {
+        // The setup page dims these controls without a radio identity, since
+        // the setting is stored against it.
+        return QStringLiteral("TCI: the HL2 filter board cannot change before the radio "
+                              "has an identity to store it against.");
+    }
+    return {};
+}
+
+// Logged every time; shown to the operator once per transmit state, so a
+// client repeating a refused set cannot keep the status bar from clearing.
+// The latch clears on any key or unkey (onHl2TransmitStateChanged) and on a
+// set that is applied.
+void TciServer::warnHl2SetRefused(const QString& refusal)
+{
+    qCWarning(lcCat).noquote() << refusal;
+    if (m_hl2RefusalWarned.contains(refusal)) {
+        return;
+    }
+    m_hl2RefusalWarned.insert(refusal);
+    emit m_model->configurationWarning(refusal);
+}
+
+void TciServer::onHl2TransmitStateChanged()
+{
+    m_hl2RefusalWarned.clear();
+}
+
+void TciServer::flushHl2Set()
+{
+    if (!m_hl2SetPending) {
+        return;
+    }
+    const QVariantMap fields = *std::exchange(m_hl2SetPending, std::nullopt);
+    const QPointer<TciClient> requester = std::exchange(m_hl2SetRequester, nullptr);
+    IRadioBackend* backend = m_model ? m_model->backend() : nullptr;
+    if (!backend || !hl2Offered()) {
+        return;
+    }
+    // The sender is answered with what stands, as for a refusal on arrival.
+    const auto answerRefused = [this, &requester](const QString& why) {
+        warnHl2SetRefused(why);
+        if (ClientState* client = requester ? clientStateFor(requester) : nullptr) {
+            sendExtensionText(*client, hl2FilterBoardLine());
+        }
+    };
+    if (const QString refusal = hl2SetRefusal(); !refusal.isEmpty()) {
+        answerRefused(refusal);
+        return;
+    }
+    // The backend refuses it during the transmit tail too, the rule its
+    // transmit output change follows. hw.set answers synchronously.
+    QVariantMap request = fields;
+    request.insert(QStringLiteral("refuseWhileTransmitting"), true);
+    const quint64 id = m_hl2NextRequestId++;
+    bool refused = false;
+    {
+        QObject guard;
+        connect(backend, &IRadioBackend::extensionError, &guard,
+                [&refused, id](quint64 requestId, const QString&) {
+                    if (requestId == id) {
+                        refused = true;
+                    }
+                });
+        m_model->invokeBackendExtension(QString::fromLatin1(TciHl2Extension::kToken),
+                                        QStringLiteral("hw.set"), id, request);
+    }
+    if (refused) {
+        answerRefused(QStringLiteral("TCI: the HL2 filter board cannot change while the "
+                                     "radio is transmitting or its transmit tail is still "
+                                     "on the air; it stays as set."));
+        return;
+    }
+    m_hl2RefusalWarned.clear();
+    m_hl2SetRateTimer->start();
     // The answer is the notice, to every enabled client, with what the
     // backend adopted.
     queueHl2FilterNotice();
-    return result;
 }
 
 void TciServer::onHl2ExtensionResult(quint64 requestId, const QVariant& result)

@@ -15,6 +15,7 @@
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/TransmitDelta.h"
+#include "core/backends/hl2/Hl2Backend.h"
 #include "models/DaxIqModel.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -52,6 +53,31 @@ public:
     }
     static void checkReadings(TciServer& server) { server.checkHl2Readings(); }
 };
+
+// RadioModel befriends this name; the identity is what a set is stored against.
+struct RadioModelWakeTestAccess {
+    static void identity(RadioModel& radio, const QString& serial)
+    { radio.m_lastInfo.serial = serial; }
+};
+
+namespace hl2 {
+// The real transmit tail, armed and ended by the backend's own functions.
+struct Hl2HwSetTailTestAccess {
+    static void setConnected(Hl2Backend& b) { b.m_connected = true; }
+    static void beginTail(Hl2Backend& b)
+    {
+        b.m_txTailHoldMs = 60 * 60 * 1000;   // parked; the test ends it
+        b.beginTxTail();
+    }
+    static void endTail(Hl2Backend& b)
+    {
+        b.m_txTailTimer->stop();
+        b.finishTxTail();
+    }
+    static bool tailPending(const Hl2Backend& b) { return b.m_txTailPending; }
+    static void setKeyed(Hl2Backend& b, bool v) { b.m_keyed = v; }
+};
+} // namespace hl2
 
 namespace {
 
@@ -367,8 +393,11 @@ void serverBehaviour()
     // Set: hw.set with only the board (HPF not applicable), then one notice.
     a.send("aethersdr_hl2_filter_board:N2ADR_RXTX,false;");
     check(backend->hwSets.size() == 1
-              && backend->hwSets.first() == QVariantMap({{QStringLiteral("filterBoard"), 1}}),
-          "a set reaches the backend as the setup page's partial hw.set");
+              && backend->hwSets.first()
+                     == QVariantMap({{QStringLiteral("filterBoard"), 1},
+                                     {QStringLiteral("refuseWhileTransmitting"), true}}),
+          "a set reaches the backend as the setup page's partial hw.set, asking for the "
+          "transmit refusal");
     settle();
     check(a.take() == one("aethersdr_hl2_filter_board:n2adr_rxtx,false;")
               && c.take() == one("aethersdr_hl2_filter_board:n2adr_rxtx,false;")
@@ -385,8 +414,10 @@ void serverBehaviour()
     a.send("aethersdr_hl2_filter_board:n2adr_txonly,1;");
     settle();
     check(backend->hwSets.size() == 2
-              && backend->hwSets.last() == QVariantMap({{QStringLiteral("filterBoard"), 2},
-                                                        {QStringLiteral("n2adrHpf"), true}})
+              && backend->hwSets.last()
+                     == QVariantMap({{QStringLiteral("filterBoard"), 2},
+                                     {QStringLiteral("n2adrHpf"), true},
+                                     {QStringLiteral("refuseWhileTransmitting"), true}})
               && a.take() == one("aethersdr_hl2_filter_board:n2adr_txonly,true;")
               && c.take() == one("aethersdr_hl2_filter_board:n2adr_txonly,true;"),
           "on the TX-only board the HPF is set with it and notified");
@@ -395,21 +426,56 @@ void serverBehaviour()
     check(backend->hwSets.size() == 2 && a.take().isEmpty() && c.take().isEmpty(),
           "a set that changes nothing stays quiet");
 
+    // A toggling client: the first set is applied at once, the rest of the
+    // window is coalesced into one hw.set with the newest.
+    a.send("aethersdr_hl2_filter_board:none,false;aethersdr_hl2_filter_board:n2adr_rxtx,false;"
+           "aethersdr_hl2_filter_board:none,false;aethersdr_hl2_filter_board:n2adr_rxtx,false;");
+    check(backend->hwSets.size() == 3 && backend->filterBoard == 0,
+          "the first set of a burst is applied at once");
+    settle();
+    check(backend->hwSets.size() == 4 && backend->filterBoard == 1,
+          "the rest of the window is one hw.set, with the newest board");
+    settle(250);  // the window the coalesced set opened
+    a.take();
+    c.take();
+    a.send("aethersdr_hl2_filter_board:none,false;aethersdr_hl2_filter_board:n2adr_rxtx,false;"
+           "aethersdr_hl2_filter_board:none,false;");
+    settle(250);
+    check(backend->hwSets.size() == 5 && backend->filterBoard == 0,
+          "a held set followed by one equal to what stands is dropped, not applied");
+    a.take();
+    c.take();
+    a.send("aethersdr_hl2_filter_board:n2adr_txonly,true;");
+    settle(250);
+    check(backend->hwSets.size() == 6 && backend->filterBoard == 2 && backend->n2adrHpf,
+          "the board is back where the keyed checks expect it");
+    a.take();
+    c.take();
+
     // Keyed: refused before any hw.set, current value to the sender, noticed.
+    const qsizetype setsBeforeKey = backend->hwSets.size();
     model.transmitModel().setTransmitting(true);
     a.send("aethersdr_hl2_filter_board:none,false;");
     settle();
-    check(backend->hwSets.size() == 2 && backend->filterBoard == 2 && warnings == 2
+    check(backend->hwSets.size() == setsBeforeKey && backend->filterBoard == 2 && warnings == 2
               && a.take() == one("aethersdr_hl2_filter_board:n2adr_txonly,true;")
               && c.take().isEmpty(),
           "a set while transmitting is refused, answered to the sender, and noticed");
+    a.send("aethersdr_hl2_filter_board:none,false;aethersdr_hl2_filter_board:n2adr_rxtx,false;");
+    c.send("aethersdr_hl2_filter_board:none,false;");
+    settle();
+    check(backend->hwSets.size() == setsBeforeKey && warnings == 2
+              && a.take() == QStringList({QStringLiteral("aethersdr_hl2_filter_board:n2adr_txonly,true;"),
+                                          QStringLiteral("aethersdr_hl2_filter_board:n2adr_txonly,true;")})
+              && c.take() == one("aethersdr_hl2_filter_board:n2adr_txonly,true;"),
+          "repeated refusals in one transmit state are each answered, and noticed once");
     model.transmitModel().setTransmitting(false);
     TransmitDelta tune;
     tune.tune = true;
     model.transmitModel().applyChanges(tune);
     a.send("aethersdr_hl2_filter_board:none,false;");
     settle();
-    check(model.transmitModel().isTuning() && backend->hwSets.size() == 2 && warnings == 3
+    check(model.transmitModel().isTuning() && backend->hwSets.size() == setsBeforeKey && warnings == 3
               && a.take() == one("aethersdr_hl2_filter_board:n2adr_txonly,true;"),
           "and while tuning");
     tune.tune = false;
@@ -558,6 +624,118 @@ void realBackendNotifies()
           "and hw.get, which the state line reads, agrees with it");
 }
 
+// The HL2 keeps radiating for a tail after MOX-off, and no source TCI reads
+// sees it. The real Hl2Backend refuses a hw.set that asks for the transmit
+// refusal during the tail and accepts it once the tail ends; a hw.set without
+// it (the setup page's) is unchanged. Then the same through TciServer.
+void realBackendRefusesInTheTail()
+{
+    using hl2::Hl2HwSetTailTestAccess;
+    RadioModel model;
+    if (!model.rebuildBackendForTest(QStringLiteral("hl2")) || !model.backend()) {
+        check(false, "the HL2 backend builds");
+        return;
+    }
+    auto* backend = dynamic_cast<hl2::Hl2Backend*>(model.backend());
+    if (!backend) {
+        check(false, "the backend is an Hl2Backend");
+        return;
+    }
+    int statuses = 0;
+    QList<quint64> errors;
+    QObject::connect(backend, &IRadioBackend::extensionStatus, &model,
+                     [&statuses](const QString& ns, const QString& kind, const QVariantMap&) {
+                         if (ns == QLatin1String("hl2") && kind == QLatin1String("hw")) {
+                             ++statuses;
+                         }
+                     });
+    QObject::connect(backend, &IRadioBackend::extensionError, &model,
+                     [&errors](quint64 id, const QString&) { errors << id; });
+    const auto hw = [&model, backend] {
+        QVariantMap got;
+        QObject guard;
+        QObject::connect(backend, &IRadioBackend::extensionResult, &guard,
+                         [&got](quint64 id, const QVariant& v) {
+                             if (id == 99) {
+                                 got = v.toMap();
+                             }
+                         });
+        model.invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("hw.get"), 99);
+        return got;
+    };
+    const auto board = [&hw] {
+        return hw().value(QStringLiteral("filterBoard"), -1).toInt();
+    };
+    const auto set = [&model](quint64 id, int filterBoard, bool refuse) {
+        QVariantMap in{{QStringLiteral("filterBoard"), filterBoard}};
+        if (refuse) {
+            in.insert(QStringLiteral("refuseWhileTransmitting"), true);
+        }
+        model.invokeBackendExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), id, in);
+    };
+
+    const int start = board();
+    const int other = start == 1 ? 2 : 1;
+    Hl2HwSetTailTestAccess::beginTail(*backend);
+    check(Hl2HwSetTailTestAccess::tailPending(*backend), "the tail is pending after MOX-off");
+    set(7, other, true);
+    check(errors == QList<quint64>{7} && statuses == 0 && board() == start,
+          "in the tail, a hw.set asking for the refusal is refused and changes nothing");
+    set(0, other, false);
+    check(statuses == 1 && board() == other,
+          "in the tail, the setup page's hw.set is applied as before");
+    set(0, start, false);
+    statuses = 0;
+    Hl2HwSetTailTestAccess::setKeyed(*backend, true);
+    set(8, other, true);
+    Hl2HwSetTailTestAccess::setKeyed(*backend, false);
+    check(errors.size() == 2 && errors.last() == 8 && statuses == 0 && board() == start,
+          "keyed, it is refused too");
+    Hl2HwSetTailTestAccess::endTail(*backend);
+    check(!Hl2HwSetTailTestAccess::tailPending(*backend), "the tail ends");
+    set(9, other, true);
+    check(errors.size() == 2 && statuses == 1 && board() == other,
+          "after the tail it is accepted");
+    set(0, start, false);
+
+    // Through TciServer: a client's set in the tail is answered with what
+    // stands and noticed; after the tail it is applied.
+    Hl2HwSetTailTestAccess::setConnected(*backend);
+    RadioModelWakeTestAccess::identity(model, QStringLiteral("00:00:00:00:00:02"));
+    int warnings = 0;
+    QObject::connect(&model, &RadioModel::configurationWarning, &model,
+                     [&warnings](const QString&) { ++warnings; });
+    TciServer server(&model);
+    Wire a;
+    TciHl2ExtensionTest::attach(server, a.client, model);
+    settle();
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    const QString standing = TciHl2Extension::filterBoardLine(hw());
+    const QString target = other == 1 ? QStringLiteral("aethersdr_hl2_filter_board:n2adr_rxtx,false;")
+                                      : QStringLiteral("aethersdr_hl2_filter_board:n2adr_txonly,false;");
+    std::printf("      start board %d, standing %s\n", start, qPrintable(standing));
+    Hl2HwSetTailTestAccess::beginTail(*backend);
+    a.send(qPrintable(target));
+    settle();
+    QStringList got = a.take();
+    check(board() == start && warnings == 1 && got == QStringList{standing},
+          "a TCI set in the tail is refused, answered with what stands, and noticed");
+    if (got != QStringList{standing}) {
+        dump("a", got);
+    }
+    Hl2HwSetTailTestAccess::endTail(*backend);
+    settle(250);
+    a.send(qPrintable(target));
+    settle();
+    got = a.take();
+    check(board() == other && warnings == 1 && got == QStringList{target},
+          "after the tail the same set is applied and notified");
+    if (got != QStringList{target}) {
+        dump("a", got);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -572,6 +750,7 @@ int main(int argc, char** argv)
     grammar();
     serverBehaviour();
     realBackendNotifies();
+    realBackendRefusesInTheTail();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -320,6 +320,8 @@ private:
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
     friend struct Hl2TxRouteTestAccess;
+    // Arms and ends the transmit tail, for tci_ext_hl2_hw_test's hw.set refusal.
+    friend struct Hl2HwSetTailTestAccess;
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
     void onRadioPttChanged(bool keyed);

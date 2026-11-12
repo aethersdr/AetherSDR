@@ -270,6 +270,11 @@ private:
     void queueHl2FilterNotice();
     bool broadcastHl2FilterBoard();
     void checkHl2Readings();
+    QString hl2SetRefusal() const;
+    void warnHl2SetRefused(const QString& refusal);
+    void onHl2TransmitStateChanged();
+    // Applies the newest filter board set held in the rate window.
+    void flushHl2Set();
     // Transmitting, tuning, or a transmit operation still held: the sources
     // ReceiveControlGuard::checkTransmit() reads.
     bool extensionKeyed() const;
@@ -489,6 +494,12 @@ private:
     // Filter board and HPF from the last hw status seen; a notice is queued
     // when a status moves them.
     std::optional<QPair<int, bool>> m_hl2LastFilter;
+    // A filter board set waiting for the rate window, newest wins, and who
+    // asked; refusal warnings already shown in this transmit state.
+    QTimer*           m_hl2SetRateTimer{nullptr};
+    std::optional<QVariantMap> m_hl2SetPending;
+    QPointer<TciClient> m_hl2SetRequester;
+    QSet<QString>     m_hl2RefusalWarned;
     QTimer*           m_hl2ReadingTimer{nullptr};
     QString           m_hl2LastTxTiming;
     QString           m_hl2LastExtTr;

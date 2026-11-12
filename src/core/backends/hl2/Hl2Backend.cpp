@@ -6123,6 +6123,19 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         }
         if (verb == QLatin1String("hw.set")) {
             const QVariantMap in = arg.toMap();
+            // Opt-in, for a remote caller (TCI): refused while the radio
+            // radiates, the tail included, as requestTxRoute() refuses. The
+            // filter board moves the J16 relays under the carrier. The setup
+            // page does not send it, so its writes are unchanged.
+            if (in.value(QStringLiteral("refuseWhileTransmitting")).toBool()
+                && (m_keyed || m_radioPtt || m_tuning || m_txTailPending)) {
+                qCWarning(lcHl2) << "HL2: hardware options not changed — transmitting";
+                if (requestId != 0) {
+                    emit extensionError(requestId,
+                        QStringLiteral("hw.set: refused while transmitting"));
+                }
+                return;
+            }
             // PARTIAL BY DESIGN: a caller sets the one field it cares about and
             // every absent key keeps its current value. Defaulting an absent
             // key to false instead would let a bridge command that meant to
