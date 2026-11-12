@@ -144,6 +144,9 @@ private:
     QString livePreviewRecognizer() const;
     // Copy Assist is on with the sherpa preview, so its model is needed now.
     bool previewModelWanted() const;
+    // The sherpa (Kroko, English-only) preview is on while the transcription
+    // language is set to another language, so its gray text will be nonsense.
+    bool previewLanguageMismatch() const;
     // Fetch (or verify the cached) default preview model when it is wanted;
     // applyLivePreview() runs again once it is ready.
     void ensurePreviewModelIfWanted();

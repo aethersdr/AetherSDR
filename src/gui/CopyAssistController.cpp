@@ -496,11 +496,14 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         CopyAssistSettings::setValue(QStringLiteral("AsrLivePreview"),
                                      on ? QStringLiteral("True") : QStringLiteral("False"));
         applyLivePreview();
+        // Add or drop the English-only note, and any earlier preview message.
+        restoreListeningStatus();
     });
     connect(m_settings, &CopyAssistSettingsDialog::livePreviewRecognizerChanged, this,
             [this](const QString& id) {
                 CopyAssistSettings::setValue(QStringLiteral("AsrLivePreviewRecognizer"), id);
                 applyLivePreview();
+                restoreListeningStatus();
             });
 
     // The default recognizer's model: four files fetched and SHA-verified like
@@ -902,15 +905,24 @@ void CopyAssistController::refreshNativeInput()
 
 QString CopyAssistController::listeningStatus() const
 {
+    QString status;
     if (m_tap && m_tap->usesNativeInput()) {
         if (!m_nativeAudio || m_nativeAudio->routeStatus() != DecoderAudioModel::RouteStatus::Bound) {
-            return tr("Waiting for selected receiver — audio before RX effects");
+            status = tr("Waiting for selected receiver — audio before RX effects");
+        } else {
+            status = m_backend == AsrBackendKind::Remote
+                ? tr("Listening (remote) — selected receiver before RX effects")
+                : tr("Listening — selected receiver before RX effects");
         }
-        return m_backend == AsrBackendKind::Remote
-            ? tr("Listening (remote) — selected receiver before RX effects")
-            : tr("Listening — selected receiver before RX effects");
+    } else {
+        status = m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…") : tr("Listening…");
     }
-    return m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…") : tr("Listening…");
+    if (previewLanguageMismatch()) {
+        // Kroko keeps running (the finals are unaffected), so this is a note on
+        // the status rather than a failure like Apple's unsupported language.
+        status = tr("%1 · Live preview understands English only").arg(status);
+    }
+    return status;
 }
 
 void CopyAssistController::clearDecode()
@@ -1306,14 +1318,10 @@ void CopyAssistController::applyLivePreview()
     if (on) {
         const QString which = livePreviewRecognizer();
         if (which == QLatin1String(kPreviewApple) && appleLivePreviewSupported()) {
-            // "auto" or empty means the system language.
-            QString lang =
+            // Always a whisper language code; the list has no auto-detect entry.
+            factory = appleLivePreviewFactory(
                 CopyAssistSettings::value(QStringLiteral("AsrLanguage"), QStringLiteral("en"))
-                    .toString();
-            if (lang == QStringLiteral("auto")) {
-                lang.clear();
-            }
-            factory = appleLivePreviewFactory(lang);
+                    .toString());
         } else if (which == QLatin1String(kPreviewSherpa) && sherpaLivePreviewSupported()) {
             if (!m_previewModelDir.isEmpty()) {
                 if (!m_sherpaPreviewFactory) {
@@ -1355,6 +1363,26 @@ bool CopyAssistController::previewModelWanted() const
         == QStringLiteral("True");
     return m_enabled && on && livePreviewRecognizer() == QLatin1String(kPreviewSherpa)
            && sherpaLivePreviewSupported();
+}
+
+bool CopyAssistController::previewLanguageMismatch() const
+{
+    // The offline sherpa backend hides the language setting and ignores it.
+    if (m_backend == AsrBackendKind::SherpaOnnx) {
+        return false;
+    }
+    const bool on =
+        CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
+            .toString()
+        == QStringLiteral("True");
+    if (!on || livePreviewRecognizer() != QLatin1String(kPreviewSherpa)
+        || !sherpaLivePreviewSupported()) {
+        return false;
+    }
+    // Always a whisper code: the list has no auto-detect entry, and a saved
+    // value outside it is reset to "en" at startup.
+    return CopyAssistSettings::value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString()
+           != QStringLiteral("en");
 }
 
 void CopyAssistController::ensurePreviewModelIfWanted()
@@ -1846,7 +1874,7 @@ void CopyAssistController::onSpeakerModelLoaded(const QString& path, bool loaded
 
 void CopyAssistController::restoreListeningStatus()
 {
-    if (!m_enabled || !m_asr->isReady()) {
+    if (!m_enabled || m_asr == nullptr || !m_asr->isReady()) {
         return; // not listening — leave "Disabled"/"Loading model…" alone
     }
     m_panel->setStatus(listeningStatus());

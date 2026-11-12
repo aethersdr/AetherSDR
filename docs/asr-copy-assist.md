@@ -267,13 +267,22 @@ the layout. Grab models from sherpa-onnx's model zoo and point at the extracted
 directory. sherpa-onnx bundles its own ONNX Runtime, which the whole app then
 shares (single runtime, no version clash).
 
-Stage it with `scripts/setup/setup-sherpa-onnx.sh` (Linux x64/aarch64 + macOS;
-`REQUIRE_ASR_SHERPA=ON` makes it a release requirement). The AppImage and DMG
-release builds run this and ship sherpa-onnx. k2-fsa publishes no aarch64
-shared-lib, so the ARM one is built by AetherSDR's own CI
+Stage it with `scripts/setup/setup-sherpa-onnx.sh` (Linux x64/aarch64 + macOS)
+or `scripts\setup\setup-sherpa-onnx.ps1` (Windows), then re-run CMake; configure
+prints `sherpa-onnx found — non-whisper ASR backend enabled`. On macOS, run
+`setup-onnxruntime.sh` first: the sherpa script links against that runtime and
+refuses to run without it. On Linux and Windows sherpa-onnx brings its own.
+`REQUIRE_ASR_SHERPA=ON` turns a missing sherpa-onnx into a configure error
+instead of a build without it. The release builds run these scripts and ship
+sherpa-onnx. k2-fsa publishes no aarch64 shared-lib, so the ARM one is built by
+AetherSDR's own CI
 ([`build-sherpa-onnx-aarch64.yml`](../.github/workflows/build-sherpa-onnx-aarch64.yml))
-and hosted on the `sherpa-onnx-libs` release. Windows is a follow-up (needs a
-`setup-sherpa-onnx.ps1`).
+and hosted on the `sherpa-onnx-libs` release.
+
+A source build without sherpa-onnx still succeeds, but has no default live
+preview recognizer: the Kroko entry is dimmed, and off macOS so is the preview
+setting. The app downloads only the Kroko *model* on first use; the library is
+a build-time dependency, so anyone building to test the preview must stage it.
 
 ## Remote backend (bring your own server)
 
@@ -410,11 +419,12 @@ at huggingface.co/Banafo/Kroko-ASR gives the licence as CC-BY-SA), fetched by
 each file pinned by size and SHA-256 and verified like the whisper tiers.
 
 **Apple (`AppleLivePreview.cpp`).** The recogniser takes the Copy Assist
-language setting; empty (**Auto**) means `Locale.current`, the Mac's own
-language and region, so the preview has no language control of its own.
-`SpeechTranscriber.supportedLocale(equivalentTo:)` maps it to Apple's nearest
-regional variant. On macOS 26 that covers English, Spanish, French, German,
-Italian, Portuguese, Mandarin, Cantonese, Japanese and Korean (31 locales,
+language setting, so the preview has no language control of its own. That
+setting is always a whisper language code: the list has no auto-detect entry.
+`SpeechTranscriber.supportedLocale(equivalentTo:)` maps the bare code to one of
+Apple's regional variants (an empty code would mean `Locale.current`). On
+macOS 26 that covers English, Spanish, French, German, Italian, Portuguese,
+Mandarin, Cantonese, Japanese and Korean (31 locales,
 `SpeechTranscriber.supportedLocales`); anything else reports Failed with the
 reason and shows no preview. A locale not yet installed is downloaded first,
 reported as Preparing. Apple's API is Swift-only. `src/asr/apple/AppleLivePreview.swift` exports a C
@@ -437,6 +447,7 @@ dimmed with the reason.
 | `ENABLE_ASR_METAL` | ON (Apple) | Metal GPU backend (macOS). |
 | `REQUIRE_ASR_ONNX` | OFF | **Release guard** — fail configure if ONNX Runtime is missing (else VAD/speaker/classifier silently compile out). |
 | `REQUIRE_ASR_GPU` | OFF | **Release guard** — fail configure if no GPU backend (Vulkan/Metal) is enabled. |
+| `REQUIRE_ASR_SHERPA` | OFF | **Release guard** — fail configure if sherpa-onnx is missing (else the offline sherpa backend and the default live preview recognizer compile out). See *sherpa-onnx models* for staging it. |
 | `ENABLE_ASR_APPLE_LIVE_PREVIEW` | ON (Apple) | Build the Swift bridge for Apple's live-preview recognizer (needs the macOS 26 SDK; an older SDK builds the stub). It runs on macOS 26+; older macOS gets its entry dimmed. The default recognizer, sherpa-onnx, needs no flag beyond sherpa-onnx itself. |
 | `USE_SYSTEM_LIBWHISPER` | OFF | Link a distro libwhisper (**≥ 1.8.0**) via pkg-config instead of the vendored snapshot. |
 
