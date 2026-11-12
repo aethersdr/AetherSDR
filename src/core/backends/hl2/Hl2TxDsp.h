@@ -55,8 +55,9 @@ public:
         int inputSampleRateHz = 24000;    // AudioEngine TX audio rate
         int outputSampleRateHz = 48000;   // EP2, fixed
         // Input samples per WDSP block: 10.67 ms at 24 kHz. The start of every
-        // over waits one block to fill and one block of TXA output pre-load, so
-        // the block is kept short (#6052); kTxFilterTaps is independent of it.
+        // over waits one block each for the fill, the TXA output pre-load and
+        // bp0's partition delay, so the block is kept short (#6052);
+        // kTxFilterTaps is independent of it.
         int dspBlockSize = 256;
         WdspChannel::Mode mode = WdspChannel::Mode::Usb;
         // SSB transmit passband. Narrower than the RX default on purpose:
@@ -140,6 +141,11 @@ public:
     }
 #endif
 
+    // TXA build: longest wait for the worker before the head block is dropped,
+    // 21.33 ms at 24 kHz or one block period if longer. Set in time, not in
+    // blocks: the prime margin (42.67 ms) covers the wire while the block waits.
+    static constexpr std::size_t kExchangeStallSamples = 512;
+
     // Blocks the modulator could not place on the wire since configure(): each
     // non-Ok WdspChannel::processIq in the TXA build, always 0 in the phasing
     // build. Surfaced in the log and health snapshot. Read on the I/O thread,
@@ -147,7 +153,7 @@ public:
     [[nodiscard]] unsigned long long modulatorFaultBlocks() const noexcept;
     [[nodiscard]] unsigned long long modulatorBlocks() const noexcept;
     // The part of modulatorFaultBlocks() dropped unexchanged because the worker
-    // had not produced the previous block's output within a block period (TXA
+    // had not produced the previous block's output within exchangeStallNs() (TXA
     // build; 0 in the phasing build). A drop means the worker was starved; any
     // other fault means the exchange gate failed.
     [[nodiscard]] unsigned long long modulatorStallDrops() const noexcept;
@@ -273,9 +279,10 @@ private:
     // never inherits a deadline from the previous one.
     QElapsedTimer m_headWait;
     unsigned long long m_txStallDrops = 0;
-    // Queue depth, in blocks, above which the stage warns that it is being fed
-    // faster than the channel drains. Warned once per excursion.
-    static constexpr std::size_t kPendingWarnBlocks = 4;
+    // Queue depth, in input samples, above which the stage warns that it is
+    // being fed faster than the channel drains: 85.33 ms at 24 kHz, set in time
+    // so it does not follow the block. Warned once per excursion.
+    static constexpr std::size_t kPendingWarnSamples = 2048;
     bool m_pendingWarned = false;
     std::function<bool(bool)> m_outputReadyProbe;
 #else

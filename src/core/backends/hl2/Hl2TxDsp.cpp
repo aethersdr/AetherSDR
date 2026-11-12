@@ -204,7 +204,7 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
     // A caller faster than real time on average shows as queue depth and
     // latency, not faults: warn once per excursion.
     const std::size_t depth = m_exchangePending.size() / block;
-    if (depth > kPendingWarnBlocks && !m_pendingWarned) {
+    if (m_exchangePending.size() > kPendingWarnSamples && !m_pendingWarned) {
         m_pendingWarned = true;
         qCWarning(lcTxMod).nospace()
             << "HL2 TXA modulator: " << depth << " blocks waiting for the "
@@ -216,13 +216,15 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
     exchangeDueBlocks();
 }
 
-// How long the head block may wait for the worker before it is dropped: one
-// block period from when it reached the head. The worker turns a TXA block
-// round in well under a millisecond, so a whole period without output is a
-// stall (preempted, or held by a control operation).
+// How long the head block may wait for the worker before it is dropped, from
+// when it reached the head: kExchangeStallSamples, or one block period if
+// longer. The worker turns a TXA block round in well under a millisecond, so
+// that long without output is a stall (preempted, or held by a control operation).
 qint64 Hl2TxDsp::exchangeStallNs() const noexcept
 {
-    return static_cast<qint64>(static_cast<double>(m_config.dspBlockSize) * 1e9
+    const std::size_t samples =
+        std::max(kExchangeStallSamples, static_cast<std::size_t>(std::max(0, m_config.dspBlockSize)));
+    return static_cast<qint64>(static_cast<double>(samples) * 1e9
                                / static_cast<double>(std::max(1, m_config.inputSampleRateHz)));
 }
 
