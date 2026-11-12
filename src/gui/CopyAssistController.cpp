@@ -508,6 +508,9 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // same rule as the speaker model, #4737).
     m_previewModels = new AsrModelManager(this);
     connect(m_previewModels, &AsrModelManager::progress, this, [this](qint64 got, qint64 total) {
+        if (!previewModelWanted()) {
+            return; // Copy Assist or the sherpa preview went off mid-download
+        }
         m_panel->setStatus(
             total > 0 ? tr("Downloading live preview model… %1%").arg(static_cast<int>(got * 100 / total))
                       : tr("Downloading live preview model…"));
@@ -520,8 +523,16 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     connect(m_previewModels, &AsrModelManager::alreadyPresent, this, onPreviewModelReady);
     connect(m_previewModels, &AsrModelManager::finished, this, onPreviewModelReady);
     connect(m_previewModels, &AsrModelManager::failed, this, [this](const QString& err) {
+        if (!previewModelWanted()) {
+            // Nobody is waiting for it any more (Copy Assist or the preview is
+            // off, or Apple was chosen): drop the error rather than switch off
+            // a setting the operator has since changed, and don't strand the
+            // panel on the abandoned download's progress.
+            restoreListeningStatus();
+            return;
+        }
         // Same as the VAD and speaker models: say why, and turn the option off
-        // so every engine rebuild does not try (and fail) again.
+        // so every Enable does not try (and fail) again.
         m_panel->setStatus(tr("Live preview model download failed: %1").arg(err));
         CopyAssistSettings::setValue(QStringLiteral("AsrLivePreview"), QStringLiteral("False"));
         m_settings->setLivePreviewChecked(false);
@@ -1291,6 +1302,7 @@ void CopyAssistController::applyLivePreview()
             .toString()
         == QStringLiteral("True");
     LivePreviewFactory factory;
+    bool usingSherpa = false;
     if (on) {
         const QString which = livePreviewRecognizer();
         if (which == QLatin1String(kPreviewApple) && appleLivePreviewSupported()) {
@@ -1304,12 +1316,19 @@ void CopyAssistController::applyLivePreview()
             factory = appleLivePreviewFactory(lang);
         } else if (which == QLatin1String(kPreviewSherpa) && sherpaLivePreviewSupported()) {
             if (!m_previewModelDir.isEmpty()) {
-                factory = sherpaLivePreviewFactory(m_previewModelDir);
+                if (!m_sherpaPreviewFactory) {
+                    m_sherpaPreviewFactory = sherpaLivePreviewFactory(m_previewModelDir);
+                }
+                factory = m_sherpaPreviewFactory;
+                usingSherpa = true;
             } else {
                 // No preview until the model is verified; this runs again then.
                 ensurePreviewModelIfWanted();
             }
         }
+    }
+    if (!usingSherpa) {
+        m_sherpaPreviewFactory = {}; // let its loaded model go
     }
     m_asr->setLivePreviewFactory(std::move(factory));
 }
@@ -1328,15 +1347,19 @@ QString CopyAssistController::livePreviewRecognizer() const
     return sherpaOk || !appleOk ? sherpaId : appleId;
 }
 
-void CopyAssistController::ensurePreviewModelIfWanted()
+bool CopyAssistController::previewModelWanted() const
 {
     const bool on =
         CopyAssistSettings::value(QStringLiteral("AsrLivePreview"), QStringLiteral("False"))
             .toString()
         == QStringLiteral("True");
-    if (!m_enabled || !on || !m_previewModelDir.isEmpty()
-        || livePreviewRecognizer() != QLatin1String(kPreviewSherpa)
-        || !sherpaLivePreviewSupported() || m_previewModels->isBusy()) {
+    return m_enabled && on && livePreviewRecognizer() == QLatin1String(kPreviewSherpa)
+           && sherpaLivePreviewSupported();
+}
+
+void CopyAssistController::ensurePreviewModelIfWanted()
+{
+    if (!previewModelWanted() || !m_previewModelDir.isEmpty() || m_previewModels->isBusy()) {
         return;
     }
     m_previewModels->ensureBundle(AsrModelCatalog::sherpaLivePreviewModel());

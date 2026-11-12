@@ -79,19 +79,6 @@ QString AsrModelManager::bundlePath(const QVector<AsrModelTier>& files) const
     return files.isEmpty() ? QString() : QFileInfo(modelPath(files.first())).absolutePath();
 }
 
-bool AsrModelManager::isBundlePresent(const QVector<AsrModelTier>& files) const
-{
-    if (files.isEmpty()) {
-        return false;
-    }
-    for (const AsrModelTier& tier : files) {
-        if (!isPresent(tier)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool AsrModelManager::verifyFile(const QString& path, const AsrModelTier& tier,
                                  QString* error) const
 {

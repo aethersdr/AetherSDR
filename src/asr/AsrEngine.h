@@ -309,8 +309,9 @@ signals:
     void previewDiscarded(quint64 segmentId, quint64 generation);
     // LivePreviewState as int, with a message for the status line.
     void livePreviewStatus(int state, const QString& message);
-    // reset() restarted the segment-id timeline at 0 under a new generation:
-    // drop every provisional block and forget which ids were already resolved.
+    // Drop every provisional block and forget which ids were already resolved:
+    // reset() restarted the segment-id timeline at 0 under a new generation, or
+    // the preview was turned off (same generation).
     void livePreviewReset(quint64 generation);
     // Transcription backlog: seconds of received audio not yet handled by the
     // worker (grows when it can't keep up with real time).

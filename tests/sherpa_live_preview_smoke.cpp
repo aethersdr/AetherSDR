@@ -13,11 +13,14 @@
 //     one ended, and no provisional result starts before that edge;
 //   - B's finals hold the same number of words as A's, within 5%: a split
 //     that kept words from after its edge would repeat them, one that lost the
-//     re-fed audio would drop them.
+//     re-fed audio would drop them;
+//   - both runs share one factory, and B's session starts in a fifth of the
+//     time A's took: the model loads once, not per session.
 
 #include "asr/LivePreview.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QFile>
 
 #include <cmath>
@@ -44,9 +47,10 @@ struct Run {
     bool tiled = true;
     bool provisionalInOrder = true;
     QString text;
+    qint64 startMs = 0; // creating the session (the first one loads the model)
 };
 
-Run run(const QString& modelDir, const std::vector<float>& pcm, qint64 lagSamples)
+Run run(const LivePreviewFactory& factory, const std::vector<float>& pcm, qint64 lagSamples)
 {
     Run out;
     qint64 edge = -1;
@@ -68,7 +72,10 @@ Run run(const QString& modelDir, const std::vector<float>& pcm, qint64 lagSample
             std::fprintf(stderr, "failed: %s\n", qPrintable(m));
         }
     };
-    std::unique_ptr<ILivePreview> preview = sherpaLivePreviewFactory(modelDir)(cb);
+    QElapsedTimer started;
+    started.start();
+    std::unique_ptr<ILivePreview> preview = factory(cb);
+    out.startMs = started.elapsed();
     if (!preview) {
         std::exit(1);
     }
@@ -117,9 +124,12 @@ int main(int argc, char** argv)
     const double seconds = argc > 3 ? std::atof(argv[3]) : 120.0;
     pcm.resize(std::min(pcm.size(), size_t(seconds * 16000)));
 
-    const QString model = QString::fromLocal8Bit(argv[1]);
-    const Run a = run(model, pcm, 0);
-    const Run b = run(model, pcm, 24000); // 1.5 s behind the feed
+    // One factory for both runs, as the engine keeps one across sessions.
+    const LivePreviewFactory factory = sherpaLivePreviewFactory(QString::fromLocal8Bit(argv[1]));
+    const Run a = run(factory, pcm, 0);
+    const Run b = run(factory, pcm, 24000); // 1.5 s behind the feed
+    std::printf("session start: A %lld ms (loads the model), B %lld ms\n",
+                static_cast<long long>(a.startMs), static_cast<long long>(b.startMs));
     std::printf("A (split at the feed): %d words\n  %s\n", a.finalWords, qPrintable(a.text));
     std::printf("B (split 1.5 s behind): %d words\n  %s\n", b.finalWords, qPrintable(b.text));
 
@@ -129,6 +139,8 @@ int main(int argc, char** argv)
            "no provisional result starts before the last final's end");
     expect(std::abs(b.finalWords - a.finalWords) <= std::max(2, a.finalWords / 20),
            "splitting behind the feed neither repeats nor drops words (within 5%)");
+    expect(b.startMs * 5 < a.startMs,
+           "a second session from the same factory reuses the loaded model");
     std::printf(g_failures == 0 ? "sherpa live preview smoke: ALL PASS\n"
                                 : "sherpa live preview smoke: %d FAILURE(S)\n",
                 g_failures);

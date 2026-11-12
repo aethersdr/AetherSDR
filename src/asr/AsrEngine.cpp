@@ -715,7 +715,11 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     connect(m_worker, &AsrWorker::previewBlockClosed, this,
             [this](quint64 segmentId, qint64 endSample, quint64 generation) {
                 if (generation != m_generation) { return; }
-                m_previewAssembler.closeBlock(segmentId, endSample);
+                for (const auto& update : m_previewAssembler.closeBlock(segmentId, endSample)) {
+                    if (m_enabled && m_livePreviewEnabled) {
+                        emit previewText(update.block, update.text, m_generation);
+                    }
+                }
                 // Split the recogniser's text at the same edge as the segment.
                 postToFeeder([endSample, generation](LivePreviewFeeder* f) {
                     f->finalizeThrough(endSample, generation);
@@ -1029,7 +1033,13 @@ void AsrEngine::reset()
 
 void AsrEngine::setLivePreviewFactory(LivePreviewFactory factory)
 {
+    const bool wasEnabled = m_livePreviewEnabled;
     m_livePreviewEnabled = static_cast<bool>(factory);
+    if (wasEnabled && !m_livePreviewEnabled) {
+        // Nothing will replace or retract the gray text already shown for
+        // audio the backend may never finalise, so take it down now.
+        emit livePreviewReset(m_generation);
+    }
     if (m_livePreviewEnabled) {
         startPreviewThread();
     }

@@ -15,16 +15,52 @@ void LivePreviewAssembler::reset()
     m_lastResolved = 0;
 }
 
-void LivePreviewAssembler::closeBlock(quint64 id, qint64 endSample)
+std::vector<LivePreviewAssembler::Update> LivePreviewAssembler::closeBlock(quint64 id,
+                                                                          qint64 endSample)
 {
+    std::vector<Update> changed;
     if (m_anyResolved && id <= m_lastResolved) {
-        return;
+        return changed;
     }
     m_closedEnd[id] = endSample;
-    if (id >= m_openBlock) {
-        m_openBlock = id + 1;
-        m_openStart = std::max(m_openStart, endSample);
+    if (id < m_openBlock) {
+        return changed;
     }
+    m_openBlock = id + 1;
+    m_openStart = std::max(m_openStart, endSample);
+
+    const auto it = m_content.find(id);
+    if (it == m_content.end()) {
+        return changed;
+    }
+    Content& from = it->second;
+    Content moved;
+    const auto past = from.finals.lower_bound(endSample);
+    moved.finals.insert(past, from.finals.end());
+    from.finals.erase(past, from.finals.end());
+    if (from.provisionalStart >= endSample) {
+        moved.provisionalStart = from.provisionalStart;
+        moved.provisional = from.provisional;
+        from.provisionalStart = -1;
+        from.provisional.clear();
+    }
+    if (moved.finals.empty() && moved.provisionalStart < 0) {
+        return changed;
+    }
+    // Block id + 1 opens only now, so normally it is empty; merge regardless.
+    Content& to = m_content[id + 1];
+    to.finals.merge(moved.finals);
+    if (moved.provisionalStart >= 0 && to.provisionalStart < 0) {
+        to.provisionalStart = moved.provisionalStart;
+        to.provisional = moved.provisional;
+    }
+    if (auto update = render(id, from)) {
+        changed.push_back(*update);
+    }
+    if (auto update = render(id + 1, to)) {
+        changed.push_back(*update);
+    }
+    return changed;
 }
 
 std::optional<LivePreviewAssembler::Update>
