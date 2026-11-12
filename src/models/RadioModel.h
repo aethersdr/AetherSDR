@@ -68,6 +68,7 @@
 #include <QSet>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include "core/backends/SessionCommandGuard.h"
 
 #include <QTimer>
@@ -1675,6 +1676,18 @@ public:
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source,
                        const TxCoordinator::Context& context);
+    // Any thread. Hands transmit audio to a backend that takes it without the
+    // GUI thread (HL2). False when there is none; the caller then queues the
+    // block to submitTxAudio() on the GUI thread as before.
+    bool submitTxAudioDirect(const QByteArray& int16Stereo, int sampleRateHz,
+                             TxAudioSource source,
+                             const TxCoordinator::Context& context);
+private:
+    void installDirectTxSubmitter();
+    std::mutex m_directTxMutex;
+    std::function<bool(const QByteArray&, int, TxAudioSource,
+                       const TxCoordinator::Context&)> m_directTx;
+public:
     // Ordered completion barrier for a finite modem stream. The token lets the
     // producer reject a stale completion from an aborted transmission.
     void finishTxAudio(quint64 token, const TxCoordinator::Context& context);

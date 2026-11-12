@@ -843,9 +843,10 @@ private:
     bool m_txAllowed = false;   // gate; see enableTransmit()
     std::deque<std::complex<float>> m_txIq;   // pending transmit samples
     TxCoordinator::Context m_txIqContext;
-    // Roughly a quarter second at 48 kHz. Past this the operator is hearing
-    // latency, so dropping is better than growing the backlog.
-    static constexpr std::size_t kTxQueueMax = 12000;
+    // Roughly a third of a second at 48 kHz. Past this the operator is hearing
+    // latency, so dropping is better than growing the backlog. Raised from
+    // 12000 to hold the eight-block client prime with room above it.
+    static constexpr std::size_t kTxQueueMax = 16384;
     // THE PRIME (#6052). Delivery is in whole blocks, so an unprimed queue is
     // empty when each block is due and any lateness is keyed zeros mid-over.
     // Armed on the keyed edge and on every abandon; the keyed queued-IQ arm then
@@ -861,10 +862,11 @@ private:
             / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeTargetSamples < kTxQueueMax,
                   "the prime target must fit below the overflow bound");
-    // TCI/DAX audio: six blocks (128 ms). On a Hermes-Lite 2 the TCI path
+    // TCI/DAX audio: eight blocks (171 ms). On a Hermes-Lite 2 the TCI path
     // measured mid-over starvations of 1-49 EP2 packets (up to 128 ms) with
-    // the two-block margin, against a steady client and an on-time TCI clock.
-    static constexpr std::size_t kTxPrimeClientMarginBlocks = 6;
+    // the two-block margin, against a steady client and an on-time TCI clock,
+    // and producer stalls of 100-180 ms.
+    static constexpr std::size_t kTxPrimeClientMarginBlocks = 8;
     static constexpr std::size_t kTxPrimeClientTargetSamples =
         (kTxPrimeClientMarginBlocks + 1) * kTxPrimeBlockSamples;
     static constexpr std::uint64_t kTxPrimeClientMaxHoldPackets =
