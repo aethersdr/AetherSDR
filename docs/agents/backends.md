@@ -56,7 +56,7 @@ tool's `--check` on every PR and fails naming the signal you missed.
 
 | Family | Backend | Notes |
 |---|---|---|
-| `flex` | `FlexBackend` (`src/core/backends/flex/`) | SmartSDR wire stack; the Panadapter / Slice / Meter / Transmit / Amp / Tuner status+command paths decode behind it (2.2b–2.4) |
+| `flex` | `FlexBackend` (`src/core/backends/flex/`) | SmartSDR wire stack; every status and message line enters through its `FlexStatusIngress`, and the Panadapter / Slice / Meter / Transmit / Amp / Tuner status+command paths decode behind it (2.2b–2.4) |
 | `hl2` | `Hl2Backend` (`src/core/backends/hl2/`) | Hermes-Lite 2, shipped v26.7.4 — Metis/HPSDR transport, raw-IQ RX/TX DSP done in-client |
 | `icom` | `IcomCivBackend` (`src/core/backends/icom/`) | Networked Icom, shipped v26.8.2 — CI-V command plane inside the RS-BA1 UDP transport; the radio owns its own state, so `clientSettingsDomains` is empty |
 | `sim` | `SimBackend` (`src/core/backends/sim/`) | Synthetic demo backend, shipped v26.7.4 — generates its own audio + spectrum, RX-only by construction (Principle VI) |
@@ -311,6 +311,58 @@ model/UI consumers are converted subsystem-by-subsystem. Converting a
 touchpoint follows the claim protocol + a before/after
 `tools/verify_slice0_rx.py` run; a converted file drops its vendor include and
 lowers its EB3 baseline.
+
+### The Flex status ingress
+
+Every Flex wire line (status and message) enters the model through
+`FlexStatusIngress` (`src/core/backends/flex/`), one per transport: the LAN
+`RadioConnection`, a SmartLink `WanConnection`, and the Demo's synthetic
+connection.
+
+- **One entry.** A transport emits `lineReceived(line, epoch)` once per line,
+  and only the ingress subscribes. No model, dialog or tool reads raw status:
+  `RadioModel` has no raw relay, and a GUI that needs radio state gets a typed
+  signal.
+- **One fence.** The ingress takes each line over one queued hop on the
+  owner's thread and accepts it only from its current route and epoch.
+  `RadioModel` stamps a fresh epoch on the transport inside the same call that
+  starts a connect (`beginStatusSession()`), so a line from an abandoned
+  attempt or a retired session never reaches the model. SmartLink binds with
+  `bindLive()`; its lifecycle signals and its command replies take the same
+  queued hop, fenced per bind, so a reply never overtakes status read ahead
+  of it (as on the LAN, where replies queue as `commandResponse`).
+- **Decoders live in the ingress** (`FlexStatusDecoders.cpp`, plus header-only
+  `Flex*Status.h` parses that lightweight tests share) and run before the line
+  is handed on. A decoder's state moves with it (DAX TX streams, TUNE output
+  bands, amp/tuner encode handles); `FlexBackend` reads it through accessors.
+- **Typed results travel an existing seam signal where one fits** (transmit,
+  audio streams, amplifier/tuner, notches). Flex-only features (TX band tables,
+  spots, CWX, graphic EQ, waveforms, stream facts, interlock, firmware updates)
+  go out as `FlexBackend`-only signals that `RadioModel` relays, so the seam
+  does not grow.
+- **The relays need the concrete backend.** `RadioModel::wireStatusIngress()`
+  casts to `FlexBackend` and `SimBackend` to connect the Flex-only relays.
+  This is a deliberate exception to "no new `dynamic_cast` to a concrete
+  backend": the alternative is growing `IRadioBackend` with Flex-only signals.
+  It is a separate site from `setupBackend()` because `setBackendForTest()`
+  skips that and must still wire the ingress.
+- **Demo** turns value decoding off (`setDecodeValues(false)`): its native
+  producer owns the values, and only identity (a TGXL's handle) is decoded.
+  Its synthetic wire carries radio, display and slice status only, so the
+  Flex-only relays above are not wired for it.
+- **Tests feed lines through `RadioModel::handleLineForTest()` or
+  `handleStatusForTest()`**, never `onStatusReceived` directly: that skips the
+  decoders. A Flex fixture installs its backend with `setBackendForTest()`,
+  which wires the ingress; a Flex alias without one aborts the test rather
+  than pass with every decoder skipped. `tests/flex_ingress_characterization_test` (run with
+  `-vs -maxwarnings 0` and `tools/flex_ingress_trace.py`) traces a wire
+  corpus for before/after comparison of an ingress change.
+- **Still inline in `RadioModel`**, each awaiting its own PR: radio/client
+  lifecycle (#6907), slice ownership (#6878), pan/waterfall ownership and
+  foreign pan writes (#6884), setup status — transverters, USB cables, filter
+  sharpness, licenses (#6916) — and DVK/NAVTEX (#6870). Each moves into the
+  ingress as a domain decoder; none adds its own transport decoder or
+  lifetime token.
 
 Do not pre-emptively restructure code toward the RFC — no new engine/UI
 seams, backend interfaces, or speculative library targets ahead of a landed

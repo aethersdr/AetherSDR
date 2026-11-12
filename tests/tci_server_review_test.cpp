@@ -15,6 +15,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "IqStatusFixture.h"
 
 #include <QCoreApplication>
 #include <QAbstractSocket>
@@ -37,6 +38,8 @@
 #include <cstdio>
 #include <memory>
 #include <utility>
+
+
 
 namespace AetherSDR
 {
@@ -2417,7 +2420,7 @@ public:
         QMap<QString, QString> kvs;
         kvs.insert(QStringLiteral("daxiq_channel"), QStringLiteral("1"));
         kvs.insert(QStringLiteral("daxiq_rate"), QStringLiteral("192000"));
-        model.daxIqModel().applyStreamStatus(0x2000abcd, kvs);
+        model.daxIqModel().applyStreamDelta(iqStatus(0x2000abcd, kvs));
         if (!model.daxIqModel().stream(1).exists) {
             std::printf("      applet stream fixture did not take\n");
             return false;

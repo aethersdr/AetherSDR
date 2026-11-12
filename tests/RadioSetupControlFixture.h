@@ -14,13 +14,13 @@ public:
     { radio.applyRadioChanges(observation); }
     static void band(RadioModel& radio, int id)
     {
-        radio.onStatusReceived(QStringLiteral("transmit band %1").arg(id),
+        radio.handleStatusForTest(QStringLiteral("transmit band %1").arg(id),
             {{QStringLiteral("band_name"), QStringLiteral("20m")},
              {QStringLiteral("rfpower"), QStringLiteral("37")}});
     }
     static void transverter(RadioModel& radio, int id)
     {
-        radio.onStatusReceived(QStringLiteral("xvtr %1").arg(id),
+        radio.handleStatusForTest(QStringLiteral("xvtr %1").arg(id),
             {{QStringLiteral("name"), QStringLiteral("2m")},
              {QStringLiteral("rf_freq"), QStringLiteral("144")},
              {QStringLiteral("if_freq"), QStringLiteral("28")}});

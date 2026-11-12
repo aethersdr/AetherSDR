@@ -1294,7 +1294,7 @@ bool MainWindow::startDax()
 
     // Stream status registration now lives in ONE place —
     // RadioModel::handleDaxRxStreamRegistry (#3305) — instead of per-consumer
-    // statusReceived hooks with divergent filtering.
+    // raw status hooks with divergent filtering.
 
     if (!nativeReceive) {
         // Acquire DAX channels only for slices with a channel assigned.

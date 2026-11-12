@@ -22,7 +22,7 @@ public:
     }
     static void release(RadioModel& radio) { radio.m_connection = nullptr; }
     static void status(RadioModel& radio, const QString& object, const QMap<QString, QString>& values)
-    { radio.onStatusReceived(object, values); }
+    { radio.handleStatusForTest(object, values); }
     static int pending(const RadioModel& radio) { return radio.m_pendingPanCreations.size(); }
     static int history(const RadioModel& radio) { return radio.m_displayRetirements.size(); }
     static void retire(RadioModel& radio, const QString& id) { radio.retireDisplayResource(id); }
