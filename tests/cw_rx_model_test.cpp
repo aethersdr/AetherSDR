@@ -183,6 +183,51 @@ bool savedRangesStayInsideTheSliders()
     return kept;
 }
 
+// Each neural decoder keeps its own Sens beside the other CW decoder settings,
+// and a missing, malformed or out-of-span value never reaches the slider.
+bool neuralSensIsSavedPerDecoder()
+{
+    auto& s = AppSettings::instance();
+    auto store = [&](const char* json) { s.setValue("CwDecoder", QString::fromLatin1(json)); };
+    const QString ggmorseSens = s.value("CwDecoderSensitivity", "unset").toString();
+    // CONSTRUCTED blobs: they exercise the read-side validation only.
+    store(R"({"rx":"True","tx":"False"})");
+    if (!require(CwDecodeSettings::sensitivity("deepfist") == 0
+                 && CwDecodeSettings::sensitivity("deepcw") == 0,
+                 "A neural decoder with no saved Sens did not read as 0")) { return false; }
+    store(R"({"sensitivity":{"deepfist":250,"deepcw":-4}})");
+    if (!require(CwDecodeSettings::sensitivity("deepfist") == 100
+                 && CwDecodeSettings::sensitivity("deepcw") == 0,
+                 "An out-of-span Sens was not clamped to the slider span")) { return false; }
+    store(R"({"sensitivity":{"deepfist":"high"}})");
+    if (!require(CwDecodeSettings::sensitivity("deepfist") == 0,
+                 "A non-numeric Sens did not read as 0")) { return false; }
+    store(R"({"sensitivity":7})");
+    if (!require(CwDecodeSettings::sensitivity("deepfist") == 0,
+                 "A Sens entry that is not per decoder did not read as 0")) { return false; }
+
+    store(R"({"rx":"False","tx":"True","liveContacts":"True","pitchLow":651,"pitchHigh":954})");
+    CwDecodeSettings::setSensitivity("deepfist", 40);
+    CwDecodeSettings::setSensitivity("deepcw", 70);
+    CwDecodeSettings::setSensitivity("deepfist", 45);
+    const bool kept = require(CwDecodeSettings::sensitivity("deepfist") == 45
+                              && CwDecodeSettings::sensitivity("deepcw") == 70,
+                              "Saving one decoder's Sens changed or lost the other's")
+        && require(!CwDecodeSettings::rxEnabled() && CwDecodeSettings::txEnabled()
+                   && CwDecodeSettings::liveContactsEnabled()
+                   && sameRange(CwDecodeSettings::pitchRange(), 651, 954),
+                   "Saving a Sens lost another CW decoder setting")
+        && require(s.value("CwDecoderSensitivity", "unset").toString() == ggmorseSens,
+                   "Saving a neural decoder's Sens changed ggmorse's");
+    CwDecodeSettings::setSensitivity("deepfist", 300);
+    const QJsonObject stored =
+        QJsonDocument::fromJson(s.value("CwDecoder").toString().toUtf8()).object();
+    const bool clamped = require(stored.value("sensitivity").toObject().value("deepfist").toInt(-1) == 100,
+                                 "A Sens above the slider span was saved unclamped");
+    store(R"({"rx":"True","tx":"False"})");
+    return kept && clamped;
+}
+
 bool unlockAfterStopClearsReadout()
 {
     // The CW panel shows the last statsUpdated. A stopped decoder keeps its
@@ -254,6 +299,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
     if (!savedRangesStayInsideTheSliders()) { return 1; }
+    if (!neuralSensIsSavedPerDecoder()) { return 1; }
     if (!pitchRangeFollowsTheRadioPitch()) { return 1; }
     CwDecodeSettings::setBackend(QStringLiteral("unknown"));
     if (!require(!CwDecodeSettings::neuralSelected(),

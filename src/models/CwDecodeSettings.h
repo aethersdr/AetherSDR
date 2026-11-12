@@ -116,6 +116,27 @@ public:
     static void setPitchRange(int low, int high) { writeRange("pitchLow", "pitchHigh", low, high); }
     static void setSpeedRange(int low, int high) { writeRange("speedLow", "speedHigh", low, high); }
 
+    // Sens (0-100) of a neural CW decoder, one value per backend key because
+    // each model's confidence is on its own scale.  0, which hides nothing,
+    // when none is saved.  ggmorse's Sens stays in the flat
+    // CwDecoderSensitivity key.
+    static int sensitivity(const QString& backend)
+    {
+        const QJsonValue saved = readObj().value("sensitivity").toObject().value(backend);
+        return saved.isDouble() ? std::clamp(saved.toInt(), 0, 100) : 0;
+    }
+    static void setSensitivity(const QString& backend, int value)
+    {
+        QJsonObject o = readObj();
+        QJsonObject perBackend = o.value("sensitivity").toObject();
+        const int clamped = std::clamp(value, 0, 100);
+        if (perBackend.value(backend).toInt(-1) == clamped) return;
+        perBackend[backend] = clamped;
+        o["sensitivity"] = perBackend;
+        ensureToggles(o);
+        write(o);
+    }
+
     // The pitch range centred on the CW pitch: 300 Hz wide, shifted to stay
     // inside the slider span (a pitch beyond the span gets the edge window).
     static constexpr int kPitchHalfWidth = CwDecoder::kPitchHalfWidthHz;
