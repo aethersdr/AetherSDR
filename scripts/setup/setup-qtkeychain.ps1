@@ -74,8 +74,22 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # ── Download source ──────────────────────────────────────────────────────
 if (-not (Test-Path $TarFile)) {
-    Write-Host "Downloading qtkeychain ${QtKeychainVersion} source..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $QtKeychainUrl -OutFile $TarFile
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Write-Host "Downloading qtkeychain ${QtKeychainVersion} source (attempt $attempt/3)..." -ForegroundColor Cyan
+        try {
+            Invoke-WebRequest -Uri $QtKeychainUrl -OutFile $TarFile -TimeoutSec 60
+            break
+        } catch {
+            # Do not reuse a partially written archive on the next attempt.
+            Remove-Item -Force $TarFile -ErrorAction SilentlyContinue
+            if ($attempt -eq 3) {
+                throw "qtkeychain source download failed after 3 attempts: $($_.Exception.Message)"
+            }
+            Write-Warning "qtkeychain download failed (attempt $attempt/3): $($_.Exception.Message)"
+            Start-Sleep -Seconds (5 * $attempt)
+        }
+    }
+    # A successful transport must still match the immutable content pin.
     Confirm-Sha256 -Path $TarFile -Expected $QtKeychainSha256
 }
 
