@@ -409,7 +409,15 @@ at huggingface.co/Banafo/Kroko-ASR gives the licence as CC-BY-SA), fetched by
 `AsrModelManager::ensureBundle` from `AsrModelCatalog::sherpaLivePreviewModel()`:
 each file pinned by size and SHA-256 and verified like the whisper tiers.
 
-**Apple (`AppleLivePreview.cpp`).** Apple's API is Swift-only. `src/asr/apple/AppleLivePreview.swift` exports a C
+**Apple (`AppleLivePreview.cpp`).** The recogniser takes the Copy Assist
+language setting; empty (**Auto**) means `Locale.current`, the Mac's own
+language and region, so the preview has no language control of its own.
+`SpeechTranscriber.supportedLocale(equivalentTo:)` maps it to Apple's nearest
+regional variant. On macOS 26 that covers English, Spanish, French, German,
+Italian, Portuguese, Mandarin, Cantonese, Japanese and Korean (31 locales,
+`SpeechTranscriber.supportedLocales`); anything else reports Failed with the
+reason and shows no preview. A locale not yet installed is downloaded first,
+reported as Preparing. Apple's API is Swift-only. `src/asr/apple/AppleLivePreview.swift` exports a C
 interface (`AppleLivePreviewC.h`) that `AppleLivePreview.cpp` wraps as an
 `ILivePreview`. CMake compiles the Swift file with `swiftc` through a custom
 command (CMake's own Swift support needs the Ninja or Xcode generator), once
