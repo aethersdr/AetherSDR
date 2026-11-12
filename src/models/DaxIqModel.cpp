@@ -304,13 +304,12 @@ void DaxIqModel::setSampleRate(int channel, int rate)
     dispatch({AudioStreamKind::Iq, AudioStreamAction::SetIqRate, m_streams[idx].streamId, channel, rate});
 }
 
-void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString>& kvs)
+void DaxIqModel::applyStreamDelta(const AudioStreamDelta& delta)
 {
+    const quint32 streamId = delta.streamId;
     if (m_ignoredStreams.contains(streamId)) { return; }
     // Find which channel this stream belongs to
-    int ch = -1;
-    if (kvs.contains("daxiq_channel"))
-        ch = kvs["daxiq_channel"].toInt();
+    const int ch = delta.channel.value_or(-1);
 
     // Try to find existing stream by ID
     int idx = -1;
@@ -351,8 +350,7 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
     // destroyPipe is idempotent (m_pipeFds[idx]>=0 guard), so destroy-then-create
     // is safe even with no prior pipe.
     {
-        int newRate = kvs.contains("daxiq_rate") ? kvs["daxiq_rate"].toInt()
-                                                  : s.sampleRate;
+        const int newRate = delta.iqRate.value_or(s.sampleRate);
         if (isNew || newRate != s.sampleRate) {
             s.sampleRate = newRate;
             QMetaObject::invokeMethod(m_worker, [this, ch = s.channel, newRate] {
@@ -377,10 +375,10 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
     // If the radio never echoes the rate it stays set; cosmetic only.
     s.rateSettling = desiredRate != 0 && desiredRate != s.sampleRate;
 
-    if (kvs.contains("pan"))
-        s.panId = kvs["pan"];
-    if (kvs.contains("active"))
-        s.active = kvs["active"] == "1";
+    if (delta.pan)
+        s.panId = *delta.pan;
+    if (delta.active)
+        s.active = *delta.active;
 
     // Emit unconditionally so the On/Off button and meter gating sync the moment
     // the stream exists — even during the transient 48k state. Suppressing it

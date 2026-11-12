@@ -42,8 +42,9 @@ public:
     }
     static void succeed(FirmwareUploader& uploader)
     {
-        uploader.onRadioStatus(uploader.m_generation, QStringLiteral("file update"),
-                               {{QStringLiteral("failed"), QStringLiteral("0")}});
+        FirmwareUpdateStatus accepted;
+        accepted.failed = false;
+        uploader.onUpdateStatus(uploader.m_generation, accepted);
     }
     static bool blocked(FirmwareUploader& uploader) { return uploader.retryBarrierActive(); }
 };

@@ -1,5 +1,7 @@
 // Socket-free production-path tests. Only an injected transport recorder is
 // used; no radio, peer, listener, discovery or transmitter is opened.
+#include "core/backends/flex/FlexCwxStatus.h"
+#include "core/backends/flex/FlexStatusIngress.h"
 #include "TestSettingsProfile.h"
 #include "TestEventLoop.h"
 #include "TxTestAuthority.h"
@@ -53,7 +55,7 @@ class TxOperationIntegrationTestAccess {
 public:
     static void clientStatus(RadioModel& radio, quint32 handle, bool localPtt, bool full)
     {
-        radio.onStatusReceived(QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
+        radio.handleStatusForTest(QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
             .arg(full ? QStringLiteral(" connected") : QString()), {{"local_ptt", localPtt ? "1" : "0"}});
     }
     static void connectInert(RadioConnection& connection)
@@ -2016,7 +2018,7 @@ void queuedCwxConfiguration()
         check(tcp == QStringList({"cwx wpm 31"}),
               "first operator speed reaches the terminal before the replacement edit");
         f.radio.cwxModel().setSpeed(35);
-        f.radio.cwxModel().applyStatus({{"wpm", "31"}});
+        f.radio.cwxModel().applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(f.radio.cwxModel().speed() == 35,
               "older operator WPM echo cannot overwrite the newer pending selection");
         f.radio.cwxModel().send("NEW");
@@ -2024,8 +2026,8 @@ void queuedCwxConfiguration()
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
         check(tcp == QStringList({"cwx wpm 31", "cwx wpm 35", "cwx send \"NEW\" 1"}),
               "delayed first-speed status cannot drop the replacement WPM before text");
-        f.radio.cwxModel().applyStatus({{"wpm", "35"}});
-        f.radio.cwxModel().applyStatus({{"wpm", "33"}});
+        f.radio.cwxModel().applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
+        f.radio.cwxModel().applyStatusDelta(flexCwxStatus({{"wpm", "33"}}));
         check(f.radio.cwxModel().speed() == 33,
               "uncorrelated radio WPM remains authoritative after operator echoes settle");
     }

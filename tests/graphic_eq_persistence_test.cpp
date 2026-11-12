@@ -4,6 +4,7 @@
 // is in it, an untouched EQ writes nothing, damaged settings give defaults, and
 // a Flex session in between does not save its EQ over the saved layout.
 
+#include "core/backends/flex/FlexGraphicEqStatus.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/HostVoiceChainPolicy.h"
@@ -154,7 +155,7 @@ void restoreIsSilent()
     QMap<QString, QString> status;
     status.insert(QStringLiteral("mode"), QStringLiteral("1"));
     status.insert(QStringLiteral("63Hz"), QStringLiteral("4"));
-    model.applyRxEqStatus(status);
+    model.applyEqStatus(flexGraphicEqStatus(GraphicEqRequest::Path::Receive, status));
     check(edits.size() == 1, "radio status does not emit operatorEdited");
 }
 
@@ -283,12 +284,12 @@ void flexSessionLeavesSavedLayout()
 
     // A Flex connects and reports its own EQ.
     bool fromRadio = true;
-    model.applyTxEqStatus({{"mode", "0"}, {"63Hz", "4"}, {"125Hz", "4"}, {"250Hz", "4"},
+    model.applyEqStatus(flexGraphicEqStatus(GraphicEqRequest::Path::Transmit, {{"mode", "0"}, {"63Hz", "4"}, {"125Hz", "4"}, {"250Hz", "4"},
                            {"500Hz", "4"}, {"1000Hz", "4"}, {"2000Hz", "4"},
-                           {"4000Hz", "4"}, {"8000Hz", "4"}});
-    model.applyRxEqStatus({{"mode", "1"}, {"63Hz", "-4"}, {"125Hz", "-4"}, {"250Hz", "-4"},
+                           {"4000Hz", "4"}, {"8000Hz", "4"}}));
+    model.applyEqStatus(flexGraphicEqStatus(GraphicEqRequest::Path::Receive, {{"mode", "1"}, {"63Hz", "-4"}, {"125Hz", "-4"}, {"250Hz", "-4"},
                            {"500Hz", "-4"}, {"1000Hz", "-4"}, {"2000Hz", "-4"},
-                           {"4000Hz", "-4"}, {"8000Hz", "-4"}});
+                           {"4000Hz", "-4"}, {"8000Hz", "-4"}}));
     check(!(model.state() == saved), "flex session: the radio's status replaced the model");
     check(!graphicEqPersistAllowed(true, false, fromRadio),
           "flex session: nothing is saved while the Flex is connected");

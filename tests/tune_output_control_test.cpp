@@ -126,16 +126,16 @@ void policyAndParser()
                      [&observations](int, bool) { ++observations; });
     for (const QString& token : {QString(), QStringLiteral("true"), QStringLiteral("01"),
                                 QStringLiteral("-1"), QStringLiteral("2"), QStringLiteral("1 ")}) {
-        f.backend->decodeTuneOutputStatus(QStringLiteral("interlock band 9"),
+        f.backend->statusIngress()->decodeTuneOutputStatus(QStringLiteral("interlock band 9"),
                                          {{QStringLiteral("tune_tx_suppress"), token}});
     }
     for (const QString& object : {QStringLiteral("interlock"), QStringLiteral("interlock band -1"),
             QStringLiteral("interlock band 256"), QStringLiteral("interlock band 99999999999999"),
             QStringLiteral("interlock band 9 suffix")}) {
-        f.backend->decodeTuneOutputStatus(object, {{QStringLiteral("tune_tx_suppress"), QStringLiteral("1")}});
+        f.backend->statusIngress()->decodeTuneOutputStatus(object, {{QStringLiteral("tune_tx_suppress"), QStringLiteral("1")}});
     }
     check(observations == 0 && f.wire.isEmpty(), "malformed and unscoped status has no observation or write");
-    f.backend->decodeTuneOutputStatus(QStringLiteral("interlock band 26"),
+    f.backend->statusIngress()->decodeTuneOutputStatus(QStringLiteral("interlock band 26"),
                                      {{QStringLiteral("tune_tx_suppress"), QStringLiteral("1")}});
     check(observations == 1, "noncontiguous reported IDs above fifteen are decoded");
     check(!f.radio.tuneOutputControl(26).haveValue, "unnamed observation alone cannot make a row editable");
