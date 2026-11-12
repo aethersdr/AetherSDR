@@ -1605,11 +1605,12 @@ bool WdspChannel::open() noexcept
     if (m_config.direction == Direction::Receive) {
         SetRXAMode(m_channelId, wdspMode(m_config.mode));
         if (m_config.fmReceive) {
-            // Upstream RX panel gain defaults to 4 and the FM limiter is off.
-            // Together with FM de-emphasis this clips valid modulation at
-            // unity monitor gain. Normalize inside the FM chain, including
-            // pre-monitor taps. FM bypasses the main RX AGC.
+            // The RTL FM-only recipe also selects unity panel gain.
             SetRXAPanelGain1(m_channelId, 1.0);
+        }
+        if (m_config.fmReceive || m_config.fmDetectorLimiter) {
+            // FM bypasses the main RX AGC. Bound its detector output before
+            // speaker, TCI and DAX taps; inert when the radio changes mode.
             SetRXAFMLimGain(m_channelId, 0.0);
             SetRXAFMLimRun(m_channelId, 1);
         }

@@ -164,6 +164,8 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(
     // process-global FFTW lock.
     wc.minimumPhase = rxMinimumPhaseFor(config.mode);
     wc.rxPanelGain = kRxPanelGain;
+    // FM can be entered live from USB; keep its detector bounded from open().
+    wc.fmDetectorLimiter = true;
 
     auto channel = WdspChannel::create(wc, &result.error);
     if (!channel)

@@ -133,6 +133,9 @@ public:
         int outputSampleRate = 48000;
         Mode mode = Mode::Usb;
         std::optional<FmReceive> fmReceive;
+        // Enable WDSP's detector limiter without locking a live radio to FM.
+        // The FM detector alone uses it; other demodulation modes are unchanged.
+        bool fmDetectorLimiter = false;
         std::optional<AmReceive> amReceive;
         std::optional<AnalogReceiveDsp> analogReceiveDsp;
         std::optional<WbfmReceive> wbfmReceive;

@@ -102,6 +102,57 @@ void noiseTransitions()
     std::printf("FM noise/silence/carrier peak=%.6f\n", peak);
     check(peak < 1.0, "noise and carrier transitions retain normalized PCM headroom");
 }
+// HL2 can move from USB into FM without rebuilding its WDSP channel. Its
+// FM detector must stay bounded even without the RTL-only FmReceive recipe.
+void liveModeFmLimiter()
+{
+    WdspChannel::Config config;
+    config.mode = WdspChannel::Mode::Usb;
+    config.fmDetectorLimiter = true;
+    config.rxPanelGain = 1.0;
+    config.fmDeviationHz = 5000;
+    config.filterLowHz = -8000;
+    config.filterHighHz = 8000;
+    config.blockForOutput = true;
+    auto channel = WdspChannel::create(config);
+    check(channel != nullptr, "mode-independent FM limiter constructs in USB");
+    if (!channel) { return; }
+
+    std::mt19937 random(18765);
+    std::uniform_real_distribution<float> noise(-0.3f, 0.3f);
+    std::array<float, 1024> inI{}, inQ{}, left{}, right{};
+    double peak = 0;
+    bool allFinite = true;
+    bool allProcessed = true;
+
+    auto process = [&](bool measurePeak) {
+        for (int i = 0; i < 1024; ++i) {
+            inI[i] = noise(random);
+            inQ[i] = noise(random);
+        }
+        if (channel->processIq(inI, inQ, left, right) != WdspChannel::ProcessResult::Ok) {
+            allProcessed = false;
+            return;
+        }
+        if (measurePeak) {
+            for (const float sample : left) {
+                allFinite &= std::isfinite(sample);
+                peak = std::max(peak, std::abs(double(sample)));
+            }
+        }
+    };
+
+    check(channel->setMode(WdspChannel::Mode::Fm), "enter FM without channel rebuild");
+    for (int block = 0; block < 150; ++block) { process(true); }
+    check(channel->setMode(WdspChannel::Mode::Usb), "leave FM with limiter armed");
+    for (int block = 0; block < 10; ++block) { process(false); }
+    check(channel->setMode(WdspChannel::Mode::Fm), "re-enter FM without channel rebuild");
+    for (int block = 0; block < 150; ++block) { process(true); }
+    std::printf("FM live mode-switch noise peak=%.6f\n", peak);
+    check(allProcessed && allFinite, "FM live mode-switch keeps producing finite PCM");
+    check(peak > 0.1 && peak < 1.0, "HL2 FM noise stays below full scale");
+}
+
 } // namespace
 
 int main()
@@ -125,5 +176,6 @@ int main()
         }
     }
     noiseTransitions();
+    liveModeFmLimiter();
     return failures ? 1 : 0;
 }
