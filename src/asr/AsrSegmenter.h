@@ -120,6 +120,12 @@ public:
     // ClosedSegment positions and the live preview share.
     std::int64_t samplesFed() const { return m_samplesFed; }
 
+    // One-shot, like consumeLongGap(): where the most recent stretch of audio
+    // that was too short to count as speech (under minSpeechMs) ended, on the
+    // samplesFed() timeline, or -1 if none since the last call. That audio is
+    // never emitted, so nothing else marks where it ended.
+    std::int64_t consumeDiscardedThrough();
+
 private:
     int framesToSamples(int ms) const;
     // forceCap: true when this close is the maxSegmentMs cap firing mid-speech
@@ -144,6 +150,7 @@ private:
     int m_longGapSamples = 0;       // Config::longGapMs in samples (0 = disabled)
     std::int64_t m_samplesFed = 0;
     std::uint64_t m_nextSegmentId = 0;
+    std::int64_t m_discardedThrough = -1;
     int m_idleSilence = 0;          // contiguous silence samples while NOT in speech
     bool m_longGapFired = false;    // latched when the current idle gap crossed the threshold
     bool m_longGapPending = false;  // consumable one-shot for consumeLongGap()

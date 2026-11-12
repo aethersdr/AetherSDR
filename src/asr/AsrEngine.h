@@ -33,6 +33,61 @@ using AsrBackendFactory = std::function<std::unique_ptr<IAsrBackend>()>;
 using AsrSpeakerEmbedderFactory =
     std::function<std::unique_ptr<SpeakerEmbedder>(const QString& modelPath)>;
 
+// Arbitrary-rate mono to 16 kHz mono (r8brain), rebuilt when the source rate
+// changes. AsrWorker and LivePreviewFeeder each own one, built alike, so their
+// outputs line up to within the resampler's group delay (a few ms).
+class AsrSixteenKConverter {
+public:
+    AsrSixteenKConverter();
+    ~AsrSixteenKConverter();
+    // Returns the input unchanged when it is already 16 kHz.
+    std::vector<float> convert(const QVector<float>& monoSamples, int sampleRate);
+    void reset();
+
+private:
+    std::unique_ptr<Resampler> m_resampler;
+    int m_srcRate = 0;
+};
+
+// Live-preview half of the ASR engine (docs/asr-copy-assist.md, "Live
+// preview"): owns the streaming recogniser on a thread of its own. AsrWorker
+// blocks for a second or more inside every backend decode; feeding the
+// recogniser from there would hold back the audio it hears, and the gray text
+// would stall at every segment close. AsrEngine posts each chunk here and to
+// the worker, stamped with the same timeline position.
+class LivePreviewFeeder : public QObject {
+    Q_OBJECT
+public:
+    explicit LivePreviewFeeder(quint64 generation) : m_generation(generation) {}
+    ~LivePreviewFeeder() override;
+
+    // All on the feeder's thread (AsrEngine posts them).
+    // An empty factory stops the preview.
+    void setFactory(LivePreviewFactory factory);
+    // timelineStart: this chunk's position in 16 kHz samples on AsrEngine's
+    // timeline, which starts at 0 after every reset.
+    void feed(const QVector<float>& monoSamples, int sampleRate, qint64 timelineStart,
+              quint64 generation);
+    void finalizeThrough(qint64 sample, quint64 generation);
+    // A new timeline: drop the session; the next audio starts another.
+    void reset(quint64 generation);
+
+signals:
+    // Emitted from the recogniser's own threads.
+    void previewResult(qint64 startSample, qint64 endSample, const QString& text, bool isFinal,
+                       quint64 generation);
+    void previewState(int state, const QString& message, quint64 generation);
+
+private:
+    LivePreviewFactory m_factory;
+    std::unique_ptr<ILivePreview> m_preview;
+    AsrSixteenKConverter m_toSixteenK;
+    quint64 m_generation = 0;
+    bool m_fedAny = false;      // m_fedEnd is valid for this session
+    qint64 m_fedEnd = 0;        // where the next contiguous chunk starts
+    qint64 m_lastFinalize = 0;
+};
+
 // Worker half of the ASR engine — runs on a dedicated thread, owns the backend
 // and the segmenter, and does all CPU-heavy work (segmentation + inference).
 // Never touched directly by callers; AsrEngine marshals to it via queued
@@ -53,10 +108,6 @@ public:
     void setCancelPending(bool cancel) { m_cancelPending.store(cancel, std::memory_order_relaxed); }
     void setInputGeneration(quint64 generation) { m_requestedGeneration.store(generation); }
 
-    // Worker-thread only (AsrEngine posts it). An empty factory turns the live
-    // preview off; a non-empty one starts a session on the next audio.
-    void setLivePreviewFactory(LivePreviewFactory factory);
-
     // Thread-safe; set once by ~AsrEngine() before it joins this thread. Distinct
     // from setCancelPending() above, which is ALSO raised on every ASR-disable
     // (i.e. whenever the audio tap goes off) and so cannot mean "shutting down".
@@ -71,8 +122,10 @@ public slots:
     void setSpeakerLabelingEnabled(bool on);
     // Mono float samples at sampleRate; resampled to whisper's 16 kHz on this
     // (worker) thread before segmentation — never on the audio/caller thread.
+    // timelineStart: the chunk's position on AsrEngine's 16 kHz timeline, which
+    // live-preview positions share (see m_timelineOffset).
     void processAudio(const QVector<float>& monoSamples, int sampleRate, quint64 generation,
-                      const AetherSDR::PcmEpochLease& source);
+                      const AetherSDR::PcmEpochLease& source, qint64 timelineStart);
     void setMaxSegmentMs(int ms);
     void setSpeechRms(float rms);
     void setHangoverMs(int ms);
@@ -102,32 +155,35 @@ signals:
     // A segment closed but produced no text (empty, failed, all overlap, or no
     // model): its live-preview block is resolved with nothing.
     void segmentDiscarded(quint64 segmentId, quint64 generation);
-    // Every closed segment, before its decode starts (live-preview block edge).
+    // Every closed segment, before its decode starts (live-preview block edge),
+    // with its end on AsrEngine's timeline.
     void previewBlockClosed(quint64 segmentId, qint64 endSample, quint64 generation);
-    // Emitted from the recogniser's own threads; queued to the engine.
-    void previewResult(qint64 startSample, qint64 endSample, const QString& text, bool isFinal,
-                       quint64 generation);
-    void previewState(int state, const QString& message, quint64 generation);
+    // The segmenter threw away audio too short to count as speech, ending at
+    // endSample on AsrEngine's timeline: preview text for it has no segment to
+    // replace it.
+    void previewSpanDiscarded(qint64 endSample, quint64 generation);
     void processedMs(double ms); // this chunk fully handled (for the backlog meter)
     void errorOccurred(const QString& error);
 
 private:
-    // Resample arbitrary-rate mono to 16 kHz mono (returns the input unchanged
-    // when already 16 kHz). Builds/rebuilds the r8brain resampler on rate change.
-    std::vector<float> toSixteenK(const QVector<float>& monoSamples, int sampleRate);
     // Transcribe closed segments in order and emit their text (overlap de-dup,
     // speaker label). Requires a loaded backend. Shared by processAudio() and
     // markDiscontinuity().
     void decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segments);
-    // Live preview: feed this chunk (call BEFORE m_segmenter.feed so its start
-    // is samplesFed()), and mark the segments that chunk closed.
-    void feedPreview(const std::vector<float>& pcm16k);
+    // Live preview: report the block edges and discarded audio of the feed
+    // that just ran, on AsrEngine's timeline.
     void closePreviewBlocks(const std::vector<AsrSegmenter::ClosedSegment>& segments);
     void discardSegments(const std::vector<AsrSegmenter::ClosedSegment>& segments);
 
-    LivePreviewFactory m_previewFactory;
-    std::unique_ptr<ILivePreview> m_preview;
-    qint64 m_lastPreviewFinalize = 0;
+    // AsrEngine's timeline minus the audio this worker has accepted, as of the
+    // latest chunk. The worker skips stale or cancelled chunks the engine
+    // counted, so the two differ; adding this maps a segmenter position onto
+    // the timeline the live preview uses. Accepted audio is counted at the
+    // exact rate ratio, the way the engine counts, rather than from
+    // samplesFed(), so the mapping never depends on how the resampler batches
+    // its output.
+    qint64 m_timelineOffset = 0;
+    double m_accepted16k = 0.0;
 
     AsrBackendFactory m_factory;
     AsrSpeakerEmbedderFactory m_speakerEmbedderFactory;
@@ -140,8 +196,7 @@ private:
     std::string m_speakerModelPath;     // path m_embedder was built from ("" = none)
     bool m_speakerLabelingEnabled = false; // operator intent; embedder presence gates
     QString m_prevSegmentText;          // last decode's text — tail source for overlap de-dup (#4821)
-    std::unique_ptr<Resampler> m_resampler;
-    int m_resamplerSrcRate = 0;
+    AsrSixteenKConverter m_toSixteenK;
     bool m_warnedNoModel = false;
     quint64 m_generation = 0;
     std::atomic<quint64> m_requestedGeneration{0};
@@ -265,7 +320,7 @@ signals:
     void requestLoadSpeakerModel(const QString& modelPath);
     void requestSetSpeakerLabelingEnabled(bool on);
     void requestProcess(const QVector<float>& monoSamples, int sampleRate, quint64 generation,
-                        const AetherSDR::PcmEpochLease& source);
+                        const AetherSDR::PcmEpochLease& source, qint64 timelineStart);
     void requestSetMaxSegmentMs(int ms);
     void requestSetSpeechRms(float rms);
     void requestSetHangoverMs(int ms);
@@ -290,8 +345,18 @@ private:
 
     QThread* m_thread = nullptr;
     AsrWorker* m_worker = nullptr;
+    // Live preview: its own thread, started the first time a preview is
+    // turned on and kept until the engine goes (an idle thread costs nothing).
+    void startPreviewThread();
+    void postToFeeder(std::function<void(LivePreviewFeeder*)> call);
+    QThread* m_previewThread = nullptr;
+    LivePreviewFeeder* m_feeder = nullptr;
     LivePreviewAssembler m_previewAssembler;
     bool m_livePreviewEnabled = false;
+    // Audio handed to the worker since the last reset(), in 16 kHz samples:
+    // the timeline that segment edges and preview results share. Dropped
+    // chunks (backlog ceiling) are not counted, so it has no gaps.
+    double m_timeline16k = 0.0;
     bool m_enabled = false;
     bool m_ready = false;
     QString m_modelPath;

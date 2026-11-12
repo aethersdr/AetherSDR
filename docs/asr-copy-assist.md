@@ -307,25 +307,39 @@ The backend still produces every final word. A streaming recogniser only fills
 the wait for a segment to close:
 
 ```
-AsrWorker (ASR thread)                         AsrEngine (main thread)
-  pcm16k ─▶ ILivePreview::feed(start = samplesFed)        ▲ previewResult (from the
-         ─▶ AsrSegmenter ─▶ segment N closes:             │  recogniser's own threads)
-              previewBlockClosed(N, endSample) ──────────▶ LivePreviewAssembler
-              ILivePreview::finalizeThrough(endSample)     │  block N = (end N-1, end N]
-              backend.transcribe(N) ─▶ segmentText(N) ───▶ resolve(N) ─▶ finalText(.., N)
-                                   or segmentDiscarded(N) ▶ resolve(N) ─▶ previewDiscarded(N)
-                                                           └▶ previewText(N, text)
+AsrEngine (main thread)
+  pushAudio ─ stamps timelineStart (16 kHz samples since reset) ─┬─▶ AsrWorker (ASR thread)
+                                                                 │     AsrSegmenter ─▶ segment N closes:
+                                                                 │       previewBlockClosed(N, end) ──┐
+                                                                 │       backend.transcribe(N) ...    │
+                                                                 │       segmentText(N) / Discarded ──┤
+                                                                 │     too-short burst thrown away:   │
+                                                                 │       previewSpanDiscarded(end) ───┤
+                                                                 └─▶ LivePreviewFeeder (own thread)   │
+                                                                       ILivePreview::feed(...)        │
+                                                                       finalizeThrough(end) ◀─────────┤
+                                                                       results (recogniser threads) ──┤
+                                                                                                      ▼
+                                                     LivePreviewAssembler ─▶ previewText(N) / finalText(.., N)
 ```
 
-- **Results never pass through the worker's queue.** A whisper decode blocks
-  the worker for a second or more; the recogniser emits on its own thread and
-  the signal queues straight to the engine (`asr_live_preview_engine_test`
-  pins this with a 1.5 s decode).
+- **Neither the preview's audio nor its results pass through the worker.** A
+  whisper decode blocks the worker for a second or more; the feeder has its
+  own thread, so the recogniser keeps hearing audio during a decode, and its
+  results queue straight to the engine. `asr_live_preview_engine_test` pins
+  both with a 1.5 s decode.
+- **One timeline.** The engine stamps every chunk it hands on with its
+  position in 16 kHz samples. The worker maps its segment edges onto that
+  timeline (it skips stale or cancelled chunks the engine counted); the
+  feeder feeds the recogniser contiguously from it. Both resample alike, so
+  they agree to within a few samples.
 - **Block N** is the audio between the ends of segments N-1 and N, keyed by
   `AsrSegmenter::ClosedSegment::id`. The recogniser is finalised at every
   segment close, so its text splits at the same edges, and the panel replaces
   block N's gray text with segment N's final. A segment that yields nothing
-  removes its block.
+  removes its block. Audio the segmenter throws away as too short to be speech
+  never becomes a segment, so the worker reports where it ended and the open
+  block drops the text from it.
 - **Forced finalisation every 10 s.** In weak signal Apple's end-of-utterance
   detection may never fire; an utterance left open for minutes finalises
   nearly empty. Measured on an off-air ragchew: unbounded streaming lost a
@@ -345,7 +359,9 @@ interface (`AppleLivePreviewC.h`) that `AppleLivePreview.cpp` wraps as an
 `ILivePreview`. CMake compiles the Swift file with `swiftc` through a custom
 command (CMake's own Swift support needs the Ninja or Xcode generator), once
 per architecture, then `lipo`s the slices. Everything Swift-side is gated on
-macOS 26 at runtime, so the app's deployment floor is unchanged. Elsewhere
+macOS 26 at runtime, so the app's deployment floor is unchanged. The bridge
+needs the macOS 26 SDK (Xcode 26) to compile; with an older SDK CMake builds
+the stub instead and says so. Elsewhere
 `appleLivePreviewSupported()` is false and the setting is dimmed with the
 reason.
 
@@ -358,7 +374,7 @@ reason.
 | `ENABLE_ASR_METAL` | ON (Apple) | Metal GPU backend (macOS). |
 | `REQUIRE_ASR_ONNX` | OFF | **Release guard** — fail configure if ONNX Runtime is missing (else VAD/speaker/classifier silently compile out). |
 | `REQUIRE_ASR_GPU` | OFF | **Release guard** — fail configure if no GPU backend (Vulkan/Metal) is enabled. |
-| `ENABLE_ASR_APPLE_LIVE_PREVIEW` | ON (Apple) | Build the Swift live-preview bridge. It runs on macOS 26+; older macOS gets the dimmed setting. |
+| `ENABLE_ASR_APPLE_LIVE_PREVIEW` | ON (Apple) | Build the Swift live-preview bridge (needs the macOS 26 SDK; an older SDK builds the stub). It runs on macOS 26+; older macOS gets the dimmed setting. |
 | `USE_SYSTEM_LIBWHISPER` | OFF | Link a distro libwhisper (**≥ 1.8.0**) via pkg-config instead of the vendored snapshot. |
 
 The ONNX features (Silero VAD, speaker labeling) and the signal classifier need

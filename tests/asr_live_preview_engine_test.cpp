@@ -1,7 +1,8 @@
-// AsrEngine live-preview plumbing with a fake recogniser: the preview is fed the
-// same 16 kHz timeline the segmenter sees, finalised at every segment close,
-// and its results reach the main thread without waiting behind a decode.
-// The fake fires results from its own thread, as the Apple recogniser does.
+// AsrEngine live-preview plumbing with a fake recogniser: the preview runs on
+// its own thread, is fed the same 16 kHz timeline the segmenter's edges are
+// reported on, is finalised at every segment close, and neither its audio nor
+// its results wait behind a decode. The fake fires results from its own
+// thread, as the Apple recogniser does.
 
 #include "asr/AsrEngine.h"
 #include "asr/IAsrBackend.h"
@@ -9,17 +10,37 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QSemaphore>
 #include <QSignalSpy>
 #include <QThread>
 #include <QVector>
 
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
+
+namespace AetherSDR {
+// The worker skips chunks the engine already counted (cancelled or stale
+// input); this makes it skip one on demand.
+struct AsrEngineTestAccess {
+    static void setWorkerCancel(AsrEngine& engine, bool cancel)
+    {
+        engine.m_worker->setCancelPending(cancel);
+    }
+    static bool awaitWorker(AsrEngine& engine)
+    {
+        auto done = std::make_shared<QSemaphore>();
+        QMetaObject::invokeMethod(engine.m_worker, [done] { done->release(); },
+                                  Qt::QueuedConnection);
+        return done->tryAcquire(1, 5000);
+    }
+};
+} // namespace AetherSDR
 
 using namespace AetherSDR;
 
@@ -37,18 +58,18 @@ void expect(bool condition, const char* description)
 
 constexpr int kRate = 16000; // the ASR rate, so no resampling and exact positions
 
-QVector<float> tone(int ms)
+QVector<float> tone(int ms, int rate = kRate)
 {
-    QVector<float> v(ms * kRate / 1000);
+    QVector<float> v(ms * rate / 1000);
     for (int i = 0; i < v.size(); ++i) {
-        v[i] = 0.3f * static_cast<float>(std::sin(2.0 * 3.14159265358979 * 440.0 * i / kRate));
+        v[i] = 0.3f * static_cast<float>(std::sin(2.0 * 3.14159265358979 * 440.0 * i / rate));
     }
     return v;
 }
 
-QVector<float> silence(int ms)
+QVector<float> silence(int ms, int rate = kRate)
 {
-    return QVector<float>(ms * kRate / 1000, 0.0f);
+    return QVector<float>(ms * rate / 1000, 0.0f);
 }
 
 // What the worker did to the fake, plus every session's callbacks.
@@ -82,6 +103,16 @@ public:
 private:
     std::shared_ptr<FakeLog> m_log;
 };
+
+// Segment edges reach the preview through the engine's thread, so they can
+// land just after the final text does.
+bool awaitFinalize(FakeLog& log);
+
+qint64 fedEnd(FakeLog& log)
+{
+    const std::lock_guard<std::mutex> lock(log.mu);
+    return log.feeds.empty() ? 0 : log.feeds.back().first + log.feeds.back().second;
+}
 
 LivePreviewFactory fakeFactory(const std::shared_ptr<FakeLog>& log)
 {
@@ -139,6 +170,14 @@ bool waitFor(Pred pred, int timeoutMs)
     return pred();
 }
 
+bool awaitFinalize(FakeLog& log)
+{
+    return waitFor([&] {
+        const std::lock_guard<std::mutex> lock(log.mu);
+        return !log.finalizes.empty();
+    }, 3000);
+}
+
 bool readyEngine(AsrEngine& engine)
 {
     QSignalSpy ready(&engine, &AsrEngine::ready);
@@ -173,6 +212,7 @@ int main(int argc, char** argv)
         QSignalSpy finals(&engine, &AsrEngine::finalText);
         pushUtterance(engine);
         expect(finals.wait(5000), "the utterance is decoded");
+        awaitFinalize(*log);
 
         const std::lock_guard<std::mutex> lock(log->mu);
         bool contiguous = !log->feeds.empty() && log->feeds.front().first == 0;
@@ -223,6 +263,16 @@ int main(int argc, char** argv)
         expect(previews.wait(600), "preview text arrives during the decode, not after it");
         expect(t.elapsed() < 600 && finals.isEmpty(),
                "it arrived before the decode finished");
+
+        // The audio side of the same promise: what arrives during the decode
+        // reaches the recogniser now, not in a burst once the decode ends
+        // (the gray text would otherwise stall at every segment close).
+        const qint64 before = fedEnd(*log);
+        engine.pushAudio(tone(200), kRate);
+        const bool fedDuring =
+            waitFor([&] { return fedEnd(*log) >= before + 200 * kRate / 1000; }, 400);
+        expect(fedDuring && finals.isEmpty(),
+               "audio pushed during the decode reaches the preview before the decode ends");
         if (!previews.isEmpty()) {
             expect(previews.last().at(0).toULongLong() == 1
                        && previews.last().at(1).toString() == QStringLiteral("next over"),
@@ -273,6 +323,130 @@ int main(int argc, char** argv)
             return log->sessions.size() == 2 && log->destroyed == 1;
         }, 3000);
         expect(fresh, "reset() retires the session and the next audio starts a new one");
+    }
+
+    // ---- A burst too short to be speech ------------------------------------
+    {
+        auto log = std::make_shared<FakeLog>();
+        AsrEngine engine(backend(0, "OVER"));
+        expect(readyEngine(engine), "burst engine ready");
+        engine.setLivePreviewFactory(fakeFactory(log));
+        QSignalSpy previews(&engine, &AsrEngine::previewText);
+        engine.pushAudio(silence(150), kRate);
+        waitFor([&] {
+            const std::lock_guard<std::mutex> lock(log->mu);
+            return !log->sessions.empty();
+        }, 3000);
+        LivePreviewCallbacks cb;
+        {
+            const std::lock_guard<std::mutex> lock(log->mu);
+            cb = log->sessions.back();
+        }
+        fireFromThread(cb, 150 * kRate / 1000, 250 * kRate / 1000, "static crash", false);
+        expect(previews.wait(2000) && previews.last().at(1).toString() == QStringLiteral("static crash"),
+               "the recogniser's text for a burst shows as preview");
+        // 100 ms is under minSpeechMs (200): the segmenter discards it, so no
+        // final will ever replace that text.
+        engine.pushAudio(tone(100), kRate);
+        engine.pushAudio(silence(400), kRate);
+        const bool cleared = waitFor([&] {
+            return previews.count() >= 2 && previews.last().at(0).toULongLong() == 0
+                && previews.last().at(1).toString().isEmpty();
+        }, 3000);
+        expect(cleared, "a burst too short to be speech takes its preview text with it");
+        {
+            const std::lock_guard<std::mutex> lock(log->mu);
+            expect(!log->finalizes.empty()
+                       && log->finalizes.back() >= (150 + 100) * kRate / 1000,
+                   "the recogniser is finalised where the burst was discarded");
+        }
+    }
+
+    // ---- A source rate that needs resampling --------------------------------
+    {
+        constexpr int kNative = 24000;
+        auto log = std::make_shared<FakeLog>();
+        AsrEngine engine(backend(0, "OVER"));
+        expect(readyEngine(engine), "24 kHz engine ready");
+        engine.setLivePreviewFactory(fakeFactory(log));
+        QSignalSpy finals(&engine, &AsrEngine::finalText);
+        // In odd 101-sample chunks (67.33 samples each at 16 kHz), so the
+        // engine's rounded positions and the resampler's per-chunk output
+        // have to add up.
+        constexpr int kChunk = 101;
+        QVector<float> all;
+        auto push = [&](const QVector<float>& v) { all += v; };
+        push(silence(150, kNative));
+        push(tone(500, kNative));
+        push(silence(400, kNative));
+        for (int off = 0; off < all.size(); off += kChunk) {
+            engine.pushAudio(all.mid(off, kChunk), kNative);
+        }
+        expect(finals.wait(5000), "the 24 kHz utterance is decoded");
+        awaitFinalize(*log);
+        const std::lock_guard<std::mutex> lock(log->mu);
+        bool contiguous = !log->feeds.empty() && log->feeds.front().first == 0;
+        for (size_t i = 1; i < log->feeds.size(); ++i) {
+            contiguous = contiguous
+                && log->feeds[i].first == log->feeds[i - 1].first + log->feeds[i - 1].second;
+        }
+        expect(contiguous, "resampled audio still reaches the preview as one contiguous timeline");
+        // The segment closes 300 ms (the hangover) after the tone ends. The
+        // resampler delays its output by about 20 ms (measured: 320 samples);
+        // the preview's resampler delays its audio alike, so both sides agree.
+        const qint64 expected = (150 + 500 + 300 + 20) * kRate / 1000;
+        expect(!log->finalizes.empty() && std::llabs(log->finalizes.front() - expected) <= 80,
+               "the segment edge lands where the audio says, within 5 ms of the resampler delay");
+    }
+
+    // ---- The source rate changes mid-stream ---------------------------------
+    {
+        // The resampler is rebuilt and starts a fresh rounding phase, so its
+        // output no longer lines up sample-for-sample with the engine's
+        // positions. The feed must stay contiguous anyway: overlapping or
+        // gapped buffer times are not something to hand the recogniser.
+        auto log = std::make_shared<FakeLog>();
+        AsrEngine engine(backend(0, "OVER"));
+        expect(readyEngine(engine), "rate-change engine ready");
+        engine.setLivePreviewFactory(fakeFactory(log));
+        const QVector<float> a = silence(300, 24000);
+        for (int off = 0; off < a.size(); off += 101) {
+            engine.pushAudio(a.mid(off, 101), 24000);
+        }
+        const QVector<float> b = silence(300, 44100);
+        for (int off = 0; off < b.size(); off += 101) {
+            engine.pushAudio(b.mid(off, 101), 44100);
+        }
+        waitFor([&] { return fedEnd(*log) >= 590 * kRate / 1000; }, 3000);
+        const std::lock_guard<std::mutex> lock(log->mu);
+        bool contiguous = !log->feeds.empty();
+        for (size_t i = 1; i < log->feeds.size(); ++i) {
+            contiguous = contiguous
+                && log->feeds[i].first == log->feeds[i - 1].first + log->feeds[i - 1].second;
+        }
+        expect(contiguous, "a mid-stream rate change keeps the preview's feed contiguous");
+    }
+
+    // ---- The worker skips a chunk the preview heard -------------------------
+    {
+        auto log = std::make_shared<FakeLog>();
+        AsrEngine engine(backend(0, "OVER"));
+        expect(readyEngine(engine), "skip engine ready");
+        engine.setLivePreviewFactory(fakeFactory(log));
+        QSignalSpy finals(&engine, &AsrEngine::finalText);
+        AsrEngineTestAccess::setWorkerCancel(engine, true);
+        engine.pushAudio(silence(700), kRate); // counted and heard, but not segmented
+        expect(AsrEngineTestAccess::awaitWorker(engine), "the worker passed over the chunk");
+        AsrEngineTestAccess::setWorkerCancel(engine, false);
+        pushUtterance(engine);
+        expect(finals.wait(5000), "the utterance after the skip is decoded");
+        awaitFinalize(*log);
+        // The segment closes 300 ms (the hangover) after the tone ends, and
+        // the 700 ms the worker skipped still happened on the shared timeline.
+        const qint64 expected = (700 + 150 + 500 + 300) * kRate / 1000;
+        const std::lock_guard<std::mutex> lock(log->mu);
+        expect(!log->finalizes.empty() && std::llabs(log->finalizes.front() - expected) <= 160,
+               "segment edges stay on the preview's timeline when the worker skips audio");
     }
 
     // ---- Turning it off, and an unavailable recogniser ---------------------

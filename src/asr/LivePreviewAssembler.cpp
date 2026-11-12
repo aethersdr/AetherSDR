@@ -9,6 +9,7 @@ void LivePreviewAssembler::reset()
     m_closedEnd.clear();
     m_content.clear();
     m_openBlock = 0;
+    m_openStart = 0;
     m_resolvedEnd = 0;
     m_anyResolved = false;
     m_lastResolved = 0;
@@ -22,6 +23,7 @@ void LivePreviewAssembler::closeBlock(quint64 id, qint64 endSample)
     m_closedEnd[id] = endSample;
     if (id >= m_openBlock) {
         m_openBlock = id + 1;
+        m_openStart = std::max(m_openStart, endSample);
     }
 }
 
@@ -39,6 +41,9 @@ LivePreviewAssembler::addResult(qint64 startSample, qint64 endSample, const QStr
             break;
         }
     }
+    if (block == m_openBlock && startSample < m_openStart) {
+        return std::nullopt; // in audio the segmenter discarded
+    }
 
     Content& c = m_content[block];
     if (isFinal) {
@@ -52,7 +57,32 @@ LivePreviewAssembler::addResult(qint64 startSample, qint64 endSample, const QStr
         c.provisionalStart = startSample;
         c.provisional = text;
     }
+    return render(block, c);
+}
 
+std::optional<LivePreviewAssembler::Update>
+LivePreviewAssembler::discardOpenThrough(qint64 endSample)
+{
+    if (endSample <= m_openStart) {
+        return std::nullopt;
+    }
+    m_openStart = endSample;
+    const auto it = m_content.find(m_openBlock);
+    if (it == m_content.end()) {
+        return std::nullopt;
+    }
+    Content& c = it->second;
+    c.finals.erase(c.finals.begin(), c.finals.lower_bound(endSample));
+    if (c.provisionalStart >= 0 && c.provisionalStart < endSample) {
+        c.provisionalStart = -1;
+        c.provisional.clear();
+    }
+    return render(m_openBlock, c);
+}
+
+std::optional<LivePreviewAssembler::Update> LivePreviewAssembler::render(quint64 block,
+                                                                       Content& c)
+{
     // In audio order: the provisional piece sits wherever its start falls.
     QString joined;
     bool provisionalPlaced = c.provisionalStart < 0;

@@ -338,6 +338,37 @@ int main()
                "reset() restarts segment ids at 0");
     }
 
+    // A burst too short to count as speech is thrown away without a segment;
+    // consumeDiscardedThrough() is the only record of where it ended (the live
+    // preview drops text for it there).
+    {
+        AsrSegmenter seg;
+        std::vector<float> audio;
+        appendSilence(audio, 200);
+        appendTone(audio, 100); // under minSpeechMs (200)
+        appendSilence(audio, 400);
+        const auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
+        const std::int64_t through = seg.consumeDiscardedThrough();
+        // Closed by the 300 ms hangover after the burst: 200 + 100 + 300 ms.
+        const std::int64_t closeAt = (200 + 100 + 300) * 16;
+        expect(out.empty() && through >= closeAt - 160 && through <= closeAt + 160,
+               "a too-short burst reports where it was discarded (at its hangover close)");
+        expect(seg.consumeDiscardedThrough() == -1, "the report is one-shot");
+
+        std::vector<float> speech;
+        appendTone(speech, 500);
+        appendSilence(speech, 400);
+        const auto closed = seg.feed(speech.data(), static_cast<int>(speech.size()));
+        expect(closed.size() == 1 && seg.consumeDiscardedThrough() == -1,
+               "a segment that is emitted is not reported as discarded");
+
+        appendTone(audio, 100);
+        appendSilence(audio, 400);
+        seg.feed(audio.data(), static_cast<int>(audio.size()));
+        seg.reset();
+        expect(seg.consumeDiscardedThrough() == -1, "reset() clears a pending report");
+    }
+
     std::printf(g_failures == 0 ? "\nASR segmenter: ALL PASS\n"
                                 : "\nASR segmenter: %d FAILURE(S)\n",
                 g_failures);
