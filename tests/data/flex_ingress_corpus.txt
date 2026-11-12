@@ -315,6 +315,12 @@ M0000000Z|bad hex message id
 S00000000|client 0x0000CD34 disconnected duplicate_client_id=1 forced=0
 S00000000|client 0x0000AB12 disconnected forced=1 wan_validation_failed=0
 M10000006|Client disconnected from IP 192.168.1.77
+# file update: progress, an out-of-range transfer (dropped), an unparseable failed (falls through to transfer), success, failure
+S00000071|file update transfer=0.42
+S00000071|file update transfer=1.5
+S00000071|file update failed=maybe transfer=0.9
+S00000071|file update failed=0
+S00000071|file update failed=1 reason=Bad_signature
 # client 0x... disconnected forced=1 on OUR handle -> handleForcedClientDisconnect (session-ending; keep last)
 S00000000|client 0x00000071 disconnected forced=1 wan_validation_failed=0
 # ALTERNATE final line (mutually exclusive with the one above; m_forcedDisconnectInProgress blocks the second):

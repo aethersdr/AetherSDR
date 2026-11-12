@@ -452,13 +452,20 @@ void WanConnection::processLine(const QString& line)
         break;
 
     case MessageType::Response: {
-        auto it = m_pendingCallbacks.find(msg.sequence);
-        if (it != m_pendingCallbacks.end()) {
+        // Answer after the ingress has taken every line read ahead of this
+        // reply: status goes over one queued hop, so a reply answered here
+        // would overtake it. LAN replies take the same hop (commandResponse).
+        QMetaObject::invokeMethod(this, [this, generation = m_sessionGeneration,
+                                         sequence = msg.sequence, code = msg.resultCode,
+                                         body = msg.object] {
+            if (generation != m_sessionGeneration) { return; }
+            auto it = m_pendingCallbacks.find(sequence);
+            if (it == m_pendingCallbacks.end()) { return; }
             // A completion may retire this session or alter the callback map.
             const ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
-            callback(msg.resultCode, msg.object);
-        }
+            callback(code, body);
+        }, Qt::QueuedConnection);
         break;
     }
 

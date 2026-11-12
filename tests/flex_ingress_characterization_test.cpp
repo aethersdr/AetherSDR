@@ -21,6 +21,12 @@
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
 
+// The typed firmware report exists only once the ingress does; the harness
+// still builds on a tree without it, for a before/after run.
+#if __has_include("core/backends/flex/FlexStatusIngress.h")
+#define AETHER_HAS_FLEX_STATUS_INGRESS 1
+#endif
+
 #include <QCoreApplication>
 #include <QFile>
 #include <QtTest>
@@ -111,6 +117,13 @@ private slots:
         QVERIFY(model.rebuildBackendForTest(QStringLiteral("flex")));
         RadioConnection* connection = model.connection();
         QVERIFY(connection);
+#ifdef AETHER_HAS_FLEX_STATUS_INGRESS
+        connect(&model, &RadioModel::firmwareUpdateReported, this, [](const FirmwareUpdateStatus& s) {
+            qInfo("STATE firmware failed=%s transfer=%s reason=%s",
+                  s.failed ? (*s.failed ? "1" : "0") : "-",
+                  s.transfer ? qPrintable(QString::number(*s.transfer)) : "-", qPrintable(s.reason));
+        });
+#endif
         QMetaObject::invokeMethod(connection, [connection] {
             RadioConnectionSessionTestAccess::identity(*connection, 0x71);
         }, Qt::BlockingQueuedConnection);

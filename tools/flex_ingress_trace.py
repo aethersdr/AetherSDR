@@ -9,7 +9,9 @@ drop = re.compile(r'QFileDevice|QSaveFile|QFile\(|QEventDispatcher|QThread\(|QTi
                   r'AetherSDR::RadioConnection\(|AetherSDR::WanConnection\(|AetherSDR::FlexStatusIngress\(|statusLineAccepted|RadioModel\([0-9a-f]*\) statusReceived|QAbstractEventDispatcher|deleteLater')
 out = []
 started = False
-for raw in open(sys.argv[1], errors='replace'):
+with open(sys.argv[1], errors='replace') as trace:
+    raw_lines = trace.readlines()
+for raw in raw_lines:
     line = raw.rstrip('\n')
     m = re.search(r'LINE (.*)$', line)
     if m:

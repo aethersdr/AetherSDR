@@ -328,8 +328,9 @@ connection.
   `RadioModel` stamps a fresh epoch on the transport inside the same call that
   starts a connect (`beginStatusSession()`), so a line from an abandoned
   attempt or a retired session never reaches the model. SmartLink binds with
-  `bindLive()`; its lifecycle signals take the same queued hop, fenced per
-  bind.
+  `bindLive()`; its lifecycle signals and its command replies take the same
+  queued hop, fenced per bind, so a reply never overtakes status read ahead
+  of it (as on the LAN, where replies queue as `commandResponse`).
 - **Decoders live in the ingress** (`FlexStatusDecoders.cpp`, plus header-only
   `Flex*Status.h` parses that lightweight tests share) and run before the line
   is handed on. A decoder's state moves with it (DAX TX streams, TUNE output
@@ -339,6 +340,12 @@ connection.
   spots, CWX, graphic EQ, waveforms, stream facts, interlock, firmware updates)
   go out as `FlexBackend`-only signals that `RadioModel` relays, so the seam
   does not grow.
+- **The relays need the concrete backend.** `RadioModel::wireStatusIngress()`
+  casts to `FlexBackend` and `SimBackend` to connect the Flex-only relays.
+  This is a deliberate exception to "no new `dynamic_cast` to a concrete
+  backend": the alternative is growing `IRadioBackend` with Flex-only signals.
+  It is a separate site from `setupBackend()` because `setBackendForTest()`
+  skips that and must still wire the ingress.
 - **Demo** turns value decoding off (`setDecodeValues(false)`): its native
   producer owns the values, and only identity (a TGXL's handle) is decoded.
   Its synthetic wire carries radio, display and slice status only, so the

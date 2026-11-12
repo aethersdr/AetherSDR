@@ -26,6 +26,7 @@ public:
             wan.m_pendingCallbacks.clear();
         });
         wan.processLine(QStringLiteral("R7|0|accepted"));
+        QCoreApplication::sendPostedEvents(&wan);   // replies answer after queued status
         return called && wan.m_pendingCallbacks.isEmpty();
     }
 };

@@ -18,6 +18,7 @@
 #include <QtTest>
 
 #include <atomic>
+#include <functional>
 
 namespace AetherSDR {
 class RadioConnectionSessionTestAccess {
@@ -31,6 +32,12 @@ public:
         QMetaObject::invokeMethod(&connection, [&connection] { connection.resetSessionState(); },
                                   Qt::BlockingQueuedConnection);
     }
+};
+class WanConnectionTestAccess {
+public:
+    static void expect(WanConnection& wan, quint32 sequence, std::function<void()> onReply)
+    { wan.m_pendingCallbacks.insert(sequence, [onReply](int, const QString&) { onReply(); }); }
+    static void feed(WanConnection& wan, const QString& raw) { wan.processLine(raw); }
 };
 class SessionControlTestAccess {
 public:
@@ -77,11 +84,13 @@ private slots:
         FlexStatusIngress ingress;
         ingress.bind(&connection);
         QSignalSpy accepted(&ingress, &FlexStatusIngress::lineAccepted);
+        QSignalSpy decoded(&ingress, &FlexStatusIngress::transmitChanged);
         emit connection.lineReceived(line("S0|transmit rfpower=1"), ingress.epoch());
         const quint64 first = ingress.beginSession();
         emit connection.lineReceived(line("S0|transmit rfpower=2"), first);
         QCoreApplication::sendPostedEvents();
         QCOMPARE(accepted.size(), 1);   // the pre-session line was refused
+        QCOMPARE(decoded.size(), 1);    // and never reached a decoder
         QCOMPARE(accepted.at(0).at(0).value<ParsedMessage>().kvs.value("rfpower"), QStringLiteral("2"));
 
         emit connection.lineReceived(line("S0|interlock state=READY"), first);
@@ -391,6 +400,41 @@ private slots:
         emit wan.lineReceived(line("S0|profile global current=After close"), epoch);
         QCoreApplication::sendPostedEvents();
         QCOMPARE(model.activeGlobalProfile(), QStringLiteral("Before close"));
+    }
+
+    // A SmartLink reply answers after the status lines read ahead of it, as on
+    // the LAN, where replies take the same queued hop as status.
+    void wanReplyKeepsWireOrder()
+    {
+        WanConnection wan;
+        FlexStatusIngress ingress;
+        ingress.bindLive(&wan);
+        QStringList order;
+        connect(&ingress, &FlexStatusIngress::lineAccepted, &ingress,
+                [&order](const ParsedMessage& msg) {
+                    order << (msg.type == MessageType::Response ? QStringLiteral("reply line") : msg.object);
+                });
+        WanConnectionTestAccess::expect(wan, 3, [&order] { order << QStringLiteral("reply"); });
+        WanConnectionTestAccess::feed(wan, QStringLiteral("S0|transmit rfpower=5"));
+        WanConnectionTestAccess::feed(wan, QStringLiteral("R3|0|"));
+        QCoreApplication::sendPostedEvents();
+        QCOMPARE(order, QStringList({QStringLiteral("transmit"), QStringLiteral("reply line"),
+                                     QStringLiteral("reply")}));
+    }
+
+    // A reply queued by a session that has since ended is never answered.
+    void wanReplyDiesWithItsSession()
+    {
+        WanConnection wan;
+        bool answered = false;
+        WanConnectionTestAccess::expect(wan, 4, [&answered] { answered = true; });
+        WanConnectionTestAccess::feed(wan, QStringLiteral("R4|0|"));
+        wan.disconnectFromRadio();   // resets the session before the reply runs
+        bool misrouted = false;   // the next session reuses the sequence
+        WanConnectionTestAccess::expect(wan, 4, [&misrouted] { misrouted = true; });
+        QCoreApplication::sendPostedEvents();
+        QVERIFY(!answered);
+        QVERIFY(!misrouted);
     }
 
     // A disconnect that lands after a new connect has begun ends the old

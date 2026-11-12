@@ -55,7 +55,7 @@ class TxOperationIntegrationTestAccess {
 public:
     static void clientStatus(RadioModel& radio, quint32 handle, bool localPtt, bool full)
     {
-        radio.onStatusReceived(QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
+        radio.handleStatusForTest(QStringLiteral("client 0x%1%2").arg(handle, 0, 16)
             .arg(full ? QStringLiteral(" connected") : QString()), {{"local_ptt", localPtt ? "1" : "0"}});
     }
     static void connectInert(RadioConnection& connection)
