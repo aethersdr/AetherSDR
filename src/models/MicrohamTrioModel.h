@@ -93,6 +93,13 @@ public:
     // Off: a failed session is closed instead of retried.
     void setAutoReconnect(bool on);
 
+    // "Test connection": take the session once, read the state, release it,
+    // and answer with testFinished(). Selects nothing; stores nothing. A held
+    // session is not taken again: its current state is the answer. A session
+    // that was wanted before the test is taken again after it.
+    void testConnection(const QString& host, quint16 port);
+    bool isTesting() const { return m_testing; }
+
     // Which radio this application has connected. A scope without a radio id
     // names no radio: no binding is read or written for it.
     void setRadio(const RadioSettingsScope& scope);
@@ -127,6 +134,8 @@ signals:
     void connected();
     void disconnected();
     void connectionFailed(const QString& error);
+    // The answer to testConnection(): reachable or not, and what was read.
+    void testFinished(bool reachable, const QString& report);
 
 private slots:
     void onSnapshot(const AetherSDR::MicrohamTrio::Snapshot& snapshot,
@@ -149,6 +158,10 @@ private:
     bool m_autoReconnect{false};
     bool m_released{false};
     bool m_evicted{false};
+    bool m_testing{false};
+    bool m_resumeAfterTest{false};
+    MicrohamTrioSettings m_testTarget;
+    void finishTest(bool reachable, const QString& report);
     QString m_failure;
 
     MicrohamTrioSession* m_session{nullptr};

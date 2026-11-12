@@ -317,6 +317,65 @@ void testBinding()
     MicrohamTrioBinding::remove(hl2);
 }
 
+void testTestConnection()
+{
+    {
+        Rig rig;
+        QStringList reports;
+        bool reachable = false;
+        QObject::connect(&rig.model, &MicrohamTrioModel::testFinished,
+                         [&](bool ok, const QString& report) { reachable = ok; reports << report; });
+        rig.model.testConnection(QLatin1String(kHost), 80);
+        report("a test of an unsaved address takes a session", rig.model.isTesting()
+                   && rig.model.hasSession() && rig.word() == SessionWord::NotConfigured);
+        rig.peer.connectHeld(rig.model, "radio2", "ant6");
+        report("the state arrives: reachable, one answer",
+               reachable && reports.size() == 1 && !rig.model.isTesting());
+        report("the answer names the focus, RADIO labels and antenna labels",
+               !reports.isEmpty() && reports.first().contains(QStringLiteral("Reachable"))
+                   && reports.first().contains(QStringLiteral("R2 HL2"))
+                   && reports.first().contains(QStringLiteral("A6 Dummy")),
+               reports.isEmpty() ? std::string() : reports.first().toStdString());
+        report("and the session is released with a close frame",
+               !rig.model.hasSession() && !rig.peer.transport.sent.isEmpty()
+                   && static_cast<quint8>(rig.peer.transport.sent.last().at(0)) == 0x88);
+        report("nothing was stored, nothing selected",
+               !MicrohamTrioSettings::load().isConfigured() && rig.sentOnlyReads());
+        const int opens = rig.peer.transport.opens;
+        rig.peer.advance(rig.model, 600000);
+        report("and nothing reconnects", rig.peer.transport.opens == opens);
+    }
+    {
+        Rig rig;
+        QStringList reports;
+        bool reachable = true;
+        QObject::connect(&rig.model, &MicrohamTrioModel::testFinished,
+                         [&](bool ok, const QString& report) { reachable = ok; reports << report; });
+        rig.model.testConnection(QLatin1String(kHost), 80);
+        rig.peer.advance(rig.model, 1);
+        rig.peer.transport.breaks();
+        report("no answer: not reachable, with the reason",
+               !reachable && reports.size() == 1 && reports.first().contains(QStringLiteral("Not reachable"))
+                   && !rig.model.hasSession() && !rig.model.isTesting(),
+               reports.isEmpty() ? std::string() : reports.first().toStdString());
+        rig.model.testConnection(QString(), 80);
+        report("no address: says so", reports.size() == 2 && !reports.last().isEmpty());
+    }
+    {
+        Rig rig;
+        QStringList reports;
+        QObject::connect(&rig.model, &MicrohamTrioModel::testFinished,
+                         [&](bool, const QString& report) { reports << report; });
+        rig.model.connectNetwork(QLatin1String(kHost), 80);
+        rig.peer.connectHeld(rig.model);
+        const int opens = rig.peer.transport.opens;
+        rig.model.testConnection(QLatin1String(kHost), 80);
+        report("already connected: answered from the held session, no second connect",
+               reports.size() == 1 && rig.peer.transport.opens == opens
+                   && rig.word() == SessionWord::Direct);
+    }
+}
+
 void testRemove()
 {
     Rig rig;
@@ -349,6 +408,7 @@ int main(int argc, char** argv)
     testRelease();
     testFailures();
     testBinding();
+    testTestConnection();
     testRemove();
 
     std::printf("\n%s (%d failed)\n", g_failed == 0 ? "ALL PASSED" : "FAILURES", g_failed);

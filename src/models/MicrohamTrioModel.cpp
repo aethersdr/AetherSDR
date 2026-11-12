@@ -119,6 +119,48 @@ void MicrohamTrioModel::setAutoReconnect(bool on)
     m_autoReconnect = on;
 }
 
+void MicrohamTrioModel::testConnection(const QString& host, quint16 port)
+{
+    const QString trimmed = host.trimmed();
+    if (m_testing) {
+        return;
+    }
+    if (trimmed.isEmpty()) {
+        emit testFinished(false, tr("Enter the Trio's address first."));
+        return;
+    }
+    const bool sameTarget = trimmed.compare(m_settings.host, Qt::CaseInsensitive) == 0
+                            && port == m_settings.port;
+    if (sameTarget && isConnected() && m_snapshot) {
+        emit testFinished(true, tr("Connected to the Trio at %1:%2 now.\n%3")
+                                    .arg(trimmed).arg(port).arg(describeState(*m_snapshot)));
+        return;
+    }
+    m_resumeAfterTest = m_session != nullptr;
+    dropSession();
+    m_testing = true;
+    m_testTarget.host = trimmed;
+    m_testTarget.port = port >= 1 ? port : MicrohamTrioSettings::kDefaultPort;
+    qCInfo(lcDevices) << "MicrohamTrioModel: testing the Trio at" << trimmed << port;
+    startSession();
+    emit changed();
+}
+
+void MicrohamTrioModel::finishTest(bool reachable, const QString& report)
+{
+    dropSession();
+    m_testing = false;
+    qCInfo(lcDevices).noquote() << "MicrohamTrioModel: test" << (reachable ? "reached" : "failed")
+                                << "-" << QString(report).replace(QLatin1Char('\n'), QStringLiteral(" | "));
+    if (m_resumeAfterTest && m_settings.isConfigured()) {
+        startSession();
+    }
+    m_resumeAfterTest = false;
+    setWord(view().session);
+    emit testFinished(reachable, report);
+    emit changed();
+}
+
 void MicrohamTrioModel::setRadio(const RadioSettingsScope& scope)
 {
     m_scope = scope;
@@ -184,7 +226,7 @@ MicrohamTrioModel::BindResult MicrohamTrioModel::clearBinding()
 
 QString MicrohamTrioModel::description() const
 {
-    if (!m_session || !m_settings.isConfigured()) {
+    if (!m_session || m_testing || !m_settings.isConfigured()) {
         return {};
     }
     return QStringLiteral("%1:%2").arg(m_settings.host).arg(m_settings.port);
@@ -230,6 +272,10 @@ MicrohamTrioModel::View MicrohamTrioModel::view() const
             : SessionWord::Off;
         return out;
     }
+    if (m_testing) {
+        out.session = SessionWord::Connecting;
+        return out;
+    }
     out.stateCurrent = m_session->snapshotCurrent();
     switch (m_session->status()) {
     case MicrohamTrioSession::Status::Held:
@@ -272,8 +318,9 @@ void MicrohamTrioModel::startSession()
     connect(m_session, &MicrohamTrioSession::sessionStateChanged,
             this, &MicrohamTrioModel::onSessionState);
     MicrohamTrioSession::Config config;
-    config.host = m_settings.host;
-    config.port = static_cast<quint16>(m_settings.port);
+    const MicrohamTrioSettings& target = m_testing ? m_testTarget : m_settings;
+    config.host = target.host;
+    config.port = static_cast<quint16>(target.port);
     qCInfo(lcDevices) << "MicrohamTrioModel: taking the session at" << description();
     m_session->start(config);
 }
@@ -299,6 +346,14 @@ void MicrohamTrioModel::setWord(SessionWord word)
 void MicrohamTrioModel::onSnapshot(const MicrohamTrio::Snapshot& snapshot,
                                    MicrohamTrioSession::SnapshotSource source)
 {
+    if (m_testing) {
+        // Read and released at once; the shown state is not replaced by a test
+        // of another address.
+        finishTest(true, tr("Reachable: the Trio at %1:%2 answered; session released.\n%3")
+                             .arg(m_testTarget.host).arg(m_testTarget.port)
+                             .arg(describeState(snapshot)));
+        return;
+    }
     m_snapshot = snapshot;
     m_failure.clear();
     const SessionWord before = m_word;
@@ -318,6 +373,17 @@ void MicrohamTrioModel::onSnapshot(const MicrohamTrio::Snapshot& snapshot,
 
 void MicrohamTrioModel::onSessionState(MicrohamTrioSession::Status status)
 {
+    if (m_testing) {
+        if (status == MicrohamTrioSession::Status::Failed) {
+            finishTest(false, tr("Not reachable: %1.")
+                                  .arg(m_session ? failureText(m_session->lastFailure())
+                                                 : tr("connection failed")));
+        } else if (status == MicrohamTrioSession::Status::Evicted) {
+            finishTest(false, tr("The Trio closed the session before its state arrived; another "
+                                 "client may hold it."));
+        }
+        return;
+    }
     const SessionWord before = m_word;
     switch (status) {
     case MicrohamTrioSession::Status::Evicted:

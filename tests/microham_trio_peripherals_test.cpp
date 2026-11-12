@@ -218,6 +218,22 @@ void testRowLifecycle()
 
     report("nothing the page did sent a selection", sentOnlyReads(peer));
 
+    // Test Connection: one session, read, released.
+    auto* testButton = dialog.findChild<QPushButton*>(QStringLiteral("peripheralTest_trio"));
+    auto* testResult = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioTestResult"));
+    report("the page has Test Connection and its result field", testButton && testResult);
+    if (testButton && testResult) {
+        testButton->click();
+        peer.connectHeld(trio, "radio2", "ant6");
+        report("the test reports reachability and the labels read",
+               testResult->text().contains(QStringLiteral("Reachable"))
+                   && testResult->text().contains(QStringLiteral("A6 Dummy"))
+                   && testResult->isVisibleTo(&dialog),
+               testResult->text().toStdString());
+        report("and leaves no session behind", !trio.hasSession());
+    }
+    report("still nothing sent that selects", sentOnlyReads(peer));
+
     // Remove: address gone, row gone.
     RadioSetupDialog::setRemovalConfirmationHookForTest(
         [](const QString&, const QString&) { return true; });

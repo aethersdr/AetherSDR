@@ -113,6 +113,12 @@ microHAM documents none.
 - The Trio serves one web session. When another client takes it (most often
   the Trio's page in a browser) the row shows **Needs attention** and AetherSDR
   does not take it back by itself; **Connect** does.
+- **Test Connection** takes the session once, reads the state, shows whether the
+  Trio answered and the RADIO and antenna labels it read, and releases the
+  session. It selects nothing and stores nothing; with the session already
+  held it answers from that session.
+- **This Radio** says which of the Trio's radio ports the connected radio is
+  cabled to. It is stored for that radio only and changes nothing on the Trio.
 - **Web UI** closes AetherSDR's session first, then opens the Trio's page in
   the browser. **Connect** takes the session back.
 - Stored as `Peripherals.trio.ManualIp`, `Peripherals.trio.ManualPort` and

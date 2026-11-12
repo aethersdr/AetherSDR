@@ -1708,7 +1708,50 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         refresh();
     });
 
-    addFormRow(detail, tr("IP Address"), ui.addressEdit);
+    // Test connection: one session, the state read, released. Stores nothing.
+    auto* testButton = new QPushButton(tr("Test"));
+    testButton->setObjectName(QStringLiteral("peripheralTest_%1").arg(ui.id));
+    testButton->setAccessibleName(tr("Test the connection to the microHAM Trio"));
+    testButton->setAccessibleDescription(tr(
+        "Connects once, reads the Trio's state and labels, and releases the session. "
+        "It selects nothing and stores nothing."));
+    testButton->setToolTip(testButton->accessibleDescription());
+    auto* testResult = new QLabel(detail.page);
+    testResult->setObjectName(QStringLiteral("peripheralTrioTestResult"));
+    testResult->setAccessibleName(tr("Trio connection test result"));
+    testResult->setWordWrap(true);
+    testResult->setTextFormat(Qt::PlainText);
+    testResult->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    testResult->hide();
+    connect(testButton, &QPushButton::clicked, this, [u, trio, testResult, refresh]() {
+        if (!trio) {
+            return;
+        }
+        testResult->setText(RadioSetupDialog::tr("Testing\u2026"));
+        setTone(testResult, Tone::Hint);
+        testResult->show();
+        trio->testConnection(u->addressEdit->text(), static_cast<quint16>(u->portSpin->value()));
+        refresh();
+    });
+    if (trio) {
+        connect(trio, &MicrohamTrioModel::testFinished, testResult,
+                [testResult](bool reachable, const QString& report) {
+            testResult->setText(report);
+            testResult->setAccessibleDescription(report);
+            setTone(testResult, reachable ? Tone::Ok : Tone::Error);
+            testResult->show();
+            QAccessibleEvent event(testResult, QAccessible::DescriptionChanged);
+            QAccessible::updateAccessibility(&event);
+        });
+    }
+    // Test sits next to the address it tests.
+    auto* addressRow = new QWidget;
+    auto* addressLayout = new QHBoxLayout(addressRow);
+    addressLayout->setContentsMargins(0, 0, 0, 0);
+    addressLayout->setSpacing(6);
+    addressLayout->addWidget(ui.addressEdit, 1);
+    addressLayout->addWidget(testButton);
+    addFormRow(detail, tr("IP Address"), addressRow);
     addFormRow(detail, tr("Port"), ui.portSpin);
 
     // What the Trio reports: the radio with focus, its antenna, and every
@@ -1795,6 +1838,10 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         }
         refresh();
     });
+    ui.refreshExtra = [previous = ui.refreshExtra, testButton, trio]() {
+        previous();
+        testButton->setEnabled(trio && !trio->isTesting());
+    };
 
     // The Trio serves one session: the browser takes it from this app, so the
     // session is closed first and Connect takes it back.
@@ -1822,6 +1869,7 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         "Open the Trio's own web page in your browser. The Trio serves one session, so this "
         "app lets go of it first; click Connect to take it back."));
 
+
     m_peripheralRowSavers.append([u, group]() {
         if (!u->addressEdit || !u->addressEdit->text().trimmed().isEmpty()) {
             return;
@@ -1837,6 +1885,7 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         }
     });
     finishDetailPage(detail, ui, {ui.webUiButton});
+    detail.layout->insertWidget(detail.layout->count() - 1, testResult);
 }
 
 void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,
