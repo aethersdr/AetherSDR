@@ -209,7 +209,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - If a TCI client's transmit audio pauses mid-over and then arrives all at once, the rest of that over goes out up to about 250 ms late. A fix is proposed in [#7187](https://github.com/aethersdr/AetherSDR/pull/7187).
 - A key pressed shortly after an over is sometimes refused with "Transmit cleanup is still in progress.", about 3 keys in 100 on one HL2. Nothing is transmitted; key again. A fix is proposed in [#7189](https://github.com/aethersdr/AetherSDR/pull/7189).
 - One user reports that a transmission keyed over TCI on v26.11.2 drops out every few seconds. It is not reproduced: in 31 TCI overs into a dummy load on another HL2, on v26.11.2 and on later code, transmit and audio held for the whole over ([#7188](https://github.com/aethersdr/AetherSDR/issues/7188)).
-- aetherd does not catch SIGTERM, so stopping it that way can leave the HL2 streaming to a host that is gone; the radio then stops answering discovery until it is power-cycled. Found by reading the code, not reproduced ([#7163](https://github.com/aethersdr/AetherSDR/issues/7163)).
+- aetherd does not catch termination signals (SIGTERM, Ctrl+C, or closing its terminal), so stopping it that way can leave the HL2 streaming to a host that is gone; the radio then stops answering discovery until it is power-cycled. Found by reading the code, not reproduced ([#7163](https://github.com/aethersdr/AetherSDR/issues/7163)).
 
 ### What has not been tested
 
