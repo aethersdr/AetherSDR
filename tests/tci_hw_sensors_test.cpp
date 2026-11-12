@@ -20,6 +20,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QStringList>
+#include <QThread>
 #include <QTimer>
 
 #include <cmath>
@@ -236,6 +237,41 @@ void testServerSendsOnlyAfterEnable()
     check(hwCount(toEnabled) == after, "server: nothing is sent after disable");
 }
 
+void testStaleReadingIsNotSent()
+{
+    LinkedHl2Backend hl2;
+    MeterModel meters;
+    feedTemperature(meters, 42.0f);
+    check(messageFor(hl2.capabilities(), meters).has_value(), "stale: a fresh temperature is sent");
+    // MeterModel has no clock hook: wait out the vitals window for real.
+    QThread::msleep(static_cast<unsigned long>(MeterModel::kVitalsFreshMs + 100));
+    check(!messageFor(hl2.capabilities(), meters),
+          "stale: a temperature older than the vitals window is not a reading");
+}
+
+void testServerKeepsTheInterval()
+{
+    RadioModel model;
+    model.setBackendForTest(std::make_unique<LinkedHl2Backend>(),
+                            QStringLiteral("tci-hw-sensors-cadence"));
+    feedTemperature(model.meterModel(), 41.0f);
+    TciServer server(&model);
+    TciHwSensorsTestAccess::markRunning(server);
+    TciClient client;
+    QStringList got;
+    client.textSink = [&](const QString& m) { got << m; return qint64(m.size()); };
+    TciHwSensorsTestAccess::attach(server, &client, model);
+    emit client.textMessageReceived(QStringLiteral("hw_sensors_enable:true,100;"));
+    QElapsedTimer t;
+    t.start();
+    pumpUntil([&] { return t.elapsed() >= 450; }, 1000);
+    const int sent = int(got.filter(QStringLiteral("hw_sensors:")).size());
+    check(sent >= 3 && sent <= 6,
+          "server: a 100 ms interval sends about every 100 ms, not on every event-loop pass");
+    emit client.textMessageReceived(QStringLiteral("hw_sensors_enable:false;"));
+    pumpUntil([&] { return !TciHwSensorsTestAccess::timerActive(server); }, 1000);
+}
+
 } // namespace
 } // namespace AetherSDR
 
@@ -250,6 +286,8 @@ int main(int argc, char** argv)
     testRadioWithoutSensorsSendsNothing();
     testNanFieldsStayPositional();
     testServerSendsOnlyAfterEnable();
+    testStaleReadingIsNotSent();
+    testServerKeepsTheInterval();
     std::printf("%s (%d failed)\n", g_failed ? "FAILED" : "PASSED", g_failed);
     return g_failed ? 1 : 0;
 }
