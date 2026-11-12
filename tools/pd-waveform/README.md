@@ -189,7 +189,23 @@ the preamble at -4500 to +7500 Hz:
 | First fit | -44.5 / -58.1 | -57.4 / -61.8 | -74.2 / -66.0 dBc |
 | After 17 s | -48.0 / -51.5 | -59.8 / -61.4 | -72.7 / -69.5 dBc |
 
-The transmit-path fit still left -10.6 dB of the feedback unexplained.
+At higher power (40 m, 17 s runs with correction on; the uncorrected
+baselines are the radio's own 710/1900 Hz two-tone at the same level):
+
+| Power | IMD3 lo/hi | IMD5 lo/hi | IMD7 lo/hi |
+|---|---|---|---|
+| 10 W uncorrected | -27.5 / -27.0 | -39.2 / -39.3 | -48.2 / -48.2 dBc |
+| 10 W corrected, after 17 s | -48.0 / -49.1 | -54.3 / -55.8 | -69.4 / -62.8 dBc |
+| 25 W uncorrected | -27.7 / -27.2 | -37.6 / -37.7 | -45.4 / -45.4 dBc |
+| 25 W corrected, after 17 s | -47.8 / -48.4 | -55.4 / -55.5 | -63.0 / -61.2 dBc |
+
+That is about 21 dB on IMD3 and 15-18 dB on IMD5 and IMD7, and still
+improving when each run ended. The loop delay is found on noise; the first
+lock was wrong on three runs out of three (coherence 0.01-0.03) and was
+found again within 2 s.
+
+The transmit-path fit still left -10.6 dB (5 W), -8.7 dB (10 W) and
+-17.9 dB (25 W) of the feedback unexplained.
 Something in its training data isn't linear, and the
 cause is open. On speech it would train on 200-2800 Hz only, the same gap
 that caused the drift. Voice use needs a fit regularized toward a pure
