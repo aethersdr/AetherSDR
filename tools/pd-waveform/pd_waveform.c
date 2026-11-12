@@ -212,7 +212,10 @@ static int vita_parse(const unsigned char* p, ssize_t n, vita_t* v)
     if (n < 28)
         return 0;
     uint32_t w0 = be32(p);
-    if ((w0 >> 28) != 1 || !(w0 & 0x08000000u))
+    // Type 1 (IF data with stream ID) for the waveform's own streams and DAX
+    // IQ; type 3 (extension data with stream ID) for DAX audio (measured on a
+    // FLEX-8600, SmartSDR 4.3.16: header 0x385n0107, class 0x534c03e3).
+    if (((w0 >> 28) != 1 && (w0 >> 28) != 3) || !(w0 & 0x08000000u))
         return 0;
     if (be32(p + 8) != FLEX_OUI || (be32(p + 12) >> 16) != INFO_CLASS)
         return 0;
@@ -1217,6 +1220,7 @@ static void loop_emit_audio(loop_t* l, double i, double q)
     if (++l->npkt == 128) {
         unsigned char p[28 + 4 * 256];
         int len = vita_build(p, l->w->fb_dax_sid, CLASS_AUDIO_24K, l->count++, l->pkt, 128);
+        p[0] = (unsigned char)((p[0] & 0x0F) | 0x30);   // DAX audio is VITA type 3
         on_packet(l->w, p, len);
         l->npkt = 0;
     }
