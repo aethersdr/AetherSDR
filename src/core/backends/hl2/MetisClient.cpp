@@ -1517,6 +1517,8 @@ void MetisClient::armTxIqPrime() noexcept
 void MetisClient::abandonTxIq()
 {
     m_txIq.clear();
+    // A trim armed by the abandoned audio must not cut the audio that replaces it.
+    m_txIqTrimArmed = false;
     armTxIqPrime();
 }
 
@@ -1576,7 +1578,8 @@ void MetisClient::reportTxUnderflowRun()
                      << "(totals SINCE PROCESS START, not since this link came"
                      << "up and not per radio: underflow" << m_txUnderflowPackets
                      << "packets /" << m_txUnderflowSamples << "samples, overflow"
-                     << m_txOverflowSamples << "samples)."
+                     << m_txOverflowSamples << "samples, trim" << m_txTrimSamples
+                     << "samples)."
                      << "This is the CLIENT's queue, not the radio's DSIQ FIFO:"
                      << "the EP2 frame went out full size on schedule, so the"
                      << "gateware's fill and pacingFault readings are unaffected"
@@ -1792,7 +1795,9 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
             m_txUnderflowRunSamples += shortBy;
             // Still starving: whatever gap was accumulating was not a recovery.
             m_txUnderflowRunQuietPackets = 0;
-            if (!m_keyDownReportPending)
+            // Only once the prime has let go: it is armed on every key-down and every
+            // abandon, so front-loaded audio at the start of either is never cut.
+            if (m_txIqPrimeTarget == 0)
                 m_txIqTrimArmed = true;
         } else if (m_txUnderflowRunPackets > 0) {
             // A full packet does NOT end the run on its own -- see

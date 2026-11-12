@@ -899,8 +899,9 @@ private:
             / static_cast<std::uint64_t>(kTxSamplesPerPacket);
     std::uint64_t m_txUnderflowRunQuietPackets = 0;
     void reportTxUnderflowRun();   // also disarms the trim
-    // Set by a short packet after the over's first queued sample; the key-down
-    // underflow does not arm it. Acted on once, when the episode ends quietly.
+    // Set by a short packet once the prime has let go, so neither the key-down
+    // underflow nor a re-primed context arms it; abandonTxIq() disarms it. Acted
+    // on once, when the episode ends quietly.
     bool m_txIqTrimArmed = false;
     void trimTxIqAfterUnderflow();
     // Key-down report (#6052): armed on MOX's rising edge with the underflow and

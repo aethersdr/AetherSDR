@@ -205,6 +205,102 @@ OverResult runOver(const std::vector<int>& lateness, int group = 1)
 // Blocks in a 3 s over, the length d167 used.
 int blocksInOver() { return 3 * kRate / blockSamples(); }
 
+// One block of a scheduled over: when it is queued (EP2 samples since the keyed
+// edge) and under which of two producer contexts of the SAME held operation.
+// Producer numbering runs on across the contexts, so the wire sequence check
+// reads one continuous stream and any trim shows as a skip.
+struct ScheduledBlock { long long due; int context; };
+// A keying event at a sample time, applied before that tick's packet.
+enum class KeyEvent { Unkey, Rekey, CwDown, CwClear };
+struct ScheduledKey { long long at; KeyEvent event; };
+struct ScheduleResult {
+    std::uint64_t trimSamples = 0;
+    std::uint64_t trimEvents = 0;
+    std::uint64_t overflowSamples = 0;
+    int skips = 0;
+    long long realSamples = 0;
+    long long gapsBeforeContext1 = 0;   // keyed gaps closed before context 1's first sample
+};
+
+ScheduleResult runSchedule(const std::vector<ScheduledBlock>& schedule,
+                           const std::vector<ScheduledKey>& keys = {})
+{
+    const int block = blockSamples();
+    TxTestAuthority tx;
+    // A second producer on the same operation: a source change under held MOX.
+    const auto producerB = tx.coordinator.registerProducer();
+    const AetherSDR::TxCoordinator::Context contexts[2] = {
+        tx.context, tx.coordinator.mediaContext(producerB, tx.operation)};
+    MetisClient client;
+    MetisClientTestAccess::setStreaming(client);
+    client.enableTransmit(true);
+    client.setMox(true, tx.operation);
+
+    ScheduleResult r;
+    const auto blocks = static_cast<long long>(schedule.size());
+    const long long total = blocks * block;
+    long long nextBlock = 0;
+    long long expected = 0;
+    long long zeroRun = 0;
+    bool seenReal = false;
+    bool seenContext1 = false;
+    long long context1First = -1;   // producer index of context 1's first sample
+    std::size_t nextKey = 0;
+    bool cw = false;   // CW owns the stream: its envelope is on the wire, not the producer's
+    for (long long tick = 0;
+         r.realSamples + static_cast<long long>(client.txTrimSamples() + client.txOverflowSamples()) < total
+         && tick < 4 * (schedule.back().due + total) / kPacket;
+         ++tick) {
+        const long long now = tick * kPacket;
+        while (nextKey < keys.size() && keys[nextKey].at <= now) {
+            switch (keys[nextKey].event) {
+            case KeyEvent::Unkey:   client.setMox(false, tx.operation); break;
+            case KeyEvent::Rekey:   client.setMox(true, tx.operation); break;
+            case KeyEvent::CwDown:  client.setCwKeyDown(true, tx.operation); cw = true; break;
+            case KeyEvent::CwClear: client.clearCwKeying(); cw = false; break;
+            }
+            ++nextKey;
+        }
+        while (nextBlock < blocks && schedule[static_cast<std::size_t>(nextBlock)].due <= now) {
+            const auto& b = schedule[static_cast<std::size_t>(nextBlock)];
+            if (b.context == 1 && context1First < 0)
+                context1First = nextBlock * block;
+            std::vector<std::complex<float>> iq(static_cast<std::size_t>(block));
+            for (int n = 0; n < block; ++n)
+                iq[static_cast<std::size_t>(n)] = producerSample(nextBlock * block + n);
+            client.queueTxIq(iq, contexts[b.context]);
+            ++nextBlock;
+        }
+        const auto pkt = client.buildNextControlPacket();
+        if (cw)
+            continue;
+        const auto wire = decodeIq(pkt);
+        for (const WireSample& w : wire) {
+            if (w.i == 0 && w.q == 0) {
+                ++zeroRun;
+                continue;
+            }
+            if (seenReal && zeroRun > 0 && !seenContext1)
+                ++r.gapsBeforeContext1;
+            seenReal = true;
+            zeroRun = 0;
+            if (w.i != counterOf(expected)) {
+                const long long jump = (w.i - counterOf(expected) + kCounterPeriod) % kCounterPeriod;
+                ++r.skips;
+                expected += jump;
+            }
+            if (context1First >= 0 && expected >= context1First)
+                seenContext1 = true;
+            ++expected;
+            ++r.realSamples;
+        }
+    }
+    r.trimSamples = client.txTrimSamples();
+    r.trimEvents = client.txTrimEvents();
+    r.overflowSamples = client.txOverflowSamples();
+    return r;
+}
+
 }   // namespace
 
 int main(int argc, char** argv)
@@ -467,6 +563,81 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "PROBE  45-70 ms pauses at 1, 2 and 4 blocks per delivery: %llu trim(s)\n",
                      static_cast<unsigned long long>(shortTrims));
         check(shortTrims == 0, "a 45-70 ms pause is never trimmed, at 1, 2 or 4 blocks per delivery");
+    }
+
+    // ---- FRONT-LOADED AUDIO AT THE START OF A PRIMED STREAM IS NEVER CUT ----
+    //
+    // The trim is for a backlog left by a MID-OVER starvation. Audio a producer
+    // front-loads when its stream starts is not one: neither at key-down nor
+    // after a context change under held MOX (a source change, mic to TCI/DAX),
+    // which abandons the queue and primes it again. The front-load is sized to
+    // sit above the trim threshold, or this would pass with the trim armed.
+    {
+        const auto frontLoad = static_cast<int>((target + MetisClientTestAccess::trimMargin()) / block) + 2;
+        const long long period = block;
+        // (i) Context A plays 20 blocks on time, then stops for 200 ms (the queue
+        // starves mid-over); context B, a second producer on the same operation,
+        // arrives with frontLoad blocks at once and then runs on time.
+        {
+            std::vector<ScheduledBlock> schedule;
+            for (int j = 0; j < 20; ++j)
+                schedule.push_back({(j + 1) * period, 0});
+            const long long bStart = 20 * period + msToSamples(200.0);
+            for (int j = 0; j < frontLoad; ++j)
+                schedule.push_back({bStart, 1});
+            for (int m = 1; m <= 60; ++m)
+                schedule.push_back({bStart + m * period, 1});
+            const ScheduleResult r = runSchedule(schedule);
+            std::fprintf(stderr,
+                "PROBE  context change under held MOX after a 200 ms starvation, %d blocks"
+                " front-loaded: trimmed %llu sample(s) in %llu trim(s), overflow %llu, %d skip(s),"
+                " %lld keyed gap(s) before B\n",
+                frontLoad, static_cast<unsigned long long>(r.trimSamples),
+                static_cast<unsigned long long>(r.trimEvents),
+                static_cast<unsigned long long>(r.overflowSamples), r.skips, r.gapsBeforeContext1);
+            check(r.gapsBeforeContext1 >= 1, "CONTROL: context A's pause starves the queue mid-over");
+            check(r.trimEvents == 0 && r.trimSamples == 0,
+                  "a context change under held MOX starts a new primed stream: A's starvation does not "
+                  "trim B's front-loaded audio");
+            check(r.overflowSamples == 0 && r.skips == 0,
+                  "and every sample of B reaches the wire once, in order");
+        }
+        // (ii) A primed stream that starts on an EMPTY queue in the SAME context,
+        // so no abandon follows to disarm anything: the keyed edge of a second
+        // over, and voice resuming after CW under held PTT. Each is preceded by
+        // ~25 ms of empty keyed packets while the prime is armed, then frontLoad
+        // blocks at once and on time after. Context A plays 20 blocks first.
+        for (const bool viaCw : {false, true}) {
+            std::vector<ScheduledBlock> schedule;
+            for (int j = 0; j < 20; ++j)
+                schedule.push_back({(j + 1) * period, 0});
+            const long long edge = 24 * period;   // the 20 blocks have drained
+            std::vector<ScheduledKey> keys;
+            if (viaCw) {
+                keys.push_back({edge, KeyEvent::CwDown});
+                keys.push_back({edge + 10 * period, KeyEvent::CwClear});
+            } else {
+                keys.push_back({edge, KeyEvent::Unkey});
+                keys.push_back({edge + kPacket, KeyEvent::Rekey});
+            }
+            const long long start = keys.back().at + msToSamples(25.0);
+            for (int j = 0; j < frontLoad; ++j)
+                schedule.push_back({start, 0});
+            for (int m = 1; m <= 60; ++m)
+                schedule.push_back({start + m * period, 0});
+            const ScheduleResult r = runSchedule(schedule, keys);
+            std::fprintf(stderr,
+                "PROBE  %s, then %d blocks front-loaded after 25 ms in the same context: trimmed"
+                " %llu sample(s) in %llu trim(s)\n",
+                viaCw ? "CW then voice under held PTT" : "a second keyed edge", frontLoad,
+                static_cast<unsigned long long>(r.trimSamples),
+                static_cast<unsigned long long>(r.trimEvents));
+            check(r.trimEvents == 0 && r.trimSamples == 0,
+                  viaCw ? "voice front-loaded after CW under held PTT is never cut: the empty "
+                          "packets before it are the prime's, not a mid-over starvation"
+                        : "front-loaded audio at a keyed edge is never cut: the key-down underflow "
+                          "does not arm the trim");
+        }
     }
 
     if (g_failures == 0)
