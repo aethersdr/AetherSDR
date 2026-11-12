@@ -83,7 +83,8 @@ public:
     void setCwBackendState(const QString& key, bool tuning, const QString& status, bool preparing,
                          bool canRetry, const QString& detail);
     void appendUnscoredCwText(const QString& text);
-    // Colored like appendCwText, but never dropped by the Sens threshold.
+    // Colored like appendCwText, and hidden at or above the selected
+    // decoder's own Sens threshold.
     void appendColoredCwText(const QString& text, float cost);
 #endif
     QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
@@ -136,9 +137,9 @@ signals:
     void pitchRangeChanged(int minHz, int maxHz);
     void speedRangeChanged(int minWpm, int maxWpm);
     void cwPanelCloseRequested();
-    // RX text rendered in the pane, from any decoder (ggmorse text only
-    // after its Sens filter) — the stream the CW callsign spotter watches
-    // for "DE <call> <call>".
+    // RX text rendered in the pane, after the selected decoder's Sens
+    // filter — the stream the CW callsign spotter watches for
+    // "DE <call> <call>".
     void cwRxTextDisplayed(const QString& text);
 
     // RTTY
@@ -199,7 +200,16 @@ private:
 #ifdef HAVE_CW_RX_BACKENDS
     QComboBox*    m_cwEngineCombo{nullptr};
     QPushButton* m_cwModelAction{nullptr};
+    void          showCwSensFor(const QString& backend);
+    // Threshold for a neural decoder's colored text.  m_cwCostThreshold stays
+    // ggmorse's: the TX decode, the controller feed and MQTT read it too.
+    float         m_cwNeuralCostThreshold{1.0f};
 #endif
+    void          saveCwSens(int value);
+    // The decoder whose Sens the slider shows, and whether the slider holds
+    // a change that is not saved yet.
+    QString       m_cwSensBackend{QStringLiteral("ggmorse")};
+    bool          m_cwSensUnsaved{false};
     QWidget*      m_cwPanel{nullptr};
     QWidget*      m_cwGrip{nullptr};
     QTextEdit*    m_cwText{nullptr};
