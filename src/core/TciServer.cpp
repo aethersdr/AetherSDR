@@ -3827,12 +3827,9 @@ void TciServer::handleExtensionCommand(TciClient* ws, const QString& cmd)
 
 bool TciServer::extensionKeyed() const
 {
-    if (!m_model) {
-        return false;
-    }
     const TransmitModel& tx = m_model->transmitModel();
-    return m_model->isRadioTransmitting() || tx.isTransmitting() || tx.isTuning()
-        || tx.isMox() || m_tciPttClient;
+    return m_model->transmitOwnershipPending() || m_model->isRadioTransmitting()
+        || tx.isTransmitting() || tx.isMox() || tx.isTuning() || m_tciPttClient;
 }
 
 bool TciServer::spanOffered() const
@@ -3959,11 +3956,24 @@ void TciServer::wireSpanPan(PanadapterModel* pan)
     }
     // Every report, changed or not: a radio that kept its span (a snap to the
     // current rate, an HL2 link-budget refusal) re-asserts it here, and that
-    // is the answer a dispatched set is waiting for.
+    // is the answer a dispatched set is waiting for. A report that only moved
+    // the centre (a tune during the rebuild) is not; a re-assert keeps it.
     const QPointer<PanadapterModel> reporter(pan);
-    connect(pan, &PanadapterModel::infoChanged, this, [this, reporter](double, double) {
+    connect(pan, &PanadapterModel::infoChanged, this,
+            [this, reporter](double centerMhz, double bandwidthMhz) {
         if (reporter) {
-            m_spanReportedPans.insert(reporter->panId());
+            const QString panId = reporter->panId();
+            const qint64 spanHz = qRound64(bandwidthMhz * 1.0e6);
+            for (SpanAnswer& owed : m_spanAnswerOwed) {
+                if (owed.panId != panId || owed.reported) {
+                    continue;
+                }
+                if (spanHz != owed.spanHz || centerMhz == owed.centerMhz) {
+                    owed.reported = true;
+                } else {
+                    owed.centerMhz = centerMhz;
+                }
+            }
         }
         queueSpanNotice();
     });
@@ -4033,7 +4043,8 @@ TciExtensionSet::Result TciServer::handleSpan(const QString& name, const QString
         return result;
     }
     const QString panId = sliceForTrxStrict(request->trx)->panId();
-    m_spanAnswerOwed.insert(request->trx, panId);
+    m_spanAnswerOwed.insert(request->trx,
+        SpanAnswer{panId, *current, m_model->panadapter(panId)->centerMhz(), false});
     m_spanAnswerTimer->start();
     m_model->requestPanBandwidth(panId, static_cast<double>(target) / 1.0e6);
     return result;
@@ -4066,7 +4077,6 @@ bool TciServer::broadcastSpan()
         m_spanAnnounced.clear();
         m_spanRatesAnnounced.clear();
         m_spanAnswerOwed.clear();
-        m_spanReportedPans.clear();
         m_spanAnswerExpired = false;
         return false;
     }
@@ -4082,7 +4092,7 @@ bool TciServer::broadcastSpan()
         const qint64 hz = spans.value(trx);
         const auto owed = m_spanAnswerOwed.constFind(trx);
         const bool answered = owed != m_spanAnswerOwed.cend()
-            && (m_spanAnswerExpired || m_spanReportedPans.contains(owed.value()));
+            && (m_spanAnswerExpired || owed->reported);
         if (answered || m_spanAnnounced.value(trx, -1) != hz) {
             lines << TciSpanExtension::spanLine(trx, hz);
             m_spanAnswerOwed.remove(trx);
@@ -4093,7 +4103,6 @@ bool TciServer::broadcastSpan()
     }
     m_spanRatesAnnounced = rates;
     m_spanAnnounced = spans;
-    m_spanReportedPans.clear();
     m_spanAnswerExpired = false;
     if (m_spanAnswerOwed.isEmpty()) {
         m_spanAnswerTimer->stop();

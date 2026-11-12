@@ -2184,6 +2184,7 @@ private:
     friend class NtpSourcesTestAccess;
     friend class StoredControlTestAccess;
     friend class TciServerReviewTest;
+    friend class TciSpanExtensionTest;
     friend class TransmitDaxHoldTestAccess;
     void expirePendingCallbacks(const QString& reason);
 

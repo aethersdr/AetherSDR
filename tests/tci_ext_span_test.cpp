@@ -52,6 +52,7 @@ public:
     {
         return server.m_extensions.offeredTokens();
     }
+    static TxCoordinator& coordinator(RadioModel& model) { return model.m_txCoordinator; }
 };
 
 namespace {
@@ -434,7 +435,36 @@ void rateRadioWide()
           "the reported change reaches every enabled client, for every trx it moved");
     check(f.model.panadapter(f.model.slice(0)->panId())->bandwidthMhz() == 0.192,
           "the model holds the span the radio reported");
+
+    // Only a report after the set can answer it, and not one that only moved
+    // the centre (a tune while an HL2 rebuilds).
+    backend->answer = SpanBackend::Answer::Never;
+    backend->centerMhz.insert(QStringLiteral("p1"), 14.2);
+    backend->report(QStringLiteral("p1"));
+    a.send("aethersdr_rx_span:1,96000;");
+    settle();
+    check(expect(a, {}) && expect(c, {}, "c"),
+          "a centre report from just before a set does not answer it");
+    backend->report(QStringLiteral("p1"));
+    settle();
+    check(expect(a, lines({"aethersdr_rx_span:1,192000;"})) && expect(c, lines({"aethersdr_rx_span:1,192000;"}), "c"),
+          "a re-assert after the set, at the same centre, answers it with the span kept");
+    backend->answer = SpanBackend::Answer::Later;
+    a.send("aethersdr_rx_span:1,96000;");
+    settle();
+    backend->centerMhz.insert(QStringLiteral("p1"), 14.3);
+    backend->report(QStringLiteral("p1"));
+    settle();
+    check(expect(a, {}) && expect(c, {}, "c"),
+          "a centre move while the set is in flight does not answer it");
+    backend->finish();
+    settle();
+    const QStringList narrow = lines({"aethersdr_rx_span:0,96000;", "aethersdr_rx_span:1,96000;"});
+    check(expect(a, narrow) && expect(c, narrow, "c"), "the span the radio then reports does");
     backend->answer = SpanBackend::Answer::Now;
+    a.send("aethersdr_rx_span:1,192000;");
+    settle();
+    check(expect(a, wide) && expect(c, wide, "c"), "and the span is back for what follows");
 
     // Snaps and quiet no-ops.
     backend->requests.clear();
@@ -582,6 +612,29 @@ void continuousPerPan()
     check(extensionLines(b.all).isEmpty(), "the plain client received no aethersdr_ byte at all");
 }
 
+// Transmit ownership taken, MOX not reported yet (a key-up in progress): a set
+// that would rebuild the receive chains is refused as keyed.
+void ownershipBeforeMox()
+{
+    Fixture f(true, true, 0.096, 0.096);
+    Wire a;
+    TciSpanExtensionTest::attach(*f.server, a.client, f.model);
+    settle(600);
+    a.take();
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    TxCoordinator& coordinator = TciSpanExtensionTest::coordinator(f.model);
+    const TxCoordinator::Actor actor = coordinator.registerActor({true, 0});
+    const TxCoordinator::Admission held = coordinator.acquire(actor, TxCoordinator::monotonicMs());
+    check(held.accepted() && f.model.transmitOwnershipPending() && !f.model.transmitModel().isMox()
+              && !f.model.transmitModel().isTransmitting() && !f.model.isRadioTransmitting(),
+          "a TxCoordinator operation is held and no MOX is reported");
+    a.send("aethersdr_rx_span:0,192000;");
+    settle();
+    check(f.backend->requests.isEmpty() && expect(a, lines({"aethersdr_rx_span:0,96000;"})),
+          "while transmit ownership is held, a set is refused and answered with the span in force");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -596,6 +649,7 @@ int main(int argc, char** argv)
     grammar();
     rateRadioWide();
     continuousPerPan();
+    ownershipBeforeMox();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;

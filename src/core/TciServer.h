@@ -544,8 +544,15 @@ private:
     bool              m_spanSendPosted{false};
     QHash<int, qint64> m_spanAnnounced;
     QString           m_spanRatesAnnounced;
-    QHash<int, QString> m_spanAnswerOwed;    // trx -> the pan it waits on
-    QSet<QString>     m_spanReportedPans;       // pans reported since the last notice
+    // A dispatched set, per trx: the pan it waits on, the span and centre then.
+    // Only a report after the dispatch can answer it.
+    struct SpanAnswer {
+        QString panId;
+        qint64  spanHz{0};
+        double  centerMhz{0.0};
+        bool    reported{false};
+    };
+    QHash<int, SpanAnswer> m_spanAnswerOwed;
     bool              m_spanAnswerExpired{false};
     QString           m_spanAdvertisementSeen;
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
