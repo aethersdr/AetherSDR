@@ -7501,7 +7501,7 @@ void MainWindow::wireMeters()
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
     }
 
-    // ── microHAM Trio antenna switch — read only, no radio awareness ──────
+    // ── microHAM Trio antenna switch — switches nothing, no radio awareness ─
     // The Peripherals page shows its state and labels; nothing here selects
     // anything on it. Its session is taken at startup only with "Connect
     // automatically" on, like the KPA500/KAT500 rows.

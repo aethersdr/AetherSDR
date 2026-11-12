@@ -1081,7 +1081,7 @@
  },
  "models/MicrohamTrioModel.h": {
   "tag": "peripheral(microhamtrio)",
-  "note": "microHAM TRIO client, read only: one held web-socket session to a standalone antenna-switch controller reached by an operator-entered address with no discovery, the state it reports (radio focus, antenna, labels), the radio's port on it, the dummy-load mark, and port names written back on request. Selects nothing on the device. Works with any radio or none. Same precedent as models/GreenHeronModel.h and models/AntennaGeniusModel.h. A peripheral accessory, NOT behind the IRadioBackend radio seam.",
+  "note": "microHAM TRIO client that switches nothing: one held web-socket session to a standalone antenna-switch controller reached by an operator-entered address with no discovery, the state it reports (radio focus, antenna, labels), the radio's port on it, the dummy-load mark, and port names written back on request (the only write; refused while transmitting). Selects nothing on the device. Works with any radio or none. Same precedent as models/GreenHeronModel.h and models/AntennaGeniusModel.h. A peripheral accessory, NOT behind the IRadioBackend radio seam.",
   "split": "",
   "confidence": "high"
  },

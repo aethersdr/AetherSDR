@@ -162,6 +162,9 @@ public:
     static QString describeState(const MicrohamTrio::Snapshot& snapshot);
     // The binding in words, for the Peripherals page.
     static QString describeBinding(const View& view);
+    // Device text for a log line: newlines as " | ", every other control
+    // character (CR, ESC, ...) as U+FFFD, so a label cannot forge log lines.
+    static QString forLog(const QString& text);
 
 signals:
     // Anything view() reports may have changed.

@@ -1,7 +1,9 @@
-// microHAM TRIO model tests, read only: the stored address, the session words
-// the Peripherals page shows, an eviction that is never taken back, the
-// release to the Trio's own web page, and the proof that nothing but the
-// handshake, keep-alives and a close frame ever leaves. The device is a
+// microHAM TRIO model tests: the stored address, the session words the
+// Peripherals page shows, an eviction that is never taken back, the release
+// to the Trio's own web page, the port-name writes, device text kept out of
+// log lines as control characters, and the proof that nothing but the
+// handshake, keep-alives, a close frame and the asked-for port-name writes
+// ever leaves. The device is a
 // scripted transport and a hand-moved clock (tests/MicrohamTrioTestPeer.h):
 // no socket, no event loop. The settings store is a private temporary profile.
 //
@@ -16,6 +18,7 @@
 #include "models/MicrohamTrioModel.h"
 
 #include <QCoreApplication>
+#include <QLoggingCategory>
 #include <QString>
 #include <QStringList>
 
@@ -64,7 +67,7 @@ struct Rig {
     SessionWord word() const { return model.view().session; }
 
     // Everything the model has sent since the handshake, other than keep-alives
-    // and a close frame: the read-only claim, checked on the bytes.
+    // and a close frame: 'selects nothing', checked on the bytes.
     bool sentOnlyReads() const
     {
         for (const QByteArray& bytes : peer.transport.sent) {
@@ -470,6 +473,48 @@ void testRemove()
     report("connecting to an empty address is a remove", rig.word() == SessionWord::NotConfigured);
 }
 
+QStringList g_logged;
+
+void captureLog(QtMsgType, const QMessageLogContext&, const QString& message)
+{
+    g_logged.append(message);
+}
+
+// A label is the device's text: a CR or an ESC in it must not reach a log
+// line as itself, where it could overwrite or forge what a support bundle shows.
+void testControlCharactersAreNotLogged()
+{
+    const QString mapped = MicrohamTrioModel::forLog(
+        QStringLiteral("a\nb\rc\x1b[2Jd\te\x7f") + QChar(0x9b) + QStringLiteral("f"));
+    report("forLog: newline as \" | \", every other control character as U+FFFD",
+           mapped == QStringLiteral("a | b\uFFFDc\uFFFD[2Jd\uFFFDe\uFFFD\uFFFDf"),
+           mapped.toStdString());
+
+    QLoggingCategory::setFilterRules(QStringLiteral("aether.devices.info=true"));
+    g_logged.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureLog);
+    {
+        Rig rig;
+        rig.model.connectNetwork(QLatin1String(kHost), 80);
+        rig.peer.advance(rig.model, 1);
+        rig.peer.handshake(TrioTestPeer::textFrame(
+            stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "HL2", "Dum\\rmy\\u001b[2J")));
+        rig.peer.hold(rig.model, 1);
+    }
+    qInstallMessageHandler(previous);
+    QLoggingCategory::setFilterRules(QString());
+    QString line;
+    for (const QString& logged : g_logged) {
+        if (logged.contains(QStringLiteral("state on connect"))) {
+            line = logged;
+        }
+    }
+    report("a label with CR and ESC: the state-on-connect line carries neither",
+           !line.isEmpty() && !line.contains(QLatin1Char('\r')) && !line.contains(QChar(0x1b))
+               && line.contains(QStringLiteral("Dum\uFFFDmy\uFFFD[2J")),
+           line.toStdString());
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -492,6 +537,7 @@ int main(int argc, char** argv)
     testTestConnection();
     testLabels();
     testRemove();
+    testControlCharactersAreNotLogged();
 
     std::printf("\n%s (%d failed)\n", g_failed == 0 ? "ALL PASSED" : "FAILURES", g_failed);
     return g_failed == 0 ? 0 : 1;

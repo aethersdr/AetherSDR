@@ -1,9 +1,10 @@
-// The microHAM Trio on the Peripherals page, read only: the row is offered only
+// The microHAM Trio on the Peripherals page: the row is offered only
 // with a Trio model, its address lands under Peripherals.trio, the list line
 // reads DIRECT / OFFLINE / Needs attention, the detail page shows the state and
 // every label the Trio reports, the Web UI button lets go of the session before
-// opening the Trio's page, Remove clears the address, and nothing the page does
-// sends anything that selects. A scripted Trio (tests/MicrohamTrioTestPeer.h):
+// opening the Trio's page, Remove clears the address, every string the Trio
+// supplies is shown as plain text, and nothing the page does sends anything
+// that selects. A scripted Trio (tests/MicrohamTrioTestPeer.h):
 // no socket. Offscreen; a private settings profile.
 //
 // Run:  QT_QPA_PLATFORM=offscreen ./build/microham_trio_peripherals_test
@@ -42,6 +43,8 @@ public slots:
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QMessageBox>
+#include <QTimer>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QUrl>
@@ -334,6 +337,106 @@ void testRowLifecycle()
     RadioSetupDialog::setRemovalConfirmationHookForTest({});
 }
 
+// The Trio's names and labels are the device's text, and anyone answering at
+// its address supplies them: every place one is shown takes it as plain text.
+void testDeviceTextIsPlain()
+{
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    RadioModel radio;
+    Peer peer;
+    MicrohamTrioModel trio(peer.environment());
+    trio.loadSettings(true);
+    RadioSetupDialog dialog(&radio, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                            &trio);
+    dialog.selectTab(QStringLiteral("Peripherals"));
+    auto* add = dialog.findChild<QPushButton*>(QStringLiteral("peripheralAddButton"));
+    QAction* action = add && add->menu() ? addAction(add->menu(), QStringLiteral("trio")) : nullptr;
+    if (!action) {
+        report("markup: the Trio row can be added", false);
+        return;
+    }
+    action->trigger();
+    auto* address = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralAddress_trio"));
+    auto* connectButton = dialog.findChild<QPushButton*>(QStringLiteral("peripheralConnect_trio"));
+    if (!address || !connectButton) {
+        report("markup: the Trio page has address and Connect", false);
+        return;
+    }
+    address->setText(QLatin1String(kHost));
+    connectButton->click();
+    QByteArray doc = stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "HL2", "<i>Dummy</i>");
+    doc.replace(R"("n":"ANTENNA5")", R"("n":"<b>ANTENNA5</b>")");
+    peer.advance(trio, 1);
+    report("markup: held with a state carrying markup", peer.handshake(TrioTestPeer::textFrame(doc)));
+
+    bool allPlain = true;
+    bool literal = false;
+    const QList<QLabel*> captions = dialog.findChildren<QLabel*>(QStringLiteral("trioPortCaption"));
+    for (QLabel* caption : captions) {
+        allPlain = allPlain && caption->textFormat() == Qt::PlainText;
+        literal = literal || caption->text() == QStringLiteral("<b>ANTENNA5</b>");
+    }
+    report("markup: every port caption is plain text, the name shown literally",
+           !captions.isEmpty() && allPlain && literal);
+
+    auto* ant6Dummy = dialog.findChild<QCheckBox*>(QStringLiteral("peripheralTrioDummy_ant6"));
+    auto* dummyWarning = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioDummyWarning"));
+    auto* confirmDummy = dialog.findChild<QPushButton*>(QStringLiteral("peripheralTrioConfirmDummy"));
+    auto* writeNames = dialog.findChild<QPushButton*>(QStringLiteral("peripheralTrioWriteNames"));
+    auto* namesResult = dialog.findChild<QLabel*>(QStringLiteral("peripheralTrioNamesResult"));
+    auto* ant6Name = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralTrioName_antenna_ant6"));
+    if (!ant6Dummy || !dummyWarning || !confirmDummy || !writeNames || !namesResult || !ant6Name) {
+        report("markup: the port widgets exist", false);
+        return;
+    }
+    ant6Dummy->click();
+    peer.push(stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "HL2", "<h1>TX OK</h1>"));
+    report("markup: the dummy-load warning is plain text, the label shown literally",
+           dummyWarning->textFormat() == Qt::PlainText && dummyWarning->isVisibleTo(&dialog)
+               && dummyWarning->text().contains(QStringLiteral("<h1>TX OK</h1>")),
+           dummyWarning->text().toStdString());
+    confirmDummy->click();
+
+    // Renaming the dummy-load port: the real confirmation box, answered here.
+    Qt::TextFormat boxFormat = Qt::AutoText;
+    QString boxText;
+    bool cancelIsDefault = false;
+    bool boxSeen = false;
+    QTimer::singleShot(0, [&]() {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (!box) {
+            return;
+        }
+        boxSeen = true;
+        boxFormat = box->textFormat();
+        boxText = box->text();
+        cancelIsDefault = box->defaultButton() == box->button(QMessageBox::Cancel);
+        box->button(QMessageBox::Cancel)->click();
+    });
+    QTimer::singleShot(3000, []() {   // never hang the suite on a missed box
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (auto* box = qobject_cast<QMessageBox*>(widget); box && box->isVisible()) {
+                box->reject();
+            }
+        }
+    });
+    const int before = peer.transport.sent.size();
+    ant6Name->setText(QStringLiteral("Load"));
+    ant6Name->setModified(true);
+    writeNames->click();
+    report("markup: the rename question is a plain-text box, Cancel the default",
+           boxSeen && boxFormat == Qt::PlainText && cancelIsDefault
+               && boxText.contains(QStringLiteral("<h1>TX OK</h1>")),
+           boxText.toStdString());
+    report("markup: its Cancel sends nothing", peer.transport.sent.size() == before);
+    report("markup: the names result is plain text, the label shown literally",
+           namesResult->textFormat() == Qt::PlainText
+               && namesResult->text().contains(QStringLiteral("<h1>TX OK</h1>")),
+           namesResult->text().toStdString());
+    MicrohamTrioSettings::remove();
+}
+
 void testConfiguredRowIsListed()
 {
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
@@ -372,6 +475,7 @@ int main(int argc, char** argv)
 
     testNoModelNoRow();
     testRowLifecycle();
+    testDeviceTextIsPlain();
     testConfiguredRowIsListed();
 
     std::printf("\n%s (%d failed)\n", g_failed == 0 ? "ALL PASSED" : "FAILURES", g_failed);

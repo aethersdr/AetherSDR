@@ -6969,7 +6969,7 @@ target_include_directories(green_heron_protocol_test PRIVATE src)
 target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
 add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
 
-# microHAM TRIO antenna switch, read only. Pure: recorded state documents in,
+# microHAM TRIO antenna switch, which AetherSDR never switches. Pure: recorded state documents in,
 # snapshots and session decisions out, no socket and no clock.
 add_executable(microham_trio_protocol_test
     tests/microham_trio_protocol_test.cpp
@@ -6993,7 +6993,8 @@ set_target_properties(microham_trio_session_test PROPERTIES AUTOMOC ON)
 add_test(NAME microham_trio_session_test COMMAND microham_trio_session_test)
 
 # The TRIO model on a scripted transport and a hand-moved clock: settings,
-# session words, eviction, release, failures; only reads leave. Binds no
+# session words, eviction, release, failures; nothing that selects leaves,
+# only reads and the port-name writes asked for. Binds no
 # socket; the settings store is a private temporary profile.
 add_executable(microham_trio_model_test tests/microham_trio_model_test.cpp)
 target_include_directories(microham_trio_model_test PRIVATE src tests)

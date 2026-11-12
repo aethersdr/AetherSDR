@@ -3,7 +3,7 @@
 **Radio Setup → Peripherals** configures the accessories AetherSDR talks to
 directly: Tuner Genius XL (TGXL), Power Genius XL (PGXL), Antenna Genius (AG),
 ShackSwitch, ACOM and SPE Expert amplifiers, VK3AMP, the LP-100A meter, and
-the microHAM Trio antenna switch (read only).
+the microHAM Trio antenna switch (it switches nothing; it can rename its ports).
 
 ## Layout
 
@@ -94,16 +94,18 @@ is pending is newer than the Remove and is kept.
 | Unknown owner (Antenna Genius, ShackSwitch) | Kept | Untouched; the owning endpoint is not known | Connection stopped, guard released | **Connect** the device to establish its address, then retry **Remove** |
 | An earlier removal still pending | Unchanged | Unchanged; the earlier request owns the slot | **Remove** and **Connect** are refused with a notice | Retry after the keychain request finishes |
 
-## microHAM Trio (read only)
+## microHAM Trio
 
 The **microHAM Trio** row connects to the Trio antenna-switch controller's own
 web interface (`ws://<address>/ui.ws`, port 80 by default) and shows what it
 reports: the radio with transmit focus, its antenna (both halves in split), the
 RX antenna, RX EXT and the PA loop, and the label of every radio and antenna
-port. AetherSDR switches nothing on the Trio from this page: besides its
-handshake, keep-alives and a close, the session sends only the renames you ask
-for. Positions are the controller's
-echo of its own selection, never relay sense.
+port. AetherSDR switches nothing on the Trio: it selects no radio, antenna,
+split or RX EXT. The one thing it writes to the Trio is port names, and only
+when you ask (see **Write Names to the Trio** below; refused while the radio
+transmits). Besides that, the session sends only its handshake, keep-alives and
+a close. Positions are the controller's echo of its own selection, never relay
+sense. Every name the Trio reports is shown as plain text, never as markup.
 
 The protocol is reverse-observed from the device's own web page on one unit;
 microHAM documents none.

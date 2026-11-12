@@ -101,7 +101,7 @@ struct PeripheralDeviceUi {
         Kxpa100,          // KXPA100 amplifier with optional tuner
         Kat500,           // KAT500 serial or TCP tuner
         Kpa500,           // Serial with selectable baud, or raw TCP
-        Trio,             // microHAM Trio: host + port, read-only state
+        Trio,             // microHAM Trio: host + port, its state, port names
     };
 
     // Identity
@@ -1677,8 +1677,12 @@ bool trioConfirm(QWidget* parent, const QString& title, const QString& text)
     if (const auto& hook = trioConfirmHook()) {
         return hook(title, text);
     }
-    return QMessageBox::question(parent, title, text, QMessageBox::Yes | QMessageBox::Cancel,
-                                 QMessageBox::Cancel) == QMessageBox::Yes;
+    // The text carries a label the Trio supplied: plain text, never markup.
+    QMessageBox box(QMessageBox::Question, title, text, QMessageBox::Yes | QMessageBox::Cancel,
+                    parent);
+    box.setTextFormat(Qt::PlainText);
+    box.setDefaultButton(QMessageBox::Cancel);
+    return box.exec() == QMessageBox::Yes;
 }
 
 } // namespace
@@ -1689,8 +1693,9 @@ void RadioSetupDialog::setTrioConfirmationHookForTest(
     trioConfirmHook() = std::move(hook);
 }
 
-// Read only: the page shows what the Trio reports and switches nothing on it.
-// The model owns the session; this page edits only the address.
+// The page shows what the Trio reports and switches nothing on it; the one
+// write is the port names, on request and never while transmitting. The model
+// owns the session. Every string the Trio supplies is shown as plain text.
 void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
                                        const std::function<void()>& refresh)
 {
@@ -1828,6 +1833,7 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     auto* dummyWarning = new QLabel(antennaGroup);
     dummyWarning->setObjectName(QStringLiteral("peripheralTrioDummyWarning"));
     dummyWarning->setWordWrap(true);
+    dummyWarning->setTextFormat(Qt::PlainText);
     setTone(dummyWarning, Tone::Error);
     auto* confirmDummy = new QPushButton(tr("Confirm Dummy Load"), antennaGroup);
     confirmDummy->setObjectName(QStringLiteral("peripheralTrioConfirmDummy"));
@@ -1848,6 +1854,7 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     auto* namesResult = new QLabel(portsPanel);
     namesResult->setObjectName(QStringLiteral("peripheralTrioNamesResult"));
     namesResult->setWordWrap(true);
+    namesResult->setTextFormat(Qt::PlainText);
     namesResult->hide();
     auto* namesButtons = new QHBoxLayout;
     namesButtons->addWidget(writeNames);
@@ -1927,6 +1934,7 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
             for (const MicrohamTrio::Button& button : view.snapshot->radio.buttons) {
                 auto* caption = new QLabel(button.name, radioGroup);
                 caption->setObjectName(QStringLiteral("trioPortCaption"));
+                caption->setTextFormat(Qt::PlainText);
                 auto* edit = new QLineEdit(button.label, radioGroup);
                 edit->setObjectName(QStringLiteral("peripheralTrioName_radio_%1").arg(button.key));
                 edit->setMaxLength(MicrohamTrio::kMaxLabelChars);
@@ -1953,6 +1961,7 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
             for (const MicrohamTrio::Button& button : view.snapshot->antenna.buttons) {
                 auto* caption = new QLabel(button.name, antennaGroup);
                 caption->setObjectName(QStringLiteral("trioPortCaption"));
+                caption->setTextFormat(Qt::PlainText);
                 auto* edit = new QLineEdit(button.label, antennaGroup);
                 edit->setObjectName(QStringLiteral("peripheralTrioName_antenna_%1").arg(button.key));
                 edit->setMaxLength(MicrohamTrio::kMaxLabelChars);
@@ -2577,7 +2586,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         buildRfkitDevice(*ui, detailStack, refresh);
     }
     if (m_trio) {
-        // microHAM Trio antenna switch, read only (docs/peripherals-settings-ui.md).
+        // microHAM Trio antenna switch: selects nothing, renames ports on request
+        // (docs/peripherals-settings-ui.md).
         auto ui = addDevice(QLatin1String(MicrohamTrioSettings::kPeripheralId), tr("microHAM Trio"),
                             QStringLiteral("microHAM Trio"), PeripheralDeviceUi::Kind::Trio,
                             MicrohamTrioSettings::kDefaultPort);

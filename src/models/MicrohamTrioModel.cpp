@@ -156,7 +156,7 @@ void MicrohamTrioModel::finishTest(bool reachable, const QString& report)
     dropSession();
     m_testing = false;
     qCInfo(lcDevices).noquote() << "MicrohamTrioModel: test" << (reachable ? "reached" : "failed")
-                                << "-" << QString(report).replace(QLatin1Char('\n'), QStringLiteral(" | "));
+                                << "-" << forLog(report);
     if (m_resumeAfterTest && m_settings.isConfigured()) {
         startSession();
     }
@@ -383,8 +383,7 @@ void MicrohamTrioModel::onSnapshot(const MicrohamTrio::Snapshot& snapshot,
     if (source == MicrohamTrioSession::SnapshotSource::OnConnect) {
         // One line per connect: what the Trio reported, for the log.
         qCInfo(lcDevices).noquote() << "MicrohamTrioModel: state on connect:"
-                                    << describeState(snapshot).replace(QLatin1Char('\n'),
-                                                                       QStringLiteral(" | "));
+                                    << forLog(describeState(snapshot));
     }
     if (source == MicrohamTrioSession::SnapshotSource::OnConnect
         && before != SessionWord::Direct && m_word == SessionWord::Direct) {
@@ -657,6 +656,22 @@ void MicrohamTrioModel::onLabelsResult(MicrohamTrioSession::CommandOutcome outco
     emit labelsWritten(true, followUp && followUp->reset ? tr("The Trio's names are back to its defaults.")
                                                          : tr("Names written to the Trio."));
     emit changed();
+}
+
+QString MicrohamTrioModel::forLog(const QString& text)
+{
+    QString out;
+    out.reserve(text.size());
+    for (const QChar c : text) {
+        if (c == QLatin1Char('\n')) {
+            out += QStringLiteral(" | ");
+        } else if (c.category() == QChar::Other_Control) {
+            out += QChar(QChar::ReplacementCharacter);
+        } else {
+            out += c;
+        }
+    }
+    return out;
 }
 
 QString MicrohamTrioModel::describeBinding(const View& view)
