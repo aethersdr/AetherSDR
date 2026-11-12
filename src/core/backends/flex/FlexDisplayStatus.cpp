@@ -65,7 +65,10 @@ std::optional<DisplayObservation> decodeFlexDisplayStatus(
     result.id = resourceId(*id);
     result.removed = !match.captured(3).isEmpty();
     if (fields.contains(QStringLiteral("removed"))) {
-        if (fields.value(QStringLiteral("removed")) != QLatin1String("1")) {
+        // A bare trailing "removed" arrives with an empty value; FlexLib
+        // removes on the word alone (v4.3.16 Radio.cs:3404).
+        const QString removed = fields.value(QStringLiteral("removed"));
+        if (!removed.isEmpty() && removed != QLatin1String("1")) {
             return std::nullopt;
         }
         result.removed = true;

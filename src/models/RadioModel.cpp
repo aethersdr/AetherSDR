@@ -12725,8 +12725,11 @@ void RadioModel::openDisplaySession(quint64 epoch)
 void RadioModel::retireDisplaySession()
 {
     // Queued and deferred display reports from the ending session never apply,
-    // even ones the ingress already let through.
+    // even ones the ingress already let through. They are dropped too: a
+    // rebuilt backend's ingress numbers its epochs from zero again.
     m_displaySessionOpen = false;
+    m_pendingDisplayObservations.clear();
+    m_displayObservationQueue.clear();
 }
 
 bool RadioModel::displayObservationCurrent(const DisplayObservation& observation) const

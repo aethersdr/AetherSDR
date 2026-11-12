@@ -17,6 +17,7 @@ public:
     static quint64 displayEpoch(const RadioModel& radio) { return radio.m_displayEpoch; }
     static quint64 sessionGeneration(const RadioModel& radio) { return radio.m_sessionGeneration; }
     static void closeDisplays(RadioModel& radio) { radio.retireDisplaySession(); }
+    static void reopenDisplays(RadioModel& radio, quint64 epoch) { radio.openDisplaySession(epoch); }
     static quint64 beginSession(RadioModel& radio) { return radio.beginStatusSession(); }
     static void endSession(RadioModel& radio)
     { QMetaObject::invokeMethod(&radio, "onDisconnected", Qt::DirectConnection); }
@@ -82,6 +83,14 @@ void deferredReportDiesWithItsSession()
     f.status(panObject, {{"client_handle", "0x71"}});
     check(f.radio.panadapter(panId) && !f.radio.panadapter(panId)->centerKnown(),
           "a claim in the next session does not apply the ended session's deferred fields");
+    // A rebuilt backend's fresh ingress numbers its epochs from zero again, so
+    // closing a session drops what it deferred rather than relying on the epoch.
+    f.status("display pan 0x40000003", {{"center", "3.5"}});
+    const int before = FlexDisplayStatusTestAccess::deferred(f.radio);
+    FlexDisplayStatusTestAccess::closeDisplays(f.radio);
+    FlexDisplayStatusTestAccess::reopenDisplays(f.radio, FlexDisplayStatusTestAccess::displayEpoch(f.radio));
+    check(before >= 1 && FlexDisplayStatusTestAccess::deferred(f.radio) == 0,
+          "closing a display session drops its deferred reports, so a reused epoch number cannot revive them");
 }
 
 void lifecycle()

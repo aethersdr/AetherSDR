@@ -69,6 +69,7 @@ int main(int argc, char** argv)
     CHECK(!decodeFlexDisplayStatus("display pan 0x40000000 unrelated", {}));
     CHECK(decodeFlexDisplayStatus("display pan 0x40000000 removed", {})->removed);
     CHECK(decode({{"removed", "1"}})->removed && !decode({{"removed", "0"}}));
+    CHECK(decode({{"client_handle", "0x71"}, {"removed", ""}})->removed);   // bare trailing word
     const auto waterfall = decode({{"center", "14.2"}, {"bandwidth", "0.1"}, {"line_duration", "65"},
                                    {"panadapter", "0xC0000001"}}, true);
     CHECK(waterfall && waterfall->pairedId == QStringLiteral("0xc0000001")
