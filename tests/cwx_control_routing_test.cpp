@@ -1,4 +1,5 @@
 // Socket-free typed keyer, real Flex encoder and callback-lifetime regressions.
+#include "core/backends/flex/FlexCwxStatus.h"
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
 #include "models/CwxModel.h"
@@ -176,7 +177,7 @@ void modelIntentAndEchoFences()
     echo.send("+CQ");
     check(refusedBatches == 1 && falseDispatches == 0,
           "a refused transient cancels the admitted batch without claiming text handoff");
-    echo.applyStatus({{"wpm", "23"}});
+    echo.applyStatusDelta(flexCwxStatus({{"wpm", "23"}}));
     check(echo.speed() == 23, "a refused transient speed request cannot swallow later radio state");
 
     CwxModel edits;
@@ -212,7 +213,7 @@ void modelIntentAndEchoFences()
     CwxModel session;
     session.send("+CQ");
     session.resetDrainWatch();
-    session.applyStatus({{"wpm", "23"}});
+    session.applyStatusDelta(flexCwxStatus({{"wpm", "23"}}));
     check(session.speed() == 23, "old-session speed echoes cannot suppress replacement-session readback");
 
     CwxModel refused;
@@ -276,11 +277,11 @@ void operatorSpeedEchoOrdering()
             if (!editInSender && request.value == 31) { model.setSpeed(35); }
         });
         model.setSpeed(31);
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(writes.size() == 2 && !writes.front()() && writes.back()() && model.speed() == 35,
               "reentrant replacement preserves an accepted older echo without retiring the new write");
-        model.applyStatus({{"wpm", "35"}});
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31 && !writes.back()(),
               "settled operator tickets cannot suppress a later independent radio change");
     }
@@ -289,13 +290,13 @@ void operatorSpeedEchoOrdering()
         CwxModel::TransmissionPermit latest;
         model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit current) {
             latest = std::move(current);
-            model.applyStatus({{"wpm", QString::number(request.value)}});
+            model.applyStatusDelta(flexCwxStatus({{"wpm", QString::number(request.value)}}));
             return ReceiveDispatch::Dispatched;
         });
         model.setSpeed(31);
         model.setSpeed(35);
         check(model.speed() == 35 && latest(), "synchronous WPM echoes cannot revoke their own write");
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31 && !latest(), "synchronous receipts leave no phantom operator echo");
     }
     {
@@ -307,11 +308,11 @@ void operatorSpeedEchoOrdering()
         });
         model.send("+CQ");
         model.setSpeed(35);
-        model.applyStatus({{"wpm", "23"}});
-        model.applyStatus({{"wpm", "20"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "23"}}));
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "20"}}));
         check(model.speed() == 35 && latest(), "old transient and restore echoes preserve a newer operator edit");
-        model.applyStatus({{"wpm", "35"}});
-        model.applyStatus({{"wpm", "37"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "37"}}));
         check(model.speed() == 37 && !latest(), "uncorrelated radio state still retires queued speed writes");
     }
     {
@@ -321,20 +322,20 @@ void operatorSpeedEchoOrdering()
         });
         model.setSpeed(31);
         model.setSpeed(35);
-        model.applyStatus({{"wpm", "35"}});
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31, "a newer echo retires skipped superseded tickets before later readback");
         model.setSpeed(35);
         model.setSpeed(31);
         model.setSpeed(35);
         for (const int echo : {35, 31, 35}) {
-            model.applyStatus({{"wpm", QString::number(echo)}});
+            model.applyStatusDelta(flexCwxStatus({{"wpm", QString::number(echo)}}));
             check(model.speed() == 35, "repeated WPM values preserve the latest selection at every echo");
         }
         model.setSpeed(31);
         model.resetDrainWatch();
         model.setSpeed(35);
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31, "session reset discards operator as well as transient echo history");
     }
     for (const ReceiveDispatch refused : {ReceiveDispatch::Unsupported, ReceiveDispatch::LocalOnly}) {
@@ -347,7 +348,7 @@ void operatorSpeedEchoOrdering()
         });
         model.setSpeed(31);
         model.setSpeed(35);
-        model.applyStatus({{"wpm", "31"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "31"}}));
         check(model.speed() == 31 && !latest(), "refused or local-only speed edits leave no phantom radio echo");
     }
     {
@@ -367,7 +368,7 @@ void operatorSpeedEchoOrdering()
         model.setSpeed(31);
         check(writes == 256 && warnings == 1 && cancelled == 0 && model.speed() == 35 && latest(),
               "operator echo bound refuses new edits without discarding history or cancelling existing work");
-        model.applyStatus({{"wpm", "35"}});
+        model.applyStatusDelta(flexCwxStatus({{"wpm", "35"}}));
         model.setSpeed(31);
         check(writes == 257 && warnings == 1 && model.speed() == 31 && latest(),
               "speed editing resumes after radio echoes free correlation capacity");
@@ -413,8 +414,8 @@ void boundedEchoTrackingAndInvalidText()
               && firstSpeed && !firstSpeed() && firstText && !firstText(),
           "echo-bound overflow cancels every queued speed/text write instead of dropping correlation");
     model.send("+CQ");
-    model.applyStatus({{"wpm", "23"}});
-    model.applyStatus({{"wpm", "20"}});
+    model.applyStatusDelta(flexCwxStatus({{"wpm", "23"}}));
+    model.applyStatusDelta(flexCwxStatus({{"wpm", "20"}}));
     check(dispatched == 1 && model.speed() == 20,
           "a fresh batch after overflow retains its speed echo correlation");
 

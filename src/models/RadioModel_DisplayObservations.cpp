@@ -23,7 +23,7 @@ bool RadioModel::displayWaterfallOwned(const QString& id, const QString& parent)
 
 void RadioModel::onDisplayObservation(const DisplayObservation& observation)
 {
-    if (!observation.current()) { return; }
+    if (!displayObservationCurrent(observation)) { return; }
     if (m_displayObservationQueue.size() >= kMaxDeferredDisplays) {
         // Never discard ownership evidence and then authorize a write from the
         // resulting absence. Reconnect is required after an incomplete census.
@@ -44,7 +44,7 @@ void RadioModel::onDisplayObservation(const DisplayObservation& observation)
     // deleting a same-id replacement created by another notification handler.
     while (self && !m_displayObservationQueue.isEmpty()) {
         const DisplayObservation next = m_displayObservationQueue.takeFirst();
-        if (next.current()) { applyDisplayObservation(next); }
+        if (displayObservationCurrent(next)) { applyDisplayObservation(next); }
     }
 }
 
@@ -53,7 +53,7 @@ void RadioModel::deferDisplayObservation(const DisplayObservation& observation)
     if (!m_displayObservationClock.isValid()) { m_displayObservationClock.start(); }
     const qint64 now = m_displayObservationClock.elapsed();
     for (auto it = m_pendingDisplayObservations.begin(); it != m_pendingDisplayObservations.end();) {
-        if (!it->observation.current() || now - it->insertedMs > kDeferredDisplayAgeMs) {
+        if (!displayObservationCurrent(it->observation) || now - it->insertedMs > kDeferredDisplayAgeMs) {
             it = m_pendingDisplayObservations.erase(it);
         } else { ++it; }
     }
@@ -63,7 +63,7 @@ void RadioModel::deferDisplayObservation(const DisplayObservation& observation)
         m_pendingDisplayObservations.insert(observation.id, {now, observation});
         return;
     }
-    if (it->observation.transportEpoch != observation.transportEpoch) {
+    if (it->observation.statusEpoch != observation.statusEpoch) {
         *it = {now, observation};
         return;
     }
@@ -76,8 +76,8 @@ DisplayObservation RadioModel::takeDeferredDisplayObservation(const DisplayObser
 {
     const PendingDisplayObservation pending = m_pendingDisplayObservations.take(observation.id);
     DisplayObservation result = observation;
-    if (pending.observation.current()
-        && pending.observation.transportEpoch == observation.transportEpoch
+    if (displayObservationCurrent(pending.observation)
+        && pending.observation.statusEpoch == observation.statusEpoch
         && m_displayObservationClock.isValid()
         && m_displayObservationClock.elapsed() - pending.insertedMs <= kDeferredDisplayAgeMs) {
         result.values = pending.observation.values;
@@ -96,7 +96,7 @@ bool RadioModel::applyDisplayValues(PanadapterModel* pan, const DisplayObservati
     const quint64 ownership = pan->ownershipRevision();
     const QString waterfall = pan->waterfallId();
     const auto current = [&] {
-        return self && original && observation.current() && session == m_sessionGeneration
+        return self && original && displayObservationCurrent(observation) && session == m_sessionGeneration
             && generation == m_backendReceiverGeneration && m_panadapters.value(pan->panId()) == original
             && pan->ownershipRevision() == ownership && pan->ownedByClient(clientHandle())
             && pan->waterfallId() == waterfall;
@@ -141,14 +141,14 @@ bool RadioModel::applyDisplayValues(PanadapterModel* pan, const DisplayObservati
 
 void RadioModel::applyDisplayObservation(const DisplayObservation& observation)
 {
-    if (!observation.current()) { return; }
+    if (!displayObservationCurrent(observation)) { return; }
     const QString id = observation.id;
     const bool isPan = observation.kind == DisplayObservation::Kind::Panadapter;
     const QPointer<RadioModel> self(this);
     const quint64 session = m_sessionGeneration;
     const quint64 generation = m_backendReceiverGeneration;
     const auto current = [&] {
-        return self && observation.current() && session == m_sessionGeneration
+        return self && displayObservationCurrent(observation) && session == m_sessionGeneration
             && generation == m_backendReceiverGeneration;
     };
     if (observation.removed) {
@@ -239,7 +239,7 @@ void RadioModel::applyDisplayObservation(const DisplayObservation& observation)
         }
         if (!applyDisplayValues(pan, merged) || !current()) { return; }
         const PendingDisplayObservation pending = m_pendingDisplayObservations.take(pan->waterfallId());
-        if (pending.observation.current() && m_displayObservationClock.isValid()
+        if (displayObservationCurrent(pending.observation) && m_displayObservationClock.isValid()
             && m_displayObservationClock.elapsed() - pending.insertedMs <= kDeferredDisplayAgeMs) {
             applyDisplayObservation(pending.observation);
         }

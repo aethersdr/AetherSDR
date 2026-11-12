@@ -111,8 +111,7 @@ void flexDeclarationAndEncoding()
           "an invalid value or an empty pan id sends nothing");
 
     const auto observed = decodeFlexDisplayStatus(QStringLiteral("display pan %1").arg(kPan),
-        {{QStringLiteral("noise_floor_range"), QStringLiteral("3.5")}},
-        std::make_shared<std::atomic_bool>(true));
+        {{QStringLiteral("noise_floor_range"), QStringLiteral("3.5")}});
     check(observed && observed->id == kPan && observed->values.noiseFloorRange == 3.5,
           "pan status carries typed noise floor range to the model");
 }

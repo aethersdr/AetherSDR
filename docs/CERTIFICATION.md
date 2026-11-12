@@ -959,9 +959,21 @@ by the Icom backend and consumed by nobody. That is not a bug, but it is
 invisible today, and the inverse — a consumer with no producer — is exactly the
 §1.8 orphan. The phase already knows both sides; it should print the join.
 
-**Draw the dependency.** SWR was suppressed by forward power, and no output in
-the run said so. When a meter is gated on another meter, a suppressed reading
-must name its gate rather than reporting as merely stale.
+**Draw the dependency. DONE for the HL2's SWR gates (#7063).** SWR was
+suppressed by forward power, and no output in the run said so. When a meter is
+gated on another meter, a suppressed reading must name its gate rather than
+reporting as merely stale. A backend now publishes its forward-count threshold,
+how many keyed windows passed every gate it applies before publishing SWR, and
+the window peak, as `HealthSnapshot` keys. On the HL2 those gates are the
+forward floor and `KeyedSwrGate` (#7022), which drops the first windows of an
+over and speech pauses; only the reverse reading is left out of the count, so a
+window that passed and published nothing stays a defect. The meters phase reads
+the keys with no family test, reports `INCONCLUSIVE` naming the gate when no
+window passed, and leaves the negative verdict standing when one did. Its
+reason says which gate held: the floor (raise drive, or suspect the forward
+detector at full drive) or the key-on and speech-pause gate (key a steady
+carrier for longer). The verdict turns on the count rather than the peak
+because a peak above the floor can still be withheld.
 
 **Finish the family table.** `expectationsApplied: false` on anything that is
 not an HL2 (§2.1). Until that lands, every per-meter reading is measured and

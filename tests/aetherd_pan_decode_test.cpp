@@ -12,10 +12,9 @@ static int failures = 0;
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
-    const auto epoch = std::make_shared<std::atomic_bool>(true);
     const auto decode = [&](const QMap<QString, QString>& values, bool waterfall = false) {
         return decodeFlexDisplayStatus(waterfall ? QStringLiteral("display waterfall 0xF2000001")
-                                                : QStringLiteral("display pan 0xC0000001"), values, epoch);
+                                                : QStringLiteral("display pan 0xC0000001"), values);
     };
     const auto all = decode({{"center", "7.15"}, {"bandwidth", "0.2"}, {"min_dbm", "-125"},
         {"max_dbm", "-40"}, {"rfgain", "-8"}, {"rxant", "RX_A"}, {"ant_list", "ANT1,ANT2"},
@@ -64,11 +63,11 @@ int main(int argc, char** argv)
     CHECK(decode({{"waterfall", "42000000"}})->pairedId == QStringLiteral("0x0280de80"));
     CHECK(decode({{"client_handle", "4294967295"}})->ownerHandle == 0xffffffffU);
     CHECK(!decode({{"client_handle", "4294967296"}}));
-    CHECK(!decodeFlexDisplayStatus("display pan 0x40000000junk", {}, epoch));
-    CHECK(!decodeFlexDisplayStatus("display pan 0x100000000", {}, epoch));
-    CHECK(!decodeFlexDisplayStatus("display pan 0x0", {}, epoch));
-    CHECK(!decodeFlexDisplayStatus("display pan 0x40000000 unrelated", {}, epoch));
-    CHECK(decodeFlexDisplayStatus("display pan 0x40000000 removed", {}, epoch)->removed);
+    CHECK(!decodeFlexDisplayStatus("display pan 0x40000000junk", {}));
+    CHECK(!decodeFlexDisplayStatus("display pan 0x100000000", {}));
+    CHECK(!decodeFlexDisplayStatus("display pan 0x0", {}));
+    CHECK(!decodeFlexDisplayStatus("display pan 0x40000000 unrelated", {}));
+    CHECK(decodeFlexDisplayStatus("display pan 0x40000000 removed", {})->removed);
     CHECK(decode({{"removed", "1"}})->removed && !decode({{"removed", "0"}}));
     const auto waterfall = decode({{"center", "14.2"}, {"bandwidth", "0.1"}, {"line_duration", "65"},
                                    {"panadapter", "0xC0000001"}}, true);
@@ -99,8 +98,6 @@ int main(int argc, char** argv)
         applyPanReport(pan, {{"band_zoom", "bad"}, {"segment_zoom", "2"}});
         CHECK(pan.bandZoomOn() && !pan.segmentZoomOn());
     }
-    epoch->store(false);
-    CHECK(!all->current());
     // ---- Facet 3: model sinks ----
     {
         PanadapterModel pan(QStringLiteral("0x40000000"));

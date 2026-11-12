@@ -84,6 +84,7 @@ receive/transmit limits. Compiling a backend does not establish hardware support
 |---|---|---|
 | `ENABLE_RADE` | ON | RADE digital voice using the vendored RADE/Opus sources. |
 | `ENABLE_DSTAR` | ON | Local D-STAR waveform helper using vendored smartsdr-dsp/ThumbDV support. |
+| `ENABLE_DATA2G` | ON | Vendored Data2G HF data modem core (`third_party/data2g`, RFC #7159) and AetherModem's receive-only **HF Data** tab. OFF builds without the core and hides the tab. |
 | `ENABLE_SPECBLEACH` | ON | NR4 spectral noise reduction. MSVC builds also need `clang-cl`; otherwise CMake disables it. |
 | `ENABLE_DFNR` | ON | DFNR DeepFilterNet3 noise reduction. Run `scripts/setup/setup-deepfilter.sh` (Windows: `setup-deepfilter.ps1`) before configuring. A missing library disables it. |
 | `ENABLE_NVIDIA_AFX` | ON | BNR NVIDIA Maxine AFX GPU denoiser wrapper on x86-64 Linux/Windows. Operation needs a compatible NVIDIA GPU and the runtime/model pack, downloaded on demand. |

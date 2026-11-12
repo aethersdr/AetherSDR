@@ -3,8 +3,6 @@
 #include <QMetaType>
 #include <QString>
 #include <QStringList>
-#include <atomic>
-#include <memory>
 #include <optional>
 
 namespace AetherSDR {
@@ -75,15 +73,10 @@ struct DisplayObservation {
     // Child waterfall for a pan; parent pan for a waterfall. Empty means cleared.
     std::optional<QString> pairedId;
     DisplayValues values;
-    // Revoked at the transport boundary before disconnect/reconnect. Queued
-    // observations retain their original source, never callback-time authority.
-    std::shared_ptr<const std::atomic_bool> transportEpoch;
-
-    bool current() const
-    {
-        return !id.isEmpty() && transportEpoch
-            && transportEpoch->load(std::memory_order_acquire);
-    }
+    // The status session the line arrived in (FlexStatusIngress's epoch).
+    // RadioModel applies an observation, live or deferred, only while that
+    // session is the one it holds open.
+    quint64 statusEpoch{0};
 };
 
 } // namespace AetherSDR

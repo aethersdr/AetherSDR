@@ -8967,7 +8967,11 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
         }
     }
 
-    if (dev.isNull()) {
+    const bool inputDeviceMissing = dev.isNull();
+    if (m_txInputDeviceMissing.exchange(inputDeviceMissing) != inputDeviceMissing) {
+        emit txInputDeviceMissingChanged(inputDeviceMissing);
+    }
+    if (inputDeviceMissing) {
         qCWarning(lcAudio) << "AudioEngine: no audio input device available";
         return false;
     }
@@ -9948,9 +9952,27 @@ void AudioEngine::onTxAudioReady()
             floatBuf[i] = pcm[i] / 32768.0f;
 
         QByteArray packet = buildVitaTxPacket(floatBuf, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(packet, context);
+        emitDaxTxPacket(packet, context);
 
         m_txAccumulator.remove(0, TX_PCM_BYTES_PER_PACKET);
+    }
+}
+
+void AudioEngine::setDaxTxAudioRoute(quint32 streamId, const DaxTxAudioPermit& permit)
+{
+    const quint32 admittedId = permit.permitsStream(streamId) ? streamId : 0;
+    if (!m_daxTxAudioPermit.sameGrant(permit) || m_txStreamId.load() != admittedId) {
+        m_txAccumulator.clear();
+        m_txFloatAccumulator.clear();
+    }
+    m_daxTxAudioPermit = permit;
+    m_txStreamId.store(admittedId);
+}
+
+void AudioEngine::emitDaxTxPacket(const QByteArray& packet, const TxCoordinator::Context& context)
+{
+    if (m_daxTxAudioPermit.permitsStream(m_txStreamId.load())) {
+        emit txPacketReady(packet, context, m_daxTxAudioPermit);
     }
 }
 
@@ -9983,7 +10005,7 @@ QByteArray AudioEngine::buildVitaTxPacket(const float* samples, int numStereoSam
     words[0] = qToBigEndian(hdr);
 
     // ── Word 1: Stream ID (dax_tx stream for DAX TX audio) ──────────────
-    words[1] = qToBigEndian(m_txStreamId);
+    words[1] = qToBigEndian(m_txStreamId.load());
 
     // ── Word 2: Class ID OUI (24-bit, right-justified in 32-bit word) ────
     words[2] = qToBigEndian(FLEX_OUI);
@@ -10161,7 +10183,7 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordin
         return;
     }
 
-    if (m_txStreamId == 0) return;
+    if (!m_daxTxAudioPermit.permitsStream(m_txStreamId.load())) { return; }
     if (!selectTxContext(context)) {
         return;
     }
@@ -10184,7 +10206,7 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordin
     while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
         auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
         QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(pkt, context);
+        emitDaxTxPacket(pkt, context);
         m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
     }
 }
@@ -10392,7 +10414,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
     // its modulator runs here, fed from the final-monitor tap below. Gating this
     // path on the stream id dropped every TCI/DAX frame on such a radio, so
     // WSJT-X keyed the rig and transmitted silence. See setHostModulation().
-    if (!m_hostModulation && m_txStreamId == 0) return;
+    if (!m_hostModulation && !m_daxTxAudioPermit.permitsStream(m_txStreamId.load())) { return; }
 
     // Mark TCI as the active TX-audio source. While this timer is fresh,
     // onTxAudioReady() suppresses the local mic capture path so the two
@@ -10489,7 +10511,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
             auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
             QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-            emit txPacketReady(pkt, context);
+            emitDaxTxPacket(pkt, context);
             m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
         }
         return;
@@ -10547,7 +10569,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         hdr |= ((m_txPacketCount & 0xF) << 16);
         hdr |= (packetWords & 0xFFFF);
         words[0] = qToBigEndian(hdr);
-        words[1] = qToBigEndian(m_txStreamId);
+        words[1] = qToBigEndian(m_txStreamId.load());
         words[2] = qToBigEndian(FLEX_OUI);
         words[3] = qToBigEndian(
             (static_cast<quint32>(FLEX_INFO_CLASS) << 16) | PCC_DAX_REDUCED);
@@ -10560,7 +10582,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                     m_txFloatAccumulator.constData(), payloadBytes);
 
         m_txPacketCount = (m_txPacketCount + 1) & 0xF;
-        emit txPacketReady(pkt, context);
+        emitDaxTxPacket(pkt, context);
         m_txFloatAccumulator.remove(0, MONO_BYTES_PER_PKT);
     }
 }
@@ -10704,6 +10726,13 @@ void AudioEngine::applyBackendAudioCapabilities(
     const bool wasSeamAudio = m_hostModulation;
     const bool seamAudio = connected && caps.takesTxAudioOverSeam && caps.canTransmit;
     setHostModulation(seamAudio);
+    // Only startTxStream() refreshes the missing-input flag. Without a radio,
+    // or once the seam route is withdrawn, it describes no capture: clear it so
+    // a reconnect does not report NoInputDevice before capture is retried.
+    if ((!connected || (wasSeamAudio && !seamAudio))
+        && m_txInputDeviceMissing.exchange(false)) {
+        emit txInputDeviceMissingChanged(false);
+    }
     if (seamAudio && pcAudioEnabled) {
         if (!isTxStreaming()) {
             startTxStream(address, 4991);

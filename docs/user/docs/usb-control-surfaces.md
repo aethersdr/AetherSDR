@@ -131,6 +131,8 @@ A USB-serial adapter can carry PTT and CW in both directions using its handshake
 
 Every pin has a **Polarity** (Active High / Active Low). **Paddle Swap (swap dit/dah)** reverses the paddles, and **Auto-open serial port on startup** reopens the port at launch.
 
+An input that is already active when the port opens does not key: a foot switch held down, a stuck key or a paddle resting on a contact must be released and pressed again before it transmits.
+
 The DCD input suits interfaces such as the HaliKey Serial, whose ring contact is wired to DSR and DCD. Iambic **Mode B** keeps its trailing element when both paddles are released together.
 
 ## Reference

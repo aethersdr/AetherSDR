@@ -14,7 +14,7 @@ Open it from **Tools → Memory...**
 For quick recall while operating, the panadapter's overlay **Memory** button
 opens a browse panel (see [Memory browse panel](#memory-browse-panel)).
 
-<img src="/img/screens/memory-dialog.png" width="1000" alt="Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KK7GWY, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected." />
+<img src="/img/screens/memory-dialog.png" width="1000" alt="Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KI4TTZ, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected." />
 
 *The Memory Channels window, listing the memories stored in the radio.*
 
@@ -59,7 +59,10 @@ SmartSDR and AetherSDR, use **Profiles → Import/Export Profiles...**; see
 
 The **Memory** button in the panadapter's overlay menu opens a compact list
 (Frequency, Name) for recall without the full dialog. Its **Add Memory**
-button always stores the **active** slice.
+button always stores the **active** slice. The panel fits the panadapter height
+when you open it or resize the window. In a short panadapter, use the mouse
+wheel or the list's vertical scrollbar to reach every memory; **Add Memory**
+stays above the scrolling list.
 
 When SpotHub's **Memories** toggle is on, every memory also appears as a
 marker on the panadapter at its frequency. See [SpotHub](./spothub.md).

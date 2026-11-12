@@ -35,8 +35,7 @@ QString resourceId(quint32 id)
 } // namespace
 
 std::optional<DisplayObservation> decodeFlexDisplayStatus(
-    const QString& object, const QMap<QString, QString>& fields,
-    const std::shared_ptr<const std::atomic_bool>& transportEpoch)
+    const QString& object, const QMap<QString, QString>& fields)
 {
     // Bound retained strings as well as record count; unknown fields never
     // escape the decoder. Identity errors reject the whole observation.
@@ -59,7 +58,6 @@ std::optional<DisplayObservation> decodeFlexDisplayStatus(
     result.kind = match.captured(1) == QLatin1String("pan")
         ? DisplayObservation::Kind::Panadapter : DisplayObservation::Kind::Waterfall;
     result.id = resourceId(*id);
-    result.transportEpoch = transportEpoch;
     result.removed = !match.captured(3).isEmpty();
     if (fields.contains(QStringLiteral("removed"))) {
         if (fields.value(QStringLiteral("removed")) != QLatin1String("1")) {

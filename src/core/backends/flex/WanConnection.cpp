@@ -126,7 +126,6 @@ WanConnection::WanConnection(QObject* parent)
 
 WanConnection::~WanConnection()
 {
-    m_displayStatusSource.retire();
     disconnectFromRadio();
 }
 
@@ -134,7 +133,6 @@ WanConnection::~WanConnection()
 
 void WanConnection::resetSessionState()
 {
-    m_displayStatusSource.retire();
     ++m_sessionGeneration;
     // This object outlives every TLS session (a by-value MainWindow member), so
     // reset per session: otherwise a partial line from the dead link prefixes the
@@ -159,7 +157,6 @@ void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
     }
 
     resetSessionState();
-    m_displayStatusSource.reset();
     m_wanHandle = wanHandle;
     m_host      = host;
     m_expectedFingerprintHex = loadStoredFingerprint(host);
@@ -194,10 +191,17 @@ void WanConnection::disconnectFromRadio()
 
 // ─── Command dispatch ────────────────────────────────────────────────────────
 
+quint32 WanConnection::sendSessionCommand(const QString& command, quint64 generation,
+                                          const SessionCommandGuard& guard, ResponseCallback callback)
+{
+    if (!sessionWriteAdmitted(generation, guard)) { return 0; }
+    return sendCommand(command, std::move(callback));
+}
+
 quint32 WanConnection::sendAdministrationCommand(const QString& command, quint64 generation,
     const SessionCommandGuard& guard, ResponseCallback callback)
 {
-    if (!guard.current() || generation != m_sessionGeneration || !isConnected()) { return 0; }
+    if (!sessionWriteAdmitted(generation, guard)) { return 0; }
     const quint32 seq = m_seqCounter.fetch_add(1);
     if (callback) { m_pendingCallbacks.insert(seq, std::move(callback)); }
     const QByteArray data = CommandParser::buildCommand(seq, command);
@@ -372,12 +376,8 @@ void WanConnection::onReadyRead()
         return;
     }
 
-    // Display revocation must not suppress teardown acknowledgments. Only a
-    // replaced transport lifetime ends this read batch.
-    const auto readEpoch = m_displayStatusSource.epoch();
     int newlinePos;
-    while (readEpoch == m_displayStatusSource.epoch()
-           && (newlinePos = m_readBuffer.indexOf('\n')) >= 0) {
+    while ((newlinePos = m_readBuffer.indexOf('\n')) >= 0) {
         const QString line = QString::fromUtf8(m_readBuffer.left(newlinePos)).trimmed();
         m_readBuffer.remove(0, newlinePos + 1);
         if (!line.isEmpty())
@@ -395,7 +395,6 @@ void WanConnection::onHeartbeat()
 
 void WanConnection::processLine(const QString& line)
 {
-    const auto displayEpoch = m_displayStatusSource.epoch();
     // GPS coordinates are never useful in a support log. Compute this before
     // the certificate-decision early return so that path cannot bypass the
     // normal GPS payload suppression below.
@@ -435,7 +434,7 @@ void WanConnection::processLine(const QString& line)
     }
 
     ParsedMessage msg = CommandParser::parseLine(line);
-    emit messageReceived(msg);
+    emit lineReceived(msg, m_lineEpoch);
 
     switch (msg.type) {
     case MessageType::Version:
@@ -453,24 +452,22 @@ void WanConnection::processLine(const QString& line)
         break;
 
     case MessageType::Response: {
-        auto it = m_pendingCallbacks.find(msg.sequence);
-        if (it != m_pendingCallbacks.end()) {
+        // Answer after the ingress has taken every line read ahead of this
+        // reply: status goes over one queued hop, so a reply answered here
+        // would overtake it. LAN replies take the same hop (commandResponse).
+        QMetaObject::invokeMethod(this, [this, generation = m_sessionGeneration,
+                                         sequence = msg.sequence, code = msg.resultCode,
+                                         body = msg.object] {
+            if (generation != m_sessionGeneration) { return; }
+            auto it = m_pendingCallbacks.find(sequence);
+            if (it == m_pendingCallbacks.end()) { return; }
             // A completion may retire this session or alter the callback map.
-            ResponseCallback callback = std::move(it.value());
+            const ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
-            callback(msg.resultCode, msg.object);
-        }
+            callback(code, body);
+        }, Qt::QueuedConnection);
         break;
     }
-
-    case MessageType::Status:
-        if (auto display = decodeFlexDisplayStatus(msg.object, msg.kvs, displayEpoch);
-            display && display->current()) {
-            display->sourceHandle = msg.handle;
-            emit displayObserved(*display);
-        }
-        emit statusReceived(msg.object, msg.kvs);
-        break;
 
     default:
         break;

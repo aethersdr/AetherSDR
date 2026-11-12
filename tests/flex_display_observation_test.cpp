@@ -1,6 +1,6 @@
 #include "TestSettingsProfile.h"
 #include "PanControlTestFixture.h"
-#include "core/backends/flex/WanConnection.h"
+#include "core/backends/flex/FlexStatusIngress.h"
 #include "core/control/RadioResourceAdapter.h"
 #include "core/control/ControlResourceStore.h"
 #include <QCoreApplication>
@@ -14,21 +14,10 @@ using namespace AetherSDR;
 namespace AetherSDR {
 class FlexDisplayStatusTestAccess {
 public:
-    static void line(RadioConnection& connection, const QString& line) { connection.processLine(line); }
-    static void line(WanConnection& connection, const QString& line) { connection.processLine(line); }
-    static void buffered(RadioConnection& connection, const QByteArray& bytes) {
-        if (!connection.m_socket) { connection.init(); }
-        connection.m_readBuffer.append(bytes);
-        connection.onReadyRead();
-    }
-    static void buffered(WanConnection& connection, const QByteArray& bytes) {
-        connection.m_readBuffer.append(bytes);
-        connection.onReadyRead();
-    }
-    static void reset(RadioConnection& connection) { connection.resetSessionState(); }
-    static void reset(WanConnection& connection) { connection.resetSessionState(); }
-    static void renew(RadioConnection& connection) { connection.m_displayStatusSource.reset(); }
-    static void renew(WanConnection& connection) { connection.m_displayStatusSource.reset(); }
+    static quint64 displayEpoch(const RadioModel& radio) { return radio.m_displayEpoch; }
+    static quint64 beginSession(RadioModel& radio) { return radio.beginStatusSession(); }
+    static void endSession(RadioModel& radio)
+    { QMetaObject::invokeMethod(&radio, "onDisconnected", Qt::DirectConnection); }
     static int deferred(const RadioModel& radio) { return radio.m_pendingDisplayObservations.size(); }
     static void age(RadioModel& radio) {
         for (auto& entry : radio.m_pendingDisplayObservations) { entry.insertedMs -= 31000; }
@@ -57,39 +46,40 @@ const QString wfId = QStringLiteral("0x42000000");
 const QString panObject = QStringLiteral("display pan 0x40000000");
 const QString wfObject = QStringLiteral("display waterfall 0x42000000");
 
-template<typename Transport> void transportLifetime()
+// The ingress stamps each display report with the session it arrived in and
+// refuses a line from a session that has since been replaced.
+void ingressLifetime()
 {
-    Transport connection;
+    RadioConnection connection;
+    FlexStatusIngress ingress;
+    ingress.bind(&connection);
     std::optional<DisplayObservation> report;
-    QObject owner;
-    QObject::connect(&connection, &Transport::displayObserved, &owner,
-                     [&](const DisplayObservation& value) { report = value; }, Qt::QueuedConnection);
-    FlexDisplayStatusTestAccess::line(connection, "S0|display pan 0xC0000001 client_handle=0x71 center=7.15");
-    FlexDisplayStatusTestAccess::reset(connection);
-    QCoreApplication::processEvents();
-    check(report && !report->current(), "queued report keeps its retired original transport epoch");
-    FlexDisplayStatusTestAccess::renew(connection);
-    FlexDisplayStatusTestAccess::line(connection, "S0|display pan 0xC0000001 client_handle=0x71 center=14.2");
-    QCoreApplication::processEvents();
-    check(report && report->current() && report->values.centerMhz == 14.2, "new transport lifetime publishes typed fields");
-    report.reset();
-    QObject::connect(&connection, &Transport::messageReceived, &owner,
-                     [&](const ParsedMessage&) { FlexDisplayStatusTestAccess::reset(connection); });
-    FlexDisplayStatusTestAccess::line(connection, "S0|display pan 0xC0000001 center=28.2");
-    QCoreApplication::processEvents();
-    check(!report, "reentrant reset before status delivery cannot re-tag old input as current");
+    QObject::connect(&ingress, &FlexStatusIngress::displayObserved, &ingress,
+                     [&](const DisplayObservation& value) { report = value; });
+    emit connection.lineReceived(CommandParser::parseLine(
+        QStringLiteral("S0|display pan 0xC0000001 client_handle=0x71 center=7.15")), ingress.epoch());
+    const quint64 next = ingress.beginSession();
+    QCoreApplication::sendPostedEvents();
+    check(!report, "a display line queued by a replaced session is refused");
+    emit connection.lineReceived(CommandParser::parseLine(
+        QStringLiteral("S0|display pan 0xC0000001 client_handle=0x71 center=14.2")), next);
+    QCoreApplication::sendPostedEvents();
+    check(report && report->statusEpoch == next && report->values.centerMhz == 14.2,
+          "the current session publishes typed fields stamped with its epoch");
 }
 
-template<typename Transport> void retiredDisplayAcknowledgment()
+// A report deferred until its pan is claimed never applies in a later session.
+void deferredReportDiesWithItsSession()
 {
-    Transport connection;
-    connection.retireDisplayObservations();
-    QSignalSpy messages(&connection, &Transport::messageReceived);
-    QSignalSpy displays(&connection, &Transport::displayObserved);
-    FlexDisplayStatusTestAccess::buffered(connection,
-        "R77|0|closed\nS0|display pan 0x40000000 client_handle=0x71 center=7.2\n");
-    check(messages.count() == 2 && displays.count() == 0,
-          "display revocation still parses teardown acknowledgments while suppressing display publication");
+    PanControlFixture f;
+    f.status(panObject, {{"center", "7.15"}});
+    check(!f.radio.panadapter(panId) && FlexDisplayStatusTestAccess::deferred(f.radio) == 1,
+          "an unclaimed pan's fields are deferred");
+    FlexDisplayStatusTestAccess::endSession(f.radio);
+    FlexDisplayStatusTestAccess::beginSession(f.radio);
+    f.status(panObject, {{"client_handle", "0x71"}});
+    check(f.radio.panadapter(panId) && !f.radio.panadapter(panId)->centerKnown(),
+          "a claim in the next session does not apply the ended session's deferred fields");
 }
 
 void lifecycle()
@@ -114,9 +104,8 @@ void lifecycle()
     const auto published = store.get({QStringLiteral("panadapter"), QStringLiteral("display-session"), panId});
     check(published && published->value.value(QStringLiteral("centerHz")).toInteger() == 7'150'000,
           "daemon resource publication sees initialized geometry");
-    const auto staleEpoch = std::make_shared<std::atomic_bool>(true);
-    const auto stale = decodeFlexDisplayStatus(panObject, {{"center", "28.7"}}, staleEpoch);
-    staleEpoch->store(false);
+    auto stale = decodeFlexDisplayStatus(panObject, {{"center", "28.7"}});
+    stale->statusEpoch = FlexDisplayStatusTestAccess::displayEpoch(f.radio) + 1;   // another session's
     emit f.backend->displayObserved(*stale);
     check(original->centerMhz() == 7.15, "a retired observation cannot mutate an existing resource");
     f.clear();
@@ -167,10 +156,10 @@ void reparentAndReentrantRetirement()
         "confirmed new pairing consumes only its own deferred waterfall state");
     const int beforeAverage = second->average();
     QObject::connect(second, &PanadapterModel::fpsChanged, &f.radio,
-        [&](int) { FlexDisplayStatusTestAccess::reset(f.identity); });
+        [&](int) { FlexDisplayStatusTestAccess::endSession(f.radio); });
     f.status(QStringLiteral("display pan ") + secondId, {{"fps", "13"}, {"average", "73"}});
     check(second->fps() == 13 && second->average() == beforeAverage,
-        "transport retirement during a model signal stops the remaining fields");
+        "a disconnect during a model signal stops the remaining fields");
 
     auto model = std::make_unique<PanadapterModel>(panId);
     QObject receiver;
@@ -223,10 +212,8 @@ int main(int argc, char** argv)
     TestSettingsProfile settings(QStringLiteral("flex-display-observation"));
     QCoreApplication app(argc, argv);
     qRegisterMetaType<DisplayObservation>();
-    transportLifetime<RadioConnection>();
-    transportLifetime<WanConnection>();
-    retiredDisplayAcknowledgment<RadioConnection>();
-    retiredDisplayAcknowledgment<WanConnection>();
+    ingressLifetime();
+    deferredReportDiesWithItsSession();
     lifecycle();
     reparentAndReentrantRetirement();
     reentrancyAndBounds();

@@ -23,16 +23,27 @@ public:
     }
     static void release(RadioModel& radio) { radio.m_connection = nullptr; }
     static void status(RadioModel& radio, const QString& object, const QMap<QString, QString>& values)
-    {
-        const auto observation = decodeFlexDisplayStatus(object, values, radio.m_connection->m_displayStatusSource.epoch());
-        if (observation) { emit radio.m_backend->displayObserved(*observation); }
-        else { radio.onStatusReceived(object, values); }
-    }
+    { radio.handleStatusForTest(object, values); }
     static int pending(const RadioModel& radio) { return radio.m_pendingPanCreations.size(); }
     static int history(const RadioModel& radio) { return radio.m_displayRetirements.size(); }
     static void retire(RadioModel& radio, const QString& id) { radio.retireDisplayResource(id); }
     static void settle(RadioModel& radio) { radio.settlePanCreations(); }
     static void newSession(RadioModel& radio) { ++radio.m_sessionGeneration; radio.settlePanCreations(); }
+    static void resetAudio(RadioModel& radio) { radio.resetAudioControls(); }
+    static int pendingAudio(const RadioModel& radio) { return radio.m_audioPending.size(); }
+    static void audioTransport(RadioModel& radio, RadioConnection& connection, FlexBackend& backend,
+                               std::function<void(quint32, const QString&)> writer)
+    {
+        connection.m_commandSinkForTest = std::move(writer);
+        backend.setAudioCommandSink(radio.audioCommandSink());
+    }
+    static void acceptGuiRegistration(RadioModel& radio)
+    {
+        radio.m_guiClientRegistrationState.begin();
+        radio.m_guiClientRegistrationState.complete(0, {});
+    }
+    static void startRx(RadioModel& radio) { radio.createRxAudioStream(); }
+    static void stopRx(RadioModel& radio) { radio.removeRxAudioStream(); }
     static void hold(RadioModel& radio) { radio.m_profileLoadRadioStateWriteHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + 60000; }
     static void flush(RadioModel& radio)
     { radio.m_profileLoadRadioStateWriteHoldUntilMs = 0; radio.flushPendingProfileLoadPanWrites(); }
@@ -52,6 +63,15 @@ public:
         setSetupCommandSink([this](const QString& command, const RadioControlCompletion& completion) {
             if (!admit) { return false; }
             writes.push_back({command, completion});
+            const auto callback = onWrite;
+            if (callback) { callback(command); }
+            return true;
+        });
+        setAudioCommandSink([this](const QString& command, CommandReply reply, const AudioControlGuard& guard) {
+            if (!admit || !guard.permits()) { return false; }
+            writes.push_back({command, [reply](const RadioControlReply& result) {
+                if (reply) { reply(result.code, result.message); }
+            }});
             const auto callback = onWrite;
             if (callback) { callback(command); }
             return true;

@@ -228,8 +228,10 @@ ReceiveDispatch RadioModel::requestPanDisplay(PanadapterModel* pan, const PanDis
             || alive->m_displayRetirements.value(waterfallId) != waterfallRetired) { return false; }
         return alive->displayWaterfallOwned(waterfallId, original->panId());
     };
+    PanDisplayRequest guarded = request;
+    if (request.field == PanDisplayField::DaxIqChannel) { guarded.guard = pan->beginIqBinding(); }
     const ReceiveDispatch result = control && control->supports(request.field) && current()
-        ? m_backend->requestPanDisplay(backendPanIdFor(pan->panId()), waterfallId, request, completion, current)
+        ? m_backend->requestPanDisplay(backendPanIdFor(pan->panId()), waterfallId, guarded, completion, current)
         : ReceiveDispatch::Unsupported;
     if (alive && controlSessionCurrent(session) && announce) {
         reportReceiveDispatch(result, QStringLiteral("pan display"));

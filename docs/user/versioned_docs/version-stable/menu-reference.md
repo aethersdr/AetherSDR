@@ -79,7 +79,7 @@ See [Profile Management](./profile-management.md).
 | **FreeDV Reporter...** | FreeDV Reporter station list. |
 | **Net Scheduler...** | See [Net Scheduler](./net-scheduler.md). |
 | **Memory...** | See [Memory Channels](./memory-channels.md). |
-| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only), and edit a Docker container's [environment](./waveform-environment.md). Its bottom bar can install [Radio Health Tools](./radio-health-tools.md) and show the radio's free storage, memory and CPU. |
+| **Waveforms...** | Install and manage radio waveforms (radios with installable waveforms only), and edit a Docker container's [environment](./waveform-environment.md). **Install** adds the [WSPR receiver](./wspr-receiver.md). Its bottom bar can install [Radio Health Tools](./radio-health-tools.md) and show the radio's free storage, memory and CPU. |
 | **Wideband Bandscope...** | The radio's converter view before tuning; dimmed on radios without one. See [Hermes-Lite 2](./hermes-lite-2.md). |
 | **Radio Health...** | Reachability, other clients holding the radio, PA temperature — works even with no session. |
 | **AetherGPS...** | See [AetherClock and GPS](./aetherclock-and-gps.md). |
@@ -134,7 +134,8 @@ The Minimize and Full Screen keys can be rebound in **Settings → Configure Sho
 | **AetherSDR Documentation** | Opens this documentation site in your browser. |
 | **Printable Manual (PDF)** | Downloads the [printable manual](pathname:///AetherSDR-Manual.pdf), all of these pages in one PDF. |
 | **Log Analyzer** | Opens the [Log Analyzer](/log-analyzer), which checks a log or support bundle for known problems in your browser. |
-| **Getting Started...**, **AetherSDR Help...**, **What's New...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. In **What's New...**, only web links (http and https) open; any other kind of link in the release notes is ignored. |
+| **Getting Started...**, **AetherSDR Help...** | Built-in guides, each in its own window. They work offline, and each guide links its page on this site. Choosing an open guide restores it if minimized and brings it to the front. Close a guide with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). |
+| **What's New...** | Offline release notes. Choosing this entry again brings the open window to the front. Only web links (http and https) open; any other kind of link in the release notes is ignored. |
 | **Understanding Noise Cancellation...**, **Configuring AetherSDR Controls...**, **Configuring Data Modes...** | Topic guides, also offline. |
 | **AetherSDR Website**, **Donate to AetherSDR** | Open the web pages. |
 | **Submit your Idea... 💡** | The AI-assisted feature-request helper. |
@@ -178,6 +179,8 @@ The **UPDATE** badge appears when a newer AetherSDR release is available; click 
 
 - Line one is the radio's name; line two is its state in words (for example "Link lost"), so color is never the only signal.
 - The dot on the active tab is the **radio-link indicator**. It pulses once per discovery heartbeat, turns amber while discovering and red after three missed heartbeats (blinking, or solid if **View → Blink Status Indicator** is off). The alarm stays on the radio that dropped until you disconnect on purpose, start a new session or remove the tab. A deliberate disconnect never raises it. Right-click the tabs to toggle blinking.
+- An **AT** chip after the connected radio's name means the adaptive frame-rate throttle is on. The chip is outlined while the throttle is on standby. The tab expands for the chip and shrinks again when it disappears. It fills with the cap's quality color while a frame-rate cap is in force, and hovering the tab shows the cap (for example "Adaptive throttle: 8 fps cap"). See [Low Bandwidth Connections](./low-bandwidth-connections.md#adaptive-frame-rate-throttle).
+- While the AT chip is showing and the link is healthy, the connected radio's dot shows the network quality in the same colors as the status bar: green for Excellent or Very Good, blue for Good, amber for Fair and red for Poor. Hover the tab to see the quality in words. The quality colors follow the selected theme. With the throttle off, the dot stays the plain green "connected" color.
 - When the tabs no longer fit, scroll them with the mouse wheel or drag them sideways.
 - **"+"** opens the radio list: search by name, model, address or status; a per-radio **Actions** menu (Disconnect, Rename…, Radio setup…, Remove from tabs / Add to tabs); **Connect manually…**; **Rescan radios**. Removing a tab only hides it; it does not forget the radio or its credentials. Selecting a radio opens the connection panel on it; nothing connects without your confirmation.
 
