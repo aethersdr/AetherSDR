@@ -1355,6 +1355,35 @@ int main(int argc, char** argv)
         check(idleFree, "after that OFF frame an idle frame admits the next over");
     }
 
+    {
+        // A failed write does not retire the unkey: the next OFF frame is fenced
+        // again, and only a written OFF frame releases the operation.
+        TxTestAuthority tx;
+        MetisClient failed;
+        MetisClientTestAccess::setStreaming(failed);
+        failed.enableTransmit(true);
+        failed.setMox(true, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet& packet) -> qint64 { return packet.size(); });
+        MetisClientTestAccess::send(failed);
+        failed.setMox(false, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet&) -> qint64 { return -1; });
+        MetisClientTestAccess::send(failed);
+        bool retryFenced = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            retryFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(retryFenced, "an unkey frame whose write failed leaves the next OFF frame fenced");
+        bool idleFree = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            idleFree = !tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(idleFree, "once an OFF frame is written, the idle frame after it holds no guard");
+    }
+
     // ---- TX IQ FIFO fault accounting (S3 row 3.3) ----
     //
     // The FIFO is bounded above at kTxQueueMax and not below. Both ends change

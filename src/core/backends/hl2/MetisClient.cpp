@@ -1873,8 +1873,9 @@ void MetisClient::sendControlPacket()
     // device that reconnects or resets mid-session from silently going quiet.
     TxCoordinator::Dispatch audioDispatch;
     // Count the writer through sendTo() for keyed frames (CW/TUNE included) and
-    // for the first written OFF frame, which then retires m_moxOperation: an idle
-    // frame must not hold the counter acquire() needs at zero.
+    // for the first written OFF frame: cancellation cannot retract a write
+    // already entered. That frame then retires m_moxOperation, so an idle frame
+    // does not hold the counter acquire() needs at zero.
     TxCoordinator::Dispatch keyDispatch = m_moxOperation.beginDispatch(
         TxCoordinator::monotonicMs(), m_mox);
     if (m_mox && !keyDispatch) {
