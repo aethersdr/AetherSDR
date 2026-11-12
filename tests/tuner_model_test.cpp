@@ -17,6 +17,13 @@ struct PeripheralConnectionTestAccess {
     {
         connection.m_connected = true; // inert transport: no connection or peer
     }
+
+    static void captureCommands(TgxlConnection& connection, QStringList& lines)
+    {
+        connection.m_commandWriter = [&lines](const QByteArray& line) {
+            lines.append(QString::fromUtf8(line));
+        };
+    }
 };
 }
 
@@ -160,11 +167,7 @@ int main(int argc, char** argv)
         CHECK(started.count() == 1 && relayed.count() == 0);
     }
 
-    // ---- OPERATE / BYPASS on a TGXL reached by manual IP only REFUSE ALOUD ----
-    // A non-Flex radio (Hermes-Lite 2) has no relay for these; the direct
-    // port-9010 link makes the applet visible, so the keys were on screen and
-    // did nothing. They still send nothing -- no relay intent, no optimistic
-    // state -- but now say so, so MainWindow can announce it.
+    // A present tuner with neither a ready direct link nor a handle refuses.
     {
         TunerModel t;
         TgxlConnection direct;
@@ -197,11 +200,7 @@ int main(int argc, char** argv)
         CHECK(op.count() == 1 && refused.count() == 0);
     }
 
-    // ---- ONE press that needs both verbs is ONE refusal, not two ----
-    // STBY, BYP and the rail's cycle each command operate AND bypass for a
-    // single click. On a direct-only TGXL that used to log two refusals for
-    // one action; setOperateAndBypass() refuses once and sends nothing. With a
-    // relay it commands both, in the order asked for.
+    // One press needing both verbs is one refusal when no transport is ready.
     {
         TunerModel t;
         TgxlConnection direct;
@@ -229,6 +228,132 @@ int main(int argc, char** argv)
         t.setOperateAndBypass(false, false, /*operateFirst=*/false);
         CHECK(wire == QStringList({QStringLiteral("bypass=0"), QStringLiteral("operate=0")}));
         CHECK(refused.count() == 0);
+    }
+
+    // Direct commands work without a radio handle; only device status changes
+    // their displayed state. Vendor TGXL API, pages 3-4.
+    {
+        QStringList wire;
+        TgxlConnection direct;
+        PeripheralConnectionTestAccess::makeReady(direct);
+        PeripheralConnectionTestAccess::captureCommands(direct, wire);
+        TunerModel t;
+        t.setDirectConnection(&direct);
+        CHECK(QMetaObject::invokeMethod(&direct, "connected", Qt::DirectConnection));
+        QSignalSpy refused(&t, &TunerModel::relayedCommandRefused);
+        QSignalSpy op(&t, &TunerModel::operateRequested);
+        QSignalSpy by(&t, &TunerModel::bypassRequested);
+        QSignalSpy st(&t, &TunerModel::stateChanged);
+
+        t.setOperateAndBypass(true, false, /*operateFirst=*/false);
+        CHECK(wire == QStringList({QStringLiteral("C1|bypass set=0\n"),
+                                   QStringLiteral("C2|operate set=1\n")}));
+        CHECK(refused.count() == 0 && op.count() == 0 && by.count() == 0);
+        CHECK(!t.isOperate() && !t.isBypass() && st.count() == 0);
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+              Q_ARG(QString, QStringLiteral("S0|state state=1 bypass=0"))));
+        CHECK(t.isOperate() && !t.isBypass());
+
+        // Even with a handle, prefer the direct path and await its echo.
+        t.setHandle(QStringLiteral("0x2000"));
+        wire.clear();
+        st.clear();
+        t.setBypass(true);
+        CHECK(wire == QStringList({QStringLiteral("C3|bypass set=1\n")}));
+        CHECK(t.isOperate() && !t.isBypass() && st.count() == 0);
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+              Q_ARG(QString, QStringLiteral("S1|status state=1 bypass=1"))));
+        CHECK(t.isOperate() && t.isBypass());
+
+        wire.clear();
+        t.setOperateAndBypass(false, false, /*operateFirst=*/true);
+        CHECK(wire == QStringList({QStringLiteral("C4|operate set=0\n"),
+                                   QStringLiteral("C5|bypass set=0\n")}));
+        CHECK(t.isOperate() && t.isBypass());
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+              Q_ARG(QString, QStringLiteral("S0|state state=0 bypass=0"))));
+        CHECK(!t.isOperate() && !t.isBypass());
+        CHECK(op.count() == 0 && by.count() == 0 && refused.count() == 0);
+
+        CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+        wire.clear();
+        t.setOperateAndBypass(true, true, /*operateFirst=*/true);
+        CHECK(wire.isEmpty() && op.count() == 1 && by.count() == 1);
+        CHECK(t.isOperate() && t.isBypass()); // existing relayed optimistic state
+    }
+
+    // UI relay indices are zero-based; the TGXL wire protocol uses 1/2/3.
+    {
+        QStringList wire;
+        TgxlConnection direct;
+        PeripheralConnectionTestAccess::makeReady(direct);
+        PeripheralConnectionTestAccess::captureCommands(direct, wire);
+        TunerModel t;
+        t.setDirectConnection(&direct);
+        QSignalSpy st(&t, &TunerModel::stateChanged);
+
+        t.adjustRelay(0, 1);
+        t.adjustRelay(1, 1);
+        t.adjustRelay(2, 1);
+        t.adjustRelay(0, -1);
+        CHECK(wire == QStringList({QStringLiteral("C1|tune relay=1 move=1\n"),
+                                   QStringLiteral("C2|tune relay=2 move=1\n"),
+                                   QStringLiteral("C3|tune relay=3 move=1\n"),
+                                   QStringLiteral("C4|tune relay=1 move=-1\n")}));
+        CHECK(st.count() == 0);
+    }
+
+    // Polls and unsolicited pushes share the same present-only, change-gated
+    // relay/mode application. The first frame is captured from TGXL 1.2.17.
+    {
+        TgxlConnection direct;
+        TunerModel t;
+        t.setDirectConnection(&direct);
+        QSignalSpy st(&t, &TunerModel::stateChanged);
+        QSignalSpy tuning(&t, &TunerModel::tuningChanged);
+        QSignalSpy ant(&t, &TunerModel::antennaAChanged);
+        const QString status = QStringLiteral(
+            "S230|status fwd=21.42 peak=21.42 max=62.43 swr=-60.0000 "
+            "pttA=0 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
+            "bypassA=0 bypassRxA=0 antA=0 "
+            "pttB=0 bandB=0 modeB=0 flexB=FLEX-8600 freqB=0.000 "
+            "bypassB=0 bypassRxB=0 antB=0 "
+            "state=1 active=1 tuning=0 bypass=0 ag=0 relayC1=44 relayL=12 relayC2=8");
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                                       Q_ARG(QString, status)));
+        CHECK(t.relayC1() == 44 && t.relayL() == 12 && t.relayC2() == 8);
+        CHECK(t.isOperate() && !t.isBypass() && !t.isTuning());
+        CHECK(t.antennaA() == 0 && st.count() == 1 && ant.count() == 1);
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                                       Q_ARG(QString, status)));
+        CHECK(st.count() == 1 && ant.count() == 1);
+
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+              Q_ARG(QString, QStringLiteral(
+                  "S0|state state=0 bypass=1 tuning=1 relayC1=255 relayL=0 relayC2=32"))));
+        CHECK(!t.isOperate() && t.isBypass() && t.isTuning());
+        CHECK(t.relayC1() == 255 && t.relayL() == 0 && t.relayC2() == 32);
+        CHECK(st.count() == 2 && tuning.count() == 1 && t.antennaA() == 0);
+
+        // Alternate R-frame replies and partial updates must also work.
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+              Q_ARG(QString, QStringLiteral("R231|0|relayC1=0 bypass=0 tuning=0"))));
+        CHECK(t.relayC1() == 0 && t.relayL() == 0 && t.relayC2() == 32);
+        CHECK(!t.isOperate() && !t.isBypass() && !t.isTuning());
+        CHECK(st.count() == 3 && tuning.count() == 2);
+
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+              Q_ARG(QString, QStringLiteral("S232|status fwd=21.42 swr=-60.0000"))));
+        CHECK(st.count() == 3 && t.relayC2() == 32 && !t.isOperate());
+
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+              Q_ARG(QString, QStringLiteral(
+                  "S233|status state=2 bypass=bad tuning=-1 "
+                  "relayC1=-1 relayL=256 relayC2=bad antA=3"))));
+        CHECK(st.count() == 3 && tuning.count() == 2 && ant.count() == 1);
+        CHECK(!t.isOperate() && !t.isBypass() && !t.isTuning());
+        CHECK(t.relayC1() == 0 && t.relayL() == 0 && t.relayC2() == 32);
+        CHECK(t.antennaA() == 0);
     }
 
     // ---- per-port PTT and the pttChanged edge ----

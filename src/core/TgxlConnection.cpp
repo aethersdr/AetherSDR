@@ -561,7 +561,11 @@ quint32 TgxlConnection::sendCommand(const QString& cmd)
 {
     quint32 seq = ++m_seq;
     QString line = QString("C%1|%2\n").arg(seq).arg(cmd);
-    m_socket.write(line.toUtf8());
+    if (m_commandWriter) {
+        m_commandWriter(line.toUtf8());
+    } else {
+        m_socket.write(line.toUtf8());
+    }
     qCDebug(lcTuner) << "TgxlConnection: sent" << line.trimmed();
     return seq;
 }
@@ -571,7 +575,7 @@ void TgxlConnection::adjustRelay(int relay, int direction)
     if (!m_connected) return;
     if (relay < 0 || relay > 2) return;
     int move = (direction > 0) ? 1 : -1;
-    sendCommand(QString("tune relay=%1 move=%2").arg(relay).arg(move));
+    sendCommand(QString("tune relay=%1 move=%2").arg(relay + 1).arg(move));
 }
 
 void TgxlConnection::requestAutotune()

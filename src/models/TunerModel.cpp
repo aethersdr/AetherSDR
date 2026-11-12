@@ -4,6 +4,7 @@
 
 #include <QDebug>
 #include <cmath>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -95,14 +96,38 @@ void TunerModel::applyChanges(const TunerDelta& d)
 
 // ── Commands ─────────────────────────────────────────────────────────────────
 
-void TunerModel::applyDirectTuning(const QMap<QString, QString>& kvs)
+void TunerModel::applyDirectState(const QMap<QString, QString>& kvs)
 {
-    if (!kvs.contains(QStringLiteral("tuning"))) return;
-    const bool tuning = kvs.value(QStringLiteral("tuning")) == QLatin1String("1");
-    if (m_tuning == tuning) return;
-    m_tuning = tuning;
-    emit tuningChanged(m_tuning);
-    emit stateChanged();
+    const auto readInt = [&kvs](const QString& key, int maximum) -> std::optional<int> {
+        const auto it = kvs.constFind(key);
+        if (it == kvs.cend()) {
+            return std::nullopt;
+        }
+        bool ok = false;
+        const int value = it->toInt(&ok);
+        if (!ok || value < 0 || value > maximum) {
+            qCWarning(lcTuner) << "TunerModel: invalid direct TGXL field" << key << *it;
+            return std::nullopt;
+        }
+        return value;
+    };
+
+    // Both status polls and state pushes carry these fields (TGXL API, p. 3).
+    TunerDelta delta;
+    if (const auto state = readInt(QStringLiteral("state"), 1)) {
+        delta.operate = *state == 1;
+    }
+    if (const auto bypass = readInt(QStringLiteral("bypass"), 1)) {
+        delta.bypass = *bypass == 1;
+    }
+    if (const auto tuning = readInt(QStringLiteral("tuning"), 1)) {
+        delta.tuning = *tuning == 1;
+    }
+    delta.relayC1 = readInt(QStringLiteral("relayC1"), 255);
+    delta.relayL = readInt(QStringLiteral("relayL"), 255);
+    delta.relayC2 = readInt(QStringLiteral("relayC2"), 255);
+    delta.antennaA = readInt(QStringLiteral("antA"), 2);
+    applyChanges(delta);
 }
 
 void TunerModel::clearTuning()
@@ -115,10 +140,12 @@ void TunerModel::clearTuning()
 
 void TunerModel::setOperate(bool on)
 {
+    if (hasDirectConnection()) {
+        m_directConn->sendCommand(QStringLiteral("operate set=%1").arg(on ? 1 : 0));
+        return; // the tuner reports the resulting state in its status
+    }
     if (m_handle.isEmpty()) {
         qCDebug(lcTuner) << "TunerModel::setOperate: no handle yet, ignoring";
-        // A TGXL reached by manual IP alone (a non-Flex radio) is present and
-        // on screen, but only a Flex relays operate/standby. Say so.
         if (m_directPresence) {
             emit relayedCommandRefused(QStringLiteral("operate"));
         }
@@ -133,6 +160,10 @@ void TunerModel::setOperate(bool on)
 
 void TunerModel::setBypass(bool on)
 {
+    if (hasDirectConnection()) {
+        m_directConn->sendCommand(QStringLiteral("bypass set=%1").arg(on ? 1 : 0));
+        return;
+    }
     if (m_handle.isEmpty()) {
         qCDebug(lcTuner) << "TunerModel::setBypass: no handle yet, ignoring";
         if (m_directPresence) {
@@ -149,7 +180,7 @@ void TunerModel::setBypass(bool on)
 
 void TunerModel::setOperateAndBypass(bool operate, bool bypass, bool operateFirst)
 {
-    if (m_handle.isEmpty()) {
+    if (!hasDirectConnection() && m_handle.isEmpty()) {
         qCDebug(lcTuner) << "TunerModel::setOperateAndBypass: no handle yet, ignoring";
         // One press, one refusal: the two setters below would each refuse.
         if (m_directPresence) {
@@ -279,28 +310,10 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
             }
         });
 
-        // Update relay values from direct state pushes
+        // State fields are shared with the status poll below.
         connect(m_directConn, &TgxlConnection::stateUpdated, this,
                 [this](const QMap<QString, QString>& kvs) {
-            applyDirectTuning(kvs);
-            bool changed = false;
-            if (kvs.contains("relayC1")) {
-                int v = kvs.value("relayC1").toInt();
-                if (m_relayC1 != v) { m_relayC1 = v; changed = true; }
-            }
-            if (kvs.contains("relayL")) {
-                int v = kvs.value("relayL").toInt();
-                if (m_relayL != v) { m_relayL = v; changed = true; }
-            }
-            if (kvs.contains("relayC2")) {
-                int v = kvs.value("relayC2").toInt();
-                if (m_relayC2 != v) { m_relayC2 = v; changed = true; }
-            }
-            if (kvs.contains("antA")) {
-                int v = kvs.value("antA").toInt();
-                if (m_antennaA != v) { m_antennaA = v; changed = true; emit antennaAChanged(v); }
-            }
-            if (changed) emit stateChanged();
+            applyDirectState(kvs);
             // Forward power and SWR from direct TGXL connection (#625)
             // TGXL reports fwd in dBm and swr as return loss (negative dB).
             // Convert to watts and SWR ratio for the gauge.
@@ -332,12 +345,12 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
             }
             if (meters) emit metersChanged(m_fwdPower, m_swr, m_fwdPeak);
         });
-        // Also parse antA + meters + the per-port block from 1/sec status
+        // Also parse state + meters + the per-port block from status
         // poll responses. The port fields appear only in `status`, never in
         // the `state` push, so this is their one arrival point.
         connect(m_directConn, &TgxlConnection::statusUpdated, this,
                 [this](const QMap<QString, QString>& kvs) {
-            applyDirectTuning(kvs);
+            applyDirectState(kvs);
             if (kvs.contains(QStringLiteral("modeA"))
                 || kvs.contains(QStringLiteral("modeB"))) {
                 auto readPort = [&kvs](QChar side) {
@@ -363,14 +376,6 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                     m_pttA = a.ptt;
                     m_pttB = b.ptt;
                     emit pttChanged(m_pttA, m_pttB);
-                    emit stateChanged();
-                }
-            }
-            if (kvs.contains("antA")) {
-                int v = kvs.value("antA").toInt();
-                if (m_antennaA != v) {
-                    m_antennaA = v;
-                    emit antennaAChanged(v);
                     emit stateChanged();
                 }
             }

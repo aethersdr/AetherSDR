@@ -4,7 +4,7 @@ slug: "/tgxl-tuner-control"
 description: "AetherSDR controls the 4O3A Tuner Genius XL (TGXL) through the TUN applet, including manual adjustment of the tuner's Pi-network relays."
 ---
 
-> **Applies to:** All radios · the radio relay and OPERATE / STANDBY / BYPASS need a FlexRadio
+> **Applies to:** All radios · the radio relay needs a FlexRadio
 
 AetherSDR controls the 4O3A Tuner Genius XL (TGXL) through the **TUN** applet,
 including manual adjustment of the tuner's Pi-network relays.
@@ -38,10 +38,11 @@ The direct connection is what adds port detail, the antenna buttons and
 manual relay control. Without it the applet still works from what the radio
 relays.
 
-**OPERATE, STANDBY and BYPASS go through the radio.** A TGXL reached by IP
-only, with no FlexRadio relaying it, cannot be switched between them; pressing
-those keys raises a notice saying the control is not available rather than
-doing nothing silently.
+**OPERATE, STANDBY and BYPASS use the direct connection when available.**
+They also work with a TGXL added by IP alone, without a FlexRadio relay.
+Without a direct connection, these commands go through the FlexRadio.
+On the direct path, the displayed mode follows the tuner's reported state,
+not an assumed successful button press.
 
 ## Using the tuner applet
 
@@ -57,7 +58,8 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
   reduce an Aurora's tuner gauge range; it remains 0–600 W even when the shared
   transmit meters show the KXPA100's output.
 - **SWR** gauge (1.0–3.0).
-- **C1**, **L** and **C2** relay bars.
+- **C1**, **L** and **C2** relay bars, refreshed from both direct status polls
+  and state pushes.
 - **TUNE**: starts an auto-tune. While a tune runs it reads **STOP**;
   pressing it stops the tune. The tuner stays in operate.
 - **OPERATE**: cycles OPERATE → BYPASS → STANDBY.
@@ -126,12 +128,14 @@ The TGXL uses a text protocol in the same format as the SmartSDR API:
 | TGXL → Client (push) | `S0\|state key=val ...\n` |
 
 Authorization: `auth <code>`. Manual relay command:
-`tune relay=<0\|1\|2> move=<+1\|-1>`.
+`tune relay=<1\|2\|3> move=<+1\|-1>` (C1 / L / C2).
+Direct mode commands: `operate set=<0|1>` (standby / operate) and
+`bypass set=<0|1>` (in line / bypass).
 
 ## Known issues
 
 - TUNE can fail on a remote FLEX-8600 while the Genius peripherals are connected in AetherSDR ([#6001](https://github.com/aethersdr/AetherSDR/issues/6001)).
-- The TUN indicator in the status bar may not change the tuner's state, and the OPERATE cycle can disagree with the tuner's real state ([#4946](https://github.com/aethersdr/AetherSDR/issues/4946)).
+- On the radio-relay path, the TUN indicator may not change the tuner's state, and the OPERATE cycle can disagree with the tuner's real state ([#4946](https://github.com/aethersdr/AetherSDR/issues/4946)).
 
 ## Troubleshooting
 
@@ -162,12 +166,15 @@ The radio is not reporting the tuner, or AetherSDR cannot reach it.
 2. Add it manually in Peripherals if the radio does not report it.
 3. Check the logs in **Help → Support & Diagnostics...**.
 
-### OPERATE, STANDBY or BYPASS says the control is not available
+### OPERATE, STANDBY or BYPASS does not change the tuner
 
-These go through the radio, and no FlexRadio is relaying this tuner.
+The tuner needs either a ready direct connection or a FlexRadio relay.
 
-1. Connect the TGXL to your FlexRadio, and connect AetherSDR to that radio, so
-   the radio relays the tuner.
+1. Check the indicator reads `● DIRECT` or `● RADIO`.
+2. For a direct connection, check the TGXL's row in **Settings → Radio Setup... → Peripherals**
+   and reconnect if needed.
+3. If using the radio relay, connect the TGXL to your FlexRadio and connect
+   AetherSDR to that radio.
 
 ## See also
 

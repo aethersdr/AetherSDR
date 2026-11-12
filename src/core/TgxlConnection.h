@@ -53,7 +53,7 @@ public:
     void setAuthCodeForAttempt(quint64 attempt, const QString& code,
                                bool credentialStoreUnavailable = false);
 
-    // Manual relay adjustment: relay 0=C1, 1=L, 2=C2; direction +1 or -1
+    // UI indices: 0=C1, 1=L, 2=C2; wire indices: 1/2/3. Direction +1 or -1.
     void adjustRelay(int relay, int direction);
 
     // Native autotune over the direct port-9010 channel. The TGXL drives
@@ -114,6 +114,7 @@ private:
     friend struct PeripheralConnectionTestAccess;
     // Inject transport initiation in socket-free lifecycle tests.
     std::function<void(const QString&, quint16)> m_connectTransport;
+    std::function<void(const QByteArray&)> m_commandWriter;
     void applyPollRateFor(const QMap<QString, QString>& kvs);
     Q_INVOKABLE void processLine(const QString& line); // injected-frame test seam
     Q_INVOKABLE void processBytes(const QByteArray& bytes); // injected transport test seam

@@ -8619,9 +8619,16 @@ target_link_libraries(aetherd_amp_decode_test PRIVATE aethercore Qt6::Core Qt6::
 set_target_properties(aetherd_amp_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_amp_decode_test COMMAND aetherd_amp_decode_test)
 
-add_executable(tuner_model_test tests/tuner_model_test.cpp)
+add_executable(tuner_model_test
+    tests/tuner_model_test.cpp
+    src/models/TunerModel.cpp
+    src/core/TgxlConnection.cpp
+    $<TARGET_OBJECTS:aether_test_log_manager>
+    $<TARGET_OBJECTS:aether_test_async_log_writer>
+    $<TARGET_OBJECTS:aether_test_settings>
+)
 target_include_directories(tuner_model_test PRIVATE src)
-target_link_libraries(tuner_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
+target_link_libraries(tuner_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 set_target_properties(tuner_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME tuner_model_test COMMAND tuner_model_test)
 
@@ -11421,6 +11428,7 @@ set(AETHER_SETTINGS_CONSUMERS
     spectrum_overlay_auto_rf_gain_refusal_test
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
+    tuner_model_test
     tgxl_docked_parity_test
     tgxl_antenna_names_test
     tgxl_applet_ports_test
