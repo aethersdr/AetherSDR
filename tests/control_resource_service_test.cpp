@@ -698,7 +698,8 @@ bool testSimBackendEndToEnd()
     const QJsonObject displayCadence =
         panValue.value(QStringLiteral("displayCadence")).toObject();
     if (!check(hasExactlyKeys(radioValue,
-                              {"id", "connected", "family", "identity", "capabilities", "meterDelivery"})
+                              {"id", "connected", "family", "identity", "capabilities", "meterDelivery",
+                               "receiveObservation"})
                    && hasExactlyKeys(identity,
                                      {"name", "model", "serial", "version", "manufacturer"})
                    && hasExactlyKeys(capabilities,
@@ -707,7 +708,8 @@ bool testSimBackendEndToEnd()
                                       "maximumTransmitWatts", "hasTuner", "hasAmplifier",
                                       "extensions", "sliceFrequencyControl", "receiveModeControl",
                                       "receiveFilterControl", "receiveAudioControl",
-                                      "receivePanCenterControl", "receivePanBandwidthControl"})
+                                      "receivePanCenterControl", "receivePanBandwidthControl",
+                                      "receiveCwPitchControl"})
                    && hasExactlyKeys(sliceValue,
                                      {"id", "letter", "panadapterId", "owned",
                                       "frequencyHz", "frequencyObservation", "mode", "filter", "active",

@@ -27,14 +27,14 @@ struct WsprPackage {
         const char* sha256;
         qint64 size;
     };
-    static constexpr const char* kVersion = "0.1.10";
+    static constexpr const char* kVersion = "0.1.13";
     // FLEX-6000: a legacy waveform, whose settings persist on /user.
     static constexpr Pin kLegacy{":/waveforms/AetherWSPR.ssdr_waveform", "AetherWSPR.ssdr_waveform",
-                                 "cb0c42898fde018579992ab5249a905b6012187fbe5d1cf8a2666dcf0c337a19", 146255};
+                                 "06fa28eb58c25af268fa828832b21748b38e768723a52b2d512ef1f9a5ac5597", 148208};
     // FLEX-8000 and Aurora: a container, because a legacy waveform has only
     // RAM there and the container's writable layer survives a reboot.
     static constexpr Pin kContainer{":/waveforms/AetherWSPR.tar.gz", "AetherWSPR.tar.gz",
-                                    "c6f7227c7cca97f1bd3676169d4967f3ed83ec240262b174a3dc11aefde775fc", 160226};
+                                    "afd0f94d90a8cfc6bd1b9ea5772d9aa022ee03838b4a60a2c145b652f5ab1136", 162145};
 };
 
 // The receiver's waveform name, in both packages.

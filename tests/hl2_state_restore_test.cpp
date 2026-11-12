@@ -159,9 +159,10 @@ SliceAgcRequest offLevelRequest(int level)
 }
 
 // The fixed gain the receiver's WDSP channel accepted, in dB; NaN if the
-// chain is absent. dspChains() answers behind the queued pushes.
-double chainFixedGainDb(const hl2::Hl2Backend& backend, int receiver)
+// chain is absent. Settled first, so the cache is behind the queued pushes.
+double chainFixedGainDb(hl2::Hl2Backend& backend, int receiver)
 {
+    backend.settleDspChainsForTest();
     for (const QVariant& v : backend.dspChains()) {
         const QVariantMap m = v.toMap();
         if (m.value(QStringLiteral("chain")).toString() == QLatin1String("rx-wdsp")

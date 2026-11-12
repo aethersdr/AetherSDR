@@ -95,6 +95,10 @@ VoiceKeyerController::VoiceKeyerController(RadioModel& radio,
         connect(k, &VoiceKeyer::statusChanged, this, [this] { refreshBinding(); });
         connect(k, &VoiceKeyer::admissionChanged, this, [this] { refreshBinding(); });
     }
+    // Auto follows the radio's DVK entitlement, a 50004001 refusal included, so
+    // re-resolve whenever either changes rather than relying on a UI pass to do
+    // it. RadioModel re-emits a refusal change as licenseFeaturesChanged().
+    connect(&m_radio, &RadioModel::licenseFeaturesChanged, this, [this] { refreshBinding(); });
 
     // Resolve once so the panel has a keyer before the first availability pass.
     m_bound = resolvedSource() == VoiceKeyerSource::Local
@@ -269,7 +273,8 @@ VoiceKeyerSource VoiceKeyerController::resolvedSource() const
         VoiceKeyerSettings::source(),
         m_radio.hasVoiceKeyer(),
         m_radio.licenseFeatureSeen(DvkModel::kLicenseFeature),
-        m_radio.licenseFeatureEnabled(DvkModel::kLicenseFeature));
+        m_radio.licenseFeatureEnabled(DvkModel::kLicenseFeature),
+        m_radio.dvkLicenseRefused());
 }
 
 QString VoiceKeyerController::recordingsDir() const
