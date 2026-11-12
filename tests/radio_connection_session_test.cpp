@@ -2,6 +2,9 @@
 // listener, network peer, discovery, or radio is used by this test.
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/FlexPttWireSession.h"
+#include "core/LogManager.h"
+#include "core/AppSettings.h"
+#include "TestSettingsProfile.h"
 
 #include <QSignalSpy>
 #include <QCoreApplication>
@@ -103,6 +106,67 @@ static int statusLines(const QSignalSpy& spy)
 class RadioConnectionSessionTest final : public QObject {
     Q_OBJECT
 private slots:
+    void wnbProtocolLoggingIsOptIn()
+    {
+        AppSettings::instance().load();
+        LogManager& logs = LogManager::instance();
+        logs.loadSettings();
+        QVERIFY(!logs.isEnabled(QStringLiteral("aether.protocol")));
+        QVERIFY(!lcProtocol().isDebugEnabled());
+        QVERIFY(!lcProtocol().isInfoEnabled());
+        QVERIFY(lcProtocol().isWarningEnabled());
+        QVERIFY(lcConnection().isDebugEnabled());
+
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        QSignalSpy statuses(&connection, &RadioConnection::lineReceived);
+        const QByteArray cycle = "S0|display pan 0x40000000 wnb=1 wnb_level=50 wnb_updating=1\n"
+                                 "S0|display pan 0x40000000 wnb=1 wnb_level=50 wnb_updating=0\n";
+        static QStringList captured;
+        const auto handler = [](QtMsgType type, const QMessageLogContext& context, const QString& text) {
+            if (type == QtDebugMsg) {
+                captured.append(QString::fromLatin1(context.category) + ": " + text);
+            }
+        };
+        const auto capture = [&](const QByteArray& bytes) {
+            captured.clear();
+            const QtMessageHandler previous = qInstallMessageHandler(handler);
+            RadioConnectionSessionTestAccess::feed(connection, *socket, bytes);
+            qInstallMessageHandler(previous);
+            return captured;
+        };
+
+        // Disabled at the Qt call site: no message reaches the file writer.
+        QVERIFY(capture(cycle).isEmpty());
+        QCOMPARE(statusLines(statuses), 2);
+        const QMap<QString, QString> fields = statuses.last().at(0).value<ParsedMessage>().kvs;
+        QCOMPARE(fields.value("wnb_updating"), QStringLiteral("0"));
+
+        logs.setEnabled(QStringLiteral("aether.protocol"), true);
+        logs.loadSettings();
+        QVERIFY(logs.isEnabled(QStringLiteral("aether.protocol")));
+        const QStringList detailed = capture(cycle);
+        QCOMPARE(detailed.size(), 2);
+        for (const QString& line : detailed) {
+            QVERIFY(line.startsWith(QStringLiteral("aether.protocol: RX:")));
+        }
+        logs.setEnabled(QStringLiteral("aether.protocol"), false);
+        QVERIFY(capture(cycle).isEmpty());
+        QCOMPARE(statusLines(statuses), 6);
+
+        const QStringList ordinary = capture(
+            "S0|display pan 0x40000000 center=14.225 wnb_updating=1\n"
+            "S0|display pan 0x40000000 removed\n"
+            "S0|display pan 0x40000000 removed wnb=0\n"
+            "S0|display pan 0x40000000 wnb_future=1 wnb_updating=0\n"
+            "R17|0|wnb_updating=1\n"
+            "S0|slice 0 wnb_updating=1\n");
+        QCOMPARE(ordinary.size(), 6);
+        for (const QString& line : ordinary) {
+            QVERIFY(line.startsWith(QStringLiteral("aether.connection: RX:")));
+        }
+    }
+
     void wrongFamilyExplicitSourceFailsBeforeDial()
     {
         RadioConnection connection;
@@ -521,5 +585,14 @@ private slots:
     }
 };
 
-QTEST_GUILESS_MAIN(RadioConnectionSessionTest)
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile(QStringLiteral("radio-connection-session-test"));
+    if (!profile.isValid()) {
+        return 1;
+    }
+    QCoreApplication app(argc, argv);
+    RadioConnectionSessionTest test;
+    return QTest::qExec(&test, argc, argv);
+}
 #include "radio_connection_session_test.moc"

@@ -31,7 +31,7 @@ Choosing **Support & Diagnostics...** while it is open brings the window to the 
 
 <img src="/img/screens/support-diagnostics-dialog.png" width="680" alt="Support &amp; Diagnostics window. Diagnostic Logging lists modules in three columns with checkboxes, Discovery, Connection / Commands, Protocol / Status, Audio Summary, KiwiSDR and System Info ticked. Below are the log file path (blacked out) and size, a log tail, Refresh, Clear Log and Open Log Folder buttons, and four numbered steps for reporting an issue." />
 
-*Support & Diagnostics: per-module diagnostic logging and the log file. The log path is blacked out.*
+*Support & Diagnostics: per-module diagnostic logging and the log file. Protocol / Status is enabled in this example. The log path is blacked out.*
 
 ### Diagnostic Logging
 
@@ -40,6 +40,8 @@ A grid of checkboxes, one per log category. The three columns stay fully visible
 **Enable All** / **Disable All** toggle every category at once. The categories, and which are on by default, are listed under [Log categories](#log-categories).
 
 For refused audio-output or **Show TX in Waterfall** edits, the Protocol / Status log names the requested setting and value, such as `Backend refused operation line output gain 30`. This records a request that was not dispatched; it does not confirm a radio state change.
+
+WNB runs on the radio. Its repeating WNB-only pan status messages are debug logging under **Protocol / Status**, which is off by default. Leave it off during normal operation: these messages then produce no log records or disk writes. Enable it only while diagnosing protocol or WNB behavior, then turn it off again. Saved category choices are preserved, so uncheck **Protocol / Status** if it was enabled in an earlier session. Pan status messages that also contain other fields stay in **Connection / Commands**.
 
 ### Log viewer
 
@@ -137,7 +139,7 @@ For a crash, also attach the crash report your operating system kept: `coredumpc
 | **BNR (NVIDIA AFX)** | `aether.nvafx` | BNR runtime download and install failures, and filter load errors |
 | **System Info** | `aether.sysinfo` | Startup hardware inventory: OS, CPU and SIMD features, RAM, GPU |
 
-**On by default:** Discovery, Connection / Commands, Protocol / Status, Audio Summary, KiwiSDR and System Info. Everything else is off until you turn it on. A category that is off still records its warnings and errors, so failures such as External Services and BNR download errors always reach the log. The [Log Categories](./generated/log-categories.md) reference lists every category with the description the app shows.
+**On by default:** Discovery, Connection / Commands, Audio Summary, KiwiSDR and System Info. Everything else is off until you turn it on. A category that is off still records its warnings and errors, so failures such as External Services and BNR download errors always reach the log. The [Log Categories](./generated/log-categories.md) reference lists every category with the description the app shows.
 
 ### Log files
 
@@ -184,7 +186,7 @@ For anything else, prefer the checkboxes in **Help → Support & Diagnostics...*
 
 ## Known issues
 
-- With WNB on, a FLEX-8600 fills the default-on Connection / Commands log category with a `wnb_updating` status line every few seconds ([#6069](https://github.com/aethersdr/AetherSDR/issues/6069)).
+None currently documented.
 
 ## Troubleshooting
 
