@@ -90,6 +90,8 @@ def main():
                     help='package with AETHER_PD_TEST_TONES set: a bench two-tone instead of the mic')
     ap.add_argument('--correction-off', action='store_true',
                     help='package with AETHER_PD_CORRECT=0, for the before half of a transmit test')
+    ap.add_argument('--radio', metavar='ADDR',
+                    help='package with AETHER_PD_RADIO=ADDR: reach the radio API at this address instead of loopback')
     a = ap.parse_args()
     check_version()
     a.output.mkdir(parents=True, exist_ok=True)
@@ -110,11 +112,15 @@ def main():
             files[f'aether-pd-{arch}'] = (data, 0o755)
             print(f'aether-pd-{arch}: {len(data)} bytes')
         files['LICENSES'] = (licenses().encode(), 0o644)
+        if a.radio:
+            text = files['launch.sh'][0].decode()
+            text = text.replace('export AETHER_PD', f'AETHER_PD_RADIO={a.radio}\nexport AETHER_PD_RADIO AETHER_PD', 1)
+            files['launch.sh'] = (text.encode(), 0o755)
         if a.test_tones:
             text = files['launch.sh'][0].decode()
             text = text.replace('export AETHER_PD', f'AETHER_PD_TEST_TONES={a.test_tones}\nexport AETHER_PD_TEST_TONES AETHER_PD', 1)
             files['launch.sh'] = (text.encode(), 0o755)
-        suffix = ('-correction-off' if a.correction_off else '') + ('-test-tones' if a.test_tones else '')
+        suffix = ('-correction-off' if a.correction_off else '') + ('-test-tones' if a.test_tones else '') + ('-lan' if a.radio else '')
         target = a.output / f'{NAME}{suffix}.ssdr_waveform'
         tmp = target.with_suffix('.tmp')
         with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
