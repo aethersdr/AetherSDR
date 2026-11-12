@@ -6688,6 +6688,7 @@ void MainWindow::wireMeters()
         m_vkampConn.setAutoReconnect(ar);
         m_kpa1500Conn.setAutoReconnect(ar);
         m_rfkitConn.setAutoReconnect(ar);
+        m_trioModel.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
         m_kpa500Conn.setAutoReconnect(
             ar && PeripheralSettings::autoConnect(QStringLiteral("kpa500")));
@@ -7498,6 +7499,25 @@ void MainWindow::wireMeters()
             "Rfkit", "ManualPort", AetherSDR::Rfkit::kDefaultPort);
         if (!ip.isEmpty())
             m_rfkitConn.connectNetwork(ip, static_cast<quint16>(port));
+    }
+
+    // ── microHAM Trio antenna switch — read only, no radio awareness ──────
+    // The Peripherals page shows its state and labels; nothing here selects
+    // anything on it. Its session is taken at startup only with "Connect
+    // automatically" on, like the KPA500/KAT500 rows.
+    m_trioModel.loadSettings(PeripheralSettings::autoConnect(
+        QLatin1String(MicrohamTrioSettings::kPeripheralId)));
+    // The Trio is told which radio is connected, so the Peripherals page can
+    // read and store that radio's port on it.
+    {
+        const auto trioRadio = [this]() {
+            m_trioModel.setRadio(m_radioModel.isConnected() ? m_radioModel.settingsScope()
+                                                            : RadioSettingsScope());
+        };
+        connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
+                [trioRadio](bool) { trioRadio(); });
+        connect(&m_radioModel, &RadioModel::infoChanged, this, trioRadio);
+        trioRadio();
     }
 
     // ── LP-100A wattmeter — serial or ser2net, no FlexRadio relay ─────────

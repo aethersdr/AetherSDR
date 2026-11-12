@@ -2,7 +2,8 @@
 
 **Radio Setup → Peripherals** configures the accessories AetherSDR talks to
 directly: Tuner Genius XL (TGXL), Power Genius XL (PGXL), Antenna Genius (AG),
-ShackSwitch, ACOM and SPE Expert amplifiers, VK3AMP, and the LP-100A meter.
+ShackSwitch, ACOM and SPE Expert amplifiers, VK3AMP, the LP-100A meter, and
+the microHAM Trio antenna switch (read only).
 
 ## Layout
 
@@ -92,6 +93,30 @@ is pending is newer than the Remove and is kept.
 | No credential backend | Same as success | Session copy cleared; stored-code deletion unconfirmed, with a notice saying so | Same as success | Remove the code from the OS vault once it is available |
 | Unknown owner (Antenna Genius, ShackSwitch) | Kept | Untouched; the owning endpoint is not known | Connection stopped, guard released | **Connect** the device to establish its address, then retry **Remove** |
 | An earlier removal still pending | Unchanged | Unchanged; the earlier request owns the slot | **Remove** and **Connect** are refused with a notice | Retry after the keychain request finishes |
+
+## microHAM Trio (read only)
+
+The **microHAM Trio** row connects to the Trio antenna-switch controller's own
+web interface (`ws://<address>/ui.ws`, port 80 by default) and shows what it
+reports: the radio with transmit focus, its antenna (both halves in split), the
+RX antenna, RX EXT and the PA loop, and the label of every radio and antenna
+port. AetherSDR switches nothing on the Trio from this page: the session sends
+only its handshake, keep-alives and a close. Positions are the controller's
+echo of its own selection, never relay sense.
+
+The protocol is reverse-observed from the device's own web page on one unit;
+microHAM documents none.
+
+- The Trio is not discovered: enter the address its own menu shows.
+- **Connect automatically** (off: connect only on **Connect**) and the global
+  **Reconnect automatically** behave as for the other devices.
+- The Trio serves one web session. When another client takes it (most often
+  the Trio's page in a browser) the row shows **Needs attention** and AetherSDR
+  does not take it back by itself; **Connect** does.
+- **Web UI** closes AetherSDR's session first, then opens the Trio's page in
+  the browser. **Connect** takes the session back.
+- Stored as `Peripherals.trio.ManualIp`, `Peripherals.trio.ManualPort` and
+  `Peripherals.trio.AutoConnect`.
 
 ## Settings
 

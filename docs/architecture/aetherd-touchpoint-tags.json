@@ -419,6 +419,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/MicrohamTrioSettings.h": {
+  "tag": "peripheral(microhamtrio)",
+  "note": "Where the microHAM TRIO antenna switch's connection is kept: its address and port under Peripherals.trio in the Peripherals settings blob, beside the row's AutoConnect. Peripheral accessory configuration, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/HidEncoderManager.h": {
   "tag": "ui-support",
   "note": "USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state",
@@ -1070,6 +1076,12 @@
  "models/GreenHeronModel.h": {
   "tag": "peripheral(greenheron)",
   "note": "Green Heron \"Everyware\" client \u2014 antenna switches and rotator on one connection to a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/MicrohamTrioModel.h": {
+  "tag": "peripheral(microhamtrio)",
+  "note": "microHAM TRIO client, read only: one held web-socket session to a standalone antenna-switch controller reached by an operator-entered address with no discovery, and the state it reports (radio focus, antenna, labels). Selects nothing on the device. Works with any radio or none. Same precedent as models/GreenHeronModel.h and models/AntennaGeniusModel.h. A peripheral accessory, NOT behind the IRadioBackend radio seam.",
   "split": "",
   "confidence": "high"
  },
