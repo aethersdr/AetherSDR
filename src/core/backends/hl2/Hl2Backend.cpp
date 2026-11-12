@@ -30,6 +30,8 @@
 #include "core/backends/hl2/Hl2Settings.h"
 
 #include <QByteArray>
+#include <QCoreApplication>
+#include <QEvent>
 #include <QHostAddress>
 #include <QLoggingCategory>
 #include <QPointer>
@@ -308,6 +310,13 @@ QByteArray floatBytes(const std::vector<float>& v)
             static_cast<qsizetype>(v.size() * sizeof(float))};
 }
 
+// The TX entry gatherDspChains() writes for an unconfigured modulator.
+QVariantMap notConfiguredTxChain()
+{
+    return {{QStringLiteral("chain"), QStringLiteral("hl2-tx")},
+            {QStringLiteral("level"), QStringLiteral("not-configured")}};
+}
+
 }  // namespace
 
 Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
@@ -333,19 +342,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_rx.assign(1, Receiver{});
 
     // Transmit availability, decided once so it cannot change under a key.
-    // Interactive runs can transmit; automation runs defer to the bridge's TX
-    // gate (AETHER_AUTOMATION_ALLOW_TX) rather than an HL2-specific variable.
+    // Interactive runs can transmit; automation runs take the bridge's own
+    // launch answer (ALLOW_TX, the persisted toggle, NO_TX), so the two gates agree.
     const bool automation = qEnvironmentVariableIsSet("AETHER_AUTOMATION");
-    // The bridge's TX gate has TWO sources and both must be honoured, or this
-    // backend disagrees with the layer the operator actually configured:
-    // AutomationServer::start() reads the env var, and MainWindow applies the
-    // persisted GUI toggle through setTxAllowed(). Checking only the env var
-    // meant the bridge would accept a key, log "key ptt ON" and return ok:true
-    // while nothing keyed — a silent disagreement, which is worse than either
-    // answer on its own.
-    const bool automationAllowsTx =
-        qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
-        || AutomationBridgeSettings::txAllowed();
+    const bool automationAllowsTx = AutomationBridgeSettings::launchTxAllowed();
     m_txAllowed = g_hostOffersTransmit.load() && (!automation || automationAllowsTx);
     if (m_txAllowed) {
         m_metis->enableTransmit(true);
@@ -355,7 +355,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         qInfo() << "Hl2Backend: receive only — this host has no HL2 transmit path";
     } else {
         qInfo() << "Hl2Backend: transmit BLOCKED — automation bridge active "
-                   "without AETHER_AUTOMATION_ALLOW_TX";
+                   "without AETHER_AUTOMATION_ALLOW_TX, or with AETHER_AUTOMATION_NO_TX";
     }
 
     m_ioThread = new QThread(this);
@@ -520,6 +520,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // the filter instead of blending with history.
         m_havePaTemp = false;
         m_paTempC = 0.0;
+        // A reading belongs to its connection: back to Unobserved, and the next
+        // session's first window publishes even if it equals this one's last.
+        if (m_lastFrontEndOverload != AetherSDR::FrontEndOverload {}) {
+            m_lastFrontEndOverload = {};
+            emit frontEndOverloadChanged(m_lastFrontEndOverload);
+        }
         if (m_connected) {
             m_connected = false;
             m_ceilingAnnouncer.reset();   // #5594 (M1): re-seeded on the next connect
@@ -752,6 +758,21 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_linkStatsTimer = new QTimer(this);
     m_linkStatsTimer->setInterval(kLinkStatsIntervalMs);
     connect(m_linkStatsTimer, &QTimer::timeout, this, &Hl2Backend::publishLinkStats);
+
+    // A fresh modulator is unconfigured and m_ioDsps is empty, so this is what
+    // the first gather would return.
+    m_dspChains = {notConfiguredTxChain()};
+    m_dspChainsPublishTimer = new QTimer(this);
+    m_dspChainsPublishTimer->setSingleShot(true);
+    m_dspChainsPublishTimer->setInterval(0);
+    connect(m_dspChainsPublishTimer, &QTimer::timeout, this,
+            &Hl2Backend::postDspChainsGather);
+    // Never stopped, like the poll-state timer: the cache has no connected state.
+    m_dspChainsRefreshTimer = new QTimer(this);
+    m_dspChainsRefreshTimer->setInterval(kDspChainsRefreshIntervalMs);
+    connect(m_dspChainsRefreshTimer, &QTimer::timeout, this,
+            &Hl2Backend::postDspChainsGather);
+    m_dspChainsRefreshTimer->start();
 }
 
 void Hl2Backend::publishLinkStats()
@@ -1819,8 +1840,11 @@ void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
     // the thread that CREATED it, which is this one).
     if (m_metis && m_ioThread && m_ioThread->isRunning()
         && QThread::currentThread() != m_ioThread) {
+        // A gather already queued runs first and sees the old list: retire it.
+        ++m_dspChainsEpoch;
         QMetaObject::invokeMethod(m_metis, [this, next] { m_ioDsps = next; },
                                   Qt::BlockingQueuedConnection);
+        requestDspChainsPublish();
         return;
     }
     // No I/O thread to hand it to: before it starts, after it is joined, or when
@@ -1880,6 +1904,13 @@ AetherSDR::WidebandConverterView widebandConverterViewRecord() noexcept
     wide.frameVerb = QStringLiteral("bandscope.frame");
     return wide;
 }
+
+namespace {
+// The TX antenna tokens the slice's txAntenna carries; capabilities() names RF1
+// as unmetered with the same token.
+QString txRouteAntToken() { return QStringLiteral("ANT"); }
+QString txRouteRf1Token() { return QStringLiteral("RF1"); }
+} // namespace
 
 RadioCapabilities Hl2Backend::capabilities() const
 {
@@ -2009,6 +2040,10 @@ RadioCapabilities Hl2Backend::capabilities() const
         {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
         {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    // The BFO pitch is host DSP: setCwPitch adopts it and reports it back as
+    // TransmitDelta::cwPitch. Same range and step as cwPitchMinHz..cwPitchMaxHz.
+    c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine,
+        c.cwPitchMinHz, c.cwPitchMaxHz, c.cwPitchStepHz};
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
@@ -2021,7 +2056,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {TxPowerBand{c.tuningMinHz, c.tuningMaxHz,
                                   static_cast<double>(kHl2RatedOutputWatts)}};
     // ANT or RF1 is the operator's own choice; a CAT antenna select must not move it.
-    c.independentTxAntenna = IndependentTxAntenna{};
+    // RF1 has no forward-power detector, so its gauges read "not measured".
+    c.independentTxAntenna = IndependentTxAntenna{{txRouteRf1Token()}};
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
@@ -2047,6 +2083,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // declared as an observation of the radio's own inputs only.
     c.hasRadioPttReadback = false;
     c.radioPttObservation = RadioCapabilities::RadioPttObservation{};
+    // The pre-DDC clip bit (address 0, bit 24) feeds publishFrontEndOverload().
+    c.frontEndOverloadObservation = RadioCapabilities::FrontEndOverloadObservation{};
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
@@ -2942,6 +2980,7 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // UI yet, so anything higher would be an un-commanded power level chosen by
     // a default. An operator raising it explicitly is the only way it should go up.
     setTxDriveLevel(0);
+    requestDspChainsPublish();
     emit dspSetupFinished();
 
     // Initial slice/pan state is published from the linkUp handler above, once
@@ -2953,6 +2992,7 @@ void Hl2Backend::invalidateTxDspConfiguration()
     if (!m_txDsp) {
         return;
     }
+    withdrawCachedTxChain();
     if (!m_ioThread || !m_ioThread->isRunning()
         || QThread::currentThread() == m_txDsp->thread()) {
         m_txDsp->invalidateConfiguration();
@@ -3235,6 +3275,7 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
             Q_ARG(WdspChannel::Mode, wdsp));
         pushTxPassband(mode);
     }
+    requestDspChainsPublish();
     emitSliceState(ddc);
     notifyOperatingStateChanged();
 }
@@ -3255,6 +3296,7 @@ void Hl2Backend::setSliceFilter(int sliceId, int lowHz, int highHz)
         const auto [dspLo, dspHi] = dspFilterHz(*r);
         QMetaObject::invokeMethod(r->dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, dspLo), Q_ARG(double, dspHi));
+        requestDspChainsPublish();
     }
     emitSliceState(ddc);
     notifyOperatingStateChanged();
@@ -3305,9 +3347,11 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // threshold-only change), which used to send medium over whatever mode the
     // receiver was actually running.
     const double ceilingDb = m_dbRef.agcCeilingDb(r->agcThresholdDb);
-    if (r->dsp)
+    if (r->dsp) {
         QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgcMode(r->agcMode)), Q_ARG(double, ceilingDb));
+        requestDspChainsPublish();
+    }
     emitSliceState(ddc);
     // The capture half. setSliceMode/setSliceFilter next door have always said
     // this and AGC never did, so the operator's AGC was the one control on this
@@ -3741,6 +3785,7 @@ void Hl2Backend::pushNoiseBlanker(const Receiver& r)
         Q_ARG(WdspChannel::NoiseBlanker, AetherSDR::toWdsp(r.nbKind)),
         Q_ARG(int, r.nbLevel),
         Q_ARG(WdspChannel::NoiseBlankerFill, AetherSDR::toWdsp(r.nbFill)));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::pushApf(const Receiver& r)
@@ -3754,6 +3799,7 @@ void Hl2Backend::pushApf(const Receiver& r)
     QMetaObject::invokeMethod(r.dsp, "setApf", Qt::QueuedConnection,
         Q_ARG(bool, r.apfOn), Q_ARG(int, r.apfLevel),
         Q_ARG(double, static_cast<double>(m_cwPitchHz)));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::pushAgcOffLevel(const Receiver& r)
@@ -3762,6 +3808,7 @@ void Hl2Backend::pushAgcOffLevel(const Receiver& r)
         return;
     QMetaObject::invokeMethod(r.dsp, "setAgcOffLevel", Qt::QueuedConnection,
         Q_ARG(int, r.agcOffLevel));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::pushSquelch(const Receiver& r)
@@ -3794,6 +3841,7 @@ void Hl2Backend::seedNotches(const Receiver& r)
     }
     QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
         Q_ARG(bool, m_notchesEnabled));
+    requestDspChainsPublish();
 }
 
 void Hl2Backend::createNotch(double centerHz, double widthHz)
@@ -3833,6 +3881,7 @@ void Hl2Backend::createNotch(double centerHz, double widthHz)
     // The id is minted HERE, so nothing above knows about this notch until it
     // is told. Same contract as a Flex, where the radio assigns the id and
     // reports it back as status.
+    requestDspChainsPublish();
     AetherSDR::NotchDelta delta;
     delta.centerHz = notch.centerHz;
     delta.widthHz = notch.widthHz;
@@ -3876,6 +3925,7 @@ void Hl2Backend::setNotch(int notchId, const AetherSDR::NotchDelta& delta)
     // Echo the APPLIED values, which may differ from what was asked (width
     // clamping). Reporting the request instead would let the overlay drift away
     // from the audio a little more with every drag.
+    requestDspChainsPublish();
     AetherSDR::NotchDelta applied;
     applied.centerHz = notch.centerHz;
     applied.widthHz = notch.widthHz;
@@ -3898,6 +3948,7 @@ void Hl2Backend::removeNotch(int notchId)
             QMetaObject::invokeMethod(r.dsp, "removeNotch", Qt::QueuedConnection,
                 Q_ARG(int, index));
     }
+    requestDspChainsPublish();
     emit notchRemoved(notchId);
     notifyOperatingStateChanged();
 }
@@ -3910,6 +3961,7 @@ void Hl2Backend::setNotchesEnabled(bool on)
             QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
                 Q_ARG(bool, on));
     }
+    requestDspChainsPublish();
 }
 
 // Intent ignored — the HL2's DDC window is independent of any slice.
@@ -4325,6 +4377,7 @@ void Hl2Backend::finishRateChange(bool ok, quint64 generation, int targetRate,
     // installed nothing — this one only stops the REPORT.
     if (!m_rateLedger.isCurrent(generation))
         return;
+    requestDspChainsPublish();
 
     if (!ok) {
         // NOTHING TO UNDO ON THE RADIO. The register is written only on the
@@ -4505,7 +4558,8 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     if (!m_txAllowed) {
         if (key)
             qWarning() << "Hl2Backend: key refused — automation bridge is active "
-                          "without AETHER_AUTOMATION_ALLOW_TX";
+                          "without AETHER_AUTOMATION_ALLOW_TX"
+                          ", or with AETHER_AUTOMATION_NO_TX";
         return;
     }
     // A key with no running session is refused here too, so this backend never
@@ -4608,6 +4662,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     // gain control reads this; nothing else does.
     if (keyChanged && !key) {
         m_sinceUnkey.start();
+    }
+    // Per-over, so a reader of healthSnapshot() is told about THIS transmission
+    // rather than about every one since connect. Zeroed on key-DOWN and left
+    // alone on key-up, because a diagnostic reads the snapshot after unkeying
+    // as often as during (radiocert samples it per keyed stage).
+    if (keyChanged && key) {
+        m_keyedSwrGateClears = 0;
     }
     m_keyed = key;
     // Manual PTT is already mirrored optimistically by RadioModel, but CW
@@ -4799,7 +4860,8 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const 
     if (!m_txAllowed) {
         if (down) {
             qWarning() << "Hl2Backend: CW key refused — automation bridge is active "
-                          "without AETHER_AUTOMATION_ALLOW_TX";
+                          "without AETHER_AUTOMATION_ALLOW_TX"
+                          ", or with AETHER_AUTOMATION_NO_TX";
         }
         return;
     }
@@ -4969,8 +5031,19 @@ void Hl2Backend::setCwPitch(int hz)
     // seam, and a pitch of 0 would silently turn CW back into the
     // marker-on-DC geometry this whole path exists to remove.
     hz = std::clamp(hz, 100, 6000);
-    if (hz == m_cwPitchHz)
+    // The adopted pitch is reported on every call while connected, same value
+    // included, so a connect-time push establishes the observation.
+    const auto reportPitch = [this, hz] {
+        if (m_connected) {
+            TransmitDelta delta;
+            delta.cwPitch = hz;
+            emit transmitChanged(delta);
+        }
+    };
+    if (hz == m_cwPitchHz) {
+        reportPitch();
         return;
+    }
     m_cwPitchHz = hz;
 
     // Re-push every CW receiver. The pitch moves the BFO, and the BFO is baked
@@ -4995,6 +5068,8 @@ void Hl2Backend::setCwPitch(int hz)
         QMetaObject::invokeMethod(r.dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, lo), Q_ARG(double, hi));
     }
+    requestDspChainsPublish();
+    reportPitch();
 }
 
 void Hl2Backend::repushAllFrequencies()
@@ -5570,9 +5645,6 @@ int Hl2Backend::operatorDrivePercent() const noexcept
 }
 
 namespace {
-QString txRouteAntToken() { return QStringLiteral("ANT"); }
-QString txRouteRf1Token() { return QStringLiteral("RF1"); }
-
 QString txRouteToken(hl2::TxRoute route)
 {
     return route == hl2::TxRoute::Rf1 ? txRouteRf1Token() : txRouteAntToken();
@@ -5688,6 +5760,7 @@ void Hl2Backend::pushTxPassband(const QString& mode)
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(lo)),
             Q_ARG(double, static_cast<double>(hi)));
+        requestDspChainsPublish();
     }
     TransmitDelta delta;
     delta.txFilterLow = lo;
@@ -5729,6 +5802,7 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(applyLo)),
             Q_ARG(double, static_cast<double>(applyHi)));
+        requestDspChainsPublish();
     }
 
     // Client-authoritative state moved, so the capture half has to know — the
@@ -5750,9 +5824,11 @@ void Hl2Backend::setMicGain(int level)
 
     const double linear = micSliderToLinear(level);
 
-    if (m_txDsp)
+    if (m_txDsp) {
         QMetaObject::invokeMethod(m_txDsp, "setMicGain", Qt::QueuedConnection,
             Q_ARG(double, linear));
+        requestDspChainsPublish();
+    }
 
     // Capture half of TxSetpoints memory; RadioModel debounces the store.
     // Only on change: setupBackend() re-asserts the level on every rebuild,
@@ -5884,8 +5960,8 @@ QString agcModeName(int wdspMode)
 //
 // The gather is a STATIC member taking the two lists it may read, so it has no
 // `this` and cannot reach m_rx — see the declaration in the header for why that
-// is the enforcement rather than a comment. dspChains() below is the one place
-// that chooses what to hand it.
+// is the enforcement rather than a comment. postDspChainsGather() below is the
+// one place that chooses what to hand it.
 QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
                                          Hl2TxDsp* txDsp)
 {
@@ -6003,31 +6079,69 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
     return chains;
 }
 
-// Gathered on the I/O thread, because that is where both chains live and this
-// is called from the GUI thread. Same shape as AutomationServer's
-// dspSnapshotOnObjectThread(): a same-thread fast path, otherwise a blocking
-// queued invocation. A failed invocation returns empty rather than a
-// half-filled list — "we could not ask" and "it answered zero" must not look
-// alike, which is the same rule healthSnapshot() follows.
+// A plain read, per IRadioBackend rule 3: the I/O thread publishes into
+// m_dspChains (postDspChainsGather()), so this never waits on it. The answer is
+// as of the last publish; a withdraw is visible at once (withdrawCachedTxChain()).
 QVariantList Hl2Backend::dspChains() const
 {
-    // THE ONE LINE THAT CHOOSES. m_ioDsps, never m_rx: the I/O side gets its own
-    // DDC-indexed list, rebuilt by publishIoDsps() when the receiver set
-    // changes, and the EP6 fan-out reads it for the same reason. Nothing in the
-    // gather needs Receiver anyway — every field it reports comes from the DSP
-    // object, which was the point of reading the DSP rather than the mirror.
-    if (!m_txDsp || m_txDsp->thread() == QThread::currentThread()) {
-        return gatherDspChains(m_ioDsps, m_txDsp);
-    }
-    if (!m_ioThread || !m_ioThread->isRunning()) {
-        return {};  // no event loop can answer a blocking invocation
-    }
+    return m_dspChains;
+}
 
-    QVariantList out;
-    const bool invoked = QMetaObject::invokeMethod(
-        m_txDsp, [this, &out]() { out = gatherDspChains(m_ioDsps, m_txDsp); },
-        Qt::BlockingQueuedConnection);
-    return invoked ? out : QVariantList{};
+void Hl2Backend::requestDspChainsPublish()
+{
+    if (m_dspChainsPublishTimer && !m_dspChainsPublishTimer->isActive()) {
+        m_dspChainsPublishTimer->start();
+    }
+}
+
+// Posted to the I/O thread, so it runs after every DSP change already queued
+// there. m_ioDsps, never m_rx: see gatherDspChains().
+void Hl2Backend::postDspChainsGather()
+{
+    if (!m_metis || !m_ioThread || !m_ioThread->isRunning()) {
+        return;
+    }
+    const quint64 generation = m_connectGeneration;
+    const quint64 epoch = m_dspChainsEpoch;
+    QMetaObject::invokeMethod(m_metis, [this, generation, epoch] {
+        QVariantList chains = gatherDspChains(m_ioDsps, m_txDsp);
+        QMetaObject::invokeMethod(this, [this, chains = std::move(chains), generation, epoch] {
+            acceptDspChains(chains, generation, epoch);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
+void Hl2Backend::acceptDspChains(const QVariantList& chains, quint64 connectGeneration,
+                                 quint64 epoch)
+{
+    if (connectGeneration != m_connectGeneration || epoch != m_dspChainsEpoch) {
+        return;
+    }
+    m_dspChains = chains;
+}
+
+void Hl2Backend::withdrawCachedTxChain()
+{
+    ++m_dspChainsEpoch;
+    for (QVariant& entry : m_dspChains) {
+        if (entry.toMap().value(QStringLiteral("chain")).toString()
+            == QLatin1String("hl2-tx")) {
+            entry = notConfiguredTxChain();
+        }
+    }
+    // The receivers' half re-converges once the queued invalidation has run.
+    requestDspChainsPublish();
+}
+
+void Hl2Backend::settleDspChainsForTest()
+{
+    if (!m_metis || !m_ioThread || !m_ioThread->isRunning()
+        || QThread::currentThread() == m_ioThread) {
+        return;
+    }
+    postDspChainsGather();
+    QMetaObject::invokeMethod(m_metis, [] {}, Qt::BlockingQueuedConnection);
+    QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
 }
 
 void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
@@ -6828,6 +6942,41 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
         t.reversePowerRaw
             ? QVariant(directionalWatts(*t.reversePowerRaw)) : QVariant());
+    // The gate TX:SWR is suppressed below, published alongside the reading it
+    // gates (#7063). A consumer that only sees "no SWR" cannot tell a
+    // deliberately suppressed ratio from a dead meter, and `radiocert` reported
+    // a healthy TX:SWR as DEFINED BUT NEVER FED for exactly that reason. The
+    // VALUE is published, not just the comparison, so a reader can say how far
+    // below the gate a run sat rather than only that it was below it.
+    //
+    // All THREE rows are gated on the SAME optional, so they are genuinely
+    // present or absent together. forwardPowerRaw would be the wrong one:
+    // Hl2Telemetry::apply() takes it from every RADDR-1 response while the peak
+    // window skips the non-measurement ones, so a unit whose temperature word
+    // always reads 0 has forwardPowerRaw and no peak (MetisProtocol.h:515-517).
+    // Gating on that would publish a known threshold beside an absent reading —
+    // a half-state a consumer cannot act on, and on that unit class it would
+    // leave radiocert reporting the very "DEFINED BUT NEVER FED" verdict this
+    // change exists to remove. Pinned by hl2_backend_seam_test's
+    // swrGateHealthRows().
+    put(HealthSnapshot::kSwrGateCounts,
+        QStringLiteral("Forward counts required for SWR"),
+        t.forwardPowerPeakRaw ? QVariant(kMinForwardCountsForSwr) : QVariant());
+    // HOW MANY KEYED WINDOWS PASSED THE SWR GATES — the key a consumer reasons
+    // with, and the reason the peak below is not. A peak above the floor can
+    // still be withheld by m_swrGate (key-on and speech-pause windows), so
+    // "peak above gate" does not mean SWR was due. Counted outside the
+    // reverse-reading and swrFromRaw() conditions so "passed the gates but
+    // published nothing" stays visible. Per-over; see m_keyedSwrGateClears.
+    put(HealthSnapshot::kSwrGateClearsWhileKeyed,
+        QStringLiteral("Keyed windows clearing the SWR gate"),
+        t.forwardPowerPeakRaw ? QVariant(m_keyedSwrGateClears) : QVariant());
+    // THE WINDOW'S PEAK, for a human reading HOW FAR below the floor a run sat.
+    // Not a gate verdict — see the counter above for why. FWDPWR already takes
+    // the peak while keyed for the same display reason (publishTelemetry()).
+    put(HealthSnapshot::kForwardWindowPeakRaw,
+        QStringLiteral("Forward (raw counts, window peak)"),
+        opt(t.forwardPowerPeakRaw));
     // SWR from linearized counts (#4578), absent below kMinForwardCountsForSwr
     // like the TX:SWR meter, where the ratio would be noise.
     {
@@ -8144,6 +8293,7 @@ void Hl2Backend::pushEffectiveLnaGain()
         // The squelch gate is referred to the LNA the same way.
         pushSquelch(r);
     }
+    requestDspChainsPublish();
     // Echo what the hardware actually took, to every pan — a slider that
     // asked for something outside the register's range finds out here, and so
     // does an operator whose gain is being held down by an automatic control.
@@ -8411,6 +8561,7 @@ void Hl2Backend::pushInitialState()
                   modeFromString(txRx ? txRx->mode : QStringLiteral("USB"))));
         QMetaObject::invokeMethod(m_txDsp, "reset", Qt::QueuedConnection);
     }
+    requestDspChainsPublish();
 
     // This radio's remembered mic level, staged by applyRestoredState() for one
     // connect-time application. Applied here because m_txDsp is built by
@@ -8579,7 +8730,15 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     const std::optional<int> swrFwd = windowPair ? t.forwardPowerPeakRaw : t.forwardPowerRaw;
     const std::optional<int> swrRev = windowPair ? t.reversePowerPeakRaw : t.reversePowerRaw;
     const bool swrModulated = !windowPair || m_swrGate.accept(*swrFwd);
-    if (swrFwd && swrRev && *swrFwd >= kMinForwardCountsForSwr && swrModulated) {
+    // The keyed windows that pass every suppression gate, counted apart from
+    // the ratio: a window counted here that publishes no SWR (no reverse
+    // reading, or swrFromRaw() declining) is a real defect radiocert must call,
+    // so the reverse conditions stay out of the count.
+    const bool swrGatesPassed =
+        swrFwd && *swrFwd >= kMinForwardCountsForSwr && swrModulated;
+    if (m_keyed && swrGatesPassed)
+        ++m_keyedSwrGateClears;
+    if (swrGatesPassed && swrRev) {
         if (const auto swr = swrFromRaw(*swrFwd, *swrRev))
             emit meterUpdate(QStringLiteral("TX:SWR"), *swr);
     }

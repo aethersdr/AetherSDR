@@ -116,6 +116,43 @@ int main(int argc, char** argv)
                    .arg(applied).arg(bound.count()).arg(deferred.count()).toStdString());
     }
 
+    // Auto follows a 50004001 refusal by itself, with no UI pass to prompt it:
+    // a radio that refuses DVK commands without ever reporting the license
+    // missing (#6262) moves Auto to the local keyer, and the radio's later
+    // licensed report (which clears the refusal) moves it back.
+    {
+        VoiceKeyerSettings::setSource(VoiceKeyerSourceSetting::Auto);
+        RadioModel radio;
+        VoiceKeyerController ctl(radio, nullptr, nullptr);
+        VoiceKeyer* dvk = &radio.dvkModel();
+        const bool startedOnRadio = ctl.bound() == dvk;
+
+        QSignalSpy bound(&ctl, &VoiceKeyerController::boundKeyerChanged);
+        radio.dvkModel().noteRefusal(0x50004001u);
+        const bool movedToLocal = ctl.bound() != nullptr && ctl.bound() != dvk
+                                  && ctl.resolvedSource() == VoiceKeyerSource::Local;
+
+        radio.dvkModel().clearRefusal();
+        const bool movedBack = ctl.bound() == dvk
+                               && ctl.resolvedSource() == VoiceKeyerSource::Radio;
+
+        report("auto_follows_a_refusal_and_its_clearing",
+               startedOnRadio && movedToLocal && movedBack && bound.count() == 2,
+               QString("radio=%1 local=%2 back=%3 bound=%4")
+                   .arg(startedOnRadio).arg(movedToLocal).arg(movedBack)
+                   .arg(bound.count()).toStdString());
+    }
+
+    // An explicit Radio choice stays put on a refusal; the panel explains it.
+    {
+        VoiceKeyerSettings::setSource(VoiceKeyerSourceSetting::Radio);
+        RadioModel radio;
+        VoiceKeyerController ctl(radio, nullptr, nullptr);
+        radio.dvkModel().noteRefusal(0x50004001u);
+        report("forced_radio_stays_bound_after_a_refusal",
+               ctl.bound() == static_cast<VoiceKeyer*>(&radio.dvkModel()));
+    }
+
     std::printf("\n%s (%d failed)\n", g_failed ? "FAILED" : "PASSED", g_failed);
     return g_failed ? 1 : 0;
 }

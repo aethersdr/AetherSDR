@@ -25,8 +25,17 @@ namespace {
 constexpr float kNoCarrierWatts = 0.0011f;
 // MeterModel::kMinForwardWattsForSwr — the SWR power floor — now lives in the
 // header, because `radiocert`'s keyed-RF precondition has to reason about the
-// same number: the finding it suppresses is "TX:SWR never fed", and SWR is fed
-// exactly when forward power clears this floor.
+// same number: the finding it suppresses is "TX:SWR never fed".
+//
+// ⚠ THIS IS THE CONSUMER'S FLOOR, NOT THE CONDITION SWR IS FED UNDER. An
+// earlier wording here said SWR "is fed exactly when forward power clears this
+// floor", and that is false for any backend with a gate of its own: Hl2Backend
+// withholds SWR below kMinForwardCountsForSwr (320 counts, ~74 mW), about 67x
+// above this floor. Reading this comment as the whole condition is what made
+// `radiocert` report a healthy TX:SWR as DEFINED BUT NEVER FED (#7063). A
+// producer's gate is discoverable through IRadioBackend::HealthSnapshot's
+// kSwrGateCounts / kSwrGateClearsWhileKeyed keys; ask there, do not assume this
+// number is the only threshold in the chain.
 //
 // NOTE: kNoCarrierWatts (#4540) and kMinForwardWattsForSwr (#4533) share the
 // same numeric floor but answer different questions -- "is a carrier present"
