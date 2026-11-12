@@ -107,24 +107,24 @@ read off `Hl2TxDsp::Config` as `Hl2Backend::beginDspSetup` fills it, `MetisClien
 | `inputSampleRate` | **24000** | `Hl2TxDsp::Config::inputSampleRateHz`, assigned explicitly in `Hl2Backend::beginDspSetup` ("AudioEngine's rate; `submitTxAudio` re-checks", and `submitTxAudio` refuses anything else) |
 | `dspSampleRate` | 48000 | `Hl2RxDsp`'s `kWdspDspSampleRateHz`; WDSP's design rate, and both reference clients hold it there |
 | `outputSampleRate` | 48000 | `MetisClient::kEp2AudioRateHz`, fixed |
-| `inputBlockSize` | **512** | `Hl2TxDsp::Config::dspBlockSize`, in *input* samples |
-| `dspBlockSize` | **1024** | the mirror of `Hl2RxDsp::configure`'s `dspBlockSize * kWdspDspSampleRateHz / inputSampleRateHz`. **Nothing in the tree computes this for transmit today.** |
+| `inputBlockSize` | **256** (512 when §3 was measured; halved by #7182) | `Hl2TxDsp::Config::dspBlockSize`, in *input* samples |
+| `dspBlockSize` | **512** (1024 when §3 was measured) | the mirror of `Hl2RxDsp::configure`'s `dspBlockSize * kWdspDspSampleRateHz / inputSampleRateHz`. **Nothing in the tree computes this for transmit today.** |
 | `mode` | the TX receiver's mode | `Hl2Backend::beginDspSetup` via `modeFromString`; changes later through `setSliceMode` → `Hl2TxDsp::setMode` |
 | `filterLowHz` / `filterHighHz` | `effectiveTxPassband(mode)` → `defaultTxPassbandForMode` | `{300,2700}` voice, `{150,3000}` DIGU/DIGL, `{300,900}` CW, `{100,3000}` AM/FM — **positive for every mode** |
 | `blockForOutput` | **`false`** | must be. `Hl2Backend`'s constructor moves both `m_metis` and `m_txDsp` to `m_ioThread`, and `MetisClient`'s 2 ms `m_ep2Timer` and its `QUdpSocket` live on that same thread. `fexchange2`'s `bfo` branch is `WaitForSingleObject(Sem_OutReady, INFINITE)`; an unbounded wait there stops EP2 and the HL2's gateware watchdog is on the other end. `Hl2RxDsp::Config::blockForOutput` is already `false` for the same reason. |
 
 Derived WDSP state at that configuration:
 
-- `dsp_insize = 512`, `dsp_outsize = 1024`, `out_size = 1024`
-- `r1_size = 512`, `r2_size = 1024`, `r2_havesamps = 1024`, `Sem_OutReady` initial `n = 1`
+- `dsp_insize = 256`, `dsp_outsize = 512`, `out_size = 512` (512 / 1024 / 1024 when §3 was measured)
+- `r1_size = 256`, `r2_size = 512`, `r2_havesamps = 512` (512 / 1024 / 1024 when measured), `Sem_OutReady` initial `n = 1`
 - `rsmpin` **ON** (`in_rate != dsp_rate`) — a `calc_resample` polyphase FIR the test never runs
 - `rsmpout` off
-- `bp0` nc = `max(2048, 1024)` = 2048
-- mute ramp `0.010*24000 + 0.025*24000 = 840` input samples = **35 ms = 1.64 blocks**
+- `bp0` nc = `max(2048, 512)` = 2048 (`max(2048, 1024)` when measured): 4 partitions of 512
+- mute ramp `0.025*24000 = 600` input samples = **25 ms = 2.34 blocks of 256** (the up-delay is 0 since #6052; `0.010*24000 + 0.025*24000 = 840` = 35 ms = 1.64 blocks of 512 when measured)
 - **caller cadence**: `AudioEngine::m_txPollTimer` at 5 ms → `Hl2Backend::submitTxAudio` →
   `Qt::QueuedConnection` onto `m_ioThread` → `Hl2TxDsp::processAudioBlock` accumulates into
-  `m_inBuffer` and processes whole `dspBlockSize` multiples → **one `processIq` per 512
-  input samples = one call per 21.33 ms**
+  `m_inBuffer` and processes whole `dspBlockSize` multiples → **one `processIq` per 256
+  input samples = one call per 10.67 ms** (per 512 = 21.33 ms when measured, before #7182)
 
 ---
 
@@ -135,18 +135,18 @@ consequence was measured or read.
 
 | # | what differs | `runVector` | live | consequence | status |
 |---|---|---|---|---|---|
-| 1 | **caller pacing** | tight loop, 24 calls back to back | one call per **21.33 ms**, clocked by the audio device | **This is the entire Underrun story.** See §3. | **measured** |
+| 1 | **caller pacing** | tight loop, 24 calls back to back | one call per **21.33 ms** when measured (10.67 ms since #7182), clocked by the audio device | **This is the entire Underrun story.** See §3. | **measured** |
 | 2 | `blockForOutput` | `true` | **must be `false`** | With `bfo = 1`, `fexchange2`'s `*error += -2` branch is structurally unreachable (`if (a->bfo) WaitForSingleObject(..., INFINITE); if (a->bfo || doit)`). **The existing TX vector is incapable of reporting an underrun.** Verified unchanged in 2.10. | source |
 | 3 | `inputSampleRate` | 48000 | **24000** | `TXAResCheck` turns `rsmpin` on. A stage the test never executes, in the signal path, ahead of `bp0`. Ran clean in every measurement below. | source + **measured to run** |
-| 4 | buffer geometry | `dsp_insize == dsp_size == out_size == 256` | `dsp_insize 512`, `dsp_size 1024`, `dsp_outsize 1024`, `out_size 1024` | **Every buffer relationship `pre_main_build` computes differs.** Both geometries run clean once paced. | **measured** |
+| 4 | buffer geometry | `dsp_insize == dsp_size == out_size == 256` | `dsp_insize 512`, `dsp_size 1024`, `dsp_outsize 1024`, `out_size 1024` when measured (256 / 512 / 512 / 512 since #7182) | **Every buffer relationship `pre_main_build` computes differs.** Both geometries run clean once paced. | **measured** |
 | 5 | `dspBlockSize` derivation | hand-set equal to `inputBlockSize` | must be `2 × inputBlockSize` | `Hl2RxDsp::configure` computes this for receive; **no transmit counterpart exists**. Getting it wrong is the one configuration error that produces a *permanent* rate imbalance rather than a transient. | source |
 | 6 | **which input plane carries the audio** | **both**, identically (`fillAudioTone`) | mono audio — one plane | `xpanel` runs with `inselect = 2`: `I = in[2i] * (inselect >> 1)`, `Q = in[2i+1] * (inselect & 1)`. **Q is multiplied by zero.** A caller that fills `inputQ` and leaves `inputI` empty gets **exact zeros, forever, with no error**. `runVector` fills both, so it cannot distinguish them. | **measured** — §4.1 |
 | 7 | passband sign | `{+150, +3000}` | positive for every mode today; **must become signed** | The mode does not select the sideband in TXA — `TXASetupBPFilters` handles `TXA_LSB` and `TXA_USB` with the identical `CalcBandpassFilter(bp0, f_low, f_high, 2.0)` call. The sign does. | **measured** — §4.2 |
 | 8 | output conjugation | n/a (output discarded) | `Hl2TxDsp` emits `(bi, -q)` | **The conjugation must be DROPPED, not kept.** See §4.2 — this is the correction that matters most, and it is the opposite of what the S6 study concluded. | **measured** |
-| 9 | mute-ramp length in blocks | 1680 input samples = 6.56 blocks | 600 input samples = 2.34 blocks of 256 (the 25 ms slew; the TX channel has no up-delay since #6052, 840 = 1.64 blocks of 512 before) | The test's `block >= 8` energy window clears its ramp by one and a half blocks. First non-zero output was measured at **block 2** with the 10 ms up-delay; not re-measured without it. | source; block-2 onset measured with the 10 ms up-delay |
+| 9 | mute-ramp length in blocks | 1680 input samples = 6.56 blocks | 600 input samples = 2.34 blocks of 256 (the 25 ms slew; the TX channel has no up-delay since #6052, 840 = 1.64 blocks of 512 before) | `runVector`'s `block >= 8` energy window clears its own 6.56-block ramp by one and a half blocks. First non-zero output was measured at **block 2** with the 10 ms up-delay; not re-measured without it. | source; block-2 onset measured with the 10 ms up-delay |
 | 10 | mode coverage | `Usb` only | any of 13 | `WdspChannel::Mode` is index-identical to `rxaMode` *and* to `txaMode` for 0..11, but **`txaMode` has no `TXA_WBFM`**: 12 is `TXA_AM_LSB` and 13 is `TXA_AM_USB`. `validateConfig`'s refusal of `Mode::Wbfm` on transmit is load-bearing, not cosmetic — without it a WBFM transmit channel would silently become AM-lower-sideband. | source |
 | 11 | control calls while running | none | `setMode` / `setFilter` arrive queued, possibly **while keyed** | Both take `beginControlOperation()`, which makes concurrent `processIq` return `ProcessResult::Busy`. Since #6052 `applyModeAndFilter()` also calls `setMinimumPhase()`. It is a no-op unless the mode crosses between {USB, LSB} and the other modes; then it is a third control operation and rebuilds the bandpass (`TXASetMP`) under the setup mutex. `Hl2TxDsp` has no such state today — a mode change mid-over is free. A TXA path drops a transmit block per control call unless the caller re-feeds. | source |
-| 12 | consumer | discarded | `MetisClient::queueTxIq`, a deque drained 126 samples per 2.625 ms EP2 frame, `kTxQueueMax = 12000` | Underflow is silence, overflow drops the oldest. Unchanged by the modulator. Since #6052 the queue is primed at the start of each over and after every abandon: the first samples are held until `kTxPrimeTargetSamples` (2560: one 512-sample block plus a 2048-sample margin) are queued, which delays the audio by the margin, 42.67 ms. The margin is set in samples, not in blocks. | source |
+| 12 | consumer | discarded | `MetisClient::queueTxIq`, a deque drained 126 samples per 2.625 ms EP2 frame, `kTxQueueMax = 12000` | Underflow is silence, overflow drops the oldest. Unchanged by the modulator. Since #6052 the queue is primed at the start of each over and after every abandon: the first samples are held until `kTxPrimeTargetSamples` (2560 at 48 kHz: one 512-sample block plus a 2048-sample margin) are queued, which delays the audio by the margin, 42.67 ms. The margin is set in samples, not in blocks. | source |
 | 13 | unkey | none | `Hl2Backend::setKeying(false)` → `Hl2TxDsp::reset()` + `MetisClient::flushTxIq()` | TXA uses `WdspChannel::discardTransmitData()` to synchronously discard rings and filter history. A fade-only `setRunning(false)` requires continued clocking, which HL2 does not supply while receiving. | source + head-inclusive reset regression |
 
 ---
@@ -155,8 +155,8 @@ consequence was measured or read.
 
 ### 3.1 What was run
 
-`runTransmitLiveGeometryTest` opens a transmit `WdspChannel` at the live geometry
-(`inputBlockSize 512`, `dspBlockSize 1024`, 24 000 → 48 000 → 48 000, `blockForOutput =
+`runTransmitLiveGeometryTest` opens a transmit `WdspChannel` at the live geometry as it was
+until #7182 (`inputBlockSize 512`, `dspBlockSize 1024`, 24 000 → 48 000 → 48 000, `blockForOutput =
 false`, `Mode::Usb`, `{300, 2700}`), feeds a 1 kHz tone at amplitude 0.1 into `inputI` with
 `inputQ` zeroed, and censuses `ProcessResult` against one variable: **how fast the caller
 calls.**
@@ -218,9 +218,10 @@ spread of zero.
 buffer.** A *single* underrun slipped the output by one entire DSP block, for the rest of
 the channel's life, with `ProcessResult::Ok` returned on every block afterwards.
 
-So the cost of one underrun at the live geometry is **two** blocks of audio: 21.33 ms of
+So the cost of one underrun at the measured geometry is **two** blocks of audio: 21.33 ms of
 silence on the wire, plus 21.33 ms of real audio discarded and never sent. Nothing reports
-the second half.
+the second half. At the live 256-sample block since #7182 that is 2 × 10.67 ms (source, not
+re-measured).
 
 Three consequences:
 
