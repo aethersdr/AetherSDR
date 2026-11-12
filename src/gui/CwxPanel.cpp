@@ -675,11 +675,12 @@ void CwxPanel::buildSetupView()
     macroScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     vbox->addWidget(macroScroll, 1);
 
-    // Prosign + speed-modifier legend
+    // Prosign, speed-modifier and placeholder legend
     auto* legend = new QLabel(
         "Prosigns: = (BT)  + (AR)  ( (KN)  & (BK)  $ (SK)\n"
         "Speed: +word (faster)  -word (slower)  ++/-- (2\xc3\x97 step)\n"
-        "  + or - at word-start only; standalone + remains AR");
+        "  + or - at word-start only; standalone + remains AR\n"
+        "{CALL}: the DX call from the box at the top");
     AetherSDR::ThemeManager::instance().applyStyleSheet(legend, "QLabel { color: {{color.text.label}}; font-size: 9px; padding: 4px; }");
     legend->setWordWrap(true);
     vbox->addWidget(legend);
