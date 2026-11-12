@@ -11226,7 +11226,7 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId,
         if (!pan->waterfallId().isEmpty()) {
             const auto pending = m_pendingDisplayObservations.take(pan->waterfallId());
             if (displayObservationCurrent(pending.observation) && m_displayObservationClock.isValid()
-                && m_displayObservationClock.elapsed() - pending.insertedMs <= 30'000) {
+                && m_displayObservationClock.elapsed() - pending.insertedMs <= kDeferredDisplayAgeMs) {
                 applyDisplayObservation(pending.observation);
             }
             if (!current()) { return nullptr; }

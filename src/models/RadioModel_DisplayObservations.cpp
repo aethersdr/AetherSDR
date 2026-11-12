@@ -8,7 +8,6 @@ namespace AetherSDR {
 namespace {
 constexpr qsizetype kMaxDeferredDisplays = 128;
 constexpr qsizetype kMaxDisplayInventory = 256;
-constexpr qint64 kDeferredDisplayAgeMs = 30'000;
 constexpr int kDefaultDisplayDimension = 100;
 }
 
@@ -59,7 +58,10 @@ void RadioModel::deferDisplayObservation(const DisplayObservation& observation)
     }
     auto it = m_pendingDisplayObservations.find(observation.id);
     if (it == m_pendingDisplayObservations.end()) {
-        if (m_pendingDisplayObservations.size() >= kMaxDeferredDisplays) { return; }
+        if (m_pendingDisplayObservations.size() >= kMaxDeferredDisplays) {
+            qCDebug(lcProtocol) << "Display observation cache full; not deferring" << observation.id;
+            return;
+        }
         m_pendingDisplayObservations.insert(observation.id, {now, observation});
         return;
     }

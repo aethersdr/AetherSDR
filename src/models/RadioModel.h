@@ -1804,6 +1804,8 @@ private:
     quint64 m_statusEpoch{0};            // the epoch of the session being run
     // Display reports apply only from the session being run, and not after it
     // has begun to end (RadioModel_DisplayObservations.cpp).
+    // How long a deferred display report stays applicable.
+    static constexpr qint64 kDeferredDisplayAgeMs = 30'000;
     quint64 m_displayEpoch{0};
     bool m_displaySessionOpen{true};
     quint64 m_connectedStatusEpoch{0};   // the epoch onConnected() last ran for

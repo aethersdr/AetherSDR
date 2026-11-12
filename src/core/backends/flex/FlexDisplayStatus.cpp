@@ -8,6 +8,11 @@
 namespace AetherSDR {
 namespace {
 
+// A field's id or handle is hex with a 0x prefix and decimal without, as
+// FlexLib's StringHelper.TryParseInteger reads it (v4.3.16 Util/StringHelper.cs:33).
+// Unlike FlexLib, unprefixed digits that include a-f are taken as hex, as the
+// model did before this decoder (panadapter_model_rx_antenna_test pins it).
+// The object's own id is always hex.
 std::optional<quint32> identity(QString text, bool hexadecimal = false)
 {
     if (text.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {

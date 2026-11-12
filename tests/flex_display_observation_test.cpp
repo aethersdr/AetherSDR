@@ -15,6 +15,8 @@ namespace AetherSDR {
 class FlexDisplayStatusTestAccess {
 public:
     static quint64 displayEpoch(const RadioModel& radio) { return radio.m_displayEpoch; }
+    static quint64 sessionGeneration(const RadioModel& radio) { return radio.m_sessionGeneration; }
+    static void closeDisplays(RadioModel& radio) { radio.retireDisplaySession(); }
     static quint64 beginSession(RadioModel& radio) { return radio.beginStatusSession(); }
     static void endSession(RadioModel& radio)
     { QMetaObject::invokeMethod(&radio, "onDisconnected", Qt::DirectConnection); }
@@ -141,6 +143,44 @@ void lifecycle()
     check(replacement && replacement != original, "retired numeric identity creates a new object");
 }
 
+// Once the display session closes (the operator's disconnect, a connect or a
+// backend teardown closes it before the transport reports anything), a line
+// still in flight from that session never applies.
+void closedSessionRefusesInFlightLines()
+{
+    PanControlFixture f;
+    PanadapterModel* pan = f.publish(panId);
+    check(pan && pan->centerMhz() == 14.1, "the pan is claimed before the session closes");
+    if (!pan) { return; }
+    const quint64 session = FlexDisplayStatusTestAccess::sessionGeneration(f.radio);
+    FlexDisplayStatusTestAccess::closeDisplays(f.radio);
+    f.status(panObject, {{"client_handle", "0x71"}, {"center", "21.3"}});
+    check(FlexDisplayStatusTestAccess::sessionGeneration(f.radio) == session && pan->centerMhz() == 14.1,
+          "a display line from the closed session does not apply before the session ends");
+}
+
+// A reclaimed pan is republished once, after RadioModel has initialized it,
+// never with the fields of a reclaim still in progress.
+void adapterHoldsReclaimUntilInitialized()
+{
+    PanControlFixture f;
+    control::ControlResourceStore store;
+    control::RadioResourceAdapter adapter(&f.radio, &store, QStringLiteral("display-reclaim"));
+    check(f.publish(panId) != nullptr, "the pan is claimed before the reconnect");
+    FlexDisplayStatusTestAccess::stage(f.radio);
+    QList<qint64> published;
+    QObject::connect(&store, &control::ControlResourceStore::resourceChanged, &store,
+        [&](const control::ResourceSnapshot& snapshot) {
+            if (snapshot.resource.type == QLatin1String("panadapter") && snapshot.resource.id == panId) {
+                published << qint64(snapshot.value.value(QStringLiteral("centerHz")).toInteger());
+            }
+        });
+    f.status(panObject, {{"center", "7.2"}, {"fps", "13"}});   // deferred: not yet ours
+    f.status(panObject, {{"client_handle", "0x71"}});           // the reclaim
+    check(published == QList<qint64>{7'200'000},
+          "a reclaimed pan publishes once, with its initialized geometry");
+}
+
 void reparentAndReentrantRetirement()
 {
     PanControlFixture f;
@@ -215,6 +255,8 @@ int main(int argc, char** argv)
     ingressLifetime();
     deferredReportDiesWithItsSession();
     lifecycle();
+    adapterHoldsReclaimUntilInitialized();
+    closedSessionRefusesInFlightLines();
     reparentAndReentrantRetirement();
     reentrancyAndBounds();
     return failures == 0 ? 0 : 1;
