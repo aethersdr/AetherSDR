@@ -4,8 +4,9 @@
 // then the web socket kept open. Frames go to MicrohamTrio::classify(); what to
 // do next comes from MicrohamTrio::decideSession(), so this class keeps the
 // state that takes and holds no policy of its own.
-// Read only: nothing here sends a selection. Main-thread only. Bytes and time
-// are injected; nothing here opens a socket.
+// Nothing here sends a selection. The one kind of command is a rename
+// (set_labels, reset_labels), one at a time, confirmed by its reply.
+// Main-thread only. Bytes and time are injected; nothing here opens a socket.
 
 #include "core/MicrohamTrioProtocol.h"
 #include "core/MicrohamTrioWebSocket.h"
@@ -13,6 +14,7 @@
 #include <QByteArray>
 #include <QObject>
 #include <QString>
+#include <QVector>
 #include <QtGlobal>
 
 #include <functional>
@@ -65,11 +67,16 @@ public:
         // a failure.
         int    transientAttempts{3};
         qint64 transientRetryMs{1500};
+        // A command with no reply this long: the session reconnects to read
+        // the state the device holds.
+        qint64 replyTimeoutMs{2000};
     };
 
-    // Unpredictable values: random32 feeds the frame masks and the handshake nonce.
+    // Unpredictable values: random32 feeds the frame masks and the handshake
+    // nonce; requestId is a lowercase UUID per command.
     struct Entropy {
         std::function<quint32()> random32;
+        std::function<QString()> requestId;
     };
     static Entropy systemEntropy();
 
@@ -103,7 +110,21 @@ public:
 
     enum class SnapshotSource {
         OnConnect,   // the first state of a session
+        Reply,       // the one answer to our command
         Push,        // a change made elsewhere: front panel, band data, another client
+    };
+
+    enum class CommandRefusal {
+        None,
+        NotHeld,          // no held session with a state received on it
+        CommandPending,   // the last command is not answered yet
+        Unencodable,      // an unknown port, a bad label, a bad request id
+    };
+
+    enum class CommandOutcome {
+        Confirmed,      // answered, and the state shows what was asked
+        Disagrees,      // answered, and the state shows something else
+        ReplyOverdue,   // no reply in time; the session reconnects to read the state
     };
 
     // `transport` and `clock` are not owned and must outlive the session.
@@ -117,6 +138,13 @@ public:
     void stop();
     // Give the session to the web page, or take it back.
     void setReleasedForBrowser(bool released);
+
+    // Rename ports, or put every label back to the device's defaults. Sent
+    // only with a held session, its state received, and no command
+    // unanswered; a refused command is dropped. A sent one ends in labelsResult().
+    CommandRefusal writeLabels(const QVector<MicrohamTrio::LabelEdit>& edits);
+    CommandRefusal resetLabels();
+    bool commandPending() const { return m_pendingLabels.has_value(); }
 
     bool    isRunning() const { return m_running; }
     Status  status() const { return m_status; }
@@ -143,6 +171,7 @@ signals:
     void snapshotChanged(const AetherSDR::MicrohamTrio::Snapshot& snapshot,
                          AetherSDR::MicrohamTrioSession::SnapshotSource source);
     void sessionStateChanged(AetherSDR::MicrohamTrioSession::Status status);
+    void labelsResult(AetherSDR::MicrohamTrioSession::CommandOutcome outcome);
 
 private slots:
     void onOpened();
@@ -211,6 +240,16 @@ private:
     bool m_stateOnThisSession{false};
 
     std::optional<MicrohamTrio::Snapshot> m_snapshot;
+
+    struct PendingLabels {
+        bool    reset{false};
+        QVector<MicrohamTrio::LabelEdit> edits;
+        QString requestId;
+        qint64  sentAtMs{0};
+    };
+    std::optional<PendingLabels> m_pendingLabels;
+    CommandRefusal sendLabels(const PendingLabels& command, const QByteArray& frame);
+    QString pendingRequestId() const;
 };
 
 } // namespace AetherSDR

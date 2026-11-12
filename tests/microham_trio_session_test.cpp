@@ -356,8 +356,17 @@ struct Harness {
             randomWord = randomWord * 1664525u + 1013904223u;
             return randomWord;
         };
+        out.requestId = [this]() {
+            if (!requestIds.isEmpty()) {
+                return requestIds.takeFirst();
+            }
+            return QStringLiteral("0f0f0f0f-1111-4222-8333-%1")
+                .arg(++generatedIds, 12, 10, QLatin1Char('0'));
+        };
         return out;
     }
+    QStringList requestIds;
+    int generatedIds{0};
 
     static MicrohamTrioSession::Config config()
     {
@@ -1044,6 +1053,50 @@ void testRelease()
     report("taking it back connects", h.transport.opens == opens + 1);
 }
 
+// Renames: the one kind of command, against the scripted Trio (never the real one).
+void testLabelCommands()
+{
+    using Refusal = MicrohamTrioSession::CommandRefusal;
+    using Outcome = MicrohamTrioSession::CommandOutcome;
+    QVector<Outcome> outcomes;
+    Harness h;
+    QObject::connect(&h.session, &MicrohamTrioSession::labelsResult,
+                     [&outcomes](Outcome o) { outcomes.append(o); });
+    const QVector<LabelEdit> rename = {{QStringLiteral("antenna"), QStringLiteral("ant1"), QStringLiteral("EFHW 80")}};
+    report("before a held session: refused", h.session.writeLabels(rename) == Refusal::NotHeld);
+    h.requestIds = {QLatin1String(kIdAnt1)};
+    h.connectHeld();
+    report("set_labels goes out", h.session.writeLabels(rename) == Refusal::None);
+    report("in the page's own form",
+           isClientText(h.lastSent(), QByteArray(R"({"a":"set_labels","c":[{"bid":"ant1","gid":"antenna","l":"EFHW 80"}],"id":")")
+                                         + kIdAnt1 + "\"}"));
+    report("another while it is unanswered is refused",
+           h.session.resetLabels() == Refusal::CommandPending);
+    QByteArray doc = stateDoc("radio2", "ant2", kIdAnt1);
+    doc.replace(R"("l":"EFHW")", R"("l":"EFHW 80")");
+    h.transport.peerSends(textFrame(doc));
+    report("the reply with the new name confirms it",
+           outcomes.size() == 1 && outcomes.last() == Outcome::Confirmed
+               && h.lastSnapshot().source == Source::Reply);
+    report("reset_labels goes out", h.session.resetLabels() == Refusal::None
+               && isClientText(h.lastSent(), QByteArray(R"({"a":"reset_labels","id":"0f0f0f0f-1111-4222-8333-000000000001"})")));
+    h.transport.peerSends(textFrame(stateDoc("radio2", "ant2", "0f0f0f0f-1111-4222-8333-000000000001")));
+    report("its reply confirms it", outcomes.size() == 2 && outcomes.last() == Outcome::Confirmed);
+    report("a name that is empty, too long or for no port is refused, nothing sent",
+           h.session.writeLabels({{QStringLiteral("antenna"), QStringLiteral("ant1"), QStringLiteral("  ")}})
+                   == Refusal::Unencodable
+               && h.session.writeLabels({{QStringLiteral("antenna"), QStringLiteral("ant9"), QStringLiteral("X")}})
+                      == Refusal::Unencodable
+               && h.session.writeLabels({{QStringLiteral("radio"), QStringLiteral("radio1"),
+                                          QString(17, QLatin1Char('x'))}}) == Refusal::Unencodable);
+    h.session.writeLabels(rename);
+    const QByteArray lastId = QStringLiteral("0f0f0f0f-1111-4222-8333-%1")
+                                  .arg(h.generatedIds, 12, 10, QLatin1Char('0')).toLatin1();
+    h.transport.peerSends(textFrame(stateDoc("radio2", "ant2", lastId.constData())));
+    report("a reply that does not show the name disagrees",
+           outcomes.size() == 3 && outcomes.last() == Outcome::Disagrees);
+}
+
 void testErrorPage()
 {
     Harness h;
@@ -1343,6 +1396,7 @@ int main(int argc, char** argv)
     testKeepAliveCadence();
     testDeadSession();
     testEvictionIsNotRetaken();
+    testLabelCommands();
     testRelease();
     testErrorPage();
     testCloseAndPing();

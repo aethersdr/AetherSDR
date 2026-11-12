@@ -100,8 +100,9 @@ The **microHAM Trio** row connects to the Trio antenna-switch controller's own
 web interface (`ws://<address>/ui.ws`, port 80 by default) and shows what it
 reports: the radio with transmit focus, its antenna (both halves in split), the
 RX antenna, RX EXT and the PA loop, and the label of every radio and antenna
-port. AetherSDR switches nothing on the Trio from this page: the session sends
-only its handshake, keep-alives and a close. Positions are the controller's
+port. AetherSDR switches nothing on the Trio from this page: besides its
+handshake, keep-alives and a close, the session sends only the renames you ask
+for. Positions are the controller's
 echo of its own selection, never relay sense.
 
 The protocol is reverse-observed from the device's own web page on one unit;
@@ -117,12 +118,25 @@ microHAM documents none.
   Trio answered and the RADIO and antenna labels it read, and releases the
   session. It selects nothing and stores nothing; with the session already
   held it answers from that session.
-- **This Radio** says which of the Trio's radio ports the connected radio is
-  cabled to. It is stored for that radio only and changes nothing on the Trio.
+- **Radio Ports** lists the Trio's three radio ports with their names; the
+  marker **this AetherSDR** says which one the connected radio is cabled to
+  (stored for that radio only; it changes nothing on the Trio).
+- **Antenna Ports** lists the six antenna ports with their names; **Dummy
+  load** marks one, stored with the name it carries. If that port is renamed
+  outside AetherSDR, the page warns and the port is not treated as the dummy
+  load until **Confirm Dummy Load**.
+- Names are editable. **Write Names to the Trio** writes the changed ones to the
+  Trio itself (`set_labels`); **Reset to Trio Defaults** puts every name back
+  (`reset_labels`). Both change the device: they are refused while the radio is
+  transmitting, and renaming the dummy-load port (a reset does) asks first.
+  The form of both commands is read from the Trio's own web page source; they
+  were not recorded on the wire.
 - **Web UI** closes AetherSDR's session first, then opens the Trio's page in
   the browser. **Connect** takes the session back.
-- Stored as `Peripherals.trio.ManualIp`, `Peripherals.trio.ManualPort` and
-  `Peripherals.trio.AutoConnect`.
+- Stored as `Peripherals.trio.ManualIp`, `Peripherals.trio.ManualPort`,
+  `Peripherals.trio.AutoConnect`, `Peripherals.trio.DummyLoadKey` and
+  `Peripherals.trio.DummyLoadLabel`; the radio's port as the radio-scoped
+  feature `TrioBinding`.
 
 ## Settings
 

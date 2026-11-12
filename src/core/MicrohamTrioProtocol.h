@@ -5,7 +5,8 @@
 // firmware version is not readable. Compact JSON text frames on
 // ws://<host>/ui.ws: the complete state arrives on connect and as a push when
 // the front panel, band data or another client changes a selection.
-// Read only: this header has no command encoder.
+// The only commands encoded here rename ports (set_labels, reset_labels, as
+// the Trio's own page sends them); none selects anything.
 // Pure: no socket, no clock. Tested in tests/microham_trio_protocol_test.cpp.
 
 #include <QByteArray>
@@ -108,7 +109,8 @@ enum class FrameKind {
     Unknown,         // anything else, including an unreadable state
     KeepAliveReply,  // text `pong`
     ServerPong,      // an empty pong control frame; the device sends one about every second
-    State,           // a state document
+    State,           // a state document that is not the awaited reply
+    StateReply,      // the first state document carrying `pendingRequestId`
 };
 
 struct Frame {
@@ -116,9 +118,52 @@ struct Frame {
     ParseResult state;   // filled for any text frame that is not `pong`
 };
 
-// Classify one received frame. Every kind shows the peer is alive; only State
-// carries a snapshot.
-Frame classify(quint8 firstByte, const QByteArray& payload);
+// Classify one received frame. `pendingRequestId` is the id of the command
+// still awaiting its reply, or empty. The caller clears it on StateReply:
+// later pushes keep carrying that id and are not replies. Every kind shows the
+// peer is alive; only State and StateReply carry a snapshot.
+Frame classify(quint8 firstByte, const QByteArray& payload,
+               const QString& pendingRequestId = {});
+
+// True when `snapshot` is the reply to the command sent with `requestId`.
+bool acknowledges(const Snapshot& snapshot, const QString& requestId);
+
+// A lowercase 8-4-4-4-12 UUID other than kUnsolicitedId.
+bool isUsableRequestId(const QString& id);
+
+// One port's new name: group "radio" or "antenna", the button key, the label.
+struct LabelEdit {
+    QString group;
+    QString key;
+    QString label;
+};
+
+enum class LabelError {
+    None,
+    NoEdits,
+    NoSuchButton,     // a group or key the snapshot does not list
+    BadLabel,         // empty after trimming, longer than kMaxLabelChars, or a control character
+    BadRequestId,
+};
+
+// The longest label this client writes. The device's own limit is not
+// documented; its page sets no maxlength we could read, and its labels are
+// short. Longer is refused rather than truncated by the device.
+inline constexpr int kMaxLabelChars = 16;
+
+struct LabelCommand {
+    LabelError error{LabelError::None};
+    QByteArray frame;   // empty unless error is None
+};
+
+// {"a":"set_labels","c":[{"bid":"ant6","gid":"antenna","l":"Dummy"}],"id":"..."}:
+// the form the Trio's own page builds (read from its source, ui.shtml, recorded
+// in d180; not recorded on the wire). Labels are trimmed; JSON escapes are
+// QJsonDocument's.
+LabelCommand encodeSetLabels(const Snapshot& snapshot, const QVector<LabelEdit>& edits,
+                             const QString& requestId);
+// {"a":"reset_labels","id":"..."}: every label back to the device's defaults.
+LabelCommand encodeResetLabels(const QString& requestId);
 
 // The one long-lived session. The device serves a single session: a second
 // client evicts the first.

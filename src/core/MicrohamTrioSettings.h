@@ -25,6 +25,11 @@ struct MicrohamTrioSettings {
 
     QString host;                 // empty: no TRIO configured
     int     port{kDefaultPort};
+    // The antenna port marked as the dummy load, and the label it carried when
+    // marked: Peripherals.trio.DummyLoadKey / DummyLoadLabel. A label that no
+    // longer matches is a warning until the mark is confirmed again.
+    QString dummyLoadKey;
+    QString dummyLoadLabel;
 
     bool isConfigured() const { return !host.isEmpty(); }
 
@@ -35,6 +40,11 @@ struct MicrohamTrioSettings {
         out.host = PeripheralSettings::deviceString(id, QStringLiteral("ManualIp")).trimmed();
         const int port = PeripheralSettings::deviceInt(id, QStringLiteral("ManualPort"), kDefaultPort);
         out.port = port >= 1 && port <= 65535 ? port : kDefaultPort;
+        out.dummyLoadKey = PeripheralSettings::deviceString(id, QStringLiteral("DummyLoadKey"));
+        out.dummyLoadLabel = PeripheralSettings::deviceString(id, QStringLiteral("DummyLoadLabel"));
+        if (out.dummyLoadKey.isEmpty()) {
+            out.dummyLoadLabel.clear();
+        }
         return out;
     }
 
@@ -48,12 +58,22 @@ struct MicrohamTrioSettings {
         const QString id = QLatin1String(kPeripheralId);
         PeripheralSettings::setDeviceString(id, QStringLiteral("ManualIp"), host);
         PeripheralSettings::setDeviceInt(id, QStringLiteral("ManualPort"), port);
+        if (dummyLoadKey.isEmpty()) {
+            PeripheralSettings::clearDeviceField(id, QStringLiteral("DummyLoadKey"));
+            PeripheralSettings::clearDeviceField(id, QStringLiteral("DummyLoadLabel"));
+        } else {
+            PeripheralSettings::setDeviceString(id, QStringLiteral("DummyLoadKey"), dummyLoadKey);
+            PeripheralSettings::setDeviceString(id, QStringLiteral("DummyLoadLabel"), dummyLoadLabel);
+        }
     }
 
     // The address only; "Connect automatically" is the Peripherals row's to reset.
     static void remove()
     {
-        PeripheralSettings::clearDeviceConnection(QLatin1String(kPeripheralId));
+        const QString id = QLatin1String(kPeripheralId);
+        PeripheralSettings::clearDeviceConnection(id);
+        PeripheralSettings::clearDeviceField(id, QStringLiteral("DummyLoadKey"));
+        PeripheralSettings::clearDeviceField(id, QStringLiteral("DummyLoadLabel"));
     }
 };
 

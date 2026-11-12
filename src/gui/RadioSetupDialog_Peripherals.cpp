@@ -50,6 +50,9 @@
 #include <QStyledItemDelegate>
 #include <QAction>
 #include <QCheckBox>
+#include <QAbstractButton>
+#include <QRadioButton>
+#include <QButtonGroup>
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QEvent>
@@ -1661,6 +1664,31 @@ void RadioSetupDialog::buildRfkitDevice(PeripheralDeviceUi& ui, QWidget* stackPa
     finishDetailPage(detail, ui, {});
 }
 
+namespace {
+
+std::function<bool(const QString&, const QString&)>& trioConfirmHook()
+{
+    static std::function<bool(const QString&, const QString&)> hook;
+    return hook;
+}
+
+bool trioConfirm(QWidget* parent, const QString& title, const QString& text)
+{
+    if (const auto& hook = trioConfirmHook()) {
+        return hook(title, text);
+    }
+    return QMessageBox::question(parent, title, text, QMessageBox::Yes | QMessageBox::Cancel,
+                                 QMessageBox::Cancel) == QMessageBox::Yes;
+}
+
+} // namespace
+
+void RadioSetupDialog::setTrioConfirmationHookForTest(
+    std::function<bool(const QString& title, const QString& text)> hook)
+{
+    trioConfirmHook() = std::move(hook);
+}
+
 // Read only: the page shows what the Trio reports and switches nothing on it.
 // The model owns the session; this page edits only the address.
 void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackParent,
@@ -1782,62 +1810,249 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     setTone(ui.deviceInfoLabel, Tone::Value);
     addFormRow(detail, tr("Trio State"), ui.deviceInfoLabel);
 
-    // Which Trio radio port the connected radio is cabled to. A setting, per
-    // radio: it selects nothing on the Trio.
-    auto* slotCombo = new QComboBox;
-    slotCombo->setObjectName(QStringLiteral("peripheralTrioSlot"));
-    slotCombo->setAccessibleName(tr("This radio's port on the Trio"));
-    slotCombo->setAccessibleDescription(tr(
-        "Which of the Trio's radio ports the connected radio is cabled to. Stored for this "
-        "radio only; it changes nothing on the Trio."));
-    slotCombo->setToolTip(slotCombo->accessibleDescription());
-    addFormRow(detail, tr("This Radio"), slotCombo);
-    const QString kNotSet = QStringLiteral("__notset__");
-    const QString kNotOnTrio = QStringLiteral("__notontrio__");
-    ui.refreshExtra = [slotCombo, trio, kNotSet, kNotOnTrio]() {
+    // Radio Ports and Antenna Ports: the Trio's names, editable and written
+    // back on request; the marker "this AetherSDR" (stored per radio) and the
+    // dummy-load mark (stored per Trio). Choosing a marker changes nothing on
+    // the Trio; "Write names to the Trio" and "Reset to Trio defaults" do.
+    auto* portsPanel = new QWidget(detail.page);
+    portsPanel->setObjectName(QStringLiteral("peripheralTrioPorts"));
+    portsPanel->setMaximumWidth(760);
+    auto* portsLayout = new QVBoxLayout(portsPanel);
+    portsLayout->setContentsMargins(0, 0, 0, 0);
+    auto* radioGroup = new QGroupBox(tr("Radio Ports"), portsPanel);
+    radioGroup->setObjectName(QStringLiteral("peripheralTrioRadioPorts"));
+    auto* radioGrid = new QGridLayout(radioGroup);
+    auto* antennaGroup = new QGroupBox(tr("Antenna Ports"), portsPanel);
+    antennaGroup->setObjectName(QStringLiteral("peripheralTrioAntennaPorts"));
+    auto* antennaGrid = new QGridLayout(antennaGroup);
+    auto* dummyWarning = new QLabel(antennaGroup);
+    dummyWarning->setObjectName(QStringLiteral("peripheralTrioDummyWarning"));
+    dummyWarning->setWordWrap(true);
+    setTone(dummyWarning, Tone::Error);
+    auto* confirmDummy = new QPushButton(tr("Confirm Dummy Load"), antennaGroup);
+    confirmDummy->setObjectName(QStringLiteral("peripheralTrioConfirmDummy"));
+    confirmDummy->setAccessibleDescription(tr(
+        "The port marked as the dummy load was renamed outside AetherSDR. Confirm it is still "
+        "the dummy load; until then it is offered nowhere."));
+    auto* writeNames = new QPushButton(tr("Write Names to the Trio"), portsPanel);
+    writeNames->setObjectName(QStringLiteral("peripheralTrioWriteNames"));
+    writeNames->setAccessibleDescription(tr(
+        "Writes the edited port names to the Trio itself. Not while the radio is transmitting."));
+    writeNames->setToolTip(writeNames->accessibleDescription());
+    auto* resetNames = new QPushButton(tr("Reset to Trio Defaults"), portsPanel);
+    resetNames->setObjectName(QStringLiteral("peripheralTrioResetNames"));
+    resetNames->setAccessibleDescription(tr(
+        "Puts every port name on the Trio back to its own defaults. Not while the radio is "
+        "transmitting."));
+    resetNames->setToolTip(resetNames->accessibleDescription());
+    auto* namesResult = new QLabel(portsPanel);
+    namesResult->setObjectName(QStringLiteral("peripheralTrioNamesResult"));
+    namesResult->setWordWrap(true);
+    namesResult->hide();
+    auto* namesButtons = new QHBoxLayout;
+    namesButtons->addWidget(writeNames);
+    namesButtons->addWidget(resetNames);
+    namesButtons->addStretch();
+    portsLayout->addWidget(radioGroup);
+    portsLayout->addWidget(antennaGroup);
+    portsLayout->addLayout(namesButtons);
+    portsLayout->addWidget(namesResult);
+
+    // The rows follow the Trio's buttons; an edit in progress is kept.
+    struct PortRow {
+        QString group;
+        QString key;
+        QLineEdit* edit{nullptr};
+        QAbstractButton* marker{nullptr};
+    };
+    auto rows = std::make_shared<QVector<PortRow>>();
+    auto rowKeys = std::make_shared<QStringList>();
+    auto* thisRadio = new QButtonGroup(radioGroup);
+    thisRadio->setExclusive(true);
+    auto* notOnTrio = new QRadioButton(tr("This AetherSDR is on none of them"), radioGroup);
+    notOnTrio->setObjectName(QStringLiteral("peripheralTrioNotOnTrio"));
+    thisRadio->addButton(notOnTrio);
+
+    const auto collectEdits = [rows, trio]() {
+        QVector<MicrohamTrio::LabelEdit> edits;
+        const MicrohamTrioModel::View view = trio ? trio->view() : MicrohamTrioModel::View{};
+        for (const PortRow& row : *rows) {
+            edits.append({row.group, row.key, row.edit->text()});
+        }
+        Q_UNUSED(view);
+        return edits;
+    };
+    const auto showNamesResult = [namesResult](bool ok, const QString& text) {
+        namesResult->setText(text);
+        namesResult->setAccessibleDescription(text);
+        setTone(namesResult, ok ? Tone::Ok : Tone::Error);
+        namesResult->show();
+    };
+
+    ui.refreshExtra = [=]() {
         if (!trio) {
             return;
         }
         const MicrohamTrioModel::View view = trio->view();
-        const QSignalBlocker blocked(slotCombo);
-        slotCombo->clear();
-        slotCombo->addItem(RadioSetupDialog::tr("Not set"), kNotSet);
-        slotCombo->addItem(RadioSetupDialog::tr("Not on the Trio"), kNotOnTrio);
+        QStringList keys;
         if (view.snapshot) {
             for (const MicrohamTrio::Button& button : view.snapshot->radio.buttons) {
-                slotCombo->addItem(QStringLiteral("%1 \u2014 %2").arg(button.name, button.label),
-                                   button.key);
+                keys << QStringLiteral("radio:") + button.key;
+            }
+            for (const MicrohamTrio::Button& button : view.snapshot->antenna.buttons) {
+                keys << QStringLiteral("antenna:") + button.key;
             }
         }
-        QString current = kNotSet;
-        if (view.binding == MicrohamTrioBinding::Stored::NotOnTrio) {
-            current = kNotOnTrio;
-        } else if (view.binding == MicrohamTrioBinding::Stored::Bound) {
-            if (slotCombo->findData(view.slotKey) < 0) {
-                slotCombo->addItem(QStringLiteral("%1 \u2014 %2").arg(view.slotKey, view.slotLabel),
-                                   view.slotKey);
+        if (keys != *rowKeys && view.snapshot) {
+            // New set of buttons: rebuild the rows.
+            for (const PortRow& row : *rows) {
+                for (QWidget* w : {static_cast<QWidget*>(row.edit), static_cast<QWidget*>(row.marker)}) {
+                    if (w) {
+                        if (auto* b = qobject_cast<QAbstractButton*>(w)) {
+                            thisRadio->removeButton(b);
+                        }
+                        delete w;
+                    }
+                }
             }
-            current = view.slotKey;
+            for (QLabel* caption : radioGroup->findChildren<QLabel*>(QStringLiteral("trioPortCaption"))) {
+                delete caption;
+            }
+            for (QLabel* caption : antennaGroup->findChildren<QLabel*>(QStringLiteral("trioPortCaption"))) {
+                delete caption;
+            }
+            rows->clear();
+            *rowKeys = keys;
+            int radioRow = 0;
+            for (const MicrohamTrio::Button& button : view.snapshot->radio.buttons) {
+                auto* caption = new QLabel(button.name, radioGroup);
+                caption->setObjectName(QStringLiteral("trioPortCaption"));
+                auto* edit = new QLineEdit(button.label, radioGroup);
+                edit->setObjectName(QStringLiteral("peripheralTrioName_radio_%1").arg(button.key));
+                edit->setMaxLength(MicrohamTrio::kMaxLabelChars);
+                edit->setAccessibleName(RadioSetupDialog::tr("Trio %1 name").arg(button.name));
+                auto* marker = new QRadioButton(RadioSetupDialog::tr("this AetherSDR"), radioGroup);
+                marker->setObjectName(QStringLiteral("peripheralTrioThis_%1").arg(button.key));
+                marker->setAccessibleName(RadioSetupDialog::tr("This AetherSDR is on Trio %1")
+                                              .arg(button.name));
+                thisRadio->addButton(marker);
+                QObject::connect(marker, &QRadioButton::clicked, marker, [trio, key = button.key, refresh]() {
+                    if (trio) {
+                        trio->bindRadioSlot(key);
+                    }
+                    refresh();
+                });
+                radioGrid->addWidget(caption, radioRow, 0);
+                radioGrid->addWidget(edit, radioRow, 1);
+                radioGrid->addWidget(marker, radioRow, 2);
+                ++radioRow;
+                rows->append({QStringLiteral("radio"), button.key, edit, marker});
+            }
+            radioGrid->addWidget(notOnTrio, radioRow, 1, 1, 2);
+            int antennaRow = 0;
+            for (const MicrohamTrio::Button& button : view.snapshot->antenna.buttons) {
+                auto* caption = new QLabel(button.name, antennaGroup);
+                caption->setObjectName(QStringLiteral("trioPortCaption"));
+                auto* edit = new QLineEdit(button.label, antennaGroup);
+                edit->setObjectName(QStringLiteral("peripheralTrioName_antenna_%1").arg(button.key));
+                edit->setMaxLength(MicrohamTrio::kMaxLabelChars);
+                edit->setAccessibleName(RadioSetupDialog::tr("Trio %1 name").arg(button.name));
+                auto* marker = new QCheckBox(RadioSetupDialog::tr("Dummy load"), antennaGroup);
+                marker->setObjectName(QStringLiteral("peripheralTrioDummy_%1").arg(button.key));
+                marker->setAccessibleName(RadioSetupDialog::tr("Trio %1 is the dummy load")
+                                              .arg(button.name));
+                QObject::connect(marker, &QCheckBox::clicked, marker,
+                                 [trio, key = button.key, refresh](bool on) {
+                    if (trio) {
+                        on ? (void)trio->markDummyLoad(key) : trio->clearDummyLoad();
+                    }
+                    refresh();
+                });
+                antennaGrid->addWidget(caption, antennaRow, 0);
+                antennaGrid->addWidget(edit, antennaRow, 1);
+                antennaGrid->addWidget(marker, antennaRow, 2);
+                ++antennaRow;
+                rows->append({QStringLiteral("antenna"), button.key, edit, marker});
+            }
+            antennaGrid->addWidget(dummyWarning, antennaRow, 0, 1, 3);
+            antennaGrid->addWidget(confirmDummy, antennaRow + 1, 1);
         }
-        slotCombo->setCurrentIndex(std::max(0, slotCombo->findData(current)));
-        // Binding needs a connected radio with an identity, and the Trio's
-        // labels to bind against.
-        slotCombo->setEnabled(view.radioKnown && view.configured && view.snapshot.has_value());
+        // Names follow the Trio unless the operator is editing them.
+        for (const PortRow& row : *rows) {
+            const MicrohamTrio::Selector* group = !view.snapshot ? nullptr
+                : row.group == QLatin1String("radio") ? &view.snapshot->radio : &view.snapshot->antenna;
+            const MicrohamTrio::Button* button = group ? group->find(row.key) : nullptr;
+            if (button && !row.edit->isModified() && row.edit->text() != button->label) {
+                row.edit->setText(button->label);
+            }
+            const QSignalBlocker blocked(row.marker);
+            if (row.group == QLatin1String("radio")) {
+                row.marker->setChecked(view.binding == MicrohamTrioBinding::Stored::Bound
+                                       && view.slotKey == row.key);
+                row.marker->setEnabled(view.radioKnown && view.configured);
+            } else {
+                row.marker->setChecked(view.dummyLoadKey == row.key);
+                row.marker->setEnabled(view.configured);
+            }
+        }
+        {
+            const QSignalBlocker blocked(notOnTrio);
+            notOnTrio->setChecked(view.binding == MicrohamTrioBinding::Stored::NotOnTrio);
+            notOnTrio->setEnabled(view.radioKnown && view.configured && view.snapshot.has_value());
+        }
+        radioGroup->setEnabled(view.snapshot.has_value());
+        antennaGroup->setEnabled(view.snapshot.has_value());
+        dummyWarning->setText(view.dummyLoadIssue.isEmpty() ? QString()
+                              : RadioSetupDialog::tr("DUMMY LOAD WARNING: %1.").arg(view.dummyLoadIssue));
+        dummyWarning->setVisible(!view.dummyLoadIssue.isEmpty());
+        confirmDummy->setVisible(!view.dummyLoadIssue.isEmpty()
+                                 && view.snapshot && view.snapshot->antenna.find(view.dummyLoadKey));
+        const bool canWrite = view.session == MicrohamTrioModel::SessionWord::Direct && !view.labelsPending;
+        writeNames->setEnabled(canWrite);
+        resetNames->setEnabled(canWrite);
     };
-    connect(slotCombo, &QComboBox::activated, this, [slotCombo, trio, kNotSet, kNotOnTrio, refresh]() {
-        if (!trio) {
-            return;
-        }
-        const QString key = slotCombo->currentData().toString();
-        if (key == kNotSet) {
-            trio->clearBinding();
-        } else if (key == kNotOnTrio) {
+    QObject::connect(notOnTrio, &QRadioButton::clicked, notOnTrio, [trio, refresh]() {
+        if (trio) {
             trio->setNotOnTrio();
-        } else {
-            trio->bindRadioSlot(key);
         }
         refresh();
     });
+    connect(confirmDummy, &QPushButton::clicked, this, [trio, refresh]() {
+        if (trio) {
+            trio->confirmDummyLoad();
+        }
+        refresh();
+    });
+    const auto writeOrReset = [this, trio, collectEdits, showNamesResult, refresh](bool reset) {
+        if (!trio) {
+            return;
+        }
+        MicrohamTrioModel::LabelVerdict verdict =
+            reset ? trio->resetLabels(false) : trio->writeLabels(collectEdits(), false);
+        if (verdict.needsDummyConfirmation
+            && trioConfirm(this, RadioSetupDialog::tr("Rename the dummy load?"), verdict.message)) {
+            verdict = reset ? trio->resetLabels(true) : trio->writeLabels(collectEdits(), true);
+        }
+        if (!verdict.sent) {
+            showNamesResult(false, verdict.message);
+        } else {
+            showNamesResult(true, RadioSetupDialog::tr("Sent; waiting for the Trio…"));
+        }
+        refresh();
+    };
+    connect(writeNames, &QPushButton::clicked, this, [writeOrReset]() { writeOrReset(false); });
+    connect(resetNames, &QPushButton::clicked, this, [writeOrReset]() { writeOrReset(true); });
+    if (trio) {
+        connect(trio, &MicrohamTrioModel::labelsWritten, namesResult,
+                [rows, showNamesResult](bool ok, const QString& message) {
+            if (ok) {
+                for (const PortRow& row : *rows) {
+                    row.edit->setModified(false);
+                }
+            }
+            showNamesResult(ok, message);
+        });
+    }
     ui.refreshExtra = [previous = ui.refreshExtra, testButton, trio]() {
         previous();
         testButton->setEnabled(trio && !trio->isTesting());
@@ -1886,6 +2101,7 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     });
     finishDetailPage(detail, ui, {ui.webUiButton});
     detail.layout->insertWidget(detail.layout->count() - 1, testResult);
+    detail.layout->insertWidget(detail.layout->count() - 1, portsPanel);
 }
 
 void RadioSetupDialog::buildKpa1500Device(PeripheralDeviceUi& ui, QWidget* stackParent,

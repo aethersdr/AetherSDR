@@ -2,6 +2,7 @@
 
 #include <QRandomGenerator>
 #include <QTimer>
+#include <QUuid>
 
 #include <algorithm>
 #include <utility>
@@ -23,6 +24,7 @@ MicrohamTrioSession::Entropy MicrohamTrioSession::systemEntropy()
 {
     Entropy entropy;
     entropy.random32 = []() { return QRandomGenerator::system()->generate(); };
+    entropy.requestId = []() { return QUuid::createUuid().toString(QUuid::WithoutBraces); };
     return entropy;
 }
 
@@ -78,7 +80,60 @@ void MicrohamTrioSession::stop()
     m_consecutiveFailures = 0;
     m_transientFailures = 0;
     m_snapshot.reset();
+    m_pendingLabels.reset();
     setStatus(Status::Idle);
+}
+
+QString MicrohamTrioSession::pendingRequestId() const
+{
+    return m_pendingLabels ? m_pendingLabels->requestId : QString();
+}
+
+MicrohamTrioSession::CommandRefusal
+MicrohamTrioSession::sendLabels(const PendingLabels& command, const QByteArray& frame)
+{
+    sendText(frame);
+    m_pendingLabels = command;
+    m_pendingLabels->sentAtMs = m_clock->nowMs();
+    schedule(m_config.replyTimeoutMs);
+    return CommandRefusal::None;
+}
+
+MicrohamTrioSession::CommandRefusal
+MicrohamTrioSession::writeLabels(const QVector<LabelEdit>& edits)
+{
+    if (!m_running || m_released || !snapshotCurrent() || !m_snapshot) {
+        return CommandRefusal::NotHeld;
+    }
+    if (commandPending()) {
+        return CommandRefusal::CommandPending;
+    }
+    PendingLabels command;
+    command.edits = edits;
+    command.requestId = m_entropy.requestId ? m_entropy.requestId() : QString();
+    const LabelCommand encoded = encodeSetLabels(*m_snapshot, edits, command.requestId);
+    if (encoded.error != LabelError::None) {
+        return CommandRefusal::Unencodable;
+    }
+    return sendLabels(command, encoded.frame);
+}
+
+MicrohamTrioSession::CommandRefusal MicrohamTrioSession::resetLabels()
+{
+    if (!m_running || m_released || !snapshotCurrent() || !m_snapshot) {
+        return CommandRefusal::NotHeld;
+    }
+    if (commandPending()) {
+        return CommandRefusal::CommandPending;
+    }
+    PendingLabels command;
+    command.reset = true;
+    command.requestId = m_entropy.requestId ? m_entropy.requestId() : QString();
+    const LabelCommand encoded = encodeResetLabels(command.requestId);
+    if (encoded.error != LabelError::None) {
+        return CommandRefusal::Unencodable;
+    }
+    return sendLabels(command, encoded.frame);
 }
 
 void MicrohamTrioSession::setReleasedForBrowser(bool released)
@@ -172,6 +227,18 @@ void MicrohamTrioSession::evaluate()
             return;
         }
         wait = std::min(wait, m_config.firstStateTimeoutMs - held);
+    }
+
+    if (m_pendingLabels && m_phase == Phase::Open) {
+        const qint64 age = now - m_pendingLabels->sentAtMs;
+        if (age >= m_config.replyTimeoutMs) {
+            // No request returns the state: a new session is the only way to read it.
+            m_pendingLabels.reset();
+            startAttempt(now);
+            emit labelsResult(CommandOutcome::ReplyOverdue);
+            return;
+        }
+        wait = std::min(wait, m_config.replyTimeoutMs - age);
     }
 
     const State state = buildState(now);
@@ -415,7 +482,7 @@ void MicrohamTrioSession::handleFrame(const MicrohamTrio::Ws::ServerFrame& frame
         return;
     }
 
-    const Frame classified = classify(frame.firstByte, frame.payload);
+    const Frame classified = classify(frame.firstByte, frame.payload, pendingRequestId());
     switch (classified.kind) {
     case FrameKind::ServerPong:
         return;
@@ -423,6 +490,7 @@ void MicrohamTrioSession::handleFrame(const MicrohamTrio::Ws::ServerFrame& frame
         m_unansweredKeepAliveAtMs.reset();
         return;
     case FrameKind::State:
+    case FrameKind::StateReply:
         takeState(classified);
         return;
     case FrameKind::Unknown:
@@ -450,6 +518,21 @@ void MicrohamTrioSession::takeState(const Frame& frame)
     m_transientFailures = 0;
     m_failure = Failure::None;
     m_snapshot = frame.state.snapshot;
+    if (frame.kind == FrameKind::StateReply && m_pendingLabels) {
+        // Every later document carries this id too; only this one is the reply.
+        const PendingLabels command = *m_pendingLabels;
+        m_pendingLabels.reset();
+        emit snapshotChanged(*m_snapshot, SnapshotSource::Reply);
+        bool confirmed = true;   // the defaults are the device's to know
+        for (const LabelEdit& edit : command.edits) {
+            const Selector& group = edit.group == QLatin1String("radio") ? m_snapshot->radio
+                                                                          : m_snapshot->antenna;
+            const Button* button = group.find(edit.key);
+            confirmed = confirmed && button != nullptr && button->label == edit.label.trimmed();
+        }
+        emit labelsResult(confirmed ? CommandOutcome::Confirmed : CommandOutcome::Disagrees);
+        return;
+    }
     emit snapshotChanged(*m_snapshot, first ? SnapshotSource::OnConnect : SnapshotSource::Push);
 }
 
@@ -473,6 +556,11 @@ void MicrohamTrioSession::dropConnection()
     m_lastKeepAliveAtMs.reset();
     m_unansweredKeepAliveAtMs.reset();
     m_stateOnThisSession = false;
+    if (m_pendingLabels) {
+        // A reply cannot arrive on another connection.
+        m_pendingLabels.reset();
+        emit labelsResult(CommandOutcome::ReplyOverdue);
+    }
 }
 
 void MicrohamTrioSession::becomeEvicted()
