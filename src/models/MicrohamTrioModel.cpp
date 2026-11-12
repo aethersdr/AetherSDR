@@ -303,6 +303,12 @@ void MicrohamTrioModel::onSnapshot(const MicrohamTrio::Snapshot& snapshot,
     m_failure.clear();
     const SessionWord before = m_word;
     setWord(view().session);
+    if (source == MicrohamTrioSession::SnapshotSource::OnConnect) {
+        // One line per connect: what the Trio reported, for the log.
+        qCInfo(lcDevices).noquote() << "MicrohamTrioModel: state on connect:"
+                                    << describeState(snapshot).replace(QLatin1Char('\n'),
+                                                                       QStringLiteral(" | "));
+    }
     if (source == MicrohamTrioSession::SnapshotSource::OnConnect
         && before != SessionWord::Direct && m_word == SessionWord::Direct) {
         emit connected();
