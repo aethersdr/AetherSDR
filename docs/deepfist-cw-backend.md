@@ -17,8 +17,8 @@ there is no second normalized decoder in the UI. It also lowers the
 activity-gate threshold from the stream default 12 to 3 so weak off-air CW is
 not gated out (#5950); that value is what every user of this backend runs.
 Output has no calibrated
-ggmorse cost. Each letter is coloured by the model's own posterior (cost =
-1 − posterior, the four ggmorse colour bands) and is hidden at or above
+ggmorse cost. Each letter is colored by the model's own posterior (cost =
+1 − posterior, the four ggmorse color bands) and is hidden at or above
 DeepFist's own Sens setting (default 0, which hides nothing); pitch and speed
 are not invented.
 DeepFist output does not feed automatic callsign spotting. Other monitored

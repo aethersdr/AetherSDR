@@ -65,7 +65,7 @@ The neural decoders' models are not part of the AetherSDR download. The first ti
 With a neural decoder selected:
 
 - The lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
-- Characters are coloured by the model's own confidence, on the same green-to-red scale. **Sens** hides the low-confidence ones, as it does for ggmorse. Each decoder keeps its own Sens setting; DeepFist and DeepCW start at 0, which hides nothing. DeepFist text is hidden one character at a time and DeepCW text one group of characters at a time, as each is given its confidence. With DeepFist a word space is always shown; a hidden DeepCW group is hidden with the spaces inside it.
+- Characters are colored by the model's own confidence, on the same green-to-red scale. **Sens** hides the low-confidence ones, as it does for ggmorse. Each decoder keeps its own Sens setting; DeepFist and DeepCW start at 0, which hides nothing. DeepFist text is hidden one character at a time and DeepCW text one group of characters at a time, as each is given its confidence. With DeepFist a word space is always shown; a hidden DeepCW group is hidden with the spaces inside it.
 - The MQTT text stream comes from ggmorse only. The **Live CW contacts** window works with every decoder: it reads the text shown in the pane.
 - AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on a radio licensed for it through SmartSDR+, which it keeps after the subscription lapses) works with any decoder.
 
