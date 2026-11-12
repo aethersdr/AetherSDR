@@ -488,6 +488,9 @@ public:
     // entry point (macros, MQTT, TCI, rigctl, SmartCAT KY, bridge) bypasses
     // MainWindow's gate and must ask here, returning an error when absent.
     // Says nothing about CW keying itself, which works without a text buffer.
+    // hasVoiceKeyer is also false for a session whose firmware refused the
+    // DVK API (DvkModel::unsupported(), #7156); a change emits
+    // licenseFeaturesChanged().
     bool hasRadioSideCwKeyer() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;
@@ -1896,6 +1899,8 @@ private:
                     bool expireReply = false);
     ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
                                          const SessionControlCompletion& completion = {});
+    // `sub dvk all`, reading the radio's answer for a firmware with no DVK API.
+    void subscribeDvk();
     void requestStartupSetup(const RadioSetupRequest& request);
     void resetSessionControls();
     bool sessionTransportCurrent() const;
