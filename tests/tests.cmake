@@ -7985,6 +7985,14 @@ target_link_libraries(hl2_hardware_ptt_state_test PRIVATE aethercore Qt6::Core Q
 add_test(NAME hl2_hardware_ptt_state_test COMMAND hl2_hardware_ptt_state_test)
 set_tests_properties(hl2_hardware_ptt_state_test PROPERTIES TIMEOUT 60)
 
+# RadioModel::submitTxAudioDirect() return values over the IRadioBackend seam
+# (#7247): false without a direct submitter, true for a refused dispatch.
+add_executable(radio_model_direct_tx_test tests/radio_model_direct_tx_test.cpp)
+target_include_directories(radio_model_direct_tx_test PRIVATE src tests)
+target_link_libraries(radio_model_direct_tx_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME radio_model_direct_tx_test COMMAND radio_model_direct_tx_test)
+set_tests_properties(radio_model_direct_tx_test PROPERTIES TIMEOUT 60)
+
 # HL2 RQST/ACK state machine (docs/HERMES.md §13 item 13, oracle §5) — pure
 # policy, standalone (no Qt, no socket, no radio). The clock is EP6 frames.
 add_executable(hl2_rqst_ack_test
