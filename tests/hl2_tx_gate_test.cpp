@@ -85,6 +85,15 @@ struct MetisClientTestAccess {
     {
         return MetisClient::kTxPrimeMaxHoldPackets;
     }
+    // The client-leveled (TCI/DAX) prime, same reason.
+    static constexpr std::size_t clientPrimeTarget()
+    {
+        return MetisClient::kTxPrimeClientTargetSamples;
+    }
+    static constexpr std::uint64_t clientPrimeMaxHoldPackets()
+    {
+        return MetisClient::kTxPrimeClientMaxHoldPackets;
+    }
 };
 
 struct Hl2TxGateTestAccess {
@@ -1589,8 +1598,21 @@ int main(int argc, char** argv)
               "THE PRIME: the block MetisClient primes in is Hl2TxDsp's own, at the EP2 rate");
         check(MetisClientTestAccess::primeTarget() == 3 * block,
               "THE PRIME: the target is three blocks -- one draining, two of margin");
-        const std::vector<std::complex<float>> oneBlock(block, std::complex<float>(0.25f, -0.25f));
+        // The client-leveled margin is wall-clock time, not blocks: about
+        // 171 ms at the EP2 rate whatever the block is, plus one block draining.
         const auto packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+        const std::size_t clientMarginMs =
+            (MetisClientTestAccess::clientPrimeTarget() - block) * 1000
+            / static_cast<std::size_t>(MetisClientTestAccess::ep2AudioRateHz());
+        check(clientMarginMs >= 170 && clientMarginMs <= 171,
+              "THE PRIME: the client-leveled margin is 171 ms on top of one block, "
+              "independent of the block size");
+        check(MetisClientTestAccess::clientPrimeMaxHoldPackets()
+                  == 2 * (MetisClientTestAccess::clientPrimeTarget() - block) / packet,
+              "THE PRIME: the client-leveled deadline is twice its margin's arrival time");
+        check(MetisClientTestAccess::clientPrimeTarget() < MetisClientTestAccess::queueMax(),
+              "THE PRIME: the client-leveled target fits below the overflow bound");
+        const std::vector<std::complex<float>> oneBlock(block, std::complex<float>(0.25f, -0.25f));
 
         TxTestAuthority tx;
         ScopedTxFifoLog log;

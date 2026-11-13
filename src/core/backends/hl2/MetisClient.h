@@ -409,7 +409,7 @@ public:
     [[nodiscard]] std::size_t txQueueDepth() const noexcept { return m_txIq.size(); }
     // Client-leveled (TCI/DAX) transmit audio crosses more threads than the
     // microphone before it reaches this queue, and arrives with more jitter.
-    // While set, the prime holds kTxPrimeClientMarginBlocks instead of
+    // While set, the prime holds kTxPrimeClientMarginSamples instead of
     // kTxPrimeMarginBlocks. Any thread; read on the I/O thread.
     void setTxClientLeveledMargin(bool on) noexcept
     {
@@ -845,7 +845,7 @@ private:
     TxCoordinator::Context m_txIqContext;
     // Roughly a third of a second at 48 kHz. Past this the operator is hearing
     // latency, so dropping is better than growing the backlog. Raised from
-    // 12000 to hold the eight-block client prime with room above it.
+    // 12000 to hold the 171 ms client prime with room above it.
     static constexpr std::size_t kTxQueueMax = 16384;
     // THE PRIME (#6052). Delivery is in whole blocks, so an unprimed queue is
     // empty when each block is due and any lateness is keyed zeros mid-over.
@@ -862,15 +862,17 @@ private:
             / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeTargetSamples < kTxQueueMax,
                   "the prime target must fit below the overflow bound");
-    // TCI/DAX audio: eight blocks (171 ms). On a Hermes-Lite 2 the TCI path
-    // measured mid-over starvations of 1-49 EP2 packets (up to 128 ms) with
-    // the two-block margin, against a steady client and an on-time TCI clock,
-    // and producer stalls of 100-180 ms.
-    static constexpr std::size_t kTxPrimeClientMarginBlocks = 8;
+    // TCI/DAX audio: 8192 samples (171 ms at 48 kHz). On a Hermes-Lite 2 the
+    // TCI path measured mid-over starvations of 1-49 EP2 packets (up to
+    // 128 ms) with the two-block margin, against a steady client and an
+    // on-time TCI clock, and producer stalls of 100-180 ms. Stated in samples,
+    // not blocks: the stalls are wall-clock time, so the margin must not shrink
+    // when the block does.
+    static constexpr std::size_t kTxPrimeClientMarginSamples = 8192;
     static constexpr std::size_t kTxPrimeClientTargetSamples =
-        (kTxPrimeClientMarginBlocks + 1) * kTxPrimeBlockSamples;
+        kTxPrimeClientMarginSamples + kTxPrimeBlockSamples;
     static constexpr std::uint64_t kTxPrimeClientMaxHoldPackets =
-        (2 * kTxPrimeClientMarginBlocks * kTxPrimeBlockSamples)
+        (2 * kTxPrimeClientMarginSamples)
             / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeClientTargetSamples < kTxQueueMax,
                   "the client prime target must fit below the overflow bound");
