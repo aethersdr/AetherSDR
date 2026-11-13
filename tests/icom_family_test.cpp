@@ -17,6 +17,7 @@
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/CivCodec.h"
+#include "core/backends/hl2/MetisProtocol.h"
 #include "models/BandDefs.h"
 #include "models/DeclaredBands.h"
 #include "models/SliceModel.h"
@@ -149,7 +150,46 @@ int main(int argc, char** argv)
               == ExperimentalRadioIdentityHold::None,
           "non-Icom families classify on the connected edge");
     check(hl2Notice && hl2Notice->displayName == QStringLiteral("Hermes-Lite 2"),
-          "Hermes-Lite 2 is identified as an experimental radio family");
+          "an HL2 with no gateware identity is classified as experimental");
+
+    // The supported HL2 (#7257): gateware 74 on a board that does not name
+    // itself. The version and label come from the discovery reply exactly as
+    // both RadioInfo builders make them, so the GUI's "Gateware" cannot drift.
+    const auto hl2Identity = [](std::uint8_t major, std::optional<std::uint8_t> minor) {
+        hl2::DiscoveryReply reply;
+        reply.boardId = 0x06;
+        reply.gatewareVersion = major;
+        reply.gatewareMinor = minor;
+        return std::pair{QString::fromStdString(hl2::gatewareVersionText(reply)),
+                         QString::fromStdString(hl2::gatewareVersionLabel(reply))};
+    };
+    const auto hl2DescriptorFor = [&](std::uint8_t major, std::optional<std::uint8_t> minor) {
+        const auto [version, label] = hl2Identity(major, minor);
+        return experimentalRadioDescriptor(QStringLiteral("hl2"), QStringLiteral("Hermes-Lite 2"),
+                                           version, label);
+    };
+    check(!hl2DescriptorFor(74, 3),
+          "board id 6 with stock gateware 74.3 is not classified as experimental");
+    check(!hl2DescriptorFor(74, std::nullopt),
+          "board id 6 with gateware 74 and no minor is not classified as experimental");
+    check(hl2DescriptorFor(73, 3).has_value(),
+          "an HL2 on gateware 73 remains experimental");
+    check(hl2DescriptorFor(75, 3).has_value(),
+          "an HL2 on gateware 75 remains experimental");
+    check(hl2DescriptorFor(74, hl2::kGatewareMinorSquareSdr2).has_value(),
+          "a SQUARE SDR 2 that names itself remains experimental, even on gateware 74");
+    check(hl2DescriptorFor(75, hl2::kGatewareMinorSquareSdr2).has_value(),
+          "a SQUARE SDR 2 on its own 75.52 gateware remains experimental");
+    check(hl2DescriptorFor(74, hl2::kGatewareMinorSquare3).has_value(),
+          "a SQUARE 3 that names itself remains experimental");
+    check(experimentalRadioDescriptor(QStringLiteral("hl2"), QString(),
+                                      QStringLiteral("74x"), QStringLiteral("Gateware"))
+              .has_value(),
+          "a malformed gateware version remains experimental");
+    check(experimentalRadioDescriptor(QStringLiteral("anan"), QString(),
+                                      QStringLiteral("74.3"), QStringLiteral("Gateware"))
+              .has_value(),
+          "the HL2 gateware rule does not promote another family");
     check(ananNotice && ananNotice->displayName == QStringLiteral("ANAN-G2"),
           "ANAN-G2 is identified as an experimental radio family");
     check(!experimentalRadioDescriptor(QStringLiteral("flex")),
