@@ -152,6 +152,9 @@ These are the actions you can bind in **Settings → Configure Shortcuts...**, w
 | TNF Global Toggle | `tnf_toggle` |   |   |
 | NR Cycle (Off/NR/NR2/NR4/DFNR) | `nr_cycle` |   |   |
 | ANF Toggle | `anf_toggle` |   |   |
+| APF Toggle | `apf_toggle` |   |   |
+| APF Level Up | `apf_level_up` |   | Repeats while held |
+| APF Level Down | `apf_level_down` |   | Repeats while held |
 
 ## AGC
 

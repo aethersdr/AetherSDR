@@ -34,6 +34,8 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | Adaptive RX Filter | `rx.adaptiveFilter` | Toggle |   |   |
 | Noise Reduction | `rx.nrEnable` | Toggle |   |   |
 | Auto Notch | `rx.anfEnable` | Toggle |   |   |
+| APF (Audio Peaking Filter) | `rx.apfEnable` | Toggle |   |   |
+| APF Level | `rx.apfLevel` | Slider | 0 to 100 |   |
 | Squelch Enable | `rx.squelchEnable` | Toggle |   |   |
 | Audio Mute | `rx.mute` | Toggle |   |   |
 | Tune Lock | `rx.tuneLock` | Toggle |   |   |
