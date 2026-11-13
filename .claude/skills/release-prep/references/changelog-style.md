@@ -50,6 +50,11 @@ Rules the reviews enforced:
   from a `git shortlog` by display name. "Merged changes" is the number of
   PR-or-direct-commit units in the range; with squash merges that equals the
   commit count.
+  Each bot is named only when the range has its changes: `…human contributors,
+  AetherClaude and two Dependabot updates within that total.`, `…human
+  contributors and one Dependabot update within that total.` (v26.10.4), or
+  just `…human contributors.` (v26.11.1). `release_contents.py` prints the
+  right one.
 - **Section order is review-weight order**: what an operator sees first
   (menus, chains, maps, modes), then the per-radio-family sections, then
   persistence / audio / devices, then structural (backend seam, aetherd), then

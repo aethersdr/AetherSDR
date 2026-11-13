@@ -4,8 +4,17 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 namespace AetherSDR {
+
+struct RigExpertModelInfo {
+    QString name;
+    QStringList serialPrefixes;
+    qint64 minHz{0};
+    qint64 maxHz{0};
+    bool experimental{false};
+};
 
 struct RigExpertUsbDevice {
     QString path;
@@ -22,10 +31,12 @@ public:
     virtual void start(const QString& path) = 0;
     virtual void send(const QByteArray& report) = 0;
     // Cancels pending commands, attempts the final report, then closes. A close
-    // is host-side evidence only; the Stick Pro has no qualified RF-off receipt.
+    // is host-side evidence only; no supported model has a qualified RF-off receipt.
     virtual void finish(const QByteArray& finalReport) = 0;
 
     static bool available();
+    static const QList<RigExpertModelInfo>& models();
+    static RigExpertModelInfo modelForSerial(const QString& serial);
     static QList<RigExpertUsbDevice> enumerate();
     static RigExpertHidTransport* create(QObject* parent);
 

@@ -1,5 +1,10 @@
 #include "SystemInfoDialog.h"
 
+#include "CanonIndicators.h"
+#include "CanonScrollBarStyle.h"
+#include "CanonTableStyle.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
 #include "LogSyntaxHighlighter.h"
 #include "SparklineDelegate.h"
 #include "TimeSeriesGraphWidget.h"
@@ -156,6 +161,91 @@ QString displayName(const ThreadCpuSample& sample)
     return sample.name.isEmpty() ? QStringLiteral("(unnamed)") : sample.name;
 }
 
+// What the shared canon dialog sheet (ModemChrome::Look::Canon: buttons,
+// fields, combo box, check boxes) leaves out, after the canon table rules:
+// tabs as MQTT Settings has them; the table's selection band, whose
+// selection-background-color is also the palette Highlight the sparkline
+// delegate draws with; the log pane as Network Diagnostics has it; the
+// timeframe list; the Live toggle in canon aqua as Network Diagnostics has it
+// (the shared sheet's checked look is AetherRX's amber stage state); and
+// right-click menus, children of the fields and the log
+// pane that the sheet's transparent rule would otherwise leave with no panel.
+constexpr const char* kRuntimeMonitorRules = R"(
+QTabWidget::pane {
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 10px;
+    top: -1px;
+}
+QTabBar::tab {
+    color: {{color.canon.muted}};
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 12px;
+    font-weight: 600;
+}
+QTabBar::tab:hover {
+    color: {{color.canon.ink}};
+}
+QTabBar::tab:selected {
+    color: {{color.canon.cyan}};
+    border-bottom-color: {{color.canon.cyan}};
+}
+QTableView {
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.ink}};
+}
+QTableView::item:selected {
+    color: {{color.canon.ink}};
+}
+QPlainTextEdit {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 8px;
+    selection-background-color: {{color.canon.control}};
+    selection-color: {{color.canon.ink}};
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+}
+QComboBox QAbstractItemView {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.lineHi}};
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QPushButton#systemInfoLogLiveToggle:checked {
+    color: {{color.canon.aqua}};
+    border-color: {{color.canon.aqua}};
+    background: {{color.canon.nested}};
+}
+QLabel#systemInfoFilterLegend,
+QCheckBox[warningsOnly="true"] {
+    color: {{color.canon.muted}};
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+)";
+
 // Column order follows the issue's own list for the Threads tab.
 enum Column { ColName = 0, ColTid, ColState, ColCpu, ColPeak, ColTotal, ColSpark,
               ColSpacer, ColumnCount };
@@ -187,9 +277,17 @@ SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, CpuHistoryRing* c
     // settings id, and changing it would silently discard the saved window
     // position of anyone who has already used this dialog. Same rule LogManager
     // applies to category ids.
-    : PersistentDialog(QStringLiteral("Runtime Monitor"),
-                       QStringLiteral("SystemInfoDialogGeometry"), parent)
+    : CanonWindow(QStringLiteral("Runtime Monitor"), parent, Kind::Workspace)
 {
+    setObjectName(QStringLiteral("SystemInfoDialog"));
+    theme::setContainer(this, QStringLiteral("canon/runtimeMonitor"));
+    setGeometryKey(QStringLiteral("SystemInfoDialogGeometry"));
+    FramelessResizer::install(this);
+    applyCanonSheet(bodyWidget(), [] {
+        return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+             + canonTableRules() + canonScrollBarRules()
+             + QString::fromLatin1(kRuntimeMonitorRules);
+    });
     if (history != nullptr) {
         m_memoryRing = history;
     }
@@ -200,6 +298,8 @@ SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, CpuHistoryRing* c
         m_tickLagMeter = tickLagMeter;
     }
     auto* layout = new QVBoxLayout(bodyWidget());
+    layout->setContentsMargins(14, 12, 14, 14);
+    layout->addWidget(makeCanonHeader(QStringLiteral("Runtime Monitor")));
 
     // One timeframe for every chart in the dialog, in the window header where
     // the network dialog keeps its own (#5496). Two per-tab selectors with the
@@ -259,22 +359,44 @@ SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, CpuHistoryRing* c
     };
     connect(tabs, &QTabWidget::currentChanged, this, showTimeframeForPage);
     showTimeframeForPage(tabs->currentIndex());
-    layout->addWidget(tabs);
+    layout->addWidget(tabs, 1);
 
-    auto* buttonRow = new QHBoxLayout;
-    buttonRow->addStretch(1);
-    auto* closeButton = new QPushButton(QStringLiteral("Close"), bodyWidget());
-    closeButton->setObjectName(QStringLiteral("systemInfoCloseButton"));
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
-    buttonRow->addWidget(closeButton);
-    layout->addLayout(buttonRow);
+    applyCanonChartColors();
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, [this] {
+        applyCanonChartColors();
+        refreshMemoryChart();     // the series colours resolve per theme too
+        refreshOverview();
+    });
 
     // A reopened dialog shows the history it was handed before the first new
     // sample arrives; with an empty ring this is a no-op.
     refreshMemoryChart();
     refreshOverview();
 
-    resize(900, 600);
+    // Never smaller than the layout needs; 40 px taller than before for the
+    // canon header.
+    setMinimumSize(minimumSizeHint());
+    resize(QSize(900, 640).expandedTo(minimumSizeHint()));
+}
+
+void SystemInfoDialog::applyCanonChartColors()
+{
+    auto& tm = ThemeManager::instance();
+    TimeSeriesGraphWidget::ChartColors colors;
+    colors.ground = tm.color(this, QStringLiteral("color.canon.nested"));
+    colors.line = tm.color(this, QStringLiteral("color.canon.line"));
+    colors.title = tm.color(this, QStringLiteral("color.canon.ink"));
+    colors.text = tm.color(this, QStringLiteral("color.canon.muted"));
+    colors.legendOff = colors.text;
+    colors.legendLineOff = colors.line;
+    colors.radius = 12.0;
+    colors.roundGround = true;
+    for (TimeSeriesGraphWidget* graph : {m_overviewCpuGraph, m_overviewMemoryGraph,
+                                         m_overviewThreadsGraph, m_overviewTickGraph,
+                                         m_memoryGraph}) {
+        if (graph)
+            graph->setChartColors(colors);
+    }
 }
 
 SystemInfoDialog::~SystemInfoDialog()
@@ -767,9 +889,9 @@ void SystemInfoDialog::refreshMemoryChart()
     };
     ThemeManager& theme = ThemeManager::instance();
     m_memoryGraph->setSeries(
-        {series(QStringLiteral("Resident"), theme.color("color.accent"), Field::Resident),
-         series(QStringLiteral("Private"),  theme.color("color.accent.success"), Field::Private),
-         series(QStringLiteral("Peak"),     theme.color("color.accent.warning"), Field::Peak)},
+        {series(QStringLiteral("Resident"), theme.color(this, QStringLiteral("color.accent")), Field::Resident),
+         series(QStringLiteral("Private"),  theme.color(this, QStringLiteral("color.accent.success")), Field::Private),
+         series(QStringLiteral("Peak"),     theme.color(this, QStringLiteral("color.accent.warning")), Field::Peak)},
         rangeSeconds);
 }
 
@@ -1015,14 +1137,14 @@ void SystemInfoDialog::refreshOverview()
     };
     if (m_overviewCpuGraph != nullptr) {
         m_overviewCpuGraph->setSeries(
-            {cpuSeries(QStringLiteral("Process"), theme.color("color.accent"), CpuField::ProcessPercent, QStringLiteral("%")),
-             cpuSeries(QStringLiteral("Busiest thread"), theme.color("color.accent.warning"), CpuField::BusiestPercent, QStringLiteral("%"))},
+            {cpuSeries(QStringLiteral("Process"), theme.color(this, QStringLiteral("color.accent")), CpuField::ProcessPercent, QStringLiteral("%")),
+             cpuSeries(QStringLiteral("Busiest thread"), theme.color(this, QStringLiteral("color.accent.warning")), CpuField::BusiestPercent, QStringLiteral("%"))},
             rangeSeconds);
     }
     if (m_overviewTickGraph != nullptr) {
         m_overviewTickGraph->setSeries(
-            {cpuSeries(QStringLiteral("Worst"), theme.color("color.accent.danger"), CpuField::TickLagMax, QStringLiteral(" ms")),
-             cpuSeries(QStringLiteral("Mean"), theme.color("color.accent"), CpuField::TickLagMean, QStringLiteral(" ms"))},
+            {cpuSeries(QStringLiteral("Worst"), theme.color(this, QStringLiteral("color.accent.danger")), CpuField::TickLagMax, QStringLiteral(" ms")),
+             cpuSeries(QStringLiteral("Mean"), theme.color(this, QStringLiteral("color.accent")), CpuField::TickLagMean, QStringLiteral(" ms"))},
             rangeSeconds);
     }
     if (m_overviewMemoryGraph != nullptr) {
@@ -1035,8 +1157,8 @@ void SystemInfoDialog::refreshOverview()
             return s;
         };
         m_overviewMemoryGraph->setSeries(
-            {memSeries(QStringLiteral("Resident"), theme.color("color.accent"), MemField::Resident),
-             memSeries(QStringLiteral("Peak"), theme.color("color.accent.warning"), MemField::Peak)},
+            {memSeries(QStringLiteral("Resident"), theme.color(this, QStringLiteral("color.accent")), MemField::Resident),
+             memSeries(QStringLiteral("Peak"), theme.color(this, QStringLiteral("color.accent.warning")), MemField::Peak)},
             rangeSeconds);
     }
     if (m_overviewThreadsGraph != nullptr) {
@@ -1055,7 +1177,7 @@ void SystemInfoDialog::refreshOverview()
             for (int i = 0; i < top.size(); ++i) {
                 const CpuHistoryRing::ThreadSeries& ts = top.at(i);
                 TimeSeriesGraphWidget::Series s{threadLabel(ts, nameCount.value(ts.name) > 1),
-                                                theme.color(kThreadTokens[i % static_cast<int>(std::size(kThreadTokens))]),
+                                                theme.color(this, QLatin1String(kThreadTokens[i % static_cast<int>(std::size(kThreadTokens))])),
                                                 ts.points,
                                                 QStringLiteral("%")};
                 s.maxConnectGapSeconds = gapSeconds;
@@ -1095,6 +1217,7 @@ QWidget* SystemInfoDialog::buildLogsTab()
     // matching lines" and "following something other than what you think".
     m_logPathLabel = new QLabel(page);
     m_logPathLabel->setObjectName(QStringLiteral("systemInfoLogPath"));
+    m_logPathLabel->setTextFormat(Qt::PlainText);
     m_logPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     ThemeManager::instance().applyStyleSheet(
         m_logPathLabel,
@@ -1191,8 +1314,9 @@ void SystemInfoDialog::rebuildCategoryFilters()
             box->setToolTip(QStringLiteral("%1 — %2").arg(key, found->description));
         } else {
             anyWarningsOnly = true;
-            ThemeManager::instance().applyStyleSheet(
-                box, QStringLiteral("QCheckBox { color: {{color.text.disabled}}; }"));
+            // color.text.disabled is not remapped in the canon scope; the
+            // window sheet draws a warnings-only box in canon.muted.
+            box->setProperty("warningsOnly", true);
             box->setToolTip(
                 QStringLiteral("%1 — %2\n\nWarnings and criticals only: this "
                                "category's full logging is switched off. Turn it "
@@ -1227,8 +1351,6 @@ void SystemInfoDialog::rebuildCategoryFilters()
     if (anyWarningsOnly) {
         auto* legend = new QLabel(QStringLiteral("dimmed = warnings only"), m_logsPage);
         legend->setObjectName(QStringLiteral("systemInfoFilterLegend"));
-        ThemeManager::instance().applyStyleSheet(
-            legend, QStringLiteral("QLabel { color: {{color.text.disabled}}; }"));
         legend->setToolTip(
             QStringLiteral("A dimmed category is switched off in Help \u2192 "
                            "Support & Diagnostics, so only its warnings and criticals reach the "
@@ -1431,7 +1553,7 @@ void SystemInfoDialog::setLogFollowLive(bool on)
 
 void SystemInfoDialog::showEvent(QShowEvent* event)
 {
-    PersistentDialog::showEvent(event);
+    CanonWindow::showEvent(event);
     startSampling();
     openLogTail();
 }
@@ -1440,7 +1562,7 @@ void SystemInfoDialog::hideEvent(QHideEvent* event)
 {
     stopSampling();
     pauseLogTail();
-    PersistentDialog::hideEvent(event);
+    CanonWindow::hideEvent(event);
 }
 
 }  // namespace AetherSDR

@@ -5,6 +5,7 @@
 #include "core/backends/anan/AnanSliceAudio.h"
 #include "core/Resampler.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
+#include "core/backends/anan/AnanReceiverRoutes.h"
 #include "core/backends/anan/P2Client.h"
 #include "core/dsp/WdspSMeter.h"
 
@@ -15,18 +16,20 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
 
 namespace AetherSDR::anan {
 
-// IRadioBackend for the ANAN-G2 (openHPSDR Protocol 2). Owns one P2Client and
-// one AnanRxDsp on a dedicated I/O thread, like Hl2Backend with MetisClient +
-// Hl2RxDsp. Scope: one DDC, RX only.
-//   - No NCO/WDSP-shift split: RX1's DDC retunes on every setSliceFrequency()/
-//     setPanCenter(), so "the shift is ALWAYS exactly -cwBfoHz(mode), because
-//     the NCO IS the slice frequency".
+// IRadioBackend for the ANAN-G2 (openHPSDR Protocol 2). Owns one P2Client and,
+// per receiver, one AnanRxDsp, all on a dedicated I/O thread. A receiver is a
+// slice, the pan that shows its DDC, and the DSP behind them (Receiver below);
+// kReceiverRoutes says how many there are and where each sits. RX only.
+//   - No NCO/WDSP-shift split: a receiver's DDC retunes on every
+//     setSliceFrequency()/setPanCenter(), so "the shift is ALWAYS exactly
+//     -cwBfoHz(mode), because the NCO IS the slice frequency".
 //   - capabilities()' identity strings are fixed; gateware, DDC count and board
 //     id come from this session's Discovery reply once it lands.
 //   - setKeying() is a no-op: canTransmit is false and P2Client has no PTT
@@ -163,35 +166,45 @@ public:
     // (deskHPSDR has no AGC-off gain control).
     static constexpr int kDefaultAgcOffLevel = 29;
 
-    // Live operator AGC state as setSliceAgc()/requestSliceAgc() last stored
-    // it, which connectRadio() and beginRateChange() build the DSP config
-    // from. Exposed read-only for testing without a live radio (matches
+    // RX1's live operator AGC state as setSliceAgc()/requestSliceAgc() last
+    // stored it, which connectRadio() and beginRateChange() build the DSP
+    // config from. Exposed read-only for testing without a live radio (matches
     // WdspChannel's own *ForTest accessor convention), not part of the
     // operator-facing seam.
-    [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
-    [[nodiscard]] double agcMaxGainDbForTest() const noexcept { return agcKnobDb(m_agcThreshold); }
-    [[nodiscard]] double agcFixedGainDbForTest() const noexcept { return agcKnobDb(m_agcOffLevel); }
-    // The live receive state as applyLiveRxState() writes it into the DSP config.
+    [[nodiscard]] int agcModeForTest() const noexcept { return rx1().agcMode; }
+    [[nodiscard]] double agcMaxGainDbForTest() const noexcept { return agcKnobDb(rx1().agcThreshold); }
+    [[nodiscard]] double agcFixedGainDbForTest() const noexcept { return agcKnobDb(rx1().agcOffLevel); }
+    // RX1's live receive state as applyLiveRxState() writes it into the DSP config.
     [[nodiscard]] AnanRxDsp::Config liveRxConfigForTest() const
     {
         AnanRxDsp::Config config;
-        applyLiveRxState(config);
+        applyLiveRxState(rx1(), config);
         return config;
     }
-    [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
+    // The step attenuation of the ADC behind RX1.
+    [[nodiscard]] int attenuationDbForTest() const noexcept { return attenuationDbForAdc(rx1().adc); }
     [[nodiscard]] bool noiseBlankerOnForTest() const noexcept
     {
-        return m_nbKind != AetherSDR::NoiseBlankerKind::Off;
+        return rx1().nbKind != AetherSDR::NoiseBlankerKind::Off;
     }
     [[nodiscard]] AetherSDR::NoiseBlankerKind noiseBlankerKindForTest() const noexcept
     {
-        return m_nbKind;
+        return rx1().nbKind;
     }
-    [[nodiscard]] int noiseBlankerLevelForTest() const noexcept { return m_nbLevel; }
+    [[nodiscard]] int noiseBlankerLevelForTest() const noexcept { return rx1().nbLevel; }
     [[nodiscard]] AetherSDR::NoiseBlankerFill noiseBlankerFillForTest() const noexcept
     {
-        return m_nbFill;
+        return rx1().nbFill;
     }
+    // RX1's mode and passband, as the slice setters last stored them.
+    [[nodiscard]] QString modeForTest() const { return rx1().mode; }
+    [[nodiscard]] std::pair<int, int> filterForTest() const noexcept
+    {
+        return {rx1().filterLowHz, rx1().filterHighHz};
+    }
+    // What the next session asks the radio for, built from the receivers
+    // exactly as startP2ClientSession() builds it.
+    [[nodiscard]] P2Client::Params sessionParamsForTest() const { return sessionParams(); }
     // The radio's own output level/mute as the lineout seam last set them. Same
     // *ForTest convention as the accessors above: read-only, not part of the seam.
     [[nodiscard]] int lineoutGainPercentForTest() const noexcept { return m_lineoutGainPercent; }
@@ -212,8 +225,85 @@ private:
     friend class AnanNoiseBlankerTestAccess;
     friend class AnanLinkStatsTestAccess;
     friend class AnanSupplyRailTestAccess;
+
+    // One receiver: the slice the operator tunes, the pan that shows its DDC,
+    // and the DSP between them. m_receivers is indexed like kReceiverRoutes:
+    // the receiver at index i owns slice i, pan "anan-i" and spectrum pan index
+    // i, and RX1 is index 0. Everything here lives on this object's thread
+    // except the AnanRxDsp, which lives on m_ioThread and is reached only by
+    // queued calls (or DirectConnection from P2Client on that same thread).
+    struct Receiver {
+        int index = 0;
+        ReceiverRoute route;
+        // The ADC this receiver listens to: the route's, unless the operator
+        // picked the other input (anan.ddc0AdcIndex, which only RX1 reads).
+        int adc = 0;
+        QString panId;
+        AnanRxDsp* dsp = nullptr;   // nullptr parent: moveToThread requires it
+        // The DDC's rate, and the DSP config a connect or a rate change builds
+        // from; inputSampleRateHz carries the same rate in Hz.
+        int rateKsps = 48;
+        AnanRxDsp::Config pendingDspConfig;
+        // Panadapter points from the panel width (setPanPixelWidth()), kept here
+        // as well as in the DSP so a connect after the width arrives still
+        // builds the analyzer at that count.
+        int panPoints = static_cast<int>(kDroopCorrectionFftSize);
+        // The operator's receive state. connectRadio() and beginRateChange()
+        // build the DSP config from it and emitSliceState() publishes it, so it
+        // is retained across rate changes and reconnects.
+        QString mode = QStringLiteral("USB");
+        int filterLowHz = 100;
+        int filterHighHz = 2900;
+        double freqHz = 0.0;
+        // A retune the throttle still owes the radio and the pan
+        // (scheduleTuneApply()).
+        bool tuneDirty = false;
+        // AGC in AGC-T knob units (agcKnobDb() converts). applyRestoredState()
+        // sets RX1's before every connect from this radio's stored AGC (the Agc
+        // domain), or the defaults when it has none, so another ANAN does not
+        // inherit it the way it inherits the noise blanker below.
+        int agcMode = 3;
+        int agcThreshold = kDefaultAgcThreshold;
+        int agcOffLevel = kDefaultAgcOffLevel;
+        // Noise blanker as setSliceNoiseBlanker() last stored it. emitSliceState()
+        // also publishes it when a different radio gets a fresh slice, keeping
+        // its NB button in agreement. Defaults match AnanRxDsp::Config's.
+        AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
+        int nbLevel = 50;
+        AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
+        // The receiver's audio stage (AnanSliceAudio.h). 100/50 = unity, centered.
+        bool audioMuted = false;
+        int audioGainPercent = 100;
+        int audioPanPercent = 50;
+    };
+    std::array<Receiver, kReceiverRoutes.size()> m_receivers;
+    [[nodiscard]] Receiver& rx1() noexcept { return m_receivers.front(); }
+    [[nodiscard]] const Receiver& rx1() const noexcept { return m_receivers.front(); }
+    // The receiver a seam call addresses, or nullptr for a slice or pan this
+    // backend does not have; such a call changes nothing.
+    [[nodiscard]] Receiver* receiverForSlice(int sliceId) noexcept;
+    [[nodiscard]] Receiver* receiverForPan(const QString& panId) noexcept;
+    // The step attenuation in front of one ADC (0 or 1), as m_pendingParams
+    // holds it for the session. Every receiver on that ADC shares it.
+    [[nodiscard]] int attenuationDbForAdc(int adc) const noexcept
+    {
+        return adc == 1 ? m_pendingParams.adc1AttenuationDb
+                        : m_pendingParams.adc0AttenuationDb;
+    }
+    // m_pendingParams with the session's DDC list built from the receivers,
+    // RX1 first (P2Client::Params::activeDdcs: the first entry is the link DDC).
+    [[nodiscard]] P2Client::Params sessionParams() const;
+
+    // A receiver's DSP outputs (audio, spectrum) to this object, on its own
+    // slice and pan. Called once per receiver from the constructor.
+    void connectReceiverOutputs(int index);
+
     void beginDspSetup();
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
+    // beginDspSetup() builds one channel per receiver; finishDspSetup() starts
+    // the session once the last of them is in. The first failure is kept.
+    int m_dspSetupPending = 0;
+    QString m_dspSetupError;
     // The "restart P2Client with m_pendingParams, then retune" half of what
     // finishDspSetup() used to do inline -- extracted so beginRateChange()'s
     // background-rebuild path (finishRateChange()) can reuse it too, instead
@@ -225,11 +315,9 @@ private:
     // session isn't started until the DSP chain that will consume its IQ
     // actually exists.
     P2Client::Params m_pendingParams;
-    AnanRxDsp::Config m_pendingDspConfig;
-    // Panadapter points from the panel width (setPanPixelWidth()). Kept here
-    // as well as in AnanRxDsp so a connect that happens after the width
-    // arrives still builds the analyzer at that count.
-    int m_panPoints = static_cast<int>(kDroopCorrectionFftSize);
+    void emitSliceState(const Receiver& rx);
+    void emitPanState(const Receiver& rx);
+    // Every receiver's, for the paths that report the whole radio.
     void emitSliceState();
     void emitPanState();
 
@@ -262,6 +350,7 @@ private:
     // cumulative total alone cannot say.
     quint64 m_lastSnapshotRxBytes = 0;
     // One WDSP S-meter reading (dBFS) -> dBm, smoothed, published on a tick.
+    // RX1's: SLC:LEVEL is the one receive meter defineMeters() declares.
     void onDspMeter(float dbfs);
     // The same smoother Hl2Backend publishes through, so the two receivers'
     // needles move alike by construction -- see WdspSMeter.h.
@@ -299,13 +388,15 @@ private:
     // live P2Client session both keep running, undisturbed, for the whole
     // build. finishRateChange() is what actually stops/restarts P2Client,
     // once the new channel already exists.
-    void beginRateChange(int newRateKsps);
+    // One receiver's DDC at a time (m_rateChanging is radio-wide).
+    void beginRateChange(int receiverIndex, int newRateKsps);
     // Runs once the background build (started by beginRateChange()) has
     // finished and been installed. Same body as the old beginRateChange()'s
     // second half, just triggered after the rebuild instead of before it --
     // see its own definition comment for the retry-window fix folded in
     // here too.
-    void finishRateChange(quint64 generation, bool ok, const QString& error);
+    void finishRateChange(int receiverIndex, quint64 generation, bool ok,
+                          const QString& error);
 
     // Identity guard for the droop-calibration write, in front of
     // AnanDroopCalibrator::saveTables() (which owns the merge, the schema
@@ -322,18 +413,20 @@ private:
     // LATEST request instead of stalling on whichever one happened to be
     // running when they stopped clicking.
     void retryPendingRateChange();
-    [[nodiscard]] double cwBfoHz() const noexcept { return cwBfoOffsetHz(m_mode, m_cwPitchHz); }
-    // The operator's mode, passband, AGC and noise blanker, written into a DSP
+    [[nodiscard]] double cwBfoHz(const Receiver& rx) const noexcept
+    {
+        return cwBfoOffsetHz(rx.mode, m_cwPitchHz);
+    }
+    // One receiver's mode, passband, AGC and noise blanker, written into a DSP
     // config. connectRadio() and beginRateChange() both build theirs with it.
-    void applyLiveRxState(AnanRxDsp::Config& config) const;
+    void applyLiveRxState(const Receiver& rx, AnanRxDsp::Config& config) const;
     // Re-push mode + filter (with the CW BFO folded in) + shift, in that
-    // order, to m_dsp. HERMES.md §16.7: mode changes must re-push the
-    // passband, every time, not only when its value changed.
-    void pushModeFilterShift();
+    // order, to the receiver's DSP. HERMES.md §16.7: mode changes must re-push
+    // the passband, every time, not only when its value changed.
+    void pushModeFilterShift(const Receiver& rx);
 
     QThread* m_ioThread = nullptr;
     P2Client* m_client = nullptr;    // lives on m_ioThread; nullptr parent (moveToThread requires it)
-    AnanRxDsp* m_dsp = nullptr;      // lives on m_ioThread; nullptr parent
     // Build-only thread for a rate change's background AnanRxDsp::buildChannel()
     // call -- never touches P2Client or the real-time IQ path, so it can never
     // starve the keepalive the way blocking m_ioThread with the same work
@@ -363,9 +456,6 @@ private:
     // object's own thread (the GUI thread), not m_ioThread.
     static constexpr int kTuneThrottleMs = 33;   // ~30 Hz ceiling on real DDC retunes
     QTimer* m_tuneThrottleTimer = nullptr;
-    // Active ADC attenuation, mirrored in m_pendingParams for session restarts.
-    // Captured/restored only through RadioStateMemory's rfGain extension.
-    int m_attenuationDb = 0;
     bool m_tunePendingApply = false;
 
     // setPanBandwidth() serialization: one rate change at a time, gated on
@@ -374,6 +464,7 @@ private:
     // P2Client's 2 s connect watchdog. At most one request is remembered while busy;
     // a newer one supersedes it.
     int m_pendingBandwidthKsps = 0;   // 0 = none pending
+    int m_pendingBandwidthReceiver = 0;   // whose pan asked for it
     // Set from beginRateChange() through the next linkUp (or a failure path). Also
     // suppresses connected()/disconnected() churn: a zoom is not a disconnect.
     bool m_rateChanging = false;
@@ -398,41 +489,17 @@ private:
     // immediate send: a lost datagram costs nothing audible (see finishRateChange()).
     static constexpr int kRateChangeResendMs[] = {60, 140};
 
-    QString m_mode = QStringLiteral("USB");
-    int m_filterLowHz = 100;
-    int m_filterHighHz = 2900;
+    // The CW pitch, one setting for every receiver.
     int m_cwPitchHz = 600;
-    double m_sliceFreqHz = 0.0;
-    // What applyRestoredState() accepted, held for connectRadio(); kept apart
-    // from the live m_sliceFreqHz/m_mode. Zero/empty: nothing restored.
+    // What applyRestoredState() accepted for RX1, held for connectRadio(); kept
+    // apart from its live freqHz/mode. Zero/empty: nothing restored.
     double m_restoredFreqHz = 0.0;
     QString m_restoredMode;
-    // Live AGC state in AGC-T knob units (agcKnobDb() converts). Both
-    // connectRadio() and beginRateChange() build the DSP config from it.
-    // applyRestoredState() sets it before every connect from this radio's
-    // stored AGC (the Agc domain), or the defaults when it has none, so
-    // another ANAN does not inherit it the way it inherits the noise blanker
-    // below. emitSliceState() publishes it so the knob shows what the DSP runs.
-    int m_agcMode = 3;
-    int m_agcThreshold = kDefaultAgcThreshold;
-    int m_agcOffLevel = kDefaultAgcOffLevel;
-    // Noise blanker as setSliceNoiseBlanker() last stored it. Both
-    // connectRadio() and beginRateChange() build the DSP config from it, as
-    // they do the AGC above. emitSliceState() also publishes the pair when a
-    // different radio gets a fresh slice, keeping its NB button in agreement
-    // with the retained setting. Defaults match AnanRxDsp::Config's.
-    AetherSDR::NoiseBlankerKind m_nbKind = AetherSDR::NoiseBlankerKind::Off;
-    int m_nbLevel = 50;
-    AetherSDR::NoiseBlankerFill m_nbFill = AetherSDR::kDefaultNoiseBlankerFill;
-
-    // The receiver audio stage as last set; emitSliceState() publishes these.
-    // Retained across rate changes and reconnects (like the blanker and AGC).
-    // 100/50 = unity, centred.
-    bool m_sliceAudioMuted = false;
-    int m_sliceAudioGainPercent = 100;
-    int m_sliceAudioPanPercent = 50;
 
     // ---- speaker stream (DDC Audio, PC -> radio) ----
+    //
+    // RX1's audio only: a second receiver's mix into the radio's speaker is
+    // its own change.
     //
     // Live copy of the connect-time parameter, so the audio path tests one bool
     // rather than reaching into m_pendingParams on every block.
@@ -455,10 +522,6 @@ private:
     QByteArray m_speakerOutL;
     QByteArray m_speakerOutR;
     std::vector<qint16> m_speakerInterleaved;
-
-    // Fixed identifiers -- Phase 1b is exactly one slice, one pan.
-    static constexpr int kSliceId = 0;
-    static const QString kPanId;
 
     // Per-radio settings identity ("anan" family): RadioConnectRequest::serial
     // (AnanDiscovery::macToSerial()), set at the top of connectRadio(); empty before

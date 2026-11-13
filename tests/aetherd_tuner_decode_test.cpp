@@ -20,7 +20,7 @@ static TunerDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs,
                          const QString& handle = QStringLiteral("0x2000"))
 {
     QSignalSpy spy(&b, &IRadioBackend::tunerChanged);
-    b.decodeTunerStatus(handle, kvs);
+    b.statusIngress()->decodeTunerStatus(handle, kvs);
     if (spy.count() != 1) return {};
     return spy.takeFirst().at(0).value<TunerDelta>();
 }

@@ -1,6 +1,11 @@
 #include "ThemeEditorDialog.h"
 #include "ScopedChildWidget.h"
 #include "Theme.h"
+#include "CanonIndicators.h"
+#include "CanonMessageBox.h"
+#include "CanonScrollBarStyle.h"
+#include "FramelessResizer.h"
+#include "ModemChrome.h"
 #include "ThemeInspector.h"
 #include "TokenEditorWidget.h"
 #include "core/AppSettings.h"
@@ -18,7 +23,6 @@
 #include <QFontMetrics>
 #include <QFrame>
 #include <QHBoxLayout>
-#include <QInputDialog>
 #include <QLabel>
 #include <QLinearGradient>
 #include <QMenu>
@@ -29,7 +33,6 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QTreeWidgetItem>
-#include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -59,21 +62,150 @@ QString userThemesDir()
         + QStringLiteral("/AetherSDR/themes"));
 }
 
-QMessageBox::StandardButton showModalMessage(
-    QMessageBox::Icon icon, QWidget* parent, const QString& title,
-    const QString& text, QMessageBox::StandardButtons buttons = QMessageBox::Ok,
-    QMessageBox::StandardButton defaultButton = QMessageBox::NoButton)
+// A canon notice with one OK button. The title says what happened; a canon
+// box has no icon.
+void showNotice(QWidget* parent, const QString& title, const QString& text)
 {
-    ScopedChildWidget<QMessageBox> boxOwner(parent);
-    QMessageBox& box = *boxOwner.get();
-    box.setIcon(icon);
-    box.setWindowTitle(title);
-    box.setText(text);
-    box.setStandardButtons(buttons);
-    if (defaultButton != QMessageBox::NoButton) {
-        box.setDefaultButton(defaultButton);
-    }
-    return static_cast<QMessageBox::StandardButton>(box.exec());
+    ScopedChildWidget<CanonMessageBox> box(title, text, parent);
+    box.get()->setDefaultButton(box.get()->addButton(QStringLiteral("OK"),
+                                                     CanonMessageBox::Role::Accept));
+    box.get()->exec();
+}
+
+// A canon question whose destructive `confirm` button acts only when chosen;
+// Cancel is the default, so Return, Esc and the ✕ answer no.
+bool confirmDestructive(QWidget* parent, const QString& title, const QString& text,
+                        const QString& informative, const QString& confirm)
+{
+    ScopedChildWidget<CanonMessageBox> owner(title, text, parent);
+    CanonMessageBox& box = *owner.get();
+    if (!informative.isEmpty())
+        box.setInformativeText(informative);
+    auto* cancel = box.addButton(QStringLiteral("Cancel"), CanonMessageBox::Role::Reject);
+    auto* yes = box.addButton(confirm, CanonMessageBox::Role::Destructive);
+    box.setDefaultButton(cancel);
+    box.exec();
+    return owner && box.clickedButton() == yes;
+}
+
+QString themeEditorSheet();
+
+// A canon text prompt (in place of QInputDialog::getText): the label, a field
+// holding `initial`, then Cancel and `action`; `action` is the default, so
+// Return accepts and Esc or the ✕ cancel. `*ok` is true only on accept.
+QString promptText(QWidget* parent, const QString& title, const QString& label,
+                   const QString& initial, const QString& action, bool* ok)
+{
+    *ok = false;
+    ScopedChildWidget<CanonWindow> owner(title, parent);
+    CanonWindow& dlg = *owner.get();
+    dlg.setObjectName(QStringLiteral("themeEditorNamePrompt"));
+    dlg.setModal(true);
+    applyCanonSheet(dlg.bodyWidget(), [] {
+        return themeEditorSheet() + QStringLiteral(
+            "QPushButton:default { color: {{color.canon.cyan}}; border-color: {{color.canon.cyan}}; }");
+    });
+    auto* root = new QVBoxLayout(dlg.bodyWidget());
+    root->setContentsMargins(14, 12, 14, 14);
+    root->setSpacing(10);
+    root->addWidget(makeCanonHeader(title));
+    auto* caption = new QLabel(label, dlg.bodyWidget());
+    caption->setTextFormat(Qt::PlainText);
+    caption->setWordWrap(true);
+    root->addWidget(caption);
+    auto* field = new QLineEdit(initial, dlg.bodyWidget());
+    field->setObjectName(QStringLiteral("themeEditorNameField"));
+    field->setAccessibleName(title);
+    field->setMinimumWidth(300);
+    field->selectAll();
+    caption->setBuddy(field);
+    root->addWidget(field);
+    auto* buttons = new QHBoxLayout;
+    buttons->addStretch(1);
+    auto* cancel = new QPushButton(QStringLiteral("Cancel"), dlg.bodyWidget());
+    cancel->setAutoDefault(false);
+    auto* accept = new QPushButton(action, dlg.bodyWidget());
+    accept->setDefault(true);
+    QObject::connect(cancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+    QObject::connect(accept, &QPushButton::clicked, &dlg, &QDialog::accept);
+    buttons->addWidget(cancel);
+    buttons->addWidget(accept);
+    root->addLayout(buttons);
+    field->setFocus();
+    const int result = dlg.exec();
+    if (!owner || result != QDialog::Accepted)
+        return QString();
+    *ok = true;
+    return field->text();
+}
+
+// The editor's chrome on the shared canon dialog sheet, plus its token tree on
+// a nested card, selection ink, and right-click menus (children that the
+// sheet's transparent rule would otherwise leave with no panel).
+constexpr const char* kThemeEditorRules = R"(
+QTreeWidget {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.nested}};
+    border: 1px solid {{color.canon.line}};
+    border-radius: 6px;
+    outline: none;
+}
+QTreeWidget::item:selected {
+    color: {{color.canon.ink}};
+    background: {{color.canon.control}};
+}
+QTreeWidget::item:hover:!selected {
+    background: {{color.canon.raised}};
+}
+QHeaderView::section {
+    color: {{color.canon.cyan}};
+    background: {{color.canon.raised}};
+    border: none;
+    border-bottom: 1px solid {{color.canon.line}};
+    padding: 4px 6px;
+    font-weight: 700;
+}
+QLineEdit {
+    selection-background-color: {{color.canon.cyan}};
+    selection-color: {{color.canon.onAccent}};
+}
+QLabel#themeEditorTitle {
+    color: {{color.canon.ink}};
+    font-weight: 700;
+}
+QLabel#themeEditorInspectStatus {
+    color: {{color.canon.muted}};
+    font-style: italic;
+}
+QFrame#themeEditorDivider {
+    color: {{color.canon.line}};
+}
+QMenu {
+    color: {{color.canon.inkSoft}};
+    background: {{color.canon.raised}};
+    border: 1px solid {{color.canon.lineHi}};
+}
+QMenu::item {
+    padding: 4px 18px;
+}
+QMenu::item:selected {
+    color: {{color.canon.onAccent}};
+    background: {{color.canon.cyan}};
+}
+QMenu::item:disabled {
+    color: {{color.control.unavailable}};
+}
+QMenu::separator {
+    height: 1px;
+    margin: 4px 8px;
+    background: {{color.canon.line}};
+}
+)";
+
+QString themeEditorSheet()
+{
+    return ModemChrome::styleSheet(ModemChrome::Scale::Dialog, ModemChrome::Look::Canon)
+         + canonScrollBarRules() + QString::fromLatin1(kThemeEditorRules);
 }
 
 // Build a tiny coloured square QIcon for use as a swatch on a list row.
@@ -163,33 +295,32 @@ QIcon gradientSwatchIcon(const ThemeGradient& g)
 } // namespace
 
 ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
-    : PersistentDialog(QStringLiteral("Theme Editor"),
-                       QStringLiteral("ThemeEditorDialogGeometry"),
-                       parent)
+    : CanonWindow(QStringLiteral("Theme Editor"), parent, Kind::Workspace)
 {
-    // PersistentDialog owns the outer (FramelessWindowTitleBar + bodyWidget)
-    // layout and the geometry persistence; we just need to populate
-    // bodyWidget() with the actual editor controls.  Subclasses are
-    // expected to be non-modal — MainWindow's showOrRaisePersistent
-    // wires that up + the frameless chrome from AppSettings.
-    // Size budget — fits CompactColorPicker (~218×220) on the color
-    // page; the gradient page is taller (strip + stop list + picker
-    // + angle row).
-    setMinimumSize(440, 720);
-    applyAppTheme(this);
-
-    // Container declaration — places this dialog under the "dialog"
-    // umbrella so step 3's editor UI can navigate from root → dialog →
-    // dialog.themeEditor when rendering its own scope tree.
-    theme::setContainer(this, QStringLiteral("dialog/themeEditor"));
+    setObjectName(QStringLiteral("ThemeEditorDialog"));
+    // Size and position persist under the key it used as a PersistentDialog,
+    // so saved geometry carries over; it resizes from every edge.
+    setGeometryKey(QStringLiteral("ThemeEditorDialogGeometry"));
+    FramelessResizer::install(this);
+    // CanonWindow owns the chrome and the geometry persistence; the editor
+    // controls go in bodyWidget(). MainWindow opens it non-modal through
+    // showOrRaiseCanon(). Size budget: the colour page fits
+    // CompactColorPicker (~218×220); the gradient page is taller (strip +
+    // stop list + picker + angle row).
+    // The editor's own chrome sits under the canon scope. What it shows does
+    // not: every swatch and value is read through the root / explicit-path
+    // API (tm.color(key), tm.colorAt(path, key)), never through this
+    // widget's scope, so the canon re-map cannot leak into the preview.
+    theme::setContainer(this, QStringLiteral("canon/themeEditor"));
+    applyCanonSheet(bodyWidget(), [] { return themeEditorSheet(); });
 
     auto* root = new QVBoxLayout(bodyWidget());
-    root->setContentsMargins(8, 8, 8, 8);
+    root->setContentsMargins(14, 12, 14, 14);
     root->setSpacing(6);
+    root->addWidget(makeCanonHeader(QStringLiteral("Theme Editor")));
 
     m_themeLabel = new QLabel(bodyWidget());
-    m_themeLabel->setStyleSheet(QStringLiteral(
-        "QLabel { font-weight: bold; }"));
+    m_themeLabel->setObjectName(QStringLiteral("themeEditorTitle"));
     root->addWidget(m_themeLabel);
 
     // Inline editor — swaps controls based on the currently selected
@@ -201,6 +332,7 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     root->addWidget(m_tokenEditor);
 
     auto* divider = new QFrame(bodyWidget());
+    divider->setObjectName(QStringLiteral("themeEditorDivider"));
     divider->setFrameShape(QFrame::HLine);
     divider->setFrameShadow(QFrame::Sunken);
     root->addWidget(divider);
@@ -235,8 +367,7 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // territory; Editing label moves down to the filter row.
     m_inspectStatus = new QLabel(bodyWidget());
     m_inspectStatus->setWordWrap(true);
-    m_inspectStatus->setStyleSheet(QStringLiteral(
-        "QLabel { font-style: italic; }"));
+    m_inspectStatus->setObjectName(QStringLiteral("themeEditorInspectStatus"));
     inspectRow->addWidget(m_inspectStatus, 1);
     // Reset button reparents out of the editor's bottom row and sits
     // right-aligned on the inspect row — keeps the editor's Cancel/OK
@@ -294,9 +425,7 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
 
     btnRow->addStretch(1);
     m_saveAsBtn = new QPushButton(QStringLiteral("Save As…"), bodyWidget());
-    auto* closeBtn = new QPushButton(QStringLiteral("Close"), bodyWidget());
     btnRow->addWidget(m_saveAsBtn);
-    btnRow->addWidget(closeBtn);
     root->addLayout(btnRow);
 
     connect(renameAct, &QAction::triggered,
@@ -309,8 +438,7 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
             this, &ThemeEditorDialog::onImportThemeClicked);
 
     // Accept .aethertheme / .json drag-and-drop on the dialog body — the
-    // PersistentDialog base widget gets the drop events as long as the
-    // outermost dialog has setAcceptDrops(true).
+    // window gets the drop events as long as it has setAcceptDrops(true).
     setAcceptDrops(true);
 
     refreshContainerCombo();
@@ -350,7 +478,6 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     });
     connect(m_saveAsBtn, &QPushButton::clicked,
             this, &ThemeEditorDialog::onSaveAsClicked);
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
 
     // Active-theme switches outside the editor (e.g. via View → Theme)
     // should refresh both the title and the swatch values so the editor
@@ -577,17 +704,17 @@ void ThemeEditorDialog::onRenameThemeClicked()
     auto& tm = ThemeManager::instance();
     const QString current = tm.activeTheme();
     if (tm.isBuiltInTheme(current)) {
-        showModalMessage(QMessageBox::Information, this, QStringLiteral("Cannot rename"),
+        showNotice(this, QStringLiteral("Cannot rename"),
             QStringLiteral("\"%1\" is a built-in theme and can't be renamed. "
                            "Use Save As… to create an editable copy under a "
                            "different name first.").arg(current));
         return;
     }
     bool ok = false;
-    const QString newName = QInputDialog::getText(this,
+    const QString newName = promptText(this,
         QStringLiteral("Rename theme"),
         QStringLiteral("New name for \"%1\":").arg(current),
-        QLineEdit::Normal, current, &ok).trimmed();
+        current, QStringLiteral("Rename"), &ok).trimmed();
     if (!self || !ok || newName.isEmpty() || newName == current) {
         return;
     }
@@ -599,12 +726,12 @@ void ThemeEditorDialog::onRenameThemeClicked()
     // directory permissions.
     QString why;
     if (!ThemeManager::isValidThemeName(newName, &why)) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Rename failed"), why);
+        showNotice(this, QStringLiteral("Rename failed"), why);
         return;
     }
 
     if (!tm.renameTheme(current, newName)) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Rename failed"),
+        showNotice(this, QStringLiteral("Rename failed"),
             QStringLiteral("Could not rename \"%1\" to \"%2\".  A theme with "
                            "that name may already exist, or the theme file "
                            "may be unwriteable.").arg(current, newName));
@@ -633,7 +760,7 @@ void ThemeEditorDialog::onExportThemeClicked()
 
     QString err;
     if (!tm.exportThemeToFile(current, path, &err)) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Export failed"),
+        showNotice(this, QStringLiteral("Export failed"),
             QStringLiteral("Could not write \"%1\":\n\n%2").arg(path, err));
         return;
     }
@@ -661,18 +788,18 @@ void ThemeEditorDialog::importThemeFromPath(const QString& filePath)
         return;
     }
     if (name.isEmpty()) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Import failed"),
+        showNotice(this, QStringLiteral("Import failed"),
             QStringLiteral("Could not import \"%1\":\n\n%2").arg(filePath, err));
         return;
     }
-    showModalMessage(QMessageBox::Information, this, QStringLiteral("Theme imported"),
+    showNotice(this, QStringLiteral("Theme imported"),
         QStringLiteral("Installed \"%1\" and made it the active theme.").arg(name));
 }
 
 void ThemeEditorDialog::dragEnterEvent(QDragEnterEvent* event)
 {
     if (!event->mimeData()->hasUrls()) {
-        PersistentDialog::dragEnterEvent(event);
+        CanonWindow::dragEnterEvent(event);
         return;
     }
     // Only accept drops where every URL is a theme-shaped file — refusing
@@ -680,7 +807,7 @@ void ThemeEditorDialog::dragEnterEvent(QDragEnterEvent* event)
     const auto urls = event->mimeData()->urls();
     for (const QUrl& u : urls) {
         if (!ThemeManager::isImportableThemeFile(u)) {
-            PersistentDialog::dragEnterEvent(event);
+            CanonWindow::dragEnterEvent(event);
             return;
         }
     }
@@ -690,7 +817,7 @@ void ThemeEditorDialog::dragEnterEvent(QDragEnterEvent* event)
 void ThemeEditorDialog::dropEvent(QDropEvent* event)
 {
     if (!event->mimeData()->hasUrls()) {
-        PersistentDialog::dropEvent(event);
+        CanonWindow::dropEvent(event);
         return;
     }
     const auto urls = event->mimeData()->urls();
@@ -707,25 +834,23 @@ void ThemeEditorDialog::onDeleteThemeClicked()
     auto& tm = ThemeManager::instance();
     const QString current = tm.activeTheme();
     if (tm.isBuiltInTheme(current)) {
-        showModalMessage(QMessageBox::Information, this, QStringLiteral("Cannot delete"),
+        showNotice(this, QStringLiteral("Cannot delete"),
             QStringLiteral("\"%1\" is a built-in theme and can't be deleted.").arg(current));
         return;
     }
-    const auto reply = showModalMessage(QMessageBox::Question, this,
+    const bool confirmed = confirmDestructive(this,
         QStringLiteral("Delete theme"),
-        QStringLiteral("Permanently delete \"%1\"?\n\n"
-                       "The theme file at %2 will be removed. "
+        QStringLiteral("Permanently delete \"%1\"?").arg(current),
+        QStringLiteral("The theme file at %1 will be removed. "
                        "The active theme will switch to Default Dark.")
-            .arg(current,
-                 userThemesDir() + QDir::separator()
-                     + current + QStringLiteral(".json")),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (!self || reply != QMessageBox::Yes) {
+            .arg(userThemesDir() + QDir::separator() + current + QStringLiteral(".json")),
+        QStringLiteral("Delete"));
+    if (!self || !confirmed) {
         return;
     }
 
     if (!tm.deleteTheme(current)) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Delete failed"),
+        showNotice(this, QStringLiteral("Delete failed"),
             QStringLiteral("Could not delete \"%1\". The theme file may be "
                            "locked by another process.").arg(current));
         return;
@@ -752,10 +877,10 @@ void ThemeEditorDialog::onSaveAsClicked()
         suggestion = QStringLiteral("My %1").arg(suggestion);
 
     bool ok = false;
-    const QString name = QInputDialog::getText(this,
+    const QString name = promptText(this,
         QStringLiteral("Save Theme As"),
         QStringLiteral("Theme name:"),
-        QLineEdit::Normal, suggestion, &ok).trimmed();
+        suggestion, QStringLiteral("Save"), &ok).trimmed();
     if (!self || !ok || name.isEmpty()) {
         return;
     }
@@ -763,7 +888,7 @@ void ThemeEditorDialog::onSaveAsClicked()
     // Name first, so a rejected name is reported as a rejected name.
     QString why;
     if (!ThemeManager::isValidThemeName(name, &why)) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Save failed"), why);
+        showNotice(this, QStringLiteral("Save failed"), why);
         return;
     }
 
@@ -772,17 +897,17 @@ void ThemeEditorDialog::onSaveAsClicked()
     // User-dir themes can be overwritten freely.
     const QStringList existing = tm.availableThemes();
     if (existing.contains(name)) {
-        const auto reply = showModalMessage(QMessageBox::Question, this,
+        const bool overwrite = confirmDestructive(this,
             QStringLiteral("Theme exists"),
             QStringLiteral("A theme named \"%1\" already exists. Overwrite it?").arg(name),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (!self || reply != QMessageBox::Yes) {
+            QString(), QStringLiteral("Overwrite"));
+        if (!self || !overwrite) {
             return;
         }
     }
 
     if (!tm.saveCurrentThemeAs(name)) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Save failed"),
+        showNotice(this, QStringLiteral("Save failed"),
             QStringLiteral("Could not write the theme file. Check that "
                            "%1 is writable.").arg(userThemesDir()));
         return;
@@ -805,12 +930,12 @@ void ThemeEditorDialog::onSaveAsBeforeCommit()
 
     QString suggestion = QStringLiteral("My %1").arg(current);
     bool ok = false;
-    const QString name = QInputDialog::getText(this,
+    const QString name = promptText(this,
         QStringLiteral("Save Theme As"),
         QStringLiteral("\"%1\" is a built-in theme and can't be modified "
-                       "directly.\nSave your changes as a new theme:")
+                       "directly. Save your changes as a new theme:")
             .arg(current),
-        QLineEdit::Normal, suggestion, &ok).trimmed();
+        suggestion, QStringLiteral("Save"), &ok).trimmed();
     if (!self || !ok || name.isEmpty()) {
         return;
     }
@@ -821,31 +946,31 @@ void ThemeEditorDialog::onSaveAsBeforeCommit()
     // name and keep the edit instead of concluding the editor is broken.
     QString why;
     if (!ThemeManager::isValidThemeName(name, &why)) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Save failed"), why);
+        showNotice(this, QStringLiteral("Save failed"), why);
         return;
     }
 
     // Disallow accidentally writing to another built-in or overwriting
     // an existing user theme without confirmation.
     if (tm.isBuiltInTheme(name)) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Reserved name"),
+        showNotice(this, QStringLiteral("Reserved name"),
             QStringLiteral("\"%1\" is a built-in theme name and can't be used.")
                 .arg(name));
         return;
     }
     const QStringList existing = tm.availableThemes();
     if (existing.contains(name)) {
-        const auto reply = showModalMessage(QMessageBox::Question, this,
+        const bool overwrite = confirmDestructive(this,
             QStringLiteral("Theme exists"),
             QStringLiteral("A theme named \"%1\" already exists. Overwrite it?").arg(name),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (!self || reply != QMessageBox::Yes) {
+            QString(), QStringLiteral("Overwrite"));
+        if (!self || !overwrite) {
             return;
         }
     }
 
     if (!tm.saveCurrentThemeAs(name)) {
-        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Save failed"),
+        showNotice(this, QStringLiteral("Save failed"),
             QStringLiteral("Could not write the theme file. Check that "
                            "%1 is writable.").arg(userThemesDir()));
         return;
@@ -903,6 +1028,11 @@ void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint localPos)
 {
     if (!target) return;
     auto& tm = ThemeManager::instance();
+
+    // The pick click activates the main window, and a Workspace is not
+    // kept above it, so bring the editor back to show the result.
+    raise();
+    activateWindow();
 
     // Auto-select the picked widget's container scope so any subsequent
     // edit lands at the right level of the inheritance chain.  Walks
