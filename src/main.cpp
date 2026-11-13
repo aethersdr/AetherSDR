@@ -38,6 +38,7 @@
 #include <optional>
 #include <QStyleFactory>
 #include <QDir>
+#include <QFileInfo>
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QFile>
@@ -288,7 +289,10 @@ static int runInstallCli(int argc, char* argv[])
 // reach aetherd itself. Nothing of the app starts first: no Qt, no settings.
 static int runAetherd(int argc, char* argv[])
 {
-    const QString dir = AetherSDR::LinuxInstall::binaryDir();
+    // /proc/self/exe directly: binaryDir()'s fallback needs a QCoreApplication,
+    // and none exists here.
+    const QString exe = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
+    const QString dir = exe.isEmpty() ? QString() : QFileInfo(exe).absolutePath();
     if (!QDir::isAbsolutePath(dir)) {
         // No /proc/self/exe: never resolve "aetherd" against the working directory.
         std::fprintf(stderr, "AetherSDR: cannot start the headless engine: this binary's directory is unknown\n");
@@ -344,6 +348,12 @@ int main(int argc, char* argv[])
     }
     if (argc >= 2 && qstrcmp(argv[1], "--aetherd") == 0) {
         return runAetherd(argc, argv);
+    }
+#else
+    if (argc >= 2 && qstrcmp(argv[1], "--aetherd") == 0) {
+        // Never start the app (and its radio auto-connect) in the engine's place.
+        std::fprintf(stderr, "AetherSDR: --aetherd is available only on Linux\n");
+        return 127;
     }
 #endif
 

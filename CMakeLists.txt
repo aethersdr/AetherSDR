@@ -3862,11 +3862,12 @@ else()
             )
         endif()
     endif()
-    # The headless engine ships beside the app on Linux when it was built, so
-    # the AppImage (and an install made from it) can run it:
-    # `AetherSDR --aetherd [options]`. OPTIONAL: a build of the app alone (the
-    # x86_64 AppImage) installs without it.
-    if(LINUX AND TARGET aetherd)
+    # The headless engine ships beside the app on Linux, so the AppImage (and
+    # an install made from it) can run it: `AetherSDR --aetherd [options]`.
+    # aetherd is always a target, but a build of the app alone (the x86_64
+    # AppImage builds only named targets) leaves no binary: OPTIONAL then
+    # installs without it.
+    if(LINUX)
         install(TARGETS aetherd
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
             OPTIONAL
