@@ -43,5 +43,12 @@ the application, with the remaining options passed to it (\fB--aetherd --help\fR
 lists them). The engine serves radio control to local clients over a
 current-user socket and shows no window. It ships in the ARM64 AppImage, beside
 the application; where it is absent, \fB--aetherd\fR exits with status 127.
+.PP
+Run from the AppImage under systemd, set \fBKillMode=mixed\fR and
+\fBPrivateTmp=yes\fR in the unit. The AppImage's mount process sits in the same
+control group and unmounts the image when it receives \fBSIGTERM\fR; \fBmixed\fR
+sends \fBSIGTERM\fR to the engine alone, so it can release the radio before the
+image goes away. \fBmixed\fR then kills the mount process, which can leave its
+mount behind; \fBPrivateTmp\fR keeps that mount inside the unit.
 .SH SEE ALSO
 Project homepage: https://github.com/aethersdr/AetherSDR
