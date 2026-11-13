@@ -220,7 +220,10 @@ void BandApplet::rebuildGrid()
                   BAND_GRID[kBandIdxXvtr].freqMhz, BAND_GRID[kBandIdxXvtr].mode,
                   QString(), /*isXvtrSetup=*/true);
     } else {
-        // Radio declared bands
+        // Radio declared bands. No stack-key hint: an empty hint lets
+        // MainWindow::selectBand() run XvtrPolicy::resolveBandStackKey()
+        // first, so native slots and same-named user XVTRs win (#4191), and
+        // the declared name is passed through only when neither matches.
         for (const auto& def : kBands) {
             const QString bandName = QString::fromLatin1(def.name);
             if (!m_declaredBands.contains(bandName))
@@ -228,38 +231,27 @@ void BandApplet::rebuildGrid()
             const QString label = declaredBandButtonLabel(bandName, m_declaredBandRanges);
             const double freqMhz = def.defaultFreqMhz;
             const QString mode = QString::fromLatin1(def.defaultMode);
-            addButton(label, bandName, freqMhz, mode, bandName);
+            addButton(label, bandName, freqMhz, mode);
         }
 
-        // Custom XVTR bands
-        for (const auto& xvtr : m_xvtrBands) {
+        // A declared set belongs to a backend that owns its band surface, so
+        // no configured XVTR rows (DeclaredBandMenuPolicy, as the overlay).
+        const int xvtrCount = configuredXvtrBandCount(hasDeclared, m_xvtrBands.size());
+        for (int i = 0; i < xvtrCount; ++i) {
+            const auto& xvtr = m_xvtrBands[i];
             addButton(xvtr.name, xvtr.name, xvtr.rfFreqMhz, QStringLiteral("USB"), xvtr.stackKey);
         }
 
-        // Include utilities if available in tuning range
-        if (declaredBandMenuIncludesUtility(true, false, BAND_GRID[11].freqMhz,
-                                           m_tuningMinMhz, m_tuningMaxMhz)) {
-            addButton(BAND_GRID[11].label, BAND_GRID[11].bandName,
-                      BAND_GRID[11].freqMhz, BAND_GRID[11].mode);
+        // Retain only utility targets proven reachable by the reported tuning
+        // range, and never expose the Flex XVTR setup entry.
+        for (int idx : {11, 12, 13, 14}) {
+            if (declaredBandMenuIncludesUtility(hasDeclared, /*xvtrSetup=*/false,
+                                               BAND_GRID[idx].freqMhz,
+                                               m_tuningMinMhz, m_tuningMaxMhz)) {
+                addButton(BAND_GRID[idx].label, BAND_GRID[idx].bandName,
+                          BAND_GRID[idx].freqMhz, BAND_GRID[idx].mode);
+            }
         }
-        if (declaredBandMenuIncludesUtility(true, false, BAND_GRID[12].freqMhz,
-                                           m_tuningMinMhz, m_tuningMaxMhz)) {
-            addButton(BAND_GRID[12].label, BAND_GRID[12].bandName,
-                      BAND_GRID[12].freqMhz, BAND_GRID[12].mode);
-        }
-        if (declaredBandMenuIncludesUtility(true, false, BAND_GRID[13].freqMhz,
-                                           m_tuningMinMhz, m_tuningMaxMhz)) {
-            addButton(BAND_GRID[13].label, BAND_GRID[13].bandName,
-                      BAND_GRID[13].freqMhz, BAND_GRID[13].mode);
-        }
-        if (declaredBandMenuIncludesUtility(true, false, BAND_GRID[14].freqMhz,
-                                           m_tuningMinMhz, m_tuningMaxMhz)) {
-            addButton(BAND_GRID[14].label, BAND_GRID[14].bandName,
-                      BAND_GRID[14].freqMhz, BAND_GRID[14].mode);
-        }
-        addButton(BAND_GRID[kBandIdxXvtr].label, BAND_GRID[kBandIdxXvtr].bandName,
-                  BAND_GRID[kBandIdxXvtr].freqMhz, BAND_GRID[kBandIdxXvtr].mode,
-                  QString(), /*isXvtrSetup=*/true);
     }
 
     applyTuningRange();
@@ -303,15 +295,7 @@ void BandApplet::updateActiveBand()
     const double freq = m_slice->frequency();
     QString activeBand = BandSettings::bandForFrequency(freq);
 
-    // Check if frequency matches any custom XVTR band
-    for (const auto& xvtr : m_xvtrBands) {
-        if (std::abs(freq - xvtr.rfFreqMhz) < 0.5) {
-            activeBand = xvtr.name;
-            break;
-        }
-    }
-
-    // Check if matching any declared band ranges
+    // Declared band ranges from the connected backend/gateway.
     for (const auto& range : m_declaredBandRanges) {
         if (range.lowHz > 0.0 && range.highHz > 0.0) {
             const double lowMhz = range.lowHz / 1.0e6;
@@ -320,6 +304,18 @@ void BandApplet::updateActiveBand()
                 activeBand = range.name;
                 break;
             }
+        }
+    }
+
+    // Configured XVTR bands take precedence over declared and native bands,
+    // matching MainWindow::selectBand() resolution order (#5236) and the
+    // overlay's updateActiveBandHighlight(). SmartSDR transverter objects
+    // define a center RF frequency rather than explicit band bounds, so we
+    // match within a ±500 kHz window around the configured point frequency.
+    for (const auto& xvtr : m_xvtrBands) {
+        if (std::abs(freq - xvtr.rfFreqMhz) < 0.5) {
+            activeBand = xvtr.name;
+            break;
         }
     }
 

@@ -4,6 +4,8 @@
 #include "models/ModelCapabilities.h"
 
 #include <QApplication>
+#include <QCoreApplication>
+#include <QEvent>
 #include <QPushButton>
 #include <QSignalSpy>
 
@@ -33,6 +35,15 @@ QPushButton* findButton(const BandApplet& applet, const QString& text)
         }
     }
     return nullptr;
+}
+
+// rebuildGrid() deleteLater()s the buttons of the layout it replaces, and a
+// deferred delete only runs when the event loop gets control back — which it
+// never does inside a test. Purge them so findChildren() cannot see buttons
+// from a superseded layout.
+void settleRebuild()
+{
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
 void testDefaultButtons()
@@ -160,6 +171,83 @@ void testTuningRange()
     report("XVTR setup button remains enabled", btnXvtr && btnXvtr->isEnabled());
 }
 
+void testDeclaredBands()
+{
+    BandApplet applet;
+
+    const QVector<DeclaredBandRange> ranges = {
+        {QStringLiteral("20m"), 14.0e6, 14.35e6},
+        {QStringLiteral("2m"), 144.0e6, 148.0e6},
+    };
+    // Ranges give the buttons their hardware-coverage labels ("14", "144").
+    applet.setDeclaredBands({"20m", "2m"}, ranges);
+
+    // A configured XVTR reusing a declared name must not add a row: a declared
+    // set owns its band surface (DeclaredBandMenuPolicy, as the overlay does).
+    QVector<BandApplet::XvtrBand> xvtrs;
+    xvtrs.append({"2m", 144.1, "X0"});
+    applet.setXvtrBands(xvtrs);
+    settleRebuild();
+
+    report("declared 20m button present", findButton(applet, "14") != nullptr);
+    report("declared 2m button present", findButton(applet, "144") != nullptr);
+    report("declared set hides configured XVTR rows", findButton(applet, "2m") == nullptr);
+    report("declared set hides the XVTR setup entry", findButton(applet, "XVTR") == nullptr);
+    report("declared set retains reachable utilities",
+           findButton(applet, "WWV") != nullptr);
+
+    // No stack-key hint: MainWindow::selectBand() must run
+    // XvtrPolicy::resolveBandStackKey() first (#4191).
+    auto* btn20 = findButton(applet, "14");
+    if (btn20) {
+        QSignalSpy bandSpy(&applet, &BandApplet::bandSelected);
+        btn20->click();
+        report("declared bandSelected emitted", bandSpy.count() == 1);
+        if (bandSpy.count() == 1) {
+            const auto args = bandSpy.takeFirst();
+            report("declared band name passed through", args.at(0).toString() == "20m");
+            report("declared band carries no stack-key hint", args.at(3).toString().isEmpty());
+        }
+    }
+
+    // Utility rows follow the reported tuning range for a declared set.
+    BandApplet ranged;
+    ranged.setTuningRange(1.8, 148.0);
+    ranged.setDeclaredBands({"20m", "2m"}, ranges);
+    settleRebuild();
+    report("declared utility inside tuning range kept",
+           findButton(ranged, "WWV") != nullptr);
+    report("declared utility outside tuning range dropped",
+           findButton(ranged, "2200") == nullptr);
+}
+
+void testXvtrHighlightPrecedence()
+{
+    BandApplet applet;
+    SliceModel slice(0);
+
+    // A declared range and a configured XVTR overlap at 50.1 MHz, with
+    // different names: the XVTR wins, matching MainWindow::selectBand()'s
+    // resolution order (#5236) and the overlay's highlight.
+    const QVector<DeclaredBandRange> ranges = {
+        {QStringLiteral("6m"), 50.0e6, 54.0e6},
+    };
+    applet.setDeclaredBands({}, ranges);
+
+    QVector<BandApplet::XvtrBand> xvtrs;
+    xvtrs.append({"222", 50.1, "X0"});
+    applet.setXvtrBands(xvtrs);
+    settleRebuild();
+
+    applet.setSlice(&slice);
+    slice.setFrequency(50.1);
+
+    auto* btn222 = findButton(applet, "222");
+    auto* btn6 = findButton(applet, "6");
+    report("XVTR wins the overlap over a declared range", btn222 && btn222->isChecked());
+    report("declared range does not win the overlap", btn6 && !btn6->isChecked());
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -171,6 +259,8 @@ int main(int argc, char* argv[])
     testActiveBandHighlighting();
     testRadioCapabilitiesAndXvtr();
     testTuningRange();
+    testDeclaredBands();
+    testXvtrHighlightPrecedence();
 
     return g_failed == 0 ? 0 : 1;
 }
