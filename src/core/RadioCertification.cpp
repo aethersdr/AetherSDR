@@ -1251,9 +1251,13 @@ void RadioCertification::stageSquelchScale(const Options& o)
             const double errorDb = lineDb - peakDb;
             m[QStringLiteral("lineAtGateDb")] = lineDb;
             m[QStringLiteral("lineMinusCarrierDb")] = errorDb;
-            // The same error split at the S-meter, which reads the passband the
-            // gate measures: line - S is the scale, S - peak is the carrier (a
-            // large one means the carrier does not dominate its passband).
+            // The same error split at the S-meter, which reads the passband
+            // power the gate measures. S - peak is the carrier (a large one
+            // means it does not dominate its passband). line - S is NOT the
+            // scale error alone: the line is drawn on the pan's axis, which can
+            // read a tone above its power (the HL2 pan by 6.02 dB,
+            // Hl2Spectrum::kToneGainDb), and the record does not publish that
+            // gain, so it is reported as measured. No verdict reads it.
             if (sLevel > -999.0) {
                 m[QStringLiteral("lineMinusSLevelDb")] = lineDb - sLevel;
                 m[QStringLiteral("sLevelMinusCarrierDb")] = sLevel - peakDb;
@@ -1324,7 +1328,10 @@ void RadioCertification::stageSquelchScale(const Options& o)
                "carrier stops, each probe approached from a gate heard closed so a "
                "squelch tail cannot carry one probe into the next, then compare the published line at that level with "
                "the carrier's pan peak. Report the carrier's S-meter reading too: "
-               "above S9 a correct record can still sit several dB off."),
+               "above S9 a correct record can still sit several dB off. "
+               "lineMinusSLevelDb is the line less the S-meter, not the scale error: "
+               "it includes any gain the pan gives a tone over its power (6.02 dB "
+               "on the HL2). Only lineMinusCarrierDb is judged."),
            problems.join(QStringLiteral("; ")), ref);
 }
 

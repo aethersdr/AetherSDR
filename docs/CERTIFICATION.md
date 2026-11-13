@@ -877,9 +877,16 @@ running it:
   after an open one heard the tail and the search landed two or three levels
   high, then failed its own bracket (HL2, steady medium-wave carriers). Each
   probe now sets level 100 and waits until the audio stops before setting the
-  level under test. The record also splits the error at the S-meter:
-  `lineMinusSLevelDb` and `sLevelMinusCarrierDb`; the second moves when the
-  carrier does not dominate its passband.
+  level under test. Each probe records `fromClosed`; on the probe at level 100
+  itself there is nothing to wait for, so `true` there is the default, not a
+  measured wait.
+* **The error is split at the S-meter, for reading, not judging.**
+  `sLevelMinusCarrierDb` moves when the carrier does not dominate its passband.
+  `lineMinusSLevelDb` is the line less the S-meter, and it includes any gain
+  the pan gives a tone over its power, which the record does not publish: on the
+  HL2 that is 6.02 dB, and two steady medium-wave carriers read +6.7 to +7.7 dB
+  here with the gate where a settled sweep put it. Only
+  `lineMinusCarrierDb` is judged.
 
 Both squelch stages decline while the operator's Auto SQL is engaged. Auto
 rewrites the slice on every pan frame, and its writes land on one level and hold,
