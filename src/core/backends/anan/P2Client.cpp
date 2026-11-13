@@ -430,6 +430,9 @@ void P2Client::setSpeakerAudioEnabled(bool on)
     m_speakerAudioEnabled = on;
     m_speakerPending.clear();
     m_speakerPacer.reset();
+    // As start() does: reports counted while nothing was sent are the radio's idle
+    // underflow, and would hide the first real one's warning.
+    m_speakerUnderflowReports = 0;
     if (!m_running) {
         return;   // start() picks the flag up
     }
