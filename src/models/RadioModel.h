@@ -2265,6 +2265,7 @@ private:
     std::array<quint64, 5> m_outputIntentRevisions{};
     quint64 m_receiveControlGeneration{0};
     void wireBackendReceiverState();
+    void clearRadioSpeakerReport();
     struct PendingSliceCreate;
     void wireSliceLifecycle();
     void reconcileSliceCreates();

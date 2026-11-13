@@ -312,6 +312,10 @@ AnanBackend::AnanBackend(QObject* parent)
         }
         emitSliceState();
         emitPanState();
+        // Here as well as in connectRadio(): reconnecting over a live session, the
+        // old session's queued linkDown lands after connectRadio()'s report, and
+        // RadioModel clears the report on disconnected().
+        emit radioSpeakerAudioReported(m_speakerAudioEnabled);
         // A rate change suppresses connected(), but a page opened during
         // its brief link restart still needs the fresh calibration status.
         publishDroopStatus();

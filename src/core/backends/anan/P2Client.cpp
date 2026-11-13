@@ -433,6 +433,9 @@ void P2Client::setSpeakerAudioEnabled(bool on)
     // As start() does: reports counted while nothing was sent are the radio's idle
     // underflow, and would hide the first real one's warning.
     m_speakerUnderflowReports = 0;
+    // The new stream's first overflow warns, and its FIFO reading is its own.
+    m_speakerOverflowLogged = false;
+    m_lastSpeakerFifoLevel = 0;
     if (!m_running) {
         return;   // start() picks the flag up
     }

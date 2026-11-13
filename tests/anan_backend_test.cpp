@@ -345,6 +345,21 @@ int main(int argc, char** argv)
               "and off again");
     }
 
+    // ---- the speaker report survives a reconnect over a live session ----
+    // connectRadio() reports before the old session's queued linkDown lands, and
+    // RadioModel clears its report on disconnected() (onDisconnected); the next
+    // session's linkUp must report the speaker again.
+    {
+        AnanBackend backend;
+        P2Client* client = AnanSupplyRailTestAccess::client(backend);
+        backend.requestRadioSpeakerAudio(true);
+        QSignalSpy reports(&backend, &IRadioBackend::radioSpeakerAudioReported);
+        emit client->linkDown();   // the old session's, arriving late
+        emit client->linkUp();     // the new session
+        check(!reports.isEmpty() && reports.last().at(0).toBool(),
+              "the new session's linkUp reports the speaker state again");
+    }
+
     // ---- the blanker publishes at once, like every other receive setter ----
     {
         AnanBackend backend;
