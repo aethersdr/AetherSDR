@@ -15,8 +15,28 @@
 #include <QDeadlineTimer>
 #include <QMetaObject>
 #include <QPushButton>
+#include <QStringList>
 
 #include <cstdio>
+
+namespace AetherSDR {
+struct PeripheralConnectionTestAccess {
+    static void captureCommands(TgxlConnection& connection, QStringList& commands)
+    {
+        connection.m_commandWriter = [&commands](const QByteArray& line) {
+            commands.append(QString::fromUtf8(line));
+        };
+    }
+    static void setPollInFlight(TgxlConnection& connection, bool value)
+    {
+        connection.m_pollInFlight = value;
+    }
+    static bool pollInFlight(const TgxlConnection& connection)
+    {
+        return connection.m_pollInFlight;
+    }
+};
+}
 
 using namespace AetherSDR;
 
@@ -61,9 +81,7 @@ int main(int argc, char** argv)
 
     // ── Fixture: model + applet + 3-way direct connection ────────────────
     //
-    // hasAntennaSwitch() requires oneByThree=true (set via applyChanges).
-    // The ant container becomes visible when hasDirectConnection() &&
-    // hasAntennaSwitch() — both must be true before the buttons appear.
+    // The relay's model indication must not override direct identification.
 
     TunerModel model;
     model.setHandle(QStringLiteral("0x2000"));
@@ -97,7 +115,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    QStringList commands;
     TgxlConnection direct;
+    PeripheralConnectionTestAccess::captureCommands(direct, commands);
     model.setDirectConnection(&direct);
 
     // Injecting the version line triggers finishHandshake(), which sets
@@ -105,11 +125,34 @@ int main(int argc, char** argv)
     CHECK(inject(&direct, QStringLiteral("V1.2.44")));
     settle();
 
+    CHECK(!b1->isVisible());
+    CHECK(inject(&direct, QStringLiteral("R99|0|info serial=TG123 3way=1")));
+    CHECK(!b1->isVisible());
+    CHECK(inject(&direct, QStringLiteral("S1|status antA=1")));
+    PeripheralConnectionTestAccess::setPollInFlight(direct, true);
+    CHECK(inject(&direct, QStringLiteral("R1|0|serial=TG123 3way=1")));
+    CHECK(PeripheralConnectionTestAccess::pollInFlight(direct));
+    PeripheralConnectionTestAccess::setPollInFlight(direct, false);
+    settle();
+    CHECK(b1->isVisible() && b2->isVisible() && b3->isVisible());
+    CHECK(model.antennaA() == 1);
+    CHECK(b2->styleSheet() != b1->styleSheet());
+    CHECK(b1->styleSheet() == b3->styleSheet());
+    commands.clear();
+    b1->click();
+    b2->click();
+    b3->click();
+    CHECK(commands.size() == 3);
+    if (commands.size() == 3) {
+        CHECK(commands.at(0).contains(QStringLiteral("|activate ant=1\n")));
+        CHECK(commands.at(1).contains(QStringLiteral("|activate ant=2\n")));
+        CHECK(commands.at(2).contains(QStringLiteral("|activate ant=3\n")));
+    }
+
     // Buttons start at their defaults.
     CHECK(b1->text() == QStringLiteral("ANT 1"));
     CHECK(b2->text() == QStringLiteral("ANT 2"));
     CHECK(b3->text() == QStringLiteral("ANT 3"));
-
     // ── Happy path: all three names present ──────────────────────────────
     //
     // Firmware response to `antenna read` on a 3-way model. Underscores
@@ -176,12 +219,46 @@ int main(int argc, char** argv)
     settle();
     CHECK(b1->text() == QStringLiteral("Vertical"));
 
+    // A replacement 3-way device must not inherit the previous device's names.
+    {
+        TgxlConnection replacement;
+        PeripheralConnectionTestAccess::captureCommands(replacement, commands);
+        CHECK(inject(&replacement, QStringLiteral("V1.2.44")));
+        CHECK(inject(&replacement, QStringLiteral("R1|0|info serial=NEW 3way=1")));
+        model.setDirectConnection(&replacement);
+        CHECK(b1->text() == QStringLiteral("ANT 1"));
+        CHECK(model.antennaA() == -1);
+        model.setDirectConnection(&direct);
+    }
+
+    CHECK(inject(&direct, QStringLiteral("R7|0|antenna name1=Vertical name2=Invert_L name3=6M_Loop")));
+    CHECK(inject(&direct, QStringLiteral("S1|status antA=1")));
     CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
     settle();
 
     CHECK(b1->text() == QStringLiteral("ANT 1"));
     CHECK(b2->text() == QStringLiteral("ANT 2"));
     CHECK(b3->text() == QStringLiteral("ANT 3"));
+    CHECK(!b1->isVisible());
+    CHECK(model.antennaA() == -1);
+
+    // An invalid variant must not expose antenna controls.
+    CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
+    CHECK(inject(&direct, QStringLiteral("V1.2.44")));
+    CHECK(inject(&direct, QStringLiteral("R1|0|info serial=TG123 3way=invalid")));
+    CHECK(!direct.isThreeWay().has_value());
+    CHECK(!b1->isVisible());
+    CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+
+    // A subsequent SO2R reports no 3way field, despite stale radio data.
+    CHECK(QMetaObject::invokeMethod(&direct, "beginAttempt", Qt::DirectConnection));
+    CHECK(inject(&direct, QStringLiteral("V1.2.44")));
+    CHECK(inject(&direct, QStringLiteral("R1|0|info serial=SO2R")));
+    settle();
+    CHECK(!b1->isVisible() && !b2->isVisible() && !b3->isVisible());
+    commands.clear();
+    model.setAntennaA(1);
+    CHECK(commands.isEmpty());
 
     if (g_failures == 0) {
         std::printf("tgxl_antenna_names_test: all checks passed\n");
