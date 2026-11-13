@@ -203,7 +203,9 @@ int main(int argc, char* argv[])
         QTextStream(stderr) << "aetherd: cannot start local client service\n";
         return 1;
     }
-    const int result = app.exec();
+    // A stop that arrived during startup could not quit a loop that was not
+    // running yet; teardown below still releases whatever was set up.
+    const int result = gracefulStop.stopRequested() ? 0 : app.exec();
     // The server was constructed first; stop delivery before target/model
     // teardown rather than relying on reverse local-variable destruction.
     server.close();

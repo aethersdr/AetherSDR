@@ -17,9 +17,15 @@ namespace AetherSDR::aetherd {
 // (a stuck loop is why people reach for kill), fires the HL2 emergency stop and
 // dies by the signal exactly as before. SIGQUIT keeps the GUI's behavior (the
 // HL2 emergency stop, then the default action). An inherited SIG_IGN stays
-// ignored. Windows: a console control event queues the quit; for close, logoff
-// and shutdown, which end the process when the handler returns, the handler
-// waits for teardown, bounded by the same grace period.
+// ignored. Windows: a console control event queues the quit and waits for
+// teardown on its own handler thread; if teardown has not finished within the
+// grace period (shorter for close, logoff and shutdown, which Windows itself
+// ends after about 5 s), it fires the HL2 emergency stop and lets the default
+// handler end the process.
+//
+// A stop that arrives before the event loop runs (startup can pump nested
+// loops) cannot quit a loop that has not started: main() checks
+// stopRequested() and skips exec().
 //
 // Construct right after the QCoreApplication, before anything that owns a
 // radio: the destructor, which then runs last, marks teardown complete.
@@ -27,6 +33,8 @@ class GracefulStop {
 public:
     GracefulStop(QCoreApplication& app, std::chrono::seconds grace);
     ~GracefulStop();
+    // A stop signal or console event has arrived.
+    [[nodiscard]] bool stopRequested() const noexcept;
     GracefulStop(const GracefulStop&) = delete;
     GracefulStop& operator=(const GracefulStop&) = delete;
 };

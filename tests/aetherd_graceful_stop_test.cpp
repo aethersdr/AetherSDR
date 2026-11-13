@@ -8,13 +8,14 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QTemporaryDir>
-#include <QThread>
 #include <QTimer>
 
 #include <chrono>
@@ -22,6 +23,7 @@
 #include <cstdio>
 
 #include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 using namespace AetherSDR;
@@ -79,6 +81,25 @@ int childTeardownDone(QCoreApplication& app)
     return 8;     // 8: still alive after the grace period
 }
 
+// A stop during startup, handled by a nested loop before exec() runs: quit()
+// cannot end a loop that has not started, so stopRequested() is what main() checks.
+int childEarlyStop(QCoreApplication& app)
+{
+    const aetherd::GracefulStop stop(app, std::chrono::seconds(5));
+    ::raise(SIGTERM);
+    QCoreApplication::processEvents();   // the notifier runs here, before exec()
+    return stop.stopRequested() ? 11 : app.exec();   // 11: skipped exec(), no grace kill
+}
+
+// A stray SIGALRM before any stop request is not the grace timer.
+int childStrayAlarm(QCoreApplication& app)
+{
+    const aetherd::GracefulStop stop(app, std::chrono::seconds(30));
+    ::raise(SIGALRM);
+    ::sleep(10);
+    return 1;
+}
+
 // An inherited SIG_IGN (nohup) stays ignored.
 int childIgnoredHup(QCoreApplication& app)
 {
@@ -114,6 +135,23 @@ Outcome runChild(const QString& self, const QString& mode)
     return o;
 }
 
+// The signal that ended a child, or 0 if it exited normally (QProcess cannot
+// tell which signal killed a process).
+int childTermSignal(const QString& self, const char* mode)
+{
+    const QByteArray path = self.toLocal8Bit();
+    const pid_t pid = ::fork();
+    if (pid == 0) {
+        ::execl(path.constData(), path.constData(), "--child", mode, static_cast<char*>(nullptr));
+        ::_exit(127);
+    }
+    int status = 0;
+    if (pid < 0 || ::waitpid(pid, &status, 0) != pid) {
+        return -1;
+    }
+    return WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+}
+
 // ---- the real daemon ------------------------------------------------------------------
 
 bool daemonStops(const QString& daemon, const QString& home, int sig, const char* what)
@@ -125,6 +163,12 @@ bool daemonStops(const QString& daemon, const QString& home, int sig, const char
     env.insert(QStringLiteral("XDG_CONFIG_HOME"), home + QStringLiteral("/config"));
     env.insert(QStringLiteral("XDG_DATA_HOME"), home + QStringLiteral("/data"));
     env.insert(QStringLiteral("XDG_CACHE_HOME"), home + QStringLiteral("/cache"));
+    // The control socket goes under the runtime directory: keep it out of the
+    // developer's real one. Qt wants it private.
+    const QString runtime = home + QStringLiteral("/run");
+    QDir().mkpath(runtime);
+    QFile::setPermissions(runtime, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    env.insert(QStringLiteral("XDG_RUNTIME_DIR"), runtime);
     QProcess p;
     p.setProcessEnvironment(env);
     const QString socket = QStringLiteral("graceful-stop-test-%1").arg(QCoreApplication::applicationPid());
@@ -133,9 +177,20 @@ bool daemonStops(const QString& daemon, const QString& home, int sig, const char
     if (!p.waitForStarted(10000)) {
         return check(false, "daemon started");
     }
-    // Serving once it says nothing and is still running; give startup a moment.
-    QThread::msleep(1500);
-    if (p.state() != QProcess::Running) {
+    // Ready once its control socket exists: GracefulStop is constructed before
+    // the server listens, so the handlers are installed by then.
+    QElapsedTimer ready;
+    ready.start();
+    bool listening = false;
+    while (!listening && p.state() == QProcess::Running && ready.elapsed() < 20000) {
+        QDirIterator it(home, {QStringLiteral("control-*.sock")}, QDir::System | QDir::Files,
+                        QDirIterator::Subdirectories);
+        listening = it.hasNext();
+        if (!listening) {
+            p.waitForFinished(50);
+        }
+    }
+    if (!listening || p.state() != QProcess::Running) {
         std::fprintf(stderr, "%s\n", p.readAllStandardError().constData());
         return check(false, "daemon still running before the signal");
     }
@@ -164,6 +219,8 @@ int main(int argc, char* argv[])
         if (mode == "twice") return childTwice(app);
         if (mode == "stuck") return childStuck(app);
         if (mode == "teardown-done") return childTeardownDone(app);
+        if (mode == "early-stop") return childEarlyStop(app);
+        if (mode == "stray-alarm") return childStrayAlarm(app);
         if (mode == "ignored-hup") return childIgnoredHup(app);
         return 1;
     }
@@ -194,19 +251,27 @@ int main(int argc, char* argv[])
     ok &= check(done.finished && done.status == QProcess::NormalExit && done.code == 8,
                 "a finished teardown cancels the grace alarm");
 
+    const Outcome early = runChild(self, QStringLiteral("early-stop"));
+    ok &= check(early.finished && early.status == QProcess::NormalExit && early.code == 11
+                    && early.ms < 4000,
+                "a stop during startup is seen before exec() and ends without the grace kill");
+
+    ok &= check(childTermSignal(self, "stray-alarm") == SIGALRM,
+                "a stray SIGALRM before any stop dies as SIGALRM, not as a stop");
+
     const Outcome hup = runChild(self, QStringLiteral("ignored-hup"));
     ok &= check(hup.finished && hup.status == QProcess::NormalExit && hup.code == 9,
                 "an inherited SIG_IGN stays ignored");
 
     const QString daemon = QString::fromLocal8Bit(argv[1]);
-#ifdef Q_OS_MACOS
-    // aetherd's socket sits under $HOME/Library/Application Support on macOS; a
-    // home under $TMPDIR puts it past the 103-byte sun_path limit.
+    // aetherd's socket sits under $XDG_RUNTIME_DIR (or $HOME/Library/Application
+    // Support on macOS): a home under $TMPDIR puts it past the ~104-byte sun_path
+    // limit, so the daemon cases get a short one.
     const QTemporaryDir shortHome(QStringLiteral("/tmp/gs-XXXXXX"));
+    if (!shortHome.isValid()) {
+        return check(false, "a short home under /tmp") ? 0 : 1;
+    }
     const QString homes = shortHome.path();
-#else
-    const QString homes = profile.path();
-#endif
     ok &= daemonStops(daemon, homes + QStringLiteral("/term"), SIGTERM,
                       "aetherd exits 0 on SIGTERM through its normal teardown");
     ok &= daemonStops(daemon, homes + QStringLiteral("/int"), SIGINT,

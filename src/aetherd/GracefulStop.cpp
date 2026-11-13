@@ -29,18 +29,11 @@ volatile std::sig_atomic_t g_received = 0; // the first stop signal, 0 before on
 unsigned g_graceSeconds = 0;
 
 // The loop is not going to finish in time, or the operator asked twice: the
-// GUI's path. Stop an armed HL2, then die by the signal with the default action
-// (same exit status, same core policy). SIGALRM stands for the stop signal that
-// started the grace period.
+// GUI's path (Hl2EmergencyStop). SIGALRM stands for the stop signal that
+// started the grace period; a stray one before any stop dies as SIGALRM.
 extern "C" void escalate(int sig)
 {
-    hl2::fireEmergencyStop();
-    const int fatal = sig == SIGALRM ? (g_received ? int(g_received) : SIGTERM) : sig;
-    struct sigaction dfl {};
-    dfl.sa_handler = SIG_DFL;
-    sigemptyset(&dfl.sa_mask);
-    sigaction(fatal, &dfl, nullptr);
-    raise(fatal);
+    hl2::fireEmergencyStopAndReraise(sig == SIGALRM && g_received ? int(g_received) : sig);
 }
 
 // Async-signal-safe: write(), alarm() and errno only.
@@ -56,20 +49,6 @@ extern "C" void requestStop(int sig)
     (void)!::write(g_wake[1], &byte, 1);
     alarm(g_graceSeconds);
     errno = saved;
-}
-
-void install(int sig, void (*handler)(int))
-{
-    struct sigaction current {};
-    sigaction(sig, nullptr, &current);
-    if (current.sa_handler == SIG_IGN) {
-        return; // never override an inherited SIG_IGN (nohup ignores SIGHUP)
-    }
-    struct sigaction action {};
-    action.sa_handler = handler;
-    sigemptyset(&action.sa_mask);
-    action.sa_flags = SA_RESTART;
-    sigaction(sig, &action, nullptr);
 }
 
 const char* signalName(int sig)
@@ -105,15 +84,20 @@ GracefulStop::GracefulStop(QCoreApplication& app, std::chrono::seconds grace)
                             << " received: stopping and releasing the radio\n";
         QCoreApplication::quit();
     });
-    install(SIGALRM, escalate);
+    hl2::installSignalHandlerUnlessIgnored(SIGALRM, escalate);
     for (const int sig : {SIGTERM, SIGINT, SIGHUP}) {
-        install(sig, requestStop);
+        hl2::installSignalHandlerUnlessIgnored(sig, requestStop);
     }
 }
 
 GracefulStop::~GracefulStop()
 {
     alarm(0); // teardown finished inside the grace period
+}
+
+bool GracefulStop::stopRequested() const noexcept
+{
+    return g_received != 0;
 }
 
 #else
@@ -124,6 +108,11 @@ HANDLE g_finished = nullptr;
 DWORD g_graceMs = 0;
 volatile LONG g_requested = 0;
 
+// Windows ends a console process about 5 s after a close, logoff or shutdown
+// event; the fallback emergency stop has to fire before that.
+constexpr DWORD kSessionEndWaitMs = 4000;
+
+// Runs on a thread Windows creates for the event.
 BOOL WINAPI onConsoleControl(DWORD type)
 {
     if (InterlockedExchange(&g_requested, 1) != 0) {
@@ -131,14 +120,15 @@ BOOL WINAPI onConsoleControl(DWORD type)
         return FALSE; // asked twice: the default handler ends the process
     }
     if (QCoreApplication* app = QCoreApplication::instance()) {
-        // This runs on its own thread; a queued call is safe from here.
         QMetaObject::invokeMethod(app, [] { QCoreApplication::quit(); }, Qt::QueuedConnection);
     }
-    if (type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT) {
-        // Windows ends the process when this returns: hold it until teardown is done.
-        if (WaitForSingleObject(g_finished, g_graceMs) != WAIT_OBJECT_0) {
-            hl2::fireEmergencyStop();
-        }
+    const bool sessionEnd =
+        type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT;
+    const DWORD wait = sessionEnd && g_graceMs > kSessionEndWaitMs ? kSessionEndWaitMs : g_graceMs;
+    if (WaitForSingleObject(g_finished, wait) != WAIT_OBJECT_0) {
+        // A stuck loop: the same escalation as POSIX's grace alarm.
+        hl2::fireEmergencyStop();
+        return FALSE;
     }
     return TRUE;
 }
@@ -155,9 +145,17 @@ GracefulStop::GracefulStop(QCoreApplication&, std::chrono::seconds grace)
 
 GracefulStop::~GracefulStop()
 {
+    // Unregistered first, so no new event reaches a QCoreApplication that is
+    // about to be destroyed; then a handler already waiting is released.
+    SetConsoleCtrlHandler(onConsoleControl, FALSE);
     if (g_finished) {
         SetEvent(g_finished);
     }
+}
+
+bool GracefulStop::stopRequested() const noexcept
+{
+    return g_requested != 0;
 }
 
 #endif
