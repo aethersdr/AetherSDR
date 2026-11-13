@@ -874,7 +874,8 @@ private:
     // on-time TCI clock, and producer stalls of 100-180 ms. Stated in samples,
     // not blocks: the stalls are wall-clock time, so the margin must not shrink
     // when the block does.
-    static constexpr std::size_t kTxPrimeClientMarginSamples = 8192;
+    static constexpr std::size_t kTxPrimeClientMarginSamples =
+        Hl2TxDsp::kClientPrimeMarginSamples;
     static constexpr std::size_t kTxPrimeClientTargetSamples =
         kTxPrimeClientMarginSamples + kTxPrimeBlockSamples;
     static constexpr std::uint64_t kTxPrimeClientMaxHoldPackets =

@@ -146,6 +146,13 @@ public:
     // blocks: the prime margin (42.67 ms) covers the wire while the block waits.
     static constexpr std::size_t kExchangeStallSamples = 512;
 
+    // The client-leveled prime margin (MetisClient::kTxPrimeClientMarginSamples
+    // is this), and the producer gap it absorbs at the 48 kHz input: 170 ms,
+    // truncated from 170.67, so a gap of 171 ms or more reaches the air.
+    static constexpr std::size_t kClientPrimeMarginSamples = 8192;
+    static constexpr qint64 kClientPrimeMarginMs =
+        static_cast<qint64>(kClientPrimeMarginSamples * 1000 / 48000);
+
     // Blocks the modulator could not place on the wire since configure(): each
     // non-Ok WdspChannel::processIq in the TXA build, always 0 in the phasing
     // build. Surfaced in the log and health snapshot. Read on the I/O thread,
