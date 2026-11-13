@@ -26,8 +26,12 @@ struct MetisClientTestAccess {
     static constexpr int ep2AudioRateHz() { return MetisClient::kEp2AudioRateHz; }
     // A session without a socket: the client keys only while running.
     static void setStreaming(MetisClient& client) { client.m_running = true; }
-    // The queue's own bounds, read rather than retyped.
+    // The prime and the queue's own bounds, read from the production constants.
     static constexpr std::size_t primeTarget() { return MetisClient::kTxPrimeTargetSamples; }
+    static constexpr std::size_t primeMargin()
+    {
+        return MetisClient::kTxPrimeTargetSamples - MetisClient::kTxPrimeBlockSamples;
+    }
     static constexpr std::size_t trimMargin() { return MetisClient::kTxTrimMarginSamples; }
     static constexpr std::size_t queueMax() { return MetisClient::kTxQueueMax; }
     static constexpr std::uint64_t quietPackets() { return MetisClient::kUnderflowRunQuietPackets; }
@@ -124,8 +128,8 @@ struct OverResult {
 // the keyed edge (Hl2TxDsp has to fill a block before it can emit one).
 // `group` > 1 delivers the blocks `group` at a time: block j is due at the end
 // of its group, (j / group + 1) * group * block. TCI's TX_CHRONO period is 2048
-// samples, so it reaches the queue as two 1024-sample blocks at once, as does a
-// 24 kHz mic; at a 512-sample block that is four.
+// samples, so it reaches the queue as four 512-sample blocks at once (two on
+// the 1024-sample block before #7182).
 long long dueOf(long long j, int block, int group)
 {
     return (j / group + 1) * group * static_cast<long long>(block);
@@ -310,10 +314,12 @@ int main(int argc, char** argv)
     // dozens of episodes on purpose. The wire is what is read here.
     QLoggingCategory::setFilterRules(QStringLiteral("aether.hl2.tx.debug=false"));
     const int block = blockSamples();
-    check(block == 1024, "one Hl2TxDsp block reaches the queue as 1024 EP2 samples (21.33 ms)");
+    check(block == 512, "one Hl2TxDsp block reaches the queue as 512 EP2 samples (10.67 ms)");
+    const auto margin = static_cast<long long>(MetisClientTestAccess::primeMargin());
+    const auto target = static_cast<long long>(MetisClientTestAccess::primeTarget());
 
     // ---- A producer that is never late ----
-    // An unprimed queue is left 16 samples short of a packet when the next
+    // An unprimed queue is left a few samples short of a packet when the next
     // block is due, so even this gets one sub-ms gap. The control here is the
     // sample sequence: every sample once, in order.
     {
@@ -328,14 +334,18 @@ int main(int argc, char** argv)
               "CONTROL: every sample of an on-time over reaches the wire once, in order");
         check(r.everyPacketKeyed, "CONTROL: the over is keyed from its first packet");
         check(r.trimEvents == 0 && r.trimSamples == 0, "CONTROL: an on-time over is never trimmed");
+        // THE START (#6052): from the keyed edge, one block to fill, the margin
+        // to queue, then the next packet. Shorter blocks move it by one block.
+        check(r.firstReal == (target + kPacket - 1) / kPacket * kPacket,
+              "the first sample goes out on the first packet after one block plus the margin");
     }
 
     // ---- THE MEASURED OVERS: d167 leg C, ten 3 s overs ----
     //
     // Each row is the mid-over zero runs of one hardware over, in ms. Each run
     // becomes a STEP in the producer's lateness, held for the rest of the over,
-    // from the fourth block on every second block. The positions are chosen;
-    // only the lengths are measured.
+    // from the first block after the prime's target on, every second block.
+    // The positions are chosen; only the lengths are measured.
     const std::vector<std::vector<double>> kMeasuredOversMs = {
         {1.96, 8.67}, {0.38, 2.67, 2.29}, {2.00}, {1.29, 1.62, 8.62}, {4.96},          // 384 kHz
         {5.54, 4.25}, {2.58, 3.92, 4.25}, {5.54, 10.17, 4.58, 3.29, 1.62, 0.67},
@@ -354,8 +364,9 @@ int main(int argc, char** argv)
             std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
             int late = 0;
             std::size_t step = 0;
-            for (std::size_t j = 3; j < lateness.size(); ++j) {
-                if (step < over.size() && (j - 3) % 2 == 0)
+            const auto first = static_cast<std::size_t>(target / block);
+            for (std::size_t j = first; j < lateness.size(); ++j) {
+                if (step < over.size() && (j - first) % 2 == 0)
                     late += msToSamples(over[step++]);
                 lateness[j] = late;
             }
@@ -391,8 +402,9 @@ int main(int argc, char** argv)
                 std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
                 int late = 0;
                 std::size_t step = 0;
-                for (std::size_t j = 3; j < lateness.size(); ++j) {
-                    if (step < over.size() && (j - 3) % 2 == 0)
+                const auto first = static_cast<std::size_t>(target / block);
+                for (std::size_t j = first; j < lateness.size(); ++j) {
+                    if (step < over.size() && (j - first) % 2 == 0)
                         late += msToSamples(over[step++]);
                     lateness[j] = late;
                 }
@@ -403,11 +415,11 @@ int main(int argc, char** argv)
             check(groupedTrims == 0,
                   "the measured lateness never trims the queue when blocks arrive 2 or 4 at once");
         }
-        // WHAT THE DEPTH MAY COST. Two blocks plus the packet it is released
+        // WHAT THE DEPTH MAY COST. The margin plus the packet it is released
         // on: that is the latency #6052 puts to the maintainer, and a deeper
         // queue is a different proposal.
-        check(worstHeld <= 2 * block + kPacket,
-              "the first sample waits in the queue for at most two blocks and one packet");
+        check(worstHeld <= margin + kPacket,
+              "the first sample waits in the queue for at most the margin and one packet");
     }
 
     // ---- BOUNDED JITTER: every block late by 1-25 ms, independently ----
@@ -446,7 +458,7 @@ int main(int argc, char** argv)
     // ---- POSITIVE CONTROL: the gap detector still sees a gap ----
     //
     // One block 100 ms late is more than any queue depth proposed in #6052
-    // (two blocks at most). If this read no gap, the zeros above would mean a
+    // (a 42.67 ms margin). If this read no gap, the zeros above would mean a
     // blind detector.
     {
         std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
@@ -456,7 +468,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr,
             "PROBE  one block 100 ms late: %d gap(s), %.2f ms of keyed zeros, longest %.2f ms\n",
             r.gaps, samplesToMs(r.gapSamples), samplesToMs(r.longestGap));
-        check(r.gaps >= 1 && r.longestGap >= msToSamples(100.0) - 2 * block - kPacket
+        check(r.gaps >= 1 && r.longestGap >= msToSamples(100.0) - margin - kPacket
                   && r.longestGap <= msToSamples(100.0) + kPacket,
               "POSITIVE CONTROL: a block later than the queue is deep is a gap, as long as "
               "the lateness less whatever depth the queue had");
@@ -471,11 +483,11 @@ int main(int argc, char** argv)
     // arrives in one burst. Untrimmed, the backlog rides as latency to the end
     // of the over; the trim must bring the depth back to the prime target once
     // the starvation episode has ended, and leave it there.
-    const std::size_t target = MetisClientTestAccess::primeTarget();
-    const std::size_t ceiling = target + MetisClientTestAccess::trimMargin();
+    const std::size_t ceiling =
+        static_cast<std::size_t>(target) + MetisClientTestAccess::trimMargin();
     const auto quiet = static_cast<long long>(MetisClientTestAccess::quietPackets());
-    // `group` 2 is a 2048-sample TCI delivery on the 1024-sample block; 4 is the
-    // same on a 512-sample block. The trim lands wherever the delivery cycle is
+    // `group` 4 is a 2048-sample TCI delivery on the 512-sample block; 2 is the
+    // same on the 1024-sample block it replaced. The trim lands wherever the delivery cycle is
     // when the quiet period ends, so the margin must hold a whole delivery.
     for (const int group : {1, 2, 4})
     for (const double pauseMs : {190.0, 300.0}) {
@@ -485,7 +497,7 @@ int main(int argc, char** argv)
                          group, group * block, kLargestDeliverySamples);
             continue;
         }
-        const int stalled = 40;   // the first block held back (~0.85 s into the over); a group start
+        const int stalled = 40;   // the first block held back (~0.43 s into the over); a group start
         const long long resume = dueOf(stalled, block, group) + msToSamples(pauseMs);
         std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
         for (std::size_t j = stalled; j < lateness.size(); ++j) {
@@ -573,7 +585,8 @@ int main(int argc, char** argv)
     // which abandons the queue and primes it again. The front-load is sized to
     // sit above the trim threshold, or this would pass with the trim armed.
     {
-        const auto frontLoad = static_cast<int>((target + MetisClientTestAccess::trimMargin()) / block) + 2;
+        const auto frontLoad = static_cast<int>((static_cast<std::size_t>(target) + MetisClientTestAccess::trimMargin())
+                                         / static_cast<std::size_t>(block)) + 2;
         const long long period = block;
         // (i) Context A plays 20 blocks on time, then stops for 200 ms (the queue
         // starves mid-over); context B, a second producer on the same operation,
@@ -611,7 +624,8 @@ int main(int argc, char** argv)
             std::vector<ScheduledBlock> schedule;
             for (int j = 0; j < 20; ++j)
                 schedule.push_back({(j + 1) * period, 0});
-            const long long edge = 24 * period;   // the 20 blocks have drained
+            // The 20 blocks have drained: held for the prime target, then played.
+            const long long edge = 20 * period + static_cast<long long>(target) + period;
             std::vector<ScheduledKey> keys;
             if (viaCw) {
                 keys.push_back({edge, KeyEvent::CwDown});

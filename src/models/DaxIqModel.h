@@ -83,7 +83,9 @@ public:
     void setAvailable(int avail){ m_available = avail; }
 
     // Called by RadioModel when stream status arrives
-    void applyStreamStatus(quint32 streamId, const QMap<QString, QString>& kvs);
+    // One of our IQ streams as the radio reported it (RadioModel filters
+    // ownership and removal first).
+    void applyStreamDelta(const AudioStreamDelta& delta);
     void handleStreamRemoved(quint32 streamId);
 
     // Radio disconnected: reset all IQ stream state and destroy pipes. A hard

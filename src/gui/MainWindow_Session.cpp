@@ -2428,6 +2428,12 @@ void MainWindow::wirePanLifecycle()
         applet->spectrumWidget()->overlayMenu()->setRadioFamily(m_radioModel.family());
         applet->spectrumWidget()->overlayMenu()->setScopeModeLabels(pan->scopeModeLabels());
         applet->spectrumWidget()->overlayMenu()->setScopeModeIndex(pan->scopeModeIndex());
+        // A Flex pan is published after its first status is applied, so its
+        // geometry is already in the model and infoChanged has been and gone.
+        if (pan->centerKnown()) {
+            applet->spectrumWidget()->observeFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
+            refreshPanZoomControls();
+        }
 
         // Push display dimensions to the radio so it sends full-size FFT bins.
         // Without this, the radio uses xpixels=50 ypixels=20 (default) and
@@ -2978,45 +2984,9 @@ void MainWindow::wireDaxIq()
     // works without DAX audio and stopDax() cannot half-tear it down. The only
     // place IQ-side wiring happens; startDax() wires only the audio bridge.
     if (m_appletPanel && m_appletPanel->daxIqApplet() && m_radioModel.panStream()) {
-        connect(&m_radioModel, &RadioModel::statusReceived,
-                this, [this](const QString& obj, const QMap<QString,QString>& kvs) {
-            if (!obj.startsWith("stream ")) return;
-            const QStringList parts = obj.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-            if (parts.size() < 2) return;
-            bool ok = false;
-            quint32 streamId = parts[1].toUInt(&ok, 0);
-            if (!ok) return;
-            const bool removed = parts.contains(QStringLiteral("removed"))
-                              || kvs.contains(QStringLiteral("removed"));
-            if (removed) {
-                m_radioModel.panStream()->unregisterIqStream(streamId);
-                m_radioModel.daxIqModel().handleStreamRemoved(streamId);
-                qCDebug(lcDax) << "MainWindow: unregistered removed DAX IQ stream"
-                               << "0x" + QString::number(streamId, 16);
-                return;
-            }
-            if (kvs.value("type") != "dax_iq") return;
-            if (!streamStatusBelongsToUs(kvs, m_radioModel.ourClientHandle())) {
-                m_radioModel.panStream()->unregisterIqStream(streamId);
-                m_radioModel.daxIqModel().handleStreamRemoved(streamId);
-                qCDebug(lcDax) << "MainWindow: ignoring DAX IQ stream for another client"
-                                << "stream=0x" + QString::number(streamId, 16)
-                                << "owner=" << kvs.value("client_handle");
-                return;
-            }
-            qCDebug(lcDax) << "MainWindow: DAX IQ stream status" << obj
-                           << "keys=" << kvs.keys()
-                           << "ch=" << kvs.value("daxiq_channel")
-                           << "ip=" << kvs.value("ip");
-            m_radioModel.daxIqModel().applyStreamStatus(streamId, kvs);
-            int ch = kvs.value("daxiq_channel").toInt();
-            // panStream() is null on a backend that carries its own IQ; there
-            // is no VITA-49 stream to register against.
-            if (streamId && ch >= 1 && ch <= 4 && m_radioModel.panStream()
-                && m_radioModel.daxIqModel().stream(ch).exists
-                && m_radioModel.daxIqModel().stream(ch).streamId == streamId)
-                m_radioModel.panStream()->registerIqStream(streamId, ch);
-        });
+        // Our IQ streams register with DaxIqModel and the stream router in
+        // RadioModel::applyIqStreamDelta().
+        m_radioModel.enableDaxIqRegistry();
 
         // Stream-bound: through the shared helper the post-swap rebind also calls
         // (#4448). The daxIqModel/applet connects below survive a swap and stay.

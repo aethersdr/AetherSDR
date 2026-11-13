@@ -76,6 +76,10 @@
 namespace AetherSDR {
 class TxController;
 class WanConnection;
+class FlexStatusIngress;
+struct TxBandDelta;
+struct StreamStatusDelta;
+struct InterlockStatusDelta;
 class IAutoRfGainControl;
 
 
@@ -168,6 +172,9 @@ public:
     NavtexModel&      navtexModel()      { return m_navtexModel; }
     UsbCableModel&    usbCableModel()    { return m_usbCableModel; }
     DaxIqModel&       daxIqModel()       { return m_daxIqModel; }
+    // Route our DAX IQ streams to DaxIqModel and the stream router (the
+    // desktop's DAX IQ applet turns this on; each stream makes a PipeWire pipe).
+    void enableDaxIqRegistry() { m_daxIqRegistry = true; }
     FlexWaveformModel& flexWaveformModel() { return m_flexWaveformModel; }
     DStarModel&        dstarModel()        { return m_dstarModel; }
     const DigitalVoiceWaveformMetrics& digitalVoiceWaveformMetrics() const;
@@ -1584,8 +1591,13 @@ signals:
     void digitalVoiceWaveformMetricsChanged();
     void digitalVoiceWaveformHealthChanged();
     void digitalVoiceWaveformDegradationStarted(const QString& message);
-    // Generic status relay — for dialogs that need to listen for specific objects.
-    void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
+    // The radio's frequency calibration: running (done=false) or finished,
+    // with the error that status line reported (empty when it carried none).
+    void frequencyCalibrationReported(bool done, const QString& freqErrorPpb);
+    // The radio's report on a firmware image it received (FirmwareUploader).
+    void firmwareUpdateReported(const AetherSDR::FirmwareUpdateStatus& status);
+    // txBandSettings() changed (a "transmit band" or "interlock band" status).
+    void txBandSettingsChanged();
     // Emitted when the radio sends an M-prefix informational, warning, error,
     // or fatal message.  Severity comes from the high bits of the message
     // number per FlexLib Radio.cs:4498-4516.  MainWindow uses it to decide
@@ -1727,6 +1739,12 @@ private slots:
 private:
     void resetAudioControls();
     void applyAudioStreamDelta(const AudioStreamDelta& delta);
+    // The DAX IQ registry: our IQ streams reach DaxIqModel and the VITA-49
+    // stream router; a removed or foreign one leaves both. Off until the
+    // desktop's DAX IQ applet enables it (enableDaxIqRegistry()), since an IQ
+    // stream there creates a PipeWire pipe.
+    void applyIqStreamDelta(const AudioStreamDelta& delta);
+    bool m_daxIqRegistry{false};
     struct AudioStreamIdentity {
         AudioStreamKind kind;
         int channel{0};
@@ -1773,9 +1791,26 @@ private:
     // (IRadioBackend::gpsChanged / memoryChanged / profileChanged). aetherd RFC
     // 2.3 — RadioModel residual.
     void applyGpsChanges(const GpsDelta& delta);
-    void resetGpsState(bool receiveMessages = true);
-    void wireGpsSessionReceivers(bool receiveMessages = true);
-    void handleMessageReceived(const ParsedMessage& msg, quint64 gpsSessionGeneration);
+    void resetGpsState();
+    void wireGpsSessionReceivers();
+    // A fresh status epoch for the connect about to be issued: every wire line
+    // queued so far is refused (one strict fence for status and message lines).
+    quint64 beginStatusSession();
+    // Return the status ingress from a SmartLink session to the LAN connection.
+    void releaseWanStatus();
+    void wireStatusIngress(quint64 generation);
+    void applyTxBandChanges(const TxBandDelta& delta);
+    QPointer<FlexStatusIngress> m_statusIngress;   // the backend's; model thread
+    quint64 m_statusEpoch{0};            // the epoch of the session being run
+    // Display reports apply only from the session being run, and not after it
+    // has begun to end (RadioModel_DisplayObservations.cpp).
+    // How long a deferred display report stays applicable.
+    static constexpr qint64 kDeferredDisplayAgeMs = 30'000;
+    quint64 m_displayEpoch{0};
+    bool m_displaySessionOpen{true};
+    quint64 m_connectedStatusEpoch{0};   // the epoch onConnected() last ran for
+    quint64 m_wanRoute{0};               // fences queued SmartLink lifecycle per bind
+    void handleMessageReceived(const ParsedMessage& msg);
     // Asks for the CW profile list once per session, whenever the backend's CW
     // capability is (or later becomes) engaged.
     void refreshCwProfilesIfSupported();
@@ -1787,10 +1822,18 @@ private:
     void scheduleDStarRuntimeConfiguration();
     void applyPendingDStarRuntimeConfiguration();
     void syncDigitalVoiceTxSelection(bool force = false);
-    void handleMeterStatus(const QString& rawBody);
-    void handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs);
-    void handleProfileStatus(const QString& object, const QMap<QString, QString>& kvs);
-    void handleProfileStatusRaw(const QString& profileType, const QString& rawBody);
+    void onDisplayObservation(const DisplayObservation& observation);
+    void openDisplaySession(quint64 epoch);
+    void retireDisplaySession();
+    bool displayObservationCurrent(const DisplayObservation& observation) const;
+    void applyDisplayObservation(const DisplayObservation& observation);
+    bool applyDisplayValues(PanadapterModel* pan, const DisplayObservation& observation);
+    void deferDisplayObservation(const DisplayObservation& observation);
+    DisplayObservation takeDeferredDisplayObservation(const DisplayObservation& observation);
+    void retireDisplayPan(const QString& id);
+    void replaceDisplayWaterfall(PanadapterModel* pan, const QString& id);
+    void syncDisplayStream(PanadapterModel* pan, bool rangeChanged = false, bool scaleReported = false);
+    bool displayWaterfallOwned(const QString& id, const QString& parent) const;
     friend class DaxTxOwnershipTestAccess;
     void resetDaxTxOwnership();
     void retireDaxTxInputs();
@@ -1807,10 +1850,12 @@ private:
     void releaseWsprDaxTxOwnership();
     void finishWsprDaxTxRelease();
     bool acceptDaxTxCreate(quint32 id, quint64 startRevision);
-    void traceDaxStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
-    void handleDaxRxStreamRegistry(const QString& object, const QMap<QString, QString>& kvs);
-    bool handleRemoteAudioRxStreamStatus(const QString& object,
-                                         const QMap<QString, QString>& kvs);
+    // A stream status's model rules: remote audio ownership, then (unless that
+    // replaced the backend) the DAX stream trace and the DAX RX registry.
+    void applyStreamStatus(const StreamStatusDelta& stream);
+    void traceDaxStreamStatus(const StreamStatusDelta& stream);
+    void handleDaxRxStreamRegistry(const StreamStatusDelta& stream);
+    bool handleRemoteAudioRxStreamStatus(const StreamStatusDelta& stream);
     void scheduleRxAudioStreamEnsure(const QString& reason);
     void logRemoteAudioRxSummary(const QString& reason) const;
 
@@ -1910,9 +1955,9 @@ private:
     quint64 m_sessionRequestId{0};
     QMap<quint64, std::function<void()>> m_sessionCancellations;
     quint32 clientHandle() const;
-    PanadapterModel* ensureOwnedPanadapter(const QString& panId);
+    PanadapterModel* ensureOwnedPanadapter(const QString& panId,
+                                          const DisplayObservation* initial = nullptr);
     void updateStreamFilters();
-    void handleGpsStatus(const QString& rawBody);
     void emitOtherClientsChanged();
     QString antennaAliasRadioKey() const;
     bool reloadAntennaAliases() const;
@@ -2096,10 +2141,14 @@ public:
     // Feed a decoded status line straight into the router. Used to pin the TNF
     // removal-status handling — the wire says the notch is gone, and the router
     // must not upsert it back into TnfModel.
-    void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs)
-    {
-        onStatusReceived(object, kvs);
-    }
+    // One wire line as the status ingress delivers it (decoders, then the
+    // model's own handling), without the session fence. handleStatusForTest()
+    // rebuilds the line from its object and key/value pairs, in key order, so
+    // raw-line objects (typed profile, gps, meter, ntp_sources) need
+    // handleLineForTest().
+    void handleLineForTest(const QString& line);
+    void deliverLineForTest(const ParsedMessage& message);
+    void handleStatusForTest(const QString& object, const QMap<QString, QString>& kvs);
     // Fire the LAN auto-reconnect timer's handler now instead of waiting for it.
     // Drives the REAL handler, not a copy of its body, so a test can pin what the
     // reconnect restores — see the licensed-capacity case in
@@ -2141,6 +2190,7 @@ public:
     // when the family has no backend in this build (RTL without librtlsdr).
     bool rebuildBackendForTest(const QString& family);
 private:
+    friend class FlexDisplayStatusTestAccess;
     friend class RadioModelSliceLifecycleTestAccess;
     friend class RadioNicknameTestAccess;
     friend class TuneOutputControlTestAccess;
@@ -2514,9 +2564,7 @@ private:
     QSet<quint32> m_evictedPredecessorHandles;
     QSet<quint32> m_evictionsInFlight;
     QMap<quint32, ForeignPanWrite> m_foreignPanWrites;
-    void noteForeignPanWriteIfAny(const QString& object,
-                                  const QMap<QString, QString>& kvs,
-                                  quint32 sourceHandle);
+    void noteForeignPanWriteIfAny(const QString& panId, quint32 sourceHandle);
     void evictStaleSession(quint32 handle, const QString& reason);
     QString m_activePanId;       // currently active panadapter
 
@@ -2526,17 +2574,17 @@ private:
     // holds objects WE own. A leaked waterfall (panafall closed without
     // "display panafall remove") therefore lingers here after its pan is pruned,
     // making it detectable even when the radio has stopped streaming it.
-    // Main-thread only (written in onStatusReceived, read in the bridge).
-    struct RadioDisplayPan { quint32 clientHandle{0}; QString waterfallId; };
-    struct RadioDisplayWf  { quint32 clientHandle{0}; QString parentPanId; };
+    // Main-thread only (written by display observations, read in the bridge).
+    struct RadioDisplayPan { quint32 clientHandle{0}; QString waterfallId; bool ownerKnown{false}; };
+    struct RadioDisplayWf  { quint32 clientHandle{0}; QString parentPanId; bool ownerKnown{false}; };
     QMap<QString, RadioDisplayPan> m_radioDisplayPans;        // panId → entry
     QMap<QString, RadioDisplayWf>  m_radioDisplayWaterfalls;  // wfId  → entry
-    // Deferred "display pan" status pending ownership confirmation. Paired
-    // with QDateTime::currentSecsSinceEpoch() at insert so a sweep on insert
-    // can drop entries that the radio never resolved with a client_handle
-    // frame (#2228 — would otherwise leak for non-owned pans that also never
-    // emit "removed").
-    QMap<QString, QPair<qint64, QMap<QString, QString>>> m_pendingPanStatuses;
+    struct PendingDisplayObservation { qint64 insertedMs{0}; DisplayObservation observation; };
+    QMap<QString, PendingDisplayObservation> m_pendingDisplayObservations;
+    QElapsedTimer m_displayObservationClock;
+    QList<DisplayObservation> m_displayObservationQueue;
+    bool m_applyingDisplayObservation{false};
+    bool m_displayInventoryUncertain{false};
 
     AmpModel m_amplifier;            // power amp (PGXL) state + relay (#4094)
 
@@ -2546,8 +2594,6 @@ private:
     GpsFixState m_gpsFixState{GpsFixState::Unknown};
     quint64 m_gpsSessionGeneration{0};
     QMetaObject::Connection m_gpsBackendConnection;
-    QMetaObject::Connection m_gpsLanMessageConnection;
-    QMetaObject::Connection m_gpsWanMessageConnection;
     QString m_gpsSource;
     int     m_gpsTracked{0};
     int     m_gpsVisible{0};
@@ -2635,7 +2681,8 @@ private:
     void sendSliceCommand(SliceModel* slice, const QString& cmd);
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
-    QString radioInterlockNotificationMessage(const QMap<QString, QString>& kvs) const;
+    QString radioInterlockNotificationMessage(const QString& reason, const QString& state) const;
+    void applyInterlockStatus(const InterlockStatusDelta& delta);
     void evaluateTxFilterAudioLoss(float scFilt1, float scFilt2);
     void armInterlockNotification(TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
     // Recompute the operator-transmit predicate and emit operatorTransmitChanged

@@ -27,6 +27,7 @@
 #include <QStringList>
 #include <QThread>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -1279,6 +1280,112 @@ int main(int argc, char** argv)
               "Metis writer guard ends only after the terminal writer returns");
     }
 
+    // The keyed frames and the first OFF frame hold the dispatch fence; the idle
+    // frames after them hold nothing, so the next over's acquire() is not refused.
+    using Refusal = AetherSDR::TxCoordinator::Refusal;
+    using Packet = std::array<std::uint8_t, kUsbPacketSize>;
+    {
+        TxTestAuthority tx;
+        MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
+        over.enableTransmit(true);
+        over.setMox(true, tx.operation);
+        bool keyedFenced = false;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            keyedFenced = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(keyedFenced, "a keyed Metis frame holds the dispatch fence");
+        over.setMox(false, tx.operation);
+        bool unkeyFenced = false;
+        Refusal unkeyRefusal = Refusal::None;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            unkeyFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            (void)tx.coordinator.finishLocalIntent(tx.operation);
+            unkeyRefusal = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).refusal;
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(unkeyFenced && unkeyRefusal == Refusal::Recovering,
+              "the unkey frame stays fenced: a new operation is refused while it is entered");
+        bool idleFree = false;
+        bool idleAdmits = false;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            idleFree = !anyFrameKeyed(packet) && !tx.coordinator.hasInFlightDispatches();
+            idleAdmits = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).accepted();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(idleFree, "an idle Metis frame after the unkey frame holds no dispatch guard");
+        check(idleAdmits, "a fresh acquire() during an idle Metis frame is accepted");
+    }
+
+    {
+        // An over ended mid-frame: the next frame drops MOX and is still fenced.
+        TxTestAuthority tx;
+        MetisClient ended;
+        MetisClientTestAccess::setStreaming(ended);
+        ended.enableTransmit(true);
+        ended.setMox(true, tx.operation);
+        Refusal keyedRefusal = Refusal::None;
+        bool keyedFenced = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            (void)tx.coordinator.finishLocalIntent(tx.operation);
+            keyedRefusal = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).refusal;
+            keyedFenced = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(keyedFenced && keyedRefusal == Refusal::Recovering,
+              "a new operation is refused while a keyed Metis frame is entered");
+        bool offFenced = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            offFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(offFenced && !ended.isKeyed(),
+              "the OFF frame after a refused key dispatch is still fenced");
+        bool idleFree = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            idleFree = !tx.coordinator.hasInFlightDispatches()
+                && tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).accepted();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(idleFree, "after that OFF frame an idle frame admits the next over");
+    }
+
+    {
+        // A failed write does not retire the unkey: the next OFF frame is fenced
+        // again, and only a written OFF frame releases the operation.
+        TxTestAuthority tx;
+        MetisClient failed;
+        MetisClientTestAccess::setStreaming(failed);
+        failed.enableTransmit(true);
+        failed.setMox(true, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet& packet) -> qint64 { return packet.size(); });
+        MetisClientTestAccess::send(failed);
+        failed.setMox(false, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet&) -> qint64 { return -1; });
+        MetisClientTestAccess::send(failed);
+        bool retryFenced = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            retryFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(retryFenced, "an unkey frame whose write failed leaves the next OFF frame fenced");
+        bool idleFree = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            idleFree = !tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(idleFree, "once an OFF frame is written, the idle frame after it holds no guard");
+    }
+
     // ---- TX IQ FIFO fault accounting (S3 row 3.3) ----
     //
     // The FIFO is bounded above at kTxQueueMax and not below. Both ends change
@@ -1419,14 +1526,14 @@ int main(int argc, char** argv)
                  * static_cast<std::uint64_t>(MetisClientTestAccess::ep2AudioRateHz()))
             / (static_cast<std::uint64_t>(chain.inputSampleRateHz)
                  * static_cast<std::uint64_t>(kTxSamplesPerPacket));
-        // PINNED at the geometry this product actually ships: 512 input samples
-        // at 24 kHz is 21.33 ms, and an EP2 packet is 126 samples at 48 kHz,
-        // which is 2.625 ms. 21.33 / 2.625 = 8.127, so EIGHT whole packets --
-        // 1008 samples, about 21 ms -- of substituted silence open every clean
+        // PINNED at the geometry this product actually ships: 256 input samples
+        // at 24 kHz is 10.67 ms, and an EP2 packet is 126 samples at 48 kHz,
+        // which is 2.625 ms. 10.67 / 2.625 = 4.06, so FOUR whole packets --
+        // 504 samples, about 10.5 ms -- of substituted silence open every clean
         // over, against a tail of at most 125 samples. If the block size or
         // either rate changes, this assertion is where it says so.
-        check(preRollPackets == 8,
-              "THE FLOOR (PRE-ROLL HALF): one Hl2TxDsp input block is eight EP2 packets");
+        check(preRollPackets == 4,
+              "THE FLOOR (PRE-ROLL HALF): one Hl2TxDsp input block is four EP2 packets");
 
         TxTestAuthority tx;
         ScopedTxFifoLog log;
@@ -1579,8 +1686,9 @@ int main(int argc, char** argv)
         // ---- THE PRIME (#6052): the first samples of an over ----
         // An empty queue is still the counted pre-roll above. Once a block
         // lands, keyed packets are silence, consume nothing and count no
-        // underflow until three blocks are queued (one draining, two margin).
-        // The block is derived from the real Hl2TxDsp::Config.
+        // underflow until one draining block plus 42.67 ms of margin is queued.
+        // The block is derived from the real Hl2TxDsp::Config; the margin is
+        // the decision, pinned in milliseconds so it does not follow the block.
         const Hl2TxDsp::Config chain{};
         const std::size_t block =
             static_cast<std::size_t>(chain.dspBlockSize)
@@ -1588,8 +1696,14 @@ int main(int argc, char** argv)
             / static_cast<std::size_t>(chain.inputSampleRateHz);
         check(MetisClientTestAccess::primeBlock() == block,
               "THE PRIME: the block MetisClient primes in is Hl2TxDsp's own, at the EP2 rate");
-        check(MetisClientTestAccess::primeTarget() == 3 * block,
-              "THE PRIME: the target is three blocks -- one draining, two of margin");
+        constexpr double kMarginMs = 128.0 / 3.0;   // 42.67 ms, #6052
+        const std::size_t margin = static_cast<std::size_t>(std::lround(
+            kMarginMs * MetisClientTestAccess::ep2AudioRateHz() / 1000.0));
+        check(MetisClientTestAccess::primeTarget() == block + margin,
+              "THE PRIME: the target is one draining block plus 42.67 ms of margin");
+        check(margin % block == 0,
+              "THE PRIME: the margin is a whole number of blocks, so the hold ends on a block");
+        const std::size_t targetBlocks = MetisClientTestAccess::primeTarget() / block;
         const std::vector<std::complex<float>> oneBlock(block, std::complex<float>(0.25f, -0.25f));
         const auto packet = static_cast<std::size_t>(kTxSamplesPerPacket);
 
@@ -1609,19 +1723,23 @@ int main(int argc, char** argv)
               "THE PRIME: a hold is not an underflow -- nothing was missing");
         check(over.txPrimeHoldPackets() == 1, "THE PRIME: it is counted as a hold instead");
 
-        over.queueTxIq(oneBlock, tx.context);            // block 2
-        check(!payloadNonZero(over.buildNextControlPacket()) && over.txQueueDepth() == 2 * block,
-              "THE PRIME: two blocks are still short of the target -- one block of margin "
-              "is not what was chosen");
+        for (std::size_t k = 2; k < targetBlocks; ++k) {  // blocks 2 .. one short
+            over.queueTxIq(oneBlock, tx.context);
+            check(!payloadNonZero(over.buildNextControlPacket()) && over.txQueueDepth() == k * block,
+                  "THE PRIME: every block short of the target is still held -- one block "
+                  "less margin is not what was chosen");
+        }
 
-        over.queueTxIq(oneBlock, tx.context);            // block 3: the target
+        over.queueTxIq(oneBlock, tx.context);            // the target
         const auto first = over.buildNextControlPacket();
         const auto firstShape = ep2IqShape(first);
         check(firstShape.carryingIq == kTxSamplesPerPacket && firstShape.firstSilent < 0,
               "THE PRIME: at the target the next packet is a FULL packet of IQ");
-        check(over.txQueueDepth() == 3 * block - packet, "THE PRIME: and the queue drains from there");
-        check(over.txPrimeHoldPackets() == 2 && over.txPrimeDeadlineReleases() == 0,
-              "THE PRIME: two packets were held, and the target let it go, not the deadline");
+        check(over.txQueueDepth() == MetisClientTestAccess::primeTarget() - packet,
+              "THE PRIME: and the queue drains from there");
+        check(over.txPrimeHoldPackets() == targetBlocks - 1 && over.txPrimeDeadlineReleases() == 0,
+              "THE PRIME: one packet per short block was held, and the target let it go, "
+              "not the deadline");
         check(log.primeLines().size() == 1, "THE PRIME: one log line when it lets go");
 
         // NOT DEFENDED. Below the target again, the queue keeps draining: the
@@ -1630,9 +1748,9 @@ int main(int argc, char** argv)
             check(payloadNonZero(over.buildNextControlPacket()),
                   "THE PRIME: once let go, a queue below the target still drains");
         const auto tail = ep2IqShape(over.buildNextControlPacket());
-        check(tail.carryingIq == static_cast<int>(3 * block % packet),
+        check(tail.carryingIq == static_cast<int>(MetisClientTestAccess::primeTarget() % packet),
               "THE PRIME: down to the last short packet, which is not held either");
-        check(over.txPrimeHoldPackets() == 2 && log.primeLines().size() == 1,
+        check(over.txPrimeHoldPackets() == targetBlocks - 1 && log.primeLines().size() == 1,
               "THE PRIME: no second hold and no second line in the same over");
 
         // THE KEYED EDGE ARMS IT AGAIN. Same context, no flush, queue empty:

@@ -33,7 +33,7 @@ class RadioModel;
 //   3. Radio  → Client: S0|file server active
 //   4. Client connects TCP to radio:<port> and streams raw .tar.gz bytes
 //   5. Radio  → Client: S0|waveform container name=<name> version=<ver>
-//      (handled by FlexWaveformModel::handleContainerStatus)
+//      (decoded by flexWaveformStatus(), applied by FlexWaveformModel::applyStatus)
 class WaveformInstaller : public QObject {
     Q_OBJECT
 
