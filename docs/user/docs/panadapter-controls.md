@@ -210,7 +210,7 @@ The dock side is remembered when you restart AetherSDR.
 
 ### The button bar
 
-The top row of the panel holds **five favorite buttons** (by default VU, PWR, RX, TX and P/CW) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favorites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
+The top row of the panel holds **five favorite buttons** (by default VU, PWR, RX, BAND and TX; P/CW starts in the drawer) and a **▼/▲** drawer button that shows the rest. Right-click the bar (or the drawer button) and choose **Customize Button Bar** to pick your favorites and hide buttons you don't use; the first five active entries fill the bar and the rest go in the drawer. Hiding a button also closes its applet. Buttons for accessories you don't have (tuner, amplifier, Antenna Genius and so on) appear only when that hardware is present.
 
 <img src="/img/screens/customize-button-bar.png" width="440" alt="Customize Button Bar dialog. A note explains that the top five active buttons fill the row and the rest live in the drawer, while hidden buttons and their applets are disabled. The Active list holds VU, PWR, RX, TX and P/CW, a Favorites divider, then LOCK, PHN, EQ, WAV, VUDU, CAT, DAX, TCI, IQ, MTR, PROF, SS, MQTT and CTR2. The Hidden list is empty, with arrow buttons between the lists and OK and Cancel at the bottom." />
 
