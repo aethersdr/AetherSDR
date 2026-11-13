@@ -1562,6 +1562,7 @@ bool MetisClient::txIqPrimeHolds()
                      << "with samples waiting"
                      << (reached ? "(target reached)."
                                  : "(DEADLINE: the producer stopped short of the target).");
+    m_txIqOverTarget = m_txIqPrimeTarget;
     m_txIqPrimeTarget = 0;
     m_txIqPrimeHeldPackets = 0;
     return false;
@@ -1569,15 +1570,15 @@ bool MetisClient::txIqPrimeHolds()
 
 void MetisClient::trimTxIqAfterUnderflow()
 {
-    if (!m_txIqTrimArmed || m_txIq.size() <= kTxPrimeTargetSamples + kTxTrimMarginSamples)
+    if (!m_txIqTrimArmed || m_txIq.size() <= m_txIqOverTarget + kTxTrimMarginSamples)
         return;
     // Oldest first, as overflow does: one skip, then the over runs at the primed depth.
-    const std::size_t drop = m_txIq.size() - kTxPrimeTargetSamples;
+    const std::size_t drop = m_txIq.size() - m_txIqOverTarget;
     m_txIq.erase(m_txIq.begin(), m_txIq.begin() + static_cast<std::ptrdiff_t>(drop));
     m_txTrimSamples += drop;
     ++m_txTrimEvents;
     qCDebug(lcHl2Tx) << "HL2 tx fifo: backlog after a mid-over starvation trimmed by" << drop
-                     << "sample(s) to the prime target" << kTxPrimeTargetSamples
+                     << "sample(s) to the prime target" << m_txIqOverTarget
                      << "(totals since process start:" << m_txTrimEvents << "trim(s) /"
                      << m_txTrimSamples << "samples).";
 }

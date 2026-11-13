@@ -432,7 +432,7 @@ public:
     [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
     [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
     // Backlog dropped once when a mid-over starvation ends with the queue above the
-    // prime target plus kTxTrimMarginSamples: latency returns to the primed depth.
+    // over's prime target plus kTxTrimMarginSamples: latency returns to the primed depth.
     [[nodiscard]] std::uint64_t txTrimSamples() const noexcept { return m_txTrimSamples; }
     [[nodiscard]] std::uint64_t txTrimEvents() const noexcept { return m_txTrimEvents; }
     // Empty-queue keyed silence at the head of the most recent over that
@@ -891,11 +891,15 @@ private:
     // Depth above the target that is still steady state: a producer delivers up
     // to 2048 samples (42.67 ms) at once, whatever the DSP block: a TCI client's
     // 2048-sample mono TX_AUDIO frame. More than that after a mid-over starvation
-    // is a backlog, trimmed once to the target (trimTxIqAfterUnderflow()).
+    // is a backlog, trimmed once to the target this over was primed to
+    // (m_txIqOverTarget, trimTxIqAfterUnderflow()).
     static constexpr std::size_t kTxTrimMarginSamples = 2048;
     static_assert(kTxPrimeTargetSamples + kTxTrimMarginSamples < kTxQueueMax,
                   "the trim threshold must sit below the overflow bound");
+    static_assert(kTxPrimeClientTargetSamples + kTxTrimMarginSamples < kTxQueueMax,
+                  "the client trim threshold must sit below the overflow bound");
     std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally
+    std::size_t m_txIqOverTarget = kTxPrimeTargetSamples;   // the target the prime let go at
     std::uint64_t m_txIqPrimeHeldPackets = 0;   // this hold, for the deadline
     std::uint64_t m_txPrimeHoldPackets = 0;     // process total
     std::uint64_t m_txPrimeDeadlineReleases = 0;
