@@ -4677,7 +4677,14 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         m_keyedSwrGateClears = 0;
     }
     m_keyed = key;
-    m_keyedAudio.store(key);
+    {
+        // Under the direct-submit gate: the AudioEngine thread holds it from
+        // its m_keyedAudio check to the post of the block, so a block is either
+        // posted before the unkey's reset and flush below, or refused. That is
+        // the ordering the GUI thread gave when it was the only submitter.
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_keyedAudio.store(key);
+    }
     // Manual PTT is already mirrored optimistically by RadioModel, but CW
     // break-in keys inside this backend. Publish that edge so the TX
     // indicator, TCI clients and receive-side TX gates see the real state.
@@ -8645,7 +8652,11 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission. The radio's own
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
-    m_keyedAudio.store(false);
+    {
+        // Same ordering as applyKeying(): see there.
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_keyedAudio.store(false);
+    }
     m_radioPtt = false;
     m_swrGate.reset();
     publishTransmitState();
