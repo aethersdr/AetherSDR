@@ -1140,6 +1140,8 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
             UsbCableModel* cables = &m_model->usbCableModel();
             connect(cables, &UsbCableModel::cableAdded, radioCableCombo, reseedCables);
             connect(cables, &UsbCableModel::cableRemoved, radioCableCombo, reseedCables);
+            // plugged_in and name changes; replies no longer emit this.
+            connect(cables, &UsbCableModel::cableChanged, radioCableCombo, reseedCables);
         }
         radioPageIdx = ui.addressStack->addWidget(radioCableCombo);
     }
@@ -1300,6 +1302,7 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         pollSpin->setRange(ui.pollIntervalMinMs, ui.pollIntervalMaxMs);
         pollSpin->setSingleStep(50);
         pollSpin->setSuffix(tr(" ms"));
+        pollSpin->setKeyboardTracking(false);  // apply the typed value once, not per keystroke
         pollSpin->setValue(PeripheralSettings::deviceInt(group, "PollIntervalMs", ui.pollIntervalDefaultMs));
         pollSpin->setAccessibleName(tr("%1 poll interval").arg(ui.label));
         pollSpin->setAccessibleDescription(

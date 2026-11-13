@@ -30,11 +30,6 @@ int dataTimeoutMs(qint64 soloIntervalMs)
         + static_cast<int>(soloIntervalMs - LpMeter::PollGate::kSoloPollIntervalMs);
 }
 
-bool sameChange(const LpMeter::CableChange& a, const LpMeter::CableChange& b)
-{
-    return a.setting == b.setting && a.text == b.text && a.number == b.number;
-}
-
 QString cableChangeText(const LpMeter::CableChange& change)
 {
     using Setting = LpMeter::CableChange::Setting;
@@ -307,7 +302,12 @@ void LpMeterConnection::connectRadioCable(const QString& serial)
     const LpMeter::CableSnapshot cable = m_radioHooks.snapshot
         ? m_radioHooks.snapshot(serial) : LpMeter::CableSnapshot{};
     if (!cable.known || !cable.pluggedIn) {
-        qCInfo(lcTuner) << "LpMeterConnection: waiting for the radio to report USB cable" << serial;
+        // Not final: the link still comes up when the radio reports the cable.
+        const QString reason = cable.known
+            ? QStringLiteral("USB cable %1 is not plugged in to the radio; waiting for it").arg(serial)
+            : QStringLiteral("the radio has not reported USB cable %1; waiting for it").arg(serial);
+        qCInfo(lcTuner).noquote() << "LpMeterConnection:" << reason;
+        emit connectionFailed(reason);
     }
     evaluateRadioCable(cable);
 }
@@ -348,13 +348,16 @@ void LpMeterConnection::evaluateRadioCable(const LpMeter::CableSnapshot& cable)
         qCInfo(lcTuner) << "LpMeterConnection: USB cable" << m_lastRadioSerial
                         << (present ? "is no longer passthrough 115200 8N1" : "is gone");
         m_radioConfiguring = false;
+        // Like the serial and network modes: without auto-reconnect, a
+        // dropped link stays down until the operator connects again.
+        if (!m_autoReconnect) { m_radioWanted = false; }
         onTransportDown();
     }
     if (!present || !m_radioConfiguring) { return; }
 
     const std::optional<LpMeter::CableChange> change = LpMeter::nextCableChange(cable);
     if (!change) { return; }
-    if (m_lastCableChange && sameChange(*m_lastCableChange, *change)) {
+    if (m_lastCableChange == change) {
         return;  // sent; waiting for the radio's status to confirm it
     }
     m_lastCableChange = change;

@@ -302,7 +302,8 @@ private:
             LpMeterConnection connection;
             rig.attach(connection);
             connection.connectRadioCable(sn);
-            check("an unreported cable waits without configuring", rig.changes.isEmpty() && !connection.isConnected());
+            check("an unreported cable is reported to the operator and waited for",
+                  rig.changes.isEmpty() && !connection.isConnected() && rig.failures.size() == 1);
             rig.cable = catCable();
             connection.onRadioCableStatus(sn, rig.cable);
             check("the cable is configured once the radio reports it", rig.changes.size() == 1);
@@ -310,6 +311,22 @@ private:
             rig.cable.type = QStringLiteral("passthrough");
             connection.onRadioCableStatus(sn, rig.cable);
             check("after disconnect the cable is left alone", rig.changes.size() == 1 && !connection.isConnected());
+        }
+        {
+            RadioRig rig;
+            rig.cable = catCable();
+            rig.cable.type = QStringLiteral("passthrough");
+            rig.cable.speed = 115200;
+            LpMeterConnection connection;
+            connection.setAutoReconnect(false);
+            rig.attach(connection);
+            connection.connectRadioCable(sn);
+            const bool up = connection.isConnected() && rig.changes.isEmpty();
+            connection.onRadioCableStatus(sn, LpMeter::CableSnapshot{});
+            rig.cable = catCable();
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("without auto-reconnect a dropped radio cable stays down and untouched",
+                  up && !connection.isConnected() && rig.changes.isEmpty());
         }
         {
             RadioRig rig;

@@ -311,6 +311,7 @@ struct CableChange {
     Setting setting{Setting::Type};
     QString text;   // Type, Parity, FlowControl
     int number{0};  // Speed, DataBits, StopBits
+    bool operator==(const CableChange&) const = default;
 };
 
 // True when the cable is plugged in and set to passthrough 115200 8N1.
