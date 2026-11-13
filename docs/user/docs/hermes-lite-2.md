@@ -2,17 +2,17 @@
 title: "Hermes-Lite 2"
 slug: "/hermes-lite-2"
 description: "AetherSDR can operate a Hermes-Lite 2 (HL2) over openHPSDR Protocol 1."
-status: "Experimental"
+status: "Supported"
 applies_to: ["Hermes-Lite 2"]
 ---
 
 :::info[Status]
 
-**Status:** Experimental · **Applies to:** Hermes-Lite 2
+**Status:** Supported · **Applies to:** Hermes-Lite 2
 
 :::
 
-AetherSDR can operate a **Hermes-Lite 2** (HL2) over openHPSDR Protocol 1. Support is **experimental**: the radio receives and transmits, but FlexRadio remains AetherSDR's supported target (see [Supported Radios](./supported-radios.md)). An **EXPERIMENTAL** badge shows in the title bar while an HL2 is connected.
+AetherSDR can operate a **Hermes-Lite 2** (HL2) over openHPSDR Protocol 1. The HL2 is **supported** in the desktop application: board id 6 over Ethernet, with gateware 74 ([#7257](https://github.com/aethersdr/AetherSDR/issues/7257)). **Windows is not yet certified**: no Windows `radiocert` run has been posted yet ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)). Other gateware, other boards, the wider Hermes-Lite family and aetherd remain experimental (see [Supported Radios](./supported-radios.md)). An **EXPERIMENTAL** badge shows in the title bar while an HL2 is connected.
 
 The HL2 has no on-board DSP, so AetherSDR does the demodulation, filtering, AGC, noise blanking and transmit modulation on your computer, using WDSP.
 
@@ -209,9 +209,13 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 
 ### What has not been tested
 
-This page was checked with one Hermes-Lite 2 (gateware 74) on macOS, at one station. Reports from other setups are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)). Not yet tested:
+This page was checked with one Hermes-Lite 2 (gateware 74) on macOS, at one station. Reports from other setups are welcome ([#5678](https://github.com/aethersdr/AetherSDR/issues/5678)).
 
-- Windows, and boards built on the HL2. Linux has had one short check, without a desktop or sound hardware.
+Field time continues after the Supported label: at least 20 hours on the air with a released build, from at least two stations (one of them not ON8ST's), over at least two weeks, with no open bug against the supported HL2 in that time. Each station posts its hours, modes, OS, version, gateware and board on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678).
+
+Not yet tested:
+
+- Windows: not yet certified. That waits for a Windows `radiocert` run posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Boards built on the HL2 are not tested either. Linux has had one short check, without a desktop or sound hardware.
 - Transmitting into an antenna: every transmit test went into a dummy load.
 - Calibrated power: the forward power and SWR readings are not checked against a calibrated meter, so they are not calibrated watts.
 - Transmit linearity: intermodulation (IMD) has not been measured with a calibrated instrument.

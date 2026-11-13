@@ -91,11 +91,16 @@ connections authenticate with the device's access code.
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.
 
-**Other radio families** ride the vendor-neutral `IRadioBackend` seam. None is
-a supported family yet (one Icom model is supported on its own, below), and
-FlexRadio remains the supported target:
+**Other radio families** ride the vendor-neutral `IRadioBackend` seam. The
+Hermes-Lite 2 is supported in the desktop application and one Icom model is
+supported on its own (both below); FlexRadio remains the primary target:
 
-- **Hermes-Lite 2** — **experimental**. Four independent receivers, SSB, AM, DSB and simplex FM/NFM voice
+- **Hermes-Lite 2** — **supported** in the desktop application: board id 6 over
+  Ethernet / openHPSDR Protocol 1, gateware 74 ([#7257](https://github.com/aethersdr/AetherSDR/issues/7257)).
+  Windows is not yet certified until a Windows `radiocert` run is posted on
+  [#5678](https://github.com/aethersdr/AetherSDR/issues/5678); aetherd, other
+  gateware, other boards and the wider Hermes-Lite family remain experimental.
+  Four independent receivers, SSB, AM, DSB and simplex FM/NFM voice
   through WDSP's TXA modulator with a reduction-only ALC, CW/RTTY decoding,
   AX.25 packet, band switching with hardware filters, manual notch filters, a
   host-side impulse noise blanker, host frequency calibration, a derived dBm
@@ -272,7 +277,8 @@ Currently in flight:
   controls, slice lifecycle and split routing, panadapter/waterfall control,
   CW, radio administration and band-stack recall now use that seam too; per-client propagation, transmit for the other
   families and a thin client to replace direct model access have not.
-- **Non-Flex backends** — Hermes-Lite 2 (experimental), networked Icom (early;
+- **Non-Flex backends** — Hermes-Lite 2 (supported in the desktop application;
+  aetherd and other gateware or boards experimental), networked Icom (early;
   the IC-7300MK2 over RS-BA1 is supported), and ANAN-G2 and RTL-SDR
   (experimental, receive-only). Current coverage and
   remaining work for each is under [Supported Hardware](#supported-hardware).

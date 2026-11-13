@@ -155,7 +155,7 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   cycle — a cross-top-level reparent is the #2495/#4617/#4319 crash lineage, so
   moves go through one deliberate menu path for now), and field time on real
   stations against the Classic shell.
-- **Hermes-Lite 2 — from experimental to supported** — the backend arrived
+- **Hermes-Lite 2 — supported in the desktop application** — the backend arrived
   experimental in v26.7.4 and grew most of the way to parity in v26.8.1: four
   independent receivers, the SSB voice chain, CW/RTTY decoding and the QSO
   recorder, AX.25 packet with an on-air-proven mailbox, band switching with
@@ -206,10 +206,17 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   supply voltage) on every route, keys only inside a running session, primes
   the transmit IQ queue so an over no longer drops to keyed zeros, and reads
   the gateware as major.minor. Keyed rendering and hardware-PTT validation remain outstanding.
-  **The experimental → supported call itself is still open**; what remains
-  before making it is the rest of panadapter/waterfall parity with the Flex
-  path, arming automatic RF gain by default, and field time on the TXA chain
-  beyond one station. Two known costs are on the record rather than hidden: CW
+  **The Hermes-Lite 2 is now Supported** ([#7257](https://github.com/aethersdr/AetherSDR/issues/7257), approved):
+  board id 6 over Ethernet / openHPSDR Protocol 1, gateware 74, in the desktop
+  application. aetherd, other gateware, other boards and the wider Hermes-Lite
+  family keep their current status. Windows is not yet certified until a
+  Windows `radiocert` run is posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Field time follows the
+  label: at least 20 h on the air on a released build, from at least two
+  stations (one not ON8ST's), over at least two weeks, with no open
+  supported-model bug, each station posting hours, modes, OS, version,
+  gateware and board on #5678. Remaining work is the rest of
+  panadapter/waterfall parity with the Flex path and arming automatic RF gain
+  by default. Two known costs are on the record rather than hidden: CW
   keeps linear phase, at 4096 taps (85 ms onset) until a notch or a narrow
   passband needs 8192, and the 0.6–1.1 s pan-bandwidth rebuild is off the audio
   path but still a wait.
