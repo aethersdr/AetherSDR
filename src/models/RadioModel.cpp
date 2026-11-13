@@ -3003,6 +3003,7 @@ RadioModel::RadioModel(QObject* parent)
             m_declaredMaxSlices = m_lastInfo.maxSlices > 0 ? m_lastInfo.maxSlices : 0;
             m_maxPanadapters = m_lastInfo.maxPanadapters > 0 ? m_lastInfo.maxPanadapters : 0;
             m_version = m_lastInfo.version;
+            m_versionLabel = m_lastInfo.versionLabel;
             if (m_declaredMaxSlices > 0)
                 m_maxSlices = m_declaredMaxSlices;
             clearAutomationSliceFixtures();

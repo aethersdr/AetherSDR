@@ -209,6 +209,33 @@ int main(int argc, char** argv)
               "and its licensed slice capacity");
     }
 
+    // ---- a LAN auto-reconnect restores the version label too ----
+    //
+    // On an HL2 the label ("Gateware") is half of the supported identity. The
+    // restore runs before the transport is chosen, so a Flex RadioInfo reaches
+    // it without the HL2 backend and its UDP socket.
+    {
+        RadioModel m;
+        RadioInfo labelled;
+        labelled.model = QStringLiteral("FLEX-6700");
+        labelled.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
+        labelled.version = QStringLiteral("74.2");
+        labelled.versionLabel = QStringLiteral("Gateware");
+        m.connectToRadio(labelled);
+        check(m.versionLabel() == QStringLiteral("Gateware"),
+              "the version label is in effect");
+
+        QMetaObject::invokeMethod(&m, "onDisconnected", Qt::DirectConnection);
+        check(m.versionLabel().isEmpty(),
+              "the version label is cleared on the way down");
+
+        m.triggerAutoReconnectForTest();
+        check(m.version() == QStringLiteral("74.2"),
+              "an auto-reconnect restores the version");
+        check(m.versionLabel() == QStringLiteral("Gateware"),
+              "and the version label with it");
+    }
+
     if (g_failures == 0)
         std::printf("radio_capacity_declaration_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;
