@@ -52,8 +52,10 @@ or restore has reported does not.
 `threshold` is an integer 0–100 on the slice's AGC-T knob scale; only the
 threshold changes, and the slice's current AGC mode rides along. `enabled` is
 a JSON boolean. `offsetHz` is an int32 receive offset whose
-magnitude must not exceed the backend's `maximumRitOffsetHz`; enable and offset
-reach the backend as one intent. `gainDb` is an int32 inside the declared
+magnitude must not exceed the backend's `maximumRitOffsetHz` when `enabled` is
+true; turning RIT off is never refused for its offset. Enable and offset reach
+the backend as one intent, the desktop's typed RIT request, and a backend that
+does not take it refuses the call with `capability.unavailable`. `gainDb` is an int32 inside the declared
 `receivePanRfGainControl` range and on its step. AGC threshold, noise blanker,
 noise reduction and RIT are admitted only when `receiveDspControl` declares the
 feature, with a known authority, for the slice's **observed** mode, and the

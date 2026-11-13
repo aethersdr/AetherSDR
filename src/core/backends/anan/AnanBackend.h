@@ -69,13 +69,14 @@ public:
     void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
                               int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
-    // Desktop RIT (SliceModel::setRit) reaches setSliceRit() here; XIT stays unsupported.
+    // RIT, from the desktop (SliceModel::setRit) and from slice.setRit, reaches
+    // setSliceRit() here; XIT stays unsupported.
     ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
     // RIT moves the detector's zero (the WDSP shift) by the offset; the DDC and
-    // panadapter stay on the slice frequency.
-    void setSliceRitEnabled(int sliceId, bool on) override;
-    void setSliceRitOffset(int sliceId, int hz) override;
-    void setSliceRit(int sliceId, bool on, int hz) override;
+    // panadapter stay on the slice frequency. Enable and offset as one intent,
+    // clamped to kMaxRitOffsetHz; requestSliceControl(Rit) is how both the
+    // desktop and the headless slice.setRit reach it.
+    void setSliceRit(int sliceId, bool on, int hz);
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
 
     // The receiver's own audio stage. Without these three the operator's mute,
@@ -133,10 +134,13 @@ public:
     // it because modeFromString() falls back to USB instead of failing.
     [[nodiscard]] static bool isKnownModeString(const QString& mode) noexcept;
 
-    // The modes the mode menu offers, each once: a subset of the accepted ones.
-    // Accepted, not offered: the aliases, WBFM (the WDSP channel runs at 48 kHz,
-    // too narrow for broadcast FM) and DRM (no decoder).
+    // The modes the mode menu offers, each once. setSliceMode() and the restore
+    // take only these and their aliases: WBFM (the WDSP channel runs at 48 kHz,
+    // too narrow for broadcast FM) and DRM (no decoder) are refused, since a
+    // slice left in a mode no record offers refuses every headless verb.
     [[nodiscard]] static const QStringList& publishedModeStrings() noexcept;
+    // A spelling setSliceMode() and the restore accept: an offered mode or its alias.
+    [[nodiscard]] static bool isOfferedModeString(const QString& mode) noexcept;
 
     // The offered spelling of an accepted one: uppercased, with each alias
     // collapsed onto its offered twin. Display-only; the DSP mode is unchanged.
@@ -162,6 +166,8 @@ public:
     // 12 kHz cut, or CW's 6 kHz cut plus its 6 kHz BFO cap), so the shifted edge
     // stays inside the WDSP channel's +-24 kHz at its 48 kHz DSP rate.
     static constexpr int kMaxRitOffsetHz = 9'999;
+    // WDSP ANR's level before the operator sets one, and when none is restored.
+    static constexpr int kDefaultNrLevel = 50;
 
     // The CW BFO offset (HERMES.md §5: "CW has no BFO unless you build one").
     // +pitchHz for CWU/CW, -pitchHz for CWL, 0 for every other mode -- zero
@@ -237,6 +243,14 @@ public:
     }
     // RX1's mode and passband, as the slice setters last stored them.
     [[nodiscard]] QString modeForTest() const { return rx1().mode; }
+    [[nodiscard]] std::pair<bool, int> ritForTest() const noexcept
+    {
+        return {rx1().ritEnabled, rx1().ritOffsetHz};
+    }
+    [[nodiscard]] std::pair<bool, int> noiseReductionForTest() const noexcept
+    {
+        return {rx1().nrEnabled, rx1().nrLevel};
+    }
     [[nodiscard]] std::pair<int, int> filterForTest() const noexcept
     {
         return {rx1().filterLowHz, rx1().filterHighHz};
@@ -312,7 +326,7 @@ private:
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
         // WDSP ANR and RIT, each echoed by emitSliceState().
         bool nrEnabled = false;
-        int nrLevel = 50;
+        int nrLevel = kDefaultNrLevel;
         bool ritEnabled = false;
         int ritOffsetHz = 0;
         // The receiver's audio stage (AnanSliceAudio.h). 100/50 = unity, centered.

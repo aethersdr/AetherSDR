@@ -44,7 +44,7 @@ Configure the receive front end under **Settings → Radio Setup... → Radio �
 - **Receive** with live tuning and zoom. Changing the zoom changes the DDC rate live, without rebuilding the session.
 - **Panadapter** computed by WDSP's display analyzer: a ≥16384-point windowed FFT at one point per screen pixel. **FFT AVG** and **Wt Avg** drive it, and noise-floor auto-adjust works.
 - **S-meter.**
-- **Modes:** LSB, USB, DSB, CWL, CW, FM, AM, SAM, DIGU and DIGL, all demodulated on this computer. NFM, DFM, DSTR, RTTY and WBFM are not offered.
+- **Modes:** LSB, USB, DSB, CWL, CW, FM, AM, SAM, DIGU and DIGL, all demodulated on this computer. NFM and RTTY are taken as FM and DIGU; DFM, DSTR, WBFM and DRM are refused, including from a CAT or TCI client.
 - **NR** runs WDSP's adaptive noise reduction (ANR) on the receiver itself, in every mode, so it works whatever the audio path. ANF, APF and the manual notch are not offered.
 - **RIT** shifts the receive point up to ±9999 Hz without moving the panadapter. An offset past that is clamped to it. XIT is not offered: the G2 is receive-only here.
 - **NB** cycles Off → **NB** → **NB2** → Off: WDSP's two impulse blankers, run on this computer before the demodulator. **NB** silences each impulse; **NB2** reconstructs the blanked window from the samples either side, and shows an **NB2** fill selector (**Zero**, **Sample hold**, **Mean hold**, **Hold sample** or **Interpolate**) while it runs. Neither is offered in FM.
@@ -75,7 +75,7 @@ To measure your own radio instead, open **Settings → Radio Setup... → Droop 
 
 ### What is remembered
 
-The G2 stores none of its settings, so AetherSDR keeps these per radio: frequency and mode (14.175 MHz USB on a first connect), tuning step, **RF Gain**, the AGC mode, **AGC-T** and AGC-off level, the radio's own output level (what the volume slider sets with PC Audio off) and the panadapter dBm range. The span always starts at the connect form's **Sample rate:**. FFT averaging starts from its defaults.
+The G2 stores none of its settings, so AetherSDR keeps these per radio: frequency and mode (14.175 MHz USB on a first connect), tuning step, **RF Gain**, the AGC mode, **AGC-T** and AGC-off level, **RIT** (on/off and offset), **NR** (on/off), the radio's own output level (what the volume slider sets with PC Audio off) and the panadapter dBm range. The span always starts at the connect form's **Sample rate:**. FFT averaging starts from its defaults.
 
 ### Not available on the G2
 

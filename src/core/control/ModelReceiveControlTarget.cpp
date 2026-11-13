@@ -216,7 +216,14 @@ public:
         if (enabled && (offsetHz < -maximum || offsetHz > maximum)) {
             return refusal("request.out_of_range", "RIT offset is outside the declared range");
         }
-        m_radio->backend()->setSliceRit(id, enabled, offsetHz);
+        // The desktop's route too (SliceModel::setRit): one intent, and a
+        // backend that does not take it is a refusal, not a silent accept.
+        const SliceControlRequest request{SliceControlRequest::Field::Rit,
+                                          IncrementalTuning{enabled, offsetHz}};
+        if (!request.valid()
+            || m_radio->backend()->requestSliceControl(id, request) != ReceiveDispatch::Dispatched) {
+            return refusal("capability.unavailable", "backend did not accept the RIT intent");
+        }
         return {};
     }
 

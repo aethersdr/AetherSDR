@@ -128,6 +128,11 @@ const QStringList& AnanBackend::publishedModeStrings() noexcept
     return kPublished;
 }
 
+bool AnanBackend::isOfferedModeString(const QString& mode) noexcept
+{
+    return isKnownModeString(mode) && publishedModeStrings().contains(canonicalOfferedMode(mode));
+}
+
 QString AnanBackend::canonicalOfferedMode(const QString& mode) noexcept
 {
     // modeFromString()'s alias pairs, read off its NFM/FM, CWU/CW, WFM/WBFM and
@@ -693,10 +698,12 @@ RadioCapabilities AnanBackend::capabilities() const
     // The radio reports no frequency, mode, output level or AGC of its own (the
     // AGC runs in AnanRxDsp), so the client is their only memory, per radio.
     // With hasAgcThreshold, Agc also keeps the AGC-off level.
+    // Receivers: RX1's RIT and noise reduction, which run here and nowhere else.
     c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::RfGain
                               | RadioCapabilities::ClientSettingsDomain::Tuning
                               | RadioCapabilities::ClientSettingsDomain::ReceiveOutputLevel
-                              | RadioCapabilities::ClientSettingsDomain::Agc;
+                              | RadioCapabilities::ClientSettingsDomain::Agc
+                              | RadioCapabilities::ClientSettingsDomain::Receivers;
     c.hostDroopCalibration = true; // AnanDroopCorrection.h -- real DDC0 roll-off,
                                     // corrected client-side via AnanDroopCalibrator
     c.extensionNamespaces = {QStringLiteral("anan")};  // "frontend.set", "droop.apply" -- see invokeExtension()
@@ -729,7 +736,7 @@ void AnanBackend::applyRestoredState(const RestoredRadioState& state)
     // the sentinel, and connectRadio() falls to the first-connect default.
     m_restoredFreqHz = isRestorableFrequencyHz(state.rfFrequencyHz)
         ? state.rfFrequencyHz : 0.0;
-    m_restoredMode = isKnownModeString(state.mode) ? canonicalOfferedMode(state.mode) : QString();
+    m_restoredMode = isOfferedModeString(state.mode) ? canonicalOfferedMode(state.mode) : QString();
     m_lineoutGainPercent = state.receiveOutputLevelPct >= 0
         ? state.receiveOutputLevelPct : kDefaultLineoutGainPercent;
     // RX1's AGC too, live: connectRadio() builds the DSP config from these. A
@@ -741,6 +748,17 @@ void AnanBackend::applyRestoredState(const RestoredRadioState& state)
         ? state.agcThreshold : kDefaultAgcThreshold;
     const int offLevel = state.agcOffLevels.value(0, -1);
     rx.agcOffLevel = offLevel >= 0 && offLevel <= 100 ? offLevel : kDefaultAgcOffLevel;
+    // RX1's RIT and NR (the Receivers domain), unconditional like the rest: a
+    // missing or bad value is the default, never clamped into one nobody chose.
+    const QJsonObject saved =
+        state.extension.value(QStringLiteral("receivers")).toArray().at(0).toObject();
+    const int ritHz = saved.value(QStringLiteral("ritHz")).toInt(0);
+    const bool ritOk = ritHz >= -kMaxRitOffsetHz && ritHz <= kMaxRitOffsetHz;
+    rx.ritOffsetHz = ritOk ? ritHz : 0;
+    rx.ritEnabled = ritOk && saved.value(QStringLiteral("ritOn")).toBool(false);
+    const int nrLevel = saved.value(QStringLiteral("nrLevel")).toInt(-1);
+    rx.nrLevel = nrLevel >= 0 && nrLevel <= 100 ? nrLevel : kDefaultNrLevel;
+    rx.nrEnabled = saved.value(QStringLiteral("nrOn")).toBool(false);
 }
 
 RestoredRadioState AnanBackend::currentOperatingState() const
@@ -756,9 +774,16 @@ RestoredRadioState AnanBackend::currentOperatingState() const
     state.agcThreshold = rx.agcThreshold;
     state.agcOffLevels = {rx.agcOffLevel};   // RX1's
     state.extensionSchemaVersion = 1;
-    state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
-        {QStringLiteral("adc0AttenuationDb"), m_pendingParams.adc0AttenuationDb},
-        {QStringLiteral("adc1AttenuationDb"), m_pendingParams.adc1AttenuationDb}}}};
+    state.extension = QJsonObject{
+        {QStringLiteral("rfGain"), QJsonObject{
+            {QStringLiteral("adc0AttenuationDb"), m_pendingParams.adc0AttenuationDb},
+            {QStringLiteral("adc1AttenuationDb"), m_pendingParams.adc1AttenuationDb}}},
+        // HL2's per-receiver key names (receiverMemoryJson()); RX1 only.
+        {QStringLiteral("receivers"), QJsonArray{QJsonObject{
+            {QStringLiteral("ritOn"), rx.ritEnabled},
+            {QStringLiteral("ritHz"), rx.ritOffsetHz},
+            {QStringLiteral("nrOn"), rx.nrEnabled},
+            {QStringLiteral("nrLevel"), rx.nrLevel}}}}};
     return state;
 }
 
@@ -878,6 +903,10 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         rx.filterHighHz = hi;
     }
     rx.mode = mode;
+    // The detector shift (CW BFO and a restored RIT) for the DSP the session
+    // builds below: AnanRxDsp keeps it across configure().
+    QMetaObject::invokeMethod(rx.dsp, "setShift", Qt::QueuedConnection,
+        Q_ARG(double, detectorShiftHz(rx.mode, m_cwPitchHz, rx.ritEnabled, rx.ritOffsetHz)));
 
     m_speakerAudioEnabled = m_pendingParams.speakerAudioEnabled;
     for (Receiver& receiver : m_receivers) {
@@ -1137,10 +1166,11 @@ void AnanBackend::setSliceMode(int sliceId, const QString& requested)
     Receiver* const rx = receiverForSlice(sliceId);
     if (!rx)
         return;
-    // A mode modeFromString() does not map would demodulate as USB, so it is
-    // refused and the re-publish puts SliceModel's optimistic mode back. An
-    // alias is stored under its offered spelling, so the combos can show it.
-    if (!isKnownModeString(requested)) {
+    // A mode modeFromString() does not map would demodulate as USB, and one the
+    // records do not offer (WBFM, DRM) would leave every headless verb refused,
+    // so both are refused and the re-publish puts SliceModel's optimistic mode
+    // back. An alias is stored under its offered spelling, so the combos can show it.
+    if (!isOfferedModeString(requested)) {
         qCWarning(lcAnan) << "ANAN: refusing mode" << requested
                           << "- this radio demodulates only" << publishedModeStrings();
         emitSliceState(*rx);
@@ -1232,6 +1262,8 @@ ReceiveDispatch AnanBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
             && request.field != SliceDspRequest::Field::Level) {
             return ReceiveDispatch::Unsupported;
         }
+        const bool wasOn = rx->nrEnabled;
+        const int wasLevel = rx->nrLevel;
         if (request.field == SliceDspRequest::Field::Enabled)
             rx->nrEnabled = request.enabled;
         else
@@ -1239,6 +1271,9 @@ ReceiveDispatch AnanBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
         QMetaObject::invokeMethod(rx->dsp, "setNoiseReduction", Qt::QueuedConnection,
             Q_ARG(bool, rx->nrEnabled), Q_ARG(int, rx->nrLevel));
         emitSliceState(*rx);
+        if (rx->nrEnabled != wasOn || rx->nrLevel != wasLevel) {
+            emit operatingStateChanged();   // Receivers capture
+        }
         return ReceiveDispatch::Dispatched;
     }
     if (request.feature != SliceDspRequest::Feature::Nb) {
@@ -1267,32 +1302,15 @@ void AnanBackend::setSliceRit(int sliceId, bool on, int hz)
         return;
     // One shift push and one echo, so no intermediate offset/enable pair is
     // ever heard or published.
-    rx->ritOffsetHz = std::clamp(hz, -kMaxRitOffsetHz, kMaxRitOffsetHz);
+    const int offset = std::clamp(hz, -kMaxRitOffsetHz, kMaxRitOffsetHz);
+    const bool changed = offset != rx->ritOffsetHz || on != rx->ritEnabled;
+    rx->ritOffsetHz = offset;
     rx->ritEnabled = on;
     pushModeFilterShift(*rx);
     emitSliceState(*rx);
-}
-
-void AnanBackend::setSliceRitEnabled(int sliceId, bool on)
-{
-    Receiver* const rx = receiverForSlice(sliceId);
-    if (!rx)
-        return;
-    rx->ritEnabled = on;
-    pushModeFilterShift(*rx);
-    emitSliceState(*rx);
-}
-
-void AnanBackend::setSliceRitOffset(int sliceId, int hz)
-{
-    Receiver* const rx = receiverForSlice(sliceId);
-    if (!rx)
-        return;
-    // Clamped, per the seam's contract: an offset past the bound would move the
-    // passband off the edge of the narrowest DDC rate.
-    rx->ritOffsetHz = std::clamp(hz, -kMaxRitOffsetHz, kMaxRitOffsetHz);
-    pushModeFilterShift(*rx);
-    emitSliceState(*rx);
+    if (changed) {
+        emit operatingStateChanged();   // Receivers capture
+    }
 }
 
 void AnanBackend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,

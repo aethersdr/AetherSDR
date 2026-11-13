@@ -80,10 +80,16 @@ public:
                        {"enabled", request.enabled}, {"level", request.level}});
         return ReceiveDispatch::Dispatched;
     }
-    void setSliceRit(int id, bool on, int hz) override
+    ReceiveDispatch requestSliceControl(int id, const SliceControlRequest& request) override
     {
-        record("rit", {{"slice", id}, {"enabled", on}, {"offsetHz", hz}});
+        if (request.field != SliceControlRequest::Field::Rit) {
+            return IRadioBackend::requestSliceControl(id, request);
+        }
+        const IncrementalTuning tuning = std::get<IncrementalTuning>(request.value);
+        record("rit", {{"slice", id}, {"enabled", tuning.enabled}, {"offsetHz", tuning.hz}});
+        return ritDispatch;
     }
+    ReceiveDispatch ritDispatch{ReceiveDispatch::Dispatched};
     void setPanRfGain(const QString& id, int gainDb) override { panId = id; record("rfGain", {{"gainDb", gainDb}}); }
     void setPanCenter(const QString& id, double hz, PanCenterIntent) override { panId = id; record("center", {{"hz", hz}}); }
     void setPanBandwidth(const QString& id, double hz) override { panId = id; record("bandwidth", {{"hz", hz}}); }
@@ -1217,6 +1223,13 @@ void panelVerbs()
         check(f.send(ReceiveOperation::Rit, off).contains("result")
                   && f.backend->method == "rit" && !f.backend->args.value("enabled").toBool(),
               "turning RIT off is never refused for its offset");
+    }
+    {
+        Fixture f;
+        f.backend->ritDispatch = ReceiveDispatch::Unsupported;
+        check(error(f.send(ReceiveOperation::Rit, f.params(ReceiveOperation::Rit)))
+                  == QStringLiteral("capability.unavailable"),
+              "a backend that does not take the RIT intent is a refusal, not a silent accept");
     }
     {
         Fixture f;
