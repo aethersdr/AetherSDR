@@ -50,7 +50,7 @@ Drag the grip on the panel's edge to resize it; the height is remembered. Right-
 
 ### Choosing a decoder
 
-The decoder selector in the panel's toolbar picks which decoder reads the received CW. Only the selected decoder runs. Your own sending (the **TX** toggle) is always decoded by ggmorse.
+The decoder selector in the panel's toolbar picks which decoder reads the received CW. Only the selected decoder runs. Your own sending (the **TX** toggle) is always decoded by ggmorse and follows ggmorse's Sens setting, whichever decoder is selected.
 
 | Decoder | Text appears | Typical use | Model |
 |---|---|---|---|
@@ -64,9 +64,9 @@ The neural decoders' models are not part of the AetherSDR download. The first ti
 
 With a neural decoder selected:
 
-- **Sens**, the lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
-- Characters are coloured by the model's own confidence, on the same green-to-red scale, and are never hidden.
-- Callsign contact cards and the MQTT text stream come from ggmorse only.
+- The lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
+- Characters are colored by the model's own confidence, on the same green-to-red scale. **Sens** hides the low-confidence ones, as it does for ggmorse. Each decoder keeps its own Sens setting; DeepFist and DeepCW start at 0, which hides nothing. DeepFist text is hidden one character at a time and DeepCW text one group of characters at a time, as each is given its confidence. With DeepFist a word space is always shown; a hidden DeepCW group is hidden with the spaces inside it.
+- The MQTT text stream comes from ggmorse only. The **Live CW contacts** window works with every decoder: it reads the text shown in the pane.
 - AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on a radio licensed for it through SmartSDR+, which it keeps after the subscription lapses) works with any decoder.
 
 The slice's **Once** and **Loop** auto-tune controls adjust receive tuning;
@@ -131,7 +131,7 @@ Decoded text is published to the MQTT topic `aethersdr/cw/decode`, one JSON mess
 |---|---|
 | **Decoder** | ggmorse, DeepFist or DeepCW (Apple Silicon, Linux and Windows); see [Choosing a decoder](#choosing-a-decoder) |
 | **Stats** | Detected pitch (Hz) and speed (WPM); with a neural decoder, its status |
-| **Sens** | 0–100 (default 30). Hides low-confidence characters: 0 shows everything, higher values show only confident decodes. |
+| **Sens** | 0–100. Hides low-confidence characters: 0 shows everything, higher values show only confident decodes. Each decoder has its own setting: ggmorse starts at 30, DeepFist and DeepCW at 0. |
 | **🔒P** | Lock the decoder's pitch at the current value |
 | **🔒S** | Lock the decoder's speed at the current WPM |
 | **Pitch** | Pitch search range, 300–1200 Hz (default 500–700 Hz), remembered and the same on every pan. When the CW pitch changes, or when you connect to the radio, the range moves to the pitch ±150 Hz, unless it already covers the pitch; then it stays as you set it. |
