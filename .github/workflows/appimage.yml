@@ -443,6 +443,17 @@ jobs:
       - name: Validate RTL AppDir runtime closure
         run: python3 tools/check_rtl_package.py AppDir --platform linux
 
+      # install(TARGETS aetherd … OPTIONAL) skips a missing engine silently, so
+      # without this a dropped engine_target would ship an image whose
+      # `--aetherd` exits 127, from a green run.
+      - name: Assert the headless engine was bundled
+        if: matrix.engine_target != ''
+        env:
+          ENGINE: ${{ matrix.engine_target }}
+        run: |
+          test -x "AppDir/usr/bin/$ENGINE" \
+            || { echo "::error::$ENGINE is not in AppDir/usr/bin"; exit 1; }
+
       # Nothing else in the build would notice these plugins going missing: Qt
       # dlopen()s them at runtime rather than linking them, so no dependency walk
       # covers them and the AppImage packages happily without them. That is
