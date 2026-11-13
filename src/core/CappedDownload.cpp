@@ -33,6 +33,9 @@ void CappedDownload::startRequest()
     QNetworkRequest request(m_url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
+    // A retry must not be queued onto the HTTP/2 session that sent GOAWAY.
+    if (m_retried)
+        request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     m_reply = m_nam->get(request);
     m_reply->setReadBufferSize(64 * 1024);
     connect(m_reply, &QNetworkReply::metaDataChanged, this, [this] {
