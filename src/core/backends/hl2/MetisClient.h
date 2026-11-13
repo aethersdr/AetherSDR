@@ -413,7 +413,7 @@ public:
     // Client-leveled (TCI/DAX) transmit audio crosses more threads than the
     // microphone before it reaches this queue, and arrives with more jitter.
     // While set, the prime holds kTxPrimeClientMarginSamples instead of
-    // kTxPrimeMarginBlocks. Any thread; read on the I/O thread.
+    // kTxPrimeMarginSamples. Any thread; read on the I/O thread.
     void setTxClientLeveledMargin(bool on) noexcept
     {
         m_txClientLeveledMargin.store(on, std::memory_order_relaxed);
