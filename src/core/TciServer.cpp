@@ -4145,6 +4145,14 @@ void TciServer::teardownTciRoute()
 
 bool TciServer::txSensorsKeyed(RadioModel& model)
 {
+    // This station's own transmission only. On a multiFLEX radio another
+    // station can hold the transmitter, and a TCI client must not show that
+    // station's power and SWR as its own. txOwnedByUs() follows the
+    // interlock's tx_client_handle (true when nobody holds it, and always on a
+    // single-station backend), so it also covers a key the radio reports.
+    if (!model.txOwnedByUs()) {
+        return false;
+    }
     // isTransmitting() is MOX/PTT only; tune is a transmission too, and it is
     // when an operator reads SWR.
     return model.transmitModel().isTransmitting()

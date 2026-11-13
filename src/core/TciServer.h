@@ -212,8 +212,9 @@ private slots:
 private:
     struct ClientState;
 
-    // tx_sensors goes out while the transmitter carries RF: MOX/PTT, tune, or
-    // a key the radio reports.
+    // tx_sensors goes out while this station's transmitter carries RF:
+    // MOX/PTT, tune, or a key the radio reports, and only while this station
+    // holds the transmitter.
     static bool txSensorsKeyed(RadioModel& model);
 
     // Controller-side cleanup plus a one-way barrier that destroys worker
