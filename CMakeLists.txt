@@ -1207,6 +1207,7 @@ set(CORE_SOURCES
     src/core/SystemInventory.cpp
     src/core/DeviceDiagnostics.cpp
     src/core/SerialPortController.cpp
+    src/core/SerialOpenError.cpp
     src/core/FlexControlManager.cpp
     src/core/OpusCodec.cpp
     src/core/CtyDatParser.cpp

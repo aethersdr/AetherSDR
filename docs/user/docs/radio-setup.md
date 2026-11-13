@@ -131,7 +131,7 @@ The table shows the current TX profile's values and follows the radio while it's
 | **APD** | Adaptive predistortion external sampler per TX antenna. Only on radios that report APD support (FLEX-8000 series). |
 | **USB Cables** | The radio's USB cables, each with a Cable Type of CAT, Bit, BCD, LDPA or Passthrough. See [USB Cable Management](./usb-cable-management.md). |
 | **Peripherals** | Station devices AetherSDR talks to directly: tuners, amplifiers, antenna switches and wattmeters. See [Peripherals](./peripherals.md). |
-| **Serial & Controllers** | USB control surfaces (Ulanzi Dial, Stream Deck+ and HID encoders), serial port and pin assignment for PTT/CW keying, the FlexControl knob, and TMate 2. See [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md), [USB Control Surfaces](./usb-control-surfaces.md) and [Ulanzi Dial](./ulanzi-dial.md). Present only in builds with serial-port support. |
+| **Serial & Controllers** | USB control surfaces (Ulanzi Dial, Stream Deck+ and HID encoders), serial port and pin assignment for PTT/CW keying, the FlexControl knob, and TMate 2. The serial **Open**/**Close** status shows whether the port actually opened; a failed open stays **Closed**, shows the error, and opens a dialog with the fix ([Linux](./linux.md#serial-pttcw-port-wont-open)). **Close** always closes the port for this session; **Auto-open serial port on startup** only decides whether it opens at launch. See [FlexControl Tuning Knob](./flexcontrol-tuning-knob.md), [USB Control Surfaces](./usb-control-surfaces.md) and [Ulanzi Dial](./ulanzi-dial.md). Present only in builds with serial-port support. |
 
 ### ONLINE & APPEARANCE
 

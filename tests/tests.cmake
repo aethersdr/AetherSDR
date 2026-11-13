@@ -5113,6 +5113,16 @@ add_test(NAME serial_port_combo_test COMMAND serial_port_combo_test)
 set_tests_properties(serial_port_combo_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Serial PTT/CW open-failure classification and advice (#6972): pure logic
+# with an injected device probe, so the permission case runs under root CI.
+add_executable(serial_open_error_test
+    tests/serial_open_error_test.cpp
+    src/core/SerialOpenError.cpp
+)
+target_include_directories(serial_open_error_test PRIVATE src)
+target_link_libraries(serial_open_error_test PRIVATE Qt6::Core)
+add_test(NAME serial_open_error_test COMMAND serial_open_error_test)
+
 add_executable(spectrum_preview_logic_test
     tests/spectrum_preview_logic_test.cpp
 )

@@ -324,6 +324,7 @@ public:
     QJsonObject automationKiwiSdrSnapshot() const;
     // Status-bar TX-timer state for the bridge `get txtimer` verb.
     QJsonObject automationTxTimerSnapshot() const;
+    QJsonObject automationSerialSnapshot() const;  // `serial` model (#6972)
     // Unified-title-bar introspection + drive-the-real-control actions for the
     // agent automation bridge (`titlebar` model / `titlebar` verb).
     QJsonObject automationAppletPanelSnapshot() const;
@@ -1535,6 +1536,20 @@ private:
     SerialPortController* m_serialPort{nullptr};
     FlexControlManager*   m_flexControl{nullptr};
     bool                  m_flexControlConnected{false};
+    // Observed serial PTT/CW port state, as last reported by the controller
+    // (#6972). Radio Setup and the `serial` bridge model read this, never the
+    // SerialPortOpen request setting.
+    bool                  m_serialPortOpen{false};
+    QString               m_serialPortDevice;
+    QString               m_serialPortError;      // empty unless the last open failed
+    int                   m_serialPortErrorCode{0};
+    int                   m_serialPortFailureKind{0};  // SerialOpenFailureKind
+    QString               m_serialPortGroup;
+    QPointer<QMessageBox> m_serialOpenErrorBox;   // one at a time, never stacked
+    void handleSerialConnectionState(bool open, const QString& device,
+                                     const QString& error, int nativeCode,
+                                     int failureKind, const QString& group);
+    void showSerialOpenError(const SerialOpenFailure& failure);
 #endif
     QTimer               m_flexCoalesceTimer;
     double               m_flexTargetMhz{-1.0};

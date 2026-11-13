@@ -6218,6 +6218,26 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data[QStringLiteral("model")] = model;
         return data;
     }
+    if (model == QLatin1String("serial")) {
+        // Serial PTT/CW port: observed open state and last open failure
+        // (#6972). Served before the radio guard: the port works with no
+        // radio connected, and a failed open is provable without one.
+        if (!m_serialSnapshotHandler)
+            return err(QStringLiteral("serial snapshot unavailable"));
+        QJsonObject data = m_serialSnapshotHandler();
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for serial"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        data[QStringLiteral("ok")] = true;
+        data[QStringLiteral("model")] = model;
+        return data;
+    }
 
     if (model == QLatin1String("titlebar")) {
         // Unified title bar — geometry, brand, radio tabs, audio cluster,
