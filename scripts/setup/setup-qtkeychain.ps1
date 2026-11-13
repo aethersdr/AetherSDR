@@ -89,9 +89,18 @@ if (-not (Test-Path $TarFile)) {
             Start-Sleep -Seconds (5 * $attempt)
         }
     }
-    # A successful transport must still match the immutable content pin.
-    Confirm-Sha256 -Path $TarFile -Expected $QtKeychainSha256
 }
+
+# Verify on every run, not only after a download: an archive left on disk by an
+# earlier run must match the pin too. A rejected archive is deleted so the next
+# run downloads it again instead of extracting it.
+$TarSha256 = (Get-FileHash -Path $TarFile -Algorithm SHA256).Hash.ToLower()
+if ($TarSha256 -ne $QtKeychainSha256.ToLower()) {
+    Remove-Item -Force $TarFile -ErrorAction SilentlyContinue
+    Write-Error "SHA256 mismatch for $(Split-Path $TarFile -Leaf) (deleted)`n  expected: $QtKeychainSha256`n  actual:   $TarSha256"
+    exit 1
+}
+Confirm-Sha256 -Path $TarFile -Expected $QtKeychainSha256
 
 # ── Extract ──────────────────────────────────────────────────────────────
 Write-Host "Extracting..." -ForegroundColor Cyan
