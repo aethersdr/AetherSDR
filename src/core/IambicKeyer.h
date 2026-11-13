@@ -27,7 +27,9 @@ namespace AetherSDR {
 //   - onRoutedKeyDownChange(down, when, releaseAt, request): an element derived
 //     from the raw input for the engine queue; never supplies a new
 //     producer/session. On a key-down, `releaseAt` is that element's own
-//     key-up instant (fixed when the element starts); epoch zero on a key-up.
+//     key-up instant (fixed when the element starts). On a key-up it is the
+//     stop instant when stop() cut the element short (`when` is then still
+//     the element's deadline), and epoch zero otherwise.
 class IambicKeyer {
 public:
     enum class Mode : int {

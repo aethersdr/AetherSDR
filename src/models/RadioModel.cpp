@@ -1796,6 +1796,16 @@ void RadioModel::wireBackendReceiverState()
             m_transmitModel.handleControlAnswer(ticket, applied);
         }
     }, Qt::QueuedConnection);
+    // A keyed transmission that did not go out: the TX-refusal notice path,
+    // titled "TX failed" by its "tx-failed:" key. The backend sends one per
+    // transmission; a fresh key per notice keeps the 5 s same-key dedup in
+    // emitInterlockNotification() from swallowing the next transmission's.
+    connect(m_backend.get(), &IRadioBackend::transmitFailed, this,
+            [this, generation](const QString& reason) {
+        if (generation == m_backendReceiverGeneration) {
+            emitInterlockNotification(reason, QStringLiteral("tx-failed:%1").arg(++m_txFailedNotices));
+        }
+    }, Qt::QueuedConnection);
 
     // aetherd RFC 2.3 (RadioModel residual): radio-global status decoded in the
     // backend drives RadioModel's own state via applyRadioChanges.
@@ -5859,7 +5869,7 @@ bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
     };
     const CwControlRequest edge{ptt ? CwControlRequest::Kind::PttEnvelope : CwControlRequest::Kind::Carrier,
         down, m_transmitModel.cwBreakIn(), m_transmitModel.cwDelay(), scheduledAt,
-        debugSource, debugTraceId, debugSourceMs, down ? releaseAt : std::chrono::steady_clock::time_point{}};
+        debugSource, debugTraceId, debugSourceMs, releaseAt};
     bool accepted = false;
     {
         const TxCoordinator::Completion completion = trackTxQueue(original, finished);

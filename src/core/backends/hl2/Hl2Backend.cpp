@@ -522,6 +522,11 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     });
     connect(m_metis, &MetisClient::radioPttChanged, this, &Hl2Backend::onRadioPttChanged);
     connect(m_metis, &MetisClient::txRouteRefused, this, &Hl2Backend::onMetisTxRouteRefused);
+    // Once per over (#5065); queued from the I/O thread to this one. The over
+    // itself still ends with the break-in hang.
+    connect(m_metis, &MetisClient::cwOverRefused, this, [this] {
+        emit transmitFailed(tr("CW keying fell too far behind"));
+    });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         // No link, no observation: a PTT the radio last reported ends here, so the
         // model never stays in transmit on a radio it can no longer hear.
@@ -4861,8 +4866,14 @@ ReceiveDispatch Hl2Backend::requestCwControl(const CwControlRequest& request,
         || !cwEdgeAdmitted(request, command, capabilities().canTransmit)) {
         return ReceiveDispatch::Unsupported;
     }
-    keyCwEdge(request.down, request.breakIn, request.breakInDelayMs,
-              command.operation, command.completion, request.scheduledAt, request.releaseAt);
+    // A key-up a keyer stop cut short keys up at the stop: edges are placed
+    // at their instant here, so the deadline would keep the carrier on for
+    // the rest of the element (#5065). Other backends never read releaseAt.
+    const bool cut = !request.down && request.releaseAt != std::chrono::steady_clock::time_point{}
+        && request.releaseAt < request.scheduledAt;
+    keyCwEdge(request.down, request.breakIn, request.breakInDelayMs, command.operation,
+              command.completion, cut ? request.releaseAt : request.scheduledAt,
+              request.down ? request.releaseAt : std::chrono::steady_clock::time_point{});
     return ReceiveDispatch::Dispatched;
 }
 

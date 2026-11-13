@@ -152,8 +152,7 @@ void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point w
     m_lastEmittedKeyDown = down;
     if (m_onKeyDownChange) m_onKeyDownChange(down, when);
     if (m_onRoutedKeyDownChange) {
-        m_onRoutedKeyDownChange(down, when, down ? releaseAt : std::chrono::steady_clock::time_point{},
-                                m_elementInput);
+        m_onRoutedKeyDownChange(down, when, releaseAt, m_elementInput);
     }
 }
 
@@ -287,11 +286,16 @@ void IambicKeyer::workerLoop()
                 }
             }
             grid = onDeadline;
-            // A stop mid-element keys up now, not at the element's deadline:
-            // the backend places edges at their instant, so the deadline
-            // would keep the carrier on for the rest of the element (#5065).
+            // A stop mid-element: the key-up keeps the deadline as its instant
+            // (local sidetone and other backends unchanged) and carries the
+            // stop instant as well, for a backend that places edges at their
+            // instant and would otherwise key up at the deadline (HL2, #5065).
+            std::chrono::steady_clock::time_point stoppedAt{};
             if (m_stopRequested.load(std::memory_order_acquire)) {
-                grid = std::min(grid, std::chrono::steady_clock::now());
+                const auto now = std::chrono::steady_clock::now();
+                if (now < onDeadline) {
+                    stoppedAt = now;
+                }
             }
 
             // ── Inter-element gap ──────────────────────────────────────
@@ -300,7 +304,7 @@ void IambicKeyer::workerLoop()
             const auto gapNow = std::chrono::steady_clock::now();
             if (grid + offDuration < gapNow) grid = gapNow;
             const auto offDeadline = grid + offDuration;
-            emitKeyDown(false, grid);
+            emitKeyDown(false, grid, stoppedAt);
             if (m_stopRequested.load(std::memory_order_acquire)) break;
             {
                 std::unique_lock<std::mutex> lk(m_mu);

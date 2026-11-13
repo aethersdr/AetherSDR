@@ -7375,8 +7375,10 @@ void SpectrumWidget::showInterlockNotification(const QString& message,
         || key.startsWith(QStringLiteral("pan-tx-inhibit:"))
         || key.startsWith(QStringLiteral("local-ptt:"))
         || key.startsWith(QStringLiteral("tx-filter:"));
+    // A keyed transmission that did not go out (RadioModel, "tx-failed:N").
+    const bool txFailed = key.startsWith(QStringLiteral("tx-failed:"));
     raiseWarningCard(QStringLiteral("interlock.active"),
-                     txBlock ? tr("Transmit disabled") : tr("Notice"),
+                     txFailed ? tr("TX failed") : txBlock ? tr("Transmit disabled") : tr("Notice"),
                      text, durationMs);
 }
 

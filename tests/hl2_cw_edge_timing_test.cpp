@@ -15,10 +15,14 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
+#include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QString>
+#include <QStringList>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
@@ -28,6 +32,7 @@
 #include <cstdio>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -88,6 +93,29 @@ struct Hl2TxGateTestAccess {
             n = metis->cwShiftSamples();
         }, Qt::BlockingQueuedConnection);
         return n;
+    }
+    static std::int64_t frameMs(Hl2Backend& backend)
+    {
+        std::int64_t n = 0;
+        QMetaObject::invokeMethod(backend.m_metis, [&n, metis = backend.m_metis] {
+            n = MetisClientTestAccess::frameSample(*metis) * 1000 / MetisClientTestAccess::rateHz();
+        }, Qt::BlockingQueuedConnection);
+        return n;
+    }
+    static std::uint64_t refusedDowns(Hl2Backend& backend)
+    {
+        std::uint64_t n = 0;
+        QMetaObject::invokeMethod(backend.m_metis, [&n, metis = backend.m_metis] {
+            n = metis->cwRefusedDowns();
+        }, Qt::BlockingQueuedConnection);
+        return n;
+    }
+    // What the break-in hang's unkey does on the I/O thread: the over ends.
+    static void endOver(Hl2Backend& backend)
+    {
+        QMetaObject::invokeMethod(backend.m_metis, [metis = backend.m_metis] {
+            metis->clearCwKeying();
+        }, Qt::BlockingQueuedConnection);
     }
     static std::chrono::steady_clock::time_point upOnAir(const Hl2Backend& backend)
     {
@@ -651,6 +679,108 @@ static void testBackendHangWaitsForTheShiftedKeyUp()
           "backend: the hang ends after the shifted key-up's wire instant plus the delay");
 }
 
+// #5065 review 1: a keyer stopped mid-element sends its key-up with the
+// element's deadline as scheduledAt (as on main, for every other backend) and
+// the stop instant in releaseAt. The HL2 keys up at the stop; without it, at
+// the deadline. 5 WPM: a 720 ms dah, stopped 60 ms in.
+static void testBackendKeysUpAtAKeyerStop()
+{
+    for (const bool stopped : {true, false}) {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        const Clock::time_point t0 = Clock::now();
+        Hl2TxGateTestAccess::prepare(backend, t0);
+        const auto edge = [&](bool down, std::int64_t ms, std::int64_t releaseMs) {
+            CwControlRequest request{CwControlRequest::Kind::Carrier, down, true, 20,
+                                     t0 + std::chrono::milliseconds(ms), QStringLiteral("test"), 0, 0};
+            if (releaseMs >= 0) {
+                request.releaseAt = t0 + std::chrono::milliseconds(releaseMs);
+            }
+            return backend.requestCwControl(request, TxCoordinator::Command{tx.operation, down, {}});
+        };
+        (void)edge(true, 100, 820);
+        (void)edge(false, 820, stopped ? 160 : -1);
+        std::vector<int> iTrace;
+        while (static_cast<std::int64_t>(iTrace.size()) < samplesOfMs(1100)) {
+            appendI(Hl2TxGateTestAccess::packet(backend), iTrace);
+        }
+        const auto runs = carriers(iTrace);
+        if (stopped) {
+            check(runs.size() == 1 && within(runs[0].length, samplesOfMs(60), 1),
+                  "backend: a key-up carrying a keyer stop ends the element at the stop");
+        } else {
+            check(runs.size() == 1 && within(runs[0].length, samplesOfMs(720), 1),
+                  "backend: a key-up without a stop instant ends the element at its release");
+        }
+    }
+}
+
+// #5065: a refused over raises ONE "TX failed" notice, on the model's thread,
+// whatever number of key-downs the over goes on to refuse; the next refused
+// over raises a new one. MOX is not touched by it.
+static void testRefusedOverRaisesOneNotice()
+{
+    TxTestAuthority tx;
+    RadioModel model;
+    model.setBackendForTest(std::make_unique<Hl2Backend>(), QStringLiteral("hl2"));
+    auto* backend = static_cast<Hl2Backend*>(model.backend());
+    const Clock::time_point t0 = Clock::now();
+    Hl2TxGateTestAccess::prepare(*backend, t0);
+    QStringList keys;
+    QStringList texts;
+    bool onModelThread = true;
+    QObject::connect(&model, &RadioModel::interlockNotificationRequested, &model,
+                     [&](const QString& message, const QString& key, const QString&) {
+        onModelThread = onModelThread && QThread::currentThread() == model.thread();
+        if (key.startsWith(QStringLiteral("tx-failed:"))) {
+            keys << key;
+            texts << message;
+        }
+    });
+    const auto down = [&](std::int64_t ms) {
+        CwControlRequest request{CwControlRequest::Kind::Carrier, true, true, 20,
+                                 t0 + std::chrono::milliseconds(ms), QStringLiteral("test"), 0, 0};
+        request.releaseAt = t0 + std::chrono::milliseconds(ms + 40);
+        (void)backend->requestCwControl(request, TxCoordinator::Command{tx.operation, true, {}});
+    };
+    std::int64_t builtMs = 0;
+    const auto buildTo = [&](std::int64_t ms) {
+        while (builtMs < ms) {
+            (void)Hl2TxGateTestAccess::packet(*backend);
+            builtMs = Hl2TxGateTestAccess::frameMs(*backend);
+        }
+    };
+    // The I/O thread's signal, then two queued hops (backend, model).
+    const auto settle = [] {
+        QElapsedTimer waited;
+        waited.start();
+        while (waited.elapsed() < 200) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        }
+    };
+    // The frame cursor 600 ms on: a key-down at 100 ms is 460 ms past its
+    // sample and the lead, over the 250 ms bound.
+    buildTo(600);
+    down(100);
+    settle();
+    check(keys.size() == 1, "one refused key-down: one notice");
+    check(texts.value(0) == QStringLiteral("CW keying fell too far behind"),
+          "the notice reads \"CW keying fell too far behind\"");
+    down(150);
+    down(200);
+    down(250);
+    settle();
+    check(keys.size() == 1 && Hl2TxGateTestAccess::refusedDowns(*backend) == 4,
+          "four refused key-downs in one over: still one notice");
+    Hl2TxGateTestAccess::endOver(*backend);
+    buildTo(1400);
+    down(900);
+    down(950);
+    settle();
+    check(keys.size() == 2 && keys[0] != keys[1], "the next refused over: a new notice");
+    check(onModelThread, "every notice is raised on the model's thread");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-cw-edge-timing"));
@@ -668,6 +798,8 @@ int main(int argc, char** argv)
     testUnscheduledPathUnchanged();
     testBackendCarriesScheduledAt();
     testBackendHangWaitsForTheShiftedKeyUp();
+    testBackendKeysUpAtAKeyerStop();
+    testRefusedOverRaisesOneNotice();
     std::printf("%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

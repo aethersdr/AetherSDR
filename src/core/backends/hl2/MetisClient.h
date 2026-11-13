@@ -538,6 +538,10 @@ signals:
     void radioPttChanged(bool keyed);
     // setTxRoute() refused; `actual` is the route still in force (TxRoute as int).
     void txRouteRefused(int actual);
+    // A scheduled key-down came later than kCwMaxEdgeShiftMs and the over has
+    // no carrier until it ends (#5065). Once per over: the over's later
+    // refused downs only count, and the over's end re-arms it.
+    void cwOverRefused();
     // One accepted bandscope block: 2048 contiguous converter samples merged from the
     // four in-phase EP4 packets the gate kept (never per packet). Uncalibrated and
     // pre-DDC, on the AD9866's own scale: nothing downstream may treat these as
