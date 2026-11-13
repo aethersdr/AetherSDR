@@ -4,13 +4,16 @@
 // QWidgetPrivate::checkRestoredGeometry() assumes a native title bar: it reserves
 // PM_TitleBarHeight above the top and shrinks a work-area-filling window by
 // 2 + PM_TitleBarHeight. The Windows custom frame removes the caption via
-// WM_NCCALCSIZE, so both leave gaps (#4328). Pure (blob layout + clamp math) so
+// WM_NCCALCSIZE, so both leave gaps (#4328). Platform-independent, so
 // tests/window_geometry_restore_test.cpp runs everywhere. The startup fallback
 // also uses it on every platform after Qt rejects a changed-monitor blob (#7076).
 
 #include <QByteArray>
+#include <QMargins>
 #include <QRect>
 #include <QSize>
+
+class QWidget;
 
 namespace AetherSDR {
 
@@ -43,9 +46,21 @@ QRect clampFrameToWorkArea(const QRect& savedFrame, const QRect& availableGeomet
 // saved screen width differs greatly from the current screen. In that case
 // center on the primary work area, keeping the saved window size when it fits,
 // instead of trusting an arbitrary position left by construction (#7076).
-// A malformed blob falls back to the window's current size.
+// A malformed blob falls back to the window's current size. `frameMargins` is
+// the window's non-client frame (title bar and borders): the returned client
+// rect leaves room for it, so a native title bar stays inside the work area.
 QRect fallbackGeometryForRejectedRestore(const QByteArray& geometryBlob,
                                          const QRect& primaryAvailableGeometry,
-                                         const QSize& currentSize);
+                                         const QSize& currentSize,
+                                         const QMargins& frameMargins = {});
+
+// Startup recovery for a blob that `window->restoreGeometry()` just refused:
+// places `window` with fallbackGeometryForRejectedRestore() on
+// `primaryAvailableGeometry` and re-applies the blob's maximized or full-screen
+// state. Returns false, leaving the window alone, when no valid placement
+// exists (no usable work area).
+bool placeWindowAfterRejectedRestore(QWidget* window,
+                                     const QByteArray& geometryBlob,
+                                     const QRect& primaryAvailableGeometry);
 
 }  // namespace AetherSDR

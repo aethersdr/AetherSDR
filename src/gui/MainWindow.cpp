@@ -4091,23 +4091,8 @@ void MainWindow::reapplyStartupGeometryAfterShow()
         // primary display, rather than letting an obsolete native client rect
         // move it back to a missing or unrelated screen (#7076).
         if (QScreen* screen = QGuiApplication::primaryScreen()) {
-            const QRect fallback = fallbackGeometryForRejectedRestore(
-                m_startupGeometryForFirstShow, screen->availableGeometry(), size());
-            if (fallback.isValid()) {
-                SavedWindowGeometry saved;
-                const bool decoded =
-                    parseSavedWindowGeometry(m_startupGeometryForFirstShow, &saved);
-                if (windowState() & (Qt::WindowMinimized | Qt::WindowMaximized
-                                     | Qt::WindowFullScreen)) {
-                    showNormal();
-                }
-                setGeometry(fallback);
-                if (decoded && saved.fullScreen) {
-                    showFullScreen();
-                } else if (decoded && saved.maximized) {
-                    showMaximized();
-                }
-            }
+            placeWindowAfterRejectedRestore(this, m_startupGeometryForFirstShow,
+                                            screen->availableGeometry());
         }
         return;
     }

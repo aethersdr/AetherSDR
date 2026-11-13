@@ -29,6 +29,7 @@ using AetherSDR::SavedWindowGeometry;
 using AetherSDR::clampFrameToWorkArea;
 using AetherSDR::parseSavedWindowGeometry;
 using AetherSDR::fallbackGeometryForRejectedRestore;
+using AetherSDR::placeWindowAfterRejectedRestore;
 
 namespace {
 
@@ -292,6 +293,66 @@ int main(int argc, char** argv)
                fallbackGeometryForRejectedRestore(
                    staleMonitor, primary, QSize(1100, 600))
                    == QRect(1140, 653, 1559, 853));
+
+        // A native title bar must stay inside the work area: an oversized
+        // saved window gets a client rect that leaves room for the frame.
+        const QMargins caption(4, 30, 4, 4);
+        const QRect captioned = fallbackGeometryForRejectedRestore(
+            makeBlob(QRect(0, 0, 9999, 9999), QRect(0, 0, 9999, 9999),
+                     QRect(0, 0, 9999, 9999), false, false, 3, 3840),
+            primary, QSize(300, 220), caption);
+        report("oversized fallback leaves room for the native frame",
+               captioned == primary.marginsRemoved(caption));
+        report("fitting fallback is still centered inside the frame allowance",
+               fallbackGeometryForRejectedRestore(staleMonitor, primary,
+                                                  QSize(300, 220), caption)
+                   == QRect(1140, 666, 1559, 853));
+    }
+
+    // ── 6. The startup recovery applied to a real window ────────────────────
+    {
+        QScreen* sc = QGuiApplication::primaryScreen();
+        const QRect work = sc->availableGeometry();
+        const int incompatibleWidth = sc->geometry().width() * 3;
+
+        QWidget w;
+        w.setGeometry(work.x() + 5, work.y() + 5, 200, 150);
+        w.show();
+        const QByteArray stale = makeBlob(
+            QRect(50, 60, 400, 300), QRect(50, 60, 400, 300),
+            QRect(50, 60, 400, 300), false, false, 3, incompatibleWidth);
+        report("startup: Qt refuses the stale blob", !w.restoreGeometry(stale));
+        report("startup: recovery places the window",
+               placeWindowAfterRejectedRestore(&w, stale, work));
+        report("startup: recovered window has the saved size",
+               w.size() == QSize(qMin(400, work.width()), qMin(300, work.height())));
+        report("startup: recovered window is centered on the primary",
+               (w.geometry().center() - work.center()).manhattanLength() <= 1);
+        report("startup: recovered window is not maximized",
+               !(w.windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen)));
+
+        QWidget m;
+        m.setGeometry(work.x() + 5, work.y() + 5, 200, 150);
+        m.show();
+        const QByteArray staleMax = makeBlob(
+            QRect(50, 60, 400, 300), QRect(50, 60, 400, 300),
+            QRect(50, 60, 400, 300), true, false, 3, incompatibleWidth);
+        report("startup: Qt refuses the stale maximized blob",
+               !m.restoreGeometry(staleMax));
+        placeWindowAfterRejectedRestore(&m, staleMax, work);
+        report("startup: a saved maximized window comes back maximized",
+               m.windowState() & Qt::WindowMaximized);
+        report("startup: its normal geometry is the recovered rect",
+               m.normalGeometry().size()
+                   == QSize(qMin(400, work.width()), qMin(300, work.height())));
+
+        QWidget n;
+        n.setGeometry(work.x() + 5, work.y() + 5, 200, 150);
+        n.show();
+        const QRect before = n.geometry();
+        report("startup: no usable work area leaves the window alone",
+               !placeWindowAfterRejectedRestore(&n, stale, QRect())
+                   && n.geometry() == before);
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");
