@@ -69,6 +69,8 @@ public:
     void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
                               int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    // Desktop RIT (SliceModel::setRit) reaches setSliceRit() here; XIT stays unsupported.
+    ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
     // RIT moves the detector's zero (the WDSP shift) by the offset; the DDC and
     // panadapter stay on the slice frequency.
     void setSliceRitEnabled(int sliceId, bool on) override;

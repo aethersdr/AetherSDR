@@ -1249,6 +1249,17 @@ ReceiveDispatch AnanBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
     return ReceiveDispatch::Dispatched;
 }
 
+ReceiveDispatch AnanBackend::requestSliceControl(int sliceId, const SliceControlRequest& request)
+{
+    if (request.valid() && request.field == SliceControlRequest::Field::Rit
+        && receiverForSlice(sliceId)) {
+        const IncrementalTuning tuning = std::get<IncrementalTuning>(request.value);
+        setSliceRit(sliceId, tuning.enabled, tuning.hz);
+        return ReceiveDispatch::Dispatched;
+    }
+    return IRadioBackend::requestSliceControl(sliceId, request);
+}
+
 void AnanBackend::setSliceRit(int sliceId, bool on, int hz)
 {
     Receiver* const rx = receiverForSlice(sliceId);
