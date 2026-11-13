@@ -10,6 +10,7 @@
 #include <QSignalSpy>
 #include <QStringList>
 #include <cstdio>
+#include <cmath>
 
 namespace AetherSDR {
 struct PeripheralConnectionTestAccess {
@@ -30,6 +31,27 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     qRegisterMetaType<TunerDelta>();
+
+    // Both direct message types use the same return-loss and MAX conversion.
+    {
+        TunerModel t;
+        TgxlConnection direct;
+        t.setDirectConnection(&direct);
+        QSignalSpy meters(&t, &TunerModel::metersChanged);
+        emit direct.statusUpdated({{"fwd", "50"}, {"peak", "53"},
+                                   {"max", "60"}, {"swr", "-60"}});
+        CHECK(meters.count() == 1);
+        auto sample = meters.takeFirst();
+        CHECK(std::fabs(sample.at(0).toFloat() - 100.0f) < 0.01f);
+        CHECK(sample.at(1).toFloat() == 1.0f);
+        CHECK(std::fabs(sample.at(3).toFloat() - 1000.0f) < 0.01f);
+        emit direct.stateUpdated({{"swr", "-59.99"}, {"max", "0"}});
+        sample = meters.takeFirst();
+        CHECK(sample.at(1).toFloat() > 1.0f);
+        CHECK(sample.at(3).toFloat() == 0.0f);
+        emit direct.stateUpdated({{"swr", "-61"}});
+        CHECK(meters.takeFirst().at(1).toFloat() == 1.0f);
+    }
 
     // ---- full apply + change-gated stateChanged ----
     {

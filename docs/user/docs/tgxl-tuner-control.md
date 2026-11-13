@@ -51,12 +51,14 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
 
 *The TGXL applet with a Tuner Genius XL connected.*
 
-- **Fwd Power** gauge. It scales for barefoot (0–200 W), Aurora or a KPA500 in
-  operate (0–600 W) and PGXL (0–2000 W) power levels, and uses the tuner's own
-  peak reading, so voice peaks read correctly. An associated KXPA100 does not
-  reduce an Aurora's tuner gauge range; it remains 0–600 W even when the shared
-  transmit meters show the KXPA100's output.
-- **SWR** gauge (1.0–3.0).
+- **Fwd Power** gauge. It starts at 0–200 W, changes to 0–2,000 W above
+  200 W, and returns to the low scale when forward power rounds to 0 W.
+  The peak marker uses the tuner's own peak reading on a direct connection.
+  It is hidden when that reading rounds to 0 W.
+  The red MAX marker shows a tuning-solution power limit when reported.
+- **SWR** gauge. It starts at 1.0–3.0, changes to 1.0–10.0 above 3.0,
+  and returns to the low scale at 1.0. Green, yellow, amber and red show
+  the 1.5, 2.0 and 2.5 SWR boundaries on either scale.
 - **C1**, **L** and **C2** relay bars.
 - **TUNE**: starts an auto-tune. While a tune runs it reads **STOP**;
   pressing it stops the tune. The tuner stays in operate.
@@ -85,9 +87,8 @@ strip for each RF port showing what is feeding it and where it is tuned, the
 C1/L/C2 relay positions as dials, and separate **STBY**, **BYP** and **TUNE**
 keys. A port shows its source only while it has a live reading.
 
-The **SWR** meter has the same flat dark track as **PWR**. With no forward
-power, the SWR track stays empty; color in the bar shows the measured SWR
-while power is flowing.
+The **SWR** meter has the same flat dark track as **PWR**. Color in the bar
+shows the reported SWR.
 
 ## Using manual relay control
 

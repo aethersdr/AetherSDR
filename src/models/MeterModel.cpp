@@ -1174,7 +1174,8 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             tgxlChanged = true;
         } else if (idx == m_tgxlSwrIdx) {
             float rho = std::pow(10.0f, -v / 20.0f);
-            m_tgxlSwr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+            m_tgxlSwr = v >= 60.0f ? 1.0f
+                : (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
             m_lastTgxlSwrUpdateMs = packetUpdatedMs;
             tgxlChanged = true;
         } else if (idx == m_ampFwdPwrIdx) {

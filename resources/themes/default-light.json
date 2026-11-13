@@ -51,6 +51,7 @@
           "accent.danger":  "{color.red.500}",
           "accent.offline": "{color.orange.500}",
           "accent.success": "{color.green.500}",
+          "meter.swr.yellow": "#b5a000",
           "waterfall.timeMarker.foreground": "#c8d8e8",
           "waterfall.timeMarker.background": "#dc0f0f1a",
           "waterfall.live":    "{color.red.500}",
