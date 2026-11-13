@@ -1279,6 +1279,112 @@ int main(int argc, char** argv)
               "Metis writer guard ends only after the terminal writer returns");
     }
 
+    // The keyed frames and the first OFF frame hold the dispatch fence; the idle
+    // frames after them hold nothing, so the next over's acquire() is not refused.
+    using Refusal = AetherSDR::TxCoordinator::Refusal;
+    using Packet = std::array<std::uint8_t, kUsbPacketSize>;
+    {
+        TxTestAuthority tx;
+        MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
+        over.enableTransmit(true);
+        over.setMox(true, tx.operation);
+        bool keyedFenced = false;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            keyedFenced = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(keyedFenced, "a keyed Metis frame holds the dispatch fence");
+        over.setMox(false, tx.operation);
+        bool unkeyFenced = false;
+        Refusal unkeyRefusal = Refusal::None;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            unkeyFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            (void)tx.coordinator.finishLocalIntent(tx.operation);
+            unkeyRefusal = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).refusal;
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(unkeyFenced && unkeyRefusal == Refusal::Recovering,
+              "the unkey frame stays fenced: a new operation is refused while it is entered");
+        bool idleFree = false;
+        bool idleAdmits = false;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            idleFree = !anyFrameKeyed(packet) && !tx.coordinator.hasInFlightDispatches();
+            idleAdmits = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).accepted();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(idleFree, "an idle Metis frame after the unkey frame holds no dispatch guard");
+        check(idleAdmits, "a fresh acquire() during an idle Metis frame is accepted");
+    }
+
+    {
+        // An over ended mid-frame: the next frame drops MOX and is still fenced.
+        TxTestAuthority tx;
+        MetisClient ended;
+        MetisClientTestAccess::setStreaming(ended);
+        ended.enableTransmit(true);
+        ended.setMox(true, tx.operation);
+        Refusal keyedRefusal = Refusal::None;
+        bool keyedFenced = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            (void)tx.coordinator.finishLocalIntent(tx.operation);
+            keyedRefusal = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).refusal;
+            keyedFenced = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(keyedFenced && keyedRefusal == Refusal::Recovering,
+              "a new operation is refused while a keyed Metis frame is entered");
+        bool offFenced = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            offFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(offFenced && !ended.isKeyed(),
+              "the OFF frame after a refused key dispatch is still fenced");
+        bool idleFree = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            idleFree = !tx.coordinator.hasInFlightDispatches()
+                && tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).accepted();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(idleFree, "after that OFF frame an idle frame admits the next over");
+    }
+
+    {
+        // A failed write does not retire the unkey: the next OFF frame is fenced
+        // again, and only a written OFF frame releases the operation.
+        TxTestAuthority tx;
+        MetisClient failed;
+        MetisClientTestAccess::setStreaming(failed);
+        failed.enableTransmit(true);
+        failed.setMox(true, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet& packet) -> qint64 { return packet.size(); });
+        MetisClientTestAccess::send(failed);
+        failed.setMox(false, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet&) -> qint64 { return -1; });
+        MetisClientTestAccess::send(failed);
+        bool retryFenced = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            retryFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(retryFenced, "an unkey frame whose write failed leaves the next OFF frame fenced");
+        bool idleFree = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            idleFree = !tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(idleFree, "once an OFF frame is written, the idle frame after it holds no guard");
+    }
+
     // ---- TX IQ FIFO fault accounting (S3 row 3.3) ----
     //
     // The FIFO is bounded above at kTxQueueMax and not below. Both ends change
