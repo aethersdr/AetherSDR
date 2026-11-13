@@ -3862,6 +3862,16 @@ else()
             )
         endif()
     endif()
+    # The headless engine ships beside the app on Linux when it was built, so
+    # the AppImage (and an install made from it) can run it:
+    # `AetherSDR --aetherd [options]`. OPTIONAL: a build of the app alone (the
+    # x86_64 AppImage) installs without it.
+    if(LINUX AND TARGET aetherd)
+        install(TARGETS aetherd
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            OPTIONAL
+        )
+    endif()
     if(LINUX AND HIDAPI_FOUND)
         install(FILES packaging/linux/70-aethersdr-ctr2.rules
             DESTINATION lib/udev/rules.d

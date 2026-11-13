@@ -47,6 +47,7 @@
 #include <QTimer>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #ifdef _WIN32
 #include <io.h>
@@ -279,6 +280,27 @@ static int runInstallCli(int argc, char* argv[])
     }
     return EXIT_SUCCESS;
 }
+
+// ── `AetherSDR --aetherd [options]` — the headless engine of this release ─────
+// An AppImage only ever starts this binary, so a service that wants the engine
+// (aetherd) from the AppImage, or from an install, asks for it here. aetherd sits
+// beside this binary; exec replaces this process, so a service manager's signals
+// reach aetherd itself. Nothing of the app starts first: no Qt, no settings.
+static int runAetherd(int argc, char* argv[])
+{
+    const QByteArray path =
+        QDir(AetherSDR::LinuxInstall::binaryDir()).filePath(QStringLiteral("aetherd")).toLocal8Bit();
+    std::vector<char*> args;
+    args.push_back(const_cast<char*>(path.constData()));
+    for (int i = 2; i < argc; ++i) {
+        args.push_back(argv[i]);
+    }
+    args.push_back(nullptr);
+    ::execv(path.constData(), args.data());
+    std::fprintf(stderr, "AetherSDR: cannot start the headless engine %s: %s\n",
+                 path.constData(), std::strerror(errno));
+    return 127;
+}
 #endif
 
 // The Qt platform-selection decision made on a Wayland session, recorded before
@@ -314,6 +336,9 @@ int main(int argc, char* argv[])
 #ifdef Q_OS_LINUX
     if (argc >= 2 && qstrcmp(argv[1], "--install") == 0) {
         return runInstallCli(argc, argv);
+    }
+    if (argc >= 2 && qstrcmp(argv[1], "--aetherd") == 0) {
+        return runAetherd(argc, argv);
     }
 #endif
 

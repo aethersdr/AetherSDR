@@ -18,6 +18,7 @@ jobs:
             arch: x86_64
             qt_host: linux
             qt_arch: linux_gcc_64
+            engine_target: ''   # no headless engine: nothing runs it on x86_64 yet
             require_gpu: 'ON'   # x86_64 ships the whisper Vulkan GPU backend
             gpu_spectrum: 'ON'  # Qt 6.8+ already enabled it here; 6.12 keeps it
             glslc_source: lunarg
@@ -32,6 +33,10 @@ jobs:
             arch: aarch64
             qt_host: linux_arm64
             qt_arch: linux_gcc_arm64
+            # The headless engine ships here: the ANAN G2 runs it on the radio, as
+            # `AetherSDR --aetherd`. 66 MB stripped (it links the engine core
+            # statically), so x86_64 leaves it out until something there needs it.
+            engine_target: aetherd
             # require_gpu is the RELEASE GUARD, not the enable switch: it makes a
             # missing GPU toolchain fatal at configure time. ENABLE_ASR_VULKAN
             # defaults ON on non-Apple, so aarch64 has been building ggml-vulkan
@@ -305,10 +310,12 @@ jobs:
 
       - name: Build
         # Only the app ships (+ its aether-dv-waveform helper dependency, which
-        # also stages AetherDV.cfg and the ASR/DFNR runtime payloads via POST_BUILD).
+        # also stages AetherDV.cfg and the ASR/DFNR runtime payloads via POST_BUILD),
+        # and, where matrix.engine_target names it, the headless engine aetherd,
+        # which `AetherSDR --aetherd` starts.
         # The default `all` target additionally builds ~200 unit-test executables
         # the AppImage never bundles and never runs — pure wasted build time.
-        run: cmake --build build --target AetherSDR aether-dv-waveform -j$(nproc)
+        run: cmake --build build --target AetherSDR aether-dv-waveform ${{ matrix.engine_target }} -j$(nproc)
 
       # Before Install: linuxdeploy strips everything it bundles. The build ID
       # each debug file is keyed on survives install, patchelf and that strip;
@@ -317,7 +324,7 @@ jobs:
         # Symbols are for us, not users: a failure here must not cost the release
         # its installer. A missing archive surfaces as /tag-release's WARN.
         continue-on-error: true
-        run: bash scripts/build/split-debug-symbols.sh symbols build/AetherSDR build/aether-dv-waveform
+        run: bash scripts/build/split-debug-symbols.sh symbols build/AetherSDR build/aether-dv-waveform ${{ matrix.engine_target && format('build/{0}', matrix.engine_target) || '' }}
 
       - name: Install to AppDir
         run: |
