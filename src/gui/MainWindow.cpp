@@ -4082,7 +4082,35 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Pop-out applet containers are restored and shown during construction.
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
-    restoreGeometry(m_startupGeometryForFirstShow);
+    const bool restored = restoreGeometry(m_startupGeometryForFirstShow);
+    if (!restored) {
+        // Qt rejects saved geometry after a large monitor-resolution/DPI
+        // change. Without a fallback the window can appear on whichever
+        // monitor a restored pop-out left active (and repeat every launch).
+        // Recover its normal size from the saved blob and put it on the
+        // primary display, rather than letting an obsolete native client rect
+        // move it back to a missing or unrelated screen (#7076).
+        if (QScreen* screen = QGuiApplication::primaryScreen()) {
+            const QRect fallback = fallbackGeometryForRejectedRestore(
+                m_startupGeometryForFirstShow, screen->availableGeometry(), size());
+            if (fallback.isValid()) {
+                SavedWindowGeometry saved;
+                const bool decoded =
+                    parseSavedWindowGeometry(m_startupGeometryForFirstShow, &saved);
+                if (windowState() & (Qt::WindowMinimized | Qt::WindowMaximized
+                                     | Qt::WindowFullScreen)) {
+                    showNormal();
+                }
+                setGeometry(fallback);
+                if (decoded && saved.fullScreen) {
+                    showFullScreen();
+                } else if (decoded && saved.maximized) {
+                    showMaximized();
+                }
+            }
+        }
+        return;
+    }
 #ifdef Q_OS_WIN
     // Qt 6.12's frame margins under the expanded client area do not match the
     // window, so neither restoreGeometry() nor geometry() round-trips its size.

@@ -97,4 +97,24 @@ QRect clampFrameToWorkArea(const QRect& savedFrame, const QRect& availableGeomet
     return wanted;
 }
 
+QRect fallbackGeometryForRejectedRestore(const QByteArray& geometryBlob,
+                                         const QRect& primaryAvailableGeometry,
+                                         const QSize& currentSize)
+{
+    if (!primaryAvailableGeometry.isValid()) {
+        return QRect();
+    }
+
+    SavedWindowGeometry saved;
+    const QSize preferred = parseSavedWindowGeometry(geometryBlob, &saved)
+                                ? saved.normalRect.size() : currentSize;
+    const QSize fitted(qBound(1, preferred.width(), primaryAvailableGeometry.width()),
+                       qBound(1, preferred.height(), primaryAvailableGeometry.height()));
+    const QRect centered(
+        primaryAvailableGeometry.x() + (primaryAvailableGeometry.width() - fitted.width()) / 2,
+        primaryAvailableGeometry.y() + (primaryAvailableGeometry.height() - fitted.height()) / 2,
+        fitted.width(), fitted.height());
+    return clampFrameToWorkArea(centered, primaryAvailableGeometry);
+}
+
 }  // namespace AetherSDR

@@ -135,7 +135,7 @@ AetherSDR saves a floating panadapter only after the pop-out succeeds, so a cras
 
 ### A stored setting stops AetherSDR from starting
 
-A bad stored value, such as a window placed off-screen, is applied at startup.
+A bad stored value can still block startup. AetherSDR normally recenters its main window when a changed display makes the saved geometry unusable; other invalid settings may need manual removal.
 
 1. Use `AetherSDR --config` to inspect or remove the value. See [Settings and Backups](./settings-and-backups.md).
 
