@@ -55,14 +55,18 @@ if [ "$driver_removed" = true ]; then
     fi
 fi
 
-printf "Also remove settings, caches, downloaded models and saved QRZ login? [y/N] "
+printf "Also remove settings, caches, downloaded models and saved passwords and tokens? [y/N] "
 read -r answer || answer=""
 if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
     rm -rf -- "$HOME/Library/Preferences/AetherSDR" \
               "$HOME/Library/Caches/AetherSDR" \
               "$HOME/Library/Application Support/AetherSDR" \
               "$HOME/.config/AetherSDR"
-    security delete-generic-password -s AetherSDR -a qrz_password >/dev/null 2>&1 || true
+    for service in AetherSDR AetherSDR.aetherd; do
+        while security delete-generic-password -s "$service" >/dev/null 2>&1; do
+            :
+        done
+    done
     echo "  Removed user settings and caches"
 fi
 

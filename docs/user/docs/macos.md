@@ -36,7 +36,7 @@ Radio discovery needs **Local Network** permission on macOS 15 and later. Allow 
 
 1. Quit AetherSDR and open a current AetherSDR DMG (download a new one if your original DMG has no uninstaller).
 2. Double-click **Uninstall AetherSDR.command** in the DMG (or run it from Terminal). Enter your Mac administrator password if asked. This removes the app and DAX driver, and unloads the DAX audio devices.
-3. Choose whether to remove your personal settings, logs, cache, downloaded models and saved QRZ login. Answer **N** to keep them for a later installation.
+3. Choose whether to remove your personal settings, logs, cache, downloaded models and saved passwords and tokens in your Keychain. Answer **N** to keep them for a later installation.
 
 The uninstaller also cleans up libASPL developer files left by older DAX packages, but only files recorded in AetherSDR's package receipt. If CoreAudio cannot restart, reboot to finish unloading the driver.
 
