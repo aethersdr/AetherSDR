@@ -1882,7 +1882,13 @@ void MetisClient::sendControlPacket()
         m_mox = false;
         keyDispatch = m_moxOperation.beginDispatch(TxCoordinator::monotonicMs(), false);
     }
-    if (!m_txIq.empty()) {
+    // Only a keyed frame carries queued IQ, so only it takes the audio dispatch:
+    // an idle frame must not hold the counter acquire() needs at zero (#7212).
+    // Audio still queued on an idle frame is stale and is abandoned, uncounted.
+    // A re-key with no idle frame between it and the unkey is #7216's case.
+    if (!m_txIq.empty() && !(m_mox && m_txAllowed)) {
+        abandonTxIq();
+    } else if (!m_txIq.empty()) {
         audioDispatch = m_txIqContext.beginDispatch(TxCoordinator::monotonicMs());
         if (!audioDispatch) {
             abandonTxIq();
