@@ -402,9 +402,10 @@ ways:
 - **Network:** a ser2net proxy in raw mode (default TCP 2000).
 - **Radio USB:** the meter is plugged into a FlexRadio's USB port. Pick its
   cable from the list. The radio names the cable after the meter's USB serial
-  number, and at first labels it as a CAT cable. When you connect, AetherSDR
-  sets that cable on the radio to passthrough at 115200 8N1 and leaves it that
-  way afterwards. If another program changes the cable's settings, AetherSDR
+  number, and at first labels it as a CAT cable. Only CAT and passthrough
+  cables are listed. The first time you connect, AetherSDR asks before it sets
+  the cable on the radio to passthrough at 115200 8N1, because that replaces
+  the cable's settings there. The cable stays in passthrough afterwards. If another program changes the cable's settings, AetherSDR
   stops using it and does not change them back. To use it again, press
   **Connect**, or unplug the meter and plug it back in.
 

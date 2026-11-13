@@ -508,6 +508,10 @@ Measured on a FLEX-8600 (4.3.16) on 2026-11-13:
 
 Design rulings (maintainer, 2026-11-13):
 
+- **The cable list offers only CAT and passthrough cables.** Bit, BCD and
+  LDPA cables drive other equipment. Before Connect retypes a cable, the
+  operator confirms it (`lp100aRadioCableConfirm`). A saved choice at startup
+  counts as that confirmation.
 - **Choosing the cable is the operator's go-ahead to configure it.**
   `LpMeterConnection` walks it to passthrough 115200 8N1 one setting at a
   time, type first (`LpMeter::nextCableChange()`). Each step is confirmed by

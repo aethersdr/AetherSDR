@@ -13,6 +13,7 @@
 
 #include "RadioSetupDialog.h"
 #include "RadioSetupDialogCommon.h"
+#include "CanonMessageBox.h"
 #include "Kpa500AdvancedWidget.h"
 #include "Kxpa100AdvancedWidget.h"
 #include "models/Kxpa100Model.h"
@@ -141,6 +142,8 @@ struct PeripheralDeviceUi {
     // {serial number, label} pairs of the cables the radio reports.
     std::function<void(const QString&)> connectRadioCable;
     std::function<QVector<QPair<QString, QString>>()> radioCables;
+    // Asked before connecting; false when the operator declines.
+    std::function<bool(const QString& serial)> confirmRadioCable;
     // Optional poll-interval row (LP-100A). Stored under settingsGroup/"PollIntervalMs".
     std::function<void(int)> applyPollInterval;
     int pollIntervalDefaultMs{0};
@@ -1242,6 +1245,10 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
                 refresh();
                 return;
             }
+            if (u->confirmRadioCable && !u->confirmRadioCable(cable)) {
+                refresh();
+                return;
+            }
             PeripheralSettings::setDeviceString(group, "RadioCable", cable);
             u->state.connecting = true;
             u->connectRadioCable(cable);
@@ -2315,12 +2322,46 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
             const auto& cables = m_model->usbCableModel().cables();
             for (auto it = cables.cbegin(); it != cables.cend(); ++it) {
+                // Bit, BCD and LDPA cables drive other equipment; retyping one
+                // would erase its settings on the radio. The meter's FT232R
+                // first appears as CAT.
+                if (it->type != QLatin1String("cat") && it->type != QLatin1String("passthrough")) {
+                    continue;
+                }
                 const QString label = it->name.isEmpty()
                     ? it.key()
                     : QStringLiteral("%1 — %2").arg(it.key(), it->name);
                 choices.append({it.key(), it->present ? label : tr("%1 (unplugged)").arg(label)});
             }
             return choices;
+        };
+        ui->confirmRadioCable = [this](const QString& serial) {
+            if (!m_model) {
+                return true;
+            }
+            const auto& cables = m_model->usbCableModel().cables();
+            const auto it = cables.constFind(serial);
+            if (it == cables.constEnd() || it->type == QLatin1String("passthrough")) {
+                return true;  // nothing to replace (or it waits for the radio)
+            }
+            const QString name = it->name.isEmpty() ? serial
+                                                    : QStringLiteral("%1 (%2)").arg(serial, it->name);
+            CanonMessageBox box(tr("Use This USB Cable?"),
+                                tr("Set USB cable %1 on the radio to passthrough at 115200 8N1 "
+                                   "for the LP-100A?").arg(name),
+                                this);
+            box.setObjectName(QStringLiteral("lp100aRadioCableConfirm"));
+            box.setInformativeText(
+                tr("Its %1 settings on the radio will be replaced, and it stays in passthrough "
+                   "after you disconnect. Choose this only if the LP-100A is the device on "
+                   "this cable.").arg(it->type.toUpper()));
+            auto* cancel = box.addButton(tr("Cancel"), CanonMessageBox::Role::Reject);
+            cancel->setObjectName(QStringLiteral("lp100aRadioCableCancel"));
+            auto* apply = box.addButton(tr("Set to Passthrough"), CanonMessageBox::Role::Destructive);
+            apply->setObjectName(QStringLiteral("lp100aRadioCableApply"));
+            box.setDefaultButton(cancel);
+            box.exec();
+            return box.clickedButton() == apply;
         };
         ui->applyPollInterval = [this](int ms) {
             m_lpMeter->setPollIntervalMs(ms);
