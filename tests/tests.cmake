@@ -7817,6 +7817,29 @@ if(Qt6WebSockets_FOUND)
     )
     add_test(NAME tci_server_review_test COMMAND tci_server_review_test)
     set_tests_properties(tci_server_review_test PROPERTIES TIMEOUT 45)
+
+    # The opt-in extension set: enable, capability list, per-client gate.
+    # Socket-free; the transport is injected.
+    add_executable(tci_extension_set_test tests/tci_extension_set_test.cpp)
+    target_include_directories(tci_extension_set_test PRIVATE src tests)
+    target_link_libraries(tci_extension_set_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_extension_set_test COMMAND tci_extension_set_test)
+
+    # A client that never enables the set gets the same bytes as from a server
+    # without it. Socket-free; `--print-transcript` dumps them for a diff.
+    add_executable(tci_extension_zero_traffic_test tests/tci_extension_zero_traffic_test.cpp)
+    target_include_directories(tci_extension_zero_traffic_test PRIVATE src tests)
+    target_link_libraries(tci_extension_zero_traffic_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_extension_zero_traffic_test COMMAND tci_extension_zero_traffic_test)
+
+    # The extension set's TX passband group (aethersdr_tx_filter_band).
+    add_executable(tci_ext_tx_passband_test tests/tci_ext_tx_passband_test.cpp)
+    target_include_directories(tci_ext_tx_passband_test PRIVATE src tests)
+    target_link_libraries(tci_ext_tx_passband_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_ext_tx_passband_test COMMAND tci_ext_tx_passband_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
@@ -11184,6 +11207,9 @@ set(AETHER_SETTINGS_CONSUMERS
     noise_blanker_kind_model_test
     automation_nb2_capability_test
     tci_rx_audio_test
+    tci_extension_set_test
+    tci_extension_zero_traffic_test
+    tci_ext_tx_passband_test
     tci_applet_test
     tci_rx_applet_test
     bandscope_trace_render_test

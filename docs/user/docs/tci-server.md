@@ -319,6 +319,62 @@ keyer:0,true;                     # key down
 keyer:0,false;                    # key up
 ```
 
+### AetherSDR extension set
+
+AetherSDR offers its own TCI commands as one opt-in set. A client that does not
+ask for it receives exactly the same traffic as without it. To turn it on for
+one connection, the client sends:
+
+```
+aethersdr_ext_enable:true;
+```
+
+The server answers with the set's version and the items this radio offers,
+then one line with the current state of each item:
+
+```
+aethersdr_ext:1,tx_filter_band;
+aethersdr_tx_filter_band:0,100,2900;
+```
+
+- Every command of the set starts with `aethersdr_`. Before the enable, the
+  server ignores them without a reply, like any unknown command.
+- The list holds only what the connected radio can do, and an enabled client
+  gets a new `aethersdr_ext:` line when that changes. A command for an item
+  not in the list is ignored.
+- The enable is per connection. `aethersdr_ext_enable:false;` stops all
+  extension traffic to that client, and so does disconnecting.
+- The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,
+  `rx_ctun_ex`) work without the enable, as before.
+
+#### TX passband: `tx_filter_band`
+
+Offered when the connected radio has TX low and high cut controls (the Phone
+applet's), for example a Flex or a Hermes-Lite 2. Not on the simulator, an
+RTL-SDR, or an Icom without a TX bandwidth profile.
+
+```
+aethersdr_tx_filter_band:0;             # read
+aethersdr_tx_filter_band:0,100,2900;    # set low and high cut, audio Hz
+```
+
+- `<trx>` is the transmit receiver. A read or set for another one is ignored.
+  When transmit moves to another receiver, the line is sent again with the new
+  `<trx>`.
+- Values are positive audio Hz, as in the Phone applet; the sideband follows the
+  mode. A negative value is taken as positive and a reversed pair is swapped.
+- The value is set the way the Phone applet sets it: 0 to 10000 Hz, at least
+  50 Hz wide. On a radio with fixed edges (an Icom) it goes to the nearest ones.
+- Every change, from any source (the Phone applet, a TX profile, CAT, another
+  client), is sent as `aethersdr_tx_filter_band:<trx>,<low>,<high>;` to every
+  client that enabled the set. That is also the answer to a set. A set that the
+  limits changed but that left the passband as it was is answered to the
+  sender only. A set that changes nothing gets no answer.
+- Allowed while transmitting, as in the Phone applet.
+- The value is the operator's setting. On a Hermes-Lite 2 it applies to USB
+  and LSB voice; CW, AM, FM and the digital modes transmit with their mode's
+  own passband.
+
 ## Known issues
 
 - If a client that holds PTT dies without closing its connection (power loss, a pulled cable, a dropped Wi-Fi link), the radio stays keyed until the operating system gives up on the TCP connection ([#5985](https://github.com/aethersdr/AetherSDR/issues/5985)).

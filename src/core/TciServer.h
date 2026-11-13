@@ -2,6 +2,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include "DaxTxAudioPermit.h"
+#include "TciExtensionSet.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
 #include "TciAudioHeader.h"
@@ -80,6 +81,8 @@ class TciServer : public QObject {
     friend class TciRxAudioTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
+    friend class TciExtensionSetTest;
+    friend class TciTxPassbandExtensionTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -157,6 +160,10 @@ public:
 
     // Wire slice signals for state change broadcasts
     void wireSlice(int trx, SliceModel* slice);
+
+    // A command group of the opt-in extension set joins here, with the
+    // capability that offers it. Enabled clients hear the new list at once.
+    bool registerExtensionGroup(TciExtensionSet::Group group);
     void wireSpotModel();
     void notifySpotClicked(int spotIndex, SliceModel* slice = nullptr);
     void rearmDaxForProfileLoad();
@@ -235,6 +242,22 @@ private:
     void publishActiveTrx();
     SliceModel* sliceForPanId(const QString& panId) const;
     void broadcast(const QString& msg);
+    // The extension set's one gate: nothing reaches a client that has not
+    // enabled it. Every extension line goes through sendExtensionText().
+    void sendExtensionText(ClientState& client, const QString& msg);
+    void broadcastExtension(const QString& msg);
+    void advertiseExtensions(ClientState& client, bool onlyIfChanged);
+    void announceExtensionSet();
+    void handleExtensionEnable(TciClient* ws, const QString& cmd);
+    void handleExtensionCommand(TciClient* ws, const QString& cmd);
+    // Extension group `tx_filter_band` (TciTxPassbandExtension.h).
+    void registerTxPassbandGroup();
+    TciExtensionSet::Result handleTxPassband(const QStringList& args);
+    bool txPassbandOffered() const;
+    QString txPassbandStateLine() const;
+    int extensionTxTrx() const;
+    void queueTxPassbandNotice();
+    bool broadcastTxPassband();
     void broadcastBinary(const QByteArray& data);
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
@@ -332,6 +355,8 @@ private:
         quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
+        bool         extensionsEnabled{false};  // sent aethersdr_ext_enable:true
+        QString      extensionsAdvertised;      // last aethersdr_ext: line sent
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
         // several skimmers over one WebSocket by sending iq_start for each
         // receiver; a single scalar silently replaced the previous receiver
@@ -433,6 +458,7 @@ private:
     // released 500 ms after a genuine slice close (recreates reclaim their
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
+    TciExtensionSet m_extensions;
     std::function<void(int, bool)> m_centerLockSet;
     std::function<bool(int)> m_centerLockQuery;
     // #6352: the newest removal per slice id. A close timer that finds a newer
@@ -498,6 +524,10 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Extension set, TX passband notice: posted, then rate-limited.
+    QTimer*           m_txPassbandRateTimer{nullptr};
+    bool              m_txPassbandPending{false};
+    bool              m_txPassbandSendPosted{false};
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};
