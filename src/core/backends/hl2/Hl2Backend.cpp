@@ -499,6 +499,8 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // notches and receivers B.. come back through the operator's own paths.
         replayRestoredSession();
         refreshPureSignalAvailability();
+        // After the restored receivers: they decide whether PureSignal fits.
+        restorePureSignalEnabled();
         // Tell the IO board where we came up. applyBandFilter() is NOT called on
         // this path — the connect-time filter byte is primed straight into
         // MetisClient::Params instead — so without this the board would hold
@@ -1935,6 +1937,20 @@ bool Hl2Backend::setPureSignalEnabled(bool on)
     return true;
 }
 
+void Hl2Backend::restorePureSignalEnabled()
+{
+    // Link-up, unkeyed: the operator left PureSignal on last time, so turn it
+    // on again. A radio that cannot run it now (rate, receivers) keeps the
+    // preference and says why; the operator's next on/off replaces it.
+    if (!m_psWanted || m_psEnabled || m_keyed || !m_pureSignal || !m_metis)
+        return;
+    if (setPureSignalEnabled(true))
+        qCInfo(lcHl2) << "HL2: PureSignal on again, as the operator left it";
+    else
+        qCInfo(lcHl2) << "HL2: PureSignal was left on but cannot run now —"
+                      << m_psUnavailableReason;
+}
+
 QVariantMap Hl2Backend::pureSignalFields() const
 {
     // The controller's last report, with the three facts the GUI thread owns
@@ -1967,6 +1983,7 @@ void Hl2Backend::loadPureSignalPreferences()
     const RadioSettingsScope scope(QStringLiteral("hl2"), m_radioSerial);
     int version = 0;
     const QJsonObject doc = scope.feature(QLatin1String(kPureSignalFeature), &version);
+    m_psWanted = false;
     m_psAutoCalibrate = true;
     m_psAutoAttenuate = true;
     // Only a manual attenuation is stored. What auto-attenuate reaches depends
@@ -1975,6 +1992,8 @@ void Hl2Backend::loadPureSignalPreferences()
     // level again on the first calibration.
     m_psAttenuationDb = Hl2PsGain::kAttMax;
     if (!doc.isEmpty() && version <= kPureSignalSchemaVersion) {
+        // "enabled" came later in schema 1; a row without it reads as off.
+        m_psWanted = doc.value(QStringLiteral("enabled")).toBool(false);
         m_psAutoCalibrate = doc.value(QStringLiteral("autoCalibrate")).toBool(m_psAutoCalibrate);
         m_psAutoAttenuate = doc.value(QStringLiteral("autoAttenuate")).toBool(m_psAutoAttenuate);
         const QJsonValue att = doc.value(QStringLiteral("attenuationDb"));
@@ -2008,6 +2027,7 @@ void Hl2Backend::savePureSignalPreferences()
         qCWarning(lcHl2) << "HL2: not overwriting PureSignal preferences of schema" << version;
         return;
     }
+    doc.insert(QStringLiteral("enabled"), m_psWanted);
     doc.insert(QStringLiteral("autoCalibrate"), m_psAutoCalibrate);
     doc.insert(QStringLiteral("autoAttenuate"), m_psAutoAttenuate);
     doc.insert(QStringLiteral("attenuationDb"), m_psAttenuationDb);
@@ -2041,6 +2061,10 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
             return refuse(tr("Unkey to change PureSignal"));
         if (!setPureSignalEnabled(on))
             return refuse(m_psUnavailableReason);
+        if (on != m_psWanted) {
+            m_psWanted = on;
+            savePureSignalPreferences();
+        }
     } else if (verb == QLatin1String("puresignal.auto")) {
         if (!boolArg(on))
             return refuse(QStringLiteral("puresignal.auto: expects a bool"));
@@ -2881,11 +2905,13 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         qCInfo(lcHl2) << "HL2: board reports" << m_boardMaxRx << "receiver(s)";
     }
     mp.boardMaxRx = m_boardMaxRx;
-    // PureSignal starts every session off: it claims receivers and keys the
-    // feedback path, so it is the operator's choice each time.
+    // PureSignal starts each session off on the wire: it claims receivers,
+    // which only fits once the restored session's receivers are known. Its
+    // preferences are this radio's, so they follow the radio, and one of them
+    // is whether the operator left it on: restorePureSignalEnabled() turns it
+    // back on at link-up.
     applyPureSignalWire(false);
     mp.pureSignal = false;
-    // ...but its preferences are this radio's, so they follow the radio.
     loadPureSignalPreferences();
     // The filter board must be right from the first config frame: the radio
     // reports no state. All receivers start on one frequency, so this is that

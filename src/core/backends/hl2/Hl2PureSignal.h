@@ -35,6 +35,11 @@
 //     attempts, info[4] is the feedback level, and info[0] bit 0 says the
 //     level was not measured this time (it keeps the previous value).
 //   - pscc() is the only place the state machine moves.
+//   - info[15] is written at the top of pscc(), before the state switch, so
+//     a GetPSInfo read reports the state calcc was in when its last pscc()
+//     began. The first read after a SetPSControl can predate the flags.
+//   - `turnon` from any state but LSTAYON leads to LTURNON, which keeps the
+//     current correction applied and goes on to LSTAYON.
 
 #include "core/dsp/WdspChannel.h"
 
@@ -162,6 +167,10 @@ public:
     // sent again here clear a `mancal` or `automode` left from before, which
     // would otherwise take calcc straight out of LSTAYON.
     void selectRestoring();
+    // The operator unticks Auto. With a correction applied, calcc is told to
+    // keep it (`turnon` alone, as Restoring sends) and the controller ends in
+    // Hold; without one, Off. Nothing happens when Auto is not running.
+    void stopAuto(bool correctionHeld);
     // A new TXA channel: calcc starts in LRESET with nothing set. The
     // attenuation is the radio's and is kept.
     void reset();
@@ -170,7 +179,8 @@ public:
     void setAttenuationDb(int att) { m_att = Hl2PsGain::clampAtt(att); }
 
     // One GetPSInfo report. Flags still waiting go out first, and the report
-    // is not judged: it was read before calcc saw them.
+    // is not judged: it was read before calcc saw them. Nor is the report
+    // after any flag write: it can still describe the state before them.
     Step step(const Report& r);
 
     [[nodiscard]] Mode mode() const noexcept { return m_mode; }
@@ -191,6 +201,7 @@ private:
     bool m_autoAttenuate = true;
     int m_att = Hl2PsGain::kAttMax;   // lowest gain: auto-attenuate raises it
     std::optional<int> m_lastAttempts;
+    bool m_settling = false;          // flags just went out: next report is not judged
     bool m_sawActive = false;         // Single: calcc has left LRESET
     bool m_collected = false;         // calcc has collected since the last flags
     int m_singleStarts = 0;

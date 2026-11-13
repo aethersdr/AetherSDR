@@ -532,6 +532,11 @@ private:
     bool m_psAutoCalibrate = true;
     bool m_psAutoAttenuate = true;
     int m_psAttenuationDb = Hl2PsGain::kAttMax;
+    // The operator's last PureSignal on/off, as puresignal.enable set it.
+    // Turned back on at link-up when the radio allows it. Not m_psEnabled:
+    // an automatic off (PureSignal became unavailable) does not change it.
+    bool m_psWanted = false;
+    void restorePureSignalEnabled();
     void loadPureSignalPreferences();
     void savePureSignalPreferences();
     // Why PureSignal cannot run right now, or empty when it can.

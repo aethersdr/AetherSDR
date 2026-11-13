@@ -191,8 +191,8 @@ When one of these is missing, the PureSignal button is dimmed, and the line unde
 
 **Controls.**
 
-- **PureSignal** turns it on and off. It starts off on every connect. You can turn it on or off only while you are not transmitting.
-- **Auto** calibrates again and again while you transmit.
+- **PureSignal** turns it on and off. You can turn it on or off only while you are not transmitting. If you left it on, it comes back on when you connect again. If the HL2 cannot run it at that moment, for example because three receivers are open, it stays off and the line under the button says why.
+- **Auto** calibrates again and again while you transmit. Unticking **Auto** stops new calibrations and keeps the last good correction, until you press **Reset** or turn PureSignal off.
 - **Single** calibrates once, on your next transmission, then holds that correction. It stays lit from the press until that calibration is done. If the calibration fails, Single starts it again, three tries in all, and then turns off.
 - **FB** is the feedback level. A calibration needs it inside the marked window (128–181).
 - The line under the meter shows the attenuation, the number of calibrations and the engine state. The state line says what PureSignal is doing, for example "Armed — key into a load to calibrate".
@@ -207,7 +207,7 @@ PureSignal never keys the radio. It calibrates on transmissions you make yoursel
 
 **Single, Reset and Restore switch Auto off,** because each one replaces continuous calibration with a correction you chose. Press **Auto** again to go back to continuous calibration.
 
-AetherSDR remembers **Auto**, **Auto-attenuate feedback** and a manual **TX att** for each HL2. The attenuation that auto-attenuate reaches is not remembered: each session finds it again on the first calibration.
+AetherSDR remembers **PureSignal** on or off, **Auto**, **Auto-attenuate feedback** and a manual **TX att** for each HL2. A correction is not remembered: after a restart, PureSignal calibrates again, or you load one with **Restore…**. The attenuation that auto-attenuate reaches is not remembered: each session finds it again on the first calibration.
 
 ## Other Features
 

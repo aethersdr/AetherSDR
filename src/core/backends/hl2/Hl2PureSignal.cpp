@@ -63,11 +63,25 @@ void Hl2PsController::selectSingle()
 
 void Hl2PsController::selectRestoring() { select(Mode::Restoring); }
 
+void Hl2PsController::stopAuto(bool correctionHeld)
+{
+    if (m_mode != Mode::Auto)
+        return;
+    // `turnon` alone: calcc stops calibrating at its next state and goes
+    // through LTURNON to LSTAYON with the correction it has. Restoring waits
+    // for that LSTAYON and then holds, as it does for a loaded correction.
+    if (correctionHeld)
+        select(Mode::Restoring);
+    else
+        select(Mode::Off);
+}
+
 void Hl2PsController::reset()
 {
     m_mode = Mode::Off;
     m_pending.reset();
     m_lastAttempts.reset();
+    m_settling = false;
     m_sawActive = false;
     m_collected = false;
     m_singleStarts = 0;
@@ -104,6 +118,15 @@ Hl2PsController::Step Hl2PsController::step(const Report& r)
         out.flags = *m_pending;
         m_pending.reset();
         m_lastAttempts = r.attempts;
+        m_settling = true;
+        return out;
+    }
+    if (m_settling) {
+        // GetPSInfo's state is the one calcc was in when its last pscc()
+        // began, so the read after a flag write can predate them. Unkeyed,
+        // one pscc() runs per tick and it always does. Not judged.
+        m_settling = false;
+        m_lastAttempts = r.attempts;
         return out;
     }
 
@@ -114,6 +137,7 @@ Hl2PsController::Step Hl2PsController::step(const Report& r)
         // it collects again.
         out.attenuationDb = att;
         out.flags = flagsFor(m_mode);
+        m_settling = true;
         m_sawActive = false;
         m_collected = false;
         if (m_mode == Mode::Single)
@@ -133,6 +157,7 @@ Hl2PsController::Step Hl2PsController::step(const Report& r)
             if (m_singleStarts < kSingleAttempts) {
                 ++m_singleStarts;
                 out.flags = flagsFor(Mode::Single);
+                m_settling = true;
                 m_sawActive = false;
                 m_collected = false;
             } else {
@@ -274,8 +299,8 @@ void Hl2PureSignal::setAutoCalibrate(bool on)
     if (m_enabled) {
         if (on)
             m_ctl.selectAuto();
-        else if (m_ctl.mode() == Hl2PsController::Mode::Auto)
-            m_ctl.selectOff();   // a held correction stays when Auto was not running
+        else
+            m_ctl.stopAuto(m_lastInfo.correcting);   // keeps the last good correction
     }
     publish();
 }

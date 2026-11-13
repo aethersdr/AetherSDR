@@ -111,11 +111,14 @@ void singleGivesUp()
     c.setAutoAttenuate(false);
     c.selectSingle();
     c.step(at(L::LReset));
+    c.step(at(L::LReset));   // read during the call that took the flags
     check(!c.step(at(L::LReset)).flags, "LRESET before calcc moved is not a failure");
     for (int start = 2; start <= Hl2PsController::kSingleAttempts; ++start) {
         c.step(at(L::LCollect));
         const auto s = c.step(at(L::LReset));
         check(s.flags == kSingle && c.mode() == Mode::Single, "calcc gave up: Single again");
+        check(!c.step(at(L::LReset)).flags && c.mode() == Mode::Single,
+              "the read after the retry is not judged");
     }
     c.step(at(L::LCollect));
     const auto s = c.step(at(L::LReset));
@@ -131,8 +134,74 @@ void restoring()
     auto s = c.step(at(L::LCollect));
     check(s.flags == kTurnOn, "Restore: turnon alone, clears automode");
     check(c.mode() == Mode::Restoring && !c.calibrating(), "Restoring is not calibrating");
+    c.step(at(L::LCollect));   // read during the call that took the flags
+    check(c.mode() == Mode::Restoring, "the read after the flags is not judged");
     c.step(at(L::LStayOn, 0, 0, true));
     check(c.mode() == Mode::Hold, "loaded correction held -> Hold");
+}
+
+void singleFromHold()
+{
+    // Unkeyed, one pscc() runs per tick, so the first read after Single's
+    // flags is from the call that processed them: still LSTAYON, still
+    // correcting. It must not end the Single.
+    Hl2PsController c;
+    c.setAutoAttenuate(false);
+    c.selectRestoring();
+    c.step(at(L::LReset));
+    c.step(at(L::LReset));
+    c.step(at(L::LStayOn, 0, 0, true));
+    check(c.mode() == Mode::Hold, "starts from a held correction");
+
+    c.selectSingle();
+    check(c.step(at(L::LStayOn, 0, 0, true)).flags == kSingle, "Single from Hold: flags out");
+    c.step(at(L::LStayOn, 0, 0, true));
+    check(c.mode() == Mode::Single && c.calibrating(), "stale LSTAYON read: still Single");
+    c.step(at(L::LReset));
+    check(c.mode() == Mode::Single, "calcc drops the old correction: still Single");
+    c.step(at(L::LWait));
+    check(c.mode() == Mode::Single && c.calibrating(), "armed in LWAIT: still Single");
+    c.step(at(L::LCollect));
+    c.step(at(L::LStayOn, 1, 150, true));
+    check(c.mode() == Mode::Hold, "the new correction held -> Hold");
+}
+
+void stopAuto()
+{
+    {
+        Hl2PsController c;
+        c.setAutoAttenuate(false);
+        c.selectAuto();
+        c.step(at(L::LReset));
+        c.step(at(L::LReset));
+        c.step(at(L::LCollect, 1, 150, true));
+        c.stopAuto(true);
+        const auto s = c.step(at(L::LCollect, 1, 150, true));
+        check(s.flags == kTurnOn, "Auto unticked with a correction: turnon alone, no reset");
+        check(c.mode() == Mode::Restoring && !c.calibrating(), "and no longer calibrating");
+        c.step(at(L::LCollect, 1, 150, true));
+        c.step(at(L::LTurnOn, 1, 150, true));
+        c.step(at(L::LStayOn, 1, 150, true));
+        check(c.mode() == Mode::Hold, "the correction is held -> Hold");
+    }
+    {
+        Hl2PsController c;
+        c.selectAuto();
+        c.step(at(L::LReset));
+        c.stopAuto(false);
+        check(c.step(at(L::LWait)).flags == kOff && c.mode() == Mode::Off,
+              "Auto unticked with nothing to keep: Off");
+    }
+    {
+        Hl2PsController c;
+        c.selectRestoring();
+        c.step(at(L::LReset));
+        c.step(at(L::LReset));
+        c.step(at(L::LStayOn, 0, 0, true));
+        c.stopAuto(true);
+        check(!c.step(at(L::LStayOn, 0, 0, true)).flags && c.mode() == Mode::Hold,
+              "unticking Auto when it is not running changes nothing");
+    }
 }
 
 void autoAttenuate()
@@ -141,10 +210,12 @@ void autoAttenuate()
     check(c.attenuationDb() == 31 && c.autoAttenuate(), "starts at the lowest gain, on");
     c.selectAuto();
     c.step(at(L::LReset, 4));          // flags out; attempts 4 is the baseline
+    auto s = c.step(at(L::LReset, 4)); // the read after them is not judged
+    check(!s.attenuationDb && !s.flags, "settling read is not judged");
 
     // An attempt that lands before calcc collected again is from before the
     // flags: not judged.
-    auto s = c.step(at(L::LWait, 5, 30));
+    s = c.step(at(L::LWait, 5, 30));
     check(!s.attenuationDb && !s.flags, "attempt from before the flags is ignored");
 
     c.step(at(L::LCollect, 5, 30));
@@ -152,6 +223,8 @@ void autoAttenuate()
     check(s.attenuationDb && *s.attenuationDb == 21, "too cold: 31 - 10 = 21");
     check(s.flags == kAuto, "and Auto starts over at the new gain");
     check(c.attenuationDb() == 21, "controller holds 21");
+    s = c.step(at(L::LCollect, 6, 30));   // settling read after the restart
+    check(!s.attenuationDb && !s.flags, "the read after a gain move is not judged");
 
     s = c.step(at(L::LWait, 7, 30));
     check(!s.attenuationDb, "next attempt only counts once calcc collected again");
@@ -169,6 +242,7 @@ void autoAttenuate()
     top.setAttenuationDb(Gain::kAttMin);
     top.selectAuto();
     top.step(at(L::LReset));
+    top.step(at(L::LReset));
     top.step(at(L::LCollect));
     s = top.step(at(L::LCollect, 1, 30));
     check(!s.attenuationDb && !s.flags, "at full gain a cold level has nowhere to go");
@@ -176,6 +250,7 @@ void autoAttenuate()
     Hl2PsController manual;
     manual.setAutoAttenuate(false);
     manual.selectAuto();
+    manual.step(at(L::LReset));
     manual.step(at(L::LReset));
     manual.step(at(L::LCollect));
     s = manual.step(at(L::LCollect, 1, 30));
@@ -185,6 +260,7 @@ void autoAttenuate()
     Hl2PsController held;
     held.setAutoAttenuate(false);
     held.selectSingle();
+    held.step(at(L::LReset));
     held.step(at(L::LReset));
     held.step(at(L::LCollect));
     held.step(at(L::LStayOn, 1, 150, true));
@@ -336,6 +412,8 @@ int main(int argc, char** argv)
     singleCalibration();
     singleGivesUp();
     restoring();
+    singleFromHold();
+    stopAuto();
     autoAttenuate();
     singleGainMovesBounded();
     controllerAutoSwitch();
