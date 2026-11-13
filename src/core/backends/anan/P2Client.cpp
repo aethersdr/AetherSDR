@@ -422,6 +422,25 @@ void P2Client::setBandFiltersEnabled(bool on)
     }
 }
 
+void P2Client::setSpeakerAudioEnabled(bool on)
+{
+    if (on == m_speakerAudioEnabled) {
+        return;
+    }
+    m_speakerAudioEnabled = on;
+    m_speakerPending.clear();
+    m_speakerPacer.reset();
+    if (!m_running) {
+        return;   // start() picks the flag up
+    }
+    if (on) {
+        m_speakerClock.restart();
+        m_speakerDrainTimer->start();
+    } else {
+        m_speakerDrainTimer->stop();
+    }
+}
+
 void P2Client::setSpeakerAmpMuted(bool on)
 {
     m_speakerAmpMuted = on;

@@ -195,6 +195,8 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    // The backend's last radioSpeakerAudioReported() this session; unknown until then.
+    std::optional<bool> reportedRadioSpeaker() const { return m_reportedRadioSpeaker; }
     TuneOutputControlState tuneOutputControl(int bandId) const;
     void requestTuneOutputSuppression(int bandId, bool suppressed);
 
@@ -1325,6 +1327,7 @@ public:
     void setPanNoiseFloorEnable(bool on);
 
 signals:
+    void radioSpeakerReportChanged();
     void cwAutoTuneIntentChanged(int sliceId);
     // RFC #5535's visibility condition, republished for the GUI. See
     // core/backends/FrontEndOverload.h.
@@ -1737,6 +1740,7 @@ private slots:
                                 const SpectrumCoverage& coverage);
 
 private:
+    std::optional<bool> m_reportedRadioSpeaker;
     void resetAudioControls();
     void applyAudioStreamDelta(const AudioStreamDelta& delta);
     // The DAX IQ registry: our IQ streams reach DaxIqModel and the VITA-49

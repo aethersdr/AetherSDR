@@ -155,6 +155,9 @@ QJsonObject capabilityValue(const RadioCapabilities& capabilities)
                 {QStringLiteral("maximumDb"), capabilities.receivePanRfGainControl->maximumDb},
                 {QStringLiteral("stepDb"), capabilities.receivePanRfGainControl->stepDb}})
             : QJsonValue(QJsonValue::Null)},
+        {QStringLiteral("radioSpeakerControl"), capabilities.radioSpeakerControl
+            ? QJsonValue(QJsonObject{{QStringLiteral("authority"), receiveAuthority(capabilities.radioSpeakerControl)}})
+            : QJsonValue(QJsonValue::Null)},
         {QStringLiteral("canTransmit"), capabilities.canTransmit},
         {QStringLiteral("maximumTransmitWatts"), capabilities.txPowerMaxWatts},
         {QStringLiteral("hasTuner"), capabilities.hasTuner},
@@ -184,6 +187,8 @@ RadioResourceAdapter::RadioResourceAdapter(
     }
 
     connect(m_radio, &RadioModel::infoChanged,
+            this, &RadioResourceAdapter::publishRadioSession);
+    connect(m_radio, &RadioModel::radioSpeakerReportChanged,
             this, &RadioResourceAdapter::publishRadioSession);
     connect(m_radio, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
@@ -427,10 +432,15 @@ void RadioResourceAdapter::publishRadioSession()
     const std::optional<int> pitch = m_radio->isConnected()
         ? m_radio->transmitModel().reportedCwPitch() : std::nullopt;
     m_publishedCwPitch = pitch;
+    const std::optional<bool> speaker = m_radio->isConnected()
+        ? m_radio->reportedRadioSpeaker() : std::nullopt;
     value.insert(QStringLiteral("receiveObservation"), QJsonObject{
         {QStringLiteral("cwPitch"), QJsonObject{
             {QStringLiteral("known"), pitch.has_value()},
-            {QStringLiteral("hz"), observedValue(pitch)}}}});
+            {QStringLiteral("hz"), observedValue(pitch)}}},
+        {QStringLiteral("radioSpeaker"), QJsonObject{
+            {QStringLiteral("known"), speaker.has_value()},
+            {QStringLiteral("enabled"), observedValue(speaker)}}}});
     if (m_telemetry) {
         value.insert(QStringLiteral("meterDelivery"), m_telemetry->meterDelivery());
     }

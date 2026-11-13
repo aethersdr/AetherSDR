@@ -247,9 +247,14 @@ commands. Create a new instance to restart discovery.
     `features`, an object naming each steerable host DSP feature
     (`agcThreshold`, `noiseBlanker`, `noiseReduction`, `rit`) with the modes
     it applies in; a feature that applies in no mode is omitted.
+  - Optional `radioSpeakerControl`: `authority` only, for
+    `radioSession.setRadioSpeaker` (the radio's own speaker; ANAN declares it).
   - Optional `receivePanRfGainControl`: `authority`, inclusive
     `minimumDb`/`maximumDb`, and `stepDb`. A backend whose stage is an
     attenuator declares it negated (ANAN: −31 to 0).
+- `receiveObservation.radioSpeaker`: `{known, enabled}`, whether the backend is
+  feeding the radio's own speaker, as it last reported in this session; unknown
+  while disconnected.
 - `receiveObservation.cwPitch`: `{known, hz}`, the pitch the backend last
   reported in this session, with `known:false` and `hz:null` while unknown or
   disconnected. It is session-wide, shared by every CW receiver, so it lives

@@ -329,6 +329,22 @@ int main(int argc, char** argv)
               "the typed RIT request (desktop and headless) reaches the same state");
     }
 
+    // ---- the G2's own speaker: declared, accepted, reported ----
+    {
+        AnanBackend backend;
+        check(backend.capabilities().radioSpeakerControl
+                  && backend.capabilities().radioSpeakerControl->authority
+                         == SliceFrequencyControl::Authority::Engine,
+              "ANAN declares its own speaker, engine authority");
+        std::optional<bool> reported;
+        QObject::connect(&backend, &IRadioBackend::radioSpeakerAudioReported,
+                         [&](bool on) { reported = on; });
+        check(backend.requestRadioSpeakerAudio(true) == ReceiveDispatch::Dispatched && reported == true,
+              "requestRadioSpeakerAudio(true) is taken and reported");
+        check(backend.requestRadioSpeakerAudio(false) == ReceiveDispatch::Dispatched && reported == false,
+              "and off again");
+    }
+
     // ---- the blanker publishes at once, like every other receive setter ----
     {
         AnanBackend backend;

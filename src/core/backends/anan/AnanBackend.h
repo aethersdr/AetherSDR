@@ -72,6 +72,9 @@ public:
     // RIT, from the desktop (SliceModel::setRit) and from slice.setRit, reaches
     // setSliceRit() here; XIT stays unsupported.
     ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
+    // The G2's own speaker, live for this session like frontend.set; the Radio Setup
+    // checkbox (AnanSettings) stays the saved default each connect starts from.
+    ReceiveDispatch requestRadioSpeakerAudio(bool on) override;
     // RIT moves the detector's zero (the WDSP shift) by the offset; the DDC and
     // panadapter stay on the slice frequency. Enable and offset as one intent,
     // clamped to kMaxRitOffsetHz; requestSliceControl(Rit) is how both the

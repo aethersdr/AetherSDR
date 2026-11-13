@@ -65,6 +65,9 @@ public:
         if (op == ReceiveOperation::CwPitch) {
             return !checkCwPitch();
         }
+        if (op == ReceiveOperation::RadioSpeaker) {
+            return !checkRadioSpeaker();
+        }
         if (op == ReceiveOperation::PanCenter || op == ReceiveOperation::PanBandwidth
             || op == ReceiveOperation::PanRfGain) {
             for (PanadapterModel* pan : m_radio->panadapters()) {
@@ -241,6 +244,17 @@ public:
         return {};
     }
 
+    std::optional<ProtocolError> setRadioSpeaker(bool enabled) override
+    {
+        if (const auto error = checkRadioSpeaker()) {
+            return error;
+        }
+        if (m_radio->backend()->requestRadioSpeakerAudio(enabled) != ReceiveDispatch::Dispatched) {
+            return refusal("capability.unavailable", "backend did not accept the speaker intent");
+        }
+        return {};
+    }
+
     std::optional<ProtocolError> setPanCenter(const QString& id, qint64 hz) override
     {
         return setPan(id, hz, ReceiveOperation::PanCenter);
@@ -363,6 +377,24 @@ private:
         if (!pitch || pitch->minimumHz <= 0 || pitch->maximumHz < pitch->minimumHz || pitch->stepHz <= 0
             || !m_radio->transmitModel().reportedCwPitch()) {
             return refusal("capability.unavailable", "CW pitch control or observation unavailable");
+        }
+        return {};
+    }
+
+    // Declared, and reported by this session's backend: the model holds no speaker
+    // state of its own to stand in for the report.
+    std::optional<ProtocolError> checkRadioSpeaker() const
+    {
+        if (thread() != QThread::currentThread() || !m_guard.ready()) {
+            return refusal("request.conflict", "radio connection is not ready");
+        }
+        const RadioCapabilities caps = m_radio->backendCapabilities();
+        if (const auto error = m_guard.checkTransmit(caps)) {
+            return error;
+        }
+        if (!caps.radioSpeakerControl || !known(caps.radioSpeakerControl->authority)
+            || !m_radio->reportedRadioSpeaker()) {
+            return refusal("capability.unavailable", "radio speaker control or observation unavailable");
         }
         return {};
     }
