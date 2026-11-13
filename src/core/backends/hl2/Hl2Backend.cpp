@@ -4677,13 +4677,14 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         m_keyedSwrGateClears = 0;
     }
     m_keyed = key;
-    {
+    if (!key) {
         // Under the direct-submit gate: the AudioEngine thread holds it from
         // its m_keyedAudio check to the post of the block, so a block is either
         // posted before the unkey's reset and flush below, or refused. That is
         // the ordering the GUI thread gave when it was the only submitter.
+        // Key-down stores true further on, after the setMox post.
         const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
-        m_keyedAudio.store(key);
+        m_keyedAudio.store(false);
     }
     // Manual PTT is already mirrored optimistically by RadioModel, but CW
     // break-in keys inside this backend. Publish that edge so the TX
@@ -4761,6 +4762,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 dsp->reset();
             }
         }, Qt::QueuedConnection);
+    }
+    if (key) {
+        // Only now, after the setMox post: the I/O thread runs posts in order,
+        // so the first direct block of a new over lands after that over's
+        // dsp->reset() rather than being wiped by it.
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_keyedAudio.store(true);
     }
     // The receive filter and an owed RF drive wait out the radio's transmit
     // tail (see kTxTailHoldMs), armed only after the MOX-off is queued.
