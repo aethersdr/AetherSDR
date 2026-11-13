@@ -17,6 +17,7 @@
 
 #include "core/backends/hl2/Hl2ControlRequest.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+#include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 class QUdpSocket;
@@ -842,15 +843,18 @@ private:
     // empty when each block is due and any lateness is keyed zeros mid-over.
     // Armed on the keyed edge and on every abandon; the keyed queued-IQ arm then
     // sends silence until the target is queued. Margin = target - one block:
-    // two blocks (42.67 ms) cover every over measured; that is also the latency.
-    static constexpr std::size_t kTxPrimeBlockSamples = 1024;   // Hl2TxDsp block at 48 kHz; hl2_tx_gate_test pins it
-    static constexpr std::size_t kTxPrimeMarginBlocks = 2;
+    // 42.67 ms covers every over measured, whatever the block; that is also the latency.
+    // Hl2TxDsp's default block, at the EP2 rate: derived, so it follows the block.
+    static constexpr std::size_t kTxPrimeBlockSamples =
+        static_cast<std::size_t>(Hl2TxDsp::Config{}.dspBlockSize)
+        * static_cast<std::size_t>(Hl2TxDsp::Config{}.outputSampleRateHz
+                                   / Hl2TxDsp::Config{}.inputSampleRateHz);
+    static constexpr std::size_t kTxPrimeMarginSamples = 2048;  // 42.67 ms at 48 kHz
     static constexpr std::size_t kTxPrimeTargetSamples =
-        (kTxPrimeMarginBlocks + 1) * kTxPrimeBlockSamples;
+        kTxPrimeMarginSamples + kTxPrimeBlockSamples;
     // Deadline in packets: twice the margin's arrival time. A stopped producer is let go.
     static constexpr std::uint64_t kTxPrimeMaxHoldPackets =
-        (2 * kTxPrimeMarginBlocks * kTxPrimeBlockSamples)
-            / static_cast<std::size_t>(kTxSamplesPerPacket);
+        (2 * kTxPrimeMarginSamples) / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeTargetSamples < kTxQueueMax,
                   "the prime target must fit below the overflow bound");
     std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally

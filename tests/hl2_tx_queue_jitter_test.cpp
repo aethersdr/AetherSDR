@@ -26,6 +26,12 @@ struct MetisClientTestAccess {
     static constexpr int ep2AudioRateHz() { return MetisClient::kEp2AudioRateHz; }
     // A session without a socket: the client keys only while running.
     static void setStreaming(MetisClient& client) { client.m_running = true; }
+    // The prime, read from the production constants.
+    static constexpr std::size_t primeTarget() { return MetisClient::kTxPrimeTargetSamples; }
+    static constexpr std::size_t primeMargin()
+    {
+        return MetisClient::kTxPrimeTargetSamples - MetisClient::kTxPrimeBlockSamples;
+    }
 };
 }
 
@@ -169,10 +175,12 @@ int main(int argc, char** argv)
     // dozens of episodes on purpose. The wire is what is read here.
     QLoggingCategory::setFilterRules(QStringLiteral("aether.hl2.tx.debug=false"));
     const int block = blockSamples();
-    check(block == 1024, "one Hl2TxDsp block reaches the queue as 1024 EP2 samples (21.33 ms)");
+    check(block == 512, "one Hl2TxDsp block reaches the queue as 512 EP2 samples (10.67 ms)");
+    const auto margin = static_cast<long long>(MetisClientTestAccess::primeMargin());
+    const auto target = static_cast<long long>(MetisClientTestAccess::primeTarget());
 
     // ---- A producer that is never late ----
-    // An unprimed queue is left 16 samples short of a packet when the next
+    // An unprimed queue is left a few samples short of a packet when the next
     // block is due, so even this gets one sub-ms gap. The control here is the
     // sample sequence: every sample once, in order.
     {
@@ -186,14 +194,18 @@ int main(int argc, char** argv)
         check(r.sequenceIntact && r.realSamples == static_cast<long long>(blocksInOver()) * block,
               "CONTROL: every sample of an on-time over reaches the wire once, in order");
         check(r.everyPacketKeyed, "CONTROL: the over is keyed from its first packet");
+        // THE START (#6052): from the keyed edge, one block to fill, the margin
+        // to queue, then the next packet. Shorter blocks move it by one block.
+        check(r.firstReal == (target + kPacket - 1) / kPacket * kPacket,
+              "the first sample goes out on the first packet after one block plus the margin");
     }
 
     // ---- THE MEASURED OVERS: d167 leg C, ten 3 s overs ----
     //
     // Each row is the mid-over zero runs of one hardware over, in ms. Each run
     // becomes a STEP in the producer's lateness, held for the rest of the over,
-    // from the fourth block on every second block. The positions are chosen;
-    // only the lengths are measured.
+    // from the first block after the prime's target on, every second block.
+    // The positions are chosen; only the lengths are measured.
     const std::vector<std::vector<double>> kMeasuredOversMs = {
         {1.96, 8.67}, {0.38, 2.67, 2.29}, {2.00}, {1.29, 1.62, 8.62}, {4.96},          // 384 kHz
         {5.54, 4.25}, {2.58, 3.92, 4.25}, {5.54, 10.17, 4.58, 3.29, 1.62, 0.67},
@@ -211,8 +223,9 @@ int main(int argc, char** argv)
             std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
             int late = 0;
             std::size_t step = 0;
-            for (std::size_t j = 3; j < lateness.size(); ++j) {
-                if (step < over.size() && (j - 3) % 2 == 0)
+            const auto first = static_cast<std::size_t>(target / block);
+            for (std::size_t j = first; j < lateness.size(); ++j) {
+                if (step < over.size() && (j - first) % 2 == 0)
                     late += msToSamples(over[step++]);
                 lateness[j] = late;
             }
@@ -237,11 +250,11 @@ int main(int argc, char** argv)
               "puts NO keyed zeros in mid-over");
         check(intact, "late blocks are delayed, never lost, repeated or reordered");
         check(keyed, "MOX is on the first packet of the over and every one after it");
-        // WHAT THE DEPTH MAY COST. Two blocks plus the packet it is released
+        // WHAT THE DEPTH MAY COST. The margin plus the packet it is released
         // on: that is the latency #6052 puts to the maintainer, and a deeper
         // queue is a different proposal.
-        check(worstHeld <= 2 * block + kPacket,
-              "the first sample waits in the queue for at most two blocks and one packet");
+        check(worstHeld <= margin + kPacket,
+              "the first sample waits in the queue for at most the margin and one packet");
     }
 
     // ---- BOUNDED JITTER: every block late by 1-25 ms, independently ----
@@ -272,7 +285,7 @@ int main(int argc, char** argv)
     // ---- POSITIVE CONTROL: the gap detector still sees a gap ----
     //
     // One block 100 ms late is more than any queue depth proposed in #6052
-    // (two blocks at most). If this read no gap, the zeros above would mean a
+    // (a 42.67 ms margin). If this read no gap, the zeros above would mean a
     // blind detector.
     {
         std::vector<int> lateness(static_cast<std::size_t>(blocksInOver()), 0);
@@ -282,7 +295,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr,
             "PROBE  one block 100 ms late: %d gap(s), %.2f ms of keyed zeros, longest %.2f ms\n",
             r.gaps, samplesToMs(r.gapSamples), samplesToMs(r.longestGap));
-        check(r.gaps >= 1 && r.longestGap >= msToSamples(100.0) - 2 * block - kPacket
+        check(r.gaps >= 1 && r.longestGap >= msToSamples(100.0) - margin - kPacket
                   && r.longestGap <= msToSamples(100.0) + kPacket,
               "POSITIVE CONTROL: a block later than the queue is deep is a gap, as long as "
               "the lateness less whatever depth the queue had");
