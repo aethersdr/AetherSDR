@@ -66,7 +66,7 @@ With a neural decoder selected:
 
 - **Sens**, the lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
 - Characters are coloured by the model's own confidence, on the same green-to-red scale, and are never hidden.
-- The MQTT text stream comes from ggmorse only. The **Live CW contacts** window works with every decoder: it reads the text shown in the pane.
+- The MQTT text stream comes from ggmorse only. The **Live CW contacts** window works with every decoder: it reads the text shown in the panel.
 - AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on a radio licensed for it through SmartSDR+, which it keeps after the subscription lapses) works with any decoder.
 
 The slice's **Once** and **Loop** auto-tune controls adjust receive tuning;
