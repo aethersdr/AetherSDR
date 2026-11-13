@@ -3,8 +3,9 @@
 // FM bypasses the RX AGC and the detector output scales with deviation, so on
 // open-squelch noise it reaches several times full scale unless WDSP's FM
 // detector limiter runs. This pins that it does on the HL2, whether FM is
-// built or entered live, that a full-deviation tone keeps its level and shape,
-// and that the limiter flag leaves USB and AM output identical.
+// built, entered live, or left and re-entered live, that a full-deviation tone
+// keeps its level and shape, and that the limiter flag leaves USB and AM output
+// identical.
 //
 // Offline and sample-counted: blockForOutput, no audio device, no wall clock.
 
@@ -243,6 +244,27 @@ int main(int argc, char** argv)
         const Capture noise = rig.measure(Stimulus::Noise);
         std::printf("FM entered live, noise: peak %.4f rms %.4f\n", noise.peak(), noise.rms());
         check(noise.peak() <= 1.0, "FM entered live: noise peak is within full scale");
+    }
+
+    // 2b. USB -> FM -> USB -> FM without a rebuild (case from #7235): leaving
+    // FM and coming back must leave the limiter running on the second entry.
+    {
+        Rig rig(WdspChannel::Mode::Usb);
+        rig.dsp.setFilter(-8000.0, 8000.0);
+        rig.dsp.setMode(WdspChannel::Mode::Fm);
+        const Capture first = rig.measure(Stimulus::Noise);
+        rig.dsp.setFilter(150.0, 2850.0);
+        rig.dsp.setMode(WdspChannel::Mode::Usb);
+        rig.feed(1, Stimulus::Noise, 1000.0);
+        rig.dsp.setFilter(-8000.0, 8000.0);
+        rig.dsp.setMode(WdspChannel::Mode::Fm);
+        const Capture second = rig.measure(Stimulus::Noise);
+        std::printf("USB->FM->USB->FM, noise: first FM peak %.4f, second FM peak %.4f (%zu samples)\n",
+                    first.peak(), second.peak(), second.left.size());
+        check(second.left.size() > static_cast<std::size_t>(kAudioRate),
+              "FM re-entered: noise produced audio");
+        check(first.peak() <= 1.0, "USB->FM: noise peak is within full scale");
+        check(second.peak() <= 1.0, "USB->FM->USB->FM: noise peak is within full scale");
     }
 
     // 3. A full-deviation 1 kHz tone keeps a usable level and its shape. The
