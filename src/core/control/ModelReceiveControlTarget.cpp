@@ -212,7 +212,8 @@ public:
             return error;
         }
         const int maximum = m_radio->backendCapabilities().receiveDspControl->maximumRitOffsetHz;
-        if (offsetHz < -maximum || offsetHz > maximum) {
+        // Turning RIT off is always allowed; the backend clamps the offset it keeps.
+        if (enabled && (offsetHz < -maximum || offsetHz > maximum)) {
             return refusal("request.out_of_range", "RIT offset is outside the declared range");
         }
         m_radio->backend()->setSliceRit(id, enabled, offsetHz);

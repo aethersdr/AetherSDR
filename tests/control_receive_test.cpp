@@ -1212,6 +1212,14 @@ void panelVerbs()
     }
     {
         Fixture f;
+        auto off = with(f.params(ReceiveOperation::Rit), "enabled", false);
+        off.insert("offsetHz", 15000);
+        check(f.send(ReceiveOperation::Rit, off).contains("result")
+                  && f.backend->method == "rit" && !f.backend->args.value("enabled").toBool(),
+              "turning RIT off is never refused for its offset");
+    }
+    {
+        Fixture f;
         check(f.send(ReceiveOperation::NoiseReduction, f.params(ReceiveOperation::NoiseReduction)).contains("result")
                   && f.backend->method == "dsp"
                   && f.backend->args.value("feature").toInt() == static_cast<int>(SliceDspRequest::Feature::Nr)
