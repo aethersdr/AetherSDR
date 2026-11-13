@@ -3200,7 +3200,7 @@ RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz
   level: 10 dB at the default level of 10, against an AGC ceiling of
   0.6·T + (20 − LNA) dB. DIGU/DIGL are therefore about 0.6·T − 10 dB quieter
   on the speaker and on the TCI level meter at the default LNA gain: 29 dB at
-  AGC-T 65, 41 dB at AGC-T 85 (measured on hardware with `radiocert rx`:
+  AGC-T 65, 41 dB at AGC-T 85 (measured on hardware by radiocert's `rx-sidebands` stage:
   29.6 dB and 41.1 dB); #5629's AGC-off arm ran at that same 10 dB. The
   operator raises the level with the AGC-T slider while AGC is off, and the
   level is remembered per receiver (`RestoredRadioState::agcOffLevels`, §5 AGC),
