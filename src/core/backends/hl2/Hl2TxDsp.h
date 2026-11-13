@@ -223,8 +223,11 @@ private:
     // never levelled as a different source. See processAudioBlock().
     TxAudioSource m_lastSource = TxAudioSource::Microphone;
     bool m_sourceChangeWarned = false;   // one warning per transmission
-    // Diagnostic: time since the previous audio block of this transmission.
+    // Diagnostic: time since the previous audio block of this transmission,
+    // and this transmission's late blocks, summarised once in reset().
     QElapsedTimer m_arrivalTimer;
+    int m_lateBlocks = 0;
+    qint64 m_worstGapMs = 0;
     int m_upsample = 2;
     Hl2TxAlc m_alc;              // level chain; its gain carries across blocks
 
