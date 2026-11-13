@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
@@ -550,6 +551,29 @@ static void testFlushPaths()
         b.play({}, 400);
         check(carriers(b.iTrace).empty() && !b.client.cwKeyDown(),
               "ended operation: a pending down whose operation ended is not keyed");
+    }
+    {
+        // CW mode stays up on a later, live element, so only the due-time
+        // re-check stands between the ended element and the carrier.
+        Bench b;
+        const auto producer = b.tx.coordinator.registerProducer();
+        const auto element = producer.request();
+        const auto intent = b.tx.coordinator.beginRequest(element, b.tx.operation, TxCoordinator::Activity::CwKey);
+        const auto op = b.tx.coordinator.requestOperation(element);
+        b.client.setCwKeyDown(true, op, b.t0 + std::chrono::milliseconds(100),
+                              b.t0 + std::chrono::milliseconds(140));
+        b.client.setCwKeyDown(true, b.tx.operation, b.t0 + std::chrono::milliseconds(300),
+                              b.t0 + std::chrono::milliseconds(340));
+        (void)b.tx.coordinator.endIntent(intent);
+        b.play({}, 500);
+        const auto liveStart = static_cast<std::size_t>(samplesOfMs(300) + Access::leadSamples());
+        const bool silent = b.iTrace.size() > liveStart
+            && std::all_of(b.iTrace.begin(), b.iTrace.begin() + static_cast<std::ptrdiff_t>(liveStart),
+                           [](int s) { return s == 0; });
+        check(silent, "ended operation, MOX live: no CW sample before the live element (no carrier)");
+        const auto runs = carriers(b.iTrace);
+        check(runs.size() == 1 && within(runs[0].length, samplesOfMs(40), 1),
+              "ended operation, MOX live: the live element after it is keyed whole");
     }
 }
 
