@@ -586,8 +586,12 @@ RadioCapabilities AnanBackend::capabilities() const
     // both zero means "not reported", not a guess.
     c.tuningMinHz = 0.0;
     c.tuningMaxHz = 0.0;
-    // State is engine-owned, but verified coverage is still unavailable.
-    c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine, 0, 0};
+    // Headless tuning bounds: the span a G2 (gateware 27) was measured to tune
+    // and demodulate, kept below phaseWord()'s alias at kDspClockHz/2. A tuning
+    // bound, not a sensitivity claim: front-end roll-off is unmeasured, so the
+    // GUI range above stays unreported.
+    c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
+                               kHeadlessTuneMinHz, kHeadlessTuneMaxHz};
     c.receiveModeControl = std::nullopt; // mode/passband transition contract not yet qualified
     c.receiveFilterControl = std::nullopt;
     // Gain and mute both act on this receiver's audio and are applied by this

@@ -125,8 +125,11 @@ The production simulator is the fully exercised integration path for this
 slice. RTL-SDR is eligible when built and connected but is not hardware-certified
 by simulator tests. A TX-enabled HL2 lacks normalized idle readback and
 remains unavailable; aetherd constructs the HL2 TX-disabled (no HL2 TX grant
-exists), so in the daemon it qualifies. Flex and ANAN
-currently lack verified command coverage and remain unavailable. Icom's
+exists), so in the daemon it qualifies. ANAN qualifies with engine authority
+over 10 kHz–61.43 MHz, the span a G2 (gateware 27) was measured to tune; that
+is a tuning bound, not a sensitivity claim, and the desktop tuning range stays
+unreported. Flex currently lacks verified command coverage and remains
+unavailable. Icom's
 profile-driven bounds/readback can satisfy the model seam, but the current daemon
 catalogue intentionally does not offer Icom/manual connections. None of these
 limitations changes existing desktop tuning behavior.

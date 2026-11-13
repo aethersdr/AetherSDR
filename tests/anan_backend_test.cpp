@@ -222,6 +222,15 @@ int main(int argc, char** argv)
               "backendPanAveraging engaged, 10 ms per FFT AVG step -- the WDSP analyzer averages");
         check(c.tuningMinHz == 0.0 && c.tuningMaxHz == 0.0,
               "tuning range not reported -- no verified G2 range yet, not a guess");
+        check(c.sliceFrequencyControl.authority == SliceFrequencyControl::Authority::Engine
+                  && c.sliceFrequencyControl.minimumHz == 10'000
+                  && c.sliceFrequencyControl.maximumHz == 61'430'000,
+              "headless tuning bounds are the measured 10 kHz - 61.43 MHz span");
+        check(AnanBackend::isRestorableFrequencyHz(
+                  static_cast<double>(c.sliceFrequencyControl.minimumHz))
+                  && AnanBackend::isRestorableFrequencyHz(
+                      static_cast<double>(c.sliceFrequencyControl.maximumHz)),
+              "both headless edges are tunable: inside (0, Nyquist), below phaseWord() aliasing");
         check(c.clientSettingsDomains
                   == (RadioCapabilities::ClientSettingsDomain::RfGain
                       | RadioCapabilities::ClientSettingsDomain::Tuning

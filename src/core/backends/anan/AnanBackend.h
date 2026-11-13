@@ -134,6 +134,11 @@ public:
     // reported. Refused, never clamped, at or above Nyquist.
     [[nodiscard]] static bool isRestorableFrequencyHz(double hz) noexcept;
 
+    // Headless slice.setFrequency bounds (sliceFrequencyControl): the measured
+    // tuning span, both edges inside isRestorableFrequencyHz(). See capabilities().
+    static constexpr qint64 kHeadlessTuneMinHz = 10'000;
+    static constexpr qint64 kHeadlessTuneMaxHz = 61'430'000;
+
     // The CW BFO offset (HERMES.md §5: "CW has no BFO unless you build one").
     // +pitchHz for CWU/CW, -pitchHz for CWL, 0 for every other mode -- zero
     // for non-CW is why every mode routes through this rather than only the
