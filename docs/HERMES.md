@@ -1697,7 +1697,7 @@ radio. See §18 for the full audit and the proposed seam.
 | 27 | AetherClock off DAX-channel identity onto slice identity | §18.6, gap 17 | WWV/WWVB decode. Depends on 26 | S |
 | 28 | `hasDaxAudio` / `hasDaxIq` / tap kinds / `rxAudioSampleRateHz` capabilities | §18.5 | Lets features decline honestly instead of binding to nothing. Depends on 26. On HL2 the tap-kinds answer is `Demod` only (item 30) | S |
 | 29 | Retire the `kiwi : "flex"` source-tag ternary | §18.2, gap 19 | Blocks a third concurrent family; `AsrTapPolicy` cannot disambiguate. Fold into 26 | XS |
-| ~~30~~ | ~~Measure whether TCI's post-AGC feed costs WSJT-X decodes~~ **DONE (#5629)** | §18.5 | Measured offline against WSJT-X's FT8 decoder: no measurable loss alone or beside a +10/+20 dB signal, 32 of 82 weak decodes lost beside +30 dB and 58 of 76 beside +40 dB. `agcMode = "off"` recovers them, so no `Wideband` tap is built; DIGU/DIGL open with AGC off instead, up to 29 dB quieter (§18.5) | — |
+| ~~30~~ | ~~Measure whether TCI's post-AGC feed costs WSJT-X decodes~~ **DONE (#5629)** | §18.5 | Measured offline against WSJT-X's FT8 decoder: no measurable loss alone or beside a +10/+20 dB signal, 32 of 82 weak decodes lost beside +30 dB and 58 of 76 beside +40 dB. `agcMode = "off"` recovers them, so no `Wideband` tap is built; DIGU/DIGL open with AGC off instead, about 0.6·T − 10 dB quieter (§18.5) | — |
 
 ### Tier 4 — deliberate divergences, do NOT "fix" by reflex
 
@@ -1989,9 +1989,10 @@ second receiver remains the only check that comes from outside it.
   it is a real frequency error with no calibration knob. A per-unit ppm trim
   belongs alongside the power-calibration curve above.
 - **`RTTY` has no HL2 mode mapping.** It is advertised in the TCI
-  `modulations_list` and falls through `modeFromString` to the USB fallback —
-  the same class of silent defect as the `CW` gap in §16.7. Left unmapped rather
-  than guessed at; WDSP has no RTTY mode, so it needs a deliberate decision.
+  `modulations_list`, and `Hl2Backend::setSliceMode` refuses it (it is not in
+  `hl2::knownModeStrings`), so the slice stays on its previous mode rather than
+  becoming USB. Left unmapped rather than guessed at; WDSP has no RTTY mode, so
+  it needs a deliberate decision.
 
 ### 14.9 The voice chain: what persists per radio, and what does not
 
@@ -2738,7 +2739,7 @@ Also fixed here: `modeFromString` knew `"CWU"` but not `"CW"` — the spelling
 reports — so plain CW fell through to the USB fallback and was demodulated as
 SSB. `NFM` was missing for the same reason. **Any mode name that appears in the
 TCI `modulations_list` needs a mapping, or it silently becomes USB.** `RTTY`
-still has this gap.
+has none and is refused instead (§14.8).
 
 ---
 
@@ -3196,10 +3197,11 @@ RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz
   and `Hl2Backend::requestSliceAgc` drops it in DIGU/DIGL, so a bookmark
   cannot bring an AGC mode into a data mode; its threshold still applies.
   With AGC off the gain is the AGC-off
-  level: 10 dB at the default level of 10, against a 39 dB AGC ceiling at the
-  default threshold and LNA gain. DIGU/DIGL are therefore up to 29 dB quieter
-  on the speaker and on the TCI level meter (arithmetic on the two settings,
-  not a measurement); #5629's AGC-off arm ran at that same 10 dB. The
+  level: 10 dB at the default level of 10, against an AGC ceiling of
+  0.6·T + (20 − LNA) dB. DIGU/DIGL are therefore about 0.6·T − 10 dB quieter
+  on the speaker and on the TCI level meter at the default LNA gain: 29 dB at
+  AGC-T 65, 41 dB at AGC-T 85 (measured on hardware with `radiocert rx`:
+  29.6 dB and 41.1 dB); #5629's AGC-off arm ran at that same 10 dB. The
   operator raises the level with the AGC-T slider while AGC is off, and the
   level is remembered per receiver (`RestoredRadioState::agcOffLevels`, §5 AGC),
   so the compensation holds across launches. The

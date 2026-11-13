@@ -308,6 +308,88 @@ int main()
         check(std::isnan(median({std::nan("")})), "median of nothing finite is NaN");
     }
 
+    // ---- rx-sidebands: recovered is RELATIVE to the mode's own background ----
+    //
+    // The HL2 runs DIGU/DIGL with AGC off by design (#5629), so the same
+    // carrier plays 29-41 dB quieter there than in USB at the same
+    // tone-to-rest ratio. An absolute floor read that as deaf.
+    {
+        const auto lin = [](double dB) { return std::pow(10.0, dB / 20.0); };
+        // Hardware figures (tone, overall rms), one host, WWV on an antenna.
+        check(toneRecovered(lin(-46.08), lin(-40.48)), "USB on WWV is recovered");
+        check(toneRecovered(lin(-75.69), lin(-70.04)),
+              "DIGU on WWV, 29.6 dB quieter with AGC off, is recovered too");
+        check(db(lin(-75.69)) < -55.0,
+              "and that DIGU tone sits below the old absolute -55 dB floor");
+        check(!toneRecovered(lin(-77.8), lin(-37.0)), "LSB on the far side is not");
+        check(!toneRecovered(lin(-107.2), lin(-61.8)), "DIGL on the far side is not");
+        // A second host, same antenna class.
+        check(toneRecovered(lin(-34.3), lin(-28.4)) && toneRecovered(lin(-75.1), lin(-67.5)),
+              "the second host's USB and DIGU are recovered");
+        check(!toneRecovered(lin(-80.8), lin(-18.4)), "its LSB is not");
+        // Band noise alone (a dummy load), the strongest bin of the span.
+        check(!toneRecovered(lin(-97.0), lin(-66.0)) && !toneRecovered(lin(-138.4), lin(-107.1)),
+              "noise alone is not a recovered tone, at either level");
+
+        // The same property on synthetic audio: scaling a capture by -30 dB
+        // changes neither the ratio nor the verdict.
+        const double fs = 48000.0;
+        std::vector<float> loud = tone(1500.0, fs, 1.5, 0.02);
+        unsigned seed = 12345u;
+        for (float& v : loud) {
+            seed = seed * 1103515245u + 12345u;
+            v += 0.01f * (static_cast<float>((seed >> 8) & 0xFFFF) / 32768.0f - 1.0f);
+        }
+        std::vector<float> quiet(loud);
+        for (float& v : quiet)
+            v *= 0.0316f;
+        const double tl = tonePowerNear(loud, 1500.0, fs, 25.0);
+        const double tq = tonePowerNear(quiet, 1500.0, fs, 25.0);
+        check(toneRecovered(tl, rms(loud)) && toneRecovered(tq, rms(quiet)),
+              "a tone 30 dB quieter overall is still recovered");
+        check(std::fabs(toneAboveBackgroundDb(tl, rms(loud))
+                        - toneAboveBackgroundDb(tq, rms(quiet))) < 0.1,
+              "the ratio does not move with the overall level");
+        std::vector<float> noiseOnly(loud.size());
+        for (float& v : noiseOnly) {
+            seed = seed * 1103515245u + 12345u;
+            v = 0.01f * (static_cast<float>((seed >> 8) & 0xFFFF) / 32768.0f - 1.0f);
+        }
+        check(!toneRecovered(tonePowerNear(noiseOnly, 1500.0, fs, 25.0), rms(noiseOnly)),
+              "synthetic noise alone is not recovered");
+        check(toneAboveBackgroundDb(0.5 / std::sqrt(2.0), 0.5) > 100.0,
+              "a pure tone stands far above an empty background, without dividing by 0");
+    }
+
+    // ---- rx-sidebands: what the four verdicts say together ----
+    {
+        using P = RxSidebandPattern;
+        check(rxSidebandPattern(true, false, true, false, true) == P::Expected,
+              "upper pair hears a carrier above the dial");
+        check(rxSidebandPattern(false, true, false, true, false) == P::Expected,
+              "lower pair hears a carrier below the dial");
+        check(rxSidebandPattern(false, true, false, true, true) == P::Inverted,
+              "only the lower pair hearing a carrier above the dial is an inversion");
+        check(rxSidebandPattern(true, false, false, false, true) == P::PairsDisagree,
+              "USB without DIGU is a pair disagreement, not a pass");
+        check(rxSidebandPattern(false, false, false, false, true) == P::NoneRecovered,
+              "nothing heard is inconclusive");
+        check(rxSidebandPattern(true, true, true, true, true) == P::AllRecovered,
+              "everything heard means the dial is not where it is thought to be");
+    }
+
+    // ---- mode-map: refused, alias, unstable ----
+    {
+        using M = ModeReadback;
+        check(classifyModeReadback(true, false, false) == M::Retained, "retained");
+        check(classifyModeReadback(false, true, false) == M::Refused,
+              "a re-probe that stays on the baseline is a refusal (RTTY on the HL2)");
+        check(classifyModeReadback(false, false, true) == M::Alias,
+              "a re-probe that lands on the same other spelling is an alias (CWU->CW)");
+        check(classifyModeReadback(false, false, false) == M::Unstable,
+              "two different answers are neither");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "radio_certification_math_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

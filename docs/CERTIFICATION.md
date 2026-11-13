@@ -97,8 +97,10 @@ would inherit the blindness it exists to remove.
 
 ### 1.6 Readback proves nothing
 
-The mode map passed for twelve modes while the backend mapped nine. `RTTY` still
-reads back perfectly and is demodulated as USB.
+The mode map passed for twelve modes while the backend mapped nine. `RTTY` read
+back perfectly and was demodulated as USB; the HL2 now refuses it and the slice
+keeps its previous mode, which the mode map re-asks from a known mode to tell
+apart from an alias.
 
 **Consequence.** Controls are certified by **effect**. Halving a linear gain is
 −6.02 dB; that is arithmetic rather than a property of any radio, which is what
@@ -1072,7 +1074,7 @@ need:
 | `SliceModel::setRfGain` has no runtime path | LNA gain is connect-parameters only; the preamp control does nothing after connect |
 | ~~`TX:ALC` computed and discarded~~ | **Producer and Phone-panel display implemented (#5506, #5636)** (not yet verified on a real radio) — `Hl2TxDsp::alcGain` now feeds a meter of its own, `TX:ALCGAIN` (dB), through `MeterModel`, radiocert and the automation bridge; the Phone panel renders ALC Gain when the meter is defined, with immediate clearing on invalidation. It was NOT a repoint of `TX:ALC`: that key is a post-ALC LEVEL consumed by `MeterModel::swAlc()`, both ALC gauges, the certification table and the bridge, and changing what a published key means breaks all of them silently. The two are now separate quantities, as they are in WDSP (`TXA_ALC_PK` and `TXA_ALC_GAIN`) |
 | Tune power not separable from RF power | TUNE keys at full drive on a fresh connect |
-| `RTTY` unmapped | silently demodulated as USB; conventionally lower-sideband on HF, so it wants a decision rather than a default |
+| `RTTY` unmapped | refused by `Hl2Backend::setSliceMode` (the slice keeps its previous mode), no longer demodulated as USB; conventionally lower-sideband on HF, so it still wants a decision rather than a default |
 | Sideband stage saturates | even at 5 % drive into a dummy load a few inches away; needs inline attenuation or a second receiver |
 | Wire-convention stimulus harness (§1.4) | inject synthetic IQ at the backend boundary; needs no radio and would have caught the receive inversion |
 | **Reconnect stage** (§1.21) | connect / disconnect / immediately reconnect; nothing in the suite exercises teardown today, and a leaked session is invisible until the second connect |

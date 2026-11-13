@@ -221,4 +221,83 @@ inline double median(std::vector<double> values)
     return n % 2 ? values[n / 2] : 0.5 * (values[n / 2 - 1] + values[n / 2]);
 }
 
+// ---- receive sidebands (docs/HERMES.md 15.3, 15.4) ----
+
+// How far the reference tone stands above everything else the mode delivered,
+// in dB of rms against rms. Relative on purpose: an absolute floor reads a
+// mode that runs quieter BY DESIGN as deaf. The HL2 runs DIGU/DIGL with AGC
+// off (#5629), 29-41 dB below USB/LSB at the same tone-to-rest ratio, and an
+// absolute floor of -55 dB would call DIGU "not recovered" at -75.7 dB while
+// it carried the tone exactly as well as USB did.
+//
+// `tone` is tonePowerNear()'s figure, |sum x e^-jwn| / N, which is half a
+// sinusoid's amplitude; its rms is therefore tone * sqrt(2). The background is
+// what remains of the overall rms once that tone is taken out.
+inline double toneAboveBackgroundDb(double tone, double overallRms)
+{
+    const double toneRms = tone * std::sqrt(2.0);
+    const double rest2 = overallRms * overallRms - toneRms * toneRms;
+    const double floorRms = 1e-12;   // db()'s own floor: a pure tone reads high, not inf
+    return db(toneRms) - db(std::sqrt(std::max(rest2, floorRms * floorRms)));
+}
+
+// A mode recovered the reference when its tone stands no further than this
+// below the rest of its audio. Measured on the HL2 (1.5 s, 48 kHz tap): a
+// recovered WWV carrier sits at about 0 dB on two hosts, band noise alone at
+// -28 to -31 dB (the strongest bin of the search span), and the opposite
+// sideband at -38 to -59 dB. -15 dB is midway between recovered and noise.
+inline constexpr double kRecoveredToneAboveBackgroundDb = -15.0;
+
+inline bool toneRecovered(double tone, double overallRms)
+{
+    return toneAboveBackgroundDb(tone, overallRms) > kRecoveredToneAboveBackgroundDb;
+}
+
+// What the four modes' recoveries say together. With the carrier ABOVE the
+// dial (offset > 0) USB and DIGU should hear it and LSB and DIGL should not;
+// below the dial, the reverse.
+enum class RxSidebandPattern {
+    NoneRecovered,    // no carrier, or no antenna: inconclusive, not a pass
+    AllRecovered,     // the dial is probably not where the stage thinks
+    PairsDisagree,    // USB vs DIGU, or LSB vs DIGL, differ: a per-mode fault
+    Inverted,         // only the wrong pair recovered: a handedness inversion
+    Expected,
+};
+
+inline RxSidebandPattern rxSidebandPattern(bool usb, bool lsb, bool digu, bool digl,
+                                           bool carrierAboveDial)
+{
+    if (!usb && !lsb && !digu && !digl)
+        return RxSidebandPattern::NoneRecovered;
+    if (usb && lsb && digu && digl)
+        return RxSidebandPattern::AllRecovered;
+    if (usb != digu || lsb != digl)
+        return RxSidebandPattern::PairsDisagree;
+    // Each pair agrees and exactly one pair recovered.
+    return usb == carrierAboveDial ? RxSidebandPattern::Expected
+                                   : RxSidebandPattern::Inverted;
+}
+
+// ---- mode map (docs/HERMES.md 15.7) ----
+
+// How a mode that did not come back as written behaved when it was asked for
+// again from a different, known mode. A refusal leaves the slice where it was;
+// an alias lands on the same other spelling again. Readback alone cannot tell
+// them apart, because the mode before an alias in the list is often its twin
+// (CW before CWU, FM before NFM).
+enum class ModeReadback { Retained, Alias, Refused, Unstable };
+
+inline ModeReadback classifyModeReadback(bool firstReadbackIsRequested,
+                                         bool reprobeKeptBaseline,
+                                         bool reprobeMatchesFirstReadback)
+{
+    if (firstReadbackIsRequested)
+        return ModeReadback::Retained;
+    if (reprobeKeptBaseline)
+        return ModeReadback::Refused;
+    if (reprobeMatchesFirstReadback)
+        return ModeReadback::Alias;
+    return ModeReadback::Unstable;
+}
+
 }  // namespace AetherSDR::certmath
