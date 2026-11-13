@@ -21,10 +21,10 @@ constexpr int kMinSquelchLevel = 0;
 constexpr int kMaxSquelchLevel = 100;
 constexpr int kMinFilterHz = -12000;
 constexpr int kMaxFilterHz = 12000;
-constexpr int kMinRttyMarkHz = 100;
+constexpr int kMinRttyMarkHz = 0;
 constexpr int kMaxRttyMarkHz = 4000;
 constexpr int kMinRttyShiftHz = 0;
-constexpr int kMaxRttyShiftHz = 4000;
+constexpr int kMaxRttyShiftHz = 2000;
 constexpr int kMinDigitalOffsetHz = -12000;
 constexpr int kMaxDigitalOffsetHz = 12000;
 

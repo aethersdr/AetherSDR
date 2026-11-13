@@ -165,6 +165,24 @@ void encoders()
         update.patch = {}; update.patch.rxFilterHigh = edge;
         check(!update.valid(), "out-of-envelope high filter remains refused");
     }
+    // MEASURED (#7093, FLEX-8400 firmware 4.3.16.42034): `slice set` keeps a
+    // Mark of 0-4000 Hz and a Shift of 0-2000 Hz and refuses one step past each.
+    for (const int mark : {0, 75, 4000}) {
+        update.patch = {}; update.patch.rttyMark = mark;
+        check(update.valid(), "RTTY mark inside 0-4000 Hz is storable");
+    }
+    for (const int mark : {-1, 4001}) {
+        update.patch = {}; update.patch.rttyMark = mark;
+        check(!update.valid(), "RTTY mark outside 0-4000 Hz remains refused");
+    }
+    for (const int shift : {0, 2000}) {
+        update.patch = {}; update.patch.rttyShift = shift;
+        check(update.valid(), "RTTY shift inside 0-2000 Hz is storable");
+    }
+    for (const int shift : {-1, 2001}) {
+        update.patch = {}; update.patch.rttyShift = shift;
+        check(!update.valid(), "RTTY shift outside 0-2000 Hz remains refused");
+    }
 }
 void cwProfileState()
 {
