@@ -23,15 +23,7 @@ class StoredControlTestAccess {
 public:
     static void memory(RadioModel& model, const MemoryDelta& delta) { model.applyMemoryChanges(delta); }
     static void profile(RadioModel& model, const ProfileDelta& delta) { model.applyProfileChanges(delta); }
-    static void message(RadioModel& model, const QString& line)
-    {
-        model.handleMessageReceived(CommandParser::parseLine(line), model.m_gpsSessionGeneration);
-    }
-    static void status(RadioModel& model, const QString& line)
-    {
-        const ParsedMessage msg = CommandParser::parseLine(line);
-        model.onStatusReceived(msg.object, msg.kvs);
-    }
+    static void line(RadioModel& model, const QString& text) { model.handleLineForTest(text); }
     static void capabilitiesChanged(RadioModel& model) { model.refreshCwProfilesOnCapabilityChange(); }
     static bool flush(RadioModel& model) { return model.m_localMemories.flush(); }
 };
@@ -198,16 +190,16 @@ void cwProfileRawStatus()
 {
     RadioModel model;
     check(model.rebuildBackendForTest(QStringLiteral("flex")), "raw CW status test installs the Flex decoder");
-    StoredControlTestAccess::message(model, QStringLiteral("S0|profile cw list=Default^Default Casual^Default Contest"));
-    StoredControlTestAccess::message(model, QStringLiteral("S0|profile cw current=Default Contest"));
-    StoredControlTestAccess::message(model, QStringLiteral("S0|profile cw unsaved_changes_cw=1"));
+    StoredControlTestAccess::line(model, QStringLiteral("S0|profile cw list=Default^Default Casual^Default Contest"));
+    StoredControlTestAccess::line(model, QStringLiteral("S0|profile cw current=Default Contest"));
+    StoredControlTestAccess::line(model, QStringLiteral("S0|profile cw unsaved_changes_cw=1"));
     const TransmitModel& tx = model.transmitModel();
     check(tx.cwProfileList() == QStringList{QStringLiteral("Default"), QStringLiteral("Default Casual"),
                                             QStringLiteral("Default Contest")},
           "raw CW list keeps names with spaces");
     check(tx.activeCwProfile() == QStringLiteral("Default Contest") && tx.cwProfileUnsaved(),
           "raw CW current and unsaved flag reach the transmit model");
-    StoredControlTestAccess::status(model, QStringLiteral("S0|profile unsaved_changes_cw=0"));
+    StoredControlTestAccess::line(model, QStringLiteral("S0|profile unsaved_changes_cw=0"));
     check(!tx.cwProfileUnsaved(), "space-free unsaved flag clears through the kv path");
 }
 void cwProfileLateCapability()

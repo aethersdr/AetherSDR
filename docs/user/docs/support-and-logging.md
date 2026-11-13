@@ -27,13 +27,15 @@ The Help menu starts with **AetherSDR Documentation** (this site), **Printable M
 
 **Help → Support & Diagnostics...** has two parts, followed by two buttons that open these docs in your browser: **Troubleshooting Guide** opens [Troubleshooting](./troubleshooting.md) and **Log Analyzer** opens the [Log Analyzer](/log-analyzer).
 
+Choosing **Support & Diagnostics...** while it is open brings the window to the front. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). The log path can be selected and copied into a report.
+
 <img src="/img/screens/support-diagnostics-dialog.png" width="680" alt="Support &amp; Diagnostics window. Diagnostic Logging lists modules in three columns with checkboxes, Discovery, Connection / Commands, Protocol / Status, Audio Summary, KiwiSDR and System Info ticked. Below are the log file path (blacked out) and size, a log tail, Refresh, Clear Log and Open Log Folder buttons, and four numbered steps for reporting an issue." />
 
 *Support & Diagnostics: per-module diagnostic logging and the log file. The log path is blacked out.*
 
 ### Diagnostic Logging
 
-A grid of checkboxes, one per log category. Hover a box for what it covers. Turn on the categories relevant to your problem, then reproduce it. The dialog advises restarting AetherSDR after changing categories so the new settings are in effect from startup.
+A grid of checkboxes, one per log category. The three columns stay fully visible at the window’s minimum width; scroll vertically to reach the remaining categories. Hover a box for what it covers. Turn on the categories relevant to your problem, then reproduce it. The dialog advises restarting AetherSDR after changing categories so the new settings are in effect from startup.
 
 **Enable All** / **Disable All** toggle every category at once. The categories, and which are on by default, are listed under [Log categories](#log-categories).
 

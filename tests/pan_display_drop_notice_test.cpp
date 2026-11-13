@@ -3,6 +3,7 @@
 // plane, selects radio writes. GUI ordering is inspected separately as text.
 
 #include "TestSettingsProfile.h"
+#include "core/backends/SessionCommandGuard.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/hl2/Hl2Backend.h"
@@ -32,7 +33,12 @@ public:
     {
         connection.m_commandSinkForTest =
             [&written](quint32, const QString& command) { written << command; };
+        connection.m_state.store(ConnectionState::Connected);
         radio.m_connection = &connection;
+        radio.resetSessionControls();
+        radio.m_sessionCommands = SessionCommandGuard::create();
+        radio.m_sessionWire = &connection;
+        radio.m_sessionWireGeneration = connection.commandSessionGeneration();
     }
     static void encoder(FlexBackend& backend, RadioModel& radio)
     { backend.setSetupCommandSink(radio.setupCommandSink()); }

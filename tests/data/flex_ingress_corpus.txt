@@ -1,0 +1,327 @@
+# prologue: version then our handle (RadioConnection Version/Handle; handleMessageReceived Handle arm)
+V1.4.0.0
+H00000071
+# M routine Info client-connect notice (suppressed during connect gate)
+M10000001|Client connected from IP 192.168.1.20
+# client 0x... connected: ours (no announce), with client_id/program/station
+S00000071|client 0x00000071 connected local_ptt=1 client_id=8C1F2A3B-4D5E-4F60-8172-93A4B5C6D7E8 program=AetherSDR station=Shack-PC
+# radio: global status (FlexBackend::decodeRadioStatus -> applyRadioChanges)
+S00000071|radio slices=3 panadapters=3 lineout_gain=60 lineout_mute=0 headphone_gain=50 headphone_mute=0 front_speaker_mute=0 remote_on_enabled=0 pll_done=0 freq_error_ppb=0 cal_freq=15.000000 tnf_enabled=1 snap_tune_enabled=1 nickname=Shack callsign=W1AW binaural_rx=0 full_duplex_enabled=0 band_persistence_enabled=1 rtty_mark_default=2125 enforce_private_ip_connections=1 backlight=50 mute_local_audio_when_remote=1 daxiq_capacity=16 daxiq_available=16 alpha=0 low_latency_digital_modes=0 mf_enable=1 auto_save=1
+# radio: identity/capability keys the decoder carries (model -> capabilitiesChanged; bands raw)
+S00000071|radio model=FLEX-8600 region=USA radio_options=GPSDO bands=160,80,60,40,30,20,17,15,12,10,6
+# radio: update a few keys (gains, callsign change, rtty mark propagation, auto_save flip)
+S00000071|radio lineout_gain=45 headphone_mute=1 callsign=W1AW/7 rtty_mark_default=2295 auto_save=0 slices=2 daxiq_available=14
+# radio filter_sharpness VOICE / CW / DIGITAL
+S00000071|radio filter_sharpness VOICE level=2 auto_level=1
+S00000071|radio filter_sharpness CW level=3 auto_level=0
+S00000071|radio filter_sharpness DIGITAL level=3 auto_level=0
+# radio oscillator: gpsdo_present spelling, then gnss_present=0 alias clearing presence
+S00000071|radio oscillator state=gpsdo setting=auto locked=1 ext_present=0 gpsdo_present=1 tcxo_present=1
+S00000071|radio oscillator state=tcxo locked=0 gnss_present=0
+# radio static_net_params: static, then cleared (DHCP)
+S00000071|radio static_net_params ip=192.168.1.50 gateway=192.168.1.1 netmask=255.255.255.0
+S00000071|radio static_net_params ip= gateway= netmask=
+# license / license subscription / license feature (incl. DVK feature clearRefusal, malformed)
+S00000071|license radio_id=0123-4567-89ab-cdef issued=2024-01-15 last_refreshed_date=2026-11-01 highest_major_version=4
+S00000071|license subscription name=smartsdr+ expiration=2027-06-30T00:00:00Z
+S00000071|license subscription name=smartsdr+_early_access expiration=2027-12-31
+S00000071|license subscription name=unknown_tier expiration=2030-01-01
+S00000071|license feature name=digital_voice_keyer enabled=1 reason=plus
+S00000071|license feature name=noise_reduction enabled=1 reason=built_in
+S00000071|license feature name=noise_reduction enabled=0 reason=license_file
+S00000071|license feature name=auto_agc_t enabled=maybe reason=ea
+# xvtr N: create (with is_valid), second without is_valid, update, in_use=0 removal (known + unknown idx)
+S00000071|xvtr 0 name=2m order=0 rf_freq=144.000000 if_freq=28.000000 lo_error=0.000000 rx_gain=0.0 max_power=10.0 rx_only=0 is_valid=1 preferred=1 two_meter_int=0
+S00000071|xvtr 1 name=70cm order=1 rf_freq=432.000000 if_freq=28.000000 lo_error=0.000000 rx_gain=0.0 max_power=5.0 rx_only=1
+S00000071|xvtr 0 lo_error=0.001200 max_power=8.0
+S00000071|xvtr 1 in_use=0
+S00000071|xvtr 5 in_use=0
+# display pan: handle-less fragment for unclaimed pan -> Defer into pending
+S00000071|display pan 0x40000000 center=14.100000 bandwidth=0.200000
+# display pan: ours, full status -> Claim (ensureOwnedPanadapter) + all pan decoders; tiny x/y pixels
+S00000071|display pan 0x40000000 client_handle=0x00000071 wnb=0 wnb_level=50 wnb_updating=0 band_zoom=0 segment_zoom=0 x_pixels=50 y_pixels=20 center=14.100000 bandwidth=0.200000 min_dbm=-125.00 max_dbm=-40.00 fps=25 average=50 weighted_average=0 rfgain=0 rxant=ANT1 wide=0 loopa=0 loopb=0 band=20 daxiq_channel=0 waterfall=0x42000000 min_bw=0.004920 max_bw=14.745601 xvtr= pre= noise_floor_range=0 ant_list=ANT1,ANT2,RX_A,RX_B,XVTA,XVTB
+# display pan: ours, update (Apply; y_pixels > threshold, pre= applied to all pans, wnb flags, range)
+S00000071|display pan 0x40000000 y_pixels=700 x_pixels=1200 min_dbm=-130.00 max_dbm=-35.00 pre=+10dB wnb=1 wnb_level=60 rxant=ANT2 fps=30
+# display pan: malformed numeric fields (ok-guarded drops)
+S00000071|display pan 0x40000000 rfgain=bogus min_dbm=abc wnb=7 wnb_level=200 wnb_updating=x
+# display waterfall: ours (via pan waterfall= link) -> center/bw + line_duration, configureWaterfall
+S00000071|display waterfall 0x42000000 auto_black=1 black_level=15 color_gain=50 gradient_index=1 line_duration=80 panadapter=0x40000000 client_handle=0x00000071 x_pixels=50 center=14.100000 bandwidth=0.200000 band_zoom=0 segment_zoom=0 wide=0 rfgain=0 daxiq_channel=0 xvtr= band=20
+S00000071|display waterfall 0x42000000 line_duration=120 black_level=20 auto_black=0
+# slice: partial status before creation for an id not in owned set -> ignored
+S00000071|slice 1 rit_on=0
+# slice N: ours, full create (mode_list stored, decodeSliceStatus, sliceAdded)
+S00000071|slice 0 in_use=1 sample_rate=24000 RF_frequency=14.100000 client_handle=0x00000071 index_letter=A rit_on=0 rit_freq=0 xit_on=0 xit_freq=0 rxant=ANT1 mode=USB wide=0 filter_lo=100 filter_hi=2800 step=100 step_list=1,5,10,20,100,250,500,1000 agc_mode=med agc_threshold=65 agc_off_level=10 agc_threshold_mode=manual pan=0x40000000 txant=ANT1 loopa=0 loopb=0 qsk=0 dax=1 dax_clients=0 lock=0 tx=1 active=1 audio_level=50 audio_pan=50 audio_mute=0 record=0 play=disabled record_time=0.0 anf=0 anf_level=0 nr=0 nr_level=0 nb=0 nb_level=50 wnb=0 wnb_level=0 apf=0 apf_level=0 squelch=1 squelch_level=20 diversity=0 diversity_parent=0 diversity_child=0 diversity_index=1342177293 ant_list=ANT1,ANT2,RX_A,RX_B,XVTA,XVTB rx_ant_list=ANT1,ANT2,RX_A,RX_B,XVTA,XVTB tx_ant_list=ANT1,ANT2,XVTA,XVTB mode_list=LSB,USB,AM,CW,DIGL,DIGU,SAM,FM,NFM,DFM,RTTY,FDVU,FDVL fm_tone_mode=OFF fm_tone_value=67.0 fm_repeater_offset_freq=0.000000 tx_offset_freq=0.000000 repeater_offset_dir=SIMPLEX fm_tone_burst=0 fm_deviation=5000 dfm_pre_de_emphasis=0 post_demod_low=300 post_demod_high=3300 rtty_mark=2125 rtty_shift=170 digl_offset=2210 digu_offset=1500 post_demod_bypass=0 rfgain=0 nrl=0 nrs=0 rnn=0 nrf=0 anfl=0 anft=0 lms_nr_level=50 speex_nr_level=50 nrf_level=50 lms_anf_level=50 esc=off esc_gain=1.000000 esc_phase_shift=0.000000 chain_mode=USB
+S00000071|slice 1 in_use=1 sample_rate=24000 RF_frequency=7.074000 client_handle=0x00000071 index_letter=B rxant=ANT2 mode=DIGU filter_lo=0 filter_hi=3000 pan=0x40000000 txant=ANT1 dax=2 tx=0 active=0 audio_level=40 audio_pan=50 audio_mute=0 squelch=0 squelch_level=20 step=10 step_list=1,5,10,20,100,250,500,1000 agc_mode=fast agc_threshold=55 mode_list=LSB,USB,AM,CW,DIGL,DIGU,SAM,FM,NFM,DFM,RTTY
+# slice: update ours (freq/mode/filters, max_internal_pa_power, NR levels by status name)
+S00000071|slice 0 RF_frequency=14.074000 mode=DIGU filter_lo=0 filter_hi=3000 max_internal_pa_power=500 nrl_level=40 nrs_level=30 anfl_level=20 agc_threshold_mode=auto
+S00000071|slice 0 mode_list=LSB,USB,AM,CW,DIGL,DIGU,SAM,FM,NFM,DFM,RTTY,FDVU,FDVL,RADE
+S00000071|slice 0 rf_frequency=bogus RF_frequency=notanumber audio_level=x
+# slice N waveform_status (object form) and waveform_status= (kv form) -> FlexWaveformModel generic status
+S00000071|slice 0 waveform_status snr=6.5 sync=1 freq_offset=12
+S00000071|slice 0 waveform_status=active snr=7.0
+# meter: definitions in index.key=value#... form (slice, TX, mic, amplifier-handle num)
+S00000071|meter 1.src=SLC#1.num=0#1.nam=LEVEL#1.low=-150.0#1.hi=20.0#1.desc=Signal strength#1.unit=dBm#1.fps=10#2.src=SLC#2.num=0#2.nam=ESC#2.low=-160.0#2.hi=10.0#2.desc=Signal strength#2.unit=dBm#2.fps=10#
+S00000071|meter 7.src=TX-#7.num=1#7.nam=FWDPWR#7.low=0.0#7.hi=125.0#7.desc=RF Power Forward#7.unit=dBm#7.fps=20#8.src=TX-#8.num=1#8.nam=SWR#8.low=1.0#8.hi=999.0#8.desc=RF SWR#8.unit=SWR#8.fps=20#9.src=COD-#9.num=0#9.nam=MICPEAK#9.low=-150.0#9.hi=20.0#9.desc=Signal strength of MIC output in CODEC#9.unit=dBFS#9.fps=40#
+S00000071|meter 12.src=SLC#12.num=1#12.nam=LEVEL#12.low=-150.0#12.hi=20.0#12.desc=Signal strength#12.unit=dBm#12.fps=10#
+# meter: removal form
+S00000071|meter 12 removed
+# stream remote_audio_rx: ours adopted, updated, then (later) removed
+S00000071|stream 0x04000008 type=remote_audio_rx compression=OPUS client_handle=0x00000071 ip=192.168.1.20
+S00000071|stream 0x04000008 type=remote_audio_rx compression=NONE client_handle=0x00000071 ip=192.168.1.20
+# stream remote_audio_tx: ours
+S00000071|stream 0x84000001 type=remote_audio_tx compression=OPUS client_handle=0x00000071 ip=192.168.1.20
+# stream dax_rx: ours not auto-bound (slice= empty, slice 0 dax=1 -> #1439 nudge), ours auto-bound, dead orphan
+S00000071|stream 0x0C000001 type=dax_rx dax_channel=1 slice= client_handle=0x00000071 ip=192.168.1.20
+S00000071|stream 0x0C000001 type=dax_rx dax_channel=1 slice= client_handle=0x00000071 ip=192.168.1.20
+S00000071|stream 0x0C000002 type=dax_rx dax_channel=2 slice=B client_handle=0x00000071 ip=192.168.1.20
+S00000071|stream 0x0C000003 type=dax_rx dax_channel=3 slice= client_handle=0x00000000 ip=0.0.0.0
+S00000071|stream 0x0C000004 type=dax_rx dax_channel=12 client_handle=0x00000071 ip=192.168.1.20
+# stream dax_tx: ours (tx=0), invalid tx value, client_handle=0x0 (unknown owner)
+S00000071|stream 0x84000000 type=dax_tx client_handle=0x00000071 tx=0 ip=192.168.1.20
+S00000071|stream 0x84000000 tx=2
+S00000071|stream 0x84000000 type=dax_tx client_handle=0x0 tx=0
+S00000071|stream 0x84000000 type=dax_tx client_handle=0x00000071 tx=0
+# stream dax_iq: ours, then out-of-range daxiq_channel (skipped), rate change
+S00000071|stream 0x20000000 type=dax_iq daxiq_channel=1 pan=0x40000000 daxiq_rate=48000 client_handle=0x00000071 active=1 ip=192.168.1.20 port=4991
+S00000071|stream 0x20000000 daxiq_channel=9 daxiq_rate=96000
+# stream netcw: unknown-to-audio type -> AudioStreamDelta removed arm; then removed form (observeStreamRemoved id miss)
+S00000071|stream 0x0B000003 type=netcw client_handle=0x00000071
+S00000071|stream 0x0B000003 removed
+# tx_audio_stream (legacy DAX TX object): status, then removed
+S00000071|tx_audio_stream 0x84000002 dax_tx=1 client_handle=0x00000071 tx=0 ip=192.168.1.20
+S00000071|tx_audio_stream 0x84000002 removed
+# client 0x... connected: another client (SmartSDR, station with 0x7F space, ip source) -> announce
+S0000AB12|client 0x0000AB12 connected local_ptt=0 client_id=1D2E3F40-5162-4738-894A-5B6C7D8E9F00 program=SmartSDR-Win station=RemoteLaptop ip=192.168.1.77
+# client 0x...: partial local_ptt update for known client
+S0000AB12|client 0x0000AB12 local_ptt=1
+# client 0x... connected: a stale AetherSDR instance with our station name (eviction identity match)
+S0000CD34|client 0x0000CD34 connected local_ptt=0 client_id=8C1F2A3B-4D5E-4F60-8172-93A4B5C6D7E8 program=AetherSDR station=Shack-PC
+# M lines: Warning / Error / Fatal severities (bits 24-25)
+M11000002|Slice A is not able to transmit on this band
+M12000003|Unable to allocate DAX channel
+M13000004|Fatal: radio internal error
+M10000005|Client connected from IP 192.168.1.77
+# remote_audio_rx without client_handle now that >1 client known -> DeferredUnknownOwner; foreign -> Ignored
+S00000071|stream 0x04000010 type=remote_audio_rx compression=OPUS ip=192.168.1.77
+S0000AB12|stream 0x04000011 type=remote_audio_rx compression=OPUS client_handle=0x0000AB12 ip=192.168.1.77
+S0000AB12|stream 0x04000011 removed
+# dax_rx / dax_tx owned by another client (external DAX observed; registry ignores foreign)
+S0000AB12|stream 0x0C000005 type=dax_rx dax_channel=1 slice=C client_handle=0x0000AB12 ip=192.168.1.77
+S0000AB12|stream 0x84000005 type=dax_tx client_handle=0x0000AB12 tx=0 ip=192.168.1.77
+S0000AB12|stream 0x84000005 in_use=0
+# display pan: another client's pan (Ignore, inventory records foreign owner)
+S0000AB12|display pan 0x40000001 client_handle=0x0000AB12 center=7.200000 bandwidth=0.150000 min_dbm=-120.00 max_dbm=-50.00 waterfall=0x42000001 x_pixels=800 y_pixels=400
+# display waterfall: another client's (client_handle mismatch -> return), handle-less unknown (defer)
+S0000AB12|display waterfall 0x42000001 panadapter=0x40000001 client_handle=0x0000AB12 line_duration=100 center=7.200000 bandwidth=0.150000
+S00000071|display waterfall 0x42000009 line_duration=100
+# slice: another client's slice with tx=1 (multiFLEX tx info -> clientInfo txAntenna/txFreq; marked foreign)
+S0000AB12|slice 2 in_use=1 client_handle=0x0000AB12 tx=1 txant=ANT2 RF_frequency=7.200000 mode=LSB pan=0x40000001 index_letter=C
+S0000AB12|slice 3 in_use=1 client_handle=0x0000AB12 tx=0 RF_frequency=7.150000 mode=CW pan=0x40000001 index_letter=D
+# slice: foreign slot released (in_use=0 without client_handle -> clears foreign marker)
+S0000AB12|slice 3 in_use=0
+# foreign pan-write attribution: S<other handle>| dBm writes to OUR pan (noteForeignPanWriteIfAny)
+S0000AB12|display pan 0x40000000 min_dbm=-128.00 max_dbm=-38.00
+S0000CD34|display pan 0x40000000 min_dbm=-127.00 max_dbm=-37.00
+S0000CD34|display pan 0x40000000 min_dbm=-126.00
+S0000CD34|display pan 0x40000000 max_dbm=-36.00
+# radio-originated (S0) and our-own-echo pan writes are not counted
+S00000000|display pan 0x40000000 min_dbm=-125.00 max_dbm=-40.00
+S00000071|display pan 0x40000000 min_dbm=-125.00 max_dbm=-40.00
+# second pan of ours, then reassigned to another client (#3977 going quiet), then removed (bare)
+S00000071|display pan 0x40000002 client_handle=0x00000071 center=21.200000 bandwidth=0.100000 min_dbm=-120.00 max_dbm=-50.00 waterfall=0x42000002 x_pixels=1000 y_pixels=600
+S00000071|display waterfall 0x42000002 client_handle=0x00000071 line_duration=100 auto_black=1
+S0000AB12|display pan 0x40000002 client_handle=0x0000AB12
+S0000AB12|display pan 0x40000002 removed
+# display waterfall for an unseen pan with our client_handle + panadapter= -> ensureOwnedPanadapter(parent); pan follows; removed
+S00000071|display waterfall 0x42000004 panadapter=0x40000004 client_handle=0x00000071 line_duration=100 center=28.400000 bandwidth=0.300000
+S00000071|display pan 0x40000004 client_handle=0x00000071 center=28.400000 bandwidth=0.300000 waterfall=0x42000004 x_pixels=900 y_pixels=500
+S00000071|display pan 0x40000004 removed
+S00000071|display waterfall 0x42000004 removed
+# display waterfall removal: bare form and kv removed=1 form
+S0000AB12|display waterfall 0x42000002 removed
+S0000AB12|display waterfall 0x42000001 removed=1
+# display pan removal of another client's pan (kv form)
+S0000AB12|display pan 0x40000001 removed=1
+# memory N: create, update, bare 'removed' (merged into kvs), in_use=0 removal
+S00000071|memory 3 owner=Shack group=Nets freq=14.250000 name=Sunday_Net mode=USB step=100 repeater=SIMPLEX repeater_offset=0.000000 tone_mode=OFF tone_value=67.0 power=100 rx_filter_low=100 rx_filter_high=2900 highlight=0 highlight_color=0x00000000 squelch=0 squelch_level=20 rtty_mark=2125 rtty_shift=170 digl_offset=2210 digu_offset=1500
+S00000071|memory 4 owner=Shack group=Repeaters freq=146.940000 name=Local_Rptr mode=FM step=5000 repeater=DOWN repeater_offset=0.600000 tone_mode=CTCSS_TX tone_value=100.0 squelch=1 squelch_level=30
+S00000071|memory 3 freq=14.255000 name=Sunday_Net_Alt
+S00000071|memory 3 removed
+S00000071|memory 4 in_use=0
+# atu: radio ATU before any TGXL identity (plain object -> decodeAtuStatus only)
+S00000071|atu status=TUNE_NOT_STARTED atu_enabled=1 memories_enabled=1 using_mem=0
+# amplifier: TGXL placeholder handle, then real handle with model= identity, then update without model=
+S00000071|amplifier 0x00000000 model=TunerGeniusXL serial_num=TGXL-1234 ip=192.168.1.61
+S00000071|amplifier 0x29A3B1C4 model=TunerGeniusXL serial_num=TGXL-1234 ip=192.168.1.61 port=9010 operate=1 bypass=0 tuning=0 relayC1=10 relayC2=20 relayL=5 antA=1 ant=ANT1,ANT2 one_by_three=0 ptta=0 pttb=0
+S00000071|amplifier 0x29A3B1C4 tuning=1 relayC1=12 relayL=7 pttA=1
+S00000071|amplifier 0x29A3B1C4 tuning=0 pttA=0 bypass=1
+# atu: after TGXL known (tuner handle set -> decodeTunerStatus too); atu <handle> object form
+S00000071|atu status=TUNE_SUCCESSFUL atu_enabled=1 memories_enabled=1 using_mem=1
+S00000071|atu 0x29A3B1C4 status=TUNE_BYPASS
+# amplifier: PGXL power amp (AmpModel): create STANDBY, OPERATE, telemetry
+S00000071|amplifier 0x5A1B2C3D model=PowerGeniusXL ip=192.168.1.60 port=9008 serial_num=PGXL-0042 state=STANDBY
+S00000071|amplifier 0x5A1B2C3D state=IDLE temp=38.5 fan=low
+S00000071|amplifier 0x5A1B2C3D state=
+# amplifier removal: PGXL bare 'removed', TGXL kv removed=1
+S00000071|amplifier 0x5A1B2C3D removed
+S00000071|amplifier 0x29A3B1C4 removed=1
+# apd: enable/config, eq active with ant/freq/rfpower/lifecycle, bare equalizer_reset flag, unknown state token
+S00000071|apd enable=1 configurable=1 state=IDLE
+S00000071|apd equalizer_active=1 ant=ANT1 freq=14.100000 rfpower=50 state=ACTIVE
+S00000071|apd equalizer_reset
+S00000071|apd state=BOGUS
+# apd sampler: with tx_ant, and without tx_ant (no-op)
+S00000071|apd sampler tx_ant=ANT1 selected_sampler=RX_A valid_samplers=RX_A,RX_B,XVTA
+S00000071|apd sampler selected_sampler=INTERNAL
+# transmit: full status (non-keyed: mox=0 tune=0), then update
+S00000071|transmit freq=14.100000 rfpower=50 tunepower=10 tune=0 mox=0 tune_mode=single_tone show_tx_in_waterfall=1 mic_selection=mic mic_level=40 mic_acc=0 mic_boost=1 mic_bias=0 speech_processor_enable=1 speech_processor_level=50 compander=1 compander_level=40 dax=0 sb_monitor=0 mon_gain_sb=50 vox_enable=0 vox_level=50 vox_delay=20 met_in_rx=0 ptt_mic_override=0 synccwx=1 am_carrier_level=100 lo=100 hi=2900 speed=22 pitch=600 break_in=0 break_in_delay=150 sidetone=1 iambic=1 iambic_mode=1 swap_paddles=0 cwl_enabled=0 mon_gain_cw=60 mon_pan_cw=50 max_power_level=100 tx_slice_mode=USB inhibit=0 hwalc_enabled=0
+S00000071|transmit rfpower=75 tunepower=15 mic_level=55 speed=28 pitch=650 dexp=1 noise_gate_level=30 ptt_mic_override=7 rfpower=bogus
+# profile (raw route in handleMessageReceived): tx/mic/global/cw list (^-separated, names with spaces) + current
+S00000071|profile tx list=Default^SSB Contest^DX Pileup^FT8^
+S00000071|profile tx current=SSB Contest
+S00000071|profile mic list=Default^Heil PR-40^Desk Mic^
+S00000071|profile mic current=Heil PR-40
+S00000071|profile global list=Default^Contest Station^Field Day 2026^
+S00000071|profile global current=Contest Station
+S00000071|profile cw list=Default^QRQ 35wpm^
+S00000071|profile cw current=QRQ 35wpm
+# profile: unsaved_changes_<type>, importing/exporting on the raw route
+S00000071|profile tx unsaved_changes_tx=1
+S00000071|profile cw unsaved_changes_cw=1
+S00000071|profile global importing=1
+S00000071|profile global importing=0
+# profile (kv route -> decodeProfileFlags): space-free flags and unknown profile type
+S00000071|profile importing=1 exporting=0
+S00000071|profile exporting=1 unsaved_changes_mic=0
+S00000071|profile displays list=Default^
+# transmit band N
+S00000071|transmit band 9 band_name=20 rfpower=100 tunepower=10 hwalc_enabled=0 inhibit=0
+S00000071|transmit band 9 rfpower=80 inhibit=1
+S00000071|transmit band 10 band_name=17 rfpower=100 tunepower=10 hwalc_enabled=1 inhibit=0
+# interlock band N (incl. tune_tx_suppress -> decodeTuneOutputStatus)
+S00000071|interlock band 9 band_name=20 acc_txreq_enable=0 rca_txreq_enable=0 acc_tx_enabled=1 tx1_enabled=1 tx2_enabled=0 tx3_enabled=0 tune_tx_suppress=0
+S00000071|interlock band 9 tx1_enabled=0 tune_tx_suppress=1
+S00000071|interlock band 10 band_name=17 acc_txreq_enable=1 tune_tx_suppress=2
+# interlock: READY baseline with timing fields
+S00000071|interlock acc_txreq_enable=0 rca_txreq_enable=0 acc_txreq_polarity=0 rca_txreq_polarity=0 timeout=0 acc_tx_enabled=1 tx1_enabled=1 tx2_enabled=0 tx3_enabled=0 tx_delay=0 acc_tx_delay=0 tx1_delay=0 tx2_delay=0 tx3_delay=0 tx_allowed=1 amplifier= source= state=READY reason= tx_client_handle=0x00000000
+# interlock: another client keys -> PTT_REQUESTED -> TRANSMITTING -> UNKEY_REQUESTED -> READY (txOwnerChanged other)
+S0000AB12|interlock state=PTT_REQUESTED source=SW reason=AMP:TG tx_client_handle=0x0000AB12 tx_allowed=1
+S0000AB12|interlock state=TRANSMITTING source=SW tx_client_handle=0x0000AB12 tx_allowed=1
+S0000AB12|interlock state=UNKEY_REQUESTED tx_client_handle=0x0000AB12
+S0000AB12|interlock state=READY source= tx_client_handle=0x0000AB12
+# interlock: our handle with hardware MIC source (keepLocalTx via MIC token), then RECEIVE
+S00000071|interlock state=PTT_REQUESTED source=MIC tx_client_handle=0x00000071 tx_allowed=1
+S00000071|interlock state=TRANSMITTING source=MIC,VOX tx_client_handle=0x00000071
+S00000071|interlock state=TRANSMITTING tx_client_handle=0x00000071
+S00000071|interlock state=UNKEY_REQUESTED tx_client_handle=0x00000071
+S00000071|interlock state=RECEIVE tx_client_handle=0x00000000
+# interlock: our handle, SW source with no local TX request (force-off arm); NOT_READY with tx_allowed=0
+S00000071|interlock state=TRANSMITTING source=SW tx_client_handle=0x00000071
+S00000071|interlock state=NOT_READY tx_allowed=0 reason=OUT_OF_BAND source=
+S00000071|interlock state=READY tx_allowed=1 reason= tx_client_handle=0x00000000
+# spot N: create, update, triggered (pan=), bare removed
+S00000071|spot 12 callsign=W1AW rx_freq=14.025000 tx_freq=14.025000 mode=CW color=#FFFF0000 background_color=#00000000 source=N1MM spotter_callsign=K1ABC timestamp=1762790000 lifetime_seconds=300 comment=599_NY priority=5
+S00000071|spot 12 comment=QSX_up_2 lifetime_seconds=600
+S00000071|spot 12 triggered pan=0x40000000
+S00000071|spot 12 removed
+# usb_cable: cat cable create, bit cable + per-bit status, family type change, removed
+S00000071|usb_cable A50285BI type=cat enable=1 plugged_in=1 name=CATPort log=0 speed=9600 data_bits=8 parity=none stop_bits=1 flow_control=none source=active_slice auto_report=1
+S00000071|usb_cable A50285BI speed=38400
+S00000071|usb_cable FT4VXJ2K type=bit enable=1 plugged_in=1 name=BandDecoder log=0
+S00000071|usb_cable FT4VXJ2K bit 0 enable=1 source=tx_ant output=active_high polarity=active_high ptt_dependent=1 ptt_delay=10 tx_delay=0 source_tx_ant=ANT1
+S00000071|usb_cable FT4VXJ2K bit 3 enable=1 source=band band=20 low_freq=14.000000 high_freq=14.350000
+S00000071|usb_cable A50285BI type=bcd source=active_slice
+S00000071|usb_cable A50285BI removed
+# cwx: sent index, speed/delay/qsk, macro (0x7F space, 0x1E quote, * -> =), erase range, queue drain
+S00000071|cwx sent=3
+S00000071|cwx wpm=25 break_in_delay=50 qsk_enabled=1
+S00000071|cwx macro1="CQTESTDEW1AW" macro2="5NNTU*"
+S00000071|cwx erase=4,6
+S00000071|cwx queue=0
+# dvk: global status, added (quoted name with spaces), recording/preview status, deleted, disabled
+S00000071|dvk status=idle enabled=1
+S00000071|dvk added id=1 name="CQ Contest" duration=4200
+S00000071|dvk added id=2 name="Recording 2" duration=0
+S00000071|dvk status=preview id=1 enabled=1
+S00000071|dvk deleted id=2
+S00000071|dvk status=idle enabled=0
+# navtex: global status, sent confirmation (no queued msg), sent without idx
+S00000071|navtex status=Active
+S00000071|navtex sent idx=1 serial_num=42
+S00000071|navtex sent serial_num=43
+# eq txsc / eq rxsc
+S00000071|eq txsc mode=1 63Hz=0 125Hz=2 250Hz=3 500Hz=0 1000Hz=-2 2000Hz=1 4000Hz=4 8000Hz=0
+S00000071|eq txsc 1000Hz=-4
+S00000071|eq rxsc mode=0 63Hz=0 125Hz=0 250Hz=0 500Hz=0 1000Hz=0 2000Hz=0 4000Hz=0 8000Hz=0
+S00000071|eq rxsc mode=1 8000Hz=-6
+# tnf N: create, update, bare removed, kv removed=1, fractional-MHz width
+S00000071|tnf 1 freq=14.105000 depth=2 width=100 permanent=1
+S00000071|tnf 2 freq=14.110000 depth=1 width=0.000050 permanent=0
+S00000071|tnf 1 depth=3 width=200
+S00000071|tnf 1 removed
+S00000071|tnf 2 removed=1
+# waveform: installed_list (nameversion), container add/update/env change/removed, wfp_status, status, restarted
+S00000071|waveform installed_list=FreeDV1.9.0,RADE0.2.1,,broken_entry
+S00000071|waveform container name=AetherWSPR version=0.1.8 env=eyJXU1BSX0JBTkQiOiIyMG0iLCJMT0dfTEVWRUwiOiJpbmZvIn0=
+S00000071|waveform container name=AetherWSPR version=0.1.9 env=eyJXU1BSX0JBTkQiOiIyMG0iLCJMT0dfTEVWRUwiOiJpbmZvIn0=
+S00000071|waveform container name=AetherWSPR version=0.1.9 env=eyJXU1BSX0JBTkQiOiI0MG0iLCJMT0dfTEVWRUwiOiJkZWJ1ZyIsIkhPUCI6MX0=
+S00000071|waveform container name=AetherWSPR version=0.1.9 env=not-base64!!
+S00000071|waveform container version=1.0
+S00000071|waveform wfp_status power=on ready=true ipaddr=192.168.1.51
+S00000071|waveform wfp_status ready=false
+S00000071|waveform status slice=0 name=AetherWSPR state=receiving
+S00000071|waveform restarted name=AetherWSPR result=ok
+S00000071|waveform restarted name=AetherWSPR result=error
+S00000071|waveform container name=AetherWSPR version=0.1.9 removed
+# gps: '#'-separated (raw route, session generation), fix states, then no-lock status
+S00000000|gps lat=40.000000#lon=-105.000000#grid=DN70ma#altitude=1655 m#tracked=9#visible=13#speed=0 kts#freq_error=-2 ppb#status=Fine Lock#time=18:22:41Z#track=0.0#fix=3D
+S00000000|gps tracked=4#visible=11#status=Not Locked#fix=NO_FIX#freq_error=12 ppb
+S00000000|gps status=Present#fix=TIME_ONLY#tracked=bogus
+# ntp_sources (raw route -> decodeNtpSourceStatus): create (quoted description), update, removed, malformed
+S00000071|ntp_sources id=1 address=time.nist.gov directive=server description="NIST time servers" enabled=1 selected=1 prefer=1 state=sync stratum=1 reach=377
+S00000071|ntp_sources id=2 address=pool.ntp.org directive=pool description="Public pool (not removed)" enabled=1 selected=0 prefer=0 state=candidate stratum=2 reach=17
+S00000071|ntp_sources id=2 state=unknown enabled=0
+S00000071|ntp_sources id=2 removed
+S00000071|ntp_sources address=bad.example directive=server
+# removals for our streams: remote_audio_rx (kv removed), dax_rx bare, dax_iq in_use=0, dax_tx removed, remote_audio_tx
+S00000071|stream 0x04000008 removed
+S00000071|stream 0x0C000001 removed
+S00000071|stream 0x0C000002 in_use=0
+S00000071|stream 0x20000000 in_use=0
+S00000071|stream 0x84000000 removed
+S00000071|stream 0x84000001 removed
+# slice removal of ours (in_use=0) and mode_list cleanup
+S00000071|slice 1 in_use=0
+# malformed / unknown objects
+S00000071|wan server_connected=1 radio_authenticated=1
+S00000071|foo bar=1 baz
+S00000071|slice abc in_use=1
+S00000071|display pan nothex center=1.0
+S00000071|display waterfall 0x42000003 extra word=1
+S00000071|xvtr x name=bad
+S00000071|tnf abc freq=1.0
+S00000071|spot x removed
+S00000071|stream 0xZZZZ type=dax_rx dax_channel=1
+S00000071|amplifier
+S00000071|client 0xNOTHEX connected program=X
+S00000071|client 0x0000AB12 renamed station=Other
+S00000071|memory abc name=x
+S00000071|usb_cable 
+S00000071|
+SNOPIPE slice 0 in_use=1
+X00000071|unknown tag line
+M0000000Z|bad hex message id
+# client 0x... disconnected: other clients (forced=1 / duplicate_client_id=1 on another handle are no-ops), clears foreign slice markers
+S00000000|client 0x0000CD34 disconnected duplicate_client_id=1 forced=0
+S00000000|client 0x0000AB12 disconnected forced=1 wan_validation_failed=0
+M10000006|Client disconnected from IP 192.168.1.77
+# file update: progress, an out-of-range transfer (dropped), an unparseable failed (falls through to transfer), success, failure
+S00000071|file update transfer=0.42
+S00000071|file update transfer=1.5
+S00000071|file update failed=maybe transfer=0.9
+S00000071|file update failed=0
+S00000071|file update failed=1 reason=Bad_signature
+# client 0x... disconnected forced=1 on OUR handle -> handleForcedClientDisconnect (session-ending; keep last)
+S00000000|client 0x00000071 disconnected forced=1 wan_validation_failed=0
+# ALTERNATE final line (mutually exclusive with the one above; m_forcedDisconnectInProgress blocks the second):
+# S00000000|client 0x00000071 disconnected duplicate_client_id=1

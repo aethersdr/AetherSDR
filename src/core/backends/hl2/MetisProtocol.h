@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <complex>
 #include <cstddef>
@@ -7,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // HPSDR Protocol 1 ("Metis") wire primitives for the Hermes-Lite 2 backend.
@@ -269,6 +271,14 @@ Cc ccTxFreq(std::uint32_t hz) noexcept;
 //              N2ADR IO board (Hl2HardwareOptions::atuGateware).
 Cc ccTxDrive(int level, bool paEnable = false, bool atuTune = false) noexcept;
 
+// Where the transmit signal leaves the board (#4954): ANT through the onboard PA,
+// or RF1, the AD9866 output alone, with the PA held off. 0x09[19] (pa_enable)
+// selects it; control.v also moves the RF switch with it, keyed or not.
+enum class TxRoute : std::uint8_t { Ant, Rf1 };
+// The 0x09 bank for `route`. A closed gate forces drive 0; the PA is on only for
+// ANT with a non-zero drive, so RF1 never biases it. 0x09[18] stays clear.
+Cc ccTxDriveForRoute(TxRoute route, int level, bool txAllowed, bool atuTune) noexcept;
+
 // Direct I2C writes: 0x3c (I2C1, internal: Versa clock, AD9866) and 0x3d
 // (I2C2, external companion bus). Payload per gateware/rtl/i2c.v:
 //   C1 = DATA[31:24] cookie 0x06 write / 0x07 read
@@ -515,6 +525,9 @@ struct Hl2Telemetry {
     // The window's RADDR-1 responses skipped as isNonMeasurementRaddr1(). A unit
     // whose temperature word is always 0 has every response here and no peak.
     int forwardPowerSkipped = 0;
+    // Maximum of the same window's non-ACK RADDR-2 DATA[31:16]. Keyed, the SWR
+    // is the ratio of this and forwardPowerPeakRaw (Hl2Backend::publishTelemetry).
+    std::optional<int> reversePowerPeakRaw;
 
     // Merge a decoded response in, leaving untouched fields alone. ACK
     // responses contribute only PTT: their raddr is the command address and
@@ -532,16 +545,26 @@ struct Hl2Telemetry {
 }
 
 // Accumulator for Hl2Telemetry::forwardPowerPeakRaw: the maximum of DATA[15:0]
-// over non-ACK RADDR-1 responses that carry a measurement. Kept here so the
-// rule is testable without a socket.
+// over non-ACK RADDR-1 responses that carry a measurement, and for
+// reversePowerPeakRaw: the maximum of DATA[31:16] over non-ACK RADDR-2
+// responses. Kept here so the rule is testable without a socket.
 struct ForwardPowerWindow {
     std::optional<int> peak;
     int samples = 0;
     int skipped = 0;
+    std::optional<int> reversePeak;
 
     void observe(const Ep6Response& r) noexcept
     {
-        if (r.ack || r.raddr != 0x01)
+        if (r.ack)
+            return;
+        if (r.raddr == 0x02) {
+            const int rev = static_cast<int>((r.data >> 16) & 0xFFFF);
+            if (!reversePeak || rev > *reversePeak)
+                reversePeak = rev;
+            return;
+        }
+        if (r.raddr != 0x01)
             return;
         // Only this window skips it: Hl2Telemetry::apply() still takes both
         // halves of the word as last values.
@@ -559,6 +582,36 @@ struct ForwardPowerWindow {
         peak.reset();
         samples = 0;
         skipped = 0;
+        reversePeak.reset();
+    }
+};
+
+// Keyed SWR is published only from windows that carry modulation: a speech
+// pause, whose maxima fall on different syllables, reads 3:1 to 6:1 on a
+// matched load. A window passes when its forward peak is within kMinFraction
+// of a decaying envelope, so a steady carrier passes. The first two windows
+// of each over are dropped: they can hold the key-on junk words (#6229).
+struct KeyedSwrGate {
+    // Per 100 ms telemetry window: half-life about 0.66 s, so the envelope
+    // still remembers the last syllable through a normal pause.
+    static constexpr double kRelease = 0.9;
+    static constexpr double kMinFraction = 0.7;
+    static constexpr int kKeyOnWindows = 2;
+    double envelope = 0.0;
+    int keyOnWindowsLeft = kKeyOnWindows;
+    bool accept(int forwardCounts) noexcept
+    {
+        envelope = std::max(envelope * kRelease, static_cast<double>(forwardCounts));
+        if (keyOnWindowsLeft > 0) {
+            --keyOnWindowsLeft;
+            return false;
+        }
+        return forwardCounts >= envelope * kMinFraction;
+    }
+    void reset() noexcept
+    {
+        envelope = 0.0;
+        keyOnWindowsLeft = kKeyOnWindows;
     }
 };
 
@@ -698,6 +751,44 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
 // The gateware version as the operator reads it: "74.3", or "74" when the
 // reply carried no minor version. Both decimal, as upstream writes them.
 std::string gatewareVersionText(const DiscoveryReply& reply);
+
+// A board that names itself through VERSION_MINOR (#6806). The SQUARE SDR 2 and
+// SQUARE 3 values are fixed by their designer and kept across releases; any
+// other value, stock HL2 and first-generation SQUARE SDR included, is Unknown.
+enum class GatewareBoard : int { Unknown = 0, SquareSdr2, Square3 };
+inline constexpr std::uint8_t kGatewareMinorSquareSdr2 = 52;
+inline constexpr std::uint8_t kGatewareMinorSquare3 = 53;
+
+[[nodiscard]] constexpr GatewareBoard boardForGatewareMinor(
+    std::optional<std::uint8_t> minor) noexcept
+{
+    if (!minor) {
+        return GatewareBoard::Unknown;
+    }
+    switch (*minor) {
+    case kGatewareMinorSquareSdr2: return GatewareBoard::SquareSdr2;
+    case kGatewareMinorSquare3:    return GatewareBoard::Square3;
+    default:                       return GatewareBoard::Unknown;
+    }
+}
+
+// The board's own name, or nullptr when the gateware does not identify one.
+[[nodiscard]] constexpr const char* gatewareBoardName(GatewareBoard board) noexcept
+{
+    switch (board) {
+    case GatewareBoard::SquareSdr2: return "SQUARE SDR 2";
+    case GatewareBoard::Square3:    return "SQUARE 3";
+    case GatewareBoard::Unknown:    return nullptr;
+    }
+    return nullptr;
+}
+
+// The word shown before the version: "Gateware", or "SQUARE SDR 2 gateware".
+std::string gatewareVersionLabel(const DiscoveryReply& reply);
+
+// The minor version back out of gatewareVersionText()'s "major.minor", as it
+// arrives in RadioConnectRequest::version. nullopt for "74", empty or malformed.
+std::optional<std::uint8_t> gatewareMinorFromVersionText(std::string_view text) noexcept;
 
 // Build a 1032-byte EP2 packet carrying two C&C registers (one per frame). The
 // 504-byte payload is zero-filled, which is transmit SILENCE — ep2WriteTxIq()

@@ -249,9 +249,9 @@ bool LogManager::startLogging(const QString& path, bool mirrorToStderr)
     const RetentionConfig cfg = retentionConfig();
     const qint64 maxBytes = static_cast<qint64>(cfg.activeLogMaxMb) * 1024 * 1024;
 
-    // Rotation runs on the writer thread and publishes the timestamped path
-    // used by Support and bundles. The POSIX alias is for external tools.
-    // currentPath names the closed file; its handle stays with the writer.
+    // Rotation runs on the writer thread. The new path is published for
+    // Support and bundles, and the POSIX alias for external tools, only once
+    // the writer has opened it; a failed open leaves both on the old file.
     m_writer.setRotationConfig(maxBytes,
         [this](const QString& currentPath) -> QString {
             const QString dir = QFileInfo(currentPath).absolutePath();
@@ -263,11 +263,11 @@ bool LogManager::startLogging(const QString& path, bool mirrorToStderr)
             }
             if (QFile::exists(candidate))
                 return {};
-
-            setActiveLogFilePath(candidate);
-
-            updateLatestLogAlias(candidate);
             return candidate;
+        },
+        [this](const QString& newPath) {
+            setActiveLogFilePath(newPath);
+            updateLatestLogAlias(newPath);
         });
 
     if (!m_writer.start(path, mirrorToStderr))

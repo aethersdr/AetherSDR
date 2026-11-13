@@ -274,7 +274,7 @@ Full dependency list is in `README.md`. Adding a test: declare it in
 
 ### Version and release files
 
-Current version: **26.11.1**.
+Current version: **26.11.2**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
@@ -339,7 +339,7 @@ applets), `src/core/backends/` (one directory per radio family).
 - `IRadioBackend` — the radio seam; six implementors (flex, hl2, icom, sim,
   anan, rtl) ([`docs/agents/backends.md`](docs/agents/backends.md))
 
-**Threading:** up to 13 threads — see `docs/architecture/pipelines.md` for the
+**Threading:** up to 14 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
 
 **Design principle:** RadioModel owns all sub-models on the main thread.

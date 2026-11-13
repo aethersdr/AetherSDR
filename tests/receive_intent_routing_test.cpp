@@ -55,6 +55,8 @@ class Backend final : public IRadioBackend {
 public:
     bool connected = false;
     bool confirmed = false;
+    bool declaresPitch = false;
+    bool hostModulates = false;
     QList<int> pitches;
     QList<bool> ritEnables;
     QList<int> ritOffsets;
@@ -80,7 +82,8 @@ public:
     RadioCapabilities capabilities() const override
     {
         RadioCapabilities caps;
-        if (confirmed) { caps.receiveCwPitchControl = ReceiveCwPitchControl{}; }
+        if (confirmed || declaresPitch) { caps.receiveCwPitchControl = ReceiveCwPitchControl{}; }
+        caps.hostModulates = hostModulates;
         return caps;
     }
     bool isConnected() const override { return connected; }
@@ -282,6 +285,30 @@ void confirmedReceiveControls()
                     == TransmitControlRequest::Field::CwPitch
               && std::get<int>(qvariant_cast<TransmitControlRequest>(pitchControls.first().first()).value) == 800,
           "optimistic pitch uses the typed upstream control route once without raw wire text");
+}
+
+// An optimistic host-DSP backend that declares the pitch record (the HL2 shape)
+// keeps the model's pitch edge route: an applied pitch, such as a restored one,
+// still reaches the backend, and the model is not put into confirmation mode.
+void optimisticDeclaredPitchKeepsEdgeRoute()
+{
+    Fixture f;
+    f.backend->declaresPitch = true;
+    f.backend->hostModulates = true;
+    RadioModelSliceLifecycleTestAccess::publishCapabilities(f.radio);
+    TransmitModel& tx = f.radio.transmitModel();
+    check(!tx.confirmsReceiveCwPitch(), "a declared pitch without confirmed policy is not confirmation");
+    f.backend->pitches.clear();
+    tx.setCwPitch(820);
+    check(tx.cwPitch() == 820 && f.backend->pitches == QList<int>{820},
+          "an operator pitch reaches the optimistic backend once");
+    TransmitDelta restored; restored.cwPitch = 900;
+    tx.applyChanges(restored);
+    check(tx.cwPitch() == 900 && f.backend->pitches == QList<int>{820, 900},
+          "an applied pitch still reaches the optimistic backend that declares the record");
+    check(tx.reportedCwPitch() == 900, "the applied pitch is the model's reported pitch");
+    tx.setCwPitch(950);
+    check(tx.reportedCwPitch() == 900, "the local setter does not move the reported pitch");
 }
 
 void ritLifecycle()
@@ -839,6 +866,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 1; }
     confirmedReceiveControls();
+    optimisticDeclaredPitchKeepsEdgeRoute();
     ritLifecycle();
     notchReadbackLifecycle();
     creationPaths();
