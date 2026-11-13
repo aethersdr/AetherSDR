@@ -9875,7 +9875,7 @@ void AudioEngine::onTxAudioReady()
     // The fence is absolute: no stamp, no transport delivery. At most one block can
     // arrive unstamped: setHostMicrophoneContext and onTxAudioReady are both events
     // on this thread, delivered FIFO, so only a block already queued ahead of the
-    // install misses it (one dspBlockSize, ~21 ms at 24 kHz, within HL2 keying
+    // install misses it (one dspBlockSize, ~11 ms at 24 kHz, within HL2 keying
     // latency). (#5659)
     if (!selectTxContext(context)) {
         return;

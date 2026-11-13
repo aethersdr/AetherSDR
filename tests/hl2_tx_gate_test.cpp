@@ -23,10 +23,12 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QLoggingCategory>
+#include <QSemaphore>
 #include <QString>
 #include <QStringList>
 #include <QThread>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -190,6 +192,32 @@ struct Hl2TxGateTestAccess {
     {
         backend.m_cwHangTimer->stop();
         QMetaObject::invokeMethod(backend.m_cwHangTimer, "timeout", Qt::DirectConnection);
+    }
+
+    // #7216: the modulator, on the I/O thread it lives on (Hl2Backend.cpp:364).
+    static bool configureTxDsp(Hl2Backend& backend)
+    {
+        bool ok = false;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&ok, dsp = backend.m_txDsp] {
+            std::string err;
+            ok = dsp->configure(Hl2TxDsp::Config{}, &err);
+        }, Qt::BlockingQueuedConnection);
+        return ok;
+    }
+    static double txAlcGainDb(Hl2Backend& backend)
+    {
+        double db = 0.0;
+        QMetaObject::invokeMethod(backend.m_txDsp, [&db, dsp = backend.m_txDsp] {
+            db = dsp->alcGainDb();
+        }, Qt::BlockingQueuedConnection);
+        return db;
+    }
+    // Park the I/O thread until `gate` is released, so the calls the backend
+    // posts meanwhile run back-to-back, after the test has moved the coordinator.
+    static void holdIoThread(Hl2Backend& backend, QSemaphore& gate)
+    {
+        QMetaObject::invokeMethod(backend.m_metis, [&gate] { gate.acquire(); },
+                                  Qt::QueuedConnection);
     }
 };
 }
@@ -811,6 +839,64 @@ static void testTransmitTailEdges(TxTestAuthority& authority)
     }
 }
 
+// #7216, through the real backend: a re-key whose operation acquires before the
+// I/O thread runs the unkey's posted setMox(false)/reset()/flushTxIq(). All three
+// are skipped (permitsCleanup() is false once B acquired), so the key under B
+// must run them itself, the modulator's reset included.
+static void testRekeyRunsSkippedCleanup()
+{
+    const auto loud = [] {
+        QByteArray pcm(2 * 2048 * static_cast<int>(sizeof(qint16)), Qt::Uninitialized);
+        auto* s = reinterpret_cast<qint16*>(pcm.data());
+        for (int n = 0; n < 2 * 2048; ++n) {
+            s[n] = (n / 2) % 2 ? 32000 : -32000;
+        }
+        return pcm;
+    }();
+    // skipCleanup: park the I/O thread across the unkey and B's acquire, so the
+    // posted cleanup runs only after A's operation is gone (the race).
+    const auto run = [&](bool skipCleanup, const char* premise, const char* claim) {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        if (!Hl2TxGateTestAccess::configureTxDsp(backend)) {
+            check(false, "#7216 premise: the modulator configures");
+            return;
+        }
+        const auto mic = tx.coordinator.registerProducer(true);
+        const auto a = tx.operation;
+        backend.setKeying(true, a, {});
+        backend.submitTxAudio(loud, 24000, AetherSDR::TxAudioSource::Microphone,
+                              tx.coordinator.mediaContext(mic, a));
+        check(Hl2TxGateTestAccess::txAlcGainDb(backend) < -0.5, premise);
+        QSemaphore gate;
+        if (skipCleanup) {
+            Hl2TxGateTestAccess::holdIoThread(backend, gate);
+        }
+        backend.setKeying(false, a, {});
+        if (!skipCleanup) {
+            (void)Hl2TxGateTestAccess::txAlcGainDb(backend);   // the cleanup has run
+        }
+        (void)tx.coordinator.finishLocalIntent(a);
+        const auto b = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        backend.setKeying(true, b, {});
+        gate.release();
+        check(Hl2TxGateTestAccess::txAlcGainDb(backend) > -0.01, claim);
+        std::size_t depth = 1;
+        QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), [&] {
+            depth = Hl2TxGateTestAccess::metis(backend)->txQueueDepth();
+        }, Qt::BlockingQueuedConnection);
+        check(depth == 0, skipCleanup ? "#7216: A's queued tail is gone before B's first frame"
+                                      : "#7216 control: the ordinary unkey left nothing queued");
+        backend.setKeying(false, b, {});
+    };
+    run(true, "#7216 premise: A's loud audio drove the ALC below unity",
+        "#7216: a re-key that skipped the unkey's cleanup still resets the modulator");
+    run(false, "#7216 control premise: A's loud audio drove the ALC below unity",
+        "#7216 control: an ordinary unkey/re-key resets the modulator as before");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-tx-gate"));
@@ -827,6 +913,7 @@ int main(int argc, char** argv)
     testTunePowerAppliesLiveWhileTuning(authority);
     testTuneReleasePostsNoDriveRestore(authority);
     testTransmitTailEdges(authority);
+    testRekeyRunsSkippedCleanup();
 
     {
         MetisClient board;
@@ -1166,6 +1253,104 @@ int main(int argc, char** argv)
         (void)tx.coordinator.endIntent(aIntent);
     }
 
+    // #7216: B acquires before the I/O thread runs A's unkey. setMox(false, A)
+    // and flushTxIq() are refused/skipped, so B's key finds m_mox unchanged, and
+    // a microphone context is the same across both overs (sameContext()).
+    {
+        const std::size_t packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+        const std::vector<std::complex<float>> tail(MetisClientTestAccess::primeTarget(),
+                                                    {0.25f, -0.25f});
+        // unkeyRan: A's setMox(false) ran before B acquired, its flush did not.
+        for (const bool unkeyRan : {false, true}) {
+            TxTestAuthority tx;
+            MetisClient rekey;
+            MetisClientTestAccess::setStreaming(rekey);
+            rekey.enableTransmit(true);
+            const auto mic = tx.coordinator.registerProducer(true);
+            const auto a = tx.operation;
+            const auto micA = tx.coordinator.mediaContext(mic, a);
+            check(!rekey.setMox(true, a), "#7216 premise: a first key owes no cleanup");
+            for (int i = 0; i < 3; ++i) {
+                (void)rekey.buildNextControlPacket();   // A's own leading silence
+            }
+            rekey.queueTxIq(tail, micA);
+            if (unkeyRan) {
+                rekey.setMox(false, a);
+            }
+            (void)tx.coordinator.finishLocalIntent(a);
+            const auto b = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+            rekey.setMox(false, a);   // the posted unkey, now refused
+            check(rekey.isKeyed() != unkeyRan && rekey.txQueueDepth() == tail.size(),
+                  "#7216 premise: A's tail is still queued when B keys");
+            check(micA.sameContext(tx.coordinator.mediaContext(mic, b)),
+                  "#7216 premise: the microphone context spans both overs");
+            const auto overflow = rekey.txOverflowSamples();
+            check(rekey.setMox(true, b), "#7216: a key under a new operation runs A's skipped cleanup");
+            check(rekey.txQueueDepth() == 0 && rekey.txOverflowSamples() == overflow,
+                  "#7216: A's tail is abandoned, uncounted");
+            const auto first = rekey.buildNextControlPacket();
+            check(anyFrameKeyed(first) && !payloadNonZero(first),
+                  "#7216: B's first keyed frame carries none of A's tail");
+            const auto underflowAtB = rekey.txUnderflowSamples();
+            rekey.queueTxIq(tail, tx.coordinator.mediaContext(mic, b));
+            bool carried = false;
+            for (std::size_t i = 0; i < tail.size() / packet + 8 && !carried; ++i) {
+                carried = payloadNonZero(rekey.buildNextControlPacket());
+            }
+            check(carried, "#7216: B's own audio still reaches the wire");
+            check(rekey.lastKeyDownUnderflowSamples() == rekey.txUnderflowSamples() - underflowAtB + packet,
+                  "#7216: B's key-down report counts from B's key, not A's");
+        }
+
+        // Control: an ordinary key/unkey/key. The unkey's flush ran, so B's key
+        // owes nothing and the client behaves exactly as before.
+        {
+            TxTestAuthority tx;
+            MetisClient ordinary;
+            MetisClientTestAccess::setStreaming(ordinary);
+            ordinary.enableTransmit(true);
+            const auto mic = tx.coordinator.registerProducer(true);
+            const auto a = tx.operation;
+            check(!ordinary.setMox(true, a), "#7216 control premise: first key");
+            ordinary.queueTxIq(tail, tx.coordinator.mediaContext(mic, a));
+            check(!ordinary.setMox(false, a), "#7216 control: an ordinary unkey owes no cleanup");
+            ordinary.flushTxIq();                       // what applyKeying posts on unkey
+            (void)tx.coordinator.finishLocalIntent(a);
+            const auto b = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+            check(!ordinary.setMox(true, b),
+                  "#7216 control: an ordinary re-key after a completed unkey runs no extra cleanup");
+            check(ordinary.isKeyed(), "#7216 control: and keys");
+        }
+
+        // Control: a repeat key under the SAME operation from a second producer
+        // (the heldKeying re-anchor) is not a new over and keeps the queue.
+        {
+            TxTestAuthority tx;
+            MetisClient repeat;
+            MetisClientTestAccess::setStreaming(repeat);
+            repeat.enableTransmit(true);
+            const auto first = tx.coordinator.registerProducer();
+            const auto second = tx.coordinator.registerProducer();
+            const auto mic = tx.coordinator.registerProducer(true);
+            const auto ra = first.request();
+            const auto rb = second.request();
+            const auto aIntent = tx.coordinator.beginRequest(ra, tx.operation,
+                AetherSDR::TxCoordinator::Activity::Mox);
+            const auto bIntent = tx.coordinator.beginRequest(rb, tx.operation,
+                AetherSDR::TxCoordinator::Activity::Mox);
+            repeat.setMox(true, tx.coordinator.requestOperation(ra));
+            repeat.queueTxIq(tail, tx.coordinator.mediaContext(mic, tx.operation));
+            check(!repeat.setMox(true, tx.coordinator.requestOperation(rb)),
+                  "#7216 control: a same-operation repeat key is not a new over");
+            check(repeat.txQueueDepth() == tail.size(),
+                  "#7216 control: a same-operation repeat key keeps the queued audio");
+            check(payloadNonZero(repeat.buildNextControlPacket()),
+                  "#7216 control: and that audio goes out");
+            (void)tx.coordinator.endIntent(bIntent);
+            (void)tx.coordinator.endIntent(aIntent);
+        }
+    }
+
     {
         TxTestAuthority tx;
         Hl2Backend cw;
@@ -1267,6 +1452,61 @@ int main(int argc, char** argv)
         check(!independent.cwKeyDown(), "an ended CW request cannot relatch its carrier");
     }
 
+    // #7212: audio queued after the unkey, under a context that still permits
+    // dispatch, must not make an idle frame hold the counter acquire() needs at
+    // zero. MOX is keyed by a separate coordinator, so `tx` sees only the audio.
+    {
+        TxTestAuthority keyer;
+        TxTestAuthority tx;
+        MetisClient idle;
+        MetisClientTestAccess::setStreaming(idle);
+        idle.enableTransmit(true);
+        idle.setMox(true, keyer.operation);
+        idle.setMox(false, keyer.operation);
+        const std::vector<std::complex<float>> late(
+            static_cast<std::size_t>(kTxSamplesPerPacket), std::complex<float>(0.25f, -0.25f));
+        idle.queueTxIq(late, tx.context);
+        check(idle.txQueueDepth() == late.size(), "late audio under a live context is queued");
+        bool wrote = false;
+        MetisClientTestAccess::writer(idle, [&](const auto& packet) -> qint64 {
+            wrote = !anyFrameKeyed(packet);
+            check(!tx.coordinator.hasInFlightDispatches(),
+                  "#7212: an idle frame with queued audio holds no audio dispatch during the write");
+            return packet.size();
+        });
+        MetisClientTestAccess::send(idle);
+        check(wrote, "#7212: the idle frame was written unkeyed");
+        check(idle.txQueueDepth() == 0, "#7212: audio queued while unkeyed is abandoned on the idle frame");
+        check(idle.txOverflowSamples() == 0, "#7212: that abandon is not counted as overflow");
+
+        // A microphone context has no operation, so the next over reuses it
+        // and only the abandon above keeps the stale block out of that over.
+        const auto mic = tx.coordinator.registerProducer(true);
+        const auto micContext = tx.coordinator.mediaContext(mic, tx.operation);
+        check(micContext.sameContext(tx.coordinator.mediaContext(mic, keyer.operation)),
+              "#7212: a microphone context is the same across overs");
+        idle.queueTxIq(late, micContext);
+        check(idle.txQueueDepth() == late.size(), "late microphone audio is queued");
+        MetisClientTestAccess::send(idle);
+        check(idle.txQueueDepth() == 0, "#7212: stale microphone audio is abandoned before the next key");
+
+        // Positive control: a keyed frame carrying queued IQ still holds it.
+        idle.setMox(true, keyer.operation);
+        pastThePrime(idle, tx.context);
+        idle.queueTxIq(late, tx.context);
+        bool held = false;
+        bool carried = false;
+        MetisClientTestAccess::writer(idle, [&](const auto& packet) -> qint64 {
+            held = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            carried = payloadNonZero(packet);
+            return packet.size();
+        });
+        MetisClientTestAccess::send(idle);
+        check(held, "#7212 control: a keyed frame with queued IQ holds the audio dispatch during the write");
+        check(idle.txQueueDepth() == 0, "#7212 control: the keyed frame leaves nothing queued");
+        check(carried, "#7212 control: the keyed frame's payload is the queued block");
+    }
+
     {
         TxTestAuthority tx;
         MetisClient entered;
@@ -1285,6 +1525,112 @@ int main(int argc, char** argv)
         MetisClientTestAccess::send(entered);
         check(written && tx.coordinator.acknowledgeStopped(tx.operation),
               "Metis writer guard ends only after the terminal writer returns");
+    }
+
+    // The keyed frames and the first OFF frame hold the dispatch fence; the idle
+    // frames after them hold nothing, so the next over's acquire() is not refused.
+    using Refusal = AetherSDR::TxCoordinator::Refusal;
+    using Packet = std::array<std::uint8_t, kUsbPacketSize>;
+    {
+        TxTestAuthority tx;
+        MetisClient over;
+        MetisClientTestAccess::setStreaming(over);
+        over.enableTransmit(true);
+        over.setMox(true, tx.operation);
+        bool keyedFenced = false;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            keyedFenced = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(keyedFenced, "a keyed Metis frame holds the dispatch fence");
+        over.setMox(false, tx.operation);
+        bool unkeyFenced = false;
+        Refusal unkeyRefusal = Refusal::None;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            unkeyFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            (void)tx.coordinator.finishLocalIntent(tx.operation);
+            unkeyRefusal = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).refusal;
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(unkeyFenced && unkeyRefusal == Refusal::Recovering,
+              "the unkey frame stays fenced: a new operation is refused while it is entered");
+        bool idleFree = false;
+        bool idleAdmits = false;
+        MetisClientTestAccess::writer(over, [&](const Packet& packet) -> qint64 {
+            idleFree = !anyFrameKeyed(packet) && !tx.coordinator.hasInFlightDispatches();
+            idleAdmits = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).accepted();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(over);
+        check(idleFree, "an idle Metis frame after the unkey frame holds no dispatch guard");
+        check(idleAdmits, "a fresh acquire() during an idle Metis frame is accepted");
+    }
+
+    {
+        // An over ended mid-frame: the next frame drops MOX and is still fenced.
+        TxTestAuthority tx;
+        MetisClient ended;
+        MetisClientTestAccess::setStreaming(ended);
+        ended.enableTransmit(true);
+        ended.setMox(true, tx.operation);
+        Refusal keyedRefusal = Refusal::None;
+        bool keyedFenced = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            (void)tx.coordinator.finishLocalIntent(tx.operation);
+            keyedRefusal = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).refusal;
+            keyedFenced = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(keyedFenced && keyedRefusal == Refusal::Recovering,
+              "a new operation is refused while a keyed Metis frame is entered");
+        bool offFenced = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            offFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(offFenced && !ended.isKeyed(),
+              "the OFF frame after a refused key dispatch is still fenced");
+        bool idleFree = false;
+        MetisClientTestAccess::writer(ended, [&](const Packet& packet) -> qint64 {
+            idleFree = !tx.coordinator.hasInFlightDispatches()
+                && tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).accepted();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(ended);
+        check(idleFree, "after that OFF frame an idle frame admits the next over");
+    }
+
+    {
+        // A failed write does not retire the unkey: the next OFF frame is fenced
+        // again, and only a written OFF frame releases the operation.
+        TxTestAuthority tx;
+        MetisClient failed;
+        MetisClientTestAccess::setStreaming(failed);
+        failed.enableTransmit(true);
+        failed.setMox(true, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet& packet) -> qint64 { return packet.size(); });
+        MetisClientTestAccess::send(failed);
+        failed.setMox(false, tx.operation);
+        MetisClientTestAccess::writer(failed, [](const Packet&) -> qint64 { return -1; });
+        MetisClientTestAccess::send(failed);
+        bool retryFenced = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            retryFenced = !anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(retryFenced, "an unkey frame whose write failed leaves the next OFF frame fenced");
+        bool idleFree = false;
+        MetisClientTestAccess::writer(failed, [&](const Packet& packet) -> qint64 {
+            idleFree = !tx.coordinator.hasInFlightDispatches();
+            return packet.size();
+        });
+        MetisClientTestAccess::send(failed);
+        check(idleFree, "once an OFF frame is written, the idle frame after it holds no guard");
     }
 
     // ---- TX IQ FIFO fault accounting (S3 row 3.3) ----
@@ -1427,14 +1773,14 @@ int main(int argc, char** argv)
                  * static_cast<std::uint64_t>(MetisClientTestAccess::ep2AudioRateHz()))
             / (static_cast<std::uint64_t>(chain.inputSampleRateHz)
                  * static_cast<std::uint64_t>(kTxSamplesPerPacket));
-        // PINNED at the geometry this product actually ships: 512 input samples
-        // at 24 kHz is 21.33 ms, and an EP2 packet is 126 samples at 48 kHz,
-        // which is 2.625 ms. 21.33 / 2.625 = 8.127, so EIGHT whole packets --
-        // 1008 samples, about 21 ms -- of substituted silence open every clean
+        // PINNED at the geometry this product actually ships: 256 input samples
+        // at 24 kHz is 10.67 ms, and an EP2 packet is 126 samples at 48 kHz,
+        // which is 2.625 ms. 10.67 / 2.625 = 4.06, so FOUR whole packets --
+        // 504 samples, about 10.5 ms -- of substituted silence open every clean
         // over, against a tail of at most 125 samples. If the block size or
         // either rate changes, this assertion is where it says so.
-        check(preRollPackets == 8,
-              "THE FLOOR (PRE-ROLL HALF): one Hl2TxDsp input block is eight EP2 packets");
+        check(preRollPackets == 4,
+              "THE FLOOR (PRE-ROLL HALF): one Hl2TxDsp input block is four EP2 packets");
 
         TxTestAuthority tx;
         ScopedTxFifoLog log;
@@ -1587,8 +1933,9 @@ int main(int argc, char** argv)
         // ---- THE PRIME (#6052): the first samples of an over ----
         // An empty queue is still the counted pre-roll above. Once a block
         // lands, keyed packets are silence, consume nothing and count no
-        // underflow until three blocks are queued (one draining, two margin).
-        // The block is derived from the real Hl2TxDsp::Config.
+        // underflow until one draining block plus 42.67 ms of margin is queued.
+        // The block is derived from the real Hl2TxDsp::Config; the margin is
+        // the decision, pinned in milliseconds so it does not follow the block.
         const Hl2TxDsp::Config chain{};
         const std::size_t block =
             static_cast<std::size_t>(chain.dspBlockSize)
@@ -1596,8 +1943,15 @@ int main(int argc, char** argv)
             / static_cast<std::size_t>(chain.inputSampleRateHz);
         check(MetisClientTestAccess::primeBlock() == block,
               "THE PRIME: the block MetisClient primes in is Hl2TxDsp's own, at the EP2 rate");
-        check(MetisClientTestAccess::primeTarget() == 3 * block,
-              "THE PRIME: the target is three blocks -- one draining, two of margin");
+        constexpr double kMarginMs = 128.0 / 3.0;   // 42.67 ms, #6052
+        const std::size_t margin = static_cast<std::size_t>(std::lround(
+            kMarginMs * MetisClientTestAccess::ep2AudioRateHz() / 1000.0));
+        check(MetisClientTestAccess::primeTarget() == block + margin,
+              "THE PRIME: the target is one draining block plus 42.67 ms of margin");
+        check(margin % block == 0,
+              "THE PRIME: the margin is a whole number of blocks, so the hold ends on a block");
+        const std::size_t targetBlocks = MetisClientTestAccess::primeTarget() / block;
+        const std::vector<std::complex<float>> oneBlock(block, std::complex<float>(0.25f, -0.25f));
         // The client-leveled margin is wall-clock time, not blocks: about
         // 171 ms at the EP2 rate whatever the block is, plus one block draining.
         const auto packet = static_cast<std::size_t>(kTxSamplesPerPacket);
@@ -1612,7 +1966,6 @@ int main(int argc, char** argv)
               "THE PRIME: the client-leveled deadline is twice its margin's arrival time");
         check(MetisClientTestAccess::clientPrimeTarget() < MetisClientTestAccess::queueMax(),
               "THE PRIME: the client-leveled target fits below the overflow bound");
-        const std::vector<std::complex<float>> oneBlock(block, std::complex<float>(0.25f, -0.25f));
 
         TxTestAuthority tx;
         ScopedTxFifoLog log;
@@ -1630,19 +1983,23 @@ int main(int argc, char** argv)
               "THE PRIME: a hold is not an underflow -- nothing was missing");
         check(over.txPrimeHoldPackets() == 1, "THE PRIME: it is counted as a hold instead");
 
-        over.queueTxIq(oneBlock, tx.context);            // block 2
-        check(!payloadNonZero(over.buildNextControlPacket()) && over.txQueueDepth() == 2 * block,
-              "THE PRIME: two blocks are still short of the target -- one block of margin "
-              "is not what was chosen");
+        for (std::size_t k = 2; k < targetBlocks; ++k) {  // blocks 2 .. one short
+            over.queueTxIq(oneBlock, tx.context);
+            check(!payloadNonZero(over.buildNextControlPacket()) && over.txQueueDepth() == k * block,
+                  "THE PRIME: every block short of the target is still held -- one block "
+                  "less margin is not what was chosen");
+        }
 
-        over.queueTxIq(oneBlock, tx.context);            // block 3: the target
+        over.queueTxIq(oneBlock, tx.context);            // the target
         const auto first = over.buildNextControlPacket();
         const auto firstShape = ep2IqShape(first);
         check(firstShape.carryingIq == kTxSamplesPerPacket && firstShape.firstSilent < 0,
               "THE PRIME: at the target the next packet is a FULL packet of IQ");
-        check(over.txQueueDepth() == 3 * block - packet, "THE PRIME: and the queue drains from there");
-        check(over.txPrimeHoldPackets() == 2 && over.txPrimeDeadlineReleases() == 0,
-              "THE PRIME: two packets were held, and the target let it go, not the deadline");
+        check(over.txQueueDepth() == MetisClientTestAccess::primeTarget() - packet,
+              "THE PRIME: and the queue drains from there");
+        check(over.txPrimeHoldPackets() == targetBlocks - 1 && over.txPrimeDeadlineReleases() == 0,
+              "THE PRIME: one packet per short block was held, and the target let it go, "
+              "not the deadline");
         check(log.primeLines().size() == 1, "THE PRIME: one log line when it lets go");
 
         // NOT DEFENDED. Below the target again, the queue keeps draining: the
@@ -1651,9 +2008,9 @@ int main(int argc, char** argv)
             check(payloadNonZero(over.buildNextControlPacket()),
                   "THE PRIME: once let go, a queue below the target still drains");
         const auto tail = ep2IqShape(over.buildNextControlPacket());
-        check(tail.carryingIq == static_cast<int>(3 * block % packet),
+        check(tail.carryingIq == static_cast<int>(MetisClientTestAccess::primeTarget() % packet),
               "THE PRIME: down to the last short packet, which is not held either");
-        check(over.txPrimeHoldPackets() == 2 && log.primeLines().size() == 1,
+        check(over.txPrimeHoldPackets() == targetBlocks - 1 && log.primeLines().size() == 1,
               "THE PRIME: no second hold and no second line in the same over");
 
         // THE KEYED EDGE ARMS IT AGAIN. Same context, no flush, queue empty:
