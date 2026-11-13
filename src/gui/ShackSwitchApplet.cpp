@@ -380,7 +380,7 @@ void ShackSwitchApplet::rebuildAntennaRows()
         aBtn->setFixedWidth(22);
         hl->addWidget(aBtn);
 
-        auto* bBtn = new QPushButton("B");
+        auto* bBtn = new QPushButton("B", row);
         bBtn->setFixedWidth(22);
         bBtn->setVisible(dualPort);
         hl->addWidget(bBtn);

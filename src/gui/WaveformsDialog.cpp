@@ -1196,7 +1196,7 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
         m_dstarAdvancedBtn->isChecked() ? Qt::DownArrow : Qt::RightArrow);
     dstarRoot->addWidget(m_dstarAdvancedBtn);
 
-    m_dstarAdvancedPanel = new QWidget;
+    m_dstarAdvancedPanel = new QWidget(dstarBody);
     m_dstarAdvancedPanel->setObjectName(QStringLiteral("DStarAdvancedPanel"));
     auto* advancedLayout = new QVBoxLayout(m_dstarAdvancedPanel);
     advancedLayout->setContentsMargins(0, 0, 0, 0);

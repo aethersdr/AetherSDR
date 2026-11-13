@@ -294,6 +294,17 @@ with the same buttons.
 These are the issues that have hit real PRs in the project's history.
 Listing them so they don't bite the next contributor.
 
+Give a page's controls their intended widget parent before calling `show()`
+or `setVisible(true)`. A parentless control is a top-level window: showing it
+before adding it to a layout can steal activation on macOS. Constructor
+parenting also owns alternate controls that are not initially inserted into a
+layout, such as the EQ fader's editable value and meter readout. Keep the
+existing visibility conditions; ownership is the correction. The
+`radio_setup_no_transient_window_test` records top-level show events during
+page construction and exercises both fader modes and ShackSwitch port counts.
+Live GPU widget reparenting has additional resource-lifetime constraints;
+see [multi-pan pitfall 21](../architecture/multi-pan-pitfalls.md).
+
 | Pitfall | Wrong | Right | Surfaced in |
 |---|---|---|---|
 | AppSettings is a reference, not a pointer | `AppSettings::instance()->value(...)` | `AppSettings::instance().value(...)` | #2591 |
