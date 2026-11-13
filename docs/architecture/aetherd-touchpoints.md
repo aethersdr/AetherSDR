@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 289 touchpoint headers (233 core, 56 models) — 289/289 tagged, 0/289 converted.
+**Totals:** 288 touchpoint headers (233 core, 55 models) — 288/288 tagged, 0/288 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -259,7 +259,6 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/Data2gReceiveModel.h` | 2 | universal — Receive-only Data2G monitor fed mono 24 kHz audio from the AX.25 receive model's existing tap; decode runs on its own worker with a bounded queue and generation retirement. No radio protocol, no audio source of its own and no transmit authority. | unconverted |
 | `models/DaxIqModel.h` | 1 | vendor(flex) — Flex DAX IQ streams: typed create/remove/rate requests, four-channel model and pipes to SDR apps; Flex status parsing remains in the model | unconverted |
 | `models/DaxReceiveModel.h` | 1 | universal — Owner-thread adapter from typed native receive PCM and stable TCI receiver bindings to the existing 24 kHz virtual audio bridges; no radio wire protocol. | unconverted |
-| `models/DeclaredBands.h` | 1 | universal — Radio-declared band set ('bands=2m,440,23cm' CSV) validated against the canonical BandDefs allow-list (aliases resolved, deduped, case-folded); family-agnostic vocabulary with no wire text — empty for real Flex, filled by gateway/Icom hardware (#4027, #5041) | unconverted |
 | `models/DecoderAudioModel.h` | 3 | mixed(flex) — Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry. | unconverted |
 | `models/DigitalVoiceWaveformHistory.h` | 1 | mixed(flex) — Rolling health history for the DV waveform path (sample rate, turnaround, deficits). Generic rate/latency telemetry fused with Flex VITA sequence-gap counters. | unconverted |
 | `models/EqualizerModel.h` | 3 | universal — 8-band TX/RX audio EQ state and typed enable/band-gain intent are universal; Flex encoding is backend-owned, legacy status parsing remains | unconverted |

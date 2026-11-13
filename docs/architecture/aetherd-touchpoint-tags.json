@@ -1043,12 +1043,6 @@
   "split": "",
   "confidence": "high"
  },
- "models/DeclaredBands.h": {
-  "tag": "universal",
-  "note": "Radio-declared band set ('bands=2m,440,23cm' CSV) validated against the canonical BandDefs allow-list (aliases resolved, deduped, case-folded); family-agnostic vocabulary with no wire text \u2014 empty for real Flex, filled by gateway/Icom hardware (#4027, #5041)",
-  "split": "",
-  "confidence": "high"
- },
  "models/CwxModel.h": {
   "tag": "universal",
   "note": "Plain-text CW keyer intent: typed WPM/delay/QSK, macro and send/erase requests, batch cancellation and bounded speed-echo bookkeeping. Command encoding and queue-reply decoding live below the seam; legacy CWX status parsing remains.",

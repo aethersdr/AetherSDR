@@ -2,7 +2,6 @@
 
 #include "core/backends/RadioCapabilities.h"
 #include "models/ModelCapabilities.h"
-#include "models/DeclaredBands.h"
 
 #include <QPointer>
 #include <QStringList>
