@@ -4736,11 +4736,15 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         applyAtuTuneRequest(false);
     }
     if (m_metis) {
-        QMetaObject::invokeMethod(m_metis, [metis = m_metis, key, operation, cwBreakIn] {
-            if (cwBreakIn) {
-                metis->setCwMox(key, operation);
-            } else {
-                metis->setMox(key, operation);
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, dsp = m_txDsp, key, operation, cwBreakIn] {
+            const bool newOver = cwBreakIn ? metis->setCwMox(key, operation)
+                                           : metis->setMox(key, operation);
+            // #7216: the previous over's skipped cleanup (below) is run here
+            // instead. The modulator shares this thread (see m_ioThread), and
+            // resetting it in this same event leaves its exchange timer no
+            // chance to emit that over's residue into the new one.
+            if (newOver && dsp) {
+                dsp->reset();
             }
         }, Qt::QueuedConnection);
     }

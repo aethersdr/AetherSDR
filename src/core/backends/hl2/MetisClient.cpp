@@ -1272,20 +1272,28 @@ void MetisClient::ingestControlResponse(const Ep6Response& resp)
     publishControlVerdict();
 }
 
-void MetisClient::setMox(bool keyed, const TxCoordinator::Operation& operation)
+bool MetisClient::setMox(bool keyed, const TxCoordinator::Operation& operation)
 {
-    setMoxImpl(keyed, operation, false);
+    return setMoxImpl(keyed, operation, false);
 }
 
-void MetisClient::setCwMox(bool keyed, const TxCoordinator::Operation& operation)
+bool MetisClient::setCwMox(bool keyed, const TxCoordinator::Operation& operation)
 {
-    setMoxImpl(keyed, operation, true);
+    return setMoxImpl(keyed, operation, true);
 }
 
-void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn)
+bool MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn)
 {
     if (!TxCoordinator::Command{operation, keyed}.permitsDispatch(TxCoordinator::monotonicMs())) {
-        return;
+        return false;
+    }
+    // #7216: the unkey's flushTxIq() is skipped once a new operation acquires,
+    // and so is its setMox(false), leaving no edge below. A key under another
+    // operation while that flush is owed starts a new over: run it here, before
+    // the over's first frame. A repeat key under the same operation does not.
+    const bool newOver = keyed && m_overFlushOwed && !m_moxOperation.sameOperation(operation);
+    if (newOver) {
+        flushTxIq();
     }
     const bool was = m_mox;
     if (keyed && (!m_txAllowed || !m_running)) {
@@ -1296,14 +1304,15 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
         keyed = false;
     }
     m_mox = keyed;
+    m_overFlushOwed = m_overFlushOwed || m_mox;
     m_moxOperation = keyed
         ? (cwBreakIn ? operation.heldCwKeying() : operation.heldKeying()) : operation;
     // main 2c693d1c: the bandscope transmit interlock runs on real key edges
     // only. The operation fence above is set first and unconditionally — a
     // repeat key from a NEW producer must re-anchor the fence even though the
     // wire state did not change.
-    if (m_mox == was)
-        return;
+    if (m_mox == was && !(newOver && m_mox))
+        return newOver;
 
     // The key-down report (#6052): armed on the rising edge, disarmed on the
     // falling one so an over that never carried queued IQ says nothing.
@@ -1339,6 +1348,7 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
         // 178-285 ms past the falling edge; kBandscopeUnkeyHoldoffMs clears it.
         m_sinceUnkey.restart();
     }
+    return newOver;
 }
 
 void MetisClient::setTxFrequencyHz(std::uint32_t hz)
@@ -1500,6 +1510,7 @@ void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoord
 
 void MetisClient::flushTxIq()
 {
+    m_overFlushOwed = false;
     abandonTxIq();
     // A flush is how an over ends, so it is also where a starvation that ran
     // to the end of that over stops. Without this the run would sit unreported
