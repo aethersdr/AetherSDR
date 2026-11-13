@@ -1685,8 +1685,7 @@ public:
 private:
     void installDirectTxSubmitter();
     std::mutex m_directTxMutex;
-    std::function<bool(const QByteArray&, int, TxAudioSource,
-                       const TxCoordinator::Context&)> m_directTx;
+    IRadioBackend::DirectTxSubmitter m_directTx;
 public:
     // Ordered completion barrier for a finite modem stream. The token lets the
     // producer reject a stale completion from an aborted transmission.

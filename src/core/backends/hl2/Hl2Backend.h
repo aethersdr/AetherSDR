@@ -172,9 +172,7 @@ public:
     // through the GUI thread: a GUI hitch of 100+ ms otherwise starves the
     // transmit queue mid-over. The returned callable is safe from any thread
     // and outlives the backend; once the backend is gone it returns false.
-    using DirectTxSubmitter = std::function<bool(const QByteArray&, int, TxAudioSource,
-                                                 const TxCoordinator::Context&)>;
-    DirectTxSubmitter directTxSubmitter();
+    DirectTxSubmitter directTxSubmitter() override;
     void setTxPower(int percent) override;
     void setTunePower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;

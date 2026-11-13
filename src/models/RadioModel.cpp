@@ -9935,8 +9935,7 @@ bool RadioModel::submitTxAudioDirect(const QByteArray& int16Stereo, int sampleRa
                                      TxAudioSource source,
                                      const TxCoordinator::Context& context)
 {
-    std::function<bool(const QByteArray&, int, TxAudioSource,
-                       const TxCoordinator::Context&)> direct;
+    IRadioBackend::DirectTxSubmitter direct;
     {
         const std::lock_guard<std::mutex> lock(m_directTxMutex);
         direct = m_directTx;
@@ -9951,11 +9950,8 @@ bool RadioModel::submitTxAudioDirect(const QByteArray& int16Stereo, int sampleRa
 
 void RadioModel::installDirectTxSubmitter()
 {
-    auto* hl2 = dynamic_cast<hl2::Hl2Backend*>(m_backend.get());
     const std::lock_guard<std::mutex> lock(m_directTxMutex);
-    m_directTx = nullptr;
-    if (hl2)
-        m_directTx = hl2->directTxSubmitter();
+    m_directTx = m_backend ? m_backend->directTxSubmitter() : nullptr;
 }
 
 void RadioModel::finishTxAudio(quint64 token, const TxCoordinator::Context& context)
