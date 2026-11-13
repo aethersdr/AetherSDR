@@ -1041,6 +1041,13 @@ public:
     virtual void setSliceRitEnabled(int sliceId, bool on) { Q_UNUSED(sliceId); Q_UNUSED(on); }
     virtual void setSliceXitEnabled(int sliceId, bool on) { Q_UNUSED(sliceId); Q_UNUSED(on); }
     virtual void setSliceRitOffset(int sliceId, int hz) { Q_UNUSED(sliceId); Q_UNUSED(hz); }
+    // Both halves as one intent (the headless slice.setRit). The default is the
+    // pair above; a backend that can apply them together overrides it.
+    virtual void setSliceRit(int sliceId, bool on, int hz)
+    {
+        setSliceRitOffset(sliceId, hz);
+        setSliceRitEnabled(sliceId, on);
+    }
 
     // The TRANSMIT offset. Defaults to setSliceRitOffset() because an IC-705 has ONE
     // shift register (21 00; 21 01 / 21 02 choose whether it applies to RX, TX or

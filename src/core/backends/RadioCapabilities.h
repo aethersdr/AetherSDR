@@ -101,6 +101,12 @@ struct ReceiveDspControl {
     // An entry narrows a declared feature to a subset of the qualified modes.
     // An absent entry uses all modes; an empty entry disables that feature.
     QMap<Feature, QStringList> featureModes;
+    // Headless admission provenance for slice.setAgcThreshold/NoiseBlanker/
+    // NoiseReduction/Rit. Unknown keeps the record GUI-only: aetherd refuses.
+    // Last, so existing positional initializers keep their meaning.
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    // Largest |RIT offset| slice.setRit admits; 0 = RIT is not offered headless.
+    int maximumRitOffsetHz = 0;
     bool supports(Feature feature, const QString& mode) const
     {
         const auto restriction = featureModes.constFind(feature);
@@ -121,6 +127,14 @@ struct ReceiveCwPitchControl {
 struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
+};
+// panadapter.setRfGain: setPanRfGain()'s range in dB, reported back through
+// panRfGainChanged. A backend whose stage is an attenuator declares it negated.
+struct ReceivePanRfGainControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    int minimumDb = 0;
+    int maximumDb = 0;
+    int stepDb = 1;
 };
 // Typed pre-monitor sliceAudioFrameReady export; grants no TX, IQ or control verb.
 struct ReceiveAudioExport {
@@ -472,6 +486,7 @@ struct RadioCapabilities {
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
+    std::optional<ReceivePanRfGainControl> receivePanRfGainControl;
     // Engaged when the radio can deliver a wideband converter view; see the
     // struct above for why absence is the right default and what it means.
     std::optional<WidebandConverterView> widebandConverterView;

@@ -152,6 +152,12 @@ reaches the desktop through `ModeFilters` (`RxApplet`, `VfoWidget`): which FM ro
 are declared decides whether the FM width presets show and whether the passband
 widget is enabled or replaced by the "Filter unavailable" placeholder, and a
 declared row range-checks saved presets for its mode.
+`receivePanRfGainControl` gates `panadapter.setRfGain` the same way; only ANAN
+declares it. `receiveDspControl`
+gates `slice.setAgcThreshold`, `slice.setNoiseBlanker`, `slice.setNoiseReduction`
+and `slice.setRit` per observed mode, but only with a known authority, which only
+ANAN sets: RTL's record keeps an unknown authority and stays GUI gating. On the
+desktop the record decides which DSP buttons the VFO shows, per declared feature.
 Null or unknown authority fails closed. Their full per-backend support matrix,
 range contracts, TX-idle restrictions and remaining no-op/coupling limitations
 are in [local receive control](../aetherd-local-receive-control.md#qualified-backend-surface).

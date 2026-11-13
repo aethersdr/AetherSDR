@@ -24,6 +24,7 @@
 #include <limits>
 
 Q_LOGGING_CATEGORY(lcAnanDefaults, "aether.anan.droopdefaults", QtWarningMsg)
+Q_LOGGING_CATEGORY(lcAnan, "aether.anan.backend", QtWarningMsg)
 
 namespace AetherSDR::anan {
 
@@ -114,6 +115,29 @@ bool AnanBackend::isKnownModeString(const QString& mode) noexcept
         QStringLiteral("WFM"),
     };
     return kKnown.contains(mode.toUpper());
+}
+
+const QStringList& AnanBackend::publishedModeStrings() noexcept
+{
+    static const QStringList kPublished = {
+        QStringLiteral("LSB"), QStringLiteral("USB"), QStringLiteral("DSB"),
+        QStringLiteral("CWL"), QStringLiteral("CW"),  QStringLiteral("FM"),
+        QStringLiteral("AM"),  QStringLiteral("SAM"),
+        QStringLiteral("DIGU"), QStringLiteral("DIGL"),
+    };
+    return kPublished;
+}
+
+QString AnanBackend::canonicalOfferedMode(const QString& mode) noexcept
+{
+    // modeFromString()'s alias pairs, read off its NFM/FM, CWU/CW, WFM/WBFM and
+    // RTTY/DIGU branches; a new alias there needs its pair here.
+    const QString u = mode.toUpper();
+    if (u == QLatin1String("NFM"))  return QStringLiteral("FM");
+    if (u == QLatin1String("CWU"))  return QStringLiteral("CW");
+    if (u == QLatin1String("WFM"))  return QStringLiteral("WBFM");
+    if (u == QLatin1String("RTTY")) return QStringLiteral("DIGU");
+    return u;
 }
 
 bool AnanBackend::isRestorableFrequencyHz(double hz) noexcept
@@ -594,8 +618,41 @@ RadioCapabilities AnanBackend::capabilities() const
     // slice, so a tune always moves it: PreservePan cannot hold here.
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
                                kHeadlessTuneMinHz, kHeadlessTuneMaxHz};
-    c.receiveModeControl = std::nullopt; // mode/passband transition contract not yet qualified
-    c.receiveFilterControl = std::nullopt;
+    // Exactly the menu's modes, each its own canonical spelling: setSliceMode()
+    // publishes the offered spelling back, and the receive target releases a
+    // pending mode only on an equal observation, so an alias here would wedge it.
+    c.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
+                                              publishedModeStrings()};
+    // Carrier-relative subdomains of the WDSP passband (48 kHz DSP rate, cuts
+    // applied ahead of the detector and echoed unchanged). CW/CWL add the BFO,
+    // clamped to 6000 Hz in setCwPitch(), so their edges stay inside +-12000 Hz.
+    c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine, {
+        {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},
+        {QStringLiteral("DIGU"), 0, 11990, 10, 12000, 10, 12000},
+        {QStringLiteral("LSB"), -12000, -10, -11990, 0, 10, 12000},
+        {QStringLiteral("DIGL"), -12000, -10, -11990, 0, 10, 12000},
+        {QStringLiteral("AM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("DSB"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("FM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
+        {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
+    // The host DSP features this backend runs and echoes: AGC, the impulse
+    // blankers, WDSP's ANR and RIT (a detector shift), in every offered mode.
+    // ANF, APF and the manual notch are not run here, so they are not declared.
+    {
+        using Feature = ReceiveDspControl::Feature;
+        ReceiveDspControl dsp;
+        dsp.modes = publishedModeStrings();
+        dsp.features = {Feature::Agc, Feature::Nb, Feature::Nr, Feature::Rit};
+        dsp.authority = SliceFrequencyControl::Authority::Engine;
+        dsp.maximumRitOffsetHz = kMaxRitOffsetHz;
+        c.receiveDspControl = dsp;
+    }
+    // setPanRfGain() drives the step attenuator negated, and panRfGainChanged
+    // reports what it applied.
+    c.receivePanRfGainControl = ReceivePanRfGainControl{SliceFrequencyControl::Authority::Engine,
+                                                        -kMaxStepAttenuationDb, 0, 1};
     // Gain and mute both act on this receiver's audio and are applied by this
     // backend, which is what the record promises. Engine authority: the state is
     // ours, the radio echoes nothing back, and there is no register to read.
@@ -672,7 +729,7 @@ void AnanBackend::applyRestoredState(const RestoredRadioState& state)
     // the sentinel, and connectRadio() falls to the first-connect default.
     m_restoredFreqHz = isRestorableFrequencyHz(state.rfFrequencyHz)
         ? state.rfFrequencyHz : 0.0;
-    m_restoredMode = isKnownModeString(state.mode) ? state.mode.toUpper() : QString();
+    m_restoredMode = isKnownModeString(state.mode) ? canonicalOfferedMode(state.mode) : QString();
     m_lineoutGainPercent = state.receiveOutputLevelPct >= 0
         ? state.receiveOutputLevelPct : kDefaultLineoutGainPercent;
     // RX1's AGC too, live: connectRadio() builds the DSP config from these. A
@@ -856,6 +913,8 @@ void AnanBackend::applyLiveRxState(const Receiver& rx, AnanRxDsp::Config& config
     config.noiseBlanker = AetherSDR::toWdsp(rx.nbKind);
     config.noiseBlankerLevel = rx.nbLevel;
     config.noiseBlankerFill = AetherSDR::toWdsp(rx.nbFill);
+    config.noiseReduction = rx.nrEnabled;
+    config.noiseReductionLevel = rx.nrLevel;
 }
 
 void AnanBackend::beginDspSetup()
@@ -1042,11 +1101,12 @@ void AnanBackend::pushModeFilterShift(const Receiver& rx)
     QMetaObject::invokeMethod(rx.dsp, "setFilter", Qt::QueuedConnection,
         Q_ARG(double, static_cast<double>(rx.filterLowHz) + bfo),
         Q_ARG(double, static_cast<double>(rx.filterHighHz) + bfo));
-    // No NCO-vs-slice offset in this backend (see the class comment) --
-    // the shift is exactly the CW BFO, negated (HERMES §5: the shift names
-    // the RF frequency the detector treats as zero, so pushing that zero
-    // DOWN a pitch is what lifts the marker UP onto it).
-    QMetaObject::invokeMethod(rx.dsp, "setShift", Qt::QueuedConnection, Q_ARG(double, -bfo));
+    // No NCO-vs-slice offset in this backend (see the class comment), so the
+    // shift is the CW BFO, negated (HERMES §5: the shift names the RF frequency
+    // the detector treats as zero, so pushing that zero DOWN a pitch lifts the
+    // marker UP onto it), plus RIT, which moves that zero UP by the offset.
+    QMetaObject::invokeMethod(rx.dsp, "setShift", Qt::QueuedConnection,
+        Q_ARG(double, detectorShiftHz(rx.mode, m_cwPitchHz, rx.ritEnabled, rx.ritOffsetHz)));
 }
 
 void AnanBackend::setSliceFrequency(int sliceId, double hz)
@@ -1072,11 +1132,21 @@ void AnanBackend::setSliceFrequency(int sliceId, double hz)
     // The Tuning capture rides the same throttle: applyTuneToRadioAndPan().
 }
 
-void AnanBackend::setSliceMode(int sliceId, const QString& mode)
+void AnanBackend::setSliceMode(int sliceId, const QString& requested)
 {
     Receiver* const rx = receiverForSlice(sliceId);
     if (!rx)
         return;
+    // A mode modeFromString() does not map would demodulate as USB, so it is
+    // refused and the re-publish puts SliceModel's optimistic mode back. An
+    // alias is stored under its offered spelling, so the combos can show it.
+    if (!isKnownModeString(requested)) {
+        qCWarning(lcAnan) << "ANAN: refusing mode" << requested
+                          << "- this radio demodulates only" << publishedModeStrings();
+        emitSliceState(*rx);
+        return;
+    }
+    const QString mode = canonicalOfferedMode(requested);
     // Idempotence: only reset the passband to the mode's default when the
     // mode actually changes, so a repeated set does not clobber an
     // operator's manual filter edit.
@@ -1152,13 +1222,66 @@ ReceiveDispatch AnanBackend::requestSliceDsp(int sliceId, const SliceDspRequest&
 {
     // #5824 already owns the worker and NB readback. The typed desktop route
     // must consume that implementation, not replace it or invent other DSP.
-    if (!receiverForSlice(sliceId) || !request.valid()
-        || request.feature != SliceDspRequest::Feature::Nb) {
+    Receiver* const rx = receiverForSlice(sliceId);
+    if (!rx || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    if (request.feature == SliceDspRequest::Feature::Nr) {
+        // WDSP's ANR on the receiver's channel; level rides along.
+        if (request.field != SliceDspRequest::Field::Enabled
+            && request.field != SliceDspRequest::Field::Level) {
+            return ReceiveDispatch::Unsupported;
+        }
+        if (request.field == SliceDspRequest::Field::Enabled)
+            rx->nrEnabled = request.enabled;
+        else
+            rx->nrLevel = std::clamp(request.level, 0, 100);
+        QMetaObject::invokeMethod(rx->dsp, "setNoiseReduction", Qt::QueuedConnection,
+            Q_ARG(bool, rx->nrEnabled), Q_ARG(int, rx->nrLevel));
+        emitSliceState(*rx);
+        return ReceiveDispatch::Dispatched;
+    }
+    if (request.feature != SliceDspRequest::Feature::Nb) {
         return ReceiveDispatch::Unsupported;
     }
     // Level and Fill ride along so the one verb always gets the whole state.
     setSliceNoiseBlanker(sliceId, request.requestedBlanker(), request.level, request.fill);
     return ReceiveDispatch::Dispatched;
+}
+
+void AnanBackend::setSliceRit(int sliceId, bool on, int hz)
+{
+    Receiver* const rx = receiverForSlice(sliceId);
+    if (!rx)
+        return;
+    // One shift push and one echo, so no intermediate offset/enable pair is
+    // ever heard or published.
+    rx->ritOffsetHz = std::clamp(hz, -kMaxRitOffsetHz, kMaxRitOffsetHz);
+    rx->ritEnabled = on;
+    pushModeFilterShift(*rx);
+    emitSliceState(*rx);
+}
+
+void AnanBackend::setSliceRitEnabled(int sliceId, bool on)
+{
+    Receiver* const rx = receiverForSlice(sliceId);
+    if (!rx)
+        return;
+    rx->ritEnabled = on;
+    pushModeFilterShift(*rx);
+    emitSliceState(*rx);
+}
+
+void AnanBackend::setSliceRitOffset(int sliceId, int hz)
+{
+    Receiver* const rx = receiverForSlice(sliceId);
+    if (!rx)
+        return;
+    // Clamped, per the seam's contract: an offset past the bound would move the
+    // passband off the edge of the narrowest DDC rate.
+    rx->ritOffsetHz = std::clamp(hz, -kMaxRitOffsetHz, kMaxRitOffsetHz);
+    pushModeFilterShift(*rx);
+    emitSliceState(*rx);
 }
 
 void AnanBackend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
@@ -1174,6 +1297,9 @@ void AnanBackend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind 
         Q_ARG(WdspChannel::NoiseBlanker, AetherSDR::toWdsp(rx->nbKind)),
         Q_ARG(int, rx->nbLevel),
         Q_ARG(WdspChannel::NoiseBlankerFill, AetherSDR::toWdsp(rx->nbFill)));
+    // Published now, like the other receive setters, so the blanker's
+    // observation does not wait for an unrelated echo.
+    emitSliceState(*rx);
 }
 
 ReceiveDispatch AnanBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
@@ -1527,7 +1653,9 @@ void AnanBackend::setPanPixelWidth(const QString& panId, int pixels)
 
 void AnanBackend::setCwPitch(int hz)
 {
-    m_cwPitchHz = hz;
+    // TransmitModel's range, clamped again at this seam: the declared CW filter
+    // limits assume the BFO never exceeds 6000 Hz, and 0 would put CW on DC.
+    m_cwPitchHz = std::clamp(hz, 100, 6000);
     // Both the shift AND the filter depend on the pitch -- HERMES §5:
     // "entering or leaving CW has to re-push the shift, not just the
     // filter." Re-derive both from current state rather than adjusting in
@@ -1876,6 +2004,7 @@ void AnanBackend::emitSliceState(const Receiver& rx)
     SliceDelta d;
     d.frequency = rx.freqHz / 1.0e6;   // SliceDelta::frequency is MHz
     d.mode = rx.mode;
+    d.modeList = publishedModeStrings();
     d.filterLow = rx.filterLowHz;
     d.filterHigh = rx.filterHighHz;
     // RX1 is the one active slice; nothing yet selects another.
@@ -1886,6 +2015,10 @@ void AnanBackend::emitSliceState(const Receiver& rx)
     d.nbKind = rx.nbKind;
     d.nbLevel = rx.nbLevel;
     d.nbFill = rx.nbFill;
+    d.nr = rx.nrEnabled;
+    d.nrLevel = rx.nrLevel;
+    d.ritOn = rx.ritEnabled;
+    d.ritFreq = rx.ritOffsetHz;
     // The AGC as the DSP runs it, so the slice's knob starts from this
     // backend's values, not SliceModel's defaults.
     d.agcMode = agcModeName(rx.agcMode);

@@ -13,8 +13,11 @@ class RadioModel;
 namespace control {
 class RadioConnectionTarget;
 
-enum class ReceiveOperation { Mode, Filter, AudioGain, AudioMute, PanCenter, PanBandwidth, CwPitch };
-inline constexpr std::array<std::pair<ReceiveOperation, const char*>, 7> kReceiveMethods{{
+enum class ReceiveOperation {
+    Mode, Filter, AudioGain, AudioMute, PanCenter, PanBandwidth, CwPitch,
+    AgcThreshold, NoiseBlanker, NoiseReduction, Rit, PanRfGain
+};
+inline constexpr std::array<std::pair<ReceiveOperation, const char*>, 12> kReceiveMethods{{
     {ReceiveOperation::Mode, "slice.setMode"},
     {ReceiveOperation::Filter, "slice.setFilter"},
     {ReceiveOperation::AudioGain, "slice.setAudioGain"},
@@ -23,6 +26,11 @@ inline constexpr std::array<std::pair<ReceiveOperation, const char*>, 7> kReceiv
     {ReceiveOperation::PanBandwidth, "panadapter.setBandwidth"},
     // Session-wide receive BFO pitch: addressed to the radio session, not a slice.
     {ReceiveOperation::CwPitch, "radioSession.setCwPitch"},
+    {ReceiveOperation::AgcThreshold, "slice.setAgcThreshold"},
+    {ReceiveOperation::NoiseBlanker, "slice.setNoiseBlanker"},
+    {ReceiveOperation::NoiseReduction, "slice.setNoiseReduction"},
+    {ReceiveOperation::Rit, "slice.setRit"},
+    {ReceiveOperation::PanRfGain, "panadapter.setRfGain"},
 }};
 
 // Closed typed intent set; no reflection, raw commands or runtime setter names.
@@ -37,6 +45,11 @@ public:
     [[nodiscard]] virtual std::optional<ProtocolError> setPanCenter(const QString& pan, qint64 hz) = 0;
     [[nodiscard]] virtual std::optional<ProtocolError> setPanBandwidth(const QString& pan, qint64 hz) = 0;
     [[nodiscard]] virtual std::optional<ProtocolError> setCwPitch(int hz) = 0;
+    [[nodiscard]] virtual std::optional<ProtocolError> setAgcThreshold(int slice, int threshold) = 0;
+    [[nodiscard]] virtual std::optional<ProtocolError> setNoiseBlanker(int slice, bool enabled) = 0;
+    [[nodiscard]] virtual std::optional<ProtocolError> setNoiseReduction(int slice, bool enabled) = 0;
+    [[nodiscard]] virtual std::optional<ProtocolError> setRit(int slice, bool enabled, int offsetHz) = 0;
+    [[nodiscard]] virtual std::optional<ProtocolError> setPanRfGain(const QString& pan, int gainDb) = 0;
 };
 
 [[nodiscard]] std::unique_ptr<ReceiveControlTarget> makeModelReceiveControlTarget(

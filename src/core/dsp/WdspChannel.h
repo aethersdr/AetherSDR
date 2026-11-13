@@ -465,6 +465,11 @@ public:
     // the operator tunes. 0 disables the stage. Receive channels only.
     bool setShift(double shiftHz) noexcept;
 
+    // WDSP's ANR (LMS noise reduction) on a running receive channel, level
+    // 0..100 in the slice model's units. Re-applied on reopen unless the
+    // Config's analogReceiveDsp recipe owns NR instead. Receive channels only.
+    bool setNoiseReduction(bool enabled, int level) noexcept;
+
     // Manual notches: the host-side Flex TNF equivalent, and the only notch on a
     // direct-sampling radio (HL2 has no radio-side DSP; oracle addendum 3 §B4).
     // Centres and the notch tune frequency are ABSOLUTE RF Hz; WDSP subtracts the
@@ -622,6 +627,10 @@ private:
     // processIq() buffer-size check does not repeat a divide every block.
     std::size_t m_outputBlockSize = 0;
     double m_shiftHz = 0.0;
+    // setNoiseReduction()'s request; set = a live caller owns NR.
+    bool m_liveNrSet = false;
+    bool m_liveNrEnabled = false;
+    int m_liveNrLevel = 50;
     // These two coordinate the real-time processIq() against control-thread
     // operations. The handshake is Dekker-style — each side stores its own flag
     // then reads the other's — which is only correct under sequential

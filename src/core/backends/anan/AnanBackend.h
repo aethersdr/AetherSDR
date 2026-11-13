@@ -60,7 +60,7 @@ public:
     bool isConnected() const override { return m_connected; }
 
     void setSliceFrequency(int sliceId, double hz) override;
-    void setSliceMode(int sliceId, const QString& mode) override;
+    void setSliceMode(int sliceId, const QString& requested) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     // The AGC-off level, which the base class drops. Mode and threshold edits
@@ -69,6 +69,11 @@ public:
     void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
                               int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    // RIT moves the detector's zero (the WDSP shift) by the offset; the DDC and
+    // panadapter stay on the slice frequency.
+    void setSliceRitEnabled(int sliceId, bool on) override;
+    void setSliceRitOffset(int sliceId, int hz) override;
+    void setSliceRit(int sliceId, bool on, int hz) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
 
     // The receiver's own audio stage. Without these three the operator's mute,
@@ -126,6 +131,15 @@ public:
     // it because modeFromString() falls back to USB instead of failing.
     [[nodiscard]] static bool isKnownModeString(const QString& mode) noexcept;
 
+    // The modes the mode menu offers, each once: a subset of the accepted ones.
+    // Accepted, not offered: the aliases, WBFM (the WDSP channel runs at 48 kHz,
+    // too narrow for broadcast FM) and DRM (no decoder).
+    [[nodiscard]] static const QStringList& publishedModeStrings() noexcept;
+
+    // The offered spelling of an accepted one: uppercased, with each alias
+    // collapsed onto its offered twin. Display-only; the DSP mode is unchanged.
+    [[nodiscard]] static QString canonicalOfferedMode(const QString& mode) noexcept;
+
     // Where a session starts when this radio has no remembered state.
     static constexpr double kFirstConnectFrequencyHz = 14'175'000.0;
     static constexpr const char* kFirstConnectMode = "USB";
@@ -142,11 +156,26 @@ public:
                       && kHeadlessTuneMaxHz < static_cast<qint64>(kDspClockHz) / 2,
                   "headless tuning bounds must sit inside (0, Nyquist)");
 
+    // Largest |RIT offset|. The widest passband edge is 12 kHz in every mode (a
+    // 12 kHz cut, or CW's 6 kHz cut plus its 6 kHz BFO cap), so the shifted edge
+    // stays inside the WDSP channel's +-24 kHz at its 48 kHz DSP rate.
+    static constexpr int kMaxRitOffsetHz = 9'999;
+
     // The CW BFO offset (HERMES.md §5: "CW has no BFO unless you build one").
     // +pitchHz for CWU/CW, -pitchHz for CWL, 0 for every other mode -- zero
     // for non-CW is why every mode routes through this rather than only the
     // CW ones (entering/leaving CW must re-push the shift either way).
     [[nodiscard]] static double cwBfoOffsetHz(const QString& mode, int pitchHz) noexcept;
+
+    // The WDSP shift for a receiver: RIT moves the detector's zero up by the
+    // offset, and the CW BFO pushes it down a pitch (a positive shift raises the
+    // receive point; anan_rxdsp_handedness_test pins that direction).
+    [[nodiscard]] static double detectorShiftHz(const QString& mode, int pitchHz,
+                                                bool ritEnabled, int ritOffsetHz) noexcept
+    {
+        return (ritEnabled ? static_cast<double>(ritOffsetHz) : 0.0)
+               - cwBfoOffsetHz(mode, pitchHz);
+    }
 
     // Snaps an operator-requested span to the nearest rate this radio
     // actually offers (capabilities().sampleRatesHz), by RATIO (log
@@ -279,6 +308,11 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
+        // WDSP ANR and RIT, each echoed by emitSliceState().
+        bool nrEnabled = false;
+        int nrLevel = 50;
+        bool ritEnabled = false;
+        int ritOffsetHz = 0;
         // The receiver's audio stage (AnanSliceAudio.h). 100/50 = unity, centered.
         bool audioMuted = false;
         int audioGainPercent = 100;

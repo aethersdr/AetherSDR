@@ -20,6 +20,11 @@ schema validation or resource lookup. Unknown fields are rejected.
 | `panadapter.setCenter` | `panadapter`, `hz` |
 | `panadapter.setBandwidth` | `panadapter`, `hz` |
 | `radioSession.setCwPitch` | `hz` |
+| `slice.setAgcThreshold` | `slice`, `threshold` |
+| `slice.setNoiseBlanker` | `slice`, `enabled` |
+| `slice.setNoiseReduction` | `slice`, `enabled` |
+| `slice.setRit` | `slice`, `enabled`, `offsetHz` |
+| `panadapter.setRfGain` | `panadapter`, `gainDb` |
 
 `radioSession` must identify the current `radio-1`. Slice IDs are canonical
 nonnegative decimal strings fitting int32; pan IDs are exact opaque resource
@@ -43,6 +48,23 @@ range and on its step. The backend must have reported a pitch in this session
 (`receiveObservation.cwPitch` on the `radioSession` resource). A saved pitch
 restored at connect counts as reported; a pitch the client set but no backend
 or restore has reported does not.
+
+`threshold` is an integer 0–100 on the slice's AGC-T knob scale; only the
+threshold changes, and the slice's current AGC mode rides along. `enabled` is
+a JSON boolean. `offsetHz` is an int32 receive offset whose
+magnitude must not exceed the backend's `maximumRitOffsetHz`; enable and offset
+reach the backend as one intent. `gainDb` is an int32 inside the declared
+`receivePanRfGainControl` range and on its step. AGC threshold, noise blanker,
+noise reduction and RIT are admitted only when `receiveDspControl` declares the
+feature, with a known authority, for the slice's **observed** mode, and the
+backend has published the matching `receiveObservation` field. Like a filter, they
+wait out a pending mode write. The noise blanker toggles on/off only: its kind,
+level and fill ride along as the backend last reported them.
+
+There is no lock method. The per-slice tune lock is client-side
+(`requestSliceLock` is local-only), so a client that wants one holds it itself
+and stops sending tune intents. A desktop lock on the engine's own slice
+still refuses every method here with `request.conflict`.
 
 ```json
 {"v":1,"id":"mode-1","sessionId":"<negotiated>","method":"slice.setMode","params":{"radioSession":"radio-1","slice":"0","expectedRevision":42,"mode":"LSB"}}
@@ -107,7 +129,7 @@ capability, ownership and resource changes; advertisement reserves nothing.
 | Sim | USB, LSB | unavailable: echo-only | unavailable | unavailable: fixed VFO scene | unavailable: fixed span | unavailable |
 | Flex | USB/LSB, DIGU/DIGL, AM/SAM/DSB, CW, FM/NFM | USB/LSB, DIGU/DIGL, AM/SAM/DSB | unavailable: legacy wire route | unavailable: unknown coverage | unavailable: coupled legacy geometry | unavailable: radio-owned `cw pitch` |
 | HL2 | USB/LSB, DSB, DIGU/DIGL, AM/SAM, CW/CWL, FM | USB/LSB, DIGU/DIGL, AM/SAM, DSB, CW/CWL, FM | supported | 100 kHz–38.4 MHz | unavailable: radio-wide rate can retire receivers | 100–6000 Hz, step 10 |
-| ANAN | not yet qualified | not yet qualified | supported | unavailable: also retunes slice | 48 kHz–1.536 MHz; backend selects actual rate; rate changes rebuild DSP and restart the P2 session, interrupting streams | not yet qualified |
+| ANAN | USB/LSB, DSB, DIGU/DIGL, AM/SAM, CW/CWL, FM | USB/LSB, DIGU/DIGL, AM/SAM, DSB, CW/CWL, FM | supported | unavailable: also retunes slice | 48 kHz–1.536 MHz; backend selects actual rate; rate changes rebuild DSP and restart the P2 session, interrupting streams | not yet qualified |
 | RTL-SDR | AM/SAM, FM/FMN/WFM, USB/LSB, CW/CWR | unavailable: DSP does not consume cuts | supported | unavailable: also retunes slice | 225001 Hz–3 MHz; observe actual result | 100–6000 Hz, step 10 |
 | Icom | not yet qualified | profile/preset contract needed | not yet qualified | not yet qualified | not yet qualified | not yet qualified |
 
@@ -122,6 +144,27 @@ act on the demodulated speaker feed before it leaves the backend (the per-slice
 tap for TCI and decoders stays pre-mute and pre-gain), and both gain and mute
 are echoed in `SliceDelta` so the observation this path requires exists. Balance is
 applied without a record because `SliceDelta` carries no field for it.
+
+| Backend | AGC threshold | Noise blanker | Noise reduction | RIT | Pan RF gain |
+|---|---|---|---|---|---|
+| ANAN | every offered mode | every offered mode | every offered mode (WDSP ANR) | ±9999 Hz, every offered mode | −31 to 0 dB, step 1 (the step attenuator, negated) |
+| Every other backend | not offered | not offered | not offered | not offered | not offered |
+
+ANAN RIT is a WDSP shift of the detector's zero by the offset: the DDC and
+panadapter stay on the slice frequency. ±9999 Hz keeps the widest passband
+edge (12 kHz in every mode, CW's 6 kHz cut plus its BFO cap included) inside
+the WDSP channel's ±24 kHz at its 48 kHz DSP rate. ANAN noise reduction is
+WDSP's ANR, run on the receiver's own channel, so it works with no desktop
+audio chain. RTL's `receiveDspControl` keeps an `unknown` authority, so it stays a
+GUI gating record and offers none of these verbs.
+
+ANAN mode and filter follow the HL2's contract because both demodulate in the
+same host WDSP: Protocol 2 carries no mode, so the radio adds none. ANAN
+publishes its own mode menu (`AnanBackend::publishedModeStrings()`), and the
+declaration is exactly that list. Aliases (CWU, NFM, WFM, RTTY) are stored
+under their offered spelling, and a mode the DSP cannot demodulate is
+refused rather than run as USB. The filter ranges are the HL2's, with the CW
+pitch clamped to 100–6000 Hz at the backend seam, as the HL2's is.
 
 Flex and ordinary TX-enabled HL2 still lack the normalized idle readback needed
 by this daemon path, so their declarations do **not** make those methods live.

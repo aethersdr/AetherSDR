@@ -231,6 +231,41 @@ int main(int argc, char** argv)
                   && AnanBackend::isRestorableFrequencyHz(
                       static_cast<double>(c.sliceFrequencyControl.maximumHz)),
               "both headless edges are tunable: inside (0, Nyquist), below phaseWord() aliasing");
+        // The G2 front-panel verbs' declarations.
+        {
+            using Feature = ReceiveDspControl::Feature;
+            const auto& dsp = c.receiveDspControl;
+            bool everyMode = dsp.has_value();
+            for (const QString& mode : AnanBackend::publishedModeStrings()) {
+                for (const Feature f : {Feature::Agc, Feature::Nb, Feature::Nr, Feature::Rit})
+                    everyMode = everyMode && dsp->supports(f, mode);
+            }
+            check(everyMode && dsp->authority == SliceFrequencyControl::Authority::Engine
+                      && dsp->maximumRitOffsetHz == AnanBackend::kMaxRitOffsetHz,
+                  "ANAN declares AGC, NB, NR and RIT in every offered mode, engine authority");
+            check(!dsp->features.contains(Feature::Anf) && !dsp->features.contains(Feature::Apf)
+                      && !dsp->features.contains(Feature::ManualNotch),
+                  "and nothing it does not run: no ANF, APF or manual notch");
+            check(c.receivePanRfGainControl && c.receivePanRfGainControl->minimumDb == -kMaxStepAttenuationDb
+                      && c.receivePanRfGainControl->maximumDb == 0 && c.receivePanRfGainControl->stepDb == 1,
+                  "RF gain is the negated 0-31 dB step attenuator, 1 dB steps");
+            // The widest declared edge plus the BFO it carries (CW) and the
+            // largest RIT must stay inside the 48 kHz DSP rate's +-24 kHz.
+            int widestEdgeHz = 0;
+            for (const auto& f : c.receiveFilterControl->modes) {
+                const int bfo = (f.mode == QLatin1String("CW") || f.mode == QLatin1String("CWL"))
+                    ? c.cwPitchMaxHz : 0;
+                widestEdgeHz = std::max({widestEdgeHz, std::abs(f.minimumLowHz) + bfo,
+                                         std::abs(f.maximumHighHz) + bfo});
+            }
+            check(widestEdgeHz == 12'000 && widestEdgeHz + AnanBackend::kMaxRitOffsetHz < 24'000,
+                  "the RIT bound keeps the shifted passband inside the 48 kHz DSP rate");
+            check(AnanBackend::detectorShiftHz(QStringLiteral("USB"), 600, true, 500) == 500.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("USB"), 600, false, 500) == 0.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("CW"), 600, true, 500) == -100.0
+                      && AnanBackend::detectorShiftHz(QStringLiteral("CWL"), 600, true, -200) == 400.0,
+                  "the detector shift is RIT (when on) minus the CW BFO");
+        }
         check(c.clientSettingsDomains
                   == (RadioCapabilities::ClientSettingsDomain::RfGain
                       | RadioCapabilities::ClientSettingsDomain::Tuning
@@ -252,6 +287,33 @@ int main(int argc, char** argv)
               "hasHostNoiseBlanker true -- WDSP ANB runs in AnanRxDsp, so the "
               "VFO's NB button has something to drive");
         check(!backend.isConnected(), "not connected before connectRadio() is ever called");
+    }
+
+    // ---- RIT: one intent, echoed, clamped to the declared bound ----
+    {
+        AnanBackend backend;
+        SliceDelta seen;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&](int, const SliceDelta& d) { seen = d; });
+        backend.setSliceRit(0, true, -350);
+        check(seen.ritOn == true && seen.ritFreq == -350, "setSliceRit() echoes enable and offset together");
+        backend.setSliceRit(0, true, 50'000);
+        check(seen.ritFreq == AnanBackend::kMaxRitOffsetHz, "an offset past the bound is clamped, not honored");
+        backend.setSliceRitOffset(0, -120);
+        backend.setSliceRitEnabled(0, false);
+        check(seen.ritOn == false && seen.ritFreq == -120,
+              "the separate desktop setters reach the same state");
+    }
+
+    // ---- the blanker publishes at once, like every other receive setter ----
+    {
+        AnanBackend backend;
+        std::optional<bool> nb;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&](int, const SliceDelta& d) { if (d.nb) nb = d.nb; });
+        backend.setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Impulse, 60,
+                                     AetherSDR::NoiseBlankerFill::Zero);
+        check(nb == true, "setSliceNoiseBlanker() echoes the blanker immediately");
     }
 
     // ---- setSliceNoiseBlanker: live state for connect and rate change ----

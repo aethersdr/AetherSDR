@@ -1186,7 +1186,10 @@ void RadioModel::setupBackend(const QString& family)
     // native antenna-list reports onto this single source.
     connect(m_backend.get(), &IRadioBackend::panRfGainChanged, this,
             [this](const QString& panId, int gain) {
-        if (auto* pan = resolveBackendPan(panId)) pan->setRfGain(gain);
+        if (auto* pan = resolveBackendPan(panId)) {
+            pan->recordRfGainObservation(gain);
+            pan->setRfGain(gain);
+        }
     });
     connect(m_backend.get(), &IRadioBackend::panRfGainInfoChanged, this,
             [this](const QString& panId, int low, int high, int step,
