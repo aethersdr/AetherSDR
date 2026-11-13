@@ -7,6 +7,7 @@
 #include "core/TgxlConnection.h"
 
 #include <QCoreApplication>
+#include <QLoggingCategory>
 #include <QSignalSpy>
 #include <QStringList>
 #include <cstdio>
@@ -30,6 +31,15 @@ struct PeripheralConnectionTestAccess {
 using namespace AetherSDR;
 
 static int g_failures = 0;
+static QStringList g_warnings;
+
+static void captureWarning(QtMsgType type, const QMessageLogContext& context, const QString& message)
+{
+    if (type == QtWarningMsg && QString::fromLatin1(context.category) == QStringLiteral("aether.tuner")) {
+        g_warnings.append(message);
+    }
+}
+
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
 
@@ -254,8 +264,7 @@ int main(int argc, char** argv)
               Q_ARG(QString, QStringLiteral("S0|state state=1 bypass=0"))));
         CHECK(t.isOperate() && !t.isBypass());
 
-        // Even with a handle, prefer the direct path and await its echo.
-        t.setHandle(QStringLiteral("0x2000"));
+        // Direct-only mode changes await device readback.
         wire.clear();
         st.clear();
         t.setBypass(true);
@@ -275,11 +284,82 @@ int main(int argc, char** argv)
         CHECK(!t.isOperate() && !t.isBypass());
         CHECK(op.count() == 0 && by.count() == 0 && refused.count() == 0);
 
-        CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+        // A radio handle keeps mode commands on the proven relay path, even
+        // while the direct link is ready for status and other commands.
+        t.setHandle(QStringLiteral("0x2000"));
         wire.clear();
+        st.clear();
         t.setOperateAndBypass(true, true, /*operateFirst=*/true);
         CHECK(wire.isEmpty() && op.count() == 1 && by.count() == 1);
-        CHECK(t.isOperate() && t.isBypass()); // existing relayed optimistic state
+        CHECK(t.isOperate() && t.isBypass() && st.count() == 2);
+
+        CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+        wire.clear();
+        t.setOperateAndBypass(false, false, /*operateFirst=*/false);
+        CHECK(wire.isEmpty() && op.count() == 2 && by.count() == 2);
+        CHECK(!t.isOperate() && !t.isBypass()); // existing relayed optimistic state
+    }
+
+    // Unknown tuning must disarm abort: autotune on an idle device starts TX.
+    {
+        QStringList wire;
+        TgxlConnection direct;
+        PeripheralConnectionTestAccess::makeReady(direct);
+        PeripheralConnectionTestAccess::captureCommands(direct, wire);
+        TunerModel t;
+        t.setDirectConnection(&direct);
+        for (const QString& prefix : {QStringLiteral("S0|state "),
+                                      QStringLiteral("S1|status "),
+                                      QStringLiteral("R2|0|")}) {
+            for (const QString& value : {QString(), QStringLiteral("bad"), QStringLiteral("-1")}) {
+                CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                      Q_ARG(QString, QStringLiteral("S0|state tuning=1"))));
+                CHECK(t.isTuning());
+                CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                      Q_ARG(QString, QStringLiteral("S1|status relayC1=42"))));
+                CHECK(t.isTuning()); // absent is different from present but invalid
+                wire.clear();
+                CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                      Q_ARG(QString, prefix + QStringLiteral("tuning=") + value)));
+                CHECK(!t.isTuning());
+                t.abortTune();
+                CHECK(wire.isEmpty());
+            }
+        }
+    }
+
+    // Refused replies must warn, not publish their bodies as successful data.
+    {
+        TgxlConnection direct;
+        QSignalSpy status(&direct, &TgxlConnection::statusUpdated);
+        QSignalSpy names(&direct, &TgxlConnection::antennaNamesChanged);
+        QLoggingCategory::setFilterRules(QStringLiteral("aether.tuner.warning=true"));
+        const QtMessageHandler previous = qInstallMessageHandler(captureWarning);
+        for (const QString& reply : {QStringLiteral("R7|1|unsupported command"),
+                                     QStringLiteral("R8|50000001|state=0 bypass=1"),
+                                     QStringLiteral("R9|2|"),
+                                     QStringLiteral("R10|3|antenna name1=Rejected")}) {
+            g_warnings.clear();
+            CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                  Q_ARG(QString, reply)));
+            CHECK(g_warnings.size() == 1);
+            if (!g_warnings.isEmpty()) {
+                CHECK(g_warnings.first().contains(QStringLiteral("command refused")));
+                CHECK(g_warnings.first().contains(reply));
+            }
+            CHECK(status.count() == 0 && names.count() == 0);
+        }
+        g_warnings.clear();
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+              Q_ARG(QString, QStringLiteral("R11|0|state=1 bypass=0"))));
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+              Q_ARG(QString, QStringLiteral("R12|0|"))));
+        CHECK(g_warnings.isEmpty() && status.count() == 1);
+        if (!status.isEmpty()) {
+            const QMap<QString, QString> fields = status.first().first().value<QMap<QString, QString>>();
+            CHECK(fields.value(QStringLiteral("state")) == QStringLiteral("1"));
+        }
+        qInstallMessageHandler(previous);
     }
 
     // Preserve the zero-based relay numbering captured in #469.

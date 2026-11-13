@@ -120,8 +120,12 @@ void TunerModel::applyDirectState(const QMap<QString, QString>& kvs)
     if (const auto bypass = readInt(QStringLiteral("bypass"), 1)) {
         delta.bypass = *bypass == 1;
     }
-    if (const auto tuning = readInt(QStringLiteral("tuning"), 1)) {
-        delta.tuning = *tuning == 1;
+    // Unknown tuning disarms abortTune(): autotune on an idle device starts TX.
+    if (const auto it = kvs.constFind(QStringLiteral("tuning")); it != kvs.cend()) {
+        if (*it != QLatin1String("0") && *it != QLatin1String("1")) {
+            qCWarning(lcTuner) << "TunerModel: invalid direct TGXL field" << it.key() << *it;
+        }
+        delta.tuning = *it == QLatin1String("1");
     }
     delta.relayC1 = readInt(QStringLiteral("relayC1"), 255);
     delta.relayL = readInt(QStringLiteral("relayL"), 255);
@@ -140,7 +144,7 @@ void TunerModel::clearTuning()
 
 void TunerModel::setOperate(bool on)
 {
-    if (hasDirectConnection()) {
+    if (m_handle.isEmpty() && hasDirectConnection()) {
         m_directConn->sendCommand(QStringLiteral("operate set=%1").arg(on ? 1 : 0));
         return; // the tuner reports the resulting state in its status
     }
@@ -160,7 +164,7 @@ void TunerModel::setOperate(bool on)
 
 void TunerModel::setBypass(bool on)
 {
-    if (hasDirectConnection()) {
+    if (m_handle.isEmpty() && hasDirectConnection()) {
         m_directConn->sendCommand(QStringLiteral("bypass set=%1").arg(on ? 1 : 0));
         return;
     }

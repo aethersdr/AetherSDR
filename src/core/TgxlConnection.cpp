@@ -4,6 +4,7 @@
 #include "PeripheralAuthCode.h"
 #include "LogManager.h"
 #include <QRegularExpression>
+#include <QStringView>
 
 namespace AetherSDR {
 
@@ -401,6 +402,11 @@ void TgxlConnection::processLine(const QString& line)
         int pipe1 = line.indexOf('|');
         int pipe2 = (pipe1 >= 0) ? line.indexOf('|', pipe1 + 1) : -1;
         if (pipe2 >= 0) {
+            const QStringView code = QStringView(line).mid(pipe1 + 1, pipe2 - pipe1 - 1);
+            if (code != u"0") {
+                qCWarning(lcTuner) << "TgxlConnection: command refused:" << line.trimmed();
+                return;
+            }
             QString body = line.mid(pipe2 + 1).trimmed();
             if (!body.isEmpty()) {
                 // antenna name1=X name2=Y name3=Z  (3-way model, v1.2.41+)

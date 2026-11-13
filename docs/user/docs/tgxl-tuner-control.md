@@ -38,9 +38,10 @@ The direct connection is what adds port detail, the antenna buttons and
 manual relay control. Without it the applet still works from what the radio
 relays.
 
-**OPERATE, STANDBY and BYPASS use the direct connection when available.**
-They also work with a TGXL added by IP alone, without a FlexRadio relay.
-Without a direct connection, these commands go through the FlexRadio.
+**OPERATE, STANDBY and BYPASS use the FlexRadio relay when the radio reports the tuner,**
+even if a direct connection is also available.
+For a TGXL added by IP alone, without a FlexRadio relay, these commands use
+the ready direct connection.
 On the direct path, the displayed mode follows the tuner's reported state,
 not an assumed successful button press.
 
@@ -180,6 +181,9 @@ If neither is available, AetherSDR reports that the command was not sent.
    and reconnect if needed.
 3. If using the radio relay, connect the TGXL to your FlexRadio and connect
    AetherSDR to that radio.
+4. For direct-only control, check **Help → Support & Diagnostics...** for
+   `TgxlConnection: command refused:`. A nonzero reply code means the tuner
+   rejected the command; the log includes its response.
 
 ## See also
 

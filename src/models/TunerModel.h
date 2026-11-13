@@ -92,9 +92,9 @@ private:
 
 public:
 
-    // Command methods — emit neutral intents (operate/bypass/autotune) that
-    // RadioModel translates to the Flex TGXL relay via invokeExtension. The
-    // direct port-9010 path is preferred when connected and stays local.
+    // RadioModel translates neutral relay intents via invokeExtension.
+    // Mode commands keep the radio relay when a handle exists; direct mode
+    // commands serve IP-only tuners. Autotune prefers the direct link.
     void setOperate(bool on);
     void setBypass(bool on);
     // One operator action that needs BOTH verbs (STBY, BYP, the rail cycle),
