@@ -640,11 +640,16 @@ void PhoneCwApplet::setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
     }
     // Changing sessions must not turn a range clamp into a radio command.
     const QSignalBlocker blocker(m_speedSlider);
+    const bool speedRangeChanged = m_speedSlider->minimum() != minWpm
+                                   || m_speedSlider->maximum() != maxWpm;
     m_speedSlider->setRange(minWpm, maxWpm);
     auto* speedValidator = qobject_cast<QIntValidator*>(
         const_cast<QValidator*>(m_speedEdit->validator()));
     speedValidator->setRange(minWpm, maxWpm);
-    if (!m_speedEdit->hasFocus() || !m_speedEdit->hasAcceptableInput()) {
+    // Capability refreshes can arrive between digits. Intermediate input
+    // belongs to the active edit unless the supported range actually changes.
+    if (!m_speedEdit->hasFocus()
+        || (speedRangeChanged && !m_speedEdit->hasAcceptableInput())) {
         m_speedEdit->setText(QString::number(m_speedSlider->value()));
     }
     m_speedEdit->setAccessibleDescription(
