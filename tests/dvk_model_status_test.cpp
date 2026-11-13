@@ -339,6 +339,47 @@ int main(int argc, char* argv[])
                !model.licenseRefused() && !lastRefused && refusedSignals == 2
                    && model.recordings().isEmpty() && model.status() == DvkModel::Unknown);
     }
+    // ── 50000015 on a core verb: this firmware has no DVK API (#7156) ───────
+    {
+        DvkModel model;
+        int unsupportedSignals = 0;
+        bool lastUnsupported = false;
+        QObject::connect(&model, &DvkModel::unsupportedChanged, &model,
+                         [&](bool unsupported) { ++unsupportedSignals; lastUnsupported = unsupported; });
+        QString failedMessage;
+        QObject::connect(&model, &DvkModel::commandFailed, &model,
+                         [&](const QString&, int, uint, const QString& message) {
+            failedMessage = message;
+        });
+
+        model.handleCommandResponse(QStringLiteral("clear"), 1, 0x50000015u, QString());
+        model.handleCommandResponse(QStringLiteral("set_name"), 1, 0x50000015u, QString());
+        model.noteRefusal(0x50000015u);   // the WAV transfer path
+        report("50000015 on a newer verb or a transfer does not mark the DVK absent",
+               !model.unsupported() && unsupportedSignals == 0);
+
+        model.handleCommandResponse(QStringLiteral("rec_start"), 1, 0x50000015u, QString());
+        report("50000015 on rec_start marks the firmware as having no DVK",
+               model.unsupported() && lastUnsupported && unsupportedSignals == 1);
+        report("50000015 is not read as a licence refusal", !model.licenseRefused());
+        report("50000015 has a readable message",
+               failedMessage.contains(QStringLiteral("firmware")));
+        model.handleCommandResponse(QStringLiteral("playback_start"), 2, 0x50000015u, QString());
+        report("a repeat does not re-signal", unsupportedSignals == 1);
+
+        model.clearRefusal();   // what a licence status reporting DVK licensed does
+        report("a licence status does not restore a missing DVK API", model.unsupported());
+
+        model.reset();
+        report("reset (disconnect) clears it for the next session",
+               !model.unsupported() && !lastUnsupported && unsupportedSignals == 2);
+    }
+    {
+        DvkModel model;
+        model.handleCommandResponse(QStringLiteral("preview_start"), 1, 0x50004001u, QString());
+        report("50004001 stays a licence refusal, not a missing API",
+               model.licenseRefused() && !model.unsupported());
+    }
     {
         report("busy file server has a readable message",
                DvkModel::dvkErrorString(0x50000053u).contains(QStringLiteral("busy")));

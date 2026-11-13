@@ -10748,8 +10748,12 @@ void MainWindow::updateKeyerAvailability()
     if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable, txIsSsb || !connected);
     // The local keyer is verified on FlexRadio; on a radio with no voice keyer
     // of its own (Hermes-Lite 2, Icom, ...) it is Beta until those radios have
-    // been tested on the air. hasVoiceKeyer() is permissive while disconnected,
-    // so the word appears only once such a radio is actually connected.
+    // been tested on the air. The family's capability decides it, not
+    // hasVoiceKeyer(): a FlexRadio whose firmware has no DVK API (#7156) still
+    // transmits the local keyer the verified way. Only once a radio is
+    // connected, since a disconnected capability set says nothing.
+    const bool familyHasVoiceKeyer = !connected
+        || m_radioModel.backendCapabilities().hasVoiceKeyer;
     if (m_dvkPanel) {
         // Offline the panel says so rather than blame the radio (the
         // capabilities are then a default-constructed set), and the local
@@ -10761,7 +10765,8 @@ void MainWindow::updateKeyerAvailability()
                 m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature),
                 m_radioModel.dvkLicenseRefused()),
             voiceKeyerPanelSlotsEditableOffline(voiceKeyerSource(), connected));
-        m_dvkPanel->setSourceQualifier(voiceKeyerSource() == VoiceKeyerSource::Local && !hasVoiceKeyer
+        m_dvkPanel->setSourceQualifier(voiceKeyerSource() == VoiceKeyerSource::Local
+                                               && !familyHasVoiceKeyer
                                            ? QStringLiteral("Beta") : QString());
     }
 

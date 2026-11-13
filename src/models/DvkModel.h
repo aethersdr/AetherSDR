@@ -47,6 +47,13 @@ public:
     // The radio later reported the feature licensed (its status outranks an
     // earlier refusal, e.g. a subscription activated mid-session).
     void clearRefusal();
+    // This firmware has no DVK API at all (fw 3.9, #7156): the radio refused
+    // `sub dvk all`, or answered a record, playback or preview command with
+    // 50000015 (unknown command). Unlike a licence refusal, a later licence
+    // status does not clear it; only reset() does, at disconnect. RadioModel
+    // then reports no voice keyer for the session.
+    bool unsupported() const { return m_unsupported; }
+    void noteUnsupported();
     // The radio's name for the DVK entitlement in `license feature` status.
     static constexpr QLatin1String kLicenseFeature{"digital_voice_keyer"};
     const QVector<VoiceKeyerRecording>& recordings() const override { return m_recordings; }
@@ -111,6 +118,7 @@ signals:
     // verb + slot id captured here. (#3377)
     void replyCommandReady(const QString& cmd, const QString& verb, int id);
     void licenseRefusedChanged(bool refused);
+    void unsupportedChanged(bool unsupported);
     // The operator asked to import or export a slot's WAV; MainWindow routes
     // these to DvkWavTransfer.
     void wavUploadRequested(int id, const QString& path);
@@ -118,11 +126,13 @@ signals:
 
 private:
     static constexpr uint kNotLicensed = 0x50004001u;
+    static constexpr uint kUnknownCommand = 0x50000015u;
 
     Status m_status{Unknown};
     int m_activeId{-1};
     bool m_enabled{false};
     bool m_licenseRefused{false};
+    bool m_unsupported{false};
     Status m_pending{Unknown};
     int m_pendingId{-1};
     bool m_transferActive{false};

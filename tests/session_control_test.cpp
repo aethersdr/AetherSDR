@@ -38,6 +38,7 @@ public:
     static void retire(RadioModel& model) { model.resetSessionControls(); }
     static void registerClient(RadioModel& model, const QString& id) { model.registerAsGuiClient(id); }
     static void setup(RadioModel& model, const RadioSetupRequest& request) { model.requestStartupSetup(request); }
+    static void subscribeDvk(RadioModel& model) { model.subscribeDvk(); }
     static void disconnectClients(RadioModel& model, const QList<quint32>& handles, std::function<void()> done)
     { model.disconnectClientHandlesThen(handles, std::move(done)); }
     static int pending(const RadioModel& model) { return model.m_sessionCancellations.size(); }
@@ -497,6 +498,56 @@ private slots:
         QVERIFY(!backend.capabilities().sessionControl);
         QCOMPARE(backend.requestSessionControl({SessionControlField::RegisterGui}, SessionCommandGuard::create()),
                  ReceiveDispatch::Unsupported);
+    }
+
+    // #7156: firmware 3.9 has no DVK API. It answers `sub dvk all` with
+    // 0x50001000 and sends no dvk or license status, so that answer is the only
+    // evidence. A refusal takes the voice keyer away for the session; anything
+    // that is not the radio saying no (accepted, a timeout, an ended session)
+    // leaves the fail-open default.
+    void dvkSubscriptionRefusalMeansNoVoiceKeyer_data()
+    {
+        QTest::addColumn<int>("kind");
+        QTest::addColumn<int>("code");
+        QTest::addColumn<bool>("hasVoiceKeyer");
+        using Kind = RadioControlReply::Kind;
+        QTest::newRow("accepted") << int(Kind::Accepted) << 0 << true;
+        QTest::newRow("fw 3.9 refusal") << int(Kind::Refused) << 0x50001000 << false;
+        QTest::newRow("unknown command") << int(Kind::Refused) << 0x50000015 << false;
+        QTest::newRow("never reached the radio") << int(Kind::Cancelled) << -1 << true;
+    }
+    void dvkSubscriptionRefusalMeansNoVoiceKeyer()
+    {
+        QFETCH(int, kind);
+        QFETCH(int, code);
+        QFETCH(bool, hasVoiceKeyer);
+        RadioModel model;
+        RecordingSessionBackend* backend = install(model);
+        QSignalSpy refresh(&model, &RadioModel::licenseFeaturesChanged);
+        SessionControlTestAccess::subscribeDvk(model);
+        QCOMPARE(backend->commands.size(), std::size_t(1));
+        QCOMPARE(backend->commands.front().text, QStringLiteral("sub dvk all"));
+        QVERIFY2(model.hasVoiceKeyer(), "fails open until the radio answers");
+
+        backend->commands.front().reply({static_cast<RadioControlReply::Kind>(kind), code, {}});
+        QCOMPARE(model.hasVoiceKeyer(), hasVoiceKeyer);
+        QCOMPARE(model.dvkModel().unsupported(), !hasVoiceKeyer);
+        // The keyer surfaces re-read hasVoiceKeyer() on this signal.
+        QCOMPARE(refresh.count(), hasVoiceKeyer ? 0 : 1);
+
+        // A disconnect resets the DVK model, so the next session starts over.
+        model.dvkModel().reset();
+        QVERIFY(model.hasVoiceKeyer());
+    }
+    void dvkSubscriptionTimeoutKeepsVoiceKeyer()
+    {
+        RadioModel model;
+        RecordingSessionBackend* backend = install(model);
+        SessionControlTestAccess::subscribeDvk(model);
+        QCOMPARE(backend->commands.size(), std::size_t(1));
+        QVERIFY(SessionControlTestAccess::expire(model));
+        QVERIFY2(model.hasVoiceKeyer(), "no answer is not a refusal");
+        QVERIFY(!model.dvkModel().unsupported());
     }
 };
 

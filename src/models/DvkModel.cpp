@@ -128,6 +128,15 @@ void DvkModel::handleCommandResponse(const QString& verb, int id, uint code,
     }
 
     noteRefusal(code);
+    // Every DVK firmware has the record, playback and preview commands, so an
+    // unknown-command answer to one of them means there is no DVK API. The
+    // other verbs are left out: a release lacking only one of them must not
+    // take the whole keyer down for the session.
+    if (code == kUnknownCommand
+        && (verb.startsWith(QLatin1String("rec_")) || verb.startsWith(QLatin1String("playback_"))
+            || verb.startsWith(QLatin1String("preview_")))) {
+        noteUnsupported();
+    }
 
     qWarning() << "DvkModel: command" << verb << "id=" << id
                << "failed with code 0x" << QString::number(code, 16);
@@ -173,12 +182,21 @@ void DvkModel::noteRefusal(uint code)
     }
 }
 
+void DvkModel::noteUnsupported()
+{
+    if (!m_unsupported) {
+        m_unsupported = true;
+        emit unsupportedChanged(true);
+    }
+}
+
 QString DvkModel::dvkErrorString(uint code)
 {
     // Labels come from the SmartSDR API wiki (TCPIP-dvk) and FlexLib. Codes
     // documented in neither render as bare hex so the user can report them.
     switch (code) {
     case kNotLicensed:  return QStringLiteral("DVK is not licensed on this radio (SmartSDR+)");
+    case kUnknownCommand: return QStringLiteral("this radio's firmware does not support the command");
     case 0x50001000u:   return QStringLiteral("radio could not parse the command");
     case 0xE2000000u:   return QStringLiteral("no such slot, or an upload is already pending");
     case 0x50000053u:   return QStringLiteral("radio file server busy, try again in a moment");
@@ -284,10 +302,12 @@ void DvkModel::reset()
 {
     ++m_transferRevision;
     const bool wasRefused = m_licenseRefused;
+    const bool wasUnsupported = m_unsupported;
     m_status = Unknown;
     m_activeId = -1;
     m_enabled = false;
     m_licenseRefused = false;
+    m_unsupported = false;
     m_pending = Unknown;
     m_pendingId = -1;
     // m_transferActive belongs to DvkWavTransfer, which clears it when its own
@@ -299,6 +319,9 @@ void DvkModel::reset()
     }
     if (wasRefused) {
         emit licenseRefusedChanged(false);
+    }
+    if (wasUnsupported) {
+        emit unsupportedChanged(false);
     }
     emit admissionChanged();
 }
