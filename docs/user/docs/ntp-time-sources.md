@@ -12,7 +12,7 @@ applies_to: ["FlexRadio"]
 
 :::
 
-A radio running SmartSDR v4.3.16 or later sets its own clock from a list of NTP servers that it keeps itself. **Radio Setup → Time** shows that list and lets you change it. The radio owns the list: AetherSDR sends each change to the radio, and the table shows what the radio then reports.
+A radio running SmartSDR v4.3.16 or later sets its own clock from a list of NTP servers that it keeps itself. **Radio Setup → Time** shows that list and lets you change it. The radio owns the list: AetherSDR sends each change to the radio, and the dashboard shows what the radio then reports.
 
 ## Requirements
 
@@ -22,29 +22,35 @@ On older firmware, on a radio model AetherSDR doesn't know, or with no radio con
 
 On a FLEX-6300 running SmartSDR 4.3.16, the radio reports its sources and accepts enabling one, but it refuses adding a source and removing a missing one ([#7154](https://github.com/aethersdr/AetherSDR/issues/7154)). Disabling or removing a real source there has not been tested. When the radio refuses a change, the page shows the radio's error, and the list stays as the radio reports it.
 
-## The table
+## Using the dashboard
 
-| Column | What it shows |
-|---|---|
-| **ID** | The source's name on the radio. It cannot be changed once the source exists. |
-| **Address** | The NTP server's host name or IP address. |
-| **Type** | **server** (one server), **pool** (a DNS name that hands out several servers) or **peer**. |
-| **Status** | **★ In use** for the source the radio is synced to. Otherwise **Candidate**, **Outlier**, **Jittery**, **Falseticker (rejected)**, **Not usable**, **Unreachable** or **Disabled**. |
-| **Stratum** | How many steps the server is from a reference clock, or — while unknown. |
-| **Reach** | How many of the last eight polls the server answered, such as **8/8**. |
-| **Enabled** | Tick or untick to enable or disable the source on the radio. The box shows the radio's state, so it changes only once the radio reports the change. |
-| **Prefer** | Whether the radio prefers this source when several are usable. |
-| **Description** | An optional note. |
+**Radio Setup → Time** has a compact live status dashboard above ten numbered server tabs. The page scrolls when the window is too short to show all settings.
 
-Status, stratum and reach update live while the page is open. Any change to the list restarts the radio's time service, so for a few seconds afterwards every source reads **—** until the radio has polled it again.
+- **Network time** identifies the radio's selected network reference, or says that it is awaiting a reference. Selection is the radio's report, not an independent clock-accuracy measurement.
+- **Source health** counts enabled sources and sources with at least one reply in the last eight polls. A pool is one configured source, even when it resolves to several servers.
+- **Onboard reference** shows the radio's GPSDO status. A locked GPSDO receives gold chrome. GPSDO lock does not confirm the local NTP service is stratum 1; the radio does not currently report that service stratum.
 
-## Adding, editing and removing
+Select a numbered tab to see that source's selection state, upstream **Source stratum**, and **Reach** in chrony's octal notation, alongside the number of answered polls. The eight poll indicators run from oldest on the left to newest on the right: a tick means a reply, a cross means no reply, and a dash means no measurement is reported. These are reach-register bits, not a time-scaled graph.
 
-- **Add…** opens a form below the table. The ID can use letters, digits and hyphens (up to 64 characters, not starting or ending with a hyphen). The address can use letters, digits and `. : - _ %` (up to 253 characters). The description can use letters, digits, spaces and `. _ -` (up to 62 characters). Anything else is refused with the reason, and nothing is sent. The radio holds at most 10 sources; at 10, **Add…** is dimmed.
-- **Edit…** (or double-click a row) changes the address, type, description or prefer setting. **Save Changes** stays dimmed until something has changed. The radio has no command to change a source in place, so AetherSDR removes it and creates it again with the same ID, and disables it again if it was disabled. For that moment the radio has one source fewer. The row stays where it is, reads **Updating…** and keeps its **Enabled** box as it was until the edit ends. If the radio refuses the new settings, AetherSDR re-creates the old ones and says so. If the session ends or the radio stops answering partway, AetherSDR sends nothing more and says so; the table then shows what the radio reports, and a source it no longer lists has to be added again.
-- **Remove** asks first, then removes the source from the radio.
-- Removing or disabling the last enabled source leaves the radio with no NTP server, so it cannot set its clock from the network. AetherSDR asks before doing either. Pending disables and removals count immediately; an added or enabled source counts only once the radio reports it as enabled, even if its command reply has already arrived.
-- While the radio has not answered a change to a source, that source cannot be changed again.
+The source in use has a star on its tab. Other selection states include **Candidate**, **Outlier**, **Jittery**, **Falseticker (rejected)**, **Not usable**, **Unreachable** and **Disabled**. Source stratum describes the upstream source, not the radio's own service stratum.
+
+## Configuring a server
+
+1. Select a numbered tab. Existing sources open their settings directly; an empty tab opens a new-source form.
+2. Set **ID**, **Address**, **Type**, **Description** and **Prefer this source**. An existing source's ID is read-only.
+3. Choose **Add Source** for an empty slot or **Save Changes** for an existing source. **Reset** reloads the radio's settings for that slot.
+
+The ID can use letters, digits and hyphens (up to 64 characters, not starting or ending with a hyphen). The address can use letters, digits and `. : - _ %` (up to 253 characters). The description can use letters, digits, spaces and `. _ -` (up to 62 characters). Invalid values show a reason and cannot be sent. The radio holds at most ten sources; slot numbers are navigation labels, not radio IDs, and are kept only while this page is open.
+
+**Enabled on radio** requests enabling or disabling the selected source. The checkbox follows the radio's reported state. **Remove** asks before removing the selected source. Removing or disabling the last enabled source requires an additional warning. Pending disables and removals count immediately; an added or enabled source counts only once the radio reports it as enabled.
+
+**Save Changes** stays dimmed until something changes. Editing removes and re-creates the source with its original ID, preserving its enabled state. During the edit the source reads **Updating…** and cannot be changed again. If the radio refuses the new settings, AetherSDR attempts to restore the old definition and reports the result. If the session ends or the radio stops answering, AetherSDR stops the operation and shows the radio's reported state.
+
+Status refreshes preserve text being edited in the current tab. Switching tabs preserves unsaved drafts for each server while the page and radio session remain open. **Reset** discards the current tab's draft. Updates from another client keep existing source tab assignments stable. Any change to the source list restarts the radio's time service, so statistics may briefly be unreported.
+
+## Known issues
+
+On a FLEX-6300 running SmartSDR 4.3.16, source creation is refused by the radio ([#7154](https://github.com/aethersdr/AetherSDR/issues/7154)). The dashboard displays the refusal and continues to follow the radio's source list.
 
 ## See also
 
