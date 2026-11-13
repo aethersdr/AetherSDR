@@ -877,6 +877,18 @@ add_dependencies(aetherd_discovery_startup_test aetherd)
 add_test(NAME aetherd_discovery_startup_test
     COMMAND aetherd_discovery_startup_test $<TARGET_FILE:aetherd>)
 
+# A stop signal ends aetherd through its normal teardown, which releases the
+# radio; a second one or a stuck loop dies by the signal (POSIX signals only).
+if(NOT WIN32)
+    add_executable(aetherd_graceful_stop_test tests/aetherd_graceful_stop_test.cpp
+        src/aetherd/GracefulStop.cpp)
+    target_include_directories(aetherd_graceful_stop_test PRIVATE src tests)
+    target_link_libraries(aetherd_graceful_stop_test PRIVATE aethercore Qt6::Core)
+    add_dependencies(aetherd_graceful_stop_test aetherd)
+    add_test(NAME aetherd_graceful_stop_test
+        COMMAND aetherd_graceful_stop_test $<TARGET_FILE:aetherd>)
+endif()
+
 # Async bridge-start outcome policy (#4181): socket-free, the bind result is
 # injected as a bool — see AutomationBridgeSettings::recordStartOutcome().
 add_executable(automation_bridge_start_outcome_test tests/automation_bridge_start_outcome_test.cpp)

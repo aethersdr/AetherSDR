@@ -1,5 +1,6 @@
 #include "DiscoveryStartup.h"
 #include "CredentialStartup.h"
+#include "GracefulStop.h"
 #include "GrantAdminClient.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/control/LocalControlServer.h"
@@ -112,6 +113,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    // Before anything that owns a radio, so its destructor runs after theirs: a
+    // stop signal then ends aetherd through the teardown that releases the radio.
+    const AetherSDR::aetherd::GracefulStop gracefulStop(app, std::chrono::seconds(5));
     AetherSDR::control::LocalControlServer server(
         nullptr, {}, nullptr, parser.isSet(controlOption));
     if (!server.listen(parser.value(socketOption),
