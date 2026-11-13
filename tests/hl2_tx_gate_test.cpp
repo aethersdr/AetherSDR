@@ -1301,13 +1301,16 @@ int main(int argc, char** argv)
         pastThePrime(idle, tx.context);
         idle.queueTxIq(late, tx.context);
         bool held = false;
+        bool carried = false;
         MetisClientTestAccess::writer(idle, [&](const auto& packet) -> qint64 {
             held = anyFrameKeyed(packet) && tx.coordinator.hasInFlightDispatches();
+            carried = payloadNonZero(packet);
             return packet.size();
         });
         MetisClientTestAccess::send(idle);
         check(held, "#7212 control: a keyed frame with queued IQ holds the audio dispatch during the write");
-        check(idle.txQueueDepth() == 0, "#7212 control: the keyed frame carried the queued block");
+        check(idle.txQueueDepth() == 0, "#7212 control: the keyed frame leaves nothing queued");
+        check(carried, "#7212 control: the keyed frame's payload is the queued block");
     }
 
     {

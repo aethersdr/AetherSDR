@@ -1882,8 +1882,7 @@ void MetisClient::sendControlPacket()
     // Only a keyed frame carries queued IQ, so only it takes the audio dispatch:
     // an idle frame must not hold the counter acquire() needs at zero (#7212).
     // Audio still queued on an idle frame is stale and is abandoned, uncounted.
-    // That covers a re-key only if an idle frame runs between it and the unkey;
-    // delivered back-to-back, a microphone context's tail still opens the next over.
+    // A re-key with no idle frame between it and the unkey is #7216's case.
     if (!m_txIq.empty() && !(m_mox && m_txAllowed)) {
         abandonTxIq();
     } else if (!m_txIq.empty()) {
