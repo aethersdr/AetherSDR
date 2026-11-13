@@ -3753,6 +3753,8 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     dlg->setFlexControlConnectionStatus(
         m_flexControlConnected,
         m_flexControlConnected && m_flexControl ? m_flexControl->portName() : QString());
+    dlg->setSerialPortConnectionStatus(m_serialPortOpen, m_serialPortDevice,
+                                       m_serialPortError);
 #endif
     // VK3AMP hardware variant changed in Peripherals settings -- rescale
     // the live forward-power gauge to match (see RadioSetupDialog.h's own

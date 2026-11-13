@@ -4,7 +4,7 @@
 
 #ifndef Q_OS_WIN
 #ifdef HAVE_SERIALPORT
-#include <QSerialPortInfo>
+#include <cerrno>
 #endif
 #endif
 
@@ -68,6 +68,18 @@ void SerialPortController::publishPaddleInput(bool dit, bool dah, const TxCoordi
     emit cwPaddleChanged(dit, dah, m_paddleInput, m_paddleKeyInput);
 }
 
+void SerialPortController::reportOpenFailure(const SerialOpenFailure& failure)
+{
+    const QString summary = serialOpenFailureSummary(failure);
+    qCWarning(lcDevices) << "SerialPortController:" << summary
+                         << "kind=" << static_cast<int>(failure.kind)
+                         << "group=" << failure.group;
+    emit errorOccurred(summary);
+    emit connectionStateChanged(false, failure.device, failure.error,
+                                failure.nativeCode, static_cast<int>(failure.kind),
+                                failure.group);
+}
+
 void SerialPortController::retireTxInputs()
 {
     // Fence before notifying the owner: even input already queued on another
@@ -119,10 +131,13 @@ bool SerialPortController::open(const QString& portName, int baudRate,
         nullptr
     );
     if (hPort == INVALID_HANDLE_VALUE) {
-        DWORD err = ::GetLastError();
-        qCWarning(lcDevices) << "SerialPortController: failed to open" << portName
-                             << "Win32 error" << err;
-        emit errorOccurred(QString("Failed to open %1 (error %2)").arg(portName).arg(err));
+        const DWORD err = ::GetLastError();
+        SerialOpenFailure failure;
+        failure.kind = classifyWin32SerialOpenFailure(err);
+        failure.device = portName;
+        failure.error = qt_error_string(static_cast<int>(err)).trimmed();
+        failure.nativeCode = static_cast<int>(err);
+        reportOpenFailure(failure);
         return false;
     }
 
@@ -131,10 +146,14 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     dcb.DCBlength = sizeof(DCB);
     if (!::GetCommState(hPort, &dcb)) {
         DWORD err = ::GetLastError();
-        qCWarning(lcDevices) << "SerialPortController: GetCommState failed on" << portName
-                             << "Win32 error" << err;
-        emit errorOccurred(QString("Failed to read port state for %1 (error %2)").arg(portName).arg(err));
         ::CloseHandle(hPort);
+        SerialOpenFailure failure;
+        failure.kind = SerialOpenFailureKind::Other;
+        failure.device = portName;
+        failure.error = QStringLiteral("Failed to read port state: %1")
+                            .arg(qt_error_string(static_cast<int>(err)).trimmed());
+        failure.nativeCode = static_cast<int>(err);
+        reportOpenFailure(failure);
         return false;
     }
     dcb.BaudRate        = static_cast<DWORD>(baudRate);
@@ -151,10 +170,14 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     dcb.fDsrSensitivity = FALSE;
     if (!::SetCommState(hPort, &dcb)) {
         DWORD err = ::GetLastError();
-        qCWarning(lcDevices) << "SerialPortController: SetCommState failed on" << portName
-                             << "Win32 error" << err;
-        emit errorOccurred(QString("Failed to configure %1 (baud/framing, error %2)").arg(portName).arg(err));
         ::CloseHandle(hPort);
+        SerialOpenFailure failure;
+        failure.kind = SerialOpenFailureKind::Other;
+        failure.device = portName;
+        failure.error = QStringLiteral("Failed to configure baud/framing: %1")
+                            .arg(qt_error_string(static_cast<int>(err)).trimmed());
+        failure.nativeCode = static_cast<int>(err);
+        reportOpenFailure(failure);
         return false;
     }
 
@@ -195,6 +218,8 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     m_winWatchThread->setObjectName("SerialWatcher");
     m_winWatchThread->start();
 
+    emit connectionStateChanged(true, portName, {}, 0,
+                                static_cast<int>(SerialOpenFailureKind::None), {});
     return true;
 }
 
@@ -204,6 +229,7 @@ void SerialPortController::close()
     retireTxInputs();
 
     HANDLE hPort = static_cast<HANDLE>(m_hWin);
+    const QString closedPort = m_winPortName;
 
     m_lastCtsActive = false;
     m_lastDsrActive = false;
@@ -233,6 +259,8 @@ void SerialPortController::close()
     m_winBaudRate = 0;
 
     qCDebug(lcDevices) << "SerialPortController: closed (Win32)";
+    emit connectionStateChanged(false, closedPort, {}, 0,
+                                static_cast<int>(SerialOpenFailureKind::None), {});
 }
 
 bool SerialPortController::isOpen() const
@@ -318,6 +346,17 @@ void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw, bool dc
 // Non-Windows implementation — QSerialPort polling
 // ─────────────────────────────────────────────────────────────────────────────
 
+#ifdef HAVE_SERIALPORT
+// Qt's own Unix name→path rule (QSerialPortInfoPrivate::portNameToSystemLocation).
+// No bus enumeration, so it also names a device that is not present.
+static QString systemLocationFor(const QString& name)
+{
+    return (name.startsWith(QLatin1Char('/')) || name.startsWith(QLatin1String("./"))
+            || name.startsWith(QLatin1String("../")))
+        ? name : QStringLiteral("/dev/") + name;
+}
+#endif
+
 bool SerialPortController::open(const QString& portName, int baudRate,
                                  int dataBits, int parity, int stopBits)
 {
@@ -331,10 +370,40 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     m_port.setStopBits(static_cast<QSerialPort::StopBits>(stopBits));
     m_port.setFlowControl(QSerialPort::NoFlowControl);
 
+    errno = 0;
     if (!m_port.open(QIODevice::ReadWrite)) {
-        qCWarning(lcDevices) << "SerialPortController: failed to open" << portName
-                         << m_port.errorString();
-        emit errorOccurred(m_port.errorString());
+        const int openErrno = errno;  // before anything else can touch it
+        const QSerialPort::SerialPortError qtErr = m_port.error();
+        const QString qtText = m_port.errorString();
+        const QString device = systemLocationFor(portName);
+
+        // Qt maps EACCES, EBUSY and a held lock file all to PermissionError,
+        // and errno after open() is whatever Qt last touched. The kind comes
+        // from probing the node; errno is reported only when it is provably
+        // the one behind Qt's text.
+        const SerialDeviceProbe probe = probeSerialDevice(device);
+        const int nativeCode =
+            (openErrno != 0 && qt_error_string(openErrno) == qtText) ? openErrno : 0;
+
+        SerialOpenFailure failure;
+        failure.kind = classifySerialOpenFailure(
+            probe, qtErr == QSerialPort::DeviceNotFoundError,
+            qtErr == QSerialPort::PermissionError, nativeCode);
+        failure.device = device;
+        failure.error = qtText;
+        failure.nativeCode = nativeCode;
+        if (failure.kind == SerialOpenFailureKind::Permission) {
+            if (failure.nativeCode == 0)
+                failure.nativeCode = probe.accessErrno;
+#ifdef Q_OS_LINUX
+            // usermod/adduser advice is Linux-only.
+            failure.group = serialGroupRemedy(probe);
+#endif
+        } else if (failure.kind == SerialOpenFailureKind::NotFound
+                   && failure.nativeCode == 0) {
+            failure.nativeCode = probe.statErrno;
+        }
+        reportOpenFailure(failure);
         return false;
     }
 
@@ -372,6 +441,8 @@ bool SerialPortController::open(const QString& portName, int baudRate,
                        << "dsrFn=" << static_cast<int>(m_dsrFn)
                        << "ctsFn=" << static_cast<int>(m_ctsFn)
                        << "pollActive=" << m_pollTimer.isActive();
+    emit connectionStateChanged(true, systemLocationFor(portName), {}, 0,
+                                static_cast<int>(SerialOpenFailureKind::None), {});
     return true;
 #else
     Q_UNUSED(portName); Q_UNUSED(baudRate);
@@ -398,6 +469,8 @@ void SerialPortController::close()
             m_port.setRequestToSend(!m_rtsActiveHigh);
         m_port.close();
         qCDebug(lcDevices) << "SerialPortController: closed";
+        emit connectionStateChanged(false, systemLocationFor(m_port.portName()), {}, 0,
+                                    static_cast<int>(SerialOpenFailureKind::None), {});
     }
 #endif
 }
@@ -736,8 +809,9 @@ void SerialPortController::loadSettings()
     m_dcdActiveHigh = s.value("SerialDcdPolarity", "ActiveHigh").toString() == "ActiveHigh";
     m_paddleSwap = s.value("SerialPaddleSwap", "False").toString() == "True";
 
-    bool shouldOpen = s.value("SerialAutoOpen", "False").toString() == "True"
-                   || s.value("SerialPortOpen", "False").toString() == "True";
+    // SerialPortOpen alone: the operator's Open/Close for this session.
+    // SerialAutoOpen only seeds it at startup, so Close always closes (#6972).
+    const bool shouldOpen = s.value("SerialPortOpen", "False").toString() == "True";
 
     qCDebug(lcDevices) << "SerialPortController::loadSettings:"
                        << "port=" << port
@@ -799,46 +873,6 @@ void SerialPortController::loadSettings()
     } else {
         updatePolling();
     }
-}
-
-void SerialPortController::saveSettings()
-{
-    auto& s = AppSettings::instance();
-
-    auto fnToStr = [](PinFunction fn) -> QString {
-        switch (fn) {
-        case PinFunction::PTT:   return "PTT";
-        case PinFunction::CwKey: return "CwKey";
-        case PinFunction::CwPTT: return "CwPTT";
-        default:                 return "None";
-        }
-    };
-
-    auto inputFnToStr = [](InputFunction fn) -> QString {
-        switch (fn) {
-        case InputFunction::PttInput:   return "PttInput";
-        case InputFunction::CwKeyInput: return "CwKeyInput";
-        case InputFunction::CwDitInput: return "CwDitInput";
-        case InputFunction::CwDahInput: return "CwDahInput";
-        default:                        return "None";
-        }
-    };
-
-    s.setValue("SerialPortName", portName());
-    s.setValue("SerialDtrFunction", fnToStr(m_dtrFn));
-    s.setValue("SerialRtsFunction", fnToStr(m_rtsFn));
-    s.setValue("SerialDtrPolarity", m_dtrActiveHigh ? "ActiveHigh" : "ActiveLow");
-    s.setValue("SerialRtsPolarity", m_rtsActiveHigh ? "ActiveHigh" : "ActiveLow");
-    s.setValue("SerialCtsFunction", inputFnToStr(m_ctsFn));
-    s.setValue("SerialDsrFunction", inputFnToStr(m_dsrFn));
-    s.setValue("SerialDcdFunction", inputFnToStr(m_dcdFn));
-    s.setValue("SerialCtsPolarity", m_ctsActiveHigh ? "ActiveHigh" : "ActiveLow");
-    s.setValue("SerialDsrPolarity", m_dsrActiveHigh ? "ActiveHigh" : "ActiveLow");
-    s.setValue("SerialDcdPolarity", m_dcdActiveHigh ? "ActiveHigh" : "ActiveLow");
-    s.setValue("SerialPaddleSwap", m_paddleSwap ? "True" : "False");
-    s.setValue("SerialAutoOpen", isOpen() ? "True" : "False");
-    s.setValue("SerialPortOpen", isOpen() ? "True" : "False");
-    s.save();
 }
 
 } // namespace AetherSDR

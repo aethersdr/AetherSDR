@@ -381,6 +381,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get daxtx`](#get-daxtx) | This client's radio-confirmed DAX TX ownership, audio readiness, pending request, and guard reasons. |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
+| | [`get serial`](#get-serial) | Serial PTT/CW port — observed open state and the last open failure (#6972). |
 | | [`get titlebar`](#get-titlebar) | Unified 52 px title bar — brand, radio tabs, audio cluster, window chrome. |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
@@ -3360,6 +3361,33 @@ dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
 `running=false`, `holding=true`, `text` frozen; ~15 s later `fading=true` then
 `visible=false`. A TUNE, two-tone, ATU, DAX, TCI, or CW transmit must leave
 `visible=false` throughout.
+
+### `get serial`
+Read the serial PTT/CW port (**Radio Setup → Serial & Controllers**) as the
+controller last reported it — not the saved Open request. Works with no radio
+connected and never keys.
+
+```json
+→ {"cmd":"get","model":"serial"}
+← {"ok":true,"model":"serial","available":true,"open":false,
+   "device":"/dev/ttyUSB0","error":"Permission denied: Can't open /dev/ttyUSB0 (errno 13)",
+   "errorCode":13,"failureKind":1,"group":"dialout","errorDialogVisible":true,
+   "openRequested":false,"autoOpen":false}
+```
+
+Fields: `open` (the port is actually open), `device` (full system path of the
+last open/close), `error` (summary of the last failed open, empty after a
+successful open or a close), `errorCode` (errno, or the Win32 error; 0 when not
+known), `failureKind` (0 none, 1 permission, 2 not found, 3 in use, 4 other),
+`group` (the group whose membership would grant access; set only for a Linux
+permission failure where that is the remedy), `errorDialogVisible` (the "Serial
+Port Open Failed" dialog is showing), `openRequested` (the session's
+`SerialPortOpen` request; a failed open withdraws it), `autoOpen` (the startup
+preference). `available` is false in builds without Qt SerialPort. A trailing
+property narrows it: `get serial open` → `{"value":false}`. To prove the failure
+path without transmitting, select a port the user cannot open (or one that is
+not present), click **Open** through the bridge, then assert `open=false`,
+`error` non-empty and `errorDialogVisible=true`.
 
 ### `get titlebar`
 Read the unified 52 px title bar — the single strip that owns the brand mark,

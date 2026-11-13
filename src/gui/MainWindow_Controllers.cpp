@@ -9,6 +9,7 @@
 #include "models/AntennaAnalyzerModel.h"
 
 #include "FlexControlDialog.h"
+#include "FramelessMessageBox.h"
 #include "MainWindowHelpers.h"
 #include "MidiTxDispatch.h"
 #include "MixerControlAvailability.h"
@@ -2796,6 +2797,8 @@ void MainWindow::wireExternalControllers()
             this, [this](bool active, const TxCoordinator::Request& input) {
         (void)m_radioModel.setProducerTransmit(input, active, TransmitModel::PttSource::Mox);
     });
+    connect(m_serialPort, &SerialPortController::connectionStateChanged,
+            this, &MainWindow::handleSerialConnectionState);
     connect(m_serialPort, &SerialPortController::cwKeyChanged,
             this, [this](bool down, const TxCoordinator::Request& input) {
         (void)m_radioModel.requestProducerCw(input, down, false, true, {}, QStringLiteral("serial:cwkey"));
@@ -3417,6 +3420,15 @@ void MainWindow::wireExternalControllers()
 
     // Init that must happen on the worker thread (serial port open, etc.)
 #ifdef HAVE_SERIALPORT
+    {
+        // Auto-open is startup intent only; SerialPortOpen is the operator's
+        // request for this session. Overwrite (never OR) so a request left
+        // over from the last session doesn't reopen with Auto-open off. (#6972)
+        auto& s = AppSettings::instance();
+        const bool autoOpen = s.value("SerialAutoOpen", "False").toString() == "True";
+        s.setValue("SerialPortOpen", autoOpen ? "True" : "False");
+        s.save();
+    }
     QMetaObject::invokeMethod(m_serialPort, [this] {
         m_serialPort->loadSettings();
     });
@@ -3489,6 +3501,109 @@ void MainWindow::wireExternalControllers()
             m_hidEncoder->loadSettings();
         });
     }
+#endif
+}
+
+#ifdef HAVE_SERIALPORT
+void MainWindow::handleSerialConnectionState(bool open, const QString& device,
+                                             const QString& error, int nativeCode,
+                                             int failureKind, const QString& group)
+{
+    const auto kind = static_cast<SerialOpenFailureKind>(failureKind);
+    m_serialPortOpen = open;
+    m_serialPortDevice = device;
+    if (open || kind == SerialOpenFailureKind::None) {
+        m_serialPortError.clear();
+        m_serialPortErrorCode = 0;
+        m_serialPortFailureKind = 0;
+        m_serialPortGroup.clear();
+    } else {
+        SerialOpenFailure failure;
+        failure.kind = kind;
+        failure.device = device;
+        failure.error = error;
+        failure.nativeCode = nativeCode;
+        failure.group = group;
+        m_serialPortError = serialOpenFailureSummary(failure);
+        m_serialPortErrorCode = nativeCode;
+        m_serialPortFailureKind = failureKind;
+        m_serialPortGroup = group;
+
+        // The open request failed: withdraw it, so nothing retries in the
+        // background and the next attempt is the operator's next Open click
+        // (one attempt, one dialog).
+        auto& s = AppSettings::instance();
+        s.setValue("SerialPortOpen", "False");
+        s.save();
+
+        if (!device.isEmpty())
+            showSerialOpenError(failure);
+    }
+    if (m_radioSetupDialog)
+        m_radioSetupDialog->setSerialPortConnectionStatus(open, device, m_serialPortError);
+}
+
+void MainWindow::showSerialOpenError(const SerialOpenFailure& failure)
+{
+    // Replace, never stack: two queued loadSettings() can both fail before
+    // the withdrawn request reaches the worker.
+    if (m_serialOpenErrorBox)
+        m_serialOpenErrorBox->close();
+
+    QWidget* parent = (m_radioSetupDialog && m_radioSetupDialog->isVisible())
+        ? static_cast<QWidget*>(m_radioSetupDialog.data()) : this;
+    const QString title = QStringLiteral("Serial Port Open Failed");
+    auto* box = new FramelessMessageBox(parent);
+    box->setObjectName(QStringLiteral("serialOpenErrorDialog"));
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setIcon(QMessageBox::Warning);
+    box->setWindowTitle(title);
+    // Plain text: the error and device path come from the OS, not from us.
+    box->setTextFormat(Qt::PlainText);
+    box->setText(serialOpenFailureSummary(failure) + QStringLiteral("\n\n")
+                 + serialOpenFailureAdvice(failure));
+    // Selectable so the commands can be copied. They are only shown, never run.
+    box->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    box->setAccessibleName(title);
+    box->setAccessibleDescription(serialOpenFailureSummary(failure));
+    box->setStandardButtons(QMessageBox::Ok);
+    box->setDefaultButton(QMessageBox::Ok);
+    m_serialOpenErrorBox = box;
+    // Non-modal show(): no nested event loop, radio events keep flowing.
+    box->setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString()
+        == QLatin1String("True"));
+    // setFramelessMode() can clear the native title on macOS; restore it.
+    box->setWindowTitle(title);
+    box->show();
+    box->raise();
+    box->activateWindow();
+}
+#endif
+
+QJsonObject MainWindow::automationSerialSnapshot() const
+{
+#ifdef HAVE_SERIALPORT
+    QJsonObject data{
+        {QStringLiteral("available"), true},
+        {QStringLiteral("open"), m_serialPortOpen},
+        {QStringLiteral("device"), m_serialPortDevice},
+        {QStringLiteral("error"), m_serialPortError},
+        {QStringLiteral("errorCode"), m_serialPortErrorCode},
+        {QStringLiteral("failureKind"), m_serialPortFailureKind},
+        {QStringLiteral("group"), m_serialPortGroup},
+        {QStringLiteral("errorDialogVisible"),
+         m_serialOpenErrorBox && m_serialOpenErrorBox->isVisible()},
+    };
+    const auto& s = AppSettings::instance();
+    data[QStringLiteral("openRequested")] =
+        s.value("SerialPortOpen", "False").toString() == QLatin1String("True");
+    data[QStringLiteral("autoOpen")] =
+        s.value("SerialAutoOpen", "False").toString() == QLatin1String("True");
+    return data;
+#else
+    return QJsonObject{{QStringLiteral("available"), false},
+                       {QStringLiteral("open"), false}};
 #endif
 }
 

@@ -8668,42 +8668,39 @@ QWidget* RadioSetupDialog::buildSerialTab()
         setButtonRole(closeBtn, ButtonRole::Select);
 
         auto* statusLabel = new QLabel;
+        statusLabel->setObjectName(QStringLiteral("serialPortStatusLabel"));
+        statusLabel->setWordWrap(true);
+        statusLabel->setTextFormat(Qt::PlainText);  // carries OS error text
+        statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        statusLabel->setAccessibleName(QStringLiteral("Serial port connection status"));
 
         row->addWidget(openBtn);
         row->addWidget(closeBtn);
-        row->addWidget(statusLabel);
-        row->addStretch();
+        row->addWidget(statusLabel, 1);
 
-        auto updatePortStatus = [openBtn, closeBtn, statusLabel]() {
-            bool open = AppSettings::instance().value("SerialPortOpen", "False").toString() == "True";
-            openBtn->setEnabled(!open);
-            closeBtn->setEnabled(open);
-            if (open) {
-                statusLabel->setText("Open");
-                setTone(statusLabel, Tone::Ok);
-            } else {
-                statusLabel->setText("Closed");
-                setTone(statusLabel, Tone::Hint);
-            }
-        };
+        m_serialOpenButton = openBtn;
+        m_serialCloseButton = closeBtn;
+        m_serialStatusLabel = statusLabel;
 
-        connect(openBtn, &QPushButton::clicked, this, [this, updatePortStatus]() {
+        // The status shows what the controller reported, never the request:
+        // MainWindow pushes setSerialPortConnectionStatus() after every open
+        // and close, including failures (#6972).
+        connect(openBtn, &QPushButton::clicked, this, [this]() {
             auto& s = AppSettings::instance();
             s.setValue("SerialPortOpen", "True");
             s.save();
-            updatePortStatus();
             emit serialSettingsChanged();
         });
 
-        connect(closeBtn, &QPushButton::clicked, this, [this, updatePortStatus]() {
+        connect(closeBtn, &QPushButton::clicked, this, [this]() {
             auto& s = AppSettings::instance();
             s.setValue("SerialPortOpen", "False");
             s.save();
-            updatePortStatus();
             emit serialSettingsChanged();
         });
 
-        updatePortStatus();
+        setSerialPortConnectionStatus(m_serialPortOpen, m_serialPortDevice,
+                                      m_serialPortError);
         // In a group like everything else on the page, not loose between
         // Pin Assignment and the FlexControl knob.
         auto* connectionGroup = new QGroupBox("Connection");
@@ -9520,6 +9517,32 @@ void RadioSetupDialog::refreshFlexControlButtonActions()
             settings.value("FlexControlInvertDir", "False").toString() == "True";
         const QSignalBlocker blocker(m_flexControlInvertCheck);
         m_flexControlInvertCheck->setChecked(inverted);
+    }
+}
+
+void RadioSetupDialog::setSerialPortConnectionStatus(bool open, const QString& device,
+                                                     const QString& error)
+{
+    m_serialPortOpen = open;
+    m_serialPortDevice = device;
+    m_serialPortError = error;
+    if (m_serialOpenButton)
+        m_serialOpenButton->setEnabled(!open);
+    if (m_serialCloseButton)
+        m_serialCloseButton->setEnabled(open);
+    if (!m_serialStatusLabel)
+        return;
+    if (open) {
+        m_serialStatusLabel->setText(device.isEmpty()
+            ? QStringLiteral("Open")
+            : QStringLiteral("Open (%1)").arg(device));
+        setTone(m_serialStatusLabel, Tone::Ok);
+    } else if (!error.isEmpty()) {
+        m_serialStatusLabel->setText(QStringLiteral("Closed: %1").arg(error));
+        setTone(m_serialStatusLabel, Tone::Error);
+    } else {
+        m_serialStatusLabel->setText(QStringLiteral("Closed"));
+        setTone(m_serialStatusLabel, Tone::Hint);
     }
 }
 

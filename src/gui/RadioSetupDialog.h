@@ -79,6 +79,10 @@ public:
     void revealKxpa100AdvancedSettings();
     void refreshFlexControlButtonActions();
     void setFlexControlConnectionStatus(bool connected, const QString& port = {});
+    // Observed serial PTT/CW port state from SerialPortController (#6972).
+    // error is the last open failure's summary, empty when there is none.
+    void setSerialPortConnectionStatus(bool open, const QString& device,
+                                       const QString& error);
     // Result of the automation-bridge start the Network-tab toggle kicked off
     // (#4181). The start is ASYNCHRONOUS — the token read has to land before
     // the socket can listen — so the toggle handler can't know whether the
@@ -304,6 +308,13 @@ private:
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;
     QLabel* m_flexControlStatusLabel{nullptr};
+    QLabel* m_serialStatusLabel{nullptr};
+    QPushButton* m_serialOpenButton{nullptr};
+    QPushButton* m_serialCloseButton{nullptr};
+    // Last pushed state; the Serial page is built lazily and applies it then.
+    bool m_serialPortOpen{false};
+    QString m_serialPortDevice;
+    QString m_serialPortError;
     QGroupBox* m_flexControlGroup{nullptr};
     QPushButton* m_flexControlDetectButton{nullptr};
     QPushButton* m_flexControlCloseButton{nullptr};
