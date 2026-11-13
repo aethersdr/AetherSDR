@@ -4,6 +4,8 @@
 #include "core/CappedDownload.h"
 
 #include <QHostAddress>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -31,56 +33,107 @@ private:
             QByteArray::number(announcedLength) + "\r\n\r\n" + body;
     }
 
+    // A peer that reads each HTTP request and then either drops the connection
+    // with no reply or serves it. Requests are counted, not sockets: Qt may
+    // open a spare connection that never carries one.
+    struct DroppingPeer {
+        QTcpServer server;
+        int requests{0};
+        int dropFirst{0};   // requests to drop; < 0 drops every one
+
+        bool listen()
+        {
+            if (!server.listen(QHostAddress::LocalHost))
+                return false;
+            QObject::connect(&server, &QTcpServer::newConnection, &server, [this] {
+                while (server.hasPendingConnections()) {
+                    QTcpSocket* peer = server.nextPendingConnection();
+                    QObject::connect(peer, &QTcpSocket::readyRead, peer, [this, peer] {
+                        if (peer->property("seen").toBool()
+                            || !peer->peek(4096).contains("\r\n\r\n"))
+                            return;
+                        peer->setProperty("seen", true);
+                        ++requests;
+                        if (dropFirst < 0 || requests <= dropFirst) {
+                            peer->abort();
+                        } else {
+                            peer->write(response(200, "complete"));
+                            peer->flush();
+                            peer->disconnectFromHost();
+                        }
+                    });
+                }
+            });
+            return true;
+        }
+        QUrl url() const { return endpoint(server); }
+    };
+
+    // Qt's HTTP channel resends an idempotent GET on its own after the peer
+    // drops it, and how often varies by Qt version. Count the requests one
+    // GET with CappedDownload's settings makes, so the retry tests below
+    // demand more than Qt alone sends.
+    static int requestsPerQtGet()
+    {
+        DroppingPeer peer;
+        peer.dropFirst = -1;
+        if (!peer.listen())
+            return -1;
+        QNetworkAccessManager nam;
+        nam.setTransferTimeout(30000);
+        QNetworkRequest request(peer.url());
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                             QNetworkRequest::NoLessSafeRedirectPolicy);
+        QNetworkReply* reply = nam.get(request);
+        reply->setReadBufferSize(64 * 1024);
+        QSignalSpy done(reply, &QNetworkReply::finished);
+        if (!done.wait(5000))
+            return -1;
+        delete reply;
+        return peer.requests;
+    }
+
+    int m_qtRequests{0};
+
 private slots:
+    void initTestCase()
+    {
+        m_qtRequests = requestsPerQtGet();
+        QVERIFY2(m_qtRequests >= 1, "could not count Qt's own resends");
+        qInfo("Qt sends %d request(s) for one GET to a dropping peer", m_qtRequests);
+    }
+
     void retryAfterEmptyDisconnect()
     {
-        QTcpServer server;
-        QVERIFY(server.listen(QHostAddress::LocalHost));
-        int connections = 0;
-        connect(&server, &QTcpServer::newConnection, &server, [&] {
-            while (server.hasPendingConnections()) {
-                QTcpSocket* peer = server.nextPendingConnection();
-                ++connections;
-                if (connections <= 2) {
-                    peer->abort();
-                } else {
-                    peer->write(response(200, "complete"));
-                    peer->flush();
-                    peer->disconnectFromHost();
-                }
-            }
-        });
+        // Every request Qt sends on its own is dropped, so a body arrives
+        // only through CappedDownload's retry.
+        DroppingPeer peer;
+        peer.dropFirst = m_qtRequests;
+        QVERIFY(peer.listen());
         CappedDownload download;
         QSignalSpy success(&download, &CappedDownload::finished);
         QSignalSpy failure(&download, &CappedDownload::failed);
-        download.get(endpoint(server), 100, QStringLiteral("Too large"));
-        QTRY_COMPARE_WITH_TIMEOUT(success.size(), 1, 5000);
-        // Qt itself may transparently reconnect once before reporting an
-        // error, so count on-wire connections, not our QNAM get() calls.
-        QVERIFY(connections >= 3);
+        download.get(peer.url(), 100, QStringLiteral("Too large"));
+        QTRY_COMPARE_WITH_TIMEOUT(success.size() + failure.size(), 1, 5000);
         QVERIFY(failure.isEmpty());
         QCOMPARE(success.at(0).at(1).toByteArray(), QByteArray("complete"));
+        QCOMPARE(peer.requests, m_qtRequests + 1);
     }
 
     void exhaustedRetryFailsOnce()
     {
-        QTcpServer server;
-        QVERIFY(server.listen(QHostAddress::LocalHost));
-        int connections = 0;
-        connect(&server, &QTcpServer::newConnection, &server, [&] {
-            while (server.hasPendingConnections()) {
-                ++connections;
-                server.nextPendingConnection()->abort();
-            }
-        });
+        DroppingPeer peer;
+        peer.dropFirst = -1;
+        QVERIFY(peer.listen());
         CappedDownload download;
         QSignalSpy success(&download, &CappedDownload::finished);
         QSignalSpy failure(&download, &CappedDownload::failed);
-        download.get(endpoint(server), 100, QStringLiteral("Too large"));
+        download.get(peer.url(), 100, QStringLiteral("Too large"));
         QTRY_COMPARE_WITH_TIMEOUT(failure.size(), 1, 5000);
-        // A network GET can open several sockets internally, especially on
-        // Qt 6.12; the app-level invariant is one terminal failed() signal.
-        QVERIFY(connections >= 2);
+        // One retry, then one terminal failed().
+        QCOMPARE(peer.requests, 2 * m_qtRequests);
+        QTest::qWait(200);
+        QCOMPARE(failure.size(), 1);
         QVERIFY(success.isEmpty());
     }
 

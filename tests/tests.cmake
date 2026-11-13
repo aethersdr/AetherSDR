@@ -12136,3 +12136,15 @@ target_link_libraries(capped_download_test PRIVATE Qt6::Core Qt6::Network Qt6::T
 set_target_properties(capped_download_test PROPERTIES AUTOMOC ON)
 add_test(NAME capped_download_test COMMAND capped_download_test)
 set_tests_properties(capped_download_test PROPERTIES TIMEOUT 30)
+
+# Which failures the update and firmware transport retries before a body
+# arrives, including the HTTP/2 refusals a loopback peer cannot produce.
+# Socket-free.
+add_executable(capped_download_retry_policy_test
+    tests/capped_download_retry_policy_test.cpp
+    src/core/CappedDownload.cpp
+)
+target_include_directories(capped_download_retry_policy_test PRIVATE src)
+target_link_libraries(capped_download_retry_policy_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(capped_download_retry_policy_test PROPERTIES AUTOMOC ON)
+add_test(NAME capped_download_retry_policy_test COMMAND capped_download_retry_policy_test)

@@ -9,6 +9,21 @@
 
 namespace AetherSDR {
 
+bool isRetryableBeforeBody(QNetworkReply::NetworkError error, bool http2Used)
+{
+    switch (error) {
+    case QNetworkReply::RemoteHostClosedError:
+    case QNetworkReply::ContentReSendError:
+    case QNetworkReply::ProtocolUnknownError:
+    case QNetworkReply::ProtocolFailure:
+        return true;
+    case QNetworkReply::UnknownNetworkError:
+        return http2Used;
+    default:
+        return false;
+    }
+}
+
 CappedDownload::CappedDownload(QObject* parent)
     : QObject(parent)
     , m_nam(new QNetworkAccessManager(this))
@@ -91,17 +106,10 @@ void CappedDownload::onFinished()
     reply->deleteLater();
     const QUrl url = reply->url();
     if (reply->error() != QNetworkReply::NoError) {
-        // HTTP/2 GOAWAY and connection resets can reject a request before
-        // sending any payload. Retry it once; never join partial bodies or
-        // repeat HTTP/status, timeout, cancel, or oversized-response failures.
-        const QNetworkReply::NetworkError error = reply->error();
-        const bool connectionError =
-            error == QNetworkReply::RemoteHostClosedError ||
-            error == QNetworkReply::ContentReSendError ||
-            error == QNetworkReply::ProtocolUnknownError ||
-            error == QNetworkReply::ProtocolFailure ||
-            (error == QNetworkReply::UnknownNetworkError &&
-             reply->attribute(QNetworkRequest::Http2WasUsedAttribute).toBool());
+        // Retry once; never join partial bodies.
+        const bool connectionError = isRetryableBeforeBody(
+            reply->error(),
+            reply->attribute(QNetworkRequest::Http2WasUsedAttribute).toBool());
         if (!m_retried && connectionError && m_body.isEmpty() &&
             reply->bytesAvailable() == 0) {
             m_retried = true;
