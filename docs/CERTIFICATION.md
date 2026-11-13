@@ -872,6 +872,14 @@ running it:
 * **A fading carrier declines.** Night medium-wave moved 25 dB within one search;
   the bracket failed and the stage said so. Use a groundwave carrier, or the
   attenuator in front of a strong steady one.
+* **Every probe starts from a closed gate.** WDSP's squelch holds an open gate
+  for a tail of up to 1.5 s, longer than the 900 ms settle, so a probe right
+  after an open one heard the tail and the search landed two or three levels
+  high, then failed its own bracket (HL2, steady medium-wave carriers). Each
+  probe now sets level 100 and waits until the audio stops before setting the
+  level under test. The record also splits the error at the S-meter:
+  `lineMinusSLevelDb` and `sLevelMinusCarrierDb`; the second moves when the
+  carrier does not dominate its passband.
 
 Both squelch stages decline while the operator's Auto SQL is engaged. Auto
 rewrites the slice on every pan frame, and its writes land on one level and hold,

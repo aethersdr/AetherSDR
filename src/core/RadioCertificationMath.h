@@ -184,6 +184,47 @@ int lowestClosedLevel(int lo, int hi, ClosedAt&& closedAt)
     return lo;
 }
 
+// One gate probe, approached from a gate heard closed. A squelch that was open
+// can hold its audio for a tail after the level rises past the signal (WDSP's
+// amsq: up to 1.5 s), so a probe that follows an open one hears the tail and
+// reads open at a level that is closed. Setting `topLevel` and listening until
+// the audio stops first makes every probe read the same gate whatever came
+// before it. closedOver(ms) listens for ms and says whether the gate was shut.
+struct GateProbeTiming {
+    int settleMs = 900;
+    int listenMs = 700;
+    int closePollMs = 200;
+    int closeMaxMs = 4000;
+};
+
+struct GateProbe {
+    bool closed = false;
+    // False when the gate never shut at topLevel within closeMaxMs, so this
+    // probe could follow an open gate.
+    bool fromClosed = true;
+};
+
+template <typename SetLevel, typename Wait, typename ClosedOver>
+GateProbe probeFromClosedGate(int level, int topLevel, const GateProbeTiming& t,
+                              SetLevel&& setLevel, Wait&& wait, ClosedOver&& closedOver)
+{
+    GateProbe r;
+    if (level < topLevel) {
+        setLevel(topLevel);
+        r.fromClosed = false;
+        for (int waited = 0; waited < t.closeMaxMs; waited += t.closePollMs) {
+            if (closedOver(t.closePollMs)) {
+                r.fromClosed = true;
+                break;
+            }
+        }
+    }
+    setLevel(level);
+    wait(t.settleMs);
+    r.closed = closedOver(t.listenMs);
+    return r;
+}
+
 // Strongest bin within +/- spanHz of targetHz, on a pan whose bins spread
 // evenly over [lowHz, highHz). NaN when the window is off the pan or holds no
 // finite bin. The bins are on the pan's own dBm axis, where the SQL line is drawn.

@@ -1165,14 +1165,20 @@ void RadioCertification::stageSquelchScale(const Options& o)
                 interrupted = true;
                 return true;
             }
-            slice->setSquelch(true, level);
-            spin(900);
-            const double d = audioDb(700);
-            const bool closed = certmath::gateClosed(openDb, d);
+            // From a gate heard closed at 100: a squelch tail (1.5 s on WDSP's
+            // amsq) outlasts the settle, so a probe after an open one would
+            // still hear audio and the search would land high.
+            double d = -999.0;
+            const certmath::GateProbe p = certmath::probeFromClosedGate(
+                level, 100, certmath::GateProbeTiming{},
+                [&](int l) { if (slice) slice->setSquelch(true, l); },
+                [&](int ms) { spin(ms); },
+                [&](int ms) { d = audioDb(ms); return certmath::gateClosed(openDb, d); });
             probes.append(QJsonObject{{QStringLiteral("level"), level},
                                       {QStringLiteral("audioDb"), d},
-                                      {QStringLiteral("closed"), closed}});
-            return closed;
+                                      {QStringLiteral("closed"), p.closed},
+                                      {QStringLiteral("fromClosed"), p.fromClosed}});
+            return p.closed;
         };
         // From 1: a radio with no squelch enable cannot gate at threshold 0.
         int gate = certmath::lowestClosedLevel(1, 100, closedAt);
@@ -1245,6 +1251,13 @@ void RadioCertification::stageSquelchScale(const Options& o)
             const double errorDb = lineDb - peakDb;
             m[QStringLiteral("lineAtGateDb")] = lineDb;
             m[QStringLiteral("lineMinusCarrierDb")] = errorDb;
+            // The same error split at the S-meter, which reads the passband the
+            // gate measures: line - S is the scale, S - peak is the carrier (a
+            // large one means the carrier does not dominate its passband).
+            if (sLevel > -999.0) {
+                m[QStringLiteral("lineMinusSLevelDb")] = lineDb - sLevel;
+                m[QStringLiteral("sLevelMinusCarrierDb")] = sLevel - peakDb;
+            }
             if (!confirmed) {
                 inconclusive = QStringLiteral("the gate at level %1 did not bracket (closed "
                                               "one above, open one below) — a fading "
@@ -1308,7 +1321,8 @@ void RadioCertification::stageSquelchScale(const Options& o)
     record(id, title, m,
            QStringLiteral(
                "Binary-search the squelch level at which the audio from a steady "
-               "carrier stops, then compare the published line at that level with "
+               "carrier stops, each probe approached from a gate heard closed so a "
+               "squelch tail cannot carry one probe into the next, then compare the published line at that level with "
                "the carrier's pan peak. Report the carrier's S-meter reading too: "
                "above S9 a correct record can still sit several dB off."),
            problems.join(QStringLiteral("; ")), ref);

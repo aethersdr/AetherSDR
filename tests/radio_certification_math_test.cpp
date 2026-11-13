@@ -292,6 +292,74 @@ int main()
               "digital silence is closed; a quieter passband is not");
     }
 
+    // ---- gate search against a squelch with a tail (d254, WDSP amsq) ----
+    {
+        // A carrier at 36.5 on a gate whose threshold is the level: it opens
+        // 70 ms after the threshold drops below the carrier and, once open,
+        // holds the audio for a 1.5 s tail after the threshold rises past it.
+        // The true lowest closed level is 37.
+        struct TailGate {
+            double carrier = 36.5;
+            int level = 100;
+            bool open = false;
+            int belowMs = 0;   // time the carrier has spent under the threshold while open
+            int aboveMs = 0;   // time over the threshold while closed
+            void step()        // 10 ms
+            {
+                const bool over = carrier > level;
+                if (open) {
+                    belowMs = over ? 0 : belowMs + 10;
+                    if (belowMs >= 1500) { open = false; belowMs = 0; }
+                } else {
+                    aboveMs = over ? aboveMs + 10 : 0;
+                    if (aboveMs >= 70) { open = true; aboveMs = 0; }
+                }
+            }
+            void wait(int ms) { for (int t = 0; t < ms; t += 10) step(); }
+            bool closedOver(int ms)   // the audio stays >20 dB down only if no 10 ms opens
+            {
+                int openSteps = 0;
+                for (int t = 0; t < ms; t += 10) { step(); openSteps += open ? 1 : 0; }
+                return openSteps == 0;
+            }
+        };
+        auto search = [](TailGate& g, auto&& closedAt) {
+            const int gate = lowestClosedLevel(1, 100, closedAt);
+            const bool confirmed = gate > 1 && gate < 100 && closedAt(gate + 1) && !closedAt(gate - 1);
+            return std::pair{gate, confirmed};
+        };
+
+        TailGate old;
+        const auto [oldGate, oldConfirmed] = search(old, [&old](int level) {
+            old.level = level;           // the probe as it was: set, 900 ms, listen 700 ms
+            old.wait(900);
+            return old.closedOver(700);
+        });
+        check(oldGate > 37 && !oldConfirmed,
+              "the old probe hears the tail after an open level, lands high and fails the bracket");
+
+        TailGate g;
+        bool allFromClosed = true;
+        const auto [gate, confirmed] = search(g, [&g, &allFromClosed](int level) {
+            const GateProbe p = probeFromClosedGate(
+                level, 100, GateProbeTiming{},
+                [&g](int l) { g.level = l; }, [&g](int ms) { g.wait(ms); },
+                [&g](int ms) { return g.closedOver(ms); });
+            allFromClosed = allFromClosed && p.fromClosed;
+            return p.closed;
+        });
+        check(gate == 37 && confirmed,
+              "approached from a closed gate, the search finds 37 and the bracket holds");
+        check(allFromClosed, "every probe started from a gate heard closed");
+
+        TailGate stuck;
+        stuck.carrier = 200.0;   // above the whole scale: 100 never closes
+        const GateProbe p = probeFromClosedGate(
+            50, 100, GateProbeTiming{}, [&stuck](int l) { stuck.level = l; },
+            [&stuck](int ms) { stuck.wait(ms); }, [&stuck](int ms) { return stuck.closedOver(ms); });
+        check(!p.closed && !p.fromClosed, "a gate that never shuts at the top is reported as such");
+    }
+
     // ---- pan peak and floor ----
     {
         std::vector<float> bins(1000, -130.0f);
