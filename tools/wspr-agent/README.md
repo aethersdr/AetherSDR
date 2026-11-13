@@ -16,9 +16,36 @@ delivers only to a separate computer on its LAN.
   slice (`tx=0`) and takes its DAX audio (`dax_rx`, 24 kHz). The radio
   removes headless slices when its last GUI client disconnects; the agent
   remakes the slice at once and loses that one cycle.
+- **Its slice:** a slice outlives the client that made it, so the agent
+  cleans up after itself. On SIGTERM (stop, update, remove) it removes its
+  slice and stream and waits up to 1.5 s for the radio to answer. After a
+  crash, the next start removes the slice at the index it saved, but only
+  if that slice still looks like its own: no panadapter, DIGU, on a WSPR
+  dial frequency, on DAX channel 0 or its own. The radio reports the slice
+  as the connected GUI client's own (#7139). `/v1/status` names it as
+  `slice_index`, and AetherSDR leaves that slice alone. Other clients may
+  still take it over, so every retune sets `mode=DIGU` and `tx=0` again.
+- **Its audio stays on the radio:** the radio mixes a slice's audio into the
+  stream it sends the slice's GUI client, so an unmuted receiver slice plays
+  on that client's computer (measured on a FLEX-8600: -31 dBFS reached
+  AetherSDR with its own slice at zero gain). The agent sets `audio_mute=1`
+  when it makes the slice and at every retune, and at once when a status
+  shows another client unmuted it. DAX, which it records from, is not
+  affected by the mute (measured: decodes and level unchanged).
+- **Its DAX channel:** a DAX channel feeds one slice. A client that picks
+  ours moves it to their slice, and our stream then carries their audio:
+  measured on a FLEX-8600, those decodes came out under our band. So the
+  agent tracks each slice's channel from the radio's statuses and from the
+  reply to its own `slice set … dax=`. A cycle starts only with the channel
+  on our slice, one it leaves mid-cycle is discarded, and the next retune
+  takes the channel back.
 - **Capture:** each even UTC minute, 114 s, timed by the system clock. It
-  waits until the kernel reports the clock synchronized; on an 8000-series
-  radio the clock comes from its GPS-disciplined stratum-1 NTP. Lost VITA
+  waits for a trusted clock; on an 8000-series radio that comes from its
+  GPS-disciplined stratum-1 NTP. A FLEX-6000 runs kernel 2.6.37, where
+  chronyd disciplines the clock but never clears `STA_UNSYNC`, so the kernel
+  flag alone would leave the agent waiting forever; there the radio's own
+  `ntp_sources ... state=selected` is accepted instead. `clock_source` in the
+  status says which applies — `kernel`, `radio_ntp` or `none`. Lost VITA
   packets become silence so the timing holds.
 - **DSP:** mix 1500 Hz to 0, then two FIR decimators: 24 kHz to 1500 Hz to
   375 Hz complex, in the scale and sign wsprd's own `.wav` reader produces.
@@ -54,7 +81,7 @@ it (`POST /v1/local/expose`), so a remote AetherSDR can read it too.
 ## Build and test
 
 ```sh
-python3 -I build.py --output OUT --host     # needs zig 0.17
+python3 -I build.py --output OUT --host     # needs zig 0.17.0 exactly (see build.py)
 OUT/aether-wspr-host selftest -27           # synthetic signal through DSP + decoder
 ./test_osd.sh /path/to/wsjtx                # C ports vs WSJT-X's Fortran (needs gfortran)
 ```

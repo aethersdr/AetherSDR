@@ -879,3 +879,41 @@ sun.f90, grid2deg.f90). The GPL text is at tools/wspr-agent/wsprd/COPYING.
              Bob Jenkins (the lookup3 hash, nhash.c, public domain)
   License:   GPL-3.0-or-later
   Source:    https://github.com/WSJTX/wsjtx
+
+
+37. Data2G — HF data modem core
+-------------------------------
+Bundled at third_party/data2g/ (upstream release v0.4.3, commit
+f5388f792425d80ac4d175ff1838260e790a3433): the data2g_core target's sources,
+byte for byte, compiled as a separately-linked static library for
+AetherModem's receive-only HF data monitor (RFC #7159). The generated tables
+under core/generated/ include the rate shifter's trained model; upstream
+documents how each was produced (docs/outcome-training-data.md,
+data2g/codes_data/README.md). The license texts are at
+third_party/data2g/LICENSE and third_party/data2g/LICENSE_ion.
+
+  Copyright: the Data2G authors (upstream names no copyright holder in its
+             license file; see the repository history)
+  License:   Artistic License 2.0
+  Source:    https://github.com/arodland/Data2G
+
+Data2G incorporates features from Ion (CW identification, core/cwid/),
+relicensed for Data2G by Ion's author. Ion itself is distributed under the
+Apache License 2.0.
+
+  Copyright: Jesse Forkum, N0JLF
+  License:   Apache-2.0
+  Source:    https://github.com/jesseforkum/ion-hf
+
+
+38. pocketfft — FFT (single header, vendored by Data2G)
+-------------------------------------------------------
+Bundled at third_party/data2g/third_party/pocketfft/ as Data2G ships it.
+
+  Copyright: Copyright (C) 2010-2024 Max-Planck-Society
+             Copyright (C) 2019-2020 Peter Bell
+             Copyright (C) 2003, 2007-14 Matteo Frigo and Massachusetts
+               Institute of Technology (algorithms after FFTW)
+             Copyright (C) 2024 Tan Ping Liang, Peter Bell
+  License:   BSD-3-Clause
+  Source:    https://github.com/mreineck/pocketfft

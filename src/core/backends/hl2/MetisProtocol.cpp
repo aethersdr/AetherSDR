@@ -216,6 +216,12 @@ Cc ccTxDrive(int level, bool paEnable, bool atuTune) noexcept
     return {kC0TxDrive, static_cast<std::uint8_t>(level), c2, 0x00, 0x00};
 }
 
+Cc ccTxDriveForRoute(TxRoute route, int level, bool txAllowed, bool atuTune) noexcept
+{
+    const int applied = txAllowed ? level : 0;
+    return ccTxDrive(applied, route == TxRoute::Ant && applied > 0, atuTune);
+}
+
 Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept
 {
     // The chip address is MASKED to 7 bits rather than asserted, because C2
@@ -603,6 +609,38 @@ std::string gatewareVersionText(const DiscoveryReply& reply)
     if (reply.gatewareMinor)
         text += '.' + std::to_string(*reply.gatewareMinor);
     return text;
+}
+
+std::optional<std::uint8_t> gatewareMinorFromVersionText(std::string_view text) noexcept
+{
+    const auto isDigits = [](std::string_view part) {
+        return !part.empty() && part.size() <= 3
+            && std::all_of(part.begin(), part.end(),
+                           [](char c) { return c >= '0' && c <= '9'; });
+    };
+    const std::size_t dot = text.find('.');
+    if (dot == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const std::string_view major = text.substr(0, dot);
+    const std::string_view minor = text.substr(dot + 1);
+    if (!isDigits(major) || !isDigits(minor)) {
+        return std::nullopt;
+    }
+    int value = 0;
+    for (const char c : minor) {
+        value = value * 10 + (c - '0');
+    }
+    if (value > 0xFF) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint8_t>(value);
+}
+
+std::string gatewareVersionLabel(const DiscoveryReply& reply)
+{
+    const char* name = gatewareBoardName(boardForGatewareMinor(reply.gatewareMinor));
+    return name ? std::string(name) + " gateware" : std::string("Gateware");
 }
 
 std::array<std::uint8_t, kUsbPacketSize> ep2Packet(std::uint32_t seq, const Cc& a, const Cc& b) noexcept

@@ -12,10 +12,22 @@
 #include "core/AppSettings.h"
 #include "core/SettingsDatabase.h"
 #include "core/SettingsPaths.h"
+#include "core/ThemeManager.h"
+#include "gui/CanonMessageBox.h"
+#include "gui/CanonWindow.h"
 #include "gui/FramelessMessageBox.h"
+#include "gui/FramelessResizer.h"
 #include "gui/SettingsBrowserDialog.h"
 
+#include <QAbstractScrollArea>
 #include <QApplication>
+#include <QCursor>
+#include <QDialog>
+#include <QKeySequence>
+#include <QLineEdit>
+#include <QToolButton>
+#include <functional>
+#include <tuple>
 #include <QHeaderView>
 #include <QJsonObject>
 #include <QLabel>
@@ -28,6 +40,7 @@
 #include <QTest>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QWindow>
 
 #include <cstdio>
 
@@ -442,12 +455,10 @@ void testEditableRowShowsStoredBytes()
 
 void testAddKeyNestedDialogSurvivesPersistentParentClose()
 {
-    // Match MainWindow::showOrRaisePersistent(): the browser is a top-level
-    // persistent dialog that deletes itself on close, then opens Add Key.
+    // Match MainWindow::showOrRaiseCanon(): the browser is a top-level canon
+    // workspace that deletes itself on close, then opens Add Key.
     QPointer<SettingsBrowserDialog> parent(new SettingsBrowserDialog);
     parent->setAttribute(Qt::WA_DeleteOnClose);
-    parent->setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     parent->show();
 
     QPushButton* add = nullptr;
@@ -505,8 +516,6 @@ void testViewerNestedDialogSurvivesPersistentParentClose()
 {
     QPointer<SettingsBrowserDialog> parent(new SettingsBrowserDialog);
     parent->setAttribute(Qt::WA_DeleteOnClose);
-    parent->setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     parent->resize(900, 600);
     parent->show();
 
@@ -621,6 +630,440 @@ void testStaticWarningSurvivesParentDeletion()
            "a warning whose parent dies mid-loop reports cancellation, never a button");
 }
 
+// ── Canon (#7055) ────────────────────────────────────────────────────────
+
+QPushButton* buttonByAccessibleName(QWidget* w, const QString& name)
+{
+    for (QPushButton* b : w->findChildren<QPushButton*>())
+        if (b->accessibleName() == name) return b;
+    return nullptr;
+}
+
+// Answers the first visible top-level of type T for which `match` holds, with
+// `answer`, once it is up; reports its default button. A safety timer closes
+// any modal left open so a miss fails a check rather than hanging.
+template <class T>
+struct Driver {
+    std::function<bool(T*)> match;
+    std::function<void(T*)> answer;
+    QString seenDefault;
+    bool seen{false};
+    QTimer timer, safety;
+    Driver(std::function<bool(T*)> m, std::function<void(T*)> a) : match(std::move(m)), answer(std::move(a))
+    {
+        QObject::connect(&timer, &QTimer::timeout, [this] {
+            if (seen) return;
+            for (QWidget* w : QApplication::topLevelWidgets()) {
+                auto* t = qobject_cast<T*>(w);
+                if (!t || !t->isVisible() || !match(t)) continue;
+                seen = true;
+                for (QPushButton* b : t->template findChildren<QPushButton*>())
+                    if (b->isDefault()) seenDefault = b->text();
+                answer(t);
+                return;
+            }
+        });
+        timer.start(20);
+        safety.setSingleShot(true);
+        QObject::connect(&safety, &QTimer::timeout, [] {
+            while (QWidget* modal = QApplication::activeModalWidget()) modal->close();
+        });
+        safety.start(8000);
+    }
+};
+
+template <class T>
+std::function<void(T*)> clickText(const QString& text)
+{
+    return [text](T* w) {
+        for (QPushButton* b : w->template findChildren<QPushButton*>())
+            if (b->text() == text) { b->click(); return; }
+        w->reject();
+    };
+}
+
+template <class T>
+std::function<void(T*)> pressKey(Qt::Key key)
+{
+    return [key](T* w) { QTest::keyClick(w->focusWidget() ? w->focusWidget() : w, key); };
+}
+
+void testCanonWindow()
+{
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        expect(tm.setActiveTheme(QLatin1String(theme)), theme);
+        SettingsBrowserDialog d;
+        expect(qobject_cast<CanonWindow*>(&d) != nullptr, "Settings Browser is a CanonWindow");
+        expect(d.windowType() == Qt::Window && d.windowFlags().testFlag(Qt::FramelessWindowHint),
+               "it is a frameless workspace window");
+        expect(d.objectName() == "SettingsBrowserDialog", "it keeps the name screens.json waits for");
+        expect(d.property("themeContainer").toString() == "canon/settingsBrowser",
+               "it uses the canon/settingsBrowser scope");
+        auto* header = d.findChild<QLabel*>("canonHeaderTitle");
+        expect(header && header->text() == "Settings Browser", "the canon header carries the title");
+        bool closeButton = false;
+        for (QPushButton* b : d.findChildren<QPushButton*>())
+            closeButton = closeButton || b->text() == "Close";
+        expect(!closeButton, "the footer Close is gone");
+        const QString sheet = d.bodyWidget()->styleSheet();
+        expect(!sheet.contains(": ;") && sheet.contains("QMenu") && sheet.contains("selection-color"),
+               "the sheet resolves, with menu and selection rules");
+        bool literal = false;
+        for (QWidget* w : d.findChildren<QWidget*>())
+            for (const char* hex : {"#0a0a18", "#0070c0", "#9bd1ff", "#ff8f8f", "#ffc978", "#241c10"})
+                literal = literal || w->styleSheet().contains(QLatin1String(hex), Qt::CaseInsensitive);
+        expect(!literal, "the old hard-coded colours are gone");
+    }
+    tm.setActiveTheme(before);
+}
+
+// Delete asks a canon question with Cancel the default (QMessageBox's Yes / No
+// defaulted to Yes, so Return deleted). Cancel, Return, Esc and closing it
+// delete nothing; Delete deletes.
+void testDeleteDefaultsToCancel()
+{
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("CanonDeleteMe"), QStringLiteral("1"));
+    s.save();
+    SettingsBrowserDialog d;
+    d.resize(900, 600);
+    d.show();
+    QTest::qWaitForWindowExposed(&d);
+    QTreeWidget* tree = treeOf(d);
+    QTableWidget* table = tableOf(d);
+    QPushButton* del = buttonByAccessibleName(&d, QStringLiteral("Delete selected setting"));
+    if (!tree || !table || !del || !selectScope(tree, QStringLiteral("App Settings"))) {
+        expect(false, "the browser shows App Settings and Delete");
+        return;
+    }
+    settle();
+    const auto run = [&](std::function<void(CanonMessageBox*)> answer) {
+        const int row = rowForKey(table, QStringLiteral("CanonDeleteMe"));
+        if (row < 0) return QString();
+        table->selectRow(row);
+        Driver<CanonMessageBox> driver([](CanonMessageBox* b) { return b->windowTitle() == "Delete Setting?"; },
+                                       answer);
+        del->click();
+        settle();
+        return driver.seen ? driver.seenDefault : QStringLiteral("<no question>");
+    };
+    expect(run(clickText<CanonMessageBox>("Cancel")) == "Cancel", "Delete asks a canon question, Cancel the default");
+    expect(s.contains(QStringLiteral("CanonDeleteMe")), "Cancel deletes nothing");
+    expect(run(pressKey<CanonMessageBox>(Qt::Key_Return)) == "Cancel"
+               && s.contains(QStringLiteral("CanonDeleteMe")),
+           "Return on the question deletes nothing");
+    expect(run(pressKey<CanonMessageBox>(Qt::Key_Escape)) == "Cancel"
+               && s.contains(QStringLiteral("CanonDeleteMe")),
+           "Esc on the question deletes nothing");
+    expect(run([](CanonMessageBox* b) { b->close(); }) == "Cancel"
+               && s.contains(QStringLiteral("CanonDeleteMe")),
+           "closing the question deletes nothing");
+    run(clickText<CanonMessageBox>("Delete"));
+    expect(!s.contains(QStringLiteral("CanonDeleteMe")), "Delete deletes the setting");
+    d.hide();
+}
+
+// Add Key is a canon dialog with OK the default; a new raw key then asks a
+// canon question with Cancel the default, and only Create writes it.
+void testAddKeyAndCreateRawKey()
+{
+    auto& s = AppSettings::instance();
+    s.remove(QStringLiteral("CanonNewKey"));
+    s.save();
+    SettingsBrowserDialog d;
+    d.resize(900, 600);
+    d.show();
+    QTest::qWaitForWindowExposed(&d);
+    QTreeWidget* tree = treeOf(d);
+    QPushButton* add = buttonByAccessibleName(&d, QStringLiteral("Add settings key"));
+    if (!tree || !add || !selectScope(tree, QStringLiteral("App Settings"))) {
+        expect(false, "the browser shows App Settings and Add Key");
+        return;
+    }
+    settle();
+    const auto run = [&](std::function<void(CanonMessageBox*)> answer) {
+        bool canon = false;
+        QString addDefault;
+        Driver<CanonWindow> addKey([](CanonWindow* w) { return w->objectName() == "settingsAddKeyDialog"; },
+            [&](CanonWindow* w) {
+                canon = w->findChild<QLabel*>("canonHeaderTitle") != nullptr;
+                for (QPushButton* b : w->findChildren<QPushButton*>()) if (b->isDefault()) addDefault = b->text();
+                const auto edits = w->findChildren<QLineEdit*>();
+                for (QLineEdit* e : edits) {
+                    if (e->accessibleName() == "New key name") e->setText("CanonNewKey");
+                    if (e->accessibleName() == "New key value") {
+                        e->setText("7");
+                        e->setFocus();
+                        QTest::keyClick(e, Qt::Key_Return);   // OK is the default
+                    }
+                }
+            });
+        Driver<CanonMessageBox> question([](CanonMessageBox* b) { return b->windowTitle() == "Create Raw Key?"; },
+                                         answer);
+        add->click();
+        settle();
+        return std::make_tuple(canon, addDefault, question.seen, question.seenDefault);
+    };
+    auto [canon, addDefault, asked, questionDefault] = run(clickText<CanonMessageBox>("Cancel"));
+    expect(canon && addDefault == "OK", "Add Key is a canon dialog with OK the default");
+    expect(asked && questionDefault == "Cancel", "a new raw key asks first, with Cancel the default");
+    expect(!s.contains(QStringLiteral("CanonNewKey")), "Cancel writes nothing");
+    const bool askedOnReturn = std::get<2>(run(pressKey<CanonMessageBox>(Qt::Key_Return)));
+    expect(askedOnReturn && !s.contains(QStringLiteral("CanonNewKey")),
+           "Return on the question writes nothing");
+    run(clickText<CanonMessageBox>("Create"));
+    expect(s.value(QStringLiteral("CanonNewKey")).toString() == "7", "Create writes the key");
+    s.remove(QStringLiteral("CanonNewKey"));
+    s.save();
+    d.hide();
+}
+
+// Add Key opens with the key name focused: typing straight away names the key.
+// (The canon header's ✕ is first in the focus chain, so without an explicit
+// focus the keystrokes went to it and were lost.)
+void testAddKeyFocusesKeyName()
+{
+    SettingsBrowserDialog d;
+    d.resize(900, 600);
+    d.show();
+    QTest::qWaitForWindowExposed(&d);
+    QTreeWidget* tree = treeOf(d);
+    QPushButton* add = buttonByAccessibleName(&d, QStringLiteral("Add settings key"));
+    if (!tree || !add || !selectScope(tree, QStringLiteral("App Settings"))) {
+        expect(false, "the browser shows App Settings and Add Key");
+        return;
+    }
+    settle();
+    QString focusName;
+    QString typed;
+    Driver<CanonWindow> addKey([](CanonWindow* w) { return w->objectName() == "settingsAddKeyDialog"; },
+        [&](CanonWindow* w) {
+            QWidget* focus = w->focusWidget();
+            focusName = focus ? focus->accessibleName() : QStringLiteral("<none>");
+            if (focus) QTest::keyClicks(focus, QStringLiteral("TypedKey"));
+            for (QLineEdit* e : w->findChildren<QLineEdit*>())
+                if (e->accessibleName() == "New key name") typed = e->text();
+            w->reject();
+        });
+    add->click();
+    settle();
+    std::printf("       (Add Key focus: %s, typed: %s)\n", qPrintable(focusName), qPrintable(typed));
+    expect(addKey.seen, "Add Key opens");
+    expect(focusName == "New key name", "Add Key opens with the key name field focused");
+    expect(typed == "TypedKey", "typing straight after opening Add Key fills in the key name");
+    d.hide();
+}
+
+// The document viewer is its own frameless top-level, so it needs its own
+// FramelessResizer: dragging its bottom-right corner makes it bigger.
+void testViewerResizesFromItsEdges()
+{
+    SettingsBrowserDialog d;
+    d.resize(900, 600);
+    d.show();
+    QTest::qWaitForWindowExposed(&d);
+    QTreeWidget* tree = treeOf(d);
+    QTableWidget* table = tableOf(d);
+    if (!tree || !table || !selectScope(tree, QStringLiteral("AA:BB:CC:DD:EE:01"))) {
+        expect(false, "the browser shows the seeded radio scope");
+        return;
+    }
+    settle();
+    const int row = rowForKey(table, QStringLiteral("CleanDoc"));
+    if (row < 0) {
+        expect(false, "the seeded document is listed");
+        return;
+    }
+    bool hasResizer = false;
+    QSize before, after;
+    Driver<CanonWindow> viewer([](CanonWindow* w) { return w->objectName() == "settingsDocumentViewer"; },
+        [&](CanonWindow* w) {
+            hasResizer = w->findChild<FramelessResizer*>() != nullptr;
+            QWindow* handle = w->windowHandle();
+            before = w->size();
+            if (handle) {
+                const QPoint corner(w->width() - 2, w->height() - 2);
+                QCursor::setPos(w->mapToGlobal(corner));
+                QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, corner);
+                const QPoint to = corner + QPoint(100, 80);
+                QCursor::setPos(w->mapToGlobal(corner) + QPoint(100, 80));
+                QTest::mouseMove(handle, to);
+                QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, to);
+                QApplication::processEvents();
+            }
+            after = w->size();
+            w->reject();
+        });
+    sendDoubleClick(table, row, 2);
+    settle();
+    std::printf("       (viewer drag: %dx%d -> %dx%d)\n", before.width(), before.height(),
+                after.width(), after.height());
+    expect(viewer.seen, "the document viewer opens");
+    expect(hasResizer, "the document viewer installs FramelessResizer");
+    expect(after.width() > before.width() && after.height() > before.height(),
+           "dragging the viewer's corner makes it bigger");
+    d.hide();
+}
+
+// The browser deletes itself on close, and closing it while Delete Setting? or
+// Create Raw Key? is up destroys the question with it. confirmCanon() then
+// answers no without touching the dead box, so neither path writes the store.
+void testQuestionsSurviveBrowserDeletion()
+{
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("CanonDeleteMe"), QStringLiteral("1"));
+    s.remove(QStringLiteral("CanonNewKey"));
+    s.save();
+
+    // Opens the browser on App Settings, starts `ask` and closes the browser
+    // from inside the question titled `title`.
+    const auto closeDuring = [&](const QString& title, const QString& buttonName,
+                                 const std::function<void(SettingsBrowserDialog*)>& select,
+                                 std::function<void(CanonWindow*)> addKeyAnswer) {
+        QPointer<SettingsBrowserDialog> browser(new SettingsBrowserDialog);
+        browser->setAttribute(Qt::WA_DeleteOnClose);
+        browser->resize(900, 600);
+        browser->show();
+        QTest::qWaitForWindowExposed(browser);
+        QTreeWidget* tree = treeOf(*browser);
+        QPushButton* button = buttonByAccessibleName(browser, buttonName);
+        if (!tree || !button || !selectScope(tree, QStringLiteral("App Settings"))) {
+            browser->close();
+            settle();
+            return std::make_tuple(false, false);
+        }
+        settle();
+        select(browser);
+        QPointer<QWidget> question;
+        Driver<CanonWindow> addKey([](CanonWindow* w) { return w->objectName() == "settingsAddKeyDialog"; },
+                                   std::move(addKeyAnswer));
+        Driver<CanonMessageBox> driver([title](CanonMessageBox* b) { return b->windowTitle() == title; },
+                                       [&](CanonMessageBox* b) {
+                                           question = b;
+                                           if (browser) browser->close();
+                                       });
+        button->click();
+        settle();
+        return std::make_tuple(driver.seen, browser.isNull() && question.isNull());
+    };
+
+    const auto [deleteAsked, deleteGone] = closeDuring(
+        QStringLiteral("Delete Setting?"), QStringLiteral("Delete selected setting"),
+        [](SettingsBrowserDialog* b) {
+            QTableWidget* table = tableOf(*b);
+            const int row = rowForKey(table, QStringLiteral("CanonDeleteMe"));
+            if (row >= 0) table->selectRow(row);
+        },
+        [](CanonWindow* w) { w->close(); });
+    expect(deleteAsked && deleteGone,
+           "closing the browser during Delete Setting? deletes the browser and the question");
+    expect(s.contains(QStringLiteral("CanonDeleteMe")),
+           "a Delete Setting? whose browser dies mid-question deletes nothing");
+
+    const auto [createAsked, createGone] = closeDuring(
+        QStringLiteral("Create Raw Key?"), QStringLiteral("Add settings key"),
+        [](SettingsBrowserDialog*) {},
+        [](CanonWindow* w) {
+            for (QLineEdit* e : w->findChildren<QLineEdit*>()) {
+                if (e->accessibleName() == "New key name") e->setText("CanonNewKey");
+                if (e->accessibleName() == "New key value") {
+                    e->setText("7");
+                    e->setFocus();
+                    QTest::keyClick(e, Qt::Key_Return);
+                }
+            }
+        });
+    expect(createAsked && createGone,
+           "closing the browser during Create Raw Key? deletes the browser and the question");
+    expect(!s.contains(QStringLiteral("CanonNewKey")),
+           "a Create Raw Key? whose browser dies mid-question writes nothing");
+
+    s.remove(QStringLiteral("CanonDeleteMe"));
+    s.save();
+}
+
+void testClosePaths()
+{
+    for (int path = 0; path < 3; ++path) {
+        QPointer<SettingsBrowserDialog> d = new SettingsBrowserDialog;
+        d->setAttribute(Qt::WA_DeleteOnClose);
+        d->show();
+        const bool exposed = QTest::qWaitForWindowExposed(d);
+        if (path == 0) QTest::keyClick(d, Qt::Key_Escape);
+        if (path == 1) {
+            d->activateWindow();
+            QTest::qWaitForWindowActive(d);
+            QTest::keySequence(d, QKeySequence::Close);
+        }
+        if (path == 2) {
+            QToolButton* corner = nullptr;
+            for (QToolButton* b : d->findChildren<QToolButton*>())
+                if (b->accessibleName() == QLatin1String("Close")) corner = b;
+            expect(corner != nullptr, "the corner close button exists");
+            if (corner) QTest::mouseClick(corner, Qt::LeftButton);
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        expect(exposed && d.isNull(),
+               path == 0 ? "Esc destroys the window"
+               : path == 1 ? "Ctrl+W / Cmd+W destroys the window"
+                           : "the corner close button destroys the window");
+        delete d.data();
+    }
+}
+
+void testLegibleAtMinimum()
+{
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    for (const char* theme : {"Default Dark", "Default Light"}) {
+        tm.setActiveTheme(QLatin1String(theme));
+        SettingsBrowserDialog d;
+        d.show();
+        QTest::qWaitForWindowExposed(&d);
+        d.resize(QSize(1, 1));
+        QTest::qWait(50);
+        bool legible = true;
+        for (QWidget* w : d.bodyWidget()->findChildren<QWidget*>()) {
+            if (!w->isVisible()) continue;
+            bool scrolled = false;
+            for (QWidget* p = w->parentWidget(); p && p != &d; p = p->parentWidget())
+                scrolled = scrolled || qobject_cast<QAbstractScrollArea*>(p) != nullptr;
+            if (scrolled || qobject_cast<QAbstractScrollArea*>(w)) continue;
+            int need = w->minimumSizeHint().height();
+            if (auto* l = qobject_cast<QLabel*>(w); l && l->wordWrap()) need = l->heightForWidth(l->width());
+            if (w->height() < need) {
+                legible = false;
+                std::printf("  %s: %s h=%d need=%d\n", theme, w->metaObject()->className(), w->height(), need);
+            }
+        }
+        std::printf("  %s: shown minimum %dx%d\n", theme, d.width(), d.height());
+        expect(legible, "every control keeps its height at the smallest size");
+        expect(d.height() <= 700, "the shown minimum height fits a 768 px screen");
+        d.hide();
+    }
+    tm.setActiveTheme(before);
+}
+
+void testGeometryCarriesOver()
+{
+    static const QString kKey = QStringLiteral("SettingsBrowserDialogGeometry");
+    auto& settings = AppSettings::instance();
+    settings.remove(kKey);
+    SettingsBrowserDialog restored;
+    const QSize chosen(restored.minimumWidth() + 20, restored.minimumHeight() + 30);
+    QDialog legacy;
+    legacy.resize(chosen);
+    settings.setValue(kKey, QString::fromLatin1(legacy.saveGeometry().toBase64()));
+    restored.show();
+    QTest::qWaitForWindowExposed(&restored);
+    for (int i = 0; i < 50 && restored.size() != chosen; ++i)
+        QTest::qWait(20);
+    expect(restored.size() == chosen, "geometry saved by the old dialog restores under its key");
+    restored.hide();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -666,6 +1109,15 @@ int main(int argc, char** argv)
     testAddKeyNestedDialogSurvivesPersistentParentClose();
     testViewerNestedDialogSurvivesPersistentParentClose();
     testStaticWarningSurvivesParentDeletion();
+    testCanonWindow();
+    testDeleteDefaultsToCancel();
+    testAddKeyAndCreateRawKey();
+    testAddKeyFocusesKeyName();
+    testViewerResizesFromItsEdges();
+    testQuestionsSurviveBrowserDeletion();
+    testClosePaths();
+    testLegibleAtMinimum();
+    testGeometryCarriesOver();
 
     std::printf("\n%s\n", g_failures == 0 ? "PASS" : "FAIL");
     return g_failures == 0 ? 0 : 1;

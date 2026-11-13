@@ -4,6 +4,7 @@
 // is in it, an untouched EQ writes nothing, damaged settings give defaults, and
 // a Flex session in between does not save its EQ over the saved layout.
 
+#include "core/backends/flex/FlexGraphicEqStatus.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/HostVoiceChainPolicy.h"
@@ -133,7 +134,7 @@ void sharedObjectIsPreserved()
 void restoreIsSilent()
 {
     EqualizerModel model;
-    QSignalSpy commands(&model, &EqualizerModel::commandReady);
+    QSignalSpy commands(&model, &EqualizerModel::controlRequested);
     QSignalSpy edits(&model, &EqualizerModel::operatorEdited);
     QSignalSpy txState(&model, &EqualizerModel::txStateChanged);
     QSignalSpy rxState(&model, &EqualizerModel::rxStateChanged);
@@ -142,19 +143,19 @@ void restoreIsSilent()
     check(model.state() == distinctState(), "silent restore: the model holds the state");
     check(txState.size() == 1, "silent restore: txStateChanged fires once");
     check(rxState.size() == 1, "silent restore: rxStateChanged fires once");
-    check(commands.isEmpty(), "silent restore: NO commandReady is emitted");
+    check(commands.isEmpty(), "silent restore: NO control request is emitted");
     check(edits.isEmpty(), "silent restore: NO operatorEdited is emitted");
 
     // The positive control for the two spies above.
     model.setTxBand(EqualizerModel::B1k, 3);
-    check(commands.size() == 1, "control: an operator setter does emit commandReady");
+    check(commands.size() == 1, "control: an operator setter does emit a typed request");
     check(edits.size() == 1, "control: an operator setter does emit operatorEdited");
 
     // Radio status is not an operator edit either, so it is never saved.
     QMap<QString, QString> status;
     status.insert(QStringLiteral("mode"), QStringLiteral("1"));
     status.insert(QStringLiteral("63Hz"), QStringLiteral("4"));
-    model.applyRxEqStatus(status);
+    model.applyEqStatus(flexGraphicEqStatus(GraphicEqRequest::Path::Receive, status));
     check(edits.size() == 1, "radio status does not emit operatorEdited");
 }
 
@@ -283,12 +284,12 @@ void flexSessionLeavesSavedLayout()
 
     // A Flex connects and reports its own EQ.
     bool fromRadio = true;
-    model.applyTxEqStatus({{"mode", "0"}, {"63Hz", "4"}, {"125Hz", "4"}, {"250Hz", "4"},
+    model.applyEqStatus(flexGraphicEqStatus(GraphicEqRequest::Path::Transmit, {{"mode", "0"}, {"63Hz", "4"}, {"125Hz", "4"}, {"250Hz", "4"},
                            {"500Hz", "4"}, {"1000Hz", "4"}, {"2000Hz", "4"},
-                           {"4000Hz", "4"}, {"8000Hz", "4"}});
-    model.applyRxEqStatus({{"mode", "1"}, {"63Hz", "-4"}, {"125Hz", "-4"}, {"250Hz", "-4"},
+                           {"4000Hz", "4"}, {"8000Hz", "4"}}));
+    model.applyEqStatus(flexGraphicEqStatus(GraphicEqRequest::Path::Receive, {{"mode", "1"}, {"63Hz", "-4"}, {"125Hz", "-4"}, {"250Hz", "-4"},
                            {"500Hz", "-4"}, {"1000Hz", "-4"}, {"2000Hz", "-4"},
-                           {"4000Hz", "-4"}, {"8000Hz", "-4"}});
+                           {"4000Hz", "-4"}, {"8000Hz", "-4"}}));
     check(!(model.state() == saved), "flex session: the radio's status replaced the model");
     check(!graphicEqPersistAllowed(true, false, fromRadio),
           "flex session: nothing is saved while the Flex is connected");

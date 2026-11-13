@@ -34,8 +34,20 @@ class WsprConfigureWindow : public CanonWindow {
 public:
     explicit WsprConfigureWindow(RadioModel* model, QWidget* parent = nullptr);
 
+    // The Waveforms window couldn't remove the old receiver or start the
+    // install; it has said why. Stops waiting for the new one.
+    void reinstallFailed();
+
+signals:
+    // Update was confirmed for a receiver older than the bundled one: remove
+    // it and install the bundled one. This window then waits for the new
+    // receiver and gives it the settings the old one had.
+    void reinstallRequested();
+
 private:
     void load();
+    void updateReceiver();
+    void endUpdate(const QString& message, const QString& tone);
     void showConfig(const WsprConfig& config, bool claimed);
     void showStatus(const WsprStatus& status);
     void closeEvent(QCloseEvent* event) override;
@@ -53,6 +65,12 @@ private:
     bool m_claimed{false};
     bool m_busy{false};
     std::optional<WsprConfig> m_loaded;   // as the receiver last reported it
+    QString m_installedVersion;           // as the receiver last reported it
+    // Through an Update: the settings to give the new receiver, and whether
+    // they have been sent.
+    std::optional<WsprConfig> m_restore;
+    bool m_restoreSent{false};
+    QTimer* m_updateDeadline{nullptr};
 
     QLabel* m_statusDot{nullptr};
     QLabel* m_stateLabel{nullptr};
@@ -69,6 +87,7 @@ private:
     QLabel* m_uploadStatus{nullptr};
     QLabel* m_messageLabel{nullptr};
     QPushButton* m_applyButton{nullptr};
+    QPushButton* m_updateButton{nullptr};
 };
 
 }  // namespace AetherSDR
