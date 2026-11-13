@@ -3344,9 +3344,10 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         // leaves the cache pointing at the outgoing slice for the brief
         // band-change gap, which is the value drive should still use.
         if (tx) m_lastTxTrx = trx;
-        // The TX passband line names the TX trx, and a client's set is only
-        // taken for that trx, so a move re-sends it to enabled clients.
-        if (tx) queueTxPassbandNotice();
+        // The TX passband line names the TX trx, so a move re-sends it to
+        // enabled clients. Either edge can be the last one applied; the
+        // posted, rate-limited send reads the TX trx when it runs.
+        queueTxPassbandNotice();
         // Both edges of a TX move fire here, and a band change drops TX for
         // ~340 ms; publish once it has settled.
         QTimer::singleShot(kSplitSettleMs, this, [this] { publishMainSplit(); });

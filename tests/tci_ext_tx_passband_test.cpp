@@ -419,6 +419,67 @@ void txMove()
           "a set on the new trx 1 is applied and notified with trx 1");
 }
 
+// The radio may report the two edges of a move on separate turns, in either
+// order; the last line an enabled client hears must name the new trx.
+void txMoveSplit(bool gainFirst)
+{
+    RadioModel model;
+    auto owner = std::make_unique<FilterBackend>();
+    FilterBackend* backend = owner.get();
+    backend->caps.hasTxFilterControls = true;
+    backend->connected = false;  // slice fixtures are applied while disconnected
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    QString error;
+    const bool fixtures = model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+        && model.automationApplySliceFixture(1, QStringLiteral("B"), &error);
+    backend->connected = true;
+    SliceModel* s0 = model.slice(0);
+    SliceModel* s1 = model.slice(1);
+    if (!fixtures || !s0 || !s1) {
+        check(false, "two fixture slices on a connected radio");
+        std::printf("      fixture: %s\n", qPrintable(error));
+        return;
+    }
+    SliceDelta on;
+    on.txSlice = true;
+    SliceDelta off;
+    off.txSlice = false;
+    s0->applyChanges(on);
+    model.transmitModel().setTxFilter(100, 2900);
+    TciServer server(&model);
+    server.wireSlice(s0->sliceId(), s0);
+    server.wireSlice(s1->sliceId(), s1);
+    Wire a;  // enabled
+    Wire b;  // plain
+    TciTxPassbandExtensionTest::attach(server, a.client, model);
+    TciTxPassbandExtensionTest::attach(server, b.client, model);
+    settle(600);  // past wireSlice()'s 400 ms seeds
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    b.take();
+
+    if (gainFirst) {
+        s1->applyChanges(on);
+        settle(20);  // one event-loop turn: the posted send runs in between
+        s0->applyChanges(off);
+    } else {
+        s0->applyChanges(off);
+        settle(20);
+        s1->applyChanges(on);
+    }
+    settle(600);  // past the trailing flush and kSplitSettleMs (450 ms)
+    const QStringList heard = extensionLines(a.take());
+    check(!heard.isEmpty() && heard.last() == QLatin1String("aethersdr_tx_filter_band:1,100,2900;"),
+          gainFirst ? "gain, a turn, then loss: the last line names trx 1"
+                    : "loss, a turn, then gain: the last line names trx 1");
+    if (heard.isEmpty() || heard.last() != QLatin1String("aethersdr_tx_filter_band:1,100,2900;")) {
+        for (const QString& line : heard) {
+            std::printf("      a< %s\n", qPrintable(line));
+        }
+    }
+    check(extensionLines(b.take()).isEmpty(), "and the plain client hears no aethersdr_ line");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -433,6 +494,8 @@ int main(int argc, char** argv)
     normalisation();
     serverBehaviour();
     txMove();
+    txMoveSplit(true);
+    txMoveSplit(false);
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
