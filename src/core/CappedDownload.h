@@ -36,10 +36,13 @@ private:
     bool readBody();
     void refuse();
     void onFinished();
+    void startRequest();
 
     QNetworkAccessManager* m_nam;
     QNetworkReply* m_reply{nullptr};
+    QUrl m_url;
     qint64 m_limit{0};
+    bool m_retried{false};
     QString m_tooLarge;
     QByteArray m_body;
 };

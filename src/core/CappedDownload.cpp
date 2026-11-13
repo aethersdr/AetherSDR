@@ -20,10 +20,17 @@ CappedDownload::CappedDownload(QObject* parent)
 void CappedDownload::get(const QUrl& url, qint64 limit, const QString& tooLarge)
 {
     cancel();
+    m_url = url;
+    m_retried = false;
     m_limit = limit;
     m_tooLarge = tooLarge;
     m_body.clear();
-    QNetworkRequest request(url);
+    startRequest();
+}
+
+void CappedDownload::startRequest()
+{
+    QNetworkRequest request(m_url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     m_reply = m_nam->get(request);
@@ -48,6 +55,7 @@ void CappedDownload::cancel()
         reply->abort();
         reply->deleteLater();
     }
+    m_retried = false;
 }
 
 bool CappedDownload::readBody()
@@ -76,9 +84,28 @@ void CappedDownload::onFinished()
     if (reply->error() == QNetworkReply::NoError && !readBody())
         return;   // refused: too large
     m_reply = nullptr;
+    reply->disconnect(this);
     reply->deleteLater();
     const QUrl url = reply->url();
     if (reply->error() != QNetworkReply::NoError) {
+        // HTTP/2 GOAWAY and connection resets can reject a request before
+        // sending any payload. Retry it once; never join partial bodies or
+        // repeat HTTP/status, timeout, cancel, or oversized-response failures.
+        const QNetworkReply::NetworkError error = reply->error();
+        const bool connectionError =
+            error == QNetworkReply::RemoteHostClosedError ||
+            error == QNetworkReply::ContentReSendError ||
+            error == QNetworkReply::ProtocolUnknownError ||
+            error == QNetworkReply::ProtocolFailure ||
+            (error == QNetworkReply::UnknownNetworkError &&
+             reply->attribute(QNetworkRequest::Http2WasUsedAttribute).toBool());
+        if (!m_retried && connectionError && m_body.isEmpty() &&
+            reply->bytesAvailable() == 0) {
+            m_retried = true;
+            startRequest();
+            return;
+        }
+        m_body.clear();
         emit failed(QCoreApplication::translate("CappedDownload", "Could not download %1: %2")
                         .arg(url.fileName(), reply->errorString()));
         return;

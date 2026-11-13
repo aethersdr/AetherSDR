@@ -12123,3 +12123,16 @@ add_executable(transfer_lifecycle_test tests/transfer_lifecycle_test.cpp)
 target_include_directories(transfer_lifecycle_test PRIVATE src)
 target_link_libraries(transfer_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME transfer_lifecycle_test COMMAND transfer_lifecycle_test)
+
+# The update and firmware HTTP transport retries a connection reset before
+# receiving bytes, but never repeats a partial, rejected or oversized transfer.
+# Binds an ephemeral 127.0.0.1 TCP listener to serve versioned HTTP/1.1 replies.
+add_executable(capped_download_test
+    tests/capped_download_test.cpp
+    src/core/CappedDownload.cpp
+)
+target_include_directories(capped_download_test PRIVATE src)
+target_link_libraries(capped_download_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(capped_download_test PROPERTIES AUTOMOC ON)
+add_test(NAME capped_download_test COMMAND capped_download_test)
+set_tests_properties(capped_download_test PROPERTIES TIMEOUT 30)
