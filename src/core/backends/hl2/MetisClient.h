@@ -431,6 +431,10 @@ public:
     [[nodiscard]] std::uint64_t txUnderflowPackets() const noexcept { return m_txUnderflowPackets; }
     [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
     [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
+    // Backlog dropped once when a mid-over starvation ends with the queue above the
+    // prime target plus kTxTrimMarginSamples: latency returns to the primed depth.
+    [[nodiscard]] std::uint64_t txTrimSamples() const noexcept { return m_txTrimSamples; }
+    [[nodiscard]] std::uint64_t txTrimEvents() const noexcept { return m_txTrimEvents; }
     // Empty-queue keyed silence at the head of the most recent over that
     // carried queued IQ, in EP2 samples: txUnderflowSamples from MOX-on to the
     // first queued sample. Logged at that moment under lcHl2Tx. Same THREAD
@@ -884,6 +888,13 @@ private:
     static_assert(kTxPrimeClientTargetSamples < kTxQueueMax,
                   "the client prime target must fit below the overflow bound");
     std::atomic<bool> m_txClientLeveledMargin{false};
+    // Depth above the target that is still steady state: a producer delivers up
+    // to 2048 samples (42.67 ms) at once, whatever the DSP block: a TCI client's
+    // 2048-sample mono TX_AUDIO frame. More than that after a mid-over starvation
+    // is a backlog, trimmed once to the target (trimTxIqAfterUnderflow()).
+    static constexpr std::size_t kTxTrimMarginSamples = 2048;
+    static_assert(kTxPrimeTargetSamples + kTxTrimMarginSamples < kTxQueueMax,
+                  "the trim threshold must sit below the overflow bound");
     std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally
     std::uint64_t m_txIqPrimeHeldPackets = 0;   // this hold, for the deadline
     std::uint64_t m_txPrimeHoldPackets = 0;     // process total
@@ -899,6 +910,8 @@ private:
     std::uint64_t m_txUnderflowPackets = 0;
     std::uint64_t m_txUnderflowSamples = 0;
     std::uint64_t m_txOverflowSamples = 0;
+    std::uint64_t m_txTrimSamples = 0;
+    std::uint64_t m_txTrimEvents = 0;
     // Length of the starvation currently in progress, in packets and in
     // substituted silent samples, so ONE log line describes the whole EPISODE
     // instead of one line per EP2 frame at 380 frames/second. Reported and
@@ -916,7 +929,12 @@ private:
         (static_cast<std::uint64_t>(kEp2AudioRateHz) / 10u)
             / static_cast<std::uint64_t>(kTxSamplesPerPacket);
     std::uint64_t m_txUnderflowRunQuietPackets = 0;
-    void reportTxUnderflowRun();
+    void reportTxUnderflowRun();   // also disarms the trim
+    // Set by a short packet once the prime has let go, so neither the key-down
+    // underflow nor a re-primed context arms it; abandonTxIq() disarms it. Acted
+    // on once, when the episode ends quietly.
+    bool m_txIqTrimArmed = false;
+    void trimTxIqAfterUnderflow();
     // Key-down report (#6052): armed on MOX's rising edge with the underflow and
     // prime-hold totals, reported once on the first keyed packet carrying queued
     // IQ. The differences are the silence this queue put at the head of the over

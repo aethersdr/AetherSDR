@@ -3,8 +3,8 @@
 // The Windows custom frame removes the caption through WM_NCCALCSIZE, but
 // QWidget::restoreGeometry() clamps as though the caption were still there.
 // WindowGeometryRestore.{h,cpp} re-runs that clamp without the caption term.
-// Both halves are platform-independent, so they are pinned here on every
-// platform even though only Windows calls them.
+// The helpers are platform-independent, so the test runs everywhere; Windows
+// uses the caption fix and all platforms use the changed-monitor fallback.
 //
 // Case 4 is the load-bearing one: it drives a REAL QWidget through
 // saveGeometry()/restoreGeometry() and asserts (a) that our parser agrees with
@@ -28,6 +28,8 @@
 using AetherSDR::SavedWindowGeometry;
 using AetherSDR::clampFrameToWorkArea;
 using AetherSDR::parseSavedWindowGeometry;
+using AetherSDR::fallbackGeometryForRejectedRestore;
+using AetherSDR::placeWindowAfterRejectedRestore;
 
 namespace {
 
@@ -235,6 +237,122 @@ int main(int argc, char** argv)
         parseSavedWindowGeometry(filledBlob, &filledSaved);
         report("clamp keeps a work-area-sized window whole",
                clampFrameToWorkArea(filledSaved.normalRect, work).size() == work.size());
+    }
+
+    // ── 5. A monitor resolution change can make Qt reject the saved blob ────
+    {
+        QScreen* sc = QGuiApplication::primaryScreen();
+        const QRect work = sc->availableGeometry();
+
+        QWidget w;
+        w.setGeometry(work.x() + 25, work.y() + 20, 300, 220);
+        w.show();
+        // The saved screen width is deliberately incompatible with the
+        // current display. Qt 6.12 rejects the whole blob before moving.
+        const QByteArray stale = makeBlob(
+            QRect(100, 100, 600, 450), QRect(100, 100, 600, 450),
+            QRect(100, 100, 600, 450), false, false, 3,
+            sc->geometry().width() * 3);
+        report("Qt rejects a saved blob after major screen-width change",
+               !w.restoreGeometry(stale));
+
+        const QRect recovered =
+            fallbackGeometryForRejectedRestore(stale, work, w.size());
+        w.setGeometry(recovered);
+        report("rejected restore centers on the current primary work area",
+               w.geometry().center() == work.center()
+               || (w.geometry().center() - work.center()).manhattanLength() <= 1);
+        report("rejected restore keeps the saved size when it fits",
+               recovered.size() == QSize(qMin(600, work.width()),
+                                          qMin(450, work.height())));
+        report("rejected restore leaves the entire window on primary",
+               work.contains(recovered));
+
+        report("invalid blob uses current size on primary",
+               fallbackGeometryForRejectedRestore(
+                   QByteArray("corrupt"), work, QSize(300, 220)).size()
+                   == QSize(qMin(300, work.width()), qMin(220, work.height())));
+        report("huge saved size fits within current work area",
+               fallbackGeometryForRejectedRestore(
+                   makeBlob(QRect(0, 0, 9999, 9999),
+                            QRect(0, 0, 9999, 9999),
+                            QRect(0, 0, 9999, 9999)),
+                   work, QSize(300, 220)) == work);
+        report("unavailable primary screen is not fabricated",
+               !fallbackGeometryForRejectedRestore(
+                   stale, QRect(), QSize(300, 220)).isValid());
+
+        // The reported Windows 11 three-display case (#7076): a 2560-wide
+        // saved screen replaced by a 3840-wide primary. Window placement had
+        // drifted to DISPLAY3 at x=-6277; restore rejected the saved blob.
+        const QRect primary(0, 0, 3840, 2160);
+        const QRect former(441, 279, 1559, 853);
+        const QByteArray staleMonitor = makeBlob(
+            former, former, former, false, false, 3, 2560);
+        report("real three-monitor report restores size on primary display",
+               fallbackGeometryForRejectedRestore(
+                   staleMonitor, primary, QSize(1100, 600))
+                   == QRect(1140, 653, 1559, 853));
+
+        // A native title bar must stay inside the work area: an oversized
+        // saved window gets a client rect that leaves room for the frame.
+        const QMargins caption(4, 30, 4, 4);
+        const QRect captioned = fallbackGeometryForRejectedRestore(
+            makeBlob(QRect(0, 0, 9999, 9999), QRect(0, 0, 9999, 9999),
+                     QRect(0, 0, 9999, 9999), false, false, 3, 3840),
+            primary, QSize(300, 220), caption);
+        report("oversized fallback leaves room for the native frame",
+               captioned == primary.marginsRemoved(caption));
+        report("fitting fallback is still centered inside the frame allowance",
+               fallbackGeometryForRejectedRestore(staleMonitor, primary,
+                                                  QSize(300, 220), caption)
+                   == QRect(1140, 666, 1559, 853));
+    }
+
+    // ── 6. The startup recovery applied to a real window ────────────────────
+    {
+        QScreen* sc = QGuiApplication::primaryScreen();
+        const QRect work = sc->availableGeometry();
+        const int incompatibleWidth = sc->geometry().width() * 3;
+
+        QWidget w;
+        w.setGeometry(work.x() + 5, work.y() + 5, 200, 150);
+        w.show();
+        const QByteArray stale = makeBlob(
+            QRect(50, 60, 400, 300), QRect(50, 60, 400, 300),
+            QRect(50, 60, 400, 300), false, false, 3, incompatibleWidth);
+        report("startup: Qt refuses the stale blob", !w.restoreGeometry(stale));
+        report("startup: recovery places the window",
+               placeWindowAfterRejectedRestore(&w, stale, work));
+        report("startup: recovered window has the saved size",
+               w.size() == QSize(qMin(400, work.width()), qMin(300, work.height())));
+        report("startup: recovered window is centered on the primary",
+               (w.geometry().center() - work.center()).manhattanLength() <= 1);
+        report("startup: recovered window is not maximized",
+               !(w.windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen)));
+
+        QWidget m;
+        m.setGeometry(work.x() + 5, work.y() + 5, 200, 150);
+        m.show();
+        const QByteArray staleMax = makeBlob(
+            QRect(50, 60, 400, 300), QRect(50, 60, 400, 300),
+            QRect(50, 60, 400, 300), true, false, 3, incompatibleWidth);
+        report("startup: Qt refuses the stale maximized blob",
+               !m.restoreGeometry(staleMax));
+        placeWindowAfterRejectedRestore(&m, staleMax, work);
+        report("startup: a saved maximized window comes back maximized",
+               m.windowState() & Qt::WindowMaximized);
+        report("startup: its normal geometry is the recovered rect",
+               m.normalGeometry().size()
+                   == QSize(qMin(400, work.width()), qMin(300, work.height())));
+
+        QWidget n;
+        n.setGeometry(work.x() + 5, work.y() + 5, 200, 150);
+        n.show();
+        const QRect before = n.geometry();
+        report("startup: no usable work area leaves the window alone",
+               !placeWindowAfterRejectedRestore(&n, stale, QRect())
+                   && n.geometry() == before);
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");

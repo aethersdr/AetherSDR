@@ -82,6 +82,7 @@ struct MetisClientTestAccess {
     // The prime (#6052), read from the production constants for the same
     // reason as the three above.
     static constexpr std::size_t primeTarget() { return MetisClient::kTxPrimeTargetSamples; }
+    static constexpr std::size_t trimMargin() { return MetisClient::kTxTrimMarginSamples; }
     static constexpr std::size_t primeBlock() { return MetisClient::kTxPrimeBlockSamples; }
     static constexpr std::uint64_t primeMaxHoldPackets()
     {
@@ -2200,6 +2201,40 @@ int main(int argc, char** argv)
             (void)drift.buildNextControlPacket();
         check(log.starvationLines().size() == 1,
               "ten short packets spread across twenty are ONE episode and ONE line");
+    }
+
+    {
+        // ---- THE STARVATION TOTALS NAME THE TRIM ----
+        //
+        // A trim drops audio as overflow does, so the one line people read after
+        // a "my audio jumped" report must carry it, or "overflow 0" reads as
+        // nothing dropped. Mid-over starvation, then a backlog above the trim
+        // threshold that outlasts the quiet period: trimmed once, then reported.
+        TxTestAuthority tx;
+        ScopedTxFifoLog log;
+        MetisClient trim;
+        MetisClientTestAccess::setStreaming(trim);
+        trim.enableTransmit(true);
+        trim.setMox(true, tx.operation);
+        pastThePrime(trim, tx.context);
+        const std::vector<std::complex<float>> ragged(40, std::complex<float>(0.25f, -0.25f));
+        trim.queueTxIq(ragged, tx.context);
+        (void)trim.buildNextControlPacket();     // short, after the prime -> armed
+        const std::size_t packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+        const std::vector<std::complex<float>> backlog(
+            MetisClientTestAccess::primeTarget() + MetisClientTestAccess::trimMargin()
+                + packet * static_cast<std::size_t>(MetisClientTestAccess::runQuietPackets() + 4),
+            std::complex<float>(0.25f, -0.25f));
+        trim.queueTxIq(backlog, tx.context);
+        for (std::uint64_t i = 0; i < MetisClientTestAccess::runQuietPackets(); ++i)
+            (void)trim.buildNextControlPacket();
+        const QStringList lines = log.starvationLines();
+        check(trim.txTrimEvents() == 1 && trim.txTrimSamples() > 0,
+              "CONTROL: the backlog after a mid-over starvation is trimmed once");
+        check(lines.size() == 1
+                  && lines.first().contains(QStringLiteral("overflow 0 samples, trim %1 samples)")
+                                                .arg(trim.txTrimSamples())),
+              "the starvation line's totals include the trimmed samples, next to overflow");
     }
 
     {

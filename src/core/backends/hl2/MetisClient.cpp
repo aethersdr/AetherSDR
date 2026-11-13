@@ -1528,6 +1528,8 @@ void MetisClient::armTxIqPrime() noexcept
 void MetisClient::abandonTxIq()
 {
     m_txIq.clear();
+    // A trim armed by the abandoned audio must not cut the audio that replaces it.
+    m_txIqTrimArmed = false;
     armTxIqPrime();
 }
 
@@ -1565,8 +1567,24 @@ bool MetisClient::txIqPrimeHolds()
     return false;
 }
 
+void MetisClient::trimTxIqAfterUnderflow()
+{
+    if (!m_txIqTrimArmed || m_txIq.size() <= kTxPrimeTargetSamples + kTxTrimMarginSamples)
+        return;
+    // Oldest first, as overflow does: one skip, then the over runs at the primed depth.
+    const std::size_t drop = m_txIq.size() - kTxPrimeTargetSamples;
+    m_txIq.erase(m_txIq.begin(), m_txIq.begin() + static_cast<std::ptrdiff_t>(drop));
+    m_txTrimSamples += drop;
+    ++m_txTrimEvents;
+    qCDebug(lcHl2Tx) << "HL2 tx fifo: backlog after a mid-over starvation trimmed by" << drop
+                     << "sample(s) to the prime target" << kTxPrimeTargetSamples
+                     << "(totals since process start:" << m_txTrimEvents << "trim(s) /"
+                     << m_txTrimSamples << "samples).";
+}
+
 void MetisClient::reportTxUnderflowRun()
 {
+    m_txIqTrimArmed = false;
     m_txUnderflowRunQuietPackets = 0;
     if (m_txUnderflowRunPackets == 0)
         return;
@@ -1577,7 +1595,8 @@ void MetisClient::reportTxUnderflowRun()
                      << "(totals SINCE PROCESS START, not since this link came"
                      << "up and not per radio: underflow" << m_txUnderflowPackets
                      << "packets /" << m_txUnderflowSamples << "samples, overflow"
-                     << m_txOverflowSamples << "samples)."
+                     << m_txOverflowSamples << "samples, trim" << m_txTrimSamples
+                     << "samples)."
                      << "This is the CLIENT's queue, not the radio's DSIQ FIFO:"
                      << "the EP2 frame went out full size on schedule, so the"
                      << "gateware's fill and pacingFault readings are unaffected"
@@ -1793,12 +1812,18 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
             m_txUnderflowRunSamples += shortBy;
             // Still starving: whatever gap was accumulating was not a recovery.
             m_txUnderflowRunQuietPackets = 0;
+            // Only once the prime has let go: it is armed on every key-down and every
+            // abandon, so front-loaded audio at the start of either is never cut.
+            if (m_txIqPrimeTarget == 0)
+                m_txIqTrimArmed = true;
         } else if (m_txUnderflowRunPackets > 0) {
             // A full packet does NOT end the run on its own -- see
             // kUnderflowRunQuietPackets. It only starts the clock on the gap
             // that will.
-            if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets)
+            if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets) {
+                trimTxIqAfterUnderflow();
                 reportTxUnderflowRun();
+            }
         }
         if (n > 0 && m_keyDownReportPending)
             reportKeyDown();
