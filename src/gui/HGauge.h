@@ -128,6 +128,8 @@ public:
         update();
     }
 
+    const QString& label() const { return m_label; }
+
     void setLabel(const QString& label) {
         if (m_label == label) return;
         m_label = label;

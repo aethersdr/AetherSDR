@@ -32,7 +32,7 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
     : QWidget(parent)
 {
     theme::setContainer(this, QStringLiteral("panel/memoryBrowse"));
-    setFixedSize(252, 460);
+    setFixedWidth(252);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "background: rgba(15, 15, 26, 220); border: 1px solid {{color.background.2}}; border-radius: 3px;");
 
     auto* root = new QVBoxLayout(this);
@@ -72,9 +72,8 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
     root->addWidget(m_table, 1);
     m_table->hide();
 
-    // Keep the list action at the top of the panel, immediately above the
-    // scrolling rows. The bottom of this fixed-height drawer can be clipped
-    // by short panadapters, but its top remains visible.
+    // Keep the list action above the scrolling rows as the drawer shrinks
+    // to fit the panadapter.
     m_addBtn = new QPushButton(QStringLiteral("Add Memory"), this);
     m_addBtn->setObjectName(QStringLiteral("memoryAddButton"));
     m_addBtn->setAccessibleName(QStringLiteral("Add Memory"));

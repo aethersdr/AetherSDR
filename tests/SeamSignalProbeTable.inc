@@ -9,6 +9,8 @@
 // Kept honest by `python tools/gen_seam_probe_table.py --check` in
 // .github/workflows/static-checks.yml, on every pull request, without a build.
 
+AETHER_SEAM_PROBE(displayObserved);
+AETHER_SEAM_PROBE(audioStreamChanged);
 AETHER_SEAM_PROBE(independentTxStopped);
 AETHER_SEAM_PROBE(transmitControlAnswered);
 AETHER_SEAM_PROBE(connected);
@@ -30,6 +32,7 @@ AETHER_SEAM_PROBE(meterUpdate);
 AETHER_SEAM_PROBE(frontEndOverloadChanged);
 AETHER_SEAM_PROBE(autoRfGainArmSettled);
 AETHER_SEAM_PROBE(transmitChanged);
+AETHER_SEAM_PROBE(daxTxStreamChanged);
 AETHER_SEAM_PROBE(keyingStateConfirmed);
 AETHER_SEAM_PROBE(amplifierChanged);
 AETHER_SEAM_PROBE(tunerChanged);
@@ -61,6 +64,7 @@ AETHER_SEAM_PROBE(panAttenuatorInfoChanged);
 AETHER_SEAM_PROBE(panAttenuatorChanged);
 AETHER_SEAM_PROBE(panScopeModesChanged);
 AETHER_SEAM_PROBE(panScopeModeChanged);
+AETHER_SEAM_PROBE(panZoomPlacementChanged);
 AETHER_SEAM_PROBE(panRxAntennaChanged);
 AETHER_SEAM_PROBE(panAntennaListChanged);
 AETHER_SEAM_PROBE(panWaterfallLineDurationChanged);

@@ -33,6 +33,10 @@ public:
     // headless/CI override). An env-forced start is not an operator opt-in,
     // so nothing below may rewrite the saved toggle because of one (#4181).
     static bool envForced();
+    // Whether an MCP client may key at launch: never with AETHER_AUTOMATION_NO_TX,
+    // else AETHER_AUTOMATION_ALLOW_TX or the persisted txAllowed toggle. The
+    // bridge's gate and a backend's own transmit gate both read this answer.
+    static bool launchTxAllowed();
     // Persist the outcome of an ASYNCHRONOUS bridge start (#4181). The saved
     // `enabled` flag is the operator's opt-in as observed by the socket: a
     // successful bind records true, a failed bind clears it so a doomed start

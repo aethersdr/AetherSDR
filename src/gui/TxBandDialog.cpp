@@ -188,8 +188,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
                 rebuildTable();
             }
         });
-        // The model relays each status line before applying it, so the
-        // refresh runs once the burst has been applied.
+        // One refresh per burst of band status.
         m_refreshTimer.setSingleShot(true);
         m_refreshTimer.setInterval(0);
         connect(&m_refreshTimer, &QTimer::timeout, this, &TxBandDialog::refreshValues);
@@ -198,7 +197,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
                 m_refreshTimer.start();
             }
         };
-        connect(m_model, &RadioModel::statusReceived, this, refreshSoon);
+        connect(m_model, &RadioModel::txBandSettingsChanged, this, refreshSoon);
         connect(m_model, &RadioModel::connectionStateChanged, this, refreshSoon);
     }
     buildTable();

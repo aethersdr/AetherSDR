@@ -13,14 +13,16 @@ class RadioModel;
 namespace control {
 class RadioConnectionTarget;
 
-enum class ReceiveOperation { Mode, Filter, AudioGain, AudioMute, PanCenter, PanBandwidth };
-inline constexpr std::array<std::pair<ReceiveOperation, const char*>, 6> kReceiveMethods{{
+enum class ReceiveOperation { Mode, Filter, AudioGain, AudioMute, PanCenter, PanBandwidth, CwPitch };
+inline constexpr std::array<std::pair<ReceiveOperation, const char*>, 7> kReceiveMethods{{
     {ReceiveOperation::Mode, "slice.setMode"},
     {ReceiveOperation::Filter, "slice.setFilter"},
     {ReceiveOperation::AudioGain, "slice.setAudioGain"},
     {ReceiveOperation::AudioMute, "slice.setAudioMute"},
     {ReceiveOperation::PanCenter, "panadapter.setCenter"},
     {ReceiveOperation::PanBandwidth, "panadapter.setBandwidth"},
+    // Session-wide receive BFO pitch: addressed to the radio session, not a slice.
+    {ReceiveOperation::CwPitch, "radioSession.setCwPitch"},
 }};
 
 // Closed typed intent set; no reflection, raw commands or runtime setter names.
@@ -34,6 +36,7 @@ public:
     [[nodiscard]] virtual std::optional<ProtocolError> setAudioMute(int slice, bool muted) = 0;
     [[nodiscard]] virtual std::optional<ProtocolError> setPanCenter(const QString& pan, qint64 hz) = 0;
     [[nodiscard]] virtual std::optional<ProtocolError> setPanBandwidth(const QString& pan, qint64 hz) = 0;
+    [[nodiscard]] virtual std::optional<ProtocolError> setCwPitch(int hz) = 0;
 };
 
 [[nodiscard]] std::unique_ptr<ReceiveControlTarget> makeModelReceiveControlTarget(
