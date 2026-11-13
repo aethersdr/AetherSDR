@@ -3819,7 +3819,7 @@ include(GNUInstallDirs)
 
 if(LINUX AND NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
     # Keep pinned or non-system Qt loadable after install; explicit builder overrides win.
-    set_property(TARGET AetherSDR PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
+    set_property(TARGET AetherSDR aetherd PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
 endif()
 
 if(APPLE)

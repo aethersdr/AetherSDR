@@ -288,8 +288,13 @@ static int runInstallCli(int argc, char* argv[])
 // reach aetherd itself. Nothing of the app starts first: no Qt, no settings.
 static int runAetherd(int argc, char* argv[])
 {
-    const QByteArray path =
-        QDir(AetherSDR::LinuxInstall::binaryDir()).filePath(QStringLiteral("aetherd")).toLocal8Bit();
+    const QString dir = AetherSDR::LinuxInstall::binaryDir();
+    if (!QDir::isAbsolutePath(dir)) {
+        // No /proc/self/exe: never resolve "aetherd" against the working directory.
+        std::fprintf(stderr, "AetherSDR: cannot start the headless engine: this binary's directory is unknown\n");
+        return 127;
+    }
+    const QByteArray path = QDir(dir).filePath(QStringLiteral("aetherd")).toLocal8Bit();
     std::vector<char*> args;
     args.push_back(const_cast<char*>(path.constData()));
     for (int i = 2; i < argc; ++i) {
