@@ -138,6 +138,9 @@ public:
     // tuning span, both edges inside isRestorableFrequencyHz(). See capabilities().
     static constexpr qint64 kHeadlessTuneMinHz = 10'000;
     static constexpr qint64 kHeadlessTuneMaxHz = 61'430'000;
+    static_assert(0 < kHeadlessTuneMinHz && kHeadlessTuneMinHz <= kHeadlessTuneMaxHz
+                      && kHeadlessTuneMaxHz < static_cast<qint64>(kDspClockHz) / 2,
+                  "headless tuning bounds must sit inside (0, Nyquist)");
 
     // The CW BFO offset (HERMES.md §5: "CW has no BFO unless you build one").
     // +pitchHz for CWU/CW, -pitchHz for CWL, 0 for every other mode -- zero

@@ -128,7 +128,8 @@ remains unavailable; aetherd constructs the HL2 TX-disabled (no HL2 TX grant
 exists), so in the daemon it qualifies. ANAN qualifies with engine authority
 over 10 kHz–61.43 MHz, the span a G2 (gateware 27) was measured to tune; that
 is a tuning bound, not a sensitivity claim, and the desktop tuning range stays
-unreported. Flex currently lacks verified command coverage and remains
+unreported. ANAN's panadapter is its one DDC, centered on the slice, so a tune
+always moves the pan: a `PreservePan` intent cannot hold there. Flex currently lacks verified command coverage and remains
 unavailable. Icom's
 profile-driven bounds/readback can satisfy the model seam, but the current daemon
 catalogue intentionally does not offer Icom/manual connections. None of these

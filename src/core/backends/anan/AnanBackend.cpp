@@ -581,15 +581,17 @@ RadioCapabilities AnanBackend::capabilities() const
     c.maxPanadapters = 1;
     for (const int ksps : kDdc0RatesKsps)
         c.sampleRatesHz.append(ksps * 1000);
-    // Not reported -- no verified G2 tuning range (RFC: "I have not fetched
-    // the Apache Labs G2 manual"). RadioCapabilities.h's own convention:
-    // both zero means "not reported", not a guess.
+    // The desktop range is not reported: the headless span below is a measured
+    // tuning bound, but the front end's sensitivity and roll-off across it are
+    // not. RadioCapabilities.h's own convention: both zero means "not reported".
     c.tuningMinHz = 0.0;
     c.tuningMaxHz = 0.0;
     // Headless tuning bounds: the span a G2 (gateware 27) was measured to tune
     // and demodulate, kept below phaseWord()'s alias at kDspClockHz/2. A tuning
     // bound, not a sensitivity claim: front-end roll-off is unmeasured, so the
-    // GUI range above stays unreported.
+    // GUI range above stays unreported. The span follows from the 122.88 MHz
+    // clock every Saturn gateware shares. The pan is the DDC, centered on the
+    // slice, so a tune always moves it: PreservePan cannot hold here.
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
                                kHeadlessTuneMinHz, kHeadlessTuneMaxHz};
     c.receiveModeControl = std::nullopt; // mode/passband transition contract not yet qualified
