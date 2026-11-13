@@ -1214,6 +1214,13 @@ void MainWindow::wireRadioModel()
         if (!connected)
             failSafeMomentaryKeyingToRx("radio-disconnect");
     });
+    // The DX call belongs to the contact in progress: it does not carry over
+    // to the next session.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        if (!connected)
+            m_radioModel.cwxModel().setDxCall(QString());
+    });
     // RadioModel publishes this on connect, disconnect, and late identity.
     // A Network Radio Name must not decide whether the TX audio route starts.
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,

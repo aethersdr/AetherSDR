@@ -4044,6 +4044,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, &MainWindow::onRttyDecoderMarkChosen);
     connect(applet, &PanadapterApplet::rttyShiftHzChanged,
             this, &MainWindow::onRttyDecoderShiftChosen);
+    // A callsign picked in the CW text becomes the DX call for CWX macros.
+    connect(applet, &PanadapterApplet::cwCallsignPicked, this,
+            [this](const QString& call) { m_radioModel.cwxModel().setDxCall(call); });
     QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
     connect(this, &MainWindow::bandStackRestoreStarting,
             sw, [applet, pendingDbm, reconcileDbmRangeFromModel]

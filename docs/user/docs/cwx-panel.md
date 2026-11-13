@@ -57,6 +57,26 @@ Text is not automatically resent after a lost connection. Reconnect before start
 
 F1–F12 follow the transmit slice's mode: in CW they fire CWX macros, in voice modes they play DVK recordings (see [DVK Panel](./dvk-panel.md)), and only one of the two responds. CWX macros 1–12 can also be assigned to FlexControl, MIDI and other controller buttons.
 
+### The DX call placeholder
+
+Write `{CALL}` in a macro, or in text you type and send, and AetherSDR keys the **DX call** in its place. One DX call serves every macro, so a set such as `{CALL} 5NN` and `TU {CALL} 73` answers whichever station you picked last.
+
+The **DX call** box is at the top of the panel, beside its title, in the Send and the Setup view:
+
+- Double-click a callsign in the [CW Decoder](./cw-decoder.md) text, or right-click it and choose **Use … as DX call**, to fill the box.
+- Type in the box to enter a call or to correct a letter. It keeps capital letters, digits and `/`.
+- **✕** clears it. It also clears when you disconnect, and it is not saved.
+
+While the box is empty, a macro or message that contains `{CALL}` is not sent and AetherSDR shows a notice. The same applies to a name in braces that AetherSDR does not know, such as `{NAME}`. The sent bubble shows the text as keyed, with the call filled in, and **Resend** on that bubble sends the same call again.
+
+Where `{CALL}` applies:
+
+- It is filled in for stored macros (F1–F12, a click on the F-key label, a controller or MIDI macro button) and for text sent with **Send**. It is not case-sensitive.
+- It is not used in **Live**, where each character is keyed as you type it.
+- Text sent by another program over TCI or MQTT is keyed as received.
+- The macro is stored on the radio as you wrote it. Another client that plays that macro does not fill `{CALL}` in.
+- A macro fired in the first moments after connecting, before the radio has reported its macro texts, is played by the radio as stored.
+
 ### Keyboard and MIDI keying (local iambic keyer)
 
 Beyond text entry, AetherSDR has a local iambic / straight-key keyer that respects the radio's break-in setting. Three actions can be bound to keys or MIDI controls:
@@ -107,6 +127,7 @@ The legend under the macros lists the special characters:
 
 - **Prosigns:** `=` (BT), `+` (AR), `(` (KN), `&` (BK), `$` (SK)
 - **Speed changes:** `+word` sends that word faster, `-word` slower; `++` / `--` change by twice the step. A `+` or `-` only counts as a speed prefix at the start of a word — a standalone `+` is still AR.
+- **DX call:** `{CALL}` is replaced by the call in the **DX call** box (see [The DX call placeholder](#the-dx-call-placeholder)).
 
 ## Known issues
 

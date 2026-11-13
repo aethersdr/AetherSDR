@@ -15,6 +15,7 @@
 #include "SpectrumWidget.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
+#include "core/CallsignUtils.h"
 #include "gui/CopyAssistSettings.h"
 #include "core/SettingsHelpers.h"
 
@@ -33,6 +34,7 @@
 #include <QPushButton>
 #include <QTextEdit>
 #include <QTextCharFormat>
+#include <QTextCursor>
 #include <QWindow>
 #include <QGuiApplication>
 #include <QClipboard>
@@ -374,8 +376,17 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_cwText->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_cwText->setWordWrapMode(QTextOption::WrapAnywhere);
     m_cwText->setContextMenuPolicy(Qt::CustomContextMenu);
+    // A double-click on a callsign picks it as the DX call (see eventFilter).
+    m_cwText->viewport()->installEventFilter(this);
     connect(m_cwText, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
         QMenu *menu = m_cwText->createStandardContextMenu();
+        // A scroll area reports the menu position in viewport coordinates.
+        const QString call = cwCallsignAt(pos);
+        if (!call.isEmpty()) {
+            menu->addSeparator();
+            menu->addAction(tr("Use %1 as DX call").arg(call), this,
+                            [this, call] { emit cwCallsignPicked(call); });
+        }
         menu->addSeparator();
         menu->addAction(tr("Increase font size"), this, [this] { adjustCwFont(+1); });
         menu->addAction(tr("Decrease font size"), this, [this] { adjustCwFont(-1); });
@@ -1022,6 +1033,20 @@ void PanadapterApplet::clearCwText()
     m_lastCwTextSource = CwTextSource::None;
 }
 
+QString PanadapterApplet::cwCallsignAt(const QPoint& viewportPos) const
+{
+    // cursorForPosition() answers with the nearest text position even for a
+    // point in the empty area beside or below the text; accept only a point
+    // on the cursor's own line and within a character of it.
+    const QTextCursor cursor = m_cwText->cursorForPosition(viewportPos);
+    const QRect line = m_cwText->cursorRect(cursor);
+    if (viewportPos.y() < line.top() || viewportPos.y() > line.bottom()
+        || qAbs(viewportPos.x() - line.center().x()) > m_cwText->fontMetrics().maxWidth()) {
+        return {};
+    }
+    return Callsigns::callsignAt(m_cwText->toPlainText(), cursor.position());
+}
+
 void PanadapterApplet::layoutHeader()
 {
     if (!m_titleBar || !m_headerButtons) {
@@ -1046,6 +1071,14 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
         || ((obj == m_titleBar || obj == m_headerButtons)
             && ev->type() == QEvent::LayoutRequest)) {
         layoutHeader();
+    }
+    // A double-click on a callsign in the CW text picks it as the DX call.
+    // Observe only: the text edit still selects the word.
+    if (m_cwText && obj == m_cwText->viewport() && ev->type() == QEvent::MouseButtonDblClick) {
+        const auto* me = static_cast<QMouseEvent*>(ev);
+        const QString call = me->button() == Qt::LeftButton
+            ? cwCallsignAt(me->position().toPoint()) : QString();
+        if (!call.isEmpty()) { emit cwCallsignPicked(call); }
     }
     // A decoder range is saved once the drag or key press that set it ends.
     // Observe only: the slider still handles the event itself.

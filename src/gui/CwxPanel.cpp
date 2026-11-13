@@ -28,6 +28,8 @@
 #include <QVBoxLayout>
 #include "core/ThemeManager.h"
 
+#include <optional>
+
 namespace {
 
 constexpr const char* kCwxPanelSettingsKey = "CwxPanel";
@@ -214,10 +216,55 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     vbox->setSpacing(0);
 
     // Title
+    // Title row: the keyer's name, then the DX call that fills {CALL}. It
+    // sits above the stack so it shows in the Send and the Setup view.
+    auto* titleRow = new QWidget;
+    AetherSDR::ThemeManager::instance().applyStyleSheet(titleRow, "QWidget { background: {{color.background.0}}; }");
+    auto* titleLayout = new QHBoxLayout(titleRow);
+    titleLayout->setContentsMargins(0, 0, 4, 0);
+    titleLayout->setSpacing(4);
+
     m_titleLabel = new QLabel("CWX");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
                          "padding: 6px 8px; background: {{color.background.0}}; }");
-    vbox->addWidget(m_titleLabel);
+    titleLayout->addWidget(m_titleLabel);
+    titleLayout->addStretch(1);
+
+    auto* dxCallLabel = new QLabel(tr("DX call"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(dxCallLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
+    titleLayout->addWidget(dxCallLabel);
+
+    m_dxCallEdit = new QLineEdit;
+    m_dxCallEdit->setObjectName(QStringLiteral("cwxDxCallEdit"));
+    m_dxCallEdit->setAccessibleName(tr("DX call"));
+    m_dxCallEdit->setToolTip(tr("Fills {CALL} in macros and sent text. "
+                                "Double-click a callsign in the CW decoder to set it."));
+    m_dxCallEdit->setMaxLength(16);
+    m_dxCallEdit->setFixedWidth(92);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_dxCallEdit, "QLineEdit { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 2px; font-size: 11px; padding: 2px; }");
+    dxCallLabel->setBuddy(m_dxCallEdit);
+    titleLayout->addWidget(m_dxCallEdit);
+
+    m_dxCallClearBtn = new QPushButton(QStringLiteral("\u2715"));
+    m_dxCallClearBtn->setObjectName(QStringLiteral("cwxDxCallClear"));
+    m_dxCallClearBtn->setAccessibleName(tr("Clear DX call"));
+    m_dxCallClearBtn->setToolTip(tr("Clear the DX call"));
+    m_dxCallClearBtn->setFixedWidth(20);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_dxCallClearBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.secondary}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 2px; font-size: 9px; font-weight: bold; padding: 2px; }");
+    titleLayout->addWidget(m_dxCallClearBtn);
+    vbox->addWidget(titleRow);
+
+    // The model keeps capitals, digits and '/'; the box shows what it kept.
+    connect(m_dxCallEdit, &QLineEdit::textEdited, this, [this](const QString& text) {
+        if (m_model) { m_model->setDxCall(text); }
+        syncDxCallEdit();
+    });
+    connect(m_dxCallClearBtn, &QPushButton::clicked, this, [this]() {
+        if (m_model) { m_model->setDxCall(QString()); }
+        syncDxCallEdit();
+    });
 
     // Stacked widget for Send/Live vs Setup
     m_stack = new QStackedWidget;
@@ -429,6 +476,8 @@ void CwxPanel::setModel(CwxModel* model)
             m_macroEdits[idx]->setPlainText(text);
         }
     });
+    connect(m_model, &CwxModel::dxCallChanged, this, [this](const QString&) { syncDxCallEdit(); });
+    syncDxCallEdit();
     connect(m_model, &CwxModel::delayChanged, this, [this](int ms) {
         if (m_delaySpin) {
             QSignalBlocker b(m_delaySpin);
@@ -596,7 +645,9 @@ void CwxPanel::buildSetupView()
             if (!m_model || action != QLatin1String("click")) { return {}; }
             const TxController::Input input = controller->capture(TxController::Activity::Cwx);
             if (!input.belongsTo(m_model)) { return {}; }
-            const QString text = m_model->macro(i);
+            const std::optional<QString> resolved = m_model->resolveForSend(m_model->macro(i));
+            if (!resolved) { return {}; }
+            const QString text = *resolved;
             return [this, input, text, i] {
                 const QPointer<CwxPanel> guard(this);
                 const auto admitted = [guard, text] { if (guard) { guard->appendHistoryBubble(text); } };
@@ -624,11 +675,12 @@ void CwxPanel::buildSetupView()
     macroScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     vbox->addWidget(macroScroll, 1);
 
-    // Prosign + speed-modifier legend
+    // Prosign, speed-modifier and placeholder legend
     auto* legend = new QLabel(
         "Prosigns: = (BT)  + (AR)  ( (KN)  & (BK)  $ (SK)\n"
         "Speed: +word (faster)  -word (slower)  ++/-- (2\xc3\x97 step)\n"
-        "  + or - at word-start only; standalone + remains AR");
+        "  + or - at word-start only; standalone + remains AR\n"
+        "{CALL}: the DX call from the box at the top");
     AetherSDR::ThemeManager::instance().applyStyleSheet(legend, "QLabel { color: {{color.text.label}}; font-size: 9px; padding: 4px; }");
     legend->setWordWrap(true);
     vbox->addWidget(legend);
@@ -684,16 +736,23 @@ void CwxPanel::sendBuffer(const TxController::Input* input, const QString& captu
     if (!m_model->canSend()) {
         return;
     }
+    // {CALL} is filled here, so the bubble shows the text as keyed. Text that
+    // cannot be filled stays in the editor and paints no bubble.
+    const std::optional<QString> resolved = m_model->resolveForSend(text);
+    if (!resolved) {
+        return;
+    }
+    const QString keyed = *resolved;
     if (input) {
         if (!input->belongsTo(m_model)) {
             return;
         }
         const QPointer<CwxPanel> guard(this);
-        (void)input->send(text, [guard, text] {
+        (void)input->send(keyed, [guard, text, keyed] {
             if (guard) {
                 // Commit the editor/history only after engine admission, but
                 // before send replies advance the global sent index.
-                guard->appendHistoryBubble(text);
+                guard->appendHistoryBubble(keyed);
                 if (guard->m_textEdit->toPlainText().trimmed() == text) {
                     guard->m_textEdit->clear();
                 }
@@ -705,10 +764,10 @@ void CwxPanel::sendBuffer(const TxController::Input* input, const QString& captu
     // appendHistoryBubble paints the modifier-stripped text (so the bubble's
     // char count matches the radio's sent=N counter) while retaining the raw
     // text for Resend. (#272)
-    appendHistoryBubble(text);
+    appendHistoryBubble(keyed);
     m_textEdit->clear();
 
-    m_model->send(text);
+    m_model->send(keyed);
 }
 
 void CwxPanel::sendMacro(int index, const TxController::Input* input)
@@ -721,7 +780,9 @@ void CwxPanel::sendMacro(int index, const TxController::Input* input)
         return;
     }
     if (!m_model || index < 0 || index >= 12 || !m_model->canSend()) { return; }
-    const QString text = m_model->macro(index);
+    const std::optional<QString> resolved = m_model->resolveForSend(m_model->macro(index));
+    if (!resolved) { return; }
+    const QString text = *resolved;
     if (!input) {
         appendHistoryBubble(text);
         m_model->sendMacro(index + 1);
@@ -885,6 +946,17 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
     }
 
     return QWidget::eventFilter(obj, event);
+}
+
+void AetherSDR::CwxPanel::syncDxCallEdit()
+{
+    if (!m_dxCallEdit) { return; }
+    const QString call = m_model ? m_model->dxCall() : QString();
+    if (m_dxCallEdit->text() == call) { return; }
+    const int cursor = m_dxCallEdit->cursorPosition();
+    const QSignalBlocker blocker(m_dxCallEdit);
+    m_dxCallEdit->setText(call);
+    m_dxCallEdit->setCursorPosition(qMin(cursor, static_cast<int>(call.size())));
 }
 
 void AetherSDR::CwxPanel::resendText(const QString& text)

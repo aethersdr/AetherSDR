@@ -431,6 +431,79 @@ void boundedEchoTrackingAndInvalidText()
     check(invalidWarnings == 1 && textWrites == 0,
           "invalid pasted control text reports a refusal without reaching a keying writer");
 }
+
+void dxCallPlaceholder()
+{
+    // CONSTRUCTED callsigns and macro text: they exercise the substitution
+    // and the refusal only.
+    CwxModel model;
+    QStringList keyed;
+    QStringList saved;
+    QStringList refusals;
+    int radioSideMacros = 0;
+    int admissions = 0;
+    int changes = 0;
+    model.setTransmissionAdmission([&] {
+        ++admissions;
+        return CwxModel::TransmissionPermit([] { return true; });
+    });
+    model.setRequestSender([&](const CwTextRequest& request, int, int, CwxModel::TransmissionPermit) {
+        if (request.field == CwTextRequest::Field::Send) { keyed.append(request.text); }
+        if (request.field == CwTextRequest::Field::SaveMacro) { saved.append(request.text); }
+        if (request.field == CwTextRequest::Field::SendMacro) { ++radioSideMacros; }
+        return ReceiveDispatch::Dispatched;
+    });
+    QObject::connect(&model, &CwxModel::requestRejected, &model, [&](const QString& reason) { refusals.append(reason); });
+    QObject::connect(&model, &CwxModel::dxCallChanged, &model, [&](const QString&) { ++changes; });
+
+    model.saveMacro(0, QStringLiteral("{CALL} 5NN"));
+    check(saved == QStringList{QStringLiteral("{CALL} 5NN")},
+          "a macro keeps its placeholder when it is written to the radio");
+
+    model.sendMacro(1);
+    check(keyed.isEmpty() && radioSideMacros == 0 && admissions == 0 && refusals.size() == 1,
+          "a {CALL} macro with no DX call is refused before admission and keys nothing");
+
+    model.setDxCall(QStringLiteral(" k1abc/p\n"));
+    check(model.dxCall() == QLatin1String("K1ABC/P") && changes == 1,
+          "the DX call is kept as capitals, digits and '/'");
+    model.setDxCall(QStringLiteral("K1ABC/P"));
+    check(changes == 1, "setting the same DX call again is not a change");
+
+    model.sendMacro(1);
+    check(keyed == QStringList{QStringLiteral("K1ABC/P 5NN")} && admissions == 1 && refusals.size() == 1,
+          "a {CALL} macro is keyed with the DX call in place of the placeholder");
+
+    keyed.clear();
+    model.saveMacro(1, QStringLiteral("+{call} TU"));
+    model.sendMacro(2);
+    check(keyed == QStringList{QStringLiteral("K1ABC/P"), QStringLiteral(" TU")},
+          "the placeholder is filled before speed prefixes are read, in any letter case");
+
+    QString reason;
+    check(model.resolvePlaceholders(QStringLiteral("{CALL} DE {Call}"))
+              == QStringLiteral("K1ABC/P DE K1ABC/P"),
+          "every occurrence is filled");
+    check(!model.resolvePlaceholders(QStringLiteral("{MYCALL} TU"), &reason)
+              && reason.contains(QLatin1String("{MYCALL}")),
+          "an unknown placeholder is refused by name");
+    check(model.resolvePlaceholders(QStringLiteral("CQ TEST")) == QStringLiteral("CQ TEST")
+              && model.resolvePlaceholders(QStringLiteral("CQ {")) == QStringLiteral("CQ {"),
+          "text without a placeholder pair is unchanged");
+
+    keyed.clear();
+    model.saveMacro(2, QStringLiteral("{MYCALL} TU"));
+    model.sendMacro(3);
+    check(keyed.isEmpty() && refusals.size() == 2,
+          "a macro with an unknown placeholder keys nothing");
+
+    model.send(QStringLiteral("{CALL} TEST"));
+    check(keyed == QStringList{QStringLiteral("{CALL} TEST")},
+          "send() keys text as received: another program's text is not interpreted");
+
+    model.setDxCall(QString());
+    check(model.dxCall().isEmpty() && changes == 2, "the DX call can be cleared");
+}
 }
 
 int main(int argc, char** argv)
@@ -443,5 +516,6 @@ int main(int argc, char** argv)
     modelIntentAndEchoFences();
     operatorSpeedEchoOrdering();
     receiverDestruction();
+    dxCallPlaceholder();
     return failures == 0 ? 0 : 1;
 }

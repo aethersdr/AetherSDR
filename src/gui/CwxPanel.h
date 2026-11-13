@@ -128,10 +128,13 @@ private:
     void appendHistoryBubble(const QString& rawText);
     void onKeyPress(const QString& text);
     void sendMacro(int index, const TxController::Input* input = nullptr);
+    void syncDxCallEdit();
     std::function<std::shared_ptr<TxController>()> m_txControllerProvider;
 
     CwxModel*       m_model{nullptr};
     QLabel*         m_titleLabel{nullptr};
+    QLineEdit*      m_dxCallEdit{nullptr};
+    QPushButton*    m_dxCallClearBtn{nullptr};
 
     QStackedWidget* m_stack{nullptr};
 
