@@ -980,12 +980,16 @@ void MainWindow::updateExperimentalRadioSupport(bool connected, bool identityWai
     const RadioCapabilities caps = m_radioModel.backendCapabilities();
     const QString family = connected ? m_radioModel.family() : QString();
     const QString model = connected ? caps.model : QString();
+    const QString version = connected ? m_radioModel.version() : QString();
+    const QString versionLabel = connected ? m_radioModel.versionLabel() : QString();
+    const bool isIcom = family.compare(QLatin1String("icom"), Qt::CaseInsensitive) == 0;
+    const bool isHl2 = family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0;
     const QString identityKey = connected
         ? family.trimmed().toLower()
               + QLatin1Char('\n')
-              + (family.compare(QLatin1String("icom"), Qt::CaseInsensitive) == 0
-                     ? model.trimmed().toUpper()
-                     : QString())
+              + (isIcom ? model.trimmed().toUpper() : QString())
+              + (isHl2 ? version.trimmed() + QLatin1Char('\n') + versionLabel.trimmed()
+                       : QString())
         : QString();
     if (!identityWaitExpired && identityKey == m_experimentalRadioSupportIdentityKey) {
         return;
@@ -1025,7 +1029,7 @@ void MainWindow::updateExperimentalRadioSupport(bool connected, bool identityWai
     }
 
     const auto descriptor = connected
-        ? experimentalRadioDescriptor(family, model)
+        ? experimentalRadioDescriptor(family, model, version, versionLabel)
         : std::optional<ExperimentalRadioDescriptor>{};
 
     if (m_titleBar) {

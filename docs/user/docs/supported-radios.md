@@ -29,16 +29,16 @@ The rest of this documentation describes FlexRadio operation unless a page says 
 
 | Family | Status | Connects by | Page |
 |--------|--------|-------------|------|
-| Hermes-Lite 2 | **Experimental** | LAN discovery, or Connect by IP | [Hermes-Lite 2](./hermes-lite-2.md) |
+| Hermes-Lite 2 | **Supported** in the desktop application (board id 6 over Ethernet, gateware 74; Windows not yet certified) | LAN discovery, or Connect by IP | [Hermes-Lite 2](./hermes-lite-2.md) |
 | Networked Icom (IC-705, IC-7300MK2, IC-9700 …) | **Early**; the **IC-7300MK2 is supported** | Connect by IP | [Networked Icom](./networked-icom.md) |
 | ANAN-G2 | **Experimental, receive-only** | LAN discovery, or Connect by IP | [ANAN-G2](./anan-g2.md) |
 | RTL-SDR USB dongles | **Experimental, receive-only** | USB discovery (builds with the RTL-SDR backend) | [RTL-SDR](./rtl-sdr.md) |
 | KiwiSDR and Web-888 | Public receivers used as receive-only antennas for a slice | Radio Setup → Antennas | [KiwiSDR and Web-888](./kiwisdr-and-web-888.md) |
 | Demo | Built-in simulator, cannot transmit | The Connect to Radio list | [Demo Mode](./demo-mode.md) |
 
-None of the other families is a supported family yet. The IC-7300MK2 over its built-in Ethernet (RS-BA1) is the one non-Flex model supported on its own; every other Icom model keeps the early, experimental treatment.
+The Hermes-Lite 2 is supported in the desktop application: board id 6 over Ethernet / openHPSDR Protocol 1, with gateware 74. Windows is not yet certified until a Windows `radiocert` run is posted on [#5678](https://github.com/aethersdr/AetherSDR/issues/5678). Other gateware, other boards, the wider Hermes-Lite family and aetherd remain experimental. The IC-7300MK2 over its built-in Ethernet (RS-BA1) is the one Icom model supported on its own; every other Icom model keeps the early, experimental treatment.
 
-While a Hermes-Lite 2, an ANAN-G2 or an Icom other than the IC-7300MK2 is connected, an **EXPERIMENTAL** badge shows in the title bar, and an "Experimental radio support" notice appears when you connect. Tick "Don't show again" in the notice to stop it for that family.
+While an ANAN-G2, an Icom other than the IC-7300MK2, or a Hermes-Lite 2 on gateware other than 74 or on a board that names itself in its gateware version is connected, an **EXPERIMENTAL** badge shows in the title bar, and an "Experimental radio support" notice appears when you connect. Tick "Don't show again" in the notice to stop it for that family.
 
 ## Setup
 
