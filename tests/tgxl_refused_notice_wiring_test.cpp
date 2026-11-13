@@ -1,6 +1,6 @@
-// A TGXL reached by IP only cannot carry OPERATE / STANDBY / BYPASS, and
-// TunerModel::relayedCommandRefused is how it says so. MainWindow turns that
-// into showUnsupportedControlNotice(). MainWindow cannot be constructed in a
+// Without a ready direct connection or FlexRadio relay, TGXL mode commands
+// emit TunerModel::relayedCommandRefused. MainWindow turns that into a
+// transport-specific notice. MainWindow cannot be constructed in a
 // test, so this pins the connection in the wiring source: the one claim no
 // behavioural seam reaches. TunerModel's emission is covered behaviourally by
 // tuner_model_test.
@@ -34,7 +34,13 @@ int main()
     const int at = wiring.indexOf("&TunerModel::relayedCommandRefused");
     report("MainWindow connects TunerModel::relayedCommandRefused", at >= 0);
     const int end = at >= 0 ? wiring.indexOf("});", at) : -1;
-    report("the refusal raises the unsupported-control notice",
-           end > at && wiring.mid(at, end - at).contains("showUnsupportedControlNotice()"));
+    const QByteArray handler = end > at ? wiring.mid(at, end - at) : QByteArray();
+    report("the refusal raises a transport-specific status notice",
+           handler.contains("statusBar()->showMessage(")
+               && handler.contains("no ready direct connection")
+               && handler.contains("FlexRadio relay"));
+    report("the refusal preserves the once-per-session notice latch",
+           handler.contains("if (!m_commandDroppedNoticeShown)")
+               && handler.contains("m_commandDroppedNoticeShown = true"));
     return failures == 0 ? 0 : 1;
 }

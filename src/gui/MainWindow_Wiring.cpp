@@ -6831,16 +6831,21 @@ void MainWindow::wireMeters()
             }
         }, Qt::QueuedConnection);
     }
-    // OPERATE / STANDBY / BYPASS on a TGXL reached by manual IP only: no radio
-    // relays them, nothing was sent. Every surface (applet keys, the status-bar
+    // OPERATE / STANDBY / BYPASS need a ready direct link or a radio relay.
+    // Without either, nothing was sent. Every surface (applet keys, the status-bar
     // cycle, the SWR sweep's bypass) funnels through TunerModel, so one
     // connection announces them all.
     connect(&m_radioModel.tunerModel(), &TunerModel::relayedCommandRefused,
             this, [this](const QString& command) {
         qCWarning(lcDevices) << "TGXL" << command
-                             << "refused: operate/standby/bypass need a Flex radio"
-                             << "to relay them; this tuner is reached by IP only";
-        showUnsupportedControlNotice();
+                             << "refused: no ready direct connection and no FlexRadio relay;"
+                             << "nothing was sent";
+        if (!m_commandDroppedNoticeShown) {
+            m_commandDroppedNoticeShown = true;
+            statusBar()->showMessage(
+                tr("TGXL command not sent: no ready direct connection or FlexRadio relay is available."),
+                8000);
+        }
     });
     // Same for the PGXL: the per-port block, the state word and the alert
     // channel live in the model rather than being decoded into the applet
