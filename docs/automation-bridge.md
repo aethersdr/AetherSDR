@@ -1228,6 +1228,14 @@ operator setting it lowered. Where a backend withholds SWR below its own forward
 gate (the health keys `forwardPowerSwrGateCounts` and `forwardPowerSwrGateClears`), `rf`
 reports `swrResult: gate-not-reached` with the gate, the key's forward peak, the
 tone and the drive, instead of "no SWR reading".
+Full drive does not establish adequate stimulus: a quiet tone can still leave
+the forward reading below the gate. Check the selected tone level and
+independently measured forward power before drawing conclusions about the
+detector or its scaling.
+
+The receive-only `rx-sidebands` stage judges each mode's reference tone relative
+to its own background. Silent captures and non-finite measurements do not count
+as recovered carriers, so muted audio cannot produce an `expected` pattern.
 
 ### `radiocert meters`: control readback, interlock and the SQL line
 

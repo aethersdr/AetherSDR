@@ -292,12 +292,8 @@ int main(int argc, char** argv)
               "a peak above the floor does not advise raising drive");
     }
 
-    // ---- NIT 4: at full drive, "raise drive" is not a remedy. A forward
-    // reading that cannot clear the gate with the slider at maximum is a
-    // detector or scaling fault (the #5369 class), and before this change the
-    // run at least produced a negative finding. The verdict stays INCONCLUSIVE
-    // -- the meter really is suppressed -- but the remedy must point at the
-    // forward chain instead of asking for drive that does not exist.
+    // Full drive leaves stimulus strength unknown; an absent SWR remains
+    // inconclusive until forward power is independently established.
     {
         RadioModel radio;
         std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(new GatedBackend()));
@@ -324,8 +320,10 @@ int main(int argc, char** argv)
               "at full drive the remedy does not ask for more drive");
         check(reason.contains(QLatin1String("100%")),
               "the reason states that drive was already at maximum");
-        check(reason.contains(QLatin1String("forward detector")),
-              "and it points at the forward detector instead");
+        check(reason.contains(QLatin1String("quiet stimulus"))
+                  && reason.contains(QLatin1String("independently measured forward power"))
+                  && !reason.contains(QLatin1String("points at the forward detector")),
+              "inventory: full drive does not diagnose the detector without adequate stimulus");
     }
 
     // ---- the gate WAS cleared: silence here IS a defect and must still be
@@ -461,12 +459,17 @@ int main(int argc, char** argv)
               "rf: the remedy is stated, never applied");
     }
     {
-        const auto [result, concern] = RadioCertificationTestAccess::classifySwrAtKey(
-            false, 320, 0, 40, 100, -20.0);
-        check(result == QLatin1String("gate-not-reached")
-                  && concern.contains(QLatin1String("forward detector"))
-                  && !concern.contains(QLatin1String("raise the stimulus")),
-              "rf: at full drive the gate points at the forward detector");
+        for (const double tone : {-60.0, -20.0, -3.0}) {
+            const auto [result, concern] = RadioCertificationTestAccess::classifySwrAtKey(
+                false, 320, 0, 40, 100, tone);
+            check(result == QLatin1String("gate-not-reached")
+                      && concern.contains(QLatin1String("quiet stimulus"))
+                      && concern.contains(QLatin1String("independently measured forward power"))
+                      && !concern.contains(QLatin1String("points at the forward detector")),
+                  "rf: full drive alone establishes neither adequate stimulus nor a detector fault");
+            check(concern.contains(QLatin1String("raises neither")),
+                  "rf: full drive advice never raises stimulus or drive automatically");
+        }
     }
     {
         const auto [result, concern] = RadioCertificationTestAccess::classifySwrAtKey(

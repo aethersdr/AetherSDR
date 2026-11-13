@@ -429,10 +429,11 @@ RadioCertification::SwrAtKey RadioCertification::classifySwrAtKey(
             ? QString::number(gate.peakCounts) : QStringLiteral("an unpublished peak");
         const QString remedy = drivePercent >= 100
             ? QStringLiteral(
-                  "Drive was already at 100%, so this is not a drive problem: a "
-                  "forward reading that cannot clear the gate at full drive points "
-                  "at the forward detector or its scaling. Check forward power "
-                  "against a known load")
+                  "Drive was already at 100%; a quiet stimulus can still leave "
+                  "the forward reading below the gate. Check the selected tone "
+                  "level and independently measured forward power before "
+                  "concluding anything about the detector or its scaling; this "
+                  "tool raises neither stimulus nor drive by itself")
             : QStringLiteral(
                   "To exercise SWR, raise the stimulus (tone=<dBFS>) or the drive "
                   "within the station's ceiling; this tool raises neither by itself");
@@ -1457,12 +1458,8 @@ void RadioCertification::stageMeterInventory()
             // A peak at or above the floor with 0 passes means the key-on and
             // speech-pause gate withheld every window, which drive cannot fix.
             //
-            // THE REMEDY DEPENDS ON DRIVE. At less than full drive, "raise it"
-            // is both true and actionable. At full drive it is neither: a
-            // forward reading that cannot reach the gate with the slider at
-            // maximum is a forward-detector or scaling fault (the #5369 class),
-            // and excusing it with "raise drive" would be a softer verdict than
-            // this diagnostic gave before the change.
+            // Full drive leaves stimulus strength unknown. Detector health
+            // needs an independent forward-power measurement at any drive.
             const bool atFullDrive = m_keyedDrivePercentMax >= 100;
             const bool peakReachedFloor = m_keyedFwdCountsMax >= m_swrGateCounts;
             untestedBecause = peakReachedFloor
@@ -1484,11 +1481,11 @@ void RadioCertification::stageMeterInventory()
                 .arg(m_keyedFwdCountsMax)
                 .arg(atFullDrive
                      ? QStringLiteral(
-                           "DRIVE WAS ALREADY AT 100%, so this is not a drive "
-                           "problem — a forward reading that cannot clear the "
-                           "gate at full drive points at the forward detector "
-                           "or its scaling, not at this meter. Check forward "
-                           "power against a known load before trusting either")
+                           "DRIVE WAS ALREADY AT 100%; a quiet stimulus can still "
+                           "leave the forward reading below the gate. Check the "
+                           "selected tone level and independently measured forward power "
+                           "before concluding anything about the detector or its "
+                           "scaling; this tool raises neither stimulus nor drive by itself")
                      : QStringLiteral(
                            "That is the backend working as designed, not a dead "
                            "meter — raise drive (this run keyed at %1%) until "
@@ -3006,11 +3003,8 @@ QJsonObject RadioCertification::run(const Options& o)
             // this field went on claiming the requested frequency regardless.
             {QStringLiteral("frequencyMhz"), o.frequencyMhz},
             {QStringLiteral("mode"), o.mode},
-            // THE CEILING THE RUN ACTUALLY APPLIED, from the field the clamp
-            // above reads. This used to report a second Options field nothing
-            // set, so every bridge run read -1 ("none") while the bridge's
-            // ceiling was live and clamping. Beside it, the operator setting
-            // the clamp lowered, or null when it did not have to.
+            // The clamp and report share one ceiling. The clamped-from value
+            // is null when the operator's setting was already within it.
             {QStringLiteral("txPowerCeilingPercent"), o.maxRfPowerPercent},
             {QStringLiteral("rfPowerClampedFromPercent"),
              powerToRestore >= 0 ? QJsonValue(powerToRestore) : QJsonValue()},

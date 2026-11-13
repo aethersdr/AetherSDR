@@ -987,8 +987,9 @@ over and speech pauses; only the reverse reading is left out of the count, so a
 window that passed and published nothing stays a defect. The meters phase reads
 the keys with no family test, reports `INCONCLUSIVE` naming the gate when no
 window passed, and leaves the negative verdict standing when one did. Its
-reason says which gate held: the floor (raise drive, or suspect the forward
-detector at full drive) or the key-on and speech-pause gate (key a steady
+reason says which gate held: the floor (check the selected stimulus and drive,
+and independently measured forward power before judging the detector even at
+full drive) or the key-on and speech-pause gate (key a steady
 carrier for longer). The verdict turns on the count rather than the peak
 because a peak above the floor can still be withheld.
 

@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 using namespace AetherSDR::certmath;
@@ -425,6 +426,24 @@ int main()
         }
         check(!toneRecovered(tonePowerNear(noiseOnly, 1500.0, fs, 25.0), rms(noiseOnly)),
               "synthetic noise alone is not recovered");
+        const std::vector<float> silence(loud.size(), 0.0f);
+        const bool silenceRecovered = toneRecovered(
+            tonePowerNear(silence, 1500.0, fs, 25.0), rms(silence));
+        const bool noiseRecovered = toneRecovered(
+            tonePowerNear(noiseOnly, 1500.0, fs, 25.0), rms(noiseOnly));
+        check(!silenceRecovered, "a nonempty silent capture recovers no carrier");
+        check(rxSidebandPattern(silenceRecovered, noiseRecovered,
+                               silenceRecovered, noiseRecovered, true)
+                  == RxSidebandPattern::NoneRecovered,
+              "silence in the expected pair and noise in the other cannot pass");
+        check(!toneRecovered(0.0, 0.0) && !toneRecovered(0.0, 0.5)
+                  && !toneRecovered(0.5, 0.0),
+              "recovery requires both tone and capture energy");
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        check(!toneRecovered(nan, 0.5) && !toneRecovered(0.25, nan)
+                  && !toneRecovered(inf, 0.5) && !toneRecovered(0.25, inf),
+              "non-finite measurements cannot recover a carrier");
         check(toneAboveBackgroundDb(0.5 / std::sqrt(2.0), 0.5) > 100.0,
               "a pure tone stands far above an empty background, without dividing by 0");
     }

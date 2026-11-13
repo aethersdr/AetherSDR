@@ -291,7 +291,11 @@ inline constexpr double kRecoveredToneAboveBackgroundDb = -15.0;
 
 inline bool toneRecovered(double tone, double overallRms)
 {
-    return toneAboveBackgroundDb(tone, overallRms) > kRecoveredToneAboveBackgroundDb;
+    // Both energies must exceed db()'s floor; flooring silence on both sides
+    // of the ratio would otherwise make it indistinguishable from a tone.
+    return std::isfinite(tone) && tone > 1e-12
+        && std::isfinite(overallRms) && overallRms > 1e-12
+        && toneAboveBackgroundDb(tone, overallRms) > kRecoveredToneAboveBackgroundDb;
 }
 
 // What the four modes' recoveries say together. With the carrier ABOVE the
