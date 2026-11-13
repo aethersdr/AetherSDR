@@ -1868,8 +1868,8 @@ keeps both workflows consistent:
   the key-up's own GUI hop. A key-down that arrives after its sample is never
   dropped or truncated: it and every later edge of the over move later by the
   lateness (the shift only grows until the over ends), so only the space before
-  it is longer; past `kCwMaxEdgeShiftMs` (250 ms) it is refused and the over's
-  carrier stays up. The break-in hang counts from the shifted key-up's wire
+  it is longer; past `kCwMaxEdgeShiftMs` (250 ms) it is refused and the over
+  has no carrier until it ends. The break-in hang counts from the shifted key-up's wire
   instant. A late key-up without a release is applied at once; a scheduled
   key-down is forced up after a 5 WPM dah plus the lead. Admission of each
   element stays on the engine-owning thread. Edges without an instant

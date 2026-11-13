@@ -591,6 +591,33 @@ void testCapturedInputSurvivesNormalTailButNotCancel()
     report("another input's release cannot stop the current paddle squeeze", retained);
 }
 
+// #5065: the backend places a key-up at its instant, so a stop mid-element must
+// carry the stop instant, not the element's own release. 5 WPM: a 720 ms dah.
+void testStopMidElementKeysUpBeforeRelease()
+{
+    Recorder rec;
+    IambicKeyer k;
+    std::mutex mutex;
+    std::chrono::steady_clock::time_point releaseAt{}, upAt{};
+    int ups = 0;
+    k.setOnKeyDownChange([&](bool d, auto w) { rec.onKeyDownChange(d, w); });
+    k.setOnRoutedKeyDownChange([&](bool down, auto when, auto release, const auto&) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (down && releaseAt == std::chrono::steady_clock::time_point{}) releaseAt = release;
+        if (!down) { ++ups; upAt = when; }
+    });
+    k.setWpm(5);
+    k.setMode(IambicKeyer::Mode::IambicB);
+    k.start();
+    k.setPaddleState(false, true);
+    const bool down = waitForNthDown(rec, 1);
+    const auto stoppedAt = std::chrono::steady_clock::now();
+    k.stop();
+    std::lock_guard<std::mutex> lock(mutex);
+    report("stop mid-dah: one key-up, at the stop, before the element's release",
+           down && ups == 1 && upAt >= stoppedAt && upAt < releaseAt);
+}
+
 } // namespace
 
 int main()
@@ -609,6 +636,7 @@ int main()
     testStartIsIdempotent();
     testCapturedInputSurvivesNormalTailButNotCancel();
     testScheduledStampsAreGridExact();
+    testStopMidElementKeysUpBeforeRelease();
     std::cout << "iambic_keyer_test: done, failures=" << g_failures << '\n';
     return g_failures == 0 ? 0 : 1;
 }

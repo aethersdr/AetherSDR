@@ -1494,7 +1494,7 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
             m_cwOverRefused = true;
             ++m_cwRefusedDowns;
             flushCwSchedule();
-            logCwFailSafe("scheduled key-down later than the shift bound refused; the over's carrier stays up");
+            logCwFailSafe("scheduled key-down later than the shift bound refused; no carrier until the over ends");
             return;
         }
         m_cwShiftSamples = shift;

@@ -7933,8 +7933,8 @@ target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
 
-# #5065: scheduled CW edges land at their EP2 sample plus a fixed lead; late
-# downs dropped, late ups applied, cap and flushes. Socket-free, nothing keyed.
+# #5065: scheduled CW edges land at their EP2 sample plus a fixed lead; a late
+# down shifts the over, past the bound it is refused; cap and flushes. Socket-free.
 add_executable(hl2_cw_edge_timing_test tests/hl2_cw_edge_timing_test.cpp)
 target_include_directories(hl2_cw_edge_timing_test PRIVATE src tests)
 target_link_libraries(hl2_cw_edge_timing_test PRIVATE aethercore Qt6::Core Qt6::Network)

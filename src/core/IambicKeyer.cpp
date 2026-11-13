@@ -287,6 +287,12 @@ void IambicKeyer::workerLoop()
                 }
             }
             grid = onDeadline;
+            // A stop mid-element keys up now, not at the element's deadline:
+            // the backend places edges at their instant, so the deadline
+            // would keep the carrier on for the rest of the element (#5065).
+            if (m_stopRequested.load(std::memory_order_acquire)) {
+                grid = std::min(grid, std::chrono::steady_clock::now());
+            }
 
             // ── Inter-element gap ──────────────────────────────────────
             // Same limiter for the gap: without it the element that absorbed

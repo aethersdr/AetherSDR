@@ -395,8 +395,8 @@ public:
     // later edge of the over move later by the lateness (the shift grows,
     // never shrinks, until the over ends), so element and later space lengths
     // stay exact; only the space before it is longer. A shift past
-    // kCwMaxEdgeShiftMs is refused and keys the over's carrier up until the
-    // over ends. A late key-up without a scheduled release is applied at once.
+    // kCwMaxEdgeShiftMs is refused, and the over has no carrier until it
+    // ends. A late key-up without a scheduled release is applied at once.
     // An unscheduled edge flushes pending ones and takes effect now.
     void setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
                       std::chrono::steady_clock::time_point scheduledAt = {},
@@ -409,7 +409,7 @@ public:
     // while keyed on a slow host (17-62 ms), so most overs never shift.
     static constexpr int kCwEdgeLeadMs = 40;
     // The largest shift an over may accumulate; a key-down later than this
-    // (beyond the lead) is refused and the over's carrier stays up.
+    // (beyond the lead) is refused: no carrier until the over ends.
     static constexpr int kCwMaxEdgeShiftMs = 250;
     // Longest scheduled element: a dah at the 5 WPM floor of IambicKeyer and
     // CwxModel. A scheduled down held past this plus the lead is forced up.
@@ -976,7 +976,7 @@ private:
     std::int64_t m_cwFrameSample = 0;        // EP2 sample index of the next frame built
     std::int64_t m_cwForceUpSample = -1;     // cap on the scheduled down in force; -1 none
     std::int64_t m_cwShiftSamples = 0;       // the over's shift, >= 0, grows only
-    bool m_cwOverRefused = false;            // a key-down past the bound: carrier up until the over ends
+    bool m_cwOverRefused = false;            // a key-down past the bound: no carrier until the over ends
     bool m_cwReleaseOwed = false;            // the last down scheduled its own key-up
     std::atomic<std::chrono::steady_clock::rep> m_cwUpOnAirTicks{0};
     std::uint64_t m_cwShiftedElements = 0;
