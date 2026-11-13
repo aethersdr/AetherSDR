@@ -74,10 +74,33 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # ── Download source ──────────────────────────────────────────────────────
 if (-not (Test-Path $TarFile)) {
-    Write-Host "Downloading qtkeychain ${QtKeychainVersion} source..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $QtKeychainUrl -OutFile $TarFile
-    Confirm-Sha256 -Path $TarFile -Expected $QtKeychainSha256
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Write-Host "Downloading qtkeychain ${QtKeychainVersion} source (attempt $attempt/3)..." -ForegroundColor Cyan
+        try {
+            Invoke-WebRequest -Uri $QtKeychainUrl -OutFile $TarFile -TimeoutSec 60
+            break
+        } catch {
+            # Do not reuse a partially written archive on the next attempt.
+            Remove-Item -Force $TarFile -ErrorAction SilentlyContinue
+            if ($attempt -eq 3) {
+                throw "qtkeychain source download failed after 3 attempts: $($_.Exception.Message)"
+            }
+            Write-Warning "qtkeychain download failed (attempt $attempt/3): $($_.Exception.Message)"
+            Start-Sleep -Seconds (5 * $attempt)
+        }
+    }
 }
+
+# Verify on every run, not only after a download: an archive left on disk by an
+# earlier run must match the pin too. A rejected archive is deleted so the next
+# run downloads it again instead of extracting it.
+$TarSha256 = (Get-FileHash -Path $TarFile -Algorithm SHA256).Hash.ToLower()
+if ($TarSha256 -ne $QtKeychainSha256.ToLower()) {
+    Remove-Item -Force $TarFile -ErrorAction SilentlyContinue
+    Write-Error "SHA256 mismatch for $(Split-Path $TarFile -Leaf) (deleted)`n  expected: $QtKeychainSha256`n  actual:   $TarSha256"
+    exit 1
+}
+Confirm-Sha256 -Path $TarFile -Expected $QtKeychainSha256
 
 # ── Extract ──────────────────────────────────────────────────────────────
 Write-Host "Extracting..." -ForegroundColor Cyan
