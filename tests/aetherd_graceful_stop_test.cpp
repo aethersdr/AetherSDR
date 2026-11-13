@@ -13,6 +13,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
 
@@ -63,6 +64,21 @@ int childStuck(QCoreApplication& app)
     return 1;
 }
 
+// Teardown finished inside the grace period: the grace alarm is cancelled, so a
+// process that outlives it after the stop is not killed.
+int childTeardownDone(QCoreApplication& app)
+{
+    {
+        const aetherd::GracefulStop stop(app, std::chrono::seconds(1));
+        QTimer::singleShot(50, [] { ::raise(SIGTERM); });
+        if (app.exec() != 0) {
+            return 1;
+        }
+    }
+    ::sleep(2);   // past the 1 s grace
+    return 8;     // 8: still alive after the grace period
+}
+
 // An inherited SIG_IGN (nohup) stays ignored.
 int childIgnoredHup(QCoreApplication& app)
 {
@@ -105,6 +121,7 @@ bool daemonStops(const QString& daemon, const QString& home, int sig, const char
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.insert(QStringLiteral("AETHER_SETTINGS_DIR"), home + QStringLiteral("/settings"));
     env.insert(QStringLiteral("HOME"), home);
+    env.insert(QStringLiteral("CFFIXED_USER_HOME"), home);   // macOS reads this before HOME
     env.insert(QStringLiteral("XDG_CONFIG_HOME"), home + QStringLiteral("/config"));
     env.insert(QStringLiteral("XDG_DATA_HOME"), home + QStringLiteral("/data"));
     env.insert(QStringLiteral("XDG_CACHE_HOME"), home + QStringLiteral("/cache"));
@@ -146,6 +163,7 @@ int main(int argc, char* argv[])
         if (mode == "graceful") return childGraceful(app);
         if (mode == "twice") return childTwice(app);
         if (mode == "stuck") return childStuck(app);
+        if (mode == "teardown-done") return childTeardownDone(app);
         if (mode == "ignored-hup") return childIgnoredHup(app);
         return 1;
     }
@@ -172,14 +190,26 @@ int main(int argc, char* argv[])
     ok &= check(stuck.finished && stuck.status == QProcess::CrashExit && stuck.ms >= 900 && stuck.ms < 5000,
                 "a loop that cannot quit dies by the signal when the grace period ends");
 
+    const Outcome done = runChild(self, QStringLiteral("teardown-done"));
+    ok &= check(done.finished && done.status == QProcess::NormalExit && done.code == 8,
+                "a finished teardown cancels the grace alarm");
+
     const Outcome hup = runChild(self, QStringLiteral("ignored-hup"));
     ok &= check(hup.finished && hup.status == QProcess::NormalExit && hup.code == 9,
                 "an inherited SIG_IGN stays ignored");
 
     const QString daemon = QString::fromLocal8Bit(argv[1]);
-    ok &= daemonStops(daemon, profile.path() + QStringLiteral("/term"), SIGTERM,
+#ifdef Q_OS_MACOS
+    // aetherd's socket sits under $HOME/Library/Application Support on macOS; a
+    // home under $TMPDIR puts it past the 103-byte sun_path limit.
+    const QTemporaryDir shortHome(QStringLiteral("/tmp/gs-XXXXXX"));
+    const QString homes = shortHome.path();
+#else
+    const QString homes = profile.path();
+#endif
+    ok &= daemonStops(daemon, homes + QStringLiteral("/term"), SIGTERM,
                       "aetherd exits 0 on SIGTERM through its normal teardown");
-    ok &= daemonStops(daemon, profile.path() + QStringLiteral("/int"), SIGINT,
+    ok &= daemonStops(daemon, homes + QStringLiteral("/int"), SIGINT,
                       "aetherd exits 0 on SIGINT through its normal teardown");
     return ok ? 0 : 1;
 }

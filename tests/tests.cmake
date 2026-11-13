@@ -879,6 +879,8 @@ add_test(NAME aetherd_discovery_startup_test
 
 # A stop signal ends aetherd through its normal teardown, which releases the
 # radio; a second one or a stuck loop dies by the signal (POSIX signals only).
+# Socket: runs the real aetherd, which listens on the QLocalServer endpoint
+# graceful-stop-test-<pid>; a refused listen fails the case in about 1.5 s.
 if(NOT WIN32)
     add_executable(aetherd_graceful_stop_test tests/aetherd_graceful_stop_test.cpp
         src/aetherd/GracefulStop.cpp)
