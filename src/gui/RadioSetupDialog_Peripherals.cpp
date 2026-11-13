@@ -136,6 +136,16 @@ struct PeripheralDeviceUi {
     std::function<void()> openWebUi;          // ShackSwitch only
     std::function<void(const QString&, quint16)> connectNetwork;  // serial-or-network devices
     std::function<void(const QString&)> connectSerial;
+    // Optional third mode: a device on the radio's own USB port, reached
+    // through the radio's passthrough cable (LP-100A). Choices are
+    // {serial number, label} pairs of the cables the radio reports.
+    std::function<void(const QString&)> connectRadioCable;
+    std::function<QVector<QPair<QString, QString>>()> radioCables;
+    // Optional poll-interval row (LP-100A). Stored under settingsGroup/"PollIntervalMs".
+    std::function<void(int)> applyPollInterval;
+    int pollIntervalDefaultMs{0};
+    int pollIntervalMinMs{0};
+    int pollIntervalMaxMs{0};
     std::function<QString()> description;
 
     // Serial-or-network presentation
@@ -187,6 +197,9 @@ struct PeripheralDeviceUi {
             return {};
         }
         QWidget* current = addressStack->currentWidget();
+        if (auto* cable = qobject_cast<QComboBox*>(current)) {
+            return cable->currentData().toString();  // Radio USB: the cable's serial
+        }
         if (QComboBox* serial = current->findChild<QComboBox*>()) {
             QString text = serial->currentData().toString();
             if (text == QStringLiteral("__custom__")) {
@@ -1021,6 +1034,9 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     ui.modeCombo->addItem("Serial", "Serial");
 #endif
     ui.modeCombo->addItem("Network", "Network");
+    if (ui.connectRadioCable) {
+        ui.modeCombo->addItem(tr("Radio USB"), "Radio");
+    }
     if (!ui.networkTooltip.isEmpty()) {
         ui.modeCombo->setToolTip(ui.networkTooltip);
     }
@@ -1088,6 +1104,46 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     netLay->addWidget(netIpEdit);
     const int netPageIdx = ui.addressStack->addWidget(netPage);
 
+    // Radio USB: the cables the radio reports, by serial number and name.
+    int radioPageIdx = -1;
+    QComboBox* radioCableCombo = nullptr;
+    if (ui.connectRadioCable) {
+        radioCableCombo = new QComboBox;
+        radioCableCombo->setObjectName(QStringLiteral("peripheralRadioCable_%1").arg(ui.id));
+        radioCableCombo->setAccessibleName(tr("%1 radio USB cable").arg(ui.label));
+        radioCableCombo->setAccessibleDescription(
+            tr("The USB cable on the radio this device is plugged into. Connecting sets "
+               "that cable to passthrough at the device's serial speed."));
+        radioCableCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        radioCableCombo->setMinimumContentsLength(14);
+        auto reseedCables = [combo = QPointer<QComboBox>(radioCableCombo), u, group]() {
+            if (!combo) {
+                return;
+            }
+            const QString current = combo->count() > 0
+                ? combo->currentData().toString()
+                : PeripheralSettings::deviceString(group, "RadioCable");
+            const QSignalBlocker block(combo);
+            combo->clear();
+            for (const auto& [serial, label] : u->radioCables()) {
+                combo->addItem(label, serial);
+            }
+            if (!current.isEmpty() && combo->findData(current) < 0) {
+                combo->addItem(tr("%1 (not reported by the radio)").arg(current), current);
+            }
+            const int idx = combo->findData(current);
+            combo->setCurrentIndex(idx >= 0 ? idx : 0);
+        };
+        reseedCables();
+        pageReseeds->append(reseedCables);
+        if (m_model) {
+            UsbCableModel* cables = &m_model->usbCableModel();
+            connect(cables, &UsbCableModel::cableAdded, radioCableCombo, reseedCables);
+            connect(cables, &UsbCableModel::cableRemoved, radioCableCombo, reseedCables);
+        }
+        radioPageIdx = ui.addressStack->addWidget(radioCableCombo);
+    }
+
     // Port column: fixed text for serial (mandated by the device's own protocol
     // spec) or a port spin box for network mode.
     ui.portStack = new QStackedWidget;
@@ -1110,9 +1166,21 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     netPortSpin->setValue(PeripheralSettings::deviceInt(group, "ManualPort", ui.defaultPort));
     netPortSpin->setAccessibleName(tr("%1 network port").arg(ui.label));
     const int netPortIdx = ui.portStack->addWidget(netPortSpin);
+    int radioSpeedIdx = -1;
+    if (radioPageIdx >= 0) {
+        auto* radioSpeedLbl = new QLabel(tr("%1 (set on the radio)").arg(ui.fixedBaud));
+        setTone(radioSpeedLbl, Tone::Hint);
+        radioSpeedIdx = ui.portStack->addWidget(radioSpeedLbl);
+    }
 
     auto applyMode = [stack = ui.addressStack, ports = ui.portStack,
-                      serialPageIdx, serialBaudIdx, netPageIdx, netPortIdx](const QString& mode) {
+                      serialPageIdx, serialBaudIdx, netPageIdx, netPortIdx,
+                      radioPageIdx, radioSpeedIdx](const QString& mode) {
+        if (mode == "Radio" && radioPageIdx >= 0) {
+            stack->setCurrentIndex(radioPageIdx);
+            ports->setCurrentIndex(radioSpeedIdx);
+            return;
+        }
 #ifdef HAVE_SERIALPORT
         if (mode == "Serial" && serialPageIdx >= 0) {
             stack->setCurrentIndex(serialPageIdx);
@@ -1147,7 +1215,7 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
 
     ui.connectButton = makeConnectButton(ui);
     connect(ui.connectButton, &QPushButton::clicked, this,
-            [u, group, netIpEdit, netPortSpin, serialCombo, serialCustomEdit, refresh]() {
+            [u, group, netIpEdit, netPortSpin, serialCombo, serialCustomEdit, radioCableCombo, refresh]() {
         if (u->isConnected() || (u->isConnecting && u->isConnecting())) {
             u->disconnectNow();
             return;
@@ -1166,6 +1234,15 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
             PeripheralSettings::setDeviceInt(group, "ManualPort", port);
             u->state.connecting = true;
             u->connectNetwork(ip, static_cast<quint16>(port));
+        } else if (mode == "Radio" && radioCableCombo) {
+            const QString cable = radioCableCombo->currentData().toString();
+            if (cable.isEmpty()) {
+                refresh();
+                return;
+            }
+            PeripheralSettings::setDeviceString(group, "RadioCable", cable);
+            u->state.connecting = true;
+            u->connectRadioCable(cable);
         }
 #ifdef HAVE_SERIALPORT
         else {
@@ -1217,6 +1294,24 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
     addFormRow(detail, tr("Connection Type"), ui.modeCombo);
     addFormRow(detail, tr("Address/Serial Port"), ui.addressStack);
     addFormRow(detail, tr("TCP Port/Speed"), ui.portStack);
+    if (ui.applyPollInterval) {
+        auto* pollSpin = new QSpinBox;
+        pollSpin->setObjectName(QStringLiteral("peripheralPollInterval_%1").arg(ui.id));
+        pollSpin->setRange(ui.pollIntervalMinMs, ui.pollIntervalMaxMs);
+        pollSpin->setSingleStep(50);
+        pollSpin->setSuffix(tr(" ms"));
+        pollSpin->setValue(PeripheralSettings::deviceInt(group, "PollIntervalMs", ui.pollIntervalDefaultMs));
+        pollSpin->setAccessibleName(tr("%1 poll interval").arg(ui.label));
+        pollSpin->setAccessibleDescription(
+            tr("How often AetherSDR asks the device for a reading when no other program "
+               "is polling it, %1 to %2 milliseconds. Applies immediately.")
+                .arg(ui.pollIntervalMinMs).arg(ui.pollIntervalMaxMs));
+        connect(pollSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [u, group](int ms) {
+            PeripheralSettings::setDeviceInt(group, "PollIntervalMs", ms);
+            u->applyPollInterval(ms);
+        });
+        addFormRow(detail, tr("Poll Interval"), pollSpin);
+    }
     if (ui.deviceInfo) {
         ui.deviceInfoLabel = new QLabel(ui.deviceInfo());
         ui.deviceInfoLabel->setObjectName(QStringLiteral("peripheralDeviceInfo_%1").arg(ui.id));
@@ -2209,6 +2304,28 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ui->disconnectNow = [this]() { m_lpMeter->disconnect(); };
         ui->connectNetwork = [this](const QString& h, quint16 p) { m_lpMeter->connectNetwork(h, p); };
         ui->connectSerial = [this](const QString& port) { m_lpMeter->connectSerial(port); };
+        ui->connectRadioCable = [this](const QString& serial) { m_lpMeter->connectRadioCable(serial); };
+        ui->radioCables = [this]() {
+            QVector<QPair<QString, QString>> choices;
+            if (!m_model) {
+                return choices;
+            }
+            const auto& cables = m_model->usbCableModel().cables();
+            for (auto it = cables.cbegin(); it != cables.cend(); ++it) {
+                const QString label = it->name.isEmpty()
+                    ? it.key()
+                    : QStringLiteral("%1 — %2").arg(it.key(), it->name);
+                choices.append({it.key(), it->present ? label : tr("%1 (unplugged)").arg(label)});
+            }
+            return choices;
+        };
+        ui->applyPollInterval = [this](int ms) {
+            m_lpMeter->setPollIntervalMs(ms);
+            emit lpMeterPollIntervalChanged(static_cast<int>(m_lpMeter->pollIntervalMs()));
+        };
+        ui->pollIntervalDefaultMs = static_cast<int>(LpMeter::PollGate::kSoloPollIntervalMs);
+        ui->pollIntervalMinMs = static_cast<int>(LpMeter::PollGate::kSoloPollIntervalMs);
+        ui->pollIntervalMaxMs = static_cast<int>(LpMeter::PollGate::kMaxSoloPollIntervalMs);
         ui->description = [this]() { return m_lpMeter->description(); };
         ui->afterRemoval = [this]() { m_lpMeter->disconnect(); };
         buildSerialNetworkDevice(*ui, detailStack, refresh, serialReseeds);

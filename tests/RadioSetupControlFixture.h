@@ -25,6 +25,8 @@ public:
              {QStringLiteral("rf_freq"), QStringLiteral("144")},
              {QStringLiteral("if_freq"), QStringLiteral("28")}});
     }
+    static void status(RadioModel& radio, const QString& object, const QMap<QString, QString>& kvs)
+    { radio.handleStatusForTest(object, kvs); }
     static void disconnected(RadioModel& radio) { radio.onDisconnected(); }
     static void replaceConnectionGeneration(RadioModel& radio) { ++radio.m_sessionGeneration; }
     static auto productionSetupSink(RadioModel& radio, const RadioModel::SetupCommandWriter& writer)

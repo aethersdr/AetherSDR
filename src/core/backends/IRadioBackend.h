@@ -298,6 +298,10 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestUsbCable(const UsbCableRequest&)
     { return ReceiveDispatch::Unsupported; }
+    // Bytes for a passthrough USB cable's serial device. Replies arrive as
+    // the cable's status data (UsbCableModel::passthroughDataReceived).
+    virtual ReceiveDispatch requestUsbCableWrite(const QString& serial, const QByteArray& bytes)
+    { Q_UNUSED(serial); Q_UNUSED(bytes); return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestTransverter(const TransverterRequest&,
                                                const RadioSetupCompletion& = {})
     { return ReceiveDispatch::Unsupported; }

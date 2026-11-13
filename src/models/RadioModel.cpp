@@ -12030,6 +12030,22 @@ void RadioModel::onStatusReceived(const QString& object,
             // The CommandParser puts extra object words before the KV split.
             // "usb_cable FTDI-1234 bit 3" → object="usb_cable FTDI-1234 bit 3", kvs={enable=1,...}
             QMap<QString, QString> effectiveKvs = kvs;
+            // Passthrough data (FlexLib v4.3.16 UsbPassthroughCable.ParseStatus,
+            // "data:base64"); the parser keeps the value's '=' padding.
+            const auto data = effectiveKvs.constFind(QStringLiteral("data:base64"));
+            if (data != effectiveKvs.constEnd()) {
+                const auto decoded = QByteArray::fromBase64Encoding(data->toLatin1(),
+                    QByteArray::AbortOnBase64DecodingErrors);
+                if (decoded) {
+                    m_usbCableModel.deliverPassthroughData(sn, *decoded);
+                }
+                effectiveKvs.remove(QStringLiteral("data:base64"));
+                if (effectiveKvs.isEmpty()) { return; }
+            }
+            // Text-mode data from another client's `usb_cable write … text`
+            // splits on spaces in the KV parse, so it is not delivered; it is
+            // still not a cable setting.
+            if (effectiveKvs.contains(QStringLiteral("data:text"))) { return; }
             if (spaceIdx >= 0) {
                 QString afterSn = rest.mid(spaceIdx + 1).trimmed();
                 if (afterSn.startsWith("bit ")) {

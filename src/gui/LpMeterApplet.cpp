@@ -285,7 +285,7 @@ QString LpMeterApplet::diagnosticTooltip() const
                     "the update rate follows that program.");
     } else {
         lines << tr("Polling the meter directly at %1 ms.")
-                     .arg(LpMeter::PollGate::kSoloPollIntervalMs);
+                     .arg(m_pollIntervalMs);
     }
 
     lines << QString();

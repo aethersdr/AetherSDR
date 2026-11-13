@@ -21,7 +21,10 @@ community request.
 LP-100A is a standalone RS-232 instrument the radio has never heard of, and it
 works with any radio or none. So, like `AcomConnection`/`SpeConnection`/
 `VkampConnection`/`PgxlConnection`, `LpMeterConnection` lives directly under
-`src/core/`, outside the radio seam, and never touches `IRadioBackend`.
+`src/core/`, outside the radio seam, and never touches `IRadioBackend`. The
+one exception is a meter plugged into a FlexRadio's own USB port (§13): even
+then the connection holds no radio types, and its bytes reach the radio
+through hooks the main window supplies.
 
 It is also **not** an extension of `CrossNeedleMeterApplet`. That applet is fed
 by the radio's own forward/reflected telemetry; this is an independent
@@ -44,7 +47,8 @@ LpMeterProtocol (src/core/LpMeterProtocol.h/.cpp)   -- pure, Qt6::Core only
 
 LpMeterConnection (src/core/LpMeterConnection.h/.cpp)
   QIODevice* -- QSerialPort (local port) or QTcpSocket (raw-TCP proxy),
-  chosen at connect time. One parser serves both.
+  chosen at connect time, or the radio's USB passthrough cable through
+  RadioCableHooks (§13). One parser serves all three.
   signals: connected/disconnected/connectionFailed, readingUpdated,
            gaugeCeilingChanged, dataFlowingChanged
 
@@ -239,8 +243,9 @@ wins the race it consumes one of our polls; our later reply is then counted
 foreign in its place, so the totals still agree. Because matching is by count,
 there is no wall-clock ceiling on reply latency: a remote or VPN path with
 steady latency of any size classifies correctly. What the gate bounds is a
-number. At most `kMaxOutstandingPolls` (10) polls are held, so a stall followed
-by a burst of more than ten of our own replies is misclassified, and a poll the
+number. At most `maxOutstandingPolls()` polls are held (`kReplyExpiryMs`
+divided by the solo poll interval: 10 at the default 100 ms), so a stall
+followed by a longer burst of our own replies is misclassified, and a poll the
 meter ignores (or a failed write) leaves one slot that is carried forward while
 we keep polling and can absorb one later foreign record. An ignored poll or
 failed write delays confirming a foreign poller and causes extra polling; an
@@ -465,3 +470,64 @@ manifest tracks `core/`/`models/` headers the UI includes, not `gui/` files.
 4. Community data: the forward-vs-net question and dBm width on other units
    (§8) — ongoing, not gated on a release.
 5. v2: the three cycle commands, under §4's rule.
+
+---
+
+## 13. Radio USB passthrough transport
+
+A meter plugged into a FlexRadio's USB port is reached through the radio's
+passthrough cable (`reference/FlexLib/FlexLib/UsbPassthroughCable.cs`,
+v4.3.16). The Peripherals row's third connection type, **Radio USB**, lists the
+cables the radio reports by serial number and name.
+
+Measured on a FLEX-8600 (4.3.16) on 2026-11-13:
+
+- The radio takes the meter's FT232R (`0403:6001`) as a USB cable named by
+  the chip's serial number and sets it up as `type=cat speed=9600`.
+- **Changing the type resets the speed to 9600.** A `speed=115200` sent while
+  the cable is still CAT is acknowledged with `R|0|` and dropped.
+- The radio pushes a status for a type change but **not for a speed or
+  framing change**. So after each of those AetherSDR sends
+  `sub usb_cable all` (`RadioModel::requestUsbCableStatus()`) and waits for
+  the status that comes back.
+- A type change makes `UsbCableModel` re-create the cable (`cableRemoved`,
+  then `cableAdded`, in the same call). The main window reads a removal one
+  event-loop turn later, so a cable that another client re-types is not
+  mistaken for one that was unplugged and plugged back in.
+- Polls go out as `usb_cable write <sn> base64 UA==`. Replies arrive in the
+  cable's status as `data:base64=…`, and the status parser keeps the value's
+  `=` padding.
+- At a 100 ms poll for 60 s, 600 polls gave 598 records. Every record was the
+  full 42 characters, with no error replies. Round-trip time had a median of
+  59 ms and a maximum of 100 ms.
+- 817 statuses carried the 598 records, so records are often split across
+  statuses. They are fed to `ResponseParser` as a byte stream.
+- **Every client on the radio receives the replies.** A second API connection
+  that never polled got all 817. Through `PollGate` (§6), a second AetherSDR
+  therefore rides along instead of adding polls.
+
+Design rulings (maintainer, 2026-11-13):
+
+- **Choosing the cable is the operator's go-ahead to configure it.**
+  `LpMeterConnection` walks it to passthrough 115200 8N1 one setting at a
+  time, type first (`LpMeter::nextCableChange()`). Each step is confirmed by
+  the radio's status, never by its `R|0|`, and has 5 s to arrive. The cable is
+  left configured on disconnect.
+- **The link follows the radio's status, not a reconnect timer.** A cable that
+  is unplugged, or lost because the radio disconnects, is configured again
+  when it comes back. A cable that another client moves off passthrough drops
+  the link and is not taken back until it is replugged, the radio reconnects,
+  or the operator connects again.
+- **The seam carries bytes, not meter knowledge.**
+  `IRadioBackend::requestUsbCableWrite()` takes bytes for one cable, and
+  `UsbCableModel::passthroughDataReceived` delivers what comes back.
+  `RadioModel` splits `data:base64` off the cable status before the cable
+  model sees it, so a reply never counts as a settings change. Text-mode data
+  (`data:text`) from another client splits on spaces in the parse, so it is
+  dropped.
+- **The poll interval is an operator setting** (`Lp100a/PollIntervalMs`,
+  100–1000 ms, default 100), applied in every connection mode. It exists
+  because the radio relays every reply to every client.
+- The chosen cable is stored app-wide as `Lp100a/RadioCable`, alongside the
+  serial and network settings.
+

@@ -82,11 +82,16 @@ public:
                         const QString& value, int bit = -1);
     void requestRemoval(const QString& sn);
 
+    // Bytes a passthrough cable's device sent, from the cable's `data:base64`
+    // status. Kept apart from applyStatus() so replies do not emit cableChanged.
+    void deliverPassthroughData(const QString& serialNumber, const QByteArray& bytes);
+
 signals:
     void cableAdded(const QString& serialNumber);
     void cableRemoved(const QString& serialNumber);
     void cableChanged(const QString& serialNumber);
     void controlRequested(const AetherSDR::UsbCableRequest& request);
+    void passthroughDataReceived(const QString& serialNumber, const QByteArray& bytes);
 
 private:
     void parseBaseStatus(UsbCable& cable, const QMap<QString, QString>& kvs);

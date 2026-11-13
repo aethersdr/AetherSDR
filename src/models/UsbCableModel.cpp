@@ -124,6 +124,12 @@ void UsbCableModel::applyStatus(const QString& serialNumber,
     }
 }
 
+void UsbCableModel::deliverPassthroughData(const QString& serialNumber, const QByteArray& bytes)
+{
+    if (bytes.isEmpty() || !m_cables.contains(serialNumber)) { return; }
+    emit passthroughDataReceived(serialNumber, bytes);
+}
+
 void UsbCableModel::handleRemoved(const QString& serialNumber)
 {
     if (m_cables.remove(serialNumber)) {

@@ -364,4 +364,24 @@ ReceiveDispatch FlexBackend::requestUsbCable(const UsbCableRequest& request)
     return sink(command, {}) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
 }
 
+// FlexLib v4.3.16 UsbPassthroughCable.WriteBase64(): base64 so any byte,
+// space or '|' crosses the command line intact.
+ReceiveDispatch FlexBackend::requestUsbCableWrite(const QString& serial, const QByteArray& bytes)
+{
+    constexpr qsizetype kMaxWriteBytes = 1024;
+    if (!m_setupSink || bytes.isEmpty() || bytes.size() > kMaxWriteBytes
+        || serial.isEmpty() || serial.size() > 128) {
+        return ReceiveDispatch::Unsupported;
+    }
+    for (const QChar ch : serial) {
+        if (ch.unicode() > 127 || (!ch.isLetterOrNumber()
+            && ch != QLatin1Char('_') && ch != QLatin1Char('-') && ch != QLatin1Char('/'))) {
+            return ReceiveDispatch::Unsupported;
+        }
+    }
+    const QString command = QStringLiteral("usb_cable write %1 base64 %2")
+        .arg(serial, QString::fromLatin1(bytes.toBase64()));
+    return m_setupSink(command, {}) ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported;
+}
+
 } // namespace AetherSDR

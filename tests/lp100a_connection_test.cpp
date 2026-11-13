@@ -192,10 +192,160 @@ public:
             check("same serial endpoint retains its outage across reconnect",
                   warnings.size() == 2 && hasRecoveryDuration());
         }
+        radioCable(check);
         return failed == 0 ? 0 : 1;
     }
 
 private:
+    struct RadioRig {
+        LpMeter::CableSnapshot cable;
+        QList<LpMeter::CableChange> changes;
+        QList<QPair<QString, QByteArray>> writes;
+        bool accept{true};
+        int connectedCount{0};
+        int disconnectedCount{0};
+        QStringList failures;
+        QList<LpMeter::Reading> readings;
+
+        void attach(LpMeterConnection& connection)
+        {
+            LpMeterConnection::RadioCableHooks hooks;
+            hooks.snapshot = [this](const QString& serial) {
+                return serial == QStringLiteral("ABBDMO0I") ? cable : LpMeter::CableSnapshot{};
+            };
+            hooks.configure = [this](const QString&, const LpMeter::CableChange& change) {
+                changes.append(change);
+                return accept;
+            };
+            hooks.write = [this](const QString& serial, const QByteArray& bytes) {
+                writes.append({serial, bytes});
+                return accept;
+            };
+            connection.setRadioCableHooks(std::move(hooks));
+            QObject::connect(&connection, &LpMeterConnection::connected, [this] { ++connectedCount; });
+            QObject::connect(&connection, &LpMeterConnection::disconnected, [this] { ++disconnectedCount; });
+            QObject::connect(&connection, &LpMeterConnection::connectionFailed,
+                             [this](const QString& e) { failures.append(e); });
+            QObject::connect(&connection, &LpMeterConnection::readingUpdated,
+                             [this](const LpMeter::Reading& r) { readings.append(r); });
+        }
+    };
+
+    static LpMeter::CableSnapshot catCable()
+    {
+        // As the radio first reports the meter's FT232R (FLEX-8600, 4.3.16).
+        return {true, true, QStringLiteral("cat"), 9600, 8, QStringLiteral("none"), 1,
+                QStringLiteral("none")};
+    }
+
+    template <typename Check>
+    static void radioCable(const Check& check)
+    {
+        using Setting = LpMeter::CableChange::Setting;
+        const QString sn = QStringLiteral("ABBDMO0I");
+        {
+            RadioRig rig;
+            rig.cable = catCable();
+            LpMeterConnection connection;
+            connection.setAutoReconnect(true);
+            rig.attach(connection);
+            connection.connectRadioCable(sn);
+            check("a CAT cable is first switched to passthrough",
+                  rig.changes.size() == 1 && rig.changes[0].setting == Setting::Type
+                  && rig.changes[0].text == QStringLiteral("passthrough") && !connection.isConnected());
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("an unchanged status does not resend the pending setting", rig.changes.size() == 1);
+            rig.cable.type = QStringLiteral("passthrough");
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("the speed is set only after the radio confirms the type",
+                  rig.changes.size() == 2 && rig.changes[1].setting == Setting::Speed
+                  && rig.changes[1].number == 115200 && !connection.isConnected());
+            rig.cable.speed = 115200;
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("a confirmed passthrough 115200 8N1 cable brings the link up",
+                  connection.isConnected() && rig.connectedCount == 1
+                  && connection.sourceLabel() == QStringLiteral("RADIO")
+                  && connection.description() == QStringLiteral("radio USB cable ABBDMO0I")
+                  && !connection.m_cableConfigureTimer.isActive());
+            connection.m_pollTimer.stop();
+            connection.m_dataWatchdog.stop();
+
+            connection.pollTick();
+            check("a poll is written through the radio hook",
+                  rig.writes.size() == 1 && rig.writes[0].first == sn
+                  && rig.writes[0].second == QByteArray(1, LpMeter::kPollCommand));
+            // Measured: the radio often splits one record across two statuses.
+            connection.onRadioCableData(sn, QByteArray(";0000.00,047.5,071.6,0,LP-"));
+            connection.onRadioCableData(QStringLiteral("OTHER"), QByteArray(";9999.99"));
+            connection.onRadioCableData(sn, QByteArray("100,2,1,-2.3,1.00"));
+            connection.onRadioCableData(sn, QByteArray(";"));
+            connection.m_dataWatchdog.stop();
+            check("a record split across statuses decodes once; other cables are ignored",
+                  rig.readings.size() == 1 && rig.readings[0].zOhms > 47.4 && rig.readings[0].zOhms < 47.6);
+
+            rig.cable.type = QStringLiteral("cat");
+            rig.cable.speed = 9600;
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("a cable another client moves off passthrough drops the link and is not taken back",
+                  !connection.isConnected() && rig.disconnectedCount == 1 && rig.changes.size() == 2
+                  && !connection.reconnectPending());
+
+            rig.cable = LpMeter::CableSnapshot{};
+            connection.onRadioCableStatus(sn, rig.cable);
+            rig.cable = catCable();
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("a replugged cable is configured again",
+                  rig.changes.size() == 3 && rig.changes[2].setting == Setting::Type);
+        }
+        {
+            RadioRig rig;
+            LpMeterConnection connection;
+            rig.attach(connection);
+            connection.connectRadioCable(sn);
+            check("an unreported cable waits without configuring", rig.changes.isEmpty() && !connection.isConnected());
+            rig.cable = catCable();
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("the cable is configured once the radio reports it", rig.changes.size() == 1);
+            connection.disconnect();
+            rig.cable.type = QStringLiteral("passthrough");
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("after disconnect the cable is left alone", rig.changes.size() == 1 && !connection.isConnected());
+        }
+        {
+            RadioRig rig;
+            rig.cable = catCable();
+            rig.accept = false;
+            LpMeterConnection connection;
+            rig.attach(connection);
+            connection.connectRadioCable(sn);
+            rig.accept = true;
+            rig.cable.type = QStringLiteral("bit");
+            connection.onRadioCableStatus(sn, rig.cable);
+            check("a refused setting fails the attempt and stops configuring",
+                  rig.failures.size() == 1 && rig.changes.size() == 1 && !connection.isConnected());
+        }
+        {
+            RadioRig rig;
+            rig.cable = catCable();
+            LpMeterConnection connection;
+            rig.attach(connection);
+            connection.connectRadioCable(sn);
+            QMetaObject::invokeMethod(&connection.m_cableConfigureTimer, "timeout", Qt::DirectConnection);
+            check("a setting the radio never confirms fails the attempt",
+                  rig.failures.size() == 1 && rig.failures[0].contains(QStringLiteral("type passthrough")));
+        }
+        {
+            LpMeterConnection connection;
+            connection.setPollIntervalMs(250);
+            check("the poll interval reaches the timer and stretches the watchdog",
+                  connection.pollIntervalMs() == 250 && connection.m_pollTimer.interval() == 250
+                  && connection.m_dataWatchdog.interval() == 3150);
+            connection.setPollIntervalMs(20);
+            check("the poll interval is clamped", connection.pollIntervalMs() == 100
+                  && connection.m_dataWatchdog.interval() == 3000);
+        }
+    }
+
     static void start(LpMeterConnection& connection, PollSink& sink)
     {
         connection.m_device = &sink;

@@ -232,6 +232,23 @@ ReceiveDispatch RadioModel::requestUsbCable(const UsbCableRequest& request)
     return result;
 }
 
+ReceiveDispatch RadioModel::requestUsbCableWrite(const QString& serial, const QByteArray& bytes)
+{
+    if (QThread::currentThread() != thread()) { return ReceiveDispatch::Unsupported; }
+    const auto cable = m_usbCableModel.cables().constFind(serial);
+    const bool writable = cable != m_usbCableModel.cables().constEnd()
+        && cable->type == QLatin1String("passthrough") && cable->present;
+    // Not reported through reportReceiveDispatch: a poller calls this many
+    // times a second and its own watchdog reports a silent device.
+    return m_backend && controlSessionCurrent(controlSession()) && writable
+        ? m_backend->requestUsbCableWrite(serial, bytes) : ReceiveDispatch::Unsupported;
+}
+
+ReceiveDispatch RadioModel::requestUsbCableStatus()
+{
+    return requestSessionControl(SessionControlRequest::subscription(SessionTopic::UsbCable));
+}
+
 ReceiveDispatch RadioModel::requestTransverter(const TransverterRequest& request,
                                               QObject* replyContext,
                                               const RadioSetupCompletion& completion,
