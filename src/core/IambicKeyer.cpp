@@ -145,13 +145,15 @@ IambicKeyer::Element IambicKeyer::nextElementChoice(bool ditWanted,
     return justSent == Element::Dit ? Element::Dah : Element::Dit;
 }
 
-void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point when)
+void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point when,
+                              std::chrono::steady_clock::time_point releaseAt)
 {
     if (down == m_lastEmittedKeyDown) return;
     m_lastEmittedKeyDown = down;
     if (m_onKeyDownChange) m_onKeyDownChange(down, when);
     if (m_onRoutedKeyDownChange) {
-        m_onRoutedKeyDownChange(down, when, m_elementInput);
+        m_onRoutedKeyDownChange(down, when, down ? releaseAt : std::chrono::steady_clock::time_point{},
+                                m_elementInput);
     }
 }
 
@@ -271,7 +273,8 @@ void IambicKeyer::workerLoop()
             // Cancellation/reconnect cannot mint fresh authority here. Local
             // monitor/recorder timing remains independent of RF admission.
             m_elementInput = input.derive();
-            emitKeyDown(true, grid);
+            // onDeadline is this element's key-up instant, known now (#5065).
+            emitKeyDown(true, grid, onDeadline);
             {
                 std::unique_lock<std::mutex> lk(m_mu);
                 while (std::chrono::steady_clock::now() < onDeadline

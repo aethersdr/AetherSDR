@@ -5776,10 +5776,11 @@ bool RadioModel::requestProducerCw(const TxCoordinator::Request& request, bool d
 bool RadioModel::sendCwInput(bool down, bool ptt, bool notifySidetone,
                             const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                             std::chrono::steady_clock::time_point scheduledAt,
-                            const TxCoordinator::Request* request)
+                            const TxCoordinator::Request* request,
+                            std::chrono::steady_clock::time_point releaseAt)
 {
     const bool accepted = dispatchCwInput(down, ptt, notifySidetone, debugSource, debugTraceId,
-                                          debugSourceMs, scheduledAt, request);
+                                          debugSourceMs, scheduledAt, request, releaseAt);
     if (QThread::currentThread() != thread() || ptt || !notifySidetone) { return accepted; }
     if (accepted) {
         m_cwPracticeKeyDown = false;
@@ -5802,7 +5803,8 @@ bool RadioModel::sendCwInput(bool down, bool ptt, bool notifySidetone,
 bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
                                  const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
                                  std::chrono::steady_clock::time_point scheduledAt,
-                                 const TxCoordinator::Request* request)
+                                 const TxCoordinator::Request* request,
+                                 std::chrono::steady_clock::time_point releaseAt)
 {
     if (QThread::currentThread() != thread()) {
         return false;
@@ -5857,7 +5859,7 @@ bool RadioModel::dispatchCwInput(bool down, bool ptt, bool notifySidetone,
     };
     const CwControlRequest edge{ptt ? CwControlRequest::Kind::PttEnvelope : CwControlRequest::Kind::Carrier,
         down, m_transmitModel.cwBreakIn(), m_transmitModel.cwDelay(), scheduledAt,
-        debugSource, debugTraceId, debugSourceMs};
+        debugSource, debugTraceId, debugSourceMs, down ? releaseAt : std::chrono::steady_clock::time_point{}};
     bool accepted = false;
     {
         const TxCoordinator::Completion completion = trackTxQueue(original, finished);

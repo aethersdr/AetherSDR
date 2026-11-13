@@ -7,7 +7,9 @@
 #include <QList>
 #include <QObject>
 
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <complex>
 #include <span>
 #include <cstdint>
@@ -357,6 +359,8 @@ public:
         m_txAllowed = allowed;
         if (!allowed) {
             m_mox = false;
+            flushCwSchedule();
+            resetCwShift();
         }
     }
     [[nodiscard]] bool transmitEnabled() const noexcept { return m_txAllowed; }
@@ -381,10 +385,55 @@ public:
     // packet builder so its envelope is sample-paced by the radio's fixed
     // 48 kHz transmit stream rather than by GUI or producer-thread timing.
     // It still requires MOX; Hl2Backend owns break-in and manual-PTT policy.
-    void setCwKeyDown(bool down, const TxCoordinator::Operation& operation);
+    // An edge with `scheduledAt` takes effect at that instant's EP2 sample plus
+    // kCwEdgeLeadMs plus the over's shift (#5065). A key-down with `releaseAt`
+    // (its own key-up instant, known to the keyer when the element starts)
+    // schedules both edges at once, so the element's length never depends on
+    // when its key-up crosses the GUI thread; that later key-up is then
+    // bookkeeping, unless it is earlier (a keyer stopped mid-element).
+    // A key-down that arrives after its sample is never dropped: it and every
+    // later edge of the over move later by the lateness (the shift grows,
+    // never shrinks, until the over ends), so element and later space lengths
+    // stay exact; only the space before it is longer. A shift past
+    // kCwMaxEdgeShiftMs is refused and keys the over's carrier up until the
+    // over ends. A late key-up without a scheduled release is applied at once.
+    // An unscheduled edge flushes pending ones and takes effect now.
+    void setCwKeyDown(bool down, const TxCoordinator::Operation& operation,
+                      std::chrono::steady_clock::time_point scheduledAt = {},
+                      std::chrono::steady_clock::time_point releaseAt = {});
     Q_INVOKABLE void clearCwKeying();
     [[nodiscard]] bool cwModeActive() const noexcept { return m_cwMode; }
     [[nodiscard]] bool cwKeyDown() const noexcept { return m_cwKeyDown; }
+    // The delay that absorbs GUI and I/O-thread stalls in scheduled CW edges
+    // before the over's shift has to grow. 40 ms covers the GUI hop measured
+    // while keyed on a slow host (17-62 ms), so most overs never shift.
+    static constexpr int kCwEdgeLeadMs = 40;
+    // The largest shift an over may accumulate; a key-down later than this
+    // (beyond the lead) is refused and the over's carrier stays up.
+    static constexpr int kCwMaxEdgeShiftMs = 250;
+    // Longest scheduled element: a dah at the 5 WPM floor of IambicKeyer and
+    // CwxModel. A scheduled down held past this plus the lead is forced up.
+    static constexpr int kCwMaxScheduledElementMs = 3 * 1200 / 5;
+    // Process totals of the scheduled-edge fail-safes. A shifted element is
+    // sent whole; a refused one (past kCwMaxEdgeShiftMs, or inside a refused
+    // over) is not sent. A late key-up is one without a scheduled release that
+    // arrived after its sample and was applied at once (the element is long).
+    [[nodiscard]] std::uint64_t cwShiftedElements() const noexcept { return m_cwShiftedElements; }
+    [[nodiscard]] std::uint64_t cwRefusedDowns() const noexcept { return m_cwRefusedDowns; }
+    [[nodiscard]] std::uint64_t cwLateKeyUps() const noexcept { return m_cwLateKeyUps; }
+    // The current over's shift, in EP2 samples (I/O thread).
+    [[nodiscard]] std::int64_t cwShiftSamples() const noexcept { return m_cwShiftSamples; }
+    // The on-air instant of the last scheduled key-up, or epoch zero. An
+    // atomic, so the GUI thread may read it: Hl2Backend's break-in hang waits
+    // for it, because a shifted key-up reaches the wire later than its instant
+    // plus the lead.
+    [[nodiscard]] std::chrono::steady_clock::time_point cwScheduledUpOnAir() const noexcept
+    {
+        return std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(
+            m_cwUpOnAirTicks.load(std::memory_order_acquire)));
+    }
+    [[nodiscard]] std::uint64_t cwScheduleOverflows() const noexcept { return m_cwScheduleOverflows; }
+    [[nodiscard]] std::uint64_t cwForcedKeyUps() const noexcept { return m_cwForcedKeyUps; }
 
     // Build the EP2 packet this client would send next, without sending it.
     // Exists so the gate can be tested on the exact bytes that would go out.
@@ -905,6 +954,45 @@ private:
     bool m_mox = false;         // requested key state, only honoured if m_txAllowed
     TxCoordinator::Operation m_moxOperation;
     TxCoordinator::Operation m_cwOperation;
+    // Scheduled CW edges (#5065), sorted by EP2 sample index. Sample 0 is
+    // m_cwAnchor, taken with m_ep2Clock; the pacer re-syncs m_cwFrameSample to
+    // its own frame count, and every other build advances it by one frame.
+    struct CwScheduledEdge {
+        std::int64_t sample = 0;
+        bool down = false;
+        TxCoordinator::Operation operation;
+        bool release = false;   // a key-up scheduled with its own key-down
+    };
+    static constexpr std::size_t kCwScheduleCapacity = 16;
+    static constexpr std::int64_t kCwEdgeLeadSamples =
+        static_cast<std::int64_t>(kCwEdgeLeadMs) * kEp2AudioRateHz / 1000;
+    static constexpr std::int64_t kCwMaxScheduledElementSamples =
+        static_cast<std::int64_t>(kCwMaxScheduledElementMs + kCwEdgeLeadMs) * kEp2AudioRateHz / 1000;
+    static constexpr std::int64_t kCwMaxEdgeShiftSamples =
+        static_cast<std::int64_t>(kCwMaxEdgeShiftMs) * kEp2AudioRateHz / 1000;
+    std::array<CwScheduledEdge, kCwScheduleCapacity> m_cwSchedule{};
+    std::size_t m_cwScheduleCount = 0;
+    std::chrono::steady_clock::time_point m_cwAnchor{};
+    std::int64_t m_cwFrameSample = 0;        // EP2 sample index of the next frame built
+    std::int64_t m_cwForceUpSample = -1;     // cap on the scheduled down in force; -1 none
+    std::int64_t m_cwShiftSamples = 0;       // the over's shift, >= 0, grows only
+    bool m_cwOverRefused = false;            // a key-down past the bound: carrier up until the over ends
+    bool m_cwReleaseOwed = false;            // the last down scheduled its own key-up
+    std::atomic<std::chrono::steady_clock::rep> m_cwUpOnAirTicks{0};
+    std::uint64_t m_cwShiftedElements = 0;
+    std::uint64_t m_cwRefusedDowns = 0;
+    std::uint64_t m_cwLateKeyUps = 0;
+    std::uint64_t m_cwScheduleOverflows = 0;
+    std::uint64_t m_cwForcedKeyUps = 0;
+    QElapsedTimer m_cwFailSafeLogClock;   // rate-limits the fail-safe warning
+    [[nodiscard]] std::int64_t cwSampleAt(std::chrono::steady_clock::time_point t) const noexcept;
+    void enterCwMode(const TxCoordinator::Operation& operation);
+    void applyDueCwEdges(std::int64_t sample, qint64 nowMs);
+    void flushCwSchedule() noexcept;   // drops pending edges and keys up
+    void resetCwShift() noexcept;      // the over ended: shift and refusal cleared
+    bool insertCwEdge(const CwScheduledEdge& edge);
+    void scheduleCwKeyUp(std::int64_t target, const TxCoordinator::Operation& operation, bool release);
+    void logCwFailSafe(const char* what);
     TxCoordinator::Operation m_toneOperation;
     void setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);
 

@@ -1125,13 +1125,14 @@ void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceI
 
 void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                        const QString& source, quint64 traceId, quint64 sourceMs,
-                                       std::chrono::steady_clock::time_point scheduledAt)
+                                       std::chrono::steady_clock::time_point scheduledAt,
+                                       std::chrono::steady_clock::time_point releaseAt)
 {
-    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt] {
+    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt, releaseAt] {
         if (m_txSessionClosing || scheduledAt < m_cwInputNotBefore) {
             return;
         }
-        (void)sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request);
+        (void)sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request, releaseAt);
     }, Qt::QueuedConnection);
 }
 

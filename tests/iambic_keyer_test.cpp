@@ -544,7 +544,7 @@ void testCapturedInputSurvivesNormalTailButNotCancel()
     keyer.setWpm(kTestWpm);
     keyer.setMode(IambicKeyer::Mode::IambicB);
     keyer.setOnKeyDownChange([&](bool down, auto when) { rec.onKeyDownChange(down, when); });
-    keyer.setOnRoutedKeyDownChange([&](bool down, auto, const auto& request) {
+    keyer.setOnRoutedKeyDownChange([&](bool down, auto, auto, const auto& request) {
         std::lock_guard<std::mutex> lock(mutex);
         (down ? downs : ups).push_back(request);
     });
@@ -578,7 +578,7 @@ void testCapturedInputSurvivesNormalTailButNotCancel()
     const TxCoordinator::Request unrelated = producer.request();
     keyer.setMode(IambicKeyer::Mode::IambicA);
     keyer.setOnKeyDownChange([&](bool down, auto when) { held.onKeyDownChange(down, when); });
-    keyer.setOnRoutedKeyDownChange([&](bool down, auto, const auto&) {
+    keyer.setOnRoutedKeyDownChange([&](bool down, auto, auto, const auto&) {
         if (down) {
             keyer.setPaddleState(false, false, unrelated);
         }
