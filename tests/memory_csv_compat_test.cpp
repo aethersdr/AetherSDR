@@ -189,6 +189,37 @@ void testFreeDvRoundTrip()
     }
 }
 
+void testRttyRangeMatchesRadio()
+{
+    // MEASURED (#7093, FLEX-8400 firmware 4.3.16.42034): `slice set` keeps a
+    // Mark of 0-4000 Hz and a Shift of 0-2000 Hz and refuses one step past each.
+    struct Tones { int mark; int shift; };
+    const auto roundTrip = [](const Tones& tones) {
+        MemoryCsvRecord record;
+        record.memory.name = "RTTY";
+        record.memory.freq = 14.085;
+        record.memory.mode = "RTTY";
+        record.memory.rttyMark = tones.mark;
+        record.memory.rttyShift = tones.shift;
+        return MemoryCsvCompat::parse(MemoryCsvCompat::serialize({record}));
+    };
+    for (const Tones& tones : {Tones{0, 0}, Tones{75, 170}, Tones{4000, 2000}}) {
+        const MemoryCsvParseResult r = roundTrip(tones);
+        expect(r.ok(), "RTTY mark 0-4000 Hz and shift 0-2000 Hz pass the CSV check");
+        if (expect(r.records.size() == 1, "in-range RTTY row yields one record")) {
+            expect(r.records.first().memory.rttyMark == tones.mark
+                       && r.records.first().memory.rttyShift == tones.shift,
+                   "CSV round-trip preserves RTTY mark and shift");
+        }
+    }
+    for (const Tones& tones : {Tones{-1, 170}, Tones{4001, 170},
+                               Tones{2125, -1}, Tones{2125, 2001}}) {
+        const MemoryCsvParseResult r = roundTrip(tones);
+        expect(!r.ok() && r.records.isEmpty(),
+               "RTTY mark outside 0-4000 Hz or shift outside 0-2000 Hz is refused");
+    }
+}
+
 #ifdef CHIRP_SAMPLE_CSV
 void testSampleFixtureParses()
 {
@@ -226,6 +257,7 @@ int main()
 #endif
     testSmartSdrStillWorks();
     testFreeDvRoundTrip();
+    testRttyRangeMatchesRadio();
     testUnknownHeaderRejected();
 
     if (g_failures == 0)
