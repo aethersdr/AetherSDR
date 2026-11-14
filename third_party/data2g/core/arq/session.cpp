@@ -73,7 +73,9 @@ Session::Session(std::string call_, std::shared_ptr<Policy> policy_, double t_tu
       stats_interval_s(stats_interval_s_) {}
 
 std::shared_ptr<Station> Session::make_station(int direction, bool master_, int key) {
-    return std::make_shared<Station>(direction, policy, master_, key, std::nullopt, cap, chat);
+    auto st = std::make_shared<Station>(direction, policy, master_, key, std::nullopt, cap, chat);
+    st->nod = nods;  // nods (docs/arq.md §3b): a session's station, unless the host turned them off
+    return st;
 }
 
 // --- host side ------------------------------------------------------------------------
@@ -256,7 +258,7 @@ void Session::on_rx(RxBurst& rx, double now) {
             build_at = now + REPLY_HOLD_S;  // poll() builds it; write() brings it forward
         } else {
             build_at.reset();
-            queue(st->build(), now);
+            queue(st->build(true, true), now);  // a direct reply: where the peer looks for a nod
             st->answered();
         }
         return;
@@ -274,7 +276,7 @@ void Session::on_rx(RxBurst& rx, double now) {
         build_at = now + REPLY_HOLD_S;  // poll() builds it; write() brings it forward
     } else if (busy) {
         idle_wait = 0.0;
-        queue(st->build(), now);
+        queue(st->build(true, true), now);  // a direct reply: where the peer looks for a nod
         st->answered();
     } else {
         const bool c = st->chat || st->peer_chat;

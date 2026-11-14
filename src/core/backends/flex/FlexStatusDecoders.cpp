@@ -3,6 +3,10 @@
 // Moved from FlexBackend / FlexNtpSourceControls unchanged.
 #include "FlexStatusIngress.h"
 #include "FlexDisplayStatus.h"
+#include "FlexSetupStatus.h"
+#include "FlexSliceStatus.h"
+#include "FlexRadioStatus.h"
+#include "FlexTransmitServiceStatus.h"
 
 #include "core/LogManager.h"
 #include "core/backends/MemoryWireCodec.h"
@@ -109,10 +113,62 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
         }
         return;
     }
+    // Setup inventory and settings: the model applies them for every backend
+    // that relays them, so they are decoded before the value gate too.
+    if (isFlexSetupStatusObject(line.object)) {
+        if (auto setup = decodeFlexSetupStatus(line.object, line.kvs)) {
+            setup->statusEpoch = m_epoch;
+            emit setupStatusObserved(*setup);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected setup status" << line.object;
+        }
+        return;
+    }
+    // Slice identity and ownership are lifecycle too; SimBackend drops the
+    // values its native producer owns.
+    if (FlexSliceStatus::isSlice(line.object) && !line.kvs.contains(QStringLiteral("waveform_status"))) {
+        if (auto slice = FlexSliceStatus::decode(line.object, line.kvs)) {
+            slice->statusEpoch = m_epoch;
+            emit sliceObserved(*slice);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected slice status" << line.object;
+        }
+        return;
+    }
+    // Client lifecycle, the oscillator and static network are the Demo's too;
+    // SimBackend drops the radio-global values its native producer owns.
+    if (isFlexRadioStatusObject(line.object)) {
+        if (auto radio = decodeFlexRadioStatus(line.object, line.kvs)) {
+            radio->statusEpoch = m_epoch;
+            emit radioStatusObserved(*radio);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected radio status" << line.object;
+        }
+        return;
+    }
     if (!m_decodeValues) {
         // Identity only (SimBackend): a TGXL's handle, which replayed captured
         // status relies on; nothing else.
         if (line.object.startsWith(QLatin1String("amplifier"))) { routeAmplifierStatus(line.object, line.kvs); }
+        return;
+    }
+    // The radio voice keyer and NAVTEX: Flex-only (Demo has neither).
+    if (line.object.startsWith(QLatin1String("dvk"))) {
+        if (auto dvk = decodeFlexDvkStatus(line.object, line.kvs)) {
+            dvk->statusEpoch = m_epoch;
+            emit dvkStatusObserved(*dvk);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected dvk status" << line.object;
+        }
+        return;
+    }
+    if (line.object.startsWith(QLatin1String("navtex"))) {
+        if (auto navtex = decodeFlexNavtexStatus(line.object, line.kvs)) {
+            navtex->statusEpoch = m_epoch;
+            emit navtexStatusObserved(*navtex);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected navtex status" << line.object;
+        }
         return;
     }
     // Raw route: objects whose values carry spaces or '#' separators, read

@@ -16,6 +16,7 @@
 #include "models/FlexWaveformModel.h"
 #include "models/NavtexModel.h"
 #include "models/PanadapterModel.h"
+#include "models/SliceModel.h"
 #include "models/RadioModel.h"
 #include "models/SpotModel.h"
 #include "models/TnfModel.h"
@@ -111,6 +112,55 @@ void dumpState(RadioModel& model)
             .arg(pan->ownerHandle(), 0, 16);
     }
     qInfo("STATE pans %s", qPrintable(pans.join(QLatin1Char(' '))));
+    parts.clear();
+    for (const auto& x : model.xvtrList()) {
+        parts << QStringLiteral("xvtr%1[%2 o=%3 rf=%4 if=%5 lo=%6 g=%7 p=%8 rx=%9 v=%10/%11]").arg(x.index).arg(x.name)
+            .arg(x.order).arg(x.rfFreq).arg(x.ifFreq).arg(x.loError).arg(x.rxGain).arg(x.maxPower).arg(int(x.rxOnly))
+            .arg(int(x.isValid)).arg(int(x.hasIsValid));
+    }
+    for (const UsbCable& c : model.usbCableModel().cables()) {
+        QString bits;
+        for (int i = 0; i < 8; ++i) {
+            const UsbCableBit& b = c.bits[i];
+            bits += QStringLiteral(" b%1[%2 %3 %4 %5 %6 %7 %8 %9 %10]").arg(i).arg(int(b.enabled)).arg(b.source, b.band)
+                .arg(b.lowFreqMhz).arg(b.highFreqMhz).arg(int(b.activeHigh)).arg(int(b.pttDependent))
+                .arg(b.pttDelayMs).arg(b.txDelayMs);
+        }
+        parts << QStringLiteral("usb[%1 %2 %3 en=%4 in=%5 log=%6 %7/%8/%9/%10/%11 src=%12 auto=%13 hi=%14 ldpa=%15/%16%17]")
+            .arg(c.serialNumber, c.type, c.name).arg(int(c.enabled)).arg(int(c.present)).arg(int(c.loggingEnabled))
+            .arg(c.speed).arg(c.dataBits).arg(c.parity).arg(c.stopBits).arg(c.flowControl).arg(c.source)
+            .arg(int(c.autoReport)).arg(int(c.activeHigh)).arg(c.ldpaBand).arg(int(c.preamp)).arg(bits);
+    }
+    qInfo("STATE setup %s sharp=%d/%d,%d/%d,%d/%d", qPrintable(parts.join(QLatin1Char(' '))),
+          model.filterSharpnessVoice(), int(model.filterSharpnessVoiceAuto()), model.filterSharpnessCw(),
+          int(model.filterSharpnessCwAuto()), model.filterSharpnessDigital(), int(model.filterSharpnessDigitalAuto()));
+    parts.clear();
+    for (int id = 0; id < 8; ++id) {
+        if (const SliceModel* sl = model.slice(id)) {
+            parts << QStringLiteral("s%1[%2 %3 %4 %5..%6 act=%7 tx=%8 ant=%9/%10 dax=%11]").arg(id).arg(sl->frequency(), 0, 'f', 6)
+                .arg(sl->mode(), sl->panId()).arg(sl->filterLow()).arg(sl->filterHigh()).arg(int(sl->isActive()))
+                .arg(int(sl->isTxSlice())).arg(sl->rxAntenna(), sl->txAntenna()).arg(sl->daxChannel());
+        } else if (model.isSlotForeign(id)) {
+            parts << QStringLiteral("s%1[foreign]").arg(id);
+        }
+    }
+    qInfo("STATE slices %s", qPrintable(parts.join(QLatin1Char(' '))));
+    QStringList clients;
+    for (auto it = model.clientInfoMap().cbegin(); it != model.clientInfoMap().cend(); ++it) {
+        clients << QStringLiteral("%1[%2 %3 %4 %5 ptt=%6]").arg(it.key(), 0, 16).arg(it->clientId, it->program, it->station, it->source)
+            .arg(int(it->localPtt));
+    }
+    qInfo("STATE radio nick=%s call=%s model=%s osc=%s/%s/%d ext=%d gps=%d tcxo=%d static=%s/%s/%s clients=%s",
+          qPrintable(model.nickname()), qPrintable(model.callsign()), qPrintable(model.model()),
+          qPrintable(model.oscState()), qPrintable(model.oscSetting()), int(model.oscLocked()), int(model.extPresent()),
+          int(model.gpsdoPresent()), int(model.tcxoPresent()), qPrintable(model.staticIp()), qPrintable(model.staticNetmask()),
+          qPrintable(model.staticGateway()), qPrintable(clients.join(QLatin1Char(' '))));
+    qInfo("STATE license id=%s max=%s sub=%s exp=%s dvk=%d/%d nr=%d/%d", qPrintable(model.licenseRadioId()),
+          qPrintable(model.licenseMaxVersion()), qPrintable(model.licenseSubscription()),
+          qPrintable(model.licenseExpirationDate()), int(model.licenseFeatureSeen(QStringLiteral("digital_voice_keyer"))),
+          int(model.licenseFeatureEnabled(QStringLiteral("digital_voice_keyer"))),
+          int(model.licenseFeatureSeen(QStringLiteral("noise_reduction"))),
+          int(model.licenseFeatureEnabled(QStringLiteral("noise_reduction"))));
 }
 } // namespace
 

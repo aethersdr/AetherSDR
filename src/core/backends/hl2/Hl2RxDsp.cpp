@@ -164,6 +164,9 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(
     // process-global FFTW lock.
     wc.minimumPhase = rxMinimumPhaseFor(config.mode);
     wc.rxPanelGain = kRxPanelGain;
+    // FM bypasses the AGC; the limiter bounds it in every build, since setMode()
+    // enters FM live without a rebuild (#7222).
+    wc.fmLimiter = true;
 
     auto channel = WdspChannel::create(wc, &result.error);
     if (!channel)

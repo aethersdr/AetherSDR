@@ -21,7 +21,8 @@ ggmorse cost. Each letter is colored by the model's own posterior (cost =
 1 − posterior, the four ggmorse color bands) and is hidden at or above
 DeepFist's own Sens setting (default 0, which hides nothing); pitch and speed
 are not invented.
-DeepFist output does not feed automatic callsign spotting. Other monitored
+DeepFist output feeds automatic callsign spotting through the text shown in
+the pane, after DeepFist's Sens filter. Other monitored
 slices and speaker gain/mute do not alter the selected decoder input. This is
 an audio slice tap, not an RF separation claim.
 

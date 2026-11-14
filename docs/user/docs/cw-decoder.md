@@ -3,12 +3,12 @@ title: "CW Decoder"
 slug: "/cw-decoder"
 description: "AetherSDR includes a built-in CW (Morse code) decoder: ggmorse by default, with two optional neural decoders, DeepFist and DeepCW."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early; IC-7300MK2 supported)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (early; IC-7300MK2 supported)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental), Networked Icom (early; IC-7300MK2 supported)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (early; IC-7300MK2 supported)
 
 :::
 
@@ -66,7 +66,7 @@ With a neural decoder selected:
 
 - The lock buttons and the Pitch and WPM ranges are unavailable; they apply to ggmorse only.
 - Characters are colored by the model's own confidence, on the same green-to-red scale. **Sens** hides the low-confidence ones, as it does for ggmorse. Each decoder keeps its own Sens setting; DeepFist and DeepCW start at 0, which hides nothing. DeepFist text is hidden one character at a time and DeepCW text one group of characters at a time, as each is given its confidence. With DeepFist a word space is always shown; a hidden DeepCW group is hidden with the spaces inside it.
-- The MQTT text stream comes from ggmorse only. The **Live CW contacts** window works with every decoder: it reads the text shown in the pane.
+- The MQTT text stream comes from ggmorse only. The **Live CW contacts** window works with every decoder: it reads the text shown in the panel.
 - AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on a radio licensed for it through SmartSDR+, which it keeps after the subscription lapses) works with any decoder.
 
 The slice's **Once** and **Loop** auto-tune controls adjust receive tuning;

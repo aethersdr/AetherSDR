@@ -7,6 +7,7 @@
 #include "ControlAvailabilityRegistry.h"
 #include "HGauge.h"
 #include "StatusIndicator.h"
+#include "StatusBarMessageOverlay.h"
 #include "models/CwDecodeSettings.h"
 #include "PeripheralAuthStore.h"
 #include "core/backends/AutoRfGainControl.h"
@@ -80,6 +81,7 @@
 #include "core/WaterfallRate.h"
 #include "core/SpotModeResolver.h"
 #include "core/LogManager.h"
+#include "core/ThemeManager.h"
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
@@ -110,28 +112,12 @@ namespace AetherSDR {
 
 void MainWindow::wireStatusBarMessages()
 {
-    QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(m_statusBarContainer->layout());
-    const int stationIndex = layout->indexOf(m_stationNickLabel);
-    connect(statusBar(), &QStatusBar::messageChanged, this,
-            [this, layout, stationIndex](const QString& message) {
-        if (!message.isEmpty() && m_stationNickLabel->parentWidget() == m_statusBarContainer) {
-            // Only the existing Connect control is permanent while a message
-            // is shown. Making the full-width bar permanent hides Qt's text.
-            layout->removeWidget(m_stationNickLabel);
-            statusBar()->addPermanentWidget(m_stationNickLabel);
-            m_stationNickLabel->show();
-            // addPermanentWidget reformats the bar and can re-show normal
-            // children; explicitly leave Qt's temporary-message area clear.
-            m_statusBarContainer->hide();
-        } else if (message.isEmpty()
-                   && m_stationNickLabel->parentWidget() != m_statusBarContainer) {
-            statusBar()->removeWidget(m_stationNickLabel);
-            layout->insertWidget(stationIndex, m_stationNickLabel);
-            m_stationNickLabel->show();
-            m_statusBarContainer->show();
-            updateStatusBarMinimumWidth();
-        }
-    });
+    auto* messageOverlay = new StatusBarMessageOverlay(statusBar(), m_panStack);
+    ThemeManager::instance().applyStyleSheet(
+        messageOverlay,
+        QStringLiteral("QLabel#statusBarMessageOverlay { color: {{color.text.secondary}};"
+                       " background: {{color.background.1}}; font-size: 12px;"
+                       " border: 1px solid {{color.background.2}}; border-radius: 4px; }"));
     connect(&m_radioModel.transmitModel(), &TransmitModel::atuTuneFailed,
             this, [this](ATUStatus, const QString& detail) {
                 statusBar()->showMessage(
@@ -2224,19 +2210,21 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_antennaGenius.setRadioFrequency(s->frequency());
 
     connect(s, &SliceModel::filterChanged, this, [this, s](int lo, int hi) {
+        // The TX mask is separate state on every spectrum, so it follows every
+        // filter change; only the dragged overlay waits out a drag (#764).
+        if (s->isTxSlice())
+            syncTxWaterfallSliceToSpectrums();
         auto* sw = spectrumForSlice(s);
         if (!sw) return;
-        // Skip overlay update while user is dragging a filter edge — the radio's
-        // status echo would overwrite the drag position, causing snap-to-zero (#764)
-        if (sw->isDraggingFilter()) return;
+        // Skip this slice's overlay while its filter edge is being dragged — the
+        // radio's echo would overwrite the drag position, causing snap-to-zero (#764)
+        if (sw->isDraggingFilterOf(s->sliceId())) return;
         sw->setSliceOverlay(s->sliceId(), s->frequency(),
             lo, hi, s->isTxSlice(), s->sliceId() == m_activeSliceId,
             s->mode(), s->rttyMark(), s->rttyShift(),
             s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq(),
             s->diversity(), s->isDiversityParent(),
             s->isDiversityChild(), s->diversityIndex());
-        if (s->isTxSlice())
-            syncTxWaterfallSliceToSpectrums();
     });
     // Each pan renders its own slice's accepted threshold, including updates
     // to background Auto receivers.

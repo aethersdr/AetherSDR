@@ -36,18 +36,18 @@ public:
     // marked meterDependent.
     enum class Phase { Tune, Rx, Tx, Meters, All };
 
+    // The rf stimulus range the bridge accepts. The ceiling leaves headroom
+    // below full scale so the tone itself cannot clip the modulator.
+    static constexpr double kDefaultRfStimulusDbfs = -20.0;
+    static constexpr double kMinRfStimulusDbfs = -60.0;
+    static constexpr double kMaxRfStimulusDbfs = -3.0;
+
     struct Options {
         Phase phase = Phase::All;
         double frequencyMhz = 14.200;   // mid-band: both sidebands stay in band
         QString mode = QStringLiteral("USB");
         int settleMs = 2500;            // per keyed measurement
         bool includeAudioProbe = true;  // the demodulated-sideband stage
-
-        // The automation power ceiling (AETHER_AUTOMATION_TX_MAX_POWER), or -1
-        // for none. This verb keys repeatedly across several stages, so it is
-        // the last one that should sit outside the ceiling that exists to stop
-        // automation transmitting at the operator's full power.
-        int maxPowerPercent = -1;
 
         // A known off-air carrier for the receive stages. WWV is the default
         // because it is free, always on, on an exactly known frequency, and
@@ -65,6 +65,16 @@ public:
         // verb that keys repeatedly and unattended. The ceiling exists precisely
         // so automation cannot do that.
         int maxRfPowerPercent = -1;
+
+        // Level of the 1 kHz tone the rf and meter-scale stages key with, in
+        // dBFS. These are the two stages whose verdict needs a derived RF
+        // meter (SWR), and a backend may withhold one below its own forward
+        // gate: on the Hermes-Lite 2 a -20 dBFS tone at 40 % drive peaked at
+        // 113 of the 320 counts it needs. The level is the operator's choice,
+        // never raised by this tool, and every other keyed stage keeps -20
+        // because its known answer (a 6.02 dB mic-gain step, the sideband
+        // stage's recovery floor) was measured at that level. Bridge: tone=.
+        double rfStimulusDbfs = kDefaultRfStimulusDbfs;
 
         // A steady carrier for stage-squelch-scale, or 0 for referenceCarrierMhz.
         // Choose one below S9: above it the IC-7300MK2's gate sits 6-10 dB off
@@ -152,6 +162,27 @@ private:
     // refuse keying (band limits, interlocks) and requestPttOn returns void.
     bool keyViaOperatorPath(bool on);
     bool keyedNow() const;
+
+    // The backend's own SWR gate as its health snapshot publishes it right now
+    // (#7063): the forward counts it requires, how many windows of the current
+    // over cleared it, and the current window peak. -1 for each key the
+    // backend does not publish, which is NOT a cleared gate.
+    struct SwrGateReading {
+        int gateCounts = -1;
+        int clearsThisOver = -1;
+        int peakCounts = -1;
+    };
+    SwrGateReading readSwrGate() const;
+
+    // What the rf stage concludes about SWR from one keyed window. Separate so
+    // the decision is testable without a transmitter. `result` is one of
+    // "reading", "gate-not-reached", "gate-withheld", "no-reading".
+    struct SwrAtKey {
+        QString result;
+        QString concern;
+    };
+    static SwrAtKey classifySwrAtKey(bool haveSwr, const SwrGateReading& gate,
+                                     int drivePercent, double toneDbfs);
 
     // Drive used for the sideband probe only. Enough to measure, low enough
     // that the receiver listening to its own transmitter is not driven into

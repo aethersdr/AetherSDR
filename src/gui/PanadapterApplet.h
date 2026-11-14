@@ -137,9 +137,10 @@ signals:
     void pitchRangeChanged(int minHz, int maxHz);
     void speedRangeChanged(int minWpm, int maxWpm);
     void cwPanelCloseRequested();
-    // RX text rendered in the pane, after the selected decoder's Sens
-    // filter — the stream the CW callsign spotter watches for
-    // "DE <call> <call>".
+    // RX text rendered in the pane by appendCwText(), appendColoredCwText()
+    // and appendUnscoredCwText() (scored text only after the selected
+    // decoder's Sens filter) — the stream the CW callsign spotter watches
+    // for "DE <call> <call>".
     void cwRxTextDisplayed(const QString& text);
 
     // RTTY

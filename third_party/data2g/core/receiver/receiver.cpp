@@ -111,7 +111,7 @@ BurstEvent decode(DecodeRequest req, const modem::Accept& accept) {
     p.shift(-req.at);
     const auto t0 = std::chrono::steady_clock::now();
     if (p.is_cpm()) {
-        ev.rx = cpm::receive(req.seg, p.cpm());
+        ev.rx = req.stream ? req.stream->finish() : cpm::receive(req.seg, p.cpm());
     } else {
         try {
             if (p.copy()) {
@@ -128,6 +128,10 @@ BurstEvent decode(DecodeRequest req, const modem::Accept& accept) {
     if (req.audio_lo == 0 && req.audio_hi == static_cast<int64_t>(req.seg.size())) ev.audio = std::move(req.seg);
     else ev.audio.assign(req.seg.begin() + req.audio_lo, req.seg.begin() + req.audio_hi);
     return ev;
+}
+
+void run(StreamFeed& f) {
+    if (f.stream) f.stream->feed(f.audio);
 }
 
 Receiver::Receiver(modem::Accept accept, std::vector<std::string_view> cpm_grids, bool blank)
@@ -151,6 +155,7 @@ void Receiver::reset() {
     buf_.clear();
     off_ = 0;
     pending_.reset();
+    stream_.reset();
     pilots_ok_ = confirmed_ = false;
     dark_ = 0;
     looked_ = false;
@@ -201,6 +206,14 @@ std::optional<std::pair<double, double>> ReplySlot::window(double tx_end) const 
     const std::size_t n = v.size();
     const double g = n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;  // np.median
     return std::make_pair(tx_end + g - TOL_S, tx_end + g + TOL_S);
+}
+
+std::optional<std::pair<double, double>> ReplySlot::nod_window(double tx_end) const {
+    const auto w = window(tx_end);
+    if (!w) return std::nullopt;
+    const double g = w->first + TOL_S - tx_end;
+    const auto [mn, mx] = std::minmax_element(gaps_.begin(), gaps_.end());
+    return std::make_pair(tx_end + std::max(*mn - TOL_S, g - NOD_HALF_S), tx_end + std::min(*mx + TOL_S, g + NOD_HALF_S));
 }
 
 bool Receiver::on_air() const {
@@ -456,6 +469,7 @@ std::vector<Event> Receiver::feed(std::span<const double> x) {
     for (auto& it : feed_deferred(x)) {
         if (auto* r = std::get_if<DecodeRequest>(&it)) out.emplace_back(decode(std::move(*r), accept_));
         else if (auto* h = std::get_if<HeaderEvent>(&it)) out.emplace_back(std::move(*h));
+        else if (auto* f = std::get_if<StreamFeed>(&it)) run(*f);
         else out.emplace_back(std::move(std::get<BurstEvent>(it)));
     }
     return out;
@@ -489,6 +503,7 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
     buf_.insert(buf_.end(), x.begin(), x.end());
     fresh_ += static_cast<int64_t>(x.size());
     std::vector<Item> out;
+    if (stream_) out.push_back(StreamFeed{stream_, std::vector<double>(x.begin(), x.end())});
     while (true) {
         if (!pending_) {
             // a burst's end is checked on every call; new preambles only every HOP samples
@@ -536,6 +551,12 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
             dark_ = 0;
             looked_ = false;
             out.push_back(HeaderEvent{*p, off_ + len()});
+            if (stream_on_ && p->is_cpm()) {  // the buffer as decode() will read it (origin off_, untrimmed till then)
+                Pending q = *p;
+                q.shift(-off_);
+                stream_ = std::make_shared<cpm::Stream>(buf_, q.cpm(), stream_pass_);
+                out.push_back(StreamFeed{stream_, {}});
+            }
         }
         const Pending p = *pending_;
         if (off_ + len() < p.end() + MARGIN) {
@@ -555,6 +576,7 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
             req.at = off_;
             req.audio_lo = std::max<int64_t>(0, p.start() - off_);
             req.audio_hi = std::max(req.audio_lo, std::min(p.end() - off_, len()));
+            req.stream = std::move(stream_);
             out.push_back(std::move(req));
             last_start_ = p.start();
             // a CPM burst has no lead-out silence: with the sender's clock fast,
