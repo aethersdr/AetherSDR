@@ -1534,7 +1534,7 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
         m_cwOperation = down ? operation.heldCwKeying() : operation;
         return;
     }
-    std::int64_t target = cwSampleAt(scheduledAt) + kCwEdgeLeadSamples + m_cwShiftSamples;
+    std::int64_t target = cwSampleAt(scheduledAt) + m_cwEdgeLeadSamples + m_cwShiftSamples;
     if (!down) {
         if (m_cwReleaseOwed) {
             m_cwReleaseOwed = false;
@@ -1583,7 +1583,7 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
     (void)insertCwEdge(CwScheduledEdge{target, true, operation, false});
     m_cwReleaseOwed = withRelease;
     if (withRelease) {
-        scheduleCwKeyUp(cwSampleAt(releaseAt) + kCwEdgeLeadSamples + m_cwShiftSamples, operation, true);
+        scheduleCwKeyUp(cwSampleAt(releaseAt) + m_cwEdgeLeadSamples + m_cwShiftSamples, operation, true);
     }
 }
 
@@ -1702,6 +1702,20 @@ void MetisClient::resetCwShift() noexcept
 {
     m_cwShiftSamples = 0;
     m_cwOverRefused = false;
+    // A lead asked for during the over takes effect with the next one.
+    m_cwEdgeLeadSamples = cwLeadSamplesOfMs(m_cwEdgeLeadRequestedMs);
+    m_cwEdgeLeadMsInForce.store(m_cwEdgeLeadRequestedMs, std::memory_order_release);
+}
+
+void MetisClient::setCwEdgeLeadMs(int ms)
+{
+    m_cwEdgeLeadRequestedMs = Hl2Settings::clampCwEdgeLeadMs(ms);
+    // An over is in progress while CW owns the stream or an edge is pending;
+    // its edges keep the lead they were placed with (resetCwShift applies it).
+    if (!m_cwMode && m_cwScheduleCount == 0) {
+        m_cwEdgeLeadSamples = cwLeadSamplesOfMs(m_cwEdgeLeadRequestedMs);
+        m_cwEdgeLeadMsInForce.store(m_cwEdgeLeadRequestedMs, std::memory_order_release);
+    }
 }
 
 void MetisClient::logCwFailSafe(const char* what)

@@ -20,6 +20,7 @@
 
 #include "core/backends/hl2/Hl2ControlRequest.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+#include "core/backends/hl2/Hl2Settings.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
@@ -398,7 +399,7 @@ public:
     // 48 kHz transmit stream rather than by GUI or producer-thread timing.
     // It still requires MOX; Hl2Backend owns break-in and manual-PTT policy.
     // An edge with `scheduledAt` takes effect at that instant's EP2 sample plus
-    // kCwEdgeLeadMs plus the over's shift (#5065). A key-down with `releaseAt`
+    // the edge lead (cwEdgeLeadMs()) plus the over's shift (#5065). A key-down with `releaseAt`
     // (its own key-up instant, known to the keyer when the element starts)
     // schedules both edges at once, so the element's length never depends on
     // when its key-up crosses the GUI thread; that later key-up is then
@@ -417,9 +418,21 @@ public:
     [[nodiscard]] bool cwModeActive() const noexcept { return m_cwMode; }
     [[nodiscard]] bool cwKeyDown() const noexcept { return m_cwKeyDown; }
     // The delay that absorbs GUI and I/O-thread stalls in scheduled CW edges
-    // before the over's shift has to grow. 40 ms covers the GUI hop measured
-    // while keyed on a slow host (17-62 ms), so most overs never shift.
-    static constexpr int kCwEdgeLeadMs = 40;
+    // before the over's shift has to grow; the operator's setting
+    // (Hl2Settings::cwEdgeLeadMs, #7245), default 40 ms, which covers the GUI
+    // hop measured while keyed on a slow host (17-62 ms), so most overs never
+    // shift. Clamped to Hl2Settings' range. Applied at once when no over is
+    // in progress, otherwise when the over ends: a lead changed mid-over would
+    // move the edges after it against the ones before, and change a space.
+    Q_INVOKABLE void setCwEdgeLeadMs(int ms);
+    // The lead in force (the over in progress keys with it). An atomic, so the
+    // GUI thread may read it for the break-in hang.
+    [[nodiscard]] int cwEdgeLeadMs() const noexcept
+    {
+        return m_cwEdgeLeadMsInForce.load(std::memory_order_acquire);
+    }
+    // The lead last asked for; differs from cwEdgeLeadMs() until the over ends.
+    [[nodiscard]] int cwEdgeLeadRequestedMs() const noexcept { return m_cwEdgeLeadRequestedMs; }
     // The largest shift an over may accumulate; a key-down later than this
     // (beyond the lead) is refused: no carrier until the over ends.
     static constexpr int kCwMaxEdgeShiftMs = 250;
@@ -1013,11 +1026,26 @@ private:
         TxCoordinator::Operation operation;
         bool release = false;   // a key-up scheduled with its own key-down
     };
-    static constexpr std::size_t kCwScheduleCapacity = 16;
-    static constexpr std::int64_t kCwEdgeLeadSamples =
-        static_cast<std::int64_t>(kCwEdgeLeadMs) * kEp2AudioRateHz / 1000;
+    // Edges pending at once: those whose instant lies within the lead plus
+    // the shift before now, plus a key-down's own release. At the keyer's
+    // 60 WPM ceiling an edge falls every 20 ms (dit, space, dit ...).
+    static constexpr std::size_t kCwScheduleCapacity = 32;
+    static constexpr int kCwFastestEdgeSpacingMs = 1200 / 60;
+    static_assert((Hl2Settings::kCwEdgeLeadMaxMs + kCwMaxEdgeShiftMs) / kCwFastestEdgeSpacingMs + 2
+                      <= static_cast<int>(kCwScheduleCapacity),
+                  "the largest lead plus the largest shift must fit in the edge schedule at 60 WPM");
+    // The cap's slack is the default lead, not the one in force: it only has
+    // to sit past the release, which moves with the down.
     static constexpr std::int64_t kCwMaxScheduledElementSamples =
-        static_cast<std::int64_t>(kCwMaxScheduledElementMs + kCwEdgeLeadMs) * kEp2AudioRateHz / 1000;
+        static_cast<std::int64_t>(kCwMaxScheduledElementMs + Hl2Settings::kCwEdgeLeadDefaultMs)
+        * kEp2AudioRateHz / 1000;
+    static constexpr std::int64_t cwLeadSamplesOfMs(int ms) noexcept
+    {
+        return static_cast<std::int64_t>(ms) * kEp2AudioRateHz / 1000;
+    }
+    std::int64_t m_cwEdgeLeadSamples = cwLeadSamplesOfMs(Hl2Settings::kCwEdgeLeadDefaultMs);
+    int m_cwEdgeLeadRequestedMs = Hl2Settings::kCwEdgeLeadDefaultMs;
+    std::atomic<int> m_cwEdgeLeadMsInForce{Hl2Settings::kCwEdgeLeadDefaultMs};
     static constexpr std::int64_t kCwMaxEdgeShiftSamples =
         static_cast<std::int64_t>(kCwMaxEdgeShiftMs) * kEp2AudioRateHz / 1000;
     std::array<CwScheduledEdge, kCwScheduleCapacity> m_cwSchedule{};

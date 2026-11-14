@@ -1,5 +1,5 @@
 // #5065: a CW edge that carries `scheduledAt` reaches the EP2 stream at its
-// own sample (plus MetisClient's fixed lead), not when the queued call lands
+// own sample (plus MetisClient's edge lead), not when the queued call lands
 // on the I/O thread. Socket-free: frames come from buildNextControlPacket(),
 // edges are delivered "late" by holding them until the frame cursor has passed
 // their arrival instant, which is what a GUI or I/O stall does to them.
@@ -8,11 +8,17 @@
 // v2: a key-down carries its own key-up instant (`releaseAt`) and is never
 // dropped for lateness; a late one shifts the rest of the over so every element
 // keeps its length, and a shift past kCwMaxEdgeShiftMs refuses the over.
+//
+// v3 (#7245): the lead is the operator's setting (Hl2Settings::cwEdgeLeadMs,
+// 0..100 ms, default 40), applied at once between overs and from the next
+// over during one; the break-in hang counts with the lead in force.
 
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
 #include "core/backends/CwControlRequest.h"
+#include "core/AppSettings.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2Settings.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 #include "models/RadioModel.h"
@@ -35,6 +41,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace AetherSDR::hl2 {
@@ -47,7 +54,12 @@ struct MetisClientTestAccess {
         client.m_cwFrameSample = 0;
     }
     static constexpr int rateHz() { return MetisClient::kEp2AudioRateHz; }
-    static constexpr std::int64_t leadSamples() { return MetisClient::kCwEdgeLeadSamples; }
+    // The default lead, which every Bench keys with unless it sets another.
+    static constexpr std::int64_t leadSamples()
+    {
+        return MetisClient::cwLeadSamplesOfMs(Hl2Settings::kCwEdgeLeadDefaultMs);
+    }
+    static std::int64_t leadSamplesInForce(const MetisClient& client) { return client.m_cwEdgeLeadSamples; }
     static constexpr std::int64_t capSamples() { return MetisClient::kCwMaxScheduledElementSamples; }
     static constexpr std::size_t capacity() { return MetisClient::kCwScheduleCapacity; }
     static constexpr std::int64_t maxShiftSamples() { return MetisClient::kCwMaxEdgeShiftSamples; }
@@ -121,6 +133,16 @@ struct Hl2TxGateTestAccess {
     static std::chrono::steady_clock::time_point upOnAir(const Hl2Backend& backend)
     {
         return backend.m_metis->cwScheduledUpOnAir();
+    }
+    // The lead in force and the lead asked for, read on the I/O thread after
+    // every queued call before it has run.
+    static std::pair<int, int> lead(Hl2Backend& backend)
+    {
+        std::pair<int, int> ms;
+        QMetaObject::invokeMethod(backend.m_metis, [&ms, metis = backend.m_metis] {
+            ms = {metis->cwEdgeLeadMs(), metis->cwEdgeLeadRequestedMs()};
+        }, Qt::BlockingQueuedConnection);
+        return ms;
     }
 };
 }  // namespace AetherSDR::hl2
@@ -614,12 +636,16 @@ static void testUnscheduledPathUnchanged()
 // Level 2, backend half: Hl2Backend's own I/O thread, socket-free. The edge's
 // instant must cross Hl2Backend::requestCwControl into MetisClient, and the
 // break-in hang must count from the key-up's on-air sample.
-static void testBackendCarriesScheduledAt()
+static void testBackendCarriesScheduledAt(int leadMs)
 {
     TxTestAuthority tx;
     Hl2Backend backend;
     const Clock::time_point t0 = Clock::now();
     Hl2TxGateTestAccess::prepare(backend, t0);
+    backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("cwlead.set"), 0,
+                            QVariantMap{{QStringLiteral("edgeLeadMs"), leadMs}});
+    check(Hl2TxGateTestAccess::lead(backend).first == leadMs,
+          "backend: cwlead.set " + std::to_string(leadMs) + " ms is in force between overs");
     const int delayMs = 50;
     const auto edge = [&](bool down, std::int64_t ms) {
         const CwControlRequest request{CwControlRequest::Kind::Carrier, down, true, delayMs,
@@ -634,11 +660,13 @@ static void testBackendCarriesScheduledAt()
     };
     check(edge(true, 100) == ReceiveDispatch::Dispatched, "backend: a scheduled down is dispatched");
     check(Hl2TxGateTestAccess::pending(backend) == 1, "backend: the down's instant reaches MetisClient's schedule");
-    buildTo(155);   // the up arrives 15 ms late
+    // The up arrives late, inside the lead minus one frame: 15 ms at the default.
+    const std::int64_t lateMs = leadMs >= 20 ? 15 : leadMs / 2;
+    buildTo(140 + lateMs);
     const Clock::time_point before = Clock::now();
     check(edge(false, 140) == ReceiveDispatch::Dispatched, "backend: a scheduled up is dispatched");
     const Clock::time_point after = Clock::now();
-    const auto onAir = t0 + std::chrono::milliseconds(140) + std::chrono::milliseconds(MetisClient::kCwEdgeLeadMs);
+    const auto onAir = t0 + std::chrono::milliseconds(140) + std::chrono::milliseconds(leadMs);
     const auto aheadMs = [&](Clock::time_point now) {
         const auto d = onAir - now;
         return d > Clock::duration::zero()
@@ -648,14 +676,15 @@ static void testBackendCarriesScheduledAt()
           "backend: the break-in hang runs with the configured delay");
     check(Hl2TxGateTestAccess::hangIntervalMs(backend) >= delayMs + aheadMs(after)
               && Hl2TxGateTestAccess::hangIntervalMs(backend) <= delayMs + aheadMs(before),
-          "backend: the hang counts from the key-up's on-air instant");
+          "backend: the hang counts from the key-up's on-air instant (lead " + std::to_string(leadMs) + " ms)");
     buildTo(400);
     const auto runs = carriers(iTrace);
     check(runs.size() == 1 && within(runs[0].length, samplesOfMs(40), 1),
-          "backend: a 40 ms element delivered 15 ms late is 40 ms on the wire, +-1 sample");
+          "backend: a 40 ms element delivered " + std::to_string(lateMs) + " ms late is 40 ms on the wire, +-1 sample");
     backend.setCwKeying(false, true, delayMs, tx.operation);
     check(Hl2TxGateTestAccess::hangIntervalMs(backend) == delayMs,
           "backend: an unscheduled key-up's hang is the configured delay alone");
+    AppSettings::instance().remove(QStringLiteral("Hl2"));   // cwlead.set stored it
 }
 
 // The break-in hang must count from the SHIFTED key-up's wire instant: MOX may
@@ -668,7 +697,7 @@ static void testBackendHangWaitsForTheShiftedKeyUp()
     Hl2TxGateTestAccess::prepare(backend, t0);
     const int delayMs = 20;
     const std::int64_t lateMs = 120;
-    const std::int64_t leadMs = MetisClient::kCwEdgeLeadMs;
+    const std::int64_t leadMs = Hl2Settings::kCwEdgeLeadDefaultMs;
     const auto edge = [&](bool down, std::int64_t ms, std::int64_t releaseMs) {
         CwControlRequest request{CwControlRequest::Kind::Carrier, down, true, delayMs,
                                  t0 + std::chrono::milliseconds(ms), QStringLiteral("test"), 0, 0};
@@ -808,6 +837,160 @@ static void testRefusedOverRaisesOneNotice()
     check(onModelThread, "every notice is raised on the model's thread");
 }
 
+// ---- #7245: the lead is a setting ----
+
+// The shipped default, everywhere it is read: the client, the config object
+// with nothing stored, and the backend's reply. Runs on a fresh profile key.
+static void testLeadSettingDefault()
+{
+    AppSettings::instance().remove(QStringLiteral("Hl2"));
+    check(Hl2Settings::kCwEdgeLeadDefaultMs == 40, "lead setting: the default is 40 ms");
+    check(Hl2Settings::cwEdgeLeadMs() == 40, "lead setting: nothing stored reads 40 ms");
+    MetisClient client;
+    check(client.cwEdgeLeadMs() == 40 && client.cwEdgeLeadRequestedMs() == 40
+              && Access::leadSamplesInForce(client) == samplesOfMs(40),
+          "lead setting: a new client keys with 40 ms (1920 samples)");
+    Hl2Backend backend;
+    QVariantMap reply;
+    QObject::connect(&backend, &IRadioBackend::extensionResult, &backend,
+                     [&reply](quint64 id, const QVariant& v) { if (id == 7) reply = v.toMap(); });
+    backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("cwlead.get"), 7, {});
+    check(reply.value(QStringLiteral("edgeLeadMs")).toInt() == 40
+              && reply.value(QStringLiteral("defaultMs")).toInt() == 40
+              && reply.value(QStringLiteral("minMs")).toInt() == 0
+              && reply.value(QStringLiteral("maxMs")).toInt() == 100,
+          "lead setting: cwlead.get answers 40 ms, range 0..100, default 40");
+    check(Hl2TxGateTestAccess::lead(backend).first == 40, "lead setting: the backend's client keys with 40 ms");
+}
+
+// One element on frame-aligned instants (105 ms and 147 ms are 40 and 56
+// frames), so even a zero lead is on time: the edge then sits exactly where
+// the lead puts it, with no frame quantisation and no shift.
+static Run elementWithLead(int leadMs, std::int64_t* shift = nullptr)
+{
+    Bench b;
+    b.client.setCwEdgeLeadMs(leadMs);
+    b.play({{105, true, 105, true, 147}, {147, false, 147}}, 400);
+    const auto runs = carriers(b.iTrace);
+    if (shift) {
+        *shift = b.client.cwShiftSamples();
+    }
+    return runs.size() == 1 ? runs[0] : Run{-1, -1};
+}
+
+static void testLeadMovesTheEdgeByExactlyTheLead()
+{
+    check(samplesOfMs(105) % kFrame == 0 && samplesOfMs(147) % kFrame == 0,
+          "lead setting: the test element's instants are frame-aligned");
+    const Run reference = elementWithLead(40);
+    check(reference.length == samplesOfMs(42), "lead setting: at 40 ms the element is 42 ms, exact");
+    for (const int leadMs : {0, 1, 13, 25, 39, 41, 77, 100}) {
+        std::int64_t shift = -1;
+        const Run r = elementWithLead(leadMs, &shift);
+        const std::string name = "lead " + std::to_string(leadMs) + " ms: ";
+        check(r.start - reference.start == samplesOfMs(leadMs) - samplesOfMs(40),
+              name + "the on-air edge moves by exactly the lead's difference from 40 ms ("
+                  + std::to_string(r.start - reference.start) + " samples)");
+        check(r.length == reference.length, name + "the element length does not change");
+        check(shift == 0, name + "an on-time element is not shifted");
+    }
+}
+
+static void testLeadIsClamped()
+{
+    {
+        MetisClient client;
+        const std::pair<int, int> cases[] = {
+            {-1, 0}, {-40, 0}, {std::numeric_limits<int>::min(), 0},
+            {101, 100}, {250, 100}, {std::numeric_limits<int>::max(), 100}, {0, 0}, {100, 100}};
+        for (const auto& [asked, want] : cases) {
+            client.setCwEdgeLeadMs(asked);
+            check(client.cwEdgeLeadMs() == want && Access::leadSamplesInForce(client) == samplesOfMs(want),
+                  "lead clamp: client asked " + std::to_string(asked) + " ms keys with " + std::to_string(want));
+        }
+    }
+    // Out of range on the wire too: 500 ms keys 100 ms late, not 500.
+    check(elementWithLead(500).start == elementWithLead(100).start && elementWithLead(100).start >= 0,
+          "lead clamp: a 500 ms lead puts the edge where 100 ms does");
+    check(elementWithLead(-20).start == elementWithLead(0).start && elementWithLead(0).start >= 0,
+          "lead clamp: a -20 ms lead puts the edge where 0 ms does");
+    // The config object clamps what it stores and what it reads.
+    check(Hl2Settings::setCwEdgeLeadMs(1000) == 100 && Hl2Settings::cwEdgeLeadMs() == 100,
+          "lead clamp: storing 1000 ms stores and reads 100");
+    check(Hl2Settings::setCwEdgeLeadMs(-3) == 0 && Hl2Settings::cwEdgeLeadMs() == 0,
+          "lead clamp: storing -3 ms stores and reads 0");
+    auto& s = AppSettings::instance();
+    const auto readsAs = [&s](const char* json) {
+        s.setValue(QStringLiteral("Hl2"), QString::fromLatin1(json));
+        return Hl2Settings::cwEdgeLeadMs();
+    };
+    check(readsAs(R"({"cwEdgeLeadMs":-30})") == 0, "lead clamp: a stored -30 reads 0");
+    check(readsAs(R"({"cwEdgeLeadMs":1e300})") == 100, "lead clamp: a stored 1e300 reads 100");
+    check(readsAs(R"({"cwEdgeLeadMs":"fast"})") == 40, "lead clamp: a stored string reads the default");
+    check(readsAs(R"({"spanMhz":0.384})") == 40, "lead clamp: an absent field reads the default");
+    check(readsAs("not json") == 40, "lead clamp: an unparseable object reads the default");
+    s.remove(QStringLiteral("Hl2"));
+}
+
+// Mid-over, the over keeps its lead: the next element's space is exact. The
+// new lead is in force when the over ends.
+static void testLeadChangedDuringAnOverAppliesToTheNext()
+{
+    Bench b;
+    b.play({{105, true, 105, true, 147}, {147, false, 147}}, 120);
+    b.client.setCwEdgeLeadMs(10);
+    check(b.client.cwEdgeLeadMs() == 40 && b.client.cwEdgeLeadRequestedMs() == 10,
+          "lead mid-over: 10 ms asked, the over keeps 40 ms");
+    b.play({{231, true, 231, true, 273}, {273, false, 273}}, 500);
+    const auto runs = carriers(b.iTrace);
+    check(runs.size() == 2 && runs[1].start - (runs[0].start + runs[0].length) == samplesOfMs(231 - 147),
+          "lead mid-over: the next element's space is exact (no 30 ms jump inside the over)");
+    b.client.clearCwKeying();
+    check(b.client.cwEdgeLeadMs() == 10 && Access::leadSamplesInForce(b.client) == samplesOfMs(10),
+          "lead mid-over: the over's end puts 10 ms in force");
+    b.client.setMox(true, b.tx.operation);
+    // 21 ms is 8 frames: a whole millisecond on a frame boundary, 100 ms on.
+    constexpr std::int64_t kAligned = 21 * kRate / 1000;
+    const std::int64_t at = (Access::frameSample(b.client) / kAligned + 5) * kAligned;
+    const std::int64_t atMs = at * 1000 / kRate;
+    b.play({{atMs, true, atMs, true, atMs + 42}, {atMs + 42, false, atMs + 42}}, atMs + 300);
+    // The trace holds every sample from 0, so a run's start is its sample.
+    // With 40 ms in force the edge would sit 30 ms later.
+    const auto all = carriers(b.iTrace);
+    check(all.size() == 3
+              && all[2].start - at == runs[0].start - samplesOfMs(105) - (samplesOfMs(40) - samplesOfMs(10))
+              && all[2].length == samplesOfMs(42),
+          "lead mid-over: the next over keys with the 10 ms lead, element exact");
+}
+
+// cwlead.set persists through the config object, and a backend built after it
+// keys with the stored value (what a restart does).
+static void testBackendLeadVerbsPersist()
+{
+    AppSettings::instance().remove(QStringLiteral("Hl2"));
+    {
+        Hl2Backend backend;
+        QVariantMap reply;
+        QObject::connect(&backend, &IRadioBackend::extensionResult, &backend,
+                         [&reply](quint64 id, const QVariant& v) { if (id == 9) reply = v.toMap(); });
+        backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("cwlead.set"), 9,
+                                QVariantMap{{QStringLiteral("edgeLeadMs"), 250}});
+        check(reply.value(QStringLiteral("edgeLeadMs")).toInt() == 100,
+              "lead verbs: cwlead.set 250 ms answers the clamped 100");
+        backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("cwlead.set"), 9,
+                                QVariantMap{{QStringLiteral("edgeLeadMs"), 15}});
+        check(reply.value(QStringLiteral("edgeLeadMs")).toInt() == 15 && Hl2Settings::cwEdgeLeadMs() == 15,
+              "lead verbs: cwlead.set 15 ms is stored");
+        check(Hl2TxGateTestAccess::lead(backend) == std::pair<int, int>{15, 15},
+              "lead verbs: and reaches the client");
+    }
+    {
+        Hl2Backend backend;
+        check(Hl2TxGateTestAccess::lead(backend).first == 15, "lead verbs: a new backend keys with the stored 15 ms");
+    }
+    AppSettings::instance().remove(QStringLiteral("Hl2"));
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-cw-edge-timing"));
@@ -823,7 +1006,13 @@ int main(int argc, char** argv)
     testScheduleCapacity();
     testFlushPaths();
     testUnscheduledPathUnchanged();
-    testBackendCarriesScheduledAt();
+    testBackendCarriesScheduledAt(Hl2Settings::kCwEdgeLeadDefaultMs);
+    testBackendCarriesScheduledAt(10);
+    testLeadSettingDefault();
+    testLeadMovesTheEdgeByExactlyTheLead();
+    testLeadIsClamped();
+    testLeadChangedDuringAnOverAppliesToTheNext();
+    testBackendLeadVerbsPersist();
     testBackendHangWaitsForTheShiftedKeyUp();
     testBackendKeysUpAtAKeyerStop();
     testRefusedOverRaisesOneNotice();

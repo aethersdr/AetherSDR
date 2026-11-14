@@ -364,6 +364,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_metis->moveToThread(m_ioThread);
     m_txDsp->moveToThread(m_ioThread);
     AetherSDR::startStreamThread(m_ioThread);   // High QoS; see AppActivity.h
+    // The operator's CW edge lead (#7245), a setting of this computer. Queued:
+    // the lead is the I/O thread's; re-read at every connect below.
+    QMetaObject::invokeMethod(m_metis, "setCwEdgeLeadMs", Qt::QueuedConnection,
+                              Q_ARG(int, Hl2Settings::cwEdgeLeadMs()));
 
     // The rate-change build thread — see the member declarations. Started here
     // and never restarted: it is idle except during a pan-bandwidth crossing,
@@ -3041,7 +3045,9 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     // Blocking: start() constructs the QUdpSocket, which must take the I/O
     // thread's affinity, and we need to know whether the bind succeeded.
     bool started = false;
-    QMetaObject::invokeMethod(m_metis, [this, &mp, &started] {
+    const int cwEdgeLeadMs = Hl2Settings::cwEdgeLeadMs();
+    QMetaObject::invokeMethod(m_metis, [this, &mp, &started, cwEdgeLeadMs] {
+        m_metis->setCwEdgeLeadMs(cwEdgeLeadMs);
         started = m_metis->start(mp);
     }, Qt::BlockingQueuedConnection);
     if (!started) {
@@ -5007,11 +5013,11 @@ void Hl2Backend::keyCwEdge(bool down, bool breakIn, int breakInDelayMs,
         m_cwHangOperation = operation;
         m_cwHangCompletion = completion;
         m_cwHangDelayMs = std::max(kCwEnvelopeReleaseMs, std::clamp(breakInDelayMs, 0, 2000));
-        // A scheduled key-up reaches the wire kCwEdgeLeadMs after its instant;
-        // the hang counts from there.
+        // A scheduled key-up reaches the wire the over's lead after its
+        // instant (the lead in force, an atomic); the hang counts from there.
         int untilOnAirMs = 0;
-        if (scheduledAt != std::chrono::steady_clock::time_point{}) {
-            const auto onAir = scheduledAt + std::chrono::milliseconds(MetisClient::kCwEdgeLeadMs);
+        if (scheduledAt != std::chrono::steady_clock::time_point{} && m_metis) {
+            const auto onAir = scheduledAt + std::chrono::milliseconds(m_metis->cwEdgeLeadMs());
             const auto ahead = onAir - std::chrono::steady_clock::now();
             if (ahead > std::chrono::steady_clock::duration::zero()) {
                 untilOnAirMs = static_cast<int>(
@@ -6388,6 +6394,35 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("filterBoardSuggested"), m_hwFilterBoardSuggested},
                     {QStringLiteral("detectedBoard"),
                      QString::fromLatin1(hl2::gatewareBoardName(m_gatewareBoard))},
+                });
+            }
+            return;
+        }
+        // The CW edge lead (#7245): a setting of this computer, not of the
+        // radio (Hl2Settings), so it needs no radio identity. Completes
+        // locally. A change made during an over takes effect when it ends.
+        if (verb == QLatin1String("cwlead.get") || verb == QLatin1String("cwlead.set")) {
+            int ms = Hl2Settings::cwEdgeLeadMs();
+            if (verb == QLatin1String("cwlead.set")) {
+                const QVariant v = arg.toMap().value(QStringLiteral("edgeLeadMs"));
+                if (!v.canConvert<int>()) {
+                    if (requestId != 0)
+                        emit extensionError(requestId, QStringLiteral("cwlead.set needs edgeLeadMs"));
+                    return;
+                }
+                ms = Hl2Settings::setCwEdgeLeadMs(v.toInt());
+                if (m_metis) {
+                    QMetaObject::invokeMethod(m_metis, "setCwEdgeLeadMs", Qt::QueuedConnection,
+                                              Q_ARG(int, ms));
+                }
+                qCInfo(lcHl2) << "HL2 CW: edge lead" << ms << "ms";
+            }
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("edgeLeadMs"), ms},
+                    {QStringLiteral("minMs"), Hl2Settings::kCwEdgeLeadMinMs},
+                    {QStringLiteral("maxMs"), Hl2Settings::kCwEdgeLeadMaxMs},
+                    {QStringLiteral("defaultMs"), Hl2Settings::kCwEdgeLeadDefaultMs},
                 });
             }
             return;

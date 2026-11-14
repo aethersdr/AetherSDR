@@ -5,7 +5,7 @@
 // EP2 rate by a third thread, so a GUI stall reaches the wire only through
 // the edges' arrival. Socket-free; nothing is keyed.
 //
-// The stall is LONGER than the lead (kCwEdgeLeadMs), 70 ms every 110 ms during
+// The stall is LONGER than the default lead (Hl2Settings::kCwEdgeLeadDefaultMs), 70 ms every 110 ms during
 // a 30 WPM squeeze, so key-downs arrive late and the over must shift. Each key-down carries its own release
 // (the keyer's key-up instant), and a late key-down shifts the rest of the over
 // instead of being dropped. Expectation: every element on the wire, every
@@ -107,7 +107,7 @@ static void check(bool ok, const std::string& what)
 
 constexpr std::int64_t kRate = MetisClientTestAccess::rateHz();
 constexpr std::int64_t kFrame = kTxSamplesPerPacket;
-constexpr std::int64_t kLeadSamples = static_cast<std::int64_t>(MetisClient::kCwEdgeLeadMs) * kRate / 1000;
+constexpr std::int64_t kLeadSamples = static_cast<std::int64_t>(Hl2Settings::kCwEdgeLeadDefaultMs) * kRate / 1000;
 constexpr int kWpm = 30;                 // 40 ms unit
 constexpr int kStallMs = 70;             // longer than the lead plus one frame: edges arrive late
 constexpr int kStallPeriodMs = 110;      // not a multiple of the unit: stalls land on edges unevenly
@@ -318,7 +318,7 @@ int main(int argc, char** argv)
         return 1;
     }
     QCoreApplication app(argc, argv);
-    check(kStallMs > MetisClient::kCwEdgeLeadMs + kFrame * 1000 / kRate,
+    check(kStallMs > Hl2Settings::kCwEdgeLeadDefaultMs + kFrame * 1000 / kRate,
           "the stall is longer than the lead plus one frame: edges must arrive late");
 
     for (int attempt = 1; attempt <= kAttempts; ++attempt) {
