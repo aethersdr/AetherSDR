@@ -104,7 +104,7 @@ public:
 
     enum class SnapshotSource {
         OnConnect,   // the first state of a session
-        Push,        // a change made elsewhere: front panel, band data, another client
+        Push,        // a change made elsewhere: front panel or band data
     };
 
     // `transport` and `clock` are not owned and must outlive the session.

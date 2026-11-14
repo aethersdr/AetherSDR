@@ -4,10 +4,9 @@
 // unit from the device's own web page; the vendor documents none and the
 // firmware version is not readable. Compact JSON text frames on
 // ws://<host>/ui.ws: the complete state arrives on connect and as a push when
-// the front panel, band data or another client changes a selection.
-// Read-only: the only client frames are the keep-alive and WebSocket control
-// frames. Limits: docs/peripherals-settings-ui.md. Pure: no socket, no clock.
-// Tested in tests/microham_trio_protocol_test.cpp.
+// the front panel or band data changes a selection. Read-only: the only
+// frame encoded here is the keep-alive. Limits: docs/peripherals-settings-ui.md.
+// Pure: no socket, no clock. Tested in tests/microham_trio_protocol_test.cpp.
 
 #include <QByteArray>
 #include <QString>
