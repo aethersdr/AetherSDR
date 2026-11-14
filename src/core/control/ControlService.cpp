@@ -553,7 +553,8 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     }
     const bool pan = operation == ReceiveOperation::PanCenter || operation == ReceiveOperation::PanBandwidth
         || operation == ReceiveOperation::PanRfGain;
-    const bool sessionScoped = operation == ReceiveOperation::CwPitch;
+    const bool sessionScoped = operation == ReceiveOperation::CwPitch
+        || operation == ReceiveOperation::RadioSpeaker;
     const QString idKey = pan ? QStringLiteral("panadapter") : QStringLiteral("slice");
     QSet<QString> keys{QStringLiteral("radioSession"), QStringLiteral("expectedRevision")};
     if (!sessionScoped) {
@@ -570,7 +571,8 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::CwPitch: keys.insert(QStringLiteral("hz")); break;
     case ReceiveOperation::AgcThreshold: keys.insert(QStringLiteral("threshold")); break;
     case ReceiveOperation::NoiseBlanker:
-    case ReceiveOperation::NoiseReduction: keys.insert(QStringLiteral("enabled")); break;
+    case ReceiveOperation::NoiseReduction:
+    case ReceiveOperation::RadioSpeaker: keys.insert(QStringLiteral("enabled")); break;
     case ReceiveOperation::Rit:
         keys.insert(QStringLiteral("enabled")); keys.insert(QStringLiteral("offsetHz")); break;
     case ReceiveOperation::PanRfGain: keys.insert(QStringLiteral("gainDb")); break;
@@ -633,7 +635,8 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
         valid = integer(hz, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()); break;
     case ReceiveOperation::AgcThreshold: valid = integer(threshold, kIntMin, kIntMax); break;
     case ReceiveOperation::NoiseBlanker:
-    case ReceiveOperation::NoiseReduction: valid = enabled.isBool(); break;
+    case ReceiveOperation::NoiseReduction:
+    case ReceiveOperation::RadioSpeaker: valid = enabled.isBool(); break;
     case ReceiveOperation::Rit: valid = enabled.isBool() && integer(offsetHz, kIntMin, kIntMax); break;
     case ReceiveOperation::PanRfGain: valid = integer(gainDb, kIntMin, kIntMax); break;
     }
@@ -672,6 +675,7 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::Rit:
         error = m_receiveTarget->setRit(sliceId, enabled.toBool(), offsetHz.toInt()); break;
     case ReceiveOperation::PanRfGain: error = m_receiveTarget->setPanRfGain(id.toString(), gainDb.toInt()); break;
+    case ReceiveOperation::RadioSpeaker: error = m_receiveTarget->setRadioSpeaker(enabled.toBool()); break;
     }
     return error ? failure(request.id, *error) : ServiceReply{
         ControlProtocolCodec::successResponse(request.id, {{QStringLiteral("accepted"), true}}), false};

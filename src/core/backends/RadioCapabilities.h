@@ -128,6 +128,12 @@ struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
 };
+// radioSession.setRadioSpeaker: the receiver's audio played on the radio's own speaker
+// (a radio with one, fed from this host), dispatched through requestRadioSpeakerAudio()
+// and reported through radioSpeakerAudioReported().
+struct RadioSpeakerControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+};
 // panadapter.setRfGain: setPanRfGain()'s range in dB, reported back through
 // panRfGainChanged. A backend whose stage is an attenuator declares it negated.
 struct ReceivePanRfGainControl {
@@ -487,6 +493,7 @@ struct RadioCapabilities {
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
     std::optional<ReceivePanRfGainControl> receivePanRfGainControl;
+    std::optional<RadioSpeakerControl> radioSpeakerControl;
     // Engaged when the radio can deliver a wideband converter view; see the
     // struct above for why absence is the right default and what it means.
     std::optional<WidebandConverterView> widebandConverterView;

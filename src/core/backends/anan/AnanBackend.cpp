@@ -312,6 +312,10 @@ AnanBackend::AnanBackend(QObject* parent)
         }
         emitSliceState();
         emitPanState();
+        // Here as well as in connectRadio(): reconnecting over a live session, the
+        // old session's queued linkDown lands after connectRadio()'s report, and
+        // RadioModel clears the report on disconnected().
+        emit radioSpeakerAudioReported(m_speakerAudioEnabled);
         // A rate change suppresses connected(), but a page opened during
         // its brief link restart still needs the fresh calibration status.
         publishDroopStatus();
@@ -658,6 +662,8 @@ RadioCapabilities AnanBackend::capabilities() const
     // reports what it applied.
     c.receivePanRfGainControl = ReceivePanRfGainControl{SliceFrequencyControl::Authority::Engine,
                                                         -kMaxStepAttenuationDb, 0, 1};
+    // The G2's speaker plays RX1, sent from this host (sendSpeakerAudioToRadio()).
+    c.radioSpeakerControl = RadioSpeakerControl{SliceFrequencyControl::Authority::Engine};
     // Gain and mute both act on this receiver's audio and are applied by this
     // backend, which is what the record promises. Engine authority: the state is
     // ours, the radio echoes nothing back, and there is no register to read.
@@ -909,6 +915,7 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         Q_ARG(double, detectorShiftHz(rx.mode, m_cwPitchHz, rx.ritEnabled, rx.ritOffsetHz)));
 
     m_speakerAudioEnabled = m_pendingParams.speakerAudioEnabled;
+    emit radioSpeakerAudioReported(m_speakerAudioEnabled);
     for (Receiver& receiver : m_receivers) {
         AnanRxDsp::Config& config = receiver.pendingDspConfig;
         config = AnanRxDsp::Config{};
@@ -1293,6 +1300,23 @@ ReceiveDispatch AnanBackend::requestSliceControl(int sliceId, const SliceControl
         return ReceiveDispatch::Dispatched;
     }
     return IRadioBackend::requestSliceControl(sliceId, request);
+}
+
+ReceiveDispatch AnanBackend::requestRadioSpeakerAudio(bool on)
+{
+    // Same thread as sendSpeakerAudioToRadio() (the DSP's pcmReady is queued to this
+    // object), so the flag and the resamplers change between blocks, never inside one.
+    m_pendingParams.speakerAudioEnabled = on;
+    if (m_speakerAudioEnabled != on) {
+        m_speakerAudioEnabled = on;
+        resetSpeakerResamplers();
+        if (m_client) {
+            QMetaObject::invokeMethod(m_client, "setSpeakerAudioEnabled", Qt::QueuedConnection,
+                                      Q_ARG(bool, on));
+        }
+    }
+    emit radioSpeakerAudioReported(m_speakerAudioEnabled);
+    return ReceiveDispatch::Dispatched;
 }
 
 void AnanBackend::setSliceRit(int sliceId, bool on, int hz)

@@ -91,6 +91,11 @@ public:
     }
     ReceiveDispatch ritDispatch{ReceiveDispatch::Dispatched};
     void setPanRfGain(const QString& id, int gainDb) override { panId = id; record("rfGain", {{"gainDb", gainDb}}); }
+    ReceiveDispatch requestRadioSpeakerAudio(bool on) override
+    {
+        record("speaker", {{"enabled", on}});
+        return ReceiveDispatch::Dispatched;
+    }
     void setPanCenter(const QString& id, double hz, PanCenterIntent) override { panId = id; record("center", {{"hz", hz}}); }
     void setPanBandwidth(const QString& id, double hz) override { panId = id; record("bandwidth", {{"hz", hz}}); }
     void setCwPitch(int hz) override { record("pitch", {{"hz", hz}}); }
@@ -161,6 +166,7 @@ struct Fixture {
         dsp.maximumRitOffsetHz = 9999;
         backend->caps.receiveDspControl = dsp;
         backend->caps.receivePanRfGainControl = ReceivePanRfGainControl{Authority::Engine, -31, 0, 1};
+        backend->caps.radioSpeakerControl = RadioSpeakerControl{Authority::Engine};
         radio.setBackendForTest(std::move(owned), QStringLiteral("receive-test"));
         check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "socket-free owned slice installed");
         target = makeModelReceiveControlTarget(&radio, &connection);
@@ -178,6 +184,7 @@ struct Fixture {
         // setBackendForTest() skips setupBackend(), which wires panRfGainChanged
         // to the observation, so the report is recorded the way that wiring does.
         radio.panadapter(pan)->recordRfGainObservation(0);
+        backend->radioSpeakerAudioReported(false);
         reportPitch(600);
         adapter.publishAll();
         hello(controller);
@@ -201,7 +208,7 @@ struct Fixture {
     {
         const bool isPan = op == ReceiveOperation::PanCenter || op == ReceiveOperation::PanBandwidth
             || op == ReceiveOperation::PanRfGain;
-        const bool isSession = op == ReceiveOperation::CwPitch;
+        const bool isSession = op == ReceiveOperation::CwPitch || op == ReceiveOperation::RadioSpeaker;
         const auto snapshot = store.get(isSession ? sessionAddress : isPan ? panAddress : sliceAddress);
         QJsonObject values{{"radioSession", "radio-1"},
             {"expectedRevision", static_cast<qint64>(snapshot ? snapshot->revision : 0)}};
@@ -221,6 +228,7 @@ struct Fixture {
         case ReceiveOperation::NoiseReduction: values.insert("enabled", true); break;
         case ReceiveOperation::Rit: values.insert("enabled", true); values.insert("offsetHz", -350); break;
         case ReceiveOperation::PanRfGain: values.insert("gainDb", -12); break;
+        case ReceiveOperation::RadioSpeaker: values.insert("enabled", true); break;
         }
         return values;
     }
@@ -302,7 +310,7 @@ void dispatchAndReadback()
         Fixture f;
         const bool pan = op == ReceiveOperation::PanCenter || op == ReceiveOperation::PanBandwidth
             || op == ReceiveOperation::PanRfGain;
-        const ResourceAddress address = op == ReceiveOperation::CwPitch ? f.sessionAddress
+        const ResourceAddress address = op == ReceiveOperation::CwPitch || op == ReceiveOperation::RadioSpeaker ? f.sessionAddress
             : pan ? f.panAddress : f.sliceAddress;
         const auto before = *f.store.get(address);
         check(f.service.capabilities(f.controller).value("capabilities").toArray().contains(QString::fromLatin1(method)),
@@ -1271,6 +1279,37 @@ void panelVerbs()
     }
 }
 
+// The radio's own speaker: session-scoped, reported by the backend, refused until it is.
+void radioSpeakerVerb()
+{
+    {
+        Fixture f;
+        check(f.send(ReceiveOperation::RadioSpeaker, f.params(ReceiveOperation::RadioSpeaker)).contains("result")
+                  && f.backend->method == "speaker" && f.backend->args.value("enabled").toBool(),
+              "setRadioSpeaker reaches the backend as one typed intent");
+        f.backend->radioSpeakerAudioReported(true);
+        const auto obs = f.store.get(f.sessionAddress)->value.value("receiveObservation").toObject()
+                             .value("radioSpeaker").toObject();
+        check(obs.value("known").toBool() && obs.value("enabled").toBool(),
+              "the session resource reports the speaker as the backend adopted it");
+    }
+    {
+        // A new backend forgets the old one's speaker report (onDisconnected() clears it
+        // too; the fixture's injected backend never reaches that path).
+        Fixture f;
+        check(f.radio.reportedRadioSpeaker() == false, "the fixture's backend reported the speaker off");
+        f.radio.setBackendForTest(std::make_unique<Backend>(), QStringLiteral("receive-test"));
+        check(!f.radio.reportedRadioSpeaker().has_value(),
+              "a replaced backend's speaker report is forgotten");
+    }
+    {
+        Fixture f;
+        f.backend->caps.radioSpeakerControl.reset();
+        f.reject(ReceiveOperation::RadioSpeaker, f.params(ReceiveOperation::RadioSpeaker), "capability.unavailable");
+        check(!f.target->available(ReceiveOperation::RadioSpeaker), "no record, no speaker verb");
+    }
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("control-receive"));
@@ -1288,5 +1327,6 @@ int main(int argc, char** argv)
     cwPitchControl();
     hl2CwPitchIsDeclaredAndReported();
     panelVerbs();
+    radioSpeakerVerb();
     return failures == 0 ? 0 : 1;
 }

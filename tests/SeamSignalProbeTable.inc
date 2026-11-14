@@ -55,6 +55,7 @@ AETHER_SEAM_PROBE(panWideChanged);
 AETHER_SEAM_PROBE(panRangeChanged);
 AETHER_SEAM_PROBE(panBandwidthLimitsChanged);
 AETHER_SEAM_PROBE(panRfGainChanged);
+AETHER_SEAM_PROBE(radioSpeakerAudioReported);
 AETHER_SEAM_PROBE(operatingStateChanged);
 AETHER_SEAM_PROBE(panRfGainInfoChanged);
 AETHER_SEAM_PROBE(panPreampInfoChanged);

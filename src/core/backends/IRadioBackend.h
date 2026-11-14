@@ -443,6 +443,10 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSliceLock(int, bool)
     { return ReceiveDispatch::LocalOnly; }
+    // Play the receiver's audio on the radio's own speaker (RadioSpeakerControl).
+    // A backend that does reports the state it adopted through radioSpeakerAudioReported().
+    virtual ReceiveDispatch requestRadioSpeakerAudio(bool)
+    { return ReceiveDispatch::Unsupported; }
 
     // Compatibility implementation hooks for backend-internal callers and
     // existing paired AGC users. New receive routing uses the adapters above.
@@ -1414,6 +1418,8 @@ signals:
     // range/step are family-specific and reported via RadioCapabilities). The
     // backend decodes it from vendor status; RadioModel drives the pan.
     void panRfGainChanged(const QString& panId, int gain);
+    // Whether the radio's own speaker is being fed (RadioSpeakerControl), as adopted.
+    void radioSpeakerAudioReported(bool on);
     // Operating state moved (frequency, mode, passband, rate, gain, drive) —
     // fetch it with currentOperatingState(). Emitted only by backends with a
     // non-empty clientSettingsDomains declaration; rate-limiting is the

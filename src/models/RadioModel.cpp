@@ -1769,6 +1769,14 @@ void RadioModel::wireStatusIngress(quint64 generation)
     if (m_wanConn) { openDisplaySession(m_statusEpoch = m_statusIngress->bindLive(m_wanConn)); }
 }
 
+void RadioModel::clearRadioSpeakerReport()
+{
+    if (m_reportedRadioSpeaker) {
+        m_reportedRadioSpeaker.reset();
+        emit radioSpeakerReportChanged();
+    }
+}
+
 void RadioModel::wireBackendReceiverState()
 {
     wireTuneOutputControl();
@@ -1776,6 +1784,15 @@ void RadioModel::wireBackendReceiverState()
         return;
     }
     const quint64 generation = m_backendReceiverGeneration;
+    clearRadioSpeakerReport();
+    connect(m_backend.get(), &IRadioBackend::radioSpeakerAudioReported, this,
+            [this, generation](bool on) {
+        if (generation != m_backendReceiverGeneration || m_reportedRadioSpeaker == on) {
+            return;
+        }
+        m_reportedRadioSpeaker = on;
+        emit radioSpeakerReportChanged();
+    });
     connect(m_backend.get(), &IRadioBackend::displayObserved, this,
             [this, generation](const DisplayObservation& observation) {
         if (generation == m_backendReceiverGeneration && displayObservationCurrent(observation)) {
@@ -8485,6 +8502,7 @@ void RadioModel::onDisconnected()
         retireDisplaySession();
     }
     m_txSessionClosing = true;
+    clearRadioSpeakerReport();
     resetSessionControls();
     resetAudioControls();
     resetAdministration();

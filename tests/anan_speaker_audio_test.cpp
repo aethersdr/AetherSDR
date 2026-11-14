@@ -377,6 +377,37 @@ int main(int argc, char** argv)
         client.stop();
     }
 
+    // ---- a live enable on a running session, and off again (#7256) ----
+    {
+        P2Client client;
+        client.start(loopbackParams(false));
+        std::vector<std::uint8_t> dry(kHighPriorityStatusBytes, 0);
+        dry[30] = 0b0000'1000;
+        dry[3] = 1;
+        dry[37] = 0x02;                             // and a FIFO level of 512
+        P2ClientTestAccess::feedDatagram(client, dry, 1025);
+        check(client.speakerUnderflowReports() == 1 && client.lastSpeakerFifoLevel() == 512,
+              "an idle session counts the radio's underflow and records its level");
+        client.enqueueSpeakerAudio(blockOf(0x2222));
+        check(P2ClientTestAccess::pendingSamples(client) == 0,
+              "a disabled stream queues nothing");
+
+        client.setSpeakerAudioEnabled(true);
+        check(client.speakerUnderflowReports() == 0,
+              "a live enable forgets the idle underflow count");
+        check(client.lastSpeakerFifoLevel() == 0,
+              "and the last stream's FIFO reading");
+        client.enqueueSpeakerAudio(blockOf(0x2222));
+        check(P2ClientTestAccess::pendingSamples(client)
+                  == static_cast<std::size_t>(kSpeakerFramesPerPacket * kSpeakerChannels),
+              "a live enable queues audio on the running session");
+
+        client.setSpeakerAudioEnabled(false);
+        check(P2ClientTestAccess::pendingSamples(client) == 0,
+              "a live disable drops the queue");
+        client.stop();
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "anan_speaker_audio_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

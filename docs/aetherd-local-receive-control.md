@@ -25,6 +25,7 @@ schema validation or resource lookup. Unknown fields are rejected.
 | `slice.setNoiseReduction` | `slice`, `enabled` |
 | `slice.setRit` | `slice`, `enabled`, `offsetHz` |
 | `panadapter.setRfGain` | `panadapter`, `gainDb` |
+| `radioSession.setRadioSpeaker` | `enabled` |
 
 `radioSession` must identify the current `radio-1`. Slice IDs are canonical
 nonnegative decimal strings fitting int32; pan IDs are exact opaque resource
@@ -62,6 +63,15 @@ feature, with a known authority, for the slice's **observed** mode, and the
 backend has published the matching `receiveObservation` field. Like a filter, they
 wait out a pending mode write. The noise blanker toggles on/off only: its kind,
 level and fill ride along as the backend last reported them.
+
+`radioSession.setRadioSpeaker` plays the receiver's audio on the radio's own
+speaker (a radio that has one, fed from this host). It is session-scoped like the
+CW pitch: `expectedRevision` is the `radioSession` revision, and the backend must
+have reported the speaker state in this session (`receiveObservation.radioSpeaker`).
+It is live for the session only; it persists nothing, so a client that wants the
+speaker on asks again after each connect. On ANAN it starts or stops the G2's
+speaker stream at once; the desktop's Radio Setup setting stays the default each
+connect begins with.
 
 There is no lock method. The per-slice tune lock is client-side
 (`requestSliceLock` is local-only), so a client that wants one holds it itself
