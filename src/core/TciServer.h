@@ -2,6 +2,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include "DaxTxAudioPermit.h"
+#include "TciExtensionSet.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
 #include "TciAudioHeader.h"
@@ -80,6 +81,8 @@ class TciServer : public QObject {
     friend class TciRxAudioTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
+    friend class TciAntennaExtensionTest;
+    friend class TciExtensionSetTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -157,6 +160,10 @@ public:
 
     // Wire slice signals for state change broadcasts
     void wireSlice(int trx, SliceModel* slice);
+
+    // A command group of the opt-in extension set joins here, with the
+    // capability that offers it. Enabled clients hear the new list at once.
+    bool registerExtensionGroup(TciExtensionSet::Group group);
     void wireSpotModel();
     void notifySpotClicked(int spotIndex, SliceModel* slice = nullptr);
     void rearmDaxForProfileLoad();
@@ -201,6 +208,10 @@ signals:
     // master volume slider — m_audio->setRxVolume() (or lineout when PC
     // audio is off) plus persistence to AppSettings.
     void masterVolumeRequested(int pct);
+    // An `aethersdr_rx_antenna` set names a listed port for this slice, even
+    // the one in use: emitted before the set, as the RX antenna menus emit
+    // flexRxAntennaSelected, so MainWindow releases a KiwiSDR virtual antenna.
+    void rxAntennaSetByTci(int sliceId);
 
 private slots:
     void onClientOpened(std::shared_ptr<TciClientLifetime> lifetime, QHostAddress address, quint16 endpointPort);
@@ -235,7 +246,36 @@ private:
     void publishActiveTrx();
     SliceModel* sliceForPanId(const QString& panId) const;
     void broadcast(const QString& msg);
+    // The extension set's one gate: nothing reaches a client that has not
+    // enabled it. Every extension line goes through sendExtensionText().
+    void sendExtensionText(ClientState& client, const QString& msg);
+    void broadcastExtension(const QString& msg);
+    void advertiseExtensions(ClientState& client, bool onlyIfChanged);
+    void announceExtensionSet();
+    void handleExtensionEnable(TciClient* ws, const QString& cmd);
+    void handleExtensionCommand(TciClient* ws, const QString& cmd);
     void broadcastBinary(const QByteArray& data);
+    // Extension groups `rx_antenna` and `tx_antenna` (TciAntennaExtension.h).
+    enum class AntennaLine { RxList, RxSelection, TxList, TxSelection };
+    void registerAntennaGroups();
+    void wireSliceAntennas(SliceModel* slice);
+    TciExtensionSet::Result handleAntenna(bool tx, const QString& name,
+                                          const QStringList& args);
+    bool antennaOffered(bool tx) const;
+    QStringList antennaWireList(bool tx, const SliceModel* slice) const;
+    QStringList antennaStateLines(bool tx) const;
+    QString antennaLine(AntennaLine kind, int trx) const;
+    // Keyed, for the extension set's refusals: a transmit operation still
+    // held, the radio transmitting, TransmitModel transmitting, tuning or in
+    // MOX, or a TCI key held. Unlike ReceiveControlGuard::checkTransmit() it
+    // has no radio-confirmed idle term: in the HL2 transmit tail the backend
+    // refuses (requestTxRoute).
+    bool extensionKeyed() const;
+    // A slice's list moved: a gate that flips re-sends the whole set, else
+    // the one line is queued.
+    void antennaListMoved(AntennaLine kind, SliceModel* slice);
+    void queueAntennaNotice(AntennaLine kind, int trx);
+    bool broadcastAntennas();
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
     SliceModel* sliceForTrxStrict(int trx) const;
@@ -332,6 +372,8 @@ private:
         quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
+        bool         extensionsEnabled{false};  // sent aethersdr_ext_enable:true
+        QString      extensionsAdvertised;      // last aethersdr_ext: line sent
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
         // several skimmers over one WebSocket by sending iq_start for each
         // receiver; a single scalar silently replaced the previous receiver
@@ -433,6 +475,7 @@ private:
     // released 500 ms after a genuine slice close (recreates reclaim their
     // number), cleared on disconnect. Injected into every TciProtocol.
     TciTrxMap m_trxMap;
+    TciExtensionSet m_extensions;
     std::function<void(int, bool)> m_centerLockSet;
     std::function<bool(int)> m_centerLockQuery;
     // #6352: the newest removal per slice id. A close timer that finds a newer
@@ -498,6 +541,13 @@ private:
     // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
     // band-change slice recreation momentarily leaves no slice marked TX.
     int               m_lastTxTrx{0};
+    // Extension set, antenna notices: per line kind, the trx numbers pending;
+    // posted, then rate-limited like drive:.
+    QTimer*           m_antennaRateTimer{nullptr};
+    QSet<int>         m_antennaPending[4];
+    bool              m_antennaSendPosted{false};
+    // A refused keyed TX-antenna set warns once per keyed period; cleared on unkey.
+    bool              m_txAntennaRefusalWarned{false};
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};
