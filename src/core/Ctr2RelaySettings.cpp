@@ -34,6 +34,7 @@ Ctr2RelaySettings Ctr2RelaySettings::load()
         if (!device.serial.isEmpty() && !s.usbDevices.contains(device))
             s.usbDevices.append(device);
     }
+    s.usbForgotten = o.value("usbForgotten").toBool(false) && s.usbDevices.isEmpty();
     // Saved before several devices could relay: the one device it relayed.
     const QString serial = o.value("usbSerial").toString();
     if (!o.contains("usbDevices") && !serial.isEmpty()) {
@@ -58,6 +59,8 @@ void Ctr2RelaySettings::save() const
                                        {"productId", int(d.productId)}});
         }
         o["usbDevices"] = devices;
+        if (usbForgotten && usbDevices.isEmpty())
+            o["usbForgotten"] = true;
         o["listenAddress"] = listenAddress;
         o["listenPort"] = listenPort;
     }

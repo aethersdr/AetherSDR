@@ -9,6 +9,7 @@
 #include "core/AppSettings.h"
 #include "core/Ctr2HidPort.h"
 #include "core/Ctr2MaxStockCatalog.h"
+#include "core/Ctr2RelaySettings.h"
 #include "core/EspFirmwareCatalog.h"
 #include "gui/FirmwareInstallDialog.h"
 #include "models/Ctr2ProxyModel.h"
@@ -232,6 +233,60 @@ void aRowPerController()
     w.relay.stop();
 }
 
+// A remembered controller that is not relaying offers Forget beside its Start;
+// pressing it forgets the controller and the button goes. Never shown on a
+// relaying row or one never remembered.
+void forgetOnARememberedRow()
+{
+    Ctr2RelaySettings settings;
+    settings.hasSetup = true;
+    settings.usbDevices = {{kKnob.serial, kKnob.vendorId, kKnob.productId}};
+    settings.save();
+    Window w;
+    check(w.open(), "the window opens");
+    if (!w.fw || !w.tabs) {
+        return;
+    }
+    w.relay.setUsbBackend([d = w.devices] { return *d; },
+                          [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(new QuietPort); });
+    w.relay.setUsbRadioSocketFactory([] { return new InertRadioSocket; });
+    w.relay.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992, QStringLiteral("FLEX"), {});
+    *w.devices = {kKnob, kMax};
+    w.relay.refreshDevices();
+    QCoreApplication::processEvents();
+    auto* list = w.dialog->findChild<QListWidget*>(QStringLiteral("ctr2ProxyUsbDevices"));
+    if (!list || list->count() != 2) {
+        check(false, "a row for each controller");
+        return;
+    }
+    const auto child = [&](const Info& d, const char* name) -> QPushButton* {
+        for (int i = 0; i < list->count(); ++i) {
+            if (list->item(i)->data(Qt::UserRole).toString() == d.path)
+                return list->itemWidget(list->item(i))->findChild<QPushButton*>(QLatin1String(name));
+        }
+        return nullptr;
+    };
+    QPushButton* forget = child(kKnob, "ctr2ProxyUsbForget");
+    check(forget && forget->isVisibleTo(w.dialog.get()),
+          "the remembered, idle knob offers Forget");
+    check(forget && forget->accessibleName() == QStringLiteral("Forget AetherKnob"),
+          "named for its controller");
+    check(child(kMax, "ctr2ProxyUsbForget")
+              && !child(kMax, "ctr2ProxyUsbForget")->isVisibleTo(w.dialog.get()),
+          "a controller never remembered offers none");
+    child(kKnob, "ctr2ProxyUsbStart")->click();
+    check(w.relay.isRunning(kKnob.path) && !forget->isVisibleTo(w.dialog.get()),
+          "while the knob relays, Forget is not offered");
+    child(kKnob, "ctr2ProxyUsbStart")->click();
+    check(!w.relay.isRunning(kKnob.path) && forget->isVisibleTo(w.dialog.get()),
+          "stopped, it is offered again");
+    forget->click();
+    check(Ctr2RelaySettings::load().usbDevices.isEmpty(), "Forget forgets the knob, saved");
+    check(!forget->isVisibleTo(w.dialog.get()), "and the button goes");
+    w.relay.stop();
+    Ctr2RelaySettings{}.save();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -255,6 +310,7 @@ int main(int argc, char** argv)
     heightFollowsTheMaxPart();
     aCtr2MaxSeenKeepsThePart();
     aRowPerController();
+    forgetOnARememberedRow();
 
     check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
           "every relay model was built with an injected USB backend, never the default (hidapi)");

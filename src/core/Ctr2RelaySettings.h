@@ -26,6 +26,10 @@ struct Ctr2RelaySettings {
     // automatic start starts each one that is plugged in. Settings from
     // before several devices could relay at once hold one.
     QList<UsbDevice> usbDevices;
+    // The operator forgot the last remembered device (Forget): an automatic
+    // start then starts none, not even the selected one, until a device is
+    // started by hand. Without it, an empty list starts the selected device.
+    bool usbForgotten{false};
     QString listenAddress;        // Wi-Fi
     QString listenPort;           // Wi-Fi; empty for the default
     bool hasSetup{false};         // a setup was saved (the relay has started)

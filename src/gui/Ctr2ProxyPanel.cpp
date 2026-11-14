@@ -622,13 +622,24 @@ void Ctr2ProxyPanel::syncAddresses()
             row.state = makeLabel(QString(), w, "secondary");
             row.button = new QPushButton(tr("Start"), w);
             row.button->setObjectName(QStringLiteral("ctr2ProxyUsbStart"));
+            // Beside Start, as the row's other control: the automatic start
+            // stops starting this controller.
+            row.forget = new QPushButton(tr("Forget"), w);
+            row.forget->setObjectName(QStringLiteral("ctr2ProxyUsbForget"));
+            row.forget->setToolTip(tr("Stop starting this controller automatically"));
+            row.forget->setVisible(false);
             h->addWidget(row.name);
             h->addWidget(row.version);
             h->addStretch(1);
             h->addWidget(row.state);
+            h->addWidget(row.forget);
             h->addWidget(row.button);
             const QString path = d.path;
             connect(row.button, &QPushButton::clicked, this, [this, path] { onUsbRowClicked(path); });
+            connect(row.forget, &QPushButton::clicked, this, [this, path] {
+                if (m_model && !m_installingRule)
+                    m_model->forgetUsbDevice(path);
+            });
             row.item->setSizeHint(w->sizeHint());
             m_usbList->setItemWidget(row.item, w);
             m_usbRows.insert(d.path, row);
@@ -640,7 +651,8 @@ void Ctr2ProxyPanel::syncAddresses()
             const auto it = m_usbRows.constFind(m_usbList->item(i)->data(Qt::UserRole).toString());
             if (it == m_usbRows.constEnd())
                 continue;
-            setTabOrder(previous, it->button);
+            setTabOrder(previous, it->forget);
+            setTabOrder(it->forget, it->button);
             previous = it->button;
         }
         setTabOrder(previous, m_startBtn);
@@ -722,6 +734,9 @@ void Ctr2ProxyPanel::syncUsbRows()
                                               : tr("Start relaying %1").arg(name));
         row.button->setAccessibleDescription(m_installingRule ? tr("Waiting for administrator approval")
                                                               : problem);
+        row.forget->setVisible(m_model && !m_installingRule && m_model->canForgetUsbDevice(path));
+        row.forget->setAccessibleName(tr("Forget %1").arg(name));
+        row.forget->setAccessibleDescription(tr("%1 is no longer started automatically").arg(name));
         QStringList spoken{name};
         if (!version.isEmpty())
             spoken << tr("firmware %1").arg(version);

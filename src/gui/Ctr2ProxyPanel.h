@@ -23,7 +23,8 @@ class Ctr2ProxyModel;
 // Start/Stop, and the relay's state, endpoints, byte counters and last local
 // error. In USB mode every controller found is a row with its own state and
 // Start/Stop, so several relay at once; the selected row is the model's focus,
-// whose state, traffic and error show below. Styled by its host's canon sheet: row labels are SectionLabel, and
+// whose state, traffic and error show below. A remembered row that is not
+// relaying also offers Forget. Styled by its host's canon sheet: row labels are SectionLabel, and
 // values carry a "tone" property (secondary, warning, danger). All behavior
 // lives in Ctr2ProxyModel; closing the window does not stop the proxy.
 class Ctr2ProxyPanel : public QWidget {
@@ -83,6 +84,7 @@ private:
         QLabel* version{nullptr};
         QLabel* state{nullptr};
         QPushButton* button{nullptr};
+        QPushButton* forget{nullptr};   // shown for a remembered, idle device
     };
     QHash<QString, UsbRow> m_usbRows;
     QLabel* m_listenRowLabel{nullptr};

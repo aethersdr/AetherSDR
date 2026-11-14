@@ -524,10 +524,13 @@ void Ctr2ProxyModel::tryAutoStart()
     // The device list is the one the periodic rescan keeps current, so a
     // controller plugged in since shows up within kDeviceRescanMs. Every
     // device relayed before is started; the focus only while none is
-    // remembered (the single-device setup), so selecting a row starts nothing.
+    // remembered (the single-device setup) and none was forgotten, so
+    // selecting a row starts nothing and Forget is not undone.
     QStringList paths;
     for (const Ctr2HidPort::DeviceInfo& d : std::as_const(m_usbChoices)) {
-        if (remembered(d) || (m_settings.usbDevices.isEmpty() && d.path == m_usbDevicePath))
+        if (remembered(d)
+            || (m_settings.usbDevices.isEmpty() && !m_settings.usbForgotten
+                && d.path == m_usbDevicePath))
             paths.append(d.path);
     }
     for (const QString& path : std::as_const(paths)) {
@@ -709,6 +712,41 @@ void Ctr2ProxyModel::releaseOperatorHold(const QString& path)
     }
 }
 
+bool Ctr2ProxyModel::usbDeviceHeldByOperator(const QString& usbPath) const
+{
+    const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(usbPath);
+    return device && heldByOperator(*device);
+}
+
+bool Ctr2ProxyModel::usbDeviceRemembered(const QString& usbPath) const
+{
+    const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(usbPath);
+    return device && remembered(*device);
+}
+
+bool Ctr2ProxyModel::canForgetUsbDevice(const QString& usbPath) const
+{
+    // A firmware update's restart starts, and so remembers, its device again.
+    return m_transport == Transport::Usb && !m_firmware->isRunning()
+        && usbDeviceRemembered(usbPath) && !isRunning(usbPath);
+}
+
+bool Ctr2ProxyModel::forgetUsbDevice(const QString& usbPath)
+{
+    if (!canForgetUsbDevice(usbPath))
+        return false;
+    const Ctr2HidPort::DeviceInfo& device = *listedUsbDevice(usbPath);
+    m_settings.usbDevices.removeAll(
+        Ctr2RelaySettings::UsbDevice{device.serial, device.vendorId, device.productId});
+    if (m_settings.usbDevices.isEmpty())
+        m_settings.usbForgotten = true;
+    releaseOperatorHold(usbPath);
+    m_settings.save();   // not saveSetup(), which remembers
+    qCInfo(lcDevices) << "CTR2 relay: forgot" << device.shortName();
+    emit configurationChanged();
+    return true;
+}
+
 bool Ctr2ProxyModel::heldByOperator(const Ctr2HidPort::DeviceInfo& device) const
 {
     if (device.serial.isEmpty())
@@ -739,6 +777,7 @@ void Ctr2ProxyModel::saveSetup(const QString& usbPath)
     m_settings.hasSetup = true;
     m_settings.usb = m_activeTransport == Transport::Usb;
     if (m_settings.usb) {
+        m_settings.usbForgotten = false;   // started by hand: auto-start as before
         // Remembered for the automatic start; one with no serial number
         // cannot be told apart from the next, so it is not.
         const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(usbPath);

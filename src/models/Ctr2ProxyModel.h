@@ -152,12 +152,27 @@ public:
     // serial number is held by its path.
     void stopByOperator();
     void stopByOperator(const QString& usbPath);
+    // The operator stopped this listed device by hand this connection.
+    bool usbDeviceHeldByOperator(const QString& usbPath) const;
+
+    // A device remembered for the automatic start (started before, and with a
+    // serial number to tell it by).
+    bool usbDeviceRemembered(const QString& usbPath) const;
+    // Forget: the device leaves the remembered list, and its Stop hold goes
+    // with it, so the automatic start no longer starts it. Only for a listed,
+    // remembered device that is not relaying, in USB mode, outside a firmware
+    // update; false otherwise. Forgetting the last one leaves the automatic
+    // start with nothing to start (Ctr2RelaySettings::usbForgotten) until a
+    // device is started by hand. Saved at once.
+    bool canForgetUsbDevice(const QString& usbPath) const;
+    bool forgetUsbDevice(const QString& usbPath);
 
     // Starts the relay by itself whenever AetherSDR is connected to a radio,
     // with the setup it last started with (Ctr2RelaySettings, saved), and
     // keeps trying while a device is missing. In USB mode it starts every
     // device it has relayed before that is plugged in (the focus only when it
-    // remembers none, so selecting a row starts nothing); only a device whose
+    // remembers none and none was forgotten, so selecting a row starts
+    // nothing); only a device whose
     // firmware relays over USB
     // (usbLink()) is started, and a device that failed without ever answering
     // is retried only every kNoAnswerRetryMs, or at once when the device
