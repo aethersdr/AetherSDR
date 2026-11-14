@@ -44,7 +44,8 @@ public:
         m_announcementTimer.setSingleShot(true);
         m_announcementTimer.setInterval(100);
         connect(&m_announcementTimer, &QTimer::timeout, this, [this]() {
-            if (!m_message.isEmpty() && isVisible() && QAccessible::isActive()) {
+            // Announced even when no gap or a hidden bar keeps the notice off screen.
+            if (!m_message.isEmpty() && QAccessible::isActive()) {
                 QAccessibleAnnouncementEvent event(this, m_message);
                 event.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
                 QAccessible::updateAccessibility(&event);
@@ -60,6 +61,17 @@ public:
                 m_announcementTimer.start();
             }
         });
+    }
+
+    // The workspace canvas replaces the pan stack while it is mounted; it is
+    // created after the overlay, so it joins here.
+    void setAlternateSurface(QWidget* surface)
+    {
+        m_alternateSurface = surface;
+        if (surface) {
+            surface->installEventFilter(this);
+        }
+        updateNotice();
     }
 
 protected:
@@ -98,7 +110,9 @@ private:
         const int noticeHeight = fontMetrics().height() + margins.top() + margins.bottom();
         const QPoint barTop = m_bar->mapTo(parentWidget(), QPoint(0, 0));
         const int top = qMax(0, barTop.y() - noticeHeight - kEdgeMargin);
-        QWidget* surface = m_surface && m_surface->isVisible() ? m_surface.data() : parentWidget();
+        QWidget* surface = m_surface && m_surface->isVisible() ? m_surface.data()
+            : m_alternateSurface && m_alternateSurface->isVisible() ? m_alternateSurface.data()
+                                                                   : parentWidget();
         const QRect surfaceRect(surface->mapTo(parentWidget(), QPoint()), surface->size());
         const QRect band(surfaceRect.left() + kEdgeMargin, top,
                          qMax(0, surfaceRect.width() - 2 * kEdgeMargin), noticeHeight);
@@ -106,7 +120,8 @@ private:
         // Stay inside the pan area and clear its zoom/scroll/overlay controls.
         // Choose the gap independently of text length, keeping the anchor steady.
         for (QWidget* child : surface->findChildren<QWidget*>()) {
-            if (child == this || !child->isVisible()
+            // Floating pans are separate top-levels; their geometry does not map here.
+            if (child == this || !child->isVisible() || child->window() != window()
                 || !(qobject_cast<QAbstractButton*>(child) || qobject_cast<QAbstractSlider*>(child)
                      || qobject_cast<QComboBox*>(child) || qobject_cast<QLineEdit*>(child)
                      || (child->testAttribute(Qt::WA_SetCursor)
@@ -139,6 +154,7 @@ private:
 
     QPointer<QStatusBar> m_bar;
     QPointer<QWidget> m_surface;
+    QPointer<QWidget> m_alternateSurface;
     QTimer m_announcementTimer;
     QString m_message;
 };

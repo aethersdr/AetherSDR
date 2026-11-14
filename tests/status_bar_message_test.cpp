@@ -183,6 +183,47 @@ int main(int argc, char** argv)
     bar->clearMessage();
     QTest::qWait(150);
     check(announcements.isEmpty(), "clearing cancels a pending announcement");
+    // A notice kept off screen (minimal mode) is still announced.
+    bar->hide();
+    QApplication::processEvents();
+    announcements.clear();
+    bar->showMessage(QStringLiteral("Keyboard shortcuts are off"), 5000);
+    check(!notice.isVisible()
+              && QTest::qWaitFor([&] { return announcements.contains(QStringLiteral("Keyboard shortcuts are off")); }, 2000),
+          "a notice hidden with the status bar is still announced");
+    bar->clearMessage();
+    bar->show();
+    QApplication::processEvents();
+
+    // With the pan surface hidden (workspace canvas mounted), the notice uses
+    // the alternate surface and ignores controls in other top-level windows.
+    auto* canvas = new QWidget(&window);
+    auto* canvasButton = new QPushButton(QStringLiteral("Canvas"), canvas);
+    surface->hide();
+    // Narrower than the window: the notice must stay within the canvas.
+    canvas->setGeometry(surface->x(), surface->y(), 300, surface->height());
+    canvas->show();
+    canvasButton->setGeometry(4, canvas->height() - 50, 46, 46);
+    // A floating pan window is a top-level child; a button across its bottom
+    // would, if mapped into this window, cover the whole notice band.
+    auto* floating = new QWidget(canvas, Qt::Window);
+    floating->setGeometry(0, 0, canvas->width(), canvas->height());
+    auto* floatingButton = new QPushButton(QStringLiteral("Floating"), floating);
+    floatingButton->setGeometry(0, canvas->height() - 60, canvas->width(), 60);
+    floating->show();
+    notice.setAlternateSurface(canvas);
+    bar->showMessage(longMessage, 5000);
+    QApplication::processEvents();
+    const QRect canvasRect(canvas->mapTo(&window, QPoint()), canvas->size());
+    const QRect canvasButtonRect(canvasButton->mapTo(&window, QPoint()), canvasButton->size());
+    check(notice.isVisible() && canvasRect.contains(notice.geometry())
+              && !notice.geometry().intersects(canvasButtonRect),
+          "the canvas surface places the notice clear of its controls");
+    check(notice.isVisible() && notice.width() > 200,
+          "controls in other top-level windows do not take the notice's gap");
+    floating->hide();
+    bar->clearMessage();
+
     QAccessible::installUpdateHandler(previousUpdateHandler);
     return failures ? 1 : 0;
 }

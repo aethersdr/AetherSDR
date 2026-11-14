@@ -401,8 +401,8 @@ void MainWindow::refuseControlAction(const QString& name, bool transmitSetup)
                                   : tr("%1 is not available right now").arg(name);
     // A held key or a spinning encoder refuses many times a second: say it
     // once while the notice is up, not once per step (docs/a11y.md).
-    if (name == m_lastRefusedAction && statusBar()->isVisible()
-        && statusBar()->currentMessage() == message) {
+    // The message stays current while the bar is hidden in minimal mode.
+    if (name == m_lastRefusedAction && statusBar()->currentMessage() == message) {
         return;
     }
     m_lastRefusedAction = name;
