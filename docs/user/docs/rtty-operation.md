@@ -74,7 +74,7 @@ The stats bar updates about twice a second with the mark and space levels, the S
 
 <img src="/img/screens/rtty-decoder-pane.png" width="1226" alt="The bottom of a zoomed panadapter in RTTY mode. Under the waterfall, the decoder pane's control row reads RTTY, (selected slice), Mark: 2125, Shift: 170, Baud: 45.45, a REV button, a Sens slider, a green tuning bar with a lock status, and CPY ALL, CLR and close buttons, above an empty text area." />
 
-*The RTTY decoder pane under the waterfall.*
+*The RTTY decoder pane under the waterfall, with Sens raised to about 38.*
 
 #### Which audio is decoded
 
