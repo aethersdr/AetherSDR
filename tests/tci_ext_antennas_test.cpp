@@ -4,7 +4,9 @@
 // SliceModel::setRxAntenna()/setTxAntenna() like the RX applet's menus, the TX
 // antenna refused while transmitting, and every change, lists included, sent
 // to enabled clients only; an RX set asks first for a KiwiSDR antenna to be
-// released, and a keyed refusal warns once per keyed period. Two slices.
+// released, and a keyed refusal warns once per keyed period, re-armed also
+// when a TCI key ends on its own; a list change reaches every enabled client
+// even when only some of them were behind on the item list. Two slices.
 // Socket-free; nothing keys.
 
 #include "TestSettingsProfile.h"
@@ -61,6 +63,15 @@ public:
     {
         server.m_tciPttClient = client;
     }
+    // The same, with the key-up requested and not yet confirmed, so the
+    // client's own trx:false releases it (TciServer::abortTciPtt).
+    static void requestTciPtt(TciServer& server, TciClient* client)
+    {
+        server.m_tciPttClient = client;
+        server.m_tciPttRequestedOn = true;
+        server.m_tciPttConfirmedOn = false;
+    }
+    static bool tciPttHeld(const TciServer& server) { return !server.m_tciPttClient.isNull(); }
 };
 
 namespace {
@@ -474,6 +485,29 @@ void serverBehaviour()
     b.take();
     c.take();
 
+    // A TCI key that ends on its own, with no TransmitModel or radio edge
+    // after it, ends the keyed period too: the next one warns again.
+    TciAntennaExtensionTest::requestTciPtt(server, b.client);
+    a.send("aethersdr_tx_antenna:0,ANT2;");
+    settle();
+    check(a.takeExtension() == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT1;")})
+              && warnings == 3,
+          "a TX set refused under the same TCI key is not noticed again");
+    b.send("trx:0,false;");
+    settle();
+    check(!TciAntennaExtensionTest::tciPttHeld(server), "the TCI client releases its key");
+    model.transmitModel().setTransmitting(true);
+    a.send("aethersdr_tx_antenna:0,ANT2;");
+    settle();
+    check(backend->txRequests.isEmpty()
+              && a.takeExtension() == QStringList({QStringLiteral("aethersdr_tx_antenna:0,ANT1;")})
+              && warnings == 4,
+          "a TCI key ending on its own re-arms the notice for the next keyed period");
+    model.transmitModel().setTransmitting(false);
+    a.take();
+    b.take();
+    c.take();
+
     // TX set, not keyed: the menu's path to the backend.
     a.send("aethersdr_tx_antenna:1,ant2;");
     settle();
@@ -584,6 +618,64 @@ void serverBehaviour()
           "the plain client received no aethersdr_ line at any point");
 }
 
+// One enabled client is behind on the item list, the other already holds it:
+// the resend reaches only the first, so a list change is still noticed to both.
+void mixedResend()
+{
+    RadioModel model;
+    auto owner = std::make_unique<AntennaBackend>();
+    AntennaBackend* backend = owner.get();
+    backend->connected = false;
+    model.setBackendForTest(std::move(owner), QStringLiteral("test"));
+    QString error;
+    const bool fixture = model.automationApplySliceFixture(0, QStringLiteral("A"), &error);
+    backend->connected = true;
+    SliceModel* s0 = model.slice(0);
+    check(fixture && s0, "mixed: one fixture slice");
+    if (!fixture || !s0) {
+        std::printf("      fixture: %s\n", qPrintable(error));
+        return;
+    }
+    s0->applyChanges(antennas({QStringLiteral("ANT1"), QStringLiteral("ANT2")},
+                              QStringLiteral("ANT1"),
+                              {QStringLiteral("ANT1"), QStringLiteral("ANT2")},
+                              QStringLiteral("ANT1")));
+    TciServer server(&model);
+    server.wireSlice(s0->sliceId(), s0);
+    Wire a;
+    Wire c;
+    TciAntennaExtensionTest::attach(server, a.client, model);
+    TciAntennaExtensionTest::attach(server, c.client, model);
+    settle(600);
+    a.take();
+    c.take();
+    a.send("aethersdr_ext_enable:true;");
+    check(lastAdvertisement(a.take()) == QStringLiteral("aethersdr_ext:1,rx_antenna,tx_antenna;"),
+          "mixed: the first client enables with both items");
+    // The TX gate moves with no capabilitiesChanged yet; the second client
+    // enables in between and holds the newer list.
+    backend->caps.canTransmit = false;
+    c.send("aethersdr_ext_enable:true;");
+    check(lastAdvertisement(c.take()) == QStringLiteral("aethersdr_ext:1,rx_antenna;"),
+          "mixed: the second client enables with rx_antenna only");
+    s0->applyChanges(antennas({QStringLiteral("ANT1"), QStringLiteral("ANT2"),
+                               QStringLiteral("RX_A")},
+                              QStringLiteral("ANT1"),
+                              {QStringLiteral("ANT1"), QStringLiteral("ANT2")},
+                              QStringLiteral("ANT1")));
+    settle();
+    const QStringList gotA = a.takeExtension();
+    const QStringList gotC = c.takeExtension();
+    check(lastAdvertisement(gotA) == QStringLiteral("aethersdr_ext:1,rx_antenna;")
+              && gotA.contains(QStringLiteral("aethersdr_rx_antennas:0,ANT1,ANT2,RX_A;")),
+          "mixed: the client behind gets the item list with the new list");
+    check(gotC == QStringList({QStringLiteral("aethersdr_rx_antennas:0,ANT1,ANT2,RX_A;")}),
+          "mixed: the client already current gets the new list as a notice");
+    if (gotC != QStringList({QStringLiteral("aethersdr_rx_antennas:0,ANT1,ANT2,RX_A;")})) {
+        dump("c", gotC);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -597,6 +689,7 @@ int main(int argc, char** argv)
     wireGrammar();
     transmitGatePerBackend();
     serverBehaviour();
+    mixedResend();
 
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;

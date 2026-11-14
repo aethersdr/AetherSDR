@@ -276,8 +276,12 @@ private:
     // has no radio-confirmed idle term: in the HL2 transmit tail the backend
     // refuses (requestTxRoute).
     bool extensionKeyed() const;
-    // A slice's list moved: a gate that flips re-sends the whole set, else
-    // the one line is queued.
+    // Clears the refusal latch once nothing is keyed any more.
+    void rearmTxAntennaRefusal();
+    // Every end of a TCI key goes through here, so the latch is re-armed.
+    void clearTciPttClient();
+    // A slice's list moved: a resend to every enabled client carries it,
+    // else the one line is queued.
     void antennaListMoved(AntennaLine kind, SliceModel* slice);
     void queueAntennaNotice(AntennaLine kind, int trx);
     bool broadcastAntennas();

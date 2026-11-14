@@ -388,7 +388,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 m_tciPttConfirmedOn = false;
                 m_tciPttCancelPending = false;
                 m_tciPttWantsAudio = false;
-                m_tciPttClient.clear();
+                clearTciPttClient();
                 stopTxChrono();
                 return;
             }
@@ -2701,7 +2701,7 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
             stopTxChrono();
             m_tciPttConfirmedOn = false;
             m_tciPttWantsAudio = false;
-            m_tciPttClient.clear();
+            clearTciPttClient();
             drainDeferredRoutingAndPtt();
         }
         return;
@@ -2977,7 +2977,7 @@ void TciServer::finishIcomUnkeySettle(quint64 generation)
 
     notePttOutcome(QStringLiteral("radio-confirmed-unkeyed"));
     ++m_tciPttGeneration;
-    m_tciPttClient.clear();
+    clearTciPttClient();
     m_tciPttConfirmedOn = false;
     m_tciPttWantsAudio = false;
     drainDeferredRoutingAndPtt();
@@ -3940,17 +3940,27 @@ void TciServer::registerAntennaGroups()
             announceExtensionSet();
         });
         // Unkey ends the keyed period: the next refused TX set warns again.
-        const auto unkeyed = [this] {
-            if (!extensionKeyed()) {
-                m_txAntennaRefusalWarned = false;
-            }
-        };
+        const auto unkeyed = [this] { rearmTxAntennaRefusal(); };
         TransmitModel* txModel = &m_model->transmitModel();
         connect(txModel, &TransmitModel::transmittingChanged, this, unkeyed);
         connect(txModel, &TransmitModel::moxChanged, this, unkeyed);
         connect(txModel, &TransmitModel::tuneChanged, this, unkeyed);
         connect(m_model, &RadioModel::radioTransmittingChanged, this, unkeyed);
     }
+}
+
+void TciServer::rearmTxAntennaRefusal()
+{
+    if (m_model && !extensionKeyed()) {
+        m_txAntennaRefusalWarned = false;
+    }
+}
+
+void TciServer::clearTciPttClient()
+{
+    m_tciPttClient.clear();
+    // A TCI key can end after the last TransmitModel/radio edge has fired.
+    rearmTxAntennaRefusal();
 }
 
 void TciServer::wireSliceAntennas(SliceModel* slice)
@@ -3989,16 +3999,9 @@ void TciServer::wireSliceAntennas(SliceModel* slice)
 
 void TciServer::antennaListMoved(AntennaLine kind, SliceModel* slice)
 {
-    // Every enabled client holds the last advertisement (handleExtensionEnable
-    // and advertiseExtensions() record it). If the item list no longer matches,
-    // re-advertising sends the list and every state line, this one included.
-    const QString advertisement = m_extensions.advertisement();
-    const bool stale = std::any_of(m_clients.cbegin(), m_clients.cend(),
-        [&advertisement](const ClientState& client) {
-            return client.extensionsEnabled && client.extensionsAdvertised != advertisement;
-        });
-    if (stale) {
-        announceExtensionSet();
+    // A resend to every enabled client carried this line already; otherwise a
+    // client that held the list has not heard it, so it is queued.
+    if (announceExtensionSet()) {
         return;
     }
     queueAntennaNotice(kind, m_trxMap.trxForSlice(m_model, slice));
@@ -4239,7 +4242,7 @@ void TciServer::abortTciPtt()
     stopTxChrono();
     m_tciPttConfirmedOn = false;
     m_tciPttWantsAudio = false;
-    m_tciPttClient.clear();
+    clearTciPttClient();
     if (hadSession && m_tciPttLastOutcome == QLatin1String("key-on-pending")) {
         notePttOutcome(QStringLiteral("aborted"));
     }
@@ -4486,7 +4489,7 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
     if (m_tciPttClient) {
         notePttOutcome(QStringLiteral("radio-confirmed-unkeyed"));
         ++m_tciPttGeneration;
-        m_tciPttClient.clear();
+        clearTciPttClient();
         m_tciPttConfirmedOn = false;
         m_tciPttWantsAudio = false;
         stopTxChrono();
@@ -4528,7 +4531,7 @@ void TciServer::onRadioTransmitConfirmed(bool transmitting)
     notePttOutcome(QStringLiteral("radio-confirmed-unkeyed-late"));
     broadcastActualTxState(false);
     ++m_tciPttGeneration;
-    m_tciPttClient.clear();
+    clearTciPttClient();
     m_tciPttConfirmedOn = false;
     m_tciPttWantsAudio = false;
     stopTxChrono();
