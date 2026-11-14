@@ -86,6 +86,7 @@ struct Link {
     std::vector<std::uint8_t> theirReceived;
     Data2gLinkState ourState{Data2gLinkState::Idle};
     int transmissions{0};
+    bool transmittingReported{false};
     double transmissionPeak{0.0};
     std::size_t shortestTransmission{SIZE_MAX};
     bool sawAbort{false};
@@ -144,6 +145,7 @@ struct Link {
         }
         Data2gSessionStep ourOut = ours.step(weHear);
         ourState = ourOut.state;
+        transmittingReported = transmittingReported || ourOut.transmitting;
         std::move(ourOut.events.begin(), ourOut.events.end(), std::back_inserter(ourEvents));
         ourReceived.insert(ourReceived.end(), ourOut.received.begin(), ourOut.received.end());
         if (ourOut.abortTx) {
@@ -283,9 +285,33 @@ void strangerCalls()
     link.theirs.connect("N0CALL", 2);
     link.run(40.0);
     check(link.transmissions == 0, "an unarmed station hands back nothing");
+    check(!link.transmittingReported, "and is never reported as transmitting");
     check(!has(link.ourEvents, "CONNECTED"), "an incoming CONNECT starts no session");
     check(link.ourState == Data2gLinkState::Idle, "the adapter stays idle");
     check(link.ours.suppressedTransmissions() > 0, "the engine's refusal was dropped, and counted");
+}
+
+// The closing identification has a deadline by the engine's clock, however
+// the audio is chunked: one long step that carries the clock past it releases
+// nothing.
+void closingDeadline()
+{
+    Link link(true);
+    link.ours.requestConnect("W1AW", Data2gBandwidth::Hz2400);
+    const bool connected = link.runUntil(60.0, [&] { return has(link.ourEvents, "CONNECTED"); });
+    check(connected, "connected before the deadline case");
+    link.ours.requestDisconnect();
+    const bool closed = link.runUntil(120.0, [&] {
+        return has(link.ourEvents, "DISCONNECTED") && link.ourState == Data2gLinkState::Idle;
+    });
+    check(closed, "disconnected, and the closing window has just opened");
+
+    const std::uint64_t droppedBefore = link.ours.suppressedTransmissions();
+    const std::vector<float> eightSeconds(8 * Link::kRate, 0.0f);
+    const Data2gSessionStep late = link.ours.step(eightSeconds);
+    check(late.transmission.empty(), "an identification past the deadline is not handed back");
+    check(!late.transmitting, "nor reported as transmitting");
+    check(link.ours.suppressedTransmissions() == droppedBefore + 1, "it is dropped and counted");
 }
 
 // Abort mid-session: transmit stops at once and nothing follows, the closing
@@ -359,6 +385,7 @@ int main()
 {
     session();
     strangerCalls();
+    closingDeadline();
     abortMidSession();
     refusals();
     keyLead();

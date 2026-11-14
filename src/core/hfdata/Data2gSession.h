@@ -19,6 +19,14 @@
 //    dropped here and counted. An unarmed station stays silent, and an armed
 //    one transmits only to its own peer.
 //
+// Two costs of dropping a refusal, both the engine's doing. It still plays the
+// refusal out on its own clock and does not listen meanwhile, so a third
+// station calling mid-session costs the session a few seconds of reception.
+// And when an identification falls due in the same turn, the engine sends the
+// two as one transmission and counts itself as having identified: that
+// identification is dropped with the refusal, and the next comes a full
+// interval (600 s) later.
+//
 // Qt-free, and the Data2G headers stay out of this header, for the reasons
 // given in Data2gMonitor.h.
 //
@@ -46,9 +54,9 @@ struct Data2gSessionStep {
     // seconds of silence, so key the transmitter and play it from its first
     // sample. Empty on every other step.
     std::vector<float> transmission;
-    // The engine counts itself as transmitting during this chunk. It keeps
-    // time by the samples it is fed, so this follows the fed audio, not the
-    // radio.
+    // The engine is playing out, on its own clock, a transmission that was
+    // handed back. It keeps time by the samples it is fed, so this follows
+    // the fed audio, not the radio. False for a transmission dropped here.
     bool transmitting{false};
     // The session was aborted since the last step: stop whatever is playing
     // and unkey now.
@@ -64,7 +72,8 @@ struct Data2gSessionStep {
 class Data2gSession {
 public:
     // How long after a session ends its closing identification may still be
-    // keyed.
+    // handed back. Past it, by the engine's clock, it is dropped (maintainer
+    // ruling, 2026-11-14).
     static constexpr double kClosingIdSeconds = 6.0;
     // Silence at the head of every transmission, for the transmitter to key.
     static constexpr double kDefaultKeyLeadSeconds = 0.1;

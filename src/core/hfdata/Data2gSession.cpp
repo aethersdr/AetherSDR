@@ -86,6 +86,8 @@ struct Data2gSession::Impl {
     // What the engine keyed during the step in hand, from its on_send hook.
     int burstsSent{0};
     bool refusalSent{false};
+    // The engine is playing out a transmission that was dropped here.
+    bool suppressing{false};
     std::uint64_t suppressed{0};
     std::uint64_t faults{0};
 
@@ -107,6 +109,7 @@ struct Data2gSession::Impl {
         });
         operatorSession = false;
         sessionEnded = false;
+        suppressing = false;
     }
 
     bool sessionActive() const
@@ -264,13 +267,30 @@ Data2gSessionStep Data2gSession::step(std::span<const float> mono)
         impl.refusalSent = false;
         const data2g::arq::Engine::Out engineOut = engine.step(atFs);
         out.abortTx = engineOut.tx_abort;
-        out.transmitting = engineOut.ptt;
 
         std::vector<std::string> events = engine.events();
         out.events.insert(out.events.end(), std::make_move_iterator(events.begin()),
                           std::make_move_iterator(events.end()));
         out.received = engine.session().read();
         out.state = linkStateOf(engine.session().state);
+
+        // The window in which this station may transmit: from an accepted
+        // requestConnect() until kClosingIdSeconds of audio after that
+        // session has ended. It is settled on this step's clock before
+        // anything is handed back, so a step of any length that carries the
+        // clock past the deadline releases nothing.
+        if (impl.operatorSession) {
+            if (out.state != Data2gLinkState::Idle) {
+                impl.sessionEnded = false;
+            } else if (!impl.sessionEnded) {
+                impl.sessionEnded = true;
+                impl.endedSeconds = engine.now();
+            }
+            if (impl.sessionEnded && engine.now() - impl.endedSeconds > kClosingIdSeconds) {
+                impl.operatorSession = false;
+                impl.sessionEnded = false;
+            }
+        }
 
         if (engineOut.tx_burst) {
             // Ours only if an operator session covers it, the engine named
@@ -282,22 +302,13 @@ Data2gSessionStep Data2gSession::step(std::span<const float> mono)
                 out.transmission = impl.atCallerRate(*engineOut.tx_burst);
             else
                 ++impl.suppressed;
+            impl.suppressing = !ours;
         }
-
-        // The window in which this station may transmit: from an accepted
-        // requestConnect() until kClosingIdSeconds of audio after that
-        // session has ended.
-        if (impl.operatorSession) {
-            if (out.state != Data2gLinkState::Idle) {
-                impl.sessionEnded = false;
-            } else if (!impl.sessionEnded) {
-                impl.sessionEnded = true;
-                impl.endedSeconds = engine.now();
-            } else if (engine.now() - impl.endedSeconds > kClosingIdSeconds) {
-                impl.operatorSession = false;
-                impl.sessionEnded = false;
-            }
-        }
+        // The engine plays a dropped transmission out on its own clock. It is
+        // not reported as transmitting: nothing here is on the air.
+        if (!engineOut.ptt)
+            impl.suppressing = false;
+        out.transmitting = engineOut.ptt && !impl.suppressing;
     } catch (const std::exception&) {
         // The audio is untrusted (Principle VII), and a core in an unknown
         // state must not be left with a transmission in hand: drop the
