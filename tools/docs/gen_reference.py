@@ -12,9 +12,12 @@ app already holds in code, so it is parsed from the C++ source text instead of
 being copied by hand into a page that drifts:
 
   default-shortcuts.md       ShortcutManager registrations
-                             (src/gui/MainWindow_Shortcuts.cpp)
+                             (src/gui/MainWindow_Shortcuts.cpp) and the
+                             ControlActionRegistry declarations
+                             (src/gui/MainWindow_ControlActions.cpp)
   midi-actions.md            MIDI parameter registry
-                             (MainWindow::registerMidiParams)
+                             (MainWindow::registerMidiParams) and the same
+                             ControlActionRegistry declarations
   flexcontrol-actions.md     FlexControl action table (FlexControlDialog.cpp)
   ulanzi-dial-actions.md     Ulanzi Dial wheel options and button defaults
   hid-controller-actions.md  Stream Deck+, HID encoder and TMate 2 tables
@@ -63,6 +66,7 @@ HELPERS_H = "src/gui/MainWindowHelpers.h"
 DIGITAL_VOICE_H = "src/core/DigitalVoiceFeature.h"
 DV_REGISTRY_CPP = "src/core/DigitalVoiceModeRegistry.cpp"
 CONTROLLERS_CPP = "src/gui/MainWindow_Controllers.cpp"
+CONTROL_ACTIONS_CPP = "src/gui/MainWindow_ControlActions.cpp"
 MIDI_H = "src/core/MidiControlManager.h"
 FLEXCONTROL_CPP = "src/gui/FlexControlDialog.cpp"
 ULANZI_DIALOG_CPP = "src/gui/UlanziDialMapperDialog.cpp"
@@ -75,7 +79,7 @@ TCI_SERVER_CPP = "src/core/TciServer.cpp"
 ALL_SOURCES = [
     SHORTCUTS_CPP, SHORTCUT_MANAGER_CPP, HELPERS_H, DIGITAL_VOICE_H,
     DV_REGISTRY_CPP,
-    CONTROLLERS_CPP, MIDI_H, FLEXCONTROL_CPP, ULANZI_DIALOG_CPP,
+    CONTROLLERS_CPP, CONTROL_ACTIONS_CPP, MIDI_H, FLEXCONTROL_CPP, ULANZI_DIALOG_CPP,
     ULANZI_MAPPINGS_CPP, RADIO_SETUP_CPP, LOG_MANAGER_CPP, TCI_PROTOCOL_CPP,
     TCI_SERVER_CPP,
 ]
@@ -707,6 +711,8 @@ def parse_shortcuts():
 
     entries.sort(key=lambda e: e[0])
     actions = [e for _, e in entries]
+    registry_shortcuts, _, registry_src = parse_control_actions()
+    actions += registry_shortcuts
     ids = [a["id"] for a in actions]
     dups = sorted({i for i in ids if ids.count(i) > 1})
     if dups:
@@ -715,8 +721,176 @@ def parse_shortcuts():
     if unknown:
         raise ParseError(f"{src.rel}: categories {unknown} are not in "
                          "ShortcutManager::categories()")
-    return actions, categories, [src.rel, mgr.rel, helpers.rel, dv.rel,
-                                 DV_REGISTRY_CPP]
+    return actions, categories, [src.rel, registry_src, mgr.rel, helpers.rel,
+                                 dv.rel, DV_REGISTRY_CPP]
+
+
+# ---------------------------------------------------------------------------
+# ControlActionRegistry declarations (MainWindow::registerControlActions)
+#
+# One declaration publishes to the keyboard and to MIDI. Recognised shapes:
+#   reg.add(A::trigger|toggle|level(shortcutId, midiId, name, category, ...)
+#           [.inMidiCategory(x)] [.repeating()] [.when(...)])
+#   txShortcut(id, name, category, ...)      a keying keyboard action
+#   reg.addKeyingMidi(midiId, name, category)  its MIDI entry
+# Each string argument is a literal, {} (no id on that surface), or VAR.field
+# inside ``for (const auto& VAR : kTable)`` over a static table of literal
+# rows whose struct is declared in the same function.
+
+def struct_fields(src: Source, name: str, start: int, end: int) -> list:
+    found = list(re.finditer(r"\bstruct\s+%s\s*\{" % re.escape(name), src.code[start:end]))
+    if len(found) != 1:
+        raise ParseError(f"{src.rel}: expected one struct {name}, found {len(found)}")
+    open_pos = start + found[0].end() - 1
+    close = match_close(src.code, open_pos)
+    fields = []
+    for decl in src.code[open_pos + 1:close].split(";"):
+        d = decl.strip()
+        if not d:
+            continue
+        m = re.search(r"\(\s*\w+::\*\s*(\w+)\s*\)", d)   # member pointer
+        if not m:
+            m = re.search(r"(\w+)\s*$", d)
+        if not m:
+            raise ParseError(f"{src.rel}: cannot read a field of struct {name}: {d!r}")
+        fields.append(m.group(1))
+    return fields
+
+
+def call_chain(code: str, close: int) -> list:
+    """[(name, [args])] for ``.name(args)`` calls chained after ``close``."""
+    chain, i = [], close + 1
+    while True:
+        m = re.match(r"\s*\.\s*(\w+)\s*\(", code[i:])
+        if not m:
+            return chain
+        open_pos = i + m.end() - 1
+        end = match_close(code, open_pos)
+        chain.append((m.group(1), split_top(code[open_pos + 1:end])))
+        i = end + 1
+
+
+def parse_control_actions():
+    src = Source(CONTROL_ACTIONS_CPP)
+    b0, b1 = function_body(src, r"void\s+MainWindow::registerControlActions")
+
+    loops = []  # (open, close, var, [row dicts])
+    for m in re.finditer(r"for\s*\(\s*const\s+auto\s*&\s*(\w+)\s*:\s*(k\w+)\s*\)\s*\{",
+                         src.code[b0:b1]):
+        var, table = m.group(1), m.group(2)
+        open_pos = b0 + m.end() - 1
+        close = match_close(src.code, open_pos)
+        body = src.code[open_pos:close]
+        if not re.search(r"\bA::(?:trigger|toggle|level)\s*\(|(?<![\w.])txShortcut\s*\(|"
+                         r"\baddKeyingMidi\s*\(", body):
+            continue  # a loop that declares nothing (the legacy pairs)
+        tm = re.search(r"static\s+(?:constexpr|const)\s+(\w+)\s+%s\s*\[\s*\]" % re.escape(table),
+                       src.code[b0:b1])
+        if not tm:
+            raise ParseError(f"{src.where(open_pos)}: loop over {table} with no "
+                             "static table of that name in registerControlActions")
+        fields = struct_fields(src, tm.group(1), b0, b1)
+        rows, _ = array_initializer(src, table, b0, b1)
+        dict_rows = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) != len(fields):
+                raise ParseError(f"{src.rel}: a {table} row does not match struct "
+                                 f"{tm.group(1)}")
+            dict_rows.append(dict(zip(fields, row)))
+        loops.append((open_pos, close, var, dict_rows))
+
+    def rows_at(pos):
+        inside = [lp for lp in loops if lp[0] < pos < lp[1]]
+        if len(inside) > 1:
+            raise ParseError(f"{src.where(pos)}: nested declaration loops")
+        return inside[0] if inside else None
+
+    def value(expr, loop, row, where, allow_empty=False):
+        e = expr.strip()
+        if allow_empty and e == "{}":
+            return ""
+        v = literal(e, where)
+        if v is not None:
+            return v
+        if loop:
+            m = re.fullmatch(r"%s\.(\w+)" % re.escape(loop[2]), e)
+            if m:
+                if m.group(1) not in row:
+                    raise ParseError(f"{where}: {e} names no field of the loop's table")
+                v = literal(row[m.group(1)], where)
+                if v is not None:
+                    return v
+        raise ParseError(f"{where}: cannot resolve {e!r}")
+
+    shortcuts, midi = [], []
+    kinds = {"trigger": "Trigger", "toggle": "Toggle", "level": "Slider"}
+    sites = 0
+    for m in re.finditer(r"\bA::(trigger|toggle|level)\s*\(", src.code[b0:b1]):
+        sites += 1
+        pos = b0 + m.start()
+        where = src.where(pos)
+        open_pos = b0 + m.end() - 1
+        close = match_close(src.code, open_pos)
+        args = split_top(src.code[open_pos + 1:close])
+        chain = call_chain(src.code, close)
+        names = [c[0] for c in chain]
+        unknown = set(names) - {"inMidiCategory", "repeating", "when"}
+        if unknown:
+            raise ParseError(f"{where}: unrecognised chained call(s) {sorted(unknown)}")
+        kind = m.group(1)
+        loop = rows_at(pos)
+        for row in (loop[3] if loop else [None]):
+            sid = value(args[0], loop, row, where, allow_empty=True)
+            mid = value(args[1], loop, row, where, allow_empty=True)
+            name = value(args[2], loop, row, where)
+            cat = value(args[3], loop, row, where)
+            mcat = cat
+            for cname, cargs in chain:
+                if cname == "inMidiCategory":
+                    mcat = value(cargs[0], loop, row, where)
+            repeat = "repeating" in names
+            lo, hi = "0", "1"
+            if kind == "level":
+                lo, hi = parse_number(args[4], where), parse_number(args[5], where)
+            if sid:
+                if kind == "level":
+                    for suffix, word in (("_up", "Up"), ("_down", "Down")):
+                        shortcuts.append(dict(id=sid + suffix, name=f"{name} {word}",
+                                              category=cat, key="", repeat=True,
+                                              tx=False, window=False, conds=()))
+                else:
+                    shortcuts.append(dict(id=sid, name=name, category=cat, key="",
+                                          repeat=repeat, tx=False, window=False,
+                                          conds=()))
+            if mid:
+                midi.append(dict(id=mid, name=name, category=mcat, type=kinds[kind],
+                                 lo=lo, hi=hi, conds=()))
+
+    for pos, args in calls(src, r"(?<![\w.])txShortcut", b0, b1):
+        where = src.where(pos)
+        if len(args) != 5:
+            raise ParseError(f"{where}: txShortcut with {len(args)} args")
+        loop = rows_at(pos)
+        for row in (loop[3] if loop else [None]):
+            shortcuts.append(dict(id=value(args[0], loop, row, where),
+                                  name=value(args[1], loop, row, where),
+                                  category=value(args[2], loop, row, where),
+                                  key="", repeat=False, tx=True, window=False, conds=()))
+    for pos, args in calls(src, r"\.addKeyingMidi", b0, b1):
+        where = src.where(pos)
+        if len(args) != 3:
+            raise ParseError(f"{where}: addKeyingMidi with {len(args)} args")
+        loop = rows_at(pos)
+        for row in (loop[3] if loop else [None]):
+            midi.append(dict(id=value(args[0], loop, row, where),
+                             name=value(args[1], loop, row, where),
+                             category=value(args[2], loop, row, where),
+                             type="Trigger", lo="0", hi="1", conds=()))
+
+    loose = len(re.findall(r"\breg\.add\s*\(", src.code[b0:b1]))
+    if loose != sites:
+        raise ParseError(f"{src.rel}: {loose} reg.add() sites, parsed {sites} declarations")
+    return shortcuts, midi, src.rel
 
 
 def render_shortcuts(actions, categories, sources) -> str:
@@ -813,9 +987,25 @@ def parse_midi():
             raise ParseError(f"{src.rel}: cannot find the format of {var}")
         return need_literal(mm.group(1), src.rel)
 
+    # The registry's publishMidi() forwards each declaration through reg();
+    # that forwarding call is not a parameter of its own. The declarations
+    # are read from MainWindow_ControlActions.cpp (parse_control_actions).
+    pub = [(p, a) for p, a in calls(src, r"\bm_controlActions\.publishMidi", b0, b1)]
+    if len(pub) != 1:
+        raise ParseError(f"{src.rel}: expected one m_controlActions.publishMidi() "
+                         f"in registerMidiParams, found {len(pub)}")
+    pub_open = src.code.index("(", pub[0][0])
+    pub_span = (pub_open, match_close(src.code, pub_open))
+    forwarded = [p for p, _ in calls(src, r"(?<![\w.:>])reg", *pub_span)]
+    if len(forwarded) != 1:
+        raise ParseError(f"{src.where(pub_open)}: publishMidi() should forward through "
+                         f"one reg() call, found {len(forwarded)}")
+
     params = []
     loop_sites = 0
     for pos, args in calls(src, r"(?<![\w.:>])reg", b0, b1):
+        if pos == forwarded[0]:
+            continue
         where = src.where(pos)
         if len(args) < 6:
             raise ParseError(f"{where}: reg() with {len(args)} args")
@@ -871,18 +1061,21 @@ def parse_midi():
                 raise ParseError(f"{where}: cannot resolve MIDI name {name_expr!r}")
             params.append((pos, dict(common, id=ident, name=name)))
 
-    loose = len(re.findall(r"(?<![\w.:>])reg\s*\(", body))
+    loose = len(re.findall(r"(?<![\w.:>])reg\s*\(", body)) - 1  # - the forwarder
     seen = len({p for p, _ in params})
     if loose != seen:
         raise ParseError(f"{src.rel}: {loose} reg() sites, parsed {seen}")
     if loop_sites != 3:
         raise ParseError(f"{src.rel}: expected 3 loop registrations, found {loop_sites}")
     out = [p for _, p in params]
+    _, registry_midi, registry_src = parse_control_actions()
+    out += registry_midi
     ids = [p["id"] for p in out]
     dups = sorted({i for i in ids if ids.count(i) > 1})
     if dups:
         raise ParseError(f"{src.rel}: duplicate MIDI ids {dups}")
-    return out, [src.rel, helpers.rel, DIGITAL_VOICE_H, DV_REGISTRY_CPP, hdr.rel]
+    return out, [src.rel, registry_src, helpers.rel, DIGITAL_VOICE_H, DV_REGISTRY_CPP,
+                 hdr.rel]
 
 
 MODES_CACHE = {}

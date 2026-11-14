@@ -40,7 +40,9 @@ bool ControlActionRegistry::knownMidiId(const QString& id) const
     return std::any_of(m_actions.cbegin(), m_actions.cend(),
                        [&](const ControlAction& a) { return a.midiId == id; })
         || std::any_of(m_pairs.cbegin(), m_pairs.cend(),
-                       [&](const Pair& p) { return p.midiId == id; });
+                       [&](const Pair& p) { return p.midiId == id; })
+        || std::any_of(m_keyingMidi.cbegin(), m_keyingMidi.cend(),
+                       [&](const KeyingMidi& k) { return k.midiId == id; });
 }
 
 bool ControlActionRegistry::add(ControlAction a)
@@ -76,6 +78,19 @@ bool ControlActionRegistry::add(ControlAction a)
 void ControlActionRegistry::addPair(const QString& shortcutId, const QString& midiId)
 {
     m_pairs.append({shortcutId, midiId});
+}
+
+void ControlActionRegistry::addKeyingMidi(const QString& midiId, const QString& name,
+                                          const QString& category)
+{
+    if (midiId.isEmpty() || std::any_of(m_keyingMidi.cbegin(), m_keyingMidi.cend(),
+                                        [&](const KeyingMidi& k) { return k.midiId == midiId; })
+        || std::any_of(m_actions.cbegin(), m_actions.cend(),
+                       [&](const ControlAction& a) { return a.midiId == midiId; })) {
+        m_errors << QStringLiteral("%1: duplicate MIDI id").arg(midiId);
+        return;
+    }
+    m_keyingMidi.append({midiId, name, category});
 }
 
 bool ControlActionRegistry::guard(const ControlAction& a) const
@@ -144,6 +159,10 @@ void ControlActionRegistry::publishMidi(
                                    [self, act](float v) { if (self->guard(act)) act.set(v); },
                                    a.get};
         reg(spec);
+    }
+    for (const KeyingMidi& k : m_keyingMidi) {
+        reg({k.midiId, k.name, k.category, ControlAction::Kind::Trigger, 0.0f, 1.0f,
+             [](float) {}, {}});
     }
 }
 

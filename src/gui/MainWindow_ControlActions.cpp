@@ -206,12 +206,16 @@ void MainWindow::registerControlActions()
     // A preset lands on the radio's nearest declared width when it has a
     // fixed list (RxApplet::applyNearestFilterWidth), else on the width itself.
     const auto hasSlice = [this] { return m_radioModel.isConnected() && activeSlice(); };
-    for (int hz : {100, 250, 400, 3000}) {
-        const QString label = hz >= 1000 ? QStringLiteral("%1 kHz").arg(hz / 1000)
-                                         : QStringLiteral("%1 Hz").arg(hz);
-        reg.add(A::trigger(QStringLiteral("filter_width_%1").arg(hz),
-                           QStringLiteral("rx.filterWidth%1").arg(hz),
-                           QStringLiteral("Filter Width %1").arg(label), "Filter",
+    struct FilterPreset { const char* key; const char* midiId; const char* name; int hz; };
+    static constexpr FilterPreset kFilterPresets[] = {
+        {"filter_width_100",  "rx.filterWidth100",  "Filter Width 100 Hz", 100},
+        {"filter_width_250",  "rx.filterWidth250",  "Filter Width 250 Hz", 250},
+        {"filter_width_400",  "rx.filterWidth400",  "Filter Width 400 Hz", 400},
+        {"filter_width_3000", "rx.filterWidth3000", "Filter Width 3 kHz",  3000},
+    };
+    for (const auto& f : kFilterPresets) {
+        const int hz = f.hz;
+        reg.add(A::trigger(f.key, f.midiId, f.name, "Filter",
                            [this, hz](float) {
                                auto* rx = m_appletPanel ? m_appletPanel->rxApplet() : nullptr;
                                if (!rx || !rx->applyNearestFilterWidth(hz))
@@ -274,14 +278,11 @@ void MainWindow::registerControlActions()
 
     // ── RIT / XIT offsets ──────────────────────────────────────────────
     // 10 Hz per key press, as the RX applet's RIT/XIT arrows step.
-    static constexpr float kOffsetLimitHz = 5000.0f;
-    reg.add(A::level("rit_offset", "rx.ritOffset", "RIT Offset", "RIT/XIT",
-                     -kOffsetLimitHz, kOffsetLimitHz, 10,
+    reg.add(A::level("rit_offset", "rx.ritOffset", "RIT Offset", "RIT/XIT", -5000, 5000, 10,
         [this](float v) { if (auto* s = activeSlice()) s->setRit(s->ritOn(), static_cast<int>(v)); },
         [this]() -> float { auto* s = activeSlice(); return s ? s->ritFreq() : 0; })
         .inMidiCategory("RX").when(dsp(Feature::Rit)));
-    reg.add(A::level("xit_offset", "tx.xitOffset", "XIT Offset", "RIT/XIT",
-                     -kOffsetLimitHz, kOffsetLimitHz, 10,
+    reg.add(A::level("xit_offset", "tx.xitOffset", "XIT Offset", "RIT/XIT", -5000, 5000, 10,
         [this](float v) { if (auto* s = activeSlice()) s->setXit(s->xitOn(), static_cast<int>(v)); },
         [this]() -> float { auto* s = activeSlice(); return s ? s->xitFreq() : 0; })
         .inMidiCategory("TX").when([this, canTransmit] { return canTransmit() && activeSlice(); }));
@@ -292,11 +293,20 @@ void MainWindow::registerControlActions()
             if (s && s->letter() == letter) return s;
         return nullptr;
     };
-    for (const char* letter : {"A", "B", "C", "D", "E", "F", "G", "H"}) {
-        const QString l = QString::fromLatin1(letter);
-        reg.add(A::trigger(QStringLiteral("slice_select_%1").arg(l.toLower()),
-                           QStringLiteral("global.sliceSelect%1").arg(l),
-                           QStringLiteral("Select Slice %1").arg(l), "Slice",
+    struct SliceSelect { const char* key; const char* midiId; const char* name; const char* letter; };
+    static constexpr SliceSelect kSliceSelect[] = {
+        {"slice_select_a", "global.sliceSelectA", "Select Slice A", "A"},
+        {"slice_select_b", "global.sliceSelectB", "Select Slice B", "B"},
+        {"slice_select_c", "global.sliceSelectC", "Select Slice C", "C"},
+        {"slice_select_d", "global.sliceSelectD", "Select Slice D", "D"},
+        {"slice_select_e", "global.sliceSelectE", "Select Slice E", "E"},
+        {"slice_select_f", "global.sliceSelectF", "Select Slice F", "F"},
+        {"slice_select_g", "global.sliceSelectG", "Select Slice G", "G"},
+        {"slice_select_h", "global.sliceSelectH", "Select Slice H", "H"},
+    };
+    for (const auto& sel : kSliceSelect) {
+        const QString l = QString::fromLatin1(sel.letter);
+        reg.add(A::trigger(sel.key, sel.midiId, sel.name, "Slice",
                            [this, l, sliceByLetter](float) {
                                if (auto* s = sliceByLetter(l)) setActiveSlice(s->sliceId());
                            })
@@ -361,10 +371,20 @@ void MainWindow::registerControlActions()
         const auto applets = m_panStack->allApplets();
         return index < applets.size() ? applets.at(index) : nullptr;
     };
-    for (int n = 1; n <= 8; ++n) {
-        reg.add(A::trigger(QStringLiteral("pan_select_%1").arg(n),
-                           QStringLiteral("global.panSelect%1").arg(n),
-                           QStringLiteral("Select Panadapter %1").arg(n), "Display",
+    struct PanSelect { const char* key; const char* midiId; const char* name; int n; };
+    static constexpr PanSelect kPanSelect[] = {
+        {"pan_select_1", "global.panSelect1", "Select Panadapter 1", 1},
+        {"pan_select_2", "global.panSelect2", "Select Panadapter 2", 2},
+        {"pan_select_3", "global.panSelect3", "Select Panadapter 3", 3},
+        {"pan_select_4", "global.panSelect4", "Select Panadapter 4", 4},
+        {"pan_select_5", "global.panSelect5", "Select Panadapter 5", 5},
+        {"pan_select_6", "global.panSelect6", "Select Panadapter 6", 6},
+        {"pan_select_7", "global.panSelect7", "Select Panadapter 7", 7},
+        {"pan_select_8", "global.panSelect8", "Select Panadapter 8", 8},
+    };
+    for (const auto& ps : kPanSelect) {
+        const int n = ps.n;
+        reg.add(A::trigger(ps.key, ps.midiId, ps.name, "Display",
                            [this, n, panAt](float) {
                                auto* applet = panAt(n - 1);
                                if (!applet) return;
@@ -396,10 +416,18 @@ void MainWindow::registerControlActions()
         })
         .inMidiCategory("Global")
         .when([this] { return m_radioModel.isConnected() && m_panStack && m_panStack->count() > 1; }));
-    for (int khz : {5, 10, 25, 50, 100, 200}) {
-        reg.add(A::trigger(QStringLiteral("pan_span_%1k").arg(khz),
-                           QStringLiteral("global.panSpan%1k").arg(khz),
-                           QStringLiteral("Panadapter Span %1 kHz").arg(khz), "Display",
+    struct PanSpan { const char* key; const char* midiId; const char* name; int khz; };
+    static constexpr PanSpan kPanSpans[] = {
+        {"pan_span_5k",   "global.panSpan5k",   "Panadapter Span 5 kHz",   5},
+        {"pan_span_10k",  "global.panSpan10k",  "Panadapter Span 10 kHz",  10},
+        {"pan_span_25k",  "global.panSpan25k",  "Panadapter Span 25 kHz",  25},
+        {"pan_span_50k",  "global.panSpan50k",  "Panadapter Span 50 kHz",  50},
+        {"pan_span_100k", "global.panSpan100k", "Panadapter Span 100 kHz", 100},
+        {"pan_span_200k", "global.panSpan200k", "Panadapter Span 200 kHz", 200},
+    };
+    for (const auto& sp : kPanSpans) {
+        const int khz = sp.khz;
+        reg.add(A::trigger(sp.key, sp.midiId, sp.name, "Display",
                            [this, khz](float) {
                                if (!setActivePanSpan(khz / 1000.0)) showUnsupportedControlNotice();
                            })
@@ -421,10 +449,22 @@ void MainWindow::registerControlActions()
         if (activateMemorySpot(slot, s ? s->panId() : QString()))
             m_lastRecalledMemoryPosition = position;
     };
-    for (int n = 1; n <= 10; ++n) {
-        reg.add(A::trigger(QStringLiteral("memory_recall_%1").arg(n),
-                           QStringLiteral("global.memoryRecall%1").arg(n),
-                           QStringLiteral("Recall Memory %1").arg(n), "Display",
+    struct MemoryRecall { const char* key; const char* midiId; const char* name; int n; };
+    static constexpr MemoryRecall kMemoryRecall[] = {
+        {"memory_recall_1",  "global.memoryRecall1",  "Recall Memory 1",  1},
+        {"memory_recall_2",  "global.memoryRecall2",  "Recall Memory 2",  2},
+        {"memory_recall_3",  "global.memoryRecall3",  "Recall Memory 3",  3},
+        {"memory_recall_4",  "global.memoryRecall4",  "Recall Memory 4",  4},
+        {"memory_recall_5",  "global.memoryRecall5",  "Recall Memory 5",  5},
+        {"memory_recall_6",  "global.memoryRecall6",  "Recall Memory 6",  6},
+        {"memory_recall_7",  "global.memoryRecall7",  "Recall Memory 7",  7},
+        {"memory_recall_8",  "global.memoryRecall8",  "Recall Memory 8",  8},
+        {"memory_recall_9",  "global.memoryRecall9",  "Recall Memory 9",  9},
+        {"memory_recall_10", "global.memoryRecall10", "Recall Memory 10", 10},
+    };
+    for (const auto& mr : kMemoryRecall) {
+        const int n = mr.n;
+        reg.add(A::trigger(mr.key, mr.midiId, mr.name, "Display",
                            [recallPosition, n](float) { recallPosition(n - 1); })
                     .inMidiCategory("Global")
                     .when([this, n] {
@@ -462,38 +502,40 @@ void MainWindow::registerControlActions()
         auto* rx = rxApplet();
         return rx && (tx ? rx->selectTxAntenna(token) : rx->selectRxAntenna(token));
     };
-    for (const bool tx : {false, true}) {
-        const QString side = tx ? QStringLiteral("TX") : QStringLiteral("RX");
-        const QString key = side.toLower();
-        const auto sideAvailable = [this, tx, canTransmit] {
-            return m_radioModel.isConnected() && activeSlice() && (!tx || canTransmit());
-        };
-        for (int n = 1; n <= 4; ++n) {
-            reg.add(A::trigger(QStringLiteral("%1_antenna_%2").arg(key).arg(n),
-                               QStringLiteral("%1.antenna%2").arg(key).arg(n),
-                               QStringLiteral("%1 Antenna %2").arg(side).arg(n), tx ? "TX" : "Slice",
-                               [antennaChoices, pickAntenna, tx, n](float) {
-                                   const QStringList choices = antennaChoices(tx);
-                                   if (n <= choices.size()) pickAntenna(tx, choices.at(n - 1));
-                               })
-                        .inMidiCategory(tx ? "TX" : "RX")
-                        .when([sideAvailable, antennaChoices, tx, n] {
-                            return sideAvailable() && antennaChoices(tx).size() >= n;
-                        }));
-        }
-        reg.add(A::trigger(QStringLiteral("%1_antenna_next").arg(key),
-                           QStringLiteral("%1.antennaNext").arg(key),
-                           QStringLiteral("Next %1 Antenna").arg(side), tx ? "TX" : "Slice",
-                           [this, antennaChoices, pickAntenna, tx](float) {
+    // n = 0 is "Next": step to the following choice.
+    struct AntennaPick { const char* key; const char* midiId; const char* name;
+                         const char* category; const char* midiCategory; bool tx; int n; };
+    static constexpr AntennaPick kAntennas[] = {
+        {"rx_antenna_1",    "rx.antenna1",    "RX Antenna 1",    "Slice", "RX", false, 1},
+        {"rx_antenna_2",    "rx.antenna2",    "RX Antenna 2",    "Slice", "RX", false, 2},
+        {"rx_antenna_3",    "rx.antenna3",    "RX Antenna 3",    "Slice", "RX", false, 3},
+        {"rx_antenna_4",    "rx.antenna4",    "RX Antenna 4",    "Slice", "RX", false, 4},
+        {"rx_antenna_next", "rx.antennaNext", "Next RX Antenna", "Slice", "RX", false, 0},
+        {"tx_antenna_1",    "tx.antenna1",    "TX Antenna 1",    "TX",    "TX", true,  1},
+        {"tx_antenna_2",    "tx.antenna2",    "TX Antenna 2",    "TX",    "TX", true,  2},
+        {"tx_antenna_3",    "tx.antenna3",    "TX Antenna 3",    "TX",    "TX", true,  3},
+        {"tx_antenna_4",    "tx.antenna4",    "TX Antenna 4",    "TX",    "TX", true,  4},
+        {"tx_antenna_next", "tx.antennaNext", "Next TX Antenna", "TX",    "TX", true,  0},
+    };
+    for (const auto& ap : kAntennas) {
+        const bool tx = ap.tx;
+        const int n = ap.n;
+        reg.add(A::trigger(ap.key, ap.midiId, ap.name, ap.category,
+                           [this, antennaChoices, pickAntenna, tx, n](float) {
                                const QStringList choices = antennaChoices(tx);
                                auto* s = activeSlice();
                                if (!s || choices.isEmpty()) return;
+                               if (n > 0) {
+                                   if (n <= choices.size()) pickAntenna(tx, choices.at(n - 1));
+                                   return;
+                               }
                                const int at = choices.indexOf(tx ? s->txAntenna() : s->rxAntenna());
                                pickAntenna(tx, choices.at((at + 1) % choices.size()));
                            })
-                    .inMidiCategory(tx ? "TX" : "RX")
-                    .when([sideAvailable, antennaChoices, tx] {
-                        return sideAvailable() && antennaChoices(tx).size() > 1;
+                    .inMidiCategory(ap.midiCategory)
+                    .when([this, antennaChoices, canTransmit, tx, n] {
+                        return m_radioModel.isConnected() && activeSlice() && (!tx || canTransmit())
+                            && antennaChoices(tx).size() >= (n == 0 ? 2 : n);
                     }));
     }
 
@@ -639,12 +681,29 @@ void MainWindow::registerControlActions()
     };
     txShortcut("atu_bypass", "ATU Bypass", "TX", TxController::Activity::Atu,
                [](const TxController::Input& input) { (void)input.bypassAtu(); });
+    reg.addKeyingMidi("tx.atuBypass", "ATU Bypass", "TX");
     reg.addPair("atu_bypass", "tx.atuBypass");
-    for (int n = 1; n <= 12; ++n) {
-        const QString id = QStringLiteral("cwx_macro_%1").arg(n);
-        txShortcut(id, QStringLiteral("CWX Macro F%1").arg(n), "CW", TxController::Activity::Cwx,
-                   [this, n](const TxController::Input& input) { fireCwxMacro(n - 1, input); });
-        reg.addPair(id, QStringLiteral("cwx.macro%1").arg(n));
+    struct CwxMacro { const char* key; const char* midiId; const char* name; int index; };
+    static constexpr CwxMacro kCwxMacros[] = {
+        {"cwx_macro_1",  "cwx.macro1",  "CWX Macro F1",  0},
+        {"cwx_macro_2",  "cwx.macro2",  "CWX Macro F2",  1},
+        {"cwx_macro_3",  "cwx.macro3",  "CWX Macro F3",  2},
+        {"cwx_macro_4",  "cwx.macro4",  "CWX Macro F4",  3},
+        {"cwx_macro_5",  "cwx.macro5",  "CWX Macro F5",  4},
+        {"cwx_macro_6",  "cwx.macro6",  "CWX Macro F6",  5},
+        {"cwx_macro_7",  "cwx.macro7",  "CWX Macro F7",  6},
+        {"cwx_macro_8",  "cwx.macro8",  "CWX Macro F8",  7},
+        {"cwx_macro_9",  "cwx.macro9",  "CWX Macro F9",  8},
+        {"cwx_macro_10", "cwx.macro10", "CWX Macro F10", 9},
+        {"cwx_macro_11", "cwx.macro11", "CWX Macro F11", 10},
+        {"cwx_macro_12", "cwx.macro12", "CWX Macro F12", 11},
+    };
+    for (const auto& cm : kCwxMacros) {
+        const int index = cm.index;
+        txShortcut(cm.key, cm.name, "CW", TxController::Activity::Cwx,
+                   [this, index](const TxController::Input& input) { fireCwxMacro(index, input); });
+        reg.addKeyingMidi(cm.midiId, cm.name, "Phone/CW");
+        reg.addPair(cm.key, cm.midiId);
     }
 
     // ── Pairs declared before the registry (keyboard id ↔ MIDI id) ─────

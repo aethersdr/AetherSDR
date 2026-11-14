@@ -111,6 +111,10 @@ public:
     // a bad shortcut id, a duplicate id, or a Toggle/Level without get().
     bool add(ControlAction action);
     void addPair(const QString& shortcutId, const QString& midiId);
+    // A keying action's MIDI entry: listed for mapping with a no-op setter,
+    // because MainWindow::dispatchScopedMidiTx consumes it with the device's
+    // own TX input before any setter runs.
+    void addKeyingMidi(const QString& midiId, const QString& name, const QString& category);
 
     void publishShortcuts(ShortcutManager& shortcuts) const;
     void publishMidi(const std::function<void(const ControlActionMidiSpec&)>& reg) const;
@@ -139,6 +143,8 @@ private:
     struct Pair { QString shortcutId; QString midiId; };
     QVector<ControlAction> m_actions;
     QVector<Pair> m_pairs;
+    struct KeyingMidi { QString midiId; QString name; QString category; };
+    QVector<KeyingMidi> m_keyingMidi;
     QStringList m_errors;
     std::function<void(const QString&)> m_refused;
 };

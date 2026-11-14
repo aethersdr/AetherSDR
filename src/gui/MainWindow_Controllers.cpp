@@ -2628,14 +2628,6 @@ void MainWindow::registerMidiParams()
             return (s && s->playOn()) ? 1.0f : 0.0f;
         });
 
-    // ── Registry keying actions (dispatchScopedMidiTx consumes them) ────
-    reg("tx.atuBypass", "ATU Bypass", "TX", P::Trigger, 0, 1, [](float) {});
-    for (int n = 1; n <= 12; ++n) {
-        reg(QStringLiteral("cwx.macro%1").arg(n).toUtf8().constData(),
-            QStringLiteral("CWX Macro F%1").arg(n).toUtf8().constData(),
-            "Phone/CW", P::Trigger, 0, 1, [](float) {});
-    }
-
     // ── Registry-declared actions (ControlActionRegistry) ───────────────
     m_controlActions.publishMidi([&reg](const ControlActionMidiSpec& spec) {
         const P type = spec.kind == ControlAction::Kind::Level  ? P::Slider
