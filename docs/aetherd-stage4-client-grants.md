@@ -57,9 +57,11 @@ Combining an offline action with discovery/control/TX or another action is rejec
 before storage access or radio construction.
 
 Serving with `--credential-authority <authority-id>` loads existing records
-and enables their verifier. It creates and writes a credential only through
-remote-client pairing on the TLS listener ([`aetherd-remote-clients.md`](aetherd-remote-clients.md)
-§3), which adds one `remote-control` record; it never creates a local one. Missing,
+and enables their verifier. It writes the vault only for remote clients
+([`aetherd-remote-clients.md`](aetherd-remote-clients.md) §3): pairing on the
+TLS listener adds one `remote-control` record, and `remoteClients.revoke` on
+the local socket removes a remote-scope record. It never creates or removes a
+local one. Missing,
 denied, malformed or unavailable storage refuses that explicitly selected startup
 before clients are admitted. Without the option, observe/control behavior is
 unchanged and `hello.auth` is still rejected. Credential verification alone
@@ -76,7 +78,8 @@ TX/admin services are constructed only with the separate TX/control opt-ins.
 
 Both serving and offline administration reserve the same current-user authority
 lock, independently of the socket name, for their complete lifetime. Stop the
-daemon before adding/removing credentials: a second endpoint cannot mutate the
+daemon before adding/removing credentials offline (remote clients are paired
+and removed through the serving daemon instead): a second endpoint cannot mutate the
 vault while the first process keeps old verified identities alive. The lock and
 OS-vault access are coordination within the current OS account, not isolation
 against another compromised process in that account.

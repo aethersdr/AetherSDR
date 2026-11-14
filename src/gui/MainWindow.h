@@ -156,7 +156,6 @@ class TitleBar;
 class KiwiSdrManager;
 struct KiwiSdrAntennaProfile;
 class SpectrumWidget;
-class StatusBarNoticeLabel;
 class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
@@ -2211,7 +2210,6 @@ private:
     bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (Settings menu)
     bool m_pttHoldActive{false};           // true while the PTT-hold key is held (#3879)
     ShortcutRefusalNotice m_shortcutRefusalNotice; // once per session (#5483)
-    StatusBarNoticeLabel* m_shortcutNoticeLabel{nullptr}; // owned by the status bar
     TxController::Input m_pttHoldInput;
     bool m_cwStraightKeyActive{false};
     TxController::Input m_cwStraightKeyInput;

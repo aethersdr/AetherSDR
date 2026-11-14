@@ -73,6 +73,21 @@ void testRoutineResyncOnlyEmitsChanged()
     report("identical type= on resync only emits cableChanged",
            changedSpy.count() == 1 && addedSpy.count() == 0 && removedSpy.count() == 0);
     report("resync still applies the updated field", model.cables()["SN1"].speed == 19200);
+    {
+        QSignalSpy data(&model, &UsbCableModel::passthroughDataReceived);
+        const int changesBefore = changedSpy.count();
+        applyCableStatus(model, "SN1", kv({{"data:base64", "UA=="}}));
+        applyCableStatus(model, "SN1", kv({{"data:text", ";0000"}}));
+        applyCableStatus(model, "NOSUCH", kv({{"data:base64", "UA=="}}));
+        report("a passthrough reply is delivered and is not a cable change",
+               data.count() == 1 && data.at(0).at(1).toByteArray() == QByteArray("P")
+               && changedSpy.count() == changesBefore && addedSpy.count() == 0
+               && !model.cables().contains("NOSUCH"));
+        applyCableStatus(model, "SN1", kv({{"data:base64", "UA=="}, {"speed", "38400"}}));
+        report("data alongside a setting delivers both",
+               data.count() == 2 && changedSpy.count() == changesBefore + 1
+               && model.cables()["SN1"].speed == 38400);
+    }
 }
 
 void testLdpaStatusParsing()
