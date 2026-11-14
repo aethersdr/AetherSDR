@@ -103,6 +103,7 @@ public:
     std::vector<std::string> events;  // host notifications, oldest first
     std::string close_reason;
     bool chat = false;
+    bool nods = true;  // nods (docs/arq.md §3b) for the stations it makes; DATA2G_NOD=0 overrides
     std::vector<std::string> aliases;
     // before a CONNECT is answered: false refuses it (host ACCEPT)
     std::function<bool(const std::string& caller, const std::string& callee)> accept_connect;

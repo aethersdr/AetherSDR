@@ -137,13 +137,16 @@ std::pair<std::string, std::string> unpack_pair(ByteView b) {
     return {arq::unpack_call(be8(g)), arq::unpack_call(be8(c))};
 }
 
-std::map<int, Bytes> parse_tlvs(ByteView b) {
+std::map<int, Bytes> parse_tlvs(ByteView b, bool partial) {
     std::map<int, Bytes> out;
     std::size_t i = 0;
     while (i + 2 <= b.size() && b[i]) {
         const int t = b[i];
         const std::size_t n = b[i + 1];
-        if (i + 2 + n > b.size()) throw std::invalid_argument("truncated TLV");
+        if (i + 2 + n > b.size()) {
+            if (partial) break;
+            throw std::invalid_argument("truncated TLV");
+        }
         out[t] = Bytes(b.begin() + static_cast<std::ptrdiff_t>(i + 2), b.begin() + static_cast<std::ptrdiff_t>(i + 2 + n));
         i += 2 + n;
     }
@@ -308,12 +311,11 @@ std::vector<std::string> KissLink::take_events() { return std::exchange(events, 
 
 std::vector<std::pair<int, std::int64_t>> KissLink::take_acks() { return std::exchange(acks, {}); }
 
-void KissLink::on_sent(const arq::TxBurstPtr& burst) {
-    if (inflight_ && burst && (burst == inflight_ || same_burst(*burst, *inflight_))) {
-        acks.insert(acks.end(), inflight_acks_.begin(), inflight_acks_.end());
-        inflight_.reset();
-        inflight_acks_.clear();
-    }
+std::vector<std::pair<int, std::int64_t>> KissLink::on_sent(const arq::TxBurstPtr& burst) {
+    if (!inflight_ || !burst || (burst != inflight_ && !same_burst(*burst, *inflight_))) return {};
+    acks.insert(acks.end(), inflight_acks_.begin(), inflight_acks_.end());
+    inflight_.reset();
+    return std::exchange(inflight_acks_, {});
 }
 
 void KissLink::missed(const std::string& submode, int n_cw, std::optional<double> snr) {
@@ -558,15 +560,27 @@ std::optional<std::tuple<ControlRead, int>> KissLink::read_burst_control(arq::Pl
             continue;
         }
         Bytes ctl;
-        bool all = true;
-        for (int i = 0; i < n_ctl && all; ++i) {
+        bool first = true, all = true;
+        for (int i = 0; i < n_ctl; ++i) {
             const auto mask = arq::ctl_mask(0, i, key);
             auto p = rx.decode_plain(f * i, mask);
             if (!p && f == 2) p = rx.decode_pair(f * i, mask);
-            if (!p || (i == 0 && *p != c0)) all = false;
+            if (i == 0 && (!p || *p != c0)) first = false;
+            if (!p) all = false;
             else ctl.insert(ctl.end(), p->begin(), p->end());
         }
-        if (!all) continue;
+        if (!first) continue;
+        if (!all) {
+            // a later control codeword lost: codeword 0 passed under the group's
+            // key and says where the data starts (kisslink.py read_burst_control)
+            ControlRead out{read_control(parse_tlvs(ByteView(stream).subspan(1))).group, std::nullopt, std::nullopt};
+            try {
+                const auto whole = read_control(parse_tlvs(ByteView(c0).subspan(1), true));
+                if (whole.group == out.group) out.call = whole.call;
+            } catch (const std::invalid_argument&) {
+            }
+            return std::tuple{out, f * n_ctl};
+        }
         try {
             return std::tuple{read_control(parse_tlvs(ByteView(ctl).subspan(1))), f * n_ctl};
         } catch (const std::invalid_argument& e) {

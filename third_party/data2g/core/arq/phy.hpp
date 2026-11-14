@@ -35,6 +35,20 @@ namespace data2g::arq {
 // DD_ITERS times.
 bool dd_default();
 inline constexpr int DD_ITERS = 2;
+// CPM data slots (GF(M)): DD makes the metric coherent (cpm::dd_metric, a
+// channel per row from the decoder's soft decisions), up to CPM_DD_ITERS
+// re-decodes. DATA2G_CPM_DD (default 1), read once, turns it off alone.
+bool cpm_dd_default();
+inline constexpr int CPM_DD_ITERS = 4;
+// phy.cpm_pass: a CPM data slot's mask-free decode, the same whenever it is
+// made: the square law (`soft`, the slot's), then while it fails up to
+// CPM_DD_ITERS re-decodes on cpm::dd_metric from `earlier` (converged
+// posteriors of earlier slots' passes) and its own last posterior. `late`:
+// stop DD (the budget); empty: never.
+cpm::Pass cpm_pass(const cpm::Received& r, const codes::Spec& s, std::span<const double> soft,
+                   const cpm::Posts& earlier, int slot, const std::function<bool()>& late = {});
+// cpm_pass as a receiver's cpm::Stream makes it (no budget: the burst is still arriving).
+cpm::PassFn cpm_pass_fn();
 // A live receiver's DD starts no refines this long after the burst's decode began.
 inline constexpr double DD_BUDGET_S = 1.0;
 // A control slot that fails is decoded again with the control stream past
@@ -169,6 +183,13 @@ public:
 
     const std::shared_ptr<const SlotSoft>& soft() const { return soft_; }
 
+    // Done with by its session, handed to a reader (a monitor) on another thread: no store, and a slot already
+    // read answers from that read, under its mask (another mask: no), without decoding again. A read made
+    // primed, combined with stored bits, or as a repeat is so seen by the reader too.
+    void for_reader();
+    // Reads run (plain, stored, primed), not answered from an earlier one: for_reader's saving, measured.
+    int reads_run() const { return reads_run_; }
+
 private:
     struct Raw {
         std::vector<std::uint8_t> cands, usable;
@@ -178,7 +199,16 @@ private:
     struct DdState {
         Est est;
         SoftCache soft;
+        // CPM: the posteriors each slot's coherent metric reads (cpm::dd_metric; nullptr: the burst's own soft)
+        std::shared_ptr<const cpm::Posts> posts;
+        bool refined() const { return est || posts; }
     };
+
+    std::optional<Bytes> plain_read(int slot, const MaskId& mask);
+    std::optional<Bytes> stored_read(int slot, const MaskId& mask, int rv, std::optional<SoftEntry>& stored);
+    std::optional<Bytes> known_read(int slot, const MaskId& mask, ByteView tmpl, ByteView tmask, bool pair);
+    std::optional<std::optional<Bytes>> reused(int slot, std::uint32_t m) const;  // for_reader: a slot's read
+    std::optional<Bytes> note(int slot, std::uint32_t m, std::optional<Bytes> p);  // p, kept in reads_ if a read
 
     const codes::Spec& spec(int slot) const;
     const std::vector<double>& slot_soft(int slot);
@@ -189,6 +219,7 @@ private:
     const Raw& paired(int slot, const codes::Spec& s, int off);  // off -1: nothing pinned
     std::optional<Bytes> check_pinned(int slot, const codes::Spec& s, std::uint32_t m, int i);
     bool dd(const codes::Spec& s) const;
+    int iters() const { return n_ctl_slots_ ? CPM_DD_ITERS : DD_ITERS; }
     bool late() const;
     void learn(int slot, const codes::Spec& s, const Bytes& payload, int rv, std::uint32_t m);
     bool refine(int slot, const codes::Spec& s, std::vector<double> post);  // false: the budget ran out inside it
@@ -211,7 +242,14 @@ private:
     std::map<std::pair<int, int>, Raw> pinned_;  // (slot, offset): decoded with the payload past offset bytes known zero
     std::map<std::pair<int, int>, Raw> pairs_;   // (slot, offset or -1): slots slot, slot + 1 combined (RV 0, 1)
     std::set<int> tried_, ok_;  // ok_ within tried_
+    std::map<int, std::pair<std::uint32_t, Bytes>> reads_;  // slot -> (mask, payload): the first read of it that held
+    bool reader_ = false;
+    int reads_run_ = 0;
     std::map<int, std::vector<double>> post_;  // DD: slot -> LLRs of its coded bits
+    // CPM: data slots whose pass is made (ModemRx._cpm_passes), and the converged ones' posteriors
+    std::set<int> passed_;
+    cpm::Posts pass_post_;
+    void cpm_passes(int upto);
     bool blind_ = false;
     int refines_ = 0;
     struct Prepared {
@@ -230,7 +268,7 @@ private:
         std::vector<std::uint8_t> valid;
     };
     mutable SymCache sym_cache_;
-    DdState cur_{nullptr, std::make_shared<std::map<int, std::vector<double>>>()};
+    DdState cur_{nullptr, std::make_shared<std::map<int, std::vector<double>>>(), nullptr};
 };
 
 }  // namespace data2g::arq

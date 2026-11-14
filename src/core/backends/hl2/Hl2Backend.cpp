@@ -2303,6 +2303,63 @@ RadioCapabilities Hl2Backend::capabilities() const
 
 void Hl2Backend::connectRadio(const RadioConnectRequest& request)
 {
+    if (!m_busyProbe)
+        m_busyProbe = new ReconnectBusyProbe(this);
+    m_busyProbe->cancel();
+    const QHostAddress probeHost(request.host);
+    if (request.automaticReconnect && !probeHost.isNull()) {
+        // A session still running (its silence recovery declared link loss but
+        // keeps sending EP2) is abandoned first, without a metis-stop: another
+        // host may be running the radio, and the gateware obeys RUNSTOP from any
+        // host. The probe below finds out which; a busy answer starts nothing.
+        if (m_metis && m_metis->isRunning())
+            QMetaObject::invokeMethod(m_metis, "abandon", Qt::BlockingQueuedConnection);
+        m_busyProbeRequest = request;
+        const auto discovery = discoveryRequest();
+        m_busyProbe->start(probeHost, kMetisPort,
+            QByteArray(reinterpret_cast<const char*>(discovery.data()),
+                       static_cast<qsizetype>(discovery.size())),
+            [](std::span<const std::uint8_t> datagram) -> std::optional<bool> {
+                const auto reply = parseDiscoveryReply(datagram);
+                return reply ? std::optional<bool>(reply->streaming) : std::nullopt;
+            },
+            [this](std::optional<bool> streaming) { finishBusyProbe(streaming); });
+        return;
+    }
+    m_busyWarned = false;
+    startConnect(request);
+}
+
+void Hl2Backend::armBusyProbeForTest(const RadioConnectRequest& request)
+{
+    if (!m_busyProbe)
+        m_busyProbe = new ReconnectBusyProbe(this);
+    m_busyProbeRequest = request;
+    m_busyProbe->armForTest([this](std::optional<bool> streaming) { finishBusyProbe(streaming); });
+}
+
+void Hl2Backend::finishBusyProbe(std::optional<bool> streaming)
+{
+    // An HL2 streaming to another host does not answer our discovery, so only
+    // an explicit idle reply lets the reconnect go ahead.
+    if (!ReconnectBusyProbe::mayProceed(streaming, ReconnectBusyProbe::Silence::Wait)) {
+        qCInfo(lcHl2) << "HL2: not reconnecting to" << m_busyProbeRequest.host
+                      << (streaming ? "- another client has the radio" : "- no idle answer");
+        if (!m_busyWarned) {
+            m_busyWarned = true;
+            emit configurationWarning(QStringLiteral(
+                "HL2: the radio at %1 is not answering, or is in use by another client. "
+                "AetherSDR will reconnect once it answers free, without taking it over.")
+                .arg(m_busyProbeRequest.host));
+        }
+        return;   // RadioModel's reconnect timer asks again
+    }
+    m_busyWarned = false;
+    startConnect(m_busyProbeRequest);
+}
+
+void Hl2Backend::startConnect(const RadioConnectRequest& request)
+{
     const QHostAddress host(request.host);
     if (host.isNull()) {
         emit connectionError(QStringLiteral("HL2: invalid host '%1'").arg(request.host));
@@ -2858,7 +2915,7 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
         if (m_queuedConnect) {
             const RadioConnectRequest queued = *m_queuedConnect;
             m_queuedConnect.reset();
-            connectRadio(queued);
+            startConnect(queued);   // already past any busy probe
         }
         return;
     }
@@ -3007,6 +3064,8 @@ void Hl2Backend::invalidateTxDspConfiguration()
 
 void Hl2Backend::disconnectRadio()
 {
+    if (m_busyProbe)
+        m_busyProbe->cancel();
     retirePcmStreams();
     invalidateTxDspConfiguration();
     // Invalidate any DSP build still in flight. Without this, a disconnect
@@ -4736,11 +4795,15 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         applyAtuTuneRequest(false);
     }
     if (m_metis) {
-        QMetaObject::invokeMethod(m_metis, [metis = m_metis, key, operation, cwBreakIn] {
-            if (cwBreakIn) {
-                metis->setCwMox(key, operation);
-            } else {
-                metis->setMox(key, operation);
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, dsp = m_txDsp, key, operation, cwBreakIn] {
+            const bool newOver = cwBreakIn ? metis->setCwMox(key, operation)
+                                           : metis->setMox(key, operation);
+            // #7216: the previous over's skipped cleanup (below) is run here
+            // instead. The modulator shares this thread (see m_ioThread), and
+            // resetting it in this same event leaves its exchange timer no
+            // chance to emit that over's residue into the new one.
+            if (newOver && dsp) {
+                dsp->reset();
             }
         }, Qt::QueuedConnection);
     }

@@ -17,6 +17,11 @@ public:
         connection.m_commandSinkForTest = [&wire](quint32, const QString& command) { wire << command; };
         radio.m_connection = &connection;
     }
+    static void setup(RadioModel& radio, FlexBackend& backend)
+    {
+        backend.setSetupCommandSink(radio.setupCommandSink());
+        radio.wireFlexTransmitServices(&backend);
+    }
     static bool apply(RadioModel& radio) { return radio.applyTuneInhibit(); }
     static void openSession(RadioModel& radio)
     {
@@ -29,6 +34,18 @@ public:
         }
     }
     static void restore(RadioModel& radio) { radio.restoreTuneInhibit(); }
+    // disconnectFromRadio()'s opening, in its order, short of the transport
+    // teardown (which blocks on a connection thread this fixture lacks).
+    static void beginIntentionalDisconnect(RadioModel& radio)
+    {
+        radio.retireObservationSession();
+        radio.resetSessionControls();
+        radio.resetAdministration();
+        radio.resetTxOperations();
+        radio.restoreTuneInhibit();
+    }
+    static void link(RadioConnection& connection, bool up)
+    { connection.m_state.store(up ? ConnectionState::Connected : ConnectionState::Disconnected); }
     static void disconnect(RadioModel& radio) { radio.onDisconnected(); }
     static void reopen(RadioModel& radio) { radio.m_txSessionClosing = false; }
     static void closing(RadioModel& radio, bool value) { radio.m_txSessionClosing = value; }
@@ -73,7 +90,14 @@ void preferences(bool acc, bool tx1, bool tx2, bool tx3)
 class ConnectedFlex final : public FlexBackend {
 public:
     bool connected = false;
+    bool firmwareSuppression = false;
     bool isConnected() const override { return connected; }
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps = FlexBackend::capabilities();
+        if (firmwareSuppression) { caps.tuneOutputSuppression = TuneOutputSuppressionControl{}; }
+        return caps;
+    }
 };
 struct Fixture {
     QStringList wire;
@@ -86,16 +110,25 @@ struct Fixture {
         backend = owned.get();
         radio.setBackendForTest(std::move(owned), QStringLiteral("flex"));
         TxOperationIntegrationTestAccess::inject(radio, inert, wire);
+        TxOperationIntegrationTestAccess::setup(radio, *backend);
         check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "injected TX slice installed");
         SliceDelta delta;
         delta.txSlice = true;
         delta.frequency = 14.1;
         radio.slice(0)->applyChanges(delta);
         backend->connected = true;
+        // The inhibit's writes take the session's configuration path.
+        TxOperationIntegrationTestAccess::openSession(radio);
         band(9, "20", true, true, false, false);
         band(5, "40", true, true, true, true);
         flush();
         wire.clear();
+    }
+    // The radio link as both the backend and the session's transport see it.
+    void setConnected(bool up)
+    {
+        backend->connected = up;
+        TxOperationIntegrationTestAccess::link(inert, up);
     }
     void band(int id, const char* name, bool acc, bool tx1, bool tx2, bool tx3)
     {
@@ -159,8 +192,8 @@ void ownershipAndChurn()
 
     Fixture local;
     local.apply();
-    local.radio.sendCommand("interlock bandset 9 acc_tx_enabled=0");
-    local.radio.sendCmdPublic("interlock bandset 5 tx1_enabled=0", {});
+    local.radio.requestTxBand({9, TxBandRequest::Field::AccessoryTx, false});
+    local.radio.requestTxBand({5, TxBandRequest::Field::Tx1, false});
     local.restore();
     check(local.wire.count("interlock bandset 9 acc_tx_enabled=1") == 0
         && local.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
@@ -180,6 +213,18 @@ void ownershipAndChurn()
               && typed.wire.count("interlock bandset 9 acc_tx_enabled=1") == 0,
           "a typed TX-band edit during the inhibit is written and not undone by the restore");
 
+    // An intentional disconnect restores owned outputs first, though it has
+    // already retired the session's command guard.
+    Fixture leaving;
+    leaving.apply();
+    TxOperationIntegrationTestAccess::replyAll(leaving.radio, 0);
+    leaving.wire.clear();
+    TxOperationIntegrationTestAccess::beginIntentionalDisconnect(leaving.radio);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(leaving.wire.contains(QStringLiteral("interlock bandset 9 acc_tx_enabled=1"))
+              && leaving.wire.contains(QStringLiteral("interlock bandset 9 tx1_enabled=1")),
+          "an intentional disconnect still restores owned outputs");
+
     Fixture rejected;
     rejected.apply();
     TxOperationIntegrationTestAccess::replyAll(rejected.radio, 0x5000002d);
@@ -189,10 +234,11 @@ void ownershipAndChurn()
 
     Fixture lost;
     lost.apply();
-    lost.backend->connected = false;
+    lost.setConnected(false);
     TxOperationIntegrationTestAccess::disconnect(lost.radio);
-    lost.backend->connected = true;
+    lost.setConnected(true);
     TxOperationIntegrationTestAccess::reopen(lost.radio);
+    TxOperationIntegrationTestAccess::openSession(lost.radio);   // the reconnect's new session
     lost.wire.clear();
     lost.restore();
     lost.apply();
@@ -226,7 +272,7 @@ void reentrantPaths()
     TxOperationIntegrationTestAccess::onWrite(f.inert, [&](const QString& command) {
         f.wire << command;
         if (!std::exchange(once, true)) {
-            f.radio.sendCommand("interlock bandset 9 tx1_enabled=0");
+            f.radio.requestTxBand({9, TxBandRequest::Field::Tx1, false});
             TxOperationIntegrationTestAccess::apply(f.radio);
         }
     });
@@ -245,7 +291,7 @@ void reentrantPaths()
         cleanup.wire << command;
         if (!std::exchange(once, true)) {
             TxOperationIntegrationTestAccess::restore(cleanup.radio);
-            cleanup.radio.sendCmdPublic("interlock bandset 9 tx1_enabled=0", {});
+            cleanup.radio.requestTxBand({9, TxBandRequest::Field::Tx1, false});
         }
     });
     cleanup.restore();
@@ -284,6 +330,31 @@ void lateRepliesAndDrops()
     TxOperationIntegrationTestAccess::expiring(drop.radio, false);
     drop.restore();
     check(drop.wire.isEmpty(), "zero-return dispatch without a callback acquires no restoration write");
+
+    Fixture unknown;
+    unknown.apply();
+    TxOperationIntegrationTestAccess::replyAll(unknown.radio, -1);
+    unknown.restore();
+    check(unknown.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
+          "unknown reply retains restoration for a write that may have reached the radio");
+
+    preferences(true, true, false, false);
+    Fixture partial;
+    partial.apply();
+    const auto pending = TxOperationIntegrationTestAccess::callbacks(partial.radio);
+    if (!pending.isEmpty()) { pending.first()(0x5000002d, {}); }
+    partial.restore();
+    check(partial.wire.count("interlock bandset 9 acc_tx_enabled=1") == 0
+        && partial.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
+          "partial rejection relinquishes only the refused output");
+
+    Fixture firmware;
+    firmware.backend->firmwareSuppression = true;
+    firmware.apply();
+    firmware.restore();
+    check(firmware.wire == QStringList{"interlock bandset 9 acc_tx_enabled=0",
+                                      "interlock bandset 9 acc_tx_enabled=1"},
+          "firmware RCA suppression leaves only accessory output under client control");
 }
 void allOutputCombinations()
 {
@@ -361,7 +432,11 @@ void refusalAndClosing()
     TxOperationIntegrationTestAccess::closing(closing.radio, true);
     check(!TxOperationIntegrationTestAccess::apply(closing.radio),
           "an active snapshot cannot bypass session-closing refusal");
-    closing.backend->connected = false;
+    closing.restore();
+    check(closing.wire.count("interlock bandset 9 acc_tx_enabled=1") == 1
+        && closing.wire.count("interlock bandset 9 tx1_enabled=1") == 1,
+          "session closing still restores owned outputs before disconnecting the transport");
+    closing.setConnected(false);
     TxOperationIntegrationTestAccess::closing(closing.radio, false);
     check(!TxOperationIntegrationTestAccess::apply(closing.radio),
           "an active snapshot cannot bypass disconnected refusal");
@@ -384,26 +459,26 @@ void noOwnershipConnectivity()
     SliceDelta frequency;
     frequency.frequency = 100.0;
     noBand.radio.slice(0)->applyChanges(frequency);
-    noBand.backend->connected = false;
+    noBand.setConnected(false);
     check(TxOperationIntegrationTestAccess::apply(noBand.radio) && noBand.wire.isEmpty(),
           "no TX band leaves disconnected dispatch behavior unchanged");
 
     Fixture noSelection;
     preferences(false, false, false, false);
-    noSelection.backend->connected = false;
+    noSelection.setConnected(false);
     check(TxOperationIntegrationTestAccess::apply(noSelection.radio) && noSelection.wire.isEmpty(),
           "no selected outputs leaves disconnected dispatch behavior unchanged");
 
     Fixture noFreshReadback;
     preferences(true, true, true, true);
-    noFreshReadback.backend->connected = false;
+    noFreshReadback.setConnected(false);
     TxOperationIntegrationTestAccess::disconnect(noFreshReadback.radio);
     TxOperationIntegrationTestAccess::reopen(noFreshReadback.radio);
     check(TxOperationIntegrationTestAccess::apply(noFreshReadback.radio) && noFreshReadback.wire.isEmpty(),
           "no fresh output observations acquires no disconnected ownership");
 
     Fixture needsWrites;
-    needsWrites.backend->connected = false;
+    needsWrites.setConnected(false);
     check(!TxOperationIntegrationTestAccess::apply(needsWrites.radio) && needsWrites.wire.isEmpty(),
           "selected fresh outputs still refuse disconnected inhibit writes");
 }
