@@ -825,6 +825,12 @@ static char g_self[512];
  * It is not CLOEXEC, and an inherited listening socket would stop the new
  * process binding its own status port. -1 until the listener is up. */
 static int g_status_fd = -1;
+#ifdef AETHER_WITH_OSD
+/* Defined further down, beside the depth setting; declared here because
+ * status_json() above reports them. */
+extern long long aether_osd_attempted;
+extern long long aether_osd_rescued;
+#endif
 static char g_work[300];
 
 /* This process's own CPU seconds and peak RSS. AetherWSPR read these from its
@@ -1090,6 +1096,14 @@ static void status_json(buf_t *b, long long since)
      * and that difference is exactly the trap: on a FLEX-6300 the default
      * channel 4 yields silence while audio still reads true. */
     bprintf(b, ",\"dax_channel_bound\":%d,\"vita_packets\":%lld", G.dax_bound, G.vita_packets);
+#ifdef AETHER_WITH_OSD
+    /* How often OSD ran and how often it recovered a frame. The ratio is
+     * what decides whether it earns its cost: belief propagation also
+     * fails on every noise candidate, and OSD pays in full for each of
+     * those before returning nothing. */
+    bprintf(b, ",\"osd_asked\":%lld,\"osd_rescued\":%lld",
+            aether_osd_attempted, aether_osd_rescued);
+#endif
     bputs(b, ",\"hop_period\":");
     bjson_str(b, G.hop_period >= 0 ? PERIOD_NAME[G.hop_period] : "");
     bputs(b, ",\"depth\":");
@@ -2478,6 +2492,13 @@ static osd_depth_t g_osd_depth = OSD_DEPTH_2;
  * is no config API in play. */
 static int g_osd_env_set = 0;
 
+/* How often OSD was asked, and how often it recovered a frame. Read by
+ * decodewav's summary line. The ratio is the whole question on a live
+ * band: belief propagation fails on every noise candidate too, and OSD
+ * pays its full cost on each of those before returning nothing. */
+long long aether_osd_attempted = 0;
+long long aether_osd_rescued = 0;
+
 osd_depth_t aether_osd_depth(void)
 {
     if (g_osd_env_set) return g_osd_depth;
@@ -2529,7 +2550,11 @@ static int decode_wav_file(const char *path)
     double took = mono_s() - t0;
     for (int i = 0; i < dc.nspots; i++)
         printf("%8lld %4d %s\n", dc.spots[i].hz, dc.spots[i].snr, dc.spots[i].msg);
-    fprintf(stderr, "decodewav: %s -> %d spot(s) in %.0f ms\n", path, dc.nspots, took * 1000);
+    fprintf(stderr, "decodewav: %s -> %d spot(s) in %.0f ms", path, dc.nspots, took * 1000);
+#ifdef AETHER_WITH_OSD
+    fprintf(stderr, " [osd %lld asked, %lld rescued]", aether_osd_attempted, aether_osd_rescued);
+#endif
+    fputc('\n', stderr);
     return 0;
 }
 

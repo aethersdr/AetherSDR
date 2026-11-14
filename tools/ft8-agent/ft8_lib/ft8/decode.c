@@ -12,6 +12,10 @@
 // rebuild. Defined in agent.c; declared here rather than in a header
 // because it is the only thing this library needs from the agent.
 osd_depth_t aether_osd_depth(void);
+// Defined in agent.c. Attempts counts every candidate belief propagation
+// failed on; rescued counts the ones OSD actually recovered.
+extern long long aether_osd_attempted;
+extern long long aether_osd_rescued;
 #endif
 
 // #define LOG_LEVEL LOG_DEBUG
@@ -372,12 +376,18 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
         {
             return false;
         }
+        // Counters for the #7114 measurement: how often OSD is ASKED versus
+        // how often it RESCUES anything. On a live band most candidates are
+        // noise that never decodes, so OSD pays its full cost on each one
+        // and returns nothing -- which is the cost without the benefit.
+        aether_osd_attempted++;
         uint8_t osd_msg91[FTX_LDPC_K];
         int osd_nhard = 0;
         if (!osd174_91_decode(log174, FTX_LDPC_K, depth, osd_msg91, &osd_nhard))
         {
             return false;
         }
+        aether_osd_rescued++;
         for (int i = 0; i < FTX_LDPC_N; i++)
             plain174[i] = (i < FTX_LDPC_K) ? osd_msg91[i] : 0;
         status->ldpc_errors = 0;
