@@ -2,6 +2,8 @@
 
 #include <QThread>
 
+#include <algorithm>
+
 #include <utility>
 
 #ifdef HAVE_KEYCHAIN
@@ -12,7 +14,22 @@ namespace AetherSDR::control {
 namespace {
 constexpr qsizetype kHeaderBytes = 9;
 constexpr qsizetype kRecordBytes = 65; // 32 ASCII id + 1 role + 32 secret bytes
-constexpr auto kMagic = "AETHTX01";
+constexpr auto kMagic = "AETHTX01";   // local roles only (0 Client, 1 GrantAdmin)
+// Adds the remote scopes (2 RemoteObserve, 3 RemoteControl), whose 32 bytes are
+// a token digest. Written only when a remote record exists, so an aetherd that
+// predates it still reads every vault without one.
+constexpr auto kMagicV2 = "AETHTX02";
+
+unsigned char roleByte(ControlCredentials::Role role)
+{
+    switch (role) {
+    case ControlCredentials::Role::Client: return 0;
+    case ControlCredentials::Role::GrantAdmin: return 1;
+    case ControlCredentials::Role::RemoteObserve: return 2;
+    case ControlCredentials::Role::RemoteControl: return 3;
+    }
+    return 0;
+}
 } // namespace
 
 bool ControlCredentialVault::validAuthorityId(const QString& id)
@@ -32,11 +49,14 @@ std::optional<QByteArray> ControlCredentialVault::encode(const QList<ControlCred
     if (!ControlCredentials::validRecords(records)) { return {}; }
     // Sensitive transient serialization, not a scrubbed/locked buffer. The
     // native vault job holds its own copy; see the Stage 4 memory-limit docs.
-    QByteArray bytes(kMagic);
+    const bool anyRemote = std::any_of(records.begin(), records.end(), [](const auto& r) {
+        return ControlCredentials::isRemote(r.role);
+    });
+    QByteArray bytes(anyRemote ? kMagicV2 : kMagic);
     bytes.append(static_cast<char>(records.size()));
     for (const auto& record : records) {
         bytes.append(record.id.toLatin1());
-        bytes.append(record.role == ControlCredentials::Role::GrantAdmin ? '\1' : '\0');
+        bytes.append(static_cast<char>(roleByte(record.role)));
         bytes.append(record.secret);
     }
     return bytes;
@@ -44,7 +64,8 @@ std::optional<QByteArray> ControlCredentialVault::encode(const QList<ControlCred
 
 std::optional<QList<ControlCredentials::Record>> ControlCredentialVault::decode(const QByteArray& bytes)
 {
-    if (bytes.size() < kHeaderBytes || !bytes.startsWith(kMagic)) { return {}; }
+    const bool v2 = bytes.startsWith(kMagicV2);
+    if (bytes.size() < kHeaderBytes || (!v2 && !bytes.startsWith(kMagic))) { return {}; }
     const qsizetype count = static_cast<unsigned char>(bytes[8]);
     if (count > ControlCredentials::kMaximumRecords || bytes.size() != kHeaderBytes + count * kRecordBytes) {
         return {};
@@ -53,9 +74,11 @@ std::optional<QList<ControlCredentials::Record>> ControlCredentialVault::decode(
     for (qsizetype i = 0; i < count; ++i) {
         const qsizetype offset = kHeaderBytes + i * kRecordBytes;
         const unsigned char role = static_cast<unsigned char>(bytes[offset + 32]);
-        if (role > 1) { return {}; }
-        records.append({QString::fromLatin1(bytes.mid(offset, 32)),
-            role == 1 ? ControlCredentials::Role::GrantAdmin : ControlCredentials::Role::Client,
+        if (role > (v2 ? 3 : 1)) { return {}; }
+        static constexpr ControlCredentials::Role kRoles[] = {
+            ControlCredentials::Role::Client, ControlCredentials::Role::GrantAdmin,
+            ControlCredentials::Role::RemoteObserve, ControlCredentials::Role::RemoteControl};
+        records.append({QString::fromLatin1(bytes.mid(offset, 32)), kRoles[role],
             bytes.mid(offset + 33, ControlCredentials::kSecretBytes)});
     }
     return ControlCredentials::validRecords(records) ? std::optional{records} : std::nullopt;

@@ -270,8 +270,13 @@ ServiceReply ControlService::handle(
             return failure(request.id, {QStringLiteral("auth.invalid"),
                 QStringLiteral("credential binding failed"), {}, false}, true);
         }
+        if (!session->isAuthenticated()) {   // a network session without a remote scope
+            return failure(request.id, {QStringLiteral("auth.invalid"),
+                QStringLiteral("credential rejected"), {}, false}, true);
+        }
         session->completeNegotiation();
-        if (m_transmit && !m_transmit->attach(session)) {
+        // Network sessions never reach transmit (aetherd-remote-clients.md).
+        if (m_transmit && !session->isNetwork() && !m_transmit->attach(session)) {
             session->endAuthorization();
             return failure(request.id, {QStringLiteral("auth.grant_denied"),
                 QStringLiteral("client lifetime registration failed"), {}, false}, true);
@@ -301,6 +306,10 @@ ServiceReply ControlService::handle(
     }
     if (m_transmit && (request.method.startsWith(QLatin1String("tx."))
         || request.method.startsWith(QLatin1String("txAdmin.")))) {
+        if (session->isNetwork()) {
+            return failure(request.id, {QStringLiteral("auth.grant_denied"),
+                QStringLiteral("transmit is not available to network sessions"), {}, false});
+        }
         return {m_transmit->handle(request, session), false};
     }
     if (request.method == QStringLiteral("radio.connect")
@@ -736,7 +745,7 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
             }
         }
     }
-    if (m_transmit) {
+    if (m_transmit && !session.isNetwork()) {
         for (const QJsonValue& method : m_transmit->methods(session)) {
             available.append(method);
         }

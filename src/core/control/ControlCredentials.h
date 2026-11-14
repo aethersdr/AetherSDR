@@ -19,17 +19,29 @@ class ControlCredentials final : public QObject {
     Q_OBJECT
     struct State;
 public:
-    enum class Role { Client, GrantAdmin };
+    // Client and GrantAdmin are local-socket identities. The two remote scopes
+    // are network clients (aetherd-remote-clients.md); on the network the
+    // scope IS the grant: observe, or observe and control. Never transmit.
+    enum class Role { Client, GrantAdmin, RemoteObserve, RemoteControl };
+    [[nodiscard]] static bool isRemote(Role role) noexcept
+    {
+        return role == Role::RemoteObserve || role == Role::RemoteControl;
+    }
     struct Record {
         QString id;
         Role role{Role::Client};
-        QByteArray secret; // exactly 32 CSPRNG bytes; OS-vault storage only
+        // Local roles: exactly 32 CSPRNG bytes, OS-vault storage only. Remote
+        // roles: the SHA-256 digest of the client's token instead. The daemon
+        // never needs a remote secret back, so it never keeps one.
+        QByteArray secret;
     };
     class Principal {
     public:
         [[nodiscard]] bool valid() const;
         [[nodiscard]] QString id() const;
         [[nodiscard]] bool canAdministerGrants() const;
+        // The credential's scope; meaningful only while valid().
+        [[nodiscard]] Role role() const;
     private:
         friend class ControlCredentials;
         friend class ControlSession;
@@ -42,6 +54,9 @@ public:
     explicit ControlCredentials(QObject* parent = nullptr);
     ~ControlCredentials() override;
     [[nodiscard]] static Record generate(Role role);
+    // A remote-scope record and the token its holder presents (32 CSPRNG
+    // bytes, hex-encoded on the wire). The record keeps only the digest.
+    [[nodiscard]] static Record generateRemote(Role role, QByteArray* token);
     [[nodiscard]] static bool validRecords(const QList<Record>& records);
     // A complete vault reload replaces the verification epoch, including for
     // unchanged records. Invalid input fails closed and retires old identities.

@@ -28,6 +28,10 @@ enum class SessionAuthorization {
     Observer,
     Controller,
     ObserverController,
+    // A network session (aetherd-remote-clients.md). Unauthenticated until a
+    // remote-scope credential is bound at hello; the credential's scope then
+    // decides the grants (observe, or observe and control). Never transmit.
+    NetworkScoped,
 };
 
 // Per-client protocol state. Resource events are session-sequenced and held in
@@ -56,6 +60,8 @@ public:
     // observe/control permissions and from a live, radio-scoped TX grant.
     [[nodiscard]] QString principalId() const;
     [[nodiscard]] bool canAdministerGrants() const;
+    // From the network listener, not the current-user local socket.
+    [[nodiscard]] bool isNetwork() const { return m_authorization == SessionAuthorization::NetworkScoped; }
     // Capture at trusted grant composition, not at worker dispatch time.
     // The returned predicate reads only the original credential's atomic fence.
     [[nodiscard]] std::function<bool()> credentialFence() const;
