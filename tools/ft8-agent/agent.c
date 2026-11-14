@@ -560,6 +560,8 @@ static struct {
     long long dial_hz;
     int hop_period;             /* period of the tuned cycle, -1 when not hopping */
     int slice_ok, stream_ok;
+    int dax_bound;              /* DAX channel actually bound, 0 until it is */
+    long long vita_packets;     /* VITA packets seen: proves samples ARRIVE */
     spot_t spots[MAX_SPOTS];
     int nspots, spot_head;
     cycle_t cycles[MAX_CYCLES];
@@ -780,6 +782,10 @@ static long mem_available_kb(void)
 }
 
 static char g_self[512];
+/* The status listener, so POST /v1/restart can close it before execv().
+ * It is not CLOEXEC, and an inherited listening socket would stop the new
+ * process binding its own status port. -1 until the listener is up. */
+static int g_status_fd = -1;
 static char g_work[300];
 
 /* This process's own CPU seconds and peak RSS. AetherWSPR read these from its
@@ -1032,6 +1038,19 @@ static void status_json(buf_t *b, long long since)
     bputs(b, ",\"band\":"); bjson_str(b, G.band);
     bprintf(b, ",\"dial_hz\":%lld,\"slice\":%s,\"audio\":%s", G.dial_hz, G.slice_ok ? "true" : "false",
             G.stream_ok ? "true" : "false");
+    /* Which state directory won. pick_state_dir() prefers the one beside the
+     * binary and falls back to a RAM path named after the binary's ctime, and
+     * the two behave differently across a reinstall -- the fallback starts
+     * over. Without this field there is no way to tell from outside which one
+     * is in use, which made a settings-not-applying problem much harder to
+     * diagnose than it needed to be. */
+    bputs(b, ",\"state_path\":");
+    bjson_str(b, G.state_path[0] ? G.state_path : "");
+    /* The DAX channel actually BOUND, which is read once at startup. The
+     * configured value can differ after a config change until a restart,
+     * and that difference is exactly the trap: on a FLEX-6300 the default
+     * channel 4 yields silence while audio still reads true. */
+    bprintf(b, ",\"dax_channel_bound\":%d,\"vita_packets\":%lld", G.dax_bound, G.vita_packets);
     bputs(b, ",\"hop_period\":");
     bjson_str(b, G.hop_period >= 0 ? PERIOD_NAME[G.hop_period] : "");
     bputs(b, ",\"depth\":");
@@ -1202,6 +1221,55 @@ static void serve(int fd)
         bputs(&b, "}");
         pthread_mutex_unlock(&G.mu);
         http_reply(fd, 200, out, b.n);
+    } else if (!strcmp(method, "POST") && !strcmp(path, "/v1/restart")) {
+        /* Re-exec this program in place.
+         *
+         * Some settings are read once at startup and never again -- the DAX
+         * channel is the one that bites, because the agent's default (4)
+         * does not work on a FLEX-6300, which needs 1. Changing it through
+         * POST /v1/config stored it but changed nothing: the capture was
+         * already bound to the old channel, and the only way to re-bind was
+         * reinstalling the waveform, which is also the one thing that makes
+         * the agent forget its settings when it is running from the RAM
+         * fallback state directory (that path is named after the binary's
+         * ctime, so a reinstall starts over by design). Set the channel and
+         * nothing happened; reinstall to apply it and the setting was gone.
+         *
+         * execv() keeps the binary, so the state directory resolves the same
+         * way on the other side and the settings survive. The listening
+         * socket is closed first: it is not CLOEXEC, and leaving it open
+         * would make the new process fail to bind its own status port.
+         *
+         * Receive-only agent: nothing is keyed, so there is no transmit to
+         * leave hanging. */
+        pthread_mutex_lock(&G.mu);
+        if (G.token[0]) {
+            char want[64];
+            snprintf(want, sizeof want, "Bearer %s", G.token);
+            char *auth = strcasestr(req, "\r\nAuthorization:");
+            int ok = 0;
+            if (auth && auth < body) {
+                auth += 16;
+                while (*auth == ' ') auth++;
+                ok = !strncmp(auth, want, strlen(want)) && (auth[strlen(want)] == '\r');
+            }
+            if (!ok) { pthread_mutex_unlock(&G.mu); http_error(fd, 401, "admin token required"); return; }
+        }
+        save_config_locked();
+        pthread_mutex_unlock(&G.mu);
+
+        const char *msg = "{\"restarting\":true}";
+        http_reply(fd, 200, msg, strlen(msg));
+        /* Let the reply reach the client before the process goes away. */
+        shutdown(fd, SHUT_WR);
+        close(fd);
+        sleep(1);
+        if (g_status_fd >= 0) close(g_status_fd);
+        char *argv[] = { g_self, NULL };
+        execv(g_self, argv);
+        /* Only reached if execv failed; the caller already has its reply. */
+        logf_("restart: execv(%s) failed: %s", g_self, strerror(errno));
+        _exit(1);
     } else {
         http_error(fd, 404, "not found");
     }
@@ -1426,8 +1494,17 @@ static void api_line(api_t *a, char *l, const config_t *cfg)
             }
             a->stream_retry = 0;
             a->stream = (unsigned)strtoul(msg, NULL, 16);
-            pthread_mutex_lock(&G.mu); G.stream_ok = 1; pthread_mutex_unlock(&G.mu);
-            logf_("DAX audio stream 0x%08x", a->stream);
+            pthread_mutex_lock(&G.mu);
+            G.stream_ok = 1;
+            /* Record the channel actually bound, which may not be the one
+             * configured: the block above steps down when the radio refuses
+             * a channel. A stream that OPENS is not a stream that carries
+             * samples -- on a FLEX-6300 the default channel 4 can open and
+             * stay silent -- so report the bound channel and the VITA packet
+             * count separately from "audio": true. */
+            G.dax_bound = a->dax_try;
+            pthread_mutex_unlock(&G.mu);
+            logf_("DAX audio stream 0x%08x on channel %d", a->stream, a->dax_try);
         }
         return;
     }
@@ -1518,6 +1595,12 @@ static void vita_packet(const unsigned char *p, ssize_t n, unsigned want, dsp_t 
     uint32_t w0 = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
     uint32_t sid = (uint32_t)p[4] << 24 | (uint32_t)p[5] << 16 | (uint32_t)p[6] << 8 | p[7];
     if (sid != want) return;
+    /* Counted before the capturing gate: the question this answers is
+     * "is the radio sending us anything on this stream at all", which is
+     * separate from whether we are in a capture window. */
+    pthread_mutex_lock(&G.mu);
+    G.vita_packets++;
+    pthread_mutex_unlock(&G.mu);
     unsigned pcc = (unsigned)p[14] << 8 | p[15];
     ssize_t end = n - ((w0 & 0x04000000u) ? 4 : 0);
     if (!capturing) return;
@@ -2409,6 +2492,7 @@ int main(int argc, char *argv[])
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     struct sockaddr_in la = {.sin_family = AF_INET, .sin_port = htons(STATUS_PORT), .sin_addr.s_addr = htonl(INADDR_ANY)};
     if (bind(ls, (struct sockaddr *)&la, sizeof la) || listen(ls, 8)) { logf_("cannot listen on %d: %s", STATUS_PORT, strerror(errno)); return 1; }
+    g_status_fd = ls; /* POST /v1/restart closes this before execv() */
     pthread_t th;
     pthread_create(&th, NULL, status_thread, &ls);
     if (!getenv("AETHER_WSPR_RADIO")) pthread_create(&th, NULL, publish_thread, NULL);
