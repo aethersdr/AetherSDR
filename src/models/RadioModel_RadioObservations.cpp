@@ -129,6 +129,9 @@ void RadioModel::applyRadioObservation(const RadioStatusObservation& observation
     if (report.station) { client.station = *report.station; }
     if (report.source) { client.source = *report.source; }
     if (report.localPtt) { client.localPtt = *report.localPtt; }
+    // A full "connected" report is the client's whole state: no local_ptt
+    // means none (FlexLib Radio.cs ParseClientStatus defaults it false).
+    else if (report.action == ClientStatusValues::Action::Connected) { client.localPtt = false; }
     if (!known || replaced) {
         if (!report.program) { client.program = QStringLiteral("Unknown"); }
         if (!report.station) { client.station = client.program; }

@@ -33,6 +33,9 @@ public:
         return epoch;
     }
     static void disconnected(RadioModel& model) { model.onDisconnected(); }
+    // A connect that has begun while the previous session is still the connected one.
+    static quint64 beginLateConnect(RadioModel& model) { return model.beginStatusSession(); }
+    static void closeSession(RadioModel& model) { model.retireObservationSession(); }
 };
 
 // A status line through the backend's own ingress, as the radio's arrives.

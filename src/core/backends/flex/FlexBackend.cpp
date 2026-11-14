@@ -1430,7 +1430,10 @@ void FlexBackend::acceptRadioStatus(const RadioStatusObservation& observation)
     // `radio ...` repeats on unrelated edits, and against a newer report that
     // ran during the notification.
     if (!alive || observation.kind != RadioStatusObservation::Kind::Radio || !observation.radio.model
-        || revision != m_radioModelRevision || *observation.radio.model == m_announcedModel) { return; }
+        || revision != m_radioModelRevision || *observation.radio.model == m_announcedModel
+        // Only a model the receiver applied: RadioModel drops a report from a
+        // session that has begun to end, and capabilities() reads its model.
+        || (m_modelProvider && m_modelProvider() != *observation.radio.model)) { return; }
     m_announcedModel = *observation.radio.model;
     emit capabilitiesChanged();
 }

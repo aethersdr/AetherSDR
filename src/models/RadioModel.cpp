@@ -8764,8 +8764,12 @@ void RadioModel::onDisconnected()
     // cache empty would show an operator an empty channel list and let them
     // import into a bank they cannot see.
     publishLocalMemories();
-    m_clientStations.clear();
-    m_clientInfoMap.clear();
+    // The client inventory is the session's (resetRadioObservations above):
+    // a late disconnect leaves the new session's clients alone.
+    if (endingStatusSession) {
+        m_clientStations.clear();
+        m_clientInfoMap.clear();
+    }
     // #3977: handles are radio-boot-scoped and recycled across connections —
     // strikes and eviction marks must not outlive the connection they were
     // observed on, or a recycled handle inherits them (instant eviction of an

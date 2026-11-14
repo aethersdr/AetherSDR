@@ -94,6 +94,9 @@ private slots:
                  {"program", "SmartSDR"}, {"local_ptt", "1"}, {"ip", "192.0.2.9"}});
         f.report("client 0x99 connected", {{"station", "Updated"}});
         QCOMPARE(f.model.clientInfoMap().value(0x99).program, QString("SmartSDR"));
+        // A full connected report is the whole state (FlexLib Radio.cs ParseClientStatus).
+        QVERIFY(!f.model.clientInfoMap().value(0x99).localPtt);
+        f.report("client 0x99", {{"local_ptt", "1"}});
         QVERIFY(f.model.clientInfoMap().value(0x99).localPtt);
         f.model.mergeKnownGuiClients({"0x99"}, {"Stale"}, {"Stale"});
         QCOMPARE(f.model.clientInfoMap().value(0x99).station, QString("Updated"));
@@ -299,6 +302,61 @@ private slots:
         QSignalSpy capabilities(f.backend, &IRadioBackend::capabilitiesChanged);
         f.report("radio", {{"model", "FLEX-6700"}});
         QCOMPARE(capabilities.count(), 1);
+    }
+
+    // A model name RadioModel did not apply announces no capability revision.
+    void droppedModelReportAnnouncesNothing()
+    {
+        Fixture f;
+        FlexRadioStatusTestPeer::beginConnect(f.model);
+        FlexRadioStatusTestPeer::closeSession(f.model);
+        QSignalSpy capabilities(f.backend, &IRadioBackend::capabilitiesChanged);
+        f.report("radio", {{"model", "FLEX-6700"}});
+        QVERIFY(f.model.model() != QString("FLEX-6700"));
+        QCOMPARE(capabilities.count(), 0);
+    }
+
+    // A full "connected" report without local_ptt clears it.
+    void connectedReportResetsLocalPtt()
+    {
+        Fixture f;
+        f.report("client 0x99 connected", {{"station", "Shack"}, {"local_ptt", "1"}});
+        QVERIFY(f.model.clientInfoMap().value(0x99).localPtt);
+        f.report("client 0x99 connected", {{"station", "Shack"}});
+        QVERIFY(!f.model.clientInfoMap().value(0x99).localPtt);
+    }
+
+    // A late disconnect (a new connect already begun) keeps the new
+    // session's client inventory.
+    void lateDisconnectKeepsNewSessionClients()
+    {
+        Fixture f;
+        FlexRadioStatusTestPeer::beginConnect(f.model);
+        FlexRadioStatusTestPeer::beginLateConnect(f.model);
+        f.report("client 0x99 connected", {{"station", "New"}});
+        FlexRadioStatusTestPeer::disconnected(f.model);
+        QCOMPARE(f.model.clientInfoMap().value(0x99).station, QString("New"));
+        f.report("client 0x99", {{"local_ptt", "1"}});
+        QVERIFY(f.model.clientInfoMap().value(0x99).localPtt);
+    }
+
+    // The connection thread posts a forced-disconnect line and then its
+    // disconnect; the model sees them in that order, so the notice applies
+    // before the session ends.
+    void forcedNoticeLandsBeforeTransportDisconnect()
+    {
+        Fixture f;
+        QSignalSpy terminal(&f.model, &RadioModel::forcedDisconnectRequested);
+        const quint64 epoch = FlexRadioStatusTestPeer::beginConnect(f.model);
+        RadioConnection* transport = f.backend->connection();
+        QMetaObject::invokeMethod(transport, [transport, epoch] {
+            emit transport->lineReceived(CommandParser::parseLine(
+                QStringLiteral("S00000042|client 0x42 disconnected forced=1")), epoch);
+            emit transport->disconnected();
+        }, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::sendPostedEvents();
+        QCOMPARE(terminal.count(), 1);
     }
 
     void inventoryIsBoundedButRemovalStillWorks()
