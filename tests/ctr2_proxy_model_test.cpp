@@ -1487,10 +1487,14 @@ void testForgetAnUnpluggedDevice()
         check(!waitUntil([&] { return model.isRunning(knob.path); }, retry),
               "unplugged forget: so the automatic start leaves it");
 
-        // A saved entry from before names were kept: named by its USB IDs.
-        check(Ctr2ProxyModel::rememberedName(Saved{QStringLiteral("X"), 0x1234, 0xABCD})
-                  == QStringLiteral("USB device 1234:ABCD"),
-              "unplugged forget: an unnamed, unknown device is named by its IDs");
+        // Saved entries from before names were kept: named by their USB IDs
+        // and serial, so two with the same IDs never read the same.
+        check(Ctr2ProxyModel::rememberedName(Saved{QStringLiteral("X1"), 0x1234, 0xABCD})
+                  == QStringLiteral("USB device 1234:ABCD #X1"),
+              "unplugged forget: an unnamed, unknown device is named by its IDs and serial");
+        check(Ctr2ProxyModel::rememberedName(Saved{ctr2.serial, ctr2.vendorId, ctr2.productId})
+                  != Ctr2ProxyModel::rememberedName(Saved{knob.serial, knob.vendorId, knob.productId}),
+              "unplugged forget: two unnamed entries with the same IDs are named apart");
         model.stop();
     }
     AetherSDR::Ctr2RelaySettings{}.save();

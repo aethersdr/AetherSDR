@@ -174,8 +174,9 @@ public:
     // The remembered devices not plugged in now (none listed with their
     // serial number and IDs), in the order first started.
     QList<Ctr2RelaySettings::UsbDevice> absentUsbDevices() const;
-    // A remembered device's name: as listed when last started, else its
-    // CTR2 model by USB IDs, else the IDs.
+    // A remembered device's name: as listed when last started, else (saved
+    // before names were kept) its CTR2 model by USB IDs, else the IDs, with
+    // its serial number.
     static QString rememberedName(const Ctr2RelaySettings::UsbDevice& device);
 
     // Starts the relay by itself whenever AetherSDR is connected to a radio,

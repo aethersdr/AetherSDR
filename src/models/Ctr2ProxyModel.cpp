@@ -824,12 +824,14 @@ QString Ctr2ProxyModel::rememberedName(const Ctr2RelaySettings::UsbDevice& devic
     info.vendorId = device.vendorId;
     info.productId = device.productId;
     const QString model = info.ctr2Model();
-    if (!model.isEmpty())
-        return model;
     const auto hex = [](quint16 id) {
         return QString::number(id, 16).rightJustified(4, QLatin1Char('0')).toUpper();
     };
-    return tr("USB device %1:%2").arg(hex(device.vendorId), hex(device.productId));
+    // With its serial number: two such entries, often the same IDs, differ.
+    return tr("%1 #%2")
+        .arg(model.isEmpty() ? tr("USB device %1:%2").arg(hex(device.vendorId), hex(device.productId))
+                             : model,
+             device.serial);
 }
 
 bool Ctr2ProxyModel::heldByOperator(const Ctr2HidPort::DeviceInfo& device) const
