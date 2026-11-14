@@ -73,9 +73,9 @@ connects to a radio. The choice is saved.
 - If the CTR2 is not plugged in yet, AetherSDR keeps looking every few seconds
   and starts the relay when it appears.
 - In USB mode it starts every controller it has relayed before that is plugged
-  in, and the selected one.
+  in. Until it has relayed one, it starts the selected one.
 - Pressing **Stop** holds that controller off until AetherSDR next connects to
-  a radio.
+  a radio, even if it is unplugged and plugged back in meanwhile.
 - In USB mode it starts a CTR2-Max (on Lynovation's firmware or AetherCTR2),
   a CTR2-MIDI or an AetherKnob. A CTR2-Max on firmware older than v2.00.00, or
   a CTR2-MIDI on firmware without USB support, never answers; see

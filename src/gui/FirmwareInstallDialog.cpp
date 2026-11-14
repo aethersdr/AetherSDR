@@ -783,7 +783,9 @@ bool FirmwareInstallDialog::refreshOfferFirst(std::function<void()> again)
     if (std::exchange(m_offerRefreshed, false))
         return false;   // the repeat after the read
     const FirmwareInstallModel::Target target = m_fw->target();
-    if (!m_model || m_model->isRunning()
+    // Only the selected controller's own relay holds it; another relaying
+    // does not keep this one's offer from being read again.
+    if (!m_model || m_model->isRunning(m_model->usbDevicePath())
         || (target.device != Device::LinkFirmware && target.device != Device::Stock)
         || m_fw->takesCommands(target))
         return false;

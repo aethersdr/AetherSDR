@@ -633,6 +633,18 @@ void Ctr2ProxyPanel::syncAddresses()
             m_usbList->setItemWidget(row.item, w);
             m_usbRows.insert(d.path, row);
         }
+        // Tab walks the rows' buttons in list order, from the list to what
+        // sits below it, rather than after everything else as created.
+        QWidget* previous = m_usbList;
+        for (int i = 0; i < m_usbList->count(); ++i) {
+            const auto it = m_usbRows.constFind(m_usbList->item(i)->data(Qt::UserRole).toString());
+            if (it == m_usbRows.constEnd())
+                continue;
+            setTabOrder(previous, it->button);
+            previous = it->button;
+        }
+        setTabOrder(previous, m_startBtn);
+        setTabOrder(m_startBtn, m_autoStart);
         if (m_model) {
             const auto it = m_usbRows.constFind(m_model->usbDevicePath());
             if (it != m_usbRows.constEnd())

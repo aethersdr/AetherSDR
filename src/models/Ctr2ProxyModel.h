@@ -17,6 +17,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 class QTimer;
@@ -46,9 +47,6 @@ public:
 
     enum class Transport { Wifi, Usb };
 
-    explicit Ctr2ProxyModel(QObject* parent = nullptr);
-    ~Ctr2ProxyModel() override;
-
     // USB HID access. Defaults to hidapi (absent when the build has none);
     // tests inject a device list and a port opener. The periodic rescan calls
     // a source marked thread-safe on the thread pool, off the GUI thread; any
@@ -61,6 +59,26 @@ public:
     // the idle version readout unavailable.
     using UsbCapsPortOpener = std::function<Ctr2HidPort*(const Ctr2HidPort::DeviceInfo&,
                                                          quint32 hostCapabilities, QString* error)>;
+    struct UsbBackend {
+        UsbDeviceSource devices;
+        UsbPortOpener opener;
+        UsbCapsPortOpener firmwareOpener;
+        bool threadSafeSource{false};
+    };
+    // The build's hidapi; empty when it has none.
+    static UsbBackend hidapiBackend();
+    // Tests: the backend the parameterless constructor uses from now on, in
+    // place of hidapi, so a test that forgets to inject one never reaches a
+    // real device.
+    static void setDefaultUsbBackendForTesting(UsbBackend backend);
+
+    // With hidapiBackend() (or the one set for tests).
+    explicit Ctr2ProxyModel(QObject* parent = nullptr);
+    // With this backend from the start: the first scan and the first idle
+    // probe use it, never hidapi.
+    explicit Ctr2ProxyModel(UsbBackend backend, QObject* parent = nullptr);
+    ~Ctr2ProxyModel() override;
+
     void setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener,
                        UsbCapsPortOpener firmwareOpener = {},
                        bool threadSafeSource = false);
@@ -129,14 +147,18 @@ public:
     void stop(const QString& usbPath);
     // Stop pressed by the operator: also holds off the automatic start until
     // AetherSDR next connects to a radio. Without a path, for every relay.
+    // The hold is on the device, by serial number and USB IDs, so it survives
+    // an unplug and replug at the same path or another; a device with no
+    // serial number is held by its path.
     void stopByOperator();
     void stopByOperator(const QString& usbPath);
 
     // Starts the relay by itself whenever AetherSDR is connected to a radio,
     // with the setup it last started with (Ctr2RelaySettings, saved), and
     // keeps trying while a device is missing. In USB mode it starts every
-    // device it has relayed before that is plugged in (the focus when it
-    // remembers none); only a device whose firmware relays over USB
+    // device it has relayed before that is plugged in (the focus only when it
+    // remembers none, so selecting a row starts nothing); only a device whose
+    // firmware relays over USB
     // (usbLink()) is started, and a device that failed without ever answering
     // is retried only every kNoAnswerRetryMs, or at once when the device
     // list, the selected device, the mode or the radio changes.
@@ -147,9 +169,10 @@ public:
     void setNoAnswerRetryMs(int ms);   // tests
     // Tests: the radio socket every USB relay started from now on uses.
     void setUsbRadioSocketFactory(TcpByteProxy::SocketFactory factory);
-    // While the relay is stopped, USB devices are rescanned this often, so a
-    // controller that switched firmware (and so changed its USB identity)
-    // appears without pressing Rescan.
+    // USB devices are rescanned this often (except while the Wi-Fi proxy or a
+    // firmware update runs), so a controller plugged in, or one that switched
+    // firmware and so changed its USB identity, appears without pressing
+    // Rescan.
     static constexpr int kDeviceRescanMs = 2000;
     // After a restart request, the longest auto-start waits for the device to
     // leave the bus and come back before trying anyway.
@@ -178,7 +201,9 @@ public:
     // AudioSpectrum link extension (AetherKnob; never a stock CTR2).
     bool audioSpectrumWanted() const;
     // And such a device also negotiated AudioSpectrumLinear: windows not
-    // starting at 0.
+    // starting at 0. While one does, the feeder sends CW as linear frames
+    // only, so a device with AudioSpectrum but not AudioSpectrumLinear gets
+    // nothing in CW; no device today has one without the other.
     bool audioSpectrumLinearWanted() const;
     // True while a USB relay is up with a device that negotiated CwText.
     bool cwTextWanted() const;
@@ -189,7 +214,9 @@ public:
     // Firmware version of the selected USB device: from the relay while it
     // runs, otherwise read when the device is selected or rescanned. Empty
     // for a device that does not report one (any stock CTR2). With a path:
-    // that device's, known while it is relayed or once it has been the focus.
+    // that device's, known while it is relayed, or while it is the focus and
+    // idle once the probe has read it; an idle row that is not the focus
+    // shows none.
     QString usbFirmwareVersion() const;
     QString usbFirmwareVersion(const QString& usbPath) const;
     bool firmwareUpdateAvailable() const { return static_cast<bool>(m_firmwareOpener); }
@@ -200,8 +227,10 @@ public:
     bool usbFirmwareCommands() const;
     bool firmwareUpdateRunning() const;
     // Updates the selected USB device with image (Ctr2FirmwareUpdater::readImage).
-    // Stops the relay first and starts it again afterwards if it was
-    // running. False, with *problem, when it cannot start.
+    // Stops its relay first and, if it was running, starts that device's
+    // relay again afterwards, found by serial number and USB IDs (by path
+    // without a serial), wherever the focus has moved meanwhile. False, with
+    // *problem, when it cannot start.
     bool startFirmwareUpdate(const Ctr2FirmwareUpdater::Image& image, QString* problem);
     // Before the device starts checking the image; the device keeps its
     // current firmware. Later the update runs to its end.
@@ -264,7 +293,6 @@ private:
         bool noAnswer{false};   // and has not, kNoAnswerHintMs after starting
         QString startError;     // opening the device failed
         QString stopReason;     // why its relay stopped on its own
-        bool heldByOperator{false};   // stopped by the operator this connection
         // Failed before the device ever answered (firmware with no USB mode,
         // or a fault on the way up): no automatic retry before this expires,
         // rather than opening the device on this thread every
@@ -277,6 +305,14 @@ private:
     void stopUsbLink(UsbLink* link);
     const Ctr2HidPort::DeviceInfo* listedUsbDevice(const QString& path) const;
     bool remembered(const Ctr2HidPort::DeviceInfo& device) const;
+    // The operator's Stop, kept off the link (which goes when the device is
+    // unplugged) and by identity (its path can change on a replug).
+    void holdByOperator(const QString& path);
+    void releaseOperatorHold(const QString& path);
+    bool heldByOperator(const Ctr2HidPort::DeviceInfo& device) const;
+    // The listed device that is this one: same serial and IDs, or, with no
+    // serial, the same path and IDs.
+    const Ctr2HidPort::DeviceInfo* listedSameDevice(const Ctr2HidPort::DeviceInfo& device) const;
     static bool parsePort(const QString& text, quint16* port);
     static bool parseIpv4(const QString& text, QHostAddress* address);
     bool radioProblem(QString* problem) const;
@@ -317,7 +353,8 @@ private:
     QString m_probedVersion;
     quint32 m_probedOffers{0};  // the link extensions it offered
     Ctr2FirmwareUpdater* m_firmware{nullptr};
-    bool m_restartAfterFirmware{false};
+    // The device being updated, while its relay is to come back afterwards.
+    std::optional<Ctr2HidPort::DeviceInfo> m_restartAfterFirmware;
     Ctr2RelaySettings m_settings;
     QTimer* m_autoStartTimer{nullptr};
     QTimer* m_deviceRescan{nullptr};
@@ -326,6 +363,10 @@ private:
     // background scan that started before one of them is dropped.
     quint64 m_scanGeneration{0};
     bool m_autoStartHeld{false};   // the operator stopped the Wi-Fi proxy this connection
+    // USB devices the operator stopped this connection (holdByOperator()):
+    // by serial and IDs, or by path for a device with no serial.
+    QList<Ctr2RelaySettings::UsbDevice> m_heldDevices;
+    QStringList m_heldPaths;
     // A restart request (restartUsbDevice) answered: the device leaves the bus
     // a moment later (Lynovation's firmware after about two seconds), and is
     // still listed until then. Auto-start leaves m_restartedPath alone until a

@@ -440,7 +440,11 @@ target_link_libraries(unicast_endpoint_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME unicast_endpoint_test COMMAND unicast_endpoint_test)
 
 # CTR2 relay model: the destination is only the radio the owner pushes in, and
-# every unusable case keeps Start disabled with its reason. Socket-free.
+# every unusable case keeps Start disabled with its reason. Every model gets an
+# injected USB backend (no HID device is enumerated or opened). One case,
+# testSeveralDevicesAtOnce, binds a 127.0.0.1 ephemeral TCP listener (a generic
+# byte peer standing in for the radio endpoint the relays connect to); no radio
+# protocol or firmware stand-in. Exit 77 when loopback cannot be bound.
 add_executable(ctr2_proxy_model_test tests/ctr2_proxy_model_test.cpp)
 target_include_directories(ctr2_proxy_model_test PRIVATE src)
 target_link_libraries(ctr2_proxy_model_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -448,6 +452,7 @@ target_link_libraries(ctr2_proxy_model_test PRIVATE aethercore Qt6::Core Qt6::Ne
 target_compile_definitions(ctr2_proxy_model_test PRIVATE
     AETHER_CTR2_UDEV_RULES="${CMAKE_CURRENT_LIST_DIR}/../packaging/linux/70-aethersdr-ctr2.rules")
 add_test(NAME ctr2_proxy_model_test COMMAND ctr2_proxy_model_test)
+set_tests_properties(ctr2_proxy_model_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 
 # Socket-free CLOSED retention: injected HID output and an inert QTcpSocket
 # whose connectToHost() only queues an injected refusal; no socket is opened.

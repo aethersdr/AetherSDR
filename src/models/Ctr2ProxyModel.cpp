@@ -29,9 +29,43 @@ namespace {
 
 constexpr int kStatsRefreshMs = 250;
 
+std::optional<Ctr2ProxyModel::UsbBackend>& testingBackend()
+{
+    static std::optional<Ctr2ProxyModel::UsbBackend> backend;
+    return backend;
+}
+
 } // namespace
 
+Ctr2ProxyModel::UsbBackend Ctr2ProxyModel::hidapiBackend()
+{
+    UsbBackend backend;
+#ifdef HAVE_HIDAPI
+    backend.devices = [] { return Ctr2HidapiPort::enumerate(); };
+    // HidDiscovery serializes HIDAPI discovery across threads (#6604).
+    backend.threadSafeSource = true;
+    backend.opener = [](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
+        return Ctr2HidapiPort::open(device, error);
+    };
+    backend.firmwareOpener = [](const Ctr2HidPort::DeviceInfo& device, quint32 hostCapabilities,
+                                QString* error) -> Ctr2HidPort* {
+        return Ctr2HidapiPort::open(device, error, nullptr, hostCapabilities);
+    };
+#endif
+    return backend;
+}
+
+void Ctr2ProxyModel::setDefaultUsbBackendForTesting(UsbBackend backend)
+{
+    testingBackend() = std::move(backend);
+}
+
 Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
+    : Ctr2ProxyModel(testingBackend() ? *testingBackend() : hidapiBackend(), parent)
+{
+}
+
+Ctr2ProxyModel::Ctr2ProxyModel(UsbBackend backend, QObject* parent)
     : QObject(parent)
     , m_proxy(new TcpByteProxy(this))
     , m_aetherRadioReason(tr("Connect AetherSDR to a radio first"))
@@ -78,29 +112,26 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
             m_restartedPath.clear();
         refreshDevices();   // the device re-enumerated, perhaps at a new path
         m_probedPath.clear();
-        if (m_restartAfterFirmware) {
-            m_restartAfterFirmware = false;
-            start();
+        // The device that was updated, wherever it is listed now and whatever
+        // the focus is; none if it has not come back.
+        if (const std::optional<Ctr2HidPort::DeviceInfo> updated =
+                std::exchange(m_restartAfterFirmware, std::nullopt)) {
+            if (const Ctr2HidPort::DeviceInfo* device = listedSameDevice(*updated))
+                start(device->path);
         }
         probeFirmwareVersion();
         emit configurationChanged();
         emit firmwareUpdateFinished(ok, message);
     });
-#ifdef HAVE_HIDAPI
-    m_usbDevices = [] { return Ctr2HidapiPort::enumerate(); };
-    // HidDiscovery serializes HIDAPI discovery across threads (#6604).
-    m_usbDevicesThreadSafe = true;
-    m_usbOpener = [](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
-        return Ctr2HidapiPort::open(device, error);
-    };
-    m_firmwareOpener = [](const Ctr2HidPort::DeviceInfo& device, quint32 hostCapabilities,
-                          QString* error) -> Ctr2HidPort* {
-        return Ctr2HidapiPort::open(device, error, nullptr, hostCapabilities);
-    };
-    // USB is the default whenever this build can open a CTR2.
-    m_transport = Transport::Usb;
-    m_activeTransport = Transport::Usb;
-#endif
+    m_usbDevices = std::move(backend.devices);
+    m_usbDevicesThreadSafe = backend.threadSafeSource;
+    m_usbOpener = std::move(backend.opener);
+    m_firmwareOpener = std::move(backend.firmwareOpener);
+    // USB is the default whenever the backend can open a CTR2.
+    if (m_usbOpener) {
+        m_transport = Transport::Usb;
+        m_activeTransport = Transport::Usb;
+    }
     // The setup the relay last started with, if any; refreshDevices()
     // prefers its USB device.
     m_settings = Ctr2RelaySettings::load();
@@ -454,10 +485,10 @@ void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, quint16 port,
     emit configurationChanged();
     if (newRadio) {
         m_autoStartHeld = false;   // a new connection: start again
-        for (auto& [path, link] : m_usbLinks) {
-            link->heldByOperator = false;
+        m_heldDevices.clear();
+        m_heldPaths.clear();
+        for (auto& [path, link] : m_usbLinks)
             link->noAnswerHold = QDeadlineTimer();
-        }
         QTimer::singleShot(0, this, &Ctr2ProxyModel::tryAutoStart);
     }
 }
@@ -492,20 +523,19 @@ void Ctr2ProxyModel::tryAutoStart()
     }
     // The device list is the one the periodic rescan keeps current, so a
     // controller plugged in since shows up within kDeviceRescanMs. Every
-    // device relayed before is started, and the focus.
+    // device relayed before is started; the focus only while none is
+    // remembered (the single-device setup), so selecting a row starts nothing.
     QStringList paths;
     for (const Ctr2HidPort::DeviceInfo& d : std::as_const(m_usbChoices)) {
-        if (remembered(d) || d.path == m_usbDevicePath)
+        if (remembered(d) || (m_settings.usbDevices.isEmpty() && d.path == m_usbDevicePath))
             paths.append(d.path);
     }
     for (const QString& path : std::as_const(paths)) {
         const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(path);
-        if (!device || isRunning(path))
+        if (!device || isRunning(path) || heldByOperator(*device))
             continue;
-        if (const UsbLink* link = usbLink(path);
-            link && (link->heldByOperator || !link->noAnswerHold.hasExpired())) {
+        if (const UsbLink* link = usbLink(path); link && !link->noAnswerHold.hasExpired())
             continue;
-        }
         // Restarted on request and not back yet: opening it now would catch
         // it on its way off the bus.
         if (restartHeld(path) || !configurationProblem(path).isEmpty())
@@ -656,6 +686,47 @@ bool Ctr2ProxyModel::remembered(const Ctr2HidPort::DeviceInfo& device) const
     return !device.serial.isEmpty()
         && m_settings.usbDevices.contains(
             Ctr2RelaySettings::UsbDevice{device.serial, device.vendorId, device.productId});
+}
+
+void Ctr2ProxyModel::holdByOperator(const QString& path)
+{
+    const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(path);
+    if (device && !device->serial.isEmpty()) {
+        const Ctr2RelaySettings::UsbDevice id{device->serial, device->vendorId, device->productId};
+        if (!m_heldDevices.contains(id))
+            m_heldDevices.append(id);
+    } else if (!m_heldPaths.contains(path)) {
+        m_heldPaths.append(path);
+    }
+}
+
+void Ctr2ProxyModel::releaseOperatorHold(const QString& path)
+{
+    m_heldPaths.removeAll(path);
+    if (const Ctr2HidPort::DeviceInfo* device = listedUsbDevice(path); device && !device->serial.isEmpty()) {
+        m_heldDevices.removeAll(
+            Ctr2RelaySettings::UsbDevice{device->serial, device->vendorId, device->productId});
+    }
+}
+
+bool Ctr2ProxyModel::heldByOperator(const Ctr2HidPort::DeviceInfo& device) const
+{
+    if (device.serial.isEmpty())
+        return m_heldPaths.contains(device.path);
+    return m_heldDevices.contains(
+        Ctr2RelaySettings::UsbDevice{device.serial, device.vendorId, device.productId});
+}
+
+const Ctr2HidPort::DeviceInfo*
+Ctr2ProxyModel::listedSameDevice(const Ctr2HidPort::DeviceInfo& device) const
+{
+    for (const Ctr2HidPort::DeviceInfo& d : m_usbChoices) {
+        if (d.vendorId != device.vendorId || d.productId != device.productId)
+            continue;
+        if (device.serial.isEmpty() ? d.path == device.path : d.serial == device.serial)
+            return &d;
+    }
+    return nullptr;
 }
 
 void Ctr2ProxyModel::setNoAnswerRetryMs(int ms)
@@ -866,7 +937,7 @@ bool Ctr2ProxyModel::start(const QString& usbPath)
     UsbLink* link = ensureUsbLink(usbPath);
     link->startError.clear();
     link->stopReason.clear();
-    link->heldByOperator = false;
+    releaseOperatorHold(usbPath);
     link->noAnswerHold = QDeadlineTimer();
     bool ok = false;
     QString error;
@@ -892,16 +963,14 @@ bool Ctr2ProxyModel::start(const QString& usbPath)
 void Ctr2ProxyModel::stopByOperator()
 {
     m_autoStartHeld = true;
-    for (const QString& path : runningUsbDevices()) {
-        if (UsbLink* link = usbLink(path))
-            link->heldByOperator = true;
-    }
+    for (const QString& path : runningUsbDevices())
+        holdByOperator(path);
     stop();
 }
 
 void Ctr2ProxyModel::stopByOperator(const QString& usbPath)
 {
-    ensureUsbLink(usbPath)->heldByOperator = true;
+    holdByOperator(usbPath);
     stop(usbPath);
 }
 
@@ -1068,8 +1137,9 @@ bool Ctr2ProxyModel::startFirmwareUpdate(const Ctr2FirmwareUpdater::Image& image
     const Ctr2HidPort::DeviceInfo target = *device;
     // Only one program may drive the link: its relay lets go first, and
     // comes back afterwards if it was running. Other devices' relays run on.
-    m_restartAfterFirmware = isRunning(target.path);
-    if (m_restartAfterFirmware) {
+    m_restartAfterFirmware.reset();
+    if (isRunning(target.path)) {
+        m_restartAfterFirmware = target;
         stop(target.path);
     }
     m_firmware->start(target, image);
@@ -1089,7 +1159,7 @@ bool Ctr2ProxyModel::restartUsbDevice(Ctr2FirmwareUpdater::Restart target, QStri
         return false;
     }
     const Ctr2HidPort::DeviceInfo d = *device;
-    m_restartAfterFirmware = false;   // the device leaves the bus
+    m_restartAfterFirmware.reset();   // the device leaves the bus
     m_restartedPath = d.path;
     m_restartedDevice = d;
     m_restartedSeenGone = false;
