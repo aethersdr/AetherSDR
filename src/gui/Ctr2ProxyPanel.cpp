@@ -16,6 +16,7 @@
 #include <QListWidget>
 #include <QLocale>
 #include <QPushButton>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QStandardPaths>
@@ -601,49 +602,7 @@ void Ctr2ProxyPanel::syncAddresses()
     }
     {
         const QSignalBlocker block(m_usbList);
-        m_usbList->clear();
-        m_usbRows.clear();
-        const QList<Ctr2HidPort::DeviceInfo> devices =
-            m_model ? m_model->availableUsbDevices() : QList<Ctr2HidPort::DeviceInfo>();
-        for (const Ctr2HidPort::DeviceInfo& d : devices) {
-            UsbRow row;
-            row.item = new QListWidgetItem(m_usbList);
-            row.item->setData(Qt::UserRole, d.path);
-            row.item->setToolTip(d.label());
-            auto* w = new QWidget(m_usbList);
-            auto* h = new QHBoxLayout(w);
-            h->setContentsMargins(4, 2, 4, 2);
-            h->setSpacing(8);
-            // Device strings come from the device: never rich text.
-            row.name = makeLabel(d.shortName(), w);
-            row.name->setTextFormat(Qt::PlainText);
-            row.version = makeLabel(QString(), w, "secondary");
-            row.version->setTextFormat(Qt::PlainText);
-            row.state = makeLabel(QString(), w, "secondary");
-            row.button = new QPushButton(tr("Start"), w);
-            row.button->setObjectName(QStringLiteral("ctr2ProxyUsbStart"));
-            // Beside Start, as the row's other control: the automatic start
-            // stops starting this controller.
-            row.forget = new QPushButton(tr("Forget"), w);
-            row.forget->setObjectName(QStringLiteral("ctr2ProxyUsbForget"));
-            row.forget->setToolTip(tr("Stop starting this controller automatically"));
-            row.forget->setVisible(false);
-            h->addWidget(row.name);
-            h->addWidget(row.version);
-            h->addStretch(1);
-            h->addWidget(row.state);
-            h->addWidget(row.forget);
-            h->addWidget(row.button);
-            const QString path = d.path;
-            connect(row.button, &QPushButton::clicked, this, [this, path] { onUsbRowClicked(path); });
-            connect(row.forget, &QPushButton::clicked, this, [this, path] {
-                if (m_model && !m_installingRule)
-                    m_model->forgetUsbDevice(path);
-            });
-            row.item->setSizeHint(w->sizeHint());
-            m_usbList->setItemWidget(row.item, w);
-            m_usbRows.insert(d.path, row);
-        }
+        syncUsbRowSet();
         // Tab walks the rows' buttons in list order, from the list to what
         // sits below it, rather than after everything else as created.
         QWidget* previous = m_usbList;
@@ -664,6 +623,102 @@ void Ctr2ProxyPanel::syncAddresses()
         }
     }
     syncUsbRows();
+}
+
+namespace {
+// The device as listed: a row is kept only while its device is listed the
+// same way, as a CTR2-Max that switches firmware comes back at the same path
+// as another product.
+QString usbIdentity(const Ctr2HidPort::DeviceInfo& d)
+{
+    return QStringList{d.path, QString::number(d.vendorId), QString::number(d.productId),
+                       d.manufacturer, d.product, d.serial}
+        .join(QChar(0x1F));
+}
+} // namespace
+
+void Ctr2ProxyPanel::syncUsbRowSet()
+{
+    const QList<Ctr2HidPort::DeviceInfo> devices =
+        m_model ? m_model->availableUsbDevices() : QList<Ctr2HidPort::DeviceInfo>();
+    QSet<QString> listed;
+    for (const Ctr2HidPort::DeviceInfo& d : devices)
+        listed.insert(usbIdentity(d));
+    // Rows whose device went, or is listed differently now, go.
+    for (auto it = m_usbRows.begin(); it != m_usbRows.end();) {
+        if (!listed.contains(it->identity)) {
+            delete it->item;   // its row widget goes with it
+            it = m_usbRows.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // The rows kept must be in the list's order; if the list reordered them,
+    // every row is made again.
+    int next = 0;
+    bool inOrder = true;
+    for (const Ctr2HidPort::DeviceInfo& d : devices) {
+        const auto it = m_usbRows.constFind(d.path);
+        if (it == m_usbRows.constEnd())
+            continue;
+        if (m_usbList->row(it->item) != next++) {
+            inOrder = false;
+            break;
+        }
+    }
+    if (!inOrder) {
+        m_usbList->clear();
+        m_usbRows.clear();
+    }
+    for (int i = 0; i < devices.size(); ++i) {
+        if (!m_usbRows.contains(devices[i].path))
+            addUsbRow(i);
+    }
+}
+
+void Ctr2ProxyPanel::addUsbRow(int index)
+{
+    const QList<Ctr2HidPort::DeviceInfo> devices = m_model->availableUsbDevices();
+    const Ctr2HidPort::DeviceInfo& d = devices.at(index);
+    UsbRow row;
+    row.identity = usbIdentity(d);
+    row.item = new QListWidgetItem;
+    m_usbList->insertItem(index, row.item);
+    row.item->setData(Qt::UserRole, d.path);
+    row.item->setToolTip(d.label());
+    auto* w = new QWidget(m_usbList);
+    auto* h = new QHBoxLayout(w);
+    h->setContentsMargins(4, 2, 4, 2);
+    h->setSpacing(8);
+    // Device strings come from the device: never rich text.
+    row.name = makeLabel(d.shortName(), w);
+    row.name->setTextFormat(Qt::PlainText);
+    row.version = makeLabel(QString(), w, "secondary");
+    row.version->setTextFormat(Qt::PlainText);
+    row.state = makeLabel(QString(), w, "secondary");
+    row.button = new QPushButton(tr("Start"), w);
+    row.button->setObjectName(QStringLiteral("ctr2ProxyUsbStart"));
+    // Beside Start, as the row's other control: the automatic start
+    // stops starting this controller.
+    row.forget = new QPushButton(tr("Forget"), w);
+    row.forget->setObjectName(QStringLiteral("ctr2ProxyUsbForget"));
+    row.forget->setToolTip(tr("Stop starting this controller automatically"));
+    row.forget->setVisible(false);
+    h->addWidget(row.name);
+    h->addWidget(row.version);
+    h->addStretch(1);
+    h->addWidget(row.state);
+    h->addWidget(row.forget);
+    h->addWidget(row.button);
+    const QString path = d.path;
+    connect(row.button, &QPushButton::clicked, this, [this, path] { onUsbRowClicked(path); });
+    connect(row.forget, &QPushButton::clicked, this, [this, path] {
+        if (m_model && !m_installingRule)
+            m_model->forgetUsbDevice(path);
+    });
+    row.item->setSizeHint(w->sizeHint());
+    m_usbList->setItemWidget(row.item, w);
+    m_usbRows.insert(d.path, row);
 }
 
 // Each row as tall as its widgets under the window's sheet, which is applied

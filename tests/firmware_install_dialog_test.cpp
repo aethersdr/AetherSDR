@@ -287,6 +287,91 @@ void forgetOnARememberedRow()
     Ctr2RelaySettings{}.save();
 }
 
+// A rescan that changes only part of the device list keeps the rows of the
+// devices listed as before: the same widgets, so their focus and button
+// state survive, and only the changed rows are added or removed, in the
+// list's order.
+void rowsSurviveAPartialRescan()
+{
+    const Info third{QStringLiteral("third"), 0x303A, 0x1001, {}, QStringLiteral("AETHER_KNOB"),
+                     QStringLiteral("555555555555")};
+    Window w;
+    check(w.open(), "the window opens");
+    if (!w.fw || !w.tabs) {
+        return;
+    }
+    w.relay.setUsbBackend([d = w.devices] { return *d; },
+                          [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(new QuietPort); });
+    w.relay.setUsbRadioSocketFactory([] { return new InertRadioSocket; });
+    w.relay.setAetherRadio(QHostAddress(QStringLiteral("192.0.2.10")), 4992, QStringLiteral("FLEX"), {});
+    *w.devices = {kKnob, third};
+    w.relay.refreshDevices();
+    QCoreApplication::processEvents();
+    auto* list = w.dialog->findChild<QListWidget*>(QStringLiteral("ctr2ProxyUsbDevices"));
+    if (!list || list->count() != 2) {
+        check(false, "a row for each controller");
+        return;
+    }
+    const auto itemOf = [&](const Info& d) -> QListWidgetItem* {
+        for (int i = 0; i < list->count(); ++i) {
+            if (list->item(i)->data(Qt::UserRole).toString() == d.path)
+                return list->item(i);
+        }
+        return nullptr;
+    };
+    const auto rowOf = [&](const Info& d) -> QWidget* {
+        QListWidgetItem* item = itemOf(d);
+        return item ? list->itemWidget(item) : nullptr;
+    };
+    const auto startOf = [&](const Info& d) -> QPushButton* {
+        QWidget* row = rowOf(d);
+        return row ? row->findChild<QPushButton*>(QStringLiteral("ctr2ProxyUsbStart")) : nullptr;
+    };
+    QWidget* const knobRow = rowOf(kKnob);
+    QPushButton* const knobStart = startOf(kKnob);
+    knobStart->click();   // relaying: its button reads Stop
+    check(w.relay.isRunning(kKnob.path) && knobStart->text() == QStringLiteral("Stop"),
+          "the knob relays, its row offering Stop");
+    w.dialog->activateWindow();
+    knobStart->setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    check(knobStart->hasFocus(), "the knob's Stop has the keyboard focus");
+
+    // Another controller is plugged in, listed between the two.
+    *w.devices = {kKnob, kMax, third};
+    w.relay.refreshDevices();
+    QCoreApplication::processEvents();
+    check(list->count() == 3, "the new controller gets a row");
+    check(rowOf(kKnob) == knobRow && startOf(kKnob) == knobStart,
+          "the knob's row is the same widget, not made again");
+    check(knobStart->text() == QStringLiteral("Stop") && knobStart->isEnabled(),
+          "and its button still offers Stop");
+    check(knobStart->hasFocus(), "and keeps the keyboard focus");
+    check(list->row(itemOf(kKnob)) == 0 && list->row(itemOf(kMax)) == 1 && list->row(itemOf(third)) == 2,
+          "the new row takes its place in the list's order");
+    QWidget* const maxRow = rowOf(kMax);
+    QWidget* const thirdRow = rowOf(third);
+
+    // One unplugged: only its row goes.
+    *w.devices = {kKnob, kMax};
+    w.relay.refreshDevices();
+    QCoreApplication::processEvents();
+    check(list->count() == 2 && !itemOf(third), "the unplugged controller's row goes");
+    check(rowOf(kKnob) == knobRow && rowOf(kMax) == maxRow, "and only that one");
+    Q_UNUSED(thirdRow);
+
+    // The same path listed as another device: that row is made again.
+    Info switched = kMax;
+    switched.product = QStringLiteral("ESP32S3_DEV");
+    *w.devices = {kKnob, switched};
+    w.relay.refreshDevices();
+    QCoreApplication::processEvents();
+    check(list->count() == 2 && rowOf(switched) && rowOf(switched) != maxRow,
+          "a device listed differently at the same path gets a new row");
+    check(rowOf(kKnob) == knobRow, "and the others keep theirs");
+    w.relay.stop();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -311,6 +396,7 @@ int main(int argc, char** argv)
     aCtr2MaxSeenKeepsThePart();
     aRowPerController();
     forgetOnARememberedRow();
+    rowsSurviveAPartialRescan();
 
     check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
           "every relay model was built with an injected USB backend, never the default (hidapi)");

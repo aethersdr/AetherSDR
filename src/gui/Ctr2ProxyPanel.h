@@ -63,6 +63,12 @@ private:
     void syncStats();
     void onStartClicked();
     void syncUsbRows();
+    // The USB rows follow the device list: a device listed as before keeps
+    // its row (and so its focus and button state), and only the rows of
+    // devices that came, went or changed are added or removed.
+    void syncUsbRowSet();
+    // A row for the model's USB device at index, at that place in the list.
+    void addUsbRow(int index);
     // A USB row's Start/Stop.
     void onUsbRowClicked(const QString& path);
 #ifdef Q_OS_LINUX
@@ -79,6 +85,7 @@ private:
     // USB mode: one row per controller, keyed by HID path.
     QListWidget* m_usbList{nullptr};
     struct UsbRow {
+        QString identity;   // the device as listed when the row was made
         QListWidgetItem* item{nullptr};
         QLabel* name{nullptr};
         QLabel* version{nullptr};
