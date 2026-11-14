@@ -2,6 +2,7 @@
 
 #include <QList>
 #include <QString>
+#include <QJsonObject>
 
 #include "core/RadioDiscovery.h"  // RadioInfo
 
@@ -30,6 +31,12 @@ public:
                                        const QString& family = QString(),
                                        QString* error = nullptr) = 0;
     virtual bool automationDisconnect(QString* error = nullptr) = 0;
+    virtual QJsonObject automationConnectionProfiles() const { return {}; }
+    virtual bool automationSelectConnectionProfile(const QString&, const QString&, QString* error)
+    {
+        if (error) { *error = QStringLiteral("connection profiles unavailable"); }
+        return false;
+    }
 
     // Connect-dialog visibility (fallback when no invokable dialog host is set).
     virtual bool automationDialogVisible() const = 0;

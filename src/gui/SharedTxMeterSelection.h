@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 namespace AetherSDR {
 
 enum class SharedTxMeterSource { Radio, Amplifier, RadioKeyBlocked, Kxpa100 };
@@ -9,6 +11,13 @@ struct SharedTxMeterSelection {
     int maxWatts{100};
     bool highPowerAmplifier{false};
 };
+
+// The tuner reports its own power, independently of the shared meter source.
+// A smaller selected amplifier does not limit the radio's output on other paths.
+inline int tunerMaxWatts(int radioMaxWatts, const SharedTxMeterSelection& selection)
+{
+    return std::max(radioMaxWatts, selection.maxWatts);
+}
 
 // The KAT500 key-line override applies to the KPA500 path. A separately
 // selected radio-integrated amplifier retains its existing meter priority.

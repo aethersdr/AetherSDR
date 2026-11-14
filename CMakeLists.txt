@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.11.1 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.11.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,6 +40,7 @@ option(REQUIRE_ASR_GPU "Fail if no ASR GPU backend (Vulkan/Metal) is enabled (us
 option(REQUIRE_ASR_SHERPA "Fail if sherpa-onnx is not found (non-whisper ASR backend; use for release builds)" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 option(ENABLE_DSTAR "Build the local D-STAR waveform helper (vendored smartsdr-dsp/ThumbDV)" ON)
+option(ENABLE_DATA2G "Build the Data2G HF data modem core (vendored, receive-only monitor; RFC #7159)" ON)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
@@ -882,10 +883,13 @@ set(AETHER_SETTINGS_SOURCES
 )
 
 set(CORE_SOURCES
+    src/models/ConnectionWorkspace.cpp
     src/core/control/ControlProtocolCodec.cpp # aetherd v1 bounded JSON envelopes
     src/core/control/ControlResourceStore.cpp # typed snapshots and revisions
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
     src/core/control/ControlCredentials.cpp   # explicit credential identity, not TX grants
+    src/core/control/ControlPairing.cpp  # aetherd remote clients: pairing (aetherd-remote-clients.md)
+    src/core/control/VaultPairingIssuer.cpp  # aetherd remote clients: paired credentials into the vault
     src/core/control/ControlCredentialVault.cpp # OS-vault-only, explicit provisioning composition
     src/core/control/ControlCredentialProvisioner.cpp
     src/core/control/ControlInputPump.cpp     # bounded input turns and terminal authority lifetime
@@ -905,15 +909,30 @@ set(CORE_SOURCES
     src/core/discovery/RadioDiscoverySource.h  # socket-free discovery interface (AUTOMOC)
     src/core/backends/LocalRadioDiscoverySource.cpp  # native discovery below the vendor seam
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
+    src/core/backends/flex/FlexReceiveData.cpp
+    src/core/backends/flex/FlexBackend_ReceiveData.cpp
+    src/core/backends/flex/FlexDisplayStatus.cpp
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/flex/FlexRadioStatus.cpp
+    src/core/backends/flex/FlexCwControls.cpp
     src/core/backends/flex/FlexModelControls.cpp
     src/core/backends/flex/FlexSetupControls.cpp
+    src/core/backends/flex/FlexTransmitServices.cpp
+    src/core/backends/flex/FlexSetupStatus.cpp
+    src/core/backends/flex/FlexTransmitServiceStatus.cpp
+    src/core/backends/flex/FlexSessionControls.cpp
     src/core/backends/flex/FlexUtilityControls.cpp
     src/core/backends/flex/FlexStoredControls.cpp
+    src/core/backends/flex/FlexSliceStatus.cpp
+    src/core/backends/flex/FlexTransferControls.cpp
+    src/core/backends/flex/FlexCwxControls.cpp
     src/core/backends/flex/FlexWaveformEnvControls.cpp
     src/core/backends/flex/FlexNtpSourceControls.cpp
     src/core/backends/flex/FlexSliceLifecycleControls.cpp
     src/core/backends/flex/FlexPanControls.cpp
+    src/core/backends/flex/FlexAudioControls.cpp
+    src/core/backends/flex/FlexStatusIngress.cpp
+    src/core/backends/flex/FlexStatusDecoders.cpp
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
     src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
@@ -951,6 +970,7 @@ set(CORE_SOURCES
     src/core/backends/anan/AnanDroopCalibrator.cpp # live, in-app DDC0 droop calibration sweep
     src/core/backends/anan/AnanDroopDefaults.cpp   # derived per-gateware droop defaults (generated data)
     src/core/backends/anan/AnanBackend.cpp   # aetherd ANAN P2 Phase 1b (IRadioBackend impl)
+    src/core/backends/ReconnectBusyProbe.cpp # automatic reconnect never takes a busy HPSDR radio
     src/core/backends/anan/AnanSettings.cpp  # owned config object, "Anan" root key (Principle V)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
     src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
@@ -1131,6 +1151,10 @@ set(CORE_SOURCES
     src/core/TailnetShimTokenStore.cpp
     src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
     src/core/RadioHealthClient.cpp    # radio health agent readout (tools/radio-health)
+    src/core/GpsdSkyClient.cpp        # AetherGPS sky view: gpsd on the radio (tools/aether-gps)
+    src/core/AetherGpsPackage.cpp     # the bundled AetherGPS packages and their pins
+    src/core/WsprAgent.cpp            # WSPR receiver on the radio (tools/wspr-agent)
+    src/core/WsprAgentClient.cpp
     src/core/TailnetLinkTelemetry.cpp   # link telemetry from the shim, for Network Diagnostics
     src/core/WaveformUploadState.cpp
     src/core/LegacyWaveformPackage.cpp
@@ -1255,19 +1279,33 @@ if(WIN32)
 endif()
 
 set(MODEL_SOURCES
+    src/models/RadioSwrValidityFilter.cpp
     src/models/DecoderAudioModel.cpp
     src/models/Ax25ReceiveModel.cpp
+    src/models/Data2gReceiveModel.cpp
+    src/models/Data2gSessionModel.cpp
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
+    src/models/RadioModel_ReceiveData.cpp
     src/models/RadioModel.cpp
+    src/models/RadioModel_DaxTx.cpp
     src/models/RadioModel_Setup.cpp
+    src/models/RadioModel_TransmitServices.cpp
+    src/models/RadioModel_SetupObservations.cpp
+    src/models/RadioModel_SessionControls.cpp
+    src/models/RadioModel_Administration.cpp
     src/models/RadioModel_Utilities.cpp
     src/models/RadioModel_StoredControls.cpp
+    src/models/RadioModel_RadioObservations.cpp
+    src/models/RadioModel_TransferControls.cpp
     src/models/RadioModel_WaveformEnv.cpp
     src/models/RadioModel_NtpSources.cpp
     src/models/RadioModel_SliceLifecycle.cpp
+    src/models/RadioModel_SliceObservations.cpp
+    src/models/RadioModel_DisplayObservations.cpp
     src/models/RadioModel_PanControls.cpp
+    src/models/RadioModel_AudioControls.cpp
     src/models/RadioModel_TxCoordinator.cpp
     src/models/TxController.cpp
     src/models/DeclaredBands.cpp
@@ -1321,6 +1359,8 @@ set(GUI_SOURCES
     src/gui/MainWindow_Menus.cpp
     src/gui/MainWindow_Session.cpp
     src/gui/MainWindow_Shortcuts.cpp
+    src/gui/MainWindow_ControlActions.cpp
+    src/gui/ControlActionRegistry.cpp
     src/gui/MainWindow_DigitalModes.cpp
     src/gui/MainWindow_Spots.cpp
     src/gui/MainWindow_SwrSweep.cpp
@@ -1351,6 +1391,8 @@ set(GUI_SOURCES
     src/gui/map/WeatherRadarTileLayer.cpp
     src/gui/PskReporterMapDialog.cpp
     src/gui/GpsLocationDialog.cpp
+    src/gui/GpsSkyPlot.cpp
+    src/gui/AetherGpsTools.cpp
     src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
     src/gui/WfmDeviceDialog.cpp
@@ -1359,7 +1401,9 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/PanadapterMessageOverlay.cpp
     src/gui/PanadapterMessageOverlay.h
+    src/gui/StatusBarMessageOverlay.h
     src/gui/PanadapterRenderScheduler.cpp
+    src/gui/WindowRepaintScheduler.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumWidget_TimeMarkers.cpp
     src/gui/WaterfallHistoryBuffer.cpp
@@ -1388,6 +1432,7 @@ set(GUI_SOURCES
     src/gui/AprsRateGraph.cpp
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
+    src/gui/Data2gMonitorPage.cpp
     src/gui/AprsMessagesDialog.cpp
     src/gui/AprsSymbolIcons.cpp
     src/gui/FlexControlDialog.cpp
@@ -1413,6 +1458,7 @@ set(GUI_SOURCES
     src/gui/WaveformsDialog.cpp
     src/gui/WaveformEnvironmentDialog.cpp
     src/gui/TailnetShimDialog.cpp
+    src/gui/WsprConfigureWindow.cpp
     src/gui/QrCodeImage.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp
@@ -1473,7 +1519,6 @@ set(GUI_SOURCES
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/AnalogMeterFaceTheme.cpp
-    src/gui/RadioSwrValidityFilter.cpp
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
@@ -1811,6 +1856,80 @@ target_include_directories(aether_afskdemod PUBLIC
 target_compile_features(aether_afskdemod PUBLIC cxx_std_20)
 message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-later")
 
+# Data2G HF data modem core (RFC #7159). The data2g_core target's sources from
+# upstream release v0.5.0, verbatim: see third_party/data2g/README.aethersdr.md.
+# Artistic-2.0 with upstream's interface exception (LICENSE_exception), with
+# pocketfft (BSD-3-Clause) vendored by upstream.
+#
+# The flags below are upstream's and are load-bearing: the on-air format is
+# checked bit for bit against a Python reference, so no fast-math and no FMA
+# contraction. GCC's -O2 cost model leaves three hot loops scalar, hence -O3
+# on those files only (optimization never reassociates without fast-math).
+#
+# One definition is ours: POCKETFFT_NO_MULTITHREADING. pocketfft otherwise
+# starts a pool of one thread per CPU core on the first batched transform and
+# keeps it for the life of the process. Measured, the monitor decodes no
+# faster with it. PUBLIC, because pocketfft is header-only and every
+# translation unit that sees it must agree.
+#
+# aether_hfdata is the only consumer. It keeps the core's include root to
+# itself: that root has audio/, tnc/, host/ and util/ directories that would
+# shadow AetherSDR's own.
+if(ENABLE_DATA2G)
+    file(GLOB_RECURSE AETHER_DATA2G_CORE_SOURCES CONFIGURE_DEPENDS
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core/*.cpp)
+    # The core's rig bridge is a TCP socket client that only upstream's Android
+    # app uses, and upstream already leaves it out on Windows. AetherSDR
+    # leaves it out everywhere: nothing here calls it, and the vendored core
+    # stays free of network code.
+    list(FILTER AETHER_DATA2G_CORE_SOURCES EXCLUDE REGEX "/core/rig/bridged?\\.cpp$")
+    add_library(aether_data2g_core STATIC ${AETHER_DATA2G_CORE_SOURCES})
+    target_include_directories(aether_data2g_core PUBLIC
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core)
+    target_include_directories(aether_data2g_core SYSTEM PUBLIC
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/third_party/pocketfft)
+    target_compile_features(aether_data2g_core PUBLIC cxx_std_20)
+    target_compile_definitions(aether_data2g_core PUBLIC
+        DATA2G_VERSION="0.5.0"
+        POCKETFFT_NO_MULTITHREADING)
+    set_target_properties(aether_data2g_core PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        CXX_EXTENSIONS OFF)
+    if(MSVC)
+        target_compile_options(aether_data2g_core PRIVATE /fp:precise /w)
+    else()
+        target_compile_options(aether_data2g_core PRIVATE
+            -fno-fast-math -ffp-contract=off -w)
+    endif()
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core/polar/polar.cpp
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core/arq/predictor.cpp
+        ${CMAKE_SOURCE_DIR}/third_party/data2g/core/gfldpc/gfldpc.cpp
+        PROPERTIES COMPILE_OPTIONS
+        "$<$<AND:$<CXX_COMPILER_ID:GNU>,$<NOT:$<CONFIG:Debug>>>:-O3>")
+    find_package(Threads REQUIRED)
+    target_link_libraries(aether_data2g_core PUBLIC Threads::Threads)
+    if(USE_SYSTEM_ZLIB)
+        target_link_libraries(aether_data2g_core PUBLIC PkgConfig::zlib)
+    else()
+        target_link_libraries(aether_data2g_core PUBLIC zlibstatic)
+    endif()
+
+    # The AetherSDR side of the seam, Qt-free. Neither class has a radio: the
+    # session adapter only asks to key, and nothing is wired to that request yet.
+    add_library(aether_hfdata STATIC
+        src/core/hfdata/Data2gMonitor.cpp
+        src/core/hfdata/Data2gSession.cpp
+    )
+    target_include_directories(aether_hfdata PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(aether_hfdata PUBLIC cxx_std_20)
+    set_target_properties(aether_hfdata PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(aether_hfdata PRIVATE aether_data2g_core)
+    message(STATUS "Data2G: vendored core 0.5.0 (receive-only monitor), Artistic-2.0")
+else()
+    message(STATUS "Data2G: disabled (-DENABLE_DATA2G=OFF)")
+endif()
+
 # Vendored SQLite amalgamation (public domain) — the client settings store
 # (RFC #4603). Deliberately NOT Qt6::Sql: the amalgamation needs no runtime
 # driver plugin in any deployment artifact and is usable before QApplication
@@ -1899,6 +2018,12 @@ target_compile_definitions(aethercore PRIVATE
     AETHER_FIRMWARE_DEV_OVERRIDES=$<BOOL:${AETHER_FIRMWARE_DEV_OVERRIDES}>
     AETHER_UPDATE_DEV_OVERRIDES=$<BOOL:${AETHER_UPDATE_DEV_OVERRIDES}>)
 target_link_libraries(aethercore PRIVATE aether_ctr2max_reg)  # core: Ctr2MaxRegistration
+if(ENABLE_DATA2G)
+    # models: Data2gReceiveModel, Data2gSessionModel. Without it the models
+    # still build and report themselves unavailable.
+    target_link_libraries(aethercore PRIVATE aether_hfdata)
+    target_compile_definitions(aethercore PRIVATE HAVE_DATA2G)
+endif()
 
 # Desktop-only implementations kept out of libaethercore. Their public headers
 # remain temporarily in src/core while call sites migrate. A library keeps the
@@ -1933,6 +2058,7 @@ target_link_libraries(AetherSDR PRIVATE
 add_executable(aetherd
     src/aetherd/main.cpp
     src/aetherd/CredentialStartup.cpp
+    src/aetherd/GracefulStop.cpp
     src/aetherd/GrantAdminClient.cpp
 )
 target_link_libraries(aetherd PRIVATE
@@ -2754,6 +2880,7 @@ if(Qt6WebSockets_FOUND)
     target_compile_definitions(aethercore PUBLIC HAVE_WEBSOCKETS)
     target_sources(aethercore PRIVATE
         src/core/FreeDvClient.cpp
+        src/core/control/RemoteControlServer.cpp  # aetherd network listener (aetherd-remote-clients.md)
     )
     target_sources(AetherSDR PRIVATE
         src/gui/FreeDvReporterDialog.cpp
@@ -3605,7 +3732,8 @@ endif()
 
 if(HAVE_PIPEWIRE_NATIVE)
     target_compile_definitions(aethercore PUBLIC HAVE_PIPEWIRE_NATIVE)
-    target_include_directories(aethercore PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
+    # SYSTEM: the SPA headers use GNU C extensions -Wpedantic flags in C++.
+    target_include_directories(aethercore SYSTEM PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
     target_link_libraries(aethercore PRIVATE ${PIPEWIRE_NATIVE_LIBRARIES})
     target_compile_options(aethercore PRIVATE ${PIPEWIRE_NATIVE_CFLAGS_OTHER})
     message(STATUS "Linux DAX RX uses native pw_stream (libpipewire-0.3 ${PIPEWIRE_NATIVE_VERSION})")
@@ -3725,7 +3853,7 @@ include(GNUInstallDirs)
 
 if(LINUX AND NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
     # Keep pinned or non-system Qt loadable after install; explicit builder overrides win.
-    set_property(TARGET AetherSDR PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
+    set_property(TARGET AetherSDR aetherd PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
 endif()
 
 if(APPLE)
@@ -3767,6 +3895,17 @@ else()
                 DESTINATION lib/udev/rules.d
             )
         endif()
+    endif()
+    # The headless engine ships beside the app on Linux, so the AppImage (and
+    # an install made from it) can run it: `AetherSDR --aetherd [options]`.
+    # aetherd is always a target, but a build of the app alone (the x86_64
+    # AppImage builds only named targets) leaves no binary: OPTIONAL then
+    # installs without it.
+    if(LINUX)
+        install(TARGETS aetherd
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            OPTIONAL
+        )
     endif()
     if(LINUX AND HIDAPI_FOUND)
         install(FILES packaging/linux/70-aethersdr-ctr2.rules

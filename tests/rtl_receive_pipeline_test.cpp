@@ -1,6 +1,7 @@
 #include "core/backends/rtl/RtlReceivePipeline.h"
 #include "core/dsp/WdspChannel.h"
 #include "CallbackAllocationProbe.h"
+#include "RtlPipelineTestFeed.h"
 #include <QCoreApplication>
 #include <QThreadPool>
 #include <array>
@@ -488,7 +489,6 @@ static void measureSingleFmReceiver(T::Mode mode)
     std::array<double, 2> peak{}, energy{};
     std::array<std::size_t, 2> count{}, outside{}, clipped{};
     constexpr std::size_t total = 2400000;
-    const auto start = std::chrono::steady_clock::now();
     for (std::size_t first = 0; first < total;) {
         const std::size_t size = std::min(iq.size(), total - first);
         for (std::size_t i = 0; i < size; ++i) {
@@ -511,7 +511,10 @@ static void measureSingleFmReceiver(T::Mode mode)
                 clipped[stream] += std::abs(value) >= 0.999999 ? 1 : 0;
             }
         }
-        std::this_thread::sleep_until(start + std::chrono::microseconds(first * 1000000 / 2400000));
+        if (!AetherSDR::test::settleRtlDsp(*pipeline)) {
+            check(false, "offline capture waits for actual WDSP output publication");
+            break;
+        }
     }
     for (int stream = 0; stream < 2; ++stream) {
         std::printf("SINGLE_%s %s deviation=2500 tone=1000 iq_amplitude=0.3 "
@@ -548,7 +551,6 @@ static void measureSquelchPipeline()
     QVector<std::complex<float>> iq(8192);
     std::array<double, 6> tapPeak{}, speakerPeak{};
     std::array<std::size_t, 6> counts{};
-    const auto start = std::chrono::steady_clock::now();
     int phase = 0;
     constexpr std::uint64_t kPhaseSamples = 1920000; // 0.8 seconds per state
     while (first < 6 * kPhaseSamples) {
@@ -588,7 +590,10 @@ static void measureSquelchPipeline()
                 else if (packet.slot == -1) { speakerPeak[window] = std::max(speakerPeak[window], value); }
             }
         }
-        std::this_thread::sleep_until(start + std::chrono::microseconds(first * 1000000 / 2400000));
+        if (!AetherSDR::test::settleRtlDsp(*pipeline)) {
+            check(false, "offline capture waits for actual WDSP output publication");
+            break;
+        }
     }
     for (int window = 0; window < 6; ++window) {
         check(counts[window] > 8000, "squelch phase contains settled tap samples");
@@ -647,7 +652,10 @@ static void measureParkAndResume()
                 observed = true;
             }
             (void)pipeline->service(); // owner timer reaps banks outside the sample callback
-            std::this_thread::sleep_for(3ms);
+            if (!AetherSDR::test::settleRtlDsp(*pipeline)) {
+                check(false, "offline capture waits for actual WDSP output publication");
+                break;
+            }
         }
         check(observed == expectAudio,
               "only a captured receiver emits slice or speaker PCM");
@@ -715,7 +723,10 @@ static void trackingNotchCallbackAllocations()
             inCallback = false;
             check(accepted, "notched sideband callback accepts acquisition");
             first += iq.size();
-            std::this_thread::sleep_for(6ms);
+            if (!AetherSDR::test::settleRtlDsp(*pipeline)) {
+                check(false, "offline capture waits for actual WDSP output publication");
+                break;
+            }
         }
         check(sawSlice && !pipeline->needsRepair(), "tracking-notch bank produces current independent PCM");
         check(callbackAllocations == allocationsBefore,
@@ -870,7 +881,6 @@ int main(int argc, char** argv)
     std::uint64_t speakerNext = 0;
     Pipeline::Packet packet;
     (void)WdspChannel::threadAllocationSequenceForTest(); // materialize the core WDSP's TLS before measurement
-    const auto start = std::chrono::steady_clock::now();
     for (std::size_t first = 0; first < total;) {
         const std::size_t size = std::min<std::size_t>(8192, total - first);
         inCallback = true;
@@ -891,9 +901,12 @@ int main(int argc, char** argv)
                 for (std::size_t i = 0; i < packet.frames; ++i) { audio[id].push_back(packet.samples[2 * i]); }
             }
         }
-        std::this_thread::sleep_until(start + std::chrono::microseconds(first * 1000000 / 2400000));
+        if (!AetherSDR::test::settleRtlDsp(*pipeline)) {
+            check(false, "offline capture waits for actual WDSP output publication");
+            break;
+        }
     }
-    check(!pipeline->needsRepair() && pipeline->droppedPackets() == 0, "paced whole pipeline has no withdrawal or queue drop");
+    check(!pipeline->needsRepair() && pipeline->droppedPackets() == 0, "DSP-acknowledged whole pipeline has no withdrawal or queue drop");
     for (int id = 0; id < 4; ++id) {
         const double selected = magnitude(audio[id], tones[id]);
         double peak = 0.0;

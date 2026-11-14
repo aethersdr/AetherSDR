@@ -42,6 +42,56 @@ public:
 class AetherLabWidgetTest final : public QObject {
     Q_OBJECT
 private slots:
+    void stickSelectionLimitsAndExperimentalStatus()
+    {
+        AntennaAnalyzerModel model;
+        auto* input = new WindowInput(&model);
+        model.setUsbBackend([] {
+            return QList<RigExpertUsbDevice>{{"230", "423012345", "RigExpert"},
+                {"500", "450112345", "RigExpert"}, {"pro", "460012345", "RigExpert"},
+                {"xpro", "499812345", "RigExpert"}};
+        }, [input](QObject*) { return input; });
+        AetherLabWidget window(&model);
+        window.resize(1200, 900);
+        window.show();
+        auto* devices = window.findChild<QComboBox*>("aetherLabDevice");
+        auto* start = window.findChild<QDoubleSpinBox*>("aetherLabStartMHz");
+        auto* stop = window.findChild<QDoubleSpinBox*>("aetherLabStopMHz");
+        auto* support = window.findChild<QLabel*>("aetherLabModelSupport");
+        QVERIFY(devices && start && stop && support);
+        QVERIFY(support->text().contains("Stick 230, Stick 500, Stick XPro: Experimental"));
+        QVERIFY(model.refreshDevices());
+        QTRY_COMPARE(devices->count(), 4);
+        const QList<double> maxima{230.0, 500.0, 600.0, 1000.0};
+        for (int i = 0; i < devices->count(); ++i) {
+            devices->setCurrentIndex(i);
+            QCOMPARE(start->minimum(), 0.1);
+            QCOMPARE(start->maximum(), maxima.at(i));
+            QCOMPARE(stop->maximum(), maxima.at(i));
+            QCOMPARE(support->text().contains("Experimental"), i != 2);
+            QCOMPARE(devices->itemText(i).contains("Experimental"), i != 2);
+            QVERIFY(stop->accessibleDescription().contains(QString::number(maxima.at(i))));
+        }
+        stop->setValue(1000.0);
+        devices->setCurrentIndex(0);
+        QCOMPARE(stop->value(), 230.0);
+        // A bridge connection can target a different index from the preview.
+        QVERIFY(model.connectDevice(3));
+        input->feed("Stick XPro 123\r\n");
+        AntennaAnalyzerModelTestAccess::settled(model);
+        QTRY_VERIFY(support->text().contains("Stick XPro · 0.1–1000 MHz · Experimental"));
+        QTRY_VERIFY(!devices->isEnabled());
+        QCOMPARE(devices->currentIndex(), 3);
+        QVERIFY(support->text().contains("hardware testing pending"));
+        QAccessibleInterface* accessible = QAccessible::queryAccessibleInterface(support);
+        QVERIFY(accessible);
+        QCOMPARE(accessible->text(QAccessible::Name), support->text());
+        // Programmatic combo changes during a session cannot change its bounds.
+        devices->setCurrentIndex(0);
+        QCOMPARE(devices->currentIndex(), 3);
+        QCOMPARE(stop->maximum(), 1000.0);
+        model.disconnectDevice();
+    }
     void measuredMarkerAndClose()
     {
         AntennaAnalyzerModel model;

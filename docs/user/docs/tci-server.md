@@ -19,9 +19,9 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | Spots | Separate DX cluster connection | Same WebSocket |
 | CW keying | Serial DTR/RTS or rigctld | Same WebSocket |
 
-<img src="/img/screens/tci-applet.png" width="248" alt="TCI Server applet. Level bars for RX1, assigned to Slice A, RX2 to RX4, unassigned, and TX, assigned to Slice A, sit above the port field set to 50001, marked stopped, and a Disabled button that starts the server." />
+<img src="/img/screens/tci-applet.png" width="248" alt="TCI Server applet with RX1 and TX level meters, unchecked Include TX (Line Out) and Line Out with PC Audio off controls, a visible mutes radio outputs warning, port 50001, and a Disabled button." />
 
-*The TCI Server applet in the applet panel.*
+*The TCI Server applet with separate Line Out TX inclusion and PC Audio-off consent controls.*
 
 ## Setup
 
@@ -36,6 +36,8 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 |---|---|
 | **RX1 … RX8** | One row per receive channel: the slice it carries, a logarithmic output level meter and a 0-100% receive gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
+| **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
+| **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -97,6 +99,17 @@ Use a WSJT-X build with TCI support (WSJT-X Improved, or WSJT-X 3.x).
 
 WSJT-X takes CAT, PTT **and audio** over TCI, so there are no sound-card devices to set up. WSJT-X's **Pwr** slider attenuates the transmitted audio. See [WSJT-X Integration](./wsjt-x-integration.md).
 
+On FlexRadio, the first TCI audio transmission can create AetherSDR's DAX TX
+stream when none exists. AetherSDR waits for both the creation reply and radio
+status confirming that its stream is selected before continuing the original
+request. A refused, cancelled or timed-out request cannot resume later. If the
+stream already exists but is not selected, select it with **TX stream** in
+**DAX Audio** while the radio is idle, then initiate a new transmission.
+
+On a slow link, such as SmartLink, that first transmission can time out in
+WSJT-X or JTDX, which wait one second for the `trx` reply. Key again; the
+stream now exists.
+
 ### MSHV
 
 **Settings → Interface**, select **TCI**, enter `localhost` and port `50001`, and enable audio streaming if wanted.
@@ -136,6 +149,7 @@ Several TCI programs can be connected at once, and each keys the slice it asked 
 - An externally selected TX slice only wins when split was requested, or when VFO B set up a route for that exact receiver, so satellite and cross-band split still work.
 - A receiver that cannot be resolved is **declined**, never keyed on slice A instead.
 - **Every refused PTT is answered with `trx:<n>,false;`**, including a second client trying to key while another holds TCI PTT. WSJT-X shows this as "TCI failed to set ptt".
+- After a refusal, a new request uses its own microphone or transmit-audio source. On FlexRadio, a TCI transmit-audio request also requires AetherSDR’s **TX stream** to be **Selected** in **DAX Audio** (see [DAX Virtual Audio](./dax-virtual-audio.md#the-dax-audio-applet)).
 - **Receiver numbers are stable.** If a slice closes mid-session, the other slices keep their receiver numbers, and the freed number goes to the next new slice.
 - A VFO B request from one client does not retune another client's slice.
 
@@ -175,6 +189,45 @@ The RX meter shows the **post-gain output** on a logarithmic **-60 to 0 dBFS RMS
 
 The meter measures RMS, not peaks, so leave headroom for speech transients when adjusting recording levels in an external application. A larger logarithmic meter indication does not mean the stream has been amplified.
 
+### Line Out recording
+
+Clients start and stop a separate stereo mix with `line_out_start:<receiver>;`
+and `line_out_stop:<receiver>;`. It uses TCI stream type **4**, fixed at
+**48 kHz stereo float32**, independently of ordinary RX format negotiation.
+The receiver number labels the subscription; its content is the same complete
+playback mix, not that receiver alone. RX and Line Out can run together.
+
+**PC Audio is optional.** When PC Audio is off and the separate default-off
+**Line Out with PC Audio off** consent is disabled, the subscription remains
+active but no Line Out type-4 frames are sent; it does not transmit encoded
+silence. Enable the consent setting to allow the radio audio stream to stay
+open; while a TCI client records, this mutes the radio speaker, headphone and
+line-out outputs. With PC Audio on, Line Out keeps the incoming radio audio and
+software mixer running without opening an additional playback device. It records
+the final shared stereo mix, including the open slices' existing volume, pan and
+mute, client-side RX DSP, and other sources in that mix. PC playback master
+volume and mute do not affect the recording, including when PC Audio is off.
+The TCI RX, TX and MIC faders do not add another recording gain to Line Out.
+It does not record other applications or separate local cue/sidetone devices.
+
+**Include TX (Line Out)** is off by default. When off, Line Out sends silence
+throughout radio TX, including any simultaneous RX: TX monitor and RX cannot be
+separated after mixing. When on, it records the existing playback mix during TX
+without adding a separate TX source. On FlexRadio, enable MON yourself to hear
+and record radio-side TX monitor audio. Subscribing never changes MON, radio
+input routing or transmitter state.
+
+Switching PC Audio on or off does not stop an active Line Out subscription.
+When PC Audio is turned off without consent, the subscription remains active
+but sends no type-4 frames until PC Audio is restored or consent is enabled.
+Withdrawing consent while PC Audio is off also stops type-4 delivery without
+removing the subscription. The radio audio stream is released after the last
+Line Out listener stops unless PC playback still needs it; consent alone does
+not keep the stream open.
+Server-side `line_out_recorder_*` file recording is not implemented.
+Live TX, MON and multi-client recording qualification remain outstanding
+([#6410](https://github.com/aethersdr/AetherSDR/issues/6410)).
+
 ### TX overflow handling
 
 Right-click the **TX** meter in the TCI Server applet to choose how transmit samples beyond ±1.0 are treated:
@@ -205,7 +258,7 @@ AetherSDR implements the TCI 2.0 command set, including:
 | Audio | `volume`, `mute`, `rx_volume`, `rx_mute`, `rx_balance`, `mon_enable`, `mon_volume`, `mic_level` |
 | AGC / SQL | `agc_mode`, `agc_gain`, `sql_enable`, `sql_level`, `lock` |
 | DSP | `rx_nb_enable/param`, `rx_nr_enable`, `rx_anf_enable`, `rx_apf_enable`, `rx_bin_enable`, `rx_anc_enable`, `rx_dse_enable`, `rx_nf_enable` |
-| CW | `cw_macros_speed`, `cw_keyer_speed`, `cw_macros_delay`, `cw_msg`, `cw_macros`, `cw_macros_stop`, `cw_terminal`, `keyer` |
+| CW | `cw_macros_speed`, `cw_keyer_speed`, `cw_msg`, `cw_macros`, `cw_macros_stop`, `cw_terminal`, `keyer` |
 | Audio streaming | `audio_start/stop`, `audio_samplerate`, `audio_stream_sample_type`, `audio_stream_channels`, `audio_stream_samples` |
 | IQ | `iq_start/stop`, `iq_samplerate` |
 | Spots | `spot`, `spot_delete`, `spot_clear`, `clicked_on_spot` |
@@ -214,6 +267,9 @@ AetherSDR implements the TCI 2.0 command set, including:
 
 Notes:
 
+- `cw_macros_delay` is unsupported and produces no value or confirmation. It
+  specifies a delay before transmission; the radio's CW break-in delay is a
+  different setting and is unaffected.
 - `rx_ctun_ex:<trx>,<bool>;` is accepted as a Thetis extension. It switches center lock on that receiver's slice, inverted: `true` (click-tune on) turns center lock off, `false` turns it on. TCI Remote sends `rx_ctun_ex:0,true;` on connect.
 - `volume` is in dB, as the spec defines it; the older percent form is still accepted. It is the same master level as the title-bar slider: the computer's level with PC Audio on, the radio's Line Out level with it off. `mic_level` is a global 0–100 %.
 - `sql_level` is a threshold in dB, −140 to 0, as the spec defines it. A positive value (the 0–100 level older builds took) is ignored. −140 dB, or any value at or below what the lowest level is reported as, opens the squelch fully. The slice stores a 0–100 level, so the reply states the threshold that level really gives: on a Flex the top of the scale is −60 dB, and any higher value is answered as −60.
@@ -248,6 +304,13 @@ rx_channel_sensors:0,0,-97.3;
 ```
 
 TX sensors broadcast during transmit, including ALC.
+
+The SWR field is the same trusted SWR the S-meter shows. A reading taken
+without measurable forward power, for example in a speech pause, does not
+replace it: the last reading taken under carrier is held. A worse SWR under
+carrier is reported at once. When the radio unkeys, the held value is cleared,
+so the next transmission starts again from 1.0. A persistent below-unity
+reading from the radio, which means it cannot measure SWR, is reported as 10.0.
 
 ### CW keying
 

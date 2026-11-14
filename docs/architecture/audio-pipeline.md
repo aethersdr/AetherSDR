@@ -214,6 +214,13 @@ RADE decoded speech is logically mono duplicated to stereo before that point.
   `queueKiwiAudioData()` also enforce producer-side limits, and
   `setReceivePresentationDelays()` trims queued audio when delays decrease.
   Producer-side caps also bound backlog when the speaker drain is stopped.
+  Main-source trimming runs synchronously on the engine thread under the DSP
+  mutex. Lowering a presentation delay can process the entire held backlog;
+  20 ms bounds each input block, not the total time spent processing it.
+  Presentation feeds, ASR, Receive Sync, scopes and level/EQ taps observe that
+  processed audio before the speaker-output cut, including audio the speaker
+  will not play. The quiet-point search can retain up to 6 ms less than the
+  requested queue cap.
 - The speaker drain timer runs every 10 ms, writes only full float32 samples, and
   respects `QAudioSink::bytesFree()`.
 - If decoded RADE speech is pending, the speaker timer mixes `m_radeRxBuffer`

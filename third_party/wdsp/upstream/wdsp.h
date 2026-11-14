@@ -103,6 +103,85 @@ typedef float  dOUTREAL;
 #define dMAX_M     1
 #endif
 
+/*  ---- enumerations -------------------------------------------------
+
+	Lifted verbatim from the headers that define them, comments and
+	all.  They are declared here so a console does not have to
+	include a WDSP internal header to name a mode or a meter.     */
+
+/*  from RXA.h  */
+enum rxaMeterType
+{
+	RXA_S_PK,
+	RXA_S_AV,
+	RXA_ADC_PK,
+	RXA_ADC_AV,
+	RXA_AGC_GAIN,
+	RXA_AGC_PK,
+	RXA_AGC_AV,
+	RXA_METERTYPE_LAST
+};
+
+/*  from RXA.h  */
+enum rxaMode
+{
+	RXA_LSB,
+	RXA_USB,
+	RXA_DSB,
+	RXA_CWL,
+	RXA_CWU,
+	RXA_FM,
+	RXA_AM,
+	RXA_DIGU,
+	RXA_SPEC,
+	RXA_DIGL,
+	RXA_SAM,
+	RXA_DRM,
+	RXA_WBFM = 12
+};
+
+/*  from TXA.h  */
+enum txaMeterType
+{
+	TXA_MIC_PK,
+	TXA_MIC_AV,
+	TXA_EQ_PK,
+	TXA_EQ_AV,
+	TXA_LVLR_PK,
+	TXA_LVLR_AV,
+	TXA_LVLR_GAIN,
+	TXA_CFC_PK,
+	TXA_CFC_AV,
+	TXA_CFC_GAIN,
+	TXA_COMP_PK,
+	TXA_COMP_AV,
+	TXA_ALC_PK,
+	TXA_ALC_AV,
+	TXA_ALC_GAIN,
+	TXA_OUT_PK,
+	TXA_OUT_AV,
+	TXA_METERTYPE_LAST
+};
+
+/*  from TXA.h  */
+enum txaMode
+{
+	TXA_LSB,
+	TXA_USB,
+	TXA_DSB,
+	TXA_CWL,
+	TXA_CWU,
+	TXA_FM,
+	TXA_AM,
+	TXA_DIGU,
+	TXA_SPEC,
+	TXA_DIGL,
+	TXA_SAM,
+	TXA_DRM,
+	TXA_AM_LSB,
+	TXA_AM_USB
+};
+
 /*  A Windows DWORD is 32-bit.  `unsigned long` is 32-bit on Windows
 	but 64-bit on Linux, so the obvious substitution would change
 	the ABI.  Use a fixed width instead.                          */
@@ -471,6 +550,7 @@ WDSP_API void SetRXAPreGenSweepRate (int channel, double rate);
 WDSP_API void SetRXAPreGenToneFreq (int channel, double freq);
 WDSP_API void SetRXAPreGenToneMag (int channel, double mag);
 WDSP_API void SetTXAPostGenMode (int channel, int mode);
+WDSP_API void SetTXAPostGenNoiseMag (int channel, double mag);
 WDSP_API void SetTXAPostGenPulseDutyCycle (int channel, double dc);
 WDSP_API void SetTXAPostGenPulseFreq (int channel, double freq);
 WDSP_API void SetTXAPostGenPulseIQout (int channel, int IQout);

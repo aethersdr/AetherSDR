@@ -14,8 +14,6 @@
 namespace AetherSDR {
 namespace {
 Q_LOGGING_CATEGORY(lcAetherLab, "aether.lab")
-constexpr qint64 kMinHz = 100000;
-constexpr qint64 kMaxHz = 600000000;
 constexpr int kMaxIntervals = 1000; // host PoC cap, not a firmware limit
 constexpr int kAckTimeoutMs = 3000;
 constexpr int kSampleTimeoutMs = 15000;
@@ -30,6 +28,13 @@ QJsonObject errorResult(const QString& message)
 QJsonValue finiteValue(double value)
 {
     return std::isfinite(value) ? QJsonValue(value) : QJsonValue(QJsonValue::Null);
+}
+QJsonObject modelMetadata(const RigExpertModelInfo& model)
+{
+    return {{QStringLiteral("model"), model.name},
+        {QStringLiteral("experimental"), model.experimental},
+        {QStringLiteral("minFrequencyHz"), model.minHz},
+        {QStringLiteral("maxFrequencyHz"), model.maxHz}};
 }
 } // namespace
 
@@ -85,11 +90,14 @@ bool AntennaAnalyzerModel::connectDevice(int index)
 {
     if (m_port) { return reject(QStringLiteral("Instrument session is already open or closing")); }
     if (!m_factory || index < 0 || index >= m_devices.size()) {
-        return reject(QStringLiteral("Select a discovered Stick Pro USB interface"));
+        return reject(QStringLiteral("Select a discovered RigExpert Stick USB interface"));
     }
+    const RigExpertModelInfo model = RigExpertHidTransport::modelForSerial(m_devices.at(index).serial);
+    if (model.name.isEmpty()) { return reject(QStringLiteral("Unsupported RigExpert USB model")); }
     m_port = m_factory(this);
     if (!m_port) { return reject(QStringLiteral("Cannot create USB transport")); }
     m_selected = m_devices.at(index);
+    m_model = model;
     m_samples = {};
     m_startHz = 0;
     m_stopHz = 0;
@@ -191,7 +199,7 @@ void AntennaAnalyzerModel::receive(const QByteArray& report)
         entry.insert(QStringLiteral("payloadBytesUsed"), 62);
         m_trace[m_trace.size() - 1] = entry;
         if (m_identityLengthQuirkReports == 1) {
-            qCWarning(lcAetherLab) << "Stick Pro FULLINFO length 63 bounded to 62 received bytes";
+            qCWarning(lcAetherLab) << "RigExpert Stick FULLINFO length 63 bounded to 62 received bytes";
         }
     }
     m_pending.append(report.mid(2, qMin(declared, static_cast<int>(report.size()) - 2)));
@@ -214,20 +222,27 @@ void AntennaAnalyzerModel::receive(const QByteArray& report)
 
 void AntennaAnalyzerModel::lineReceived(const QByteArray& line)
 {
-    if (line == "ERROR-20") {
+    if (line == "ERROR-20" && m_model.name == QLatin1String("Stick Pro")) {
         finish(State::Error, QStringLiteral("Stick Pro returned ERROR-20. Stop front-panel measurement and return to the main menu, then reconnect."));
         return;
     }
-    if (line == "ERROR") { finish(State::Error, QStringLiteral("Stick Pro returned ERROR")); return; }
+    if (line == "ERROR" || line == "ERROR-20") {
+        finish(State::Error, QStringLiteral("%1 returned %2").arg(m_model.name, QString::fromLatin1(line)));
+        return;
+    }
     if (m_state == State::Identifying) {
         // Identification is bounded by inactivity; FULLINFO is capped at 32 lines below.
         m_deadline.start(kAckTimeoutMs);
         if (m_info.size() < 32) { m_info.append(QString::fromLatin1(line)); }
-        static const QRegularExpression identity(QStringLiteral("^Stick Pro\\s+[^\\s]+(?:\\s+.*)?$"),
-                                                  QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpression identity(QStringLiteral("^%1\\s+[^\\s]+(?:\\s+.*)?$")
+            .arg(QRegularExpression::escape(m_model.name)), QRegularExpression::CaseInsensitiveOption);
         if (identity.match(QString::fromLatin1(line)).hasMatch() && m_identity.isEmpty()) {
             m_identity = QString::fromLatin1(line);
             sendCommand("FULLINFO\r\n");
+        } else if (QString::fromLatin1(line).startsWith(QLatin1String("Stick "), Qt::CaseInsensitive)
+                   && !identity.match(QString::fromLatin1(line)).hasMatch()) {
+            finish(State::Error, QStringLiteral("Analyzer identity does not match the selected USB model (%1)").arg(m_model.name));
+            return;
         }
         if (!m_identity.isEmpty()) { m_identityQuiet.start(); }
         return;
@@ -265,7 +280,7 @@ void AntennaAnalyzerModel::lineReceived(const QByteArray& line)
     const qint64 hz = static_cast<qint64>(sample.value(QStringLiteral("frequencyHz")).toDouble());
     const qint64 previous = m_samples.isEmpty() ? m_startHz - 1
         : static_cast<qint64>(m_samples.last().toObject().value(QStringLiteral("frequencyHz")).toDouble());
-    if (hz < m_startHz || hz > m_stopHz || hz <= previous
+    if (hz < m_model.minHz || hz > m_model.maxHz || hz < m_startHz || hz > m_stopHz || hz <= previous
         || (m_samples.isEmpty() && hz != m_startHz)) {
         finish(State::Error, QStringLiteral("Unexpected sweep frequency or ordering; retain trace for qualification")); return;
     }
@@ -282,11 +297,12 @@ void AntennaAnalyzerModel::lineReceived(const QByteArray& line)
 bool AntennaAnalyzerModel::sweep(qint64 startHz, qint64 stopHz, int intervals, bool rfIsolated)
 {
     if (!rfIsolated) { return reject(QStringLiteral("Confirm that the analyzer RF port is isolated from transmitters")); }
-    if (m_state != State::Ready || !m_port) { return reject(QStringLiteral("Connect and identify the Stick Pro before sweeping")); }
-    if (startHz < kMinHz || stopHz > kMaxHz || startHz >= stopHz
+    if (m_state != State::Ready || !m_port) { return reject(QStringLiteral("Connect and identify the RigExpert Stick before sweeping")); }
+    if (startHz < m_model.minHz || stopHz > m_model.maxHz || startHz >= stopHz
         || ((stopHz - startHz) % 2) != 0 || intervals < 1 || intervals > kMaxIntervals
         || stopHz - startHz < intervals) {
-        return reject(QStringLiteral("Use 100 kHz–600 MHz, an even positive span, and 1–1000 FRX intervals"));
+        return reject(QStringLiteral("%1: use %2–%3 MHz, an even positive span, and 1–1000 FRX intervals")
+            .arg(m_model.name).arg(m_model.minHz / 1e6).arg(m_model.maxHz / 1e6));
     }
     m_error.clear();
     m_samples = {};
@@ -331,7 +347,7 @@ void AntennaAnalyzerModel::deadlineExpired()
         m_port = nullptr;
         m_pending.clear();
         m_state = State::Error;
-        m_error = QStringLiteral("Stick Pro did not confirm USB close; RF-off unconfirmed");
+        m_error = QStringLiteral("Analyzer did not confirm USB close; RF-off unconfirmed");
         qCWarning(lcAetherLab).noquote() << m_error;
         emit changed();
         return;
@@ -370,7 +386,13 @@ QJsonObject AntennaAnalyzerModel::impedanceSample(const QByteArray& line)
         if (!ok || !std::isfinite(values[i])) { return {}; }
     }
     const double hz = values[0] * 1e6;
-    if (!std::isfinite(hz) || hz < kMinHz || hz > kMaxHz) { return {}; }
+    // This stateless math/parser helper accepts the family envelope. Acquisition
+    // additionally checks the selected model and the explicitly requested span.
+    bool inFamilyRange = false;
+    for (const RigExpertModelInfo& model : RigExpertHidTransport::models()) {
+        if (hz >= model.minHz && hz <= model.maxHz) { inFamilyRange = true; break; }
+    }
+    if (!std::isfinite(hz) || !inFamilyRange) { return {}; }
     const std::complex<double> z(values[1], values[2]);
     const std::complex<double> gamma = (z - 50.0) / (z + 50.0);
     const double rho = std::abs(gamma);
@@ -408,16 +430,25 @@ QJsonObject AntennaAnalyzerModel::impedanceSample(const QByteArray& line)
 
 QJsonObject AntennaAnalyzerModel::snapshot() const
 {
+    QJsonArray supportedModels;
+    for (const RigExpertModelInfo& model : RigExpertHidTransport::models()) {
+        supportedModels.append(modelMetadata(model));
+    }
     QJsonArray devices;
     for (qsizetype i = 0; i < m_devices.size(); ++i) {
         const RigExpertUsbDevice& device = m_devices.at(i);
-        devices.append(QJsonObject{{QStringLiteral("index"), i}, {QStringLiteral("serial"), device.serial},
-            {QStringLiteral("product"), device.product}, {QStringLiteral("path"), device.path}});
+        QJsonObject entry = modelMetadata(RigExpertHidTransport::modelForSerial(device.serial));
+        entry.insert(QStringLiteral("index"), i);
+        entry.insert(QStringLiteral("serial"), device.serial);
+        entry.insert(QStringLiteral("product"), device.product);
+        entry.insert(QStringLiteral("path"), device.path);
+        devices.append(entry);
     }
-    return {{QStringLiteral("ok"), true}, {QStringLiteral("state"), stateText()},
+    QJsonObject result{{QStringLiteral("ok"), true}, {QStringLiteral("state"), stateText()},
         {QStringLiteral("usbAvailable"), static_cast<bool>(m_factory)},
         {QStringLiteral("generation"), static_cast<qint64>(m_generation)},
         {QStringLiteral("identity"), m_identity}, {QStringLiteral("serial"), m_selected.serial},
+        {QStringLiteral("path"), m_selected.path},
         {QStringLiteral("identityLengthQuirkReports"), m_identityLengthQuirkReports},
         {QStringLiteral("fullInfoLines"), m_info}, {QStringLiteral("error"), m_error},
         {QStringLiteral("devices"), devices}, {QStringLiteral("samples"), m_samples},
@@ -428,6 +459,11 @@ QJsonObject AntennaAnalyzerModel::snapshot() const
         {QStringLiteral("completionEvidence"), QStringLiteral("host-count-and-endpoints")},
         {QStringLiteral("countQualifiedOnHardware"), false},
         {QStringLiteral("rfOffConfirmed"), false}, {QStringLiteral("stationTxInterlock"), false}};
+    const QJsonObject metadata = modelMetadata(m_model);
+    for (auto it = metadata.begin(); it != metadata.end(); ++it) { result.insert(it.key(), it.value()); }
+    result.insert(QStringLiteral("identityVerified"), !m_identity.isEmpty());
+    result.insert(QStringLiteral("supportedModels"), supportedModels);
+    return result;
 }
 
 QJsonObject AntennaAnalyzerModel::automation(const QString& action, const QString& value)

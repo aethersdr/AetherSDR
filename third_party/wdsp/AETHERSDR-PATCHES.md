@@ -1,7 +1,7 @@
-# AetherSDR patches to WDSP 2.10
+# AetherSDR patches to WDSP 2.11
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
-`b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
+`e69de50d1d702216098019013899ad87534c64e0` (`Release Version 2.11 (NNR model 1)`).
 AetherSDR carries the local changes documented below in the otherwise exact
 `Source/*.[ch]` snapshot:
 
@@ -9,28 +9,9 @@ AetherSDR carries the local changes documented below in the otherwise exact
    its member allocations.
 2. `upstream/nurbs.c`: `destroy_nurbs()` now frees the `nurbs` object after its
    member allocations.
-3. `upstream/fmd.c` (`SetRXAFMNCde`) and `upstream/emph.c`
-   (`SetTXAFMEmphNC`): `a->pfcimp = build_fcimp (...)`. Both functions tear
-   down the filter-curve object and then rebuild it, but 2.10 discards the
-   pointer `build_fcimp()` returns, so `a->pfcimp` still holds the address of
-   the object `teardown_fcimp()` just freed. The two statements that follow —
-   `exec_fcimp()` and `get_pfcpulse()` — then read and write through it, and
-   the newly built object leaks.
-
-   This is a **use-after-free on a live path, not a teardown-only leak**:
-   `RXASetNC()` calls `SetRXAFMNCde()`, and `WdspChannel::open()` calls
-   `RXASetNC()`, so every channel this host opens hits it. ASan reports it as
-   a 4-byte read of freed memory in `exec_fcimp` (`fcurve.c:67`). It is new in
-   2.10 — 2.00's `SetRXAFMNCde()` used `fc_impulse()` and owned the impulse
-   buffer directly, so the object-lifetime mistake did not exist to make.
-
-   `SetTXAFMEmphNC()` is the same mistake in the TX chain. This host does not
-   currently call it, and it is fixed anyway: it is one line, it is the same
-   refactor, and a known use-after-free left in a vendored tree is a trap for
-   whoever calls it next.
-
-   Reported upstream as TAPR/OpenHPSDR-wdsp#2; drop both lines when a release
-   contains the assignment.
+3. Retired: upstream since 2.11. `SetRXAFMNCde()` (`fmd.c`) and
+   `SetTXAFMEmphNC()` (`emph.c`) now keep the pointer `build_fcimp()` returns
+   (TAPR/OpenHPSDR-wdsp#2), so both files are pristine.
 4. `upstream/channel.h`, `upstream/channel.c`, `upstream/main.c`,
    `upstream/iobuffs.c`, `upstream/iobuffs.h`: an exit handshake between the DSP worker and
    `pre_main_destroy()`. Upstream's only barrier between the detached worker's
@@ -128,26 +109,8 @@ AetherSDR carries the local changes documented below in the otherwise exact
    constructor argument, so the accessor is the setter that argument implies.
    Drop any function a future release provides itself.
 
-6. `upstream/nnet.c`: `setAlpha_nnet()` and `setKnee_nnet()` now check `n->df`
-   before writing through it.
-
-   They are the only two of the six NNET tuning setters without that guard —
-   `setSmooth_nnet()` checks `if (n->df)`, `setMaxGain_nnet()` and
-   `setFloor_nnet()` check `if (n->ready)`, `setTau_nnet()` checks `if (n->cnd)`.
-   A slot whose model fails to build never reaches `create_dfhead()`, so `df`
-   stays NULL from `malloc0`, and `calc_nnr()` stores slot 0 unconditionally
-   (unlike slots 1+, which it validates with `ok_nnet()`).
-
-   **Reachable in a shipping configuration, and reproduced:** a well-formed
-   model with different dimensions, named `wdsp_nnr_0.bin` in the process's
-   working directory, is loaded in preference to the built-in (RFC #5684 §8
-   keeps that lookup). WDSP's designed response is to pass audio through — and
-   then the first `setAlpha`/`setKnee` write dereferences NULL. Confirmed as
-   SIGSEGV against an unpatched build; exits cleanly with the guard.
-
-   Latent upstream too, via `SetRXANNRAlpha`/`SetRXANNRAlphaKnee`, for any
-   console that offers those controls. Reported as TAPR/OpenHPSDR-wdsp#4 with
-   a fix in TAPR/OpenHPSDR-wdsp#5; drop this when a release carries the guard.
+6. Retired: upstream since 2.11. `setAlpha_nnet()` and `setKnee_nnet()` now
+   check `n->df` themselves (TAPR/OpenHPSDR-wdsp#4), so `nnet.c` is pristine.
 
 7. `upstream/channel.c`: `SetChannelState()` case 1 now cancels a pending
    down-ramp (`flush_slews()` under `csEXCH`) before it arms the up-ramp.
@@ -529,21 +492,16 @@ AetherSDR carries the local changes documented below in the otherwise exact
     decline to carry. Drop it if upstream makes the construction conditional
     itself; drop it if this tree ever sets `Config::minimumPhase` true on every
     path, since the workspace would then be wanted everywhere and the laziness
-    would buy nothing. **Not reported upstream yet** -- unlike patch 3, which is
-    TAPR/OpenHPSDR-wdsp#2, this one has no upstream issue behind it.
+    would buy nothing. **Not reported upstream yet**: there is no upstream issue
+    behind it.
 
 Without the first two, opening and closing one RX channel leaks one `notchdb`
 object and two NURBS objects. `wdsp_channel_test` detects that deterministically.
-Without the third, every channel open reads and writes freed memory; ASan fails
-`wdsp_channel_test` immediately.
 Without the fourth, every channel close is a use-after-free race on the
 worker thread; `wdsp_channel_test` and the HL2 backend tests show it under
 ThreadSanitizer.
 Without the fifth, the only NNR setting a host outside an RXA channel can
 change is the model slot.
-Without the sixth, `nnr_controls_test`'s scenario segfaults: a model file with
-the wrong dimensions in the working directory leaves slot 0 not-ready, and the
-first alpha or knee write goes through a null `df`.
 Without the seventh, a stop immediately followed by a start — before the host has
 clocked the down-ramp out — silently and permanently disables the channel;
 `wdsp_channel_test` shows it deterministically.
@@ -555,7 +513,7 @@ RXA chain under a live `flushChannel` thread; `wdsp_channel_test` crashes.
 
 The tenth changes no filter output: at `mp == 0` the removed object was never
 read, and at `mp == 1` the same workspace is built, one call later. It is the
-only one of the ten that makes a pointer legitimately null, so the risk it
+only one of these that makes a pointer legitimately null, so the risk it
 carries is a null dereference in `mp_imp_exec()` or a double teardown in
 `deplan_fircore()`, not a leak. `wdsp_channel_test`'s new
 `runMinimumPhaseWorkspaceTest` is the cover: it is the first test in this tree
@@ -565,10 +523,10 @@ ASan build of the vendored library alone, cycling `open` / `RXASetNC` /
 `RXASetMP(1)` / `RXASetNC` / `RXASetMP(0)` / `close` twice plus a TX open,
 reported nothing on macOS arm64.
 
-**Marking convention.** Patches 4, 7, 8 and 9 carry `// AetherSDR patch N:` comments
-at every edited site, so `grep -rn "AetherSDR patch" third_party/wdsp/` finds
-them all. Patches 1-3 carry no marker — 1 and 2 are single added `_aligned_free`
-lines and 3 is a single added assignment — and are findable only from this file.
+**Marking convention.** Patches 4, 7, 8, 9 and 23 carry `// AetherSDR patch N:`
+comments at every edited site, so `grep -rn "AetherSDR patch" third_party/wdsp/`
+finds them all. Patches 1 and 2 carry no marker — each is a single added
+`_aligned_free` line — and are findable only from this file.
 New patches use the marker.
  Patch 10 is the exception: its sites are marked `// AetherSDR:` with no
 number, so the grep above does not find them; it is findable from this file
@@ -579,23 +537,22 @@ itself. They are different shapes, so grep for the shape, not for a free:
 
 - **patches 1-2** -- a trailing `_aligned_free()` of the object itself at the
   end of `destroy_notchdb()` / `destroy_nurbs()`.
-- **patch 3** -- the `a->pfcimp = build_fcimp (...)` **assignment** in
-  `SetRXAFMNCde()` and `SetTXAFMEmphNC()` (TAPR/OpenHPSDR-wdsp#2). This one is
-  a use-after-free fixed by capturing a return value, **not a free**: looking
-  for an added free will report the fix absent when it has landed, or have you
-  reapply a patch upstream already carries.
 - **patch 4** -- the `mainGen` / `mainRunGen` / `mainExited` exit handshake
   between the DSP worker and `pre_main_destroy()`.
 - **patch 5** -- standalone `set*_nnr()` accessors alongside the `SetRXANNR*`
   properties.
-- **patch 6** -- an `n->df` guard in `setAlpha_nnet()` and `setKnee_nnet()`
-  (TAPR/OpenHPSDR-wdsp#4, fix in TAPR/OpenHPSDR-wdsp#5).
 - **patch 7** -- `SetChannelState()` case 1 clearing a still-pending
   `slew.downflag` / `iob.ch_upslew` down-ramp before it arms the up-ramp
   (TAPR/OpenHPSDR-wdsp#6).
 - **patch 8** -- `SetChannelState()` case 1 waiting, outside `csEXCH` and under
   case 0's existing bound, for `exchange` clear **and** `flushflag` set
-  (TAPR/OpenHPSDR-wdsp#7).
+  (TAPR/OpenHPSDR-wdsp#7). 2.11's own case 1 waits on `flushflag` alone and
+  then force-clears `exchange`/`flushflag`/`downflag` at the timeout; that wait
+  is replaced by patches 7 and 8 here, because a pending ramp the host is not
+  clocking never clears `flushflag` and the wait always times out.
+- **patch 23** -- the already-off `else if (state == 0 && dmode)` branch 2.11
+  added to `SetChannelState()` waiting only for `exchange` clear **and**
+  `flushflag` set, not `flushflag` alone.
 - **patch 9** -- a `quiesce_flush()` holding the `flush_bypass` / `Sem_Flush`
   handshake, called from `pre_main_destroy()` rather than only from
   `destroy_iobuffs()` (TAPR/OpenHPSDR-wdsp#8).
@@ -1305,3 +1262,41 @@ skipped on Windows. The test queues the restore through
 
 When updating WDSP, keep this unless upstream's `destroy_calcc()` joins the
 correction thread before freeing.
+
+## Patch 23 — an already-off `SetChannelState(ch, 0, 1)` waits only for a completed ramp
+
+2.11 adds an `else if (state == 0 && dmode)` branch to `SetChannelState()`:
+when the channel is already off, a `dmode 1` call waits up to 100 ms for
+`flushflag` to clear. Upstream now tells hosts to call `SetChannelState(ch, 0, 1)`
+before `CloseChannel(ch)`, and this branch is what makes that wait for a stop that
+was begun with `dmode 0`.
+
+`flushflag` clears only when the `flushChannel` thread runs, and that thread is
+released only by a down-ramp that **completes**, which requires the host to clock
+`fexchange*`. `WdspChannel` stops with `dmode 0` on purpose and then refuses
+`processIq()` for the length of the control operation, so a ramp it has just
+started is still pending when the `dmode 1` calls arrive: WDSP's own `RXASetNC`,
+`TXASetNC`, `SetDSPBuffsize` and `SetDSPSamplerate`, and `WdspChannel::close()`,
+which already calls `SetChannelState(ch, 0, 1)` before `CloseChannel()` as 2.11
+now recommends. In 2.10 each of those found the state already 0 and returned at
+once. In 2.11 each waits for a flush that cannot happen, runs to the 100 ms
+timeout, and then force-clears `exchange`, `flushflag` and `downflag`. For
+`RXASetNC` that happens under `g_setupMutex`, which is the stall #5424 removed.
+
+The patch keeps the branch and narrows its condition to the one patch 8 uses in
+case 1: wait while `exchange` is clear **and** `flushflag` is set. That is a ramp
+that has already completed and whose flush is merely waiting for its thread, so
+the wait ends on its own. A ramp still pending leaves `exchange` set; the branch
+then falls through and leaves the ramp exactly as 2.10 did, and patch 7 cancels it
+at the next start.
+
+Marked `// AetherSDR patch 23:` in `upstream/channel.c`.
+
+**Covered by** `wdsp_channel_test`. With upstream's condition restored, the test's
+close-latency check fails with "closing a STOPPED channel still paid WDSP's
+stop-and-flush wait". With the patch, all of `wdsp_channel_test` passes.
+
+**Upstream status.** Not reported.
+
+Drop this if upstream narrows the condition itself, or if `WdspChannel` ever
+clocks a stopping channel's ramp out before handing control to WDSP.

@@ -1,4 +1,4 @@
-// NnrFilter end to end: real audio through WDSP 2.10's Neural Noise Reduction.
+// NnrFilter end to end: real audio through WDSP 2.11's Neural Noise Reduction.
 //
 // This is the test nnr_controls_test could not be — it constructs a filter and
 // checks what comes out, including the cross-check that the ranges in

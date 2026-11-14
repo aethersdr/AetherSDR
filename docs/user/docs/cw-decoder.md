@@ -3,12 +3,12 @@ title: "CW Decoder"
 slug: "/cw-decoder"
 description: "AetherSDR includes a built-in CW (Morse code) decoder: ggmorse by default, with two optional neural decoders, DeepFist and DeepCW."
 status: "Supported"
-applies_to: ["FlexRadio", "Hermes-Lite 2 (experimental)", "Networked Icom (early; IC-7300MK2 supported)"]
+applies_to: ["FlexRadio", "Hermes-Lite 2", "Networked Icom (early; IC-7300MK2 supported)"]
 ---
 
 :::info[Status]
 
-**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2 (experimental), Networked Icom (early; IC-7300MK2 supported)
+**Status:** Supported · **Applies to:** FlexRadio, Hermes-Lite 2, Networked Icom (early; IC-7300MK2 supported)
 
 :::
 
@@ -68,6 +68,16 @@ With a neural decoder selected:
 - Characters are coloured by the model's own confidence, on the same green-to-red scale, and are never hidden.
 - Callsign contact cards and the MQTT text stream come from ggmorse only.
 - AetherSDR's **Zero Beat** button is unavailable; it needs ggmorse's pitch estimate. A FlexRadio's own **Autotune** (on a radio licensed for it through SmartSDR+, which it keeps after the subscription lapses) works with any decoder.
+
+The slice's **Once** and **Loop** auto-tune controls adjust receive tuning;
+they do not transmit. Starting requires an unlocked CW slice owned by this
+client and a CW auto-tune license. **Loop** shows this client's requested loop state,
+not a radio-reported indication that a signal has been found. Rebuilding the
+slice controls preserves that request. Locking the slice or leaving CW mode
+requests Stop; an existing loop can also be stopped if its license becomes
+unavailable. Disconnecting or losing ownership clears the local request, and
+reconnecting does not restart it. Without a CW auto-tune license, the local **Zero Beat**
+control remains available where its decoder requirements are met.
 
 DeepCW discards its provisional text (about 5–7 seconds) when the source changes, audio is interrupted, or decoding stops. Its worker finishes the current inference or model load before stopping, so switching decoders can pause the interface until that work finishes.
 

@@ -7,6 +7,7 @@
 #include "ControlAvailabilityRegistry.h"
 #include "HGauge.h"
 #include "StatusIndicator.h"
+#include "StatusBarMessageOverlay.h"
 #include "models/CwDecodeSettings.h"
 #include "PeripheralAuthStore.h"
 #include "core/backends/AutoRfGainControl.h"
@@ -80,6 +81,7 @@
 #include "core/WaterfallRate.h"
 #include "core/SpotModeResolver.h"
 #include "core/LogManager.h"
+#include "core/ThemeManager.h"
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
@@ -110,28 +112,12 @@ namespace AetherSDR {
 
 void MainWindow::wireStatusBarMessages()
 {
-    QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(m_statusBarContainer->layout());
-    const int stationIndex = layout->indexOf(m_stationNickLabel);
-    connect(statusBar(), &QStatusBar::messageChanged, this,
-            [this, layout, stationIndex](const QString& message) {
-        if (!message.isEmpty() && m_stationNickLabel->parentWidget() == m_statusBarContainer) {
-            // Only the existing Connect control is permanent while a message
-            // is shown. Making the full-width bar permanent hides Qt's text.
-            layout->removeWidget(m_stationNickLabel);
-            statusBar()->addPermanentWidget(m_stationNickLabel);
-            m_stationNickLabel->show();
-            // addPermanentWidget reformats the bar and can re-show normal
-            // children; explicitly leave Qt's temporary-message area clear.
-            m_statusBarContainer->hide();
-        } else if (message.isEmpty()
-                   && m_stationNickLabel->parentWidget() != m_statusBarContainer) {
-            statusBar()->removeWidget(m_stationNickLabel);
-            layout->insertWidget(stationIndex, m_stationNickLabel);
-            m_stationNickLabel->show();
-            m_statusBarContainer->show();
-            updateStatusBarMinimumWidth();
-        }
-    });
+    auto* messageOverlay = new StatusBarMessageOverlay(statusBar(), m_panStack);
+    ThemeManager::instance().applyStyleSheet(
+        messageOverlay,
+        QStringLiteral("QLabel#statusBarMessageOverlay { color: {{color.text.secondary}};"
+                       " background: {{color.background.1}}; font-size: 12px;"
+                       " border: 1px solid {{color.background.2}}; border-radius: 4px; }"));
     connect(&m_radioModel.transmitModel(), &TransmitModel::atuTuneFailed,
             this, [this](ATUStatus, const QString& detail) {
                 statusBar()->showMessage(
@@ -1927,7 +1913,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // report "skipping" for the overwhelmingly common case of no key at
         // all, which is noise in exactly the captures this logging exists for.
         const bool radioHasDax = m_radioModel.backendCapabilities().hasDaxStreams;
-        if (m_daxRestore.shouldRestore(savedDax, radioHasDax)) {
+        if (m_radioModel.daxChannelReserved(savedDax)) {
+            // A program on the radio (the WSPR receiver) holds that channel;
+            // putting it on our slice would take it from theirs (#7139).
+            qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore"
+                           << key << "=" << savedDax << "for slice" << s->sliceId()
+                           << ": a reserved slot holds that channel";
+        } else if (m_daxRestore.shouldRestore(savedDax, radioHasDax)) {
             // QPointer guards against a dangling slice: a raw SliceModel*
             // stays non-null after the slice is destroyed, so the `s &&`
             // check below is only meaningful if the capture auto-nulls.
@@ -1935,7 +1927,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
             // add/remove) would otherwise dereference freed memory. (#3646)
             QPointer<SliceModel> sp(s);
             QTimer::singleShot(300, this, [this, sp, savedDax, key]() {
-                if (sp && !profileLoadRadioStateWritesHeld()) {
+                if (sp && !profileLoadRadioStateWritesHeld()
+                    && !m_radioModel.daxChannelReserved(savedDax)) {
                     // The send path below (SliceModel::controlRequested) has no
                     // logging of its own; without this line the restore is
                     // invisible in any capture (#4558).
@@ -2217,19 +2210,21 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_antennaGenius.setRadioFrequency(s->frequency());
 
     connect(s, &SliceModel::filterChanged, this, [this, s](int lo, int hi) {
+        // The TX mask is separate state on every spectrum, so it follows every
+        // filter change; only the dragged overlay waits out a drag (#764).
+        if (s->isTxSlice())
+            syncTxWaterfallSliceToSpectrums();
         auto* sw = spectrumForSlice(s);
         if (!sw) return;
-        // Skip overlay update while user is dragging a filter edge — the radio's
-        // status echo would overwrite the drag position, causing snap-to-zero (#764)
-        if (sw->isDraggingFilter()) return;
+        // Skip this slice's overlay while its filter edge is being dragged — the
+        // radio's echo would overwrite the drag position, causing snap-to-zero (#764)
+        if (sw->isDraggingFilterOf(s->sliceId())) return;
         sw->setSliceOverlay(s->sliceId(), s->frequency(),
             lo, hi, s->isTxSlice(), s->sliceId() == m_activeSliceId,
             s->mode(), s->rttyMark(), s->rttyShift(),
             s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq(),
             s->diversity(), s->isDiversityParent(),
             s->isDiversityChild(), s->diversityIndex());
-        if (s->isTxSlice())
-            syncTxWaterfallSliceToSpectrums();
     });
     // Each pan renders its own slice's accepted threshold, including updates
     // to background Auto receivers.
@@ -2378,7 +2373,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     });
 
     // Update RTTY mark/space lines on spectrum when mark/shift changes;
-    // also push new params to the decoder when Auto mark is selected.
+    // the active slice's new mark and shift also go to the decoder and its combos.
     connect(s, &SliceModel::rttyMarkChanged, this, [this, s](int) {
         pushSliceOverlay(s);
         if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
@@ -4026,12 +4021,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     sw->disconnect(this);
     menu->disconnect(this);
     applet->disconnect(this);
-    // This connection belongs to the pane's wiring, not decoder routing:
+    // These connections belong to the pane's wiring, not decoder routing:
     // routeRttyDecoderOutput() may already have selected this same applet,
     // and its unchanged-target fast path cannot restore a connection removed
-    // by the bulk disconnect above. Every close must persist dismissal (#5353).
+    // by the bulk disconnect above. Every close must persist dismissal (#5353),
+    // and every Mark and Shift choice must reach the slice (#7094, #6968).
     connect(applet, &PanadapterApplet::rttyPanelCloseRequested,
             this, &MainWindow::onRttyPanelCloseRequested);
+    connect(applet, &PanadapterApplet::rttyMarkHzChanged,
+            this, &MainWindow::onRttyDecoderMarkChosen);
+    connect(applet, &PanadapterApplet::rttyShiftHzChanged,
+            this, &MainWindow::onRttyDecoderShiftChosen);
     QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
     connect(this, &MainWindow::bandStackRestoreStarting,
             sw, [applet, pendingDbm, reconcileDbmRangeFromModel]
@@ -4184,6 +4184,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // connect — the local radio's limit clamping a zoom the Kiwi can fill.
         // (#4470)
         applyPanBandwidthLimitsToWidget(panId, sw, minMhz, maxMhz);
+        refreshPanZoomControls();
     });
 
     // Set panId on the overlay menu so +RX routes to the correct pan
@@ -4816,9 +4817,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, applet](int channel) {
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (!pan) return;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 daxiq_channel=%2")
-                .arg(applet->panId()).arg(channel));
+        m_radioModel.requestPanIqBinding(pan, channel);
     });
 
     // WFM software-demod toggle from the DAX panel. Acts on the menu's slice;
@@ -6233,13 +6232,19 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(s, &SliceModel::recordOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
     connect(s, &SliceModel::playOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
     connect(s, &SliceModel::playEnabledChanged, this, &MainWindow::syncAetherRxRecordButtons);
-    connect(w, &VfoWidget::autotuneRequested, this, [this, sliceId](bool intermittent) {
-        if (m_radioModel.slice(sliceId))
-            m_radioModel.cwAutoTune(sliceId, intermittent);
+    const QPointer<SliceModel> cwSource(s);
+    // Same-radio reconnect can reclaim this slice and its VFO widget. Each
+    // new request binds its session in the model and validates this identity.
+    connect(w, &VfoWidget::autotuneRequested, this, [this, cwSource](bool intermittent) {
+        if (cwSource) {
+            m_radioModel.requestCwAutoTune(cwSource,
+                intermittent ? CwAutoTuneAction::Start : CwAutoTuneAction::Stop);
+        }
     });
-    connect(w, &VfoWidget::autotuneOnceRequested, this, [this, sliceId]() {
-        if (m_radioModel.slice(sliceId))
-            m_radioModel.cwAutoTuneOnce(sliceId);
+    connect(w, &VfoWidget::autotuneOnceRequested, this, [this, cwSource]() {
+        if (cwSource) {
+            m_radioModel.requestCwAutoTune(cwSource, CwAutoTuneAction::Once);
+        }
     });
     connect(w, &VfoWidget::zeroBeatRequested, this, [this, sliceId]() {
 #ifdef HAVE_CW_RX_BACKENDS
@@ -7740,7 +7745,7 @@ void MainWindow::wireMeters()
         }
     }
 
-    // Data and scale use the same confirmed selection.
+    // Shared TX meter data and scale use the same confirmed selection.
     auto updatePowerScale = [this]() {
         const SharedTxMeterSelection selection = sharedTxMeterSelection();
         if (selection.source != m_sharedTxMeterSource) {
@@ -7761,7 +7766,8 @@ void MainWindow::wireMeters()
         const bool integratedAmp = m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(radioMaxWatts, integratedAmp);
-        m_appletPanel->tunerApplet()->setPowerScale(selection.maxWatts, selection.highPowerAmplifier);
+        m_appletPanel->tunerApplet()->setPowerScale(tunerMaxWatts(radioMaxWatts, selection),
+                                                   selection.highPowerAmplifier);
         m_appletPanel->healthApplet()->setPowerScale(radioMaxWatts, integratedAmp);
         m_appletPanel->setMeterPowerScale(selection.maxWatts, selection.highPowerAmplifier);
     };

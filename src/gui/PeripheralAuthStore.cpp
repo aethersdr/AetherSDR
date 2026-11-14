@@ -21,9 +21,8 @@
 namespace AetherSDR {
 namespace {
 
-Q_LOGGING_CATEGORY(lcPeripheralAuth, "aether.peripheral.auth")
-
 #ifdef HAVE_KEYCHAIN
+Q_LOGGING_CATEGORY(lcPeripheralAuth, "aether.peripheral.auth")
 constexpr const char* kService = "AetherSDR";
 #endif
 constexpr const char* kKeys[] = {

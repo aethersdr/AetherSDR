@@ -6,6 +6,9 @@
 #include "RadioSetupControlFixture.h"
 #include "AutomationSensitiveLineEdit.h"
 #include "core/backends/flex/CommandParser.h"
+#include "core/TailnetShimClient.h"
+#include "gui/CanonMessageBox.h"
+#include "gui/TailnetShimDialog.h"
 #include "gui/WaveformEnvironmentDialog.h"
 #include "models/FlexWaveformModel.h"
 
@@ -19,9 +22,20 @@
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTest>
+#include <QTimer>
 
 #include <cstdio>
 #include <optional>
+#include "core/backends/flex/FlexWaveformStatus.h"
+
+// A waveform status line through the production decode, as the status
+// ingress delivers it; a line the decode refuses changes nothing.
+static void feedWaveform(AetherSDR::FlexWaveformModel& model, const QString& object,
+                         const QMap<QString, QString>& kvs)
+{
+    if (const auto status = AetherSDR::flexWaveformStatus(object, kvs)) { model.applyStatus(*status); }
+}
+
 
 namespace AetherSDR {
 class WaveformEnvTestAccess {
@@ -53,8 +67,7 @@ QString b64(const QByteArray& json) { return QString::fromLatin1(json.toBase64()
 
 void status(RadioModel& radio, const QString& object, const Kvs& kvs)
 {
-    QMetaObject::invokeMethod(&radio, "onStatusReceived", Qt::DirectConnection,
-                              Q_ARG(QString, object), Q_ARG(Kvs, kvs));
+    radio.handleStatusForTest(object, kvs);
 }
 
 void requestValidation()
@@ -139,7 +152,7 @@ void statusDecode()
     FlexWaveformModel model;
     QSignalSpy listed(&model, &FlexWaveformModel::waveformsChanged);
     QSignalSpy environment(&model, &FlexWaveformModel::environmentChanged);
-    model.handleContainerStatus(msg.kvs);
+    feedWaveform(model, QStringLiteral("waveform container"), msg.kvs);
     const auto entry = [&model]() -> FlexWaveformEntry { return model.waveforms().value(0); };
     check(entry().environment == QMap<QString, QString>{{QStringLiteral("API_KEY"), QStringLiteral("s3cret value")},
                                                          {QStringLiteral("MODE"), QStringLiteral("fast")}}
@@ -148,22 +161,22 @@ void statusDecode()
 
     Kvs kvs = msg.kvs;
     kvs[QStringLiteral("env")] = b64(R"({"MODE":"slow"})");
-    model.handleContainerStatus(kvs);
+    feedWaveform(model, QStringLiteral("waveform container"), kvs);
     check(entry().environment.value(QStringLiteral("MODE")) == QLatin1String("slow")
               && entry().environment.size() == 1 && listed.size() == 1 && environment.size() == 1
               && environment.at(0).at(0).toString() == QLatin1String("wf-x"),
           "an env-only update replaces the environment without rebuilding the list");
 
-    model.handleContainerStatus(kvs);
+    feedWaveform(model, QStringLiteral("waveform container"), kvs);
     check(environment.size() == 1 && listed.size() == 1, "an unchanged status announces nothing");
 
     kvs.remove(QStringLiteral("env"));
-    model.handleContainerStatus(kvs);
+    feedWaveform(model, QStringLiteral("waveform container"), kvs);
     check(entry().environment.isEmpty() && environment.size() == 2,
           "a status without env= is an empty environment, as in FlexLib");
 
     kvs[QStringLiteral("env")] = b64(R"({"N":5,"B":true})");
-    model.handleContainerStatus(kvs);
+    feedWaveform(model, QStringLiteral("waveform container"), kvs);
     check(entry().environment.value(QStringLiteral("N")) == QLatin1String("5")
               && entry().environment.value(QStringLiteral("B")) == QLatin1String("true"),
           "scalar values are taken as their text");
@@ -171,21 +184,21 @@ void statusDecode()
     for (const QString& bad : {QStringLiteral("not*base64"), b64("[1,2]"), b64("{\"A\":{\"B\":1}}"),
                                b64("{\"A\":"), b64("\"x\"")}) {
         kvs[QStringLiteral("env")] = bad;
-        model.handleContainerStatus(kvs);
+        feedWaveform(model, QStringLiteral("waveform container"), kvs);
         check(entry().environment.isEmpty(), "malformed base64, non-object or nested JSON is empty");
     }
 
     kvs[QStringLiteral("version")] = QStringLiteral("2.0");
     kvs[QStringLiteral("env")] = b64(R"({"A":"1"})");
-    model.handleContainerStatus(kvs);
+    feedWaveform(model, QStringLiteral("waveform container"), kvs);
     check(listed.size() == 2 && entry().version == QLatin1String("2.0"),
           "a version change still rebuilds the list");
 
     QSignalSpy restarted(&model, &FlexWaveformModel::restarted);
-    model.handleRestarted({{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("result"), QStringLiteral("ok")}});
-    model.handleRestarted({{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("result"), QStringLiteral("ERROR")}});
-    model.handleRestarted({{QStringLiteral("name"), QStringLiteral("wf-x")}});
-    model.handleRestarted({{QStringLiteral("result"), QStringLiteral("error")}});
+    feedWaveform(model, QStringLiteral("waveform restarted"), {{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("result"), QStringLiteral("ok")}});
+    feedWaveform(model, QStringLiteral("waveform restarted"), {{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("result"), QStringLiteral("ERROR")}});
+    feedWaveform(model, QStringLiteral("waveform restarted"), {{QStringLiteral("name"), QStringLiteral("wf-x")}});
+    feedWaveform(model, QStringLiteral("waveform restarted"), {{QStringLiteral("result"), QStringLiteral("error")}});
     check(restarted.size() == 3 && restarted.at(0).at(1).toBool() && !restarted.at(1).at(1).toBool()
               && restarted.at(2).at(1).toBool(),
           "restarted: only result=error fails, a missing result succeeds, no name is ignored");
@@ -209,9 +222,9 @@ struct ApplyRig {
         const RadioSetupCompletion callback = backend->replies.at(index);
         callback({kind, kind == RadioSetupReply::Kind::Accepted ? 0 : 0x50000015, message});
     }
-    void container(const QByteArray& json)
+    void container(const QByteArray& json, const QString& name = QStringLiteral("wf-x"))
     {
-        Kvs kvs{{QStringLiteral("name"), QStringLiteral("wf-x")}, {QStringLiteral("version"), QStringLiteral("1")}};
+        Kvs kvs{{QStringLiteral("name"), name}, {QStringLiteral("version"), QStringLiteral("1")}};
         if (!json.isEmpty()) { kvs.insert(QStringLiteral("env"), b64(json)); }
         status(radio, QStringLiteral("waveform container"), kvs);
     }
@@ -812,6 +825,37 @@ void editor()
               && oldApply->accessibleDescription() == oldApply->toolTip(),
           "on older firmware Apply is dimmed with the reason in its tooltip and accessible description");
 }
+// Recreating the tailnet shim's container asks first, and Cancel is the default.
+void shimRecreateAsks()
+{
+    const QString shim = QString::fromLatin1(kTailnetShimContainerName);
+    for (const bool confirm : {false, true}) {
+        ApplyRig rig;
+        rig.container(R"({"OLD":"1"})", shim);
+        WaveformEnvironmentDialog dialog(&rig.radio, shim);
+        int handed = 0;
+        dialog.setApplyHandler([&](const QString&, const WaveformEnvironment&) { ++handed; return true; });
+        QString question;
+        bool cancelDefault = false;
+        QTimer::singleShot(0, [&] {
+            for (QWidget* w : QApplication::topLevelWidgets()) {
+                auto* box = qobject_cast<CanonMessageBox*>(w);
+                if (!box || !box->isVisible()) { continue; }
+                for (QLabel* label : box->findChildren<QLabel*>()) { question += label->text() + QLatin1Char('\n'); }
+                for (QPushButton* b : box->findChildren<QPushButton*>()) {
+                    if (b->text() == QLatin1String("Cancel")) { cancelDefault = b->isDefault(); }
+                    if (b->text() == (confirm ? QLatin1String("Recreate") : QLatin1String("Cancel"))) { b->click(); }
+                }
+            }
+        });
+        buttonNamed(dialog, QStringLiteral("wfEnvApply"))->click();
+        check(question.contains(QLatin1String("off your tailnet"))
+                  && question.contains(TailnetShimDialog::offTailnetWarning()) && cancelDefault,
+              "recreating the shim's container asks, names the tailnet and defaults to Cancel");
+        check(handed == (confirm ? 1 : 0), confirm ? "Recreate in the question applies"
+                                                   : "Cancel in the question recreates nothing");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -825,6 +869,7 @@ int main(int argc, char** argv)
     recreateReplyTimeout();
     stagingFollowsTheRadio();
     editor();
+    shimRecreateAsks();
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }

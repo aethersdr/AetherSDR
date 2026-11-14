@@ -49,28 +49,25 @@ def gz(data: bytes) -> bytes:
     return out.getvalue()
 
 
-def main() -> int:
-    if len(sys.argv) != 5:
-        print(__doc__, file=sys.stderr)
-        return 2
-    binary_path, licenses_path, version, out_path = sys.argv[1:]
-    with open(binary_path, "rb") as f:
-        binary = f.read()
-    with open(licenses_path, "rb") as f:
-        licenses = f.read()
-
-    layer_tar = tar_bytes([(NAME, binary, 0o755), ("LICENSES", licenses, 0o644)])
+def build_image(name: str, files, version: str, env=None) -> bytes:
+    """The image bytes. `files` is the layer as tar_bytes() entries; the
+    first is the entrypoint. `env` is the container's environment."""
+    entrypoint = files[0][0]
+    layer_tar = tar_bytes(files)
     layer = gz(layer_tar)
+    run_config = {
+        "Entrypoint": ["/" + entrypoint],
+        "Labels": {
+            "com.flexradio.waveform.name": name,
+            "com.flexradio.waveform.version": version,
+        },
+    }
+    if env:
+        run_config["Env"] = env
     config = {
         "architecture": "arm64",
         "os": "linux",
-        "config": {
-            "Entrypoint": ["/" + NAME],
-            "Labels": {
-                "com.flexradio.waveform.name": NAME,
-                "com.flexradio.waveform.version": version,
-            },
-        },
+        "config": run_config,
         "rootfs": {"type": "layers", "diff_ids": [sha(layer_tar)]},
         "history": [{"created_by": "tools/flex-tailnet-shim/mkimage.py"}],
     }
@@ -98,7 +95,19 @@ def main() -> int:
     entries += [("blobs/sha256/" + d.split(":", 1)[1], b, 0o644) for d, b in blobs]
     entries += [("index.json", index_b, 0o644),
                 ("oci-layout", b'{"imageLayoutVersion":"1.0.0"}', 0o644)]
-    image = gz(tar_bytes(entries))
+    return gz(tar_bytes(entries))
+
+
+def main() -> int:
+    if len(sys.argv) != 5:
+        print(__doc__, file=sys.stderr)
+        return 2
+    binary_path, licenses_path, version, out_path = sys.argv[1:]
+    with open(binary_path, "rb") as f:
+        binary = f.read()
+    with open(licenses_path, "rb") as f:
+        licenses = f.read()
+    image = build_image(NAME, [(NAME, binary, 0o755), ("LICENSES", licenses, 0o644)], version)
     with open(out_path, "wb") as f:
         f.write(image)
     print(f"{hashlib.sha256(image).hexdigest()}  {len(image)}  {out_path}")

@@ -496,12 +496,12 @@ void GlobeMapView::buildSphereMesh()
     m_vertexBuffer.create();
     m_vertexBuffer.bind();
     m_vertexBuffer.allocate(vertices.constData(),
-                            vertices.size() * sizeof(Vertex));
+                            static_cast<int>(vertices.size() * sizeof(Vertex)));
     m_vertexBuffer.release();
     m_indexBuffer.create();
     m_indexBuffer.bind();
     m_indexBuffer.allocate(indices.constData(),
-                           indices.size() * sizeof(quint32));
+                           static_cast<int>(indices.size() * sizeof(quint32)));
     m_indexBuffer.release();
 }
 
@@ -1344,12 +1344,12 @@ void GlobeMapView::uploadDetailTile(DetailTile& tile)
     tile.vertexBuffer.create();
     tile.vertexBuffer.bind();
     tile.vertexBuffer.allocate(vertices.constData(),
-                               vertices.size() * sizeof(Vertex));
+                               static_cast<int>(vertices.size() * sizeof(Vertex)));
     tile.vertexBuffer.release();
     tile.indexBuffer.create();
     tile.indexBuffer.bind();
     tile.indexBuffer.allocate(indices.constData(),
-                              indices.size() * sizeof(quint32));
+                              static_cast<int>(indices.size() * sizeof(quint32)));
     tile.indexBuffer.release();
     tile.image = {};
 }

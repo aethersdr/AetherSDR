@@ -7,6 +7,45 @@ backend slice IDs resolve through `TciTrxMap`; a sparse slice ID is not a DAX
 channel or public receiver index. The Flex DAX route retains its channel gain and
 slice binding independently.
 
+## Independent Line Out (type 4)
+
+`LINE_OUT_START:<receiver>;` / `LINE_OUT_STOP:<receiver>;` maintain subscriptions
+separate from `AUDIO_START` / `AUDIO_STOP`. Each requested receiver labels a copy
+of the same final shared playback mix. Wire format is fixed 48 kHz stereo float32;
+ordinary RX negotiation, RX gain and MIC gain do not alter it. The standard
+64-byte header has type 4 and scalar-sample length. Existing type-1 routing stays
+unchanged.
+
+The source is the stereo mixer output before the optional PC playback write, after source
+mixing, slice-controlled balance and client DSP. PC playback master gain and mute
+do not affect capture. It is not a DAX sum and does not separately apply slice
+gain/pan. Non-native device rates, including 44.1 kHz, convert L/R independently
+to the typed 48 kHz domain; native 24/48 kHz capture preserves its format until
+the worker converts to the fixed wire rate. PCM epochs retire on disable,
+device close/rate change and TX-state transitions. The existing bounded mailbox
+and per-client 256 KiB output limit also apply to Line Out. A Line Out subscriber
+retains the radio speaker stream while PC Audio is enabled, or when the separate
+default-off **Line Out with PC Audio off** consent is enabled. Without consent,
+PC Audio off releases the radio stream and Line Out sends no type-4 frames.
+Without a playback device, the
+existing 10 ms timer drains the same mixer at 48 kHz; no audio sink is opened.
+Turning PC Audio off preserves the subscription. Capture continues only with
+consent; otherwise its PCM epoch is revoked and no type-4 frames are sent until
+PC Audio returns or consent is granted. The last Line Out subscriber releases
+its demand without removing a stream needed by PC Audio.
+
+`TciRecording.lineOutIncludeTx` defaults false. While false, Line Out sends
+silence during any radio TX, including simultaneous receive. While true, it
+passes the playback mix unchanged without injecting a second transmit feed.
+Radio-side MON must already be audible to appear in this mix. This is a
+recording of the mixed playback output, not a station-scoped TX-only stream.
+No MON, PTT or radio input selection commands are issued. PC Audio is optional;
+separate local cue/sidetone sinks and server-side file recording are outside scope.
+
+Socket-free tests cover wire subscriptions, negotiation independence, stereo,
+PC master gain/mute independence, replay/revocation, multi-source playback equality, TX opt-in,
+backpressure and reentrant stop. Real-radio MON/TX and logger recordings still
+need operator-controlled qualification.
 ## Formats and conversion
 
 Producer metadata travels with each owning `PcmFrame`: source, session, format

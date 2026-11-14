@@ -30,6 +30,7 @@ namespace AetherSDR {
 
 class DxClusterClient;
 class RadioModel;
+class WsprSpotFeed;
 
 // ── Spot list table model ───────────────────────────────────────────────────
 
@@ -91,6 +92,7 @@ public:
                              WsjtxClient* wsjtxClient,
                              PotaClient* potaClient, EibiClient* eibiClient,
                              N1MMSpotClient* n1mmSpotClient,
+                             WsprSpotFeed* wsprFeed,
 #ifdef HAVE_WEBSOCKETS
                              FreeDvClient* freedvClient,
 #endif
@@ -152,6 +154,9 @@ private:
     void buildWsjtxTab(QTabWidget* tabs);
     void buildSpotCollectorTab(QTabWidget* tabs);
     void buildPotaTab(QTabWidget* tabs);
+    // The WSPR receiver on the radio (tools/wspr-agent).
+    void buildWsprTab(QTabWidget* tabs);
+    void updateWsprControls();
     void buildEiBiTab(QTabWidget* tabs);
     void updateEibiTimestamps();
     void buildN1mmTab(QTabWidget* tabs);
@@ -236,6 +241,14 @@ private:
     QPushButton*    m_potaAutoStartBtn;
     QLabel*         m_potaStatusLabel;
     QPlainTextEdit* m_potaConsole;
+
+    // WSPR tab
+    WsprSpotFeed*   m_wsprFeed{nullptr};
+    QPushButton*    m_wsprStartBtn{nullptr};
+    QPushButton*    m_wsprAutoStartBtn{nullptr};
+    QPushButton*    m_wsprConfigureBtn{nullptr};
+    QLabel*         m_wsprStatusLabel{nullptr};
+    QPlainTextEdit* m_wsprConsole{nullptr};
 
     // EiBi tab
     QPushButton*    m_eibiStartBtn{nullptr};

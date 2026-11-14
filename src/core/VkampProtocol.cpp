@@ -53,7 +53,7 @@ constexpr float kOutputCalC = 25.69141235049288f;
 // of a steady 1W-drive transmission clustered at raw 157-166 (mode 165),
 // user-confirmed ~111W true. The same capture's tail-off through 134 and 102
 // as the transmission ended is transient, not a steady point.
-constexpr float kOutputLowestConfirmedRaw = 157.0f;
+[[maybe_unused]] constexpr float kOutputLowestConfirmedRaw = 157.0f;
 
 constexpr float kCurrentCalA = 0.4052965787643523f;
 constexpr float kCurrentCalB = 0.3049154652689805f;

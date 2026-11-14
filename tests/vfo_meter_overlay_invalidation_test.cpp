@@ -172,6 +172,27 @@ private slots:
         QTest::qWait(200);
         QCOMPARE(vfo.paints, 0);
     }
+
+    void subpixelStandardMeterChangesDoNotRepaintTheCard()
+    {
+        MeterViewController::instance().setSmartMtr(false);
+        PaintCountingVfo vfo;
+        vfo.show();
+        vfo.setSignalLevel(-80.25f);
+        QTest::qWait(1000); // allow the original attack/release ballistics to settle
+        const QImage settled = vfo.grab().toImage();
+        vfo.paints = 0;
+        for (float level : {-80.249f, -80.248f, -80.247f}) {
+            vfo.setSignalLevel(level);
+            QTest::qWait(30);
+        }
+        QCOMPARE(vfo.paints, 0);
+        QCOMPARE(vfo.grab().toImage(), settled);
+
+        vfo.setSignalLevel(-40.0f);
+        QTest::qWait(200);
+        QVERIFY(vfo.grab().toImage() != settled); // visible changes still animate
+    }
 };
 
 int main(int argc, char** argv)

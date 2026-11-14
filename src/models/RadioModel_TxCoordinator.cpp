@@ -132,6 +132,7 @@ void RadioModel::abortTxProducerInputs(const TxCoordinator::Producer& producer,
             case TxActivity::Atu: (void)requestProducerAtu(request, false); break;
             case TxActivity::Tune: (void)requestProducerTune(request, false); break;
             case TxActivity::Mox: abortProducerPtt(request, source); break;
+            case TxActivity::VoiceKeyer: case TxActivity::Navtex: break;
             }
         }
     }
@@ -234,6 +235,31 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
         return false;
     }
+    const unsigned services = static_cast<unsigned>(TxActivity::VoiceKeyer)
+        | static_cast<unsigned>(TxActivity::Navtex);
+    const bool serviceActivity = static_cast<unsigned>(activity) & services;
+    if (m_txCoordinator.hasOtherIntents(m_txOperation, {}, serviceActivity ? 0 : services)) {
+        emitInterlockNotification(serviceActivity
+                ? tr("The voice keyer or NAVTEX waits for the current transmission to end.")
+                : tr("Transmit is held by the voice keyer or a NAVTEX message."),
+            QStringLiteral("tx-service"));
+        return false;
+    }
+    // The radio's own report decides too: a Stop releases this client's hold
+    // at once, but a playback or NAVTEX transmission the radio still reports
+    // keeps every other transmit out (maintainer ruling).
+    if (!serviceActivity && (m_dvkModel.status() == VoiceKeyer::Playback
+            || m_navtexModel.status() == NavtexStatus::Transmitting)) {
+        emitInterlockNotification(tr("Transmit is held: the radio reports the voice keyer or NAVTEX transmitting."),
+                                  QStringLiteral("tx-service"));
+        return false;
+    }
+    if (m_daxTxOwnershipIntent) {
+        qCWarning(lcProtocol) << "RadioModel: TX refused — a DAX TX stream selection was pending;"
+                              << "the selection is interrupted, key again to transmit";
+        interruptDaxTxOwnership(tr("Transmit preparation interrupted DAX TX ownership. Waiting for fresh radio status."));
+        return false;
+    }
     // TUNE/ATU use the backend's shared carrier/PTT latch, unlike compatible
     // MOX holds. Their release cannot preserve another producer's carrier.
     // Keep these combinations within one producer until a backend provides
@@ -279,7 +305,9 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     }
     const QString gate = activity == TxActivity::Tune || activity == TxActivity::Atu
         ? QStringLiteral("tune-start")
-        : activity == TxActivity::Mox ? QStringLiteral("xmit") : QStringLiteral("cw-key");
+        : activity == TxActivity::Mox ? QStringLiteral("xmit")
+        : activity == TxActivity::VoiceKeyer ? QStringLiteral("dvk")
+        : activity == TxActivity::Navtex ? QStringLiteral("navtex") : QStringLiteral("cw-key");
     if (transmitStartBlockedByInhibit(gate)) {
         return false;
     }
@@ -372,6 +400,7 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         m_cwxCommandOperation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
     }
     m_txOperationActivities |= static_cast<unsigned>(activity);
+    m_daxTxSelectionRxObserved = false;
     // Independent backend-generated media belongs to this captured grant's
     // input. The shared desktop producer cannot carry another actor's audio.
     // Keep desktop's compatible multi-contributor context unchanged.
@@ -388,7 +417,10 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
             return false;
         }
     }
-    return true;
+    const QPointer<RadioModel> self(this);
+    emit daxTxOwnershipChanged();
+    return self && !m_txSessionClosing && m_backend
+        && (request ? request->valid() : intent.permitsDispatch(txMonotonicMs()));
 }
 
 TransmitModel::KeyingRoute RadioModel::producerKeyingRoute(const TxCoordinator::Request& request,
@@ -457,7 +489,8 @@ bool RadioModel::requestProducerAtu(const TxCoordinator::Request& request, bool 
     bool dispatched = false;
     const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Atu, dispatched);
     m_transmitModel.requestAtu(start, route);
-    const bool accepted = dispatched;
+    // A start withdrawn during admission dispatches its cleanup, not a cycle.
+    const bool accepted = dispatched && (!start || m_transmitModel.atuAvailable());
     if (start && !accepted) {
         m_transmitModel.requestAtu(false, route);
     }
@@ -598,6 +631,7 @@ void RadioModel::endLocalTxActivity(const TxCoordinator::Intent& intent)
 {
     if (m_txCoordinator.endIntent(intent)) {
         completeLocalTxIfDrained();
+        emit daxTxOwnershipChanged();
     }
 }
 
@@ -706,6 +740,7 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
 {
     const bool tracked = operation.sameOperation(m_txOperation) && operation.permitsCleanup();
     if (tracked) {
+        m_daxTxSelectionRxObserved = false;
         ++m_pendingTxDeliveries;
     }
     return [this, operation, tracked] {
@@ -715,6 +750,7 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
         }
         --m_pendingTxDeliveries;
         completeLocalTxIfDrained();
+        emit daxTxOwnershipChanged();
     };
 }
 
@@ -742,15 +778,16 @@ TxCoordinator::Completion RadioModel::trackTxQueue(const TxCoordinator::Operatio
     });
 }
 
-void RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence)
+bool RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence)
 {
     const TxCoordinator::Operation operation = fence.operation;
     const auto completed = [completion = fence.completion] { completion.finish(); };
     if (fence.keying) {
         if (!sendTxTcpCommand(command, operation, true, completed)) {
             completed();
+            return false;
         }
-        return;
+        return true;
     }
     // Retain a short, normally released operation until its queued key-up is
     // consumed, just as NetCW does. Otherwise completion cancels an earlier
@@ -758,7 +795,9 @@ void RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator
     // This is local queue completion, not qualified radio-idle evidence.
     if (!sendTxTcpCommand(command, operation, false, completed)) {
         completed();
+        return false;
     }
+    return true;
 }
 
 bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const QString& text,
@@ -788,8 +827,10 @@ bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const
         [self, request](const QString& value, int) {
             return self && self->dispatchCwxText(value, self->m_txCoordinator.requestOperation(request));
         },
-        [self, request](const QString& command, int epoch, int nChars) {
-            if (self) { self->dispatchCwxCommand(command, self->m_txCoordinator.requestOperation(request), epoch, nChars); }
+        [self, request](const CwTextRequest& command, int epoch, int nChars, CwxModel::TransmissionPermit current) {
+            return self ? self->dispatchCwxRequest(command, self->m_txCoordinator.requestOperation(request),
+                                                   epoch, nChars, std::move(current))
+                        : ReceiveDispatch::Unsupported;
         },
         [self, request](int epoch, bool untrackedMacro) {
             if (self) { self->finishCwxDispatch(epoch, untrackedMacro, self->m_txCoordinator.requestIntent(request)); }
@@ -829,42 +870,76 @@ void RadioModel::abortProducerCwx(const TxCoordinator::Request& request)
     }
 }
 
-void RadioModel::dispatchCwxCommand(const QString& command, TxCoordinator::Operation operation,
-                                    int epoch, int nChars)
+ReceiveDispatch RadioModel::dispatchCwxRequest(const CwTextRequest& request,
+    TxCoordinator::Operation operation, int epoch, int nChars, RadioControlFence current)
 {
-    if (!usesFlexCommandPlane()) {
-        return;
+    if (QThread::currentThread() != thread() || !request.valid() || (current && !current())) {
+        return ReceiveDispatch::Unsupported;
     }
-    if (command.startsWith("cwx send") || command.startsWith("cwx macro send")) {
-        if (!operation.permitsDispatch(txMonotonicMs())) {
-            return;
+    if (request.configuration() && !isConnected()) { return ReceiveDispatch::LocalOnly; }
+    if (!m_backend || !isConnected() || m_txSessionClosing || m_expiringPendingCallbacks) {
+        return ReceiveDispatch::Unsupported;
+    }
+    const RadioCapabilities caps = backendCapabilities();
+    if (!caps.cwTextControl) {
+        // Existing native text adapters dispatch once through TextSender. Their
+        // speed setting retains TransmitModel's typed hold-delay policy.
+        if (!caps.hasRadioSideCwKeyer) { return ReceiveDispatch::Unsupported; }
+        if (request.field == CwTextRequest::Field::Speed) {
+            if (request.origin == CwTextRequest::Origin::Operator) {
+                m_transmitModel.setCwSpeed(request.value);
+            }
+            return ReceiveDispatch::LocalOnly;
         }
+        if (request.keys() || request.field == CwTextRequest::Field::Clear
+            || request.field == CwTextRequest::Field::Erase) { return ReceiveDispatch::LocalOnly; }
+        return ReceiveDispatch::Unsupported;
+    }
+    if (!caps.cwTextControl->supports(request.field)) { return ReceiveDispatch::Unsupported; }
+    if (request.configuration()) {
+        return m_backend->requestCwTextControl(request, {{}, false}, current);
+    }
+    const bool batchSpeed = request.origin != CwTextRequest::Origin::Operator;
+    if (request.keys() && !operation.permitsDispatch(txMonotonicMs())) { return ReceiveDispatch::Unsupported; }
+    if (request.origin == CwTextRequest::Origin::Transient) {
+        if (!operation.permitsDispatch(txMonotonicMs())) { return ReceiveDispatch::Unsupported; }
+        current = [operation, captured = std::move(current)] {
+            return operation.permitsDispatch(txMonotonicMs()) && (!captured || captured());
+        };
+    }
+    if (!request.keys() && !operation.permitsCleanup()) { return ReceiveDispatch::Unsupported; }
+    const QPointer<RadioModel> self(this);
+    const RadioControlSession session = controlSession();
+    CwTextCompletion reply;
+    if (request.keys()) {
         m_cwxActive = true;
-        if (nChars >= 0) {
-            // The epoch and original producer survive QSK gaps and nested
-            // notifications; an earlier reply cannot adopt a new text batch.
+        if (nChars >= 0
+            && caps.cwTextControl->completion == CwTextControl::Completion::RadioCharacterIndex) {
             m_cwxDrainArmed = true;
-            sendCwxCommand(command, true, operation,
-                [this, operation, epoch, nChars](int result, const QString& body) {
-                    if (operation.permitsDispatch(txMonotonicMs())) {
-                        m_cwxModel.handleSendReply(result, body, epoch, nChars);
-                    }
-                });
-        } else {
-            sendCwxCommand(command, true, operation);
+            reply = [self, session, operation, epoch, nChars](const CwTextReply& result) {
+                if (self && self->controlSessionCurrent(session)
+                    && operation.permitsDispatch(txMonotonicMs())) {
+                    self->m_cwxModel.handleSendReply(result, epoch, nChars);
+                }
+            };
         }
-    } else if (command.startsWith("cwx clear")) {
+    } else if (request.field == CwTextRequest::Field::Clear) {
         m_cwxActive = false;
         m_cwxDrainArmed = false;
-        sendCwxCommand(command, false, operation);
-    } else {
-        sendCmd(command);
     }
+    const bool counted = request.keys() || batchSpeed || request.field == CwTextRequest::Field::Clear
+        || request.field == CwTextRequest::Field::Erase;
+    const TxCoordinator::Completion consumed = counted ? trackCwxQueue(operation) : TxCoordinator::Completion{};
+    const TxCoordinator::Command command{operation, request.keys(), consumed};
+    const ReceiveDispatch result = m_backend->requestCwTextControl(request, command, current, reply);
+    if (result == ReceiveDispatch::Unsupported) { consumed.finish(); }
+    if (!self) { return ReceiveDispatch::Unsupported; }
+    return result;
 }
 
 bool RadioModel::dispatchCwxText(const QString& text, TxCoordinator::Operation original)
 {
-    if (usesFlexCommandPlane()) {
+    if (backendCapabilities().cwTextControl) {
         return true;
     }
     if (!m_backend || !backendCapabilities().hasRadioSideCwKeyer
@@ -884,7 +959,8 @@ void RadioModel::finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator
     if (epoch != m_cwxModel.drainEpoch() || !intent.sameIntent(m_cwxCommandIntent)) {
         return;
     }
-    if (!usesFlexCommandPlane() || untrackedMacro) {
+    const auto control = backendCapabilities().cwTextControl;
+    if (!control || control->completion == CwTextControl::Completion::LocalHandoff || untrackedMacro) {
         // CI-V and unknown-length Flex macros have no qualified drain index.
         // This is local queue handoff, never proof of radio-idle or recovery.
         if (untrackedMacro && m_cwxDrainArmed) {
@@ -913,21 +989,6 @@ TxCoordinator::Completion RadioModel::trackCwxQueue(const TxCoordinator::Operati
             receiver->endLocalTxActivity(intent);
         }
     });
-}
-
-void RadioModel::sendCwxCommand(const QString& command, bool keying,
-                                const TxCoordinator::Operation& operation, ResponseCallback reply)
-{
-    const TxCoordinator::Operation fence = keying || operation.permitsCleanup()
-        ? operation : m_txCoordinator.cleanupFence();
-    const TxCoordinator::Completion completion = trackCwxQueue(operation);
-    const auto consumed = [completion] { completion.finish(); };
-    // An ESC must cancel queued text even while a separate MOX intent keeps
-    // the shared desktop operation alive. Never read CwxModel on the worker.
-    const auto batch = m_cwxModel.queuedTransmissionPermit();
-    if (!sendTxTcpCommand(command, fence, keying, consumed, std::move(reply), batch)) {
-        consumed();
-    }
 }
 
 void RadioModel::stopTxOperation(const TxCoordinator::Operation& operation,
@@ -1006,6 +1067,27 @@ void RadioModel::cancelLocalTransmit()
     if (QThread::currentThread() != thread()) {
         return;
     }
+    // This is explicit operator Stop, unlike automatic operation retirement.
+    // DVK stop is global; automatic cleanup cannot prove another client's
+    // replacement has not acquired that radio operation.
+    const QPointer<RadioModel> alive(this);
+    if (m_dvkModel.status() == VoiceKeyer::Playback
+        || m_dvkModel.pendingOperation() == VoiceKeyer::Playback) {
+        m_dvkModel.playbackStop(m_dvkModel.activeId());
+    }
+    if (!alive) { return; }
+    // Stop also ends the services' hold on the transmitter, so a NAVTEX
+    // submission or voice playback whose answer never came cannot lock out
+    // MOX, TUNE or the next submission until reconnect.
+    if (m_dvkTxRequest) {
+        m_dvkTxRequest = 0;
+        endLocalTxActivity(std::exchange(m_dvkTxIntent, {}));
+    }
+    if (m_navtexTxRequest) {
+        m_navtexTxRequest = 0;
+        endLocalTxActivity(std::exchange(m_navtexTxIntent, {}));
+    }
+    if (!alive) { return; }
     m_txCoordinator.discardCapturedRequests();
     m_cwInputSession.fetch_add(1, std::memory_order_release);
     m_cwInputNotBefore = std::chrono::steady_clock::now();
@@ -1050,6 +1132,16 @@ void RadioModel::resetTxOperations()
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    m_transmitServiceSession->store(false, std::memory_order_release);
+    m_transmitServiceSession = std::make_shared<std::atomic_bool>(true);
+    m_dvkTxRequest = 0;
+    m_navtexTxRequest = 0;
+    m_dvkTxIntent = {};
+    m_navtexTxIntent = {};
+    m_dvkModel.reset();
+    m_navtexModel.reset();
+    m_cwxSessionValid->store(false, std::memory_order_release);
+    m_cwxSessionValid = std::make_shared<std::atomic<bool>>(true);
     if (m_independentTxGrants) {
         m_independentTxGrants->invalidateRadio();
     }

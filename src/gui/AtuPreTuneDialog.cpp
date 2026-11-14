@@ -237,6 +237,13 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
     if (m_radio) {
         connect(&m_radio->transmitModel(), &TransmitModel::atuStateChanged,
                 this, &AtuPreTuneDialog::onAtuStateChanged);
+        connect(&m_radio->transmitModel(), &TransmitModel::atuAvailabilityChanged,
+                this, [this](bool available) {
+            if (!available && !m_externalTuner) {
+                invalidateRoute(tr("The transmit antenna moved to a transverter output. "
+                                   "Close and reopen the pre-tune sweep."));
+            }
+        });
         // Sample SWR while waiting for ATU terminal state.  The radio
         // resets SWR to exactly 1.0 in the final meter packet of each tune
         // cycle (right before the terminal status arrives) even at full

@@ -597,25 +597,6 @@ void AetherialAudioStrip::onBypassToggled(bool checked)
     m_audio->setTxBypassed(checked);
 }
 
-// Preset combo items:
-//   0..N-1      stored preset names (alphabetic)
-//   N           "──────────"  (disabled separator)
-//   N+1         "Import\xe2\x80\xa6"
-//   N+2         "Export\xe2\x80\xa6"
-// Actions are identified by UserRole sentinels, not text, so labels can be
-// localised.
-
-namespace {
-constexpr int kRolePresetName       = Qt::UserRole + 1;
-constexpr int kRoleAction           = Qt::UserRole + 2;
-constexpr int kActionImport         = 1;
-constexpr int kActionExportPreset   = 2;
-constexpr int kActionExportLibrary  = 3;
-}
-
-
-
-
 void AetherialAudioStrip::refreshAllPanelsFromEngine()
 {
     // Preset loader writes new values straight into the engine; nudge

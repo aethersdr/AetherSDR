@@ -268,7 +268,8 @@ SetRXAAMDRun(int channel, int run)
 	if (a->run != run)
 	{
 		RXAbp1Check (channel, run, rxa[channel].snba.p->run, rxa[channel].emnr.p->run, 
-			getRun_nnr(rxa[channel].nnr.p), rxa[channel].anf.p->run, rxa[channel].anr.p->run);
+			getRun_nnrbypass (rxa[channel].nnrbypass.p), 
+			rxa[channel].anf.p->run, rxa[channel].anr.p->run);
 		EnterCriticalSection (&ch[channel].csDSP);
 		a->run = run;
 		RXAbp1Set (channel);

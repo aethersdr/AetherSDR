@@ -46,6 +46,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QAction>
 #include <QMouseEvent>
 #include <QMenuBar>
 #include <QOperatingSystemVersion>
@@ -203,6 +204,257 @@ int main(int argc, char** argv)
                   && WindowChrome::expandedFrameHit(QPoint(600, 53), win, 8, 4) == Hit::Top
                   && WindowChrome::expandedFrameHit(QPoint(600, 55), win, 8, 4) == Hit::Client,
               "the left/right band and the top/bottom band follow their own widths");
+    }
+
+    // ── The title bar answers as the caption so Windows offers Snap (#6825) ──
+    {
+        using Hit = WindowChrome::FrameHit;
+        const QRect win(100, 50, 1000, 600);
+        const int band = 8;
+        const int caption = 52;
+
+        // Without a caption height nothing changes: every existing caller
+        // (and every window that is not the main window) keeps the old answer.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, band, band) == Hit::Client,
+              "the title bar is client area when no caption height is given");
+
+        // The bar's background drags the window, which is what Windows needs
+        // before it offers drag-to-edge Snap and the Snap Assist picker.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, band, band, caption)
+                  == Hit::Caption,
+              "the title bar's background is the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 101), win, band, band, caption)
+                  == Hit::Caption,
+              "the last pixel of the caption strip still drags");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 102), win, band, band, caption)
+                  == Hit::Client,
+              "the first pixel below the caption is client area");
+
+        // The resize band wins over the caption, or the top edge and the top
+        // corners would stop resizing the moment the caption was introduced.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 50), win, band, band, caption) == Hit::Top,
+              "the top resize band still wins over the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(101, 51), win, band, band, caption)
+                  == Hit::TopLeft
+                  && WindowChrome::expandedFrameHit(QPoint(1098, 51), win, band, band, caption)
+                      == Hit::TopRight,
+              "the top corners still resize under the caption");
+        check(WindowChrome::expandedFrameHit(QPoint(101, 70), win, band, band, caption)
+                  == Hit::Left,
+              "the side band still resizes alongside the caption");
+
+        // Maximized: no resize band, but the caption must still answer or the
+        // window cannot be dragged back down off the top of the screen.
+        check(WindowChrome::expandedFrameHit(QPoint(600, 70), win, 0, 0, caption) == Hit::Caption,
+              "the caption answers while maximized, so the window can be dragged free");
+        check(WindowChrome::expandedFrameHit(QPoint(600, 350), win, 0, 0, caption) == Hit::Client,
+              "the body is still client area while maximized");
+
+        // A point outside the window is never the caption.
+        check(WindowChrome::expandedFrameHit(QPoint(20, 20), win, band, band, caption)
+                  == Hit::Client,
+              "a point outside the window is not the caption");
+    }
+
+    // ── WM_NCHITTEST answers for the point it carries, not the cursor (#6825) ──
+    {
+        // The message's coordinate is physical; isSystemMoveAreaAt() needs Qt's
+        // logical global space. The conversion anchors on the CLIENT origin,
+        // because GetWindowRect carries the invisible DWM resize border that
+        // Qt's frame geometry does not.
+        //
+        // Real Windows 11 geometry measured on this PR, 100% scale: a window
+        // rect of x=253 w=1414 around a client at x=259 w=1401 — 6 px of
+        // border on the left. The widget origin is the same corner as Qt sees
+        // it, so these two describe the same area and cannot skew.
+        const QPoint clientOrigin(259, 300);
+        const QPoint widgetOrigin(259, 300);
+
+        check(WindowChrome::logicalScreenPoint(clientOrigin, clientOrigin, widgetOrigin, 1.0)
+                  == widgetOrigin,
+              "the client origin maps to the widget origin");
+
+        // The regression this replaces: scaling GetWindowRect onto Qt's frame
+        // geometry shifted every point by the border inset, so a press on the
+        // right of the ☰ glyph answered HTCAPTION and started a window move.
+        // Anchored on the client, a point 36 px into the client stays 36 px in.
+        check(WindowChrome::logicalScreenPoint(QPoint(259 + 36, 326), clientOrigin,
+                                               widgetOrigin, 1.0)
+                  == QPoint(259 + 36, 326),
+              "a point inside the client keeps its offset, with no border skew");
+
+        // The window rect's own left edge is 6 px outside the client, and must
+        // map to a negative offset rather than to the widget origin.
+        check(WindowChrome::logicalScreenPoint(QPoint(253, 300), clientOrigin, widgetOrigin, 1.0)
+                  == QPoint(253, 300),
+              "a point in the resize border maps outside the widget, not onto its origin");
+
+        // DPR 2: offsets halve, and the origin still anchors the result.
+        const QPoint hiClient(400, 200);
+        const QPoint hiWidget(200, 100);
+        check(WindowChrome::logicalScreenPoint(QPoint(400, 200), hiClient, hiWidget, 2.0)
+                  == hiWidget,
+              "at DPR 2 the client origin still maps to the widget origin");
+        check(WindowChrome::logicalScreenPoint(QPoint(600, 400), hiClient, hiWidget, 2.0)
+                  == QPoint(300, 200),
+              "a point at DPR 2 halves its offset from the client origin");
+
+        // A fractional ratio (150% scaling) must not drift.
+        const QPoint p150 = WindowChrome::logicalScreenPoint(QPoint(400 + 150, 200),
+                                                             hiClient, hiWidget, 1.5);
+        check(p150.x() == 300 && p150.y() == 100,
+              "a non-integer scale divides the offset without drifting");
+
+        // A zero or negative ratio must not divide by zero.
+        check(WindowChrome::logicalScreenPoint(QPoint(7, 9), clientOrigin, widgetOrigin, 0.0)
+                  == QPoint(7, 9),
+              "a zero device pixel ratio returns the point unchanged");
+
+        // The whole point of the conversion: two different physical points in
+        // the same message stream map to two different logical points, so the
+        // caption test can distinguish them while the cursor sits elsewhere.
+        const QPoint a = WindowChrome::logicalScreenPoint(QPoint(400, 160), clientOrigin,
+                                                          widgetOrigin, 1.0);
+        const QPoint b = WindowChrome::logicalScreenPoint(QPoint(1800, 160), clientOrigin,
+                                                          widgetOrigin, 1.0);
+        check(a != b && a.y() == b.y(),
+              "two queried points stay distinct after conversion");
+
+        // ── The gate itself, not just the conversion ───────────────────────
+        // Real Windows 11 maximized geometry: the window rect starts 6 px
+        // above and left of the client and overhangs the screen.
+        const int windowTop = 294;              // GetWindowRect top
+        const QPoint maxClient(259, 300);       // client origin, 6 px inside
+        const QPoint maxWidget(259, 300);
+        const int barHeight = 52;
+
+        // Which point the gate asks about: record it, so a revert to the live
+        // cursor (or to the window rect) is visible as a different answer.
+        QPoint asked(-1, -1);
+        auto recording = [&asked](const QPoint& p) {
+            asked = p;
+            return true;
+        };
+        const int h = WindowChrome::captionHeightForHitTest(
+            QPoint(259 + 36, 326), windowTop, maxClient, maxWidget, barHeight, 1.0, recording);
+        check(asked == QPoint(259 + 36, 326),
+              "the gate asks about the message's own point, client-anchored");
+        checkEqual(h, (300 - 294) + 52,
+                   "the caption spans the frame inset plus the bar, measured from the client top");
+
+        // A point the move-area test rejects yields no caption at all.
+        auto never = [](const QPoint&) { return false; };
+        checkEqual(WindowChrome::captionHeightForHitTest(QPoint(300, 326), windowTop, maxClient,
+                                                         maxWidget, barHeight, 1.0, never),
+                   0, "a point outside the move area gives no caption");
+
+        // No bar (or a hidden one) must never produce a caption, and must not
+        // consult the move-area test at all.
+        bool consulted = false;
+        auto noting = [&consulted](const QPoint&) {
+            consulted = true;
+            return true;
+        };
+        checkEqual(WindowChrome::captionHeightForHitTest(QPoint(300, 326), windowTop, maxClient,
+                                                         maxWidget, 0, 1.0, noting),
+                   0, "a hidden title bar gives no caption");
+        check(!consulted, "a hidden title bar does not consult the move-area test");
+    }
+
+    // ── A tooltipped drag handle stays client, so its tooltip survives ──────
+    // Over a caption Windows sends WM_NCMOUSEMOVE, which Qt delivers as
+    // NonClientAreaMouseMove; that never starts the tooltip timer. Measured on
+    // Windows 11: every HTCAPTION point suppressed its tooltip, every HTCLIENT
+    // point showed it. So isCaptionMoveAreaAt() excludes the drag handles that
+    // carry one, while isSystemMoveAreaAt() — the bar's own drag, shared with
+    // Linux — still accepts them. (#6830 review)
+    {
+        QWidget tipHost;
+        auto* tipBar = new TitleBar(&tipHost);
+        tipHost.resize(1400, 200);
+        tipHost.show();
+        app.processEvents();
+
+        tipBar->setOperatorTransmitting(true);
+        app.processEvents();
+
+        auto* timer = tipBar->findChild<QLabel*>(QStringLiteral("txTimerLabel"));
+        auto* gutter = tipBar->findChild<QWidget*>(QStringLiteral("titleBarDragGutter"));
+        check(timer && gutter, "tooltip probe finds the transmit timer and the drag gutter");
+        // Assert visibility rather than folding it into the guard: if the timer
+        // ever stops showing while transmitting, these checks must fail loudly
+        // instead of quietly not running.
+        check(timer && timer->isVisible(), "the transmit timer shows while transmitting");
+        if (timer && gutter && timer->isVisible()) {
+            check(!timer->toolTip().isEmpty(), "the transmit timer carries a tooltip");
+            check(gutter->toolTip().isEmpty(), "the drag gutter carries no tooltip");
+
+            const QPoint onTimer = timer->mapToGlobal(timer->rect().center());
+            const QPoint onGutter = gutter->mapToGlobal(gutter->rect().center());
+
+            // Both are drag handles: the bar's own drag accepts either.
+            check(tipBar->isSystemMoveAreaAt(onTimer),
+                  "the transmit timer is still a drag handle for the bar's own move");
+            check(tipBar->isSystemMoveAreaAt(onGutter),
+                  "the drag gutter is a drag handle");
+
+            // Only the tooltip-free one may answer HTCAPTION.
+            check(!tipBar->isCaptionMoveAreaAt(onTimer),
+                  "a tooltipped drag handle does not become the caption, so its tooltip shows");
+            check(tipBar->isCaptionMoveAreaAt(onGutter),
+                  "the bare drag gutter still becomes the caption, so Snap works");
+        }
+        const QPoint origin = tipHost.mapToGlobal(QPoint(0, 0));
+        const QRect nativeWindow(origin, tipHost.size());
+        const auto checkClientControl = [&](QWidget* control) {
+            const QPoint samples[] = {
+                QPoint(0, control->height() / 2),
+                control->rect().center(),
+                QPoint(control->width() - 1, control->height() / 2),
+            };
+            for (const QPoint& local : samples) {
+                const QPoint point = control->mapToGlobal(local);
+                check(!tipBar->isCaptionMoveAreaAt(point),
+                      "interactive audio controls stay outside the caption move area");
+                const int captionHeight = WindowChrome::captionHeightForHitTest(
+                    point, nativeWindow.top(), origin, origin, tipBar->height(), 1.0,
+                    [tipBar](const QPoint& logical) {
+                        return tipBar->isCaptionMoveAreaAt(logical);
+                    });
+                check(WindowChrome::expandedFrameHit(point, nativeWindow, 8, 8, captionHeight)
+                          == WindowChrome::FrameHit::Client,
+                      "restored-window audio controls answer client across their width");
+                check(WindowChrome::expandedFrameHit(point, nativeWindow, 0, 0, captionHeight)
+                          == WindowChrome::FrameHit::Client,
+                      "maximized-window audio controls answer client across their width");
+            }
+        };
+
+        for (const char* name : {"Master volume", "Headphone volume"}) {
+            QSlider* slider = nullptr;
+            for (QSlider* candidate : tipBar->findChildren<QSlider*>()) {
+                if (candidate->accessibleName() == QLatin1String(name)) {
+                    slider = candidate;
+                }
+            }
+            check(slider && slider->isVisible(), "caption probe finds each visible volume slider");
+            if (slider && slider->isVisible()) {
+                const QString tooltip = slider->toolTip();
+                slider->setToolTip(QString());
+                checkClientControl(slider);
+                slider->setToolTip(tooltip);
+            }
+        }
+
+        auto* pcAudio = tipBar->findChild<QPushButton*>(QStringLiteral("pcAudioBtn"));
+        check(pcAudio && pcAudio->isVisible(), "caption probe finds the PC Audio button");
+        if (pcAudio && pcAudio->isVisible()) {
+            const QString tooltip = pcAudio->toolTip();
+            pcAudio->setToolTip(QString());
+            checkClientControl(pcAudio);
+            pcAudio->setToolTip(tooltip);
+        }
+        tipBar->setOperatorTransmitting(false);
     }
 
     // ── Native client-rect save/restore for the Windows expanded frame (#6303) ──
@@ -700,6 +952,171 @@ int main(int argc, char** argv)
         bar->setActiveRadio(connected.id);
     }
 
+    {
+        RadioTabEntry a = connected; a.id = "recent-a";
+        RadioTabEntry b = inUse; b.id = "recent-b";
+        RadioTabEntry c = inUse; c.id = "recent-c";
+        RadioTabEntry d = inUse; d.id = "recent-d";
+        RadioTabEntry lab; lab.id = "aetherlab"; lab.kind = RadioTabEntry::Kind::Workspace;
+        const auto ids = [](const QList<RadioTabEntry>& entries) {
+            QStringList result; for (const auto& entry : entries) { result.append(entry.id); } return result;
+        };
+        check(ids(recentRadioShortcuts({a,b,c,d,lab}, {d.id,c.id}, a.id)) == QStringList{a.id,d.id,lab.id},
+            "two recent shortcuts retain the active radio and independent workspace tabs");
+        check(ids(recentRadioShortcuts({a,b,c,d}, {d.id,c.id}, {})) == QStringList{c.id,d.id},
+            "recent selection retains saved visual order after restart");
+        b.canCancel = true;
+        check(ids(recentRadioShortcuts({a,b,c,d}, {d.id,c.id}, a.id)) == QStringList{a.id,b.id},
+            "a pending target replaces the second shortcut without hiding the active radio");
+        b.canCancel = false; d.visibleInTabs = false;
+        check(ids(recentRadioShortcuts({a,b,c,d}, {d.id,c.id}, {})) == QStringList{a.id,c.id},
+            "hidden recent radios stay in the drawer and another shortcut fills the slot");
+    }
+
+    // Reordering works without overflow and preserves widget/connection identity.
+    {
+        RadioTabBar reorder;
+        RadioTabEntry a = connected; a.id = "order-a";
+        RadioTabEntry b = inUse; b.id = "order-b";
+        RadioTabEntry c = inUse; c.id = "order-c";
+        reorder.setRadios({a, b, c});
+        reorder.resize(900, 40);
+        reorder.show();
+        reorder.setActiveRadio(a.id);
+        app.processEvents();
+        int activations = 0;
+        QStringList savedOrder;
+        int saves = 0;
+        QObject::connect(&reorder, &RadioTabBar::radioActivated, [&activations](const QString&) { ++activations; });
+        QObject::connect(&reorder, &RadioTabBar::radioOrderChanged, [&savedOrder, &saves](const QStringList& order) { savedOrder = order; ++saves; });
+        RadioTab* first = nullptr;
+        RadioTab* last = nullptr;
+        for (RadioTab* tab : reorder.findChildren<RadioTab*>()) {
+            if (tab->entry().id == a.id) { first = tab; }
+            if (tab->entry().id == c.id) { last = tab; }
+        }
+        const QPointF pressGlobal = first->mapToGlobal(QPointF(first->width() / 2.0, first->height() / 2.0));
+        const QPointF endGlobal = last->mapToGlobal(QPointF(last->width() / 2.0 + 20, last->height() / 2.0));
+        const auto send = [](RadioTab* tab, QEvent::Type type, QPointF global, Qt::MouseButtons held) {
+            QMouseEvent event(type, tab->mapFromGlobal(global), global,
+                type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, held, Qt::NoModifier);
+            QApplication::sendEvent(tab, &event);
+        };
+        send(first, QEvent::MouseButtonPress, pressGlobal, Qt::LeftButton);
+        send(first, QEvent::MouseMove, endGlobal, Qt::LeftButton);
+        b.detail = "updated during drag";
+        reorder.setRadios({a, b, c});
+        send(first, QEvent::MouseButtonRelease, endGlobal, Qt::NoButton);
+        check(savedOrder == QStringList{b.id, c.id, a.id} && saves == 1, "dragging past tab centers emits one complete saved order");
+        check(activations == 0 && reorder.activeRadioId() == a.id && first->entry().id == a.id,
+            "reordering and discovery refresh preserve the active radio and dragged widget");
+        const auto visualOrder = [&reorder] {
+            QStringList result;
+            for (const QVariant& tab : reorder.state().value("tabs").toList()) { result.append(tab.toMap().value("id").toString()); }
+            return result;
+        };
+        check(visualOrder() == savedOrder, "bridge inspection exposes tabs in visual order");
+        const QPointF newPress = first->mapToGlobal(QPointF(first->width() / 2.0, first->height() / 2.0));
+        send(first, QEvent::MouseButtonPress, newPress, Qt::LeftButton);
+        send(first, QEvent::MouseMove, pressGlobal, Qt::LeftButton);
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(first, &escape);
+        check(visualOrder() == savedOrder && saves == 1, "Escape cancels a reorder without persisting it");
+        QKeyEvent menuKey(QEvent::KeyPress, Qt::Key_F10, Qt::ShiftModifier);
+        QApplication::sendEvent(first, &menuKey);
+        check(reorder.state().value("contextMenuVisible").toBool() && reorder.activeRadioId() == a.id,
+            "Shift+F10 opens the tab menu without switching radios");
+        // The tab menu is the keyboard path for the same reorder.
+        QAction* left = reorder.findChild<QAction*>(QStringLiteral("radioSwitcher_moveLeft_") + a.id);
+        QAction* right = reorder.findChild<QAction*>(QStringLiteral("radioSwitcher_moveRight_") + a.id);
+        check(left && right && left->isEnabled() && !right->isEnabled(),
+            "the last tab's menu offers Move left but not Move right");
+        if (left) { left->trigger(); }
+        check(savedOrder == QStringList{b.id, a.id, c.id} && saves == 2 && visualOrder() == savedOrder
+                && reorder.activeRadioId() == a.id,
+            "Move left swaps with the neighbor and saves the order like a drag");
+        if (QMenu* menu = reorder.findChild<QMenu*>()) { menu->close(); }
+        check(!reorder.moveRadioTab(b.id, -1) && saves == 2, "the first tab cannot move further left");
+    }
+
+    // A tab's menu targets that tab, including with keyboard activation.
+    {
+        RadioTabBar* tabs = bar->radioTabBar();
+        QString requestedId;
+        QString requestedAction;
+        const auto request = QObject::connect(tabs, &RadioTabBar::radioActionRequested,
+            [&requestedId, &requestedAction](const QString& id, const QString& action) {
+                requestedId = id; requestedAction = action;
+            });
+        const QString active = tabs->activeRadioId();
+        check(tabs->showRadioContextMenu(inUse.id), "an inactive tab opens its own context menu");
+        QMenu* menu = tabs->findChild<QMenu*>(QStringLiteral("radioSwitcherMenu_") + inUse.id);
+        QAction* connect = menu ? menu->findChild<QAction*>(QStringLiteral("radioSwitcher_connect_") + inUse.id) : nullptr;
+        check(connect && connect->text() == QStringLiteral("Switch to this radio…"), "context connect names the replacement action");
+        if (connect) { connect->trigger(); }
+        check(requestedId == inUse.id && requestedAction == QStringLiteral("connect"), "context action targets the clicked radio");
+        check(tabs->activeRadioId() == active, "opening or invoking a menu cannot optimistically change the active radio");
+        if (menu) { menu->close(); }
+        QObject::disconnect(request);
+        RadioTabEntry pending = inUse;
+        pending.canCancel = true;
+        pending.canConnect = false;
+        pending.status = RadioTabStatus::Connecting;
+        tabs->setRadios({connected, pending});
+        app.processEvents();
+        tabs->showRadioContextMenu(pending.id);
+        QMenu* pendingMenu = tabs->findChildren<QMenu*>().last();
+        check(pendingMenu && pendingMenu->findChild<QAction*>(QStringLiteral("radioSwitcher_cancel_") + pending.id), "a connecting tab exposes Cancel connection");
+        if (pendingMenu) { pendingMenu->close(); }
+        tabs->setRadios({connected, inUse});
+        app.processEvents();
+    }
+
+    // A global accent-menu foreground must not leak onto a canon selection.
+    {
+        RadioTabBar* tabs = bar->radioTabBar();
+        const QString priorSheet = app.styleSheet();
+        // Subpixel antialiasing fringes every glyph pixel with color, so an
+        // exact-ink pixel count only means something with grayscale text.
+        const QFont priorFont = app.font();
+        QFont grayscaleFont = priorFont;
+        grayscaleFont.setStyleStrategy(QFont::NoSubpixelAntialias);
+        app.setFont(grayscaleFont);
+        for (const QString& theme : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            auto& tm = ThemeManager::instance();
+            check(tm.setActiveTheme(theme), "context menu render theme loads");
+            app.setStyleSheet(priorSheet + QStringLiteral("QMenu::item:selected { color: %1; }")
+                .arg(tm.color(QStringLiteral("color.canon.onAccent")).name()));
+            tabs->showRadioContextMenu(inUse.id);
+            auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            QAction* action = menu ? menu->findChild<QAction*>(QStringLiteral("radioSwitcher_connect_") + inUse.id) : nullptr;
+            check(menu && action, "the theme render uses the actual radio tab menu");
+            if (menu && action) {
+                menu->setActiveAction(action);
+                app.processEvents();
+                const QImage rendered = menu->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+                const qreal dpr = rendered.devicePixelRatio();
+                const QRect row = menu->actionGeometry(action);
+                const QRect pixels(qRound(row.x() * dpr), qRound(row.y() * dpr), qRound(row.width() * dpr), qRound(row.height() * dpr));
+                const QColor ink = tm.color(menu, QStringLiteral("color.canon.ink"));
+                int inkPixels = 0;
+                for (int y = pixels.top(); y <= pixels.bottom() && y < rendered.height(); ++y) {
+                    for (int x = pixels.left(); x <= pixels.right() && x < rendered.width(); ++x) {
+                        const QColor actual = rendered.pixelColor(x, y);
+                        if (qAbs(actual.red() - ink.red()) < 12 && qAbs(actual.green() - ink.green()) < 12
+                            && qAbs(actual.blue() - ink.blue()) < 12) { ++inkPixels; }
+                    }
+                }
+                check(inkPixels > 10, "highlighted menu text renders with the theme's canon ink");
+                check(!menu->styleSheet().contains(QStringLiteral("{{")), "all menu theme tokens resolve");
+                menu->close();
+            }
+        }
+        app.setStyleSheet(priorSheet);
+        app.setFont(priorFont);
+        ThemeManager::instance().setActiveTheme(QStringLiteral("Default Dark"));
+    }
+
     // ── Discovered-radios popover ───────────────────────────────────────────
     RadioTabBar* tabs = bar->radioTabBar();
     check(tabs != nullptr, "the bar owns a radio tab strip");
@@ -723,7 +1140,7 @@ int main(int argc, char** argv)
             check(lab && rescan && lab->y() > rescan->y(), "AetherLab is offered below Rescan radios");
             check(heading != nullptr, "the popover exposes its heading");
             if (manual) {
-                check(manual->text() == QStringLiteral("Connect manually\u2026"),
+                check(manual->text() == QStringLiteral("Locations and connections\u2026"),
                       "the manual-connect ellipsis is valid Unicode");
                 check(!manual->styleSheet().contains(QStringLiteral("{{")),
                       "the popover row resolves every theme token");
@@ -906,8 +1323,7 @@ int main(int argc, char** argv)
             check(hbar->value() < before,
                   "a vertical wheel notch scrolls the overflowing strip sideways");
 
-            // Dragging a tab sideways pans the overflowing strip and is not a
-            // click; a press that does not move still activates the tab.
+            // Dragging empty strip space scrolls; a still tab click activates.
             hbar->setValue(hbar->maximum() / 2);
             RadioTab* grabbed = nullptr;
             int grabX = 0;   // a point on the tab that is inside the viewport
@@ -927,19 +1343,19 @@ int main(int argc, char** argv)
                     tabs, &RadioTabBar::radioActivated, [&activations](const QString&) { ++activations; });
                 // A real pointer's screen position does not move with the strip.
                 const QPointF pressGlobal = grabbed->mapToGlobal(QPointF(grabX, grabbed->height() / 2.0));
-                auto send = [grabbed, pressGlobal](QEvent::Type type, int dx, Qt::MouseButtons held) {
+                auto send = [surface = scroller->viewport(), pressGlobal](QEvent::Type type, int dx, Qt::MouseButtons held) {
                     const QPointF global = pressGlobal + QPointF(dx, 0);
-                    QMouseEvent e(type, grabbed->mapFromGlobal(global), global,
+                    QMouseEvent e(type, surface->mapFromGlobal(global), global,
                                   type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
                                   held, Qt::NoModifier);
-                    QApplication::sendEvent(grabbed, &e);
+                    QApplication::sendEvent(surface, &e);
                 };
                 const int start = hbar->value();
                 send(QEvent::MouseButtonPress, 0, Qt::LeftButton);
                 send(QEvent::MouseMove, -20, Qt::LeftButton);
                 send(QEvent::MouseMove, -60, Qt::LeftButton);
                 send(QEvent::MouseButtonRelease, -60, Qt::NoButton);
-                checkEqual(hbar->value() - start, 60, "dragging a tab 60 px left pans the strip 60 px");
+                checkEqual(hbar->value() - start, 60, "dragging empty space 60 px left pans the strip 60 px");
                 checkEqual(activations, 0, "a drag does not activate the tab it started on");
                 // Click where that tab is now, after the pan.
                 const QPointF here(grabbed->width() / 2.0, grabbed->height() / 2.0);

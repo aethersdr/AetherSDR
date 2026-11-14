@@ -61,7 +61,7 @@ const Palette& palette(Look look)
          {"@checkFillChecked@", "{{color.canon.cyan}}"}, {"@buttonText@", "{{color.canon.cyan}}"},
          {"@buttonTop@", "{{color.canon.control}}"}, {"@buttonBottom@", "{{color.canon.control}}"},
          {"@buttonHoverEdge@", "{{color.canon.aqua}}"}, {"@disabledEdge@", "{{color.canon.line}}"},
-         {"@disabledFill@", "transparent"}, {"@tabCheckedText@", "{{color.canon.aqua}}"},
+         {"@disabledFill@", "{{color.canon.control}}"}, {"@tabCheckedText@", "{{color.canon.aqua}}"},
          {"@tabCheckedFill@", "{{color.canon.nested}}"}, {"@tabDisabledText@", "{{color.canon.muted}}"},
          {"@inputFill@", "{{color.canon.control}}"}, {"@selection@", "{{color.canon.nested}}"},
          {"@sliderHandleDisabled@", "{{color.canon.line}}"}, {"@sliderFillDisabled@", "{{color.canon.line}}"},
@@ -409,6 +409,8 @@ QScrollBar::sub-line:vertical {
             R"((?:QCheckBox|QRadioButton)::indicator[^{]*\{(?:\{\{[^{}]*\}\}|[^{}])*\}\s*)"));
         sheet.remove(ownIndicatorRules);
         sheet += canonIndicatorRules();
+        sheet += QStringLiteral(
+            "QPushButton:disabled { color: {{color.button.foreground.disabled}}; }");
         sheet += QStringLiteral(
             "QListWidget { color: {{color.canon.inkSoft}}; background: {{color.canon.nested}};"
             " border: 1px solid {{color.canon.line}}; border-radius: %1px; padding: 4px;"

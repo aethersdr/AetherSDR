@@ -36,11 +36,17 @@ The CWX panel and the [DVK Panel](./dvk-panel.md) share the same space — openi
 
 The panel has three views, chosen with the buttons at its top: **Send**, **Live** and **Setup** (see [Views](#views)). In **Send**, type text and send it; sent text appears as history bubbles above the entry line. In **Live**, characters are keyed as you type them.
 
-**Speed** sets the keyer speed in WPM (5–100 on FlexRadio).
+**Speed** sets the keyer speed in WPM (5–100 on FlexRadio). With several speed edits pending, a delayed status echo from an earlier edit does not cancel your newer request.
+
+When disconnected, **Speed**, **Delay**, **QSK** and macro edits remain local
+drafts. Reconnecting reads the radio's current settings; it does not send those
+draft settings automatically.
 
 Right-click a sent bubble for **Resend** (sent again exactly as typed, per-word speed changes included) or **Clear History**.
 
-When the CWX queue empties, AetherSDR releases the transmitter straight away, so the radio returns to receive right after the last character.
+When the CWX queue empties, AetherSDR releases its text-send intent. A separately held **MOX** remains on; otherwise the radio returns to receive after the last character. **Escape** cancels queued text and its local sidetone without releasing a separately held **MOX**.
+
+Text is not automatically resent after a lost connection. Reconnect before starting a new send.
 
 ### Macros and shortcuts
 
@@ -91,6 +97,8 @@ To watch your own sending, turn on the **TX** decode of the [CW Decoder](./cw-de
 | **Step** | How many WPM each `+` or `-` speed prefix changes the speed (1–20) |
 | **F1–F12** | Twelve macro texts |
 
+**Delay** follows the radio's break-in delay. AetherSDR does not push a default or enforce a minimum when you connect.
+
 ### Special characters
 
 On FlexRadio with SmartSDR 4.3 firmware, double quotation marks (`"`) are preserved in **Send**, **Live**, and stored macros, including macros received from the radio. Enter them directly; no escaping is needed. Quotation-mark handling is unverified on earlier firmware.
@@ -128,6 +136,18 @@ Break-in is off, so the keyer waits for MOX.
 
 1. Turn on **break-in**, or turn on MOX before keying.
 2. Check that **TUNE** is off; CW keying is locked out while it is on.
+
+### CWX reports invalid text or too many unacknowledged speed changes
+
+Pasted control characters are refused. A batch is also cancelled if more than
+256 speed changes remain unacknowledged by the radio. At that limit, further
+**Speed** edits are refused without cancelling the existing batch; wait for the
+radio to acknowledge changes before trying again.
+
+1. Remove control characters from the text, or shorten the message and reduce
+   per-word speed changes.
+2. Check the radio connection before starting a new send. Cancelled text is not
+   resent automatically.
 
 ## See also
 

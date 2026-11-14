@@ -25,6 +25,25 @@ public:
         QString gpu;  // render GPU decision (GpuSelector::appliedSummary)
     };
 
+    // Facts a Hermes-Lite 2 report needs that the generic fields above do not
+    // carry. `present` is false for every other radio, and then the issue
+    // report is unchanged. -1 / empty means "the backend did not report it",
+    // and the report leaves that line out rather than printing a zero.
+    struct Hl2Info {
+        bool present{false};
+        QString boardVariant;            // the operator's declared board (hw.get codec)
+        int sampleRateHz{0};             // IQ sample rate, 0 = not reported
+        int receivers{0};                // running receivers, 0 = not reported
+        QString txModulator;             // "wdsp-txa" or "phasing", empty = not reported
+        QString mode;                    // mode(s) of the open slices
+        qlonglong droppedPackets{-1};    // cumulative EP6 sequence gaps
+        qlonglong ep4Drops{-1};          // cumulative EP4 (bandscope) gaps
+        int txFifoFault{-1};             // TX pacing fault flag: 0 no, 1 yes
+        qlonglong dspUnderruns{-1};      // RX DSP pipeline underruns, summed over receivers
+        qlonglong dspFaults{-1};         // RX DSP processing faults, summed over receivers
+        qlonglong txModulatorFaultBlocks{-1};
+    };
+
     struct RadioInfo {
         QString model;
         QString serial;
@@ -33,6 +52,7 @@ public:
         QString callsign;
         QString ip;
         bool connected{false};
+        Hl2Info hl2;
     };
 
     // Collect system info from QSysInfo + app version.
@@ -60,6 +80,11 @@ public:
         obj["buildDate"]     = sys.buildDate;
         return obj;
     }
+
+    // The Hermes-Lite 2 block for the issue report, from what the backend
+    // already holds (health snapshot, DSP chains, hw.get). Not present unless
+    // the connected backend declares the "hl2" extension namespace.
+    static Hl2Info collectHl2Info(RadioModel* model);
 
     // Collect radio info from RadioModel (safe if null/disconnected).
     static RadioInfo collectRadioInfo(const RadioModel* model);

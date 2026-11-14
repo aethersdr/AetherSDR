@@ -45,7 +45,7 @@ SSTV and other modes.
 
 | Control | Options |
 |---|---|
-| Mark freq | Auto, 2125, 2210, 1700, 1275, 1000, 915, 850, 500 Hz |
+| Mark freq | 500, 850, 915, 1000, 1275, 1700, **2125**, 2210 Hz |
 | Shift | 45, 50, 75, 100, **170**, 182, 200, 240, 425, 450, 500, 850 Hz |
 | Baud | **45.45**, 50, 75, 100, 110, 150, 300 |
 | REV | Space above mark (LSB / inverted polarity) |
@@ -53,20 +53,22 @@ SSTV and other modes.
 
 Stats bar updates ~2×/second: `M:xx% S:xx% SNR:xxdB  LOCKED/UNLOCK`
 
-Mark/Shift/Baud/REV persist to AppSettings as flat key names (grandfathered —
-see bug #4 below); Sens persists as one nested JSON object under the root key
+Baud/REV persist to AppSettings as flat key names (grandfathered —
+see bug #4 below); Mark and Shift are the slice's `rtty_mark` and `rtty_shift`
+and the client does not store them; Sens persists as one nested JSON object under the root key
 `RttyDecoder` per Constitution Principle V.
 
 ---
 
-## "Auto" Mark Frequency
+## Mark and Shift come from the slice
 
-When Mark combo = "Auto" (value 0), the decoder uses `SliceModel::rttyMark()`
-(the radio's mark setting).
-
-The decoder re-reads it live on the `rttyMarkChanged` and `rttyShiftChanged`
-signals, so tuning the radio's mark tone while decoding works without a mode
-cycle.
+The decoder uses `SliceModel::rttyMark()` and `SliceModel::rttyShift()`. A
+choice in the pane's Mark or Shift combo is sent to the slice
+(`setRttyMark()` / `setRttyShift()`). The slice's `rttyMarkChanged` and
+`rttyShiftChanged` run `refreshRttyDecodeState()`, which hands the values to
+the decoder and shows them in the combos, so a change on the VFO's DSP tab
+reaches the decoder while it runs. A value off a preset list gets its own
+entry.
 
 ---
 

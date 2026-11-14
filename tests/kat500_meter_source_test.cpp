@@ -30,5 +30,32 @@ int main()
         std::printf("[%s] %s\n", ok ? "PASS" : "FAIL", c.name);
         failures += !ok;
     }
+
+    struct TunerCase {
+        const char* name;
+        int radioWatts;
+        bool amplifier, kpa, blocked, kxpa;
+        int sharedWatts, tunerWatts;
+        bool highPower;
+    };
+    const TunerCase tunerCases[] = {
+        {"barefoot tuner", 100, false, false, false, false, 100, 100, false},
+        {"Aurora tuner", 500, false, false, false, false, 500, 500, false},
+        {"KPA500 tuner", 100, false, true, false, false, 500, 500, false},
+        {"key-blocked tuner", 100, false, true, true, false, 100, 100, false},
+        {"PGXL tuner keeps high-power range", 100, true, false, false, false, 100, 100, true},
+        {"barefoot with KXPA100", 100, false, false, false, true, 100, 100, false},
+        {"Aurora with KXPA100 preserves radio range", 500, false, false, false, true, 100, 500, false},
+        {"Aurora with blocked KPA500", 500, false, true, true, false, 500, 500, false},
+    };
+    for (const TunerCase& c : tunerCases) {
+        const SharedTxMeterSelection selected = selectSharedTxMeters(
+            c.radioWatts, c.amplifier, c.kpa, c.blocked, c.kxpa);
+        const bool ok = tunerMaxWatts(c.radioWatts, selected) == c.tunerWatts
+            && selected.maxWatts == c.sharedWatts
+            && selected.highPowerAmplifier == c.highPower;
+        std::printf("[%s] %s\n", ok ? "PASS" : "FAIL", c.name);
+        failures += !ok;
+    }
     return failures ? 1 : 0;
 }
