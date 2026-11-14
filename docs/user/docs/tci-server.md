@@ -334,7 +334,7 @@ aethersdr_ext_enable:true;
 
 The server answers with the set's version and the items this radio offers,
 then the current state of the offered items. An item sends as many state lines
-as it needs, and may send none:
+as it needs, and may send none. On a Hermes-Lite 2:
 
 ```
 aethersdr_ext:1,hl2;
@@ -342,6 +342,8 @@ aethersdr_hl2_filter_board:n2adr_rxtx,false;
 aethersdr_hl2_tx_timing:-1,-1,-1;
 aethersdr_hl2_exttr:-1;
 ```
+
+On a radio that offers no item, the answer is `aethersdr_ext:1;` alone.
 
 - Every command of the set starts with `aethersdr_`. Before the enable, the
   server ignores them without a reply, like any unknown command.
@@ -371,7 +373,8 @@ aethersdr_hl2_exttr;                            # read
   high-pass, `true` or `false`. This is the HL2 Hardware page's setting and is
   saved the same way. The high-pass applies to `n2adr_txonly` only, as on that
   page; with another board a set leaves it as it is. A set is refused while
-  transmitting or tuning, because the board's relays follow the transmit
+  transmitting or tuning, or while the radio is still finishing a
+  transmission, because the board's relays follow the transmit
   filter: the client that sent it gets the setting that stands, and AetherSDR
   shows the reason. It is also refused before the radio has an identity to
   save the setting against. Every change, from the page or another client, is
