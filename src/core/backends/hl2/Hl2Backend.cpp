@@ -2333,6 +2333,11 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // A new connect re-derives the passband from the mode; a mid-session linkUp
     // (EP6 silence then resume) does not. See m_passbandDerivedThisConnect.
     m_passbandDerivedThisConnect = false;
+    // Transmit starts on receiver A: the restored flat fields are A's entry
+    // (applyRestoredState()), and the link-up replay moves transmit back to the
+    // receiver that held it. A previous session's index would give A's mode
+    // and passband to that receiver.
+    m_txDdc = 0;
 
     // Load this radio's frequency calibration first, before any frequency is
     // computed. Keyed by MAC (one crystal per radio); an empty serial gets the

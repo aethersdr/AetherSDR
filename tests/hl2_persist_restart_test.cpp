@@ -394,6 +394,43 @@ int main(int argc, char** argv)
                       .arg(rb.value(QStringLiteral("mode")).toString())
                       .arg(pb.first).arg(pb.second));
         }
+
+        // Transmit on B: each receiver still takes its own pair, and transmit
+        // comes back on B. A is left in USB, B in LSB on -2400..-400.
+        const int a = Session::Access::sliceIdOf(s.backend, 0);
+        s.backend.setSliceMode(a, QStringLiteral("USB"));
+        s.backend.setSliceFilter(a, 200, 2700);
+        s.backend.setSliceFilter(b, -2400, -400);
+        s.backend.setTxSlice(b);
+        const RestoredRadioState txOnB = throughDisk(
+            RadioSettingsScope(QStringLiteral("hl2"), serial), caps,
+            s.backend.currentOperatingState());
+        check(Session::receiverOf(txOnB, 1).value(QStringLiteral("transmit")).toBool(false),
+              "reconnect, transmit on B: the remembered document marks B as transmit");
+        s.disconnect();
+        s.connect(serial, txOnB, k20m, twoRx);
+        {
+            const RestoredRadioState now = s.backend.currentOperatingState();
+            const QJsonObject ra = Session::receiverOf(now, 0);
+            const QJsonObject rb = Session::receiverOf(now, 1);
+            const auto pa = pbOf(ra);
+            const auto pb = pbOf(rb);
+            check(rb.value(QStringLiteral("mode")).toString() == QLatin1String("LSB")
+                      && pb == std::pair<int, int>{-2400, -400},
+                  QStringLiteral("reconnect, transmit on B: B comes back on its own LSB "
+                                 "-2400..-400, got %1 %2..%3")
+                      .arg(rb.value(QStringLiteral("mode")).toString())
+                      .arg(pb.first).arg(pb.second));
+            check(ra.value(QStringLiteral("mode")).toString() == QLatin1String("USB")
+                      && pa == std::pair<int, int>{200, 2700},
+                  QStringLiteral("reconnect, transmit on B: A comes back on its own USB "
+                                 "200..2700, got %1 %2..%3")
+                      .arg(ra.value(QStringLiteral("mode")).toString())
+                      .arg(pa.first).arg(pa.second));
+            check(rb.value(QStringLiteral("transmit")).toBool(false)
+                      && !ra.value(QStringLiteral("transmit")).toBool(false),
+                  "reconnect, transmit on B: transmit comes back on B, not A");
+        }
     }
 
     // ======================================================================
