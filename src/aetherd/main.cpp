@@ -3,6 +3,7 @@
 #include "GracefulStop.h"
 #include "GrantAdminClient.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/control/ControlEngine.h"
 #include "core/control/LocalControlServer.h"
 #include "core/control/RadioResourceAdapter.h"
 #include "core/control/RadioCatalogue.h"
@@ -116,8 +117,11 @@ int main(int argc, char* argv[])
     // Before anything that owns a radio, so its destructor runs after theirs: a
     // stop signal then ends aetherd through the teardown that releases the radio.
     AetherSDR::aetherd::GracefulStop gracefulStop(app, std::chrono::seconds(5));
+    // One engine for every listener (ControlEngine.h); declared before the
+    // listener, so it outlives it.
+    AetherSDR::control::ControlEngine controlEngine;
     AetherSDR::control::LocalControlServer server(
-        nullptr, {}, nullptr, parser.isSet(controlOption));
+        controlEngine, nullptr, {}, parser.isSet(controlOption));
     if (!server.listen(parser.value(socketOption),
                        AetherSDR::control::LocalControlServer::ListenMode::ReserveEndpoint)) {
         QTextStream err(stderr);
