@@ -47,7 +47,7 @@ with the same temporary-directory fallback. The cache file is
 
 ### Board variant and hardware: HL2 Hardware
 
-**Settings → Radio Setup... → HL2 Hardware** describes the physical radio. It appears while an HL2 is connected, and the settings are stored against that radio.
+**Settings → Radio Setup... → HL2 Hardware** describes the physical radio. It appears while an HL2 is connected, and the settings are stored against that radio, except **CW Timing**, which is one setting for every HL2 on this computer.
 
 | Group | Controls |
 |-------|----------|
@@ -55,6 +55,7 @@ with the same temporary-directory fallback. The cache file is
 | **Dither Bit** | **Dither bit** and **Random bit**. On some variants the first box is relabeled to what that board uses the line for (internal loudspeaker or band-voltage output). |
 | **Companion Filter Board** | **Board:** **None — nothing on J16**, **N2ADR — receive and transmit**, or **N2ADR — transmit only**. **Receive through the N2ADR 3 MHz high-pass** adds the AM-broadcast high-pass on receive (80 m to 10 m). Choose **None** only when nothing is fitted, because then nothing filters the transmitter's harmonics. A SQUARE SDR 2 with no board chosen yet starts with **N2ADR — transmit only**, its own arrangement, selected and **Detected: SQUARE SDR 2 — suggested, not saved** beside it; as with the codec, choosing a board, the selected one included, stores it, and any choice you have made is kept. |
 | **Reference Clock and Tuner** | **External 10 MHz reference at CL1** locks the radio to a reference such as a GPSDO instead of its crystal. CL1 expects a 3.3 V logic-level clock: pad a typical 5 V GPSDO output with at least 6 dB of 50 Ω attenuation. Lock is not read back. **Antenna tuner driven by the HL2 gateware** raises the tune request during TUNE for an AH-4-protocol ATU; leave it off for a tuner on the N2ADR IO board. |
+| **CW Timing** | **Edge lead:** how long after the sidetone each CW element from AetherSDR's keyer goes on the air, 0 to 100 ms, default 40 ms. A shorter lead puts the RF closer to the sidetone, for break-in (QSK) on a computer that keeps up; it leaves less margin for the computer stalling. A stall longer than the lead delays the rest of that transmission and lengthens the space before it; dits and dahs keep their length. A change made while transmitting applies from the next transmission. |
 
 The HL2 IO board's amplifier control follows the band.
 
@@ -204,7 +205,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - One user reported spill beside the SSB signal while transmitting, and a busy ALC gauge. The distorted audio in the same report was clean from v26.10.1. A later side-by-side on that station, with a 300 to 2700 Hz transmit filter, showed the same output from AetherSDR as from deskHPSDR; no retest since then is on record ([#5198](https://github.com/aethersdr/AetherSDR/issues/5198)).
 - With no audio input device on the computer, a voice transmit still keys the HL2 but sends no RF. The AetherTX notice says so, and the first voice transmission in that state also shows the notice on the panadapter; CW, TUNE and TCI audio are not affected. See [Aetherial Audio](./aetherial-audio.md#requirements) ([#7078](https://github.com/aethersdr/AetherSDR/issues/7078)).
 - A CW key on the HL2's own key jack gives no sidetone in AetherSDR: the radio makes the CW itself, the receiver is muted while it does, and the client sidetone follows only AetherSDR's own keyer ([#5909](https://github.com/aethersdr/AetherSDR/issues/5909)).
-- Paddle CW from AetherSDR's keyer goes on the air at least 40 ms after the sidetone, so that a busy computer does not change dit and dah lengths. If the app stalls for longer than that, the rest of that transmission goes out later by the stall, with the same element lengths, and the gap before it is that much longer. A stall of more than a quarter second stops the carrier until the transmission ends, and the panadapter shows a "TX failed" notice reading "CW keying fell too far behind" once for that transmission ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
+- Paddle CW from AetherSDR's keyer goes on the air at least the **Edge lead:** after the sidetone (**HL2 Hardware → CW Timing**, 40 ms unless you change it), so that a busy computer does not change dit and dah lengths. If the app stalls for longer than that, the rest of that transmission goes out later by the stall, with the same element lengths, and the gap before it is that much longer. A stall of more than a quarter second stops the carrier until the transmission ends, and the panadapter shows a "TX failed" notice reading "CW keying fell too far behind" once for that transmission ([#5065](https://github.com/aethersdr/AetherSDR/issues/5065)).
 - One user reports a row of evenly spaced peaks on the 10 m panadapter while transmitting FT8 at 28.074 MHz. It is not confirmed: a receive-only check of 10 m on another HL2 found none on a dummy load ([#6577](https://github.com/aethersdr/AetherSDR/issues/6577)).
 
 ### What has not been tested

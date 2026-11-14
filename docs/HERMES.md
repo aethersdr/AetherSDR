@@ -1862,7 +1862,12 @@ keeps both workflows consistent:
   raised-cosine edge, paced by the fixed 48 kHz transmit stream;
 - a keyer edge carries its scheduled instant (`CwControlRequest::scheduledAt`),
   and `MetisClient` applies it at that instant's EP2 sample plus
-  `kCwEdgeLeadMs` (40 ms) plus the over's shift (#5065). A key-down also
+  the edge lead plus the over's shift (#5065). The lead is the operator's
+  setting (`Hl2Settings::cwEdgeLeadMs`, the `Hl2` object's `cwEdgeLeadMs`,
+  0..100 ms, default 40; `cwlead.get` / `cwlead.set`, #7245): applied at once
+  between overs and when the over ends during one, so an over never changes
+  lead. 0 is safe (a late edge shifts the over, lengths exact); 100 keeps the
+  lead plus the largest shift inside the 32-edge schedule at 60 WPM. A key-down also
   carries its own key-up instant (`CwControlRequest::releaseAt`), so both edges
   are scheduled when the element is admitted and its length never depends on
   the key-up's own GUI hop. A key-down that arrives after its sample is never
@@ -1876,7 +1881,7 @@ keeps both workflows consistent:
   `scheduledAt` (as for every other backend) and carries the stop instant in
   `releaseAt`; the HL2 keys up there. The break-in hang counts from the shifted key-up's wire
   instant. A late key-up without a release is applied at once; a scheduled
-  key-down is forced up after a 5 WPM dah plus the lead. Admission of each
+  key-down is forced up after a 5 WPM dah plus the default lead. Admission of each
   element stays on the engine-owning thread. Edges without an instant
   (straight key, TCI `keyer:`) take effect on the next frame built, as before;
 - CW owns the IQ payload until that PTT envelope ends, so queued microphone IQ
