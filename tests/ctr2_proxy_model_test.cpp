@@ -3,8 +3,8 @@
 // pushed reason. Socket-free but for one case: a relay that reaches its radio
 // connection gets an injected socket, except in testSeveralDevicesAtOnce,
 // whose links go all the way up to a QTcpServer listening on 127.0.0.1 (an
-// ephemeral port; a generic byte peer, no radio protocol). That case cannot
-// bind: the binary exits 77 (skipped) once every other case has passed.
+// ephemeral port; a generic byte peer, no radio protocol). When that case cannot
+// bind or reach it, the binary exits 77 (skipped) once every other case has passed.
 // No real USB device is enumerated or opened: every model is built with an
 // injected backend, and the default one is a tripwire that fails the run.
 
@@ -1058,6 +1058,20 @@ void testSeveralDevicesAtOnce()
                      qPrintable(radio.errorString()));
         g_socketCaseSkipped = true;   // main() exits 77
         return;
+    }
+    // Bound is not enough: with loopback down (a network namespace) the bind
+    // succeeds and every connection fails. Skip then too.
+    {
+        QTcpSocket probe;
+        probe.connectToHost(QHostAddress::LocalHost, radio.serverPort());
+        const bool reached = probe.waitForConnected(2000) && radio.waitForNewConnection(2000);
+        delete radio.nextPendingConnection();
+        if (!reached) {
+            std::fprintf(stderr, "SKIP: testSeveralDevicesAtOnce cannot connect to 127.0.0.1: %s\n",
+                         qPrintable(probe.errorString()));
+            g_socketCaseSkipped = true;
+            return;
+        }
     }
     std::vector<QTcpSocket*> radioConns;
     QObject::connect(&radio, &QTcpServer::newConnection, &radio, [&] {
