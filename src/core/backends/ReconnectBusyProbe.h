@@ -34,11 +34,13 @@ public:
     static constexpr int kTimeoutMs = 500;
 
     explicit ReconnectBusyProbe(QObject* parent = nullptr);
+    ~ReconnectBusyProbe() override = default;
 
     // Ask `host`. A probe already in flight is cancelled first. `done` runs once,
     // on this object's thread, unless cancel() or a newer start() comes first.
-    void start(const QHostAddress& host, quint16 port, const QByteArray& request,
-               Parse parse, Done done);
+    // Virtual only so a test can stand in for the socket.
+    virtual void start(const QHostAddress& host, quint16 port, const QByteArray& request,
+                       Parse parse, Done done);
     void cancel();
     [[nodiscard]] bool active() const noexcept { return static_cast<bool>(m_done); }
 

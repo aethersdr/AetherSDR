@@ -53,6 +53,22 @@ public:
 
 // AnanBackend's friend: the supply rail's meter definition and its averaging
 // window, against an injected clock rather than a status packet every 200 ms.
+// A probe that records its start and opens nothing.
+class RecordingProbe : public ReconnectBusyProbe {
+public:
+    using ReconnectBusyProbe::ReconnectBusyProbe;
+    int starts = 0;
+    void start(const QHostAddress&, quint16, const QByteArray&, Parse, Done done) override
+    {
+        ++starts;
+        armForTest(std::move(done));
+    }
+};
+
+struct P2ClientTestAccess {
+    static void setRunning(P2Client& client, bool running) { client.m_running = running; }
+};
+
 // The automatic-reconnect busy probe without a socket: arm it as connectRadio()
 // would, then hand it the radio's answer.
 class AnanBusyProbeTestAccess {
@@ -68,6 +84,13 @@ public:
     static void answer(AnanBackend& backend, std::optional<bool> streaming)
     {
         backend.m_busyProbe->answerForTest(streaming);
+    }
+    static RecordingProbe* installRecordingProbe(AnanBackend& backend)
+    {
+        delete backend.m_busyProbe;
+        auto* probe = new RecordingProbe(&backend);
+        backend.m_busyProbe = probe;
+        return probe;
     }
     static bool probing(const AnanBackend& backend)
     {
@@ -397,6 +420,24 @@ int main(int argc, char** argv)
         AnanBusyProbeTestAccess::answer(backend, false);
         check(errors.count() == 2 && !AnanBusyProbeTestAccess::probing(backend),
               "a disconnect during the probe cancels the reconnect");
+
+        // The previous session stops before the probe: a client left running
+        // after a connect timeout would otherwise keep sending this radio its
+        // settings while a busy answer starts nothing new.
+        {
+            AnanBackend stale;
+            RecordingProbe* probe = AnanBusyProbeTestAccess::installRecordingProbe(stale);
+            P2Client* client = AnanSupplyRailTestAccess::client(stale);
+            P2ClientTestAccess::setRunning(*client, true);
+            RadioConnectRequest again;
+            again.host = QStringLiteral("192.0.2.10");   // TEST-NET-1, and the probe opens nothing
+            again.automaticReconnect = true;
+            stale.connectRadio(again);
+            check(probe->starts == 1 && !client->isRunning(),
+                  "an automatic reconnect stops the previous session before it probes");
+            probe->answerForTest(true);
+            check(!client->isRunning(), "and a busy answer leaves it stopped");
+        }
 
         RadioConnectRequest manual = retry;
         manual.automaticReconnect = false;

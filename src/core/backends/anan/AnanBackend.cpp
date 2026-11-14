@@ -800,6 +800,11 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     m_busyProbe->cancel();
     const QHostAddress host(request.host);
     if (request.automaticReconnect && !host.isNull()) {
+        // The previous session first, as start() would have stopped it: a client
+        // left running after a connect timeout keeps sending this radio its
+        // high-priority settings, and a busy answer below starts nothing new.
+        if (m_client)
+            QMetaObject::invokeMethod(m_client, "stop", Qt::BlockingQueuedConnection);
         m_busyProbeRequest = request;
         const auto discovery = buildDiscovery();
         m_busyProbe->start(host, kRadioPort,
