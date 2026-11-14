@@ -5021,6 +5021,20 @@ bool RadioModel::hasRadioSideCwKeyer() const
     return backendCapabilities().hasRadioSideCwKeyer;
 }
 
+bool RadioModel::hasHostCwTextKeyer() const
+{
+    if (!m_backend || !isConnected()) {
+        return false;
+    }
+    const RadioCapabilities caps = backendCapabilities();
+    return !caps.hasRadioSideCwKeyer && caps.hostCwKeyingControl.has_value() && caps.canTransmit;
+}
+
+bool RadioModel::hasCwTextKeyer() const
+{
+    return hasRadioSideCwKeyer() || hasHostCwTextKeyer();
+}
+
 bool RadioModel::hasCwTextProgress() const
 {
     if (!m_backend || !isConnected()) {

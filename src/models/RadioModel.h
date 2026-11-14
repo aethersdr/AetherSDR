@@ -502,6 +502,14 @@ public:
     // MainWindow's gate and must ask here, returning an error when absent.
     // Says nothing about CW keying itself, which works without a text buffer.
     bool hasRadioSideCwKeyer() const;
+    // Whether THIS HOST can time CW text for the connected radio: no radio-side
+    // buffer, a transmit-capable backend, and hostCwKeyingControl engaged.
+    // False when disconnected, unlike hasRadioSideCwKeyer().
+    bool hasHostCwTextKeyer() const;
+    // "Can this radio send CW text?": hasRadioSideCwKeyer() || hasHostCwTextKeyer(),
+    // so it keeps the permissive disconnected rule. The one check every text-CW
+    // surface asks once it can reach the host engine (#7146).
+    bool hasCwTextKeyer() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;
     int cwTextMinWpm() const;

@@ -7544,6 +7544,14 @@ target_include_directories(cwx_control_routing_test PRIVATE src)
 target_link_libraries(cwx_control_routing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME cwx_control_routing_test COMMAND cwx_control_routing_test)
 
+# #7146 part 1: the hostCwKeyingControl record, hasHostCwTextKeyer() and
+# hasCwTextKeyer(), and no text-CW surface moved yet. Injected backend, no socket.
+add_executable(cw_text_capability_test tests/cw_text_capability_test.cpp)
+target_include_directories(cw_text_capability_test PRIVATE src tests)
+target_link_libraries(cw_text_capability_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME cw_text_capability_test COMMAND cw_text_capability_test)
+
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp
