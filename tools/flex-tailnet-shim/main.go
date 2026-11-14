@@ -25,7 +25,7 @@ import (
 	_ "golang.org/x/crypto/x509roots/fallback"
 )
 
-const shimVersion = "0.5.2"
+const shimVersion = "0.5.3"
 
 // buildVariant names a non-container build, e.g. "-native" for the legacy
 // waveform package; set with -ldflags -X.

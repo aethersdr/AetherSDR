@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"testing"
+	"time"
 )
 
 // vitaPacket builds a minimal VITA-49 header: type 3 (extension data with
@@ -122,5 +123,31 @@ func TestVitaCountsMatchTheClientsAccounting(t *testing.T) {
 	got := v.snapshot()[0]
 	if got.Packets != 4 || got.Breaks != 1 || got.Gaps != 0 {
 		t.Fatalf("0,1,1,2 counted %+v; AetherSDR counts 4 packets, 1 break", got)
+	}
+}
+
+// Telemetry runs every tick while someone reads /v1/session, and only every
+// telemetryIdleEvery ticks otherwise (#6990).
+func TestTelemetrySamplesFullRateOnlyWhileRead(t *testing.T) {
+	n := &Node{}
+	now := time.Now()
+	due := 0
+	for i := 1; i <= 2*telemetryIdleEvery; i++ {
+		if n.telemetryDue(i, now) {
+			due++
+		}
+	}
+	if due != 2 {
+		t.Fatalf("never read: %d of %d ticks sampled, want 2", due, 2*telemetryIdleEvery)
+	}
+	n.telemetryReadAt.Store(now.Add(-3 * time.Second).UnixNano())
+	for i := 1; i <= 5; i++ {
+		if !n.telemetryDue(i, now) {
+			t.Fatalf("read 3 s ago: tick %d skipped", i)
+		}
+	}
+	n.telemetryReadAt.Store(now.Add(-telemetryActiveFor - time.Second).UnixNano())
+	if n.telemetryDue(1, now) {
+		t.Fatal("read 11 s ago: tick 1 still sampled at full rate")
 	}
 }
