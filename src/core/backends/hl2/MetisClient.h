@@ -1,6 +1,5 @@
 #pragma once
 #include "core/TxCoordinator.h"
-#include "core/backends/ReconnectBusyProbe.h"
 
 #include <QElapsedTimer>
 #include <QHostAddress>
@@ -755,14 +754,18 @@ private:
     // and by setReceiverCount(), which restarts the stream by its own route and
     // must not have its EP6 credited to this one.
     bool m_silenceRecoveryArmed = false;
-    // Silence recovery asks the radio first (ReconnectBusyProbe.h): a re-sent run
-    // command to an HL2 another host is now running would take it back.
+    // Silence recovery asks the radio first, from THIS session's socket: a
+    // re-sent run to an HL2 another host is running would take it back. While
+    // running, the gateware sends replies to its stream host, so an answer here
+    // means the radio is idle or still ours (re-sending run is safe), and no
+    // answer means another host has it or the link is gone (abandon).
     void stopSession(bool sendStopPacket);
     void beginSilenceProbe();
     void onSilenceProbeAnswer(std::optional<bool> streaming);
-    AetherSDR::ReconnectBusyProbe* m_silenceProbe = nullptr;
+    QTimer* m_silenceProbeTimer = nullptr;
     bool m_silenceProbeAsking = false;
-    bool m_silenceProbeCleared = false;   // the radio answered free (or not at all)
+    bool m_silenceProbeCleared = false;   // the radio answered this socket
+    static constexpr int kSilenceProbeMs = 500;
     // Stage 1's only observable is a datagram on m_socket; with no injectable sink
     // beside feedDatagram(), its test uses a fake Metis radio (socket exception, #5254).
     // Free-running and never restarted: the RQST/ACK floor differences it, so it must

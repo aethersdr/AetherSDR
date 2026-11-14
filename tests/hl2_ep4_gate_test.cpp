@@ -103,6 +103,7 @@ struct MetisClientTestAccess {
         return MetisClient::kMaxConsecutiveBandscopeTimeouts;
     }
     static bool silenceProbeCleared(const MetisClient& client) { return client.m_silenceProbeCleared; }
+    static void askSilence(MetisClient& client) { client.m_silenceProbeAsking = true; }
 };
 }  // namespace AetherSDR::hl2
 
@@ -1046,30 +1047,33 @@ int main(int argc, char** argv)
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_ep4_gate_test: all checks passed\n");
     // ---- silence recovery asks before re-sending run (#7270) ----
-    // The gateware decodes RUNSTOP from any host: a run command to an HL2 that
-    // another host is running now would take it back.
+    // From this session's socket: while running, the gateware answers only its
+    // stream host, so a reply means idle or ours, and silence means another host
+    // has the radio (or the link is gone).
     {
         MetisClient c;
         QSignalSpy down(&c, &MetisClient::linkDown);
         MetisClientTestAccess::setStreaming(c);
         MetisClientTestAccess::setLinkUp(c);
+        MetisClientTestAccess::askSilence(c);
         c.answerSilenceProbeForTest(false);
         check(c.isRunning() && MetisClientTestAccess::silenceProbeCleared(c) && down.isEmpty(),
-              "a free radio: the next watchdog tick re-sends run, as before");
+              "an idle reply: the next watchdog tick re-sends run, as before");
         MetisClient d;
-        QSignalSpy downD(&d, &MetisClient::linkDown);
         MetisClientTestAccess::setStreaming(d);
         MetisClientTestAccess::setLinkUp(d);
-        d.answerSilenceProbeForTest(std::nullopt);
-        check(!d.isRunning() && downD.count() == 1,
-              "no reply: abandoned too (an HL2 streaming to another host does not answer)");
+        MetisClientTestAccess::askSilence(d);
+        d.answerSilenceProbeForTest(true);
+        check(d.isRunning() && MetisClientTestAccess::silenceProbeCleared(d),
+              "a 'sending' reply on our own socket is our stream: re-send run");
         MetisClient e;
         QSignalSpy downE(&e, &MetisClient::linkDown);
         MetisClientTestAccess::setStreaming(e);
         MetisClientTestAccess::setLinkUp(e);
-        e.answerSilenceProbeForTest(true);
+        MetisClientTestAccess::askSilence(e);
+        e.answerSilenceProbeForTest(std::nullopt);
         check(!e.isRunning() && downE.count() == 1 && !MetisClientTestAccess::silenceProbeCleared(e),
-              "the radio still sending: the session is abandoned (no run, no metis-stop) and the link reported down");
+              "no answer: abandoned (no run, no metis-stop) and the link reported down");
         e.answerSilenceProbeForTest(false);
         check(!e.isRunning() && downE.count() == 1, "a late answer after the session ended does nothing");
     }
