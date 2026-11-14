@@ -48,6 +48,7 @@ Themes cover the whole interface, including:
 - **Slice colors**: the default colors for slices A–H (see [Slice Colors](./slice-colors.md)).
 - **Waterfall color schemes**: the palettes chosen under the panadapter's **Display → Scheme** (see [Panadapter Controls](./panadapter-controls.md)). Switching theme or scheme recolors the waterfall already on screen, including scrollback.
 - **Windows with no title bar** (About, AetherRX, AetherTX and the other windows with rounded corners and a round close button) use the `color.canon.*` tokens. Inside AetherRX and AetherTX, the theme's `canon` scope points the usual background, text, border, accent, knob and slider tokens at them.
+- **Selected text in shared window fields and tables**, such as MQTT Settings and Net Scheduler, uses `color.canon.ink` on `color.canon.nested`, keeping selections readable in Default Light and Default Dark.
 - The 7- and 14-segment display fonts used for frequency readouts (the DSEG fonts, under the SIL Open Font License).
 
 Analog meter faces have their own **Face theme** choice on each meter (see [Meters](./meters.md)).

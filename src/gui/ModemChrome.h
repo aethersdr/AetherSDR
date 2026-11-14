@@ -42,9 +42,9 @@ enum class Scale { Dialog, Compact };
 // Two palettes for the same sheet. Modem is the AetherModem window's own navy
 // and green, which the docked applets keep. Canon is the style guide's (RFC
 // #6226), for content inside a canon window (AetherRX, AetherTX): canon
-// surfaces and ink, cyan selection and focus, and the painted canon check
-// boxes and radio buttons (CanonIndicators.h). A Canon sheet embeds theme-
-// dependent indicator images, so apply it through applyCanonSheet().
+// surfaces and ink, nested selection with ink, cyan focus, and the painted
+// canon check boxes and radio buttons (CanonIndicators.h). A Canon sheet embeds
+// theme-dependent indicator images, so apply it through applyCanonSheet().
 enum class Look { Modem, Canon };
 
 QString styleSheet(Scale scale, Look look = Look::Modem);
