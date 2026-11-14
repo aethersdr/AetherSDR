@@ -7158,9 +7158,9 @@ set_target_properties(microham_trio_session_test PROPERTIES AUTOMOC ON)
 add_test(NAME microham_trio_session_test COMMAND microham_trio_session_test)
 
 # The TRIO model on a scripted transport and a hand-moved clock: settings,
-# session words, eviction, release, failures; nothing that selects leaves,
-# only reads and the port-name writes asked for. Binds no
-# socket; the settings store is a private temporary profile.
+# session words, eviction, release, failures, a cancelled Test; nothing but
+# the handshake, keep-alives and a close leaves. Binds no socket; the
+# settings store is a private temporary profile.
 add_executable(microham_trio_model_test tests/microham_trio_model_test.cpp)
 target_include_directories(microham_trio_model_test PRIVATE src tests)
 target_link_libraries(microham_trio_model_test PRIVATE aethercore Qt6::Core)
@@ -12414,4 +12414,3 @@ add_executable(transfer_lifecycle_test tests/transfer_lifecycle_test.cpp)
 target_include_directories(transfer_lifecycle_test PRIVATE src)
 target_link_libraries(transfer_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME transfer_lifecycle_test COMMAND transfer_lifecycle_test)
-

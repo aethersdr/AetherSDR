@@ -439,7 +439,7 @@
  },
  "core/MicrohamTrioSettings.h": {
   "tag": "peripheral(microhamtrio)",
-  "note": "Where the microHAM TRIO antenna switch's connection is kept: its address and port under Peripherals.trio in the Peripherals settings blob, beside the row's AutoConnect. Peripheral accessory configuration, not radio state.",
+  "note": "Where the microHAM TRIO antenna switch's configuration is kept: its address, port and dummy-load mark under Peripherals.trio in the Peripherals settings blob, beside the row's AutoConnect, and the radio-scoped TrioBinding feature document naming the Trio radio port a radio is cabled to. Peripheral accessory configuration, not radio state.",
   "split": "",
   "confidence": "high"
  },

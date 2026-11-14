@@ -475,6 +475,9 @@ void testRequests()
            Ws::buildCookieRequest(QStringLiteral("192.168.8.10\r\nX: y"), 80).isEmpty());
     report("an empty host builds no page request",
            Ws::buildCookieRequest(QString(), 80).isEmpty());
+    report("an IPv6 literal, bare or bracketed, builds no page request",
+           Ws::buildCookieRequest(QStringLiteral("fe80::1"), 8080).isEmpty()
+               && Ws::buildCookieRequest(QStringLiteral("[fe80::1]"), 80).isEmpty());
 
     // RFC 6455 section 1.3: the worked example.
     report("the accept value of the RFC's sample key",

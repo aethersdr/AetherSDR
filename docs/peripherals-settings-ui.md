@@ -105,7 +105,8 @@ writes no port name. After the handshake the session sends only keep-alives,
 WebSocket pongs and a close. Every name the Trio reports is shown as plain
 text, never as markup.
 
-- The Trio is not discovered: enter the address its own menu shows.
+- The Trio is not discovered: enter the address its own menu shows (an IPv4
+  address or a host name).
 - **Connect automatically** (off: connect only on **Connect**) and the global
   **Reconnect automatically** behave as for the other devices.
 - The Trio serves one web session. When another client takes it (most often

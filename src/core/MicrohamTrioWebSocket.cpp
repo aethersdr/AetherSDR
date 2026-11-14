@@ -23,7 +23,8 @@ inline constexpr quint8 kFinBit        = 0x80;
 inline constexpr quint8 kReservedBits  = 0x70;
 inline constexpr quint8 kMaskBit       = 0x80;
 
-// A host name or address literal, safe to write after "Host: ".
+// A host name or IPv4 address, safe to write after "Host: ". An IPv6 literal
+// is refused: it would need brackets there, and the Trio is IPv4.
 bool isHeaderSafeHost(const QString& host)
 {
     if (host.isEmpty() || host.size() > kMaxHostChars) {
@@ -32,8 +33,7 @@ bool isHeaderSafeHost(const QString& host)
     for (const QChar c : host) {
         const char16_t u = c.unicode();
         const bool ok = (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z')
-                        || (u >= '0' && u <= '9') || u == '.' || u == '-' || u == ':'
-                        || u == '[' || u == ']';
+                        || (u >= '0' && u <= '9') || u == '.' || u == '-';
         if (!ok) {
             return false;
         }
