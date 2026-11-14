@@ -20,13 +20,13 @@ struct AetherGpsPackage {
         const char* sha256;
         qint64 size;
     };
-    static constexpr const char* kVersion = "0.1.0";
+    static constexpr const char* kVersion = "0.1.1";
     // FLEX-6000: a legacy waveform (ARMv7).
     static constexpr Pin kLegacy{":/waveforms/AetherGPS.ssdr_waveform", "AetherGPS.ssdr_waveform",
-                                 "7e371bc82163061bb956abb719f21debcd7faace16f81df5d4103b2ee0098fe9", 35207};
+                                 "d96b4d27be31bf660a5a5de2e913aa4620942fe5f1c350be693db8385321ee92", 35456};
     // FLEX-8000 and Aurora: a container (arm64) on the radio's own network.
     static constexpr Pin kContainer{":/waveforms/AetherGPS.tar.gz", "AetherGPS.tar.gz",
-                                    "dcdbf3447d6f20194f2663a8718ceeec88dd1df7b761755d9bdbd47cf29d3bce", 42873};
+                                    "0f509381fbc4e7193c35495103851157552cbce6ab85575a00400b67b716af28", 42948};
 };
 
 // The waveform's name, in both packages.

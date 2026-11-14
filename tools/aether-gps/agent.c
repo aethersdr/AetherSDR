@@ -18,11 +18,11 @@
 // LAN address is the one on the default route's interface, in the gateway's
 // subnet; the radio's other interfaces (internal links) are never used.
 //
-//   aether-gps [-a ADDR] [-b BCAST] [-l PORT] [-g GPSD_PORT] [-u UDP_PORT] [-s 0|1] [-i IDLE_MS]
+//   aether-gps [-a ADDR] [-b BCAST] [-l PORT] [-g GPSD_PORT] [-u UDP_PORT] [-s 0|1] [-i IDLE_MS] [-q QUIET_MS]
 //
 // -a/-b pin the listen and broadcast addresses (tests); -u 0 turns the NMEA
 // broadcast off; -s 0 skips publishing the port through the tailnet shim;
-// -i shortens the 30 s idle limit (tests).
+// -i and -q shorten the 30 s idle and 60 s quiet limits (tests).
 //
 // 3. When the tailnet shim runs on the radio, the gpsd port is published on
 //    the tailnet through it (POST /v1/local/expose on 48992), like AetherWSPR.
@@ -43,7 +43,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define AGENT_VERSION "0.1.0"
+#define AGENT_VERSION "0.1.1"
 #define MAX_CLIENTS 8
 #define OUT_CAP 65536      // gpsd -> client backlog; reading pauses when full
 #define CMD_CAP 1024       // one client command
@@ -60,12 +60,14 @@ struct client {
     size_t cmdlen;
     long long since;       // accepted at
     long long full_since;  // backlog full since, 0 when it isn't
+    long long active;      // when bytes last crossed the session, either way
     int commanded;         // has sent an allowed command
 };
 
 static struct client g_clients[MAX_CLIENTS];
 static int g_listen = -1, g_udp = -1, g_nmea = -1;
 static long long g_idle_ms = 30000;           // first-command and full-backlog limit (-i)
+static long long g_quiet_ms = 60000;          // nothing relayed either way for this long (-q)
 static int g_shim = 1;                        // -s 0: no tailnet publishing (tests)
 static int g_listen_port = 2947, g_gpsd_port = 2947, g_udp_port = 10110;
 static struct in_addr g_addr, g_bcast;       // current LAN address and broadcast
@@ -272,6 +274,7 @@ static int client_input(struct client *c)
     if (r <= 0) {
         return r < 0 && (errno == EAGAIN || errno == EINTR);
     }
+    c->active = now_ms();
     for (ssize_t i = 0; i < r; ++i) {
         char ch = buf[i];
         if (ch != ';' && ch != '\n') {
@@ -336,6 +339,7 @@ static void accept_client(void)
     set_nonblock(fd);
     c->down = fd;
     c->since = now_ms();
+    c->active = c->since;
     c->full_since = 0;
     c->commanded = 0;
     c->up = connect_gpsd();
@@ -465,6 +469,8 @@ int main(int argc, char **argv)
             g_gpsd_port = atoi(v);
         } else if (strcmp(argv[a], "-i") == 0) {
             g_idle_ms = atoll(v) > 0 ? atoll(v) : 30000;
+        } else if (strcmp(argv[a], "-q") == 0) {
+            g_quiet_ms = atoll(v) > 0 ? atoll(v) : 60000;
         } else if (strcmp(argv[a], "-s") == 0) {
             g_shim = atoi(v) != 0;
         } else if (strcmp(argv[a], "-u") == 0) {
@@ -543,8 +549,13 @@ int main(int argc, char **argv)
             } else if (!c->full_since) {
                 c->full_since = now;
             }
+            // A client that sent one ?VERSION and went quiet is "commanded"
+            // and never fills its backlog; nothing crossing the session for
+            // g_quiet_ms frees its slot too. A watching client gets reports
+            // every second, so it never trips this.
             if ((!c->commanded && now - c->since >= g_idle_ms)
-                || (c->full_since && now - c->full_since >= g_idle_ms)) {
+                || (c->full_since && now - c->full_since >= g_idle_ms)
+                || now - c->active >= g_quiet_ms) {
                 drop_client(c);
             }
         }
@@ -579,6 +590,7 @@ int main(int argc, char **argv)
                     if (w > 0) {
                         memmove(c->out, c->out + w, c->outlen - (size_t)w);
                         c->outlen -= (size_t)w;
+                        c->active = now;
                     } else if (w < 0 && errno != EAGAIN && errno != EINTR) {
                         ok = 0;
                     }
@@ -588,6 +600,7 @@ int main(int argc, char **argv)
                     ssize_t n = read(c->up, c->out + c->outlen, OUT_CAP - c->outlen);
                     if (n > 0) {
                         c->outlen += (size_t)n;
+                        c->active = now;
                     } else if (n == 0 || (errno != EAGAIN && errno != EINTR)) {
                         ok = 0;   // gpsd closed the session
                     }

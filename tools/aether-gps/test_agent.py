@@ -79,6 +79,8 @@ class FakeGpsd:
                             c.sendall(SKY + TPV)
                     elif line.startswith(b'?POLL'):
                         c.sendall(b'{"class":"POLL","active":1}\r\n')
+                    elif line.startswith(b'?VERSION'):
+                        c.sendall(VERSION)
         except OSError:
             # The relay under test drops sessions on purpose (refusals, idle
             # eviction, the ninth client); the stand-in just ends this one.
@@ -216,6 +218,37 @@ try:
           'a client that sent a command is kept')
     idle.close()
     busy.close()
+finally:
+    relay.kill()
+    relay.wait()
+
+# One ?VERSION, then silence: "commanded", never a full backlog. Nothing
+# crossing the session frees the slot; a watching client stays.
+relay = subprocess.Popen([BIN, '-a', '127.0.0.1', '-l', str(listen), '-g', str(gpsd.port),
+                          '-u', '0', '-s', '0', '-q', '1500'])
+try:
+    probe = connect(listen)
+    watcher = connect(listen)
+    read_lines(probe, 1)
+    read_lines(watcher, 1)
+    probe.sendall(b'?VERSION;')
+    watcher.sendall(b'?WATCH={"enable":true,"json":true};')
+    read_lines(probe, 1)
+    deadline = time.time() + 3.5
+    while time.time() < deadline:      # keep the watcher's session busy
+        watcher.sendall(b'?POLL;')
+        read_lines(watcher, 1, timeout=0.5)
+    probe.settimeout(1)
+    try:
+        closed = probe.recv(1) == b''
+    except (socket.timeout, ConnectionResetError):
+        closed = False
+    check(closed, 'a client that went quiet after one command is closed after the quiet limit')
+    watcher.sendall(b'?POLL;')
+    check(any(r['class'] == 'POLL' for r in read_lines(watcher, 2)),
+          'a client with traffic crossing its session is kept')
+    probe.close()
+    watcher.close()
 finally:
     relay.kill()
     relay.wait()
