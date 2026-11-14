@@ -124,6 +124,10 @@ S0000AB12|slice 2 in_use=1 client_handle=0x0000AB12 tx=1 txant=ANT2 RF_frequency
 S0000AB12|slice 3 in_use=1 client_handle=0x0000AB12 tx=0 RF_frequency=7.150000 mode=CW pan=0x40000001 index_letter=D
 # slice: foreign slot released (in_use=0 without client_handle -> clears foreign marker)
 S0000AB12|slice 3 in_use=0
+S00000071|slice 2 in_use=1 RF_frequency=3.700000
+S0000AB12|slice 2 in_use=0 client_handle=0x0000AB12
+S00000071|slice 4 in_use=1 RF_frequency=inf client_handle=0x00000071 mode=AM
+S00000071|slice 4 removed=1
 # foreign pan-write attribution: S<other handle>| dBm writes to OUR pan (noteForeignPanWriteIfAny)
 S0000AB12|display pan 0x40000000 min_dbm=-128.00 max_dbm=-38.00
 S0000CD34|display pan 0x40000000 min_dbm=-127.00 max_dbm=-37.00

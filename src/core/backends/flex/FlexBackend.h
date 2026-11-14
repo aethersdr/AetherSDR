@@ -232,12 +232,6 @@ public:
                          quint64 requestId, const QVariant& arg = {}) override;
 
     // ---- status decode (aetherd RFC 2.3) ----
-    // Decode a Flex slice-status kv-set into the normalized, canonically-named
-    // slice change map and emit sliceChanged(sliceId, changes). Owns all the
-    // Flex wire knowledge (key names like "RF_frequency"/"filter_lo", "1"→bool,
-    // comma-split lists); SliceModel::applyChanges consumes only canonical keys.
-    // (aetherd RFC 2.3 — SliceModel touchpoint, full canonical rename.)
-    void decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs);
 
     // Decode radio-global status ("radio …" / "radio slices …" etc.) into the
     // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel

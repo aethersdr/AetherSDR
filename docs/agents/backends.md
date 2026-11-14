@@ -383,7 +383,8 @@ connection.
 - **Demo** turns value decoding off (`setDecodeValues(false)`): its native
   producer owns the values. Identity and lifecycle are still decoded: a TGXL's
   handle, display pan/waterfall reports, whose values `SimBackend` drops
-  except their dimensions, and setup reports, which it relays whole (its
+  except their dimensions, slice reports, of which it keeps identity,
+  ownership and presence, and setup reports, which it relays whole (its
   native producer has no setup inventory). Its synthetic wire carries radio, display and slice
   status only, so the Flex-only relays above are not wired for it.
 - **Tests feed lines through `RadioModel::handleLineForTest()` or
@@ -394,7 +395,7 @@ connection.
   `-vs -maxwarnings 0` and `tools/flex_ingress_trace.py`) traces a wire
   corpus for before/after comparison of an ingress change.
 - **Still inline in `RadioModel`**, each awaiting its own PR: radio/client
-  lifecycle (#6907), slice ownership (#6878) and DVK/NAVTEX (#6870). Each moves into the
+  lifecycle (#6907) and DVK/NAVTEX (#6870). Each moves into the
   ingress as a domain decoder; none adds its own transport decoder or
   lifetime token.
 

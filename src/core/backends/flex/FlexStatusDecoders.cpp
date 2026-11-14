@@ -4,6 +4,7 @@
 #include "FlexStatusIngress.h"
 #include "FlexDisplayStatus.h"
 #include "FlexSetupStatus.h"
+#include "FlexSliceStatus.h"
 
 #include "core/LogManager.h"
 #include "core/backends/MemoryWireCodec.h"
@@ -118,6 +119,17 @@ void FlexStatusIngress::decodeLine(const ParsedMessage& line)
             emit setupStatusObserved(*setup);
         } else {
             qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected setup status" << line.object;
+        }
+        return;
+    }
+    // Slice identity and ownership are lifecycle too; SimBackend drops the
+    // values its native producer owns.
+    if (FlexSliceStatus::isSlice(line.object) && !line.kvs.contains(QStringLiteral("waveform_status"))) {
+        if (auto slice = FlexSliceStatus::decode(line.object, line.kvs)) {
+            slice->statusEpoch = m_epoch;
+            emit sliceObserved(*slice);
+        } else {
+            qCDebug(lcProtocol).noquote() << "FlexStatusIngress: rejected slice status" << line.object;
         }
         return;
     }

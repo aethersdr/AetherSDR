@@ -16,6 +16,7 @@
 #include "models/FlexWaveformModel.h"
 #include "models/NavtexModel.h"
 #include "models/PanadapterModel.h"
+#include "models/SliceModel.h"
 #include "models/RadioModel.h"
 #include "models/SpotModel.h"
 #include "models/TnfModel.h"
@@ -133,6 +134,17 @@ void dumpState(RadioModel& model)
     qInfo("STATE setup %s sharp=%d/%d,%d/%d,%d/%d", qPrintable(parts.join(QLatin1Char(' '))),
           model.filterSharpnessVoice(), int(model.filterSharpnessVoiceAuto()), model.filterSharpnessCw(),
           int(model.filterSharpnessCwAuto()), model.filterSharpnessDigital(), int(model.filterSharpnessDigitalAuto()));
+    parts.clear();
+    for (int id = 0; id < 8; ++id) {
+        if (const SliceModel* sl = model.slice(id)) {
+            parts << QStringLiteral("s%1[%2 %3 %4 %5..%6 act=%7 tx=%8 ant=%9/%10 dax=%11]").arg(id).arg(sl->frequency(), 0, 'f', 6)
+                .arg(sl->mode(), sl->panId()).arg(sl->filterLow()).arg(sl->filterHigh()).arg(int(sl->isActive()))
+                .arg(int(sl->isTxSlice())).arg(sl->rxAntenna(), sl->txAntenna()).arg(sl->daxChannel());
+        } else if (model.isSlotForeign(id)) {
+            parts << QStringLiteral("s%1[foreign]").arg(id);
+        }
+    }
+    qInfo("STATE slices %s", qPrintable(parts.join(QLatin1Char(' '))));
     qInfo("STATE license id=%s max=%s sub=%s exp=%s dvk=%d/%d nr=%d/%d", qPrintable(model.licenseRadioId()),
           qPrintable(model.licenseMaxVersion()), qPrintable(model.licenseSubscription()),
           qPrintable(model.licenseExpirationDate()), int(model.licenseFeatureSeen(QStringLiteral("digital_voice_keyer"))),

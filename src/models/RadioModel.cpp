@@ -1915,6 +1915,11 @@ void RadioModel::wireBackendReceiverState()
     // because on a backend where a slice IS a receiver, closing one retires
     // both. Without this the SliceModel outlived its receiver and every later
     // capacity check counted it.
+    connect(m_backend.get(), &IRadioBackend::sliceObserved, this,
+            [this, generation](const SliceObservation& observation) {
+        if (generation == m_backendReceiverGeneration) { applySliceObservation(observation); }
+    });
+
     connect(m_backend.get(), &IRadioBackend::sliceRemoved, this,
             [this, generation](int sliceId) {
         // Qt may already have queued this call before sender destruction.
@@ -1937,14 +1942,8 @@ void RadioModel::wireBackendReceiverState()
         s->deleteLater();
     });
 
-    // aetherd RFC 2.3: SliceModel touchpoint. The backend decodes Flex slice
-    // status into a typed SliceDelta; RadioModel routes it to the addressed slice.
-    // This is an AutoConnection: because FlexBackend shares RadioModel's thread it
-    // resolves to a synchronous DirectConnection today, so a slice just appended
-    // to m_slices is populated before the sliceAdded UI notify below. (If a
-    // backend is ever moved to a worker thread this becomes queued — the ordering
-    // guarantee would then need an explicit populate step, not Qt::DirectConnection
-    // across threads. #4068 review.)
+    // Native backends publish their own canonical receiver state. Flex uses
+    // sliceObserved so values and ownership arrive as one session-bound report.
     connect(m_backend.get(), &IRadioBackend::sliceChanged, this,
             [this, generation](int sliceId, const SliceDelta& delta) {
         // Qt may already have queued this call before sender destruction.
@@ -1993,7 +1992,6 @@ void RadioModel::wireBackendReceiverState()
                 return;
             }
             s = new SliceModel(sliceId, this);
-            wireSliceReceiveIntentsToBackend(s);
             connect(s, &SliceModel::ritCommandIssued, this, [this, s, generation](bool on, int hz) {
                 if (generation != m_backendReceiverGeneration || receiveCommandSource() != s
                     || m_backend->receiveControlPolicy() != ReceiveControlPolicy::Confirmed) { return; }
@@ -2014,7 +2012,7 @@ void RadioModel::wireBackendReceiverState()
                 }
             });
 
-            wireSliceObservationsAndTxIntentToBackend(s);
+            initializeObservedSlice(s);
             m_slices.append(s);
             s->applyChanges(mapped);
             // Before sliceAdded, so the UI never shows the default first.
@@ -2030,7 +2028,7 @@ void RadioModel::wireBackendReceiverState()
             s->setControlPolicy(m_backend->receiveControlPolicy());
             s->applyChanges(mapped);
             // The TX slice decides which TX-waveform meters resolve
-            // (MeterModel::compPeakIndexForActiveTxSlice()). handleSliceStatus() covers Flex
+            // (MeterModel::compPeakIndexForActiveTxSlice()). applySliceObservation() covers Flex
             // only, so seam backends set it here. Unconditional: setActiveTxSlice()
             // early-returns on no change, and the TX slice can also move on a removal, which
             // carries no delta.
@@ -2446,6 +2444,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TxCoordinator::StopRequest>();
     qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
+    qRegisterMetaType<SliceObservation>();
     qRegisterMetaType<SliceCreateReply>();
     qRegisterMetaType<SliceCreateRequest>();
     qRegisterMetaType<CreatedSliceReceipt>();
@@ -3243,7 +3242,7 @@ void RadioModel::clearAutomationSliceFixtures()
 {
     const QSet<int> fixtures = m_automationSliceFixtures;
     for (int sliceId : fixtures) {
-        handleSliceStatus(sliceId, QMap<QString, QString>{}, true);
+        retireObservedSlice(sliceId, false);
         m_ownedSliceIds.remove(sliceId);
         m_foreignSliceOwners.remove(sliceId);
     }
@@ -3347,27 +3346,29 @@ bool RadioModel::automationApplySliceFixture(int sliceId,
         emit infoChanged();
     }
 
-    QMap<QString, QString> kvs;
-    kvs.insert(QStringLiteral("in_use"), QStringLiteral("1"));
-    kvs.insert(QStringLiteral("pan"), QStringLiteral("0x40000000"));
-    kvs.insert(QStringLiteral("index_letter"), letter);
-    kvs.insert(QStringLiteral("RF_frequency"), QStringLiteral("14.225000"));
-    kvs.insert(QStringLiteral("mode"), QStringLiteral("USB"));
-    kvs.insert(QStringLiteral("filter_lo"), QStringLiteral("100"));
-    kvs.insert(QStringLiteral("filter_hi"), QStringLiteral("2700"));
-    kvs.insert(QStringLiteral("active"), QStringLiteral("1"));
-    kvs.insert(QStringLiteral("tx"), QStringLiteral("0"));
-    kvs.insert(QStringLiteral("audio_level"), QStringLiteral("50"));
-    kvs.insert(QStringLiteral("audio_pan"), QStringLiteral("50"));
-    kvs.insert(QStringLiteral("audio_mute"), QStringLiteral("0"));
-    kvs.insert(QStringLiteral("rxant"), QStringLiteral("ANT1"));
-    kvs.insert(QStringLiteral("txant"), QStringLiteral("ANT1"));
-    kvs.insert(QStringLiteral("rxant_list"), QStringLiteral("ANT1,ANT2"));
-    kvs.insert(QStringLiteral("txant_list"), QStringLiteral("ANT1,ANT2"));
+    SliceObservation observation;
+    observation.sliceId = sliceId;
+    SliceDelta& values = observation.values;
+    values.inUse = true;
+    values.panId = QStringLiteral("0x40000000");
+    values.letter = letter;
+    values.frequency = 14.225;
+    values.mode = QStringLiteral("USB");
+    values.filterLow = 100;
+    values.filterHigh = 2700;
+    values.active = true;
+    values.txSlice = false;
+    values.audioGain = 50;
+    values.audioPan = 50;
+    values.audioMute = false;
+    values.rxAntenna = QStringLiteral("ANT1");
+    values.txAntenna = QStringLiteral("ANT1");
+    values.rxAntennaList = QStringList{QStringLiteral("ANT1"), QStringLiteral("ANT2")};
+    values.txAntennaList = values.rxAntennaList;
 
     m_ownedSliceIds.insert(sliceId);
     m_foreignSliceOwners.remove(sliceId);
-    handleSliceStatus(sliceId, kvs, false);
+    applySliceObservation(observation, /*fenced=*/false);   // a fixture runs disconnected
     if (!slice(sliceId)) {
         m_ownedSliceIds.remove(sliceId);
         restoreAutomationSliceFixtureBaseline();  // self-guards on live fixtures
@@ -3382,9 +3383,10 @@ bool RadioModel::automationApplySliceFixture(int sliceId,
         if (existingId == sliceId) {
             continue;
         }
-        handleSliceStatus(existingId,
-                          {{QStringLiteral("active"), QStringLiteral("0")}},
-                          false);
+        SliceObservation inactive;
+        inactive.sliceId = existingId;
+        inactive.values.active = false;
+        applySliceObservation(inactive, /*fenced=*/false);
     }
     return true;
 }
@@ -3431,7 +3433,7 @@ bool RadioModel::automationRemoveSliceFixture(int sliceId, QString* error)
         return fail(QStringLiteral("no slice fixture with id %1").arg(sliceId));
     }
 
-    handleSliceStatus(sliceId, QMap<QString, QString>{}, true);
+    retireObservedSlice(sliceId, false);
     m_ownedSliceIds.remove(sliceId);
     m_foreignSliceOwners.remove(sliceId);
     m_automationSliceFixtures.remove(sliceId);
@@ -8166,7 +8168,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                             // Radio has slices but we haven't matched any to our
                             // client_handle yet (status messages still in flight).
                             // Defer the decision to give status messages time to
-                            // arrive and populate m_slices via handleSliceStatus.
+                            // arrive and populate m_slices via applySliceObservation.
                             qCDebug(lcProtocol) << "RadioModel: radio has" << ids.size()
                                      << "slice(s) but none matched yet — deferring 500ms";
                             QTimer::singleShot(500, this, [this, current]() {
@@ -11772,15 +11774,29 @@ void RadioModel::onStatusReceived(const QString& object,
                 // clear these, but hard/abrupt drops don't — covering both
                 // paths here is harmless and avoids stale dim markers
                 // (#2606).
+                QList<int> releasedSlots;
+                bool modesChanged = false;
                 auto it = m_foreignSliceOwners.begin();
                 while (it != m_foreignSliceOwners.end()) {
                     if (it.value() == handle) {
-                        const int sliceId = it.key();
+                        releasedSlots.append(it.key());
+                        modesChanged = m_rawSliceModeLists.remove(it.key()) > 0 || modesChanged;
                         it = m_foreignSliceOwners.erase(it);
-                        emit slotOccupancyChanged(sliceId);
                     } else {
                         ++it;
                     }
+                }
+                // Finish the map mutation before observers can reconnect or
+                // install a new owner while handling a slot notification.
+                const QPointer<RadioModel> alive(this);
+                const RadioControlSession session = controlSession();
+                for (int sliceId : releasedSlots) {
+                    emit slotOccupancyChanged(sliceId);
+                    if (!alive || session != controlSession()) { return; }
+                }
+                if (modesChanged) {
+                    emit rawSliceModeListsChanged();
+                    if (!alive || session != controlSession()) { return; }
                 }
                 emitOtherClientsChanged();
             } else if (action == "connected" || kvs.contains("connected")) {
@@ -11862,36 +11878,12 @@ void RadioModel::onStatusReceived(const QString& object,
     static const QRegularExpression sliceRe(R"(^slice\s+(\d+)$)");
     const auto sliceMatch = sliceRe.match(object);
     if (sliceMatch.hasMatch()) {
-        const int sliceId = sliceMatch.captured(1).toInt();
-        if (kvs.contains(QStringLiteral("mode_list"))) {
-            const QString rawModeList = kvs.value(QStringLiteral("mode_list"));
-            if (m_rawSliceModeLists.value(sliceId) != rawModeList) {
-                m_rawSliceModeLists.insert(sliceId, rawModeList);
-                emit rawSliceModeListsChanged();
-            }
-        }
+        // Every other slice report is decoded by the status ingress.
         if (kvs.contains(QStringLiteral("waveform_status"))) {
             QMap<QString, QString> report = kvs;
             report.insert(QStringLiteral("slice"), sliceMatch.captured(1));
             m_flexWaveformModel.handleGenericStatus(report);
-            return;
         }
-        // Extract per-client TX info for multiFLEX dashboard before
-        // handleSliceStatus filters out other clients' slices
-        if (kvs.contains("client_handle") && kvs.value("tx") == "1") {
-            quint32 ch = kvs["client_handle"].toUInt(nullptr, 16);
-            auto it = m_clientInfoMap.find(ch);
-            if (it != m_clientInfoMap.end()) {
-                it->txAntenna = kvs.value("txant");
-                if (kvs.contains("RF_frequency"))
-                    it->txFreqMhz = kvs["RF_frequency"].toDouble();
-            }
-        }
-        const bool removed = kvs.value("in_use") == "0";
-        if (removed && m_rawSliceModeLists.remove(sliceId) > 0) {
-            emit rawSliceModeListsChanged();
-        }
-        handleSliceStatus(sliceId, kvs, removed);
         return;
     }
 
@@ -12362,209 +12354,6 @@ void RadioModel::releaseReservedSlice(int sliceId)
     }
     if (hadDax) {
         emit reservedDaxChanged();
-    }
-}
-
-void RadioModel::handleSliceStatus(int id,
-                                    const QMap<QString, QString>& kvs,
-                                    bool removed)
-{
-    // A slot reserved for a program on the radio is never ours, whatever
-    // client_handle the radio reports for it (reserveSlice).
-    if (m_reservedSlices.contains(id)) {
-        if (removed) {
-            m_reservedSlices.remove(id);
-            const bool hadDax = m_reservedDax.remove(id) > 0;
-            noteSliceRetirement(id);
-            emit slotOccupancyChanged(id);
-            if (hadDax) {
-                emit reservedDaxChanged();
-            }
-        } else if (auto dax = kvs.constFind(QStringLiteral("dax")); dax != kvs.constEnd()) {
-            const int channel = dax.value().toInt();
-            if (m_reservedDax.value(id, -1) != channel) {
-                m_reservedDax.insert(id, channel);
-                emit reservedDaxChanged();
-            }
-        }
-        return;
-    }
-
-    // Track slice ownership via client_handle (only present in some messages).
-    bool ownershipConfirmed = false;
-    if (kvs.contains("client_handle")) {
-        bool validOwner = false;
-        const quint32 owner = kvs["client_handle"].toUInt(&validOwner, 16);
-        if (validOwner && owner != 0 && owner == clientHandle()) {
-            ownershipConfirmed = !m_ownedSliceIds.contains(id);
-            m_ownedSliceIds.insert(id);
-            // If this slot was previously foreign (e.g. another client
-            // released it and we just got assigned), drop the foreign mark.
-            if (m_foreignSliceOwners.remove(id)) {
-                emit slotOccupancyChanged(id);
-            }
-            qCDebug(lcProtocol) << "RadioModel: slice" << id << "is ours (client_handle match)";
-        } else if (owner != 0) {
-            qCDebug(lcProtocol) << "RadioModel: slice" << id << "belongs to another client"
-                     << Qt::hex << owner << ", marking foreign";
-            m_ownedSliceIds.remove(id);
-            const bool wasForeign = m_foreignSliceOwners.value(id) == owner;
-            m_foreignSliceOwners.insert(id, owner);
-            // If we already have a SliceModel for this ID, remove it.  We
-            // keep the foreign-owner record so UI can dim the slot.
-            if (!dropSliceModelForForeignSlot(id) && (removed || !wasForeign)) {
-                noteSliceRetirement(id);
-            }
-            if (!wasForeign) emit slotOccupancyChanged(id);
-            return;  // slice belongs to another client
-        }
-    }
-
-    // Removal can apply to ours OR a foreign slot — handle before the
-    // not-in-owned-set early-out so foreign slot dimming clears when the
-    // other client releases their slice.
-    SliceModel* s = slice(id);
-
-    if (removed) {
-        // A removal before publication still retires an acknowledged create ID.
-        if (!s && !m_staleSlices.contains(id)) { noteSliceRetirement(id); }
-        if (s) {
-            const bool wasTxSlice = s->isTxSlice();
-            m_slices.removeOne(s);
-            m_ownedSliceIds.remove(id);
-            emit sliceRemoved(id);
-            s->deleteLater();
-            if (wasTxSlice)
-                m_meterModel.setActiveTxSlice(activeTxSliceNum());
-            emit slotOccupancyChanged(id);
-        } else if (SliceModel* stale = m_staleSlices.take(id)) {
-            emit sliceRemoved(id);
-            stale->deleteLater();
-            emit slotOccupancyChanged(id);
-        } else if (m_foreignSliceOwners.remove(id)) {
-            // Foreign client released their slot — clear the dim marker.
-            emit slotOccupancyChanged(id);
-        }
-        syncDigitalVoiceTxSelection();
-        return;
-    }
-
-    // If we've seen client_handle info and this slice isn't ours, skip it
-    if (!m_ownedSliceIds.isEmpty() && !m_ownedSliceIds.contains(id)) {
-        qCDebug(lcProtocol) << "RadioModel: ignoring slice" << id << "status (not in owned set)";
-        return;
-    }
-
-    if (!s) {
-        // Only create SliceModel from a full status (has in_use=1 and RF_frequency).
-        // Partial statuses (e.g. "slice 3 rit_on=0") arrive early without enough
-        // data to initialize the VFO widget correctly.
-        if (!kvs.contains("in_use") || kvs["in_use"] != "1")
-            return;
-
-        bool reclaimed = false;
-        if (auto it = m_staleSlices.find(id);
-            it != m_staleSlices.end() && it.value()) {
-            s = it.value();
-            m_staleSlices.erase(it);
-            reclaimed = true;
-            qCDebug(lcProtocol) << "RadioModel: reclaimed slice" << id
-                                << "from previous session";
-        } else {
-            s = new SliceModel(id, this);
-            // Seed this slice's manual-squelch memory (#3326) from the radio's squelch_level
-            // when the status carries one; the radio is authoritative and squelch is not
-            // persisted client-side (#4592), so otherwise SliceModel's default applies.
-            // applyChanges() maintains it from later echoes; this pins it before any UI
-            // observes the slice.
-            bool haveRadioLevel = false;
-            const int radioLevel =
-                kvs.value(QStringLiteral("squelch_level")).toInt(&haveRadioLevel);
-            if (haveRadioLevel)
-                s->setManualSquelchLevel(radioLevel);
-            // Forward slice commands to the radio
-            connect(s, &SliceModel::commandReady, this, [this, s](const QString& cmd){
-                sendSliceCommand(s, cmd);
-            });
-            // Initial lock observation and selection intents, wired at EVERY
-            // construction site rather than only the backend-materialising one.
-            wireSliceObservationsAndTxIntentToBackend(s);
-            wireSliceReceiveIntentsToBackend(s);
-            connect(s, &SliceModel::digitalVoiceSliceDisplaced,
-                    this, [this](int sliceId, const QString& previousMode) {
-                SliceModel* displaced = slice(sliceId);
-                if (!displaced
-                    || !DigitalVoiceModeRegistry::modeForRadioMode(
-                            displaced->mode()).has_value()) {
-                    return;
-                }
-                QString restoreMode = previousMode.trimmed().toUpper();
-                if (restoreMode.isEmpty()
-                    || DigitalVoiceModeRegistry::modeForRadioMode(
-                        restoreMode).has_value()) {
-                    restoreMode = DigitalVoiceModeRegistry::descriptor(
-                        DigitalVoiceModeId::DStar).underlyingMode;
-                }
-                displaced->setMode(restoreMode);
-            });
-            connect(s, &SliceModel::txSliceChanged, this, [this](bool) {
-                m_meterModel.setActiveTxSlice(activeTxSliceNum());
-            });
-        }
-        s->setNrsLevelMaximum(backendCapabilities().nrsLevelControl
-            .value_or(RadioCapabilities::NrsLevelControl{}).levelMaximum);
-        s->setRttyMarkDefault(m_rttyMarkDefault);
-        m_slices.append(s);
-        // aetherd RFC 2.3: decode Flex slice status behind the seam → the
-        // synchronous sliceChanged handler applies it to this slice (already in
-        // m_slices) before the UI notify below. (populate frequency/mode first.)
-        if (m_flexBackend) m_flexBackend->decodeSliceStatus(id, kvs);
-        selectSoleValidTxAntennaIfNeeded(s, kvs.contains(QStringLiteral("txant")));
-        m_meterModel.setActiveTxSlice(activeTxSliceNum());
-        enforceTransmitInhibitForSlice(s);
-        syncDigitalVoiceTxSelection();
-        if (!reclaimed) {
-            emit sliceAdded(s);
-        } else if (s->isTxSlice()
-                   && transmitInhibitMessageForSlice(s).isEmpty()
-                   && QDateTime::currentMSecsSinceEpoch() >= m_profileLoadRadioStateWriteHoldUntilMs) {
-            // Re-claim TX after a radio reboot (#145 semantics): the radio
-            // recreates a stale slice model with tx=1 but tx_client_handle
-            // pointing at our dead pre-reboot handle (or 0). Fresh startup
-            // slices are left radio-owned so GUIClient restore can settle.
-            requestTxSlice(s);
-        }
-        emit slotOccupancyChanged(id);  // empty/foreign → ours
-        return;   // status already decoded above via decodeSliceStatus; don't
-                  // re-run the fall-through decodeSliceStatus at the end
-    }
-
-    // aetherd RFC 2.3: Flex slice status decodes in FlexBackend → sliceChanged →
-    // applyChanges (synchronous, main-thread) drives this slice.
-    if (m_flexBackend) m_flexBackend->decodeSliceStatus(id, kvs);
-    selectSoleValidTxAntennaIfNeeded(s, kvs.contains(QStringLiteral("txant")));
-    m_meterModel.setActiveTxSlice(activeTxSliceNum());
-    enforceTransmitInhibitForSlice(s);
-    syncDigitalVoiceTxSelection();
-
-    if (ownershipConfirmed) {
-        emit slotOccupancyChanged(id);
-    }
-
-    // Aurora/AU-520: max_internal_pa_power in slice status reports the true
-    // system power capability (e.g. 500W) while transmit status max_power_level
-    // only reports the exciter limit (100W). Use the higher value. (#484)
-    if (kvs.contains("max_internal_pa_power")) {
-        int internalMax = kvs["max_internal_pa_power"].toInt();
-        if (internalMax > m_transmitModel.maxPowerLevel()) {
-            m_transmitModel.setMaxPowerLevel(internalMax);
-        }
-    }
-
-    // Send any queued commands (e.g. if GUI changed freq before status arrived)
-    if (isConnected()) {
-        for (const QString& cmd : s->drainPendingCommands())
-            sendSliceCommand(s, cmd);
     }
 }
 
