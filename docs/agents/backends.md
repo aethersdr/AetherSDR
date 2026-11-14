@@ -311,6 +311,19 @@ file, weaken the check, or add an exemption. Engine code that needs a UI
 callback defines a gui-free interface in `core/` (e.g. `IConnectionAutomation`)
 that the gui implements.
 
+### Flex receive-data ownership
+
+Flex spectrum, waterfall and normalized meter batches cross `IRadioBackend` on
+its owner thread. `FlexReceiveData` bounds the worker-to-owner backlog before
+posting a single drain wake. Consumers validate the session/resource lease;
+retirement revokes even a payload already detached for delivery. Meter freshness
+uses monotonic receipt time, while public observation timestamps remain UTC.
+
+RadioModel reads Flex transport telemetry from the backend cache. UDP delivery
+counters are separate from VITA sequence loss and do not confirm a TCP ping.
+Native spectrum/synthesized-waterfall routing and Flex audio/DAX/IQ remain on
+their existing paths. Details and limits: [Flex receive data](../aetherd-flex-receive-data.md).
+
 ### Engine boundary ratchet — EB3 (vendor includes)
 
 - **Relocation does not convert a touchpoint.** The five Flex wire classes
@@ -412,9 +425,11 @@ connection.
   than pass with every decoder skipped. `tests/flex_ingress_characterization_test` (run with
   `-vs -maxwarnings 0` and `tools/flex_ingress_trace.py`) traces a wire
   corpus for before/after comparison of an ingress change.
-- **Still inline in `RadioModel`**, awaiting its own PR: DVK/NAVTEX (#6870). Each moves into the
-  ingress as a domain decoder; none adds its own transport decoder or
-  lifetime token.
+- **No Flex status is decoded in `RadioModel`.** Every domain is a decoder
+  in the ingress, the voice keyer and NAVTEX (`FlexTransmitServiceStatus.cpp`)
+  last; a new one joins them, with no transport decoder or lifetime token of
+  its own. One raw relay remains: `slice N waveform_status` reports reach
+  FlexWaveformModel as their fields from `RadioModel::onStatusReceived`.
 
 Do not pre-emptively restructure code toward the RFC — no new engine/UI
 seams, backend interfaces, or speculative library targets ahead of a landed

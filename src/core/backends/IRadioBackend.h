@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RadioStatusObservation.h"
+#include "core/ReceiveData.h"
 #include "SetupStatusObservation.h"
 
 #include "IndependentTxControl.h"
@@ -42,6 +43,7 @@
 #include "core/backends/ModelControlRequest.h"
 #include "core/backends/CwTextRequest.h"
 #include "core/backends/RadioSetupRequest.h"
+#include "core/backends/TransmitServiceRequest.h"
 #include "core/backends/SpotRequest.h"
 #include "core/backends/PanControlRequest.h"
 #include "core/backends/SlicePresetRequest.h"
@@ -54,6 +56,7 @@
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/SliceObservation.h"
+#include "core/backends/TransmitServiceStatus.h"
 #include "core/backends/SpectrumCoverage.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
@@ -225,7 +228,14 @@ public:
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestSlicePreset(int, const SlicePresetRequest&)
     { return ReceiveDispatch::Unsupported; }
-    virtual ReceiveDispatch requestTxBand(const TxBandRequest&, const RadioSetupCompletion& = {})
+    virtual ReceiveDispatch requestDvk(const DvkRequest&, const TransmitServiceCompletion&,
+                                       const TxCoordinator::Command& = {}, const RadioControlFence& = {})
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestNavtex(const NavtexRequest&, const TransmitServiceCompletion&,
+                                          const TxCoordinator::Command&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestTxBand(const TxBandRequest&, const RadioSetupCompletion& = {},
+                                          const RadioControlFence& = {})
     { return ReceiveDispatch::Unsupported; }
     virtual ReceiveDispatch requestPanDisplay(const QString& panId, const QString&,
         const PanDisplayRequest& request, const RadioControlCompletion& = {},
@@ -1207,6 +1217,10 @@ public:
         QString localEndpoint;
     };
     virtual LinkStats linkStats() const { return {}; }
+    // Separate display/meter transport snapshots do not confirm a TCP ping.
+    virtual std::optional<ReceiveTelemetry> receiveTelemetry() const { return {}; }
+    // Revoke buffered and detached receive payloads before model/session teardown.
+    virtual void retireReceiveData() {}
 
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients
@@ -1341,6 +1355,10 @@ signals:
     // radio-global status arrives here and never also on radioChanged, which
     // carries native backends and Flex's nickname/info replies.
     void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
+    // The radio voice keyer's and NAVTEX's reports, stamped with the status
+    // epoch they arrived in (Flex: FlexStatusIngress).
+    void dvkStatusObserved(const AetherSDR::DvkStatusObservation& observation);
+    void navtexStatusObserved(const AetherSDR::NavtexStatusObservation& observation);
 
     // Normalized GPS status delta (aetherd RFC 2.3 — RadioModel residual). The
     // backend tokenizes the vendor GPS status line into a present-only GpsDelta;
@@ -1490,16 +1508,18 @@ signals:
                          const QVariantMap& fields);
 
     // ---- data plane UP (RFC §4.2) ----
-    // Normalized outlets for spectrum and audio; binary frame formats are step-4
-    // work, so a backend may relay the existing in-tree frame types. No separate
-    // waterfall outlet: RadioModel derives the row from spectrumFrameReady, paced by
-    // the pan's waterfall rate. A backend with a genuinely separate waterfall plane
-    // adds an outlet together with its consumer.
+    // Native backends publish spectrumFrameReady; RadioModel derives their
+    // paced waterfall from it. The receive* outlets carry independently decoded
+    // display planes, converted meter batches and transport snapshots. They are
+    // in-process owning payloads, not the remote binary streaming protocol.
     // A producer may attach wider, same-observation RF coverage. Existing
     // producers omit it; consumers interested only in the viewport keep their
     // two-argument connection. One emission owns spectrum + paced history.
     void spectrumFrameReady(int panId, const QByteArray& frame,
                             const AetherSDR::SpectrumCoverage& coverage = AetherSDR::SpectrumCoverage());
+    void receiveSpectrumReady(const AetherSDR::ReceiveSpectrumFrame& frame);
+    void receiveWaterfallReady(const AetherSDR::ReceiveWaterfallRow& row);
+    void receiveMetersReady(const AetherSDR::ReceiveMeterBatch& batch);
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 
 protected:

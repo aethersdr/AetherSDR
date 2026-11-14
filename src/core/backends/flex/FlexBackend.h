@@ -24,6 +24,7 @@ class FirmwareStager;
 class RadioConnection;
 class WanConnection;
 class PanadapterStream;
+class FlexReceiveData;
 
 // FlexBackend — the IRadioBackend for the SmartSDR / FlexRadio wire stack.
 // Owns the RadioConnection and PanadapterStream and their two worker threads:
@@ -36,6 +37,7 @@ class FlexBackendTestAccess;
 
 class FlexBackend : public IRadioBackend {
     Q_OBJECT
+    friend class FlexReceiveDataTestAccess;
 
 public:
     explicit FlexBackend(QObject* parent = nullptr);
@@ -113,6 +115,10 @@ public:
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
     void setTxCommandSink(std::function<bool(const QString&, const TxCoordinator::Command&)> sink);
+    using RepliedTxSink = std::function<bool(const QString&, const TxCoordinator::Command&, CommandReply)>;
+    void setRepliedTxSink(RepliedTxSink sink) { m_repliedTxSink = std::move(sink); }
+    using ServiceCommandSink = std::function<bool(const QString&, const RadioControlFence&, CommandReply)>;
+    void setServiceCommandSink(ServiceCommandSink sink) { m_serviceCommandSink = std::move(sink); }
     // Queue admission and radio reply are separate. Replies run on the owner
     // thread; current is an immutable worker-safe fence at the terminal writer.
     using CwxCommandSink = std::function<bool(const QString&, const TxCoordinator::Command&,
@@ -153,6 +159,8 @@ public:
     // ---- IRadioBackend ----
     RadioCapabilities capabilities() const override;
     void onRadioSessionEstablished() override;
+    std::optional<ReceiveTelemetry> receiveTelemetry() const override { return m_receiveTelemetry; }
+    void retireReceiveData() override;
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
@@ -179,7 +187,13 @@ public:
                                       const RadioSetupCompletion& completion = {},
                                       const RadioControlFence& current = {}) override;
     ReceiveDispatch requestTxBand(const TxBandRequest& request,
-                                  const RadioSetupCompletion& completion = {}) override;
+                                  const RadioSetupCompletion& completion = {},
+                                  const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestDvk(const DvkRequest& request, const TransmitServiceCompletion& completion,
+                               const TxCoordinator::Command& fence = {},
+                               const RadioControlFence& current = {}) override;
+    ReceiveDispatch requestNavtex(const NavtexRequest& request, const TransmitServiceCompletion& completion,
+                                  const TxCoordinator::Command& fence) override;
     ReceiveDispatch requestSpot(const SpotRequest& request, const QString& panId = {}) override;
     ReceiveDispatch requestPanControl(const QString& panId, const PanControlRequest& request) override;
     ReceiveDispatch requestSlicePreset(int sliceId, const SlicePresetRequest& request) override;
@@ -271,6 +285,10 @@ private:
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
     void sendSliceTune(int sliceId, const SliceTuneRequest& request);
 
+    void initializeReceiveData();
+    void drainReceiveData(quint64 generation);
+    std::shared_ptr<FlexReceiveData> m_receiveData;
+    ReceiveTelemetry m_receiveTelemetry;
     std::unique_ptr<FlexCwControls> m_cwControls;
     FlexStatusIngress m_statusIngress;
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
@@ -292,7 +310,10 @@ private:
     quint64 m_nicknameAppliedRequest{0};
     quint64 m_tuneOutputSession = 0;
     QMap<int, quint64> m_tuneOutputRequests;
+    QSet<int> m_tuneOutputKnownBands;
     std::function<bool(const QString&, const TxCoordinator::Command&)> m_txSink;
+    RepliedTxSink m_repliedTxSink;
+    ServiceCommandSink m_serviceCommandSink;
     CwxCommandSink m_cwxSink;
     CwxConfigurationSink m_cwxConfigurationSink;
     std::function<void(const QString&)> m_sliceSink;

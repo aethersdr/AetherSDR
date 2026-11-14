@@ -1397,8 +1397,8 @@ signals:
     // this terminal signal to stop reconnect UX and preserve the radio's reason.
     void guiClientRegistrationFailed(const QString& message);
     // Backend-neutral panadapter render feed; signatures mirror PanadapterStream's
-    // so the UI binds here, not to the Flex-only stream. Flex forwards its
-    // PanadapterStream 1:1; other backends synthesise from spectrumFrameReady.
+    // so the UI and TCI bind here, not to the Flex-only stream. Flex forwards its
+    // typed receive outlets 1:1; other backends synthesise from spectrumFrameReady.
     // Coherent coverage declares final same-scale samples, avoiding repeated
     // intensity calibration and smoothing in the renderer.
     void panFeedSpectrumReady(quint32 streamId, const QVector<float>& binsDbm,
@@ -1803,6 +1803,7 @@ private:
     void applyGpsChanges(const GpsDelta& delta);
     friend class FlexSetupStatusTestPeer;
     friend class FlexSliceStatusTestPeer;
+    friend class FlexReceiveDataTestAccess;
     void applySetupObservation(const SetupStatusObservation& observation);
     void retireSetupObservations();
     void resetSetupObservations();
@@ -2292,6 +2293,8 @@ private:
     std::array<quint64, 5> m_outputIntentRevisions{};
     quint64 m_receiveControlGeneration{0};
     void wireBackendReceiverState();
+    void wireBackendReceiveData();
+    std::optional<ReceiveTelemetry> backendReceiveTelemetry() const;
     void clearRadioSpeakerReport();
     struct PendingSliceCreate;
     void wireSliceLifecycle();
@@ -2391,6 +2394,16 @@ private:
     // the desktop methods. Independent daemon clients use separate granted
     // actors on the same coordinator and cannot obtain this desktop actor.
     TxCoordinator m_txCoordinator;
+    std::shared_ptr<std::atomic_bool> m_transmitServiceSession{std::make_shared<std::atomic_bool>(true)};
+    quint64 m_dvkTxRequest{0};
+    quint64 m_navtexTxRequest{0};
+    TxCoordinator::Intent m_dvkTxIntent;
+    TxCoordinator::Intent m_navtexTxIntent;
+    void wireFlexTransmitServices(FlexBackend* backend);
+    void dispatchDvk(const DvkRequest& request, quint64 requestId);
+    void dispatchNavtex(const NavtexRequest& request, quint64 requestId);
+    TransmitServiceCompletion transmitServiceCompletion(const TransmitServiceCompletion& completion,
+        const std::shared_ptr<std::atomic_bool>& current);
     std::shared_ptr<TxController> m_localTxController;
     TxCoordinator::Actor m_desktopTxActor;
     TxCoordinator::Operation m_txOperation;
@@ -2449,7 +2462,8 @@ private:
     void applyBackendTransmitDelta(const TransmitDelta& delta);
     bool sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
                           bool keying, std::function<void()> delivered,
-                          ResponseCallback reply = {}, std::function<bool()> currentBatch = {});
+                          ResponseCallback reply = {}, std::function<bool()> currentBatch = {},
+                          int replyTimeoutMs = 0);
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;
@@ -2683,13 +2697,13 @@ private:
         int bandId{-1};
         quint64 session{0};
         quint64 backend{0};
-        QStringList pending;
-        QStringList outputs;
+        QList<TxBandRequest::Field> pending;
+        QList<TxBandRequest::Field> outputs;
         Phase phase{Phase::Applying};
     };
     std::optional<TuneInhibitState> m_tuneInhibit;
     quint64 m_tuneInhibitEpoch{0};
-    QMap<int, QSet<QString>> m_tuneInhibitKnownOutputs;
+    QMap<int, QSet<TxBandRequest::Field>> m_tuneInhibitKnownOutputs;
     // #5572 firmware-upload retry barrier. Set when an upload is dispatched to
     // the radio; cleared only when a NEW connection is established, so it
     // survives the Radio Setup dialog (and its uploader) being closed.
@@ -2712,7 +2726,11 @@ private:
     bool applyTuneInhibit();    // suppress selected TX outputs before tune
     void restoreTuneInhibit();  // restore only this cycle's temporary writes
     void discardTuneInhibit();
-    void relinquishTuneInhibit(const QString& command);
+    void relinquishTuneInhibit(const TxBandRequest& request);
+    enum class TxBandWrite { Operator, Inhibit, Restore };
+    ReceiveDispatch dispatchTxBand(const TxBandRequest& request,
+        std::optional<RadioControlSession> expectedSession, QObject* replyContext,
+        const RadioSetupCompletion& completion, TxBandWrite origin);
     QString transmitInhibitMessageForSlice(const SliceModel* slice) const;
     QString transmitInhibitMessageForTxSlice() const;
     void enforceTransmitInhibitForPan(const QString& panId);
@@ -3127,7 +3145,7 @@ public:
     // that carries everything in one stream has nothing to break down, and
     // rendering five rows of "0 / 0 packets" for it invents a distinction the
     // wire does not have.
-    bool    hasStreamCategoryStats() const { return m_panStream != nullptr; }
+    bool    hasStreamCategoryStats() const;
     bool    pendingThrottleLift() const { return m_pendingThrottleLift; }
     int     currentAdaptiveFpsCap() const;  // 0 = throttle inactive
     // The 1..100 waterfall RATE the adaptive throttle caps to for a given fps
@@ -3164,7 +3182,7 @@ public:
     bool    firstUdpPacketSeen() const;
 
     // Per-category stream stats (Audio, FFT, Waterfall, Meter, DAX)
-    PanadapterStream::CategoryStats categoryStats(PanadapterStream::StreamCategory cat) const;
+    ReceiveStreamStats::Counters categoryStats(ReceiveStreamStats::Category cat) const;
     QVector<PanadapterStream::AudioStreamDiagnostics> audioStreamDiagnostics() const;
     void resetAudioStreamDiagnostics();
 
