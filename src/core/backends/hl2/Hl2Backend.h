@@ -326,6 +326,8 @@ private:
     // for hl2_hardware_ptt_state_test.
     friend struct Hl2HardwarePttTestAccess;
     friend struct Hl2TxRouteTestAccess;
+    // Arms and ends the transmit tail, for tci_ext_hl2_hw_test's hw.set refusal.
+    friend struct Hl2HwSetTailTestAccess;
     // The radio keyed or unkeyed itself (MetisClient::radioPttChanged). Observation
     // only: it publishes the transmit state and mutes receive, and keys nothing.
     void onRadioPttChanged(bool keyed);
@@ -564,6 +566,9 @@ private:
     // wire, and re-evaluate the band filter. The single path for a hardware
     // change whoever asked for it (setup dialog, automation bridge, connect).
     void applyHardwareOptions(const Hl2HardwareOptions& next, bool persist);
+    // The options as hw.get, hw.set and the `hl2`/`hw` extensionStatus report
+    // them: one map, so the three cannot disagree.
+    [[nodiscard]] QVariantMap hardwareOptionsReport() const;
     // Raise or clear the gateware ATU request, honouring m_hw.atuGateware.
     // Called from the same two places that start and end a TUNE.
     void applyAtuTuneRequest(bool tuning);

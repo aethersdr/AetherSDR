@@ -233,6 +233,13 @@ IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
         // hang" (softerhardware/Hermes-Lite2 #178); readable before keying.
         reading("pttHangTimeMs", QStringLiteral("PTT hang time (ms), 31 = auto-unkey DISABLED"),
                 r.pttHangTimeMs);
+        // Register 0x17's other field; AetherSDR does not write it either.
+        reading("txBufferLatencyMs", QStringLiteral("TX buffer latency (ms)"),
+                r.txBufferLatencyMs);
+        // The external T/R output (control.v: pa_exttr = int_tx_on): true while
+        // the gateware transmits. A state, not a setting, and as old as the
+        // reading (telemetryAgeMs above).
+        reading("paExtTr", QStringLiteral("External T/R (transmitting)"), r.paExtTr);
         // adcClipCount is deliberately NOT published here. Only an EP6 packet
         // clears it, so off-stream it latches at its maximum after one
         // historical clip, and while another client streams it is cleared on a

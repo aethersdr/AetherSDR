@@ -11,7 +11,9 @@
 //   3. a keyboard change, suggested or stored, sends exactly one hw.set;
 //   4. the automation bridge's setCurrentIndex / setCurrentText (which emit
 //      currentIndexChanged and never activated) each send exactly one hw.set,
-//      and the backend follows the combo.
+//      and the backend follows the combo;
+//   5. a change made elsewhere (a TCI client), announced on
+//      extensionStatus("hl2", "hw"), is shown without a write.
 //
 // No socket and no radio: an injected backend that declares the hl2
 // extension and answers hw.get/hw.set with the shape Hl2Backend replies with.
@@ -51,6 +53,7 @@ public:
     bool filterSuggested{false};
     QString board{QStringLiteral("SQUARE SDR 2")};
     QList<QVariantMap> sets;
+    int gets{0};
     Hl2HardwareBackend()
     {
         caps.family = QStringLiteral("hl2");
@@ -87,6 +90,7 @@ public:
             return;
         }
         if (verb == QLatin1String("hw.get") && id != 0) {
+            ++gets;
             emit extensionResult(id, QVariantMap{
                 {QStringLiteral("codec"), codec},
                 {QStringLiteral("ditherBit"), true},
@@ -102,6 +106,14 @@ public:
             });
         }
         // Other hl2 verbs (the Calibration page's) get no reply.
+    }
+    // As Hl2Backend after a hw.set from another caller.
+    void changedElsewhere(int board)
+    {
+        filterBoard = board;
+        filterSuggested = false;
+        emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("hw"),
+                             QVariantMap{{QStringLiteral("filterBoard"), board}});
     }
 };
 
@@ -322,6 +334,23 @@ private slots:
         QCOMPARE(backend->sets.size(), 2);
         QCOMPARE(backend->sets.last(), (QVariantMap{{QStringLiteral("filterBoard"), 0}}));
         QCOMPARE(backend->filterBoard, 0);
+    }
+
+    // A TCI client or the bridge changed the board while the page is open.
+    void aChangeElsewhereIsShownWithoutAWrite()
+    {
+        RadioModel model;
+        Hl2HardwareBackend* backend = install(model, 2, false, 1, false);
+        RadioSetupDialog dialog(&model);
+        const Page page = openPage(dialog);
+        QVERIFY2(page.filter, "board combo found");
+        QCOMPARE(page.filter->currentData().toInt(), 1);
+        const int gets = backend->gets;
+        emit backend->extensionStatus(QStringLiteral("anan"), QStringLiteral("droop"), {});
+        QCOMPARE(backend->gets, gets);   // CONTROL: another status reads nothing
+        backend->changedElsewhere(2);
+        QCOMPARE(page.filter->currentData().toInt(), 2);
+        QVERIFY2(backend->sets.isEmpty(), "showing the change writes nothing");
     }
 };
 
