@@ -93,6 +93,10 @@ public:
     // through applyFilterPreset so all modes (LSB/CWL/DIGL/RTTY/AM/CW/USB) get
     // mode-correct edge geometry.
     void stepFilterWidth(int steps);
+    // Set the passband to the reachable width nearest widthHz: the radio's own
+    // list when it declared one, else widthHz itself, placed for the mode.
+    // False when there is no slice or the mode refuses those edges.
+    bool applyNearestFilterWidth(int widthHz);
 
     // Connect to transmit model for QSK (break_in) indicator.
     void setTransmitModel(class TransmitModel* txModel);

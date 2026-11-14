@@ -147,6 +147,19 @@ void ControlActionRegistry::publishMidi(
     }
 }
 
+bool ControlActionRegistry::stepLevel(const QString& midiId, int steps) const
+{
+    for (const ControlAction& a : m_actions) {
+        if (a.midiId != midiId || a.kind != ControlAction::Kind::Level)
+            continue;
+        if (guard(a))
+            a.set(std::clamp(a.get() + static_cast<float>(steps) * a.keyStep,
+                             a.rangeMin, a.rangeMax));
+        return true;
+    }
+    return false;
+}
+
 QString ControlActionRegistry::midiIdForShortcut(const QString& shortcutId) const
 {
     for (const auto& a : m_actions) {

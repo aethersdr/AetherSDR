@@ -2125,6 +2125,23 @@ void MainWindow::zoomActivePanadapter(double factor)
     applyPanRangeRequest(s->panId(), newCenter, newBw, "pan-zoom");
 }
 
+bool MainWindow::setActivePanSpan(double bandwidthMhz)
+{
+    if (!m_radioModel.isConnected()) return false;
+    auto* s = activeSlice();
+    if (!s || s->panId().isEmpty()) return false;
+    auto* sw = spectrumForSlice(s);
+    if (!sw) return false;
+    if (panSpanFixedByBackend() && !kiwiSdrPanDisplaysKiwi(s->panId())) return false;
+    const double bw = std::clamp(bandwidthMhz,
+                                 m_radioModel.panMinBandwidthMhz(s->panId()),
+                                 m_radioModel.panMaxBandwidthMhz(s->panId()));
+    const double center = std::max(s->frequency(), bw / 2.0);
+    sw->setFrequencyRange(center, bw);
+    applyPanRangeRequest(s->panId(), center, bw, "pan-span-preset");
+    return true;
+}
+
 void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
 {
     // The capability rung comes first, ahead of the slice and pan lookup.

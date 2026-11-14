@@ -120,6 +120,10 @@ public:
     static QString downId(const QString& shortcutId) { return shortcutId + QStringLiteral("_down"); }
     static bool isValidShortcutId(const QString& id);
 
+    // A relative encoder's steps on a Level's MIDI id: get() + steps * keyStep,
+    // clamped. False when midiId names no Level here.
+    bool stepLevel(const QString& midiId, int steps) const;
+
     // The other surface's id for the same action; empty when there is none.
     QString midiIdForShortcut(const QString& shortcutId) const;
     QString shortcutIdForMidi(const QString& midiId) const;

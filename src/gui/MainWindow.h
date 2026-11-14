@@ -1553,6 +1553,8 @@ private:
     void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
     void setPanZoomMode(bool segmentZoom, bool enable);
     void zoomActivePanadapter(double factor);
+    // Absolute span centered on the active slice, clamped to the pan's limits.
+    bool setActivePanSpan(double bandwidthMhz);
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
@@ -2272,6 +2274,7 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     ControlActionRegistry m_controlActions;
+    int m_lastRecalledMemoryPosition{-1};  // memory_next/prev cursor
     UpdateChecker* m_updateChecker{nullptr};
     // Install update in place (RFC #5304): outlives the Updates window, so
     // a staged release installs on quit (closeEvent).

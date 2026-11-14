@@ -4,6 +4,10 @@
 
 #include "MainWindow.h"
 #include "MainWindowHelpers.h"
+#include "AppletPanel.h"
+#include "PanadapterApplet.h"
+#include "PanadapterStack.h"
+#include "RxApplet.h"
 #include "SpectrumWidget.h"
 
 #include <QDebug>
@@ -148,6 +152,252 @@ void MainWindow::registerControlActions()
                        keyer(true, 1)).inMidiCategory("Phone/CW"));
     reg.add(A::trigger("cw_keyer_straight", "cw.keyerStraight", "CW Keyer: Straight Key", "CW",
                        keyer(false, 0)).inMidiCategory("Phone/CW"));
+
+    // ── Filter width ───────────────────────────────────────────────────
+    // A preset lands on the radio's nearest declared width when it has a
+    // fixed list (RxApplet::applyNearestFilterWidth), else on the width itself.
+    const auto hasSlice = [this] { return m_radioModel.isConnected() && activeSlice(); };
+    for (int hz : {100, 250, 400, 3000}) {
+        const QString label = hz >= 1000 ? QStringLiteral("%1 kHz").arg(hz / 1000)
+                                         : QStringLiteral("%1 Hz").arg(hz);
+        reg.add(A::trigger(QStringLiteral("filter_width_%1").arg(hz),
+                           QStringLiteral("rx.filterWidth%1").arg(hz),
+                           QStringLiteral("Filter Width %1").arg(label), "Filter",
+                           [this, hz](float) {
+                               auto* rx = m_appletPanel ? m_appletPanel->rxApplet() : nullptr;
+                               if (!rx || !rx->applyNearestFilterWidth(hz))
+                                   showUnsupportedControlNotice();
+                           })
+                    .inMidiCategory("RX").when(hasSlice));
+    }
+    // Continuous width for a wheel: 0..100 maps logarithmically to 50 Hz..12 kHz.
+    static constexpr double kMinWidth = 50.0, kMaxWidth = 12000.0;
+    reg.add(A::level({}, "rx.filterWidth", "Filter Width", "Filter", 0, 100, 2,
+        [this](float v) {
+            const double hz = kMinWidth * std::pow(kMaxWidth / kMinWidth, v / 100.0);
+            if (auto* rx = m_appletPanel ? m_appletPanel->rxApplet() : nullptr)
+                rx->applyNearestFilterWidth(static_cast<int>(std::lround(hz)));
+        },
+        [this]() -> float {
+            auto* s = activeSlice();
+            const double w = s ? std::max(1, s->filterHigh() - s->filterLow()) : kMinWidth;
+            const double v = 100.0 * std::log(std::clamp(w, kMinWidth, kMaxWidth) / kMinWidth)
+                           / std::log(kMaxWidth / kMinWidth);
+            return static_cast<float>(v);
+        })
+        .inMidiCategory("RX").when(hasSlice));
+
+    // ── Receive DSP: APF, and NB/NR/ANF/APF levels ─────────────────────
+    // Available where the radio declares the feature for the slice's mode;
+    // a radio with no ReceiveDspControl record keeps today's behavior
+    // (the VFO's own controls use the same rule).
+    using Feature = ReceiveDspControl::Feature;
+    const auto dsp = [this](Feature feature) {
+        return [this, feature] {
+            auto* s = activeSlice();
+            if (!m_radioModel.isConnected() || !s) return false;
+            const auto caps = m_radioModel.backendCapabilities();
+            return !caps.receiveDspControl || caps.receiveDspControl->supports(feature, s->mode());
+        };
+    };
+    reg.add(A::toggle("apf_toggle", "rx.apfEnable", "APF", "DSP",
+        [this](float v) { if (auto* s = activeSlice()) s->setApf(v > 0.5f); },
+        [this]() -> float { auto* s = activeSlice(); return s && s->apfOn() ? 1 : 0; })
+        .inMidiCategory("RX").when(dsp(Feature::Apf)));
+    struct DspLevel {
+        const char* key; const char* midiId; const char* name; Feature feature;
+        void (SliceModel::*set)(int); int (SliceModel::*get)() const;
+    };
+    static const DspLevel kLevels[] = {
+        {"nb_level",  "rx.nbLevel",  "NB Level",  Feature::Nb,  &SliceModel::setNbLevel,  &SliceModel::nbLevel},
+        {"nr_level",  "rx.nrLevel",  "NR Level",  Feature::Nr,  &SliceModel::setNrLevel,  &SliceModel::nrLevel},
+        {"anf_level", "rx.anfLevel", "ANF Level", Feature::Anf, &SliceModel::setAnfLevel, &SliceModel::anfLevel},
+        {"apf_level", "rx.apfLevel", "APF Level", Feature::Apf, &SliceModel::setApfLevel, &SliceModel::apfLevel},
+    };
+    for (const auto& l : kLevels) {
+        const auto set = l.set;
+        const auto get = l.get;
+        reg.add(A::level(l.key, l.midiId, l.name, "DSP", 0, 100, 5,
+            [this, set](float v) { if (auto* s = activeSlice()) (s->*set)(static_cast<int>(v)); },
+            [this, get]() -> float { auto* s = activeSlice(); return s ? (s->*get)() : 0; })
+            .inMidiCategory("RX").when(dsp(l.feature)));
+    }
+
+    // ── RIT / XIT offsets ──────────────────────────────────────────────
+    // 10 Hz per key press, as the RX applet's RIT/XIT arrows step.
+    static constexpr float kOffsetLimitHz = 5000.0f;
+    reg.add(A::level("rit_offset", "rx.ritOffset", "RIT Offset", "RIT/XIT",
+                     -kOffsetLimitHz, kOffsetLimitHz, 10,
+        [this](float v) { if (auto* s = activeSlice()) s->setRit(s->ritOn(), static_cast<int>(v)); },
+        [this]() -> float { auto* s = activeSlice(); return s ? s->ritFreq() : 0; })
+        .inMidiCategory("RX").when(dsp(Feature::Rit)));
+    reg.add(A::level("xit_offset", "tx.xitOffset", "XIT Offset", "RIT/XIT",
+                     -kOffsetLimitHz, kOffsetLimitHz, 10,
+        [this](float v) { if (auto* s = activeSlice()) s->setXit(s->xitOn(), static_cast<int>(v)); },
+        [this]() -> float { auto* s = activeSlice(); return s ? s->xitFreq() : 0; })
+        .inMidiCategory("TX").when([this, canTransmit] { return canTransmit() && activeSlice(); }));
+
+    // ── Slices: select by letter, A/B copy and swap, new, close ────────
+    const auto sliceByLetter = [this](const QString& letter) -> SliceModel* {
+        for (SliceModel* s : m_radioModel.slices())
+            if (s && s->letter() == letter) return s;
+        return nullptr;
+    };
+    for (const char* letter : {"A", "B", "C", "D", "E", "F", "G", "H"}) {
+        const QString l = QString::fromLatin1(letter);
+        reg.add(A::trigger(QStringLiteral("slice_select_%1").arg(l.toLower()),
+                           QStringLiteral("global.sliceSelect%1").arg(l),
+                           QStringLiteral("Select Slice %1").arg(l), "Slice",
+                           [this, l, sliceByLetter](float) {
+                               if (auto* s = sliceByLetter(l)) setActiveSlice(s->sliceId());
+                           })
+                    .inMidiCategory("Global")
+                    .when([this, l, sliceByLetter] {
+                        return m_radioModel.isConnected() && sliceByLetter(l);
+                    }));
+    }
+    // Copy or swap frequency and mode between slices A and B, as a VFO A/B
+    // pair does. A locked target refuses the change, like any other tune.
+    const auto retune = [this](SliceModel* to, double mhz, const QString& mode) {
+        if (to->isLocked()) { to->notifyTuneBlockedByLock(); return false; }
+        if (!mode.isEmpty() && mode != to->mode()) to->setMode(mode);
+        applyTuneRequest(to, mhz, TuneIntent::AbsoluteJump, "slice-ab");
+        return true;
+    };
+    const auto abAvailable = [this, sliceByLetter] {
+        return m_radioModel.isConnected() && sliceByLetter("A") && sliceByLetter("B");
+    };
+    reg.add(A::trigger("slice_a_to_b", "global.sliceAToB", "Copy Slice A to B", "Slice",
+        [sliceByLetter, retune](float) {
+            auto* a = sliceByLetter("A"); auto* b = sliceByLetter("B");
+            if (a && b) retune(b, a->frequency(), a->mode());
+        }).inMidiCategory("Global").when(abAvailable));
+    reg.add(A::trigger("slice_b_to_a", "global.sliceBToA", "Copy Slice B to A", "Slice",
+        [sliceByLetter, retune](float) {
+            auto* a = sliceByLetter("A"); auto* b = sliceByLetter("B");
+            if (a && b) retune(a, b->frequency(), b->mode());
+        }).inMidiCategory("Global").when(abAvailable));
+    reg.add(A::trigger("slice_swap_ab", "global.sliceSwapAB", "Swap Slices A and B", "Slice",
+        [sliceByLetter, retune](float) {
+            auto* a = sliceByLetter("A"); auto* b = sliceByLetter("B");
+            if (!a || !b) return;
+            if (a->isLocked() || b->isLocked()) {
+                (a->isLocked() ? a : b)->notifyTuneBlockedByLock();
+                return;
+            }
+            const double fa = a->frequency(), fb = b->frequency();
+            const QString ma = a->mode(), mb = b->mode();
+            retune(a, fb, mb);
+            retune(b, fa, ma);
+        }).inMidiCategory("Global").when(abAvailable));
+    reg.add(A::trigger("slice_new", "global.sliceNew", "New Slice", "Slice",
+        [this](float) {
+            if (!m_radioModel.addSlice()) showPanadapterSliceCapacityMessage();
+        })
+        .inMidiCategory("Global")
+        .when([this] {
+            return m_radioModel.isConnected() && m_radioModel.backendCapabilities().canCreateSlices;
+        }));
+    reg.add(A::trigger("slice_close", "global.sliceClose", "Close Active Slice", "Slice",
+        [this](float) { if (auto* s = activeSlice()) requestSliceClose(s->sliceId()); })
+        .inMidiCategory("Global")
+        .when([this] {
+            return m_radioModel.isConnected() && activeSlice()
+                && m_radioModel.backendCapabilities().canCreateSlices;
+        }));
+
+    // ── Panadapters: select by position, add, close, span presets ──────
+    const auto panAt = [this](int index) -> PanadapterApplet* {
+        if (!m_panStack) return nullptr;
+        const auto applets = m_panStack->allApplets();
+        return index < applets.size() ? applets.at(index) : nullptr;
+    };
+    for (int n = 1; n <= 8; ++n) {
+        reg.add(A::trigger(QStringLiteral("pan_select_%1").arg(n),
+                           QStringLiteral("global.panSelect%1").arg(n),
+                           QStringLiteral("Select Panadapter %1").arg(n), "Display",
+                           [this, n, panAt](float) {
+                               auto* applet = panAt(n - 1);
+                               if (!applet) return;
+                               // Activating a slice on the pan makes it the active pan
+                               // too; an empty pan is activated directly.
+                               for (SliceModel* s : m_radioModel.slices()) {
+                                   if (s && s->panId() == applet->panId()) {
+                                       setActiveSlice(s->sliceId());
+                                       return;
+                                   }
+                               }
+                               m_panStack->setActivePan(applet->panId());
+                           })
+                    .inMidiCategory("Global")
+                    .when([this, n, panAt] { return m_radioModel.isConnected() && panAt(n - 1); }));
+    }
+    reg.add(A::trigger("pan_add", "global.panAdd", "Add Panadapter", "Display",
+                       [this](float) { showAddPanadapterDialog(); })
+        .inMidiCategory("Global")
+        .when([this] { return m_radioModel.isConnected() && m_radioModel.maxPanadapters() > 1; }));
+    reg.add(A::trigger("pan_close", "global.panClose", "Close Active Panadapter", "Display",
+        [this](float) {
+            auto* s = activeSlice();
+            const QString panId = s && !s->panId().isEmpty() ? s->panId()
+                                : (m_panStack ? m_panStack->activePanId() : QString());
+            if (panId.isEmpty() || !m_panStack || m_panStack->count() <= 1) return;
+            clearCenterLockForPan(panId, true);
+            m_radioModel.removePanadapter(panId);
+        })
+        .inMidiCategory("Global")
+        .when([this] { return m_radioModel.isConnected() && m_panStack && m_panStack->count() > 1; }));
+    for (int khz : {5, 10, 25, 50, 100, 200}) {
+        reg.add(A::trigger(QStringLiteral("pan_span_%1k").arg(khz),
+                           QStringLiteral("global.panSpan%1k").arg(khz),
+                           QStringLiteral("Panadapter Span %1 kHz").arg(khz), "Display",
+                           [this, khz](float) {
+                               if (!setActivePanSpan(khz / 1000.0)) showUnsupportedControlNotice();
+                           })
+                    .inMidiCategory("Global")
+                    .when([this] { return m_radioModel.isConnected() && !panSpanFixedByBackend(); }));
+    }
+
+    // ── Memories: recall by position, step through them ────────────────
+    // Position N is the Nth stored memory in slot order, so the binding stays
+    // useful on radios whose slot numbers are sparse.
+    const auto memorySlot = [this](int position) -> int {
+        const auto keys = m_radioModel.memories().keys();
+        return position >= 0 && position < keys.size() ? keys.at(position) : -1;
+    };
+    const auto recallPosition = [this, memorySlot](int position) {
+        const int slot = memorySlot(position);
+        if (slot < 0) return;
+        auto* s = activeSlice();
+        if (activateMemorySpot(slot, s ? s->panId() : QString()))
+            m_lastRecalledMemoryPosition = position;
+    };
+    for (int n = 1; n <= 10; ++n) {
+        reg.add(A::trigger(QStringLiteral("memory_recall_%1").arg(n),
+                           QStringLiteral("global.memoryRecall%1").arg(n),
+                           QStringLiteral("Recall Memory %1").arg(n), "Display",
+                           [recallPosition, n](float) { recallPosition(n - 1); })
+                    .inMidiCategory("Global")
+                    .when([this, n] {
+                        return m_radioModel.isConnected() && m_radioModel.memories().size() >= n;
+                    }));
+    }
+    const auto memoryStep = [this, recallPosition](int direction) {
+        const int count = m_radioModel.memories().size();
+        if (count == 0) return;
+        const int from = m_lastRecalledMemoryPosition < 0 ? (direction > 0 ? -1 : 0)
+                                                           : m_lastRecalledMemoryPosition;
+        recallPosition(((from + direction) % count + count) % count);
+    };
+    const auto hasMemories = [this] {
+        return m_radioModel.isConnected() && !m_radioModel.memories().isEmpty();
+    };
+    reg.add(A::trigger("memory_next", "global.memoryNext", "Next Memory", "Display",
+                       [memoryStep](float) { memoryStep(+1); })
+        .inMidiCategory("Global").when(hasMemories));
+    reg.add(A::trigger("memory_prev", "global.memoryPrev", "Previous Memory", "Display",
+                       [memoryStep](float) { memoryStep(-1); })
+        .inMidiCategory("Global").when(hasMemories));
 
     // ── Pairs declared before the registry (keyboard id ↔ MIDI id) ─────
     static constexpr std::pair<const char*, const char*> kLegacyPairs[] = {

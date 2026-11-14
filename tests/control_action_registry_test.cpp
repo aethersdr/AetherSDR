@@ -176,6 +176,30 @@ private slots:
         QVERIFY(reg.midiIdForShortcut("unknown").isEmpty());
     }
 
+    void relativeEncoderStepsALevel()
+    {
+        ControlActionRegistry reg;
+        float hz = 0.0f;
+        bool available = true;
+        QStringList refused;
+        reg.setRefusalHandler([&](const QString& n) { refused << n; });
+        QVERIFY(reg.add(ControlAction::level("rit_offset", "rx.ritOffset", "RIT Offset", "RIT/XIT",
+                                             -5000, 5000, 10,
+                                             [&](float v) { hz = v; }, [&] { return hz; })
+                            .when([&] { return available; })));
+        QVERIFY(reg.add(ControlAction::trigger("t", "rx.trigger", "T", "DSP", [](float) {})));
+        QVERIFY(reg.stepLevel("rx.ritOffset", 3));
+        QCOMPARE(hz, 30.0f);
+        QVERIFY(reg.stepLevel("rx.ritOffset", -1000));
+        QCOMPARE(hz, -5000.0f);                       // clamped
+        QVERIFY(!reg.stepLevel("rx.trigger", 1));     // not a level
+        QVERIFY(!reg.stepLevel("rx.unknown", 1));
+        available = false;
+        QVERIFY(reg.stepLevel("rx.ritOffset", 1));    // handled, but refused
+        QCOMPARE(hz, -5000.0f);
+        QCOMPARE(refused, QStringList{"RIT Offset"});
+    }
+
     void everyPublishedShortcutIdIsPersistable()
     {
         ControlActionRegistry reg;

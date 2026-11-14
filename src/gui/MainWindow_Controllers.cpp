@@ -2910,7 +2910,10 @@ void MainWindow::wireExternalControllers()
             m_midiTuneIdleTimer.start();
             applyTuneRequest(s, m_midiTuneTargetMhz, TuneIntent::IncrementalTune,
                              "midi-relative");
+            return;
         }
+        // Any registry level bound as a relative CC (encoders): step it.
+        m_controlActions.stepLevel(paramId, steps);
     });
 
     MidiSettings::instance().load();
