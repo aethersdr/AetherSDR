@@ -1147,6 +1147,8 @@ set(CORE_SOURCES
     src/core/TailnetShimTokenStore.cpp
     src/core/TailnetShimDownloader.cpp  # pinned, SHA-256-verified image download (RFC #6271 D2)
     src/core/RadioHealthClient.cpp    # radio health agent readout (tools/radio-health)
+    src/core/GpsdSkyClient.cpp        # AetherGPS sky view: gpsd on the radio (tools/aether-gps)
+    src/core/AetherGpsPackage.cpp     # the bundled AetherGPS packages and their pins
     src/core/WsprAgent.cpp            # WSPR receiver on the radio (tools/wspr-agent)
     src/core/WsprAgentClient.cpp
     src/core/TailnetLinkTelemetry.cpp   # link telemetry from the shim, for Network Diagnostics
@@ -1381,6 +1383,8 @@ set(GUI_SOURCES
     src/gui/map/WeatherRadarTileLayer.cpp
     src/gui/PskReporterMapDialog.cpp
     src/gui/GpsLocationDialog.cpp
+    src/gui/GpsSkyPlot.cpp
+    src/gui/AetherGpsTools.cpp
     src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
     src/gui/WfmDeviceDialog.cpp
@@ -1390,6 +1394,7 @@ set(GUI_SOURCES
     src/gui/PanadapterMessageOverlay.cpp
     src/gui/PanadapterMessageOverlay.h
     src/gui/PanadapterRenderScheduler.cpp
+    src/gui/WindowRepaintScheduler.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumWidget_TimeMarkers.cpp
     src/gui/WaterfallHistoryBuffer.cpp
@@ -1843,8 +1848,9 @@ target_compile_features(aether_afskdemod PUBLIC cxx_std_20)
 message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-later")
 
 # Data2G HF data modem core (RFC #7159). The data2g_core target's sources from
-# upstream release v0.4.3, verbatim: see third_party/data2g/README.aethersdr.md.
-# Artistic-2.0, with pocketfft (BSD-3-Clause) vendored by upstream.
+# upstream release v0.5.0, verbatim: see third_party/data2g/README.aethersdr.md.
+# Artistic-2.0 with upstream's interface exception (LICENSE_exception), with
+# pocketfft (BSD-3-Clause) vendored by upstream.
 #
 # The flags below are upstream's and are load-bearing: the on-air format is
 # checked bit for bit against a Python reference, so no fast-math and no FMA
@@ -1863,6 +1869,11 @@ message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-
 if(ENABLE_DATA2G)
     file(GLOB_RECURSE AETHER_DATA2G_CORE_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/third_party/data2g/core/*.cpp)
+    # The core's rig bridge is a TCP socket client that only upstream's Android
+    # app uses, and upstream already leaves it out on Windows. AetherSDR
+    # leaves it out everywhere: nothing here calls it, and the vendored core
+    # stays free of network code.
+    list(FILTER AETHER_DATA2G_CORE_SOURCES EXCLUDE REGEX "/core/rig/bridged?\\.cpp$")
     add_library(aether_data2g_core STATIC ${AETHER_DATA2G_CORE_SOURCES})
     target_include_directories(aether_data2g_core PUBLIC
         ${CMAKE_SOURCE_DIR}/third_party/data2g/core)
@@ -1870,7 +1881,7 @@ if(ENABLE_DATA2G)
         ${CMAKE_SOURCE_DIR}/third_party/data2g/third_party/pocketfft)
     target_compile_features(aether_data2g_core PUBLIC cxx_std_20)
     target_compile_definitions(aether_data2g_core PUBLIC
-        DATA2G_VERSION="0.4.3"
+        DATA2G_VERSION="0.5.0"
         POCKETFFT_NO_MULTITHREADING)
     set_target_properties(aether_data2g_core PROPERTIES
         POSITION_INDEPENDENT_CODE ON
@@ -1903,7 +1914,7 @@ if(ENABLE_DATA2G)
     target_compile_features(aether_hfdata PUBLIC cxx_std_20)
     set_target_properties(aether_hfdata PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_link_libraries(aether_hfdata PRIVATE aether_data2g_core)
-    message(STATUS "Data2G: vendored core 0.4.3 (receive-only monitor), Artistic-2.0")
+    message(STATUS "Data2G: vendored core 0.5.0 (receive-only monitor), Artistic-2.0")
 else()
     message(STATUS "Data2G: disabled (-DENABLE_DATA2G=OFF)")
 endif()

@@ -1,6 +1,28 @@
 #include "tnc/tnc.hpp"
 
+#include <cctype>
+#include <string>
+#include <vector>
+
 namespace data2g::tnc {
+
+std::optional<bool> refs_command(std::span<const std::uint8_t> payload) {
+    // the payload splits on NUL/HT/LF/CR/space only, so the 0x1c-0x1f file separators poison a token instead of separating it
+    std::vector<std::string> words;
+    std::string w;
+    for (const std::uint8_t b : payload) {
+        if (b == 0x00 || b == 0x09 || b == 0x0A || b == 0x0D || b == 0x20) {
+            if (!w.empty()) words.push_back(w), w.clear();
+        } else {
+            w += static_cast<char>(std::toupper(b));
+        }
+    }
+    if (!w.empty()) words.push_back(w);
+    if (words.size() != 2 || words[0] != "REFS") return std::nullopt;
+    if (words[1] == "ON") return true;
+    if (words[1] == "OFF") return false;
+    return std::nullopt;
+}
 
 Bytes kiss_encode(std::span<const std::uint8_t> data, int port, int cmd) {
     Bytes out{FEND};
