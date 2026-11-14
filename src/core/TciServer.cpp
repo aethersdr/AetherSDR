@@ -389,7 +389,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 m_tciPttWantsAudio = false;
                 m_tciPttClient.clear();
                 stopTxChrono();
+                // No message can be built while disconnected: park the
+                // hw_sensors timer; the connect below re-arms it.
+                m_hwSensorsTimer->stop();
                 return;
+            }
+            // Wake hw_sensors: due times kept while parked are in the past.
+            if (m_running.load(std::memory_order_acquire)) {
+                for (const auto& cs : m_clients) {
+                    if (cs.hwSensorsEnabled) {
+                        m_hwSensorsTimer->start(0);
+                        break;
+                    }
+                }
             }
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) {
@@ -634,6 +646,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     connect(m_meterTimer, &QTimer::timeout, this, &TciServer::broadcastStatus);
     m_hwSensorsTimer = new QTimer(this);
     m_hwSensorsTimer->setSingleShot(true);
+    // A coarse timer may fire up to 5% early, miss the due time and re-arm.
+    m_hwSensorsTimer->setTimerType(Qt::PreciseTimer);
     connect(m_hwSensorsTimer, &QTimer::timeout, this, &TciServer::serviceHwSensors);
 
     // Rate limiter for drive:/tune_drive: — see queuePowerBroadcast().
@@ -4217,6 +4231,11 @@ void TciServer::broadcastStatus()
 
 void TciServer::serviceHwSensors()
 {
+    // Disconnected: park until connectionStateChanged(true) re-arms.
+    if (!m_model || !m_model->isConnected()) {
+        m_hwSensorsTimer->stop();
+        return;
+    }
     const qint64 now = m_tciPttTelemetryClock.elapsed();
     std::optional<QString> message;
     bool built = false;
@@ -4228,10 +4247,8 @@ void TciServer::serviceHwSensors()
         if (cs.hwSensorsDueAtMs <= now) {
             if (!built) {
                 built = true;
-                if (m_model && m_model->isConnected()) {
-                    message = TciProtocol::hwSensorsMessage(TciProtocol::hwSensorReadings(
-                        m_model->backendCapabilities(), m_model->meterModel()));
-                }
+                message = TciProtocol::hwSensorsMessage(TciProtocol::hwSensorReadings(
+                    m_model->backendCapabilities(), m_model->meterModel()));
             }
             if (message) {
                 sendClientText(cs.socket, *message);

@@ -211,7 +211,8 @@ private slots:
     void onBinaryMessage(const QByteArray& data);
     void broadcastStatus();
     // Sends hw_sensors to each enabled client whose interval is due, then
-    // re-arms m_hwSensorsTimer for the earliest next one.
+    // re-arms m_hwSensorsTimer for the earliest next one. Parked (stopped)
+    // while the radio is disconnected; the reconnect re-arms it.
     void serviceHwSensors();
 
 private:

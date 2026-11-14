@@ -46,7 +46,8 @@ void check(bool ok, const char* what)
 class LinkedHl2Backend final : public hl2::Hl2Backend
 {
 public:
-    bool isConnected() const override { return true; }
+    bool isConnected() const override { return linked; }
+    bool linked{true};
 };
 
 void defineVital(MeterModel& meters, int index, const char* name, const char* unit)
@@ -93,6 +94,7 @@ public:
     static void markRunning(TciServer& s) { s.m_running.store(true); }
     static int intervalMs(TciServer& s, int client) { return s.m_clients.at(client).hwSensorsIntervalMs; }
     static bool timerActive(TciServer& s) { return s.m_hwSensorsTimer->isActive(); }
+    static Qt::TimerType timerType(TciServer& s) { return s.m_hwSensorsTimer->timerType(); }
 };
 
 namespace {
@@ -285,6 +287,51 @@ void testServerKeepsTheInterval()
     pumpUntil([&] { return !TciHwSensorsTestAccess::timerActive(server); }, 1000);
 }
 
+void testTimerParksWhileDisconnected()
+{
+    RadioModel model;
+    auto owned = std::make_unique<LinkedHl2Backend>();
+    LinkedHl2Backend* backend = owned.get();
+    backend->linked = false;
+    model.setBackendForTest(std::move(owned), QStringLiteral("tci-hw-sensors-park"));
+    feedTemperature(model.meterModel(), 41.0f);
+    TciServer server(&model);
+    TciHwSensorsTestAccess::markRunning(server);
+    check(TciHwSensorsTestAccess::timerType(server) == Qt::PreciseTimer,
+          "park: the hw_sensors timer is precise, so it does not fire before the due time");
+    TciClient client;
+    QStringList got;
+    client.textSink = [&](const QString& m) { got << m; return qint64(m.size()); };
+    TciHwSensorsTestAccess::attach(server, &client, model);
+    const auto hwCount = [&] { return int(got.filter(QStringLiteral("hw_sensors:")).size()); };
+    const auto pumpFor = [](int ms) {
+        QElapsedTimer t;
+        t.start();
+        pumpUntil([&] { return t.elapsed() >= ms; }, ms + 500);
+    };
+
+    emit client.textMessageReceived(QStringLiteral("hw_sensors_enable:true,30;"));
+    pumpFor(150);
+    check(hwCount() == 0 && !TciHwSensorsTestAccess::timerActive(server),
+          "park: enabled while disconnected, nothing is sent and the timer is parked");
+
+    backend->linked = true;
+    emit model.connectionStateChanged(true);
+    check(TciHwSensorsTestAccess::timerActive(server), "park: the connect re-arms the timer");
+    check(pumpUntil([&] { return hwCount() >= 1; }, 2000),
+          "park: after the connect the enabled client receives hw_sensors");
+
+    backend->linked = false;
+    emit model.connectionStateChanged(false);
+    check(!TciHwSensorsTestAccess::timerActive(server), "park: the disconnect parks the timer");
+    const int before = hwCount();
+    pumpFor(150);
+    check(hwCount() == before && !TciHwSensorsTestAccess::timerActive(server),
+          "park: no sends and no wakeups while disconnected");
+
+    emit client.textMessageReceived(QStringLiteral("hw_sensors_enable:false;"));
+}
+
 } // namespace
 } // namespace AetherSDR
 
@@ -301,6 +348,7 @@ int main(int argc, char** argv)
     testServerSendsOnlyAfterEnable();
     testStaleReadingIsNotSent();
     testServerKeepsTheInterval();
+    testTimerParksWhileDisconnected();
     std::printf("%s (%d failed)\n", g_failed ? "FAILED" : "PASSED", g_failed);
     return g_failed ? 1 : 0;
 }
