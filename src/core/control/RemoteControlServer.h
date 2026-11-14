@@ -41,6 +41,7 @@ public:
         int maxClients{kMaxClients};
         int handshakeTimeoutMs{kHandshakeTimeoutMs};
         qint64 maxQueuedOutputBytes{kMaxQueuedOutputBytes};
+        int pairingWriteTimeoutMs{kPairingWriteTimeoutMs};
     };
     struct Endpoint {
         QHostAddress address;

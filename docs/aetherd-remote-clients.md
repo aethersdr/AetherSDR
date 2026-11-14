@@ -101,8 +101,15 @@ written only while a remote record exists; version-1 vaults read unchanged.
 - **Adding a credential retires no one.** A paired record joins the live
   verifier directly; a full reload would end every live session, the radio's
   own panel included.
-- **Revocation:** `--remove-credential <id>` (existing) and the radio's own
-  pairing screen list and remove paired clients.
+- **Revocation (slice 1):** offline only. `--remove-credential <id>` and
+  `--list-credentials` take the same authority reservation the serving daemon
+  holds, so the daemon is stopped, the credential removed, and the daemon
+  started again; on the G2 that briefly stops the panel's engine too. A later
+  slice adds local-socket methods to list and revoke paired clients at run
+  time, which the radio's pairing screen will use.
+- **Rollback:** once a client has paired, the vault is version 2, and an
+  aetherd that predates it refuses to load the authority (it fails closed).
+  Going back to an older engine means removing the remote records first.
 
 ### 4. The network listener
 

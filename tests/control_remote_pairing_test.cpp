@@ -46,7 +46,9 @@ public:
     {
         names.append(clientName);
         m_done = std::move(done);
+        if (immediate) { release(*immediate); }   // answers before issue() returns
     }
+    std::optional<bool> immediate;
     void release(bool succeed)
     {
         Done done = std::move(m_done);
@@ -257,6 +259,36 @@ int main(int argc, char* argv[])
         drain();
         check(wire.written.size() == 1 && error(wire.written.value(0)) == "engine.failed" && wire.closes == 1,
               "a credential that could not be stored is reported, and the connection closes");
+    }
+    for (const bool succeed : {false, true}) {
+        Harness h;
+        h.issuer.immediate = succeed;
+        const QString code = h.openPairing();
+        Wire wire(h, true);
+        wire.feed(h.request(wire.session, "pairing.complete", {{"code", code}, {"clientName", "x"}}, false));
+        check(wire.written.size() == 1 && wire.closes == 1 && !wire.pump->awaitingReply()
+                  && (succeed ? result(wire.written.value(0)).value("token").toString().size() == 64
+                              : error(wire.written.value(0)) == "engine.failed"),
+              succeed ? "an issuer that succeeds before issue() returns is answered at once"
+                      : "an issuer that refuses before issue() returns is answered at once, not left hanging");
+    }
+    {
+        // A credential-bound local session (the radio's panel, say) outlives
+        // a completed pairing: adding a record retires nobody.
+        Harness h;
+        const auto panel = ControlCredentials::generate(ControlCredentials::Role::Client);
+        check(h.credentials.replace({panel}), "load the panel's local identity");
+        ControlSession local(&h.store, 1 << 20, SessionAuthorization::ObserverController);
+        check(error(h.hello(local, QString::fromLatin1(panel.secret.toHex()))).isEmpty(),
+              "the panel session binds its credential");
+        const QString code = result(h.invoke(local, "pairing.begin")).value("code").toString();
+        Wire wire(h, true);
+        wire.feed(h.request(wire.session, "pairing.complete", {{"code", code}, {"clientName", "x"}}, false));
+        h.issuer.release(true);
+        drain();
+        check(!result(wire.written.value(0)).value("token").toString().isEmpty() && !local.isRevoked()
+                  && error(h.invoke(local, "capabilities.get")).isEmpty(),
+              "the credential-bound local session survives the pairing");
     }
     {
         Harness h;

@@ -94,13 +94,14 @@ private:
 class Issuer final : public PairingIssuer {
 public:
     explicit Issuer(ControlCredentials& credentials) : m_credentials(credentials) {}
+    int delayMs{20};
     void issue(const QString& name, Done done) override
     {
         QByteArray secret;
         auto record = ControlCredentials::generateRemote(ControlCredentials::Role::RemoteControl, &secret);
         record.name = name;
         // Complete later, as the vault does.
-        QTimer::singleShot(20, [this, record, secret, done = std::move(done)] {
+        QTimer::singleShot(delayMs, [this, record, secret, done = std::move(done)] {
             done(m_credentials.add(record)
                      ? std::optional{Issued{record.id, QString::fromLatin1(secret.toHex())}}
                      : std::nullopt);
@@ -293,6 +294,30 @@ int main(int argc, char* argv[])
               "a frame carrying a line break is refused, not split into two requests");
         WsClient plain;
         check(!plain.open(port, "ws"), "plain ws:// to the TLS port does not connect");
+    }
+
+    // A vault write slower than the handshake deadline still reaches its
+    // client: the deadline is extended once while the reply is owed.
+    {
+        RemoteControlServer slow(engine, RemoteControlServer::Mode::Secure, nullptr,
+                                 {4, 200, RemoteControlServer::kMaxQueuedOutputBytes, 3000});
+        check(slow.setTlsConfiguration(*identity) && slow.listen({QHostAddress::LocalHost, 0}, &why)
+                  && slow.startServing(), "a second TLS listener with a 200 ms handshake deadline");
+        issuer.delayMs = 600;
+        const QString slowCode = result(panel.exchange(request("pairing.begin", {}, panelSession))).value("code").toString();
+        WsClient client(fingerprint);
+        check(client.open(slow.serverPort()), "connect to the short-deadline listener");
+        const qsizetype before = client.received.size();
+        client.socket.sendTextMessage(QString::fromUtf8(QJsonDocument(request("pairing.complete",
+            {{"code", slowCode}, {"clientName", "slow"}})).toJson(QJsonDocument::Compact)));
+        check(waitUntil([&] { return client.received.size() > before; }, 3000)
+                  && result(client.received.value(before)).value("token").toString().size() == 64,
+              "a pairing whose write outlasts the handshake deadline still gets its token");
+        WsClient idle(fingerprint);
+        check(idle.open(slow.serverPort()) && waitUntil([&] { return idle.closed; }, 2000)
+                  && error(idle.received.value(0)) == "engine.timeout",
+              "a connection that sends nothing is still closed at the deadline");
+        slow.close();
     }
 
     remote.close();

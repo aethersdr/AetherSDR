@@ -260,21 +260,34 @@ ServiceReply ControlService::completePairing(const ProtocolRequest& request,
     case ControlPairing::Attempt::Expired:
         return refuse("capability.unavailable", "no pairing is open on the radio");
     }
+    // An issuer may answer before issue() returns (an early refusal). That
+    // answer becomes this call's ordinary reply: the pump only waits for a
+    // deferred one after handle() has returned.
+    struct Pending {
+        bool issuing{true};
+        std::optional<QJsonObject> early;
+    };
+    const auto pending = std::make_shared<Pending>();
     const QPointer<ControlSession> target(session);
     const QString id = request.id;
     m_pairingBinding->issuer->issue(name.toString().trimmed(),
-        [target, id](std::optional<PairingIssuer::Issued> issued) {
-            if (!target) { return; }
-            if (!issued) {
-                (void)target->completeDeferred(ControlProtocolCodec::errorResponse(id,
-                    {QStringLiteral("engine.failed"),
-                     QStringLiteral("the credential could not be stored"), {}, false}), true);
+        [target, id, pending](std::optional<PairingIssuer::Issued> issued) {
+            const QJsonObject message = issued
+                ? ControlProtocolCodec::successResponse(id, {
+                      {QStringLiteral("credentialId"), issued->credentialId},
+                      {QStringLiteral("token"), issued->token}})
+                : ControlProtocolCodec::errorResponse(id, {QStringLiteral("engine.failed"),
+                      QStringLiteral("the credential could not be stored"), {}, false});
+            if (pending->issuing) {
+                pending->early = message;
                 return;
             }
-            (void)target->completeDeferred(ControlProtocolCodec::successResponse(id, {
-                {QStringLiteral("credentialId"), issued->credentialId},
-                {QStringLiteral("token"), issued->token}}), true);
+            if (target) { (void)target->completeDeferred(message, true); }
         });
+    pending->issuing = false;
+    if (pending->early) {
+        return {*pending->early, true};
+    }
     ServiceReply reply;
     reply.deferred = true;
     return reply;

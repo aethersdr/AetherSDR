@@ -82,13 +82,14 @@ std::optional<RemoteControlServer::Endpoint> RemoteControlServer::parseEndpoint(
 
 QString RemoteControlServer::wireGuardInterfaceFor(const QHostAddress& address)
 {
-    for (const QNetworkInterface& interface : QNetworkInterface::allInterfaces()) {
-        const QString name = interface.name();
+    // Not "interface": that is a macro once windows.h is in the translation unit.
+    for (const QNetworkInterface& candidate : QNetworkInterface::allInterfaces()) {
+        const QString name = candidate.name();
         if (!(name.startsWith(QLatin1String("tailscale")) || name.startsWith(QLatin1String("wg")))
-            || !interface.flags().testFlag(QNetworkInterface::IsUp)) {
+            || !candidate.flags().testFlag(QNetworkInterface::IsUp)) {
             continue;
         }
-        for (const QNetworkAddressEntry& entry : interface.addressEntries()) {
+        for (const QNetworkAddressEntry& entry : candidate.addressEntries()) {
             if (entry.ip().isEqual(address, QHostAddress::StrictConversion)) {
                 return name;
             }
@@ -308,7 +309,7 @@ void RemoteControlServer::handshakeExpired(QWebSocket* socket)
     if (client.input->awaitingReply() && !client.handshakeExtended) {
         // pairing.complete was accepted and its credential is being written.
         client.handshakeExtended = true;
-        client.handshakeTimer.start(kPairingWriteTimeoutMs);
+        client.handshakeTimer.start(m_limits.pairingWriteTimeoutMs);
         return;
     }
     client.input->finish();
