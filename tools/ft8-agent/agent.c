@@ -860,6 +860,26 @@ static const char *band_of(long long hz)
  * trade decodes against time, and the measured 73% decode rate quoted in the
  * RFC was taken with exactly these -- changing one invalidates that figure. */
 #define FT8_MAX_CANDIDATES 140
+/* How many of those slots to actually use. ftx_find_candidates keeps the
+ * top-N by sync score in a min-heap, so a smaller budget keeps the BEST
+ * candidates rather than truncating a list -- which is what makes this a
+ * principled cut. Overridable (AETHER_FT8_CAND) so the budget can be swept
+ * without a rebuild; see the #7114 measurement. */
+/* 100, not the array's 140. Swept over the 22-WAV reference corpus at OSD
+ * depth 2, decode rate against total decode time:
+ *
+ *   140  77.3%  1.3 s      90  77.1%  0.9 s
+ *   120  77.3%  1.2 s      85  76.8%  0.8 s
+ *   110  77.3%  1.1 s      80  76.2%  0.8 s
+ *   100  77.3%  1.0 s      60  75.4%  0.6 s
+ *    95  77.1%  0.9 s      40  71.4%  0.5 s
+ *
+ * 100 is the knee: the full decode rate for 23% less time. Every step
+ * below it costs decodes. This is a real cut rather than a truncation --
+ * ftx_find_candidates keeps the top-N by sync score in a min-heap, so a
+ * smaller budget drops the WORST candidates, which are the ones belief
+ * propagation and then OSD were spending their time failing on. */
+static int g_max_candidates = 100;
 #define FT8_LDPC_ITERS      25
 #define FT8_MIN_SCORE       10
 #define FT8_FREQ_OSR         2
@@ -1014,7 +1034,7 @@ static void run_decode(decode_t *dc, const float *audio, int nsamples)
         monitor_process(&mon, audio + frame);
 
     ftx_candidate_t cand[FT8_MAX_CANDIDATES];
-    int ncand = ftx_find_candidates(&mon.wf, FT8_MAX_CANDIDATES, cand, FT8_MIN_SCORE);
+    int ncand = ftx_find_candidates(&mon.wf, g_max_candidates, cand, FT8_MIN_SCORE);
 
     dc->nspots = 0;
     ftx_message_t seen[MAX_CYCLE_SPOTS];
@@ -2556,6 +2576,13 @@ osd_depth_t aether_osd_depth(void)
 
 static void osd_depth_from_env(void)
 {
+    const char *mc = getenv("AETHER_FT8_CAND");
+    if (mc && *mc) {
+        int v = atoi(mc);
+        /* Upper bound is the array size: ftx_find_candidates writes up
+         * to the budget it is given, so a larger value would overflow. */
+        if (v >= 8 && v <= FT8_MAX_CANDIDATES) g_max_candidates = v;
+    }
     const char *s = getenv("AETHER_FT8_OSD");
     if (!s || !*s) return;
     int v = atoi(s);
