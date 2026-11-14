@@ -110,7 +110,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@592d162ba3b2f5a3411d2cbf01df9f82c492f269
+        uses: github/codeql-action/init@3ea37a44b6e4e6847c46edae209410d258d548d1
         with:
           languages: ${{ matrix.language }}
           config-file: ./.github/codeql/codeql-config.yml
@@ -159,7 +159,7 @@ jobs:
 
       - name: Perform CodeQL Analysis
         id: codeql-analyze
-        uses: github/codeql-action/analyze@592d162ba3b2f5a3411d2cbf01df9f82c492f269
+        uses: github/codeql-action/analyze@3ea37a44b6e4e6847c46edae209410d258d548d1
 
       # The compiler-input guard is not an extraction check. Preserve the
       # database's actual source archive inventory for branch/main comparison.
