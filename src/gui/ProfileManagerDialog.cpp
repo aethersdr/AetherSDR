@@ -254,7 +254,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         btnRow->insertWidget(2, resetBtn);
 
         // The radio flags edits to the active CW profile that are not yet saved.
-        m_cwUnsavedLabel = new QLabel("The active CW profile has unsaved changes.");
+        m_cwUnsavedLabel = new QLabel("The active CW profile has unsaved changes.", page);
         m_cwUnsavedLabel->setObjectName(QStringLiteral("profileUnsaved_cw"));
         m_cwUnsavedLabel->setVisible(m_model->transmitModel().cwProfileUnsaved());
         vbox->addWidget(m_cwUnsavedLabel);
