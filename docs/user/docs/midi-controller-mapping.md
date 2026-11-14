@@ -234,11 +234,11 @@ SmartSDR for Mac's Stream Deck and MIDI action list, and the AetherSDR control t
 | Frequency Up | **Tune Up (1 step)** | **Tune Up (1 step)** |
 | Frequency Up 100x | **Tune Up (100 steps)** | **Tune Up (100 steps)** |
 | Frequency Up 10x | **Tune Up (10 steps)** | **Tune Up (10 steps)** |
-| Global Profile 1 | — | Profile ruling pending |
-| Global Profile 2 | — | Profile ruling pending |
-| Global Profile 3 | — | Profile ruling pending |
-| Global Profile 4 | — | Profile ruling pending |
-| Global Profile 5 | — | Profile ruling pending |
+| Global Profile 1 | **Load Global Profile 1** | **Load Global Profile 1** |
+| Global Profile 2 | **Load Global Profile 2** | **Load Global Profile 2** |
+| Global Profile 3 | **Load Global Profile 3** | **Load Global Profile 3** |
+| Global Profile 4 | **Load Global Profile 4** | **Load Global Profile 4** |
+| Global Profile 5 | **Load Global Profile 5** | **Load Global Profile 5** |
 | Log QSO | — | AetherSDR has no QSO logbook |
 | Macro 1 | **CWX Macro F1** | **CWX Macro F1** |
 | Macro 10 | **CWX Macro F10** | **CWX Macro F10** |
