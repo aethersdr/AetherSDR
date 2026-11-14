@@ -145,6 +145,16 @@ void dumpState(RadioModel& model)
         }
     }
     qInfo("STATE slices %s", qPrintable(parts.join(QLatin1Char(' '))));
+    QStringList clients;
+    for (auto it = model.clientInfoMap().cbegin(); it != model.clientInfoMap().cend(); ++it) {
+        clients << QStringLiteral("%1[%2 %3 %4 %5 ptt=%6]").arg(it.key(), 0, 16).arg(it->clientId, it->program, it->station, it->source)
+            .arg(int(it->localPtt));
+    }
+    qInfo("STATE radio nick=%s call=%s model=%s osc=%s/%s/%d ext=%d gps=%d tcxo=%d static=%s/%s/%s clients=%s",
+          qPrintable(model.nickname()), qPrintable(model.callsign()), qPrintable(model.model()),
+          qPrintable(model.oscState()), qPrintable(model.oscSetting()), int(model.oscLocked()), int(model.extPresent()),
+          int(model.gpsdoPresent()), int(model.tcxoPresent()), qPrintable(model.staticIp()), qPrintable(model.staticNetmask()),
+          qPrintable(model.staticGateway()), qPrintable(clients.join(QLatin1Char(' '))));
     qInfo("STATE license id=%s max=%s sub=%s exp=%s dvk=%d/%d nr=%d/%d", qPrintable(model.licenseRadioId()),
           qPrintable(model.licenseMaxVersion()), qPrintable(model.licenseSubscription()),
           qPrintable(model.licenseExpirationDate()), int(model.licenseFeatureSeen(QStringLiteral("digital_voice_keyer"))),

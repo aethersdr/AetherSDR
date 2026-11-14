@@ -1,5 +1,6 @@
 #pragma once
 
+#include "RadioStatusObservation.h"
 #include "SetupStatusObservation.h"
 
 #include "IndependentTxControl.h"
@@ -1335,6 +1336,11 @@ signals:
     // residual). Typed + compiler-checked; the backend populates only the fields
     // the wire reported and RadioModel applies them + its own orchestration.
     void radioChanged(const RadioDelta& delta);
+    // A Flex radio-global, client, oscillator or static-network report, stamped
+    // with the status epoch it arrived in (Flex: FlexStatusIngress). Flex
+    // radio-global status arrives here and never also on radioChanged, which
+    // carries native backends and Flex's nickname/info replies.
+    void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
 
     // Normalized GPS status delta (aetherd RFC 2.3 — RadioModel residual). The
     // backend tokenizes the vendor GPS status line into a present-only GpsDelta;

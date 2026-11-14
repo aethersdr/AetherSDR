@@ -39,6 +39,7 @@ AETHER_SEAM_PROBE(keyingStateConfirmed);
 AETHER_SEAM_PROBE(amplifierChanged);
 AETHER_SEAM_PROBE(tunerChanged);
 AETHER_SEAM_PROBE(radioChanged);
+AETHER_SEAM_PROBE(radioStatusObserved);
 AETHER_SEAM_PROBE(gpsChanged);
 AETHER_SEAM_PROBE(memoryChanged);
 AETHER_SEAM_PROBE(memoryRefreshStarted);

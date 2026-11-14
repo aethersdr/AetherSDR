@@ -102,6 +102,22 @@ Contract: [`docs/aetherd-stage4-tx-coordinator.md`](../aetherd-stage4-tx-coordin
   through backend queues and retries. Producer identity does not confer an
   independent actor grant.
 
+## Radio and client status observations
+
+`FlexStatusIngress` decodes Flex `radio`, `radio oscillator`,
+`radio static_net_params` and `client 0x…` reports, LAN and WAN alike, into
+present-only `RadioStatusObservation` values stamped with the status epoch
+(`FlexRadioStatus.cpp`). Existing `RadioDelta` fields remain the radio-global
+contract, and `FlexBackend` announces a capability revision after a model-name
+change is applied. RadioModel applies a report only while its observation
+session is open for that epoch; the ingress hop and the transport's disconnect
+both reach the model in wire order, so a forced or duplicate-identity
+disconnect of this client lands before the session ends. The model owns client
+inventory, discovery precedence and notification policy; delayed client
+notices keep the original client incarnation. Demo relays client, oscillator
+and static-network reports and keeps its own radio-global values. No daemon
+method or TX authority is added by this status migration.
+
 ## Display status observations
 
 `FlexStatusIngress` decodes Flex panadapter/waterfall reports, LAN and WAN
@@ -385,7 +401,9 @@ connection.
   handle, display pan/waterfall reports, whose values `SimBackend` drops
   except their dimensions, slice reports, of which it keeps identity,
   ownership and presence, and setup reports, which it relays whole (its
-  native producer has no setup inventory). Its synthetic wire carries radio, display and slice
+  native producer has no setup inventory), and client, oscillator and
+  static-network reports (radio-global values are the native producer's).
+  Its synthetic wire carries radio, display and slice
   status only, so the Flex-only relays above are not wired for it.
 - **Tests feed lines through `RadioModel::handleLineForTest()` or
   `handleStatusForTest()`**, never `onStatusReceived` directly: that skips the
@@ -394,8 +412,7 @@ connection.
   than pass with every decoder skipped. `tests/flex_ingress_characterization_test` (run with
   `-vs -maxwarnings 0` and `tools/flex_ingress_trace.py`) traces a wire
   corpus for before/after comparison of an ingress change.
-- **Still inline in `RadioModel`**, each awaiting its own PR: radio/client
-  lifecycle (#6907) and DVK/NAVTEX (#6870). Each moves into the
+- **Still inline in `RadioModel`**, awaiting its own PR: DVK/NAVTEX (#6870). Each moves into the
   ingress as a domain decoder; none adds its own transport decoder or
   lifetime token.
 
