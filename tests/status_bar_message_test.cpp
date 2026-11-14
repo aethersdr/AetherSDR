@@ -1,10 +1,12 @@
 #include "gui/StatusBarMessageOverlay.h"
+#include "gui/StatusBarLayout.h"
 
 #include <QApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
+#include <QPushButton>
 #include <QStatusBar>
 #include <QTest>
 
@@ -12,6 +14,13 @@
 
 namespace {
 int failures = 0;
+QStringList announcements;
+void accessibleUpdate(QAccessibleEvent* event)
+{
+    if (event->type() == QAccessible::Announcement) {
+        announcements.append(static_cast<QAccessibleAnnouncementEvent*>(event)->message());
+    }
+}
 void check(bool condition, const char* description)
 {
     std::printf("[%s] %s\n", condition ? "OK" : "FAIL", description);
@@ -24,9 +33,15 @@ void check(bool condition, const char* description)
 int main(int argc, char** argv)
 {
     QApplication app(argc, argv);
+    const auto previousUpdateHandler = QAccessible::installUpdateHandler(accessibleUpdate);
+    QAccessible::setActive(true);
     QMainWindow window;
-    auto* input = new QLineEdit(&window);
-    window.setCentralWidget(input);
+    auto* surface = new QWidget(&window);
+    window.setCentralWidget(surface);
+    auto* input = new QLineEdit(surface);
+    input->setGeometry(0, 0, 100, 24);
+    auto* zoom = new QPushButton(QStringLiteral("Zoom"), surface);
+    auto* scroll = new QPushButton(QStringLiteral("Scroll"), surface);
     QStatusBar* bar = window.statusBar();
     bar->setFixedHeight(46);
     bar->setSizeGripEnabled(false);
@@ -37,15 +52,25 @@ int main(int argc, char** argv)
     layout->addWidget(station);
     layout->addStretch();
     layout->addWidget(tx);
-    AetherSDR::StatusBarMessageOverlay notice(bar, row);
+    bar->addPermanentWidget(row, 1);
+    AetherSDR::StatusBarMessageOverlay notice(bar, surface);
     window.resize(1024, 500);
     window.show();
     input->setFocus();
+    QApplication::processEvents();
+    zoom->setGeometry(4, surface->height() - 50, 46, 46);
+    scroll->setGeometry(surface->width() - 44, surface->height() - 50, 40, 46);
+    AetherSDR::updateStationLabelMinimumWidth(station);
+    auto remeasure = [&] {
+        AetherSDR::updateStatusBarWindowMinimum(&window, row, nullptr, false, 1920);
+    };
+    remeasure();
     QApplication::processEvents();
     const QRect rowGeometry = row->geometry();
     const QRect stationGeometry = station->geometry();
     const QRect txGeometry = tx->geometry();
     const QSize windowMinimum = window.minimumSizeHint();
+    const int stationMinimum = station->minimumWidth();
     QWidget* focus = QApplication::focusWidget();
 
     bool rowVisible = true;
@@ -54,6 +79,8 @@ int main(int argc, char** argv)
     for (int i = 0; i < 100; ++i) {
         bar->showMessage(QStringLiteral("Client connected"), 5000);
         QApplication::processEvents();
+        AetherSDR::updateStationLabelMinimumWidth(station);
+        remeasure();
         rowVisible &= row->isVisible() && station->isVisible() && tx->isVisible();
         geometryStable &= row->geometry() == rowGeometry && station->geometry() == stationGeometry
             && tx->geometry() == txGeometry && station->parentWidget() == row;
@@ -64,11 +91,15 @@ int main(int argc, char** argv)
         }
         bar->clearMessage();
         QApplication::processEvents();
+        AetherSDR::updateStationLabelMinimumWidth(station);
+        remeasure();
         geometryStable &= row->geometry() == rowGeometry && station->geometry() == stationGeometry
             && tx->geometry() == txGeometry;
     }
     check(rowVisible, "100 message cycles leave the complete status row visible");
     check(geometryStable, "100 message cycles do not move or reparent controls");
+    check(station->minimumWidth() == stationMinimum,
+          "production station sizing does not ratchet during message cycles");
     check(messageVisible, "messages appear in the notice");
     check(window.minimumSizeHint() == windowMinimum && window.size() == QSize(1024, 500),
           "message cycles leave window size and minimum unchanged");
@@ -85,10 +116,26 @@ int main(int argc, char** argv)
           "notice stays compact and above the controls");
     check(notice.accessibleName() == longMessage && notice.text().size() < longMessage.size(),
           "long text is elided visually and available in full to accessibility");
+    const QPoint anchor = notice.pos();
+    bar->showMessage(QStringLiteral("Saved"));
+    check(notice.pos() == anchor, "short and long messages share a steady anchor");
+    bar->showMessage(longMessage);
+    auto controlsClear = [&] {
+        const QRect zoomRect(zoom->mapTo(&window, QPoint()), zoom->size());
+        const QRect scrollRect(scroll->mapTo(&window, QPoint()), scroll->size());
+        return !notice.geometry().intersects(zoomRect) && !notice.geometry().intersects(scrollRect);
+    };
+    check(controlsClear(), "long notices clear the surface's zoom and scroll controls");
+    window.setMinimumSize(0, 0);
     window.resize(400, 300);
     QApplication::processEvents();
+    zoom->move(4, surface->height() - 50);
+    scroll->move(surface->width() - 44, surface->height() - 50);
+    bar->showMessage(longMessage + QStringLiteral(" Narrow"));
     check(notice.geometry().left() >= 0 && notice.geometry().right() < window.width(),
           "notice stays inside a resized window");
+    check(controlsClear() && notice.width() < 400,
+          "narrow notices elide between controls instead of covering them");
     bar->hide();
     QApplication::processEvents();
     check(!notice.isVisible(), "notice hides with the status bar in minimal mode");
@@ -96,8 +143,46 @@ int main(int argc, char** argv)
     QApplication::processEvents();
     check(notice.isVisible(), "an unexpired message returns with the status bar");
     bar->showMessage(QStringLiteral("Saved"), 20);
-    QTest::qWait(80);
-    check(!notice.isVisible() && bar->currentMessage().isEmpty(),
+    check(QTest::qWaitFor([&] { return !notice.isVisible() && bar->currentMessage().isEmpty(); }, 2000),
           "the existing status message timer expires the notice");
+
+    window.resize(1400, 500);
+    auto* accessory = new QLabel(QStringLiteral("Accessory"), row);
+    accessory->setFixedWidth(1200);
+    layout->addWidget(accessory);
+    accessory->show();
+    bar->showMessage(QStringLiteral("Client connected"));
+    remeasure();
+    check(window.minimumWidth() > 1200,
+          "an accessory arriving during a message raises the production window floor");
+    accessory->hide();
+    remeasure();
+    check(window.minimumWidth() == 1024,
+          "an accessory disappearing during a message lowers the production window floor");
+    bar->clearMessage();
+
+    bar->showMessage(QStringLiteral("Keyboard shortcuts are off"), 10000);
+    QApplication::processEvents();
+    const QRect beforeShortcut = tx->geometry();
+    bar->showMessage(QStringLiteral("Saved"));
+    QApplication::processEvents();
+    check(tx->geometry() == beforeShortcut,
+          "shortcut-disabled and ordinary notices use the same stationary row");
+
+    announcements.clear();
+    for (int i = 0; i < 10; ++i) {
+        bar->showMessage(QStringLiteral("Step: %1 Hz").arg(i));
+        QTest::qWait(10);
+    }
+    check(announcements.isEmpty(), "rapid updates do not announce intermediate messages");
+    check(QTest::qWaitFor([&] { return announcements.size() == 1; }, 2000)
+              && announcements.last() == QStringLiteral("Step: 9 Hz"),
+          "accessibility announces only the settled final message");
+    announcements.clear();
+    bar->showMessage(QStringLiteral("Already expired"));
+    bar->clearMessage();
+    QTest::qWait(150);
+    check(announcements.isEmpty(), "clearing cancels a pending announcement");
+    QAccessible::installUpdateHandler(previousUpdateHandler);
     return failures ? 1 : 0;
 }

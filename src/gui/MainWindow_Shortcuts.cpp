@@ -9,7 +9,6 @@
 #include "TxKeyActivationGuard.h"
 #include "PttHoldKeyStep.h"
 #include "ShortcutRefusalNotice.h"
-#include "StatusBarNotice.h"
 #include "TwoToneTuneGate.h"
 #include "core/IambicKeyer.h"
 
@@ -396,36 +395,25 @@ bool MainWindow::fireVoiceKeyerSlot(int id, const TxController::Input& input)
 
 void MainWindow::refuseControlAction(const QString& name, bool transmitSetup)
 {
+    // Only actions that change transmit setup use the keyed refusal wording.
+    const bool keyed = transmitSetup && m_radioModel.transmitModel().isTransmitting();
+    const QString message = keyed ? tr("%1 is not available while transmitting").arg(name)
+                                  : tr("%1 is not available right now").arg(name);
     // A held key or a spinning encoder refuses many times a second: say it
     // once while the notice is up, not once per step (docs/a11y.md).
-    if (name == m_lastRefusedAction && m_shortcutNoticeLabel
-        && m_shortcutNoticeLabel->isVisible()) {
+    if (name == m_lastRefusedAction && statusBar()->isVisible()
+        && statusBar()->currentMessage() == message) {
         return;
     }
     m_lastRefusedAction = name;
     qCInfo(lcGui).noquote() << "Control action not available:" << name;
-    // "While transmitting" only for an action that changes transmit setup;
-    // anything else refused while keyed was refused for its own reason.
-    const bool keyed = transmitSetup && m_radioModel.transmitModel().isTransmitting();
-    showShortcutNotice(keyed ? tr("%1 is not available while transmitting").arg(name)
-                             : tr("%1 is not available right now").arg(name),
-                       5000);
+    showShortcutNotice(message, 5000);
 }
 
-// A short notice in the status bar that a screen reader also announces
-// (StatusBarNoticeLabel), for shortcut and controller refusals.
+// Shortcut and controller refusals share the stationary status-message overlay.
 void MainWindow::showShortcutNotice(const QString& text, int durationMs)
 {
-    if (!m_shortcutNoticeLabel) {
-        m_shortcutNoticeLabel = new StatusBarNoticeLabel(statusBar());
-        // The right margin clears the resize grip that overlays the bar.
-        m_shortcutNoticeLabel->setContentsMargins(6, 0, 20, 0);
-        ThemeManager::instance().applyStyleSheet(
-            m_shortcutNoticeLabel,
-            QStringLiteral("QLabel#statusBarNoticeLabel { color: {{color.text.primary}};"
-                           " font-size: 14px; background: transparent; }"));
-    }
-    m_shortcutNoticeLabel->showNotice(text, durationMs);
+    statusBar()->showMessage(text, durationMs);
 }
 
 

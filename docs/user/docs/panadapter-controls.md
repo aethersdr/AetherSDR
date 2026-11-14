@@ -177,7 +177,9 @@ The status bar at the bottom of the window starts with the band-stack indicator 
 Temporary status messages appear as a small text notice just above the bar and
 clear automatically. The station name, controls and telemetry stay visible in
 their usual positions. Messages do not take keyboard focus or block clicks.
-Connection controls are also available in the radio tabs at the top of the window.
+Long messages shorten with an ellipsis to fit between the panadapter controls,
+without covering the zoom buttons or applet panel. Screen readers receive the
+complete message once rapid updates settle.
 
 Click a bookmark in the band-stack panel to recall its saved receive settings
 on the active slice. The recall stays with that slice and its panadapter even

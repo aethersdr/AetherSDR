@@ -112,7 +112,7 @@ namespace AetherSDR {
 
 void MainWindow::wireStatusBarMessages()
 {
-    auto* messageOverlay = new StatusBarMessageOverlay(statusBar(), m_statusBarContainer);
+    auto* messageOverlay = new StatusBarMessageOverlay(statusBar(), m_panStack);
     ThemeManager::instance().applyStyleSheet(
         messageOverlay,
         QStringLiteral("QLabel#statusBarMessageOverlay { color: {{color.text.secondary}};"

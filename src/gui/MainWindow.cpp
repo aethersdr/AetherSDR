@@ -14,6 +14,7 @@
 #include "core/backends/AutoRfGainControl.h"
 
 #include "MainWindowHelpers.h"
+#include "StatusBarLayout.h"
 #include "MixerControlAvailability.h"
 #include "WindowGeometryRestore.h"
 
@@ -430,12 +431,7 @@ bool setStatusBarStationText(QLabel* label, const QString& text)
         label->setText(rendered);
         changed = true;
     }
-    label->ensurePolished();
-    const int minimumWidth = label->sizeHint().width() + 2;
-    if (label->minimumWidth() != minimumWidth) {
-        label->setMinimumWidth(minimumWidth);
-        changed = true;
-    }
+    changed = AetherSDR::updateStationLabelMinimumWidth(label) || changed;
     return changed;
 }
 
@@ -4154,26 +4150,8 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::updateStatusBarMinimumWidth()
 {
-    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()
-        || !statusBar()->currentMessage().isEmpty()) {
-        return;
-    }
-
-    if (QLayout* layout = m_statusBarContainer->layout()) {
-        layout->activate();
-    }
-    m_statusBarContainer->updateGeometry();
-    statusBar()->updateGeometry();
-
-    const int sizeGripAllowance =
-        (m_sizeGrip && m_sizeGrip->isVisible()) ? m_sizeGrip->width() + 4 : 4;
-    const int statusMinWidth =
-        m_statusBarContainer->minimumSizeHint().width() + sizeGripAllowance;
-    const int screenWidthCap =
-        screen() ? screen()->availableGeometry().width() : statusMinWidth;
-    const int boundedMinWidth =
-        qBound(1024, statusMinWidth, qMax(1024, screenWidthCap));
-    setMinimumSize(boundedMinWidth, qMax(400, minimumHeight()));
+    updateStatusBarWindowMinimum(this, m_statusBarContainer, m_sizeGrip, m_minimalMode,
+                                screen() ? screen()->availableGeometry().width() : QWIDGETSIZE_MAX);
 }
 
 void MainWindow::changeEvent(QEvent* event)
@@ -6611,6 +6589,7 @@ void MainWindow::buildUI()
     timeVbox->addWidget(m_gpsTimeLabel);
     hbox->addWidget(timeStack);
 
+    statusBar()->addPermanentWidget(m_statusBarContainer, 1);
     wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();
