@@ -4,6 +4,7 @@
 // the device lists are injected, no HID device is opened, and both firmware
 // catalogs point at a local file that does not exist.
 
+#include "Ctr2ProxyTestBackend.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/Ctr2HidPort.h"
@@ -55,7 +56,7 @@ struct Window {
     std::shared_ptr<QList<Info>> devices = std::make_shared<QList<Info>>();
     std::shared_ptr<QList<FirmwareInstallModel::Loader>> loaders =
         std::make_shared<QList<FirmwareInstallModel::Loader>>();
-    Ctr2ProxyModel relay;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     std::unique_ptr<FirmwareInstallDialog> dialog;
     FirmwareInstallModel* fw{nullptr};
     QTabWidget* tabs{nullptr};
@@ -239,6 +240,9 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
     AppSettings::instance().load();
+    // A model built without an injected USB backend would reach hidapi and
+    // could open a real CTR2; it gets this counting tripwire instead.
+    Ctr2ProxyTestBackend::installUsbTripwire();
 
     // Nothing is fetched and nothing reaches the real firmware or backup folders.
     QTemporaryDir folders;
@@ -252,5 +256,7 @@ int main(int argc, char** argv)
     aCtr2MaxSeenKeepsThePart();
     aRowPerController();
 
+    check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
+          "every relay model was built with an injected USB backend, never the default (hidapi)");
     return g_failures ? 1 : 0;
 }

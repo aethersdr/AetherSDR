@@ -5,6 +5,7 @@
 // refused by MAC before anything is written. Injected device lists and an
 // in-memory flash; no serial port, no network.
 
+#include "Ctr2ProxyTestBackend.h"
 #include "TestSettingsProfile.h"
 #include "core/EspFlashTarget.h"
 #include "models/Ctr2ProxyModel.h"
@@ -178,7 +179,7 @@ void testFollowsRelaySelection()
                      QStringLiteral("111111111111")};
     const Info second{QStringLiteral("hid-2"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
                       QStringLiteral("222222222222")};
-    Ctr2ProxyModel relay;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     relay.setUsbBackend([=] { return QList<Info>{first, second}; },
                         [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
     relay.setTransport(Ctr2ProxyModel::Transport::Usb);
@@ -201,7 +202,7 @@ void testCtr2MaxOnly()
                     QStringLiteral("333333333333")};
     const Info max{QStringLiteral("max"), 0x303A, 0x1001, {}, QStringLiteral("AetherCTR2"),
                    QStringLiteral("444444444444")};
-    Ctr2ProxyModel relay;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     relay.setUsbBackend([=] { return QList<Info>{knob, max}; },
                         [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
     relay.setTransport(Ctr2ProxyModel::Transport::Usb);
@@ -243,7 +244,7 @@ void testOtherControllerOnly()
     const auto hidden = [](const QList<Info>& devices, const QString& selected,
                            const QList<Loader>& loaders = {},
                            Ctr2ProxyModel::Transport transport = Ctr2ProxyModel::Transport::Usb) {
-        Ctr2ProxyModel relay;
+        Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
         relay.setUsbBackend([=] { return devices; },
                             [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
         relay.setTransport(transport);
@@ -268,7 +269,7 @@ void testOtherControllerOnly()
     // controller meanwhile.
     auto devices = std::make_shared<QList<Info>>(QList<Info>{midi, max});
     auto loaders = std::make_shared<QList<Loader>>();
-    Ctr2ProxyModel relay;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     relay.setUsbBackend([devices] { return *devices; },
                         [](const Info&, QString*) { return static_cast<Ctr2HidPort*>(nullptr); });
     relay.setTransport(Ctr2ProxyModel::Transport::Usb);
@@ -339,6 +340,9 @@ int main(int argc, char** argv)
     // The relay model reads its saved setup: never the operator's.
     TestSettingsProfile profile(QStringLiteral("firmware_install_model_test"));
     QCoreApplication app(argc, argv);
+    // A model built without an injected USB backend would reach hidapi and
+    // could open a real CTR2; it gets this counting tripwire instead.
+    Ctr2ProxyTestBackend::installUsbTripwire();
     testWaitLifetime();
     testConfirmedDevice();
     testAccessDenied();
@@ -346,6 +350,8 @@ int main(int argc, char** argv)
     testCtr2MaxOnly();
     testOtherControllerOnly();
     testUnknownMac();
+    check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
+          "every relay model was built with an injected USB backend, never the default (hidapi)");
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

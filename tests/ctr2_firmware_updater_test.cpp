@@ -3,8 +3,10 @@
 // the updater is held to the same session a device firmware runs: a
 // FIRMWARE session opened in place of READY, Status for every message, a
 // restart after End, and a new image that keeps itself only once it answers
-// HELLO. No hidapi, no sockets, no device.
+// HELLO. No hidapi (every relay model gets an injected USB backend, and the
+// default one is a counting tripwire), no sockets, no device.
 
+#include "Ctr2ProxyTestBackend.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/Ctr2FirmwareUpdater.h"
@@ -696,7 +698,7 @@ void testAutoStartWaitsForRestart()
         QList<Ctr2HidPort::DeviceInfo>{info});
     Device dev;
     int relayOpens = 0;
-    Ctr2ProxyModel relay;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     relay.setUsbBackend(
         [listed] { return *listed; },
         [&relayOpens](const Ctr2HidPort::DeviceInfo&, QString* error) -> Ctr2HidPort* {
@@ -748,7 +750,7 @@ void testReprobeReadsTheOfferAgain()
     Device dev;
     dev.reportsVersion = false;
     dev.offersFirmware = false;   // still starting: no offer yet
-    Ctr2ProxyModel relay;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     relay.setUsbBackend(
         [info] { return QList<Ctr2HidPort::DeviceInfo>{info}; },
         [](const Ctr2HidPort::DeviceInfo&, QString*) -> Ctr2HidPort* { return nullptr; },
@@ -795,7 +797,7 @@ void testRestartHoldScope()
         std::shared_ptr<QList<Ctr2HidPort::DeviceInfo>> listed;
         Device dev;
         QStringList opened;   // relay opens, by path
-        Ctr2ProxyModel relay;
+        Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
     };
     const auto rig = [&](Rig& r, QList<Ctr2HidPort::DeviceInfo> devices) {
         r.listed = std::make_shared<QList<Ctr2HidPort::DeviceInfo>>(devices);
@@ -884,7 +886,7 @@ void testStockFirmwareCommands()
     // restore: a backup's restore instead of the restart, which gets the
     // unit into download mode the same way first.
     const auto run = [&](Device& dev, Firmware firmware, bool* waited, bool restore = false) {
-        Ctr2ProxyModel relay;
+        Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
         relay.setUsbBackend(
             [stockInfo] { return QList<Ctr2HidPort::DeviceInfo>{stockInfo}; },
             [](const Ctr2HidPort::DeviceInfo&, QString*) -> Ctr2HidPort* { return nullptr; },
@@ -984,7 +986,7 @@ void testStockFirmwareCommands()
         Device dev;
         dev.reportsVersion = false;
         int opens = 0;
-        Ctr2ProxyModel relay;
+        Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
         relay.setUsbBackend(
             [stockInfo] { return QList<Ctr2HidPort::DeviceInfo>{stockInfo}; },
             [](const Ctr2HidPort::DeviceInfo&, QString*) -> Ctr2HidPort* { return nullptr; },
@@ -1020,6 +1022,9 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("ctr2_firmware_updater_test"));
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
+    // A model built without an injected USB backend would reach hidapi and
+    // could open a real CTR2; it gets this counting tripwire instead.
+    Ctr2ProxyTestBackend::installUsbTripwire();
     testReadImage();
     testSuccess();
     testDeviceComesBackLater();
@@ -1036,6 +1041,8 @@ int main(int argc, char** argv)
     testReprobeReadsTheOfferAgain();
     testRestartHoldScope();
     testStockFirmwareCommands();
+    check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
+          "every relay model was built with an injected USB backend, never the default (hidapi)");
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

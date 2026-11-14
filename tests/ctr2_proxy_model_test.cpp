@@ -8,6 +8,7 @@
 // No real USB device is enumerated or opened: every model is built with an
 // injected backend, and the default one is a tripwire that fails the run.
 
+#include "Ctr2ProxyTestBackend.h"
 #include "TestSettingsProfile.h"
 #include "core/Ctr2HidFraming.h"
 #include "core/AppSettings.h"
@@ -53,7 +54,6 @@ namespace {
 
 int g_failures = 0;
 bool g_socketCaseSkipped = false;
-int g_defaultBackendCalls = 0;   // the tripwire set in main()
 
 void check(bool condition, const char* message)
 {
@@ -111,18 +111,7 @@ void injectInertRadio(Ctr2ProxyModel& model)
     model.setUsbRadioSocketFactory([] { return new InertRadioSocket; });
 }
 
-// The backend every model here is built with: no devices, and an opener that
-// opens nothing, so the constructor never reaches hidapi. A case that needs
-// devices injects them with setUsbBackend() afterwards.
-Ctr2ProxyModel::UsbBackend inertUsb()
-{
-    Ctr2ProxyModel::UsbBackend backend;
-    backend.devices = [] { return QList<AetherSDR::Ctr2HidPort::DeviceInfo>(); };
-    backend.opener = [](const AetherSDR::Ctr2HidPort::DeviceInfo&, QString*) {
-        return static_cast<AetherSDR::Ctr2HidPort*>(nullptr);
-    };
-    return backend;
-}
+using Ctr2ProxyTestBackend::inertUsb;
 
 // A relay port whose device offers link extensions it did not take.
 class OfferPort : public FakePort {
@@ -1381,22 +1370,7 @@ int main(int argc, char** argv)
     AetherSDR::AppSettings::instance().load();
     // Tripwire: a model built without an injected backend would reach hidapi
     // and could open a real CTR2. It gets this one instead, which counts.
-    {
-        Ctr2ProxyModel::UsbBackend tripwire;
-        tripwire.devices = [] {
-            ++g_defaultBackendCalls;
-            return QList<AetherSDR::Ctr2HidPort::DeviceInfo>();
-        };
-        tripwire.opener = [](const AetherSDR::Ctr2HidPort::DeviceInfo&, QString*) {
-            ++g_defaultBackendCalls;
-            return static_cast<AetherSDR::Ctr2HidPort*>(nullptr);
-        };
-        tripwire.firmwareOpener = [](const AetherSDR::Ctr2HidPort::DeviceInfo&, quint32, QString*) {
-            ++g_defaultBackendCalls;
-            return static_cast<AetherSDR::Ctr2HidPort*>(nullptr);
-        };
-        Ctr2ProxyModel::setDefaultUsbBackendForTesting(std::move(tripwire));
-    }
+    Ctr2ProxyTestBackend::installUsbTripwire();
     Ctr2ProxyModel model(inertUsb());
 
     check(model.configurationProblem() == QStringLiteral("Connect AetherSDR to a radio first"),
@@ -1476,7 +1450,7 @@ int main(int argc, char** argv)
     testFirmwareRestartFollowsTheUpdatedDevice(true);
     testSingleDeviceSettingsMigrate();
 
-    check(g_defaultBackendCalls == 0,
+    check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
           "every model was built with an injected USB backend, never the default (hidapi)");
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
