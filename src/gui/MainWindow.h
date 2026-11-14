@@ -980,6 +980,9 @@ private:
     void fireCwxMacro(int index, const TxController::Input& input);  // F1..F12 = 0..11
     // Band stack stepping and the band-plan strip toggle (registry actions).
     bool hasBandStackEntries() const;
+    // Pan ids as the operator sees them: the workspace canvas order when it
+    // is on, else the main window's layout order, then any floating pans.
+    QStringList panIdsInScreenOrder() const;
     void stepBandStack(int direction);
     void toggleBandPlanStrip();
     // CW decoder RX on/off, the Radio Setup "Decode: RX" switch.

@@ -6,6 +6,7 @@
 #include "MainWindowHelpers.h"
 #include "AppletPanel.h"
 #include "CwxPanel.h"
+#include "DvkPanel.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RxApplet.h"
@@ -60,13 +61,19 @@ void MainWindow::cycleBandAction(int direction)
         if (a->handler) a->handler();
 }
 
+// "Macro N" follows the mode the way F<N> does: CWX macro N while the CWX
+// panel's F-keys are armed (CW TX slice), DVK slot N while the voice keyer's
+// are (voice TX slice). The CWX panel's own rules still apply on top.
 void MainWindow::fireCwxMacro(int index, const TxController::Input& input)
 {
-    // The CWX panel's F-key rules apply: a CW TX slice and a keyer that can send.
-    if (!m_cwxPanel || !m_cwxPanel->fireMacro(index, input)) {
-        showShortcutNotice(
-            tr("CWX Macro F%1 needs a CW transmit slice and a ready CW keyer").arg(index + 1), 5000);
+    if (m_cwxPanel && m_cwxPanel->fKeysArmed() && m_cwxPanel->fireMacro(index, input))
+        return;
+    if (m_dvkPanel && m_dvkPanel->fKeysArmed()) {
+        m_dvkPanel->fireSlot(index + 1);
+        return;
     }
+    showShortcutNotice(
+        tr("Macro F%1 needs a CW or voice transmit slice with its keyer ready").arg(index + 1), 5000);
 }
 
 // The menu entry whose text, with the menus above it, ends with `path`
@@ -119,6 +126,9 @@ void MainWindow::registerControlActions()
     const auto canTransmit = [this] {
         return m_radioModel.isConnected() && m_radioModel.backendCapabilities().canTransmit;
     };
+    // Transmit setup (TX slice, TX antenna, TX outputs, a profile load) does
+    // not change under a keyed transmitter; RF Power and Mic Level do.
+    const auto notKeyed = [this] { return !m_radioModel.transmitModel().isTransmitting(); };
 
     using A = ControlAction;
 
@@ -179,7 +189,7 @@ void MainWindow::registerControlActions()
     reg.add(A::trigger("slice_set_tx", "global.sliceSetTx", "Make Active Slice TX", "Slice",
                        [this](float) { if (auto* s = activeSlice()) s->setTxSlice(true); })
         .inMidiCategory("Global")
-        .when([this, canTransmit] { return canTransmit() && activeSlice(); }));
+        .when([this, canTransmit, notKeyed] { return canTransmit() && activeSlice() && notKeyed(); }));
 
     // ── CW keyer mode (direct set; the toggles already exist) ──────────
     const auto keyer = [this](bool iambic, int mode) {
@@ -364,10 +374,10 @@ void MainWindow::registerControlActions()
         }));
 
     // ── Panadapters: select by position, add, close, span presets ──────
-    const auto panAt = [this](int index) -> PanadapterApplet* {
-        if (!m_panStack) return nullptr;
-        const auto applets = m_panStack->allApplets();
-        return index < applets.size() ? applets.at(index) : nullptr;
+    // N counts pans as they appear on screen (panIdsInScreenOrder).
+    const auto panAt = [this](int index) -> QString {
+        const QStringList ids = panIdsInScreenOrder();
+        return index < ids.size() ? ids.at(index) : QString();
     };
     struct PanSelect { const char* key; const char* midiId; const char* name; int n; };
     static constexpr PanSelect kPanSelect[] = {
@@ -384,20 +394,22 @@ void MainWindow::registerControlActions()
         const int n = ps.n;
         reg.add(A::trigger(ps.key, ps.midiId, ps.name, "Display",
                            [this, n, panAt](float) {
-                               auto* applet = panAt(n - 1);
-                               if (!applet) return;
+                               const QString panId = panAt(n - 1);
+                               if (panId.isEmpty()) return;
                                // Activating a slice on the pan makes it the active pan
                                // too; an empty pan is activated directly.
                                for (SliceModel* s : m_radioModel.slices()) {
-                                   if (s && s->panId() == applet->panId()) {
+                                   if (s && s->panId() == panId) {
                                        setActiveSlice(s->sliceId());
                                        return;
                                    }
                                }
-                               m_panStack->setActivePan(applet->panId());
+                               if (m_panStack) m_panStack->setActivePan(panId);
                            })
                     .inMidiCategory("Global")
-                    .when([this, n, panAt] { return m_radioModel.isConnected() && panAt(n - 1); }));
+                    .when([this, n, panAt] {
+                        return m_radioModel.isConnected() && !panAt(n - 1).isEmpty();
+                    }));
     }
     reg.add(A::trigger("pan_add", "global.panAdd", "Add Panadapter", "Display",
                        [this](float) { showAddPanadapterDialog(); })
@@ -507,8 +519,9 @@ void MainWindow::registerControlActions()
                                    m_radioModel.loadGlobalProfile(profiles.at(n - 1));
                            })
                     .inMidiCategory("Global")
-                    .when([this, n] {
-                        return m_radioModel.isConnected() && m_radioModel.globalProfiles().size() >= n;
+                    .when([this, n, notKeyed] {
+                        return m_radioModel.isConnected() && notKeyed()
+                            && m_radioModel.globalProfiles().size() >= n;
                     }));
     }
 
@@ -557,8 +570,9 @@ void MainWindow::registerControlActions()
                                pickAntenna(tx, choices.at((at + 1) % choices.size()));
                            })
                     .inMidiCategory(ap.midiCategory)
-                    .when([this, antennaChoices, canTransmit, tx, n] {
-                        return m_radioModel.isConnected() && activeSlice() && (!tx || canTransmit())
+                    .when([this, antennaChoices, canTransmit, notKeyed, tx, n] {
+                        return m_radioModel.isConnected() && activeSlice()
+                            && (!tx || (canTransmit() && notKeyed()))
                             && antennaChoices(tx).size() >= (n == 0 ? 2 : n);
                     }));
     }
@@ -648,7 +662,10 @@ void MainWindow::registerControlActions()
     // ── CWX: cancel and the panel (not keying) ─────────────────────────
     const auto cwxAvailable = [this] { return m_radioModel.isConnected(); };
     reg.add(A::trigger("cwx_cancel", "cwx.cancel", "Stop CWX / Macros", "CW",
-                       [this](float) { m_radioModel.cwxModel().clearBuffer(); })
+                       [this](float) {
+                           m_radioModel.cwxModel().clearBuffer();
+                           if (m_dvkPanel) m_dvkPanel->stopOperation();
+                       })
         .inMidiCategory("Phone/CW").when(cwxAvailable));
     reg.add(A::toggle("cw_decode_toggle", "cw.decodeRx", "CW Decoder", "CW",
                       [this](float v) { setCwDecodeRxEnabled(v > 0.5f); },
@@ -686,8 +703,9 @@ void MainWindow::registerControlActions()
                               : field == BandField::Tx2 ? band.tx2 : band.tx3;
                 return on ? 1 : 0;
             })
-            .when([this, txBandId, canTransmit] {
-                return canTransmit() && m_radioModel.txBandSettings().contains(txBandId());
+            .when([this, txBandId, canTransmit, notKeyed] {
+                return canTransmit() && notKeyed()
+                    && m_radioModel.txBandSettings().contains(txBandId());
             }));
     }
 
@@ -713,18 +731,18 @@ void MainWindow::registerControlActions()
     reg.addPair("atu_bypass", "tx.atuBypass");
     struct CwxMacro { const char* key; const char* midiId; const char* name; int index; };
     static constexpr CwxMacro kCwxMacros[] = {
-        {"cwx_macro_1",  "cwx.macro1",  "CWX Macro F1",  0},
-        {"cwx_macro_2",  "cwx.macro2",  "CWX Macro F2",  1},
-        {"cwx_macro_3",  "cwx.macro3",  "CWX Macro F3",  2},
-        {"cwx_macro_4",  "cwx.macro4",  "CWX Macro F4",  3},
-        {"cwx_macro_5",  "cwx.macro5",  "CWX Macro F5",  4},
-        {"cwx_macro_6",  "cwx.macro6",  "CWX Macro F6",  5},
-        {"cwx_macro_7",  "cwx.macro7",  "CWX Macro F7",  6},
-        {"cwx_macro_8",  "cwx.macro8",  "CWX Macro F8",  7},
-        {"cwx_macro_9",  "cwx.macro9",  "CWX Macro F9",  8},
-        {"cwx_macro_10", "cwx.macro10", "CWX Macro F10", 9},
-        {"cwx_macro_11", "cwx.macro11", "CWX Macro F11", 10},
-        {"cwx_macro_12", "cwx.macro12", "CWX Macro F12", 11},
+        {"cwx_macro_1",  "cwx.macro1",  "Macro F1",  0},
+        {"cwx_macro_2",  "cwx.macro2",  "Macro F2",  1},
+        {"cwx_macro_3",  "cwx.macro3",  "Macro F3",  2},
+        {"cwx_macro_4",  "cwx.macro4",  "Macro F4",  3},
+        {"cwx_macro_5",  "cwx.macro5",  "Macro F5",  4},
+        {"cwx_macro_6",  "cwx.macro6",  "Macro F6",  5},
+        {"cwx_macro_7",  "cwx.macro7",  "Macro F7",  6},
+        {"cwx_macro_8",  "cwx.macro8",  "Macro F8",  7},
+        {"cwx_macro_9",  "cwx.macro9",  "Macro F9",  8},
+        {"cwx_macro_10", "cwx.macro10", "Macro F10", 9},
+        {"cwx_macro_11", "cwx.macro11", "Macro F11", 10},
+        {"cwx_macro_12", "cwx.macro12", "Macro F12", 11},
     };
     for (const auto& cm : kCwxMacros) {
         const int index = cm.index;

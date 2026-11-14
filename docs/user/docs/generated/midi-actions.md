@@ -123,18 +123,18 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | Stop CWX / Macros | `cwx.cancel` | Trigger |   |   |
 | CW Decoder | `cw.decodeRx` | Toggle |   |   |
 | Show/Hide CWX Panel | `cwx.panelToggle` | Trigger |   |   |
-| CWX Macro F1 | `cwx.macro1` | Trigger |   |   |
-| CWX Macro F2 | `cwx.macro2` | Trigger |   |   |
-| CWX Macro F3 | `cwx.macro3` | Trigger |   |   |
-| CWX Macro F4 | `cwx.macro4` | Trigger |   |   |
-| CWX Macro F5 | `cwx.macro5` | Trigger |   |   |
-| CWX Macro F6 | `cwx.macro6` | Trigger |   |   |
-| CWX Macro F7 | `cwx.macro7` | Trigger |   |   |
-| CWX Macro F8 | `cwx.macro8` | Trigger |   |   |
-| CWX Macro F9 | `cwx.macro9` | Trigger |   |   |
-| CWX Macro F10 | `cwx.macro10` | Trigger |   |   |
-| CWX Macro F11 | `cwx.macro11` | Trigger |   |   |
-| CWX Macro F12 | `cwx.macro12` | Trigger |   |   |
+| Macro F1 | `cwx.macro1` | Trigger |   |   |
+| Macro F2 | `cwx.macro2` | Trigger |   |   |
+| Macro F3 | `cwx.macro3` | Trigger |   |   |
+| Macro F4 | `cwx.macro4` | Trigger |   |   |
+| Macro F5 | `cwx.macro5` | Trigger |   |   |
+| Macro F6 | `cwx.macro6` | Trigger |   |   |
+| Macro F7 | `cwx.macro7` | Trigger |   |   |
+| Macro F8 | `cwx.macro8` | Trigger |   |   |
+| Macro F9 | `cwx.macro9` | Trigger |   |   |
+| Macro F10 | `cwx.macro10` | Trigger |   |   |
+| Macro F11 | `cwx.macro11` | Trigger |   |   |
+| Macro F12 | `cwx.macro12` | Trigger |   |   |
 
 ## EQ
 

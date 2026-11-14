@@ -46,6 +46,12 @@ public:
     // off and Escape and a playing slot's F-key may stay armed to stop an
     // operation in flight even when `enabled` is false.
     void setShortcutsEnabled(bool enabled, bool stopKeysAllowed = false);
+    // The F1-F12 path for keyboard and MIDI "Macro N" actions: true while the
+    // panel's F-keys are armed (a voice TX slice and a usable keyer); fireSlot
+    // does what F<id> does; stopOperation does what Escape does.
+    bool fKeysArmed() const;
+    void fireSlot(int id) { selectSlot(id); togglePlayback(id); }
+    void stopOperation() { stopActiveOperation(); }
 
     // Show one line in the panel's status area. For notices the keyer itself
     // does not raise — a source change waiting on the operation in flight.

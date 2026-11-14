@@ -240,18 +240,18 @@ SmartSDR for Mac's Stream Deck and MIDI action list, and the AetherSDR control t
 | Global Profile 4 | **Load Global Profile 4** | **Load Global Profile 4** |
 | Global Profile 5 | **Load Global Profile 5** | **Load Global Profile 5** |
 | Log QSO | — | AetherSDR has no QSO logbook |
-| Macro 1 | **CWX Macro F1** | **CWX Macro F1** |
-| Macro 10 | **CWX Macro F10** | **CWX Macro F10** |
-| Macro 11 | **CWX Macro F11** | **CWX Macro F11** |
-| Macro 12 | **CWX Macro F12** | **CWX Macro F12** |
-| Macro 2 | **CWX Macro F2** | **CWX Macro F2** |
-| Macro 3 | **CWX Macro F3** | **CWX Macro F3** |
-| Macro 4 | **CWX Macro F4** | **CWX Macro F4** |
-| Macro 5 | **CWX Macro F5** | **CWX Macro F5** |
-| Macro 6 | **CWX Macro F6** | **CWX Macro F6** |
-| Macro 7 | **CWX Macro F7** | **CWX Macro F7** |
-| Macro 8 | **CWX Macro F8** | **CWX Macro F8** |
-| Macro 9 | **CWX Macro F9** | **CWX Macro F9** |
+| Macro 1 | **Macro F1** | **Macro F1** |
+| Macro 10 | **Macro F10** | **Macro F10** |
+| Macro 11 | **Macro F11** | **Macro F11** |
+| Macro 12 | **Macro F12** | **Macro F12** |
+| Macro 2 | **Macro F2** | **Macro F2** |
+| Macro 3 | **Macro F3** | **Macro F3** |
+| Macro 4 | **Macro F4** | **Macro F4** |
+| Macro 5 | **Macro F5** | **Macro F5** |
+| Macro 6 | **Macro F6** | **Macro F6** |
+| Macro 7 | **Macro F7** | **Macro F7** |
+| Macro 8 | **Macro F8** | **Macro F8** |
+| Macro 9 | **Macro F9** | **Macro F9** |
 | Macros Stop | **Stop CWX / Macros** | **Stop CWX / Macros** |
 | Main Audio Mute toggle | **Master Mute Toggle** | **Master Mute** |
 | Memory 1 | **Recall Memory 1** | **Recall Memory 1** |

@@ -914,3 +914,8 @@ void AetherSDR::CwxPanel::clearHistory()
         delete item;
     }
 }
+
+bool AetherSDR::CwxPanel::fKeysArmed() const
+{
+    return !m_shortcuts.isEmpty() && m_shortcuts.first()->isEnabled();
+}

@@ -112,6 +112,9 @@ public:
     // panel's own F-key rules: only while the TX slice is in a CW mode and the
     // keyer can send. History bubble included. False when refused.
     bool fireMacro(int index, const TxController::Input& input);
+    // True while the panel's F1-F12 keys are armed (a CW TX slice whose
+    // radio stores CWX macros): the mode a "Macro N" action follows.
+    bool fKeysArmed() const;
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;

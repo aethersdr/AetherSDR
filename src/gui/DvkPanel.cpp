@@ -1095,4 +1095,9 @@ void DvkPanel::cancelRename()
     m_renameSlot = -1;
 }
 
+bool DvkPanel::fKeysArmed() const
+{
+    return !m_shortcuts.isEmpty() && m_shortcuts.first()->isEnabled();
+}
+
 } // namespace AetherSDR

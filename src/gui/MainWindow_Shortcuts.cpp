@@ -387,7 +387,10 @@ void MainWindow::noticeRefusedShortcut(QKeyEvent* keyEvent)
 void MainWindow::refuseControlAction(const QString& name)
 {
     qCInfo(lcGui).noquote() << "Control action not available:" << name;
-    showShortcutNotice(tr("%1 is not available right now").arg(name), 5000);
+    showShortcutNotice(m_radioModel.transmitModel().isTransmitting()
+                           ? tr("%1 is not available while transmitting").arg(name)
+                           : tr("%1 is not available right now").arg(name),
+                       5000);
 }
 
 // A short notice in the status bar that a screen reader also announces

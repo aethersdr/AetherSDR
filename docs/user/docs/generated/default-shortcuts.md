@@ -126,18 +126,18 @@ These are the actions you can bind in **Settings → Configure Shortcuts...**, w
 | Stop CWX / Macros | `cwx_cancel` |   |   |
 | CW Decoder | `cw_decode_toggle` |   |   |
 | Show/Hide CWX Panel | `cwx_panel_toggle` |   |   |
-| CWX Macro F1 | `cwx_macro_1` |   | Keys the transmitter |
-| CWX Macro F2 | `cwx_macro_2` |   | Keys the transmitter |
-| CWX Macro F3 | `cwx_macro_3` |   | Keys the transmitter |
-| CWX Macro F4 | `cwx_macro_4` |   | Keys the transmitter |
-| CWX Macro F5 | `cwx_macro_5` |   | Keys the transmitter |
-| CWX Macro F6 | `cwx_macro_6` |   | Keys the transmitter |
-| CWX Macro F7 | `cwx_macro_7` |   | Keys the transmitter |
-| CWX Macro F8 | `cwx_macro_8` |   | Keys the transmitter |
-| CWX Macro F9 | `cwx_macro_9` |   | Keys the transmitter |
-| CWX Macro F10 | `cwx_macro_10` |   | Keys the transmitter |
-| CWX Macro F11 | `cwx_macro_11` |   | Keys the transmitter |
-| CWX Macro F12 | `cwx_macro_12` |   | Keys the transmitter |
+| Macro F1 | `cwx_macro_1` |   | Keys the transmitter |
+| Macro F2 | `cwx_macro_2` |   | Keys the transmitter |
+| Macro F3 | `cwx_macro_3` |   | Keys the transmitter |
+| Macro F4 | `cwx_macro_4` |   | Keys the transmitter |
+| Macro F5 | `cwx_macro_5` |   | Keys the transmitter |
+| Macro F6 | `cwx_macro_6` |   | Keys the transmitter |
+| Macro F7 | `cwx_macro_7` |   | Keys the transmitter |
+| Macro F8 | `cwx_macro_8` |   | Keys the transmitter |
+| Macro F9 | `cwx_macro_9` |   | Keys the transmitter |
+| Macro F10 | `cwx_macro_10` |   | Keys the transmitter |
+| Macro F11 | `cwx_macro_11` |   | Keys the transmitter |
+| Macro F12 | `cwx_macro_12` |   | Keys the transmitter |
 
 ## Audio
 
