@@ -1210,10 +1210,7 @@ void TunerApplet::syncFromModel()
             "QPushButton:hover { background: #9a7000; }"));
     } else {
         m_operateBtn->setText(tr("STANDBY"));
-        applyRailStyle(m_operateBtn, QStringLiteral(
-            "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+        applyRailStyle(m_operateBtn, kStandbyActiveStyle);
     }
 
     // Expanded presentation: the same three states, but shown as the lit key

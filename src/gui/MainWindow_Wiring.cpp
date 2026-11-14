@@ -7814,11 +7814,11 @@ void MainWindow::wireMeters()
 
     connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
-    // TGXL indicator: two-line rich text — label on top, state smaller below.
     // TGXL/PGXL indicator: two-line — label on top, state smaller below.
-    // Colors use semantic tokens per RFC #6816: OPERATE = color.accent.success (green),
-    // BYPASS = color.accessory.key.bypass.foreground (light amber),
-    // STANDBY = color.accessory.key.standby.foreground (amber) — distinct from BYPASS.
+    // Colors use semantic tokens per RFC #6816:
+    //   OPERATE = color.accessory.indicator.operate.foreground (green, same as today)
+    //   BYPASS  = color.accessory.indicator.bypass.foreground  (amber, same as today)
+    //   STANDBY = color.accessory.key.standby.foreground (amber) — distinct from BYPASS
     auto setIndicatorStyle = [](QLabel* nameLbl, QLabel* stateLbl,
                                 const QString& state, const QString& colorToken) {
         ThemeManager::instance().applyStyleSheet(nameLbl,
@@ -7843,10 +7843,10 @@ void MainWindow::wireMeters()
         auto& t = m_radioModel.tunerModel();
         if (t.isOperate() && !t.isBypass())
             setIndicatorStyle(m_tgxlIndicator, m_tgxlStateLabel, "OPERATE",
-                              QStringLiteral("color.accent.success"));
+                              QStringLiteral("color.accessory.indicator.operate.foreground"));
         else if (t.isOperate() && t.isBypass())
             setIndicatorStyle(m_tgxlIndicator, m_tgxlStateLabel, "BYPASS",
-                              QStringLiteral("color.accessory.key.bypass.foreground"));
+                              QStringLiteral("color.accessory.indicator.bypass.foreground"));
         else
             setIndicatorStyle(m_tgxlIndicator, m_tgxlStateLabel, "STANDBY",
                               QStringLiteral("color.accessory.key.standby.foreground"));
@@ -7857,7 +7857,7 @@ void MainWindow::wireMeters()
     auto updatePgxlStyle = [this, setIndicatorStyle]() {
         if (m_radioModel.amplifier().operate())
             setIndicatorStyle(m_pgxlIndicator, m_pgxlStateLabel, "OPERATE",
-                              QStringLiteral("color.accent.success"));
+                              QStringLiteral("color.accessory.indicator.operate.foreground"));
         else
             setIndicatorStyle(m_pgxlIndicator, m_pgxlStateLabel, "STANDBY",
                               QStringLiteral("color.accessory.key.standby.foreground"));
