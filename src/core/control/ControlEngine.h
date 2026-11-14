@@ -18,6 +18,9 @@ struct ControlEngine {
 
     ControlResourceStore resources;
     ControlService service;
+    // Live sessions across every network listener (TLS and tailnet together),
+    // so the network budget is one budget. The local socket counts apart.
+    int networkSessions{0};
 };
 
 } // namespace AetherSDR::control

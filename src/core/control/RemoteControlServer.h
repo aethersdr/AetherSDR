@@ -30,7 +30,8 @@ public:
         Secure,   // wss:// with a host-made certificate; any non-wildcard address
         Tailnet,  // plain ws:// on a WireGuard interface's address only
     };
-    static constexpr int kMaxClients = 4;   // apart from the local socket's 8
+    // Across all network listeners of one engine; apart from the local socket's 8.
+    static constexpr int kMaxClients = 4;
     static constexpr int kHandshakeTimeoutMs = 5000;
     // A pairing whose credential is being written may run past the handshake
     // deadline once, up to this long, so a stored credential reaches its client.

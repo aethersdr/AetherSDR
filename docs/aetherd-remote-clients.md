@@ -90,8 +90,8 @@ written only while a remote record exists; version-1 vaults read unchanged.
   `{scheme:"bearer", token}`. Every answer closes the connection, so a client
   reconnects with the token. Five wrong codes end the open pairing.
 - **Errors:** a wrong code is `auth.invalid`; no open or an expired pairing is
-  `capability.unavailable`; malformed parameters are `request.invalid_params`
-  (they do not use up an attempt); a credential the vault would not store is
+  `capability.unavailable`; malformed parameters, including a code that is not
+  ten digits, are `request.invalid_params` (they do not use up an attempt); a credential the vault would not store is
   `engine.failed`.
 - **The reply is deferred** while the credential is written: the service
   returns no reply at once, the connection reads no further input, and the
@@ -123,8 +123,15 @@ written only while a remote record exists; version-1 vaults read unchanged.
 - **Framing:** one JSON object per text frame, no trailing newline. Binary frames
   close the connection. Incoming frame and message sizes are capped at the
   codec's 256 KiB.
-- **Budget:** at most 4 network sessions, counted apart from the local socket's
-  8, so LAN clients can never lock the radio's own panel out.
+- **Budget:** at most 4 network sessions in all, shared by the TLS and the
+  tailnet listener and counted apart from the local socket's 8, so LAN clients
+  can never lock the radio's own panel out.
+- **Prerequisites:** both listeners need a serving `--credential-authority`.
+  Control also needs `--allow-local-control`: the receive, connection and
+  frequency targets are installed only with it, so without it a
+  `remote-control` client holds the control grant but is offered no control
+  method, and `pairing.begin` is refused locally. The G2 runs with
+  `--allow-local-control`.
 - **Rate:** the same per-session limits as the local socket. A connection that
   has not completed `hello` or `pairing.complete` within 5 s is closed.
 - **Build:** only with `HAVE_WEBSOCKETS`. Without it, the options are refused

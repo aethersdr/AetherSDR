@@ -323,6 +323,8 @@ int main(int argc, char* argv[])
                                        QJsonObject{{"code", code}, {"clientName", QString(33, u'a')}},
                                        QJsonObject{{"code", code}, {"clientName", "a\nb"}},
                                        QJsonObject{{"code", 1}, {"clientName", "x"}},
+                                       QJsonObject{{"code", "abc"}, {"clientName", "x"}},
+                                       QJsonObject{{"code", "123-456-789"}, {"clientName", "x"}},
                                        QJsonObject{{"code", code}, {"clientName", "x"}, {"extra", 1}}}) {
             Wire w(h, true);
             w.feed(h.request(w.session, "pairing.complete", bad, false));

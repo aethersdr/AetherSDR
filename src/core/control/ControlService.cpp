@@ -245,11 +245,12 @@ ServiceReply ControlService::completePairing(const ProtocolRequest& request,
     }
     const QJsonValue code = request.params.value(QStringLiteral("code"));
     const QJsonValue name = request.params.value(QStringLiteral("clientName"));
-    if (request.params.size() != 2 || !code.isString() || !name.isString()
-        || name.toString().trimmed().isEmpty()
+    // A code that is not ten digits is malformed, not wrong: it uses up no attempt.
+    if (request.params.size() != 2 || !code.isString() || !ControlPairing::digitsOf(code.toString())
+        || !name.isString() || name.toString().trimmed().isEmpty()
         || !ControlCredentials::validName(name.toString())) {
         return refuse("request.invalid_params",
-                      "pairing.complete takes code and clientName (1 to 32 bytes of UTF-8)");
+                      "pairing.complete takes a ten-digit code and clientName (1 to 32 bytes of UTF-8)");
     }
     switch (m_pairing.attempt(code.toString(), m_pairingBinding->nowMs())) {
     case ControlPairing::Attempt::Accepted:

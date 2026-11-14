@@ -236,7 +236,7 @@ void RemoteControlServer::acceptConnections()
             socket->abort();   // the engine is still starting; clients may retry
             continue;
         }
-        if (m_clients.size() >= std::size_t(m_limits.maxClients)) {
+        if (m_engine.networkSessions >= m_limits.maxClients) {
             refuse(socket, QStringLiteral("transport.limit_exceeded"),
                    QStringLiteral("maximum network client count reached"));
             continue;
@@ -246,6 +246,7 @@ void RemoteControlServer::acceptConnections()
 
         auto owned = std::make_unique<Client>(&m_engine.resources, m_limits.maxQueuedOutputBytes);
         Client* client = owned.get();
+        ++m_engine.networkSessions;
         if (m_mode == Mode::Secure) {
             client->session->allowPairing();   // the code's check digits pin this certificate
         }
@@ -345,6 +346,7 @@ void RemoteControlServer::dropClient(QWebSocket* socket)
     if (current == m_clients.end()) { return; }
     const std::unique_ptr<Client> retired = std::move(current->second);
     m_clients.erase(current);
+    --m_engine.networkSessions;
 }
 
 bool RemoteControlServer::send(QWebSocket* socket, const QJsonObject& message)

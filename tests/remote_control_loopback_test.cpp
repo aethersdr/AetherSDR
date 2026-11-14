@@ -213,9 +213,19 @@ int main(int argc, char* argv[])
     const bool localUp = local.listen("remote-loopback-" + QUuid::createUuid().toString(QUuid::Id128),
                                       LocalControlServer::ListenMode::ReserveEndpoint);
     const bool tlsSet = remote.setTlsConfiguration(*identity);
-    const bool remoteUp = remote.listen({QHostAddress::LocalHost, 0}, &why);
-    check(localUp && tlsSet && remoteUp && local.startServing() && remote.startServing(),
-          "listen on the local socket and on 127.0.0.1");
+    const bool remoteUp = tlsSet && remote.listen({QHostAddress::LocalHost, 0}, &why);
+    // tests-ci.md: a socket-owning test that cannot bind skips at once rather
+    // than spending its timeout; a setup failure after binding fails at once.
+    if (!tlsSet) { std::printf("FAIL: the TLS configuration was refused\n"); return 1; }
+    if (!localUp || !remoteUp) {
+        std::printf("SKIP: cannot bind the test listeners (%s)\n", qPrintable(why));
+        return 77;
+    }
+    if (!local.startServing() || !remote.startServing()) {
+        std::printf("FAIL: the listeners would not start serving\n");
+        return 1;
+    }
+    check(true, "listen on the local socket and on 127.0.0.1");
     const quint16 port = remote.serverPort();
 
     LocalClient panel;
@@ -277,6 +287,20 @@ int main(int argc, char* argv[])
         check(waitUntil([&] { return third.closed; })
                   && !third.received.isEmpty() && error(third.received.first()) == "transport.limit_exceeded",
               "a session over the network budget is refused");
+        // One budget for every network listener of the engine.
+        RemoteControlServer other(engine, RemoteControlServer::Mode::Secure, nullptr,
+                                  {2, RemoteControlServer::kHandshakeTimeoutMs, RemoteControlServer::kMaxQueuedOutputBytes,
+                                   RemoteControlServer::kPairingWriteTimeoutMs});
+        if (!other.setTlsConfiguration(*identity) || !other.listen({QHostAddress::LocalHost, 0}, &why)) {
+            std::printf("SKIP: cannot bind the budget-sharing listener (%s)\n", qPrintable(why));
+            return 77;
+        }
+        if (!other.startServing()) { std::printf("FAIL: the budget-sharing listener would not serve\n"); return 1; }
+        WsClient elsewhere(fingerprint);
+        elsewhere.open(other.serverPort());
+        check(waitUntil([&] { return elsewhere.closed; }) && !elsewhere.received.isEmpty()
+                  && error(elsewhere.received.first()) == "transport.limit_exceeded" && other.sessionCount() == 0,
+              "the budget is shared: another listener of the same engine refuses too");
         check(error(panel.exchange(request("capabilities.get", {}, panelSession))).isEmpty(),
               "the local socket is unaffected by the network budget");
     }
@@ -301,8 +325,13 @@ int main(int argc, char* argv[])
     {
         RemoteControlServer slow(engine, RemoteControlServer::Mode::Secure, nullptr,
                                  {4, 200, RemoteControlServer::kMaxQueuedOutputBytes, 3000});
-        check(slow.setTlsConfiguration(*identity) && slow.listen({QHostAddress::LocalHost, 0}, &why)
-                  && slow.startServing(), "a second TLS listener with a 200 ms handshake deadline");
+        if (!slow.setTlsConfiguration(*identity)) { std::printf("FAIL: second TLS configuration refused\n"); return 1; }
+        if (!slow.listen({QHostAddress::LocalHost, 0}, &why)) {
+            std::printf("SKIP: cannot bind the second test listener (%s)\n", qPrintable(why));
+            return 77;
+        }
+        if (!slow.startServing()) { std::printf("FAIL: the second listener would not serve\n"); return 1; }
+        check(true, "a second TLS listener with a 200 ms handshake deadline");
         issuer.delayMs = 600;
         const QString slowCode = result(panel.exchange(request("pairing.begin", {}, panelSession))).value("code").toString();
         WsClient client(fingerprint);
