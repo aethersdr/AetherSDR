@@ -519,6 +519,15 @@ void MetisClient::onWatchdogTick()
         // the burst msleeps on the EP2 thread. m_linkUp stays true so a recovery does not
         // republish state; m_params.bandscope and a pending frame request survive.
         if (!m_silenceRecoveryArmed && m_socket && m_startRetryTimer) {
+            // Ask the radio before re-sending run: if another host is running it
+            // now, a run command from us would take it back.
+            if (m_silenceProbeAsking)
+                return;
+            if (!m_silenceProbeCleared) {
+                beginSilenceProbe();
+                return;
+            }
+            m_silenceProbeCleared = false;
             m_silenceRecoveryArmed = true;
             ++m_link.silenceRecoveryAttempts;
             // Publish in this turn. linkCountersUpdated otherwise leaves only
@@ -605,6 +614,53 @@ void MetisClient::dropControlRequest()
 
 void MetisClient::stop()
 {
+    stopSession(true);
+}
+
+void MetisClient::abandon()
+{
+    stopSession(false);
+}
+
+void MetisClient::beginSilenceProbe()
+{
+    if (!m_socket) {
+        onSilenceProbeAnswer(std::nullopt);
+        return;
+    }
+    m_silenceProbeAsking = true;
+    if (!m_silenceProbeTimer) {
+        m_silenceProbeTimer = new QTimer(this);
+        m_silenceProbeTimer->setSingleShot(true);
+        connect(m_silenceProbeTimer, &QTimer::timeout, this,
+                [this] { onSilenceProbeAnswer(std::nullopt); });
+    }
+    countTx(sendTo(*m_socket, discoveryRequest(), m_host, m_port));
+    m_silenceProbeTimer->start(kSilenceProbeMs);
+}
+
+void MetisClient::onSilenceProbeAnswer(std::optional<bool> streaming)
+{
+    if (!m_silenceProbeAsking)
+        return;   // already answered, or the session ended
+    m_silenceProbeAsking = false;
+    if (m_silenceProbeTimer)
+        m_silenceProbeTimer->stop();
+    if (!m_running)
+        return;
+    if (!streaming) {
+        qInfo() << "MetisClient: the radio does not answer this session (another host"
+                   " has it, or our link is gone); ending this session without a stop";
+        abandon();
+        return;
+    }
+    // Idle, or still streaming to us: the reply came to this socket. Either way
+    // the run re-send is ours to make.
+    m_silenceProbeCleared = true;   // the next watchdog tick re-sends the run command
+}
+
+void MetisClient::stopSession(bool sendStopPacket)
+{
     // A receiver-count restart in flight ends here: its remaining steps would
     // put a metis-start on the wire after the stop below.
     cancelReceiverCountRestart();
@@ -612,8 +668,12 @@ void MetisClient::stop()
     if (m_ep2Timer)        m_ep2Timer->stop();
     if (m_watchdogTimer)   m_watchdogTimer->stop();
     if (m_connectWatchdog) m_connectWatchdog->stop();
+    if (m_silenceProbeTimer) m_silenceProbeTimer->stop();
+    m_silenceProbeAsking = false;
+    m_silenceProbeCleared = false;
     if (m_socket) {
-        countTx(sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port));
+        if (sendStopPacket)
+            countTx(sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port));
         // Disarm only AFTER the normal stop has gone out, and before the
         // descriptor is closed. Disarming earlier would leave a window where a
         // signal arriving mid-teardown released nothing; later would leave a
@@ -2042,6 +2102,14 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
     // recently the stream produced anything, which both the silence watchdog
     // and the start-retry read.
     m_sinceLastEp6.restart();
+    // A stream that came back needs no answer about who has the radio: the
+    // probe in flight (if any) is dropped, and the next silence asks afresh.
+    if (m_silenceProbeAsking || m_silenceProbeCleared) {
+        if (m_silenceProbeTimer)
+            m_silenceProbeTimer->stop();
+        m_silenceProbeAsking = false;
+        m_silenceProbeCleared = false;
+    }
     if (m_silenceRecoveryArmed) {
         // The stream is back and m_linkUp never dropped, so nothing downstream
         // saw this happen. The counters are the only record that it did, which
@@ -2198,6 +2266,20 @@ void MetisClient::onReadyRead()
             }
         }
 
+        // The silence probe's answer arrives here, on the session socket.
+        // Only a discovery reply: status 0x02/0x03 and short. parseDiscoveryReply()
+        // alone also accepts an EP6 frame (EF FE 01, 1032 bytes), and that must
+        // reach handleDatagram().
+        if (m_silenceProbeAsking) {
+            const auto bytes = asBytes(dg.data());
+            if (bytes.size() >= 11 && bytes.size() < 256
+                && (bytes[2] == 0x02 || bytes[2] == 0x03)) {
+                if (const auto reply = parseDiscoveryReply(bytes)) {
+                    onSilenceProbeAnswer(reply->streaming);
+                    continue;
+                }
+            }
+        }
         handleDatagram(asBytes(dg.data()));
     }
 

@@ -2,7 +2,7 @@
 
 #include "CanonWindow.h"
 #include "core/TailnetLinkTelemetry.h"
-#include "core/backends/flex/PanadapterStream.h"
+#include "core/ReceiveData.h"
 #include "models/DigitalVoiceWaveformHistory.h"
 
 #include <QComboBox>
@@ -128,7 +128,7 @@ private:
     qint64 m_lastSampleMs{0};
     quint64 m_lastAudioUnderrunCount{0};
     qint64 m_lastAudioLatePackets{0};
-    qint64 m_lastCatBytes[PanadapterStream::CatCount]{};
+    qint64 m_lastCatBytes[ReceiveStreamStats::Count]{};
     QVector<ThrottleEvent> m_throttleEvents;
     int    m_throttleSessionCount{0};
     int    m_currentFpsCap{0};  // tracks latest state for sampleNow()

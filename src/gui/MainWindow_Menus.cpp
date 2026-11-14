@@ -624,7 +624,7 @@ void MainWindow::buildMenuBar()
         // Frameless Window, which a CanonWindow does not follow.
         if (!m_ulanziMapperDialog) {
             auto* dlg = new UlanziDialMapperDialog(m_dialBackend, &m_shortcutManager,
-                                                   midi, this);
+                                                   midi, this, &m_controlActions);
             dlg->setAttribute(Qt::WA_DeleteOnClose);
             m_ulanziMapperDialog = dlg;
         }

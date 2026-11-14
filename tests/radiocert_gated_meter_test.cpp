@@ -10,10 +10,13 @@
 // VNA-measured 2:1 load: forward counts peaked at 76 against a gate of 320.
 
 #include "core/RadioCertification.h"
+#include "core/AudioEngine.h"
+#include "core/ClientTxTestTone.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "models/MeterModel.h"
 #include "models/RadioModel.h"
+#include "models/TransmitModel.h"
 #include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
@@ -21,8 +24,11 @@
 #include <QJsonObject>
 #include <QVariantMap>
 
+#include <cmath>
 #include <cstdio>
 #include <memory>
+#include <tuple>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -50,6 +56,26 @@ public:
         cert.m_keyedFwdCountsMax = fwdCountsMax;
         cert.m_keyedDrivePercentMax = drivePercent;
         cert.m_fwdPowerMeterDefined = true;
+    }
+    // The rf stage's SWR decision, and the live gate read it rests on.
+    static std::pair<QString, QString> classifySwrAtKey(bool haveSwr, int gate, int clears,
+                                                        int peak, int drive, double tone)
+    {
+        RadioCertification::SwrGateReading g;
+        g.gateCounts = gate;
+        g.clearsThisOver = clears;
+        g.peakCounts = peak;
+        const auto r = RadioCertification::classifySwrAtKey(haveSwr, g, drive, tone);
+        return {r.result, r.concern};
+    }
+    static std::tuple<int, int, int> readSwrGate(const RadioCertification& cert)
+    {
+        const auto g = cert.readSwrGate();
+        return {g.gateCounts, g.clearsThisOver, g.peakCounts};
+    }
+    static void stageRf(RadioCertification& cert, const RadioCertification::Options& o)
+    {
+        cert.stageRf(o);
     }
     static int swrGateCounts(const RadioCertification& c) { return c.m_swrGateCounts; }
     static int swrGateClears(const RadioCertification& c) { return c.m_swrGateClears; }
@@ -266,12 +292,8 @@ int main(int argc, char** argv)
               "a peak above the floor does not advise raising drive");
     }
 
-    // ---- NIT 4: at full drive, "raise drive" is not a remedy. A forward
-    // reading that cannot clear the gate with the slider at maximum is a
-    // detector or scaling fault (the #5369 class), and before this change the
-    // run at least produced a negative finding. The verdict stays INCONCLUSIVE
-    // -- the meter really is suppressed -- but the remedy must point at the
-    // forward chain instead of asking for drive that does not exist.
+    // Full drive leaves stimulus strength unknown; an absent SWR remains
+    // inconclusive until forward power is independently established.
     {
         RadioModel radio;
         std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(new GatedBackend()));
@@ -298,8 +320,10 @@ int main(int argc, char** argv)
               "at full drive the remedy does not ask for more drive");
         check(reason.contains(QLatin1String("100%")),
               "the reason states that drive was already at maximum");
-        check(reason.contains(QLatin1String("forward detector")),
-              "and it points at the forward detector instead");
+        check(reason.contains(QLatin1String("quiet stimulus"))
+                  && reason.contains(QLatin1String("independently measured forward power"))
+                  && !reason.contains(QLatin1String("points at the forward detector")),
+              "inventory: full drive does not diagnose the detector without adequate stimulus");
     }
 
     // ---- the gate WAS cleared: silence here IS a defect and must still be
@@ -411,6 +435,161 @@ int main(int argc, char** argv)
               "the gate, its clears count and the reading have distinct keys");
     }
 
+    // ---- the rf stage names the backend's SWR gate (radiocert on the HL2) ----
+    //
+    // On hardware at 40 % drive, radiocert's -20 dBFS tone peaked at 113
+    // forward counts against the HL2's 320-count SWR gate, and the rf stage
+    // said "no SWR reading" — sending the reader after a meter and a PA that
+    // were both fine. The stage must say the gate was not reached, with the
+    // numbers, and must not claim anything when the gate WAS cleared.
+    {
+        const auto [result, concern] = RadioCertificationTestAccess::classifySwrAtKey(
+            false, 320, 0, 113, 40, -20.0);
+        check(result == QLatin1String("gate-not-reached"),
+              "rf: below the backend's gate is its own result");
+        check(concern.contains(QLatin1String("SWR GATE NOT REACHED AT THIS DRIVE")),
+              "rf: the concern names the gate, not a missing reading");
+        check(!concern.contains(QLatin1String("no SWR reading")),
+              "rf: and does not say 'no SWR reading'");
+        check(concern.contains(QLatin1String("320")) && concern.contains(QLatin1String("113"))
+                  && concern.contains(QLatin1String("40%"))
+                  && concern.contains(QLatin1String("-20.0 dBFS")),
+              "rf: the concern carries the gate, the peak, the drive and the tone");
+        check(concern.contains(QLatin1String("raises neither by itself")),
+              "rf: the remedy is stated, never applied");
+    }
+    {
+        for (const double tone : {-60.0, -20.0, -3.0}) {
+            const auto [result, concern] = RadioCertificationTestAccess::classifySwrAtKey(
+                false, 320, 0, 40, 100, tone);
+            check(result == QLatin1String("gate-not-reached")
+                      && concern.contains(QLatin1String("quiet stimulus"))
+                      && concern.contains(QLatin1String("independently measured forward power"))
+                      && !concern.contains(QLatin1String("points at the forward detector")),
+                  "rf: full drive alone establishes neither adequate stimulus nor a detector fault");
+            check(concern.contains(QLatin1String("raises neither")),
+                  "rf: full drive advice never raises stimulus or drive automatically");
+        }
+    }
+    {
+        const auto [result, concern] = RadioCertificationTestAccess::classifySwrAtKey(
+            false, 320, 0, 900, 40, -20.0);
+        check(result == QLatin1String("gate-withheld")
+                  && concern.contains(QLatin1String("key-on and speech-pause gate")),
+              "rf: a peak above the gate with no clears names the key-on gate");
+    }
+    {
+        // Cleared and still silent: the one case the gate cannot excuse.
+        const auto [result, concern] = RadioCertificationTestAccess::classifySwrAtKey(
+            false, 320, 7, 900, 40, -20.0);
+        check(result == QLatin1String("no-reading")
+                  && concern.contains(QLatin1String("no SWR reading"))
+                  && concern.contains(QLatin1String("SWR was due")),
+              "rf: a silent SWR after the gate cleared stays a finding");
+    }
+    {
+        const auto [result, concern] = RadioCertificationTestAccess::classifySwrAtKey(
+            false, -1, -1, -1, 40, -20.0);
+        check(result == QLatin1String("no-reading")
+                  && concern.contains(QLatin1String("no SWR reading")),
+              "rf: a backend declaring no gate reads as before");
+        const auto [ok, none] = RadioCertificationTestAccess::classifySwrAtKey(
+            true, 320, 0, 113, 40, -20.0);
+        check(ok == QLatin1String("reading") && none.isEmpty(),
+              "rf: an SWR reading is a reading, whatever the gate says");
+    }
+    {
+        // The plumbing: the live gate read the rf stage takes inside its key.
+        RadioModel radio;
+        std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(new GatedBackend()));
+        auto* owned_ = static_cast<GatedBackend*>(owned.get());
+        owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateCounts), 320);
+        owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed), 0);
+        owned_->m_health.values.insert(
+            QLatin1StringView(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw), 113);
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        RadioCertification cert(&radio, nullptr);
+        const auto [gate, clears, peak] = RadioCertificationTestAccess::readSwrGate(cert);
+        check(gate == 320 && clears == 0 && peak == 113,
+              "rf: readSwrGate reads all three keys off the health snapshot");
+    }
+
+    // ---- the rf stimulus is the bridge option, and its default is unchanged ----
+    {
+        RadioModel radio;
+        std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(new GatedBackend()));
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        AudioEngine audio;   // constructed, never started: no device, no socket
+        check(audio.clientTxTestTone() != nullptr, "the engine owns a test tone");
+
+        RadioCertification::Options defaults;
+        check(defaults.rfStimulusDbfs == -20.0, "the default rf stimulus stays -20 dBFS");
+
+        // No TxController: the key is refused before admission, so nothing can
+        // transmit, and the stage still sets the tone it would have keyed with.
+        RadioCertification cert(&radio, &audio);
+        RadioCertification::Options o;
+        o.settleMs = 0;
+        o.rfStimulusDbfs = -6.0;
+        RadioCertificationTestAccess::stageRf(cert, o);
+        check(std::fabs(audio.clientTxTestTone()->levelDb() - (-6.0f)) < 0.01f,
+              "rf: the stage keys with the requested tone level");
+        check(!audio.clientTxTestTone()->isEnabled(), "rf: and switches the tone off after");
+        QJsonObject rf;
+        for (const QJsonValue& v : RadioCertificationTestAccess::stages(cert)) {
+            if (v.toObject().value(QStringLiteral("id")).toString() == QLatin1String("rf"))
+                rf = v.toObject();
+        }
+        const QJsonObject m = rf.value(QStringLiteral("measured")).toObject();
+        check(m.value(QStringLiteral("stimulusToneDbfs")).toDouble() == -6.0,
+              "rf: the report says which tone it keyed with");
+        check(m.value(QStringLiteral("drivePercentWhileKeyed")).isNull(),
+              "rf: a refused key reports no keyed drive");
+    }
+
+    // ---- the report states the power ceiling the run applied ----
+    //
+    // Bridge runs set Options::maxRfPowerPercent and the clamp reads it, but
+    // the report read a second field nothing set, so every hardware run said
+    // txPowerCeilingPercent -1 while the ceiling was live and clamping.
+    {
+        RadioModel radio;
+        std::unique_ptr<IRadioBackend> owned(static_cast<IRadioBackend*>(new GatedBackend()));
+        radio.setBackendForTest(std::move(owned), QStringLiteral("hl2"));
+        radio.transmitModel().setRfPower(80);
+        check(radio.transmitModel().rfPower() == 80, "operator RF power is 80");
+
+        RadioCertification cert(&radio, nullptr);
+        RadioCertification::Options o;
+        o.phase = RadioCertification::Phase::Tune;   // keys nothing
+        o.maxRfPowerPercent = 40;
+        const QJsonObject report = cert.run(o);
+        const QJsonObject r = report.value(QStringLiteral("radio")).toObject();
+        check(r.value(QStringLiteral("txPowerCeilingPercent")).toInt(-99) == 40,
+              "the report carries the ceiling the run applied");
+        check(r.value(QStringLiteral("rfPowerClampedFromPercent")).toInt(-99) == 80,
+              "and the operator setting it clamped");
+        check(r.value(QStringLiteral("rfStimulusDbfs")).toDouble() == -20.0,
+              "and the rf stimulus level");
+        check(radio.transmitModel().rfPower() == 80,
+              "the operator's RF power is restored after the run");
+
+        RadioCertification cert2(&radio, nullptr);
+        radio.transmitModel().setRfPower(25);
+        const QJsonObject r2 = cert2.run(o).value(QStringLiteral("radio")).toObject();
+        check(r2.value(QStringLiteral("txPowerCeilingPercent")).toInt(-99) == 40
+                  && r2.value(QStringLiteral("rfPowerClampedFromPercent")).isNull(),
+              "below the ceiling: the ceiling is reported and nothing was clamped");
+
+        RadioCertification cert3(&radio, nullptr);
+        RadioCertification::Options none;
+        none.phase = RadioCertification::Phase::Tune;
+        const QJsonObject r3 = cert3.run(none).value(QStringLiteral("radio")).toObject();
+        check(r3.value(QStringLiteral("txPowerCeilingPercent")).toInt(-99) == -1,
+              "no ceiling reads -1");
+    }
 
     std::printf("\n%d checks failed\n", failures);
     return failures == 0 ? 0 : 1;

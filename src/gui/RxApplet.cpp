@@ -3216,6 +3216,47 @@ void RxApplet::applyFilterPreset(int widthHz)
     }
 }
 
+bool RxApplet::selectRxAntenna(const QString& token)
+{
+    if (!m_slice || token.isEmpty() || !rxAntennaOptions().contains(token)) return false;
+    const QString profileId = m_kiwiSdrManager
+        ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
+        : QString();
+    if (!profileId.isEmpty()) {
+        emit kiwiRxAntennaSelected(m_slice->sliceId(), profileId);
+    } else {
+        emit flexRxAntennaSelected(m_slice->sliceId());
+        if (m_slice->rxAntenna() != token) { m_slice->setRxAntenna(token); }
+    }
+    return true;
+}
+
+bool RxApplet::selectTxAntenna(const QString& token)
+{
+    if (!m_slice || token.isEmpty() || !txAntennaOptions().contains(token)) return false;
+    if (m_slice->txAntenna() != token) { m_slice->setTxAntenna(token); }
+    return true;
+}
+
+bool RxApplet::applyNearestFilterWidth(int widthHz)
+{
+    if (!m_slice || widthHz <= 0) return false;
+    int width = widthHz;
+    if (!m_radioFilterWidths.isEmpty()) {
+        width = m_radioFilterWidths.first();
+        for (int w : m_radioFilterWidths) {
+            if (std::abs(w - widthHz) < std::abs(width - widthHz))
+                width = w;
+        }
+    }
+    const ModeFilters::Edges edges = ModeFilters::edgesForWidth(
+        m_slice->mode(), width,
+        {m_slice->diguOffset(), m_slice->diglOffset(), m_slice->rttyShift()});
+    if (!acceptsFilterEdges(edges.lo, edges.hi)) return false;
+    m_slice->setFilterWidth(edges.lo, edges.hi);
+    return true;
+}
+
 void RxApplet::stepFilterWidth(int steps)
 {
     // ONE list, searched, clamped and applied — see FilterStepMath.h for why

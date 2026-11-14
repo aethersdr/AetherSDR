@@ -395,7 +395,9 @@ int main(int argc, char** argv)
             });
         check(shown == -12 && writes == 0 && backend.attenuationDbForTest() == 12,
               "ANAN startup preserves per-radio attenuation despite stale family display gain");
-        check(backend.currentOperatingState().extension == state.extension,
+        // The rfGain part only: the extension also carries RX1's RIT and NR now.
+        check(backend.currentOperatingState().extension.value(QStringLiteral("rfGain"))
+                  == state.extension.value(QStringLiteral("rfGain")),
               "legacy display restore leaves both ANAN ADC values intact");
     }
     // THE OPERATOR'S "OFF" MUST REACH THE PROFILE (#5828).

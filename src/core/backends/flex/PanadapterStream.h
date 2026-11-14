@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/PcmFrame.h"
+#include "core/ReceiveData.h"
 #include "core/SpectrumDecodeScale.h"
 #include <map>
 
@@ -29,18 +30,21 @@ class QNetworkDatagram;
 namespace AetherSDR {
 
 class RadioConnection;
+class FlexReceiveData;
 class OpusCodec;
 
 // Receives all VITA-49 (ExtDataWithStream, type 3) datagrams on the single
 // "client udpport" and routes them by PacketClassCode (class ID bytes 14-15):
 //   0x03E3 float32 stereo / 0x0123 int16 mono / 0x8005 Opus → pcmFrameReady()
-//   0x8003 FFT → spectrumReady()   0x8004 waterfall tiles → waterfallRowReady()
-//   0x8002 meters → meterDataReady()   DAX audio/IQ by stream id; others dropped.
+//   0x8003 FFT, 0x8004 waterfall tiles and 0x8002 meters → the backend's
+//   FlexReceiveData (spectrumReady()/waterfallRowReady()/meterDataReady() only
+//   for a stream built without one); DAX audio/IQ by stream id; others dropped.
 // start(conn) binds a local UDP port; RadioModel registers it with
 // "client udpport <port>".
 
 class PanadapterStream : public QObject {
     Q_OBJECT
+    friend class FlexReceiveDataTestAccess;
     friend class TxOperationIntegrationTestAccess;
     friend class FlexCwControlsTestAccess;
     friend class VitaDscpStreamTestAccess;
@@ -53,7 +57,8 @@ class PanadapterStream : public QObject {
 public:
     static constexpr int VITA49_HEADER_BYTES = 28;
 
-    explicit PanadapterStream(QObject* parent = nullptr);
+    explicit PanadapterStream(QObject* parent = nullptr,
+                              std::shared_ptr<FlexReceiveData> receiveData = {});
 
     // Initialize socket and timer connections on the network thread.
     // Call after moveToThread() via QThread::started signal. (#561)
@@ -327,10 +332,9 @@ private:
         bool isComplete() const { return coverage.isComplete(); }
     };
 
-    // m_frameMutex guards m_frames and m_wfFrames: assembled on the network
-    // worker thread, removed from the main thread on pan/session teardown.
-    // Never nested with m_streamMutex, and released before any emit.
-    mutable QMutex m_frameMutex;
+    // m_streamMutex guards assembly together with stream registration and
+    // leases, so teardown cannot leave an old partial frame in a new stream.
+    // Complete frames are copied out before conversion and delivery.
     QMap<quint32, WaterfallFrame> m_wfFrames;  // per-stream waterfall frame assembly
 
     // Per-stream packet sequence tracking (4-bit count in VITA-49 word0 bits 19:16)
@@ -379,6 +383,8 @@ private:
 
     // Mutex guards stream ID sets, dBm ranges, yPixels, and DAX/IQ maps.
     // Written from main thread (RadioModel), read from network worker thread (#502).
+    std::shared_ptr<FlexReceiveData> m_receiveData;
+    void publishReceiveTelemetry();
     mutable QMutex  m_streamMutex;
     QSet<quint32>   m_knownPanStreams;     // registered pan stream IDs
     QSet<quint32>   m_knownWfStreams;     // registered wf stream IDs
@@ -410,7 +416,7 @@ private:
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling
     RadioConnection* m_conn{nullptr};
-    QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly; m_frameMutex
+    QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly; m_streamMutex
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
     mutable QMutex m_statsMutex;
     QElapsedTimer m_seqLossClock;  // time base for StreamStats::lossLog; read only on new streams and errors

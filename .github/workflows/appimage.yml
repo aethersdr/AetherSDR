@@ -18,6 +18,7 @@ jobs:
             arch: x86_64
             qt_host: linux
             qt_arch: linux_gcc_64
+            engine_target: ''   # no headless engine: nothing runs it on x86_64 yet
             require_gpu: 'ON'   # x86_64 ships the whisper Vulkan GPU backend
             gpu_spectrum: 'ON'  # Qt 6.8+ already enabled it here; 6.12 keeps it
             glslc_source: lunarg
@@ -32,6 +33,10 @@ jobs:
             arch: aarch64
             qt_host: linux_arm64
             qt_arch: linux_gcc_arm64
+            # The headless engine ships here: the ANAN G2 runs it on the radio, as
+            # `AetherSDR --aetherd`. 66 MB stripped (it links the engine core
+            # statically), so x86_64 leaves it out until something there needs it.
+            engine_target: aetherd
             # require_gpu is the RELEASE GUARD, not the enable switch: it makes a
             # missing GPU toolchain fatal at configure time. ENABLE_ASR_VULKAN
             # defaults ON on non-Apple, so aarch64 has been building ggml-vulkan
@@ -305,10 +310,12 @@ jobs:
 
       - name: Build
         # Only the app ships (+ its aether-dv-waveform helper dependency, which
-        # also stages AetherDV.cfg and the ASR/DFNR runtime payloads via POST_BUILD).
+        # also stages AetherDV.cfg and the ASR/DFNR runtime payloads via POST_BUILD),
+        # and, where matrix.engine_target names it, the headless engine aetherd,
+        # which `AetherSDR --aetherd` starts.
         # The default `all` target additionally builds ~200 unit-test executables
         # the AppImage never bundles and never runs — pure wasted build time.
-        run: cmake --build build --target AetherSDR aether-dv-waveform -j$(nproc)
+        run: cmake --build build --target AetherSDR aether-dv-waveform ${{ matrix.engine_target }} -j$(nproc)
 
       # Before Install: linuxdeploy strips everything it bundles. The build ID
       # each debug file is keyed on survives install, patchelf and that strip;
@@ -317,7 +324,7 @@ jobs:
         # Symbols are for us, not users: a failure here must not cost the release
         # its installer. A missing archive surfaces as /tag-release's WARN.
         continue-on-error: true
-        run: bash scripts/build/split-debug-symbols.sh symbols build/AetherSDR build/aether-dv-waveform
+        run: bash scripts/build/split-debug-symbols.sh symbols build/AetherSDR build/aether-dv-waveform ${{ matrix.engine_target && format('build/{0}', matrix.engine_target) || '' }}
 
       - name: Install to AppDir
         run: |
@@ -427,14 +434,45 @@ jobs:
           # Official RTL builds ship the pinned libusb despite linuxdeploy's
           # excludelist. Stage its matching SONAME before the dependency walk.
           python3 tools/stage_rtl_appimage.py third_party/rtl-deps AppDir
+          # libsecret too. qtkeychain dlopen()s it at runtime, so no dependency
+          # walk finds it, and a host libsecret pulls the HOST libgobject against
+          # the image's older libglib: "undefined symbol: g_string_copy", and the
+          # keychain has no backend on any distro newer than this runner (seen on
+          # an Arch ARM host). Deployed by linuxdeploy so it gets an $ORIGIN
+          # RUNPATH and resolves the image's own GLib set.
+          LIBSECRET=$(ls /usr/lib/${{ matrix.arch }}-linux-gnu/libsecret-1.so.0)
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
+            --library "$LIBSECRET" \
             --plugin qt \
             --desktop-file AppDir/usr/share/applications/AetherSDR.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png
 
       - name: Validate RTL AppDir runtime closure
         run: python3 tools/check_rtl_package.py AppDir --platform linux
+
+      # install(TARGETS aetherd … OPTIONAL) skips a missing engine silently, so
+      # without this a dropped engine_target would ship an image whose
+      # `--aetherd` exits 127, from a green run. Running it through the app's own
+      # hand-off also catches a library linuxdeploy did not bundle for it.
+      # The keychain's backend: qtkeychain dlopen()s libsecret, so nothing else
+      # notices it missing, and a host copy breaks against the bundled GLib.
+      - name: Assert libsecret was bundled with an $ORIGIN runpath
+        run: |
+          lib=AppDir/usr/lib/libsecret-1.so.0
+          test -e "$lib" || { echo "::error::libsecret-1.so.0 is not in AppDir/usr/lib"; exit 1; }
+          readelf -d "$lib" | grep -E 'R(UN)?PATH' | grep -q 'ORIGIN' \
+            || { echo "::error::bundled libsecret has no \$ORIGIN runpath"; readelf -d "$lib" | grep -E 'R(UN)?PATH'; exit 1; }
+
+      - name: Assert the headless engine was bundled and runs
+        if: matrix.engine_target != ''
+        env:
+          ENGINE: ${{ matrix.engine_target }}
+        run: |
+          test -x "AppDir/usr/bin/$ENGINE" \
+            || { echo "::error::$ENGINE is not in AppDir/usr/bin"; exit 1; }
+          env -u LD_LIBRARY_PATH AppDir/usr/bin/AetherSDR --aetherd --version \
+            || { echo "::error::AetherSDR --aetherd --version failed from the AppDir"; exit 1; }
 
       # Nothing else in the build would notice these plugins going missing: Qt
       # dlopen()s them at runtime rather than linking them, so no dependency walk

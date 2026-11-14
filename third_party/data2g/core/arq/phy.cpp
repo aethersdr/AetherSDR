@@ -11,6 +11,7 @@
 #include "util/cancel.hpp"
 #include "util/pool.hpp"
 #include "cpm/cpm.hpp"
+#include "arq/nod.hpp"
 #include "equalizer/equalizer.hpp"
 
 namespace data2g::arq {
@@ -44,10 +45,22 @@ int ctl_index(const MaskId& m) {
     return i < MAX_CTL ? i : 0;
 }
 
-// 30 (1 - 2 bit): a decoded codeword's bits as large LLRs.
-std::vector<double> known(std::span<const std::uint8_t> bits) {
-    std::vector<double> out(bits.size());
-    for (std::size_t i = 0; i < bits.size(); ++i) out[i] = 30.0 * (1 - 2.0 * bits[i]);
+// phy._sure: a decoded codeword's coded bits (mapping order, as sent) as DD's
+// certain posterior: 30 (1 - 2 bit), or GF(M) log-probabilities 0 / -30 per symbol.
+std::vector<double> known(const codes::Spec& s, std::span<const std::uint8_t> bits) {
+    if (!s.gf) {
+        std::vector<double> out(bits.size());
+        for (std::size_t i = 0; i < bits.size(); ++i) out[i] = 30.0 * (1 - 2.0 * bits[i]);
+        return out;
+    }
+    const int p = s.bits_per_cu, q = 1 << p;
+    const std::size_t n = bits.size() / p;
+    std::vector<double> out(n * q, -30.0);
+    for (std::size_t i = 0; i < n; ++i) {
+        int v = 0;
+        for (int b = 0; b < p; ++b) v = v << 1 | (bits[i * p + b] & 1);
+        out[i * q + v] = 0.0;
+    }
     return out;
 }
 
@@ -103,6 +116,14 @@ bool dd_default() {
     return on;
 }
 
+bool cpm_dd_default() {
+    static const bool on = [] {
+        const char* v = std::getenv("DATA2G_CPM_DD");
+        return !v || std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
 bool pin_est_default() {
     static const bool on = [] {
         const char* v = std::getenv("DATA2G_PIN_EST");
@@ -124,6 +145,10 @@ std::uint32_t mask_value(const MaskId& m) {
 }
 
 std::vector<double> tx_audio(const TxBurst& burst) {
+    if (burst.nod) {  // a nod (docs/arq.md §3b): its keyed sequence
+        const auto& [meaning, key] = *burst.nod;
+        return nod::waveform(nod::family(key).at(static_cast<std::size_t>(meaning)), burst.cap);
+    }
     const Mode& md = mode_at(burst.submode);
     const std::size_t n = burst.slots.size();
     if (md.is_cpm()) {
@@ -191,6 +216,42 @@ Measured measure(const Heard& r) {
 
 // --- ModemRx -------------------------------------------------------------------
 
+std::optional<std::optional<Bytes>> ModemRx::reused(int slot, std::uint32_t m) const {
+    if (!reader_) return std::nullopt;
+    const auto it = reads_.find(slot);
+    if (it == reads_.end()) return std::nullopt;
+    return it->second.first == m ? std::optional<Bytes>(it->second.second) : std::nullopt;
+}
+
+std::optional<Bytes> ModemRx::note(int slot, std::uint32_t m, std::optional<Bytes> p) {
+    if (p) reads_.try_emplace(slot, m, *p);
+    return p;
+}
+
+void ModemRx::for_reader() {
+    store_ = nullptr;
+    reader_ = true;
+}
+
+std::optional<Bytes> ModemRx::decode_plain(int slot, const MaskId& mask) {
+    if (auto r = reused(slot, mask_value(mask))) return *r;
+    ++reads_run_;
+    return note(slot, mask_value(mask), plain_read(slot, mask));
+}
+
+std::optional<Bytes> ModemRx::decode_stored(int slot, const MaskId& mask, int rv, std::optional<SoftEntry>& stored) {
+    if (auto r = reused(slot, mask_value(mask))) return *r;
+    ++reads_run_;
+    return note(slot, mask_value(mask), stored_read(slot, mask, rv, stored));
+}
+
+std::optional<Bytes> ModemRx::decode_known(int slot, const MaskId& mask, ByteView tmpl, ByteView tmask, bool pair) {
+    const int at = pair ? slot + 1 : slot;  // a pair's codeword, where a blind pair read (RV 1's slot) finds it
+    if (auto r = reused(at, mask_value(mask))) return *r;
+    ++reads_run_;
+    return note(at, mask_value(mask), known_read(slot, mask, tmpl, tmask, pair));
+}
+
 ModemRx::ModemRx(Heard r, SoftStore* store, std::optional<double> dd_budget, std::shared_ptr<const SlotSoft> soft,
                  bool dd, Clock clock)
     : r_(std::move(r)), store_(store), soft_(soft ? std::move(soft) : soft_bits(r_)), dd_(dd), clock_(std::move(clock)) {
@@ -206,18 +267,21 @@ ModemRx::ModemRx(Heard r, SoftStore* store, std::optional<double> dd_budget, std
 const codes::Spec& ModemRx::spec(int slot) const { return slot < n_ctl_slots_ ? *ctl_spec_ : *data_spec_; }
 
 bool ModemRx::dd(const codes::Spec& s) const {
-    return dd_ && r_.ofdm && r_.ofdm->hp.rows && !s.polar && !n_ctl_slots_;
+    if (n_ctl_slots_)  // CPM: data slots (GF(M)), on the burst's complex bins
+        return dd_ && cpm_dd_default() && r_.cpm && r_.cpm->Z.rows && s.gf;
+    return dd_ && r_.ofdm && r_.ofdm->hp.rows && !s.polar;
 }
 
 bool ModemRx::late() const { return dd_until_ && clock_() >= *dd_until_; }
 
 // The slot's soft bits on the estimate in use. A refined estimate's are
-// made per slot as asked (modem::slot_soft).
+// made per slot as asked (modem::slot_soft; CPM: its coherent metric, cpm::dd_metric).
 const std::vector<double>& ModemRx::slot_soft(int slot) {
-    if (!cur_.est) return (*soft_)[static_cast<std::size_t>(slot)];
+    if (!cur_.refined()) return (*soft_)[static_cast<std::size_t>(slot)];
     auto& cache = *cur_.soft;
     auto it = cache.find(slot);
     if (it != cache.end()) return it->second;
+    if (cur_.posts) return cache[slot] = cpm::dd_soft(*r_.cpm, cpm::dd_metric(*r_.cpm, *cur_.posts, slot), slot);
     return cache[slot] = modem::slot_soft(*r_.ofdm, *cur_.est, slot);
 }
 
@@ -237,7 +301,7 @@ void ModemRx::forget(const SoftKey& key) {
     if (store_) store_->erase(key);
 }
 
-std::optional<Bytes> ModemRx::decode_plain(int slot, const MaskId& mask) {
+std::optional<Bytes> ModemRx::plain_read(int slot, const MaskId& mask) {
     if (slot >= n_cw_) return std::nullopt;
     // CPM: its header says which slots are control (their own short
     // codeword); a blind ARQ_DUP pair probe on a data slot is a miss
@@ -340,7 +404,7 @@ std::optional<Bytes> ModemRx::decode_pair(int slot, const MaskId& mask) {
     return std::nullopt;
 }
 
-std::optional<Bytes> ModemRx::decode_known(int slot, const MaskId& mask, ByteView tmpl, ByteView tmask, bool pair) {
+std::optional<Bytes> ModemRx::known_read(int slot, const MaskId& mask, ByteView tmpl, ByteView tmask, bool pair) {
     if (slot >= n_cw_ || (pair && !pair_ok(slot))) return std::nullopt;
     const auto& s = spec(slot);
     // polar only (phy.ModemRx.decode_known)
@@ -379,7 +443,10 @@ std::optional<Bytes> ModemRx::decode_repeat(int slot, const MaskId& mask, const 
         if (it != store_->end() && it->second.submode != submode_) store_->erase(it);
     }
     auto got = decode(slot, mask, 0, &key);
-    if (!got || !own_score(slot, mask, *got)) return std::nullopt;
+    if (got && !own_score(slot, mask, *got)) {
+        reads_.erase(slot);  // not this burst's after all
+        return std::nullopt;
+    }
     return got;
 }
 
@@ -440,12 +507,62 @@ std::optional<Bytes> ModemRx::check_pinned(int slot, const codes::Spec& s, std::
 // The slot decoded alone, mask left open, with DD while it fails to
 // converge. A converged codeword is what was on air, whoever it was for: DD
 // learns from it.
+cpm::Pass cpm_pass(const cpm::Received& r, const codes::Spec& s, std::span<const double> soft,
+                   const cpm::Posts& earlier, int slot, const std::function<bool()>& late) {
+    cpm::Posts posts;
+    for (const auto& [k, v] : earlier)
+        if (k < slot) posts.emplace(k, v);
+    std::vector<double> cur(soft.begin(), soft.end());
+    codes::Posterior p;
+    for (int i = 0; i <= CPM_DD_ITERS; ++i) {
+        p = codes::decode_posterior(s, cur);
+        if (p.ok || i == CPM_DD_ITERS || (late && late())) break;
+        posts[slot] = std::move(p.post);
+        cur = cpm::dd_soft(r, cpm::dd_metric(r, posts, slot), slot);
+    }
+    cpm::Pass out{codes::descramble(s, p.bits, slot), {static_cast<std::uint8_t>(p.ok)}, {}};
+    if (p.ok) {
+        Mat<std::uint8_t> b(1, p.bits.size());
+        b.data = p.bits;
+        out.post = known(s, codes::encode_info(s, b, 0).data);
+    }
+    return out;
+}
+
+cpm::PassFn cpm_pass_fn() {
+    return [](const cpm::Received& r, int slot, const cpm::Posts& earlier) {
+        return cpm_pass(r, codes::spec(*r.spec), r.soft[static_cast<std::size_t>(slot)], earlier, slot);
+    };
+}
+
+// ModemRx._cpm_passes: every data slot's pass through `upto`, in slot order,
+// each seeing only earlier passes' posteriors: the receiver's (made while the
+// burst arrived, r.passes) where it has them.
+void ModemRx::cpm_passes(int upto) {
+    const auto& s = *data_spec_;
+    for (int k = n_ctl_slots_; k <= upto; ++k) {
+        if (passed_.count(k)) continue;
+        const auto made = r_.cpm->passes.find(k);
+        cpm::Pass p = made != r_.cpm->passes.end()
+                          ? made->second
+                          : cpm_pass(*r_.cpm, s, (*soft_)[static_cast<std::size_t>(k)], pass_post_, k,
+                                     [this] { return late(); });
+        passed_.insert(k);
+        if (!p.post.empty()) {
+            pass_post_[k] = p.post;
+            post_.emplace(k, std::move(p.post));
+        }
+        raw_.emplace(k, Raw{std::move(p.cands), std::move(p.usable)});
+    }
+}
+
 const ModemRx::Raw& ModemRx::decoded(int slot, const codes::Spec& s) {
+    if (!raw_.count(slot) && n_ctl_slots_ && dd(s)) cpm_passes(slot);
     auto it = raw_.find(slot);
     if (it != raw_.end()) return it->second;
     const DdState saved = cur_;
     Raw out;
-    for (int i = 0; i <= DD_ITERS; ++i) {
+    for (int i = 0; i <= iters(); ++i) {
         if (!dd(s)) {
             const int idx[1] = {slot};
             auto d = codes::decode_raw(s, row_f(slot_soft(slot)), idx);
@@ -457,17 +574,17 @@ const ModemRx::Raw& ModemRx::decoded(int slot, const codes::Spec& s) {
         if (p.ok) {
             Mat<std::uint8_t> b(1, p.bits.size());
             b.data = p.bits;
-            post_[slot] = known(codes::encode_info(s, b, 0).data);
+            post_[slot] = known(s, codes::encode_info(s, b, 0).data);
             break;
         }
-        if (i == DD_ITERS || late()) break;
+        if (i == iters() || late()) break;
         if (!refine(slot, s, std::move(p.post))) break;
     }
     if (std::none_of(out.usable.begin(), out.usable.end(), [](auto u) { return u != 0; })) undo(slot, saved);
     return raw_[slot] = std::move(out);
 }
 
-std::optional<Bytes> ModemRx::decode_stored(int slot, const MaskId& mask, int rv, std::optional<SoftEntry>& stored) {
+std::optional<Bytes> ModemRx::stored_read(int slot, const MaskId& mask, int rv, std::optional<SoftEntry>& stored) {
     if (slot >= n_cw_) return std::nullopt;
     if (n_ctl_slots_ && (mask.seq >= SEQ_MOD) != (slot < n_ctl_slots_)) return std::nullopt;
     const std::uint32_t m = mask_value(mask);
@@ -483,10 +600,10 @@ std::optional<Bytes> ModemRx::decode_stored(int slot, const MaskId& mask, int rv
     const DdState saved = cur_;
     const std::vector<double>* kept = stored ? &stored->buf : nullptr;
     std::vector<double> buf;
-    for (int i = 0; i <= DD_ITERS; ++i) {
+    for (int i = 0; i <= iters(); ++i) {
         DecodePass ps;
         const auto pre = prepared_.find(slot);
-        if (i == 0 && pre != prepared_.end() && !cur_.est && pre->second.rv == rv && pre->second.mask == m &&
+        if (i == 0 && pre != prepared_.end() && !cur_.refined() && pre->second.rv == rv && pre->second.mask == m &&
             pre->second.had_stored == stored.has_value()) {
             ps = std::move(pre->second.pass);  // made ahead, on this same estimate and these same bits
             prepared_.erase(pre);
@@ -504,13 +621,12 @@ std::optional<Bytes> ModemRx::decode_stored(int slot, const MaskId& mask, int rv
             ok_.insert(slot);
             return std::move(ps.data);
         }
-        if (i == DD_ITERS || late()) break;
-        const auto fl = codes::flip(s, slot, rv);
-        for (std::size_t j = 0; j < ps.post.size(); ++j) ps.post[j] *= fl[j];  // back to the bits as sent
-        if (!refine(slot, s, std::move(ps.post))) break;
+        if (i == iters() || late()) break;
+        // back to the codeword as sent (codes.plain: LDPC's signs flipped, GF(M)'s values permuted)
+        if (!refine(slot, s, codes::plain(s, ps.post, slot, rv))) break;
     }
     prepared_.erase(slot);
-    if (cur_.est != saved.est) {
+    if (cur_.est != saved.est || cur_.posts != saved.posts) {
         undo(slot, saved);
         buf = combined_buffer(s, slot, rv, slot_soft(slot), kept);
     }
@@ -538,7 +654,7 @@ std::optional<Bytes> ModemRx::decode_stored(int slot, const MaskId& mask, int rv
 // and with every key distinct (two slots sharing one combine into the same stored buffer, in order).
 void ModemRx::prepare(std::span<const DecodeRequest> reqs) {
     prepared_.clear();
-    if (reqs.size() < 2 || cur_.est || pool::threads() < 2) return;
+    if (reqs.size() < 2 || cur_.refined() || pool::threads() < 2) return;
     std::set<SoftKey> keys;
     std::vector<const DecodeRequest*> todo;
     for (const auto& q : reqs) {
@@ -566,7 +682,7 @@ void ModemRx::prepare(std::span<const DecodeRequest> reqs) {
 }
 
 void ModemRx::learn(int slot, const codes::Spec& s, const Bytes& payload, int rv, std::uint32_t m) {
-    if (dd(s)) post_[slot] = known(codes::encode(s, payload, rv, m, slot));
+    if (dd(s)) post_[slot] = known(s, codes::encode(s, payload, rv, m, slot));
 }
 
 // DD after a failed decode of `slot`: its posterior joins the other slots'
@@ -595,8 +711,14 @@ void ModemRx::remake_estimate(const codes::Spec& s) {
         // split: one decode per slot on the pool, each stopping when it converges. Python decodes them as one
         // batch, which stops together: a burst's failing slots kept every converged one iterating to the limit.
         blind_ = true;
+        if (n_ctl_slots_) {  // CPM: every slot's pass (a streaming receiver has made them)
+            cpm_passes(n_cw_ - 1);
+            auto cache = std::make_shared<std::map<int, std::vector<double>>>();
+            cur_ = DdState{nullptr, cache, std::make_shared<const cpm::Posts>(post_)};
+            return;
+        }
         std::vector<int> todo;
-        for (int i = 0; i < n_cw_; ++i)
+        for (int i = n_ctl_slots_; i < n_cw_; ++i)
             if (!post_.count(i)) todo.push_back(i);
         std::vector<std::vector<double>> got(todo.size());
         pool::parallel_for(todo.size(), [&](std::size_t t) {
@@ -604,12 +726,15 @@ void ModemRx::remake_estimate(const codes::Spec& s) {
             Mat<float> llr(1, v.size());
             std::copy(v.begin(), v.end(), llr[0]);
             const auto info = codes::decode_llrs(s, llr);
-            if (info.ok[0]) got[t] = known(codes::encode_info(s, info.bits, 0).data);
+            if (info.ok[0]) got[t] = known(s, codes::encode_info(s, info.bits, 0).data);
         });
         for (std::size_t t = 0; t < todo.size(); ++t)
             if (!got[t].empty()) post_[todo[t]] = std::move(got[t]);
     }
-    cur_ = {dd_estimate(), std::make_shared<std::map<int, std::vector<double>>>()};
+    auto cache = std::make_shared<std::map<int, std::vector<double>>>();
+    // CPM: the estimate is the posteriors themselves; each slot's metric is local (cpm::dd_metric), made as asked
+    cur_ = n_ctl_slots_ ? DdState{nullptr, cache, std::make_shared<const cpm::Posts>(post_)}
+                        : DdState{dd_estimate(), cache, nullptr};
 }
 
 // A failed decode's posterior can be confidently wrong, so neither it nor

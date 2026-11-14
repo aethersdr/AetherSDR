@@ -18,6 +18,9 @@
 #include "core/backends/icom/IcomCredentials.h"
 #include "core/backends/flex/SmartLinkClient.h"
 #include "gui/ConnectionPanel.h"
+#include "models/ConnectionWorkspace.h"
+#include <QJsonArray>
+#include <QPushButton>
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -39,11 +42,13 @@ struct ConnectionPanelStartupTestAccess {
         panel.handleHl2ProbeResult(ConnectionPanel::Hl2ProbeResult::NoAnswer,
                                    QStringLiteral("192.0.2.10"));
     }
-    static void dispatch(ConnectionPanel& panel, bool routedOnly) {
+    static bool atLocations(const ConnectionPanel& panel) { return panel.m_modeStack->currentIndex() == ConnectionPanel::WorkspaceMode; }
+    static quint64 generation(const ConnectionPanel& panel) { return panel.m_connectionGeneration; }
+    static void dispatch(ConnectionPanel& panel, bool routedOnly, std::optional<quint64> generation = std::nullopt) {
         RadioInfo info;
         info.family = QStringLiteral("hl2");
         info.serial = QStringLiteral("injected-probe-result");
-        panel.finishManualProbe(info, routedOnly);
+        panel.finishManualProbe(info, routedOnly, generation);
     }
 };
 
@@ -202,6 +207,49 @@ void checkOperatorRouteEditsEndStartupOwnership()
     report("operator family pick clears startup ownership", failures.isEmpty());
 }
 
+void checkExplicitChoiceRejectsLateStartupCompletion()
+{
+    ConnectionPanel panel;
+    QSignalSpy connects(&panel, &ConnectionPanel::connectRequested);
+    QSignalSpy routed(&panel, &ConnectionPanel::routedRadioFound);
+    QSignalSpy choices(&panel, &ConnectionPanel::explicitConnectionRequested);
+    ConnectionPanelStartupTestAccess::arm(panel);
+    const quint64 stale = ConnectionPanelStartupTestAccess::generation(panel);
+    auto* host = panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIp"));
+    emit host->textEdited(QStringLiteral("replacement-host"));
+    ConnectionPanelStartupTestAccess::dispatch(panel, true, stale);
+    ConnectionPanelStartupTestAccess::dispatch(panel, false, stale);
+    report("manual choice claims startup intent once", choices.count() == 1);
+    report("late startup completion cannot dispatch or save a radio", connects.isEmpty() && routed.isEmpty());
+    ConnectionPanelStartupTestAccess::dispatch(panel, false, ConnectionPanelStartupTestAccess::generation(panel));
+    report("the current explicit attempt can still dispatch", connects.count() == 1);
+}
+
+void checkStartupFailureRestoresSavedLocation()
+{
+    QJsonObject document = ConnectionWorkspace::load();
+    QJsonArray locations = document.value("stations").toArray();
+    QJsonObject home = locations.first().toObject();
+    home["connections"] = QJsonArray{
+        QJsonObject{{"id", "recovery-local"}, {"kind", "local"}, {"family", "hl2"}, {"serial", "saved-board"}, {"name", "Saved board"}},
+        QJsonObject{{"id", "recovery-ip"}, {"kind", "manual"}, {"family", "hl2"}, {"serial", "saved-board"}, {"name", "Saved board"}, {"host", "192.0.2.10"}}};
+    locations[0] = home;
+    document["stations"] = locations;
+    document["selectedStation"] = locations.last().toObject().value("id");
+    ConnectionWorkspace::save(document);
+    ConnectionPanel panel;
+    panel.findChild<QLineEdit*>("connectionManualIp")->setText("192.0.2.10");
+    ConnectionPanelStartupTestAccess::arm(panel);
+    ConnectionPanelStartupTestAccess::noAnswer(panel);
+    report("startup recovery restores the failed path's Location", panel.workspaceSnapshot().value("selectedStation") == home.value("id"));
+    report("startup recovery retains the saved connection name", panel.findChild<QLineEdit*>("connectionManualName")->text() == "Saved board");
+    auto* back = panel.findChild<QPushButton*>("connectionBackToStation");
+    report("startup recovery names Back to Locations", back && back->text().contains("Back to Locations"));
+    if (back) { back->click(); }
+    report("Back to Locations selects the failed path within its radio", ConnectionPanelStartupTestAccess::atLocations(panel)
+        && panel.findChild<QComboBox*>("connectionWorkspacePath")->currentData().toJsonObject().value("id").toString() == "recovery-ip");
+}
+
 // The interactive path already shows its reason in the dialog the operator is
 // looking at. Reporting upward there would pop the dialog they already have
 // open — and MainWindow would overwrite the specific message with a status line.
@@ -310,10 +358,12 @@ int main(int argc, char** argv)
     checkHl2NoAnswerStartupBailIsReportedUpward();
     checkProbeDispatchEndsStartupOwnership();
     checkOperatorRouteEditsEndStartupOwnership();
+    checkExplicitChoiceRejectsLateStartupCompletion();
     checkInteractiveBailStaysSilent();
     checkLatchDoesNotLeakIntoInteractiveProbe();
     checkIcomDispatchDoesNotLeakIntoLaterFailure();
     checkSignedInClientReplacesHint();
+    checkStartupFailureRestoresSavedLocation();
 
     std::printf("\n%s\n", g_failed == 0 ? "All checks passed." : "FAILURES PRESENT.");
     return g_failed == 0 ? 0 : 1;

@@ -33,6 +33,8 @@ The **Radio IP address** group starts with two rows:
 
 ## Using Connect by IP
 
+If a saved IP connection fails during startup, this page retains its saved name and connection context. Choose **‹ Back to Locations** to return to that radio’s Location and select another path or radio. Editing the destination or choosing another connection cancels the startup attempt; a late probe result cannot reconnect the old destination.
+
 Enter an optional **Connection name:** at the top of the form, then choose **Save connection**, beside **Connect by IP**, to save without connecting. **Edit connection**, under **Connection settings** on the selected radio, restores its host, radio family, source interface, Icom settings and low bandwidth preference for editing. A saved connection stays visible while offline. An address is a saved locator; it is not proof that the same physical radio is still there.
 
 

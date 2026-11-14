@@ -87,6 +87,7 @@
 #include "core/ShuttleRateIntegrator.h"
 #endif
 #include "core/ShortcutManager.h"
+#include "ControlActionRegistry.h"
 #include "core/SpectrogramBuffer.h"
 #include "core/SignalClassifier.h"
 #include "core/TgxlConnection.h"
@@ -970,6 +971,33 @@ private:
     void enableNr2WithWisdom();  // Wisdom-gated NR2 enable (shared by VFO + overlay)
     void updateNr2Availability(); // Disable NR2 when Opus is active (#1597)
     void registerShortcutActions();
+    // Actions declared once and published to keyboard + MIDI
+    // (ControlActionRegistry; MainWindow_ControlActions.cpp).
+    void registerControlActions();
+    void showShortcutNotice(const QString& text, int durationMs);
+    // Logged and announced once while its notice is up.
+    void refuseControlAction(const QString& name, bool transmitSetup = false);
+    QAction* findMenuAction(const QStringList& path) const;
+    void fireCwxMacro(int index, const TxController::Input& input);  // F1..F12 = 0..11
+    // F<id> on the voice keyer for an outside input, started under that
+    // input's request; false when the slot cannot play now.
+    bool fireVoiceKeyerSlot(int id, const TxController::Input& input);
+    // Band stack stepping and the band-plan strip toggle (registry actions).
+    bool hasBandStackEntries() const;
+    // Pan ids as the operator sees them: the workspace canvas order when it
+    // is on, else the main window's layout order, then any floating pans.
+    QStringList panIdsInScreenOrder() const;
+    void stepBandStack(int direction);
+    void toggleBandPlanStrip();
+    // CW decoder RX on/off, the Radio Setup "Decode: RX" switch.
+    bool cwDecodeRxEnabled() const;
+    void setCwDecodeRxEnabled(bool on);
+    // RTTY decoder on/off, the Radio Setup RTTY decode switch.
+    bool rttyDecodeEnabled() const;
+    void setRttyDecodeEnabled(bool on);
+    void nudgeActiveSliceSteps(int steps);
+    void cycleBandAction(int direction);
+    void cycleModeAction(int direction);
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void reapplyStartupGeometryAfterShow();
@@ -1546,6 +1574,8 @@ private:
     void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
     void setPanZoomMode(bool segmentZoom, bool enable);
     void zoomActivePanadapter(double factor);
+    // Absolute span centered on the active slice, clamped to the pan's limits.
+    bool setActivePanSpan(double bandwidthMhz);
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
@@ -2041,6 +2071,27 @@ private:
     bool m_paCurrentStatusPreferred{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
+    bool m_startupConnectSuperseded{false};
+    quint64 m_radioChoiceGeneration{0};
+    bool m_radioDisconnectPending{false};
+    quint64 m_radioTeardownToken{0};
+    std::function<void()> m_afterRadioDisconnect;
+    void connectSelectedRadio(const RadioInfo& info);
+    void armRadioSwitchTimeout();
+    QJsonObject m_activeRadioTarget;
+    QJsonObject m_pendingRadioTarget;
+    QJsonObject m_previousRadioTarget;
+    QJsonObject m_failedRadioTarget;
+    QString m_radioSwitchPhase;
+    QPointer<QDialog> m_radioSwitchPrompt;
+    QPointer<QDialog> m_radioSwitchFailurePrompt;
+    void beginExplicitRadioChoice();
+    void requestRadioTarget(const QJsonObject& target);
+    void performRadioSwitch(const QJsonObject& target);
+    void continueRadioSwitch(quint64 generation);
+    void awaitRadioTeardown();
+    void failRadioSwitch(const QString& reason);
+    void handleRadioTabAction(const QString& id, const QString& action);
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
     // Slice lifecycle refusals already shown this connect session, keyed
     // "<operation>\n<reason>": one notice per distinct refusal, so a control
@@ -2062,11 +2113,6 @@ private:
     // Last SmartLink radio list, cached because the title bar has to redraw the
     // tabs on LAN discovery events too and SmartLink only pushes on change.
     QList<WanRadioInfo> m_smartLinkRadios;
-    // The last session's radio, as its tab read while connected.  It keeps a
-    // visible tab after an unexpected drop, so the "Link lost" alarm always has
-    // somewhere to show; cleared when the operator disconnects on purpose or
-    // removes that tab.
-    RadioTabEntry m_lastSessionTab;
     static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
     QString m_terminalConnectionError; // preserved until the next explicit connect
@@ -2264,6 +2310,10 @@ private:
     bool m_waitingForFirstPanadapterFrame{false};
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
+    ControlActionRegistry m_controlActions;
+    int m_lastRecalledMemoryPosition{-1};  // memory_next/prev cursor
+    QString m_lastRefusedAction;           // refusal notice de-duplication
+    int m_lastBandPlanFontSize{6};         // band_plan_toggle restores this
     UpdateChecker* m_updateChecker{nullptr};
     // Install update in place (RFC #5304): outlives the Updates window, so
     // a staged release installs on quit (closeEvent).

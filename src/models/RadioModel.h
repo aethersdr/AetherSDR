@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/SetupStatusObservation.h"
+
 #include "core/TxGrantManager.h"
 #include "core/SpotRequestQueue.h"
 #include "core/SpectrumDecodeScale.h"
@@ -13,6 +15,7 @@
 #include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
+#include "core/backends/RadioStatusObservation.h"
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
@@ -60,6 +63,7 @@
 #include "DisplayInventoryPolicy.h"
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QList>
 #include <QJsonObject>
@@ -196,6 +200,8 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    // The backend's last radioSpeakerAudioReported() this session; unknown until then.
+    std::optional<bool> reportedRadioSpeaker() const { return m_reportedRadioSpeaker; }
     TuneOutputControlState tuneOutputControl(int bandId) const;
     void requestTuneOutputSuppression(int bandId, bool suppressed);
 
@@ -906,7 +912,7 @@ public:
     // states for any global slice index: ours (we have a SliceModel for
     // it), foreign (another client owns it — we have no SliceModel but
     // know the slot is taken), and empty (neither).  Updated by
-    // handleSliceStatus() as slice ownership comes in.
+    // applySliceObservation() as slice ownership comes in.
     bool isSlotOurs(int sliceId) const;
     bool isSlotForeign(int sliceId) const;
     // Station name of the client occupying a foreign slot, or empty string
@@ -953,6 +959,11 @@ public:
     // One explicit wake, followed by one bounded connection attempt. Never persisted.
     bool wakeIcomRadio(int modelId, int address, QString* error = nullptr);
     bool radioWakeActive() const { return m_radioWakeActive; }
+    // Prepare the disconnected SmartLink transport before its UDP hole punch.
+    bool prepareWanConnection();
+    // An explicit radio choice supersedes the previous radio's armed
+    // automatic reconnect; the next connect clears the intent again.
+    void cancelAutomaticReconnect();
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
     // SmartLink only reaches Flex radios. A session that last ran another family
     // (IC-705, HL2) still holds that backend, which has no PanadapterStream for the
@@ -1326,6 +1337,7 @@ public:
     void setPanNoiseFloorEnable(bool on);
 
 signals:
+    void radioSpeakerReportChanged();
     void cwAutoTuneIntentChanged(int sliceId);
     // RFC #5535's visibility condition, republished for the GUI. See
     // core/backends/FrontEndOverload.h.
@@ -1391,8 +1403,8 @@ signals:
     // this terminal signal to stop reconnect UX and preserve the radio's reason.
     void guiClientRegistrationFailed(const QString& message);
     // Backend-neutral panadapter render feed; signatures mirror PanadapterStream's
-    // so the UI binds here, not to the Flex-only stream. Flex forwards its
-    // PanadapterStream 1:1; other backends synthesise from spectrumFrameReady.
+    // so the UI and TCI bind here, not to the Flex-only stream. Flex forwards its
+    // typed receive outlets 1:1; other backends synthesise from spectrumFrameReady.
     // Coherent coverage declares final same-scale samples, avoiding repeated
     // intensity calibration and smoothing in the renderer.
     void panFeedSpectrumReady(quint32 streamId, const QVector<float>& binsDbm,
@@ -1512,6 +1524,7 @@ signals:
     void callsignChanged(const QString& callsign);
     // Emitted when the radio reports 10 MHz reference oscillator state.
     void oscillatorChanged();
+
     // Emitted when network quality assessment changes.
     // quality: "Off", "Excellent", "Very Good", "Good", "Fair", "Poor"
     // pingMs: round-trip time in milliseconds
@@ -1749,6 +1762,7 @@ private slots:
                                 const SpectrumCoverage& coverage);
 
 private:
+    std::optional<bool> m_reportedRadioSpeaker;
     void resetAudioControls();
     void applyAudioStreamDelta(const AudioStreamDelta& delta);
     // The DAX IQ registry: our IQ streams reach DaxIqModel and the VITA-49
@@ -1794,15 +1808,29 @@ private:
     void retireDisplayResource(const QString& id);
     void requestPanRfGainInfo(PanadapterModel* pan);
     friend struct RadioModelWakeTestAccess;
-    void handleRadioStatus(const QMap<QString, QString>& kvs);
     void adoptSoftwareVersion(const QString& version);
     // Apply a normalized radio-global delta from the backend
     // (IRadioBackend::radioChanged). aetherd RFC 2.3 — RadioModel residual.
-    void applyRadioChanges(const RadioDelta& delta);
+    void applyRadioChanges(const RadioDelta& delta, const std::function<bool()>& current = {});
+    void applyRadioObservation(const RadioStatusObservation& observation);
+    void resetRadioObservations();
     // Apply normalized GPS / memory-slot / profile deltas from the backend
     // (IRadioBackend::gpsChanged / memoryChanged / profileChanged). aetherd RFC
     // 2.3 — RadioModel residual.
     void applyGpsChanges(const GpsDelta& delta);
+    friend class FlexSetupStatusTestPeer;
+    friend class FlexSliceStatusTestPeer;
+    friend class FlexReceiveDataTestAccess;
+    void applySetupObservation(const SetupStatusObservation& observation);
+    void retireSetupObservations();
+    void resetSetupObservations();
+    bool refreshLicenseSubscription(const QDateTime& now);
+    quint64 m_setupObservationGeneration{0};
+    std::array<quint64, 6> m_filterSharpnessRevisions{};   // bumped by status and session end
+    std::array<quint64, 6> m_filterSharpnessAccepted{};    // request sequence last applied
+    quint64 m_filterSharpnessRequestSequence{0};
+    QString m_licenseSubscriptionLabel;
+    QTimer m_licenseExpiryTimer;
     void resetGpsState();
     void wireGpsSessionReceivers();
     // A fresh status epoch for the connect about to be issued: every wire line
@@ -1814,12 +1842,13 @@ private:
     void applyTxBandChanges(const TxBandDelta& delta);
     QPointer<FlexStatusIngress> m_statusIngress;   // the backend's; model thread
     quint64 m_statusEpoch{0};            // the epoch of the session being run
-    // Display reports apply only from the session being run, and not after it
-    // has begun to end (RadioModel_DisplayObservations.cpp).
+    // Display and setup reports apply only from the session being run, and not
+    // after it has begun to end (RadioModel_DisplayObservations.cpp,
+    // RadioModel_SetupObservations.cpp).
     // How long a deferred display report stays applicable.
     static constexpr qint64 kDeferredDisplayAgeMs = 30'000;
-    quint64 m_displayEpoch{0};
-    bool m_displaySessionOpen{true};
+    quint64 m_observationEpoch{0};
+    bool m_observationSessionOpen{true};
     quint64 m_connectedStatusEpoch{0};   // the epoch onConnected() last ran for
     quint64 m_wanRoute{0};               // fences queued SmartLink lifecycle per bind
     void handleMessageReceived(const ParsedMessage& msg);
@@ -1830,13 +1859,18 @@ private:
     void applyMemoryChanges(const MemoryDelta& delta);
     void reportMemoryImportFailure(const QString& reason);
     void applyProfileChanges(const ProfileDelta& delta);
-    void handleSliceStatus(int id, const QMap<QString, QString>& kvs, bool removed);
+    // fenced: only from the observation session being run (an automation
+    // fixture, applied while disconnected, passes false).
+    void applySliceObservation(const SliceObservation& observation, bool fenced = true);
+    void initializeObservedSlice(SliceModel* slice);
+    void retireObservedSlice(int id, bool keepForeign);
     void scheduleDStarRuntimeConfiguration();
     void applyPendingDStarRuntimeConfiguration();
     void syncDigitalVoiceTxSelection(bool force = false);
     void onDisplayObservation(const DisplayObservation& observation);
-    void openDisplaySession(quint64 epoch);
-    void retireDisplaySession();
+    void openObservationSession(quint64 epoch);
+    void retireObservationSession();
+    bool observationSessionCurrent(quint64 statusEpoch) const;
     bool displayObservationCurrent(const DisplayObservation& observation) const;
     void applyDisplayObservation(const DisplayObservation& observation);
     bool applyDisplayValues(PanadapterModel* pan, const DisplayObservation& observation);
@@ -2146,9 +2180,11 @@ public:
         return backendPanIdFor(modelPanId);
     }
     static QString neutralPanIdStringForTest(int panIdx);
-    void handleSliceStatusForTest(int id, const QMap<QString, QString>& kvs, bool removed = false)
+    // Stamped with the session being run, as the ingress would.
+    void applySliceObservationForTest(SliceObservation observation)
     {
-        handleSliceStatus(id, kvs, removed);
+        observation.statusEpoch = m_observationEpoch;
+        applySliceObservation(observation);
     }
     // Feed a decoded status line straight into the router. Used to pin the TNF
     // removal-status handling — the wire says the notch is gone, and the router
@@ -2204,6 +2240,7 @@ public:
 private:
     friend class FlexDisplayStatusTestAccess;
     friend class RadioModelSliceLifecycleTestAccess;
+    friend class FlexRadioStatusTestPeer;
     friend class RadioNicknameTestAccess;
     friend class TuneOutputControlTestAccess;
     friend class TuneOutputDialogTestAccess;
@@ -2273,6 +2310,9 @@ private:
     std::array<quint64, 5> m_outputIntentRevisions{};
     quint64 m_receiveControlGeneration{0};
     void wireBackendReceiverState();
+    void wireBackendReceiveData();
+    std::optional<ReceiveTelemetry> backendReceiveTelemetry() const;
+    void clearRadioSpeakerReport();
     struct PendingSliceCreate;
     void wireSliceLifecycle();
     void reconcileSliceCreates();
@@ -2293,6 +2333,10 @@ private:
     quint64 m_fullDuplexObservationRevision{0};
     quint64 m_txSliceSelectionRevision{0};
     quint64 m_backendReceiverGeneration = 0;
+    quint64 m_sliceObservationRevision = 0;
+    QHash<int, quint64> m_activeSliceObservations;
+    // Created by a slice report that has not yet announced it (value: reclaimed).
+    QHash<int, std::pair<QPointer<SliceModel>, bool>> m_unpublishedSlices;
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
     // Remaining selection bindings and initial global lock observation.
     // Both helpers must be called at every SliceModel construction site.
@@ -2323,7 +2367,9 @@ private:
                                                bool requiresLiveSession = true);
     using SetupCommandWriter = std::function<bool(const QString&, ResponseCallback)>;
     using SetupCommandSink = std::function<bool(const QString&, const RadioSetupCompletion&)>;
-    SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {});
+    // dispatchAllowed, when given, is checked again at the final write.
+    SetupCommandSink setupCommandSink(const SetupCommandWriter& writer = {},
+                                      std::function<bool()> dispatchAllowed = {});
     using TransferCommandWriter = std::function<bool(const QString&, const FileTransferGuard&, ResponseCallback)>;
     using TransferCommandSink = std::function<bool(const QString&, const FileTransferGuard&, const RadioControlCompletion&)>;
     TransferCommandSink transferCommandSink(const TransferCommandWriter& writer = {});
@@ -2331,6 +2377,10 @@ private:
     FileTransferHandle m_fileTransferOperation;
     using AudioCommandSink = std::function<bool(const QString&, ResponseCallback, const AudioControlGuard&)>;
     AudioCommandSink audioCommandSink();
+    // A transverter or USB cable write, refused at the final write once the
+    // entity it was aimed at has been removed or replaced.
+    bool sendSetupEntityCommand(const QString& command, const RadioSetupCompletion& completion,
+                                const std::shared_ptr<SetupStatusLifetime>& identity);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend
@@ -2361,6 +2411,16 @@ private:
     // the desktop methods. Independent daemon clients use separate granted
     // actors on the same coordinator and cannot obtain this desktop actor.
     TxCoordinator m_txCoordinator;
+    std::shared_ptr<std::atomic_bool> m_transmitServiceSession{std::make_shared<std::atomic_bool>(true)};
+    quint64 m_dvkTxRequest{0};
+    quint64 m_navtexTxRequest{0};
+    TxCoordinator::Intent m_dvkTxIntent;
+    TxCoordinator::Intent m_navtexTxIntent;
+    void wireFlexTransmitServices(FlexBackend* backend);
+    void dispatchDvk(const DvkRequest& request, quint64 requestId);
+    void dispatchNavtex(const NavtexRequest& request, quint64 requestId);
+    TransmitServiceCompletion transmitServiceCompletion(const TransmitServiceCompletion& completion,
+        const std::shared_ptr<std::atomic_bool>& current);
     std::shared_ptr<TxController> m_localTxController;
     TxCoordinator::Actor m_desktopTxActor;
     TxCoordinator::Operation m_txOperation;
@@ -2419,7 +2479,8 @@ private:
     void applyBackendTransmitDelta(const TransmitDelta& delta);
     bool sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
                           bool keying, std::function<void()> delivered,
-                          ResponseCallback reply = {}, std::function<bool()> currentBatch = {});
+                          ResponseCallback reply = {}, std::function<bool()> currentBatch = {},
+                          int replyTimeoutMs = 0);
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;
@@ -2653,13 +2714,13 @@ private:
         int bandId{-1};
         quint64 session{0};
         quint64 backend{0};
-        QStringList pending;
-        QStringList outputs;
+        QList<TxBandRequest::Field> pending;
+        QList<TxBandRequest::Field> outputs;
         Phase phase{Phase::Applying};
     };
     std::optional<TuneInhibitState> m_tuneInhibit;
     quint64 m_tuneInhibitEpoch{0};
-    QMap<int, QSet<QString>> m_tuneInhibitKnownOutputs;
+    QMap<int, QSet<TxBandRequest::Field>> m_tuneInhibitKnownOutputs;
     // #5572 firmware-upload retry barrier. Set when an upload is dispatched to
     // the radio; cleared only when a NEW connection is established, so it
     // survives the Radio Setup dialog (and its uploader) being closed.
@@ -2682,7 +2743,11 @@ private:
     bool applyTuneInhibit();    // suppress selected TX outputs before tune
     void restoreTuneInhibit();  // restore only this cycle's temporary writes
     void discardTuneInhibit();
-    void relinquishTuneInhibit(const QString& command);
+    void relinquishTuneInhibit(const TxBandRequest& request);
+    enum class TxBandWrite { Operator, Inhibit, Restore };
+    ReceiveDispatch dispatchTxBand(const TxBandRequest& request,
+        std::optional<RadioControlSession> expectedSession, QObject* replyContext,
+        const RadioSetupCompletion& completion, TxBandWrite origin);
     QString transmitInhibitMessageForSlice(const SliceModel* slice) const;
     QString transmitInhibitMessageForTxSlice() const;
     void enforceTransmitInhibitForPan(const QString& panId);
@@ -2737,8 +2802,11 @@ private:
 
 public:
     const QMap<int, TxBandInfo>& txBandSettings() const { return m_txBandSettings; }
+    // The TX band table's id for a frequency; -1 outside the table's bands.
+    int txBandIdForFrequency(double freqMhz) const { return bandIdForFrequency(freqMhz); }
 
     struct XvtrInfo {
+        std::shared_ptr<SetupStatusLifetime> lifetime;
         int     index{0};
         int     order{-1};
         QString name;
@@ -2898,7 +2966,8 @@ private:
     // `stream remove` (unregisterDaxStream). Stops the radio's own transient
     // empty-slice= unbind echo from re-triggering the nudge → #4009 storm.
     QSet<quint32> m_nudgedDaxStreams;
-    WanConnection* m_wanConn{nullptr};  // non-null when connected via SmartLink
+    quint64 m_radioObservationGeneration{0};
+    QPointer<WanConnection> m_wanConn;  // non-null when connected via SmartLink
     QString  m_wanPublicIp;
     quint16  m_wanUdpPort{4991};
     QSet<int>          m_ownedSliceIds;   // slice IDs that belong to our client
@@ -2927,6 +2996,13 @@ private:
     // one-shot timers, which would fire a stale flush for every extension).
     QTimer m_profileLoadPanWriteFlushTimer;
 
+    quint64 m_clientLifecycleRevision{0};
+    QMap<quint32, quint64> m_clientLifecycles;
+    QSet<quint32> m_liveClientHandles;
+    QSet<quint32> m_retiredClientHandles;
+    bool m_clientHistoryComplete{true};
+    static constexpr qsizetype kMaxObservedClients = 256;
+    static constexpr qsizetype kMaxRetiredClients = 1024;
     QMap<quint32, ClientInfo> m_clientInfoMap; // handle → full client info
     std::function<void()> m_multiFlexContinuation; // saved continuation during conflict pause
     QMap<quint32, QString> m_clientStations;   // handle → station name (legacy, kept in sync)
@@ -3088,7 +3164,7 @@ public:
     // that carries everything in one stream has nothing to break down, and
     // rendering five rows of "0 / 0 packets" for it invents a distinction the
     // wire does not have.
-    bool    hasStreamCategoryStats() const { return m_panStream != nullptr; }
+    bool    hasStreamCategoryStats() const;
     bool    pendingThrottleLift() const { return m_pendingThrottleLift; }
     int     currentAdaptiveFpsCap() const;  // 0 = throttle inactive
     // The 1..100 waterfall RATE the adaptive throttle caps to for a given fps
@@ -3125,7 +3201,7 @@ public:
     bool    firstUdpPacketSeen() const;
 
     // Per-category stream stats (Audio, FFT, Waterfall, Meter, DAX)
-    PanadapterStream::CategoryStats categoryStats(PanadapterStream::StreamCategory cat) const;
+    ReceiveStreamStats::Counters categoryStats(ReceiveStreamStats::Category cat) const;
     QVector<PanadapterStream::AudioStreamDiagnostics> audioStreamDiagnostics() const;
     void resetAudioStreamDiagnostics();
 

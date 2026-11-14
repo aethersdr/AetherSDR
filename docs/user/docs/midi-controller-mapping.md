@@ -65,6 +65,8 @@ Endless encoders send small "turned up / turned down" deltas instead of an absol
 
 The **VFO Tune Knob** parameter is meant for an endless encoder bound as **Relative**; as an absolute control it treats 64 as center.
 
+These sliders also step with a **Relative** encoder, by their keyboard step per detent and faster when you turn quickly: Filter Width (one width of the mode's filter list per step, as Filter Widen / Narrow), RIT Offset and XIT Offset (10 Hz), NB / NR / ANF / APF / WNB Level, RF Power and Mic Level. Bind **RIT Offset** and **XIT Offset** as **Relative**: their range is ±99,999 Hz, so an absolute knob moves them in coarse jumps.
+
 ## Using profiles
 
 Save your bindings as named profiles to switch between controllers or layouts.
@@ -100,6 +102,8 @@ On Hermes-Lite 2, Icom, ANAN-G2 and RTL-SDR, bindings for features the radio doe
 - **Invert** reverses the range (for faders mounted upside-down).
 
 ### Mappable parameters
+
+The tables below cover the long-standing parameters. The full list, including every action that is also a keyboard shortcut, with its ID, is on [MIDI Controller Actions](./generated/midi-actions.md). Every SmartSDR for Mac action AetherSDR has is both a keyboard action and a MIDI control; see [Coming from SmartSDR for Mac](#coming-from-smartsdr-for-mac) below.
 
 #### RX
 | Parameter | Type | Range |
@@ -173,6 +177,221 @@ Gate parameters follow the button: press to key, release to un-key.
 Digital-voice modes that need a helper (such as DSTR) are only offered when that helper is available. **Mode Up / Mode Down** step only through the modes the radio reports, in the order above, so a mode the radio lacks (CWL on some FlexRadio models, for example) is skipped. On a radio that reports no mode list, they step through the whole list except FDVU and FDVL. Either way they skip DSTR while the D-STAR helper is not running.
 
 **RADE Modem** turns the RADE modem on or off on the active slice. Turning it on switches the slice to DIGU or DIGL and makes it the TX slice; if RADE is running on another slice, it moves to the active one. Turning it off leaves the slice in DIGU/DIGL. RADE needs DAX audio, so on a radio without it the press is ignored. The parameter is present in builds with RADE support.
+
+### Coming from SmartSDR for Mac
+
+SmartSDR for Mac's Stream Deck and MIDI action list, and the AetherSDR control that does the same thing. Bind the keyboard action in **Settings → Configure Shortcuts...** and the MIDI control in **Settings → Controllers → MIDI Mapping...**. "Not available" rows are SmartSDR for Mac windows and panels AetherSDR does not have.
+
+<details>
+<summary>SmartSDR for Mac actions and their AetherSDR equivalents</summary>
+
+| SmartSDR for Mac | Keyboard action | MIDI control |
+|---|---|---|
+| A &lt;&gt; B | **Swap Slices A and B** | **Swap Slices A and B** |
+| A &gt; B | **Copy Slice A to B** | **Copy Slice A to B** |
+| ACC TX toggle | **ACC TX Output** | **ACC TX Output** |
+| ANF | **ANF Toggle** | **Auto Notch** |
+| APF toggle | **APF** | **APF** |
+| ATU | **ATU Start** | **ATU Start** |
+| ATU Bypass | **ATU Bypass** | **ATU Bypass** |
+| ATU MEM | **ATU Memories** | **ATU Memories** |
+| ATU Tune | **ATU Start** | **ATU Start** |
+| B &gt; A | **Copy Slice B to A** | **Copy Slice B to A** |
+| Band Next | **Band Up** | **Band Up** |
+| Band Previous | **Band Down** | **Band Down** |
+| Band zoom toggle | **Band Zoom** | **Band Zoom** |
+| Bandwidth 10 KHz | **Panadapter Span 10 kHz** | **Panadapter Span 10 kHz** |
+| Bandwidth 25 KHz | **Panadapter Span 25 kHz** | **Panadapter Span 25 kHz** |
+| Bandwidth 5 KHz | **Panadapter Span 5 kHz** | **Panadapter Span 5 kHz** |
+| Bandwidth 50 KHz | **Panadapter Span 50 kHz** | **Panadapter Span 50 kHz** |
+| Binaural RX toggle | **Binaural RX** | **Binaural RX** |
+| Cancel CWX | **Stop CWX / Macros** | **Stop CWX / Macros** |
+| Clear Log Window | — | Not available: no AetherSDR equivalent |
+| Close Panadapter | **Close Active Panadapter** | **Close Active Panadapter** |
+| Command 1 | — | Not available: no AetherSDR equivalent |
+| Command 10 | — | Not available: no AetherSDR equivalent |
+| Command 2 | — | Not available: no AetherSDR equivalent |
+| Command 3 | — | Not available: no AetherSDR equivalent |
+| Command 4 | — | Not available: no AetherSDR equivalent |
+| Command 5 | — | Not available: no AetherSDR equivalent |
+| Command 6 | — | Not available: no AetherSDR equivalent |
+| Command 7 | — | Not available: no AetherSDR equivalent |
+| Command 8 | — | Not available: no AetherSDR equivalent |
+| Command 9 | — | Not available: no AetherSDR equivalent |
+| Create Panadapter | **Add Panadapter** | **Add Panadapter** |
+| CWX | **Show/Hide CWX Panel** | **Show/Hide CWX Panel** |
+| DAX toggle | **DAX TX Toggle** | **DAX** |
+| Delete Slice | **Close Active Slice** | **Close Active Slice** |
+| Diversity toggle | **Diversity RX** | **Diversity RX** |
+| Enter Frequency | **Go to Frequency** | **Go to Frequency** |
+| Filter width 100 Hz | **Filter Width 100 Hz** | **Filter Width 100 Hz** |
+| Filter width 250 Hz | **Filter Width 250 Hz** | **Filter Width 250 Hz** |
+| Filter width 3 KHz | **Filter Width 3 kHz** | **Filter Width 3 kHz** |
+| Filter width 400 Hz | **Filter Width 400 Hz** | **Filter Width 400 Hz** |
+| Frequency Down | **Tune Down (1 step)** | **Tune Down (1 step)** |
+| Frequency Down 100x | **Tune Down (100 steps)** | **Tune Down (100 steps)** |
+| Frequency Down 10x | **Tune Down (10 steps)** | **Tune Down (10 steps)** |
+| Frequency Up | **Tune Up (1 step)** | **Tune Up (1 step)** |
+| Frequency Up 100x | **Tune Up (100 steps)** | **Tune Up (100 steps)** |
+| Frequency Up 10x | **Tune Up (10 steps)** | **Tune Up (10 steps)** |
+| Global Profile 1 | **Load Global Profile 1** | **Load Global Profile 1** |
+| Global Profile 2 | **Load Global Profile 2** | **Load Global Profile 2** |
+| Global Profile 3 | **Load Global Profile 3** | **Load Global Profile 3** |
+| Global Profile 4 | **Load Global Profile 4** | **Load Global Profile 4** |
+| Global Profile 5 | **Load Global Profile 5** | **Load Global Profile 5** |
+| Log QSO | — | AetherSDR has no QSO logbook |
+| Macro 1 | **Macro F1** | **Macro F1** |
+| Macro 10 | **Macro F10** | **Macro F10** |
+| Macro 11 | **Macro F11** | **Macro F11** |
+| Macro 12 | **Macro F12** | **Macro F12** |
+| Macro 2 | **Macro F2** | **Macro F2** |
+| Macro 3 | **Macro F3** | **Macro F3** |
+| Macro 4 | **Macro F4** | **Macro F4** |
+| Macro 5 | **Macro F5** | **Macro F5** |
+| Macro 6 | **Macro F6** | **Macro F6** |
+| Macro 7 | **Macro F7** | **Macro F7** |
+| Macro 8 | **Macro F8** | **Macro F8** |
+| Macro 9 | **Macro F9** | **Macro F9** |
+| Macros Stop | **Stop CWX / Macros** | **Stop CWX / Macros** |
+| Main Audio Mute toggle | **Master Mute Toggle** | **Master Mute** |
+| Memory 1 | **Recall Memory 1** | **Recall Memory 1** |
+| Memory 10 | **Recall Memory 10** | **Recall Memory 10** |
+| Memory 2 | **Recall Memory 2** | **Recall Memory 2** |
+| Memory 3 | **Recall Memory 3** | **Recall Memory 3** |
+| Memory 4 | **Recall Memory 4** | **Recall Memory 4** |
+| Memory 5 | **Recall Memory 5** | **Recall Memory 5** |
+| Memory 6 | **Recall Memory 6** | **Recall Memory 6** |
+| Memory 7 | **Recall Memory 7** | **Recall Memory 7** |
+| Memory 8 | **Recall Memory 8** | **Recall Memory 8** |
+| Memory 9 | **Recall Memory 9** | **Recall Memory 9** |
+| Memory Down | **Previous Memory** | **Previous Memory** |
+| Memory Up | **Next Memory** | **Next Memory** |
+| Mode AM | **AM** | **Mode AM** |
+| Mode CW | **CW** | **Mode CW** |
+| Mode DIGL | **DIGL** | **Mode DIGL** |
+| Mode DIGU | **DIGU** | **Mode DIGU** |
+| Mode FM | **FM** | **Mode FM** |
+| Mode LSB | **LSB** | **Mode LSB** |
+| Mode Next | **Mode Up** | **Mode Up** |
+| Mode Previous | **Mode Down** | **Mode Down** |
+| Mode RTTY | **RTTY** | **Mode RTTY** |
+| Mode SAM | **SAM** | **Mode SAM** |
+| Mode USB | **USB** | **Mode USB** |
+| MOX | **MOX Toggle** | **MOX** |
+| NB | **NB Toggle** | **Noise Blanker** |
+| Not assigned | — | Not available: no AetherSDR equivalent |
+| NR | **Noise Reduction** | **Noise Reduction** |
+| Open APRS | **Open AetherModem** | **Open AetherModem** |
+| Open Band Plan Tool | **Band Plan Toggle** | **Band Plan Toggle** |
+| Open Call lookup | Ctrl+Shift+L (fixed) | **Callsign Lookup** |
+| Open CW Decoder | **CW Decoder** | **CW Decoder** |
+| Open DX-Cluster Tool | **Open SpotHub** | **Open SpotHub** |
+| Open Frequency List Tool | — | Not available: no AetherSDR equivalent |
+| Open FT8 Tool | — | Not available: no AetherSDR equivalent |
+| Open Green Heron Tool | — | Not available: no AetherSDR equivalent |
+| Open HF-Fax | — | Not available: no AetherSDR equivalent |
+| Open Logbook Tool | — | AetherSDR has no QSO logbook |
+| Open Memories | **Open Memories Dialog** | **Open Memories** |
+| Open Metropwr Tool | — | Not available: no AetherSDR equivalent |
+| Open POTA Tool | **Open SpotHub** | **Open SpotHub** |
+| Open PSK | — | Not available: no AetherSDR equivalent |
+| Open PSK Reporter Tool | **Open AetherMap** | **Open AetherMap** |
+| Open RTTY | **RTTY Decoder** | **RTTY Decoder** |
+| Open S.A.T. Controller Tool | — | Not available: no AetherSDR equivalent |
+| Open SSTV | — | Not available: no AetherSDR equivalent |
+| Open Ultra Beam Tool | — | Not available: no AetherSDR equivalent |
+| Open Waveshare Tool | — | Not available: no AetherSDR equivalent |
+| PTT Push | **PTT (Hold)** | **PTT (hold)** |
+| PTT toggle | **MOX Toggle** | **TX Button** |
+| RCA TX 1 toggle | **TX1 Output** | **TX1 Output** |
+| RCA TX 2 toggle | **TX2 Output** | **TX2 Output** |
+| RCA TX 3 toggle | **TX3 Output** | **TX3 Output** |
+| RIT | **RIT Toggle** | **RIT Enable** |
+| RIT Down | **RIT Offset Down** | **RIT Offset** |
+| RIT Up | **RIT Offset Up** | **RIT Offset** |
+| RX Ant 1 | **RX Antenna 1** | **RX Antenna 1** |
+| RX Ant 2 | **RX Antenna 2** | **RX Antenna 2** |
+| RX RX_A | **RX Antenna 3** | **RX Antenna 3** (by position in the radio's antenna list) |
+| RX XVTR | **RX Antenna 4** | **RX Antenna 4** (by position in the radio's antenna list) |
+| Select 10m Band | **10m** | **Band 10m** |
+| Select 12m Band | **12m** | **Band 12m** |
+| Select 15m Band | **15m** | **Band 15m** |
+| Select 160m Band | **160m** | **Band 160m** |
+| Select 17m Band | **17m** | **Band 17m** |
+| Select 20m Band | **20m** | **Band 20m** |
+| Select 30m Band | **30m** | **Band 30m** |
+| Select 40m Band | **40m** | **Band 40m** |
+| Select 60m Band | **60m** | **Band 60m** |
+| Select 6m Band | **6m** | **Band 6m** |
+| Select 80m Band | **80m** | **Band 80m** |
+| Select Panadapter 1 | **Select Panadapter 1** | **Select Panadapter 1** |
+| Select Panadapter 2 | **Select Panadapter 2** | **Select Panadapter 2** |
+| Select Panadapter 3 | **Select Panadapter 3** | **Select Panadapter 3** |
+| Select Panadapter 4 | **Select Panadapter 4** | **Select Panadapter 4** |
+| Select Panadapter 5 | **Select Panadapter 5** | **Select Panadapter 5** |
+| Select Panadapter 6 | **Select Panadapter 6** | **Select Panadapter 6** |
+| Select Panadapter 7 | **Select Panadapter 7** | **Select Panadapter 7** |
+| Select Panadapter 8 | **Select Panadapter 8** | **Select Panadapter 8** |
+| Select Slice A | **Select Slice A** | **Select Slice A** |
+| Select Slice B | **Select Slice B** | **Select Slice B** |
+| Select Slice C | **Select Slice C** | **Select Slice C** |
+| Select Slice D | **Select Slice D** | **Select Slice D** |
+| Slice details | — | Not available: no AetherSDR equivalent |
+| Slice Lock | **Tune Lock Toggle** | **Tune Lock** |
+| Slice Mute toggle | **Mute Toggle** | **Audio Mute** |
+| Slice new | **New Slice** | **New Slice** |
+| Slice next | **Next Slice** | **Next Slice** |
+| Slice set active | **Next Slice** | **Next Slice** (or Select Slice A–H) |
+| Slice set TX | **Make Active Slice TX** | **Make Active Slice TX** |
+| Split toggle | **Split Toggle** | **Split Toggle** |
+| Switch Keyer to Iambic-A | **CW Keyer: Iambic A** | **CW Keyer: Iambic A** |
+| Switch Keyer to Iambic-B | **CW Keyer: Iambic B** | **CW Keyer: Iambic B** |
+| Switch Keyer to Straight-Key | **CW Keyer: Straight Key** | **CW Keyer: Straight Key** |
+| Trigger CW left Paddle | **Trigger CW Left Paddle** | **Trigger CW Left Paddle** |
+| Trigger CW right Paddle | **Trigger CW Right Paddle** | **Trigger CW Right Paddle** |
+| Trigger CW Straight Key | **Trigger straight key** | **Trigger straight key** |
+| Tune Stack Down | **Band Stack Down** | **Band Stack Down** |
+| Tune Stack Up | **Band Stack Up** | **Band Stack Up** |
+| Tune step (1,10,100,1000) | **Step Size Up** | **Step Size Up** |
+| Tune step Previous | **Step Size Down** | **Step Size Down** |
+| TX Ant 1 | **TX Antenna 1** | **TX Antenna 1** |
+| TX Ant 2 | **TX Antenna 2** | **TX Antenna 2** |
+| TX XVTR | **TX Antenna 3** | **TX Antenna 3** (by position in the radio's antenna list) |
+| View Command Bar | — | Not available: no AetherSDR equivalent |
+| View CWX Panel | **Show/Hide CWX Panel** | **Show/Hide CWX Panel** |
+| View DTMF Panel | — | Not available: no AetherSDR equivalent |
+| View Macros Bar | — | Not available: no AetherSDR equivalent |
+| View PTT | — | Not available: no AetherSDR equivalent |
+| View Radio Controls Panel | — | Not available: no AetherSDR equivalent |
+| View Rit/Xit Panel | — | Not available: no AetherSDR equivalent |
+| View Stack Panel | — | Not available: no AetherSDR equivalent |
+| VOX | **VOX Toggle** | **VOX Enable** |
+| WNB | **WNB** | **WNB** |
+| XIT | **XIT Toggle** | **XIT Enable** |
+| XIT Down | **XIT Offset Down** | **XIT Offset** |
+| XIT Up | **XIT Offset Up** | **XIT Offset** |
+| Zoom in | **Panadapter Zoom In** | **Panadapter Zoom In** |
+| Zoom out | **Panadapter Zoom Out** | **Panadapter Zoom Out** |
+
+| SmartSDR wheel | Keyboard action | MIDI control |
+|---|---|---|
+| Mic gain | **Mic Level Up** | **Mic Level** |
+| Adjust Main Volume | **Master Volume Up** | **Master Volume** |
+| Slice Frequency (active) | **Tune Up (1 step)** | **VFO Tune Knob** |
+| Bandwidth (active) | **Filter Widen** | **Filter Width** |
+| CW speed | **CW Speed Up (+5 WPM)** | **CW Speed** |
+| AGC Threshold (active) | **AGC-T Up** | **AGC Threshold** |
+| RF Power | **RF Power Up** | **RF Power** |
+| NB-Level (active) | **NB Level Up** | **NB Level** |
+| Slice Volume (active) | **AF Gain Up** | **AF Gain** |
+| WNB-Level (active) | **WNB Level Up** | **WNB Level** |
+| APF value (active) | **APF Level Up** | **APF Level** |
+| ANF Level (active) | **ANF Level Up** | **ANF Level** |
+| NR-Level (active) | **NR Level Up** | **NR Level** |
+| XIT Frequency (active) | **XIT Offset Up** | **XIT Offset** |
+| RIT Frequency (active) | **RIT Offset Up** | **RIT Offset** |
+
+</details>
 
 ### Settings files
 
