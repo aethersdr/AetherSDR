@@ -6639,7 +6639,8 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
     put("swrMeterForwardRaw", QStringLiteral("SWR selected forward (counts)"), opt(m_swrMeterForward));
     put("swrMeterReverseRaw", QStringLiteral("SWR selected reverse (counts)"), opt(m_swrMeterReverse));
     put("swrMeterMinForwardCounts", QStringLiteral("SWR minimum forward (counts)"), kMinForwardCountsForSwr);
-    put("swrMeterSession", QStringLiteral("SWR publication session"), QVariant::fromValue(m_connectGeneration));
+    put("swrMeterSession", QStringLiteral("SWR publication session"),
+        QStringLiteral("%1:%2").arg(m_connectGeneration).arg(m_swrPublicationEpoch));
     put("swrKeyedEligible", QStringLiteral("Keyed SWR eligible windows"), QVariant::fromValue(m_swrKeyedEligible));
     put("swrKeyedLowPower", QStringLiteral("Keyed SWR low-power windows"), QVariant::fromValue(m_swrKeyedLowPower));
     put("swrKeyedSettling", QStringLiteral("Keyed SWR settling windows"), QVariant::fromValue(m_swrKeyedSettling));
@@ -8190,6 +8191,8 @@ void Hl2Backend::pushInitialState()
     m_keyed = false;
     m_radioPtt = false;
     m_swrGate.reset();
+    // Watchdog recovery reuses the connect generation but resets this evidence.
+    ++m_swrPublicationEpoch;
     m_swrMeterState = QStringLiteral("unobserved");
     m_swrMeterInput.clear();
     m_swrMeterKeyed = false;

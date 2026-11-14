@@ -954,6 +954,63 @@ static void suppressedSwrCertification()
     Access::setKeyedFlag(*backend, false);
 }
 
+
+// A watchdog recovery reuses the backend and connect generation. Drive its
+// actual link edges so the counter reset cannot borrow an earlier receipt.
+static void swrCertificationLinkRecovery()
+{
+    RadioModel radio;
+    check(radio.rebuildBackendForTest(QStringLiteral("hl2")), "SWR recovery fixture installs");
+    auto* backend = static_cast<Hl2Backend*>(radio.backend());
+    Access::metisEdge(*backend, "linkUp");
+    auto feed = [&](int forward) {
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = t.forwardPowerPeakRaw = forward;
+        t.reversePowerRaw = t.reversePowerPeakRaw = 11;
+        Access::publish(*backend, t);
+    };
+    auto row = [](RadioCertification& cert) {
+        return RadioCertificationTestAccess::inventory(cert)
+            .value(QStringLiteral("measured")).toObject()
+            .value(QStringLiteral("TX:SWR")).toObject();
+    };
+    RadioCertification prior(&radio, nullptr);
+    Access::setKeyedFlag(*backend, true);
+    Access::pastKeyOn(*backend);
+    feed(2000);
+    check(row(prior).value(QStringLiteral("keyedUpdatesReceived")).toInteger() == 1,
+          "recovery control: initial session has one keyed receipt");
+    const QVariant firstSession = health(*backend, "swrMeterSession");
+    Access::setKeyedFlag(*backend, false);
+    Access::metisEdge(*backend, "linkDown");
+    Access::metisEdge(*backend, "linkUp");
+    const QVariant recoveredSession = health(*backend, "swrMeterSession");
+    check(recoveredSession != firstSession,
+          "watchdog recovery advances the publication session when counters reset");
+    Access::setKeyedFlag(*backend, true);
+    for (int i = 0; i < 3; ++i) { feed(76); }
+    const QJsonObject stale = row(prior);
+    check(!stale.value(QStringLiteral("fedWhileKeyedThisRun")).toBool()
+              && !stale.value(QStringLiteral("publicationEvidence")).toObject()
+                      .value(QStringLiteral("available")).toBool()
+              && stale.value(QStringLiteral("verdict")).toString() == QStringLiteral("INCONCLUSIVE"),
+          "watchdog recovery cannot reuse pre-drop receipts or publication counters");
+    RadioCertification fresh(&radio, nullptr);
+    feed(76);
+    check(row(fresh).value(QStringLiteral("verdict")).toString() == QStringLiteral("SUPPRESSED"),
+          "a fresh observation after recovery measures suppression in the new session");
+    check(health(*backend, "swrMeterSession") == recoveredSession,
+          "ordinary telemetry leaves the publication session stable");
+    Access::pastKeyOn(*backend);
+    feed(2000);
+    check(row(prior).value(QStringLiteral("verdict")).toString() == QStringLiteral("INCONCLUSIVE"),
+          "later eligible receipts cannot rehabilitate an observation from the retired session");
+    check(row(fresh).value(QStringLiteral("fedWhileKeyedThisRun")).toBool(),
+          "a fresh observation counts eligible receipts in the recovered session");
+    Access::setKeyedFlag(*backend, false);
+    Access::metisEdge(*backend, "linkDown");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-backend-seam-test"));
@@ -979,6 +1036,7 @@ int main(int argc, char** argv)
     forwardPowerWindowPeakWhileKeyed();
     swrFromWindowPairWhileKeyed();
     suppressedSwrCertification();
+    swrCertificationLinkRecovery();
     forwardPowerSkippedHealthRow();
     forwardPowerKeyOnReplay();
     panAveragingSeam();

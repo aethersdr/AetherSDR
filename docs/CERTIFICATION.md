@@ -961,7 +961,9 @@ invisible today, and the inverse — a consumer with no producer — is exactly 
 
 **Draw the dependency.** HL2 SWR inventory reads the producer's keyed-window
 counters through the health snapshot, subtracting a baseline captured at the
-start of the run. It reports `SUPPRESSED` for low forward power, key-on settling
+start of the run. The publication session includes an epoch advanced whenever
+the counters reset, including EP6 watchdog recovery on the same backend.
+It reports `SUPPRESSED` for low forward power, key-on settling
 or speech-pause windows; missing/invalid samples or a changed session produce
 `INCONCLUSIVE`. Eligible windows without a new keyed meter update produce
 `NOT DELIVERED`, even if the meter retains an earlier run's value. Eligibility

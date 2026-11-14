@@ -1153,6 +1153,7 @@ private:
     // Drops keyed SWR from speech-pause windows; see KeyedSwrGate.
     KeyedSwrGate m_swrGate;
     // Owner-thread publication evidence, independent of meter signal delivery.
+    quint64 m_swrPublicationEpoch = 0;
     QString m_swrMeterState = QStringLiteral("unobserved");
     QString m_swrMeterInput;
     bool m_swrMeterKeyed = false;
