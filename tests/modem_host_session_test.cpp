@@ -71,6 +71,29 @@ int main()
                                                    && e.ok && e.version == "Data2G 0.5.0" && s.outstanding() == 0);
     }
     {
+        // Mercury's reply to VERSION doesn't start with VERSION.
+        Session s;
+        s.request(Request::ListenOff);
+        s.request(Request::Version);
+        s.request(Request::Disconnect);
+        s.onLine("OK");
+        const Session::Event v = s.onLine("VARA version 4.9.0 registered");
+        report("free-text line answers VERSION", v.kind == Session::Event::Kind::Reply
+                                                     && v.request == Request::Version && v.ok
+                                                     && v.version == "VARA version 4.9.0 registered");
+        const Session::Event m = s.onLine("OK");
+        report("the next OK answers the next command, not VERSION", m.kind == Session::Event::Kind::Reply
+                                                                       && m.request == Request::Disconnect
+                                                                       && s.outstanding() == 0);
+    }
+    {
+        Session s;
+        s.request(Request::ListenOff);
+        const Session::Event u = s.onLine("SOMETHING NEW");
+        report("unknown line while VERSION isn't oldest stays a notification",
+               u.kind == Session::Event::Kind::Notification && s.outstanding() == 1);
+    }
+    {
         Session s;
         s.request(Request::Version);
         const Session::Event e = s.onLine("WRONG");
@@ -100,10 +123,20 @@ int main()
     {
         Session s;
         for (int i = 0; i < Session::kMaxOutstanding; ++i) {
-            s.request(Request::ListenOff);
+            s.request(Request::Version);
         }
         report("queue holds kMaxOutstanding", s.outstanding() == Session::kMaxOutstanding);
-        report("one more is refused", s.request(Request::ListenOff).isEmpty() && s.refusal() == Refusal::QueueFull);
+        report("one more ordinary command is refused", s.request(Request::Version).isEmpty()
+                                                           && s.refusal() == Refusal::QueueFull);
+        report("ordinary MYCALL refused too", s.request(Request::MyCall, {"N0CALL"}).isEmpty());
+        report("stop commands still go out past the soft cap", s.request(Request::ListenOff) == "LISTEN OFF\r"
+                                                                    && s.request(Request::Disconnect) == "DISCONNECT\r"
+                                                                    && s.request(Request::Abort) == "ABORT\r");
+        while (s.outstanding() < Session::kHardMaxOutstanding) {
+            s.request(Request::Abort);
+        }
+        report("stop commands refused at the hard cap", s.request(Request::Abort).isEmpty()
+                                                            && s.refusal() == Refusal::QueueFull);
         s.reset();
         report("reset clears the queue", s.outstanding() == 0);
         report("after reset requests work", !s.request(Request::ListenOff).isEmpty());
