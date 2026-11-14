@@ -167,17 +167,24 @@ ReceiveDispatch RadioModel::requestRadioSetup(const RadioSetupRequest& request,
         const SharpnessMode mode = automatic ? std::get<SharpnessAuto>(request.value).mode
                                             : std::get<SharpnessLevel>(request.value).mode;
         const size_t index = static_cast<size_t>(mode) * 2 + size_t(automatic);
-        const quint64 revision = ++m_filterSharpnessRevisions[index];
+        // Replies arrive in request order, so each accepted one is applied in
+        // turn unless status for that field arrived after the request, or a
+        // newer request was already accepted.
+        const quint64 status = m_filterSharpnessRevisions[index];
+        const quint64 sequence = ++m_filterSharpnessRequestSequence;
         const RadioSetupCompletion notify = reply;
         // Flex firmware 4.3.16 acknowledges sharpness writes without a self echo.
         // Retain only an accepted request; subsequent status remains authoritative. (#6913)
-        reply = fencedSetupCompletion(this, [alive, request, mode, automatic, index, revision, notify](const RadioSetupReply& result) {
-            if (alive && alive->m_filterSharpnessRevisions[index] == revision) {
-                if (result.kind == RadioSetupReply::Kind::Accepted && automatic) {
+        reply = fencedSetupCompletion(this, [alive, request, mode, automatic, index, status, sequence, notify](const RadioSetupReply& result) {
+            if (alive && alive->m_filterSharpnessRevisions[index] == status) {
+                const bool apply = result.kind == RadioSetupReply::Kind::Accepted
+                    && sequence > alive->m_filterSharpnessAccepted[index];
+                if (apply) { alive->m_filterSharpnessAccepted[index] = sequence; }
+                if (apply && automatic) {
                     bool& value = mode == SharpnessMode::Voice ? alive->m_filterVoiceAuto
                         : mode == SharpnessMode::Cw ? alive->m_filterCwAuto : alive->m_filterDigitalAuto;
                     value = std::get<SharpnessAuto>(request.value).enabled;
-                } else if (result.kind == RadioSetupReply::Kind::Accepted) {
+                } else if (apply) {
                     int& value = mode == SharpnessMode::Voice ? alive->m_filterVoice
                         : mode == SharpnessMode::Cw ? alive->m_filterCw : alive->m_filterDigital;
                     value = std::get<SharpnessLevel>(request.value).level;
@@ -268,14 +275,16 @@ ReceiveDispatch RadioModel::requestTransverter(const TransverterRequest& request
     const RadioControlSession session = controlSession();
     TransverterRequest effective = request;
     const bool creating = request.field == TransverterRequest::Field::Create;
+    const bool removing = request.field == TransverterRequest::Field::Remove;
     const auto identity = m_xvtrList.value(request.id).lifetime;
     if (!effective.expectedLifetime && !creating) { effective.expectedLifetime = identity; }
     const auto current = [effective, creating, identity] {
         return creating || (identity && identity == effective.expectedLifetime && identity->current());
     };
     const RadioSetupCompletion reply = fencedSetupCompletion(replyContext, completion
-        ? RadioSetupCompletion([completion, current](const RadioSetupReply& result) {
-            completion(current() ? result : RadioSetupReply{RadioSetupReply::Kind::Cancelled, -1,
+        ? RadioSetupCompletion([completion, current, removing](const RadioSetupReply& result) {
+            // A removal retires its own identity, usually before the reply lands.
+            completion(current() || removing ? result : RadioSetupReply{RadioSetupReply::Kind::Cancelled, -1,
                 QStringLiteral("the original transverter was removed or replaced")});
         }) : RadioSetupCompletion{});
     if (expectedSession && *expectedSession != session) {

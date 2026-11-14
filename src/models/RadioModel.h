@@ -1799,7 +1799,9 @@ private:
     void resetSetupObservations();
     bool refreshLicenseSubscription(const QDateTime& now);
     quint64 m_setupObservationGeneration{0};
-    std::array<quint64, 6> m_filterSharpnessRevisions{};
+    std::array<quint64, 6> m_filterSharpnessRevisions{};   // bumped by status and session end
+    std::array<quint64, 6> m_filterSharpnessAccepted{};    // request sequence last applied
+    quint64 m_filterSharpnessRequestSequence{0};
     QString m_licenseSubscriptionLabel;
     QTimer m_licenseExpiryTimer;
     void resetGpsState();

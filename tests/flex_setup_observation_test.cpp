@@ -29,6 +29,8 @@ public:
         model.m_connection->setLineEpoch(model.m_statusEpoch);
     }
     static quint64 statusEpoch(const RadioModel& model) { return model.m_statusEpoch; }
+    static void beginConnect(RadioModel& model) { model.beginStatusSession(); }
+    static void connectedNow(RadioModel& model) { model.m_connectedStatusEpoch = model.m_statusEpoch; }
     static void installWriter(RadioConnection& connection, std::function<void(quint32, const QString&)> writer)
     { connection.m_commandSinkForTest = std::move(writer); }
 };
@@ -128,12 +130,35 @@ void acknowledgedSharpness()
     automatic({RadioSetupReply::Kind::Accepted, 0, {}});
     check(radio.filterSharpnessVoice() == 2 && radio.filterSharpnessVoiceAuto(),
           "independent level and automatic fields can complete in either order");
+    request(1);
+    const RadioSetupCompletion accepted = backend->replies.back();
+    request(3);
+    const RadioSetupCompletion refused = backend->replies.back();
+    accepted({RadioSetupReply::Kind::Accepted, 0, {}});
+    refused({RadioSetupReply::Kind::Refused, 1, {}});
+    check(radio.filterSharpnessVoice() == 1, "an older accepted write survives a newer refused one");
     request(3);
     const RadioSetupCompletion retired = backend->replies.back();
     RadioSetupControlTestAccess::disconnected(radio);
     retired({RadioSetupReply::Kind::Accepted, 0, {}});
     check(radio.filterSharpnessVoice() == 2 && !radio.filterSharpnessVoiceAuto(),
           "retired session cannot restore acknowledged sharpness values");
+
+}
+
+void acknowledgedRemoval()
+{
+    RadioModel radio;
+    RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+    RadioSetupControlTestAccess::transverter(radio, 6);
+    std::optional<RadioSetupReply> removed;
+    radio.requestTransverter({6, TransverterRequest::Field::Remove, std::monostate{}}, nullptr,
+        [&](const RadioSetupReply& reply) { removed = reply; });
+    const RadioSetupCompletion removal = backend->replies.back();
+    FlexSetupStatusTestPeer::deliver(radio, "xvtr 6", {{"in_use", "0"}});
+    removal({RadioSetupReply::Kind::Accepted, 0, {}});
+    check(removed && removed->kind == RadioSetupReply::Kind::Accepted,
+          "a removal the radio reports before its reply still completes as accepted");
 }
 
 void entityLifecycle()
@@ -301,8 +326,17 @@ void sessionFence()
     const quint64 second = SessionControlTestAccess::statusEpoch(radio);
     emit backend->setupStatusObserved(report(first, "stale"));
     check(second != first && radio.xvtrList().value(1).name == "a", "a report from an earlier session is refused");
+    FlexSetupStatusTestPeer::deliver(radio, "license", {{"radio_id", "abc"}});
+    SessionControlTestAccess::beginConnect(radio);   // a new connect, before the old disconnect lands
+    FlexSetupStatusTestPeer::deliver(radio, "license", {{"radio_id", "new"}});
+    FlexSetupStatusTestPeer::deliver(radio, "xvtr 8", {{"name", "new"}});
     RadioSetupControlTestAccess::disconnected(radio);
-    emit backend->setupStatusObserved(report(second, "late"));
+    check(radio.licenseRadioId() == "NEW" && radio.xvtrList().value(8).name == "new",
+          "a late disconnect keeps the newer session's license and inventory");
+    SessionControlTestAccess::connectedNow(radio);
+    const quint64 third = SessionControlTestAccess::statusEpoch(radio);
+    RadioSetupControlTestAccess::disconnected(radio);
+    emit backend->setupStatusObserved(report(third, "late"));
     check(!radio.xvtrList().contains(1), "a session that has begun to end applies nothing more");
 }
 
@@ -356,6 +390,7 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
     parserSemantics();
     acknowledgedSharpness();
+    acknowledgedRemoval();
     entityLifecycle();
     modelSemantics();
     reentrancy();

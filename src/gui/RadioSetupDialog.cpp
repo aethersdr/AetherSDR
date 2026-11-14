@@ -34,6 +34,7 @@
 #include "core/LogManager.h"
 #include "core/PeripheralSettings.h"
 #include <QApplication>
+#include <QDeadlineTimer>
 #include <QHash>
 #include <QHostAddress>
 #include <QAbstractSocket>
@@ -6302,13 +6303,19 @@ QWidget* RadioSetupDialog::buildXvtrTab()
     auto* addPage = new QWidget;
     auto* addVb = new QVBoxLayout(addPage);
     auto* addBtn = new QPushButton("Create New Transverter");
-    connect(addBtn, &QPushButton::clicked, this, [this] {
-        m_model->requestTransverter({-1, XvtrField::Create, std::monostate{}}, this);
+    // The radio's reply does not name the transverter it made, so the first
+    // one that appears soon after our own Create is taken to be it.
+    const auto selectCreated = std::make_shared<QDeadlineTimer>();
+    connect(addBtn, &QPushButton::clicked, this, [this, selectCreated] {
+        if (m_model->requestTransverter({-1, XvtrField::Create, std::monostate{}}, this)
+                == ReceiveDispatch::Dispatched) {
+            *selectCreated = QDeadlineTimer(5000);
+        }
     });
     addVb->addWidget(addBtn, 0, Qt::AlignCenter);
     addVb->addStretch(1);
     xvtrTabs->addTab(addPage, "+");
-    connect(m_model, &RadioModel::infoChanged, xvtrTabs, [this, xvtrTabs, buildXvtrPage] {
+    connect(m_model, &RadioModel::infoChanged, xvtrTabs, [this, xvtrTabs, buildXvtrPage, selectCreated] {
         const auto inventory = m_model->xvtrList();
         for (int tab = xvtrTabs->count() - 2; tab >= 0; --tab) {
             QWidget* editor = xvtrTabs->widget(tab);
@@ -6329,8 +6336,12 @@ QWidget* RadioSetupDialog::buildXvtrTab()
                 if (xvtrTabs->widget(tab)->property("transverterId").toInt() == it.key()) { found = true; break; }
             }
             if (!found) {
-                xvtrTabs->insertTab(xvtrTabs->count() - 1, buildXvtrPage(it.key(), it.value()),
+                const int tab = xvtrTabs->insertTab(xvtrTabs->count() - 1, buildXvtrPage(it.key(), it.value()),
                     it->name.isEmpty() ? QString::number(it.key()) : it->name);
+                if (!selectCreated->hasExpired()) {
+                    *selectCreated = QDeadlineTimer();   // expired: one tab only
+                    xvtrTabs->setCurrentIndex(tab);
+                }
             }
         }
     });

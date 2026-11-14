@@ -8619,8 +8619,7 @@ void RadioModel::onDisconnected()
     // Reset radio-model-specific state — different radios have different
     // capabilities (APD, max power, pan count, TGXL, amplifier, XVTR, etc.)
     // Must re-derive everything from the new radio's status on next connect. (#359)
-    m_tunerModel.setHandle({});       // clear TGXL presence
-    m_xvtrList.clear();
+    m_tunerModel.setHandle({});       // clear TGXL presence (transverters: resetSetupObservations below)
     m_amplifier.reset();              // clear PGXL presence/operate (#4094)
     if (m_flexBackend) m_flexBackend->clearExtensionHandles();  // drop cached encode handles (#4198)
     if (m_statusIngress) m_statusIngress->clearExtensionHandles();  // the demo ingress's TGXL identity
@@ -8731,7 +8730,8 @@ void RadioModel::onDisconnected()
     m_tnfModel.clear();
     m_flexWaveformModel.clear();
     m_dvkModel.reset();
-    clearLicenseState();
+    // License state is the session's, like the setup inventory reset below.
+    if (endingStatusSession) { clearLicenseState(); }
     m_memorySlotRetirements.clear();
     if (!m_memories.isEmpty()) {
         m_memories.clear();

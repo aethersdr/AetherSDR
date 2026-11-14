@@ -258,12 +258,14 @@ private slots:
         RadioSetupControlTestAccess::transverter(radio, 2);
         QCOMPARE(inventory->count(), 2);
         QCOMPARE(inventory->widget(0)->property("transverterId").toInt(), 2);
-        QCOMPARE(inventory->currentWidget(), create->parentWidget());
+        QCOMPARE(inventory->currentWidget(), inventory->widget(0));   // our Create's tab is selected
+        inventory->setCurrentWidget(create->parentWidget());
         backend = installRadioSetupBackend(radio);
         QCOMPARE(inventory->count(), 1);
         RadioSetupControlTestAccess::transverter(radio, 3);
         QCOMPARE(inventory->count(), 2);
         QCOMPARE(inventory->widget(0)->property("transverterId").toInt(), 3);
+        QCOMPARE(inventory->currentWidget(), create->parentWidget());   // only one tab per Create
         QVERIFY(backend->commands.isEmpty());
         create->click();
         dialog.reset();
