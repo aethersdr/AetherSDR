@@ -7940,6 +7940,19 @@ if(Qt6WebSockets_FOUND)
     )
     add_test(NAME tci_automation_test COMMAND tci_automation_test)
 
+    # Socket-owning test: aetherd's own network listener is the subject. It
+    # binds 127.0.0.1 on an EPHEMERAL port and a local socket in a private
+    # runtime directory, with in-process clients only: the certificate pin,
+    # pairing, the paired token, a change mirrored between a local and a
+    # network client, the session budget and frame rules. Skips (77) without
+    # the openssl tool that makes its throwaway certificate.
+    add_executable(remote_control_loopback_test tests/remote_control_loopback_test.cpp)
+    target_include_directories(remote_control_loopback_test PRIVATE src)
+    target_link_libraries(remote_control_loopback_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME remote_control_loopback_test COMMAND remote_control_loopback_test)
+    set_tests_properties(remote_control_loopback_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
     # Socket-owning test: our own TCI server is the subject, so this is inside
     # the AGENTS.md carve-out. It binds an EPHEMERAL TCP port (QWebSocketServer
     # via TciServer::start(0)) on QHostAddress::Any, with local 127.0.0.1 clients to

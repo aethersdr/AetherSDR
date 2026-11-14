@@ -158,8 +158,9 @@ bool RemoteControlServer::listen(const Endpoint& endpoint, QString* error)
     if (thread() != QThread::currentThread() || m_server->isListening()) {
         return fail(QStringLiteral("listener already started"));
     }
-    if (endpoint.address.isNull() || endpoint.port == 0) {
-        return fail(QStringLiteral("an address and a port are required"));
+    // Port 0 (ephemeral) is for tests; parseEndpoint() never yields it.
+    if (endpoint.address.isNull()) {
+        return fail(QStringLiteral("an address is required"));
     }
     if (endpoint.address == QHostAddress::AnyIPv4 || endpoint.address == QHostAddress::AnyIPv6
         || endpoint.address == QHostAddress::Any) {
