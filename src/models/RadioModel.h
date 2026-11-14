@@ -2762,6 +2762,8 @@ private:
 
 public:
     const QMap<int, TxBandInfo>& txBandSettings() const { return m_txBandSettings; }
+    // The TX band table's id for a frequency; -1 outside the table's bands.
+    int txBandIdForFrequency(double freqMhz) const { return bandIdForFrequency(freqMhz); }
 
     struct XvtrInfo {
         std::shared_ptr<SetupStatusLifetime> lifetime;

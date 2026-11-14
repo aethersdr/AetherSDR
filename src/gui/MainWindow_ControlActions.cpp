@@ -5,6 +5,7 @@
 #include "MainWindow.h"
 #include "MainWindowHelpers.h"
 #include "AppletPanel.h"
+#include "CwxPanel.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RxApplet.h"
@@ -57,6 +58,19 @@ void MainWindow::cycleBandAction(int direction)
     const int next = ((current < 0 ? 0 : current) + direction + count) % count;
     if (auto* a = m_shortcutManager.action(QLatin1String(kCycle[next].shortcutId)))
         if (a->handler) a->handler();
+}
+
+void MainWindow::fireCwxMacro(int index, const TxController::Input& input)
+{
+    if (m_cwxPanel) {
+        m_cwxPanel->fireMacro(index, input);
+        return;
+    }
+    auto& cwx = m_radioModel.cwxModel();
+    if (index < 0 || index >= 12 || !cwx.canSend() || !input.belongsTo(&cwx)) return;
+    const QString text = cwx.macro(index);
+    if (!text.isEmpty()) (void)input.send(text);
+    else (void)input.sendMacro(index + 1);
 }
 
 // The menu entry whose text, with the menus above it, ends with `path`
@@ -564,6 +578,74 @@ void MainWindow::registerControlActions()
                        menuEntry({"AetherModem..."})).inMidiCategory("Global"));
     reg.add(A::trigger("band_plan_toggle", "global.bandPlanToggle", "Band Plan Toggle", "Display",
                        [this](float) { toggleBandPlanStrip(); }).inMidiCategory("Global"));
+
+    // ── CWX: cancel and the panel (not keying) ─────────────────────────
+    const auto cwxAvailable = [this] { return m_radioModel.isConnected(); };
+    reg.add(A::trigger("cwx_cancel", "cwx.cancel", "Stop CWX / Macros", "CW",
+                       [this](float) { m_radioModel.cwxModel().clearBuffer(); })
+        .inMidiCategory("Phone/CW").when(cwxAvailable));
+    reg.add(A::trigger("cwx_panel_toggle", "cwx.panelToggle", "Show/Hide CWX Panel", "CW",
+                       [this](float) { toggleCwKeyerPanel(); })
+        .inMidiCategory("Phone/CW"));
+
+    // ── TX outputs (ACC TX, TX1–TX3) for the current TX band ───────────
+    // The radio's own per-band output enables, as TX Band Settings edits
+    // them, through the typed TxBandRequest every backend handles or refuses.
+    // Offered only where the radio reported a TX band table for this band.
+    using BandField = TxBandRequest::Field;
+    const auto txBandId = [this] {
+        return m_radioModel.txBandIdForFrequency(m_radioModel.transmitModel().transmitFreq());
+    };
+    struct TxOutput { const char* key; const char* midiId; const char* name; BandField field; };
+    static constexpr TxOutput kOutputs[] = {
+        {"tx_output_acc", "tx.outputAcc", "ACC TX Output", BandField::AccessoryTx},
+        {"tx_output_1",   "tx.output1",   "TX1 Output",    BandField::Tx1},
+        {"tx_output_2",   "tx.output2",   "TX2 Output",    BandField::Tx2},
+        {"tx_output_3",   "tx.output3",   "TX3 Output",    BandField::Tx3},
+    };
+    for (const auto& o : kOutputs) {
+        const auto field = o.field;
+        reg.add(A::toggle(o.key, o.midiId, o.name, "TX",
+            [this, txBandId, field](float v) {
+                m_radioModel.requestTxBand({txBandId(), field, v > 0.5f});
+            },
+            [this, txBandId, field]() -> float {
+                const auto band = m_radioModel.txBandSettings().value(txBandId());
+                const bool on = field == BandField::AccessoryTx ? band.accTx
+                              : field == BandField::Tx1 ? band.tx1
+                              : field == BandField::Tx2 ? band.tx2 : band.tx3;
+                return on ? 1 : 0;
+            })
+            .when([this, txBandId, canTransmit] {
+                return canTransmit() && m_radioModel.txBandSettings().contains(txBandId());
+            }));
+    }
+
+    // ── Keying actions: on the TX path, like MOX and TUNE ──────────────
+    // Keyboard side registers as a keysTx action with a TxController handler
+    // (the registerTxShortcut shape); the MIDI side is consumed by
+    // dispatchScopedMidiTx with the device's own captured input.
+    const auto txShortcut = [this](const QString& id, const QString& name, const char* category,
+                                   TxController::Activity activity,
+                                   std::function<void(const TxController::Input&)> handler) {
+        m_shortcutManager.registerAction(id, name, category, QKeySequence(),
+            [this, activity, handler] {
+                if (m_radioModel.isConnected())
+                    handler(m_radioModel.localTxController()->capture(activity));
+            }, /*autoRepeat=*/false, /*keysTx=*/true);
+        ShortcutManager::Action* action = m_shortcutManager.action(id);
+        action->txActivity = activity;
+        action->txHandler = std::move(handler);
+    };
+    txShortcut("atu_bypass", "ATU Bypass", "TX", TxController::Activity::Atu,
+               [](const TxController::Input& input) { (void)input.bypassAtu(); });
+    reg.addPair("atu_bypass", "tx.atuBypass");
+    for (int n = 1; n <= 12; ++n) {
+        const QString id = QStringLiteral("cwx_macro_%1").arg(n);
+        txShortcut(id, QStringLiteral("CWX Macro F%1").arg(n), "CW", TxController::Activity::Cwx,
+                   [this, n](const TxController::Input& input) { fireCwxMacro(n - 1, input); });
+        reg.addPair(id, QStringLiteral("cwx.macro%1").arg(n));
+    }
 
     // ── Pairs declared before the registry (keyboard id ↔ MIDI id) ─────
     static constexpr std::pair<const char*, const char*> kLegacyPairs[] = {

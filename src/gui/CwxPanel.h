@@ -108,6 +108,10 @@ public:
     CwxBubble* pendingBubble() const { return m_pendingBubble; }
     int        historyBubbleCount() const;
 
+    // Fire macro F1..F12 (index 0..11) on the given TX input, exactly as the
+    // panel's own F-key does, history bubble included.
+    void fireMacro(int index, const TxController::Input& input) { sendMacro(index, &input); }
+
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
 

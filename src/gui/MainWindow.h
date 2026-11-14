@@ -975,6 +975,7 @@ private:
     // (ControlActionRegistry; MainWindow_ControlActions.cpp).
     void registerControlActions();
     QAction* findMenuAction(const QStringList& path) const;
+    void fireCwxMacro(int index, const TxController::Input& input);  // F1..F12 = 0..11
     // Band stack stepping and the band-plan strip toggle (registry actions).
     bool hasBandStackEntries() const;
     void stepBandStack(int direction);

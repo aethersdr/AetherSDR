@@ -1973,6 +1973,23 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
 bool MainWindow::dispatchScopedMidiTx(const QString& id, float value,
                                      const std::shared_ptr<TxController>& controller)
 {
+    // Registry keying actions: consumed here with the device's own input,
+    // never falling through to a setter (see MidiTxDispatch.h).
+    if (id == QLatin1String("tx.atuBypass") || id.startsWith(QLatin1String("cwx.macro"))) {
+        if (value <= 0.5f || !controller || !controller->valid()
+            || !controller->belongsTo(&m_radioModel)) {
+            return true;
+        }
+        if (id == QLatin1String("tx.atuBypass")) {
+            (void)controller->capture(TxController::Activity::Atu).bypassAtu();
+        } else {
+            bool ok = false;
+            const int n = id.mid(QStringLiteral("cwx.macro").size()).toInt(&ok);
+            if (ok && n >= 1 && n <= 12)
+                fireCwxMacro(n - 1, controller->capture(TxController::Activity::Cwx));
+        }
+        return true;
+    }
     return dispatchMidiTxInput(id, value, m_radioModel, controller,
         [this](const QString& action, bool press, const std::shared_ptr<TxController>& source) {
             (void)handleScopedCwMomentaryShortcut(action, press, source, false);
@@ -2610,6 +2627,14 @@ void MainWindow::registerMidiParams()
             auto* s = activeSlice();
             return (s && s->playOn()) ? 1.0f : 0.0f;
         });
+
+    // ── Registry keying actions (dispatchScopedMidiTx consumes them) ────
+    reg("tx.atuBypass", "ATU Bypass", "TX", P::Trigger, 0, 1, [](float) {});
+    for (int n = 1; n <= 12; ++n) {
+        reg(QStringLiteral("cwx.macro%1").arg(n).toUtf8().constData(),
+            QStringLiteral("CWX Macro F%1").arg(n).toUtf8().constData(),
+            "Phone/CW", P::Trigger, 0, 1, [](float) {});
+    }
 
     // ── Registry-declared actions (ControlActionRegistry) ───────────────
     m_controlActions.publishMidi([&reg](const ControlActionMidiSpec& spec) {
