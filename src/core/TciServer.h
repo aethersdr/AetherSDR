@@ -20,6 +20,7 @@
 #include <QWebSocketProtocol>  // CloseCode for the m_rxClose test seam
 #include <QObject>
 #include <QPointer>
+#include <QDeadlineTimer>
 #include <QElapsedTimer>
 #include <QHash>
 #include <QJsonObject>
@@ -274,6 +275,7 @@ private:
     TciExtensionSet::Result handleSpan(const QString& name, const QStringList& args);
     void queueSpanNotice();
     bool broadcastSpan();
+    void armSpanAnswerTimer();
     void broadcastBinary(const QByteArray& data);
     SliceModel* sliceForTrx(int trx) const;
     // No first-slice fallback — for paths that key the radio (#4547).
@@ -544,19 +546,19 @@ private:
     // a notice carries what moved; a dispatched set owes its trx a line even
     // when the radio kept the span it had.
     std::unique_ptr<TciExtensionNotice> m_spanNotice;
-    QTimer*           m_spanAnswerTimer{nullptr};
+    QTimer*           m_spanAnswerTimer{nullptr};  // the nearest owed deadline
     QHash<int, qint64> m_spanAnnounced;
     QString           m_spanRatesAnnounced;
-    // A dispatched set, per trx: the pan it waits on, the span and centre then.
-    // Only a report after the dispatch can answer it.
+    // A dispatched set, per trx: the pan it waits on, the span and centre then,
+    // and its own deadline. Only a report after the dispatch can answer it.
     struct SpanAnswer {
         QString panId;
         qint64  spanHz{0};
         double  centerMhz{0.0};
         bool    reported{false};
+        QDeadlineTimer deadline;
     };
     QHash<int, SpanAnswer> m_spanAnswerOwed;
-    bool              m_spanAnswerExpired{false};
     // Last split_enable:0 state publishMainSplit() settled on (-1 = none yet).
     int               m_announcedSplit{-1};
     TciClient*       m_txChronoClient{nullptr};

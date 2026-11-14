@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <utility>
 
@@ -653,18 +654,13 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     });
 
     // Extension set, span: the same limiter as drive: for its notification,
-    // and a bound on how long a dispatched set waits for the radio's report.
+    // and a bound on how long each dispatched set waits for the radio's report.
     m_spanNotice = std::make_unique<TciExtensionNotice>(
         this, kPowerRateLimitMs, [this] { return broadcastSpan(); });
     m_spanAnswerTimer = new QTimer(this);
     m_spanAnswerTimer->setSingleShot(true);
-    m_spanAnswerTimer->setInterval(kSpanAnswerTimeoutMs);
-    connect(m_spanAnswerTimer, &QTimer::timeout, this, [this]() {
-        if (!m_spanAnswerOwed.isEmpty()) {
-            m_spanAnswerExpired = true;
-            queueSpanNotice();
-        }
-    });
+    m_spanAnswerTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_spanAnswerTimer, &QTimer::timeout, this, [this]() { queueSpanNotice(); });
     registerSpanGroup();
 
     // Debounced DAX RX teardown — see scheduleDaxRelease(). Single-shot; a
@@ -4045,8 +4041,9 @@ TciExtensionSet::Result TciServer::handleSpan(const QString& name, const QString
     }
     const QString panId = sliceForTrxStrict(request->trx)->panId();
     m_spanAnswerOwed.insert(request->trx,
-        SpanAnswer{panId, *current, m_model->panadapter(panId)->centerMhz(), false});
-    m_spanAnswerTimer->start();
+        SpanAnswer{panId, *current, m_model->panadapter(panId)->centerMhz(), false,
+                   QDeadlineTimer(kSpanAnswerTimeoutMs)});
+    armSpanAnswerTimer();
     m_model->requestPanBandwidth(panId, static_cast<double>(target) / 1.0e6);
     return result;
 }
@@ -4056,17 +4053,32 @@ void TciServer::queueSpanNotice()
     m_spanNotice->queue();
 }
 
+// Fires at the nearest deadline among the owed answers; none owed, stopped.
+void TciServer::armSpanAnswerTimer()
+{
+    qint64 nearestMs = -1;
+    for (const SpanAnswer& owed : std::as_const(m_spanAnswerOwed)) {
+        const qint64 remainingMs = owed.deadline.remainingTime();
+        nearestMs = nearestMs < 0 ? remainingMs : std::min(nearestMs, remainingMs);
+    }
+    if (nearestMs < 0) {
+        m_spanAnswerTimer->stop();
+    } else {
+        m_spanAnswerTimer->start(static_cast<int>(std::max<qint64>(nearestMs, 1)));
+    }
+}
+
 // What moved since the last notice, and the answer to a dispatched set once
-// its pan has reported (or kSpanAnswerTimeoutMs passed), even if the radio kept
-// the span. The record is kept with no client enabled too, so a later change is
-// never measured against a value from before someone enabled.
+// its pan has reported (or its kSpanAnswerTimeoutMs passed), even if the radio
+// kept the span. The record is kept with no client enabled too, so a later
+// change is never measured against a value from before someone enabled.
 bool TciServer::broadcastSpan()
 {
     if (!spanOffered()) {
         m_spanAnnounced.clear();
         m_spanRatesAnnounced.clear();
         m_spanAnswerOwed.clear();
-        m_spanAnswerExpired = false;
+        m_spanAnswerTimer->stop();
         return false;
     }
     const QString rates = spanRatesLine();
@@ -4081,21 +4093,19 @@ bool TciServer::broadcastSpan()
         const qint64 hz = spans.value(trx);
         const auto owed = m_spanAnswerOwed.constFind(trx);
         const bool answered = owed != m_spanAnswerOwed.cend()
-            && (m_spanAnswerExpired || owed->reported);
+            && (owed->reported || owed->deadline.hasExpired());
         if (answered || m_spanAnnounced.value(trx, -1) != hz) {
             lines << TciSpanExtension::spanLine(trx, hz);
             m_spanAnswerOwed.remove(trx);
         }
     }
-    if (m_spanAnswerExpired) {
-        m_spanAnswerOwed.clear();  // a trx that has gone has nothing to answer
+    // A trx that has gone has nothing to answer.
+    for (auto it = m_spanAnswerOwed.begin(); it != m_spanAnswerOwed.end();) {
+        it = it->deadline.hasExpired() ? m_spanAnswerOwed.erase(it) : std::next(it);
     }
     m_spanRatesAnnounced = rates;
     m_spanAnnounced = spans;
-    m_spanAnswerExpired = false;
-    if (m_spanAnswerOwed.isEmpty()) {
-        m_spanAnswerTimer->stop();
-    }
+    armSpanAnswerTimer();
     const bool anyEnabled = std::any_of(m_clients.cbegin(), m_clients.cend(),
         [](const ClientState& client) { return client.extensionsEnabled; });
     if (lines.isEmpty() || !anyEnabled) {

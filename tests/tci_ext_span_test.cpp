@@ -640,6 +640,29 @@ void ownershipBeforeMox()
           "while transmit ownership is held, a set is refused and answered with the span in force");
 }
 
+// Each owed answer keeps its own two seconds: a later set on another trx does
+// not push back the one already waiting.
+void answerDeadlinePerTrx()
+{
+    Fixture f(false, false, 0.2, 0.1);
+    f.backend->answer = SpanBackend::Answer::Never;
+    Wire a;
+    TciSpanExtensionTest::attach(*f.server, a.client, f.model);
+    settle(600);
+    a.take();
+    a.send("aethersdr_ext_enable:true;");
+    a.take();
+    a.send("aethersdr_rx_span:0,150000;");
+    settle(1200);
+    a.send("aethersdr_rx_span:1,150000;");
+    settle(1000);
+    check(expect(a, lines({"aethersdr_rx_span:0,200000;"})),
+          "a set unanswered for two seconds is answered then, though another trx was set since");
+    settle(1200);
+    check(expect(a, lines({"aethersdr_rx_span:1,100000;"})),
+          "and the later set is answered at its own two seconds");
+}
+
 // A group registered after the span group, as the later groups of the set
 // are. A capability change that leaves the list as it was sends no state, so
 // a rates change in the same turn still goes out as a notice; one that changes
@@ -697,6 +720,7 @@ int main(int argc, char** argv)
     rateRadioWide();
     continuousPerPan();
     ownershipBeforeMox();
+    answerDeadlinePerTrx();
     groupRegisteredAfterSpan();
 
     std::printf("%d failure(s)\n", g_failures);
