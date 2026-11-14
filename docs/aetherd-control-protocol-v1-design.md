@@ -339,6 +339,14 @@ certificate validation.  Wildcard/plain-LAN binding is rejected.  Origin
 headers are not authentication.  Bearer credentials are accepted only over a
 confidential transport or a current-user local endpoint.
 
+Remote clients, slice 1 ([`aetherd-remote-clients.md`](aetherd-remote-clients.md),
+ruled 2026-11-13) implements that listener receive-only: TLS with a pinned
+self-signed certificate, or a WireGuard address. Network sessions start
+unauthenticated and take their grants from the credential's scope
+(`remote-observe`, `remote-control`); they are never attached to the transmit
+service. Its pairing methods are the one wire path that provisions a
+credential, and only a code shown on the radio's own screen opens it.
+
 ## 7. Transmit actor and arbitration contract
 
 Stage 3 exports read-only transmit state and no transmitting methods.  Stage 4

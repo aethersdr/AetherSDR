@@ -51,7 +51,8 @@ identity. It refuses to overwrite any existing authority, including an empty
 one. Subsequent actions require the selected authority; IDs and roles are the
 only output. Secrets are never accepted in argv or exported to stdout, ordinary
 settings or files. The initial local-client integration will retrieve its selected
-credential through the native-vault adapter; no token export command is provided.
+credential through the native-vault adapter; no token export command is provided. Remote clients receive theirs through
+pairing ([`aetherd-remote-clients.md`](aetherd-remote-clients.md)), once, over TLS.
 Combining an offline action with discovery/control/TX or another action is rejected
 before storage access or radio construction.
 
@@ -393,6 +394,8 @@ native-vault/actual-daemon checks have been exercised. The PR records final
 revision-specific results and limitations; unit-test injection is never a
 substitute for the hardware evidence above.
 
-SIP, remote listeners, Stage 5 audio transport and new backend feature parity
-remain out of scope. No timer, client grant or local ownership claim guarantees
+SIP, Stage 5 audio transport and new backend feature parity remain out of
+scope. Remote listeners are specified receive-only in
+[`aetherd-remote-clients.md`](aetherd-remote-clients.md): network sessions never
+reach `tx.*` or `txAdmin.*`. No timer, client grant or local ownership claim guarantees
 exclusivity against physical PTT or other radio clients.
