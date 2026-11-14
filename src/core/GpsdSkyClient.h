@@ -127,6 +127,9 @@ protected:
     void ingest(const QByteArray& chunk);
     // Bytes held waiting for a newline; never more than the line bound.
     qsizetype pendingBytes() const { return m_buffer.size(); }
+    // No full SKY for 30 s: forget the merged sky and the detail, so nothing
+    // from before the quiet spell comes back as live, and emit skyStale().
+    void markStale();
 
 private:
     void openSession();

@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QTimer>
 
 namespace AetherSDR {
 
@@ -42,14 +43,17 @@ signals:
     void failed(const QString& message);
 
 private:
-    void removalAccepted();
+    void startSettling(bool installing);
 
     QPointer<RadioModel> m_model;
     WaveformInstaller* m_installer{nullptr};
     bool m_removing{false};    // the remove command is in flight
-    // The radio accepted a removal but still lists the waveform: it takes a
-    // few seconds to carry it out. Ends when the row goes, or after 30 s.
-    bool m_removalPending{false};
+    // The radio accepted an install or a removal but its list doesn't show
+    // it yet: it takes a few seconds. Ends when the list agrees, on a
+    // disconnect, or when m_settleTimer (30 s, one per change) fires.
+    enum class Settling { None, Install, Removal };
+    Settling m_settling{Settling::None};
+    QTimer m_settleTimer;
 };
 
 }  // namespace AetherSDR

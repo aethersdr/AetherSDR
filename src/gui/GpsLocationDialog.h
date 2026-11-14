@@ -126,6 +126,7 @@ private:
     QLabel* m_gpsToolsLabel{nullptr};
     AetherGpsTools* m_gpsTools{nullptr};
     bool m_gpsToolsInstalled{false};
+    int m_installPercent{-1};   // the install's last progress, -1 before any
 
     QLabel* m_utcTimeLabel{nullptr};
     QLabel* m_localTimeLabel{nullptr};

@@ -364,7 +364,8 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     m_gpsTools = new AetherGpsTools(radioModel, this);
     connect(m_gpsTools, &AetherGpsTools::changed, this, &GpsLocationDialog::updateGpsTools);
     connect(m_gpsTools, &AetherGpsTools::installProgress, this, [this](int percent) {
-        m_gpsToolsLabel->setText(tr("Installing AetherGPS on the radio… %1%").arg(percent));
+        m_installPercent = percent;
+        updateGpsTools();
     });
     connect(m_gpsTools, &AetherGpsTools::failed, this, [this](const QString& message) {
         m_gpsToolsLabel->setText(message);
@@ -857,11 +858,15 @@ void GpsLocationDialog::updateGpsTools()
     const QString about = tr("Installs a small tool on the radio that shows each satellite, the "
                              "receiver's accuracy and PPS timing here, and shares the radio's GPS, "
                              "including its position, with gpsd and NMEA programs on your network.");
+    if (!busy) {
+        m_installPercent = -1;
+    }
     if (busy) {
-        // An install reports its progress through installProgress.
         if (m_gpsToolsInstalled) {
             m_gpsToolsLabel->setText(tr("Removing AetherGPS from the radio…"));
-        } else if (!m_gpsToolsLabel->text().startsWith(tr("Installing AetherGPS"))) {
+        } else if (m_installPercent >= 0 && m_installPercent < 100) {
+            m_gpsToolsLabel->setText(tr("Installing AetherGPS on the radio… %1%").arg(m_installPercent));
+        } else {
             m_gpsToolsLabel->setText(tr("Installing AetherGPS on the radio…"));
         }
     } else if (!reason.isEmpty()) {

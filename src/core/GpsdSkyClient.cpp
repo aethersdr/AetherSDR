@@ -177,9 +177,15 @@ bool applyDetail(const QJsonObject& o, GpsdDetail& d)
         if (rns < 0 || rns >= 1000000000 || cns < 0 || cns >= 1000000000) {
             return false;
         }
+        // Seconds must be integers: toInteger() answers its default for any
+        // other number, so two defaults that differ expose one.
+        const qint64 csec = cs.toInteger(0), rsec = rs.toInteger(0);
+        if (csec != cs.toInteger(1) || rsec != rs.toInteger(1)) {
+            return false;
+        }
         // Any qint64 can arrive: subtract without overflowing, then range-check.
         qint64 secs = 0;
-        if (qSubOverflow(cs.toInteger(), rs.toInteger(), &secs) || secs < -100 || secs > 100) {
+        if (qSubOverflow(csec, rsec, &secs) || secs < -100 || secs > 100) {
             return false;   // malformed, or the clock is far off: an offset in ns means nothing
         }
         // A pulse marks the start of a second; which second comes from the
@@ -243,7 +249,7 @@ GpsdSkyClient::GpsdSkyClient(QObject* parent)
     connect(m_retry, &QTimer::timeout, this, &GpsdSkyClient::openSession);
     m_stale->setSingleShot(true);
     m_stale->setInterval(kStaleMs);
-    connect(m_stale, &QTimer::timeout, this, &GpsdSkyClient::skyStale);
+    connect(m_stale, &QTimer::timeout, this, &GpsdSkyClient::markStale);
 }
 
 void GpsdSkyClient::start(const QHostAddress& address)
@@ -328,6 +334,13 @@ void GpsdSkyClient::closeSession(const QString& reason)
         setState(State::Unavailable, reason);
         m_retry->start();
     }
+}
+
+void GpsdSkyClient::markStale()
+{
+    m_sky.clear();
+    m_detail = {};
+    emit skyStale();
 }
 
 void GpsdSkyClient::setState(State state, const QString& detail)

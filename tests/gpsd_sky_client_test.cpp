@@ -30,6 +30,7 @@ class StreamProbe : public GpsdSkyClient {
 public:
     using GpsdSkyClient::ingest;
     using GpsdSkyClient::pendingBytes;
+    using GpsdSkyClient::markStale;
 };
 
 int g_failed = 0;
@@ -174,6 +175,19 @@ int main(int argc, char** argv)
         check(sizes.last() == 3, "a satellite stays while missing from 3 reports in a row");
         client.ingest(partial + "\n");
         check(sizes.last() == 2, "and leaves once missing from 4");
+
+        // After a quiet spell nothing old is merged back in.
+        client.ingest(full + "\n");
+        check(sizes.last() == 3, "a full report brings Galileo back");
+        GpsdDetail detail;
+        QObject::connect(&client, &GpsdSkyClient::detailUpdated, [&](const GpsdDetail& d) { detail = d; });
+        client.ingest(QByteArray(R"({"class":"SKY","hdop":7.0,"satellites":[]})") + "\n");
+        client.markStale();
+        client.ingest(partial + "\n");
+        check(sizes.last() == 2, "after stale, the merge starts over: Galileo isn't revived");
+        client.ingest(QByteArray(R"({"class":"TPV","mode":3})") + "\n");
+        check(detail.mode == 3 && std::isnan(detail.hdop),
+              "after stale, a TPV doesn't bring back the old DOPs");
     }
     {
         GpsdDetail d;
@@ -220,6 +234,12 @@ int main(int argc, char** argv)
                          R"("clock_sec":-9223372036854775808,"clock_nsec":0})").object(), d)
                   && d.hasPps && d.ppsOffsetNs == 99855,
               "seconds that would overflow, either way, are refused and the last offset kept");
+        check(!gpsdsky::applyDetail(QJsonDocument::fromJson(
+                  R"({"class":"PPS","real_sec":3,"real_nsec":0,"clock_sec":1700000000.5,"clock_nsec":0})").object(), d)
+                  && !gpsdsky::applyDetail(QJsonDocument::fromJson(
+                         R"({"class":"PPS","real_sec":2.5,"real_nsec":0,"clock_sec":2,"clock_nsec":0})").object(), d)
+                  && d.ppsOffsetNs == 99855,
+              "fractional seconds are refused, not read as 0");
         check(gpsdsky::applyDetail(QJsonDocument::fromJson(
                   R"({"class":"DEVICES","devices":[{"path":"/dev/ttyGPS","driver":"NMEA0183","bps":38400},)"
                   R"({"path":"/dev/pps0","driver":"PPS"}]})").object(), d)

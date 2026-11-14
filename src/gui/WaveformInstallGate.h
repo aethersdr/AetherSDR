@@ -2,7 +2,9 @@
 
 #include "models/ModelCapabilities.h"   // RadioPlatform, isKnownNonWfpPlatform
 
+#include <QCoreApplication>
 #include <QPointer>
+#include <QString>
 
 namespace AetherSDR {
 
@@ -82,6 +84,33 @@ inline DockerWaveformInstallBlocker dockerWaveformInstallBlocker(
         return DockerWaveformInstallBlocker::WfpNotReady;
     }
     return DockerWaveformInstallBlocker::None;
+}
+
+// What to tell the operator for a Docker install blocker; empty for None.
+// One wording for every install path (the Waveforms window, AetherGPS).
+inline QString dockerInstallBlockerMessage(DockerWaveformInstallBlocker blocker, bool wfpPowered,
+                                           bool wfpReady)
+{
+    switch (blocker) {
+    case DockerWaveformInstallBlocker::None:
+        return {};
+    case DockerWaveformInstallBlocker::NotConnected:
+        return QCoreApplication::translate("WaveformInstallGate",
+            "Connect to a radio before installing Docker waveform images.");
+    case DockerWaveformInstallBlocker::UnsupportedPlatform:
+        return QCoreApplication::translate("WaveformInstallGate",
+            "This radio platform does not support on-radio Docker waveform deployment.");
+    case DockerWaveformInstallBlocker::RuntimeStatusUnknown:
+        return QCoreApplication::translate("WaveformInstallGate",
+            "WFP runtime status has not been reported by this radio.");
+    case DockerWaveformInstallBlocker::WfpNotReady:
+        break;
+    }
+    return QCoreApplication::translate("WaveformInstallGate", "%1, %2")
+        .arg(wfpPowered ? QCoreApplication::translate("WaveformInstallGate", "WFP ON")
+                        : QCoreApplication::translate("WaveformInstallGate", "WFP OFF"),
+             wfpReady ? QCoreApplication::translate("WaveformInstallGate", "READY")
+                      : QCoreApplication::translate("WaveformInstallGate", "NOT READY"));
 }
 
 // Why AetherGPS's "Install AetherGPS on the radio" checkbox is unavailable,

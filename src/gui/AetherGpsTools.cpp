@@ -38,10 +38,18 @@ AetherGpsTools::AetherGpsTools(RadioModel* model, QObject* parent)
     if (!model) {
         return;
     }
+    m_settleTimer.setSingleShot(true);
+    m_settleTimer.setInterval(30'000);
+    connect(&m_settleTimer, &QTimer::timeout, this, [this] {
+        m_settling = Settling::None;
+        emit changed();
+    });
     FlexWaveformModel& waveforms = model->flexWaveformModel();
     auto refresh = [this] {
-        if (m_removalPending && !installed()) {
-            m_removalPending = false;
+        if ((m_settling == Settling::Removal && !installed())
+            || (m_settling == Settling::Install && installed())) {
+            m_settling = Settling::None;
+            m_settleTimer.stop();
         }
         emit changed();
     };
@@ -49,7 +57,11 @@ AetherGpsTools::AetherGpsTools(RadioModel* model, QObject* parent)
     connect(&waveforms, &FlexWaveformModel::wfpStatusChanged, this, refresh);
     connect(model, &RadioModel::connectionStateChanged, this, [this, refresh](bool connected) {
         if (!connected) {
-            m_removalPending = false;
+            // A reply that will never come (the session ended) must not
+            // leave the checkbox disabled.
+            m_removing = false;
+            m_settling = Settling::None;
+            m_settleTimer.stop();
         }
         refresh();
     });
@@ -68,7 +80,8 @@ bool AetherGpsTools::installed() const
 
 bool AetherGpsTools::busy() const
 {
-    return m_removing || m_removalPending || (m_installer && m_installer->isInstalling());
+    // Any upload in this process counts: the Waveforms window's too.
+    return m_removing || m_settling != Settling::None || WaveformInstaller::anyInstalling();
 }
 
 AetherGpsBlocker AetherGpsTools::blocker() const
@@ -81,9 +94,10 @@ AetherGpsBlocker AetherGpsTools::blocker() const
     const FlexWaveformModel& wf = m_model->flexWaveformModel();
     DockerWaveformInstallBlocker docker =
         dockerWaveformInstallBlocker(true, platform, wf.wfpStatusSeen(), wf.wfpPowered(), wf.wfpReady());
-    // A deploy picks up staged environment variables: wait them out.
+    // A deploy picks up staged environment variables: wait them out. The
+    // reason comes from waveformEnvironmentInstallBlocker() itself.
     if (docker == DockerWaveformInstallBlocker::None && !waveformEnvironmentInstallBlocker(m_model).isEmpty()) {
-        docker = DockerWaveformInstallBlocker::WfpNotReady;
+        docker = DockerWaveformInstallBlocker::RuntimeStatusUnknown;
     }
     return aetherGpsBlocker(true, m_model->backendCapabilities().hasWaveforms,
                             remoteAccessUsesNativePackage(platform), docker);
@@ -105,9 +119,12 @@ QString AetherGpsTools::blockerReason() const
     if (!staging.isEmpty()) {
         return staging;
     }
+    // The Waveforms window's wording for the same state.
     const FlexWaveformModel& wf = m_model->flexWaveformModel();
-    return wf.wfpStatusSeen() ? tr("The radio's Waveform Processor isn't ready.")
-                              : tr("The radio hasn't reported whether it can run containers yet.");
+    return dockerInstallBlockerMessage(
+        dockerWaveformInstallBlocker(true, m_model->capabilities().platform, wf.wfpStatusSeen(),
+                                     wf.wfpPowered(), wf.wfpReady()),
+        wf.wfpPowered(), wf.wfpReady());
 }
 
 void AetherGpsTools::install()
@@ -135,6 +152,9 @@ void AetherGpsTools::install()
                 [this](int percent, const QString&) { emit installProgress(percent); });
     }
     connect(m_installer, &WaveformInstaller::finished, this, [this](bool ok, const QString& message) {
+        if (ok) {
+            startSettling(true);   // until the radio lists it
+        }
         emit changed();
         if (!ok) {
             emit failed(tr("Couldn't install AetherGPS: %1").arg(message));
@@ -170,7 +190,7 @@ void AetherGpsTools::remove()
         disconnect(*conn);
         m_removing = false;
         if (ok) {
-            removalAccepted();
+            startSettling(false);   // until the radio drops it
         }
         emit changed();
         if (!ok) {
@@ -186,18 +206,13 @@ void AetherGpsTools::remove()
     emit changed();
 }
 
-void AetherGpsTools::removalAccepted()
+void AetherGpsTools::startSettling(bool installing)
 {
-    if (!installed()) {
-        return;   // already gone from the list
+    if (installed() == installing) {
+        return;   // the list already agrees
     }
-    m_removalPending = true;
-    QTimer::singleShot(30'000, this, [this] {
-        if (m_removalPending) {
-            m_removalPending = false;
-            emit changed();
-        }
-    });
+    m_settling = installing ? Settling::Install : Settling::Removal;
+    m_settleTimer.start();   // restarts: an earlier change's timer can't end this one
 }
 
 }  // namespace AetherSDR
