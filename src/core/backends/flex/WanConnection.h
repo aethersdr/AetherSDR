@@ -1,8 +1,6 @@
 #pragma once
 #include "core/backends/SessionCommandGuard.h"
 
-#include "FlexRadioStatus.h"
-
 #include "CommandParser.h"
 
 #include <QObject>
@@ -58,16 +56,21 @@ public:
     void disconnectFromRadio();
 
     // Same command interface as RadioConnection
-    // Only these source operations are safe across the transport thread boundary.
-    std::shared_ptr<RadioStatusLifetime> radioStatusLifetime() const { return m_radioStatusSource.lifetime(); }
-    void invalidateRadioStatus() { m_radioStatusSource.invalidate(); }
-
     using ResponseCallback = std::function<void(int resultCode, const QString& body)>;
     quint32 sendCommand(const QString& command,
                         ResponseCallback callback = nullptr);
     quint64 commandSessionGeneration() const { return m_sessionGeneration; }
+    // The status epoch lines are tagged with (FlexStatusIngress::bindLive()).
+    void setLineEpoch(quint64 epoch) { m_lineEpoch = epoch; }
+    quint64 lineEpoch() const { return m_lineEpoch; }
     void forgetSessionReply(quint32 sequence, quint64 generation)
     { if (generation == m_sessionGeneration) { m_pendingCallbacks.remove(sequence); } }
+    // The one admission rule for session and administration writes: the
+    // caller's session is current and this transport is the one it opened.
+    bool sessionWriteAdmitted(quint64 generation, const SessionCommandGuard& guard) const
+    { return guard.current() && generation == m_sessionGeneration && isConnected(); }
+    quint32 sendSessionCommand(const QString& command, quint64 generation,
+                               const SessionCommandGuard& guard, ResponseCallback callback = {});
     quint32 sendAdministrationCommand(const QString& command, quint64 generation,
         const SessionCommandGuard& guard, ResponseCallback callback);
 
@@ -87,9 +90,9 @@ signals:
     void connected();
     void disconnected();
     void errorOccurred(const QString& message);
-    void messageReceived(const ParsedMessage& msg);
-    void radioStatusObserved(const AetherSDR::RadioStatusObservation& observation);
-    void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
+    // Every parsed line, once, tagged with its status epoch (setLineEpoch()).
+    // FlexStatusIngress is its only subscriber.
+    void lineReceived(const AetherSDR::ParsedMessage& line, quint64 epoch);
     void versionReceived(const QString& version);
     void pingRttMeasured(int ms);
 
@@ -111,9 +114,8 @@ private slots:
     void onHeartbeat();
 
 private:
-    friend class FlexRadioStatusTestPeer;
-    FlexRadioStatusSource m_radioStatusSource;
     friend class WanConnectionTestAccess;
+    friend class SessionControlTestAccess;
     friend class RadioAdministrationTestAccess;
 
     void processLine(const QString& line);
@@ -127,6 +129,7 @@ private:
 
     bool    m_connected{false};
     quint64 m_sessionGeneration{0};
+    quint64 m_lineEpoch{0};
     bool    m_validated{false};  // wan validate sent
     quint32 m_handle{0};
     std::atomic<quint32> m_seqCounter{1};

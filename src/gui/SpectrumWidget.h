@@ -31,6 +31,7 @@
 
 #include "DssRenderer.h"
 #include "SpectrumPreviewLogic.h"
+#include "SpectrumTraceBins.h"
 #include "WaterfallHistoryBuffer.h"
 #include "WaterfallTimeMarkers.h"
 #include "WaterfallTimeScaleLock.h"
@@ -217,6 +218,8 @@ public:
     Q_INVOKABLE QVariantMap automationDssSetScrollback(bool live,
                                                        int offsetRows);
     Q_INVOKABLE QVariantMap traceDebugSnapshot();
+    // The trace's bins themselves, for `get tracedebug <pan> bins` (#5806).
+    Q_INVOKABLE QVariantMap traceBinsSnapshot() const;
     // Every value the Display panel owns, as one flat map keyed by the panel's
     // own control names. Exists so "Clone to all Pans" (and any future
     // display-preference change) is provable field-by-field over the automation
@@ -257,8 +260,10 @@ public:
                         const QString& id,
                         int durationMs = 5000);
 
-    // Feed a new FFT frame. bins are scaled dBm values.
-    void updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale = {});
+    // Feed a new FFT frame. bins are scaled dBm values. heldForPresentation:
+    // Receive Sync queued it; `get tracedebug <pan> bins` refuses it.
+    void updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale = {},
+                        bool heldForPresentation = false);
 
     // Feed a single waterfall row from a VITA-49 waterfall tile.
     // lowFreqMhz/highFreqMhz describe the tile's frequency span.
@@ -471,24 +476,34 @@ public:
         m_resetFftSmoothingOnNextFrame = true;
     }
 
-    // Enable/disable the "S"/"B" (segment/band zoom) buttons and explain why
-    // when disabled. Both send FlexLib wire text (band_zoom=/segment_zoom=,
-    // see togglePanZoomModeForPan()) that only a Flex radio's command plane
-    // ever answers -- on every other backend the click was a silent no-op,
-    // with nothing on screen saying so. Called per-radio model, same as
-    // setBandwidthLimits() above.
-    void setBandSegmentZoomAvailable(bool available)
+    // Flex uses radio-owned zoom flags; a radio declaring a native scope span
+    // (Icom today) zooms by setting that span. Keyed on the declaration, not
+    // the family, so the text stays right for the next backend that declares it.
+    // `blockedReason` says why the buttons are dimmed, when the caller knows.
+    void setBandSegmentZoomAvailable(bool available, bool nativeSpan = false,
+                                     const QString& blockedReason = {})
     {
-        const QString tip = available
-            ? QString()
-            : tr("Band/segment zoom is available on FlexRadio only.");
+        const QString tip = !available
+            ? (!blockedReason.isEmpty() ? blockedReason
+               : nativeSpan ? tr("Waiting for the radio's scope geometry.")
+                            : tr("Band and segment zoom are not available."))
+            : nativeSpan
+                ? tr("Zoom using the radio's scope span; the tuned frequency stays unchanged.")
+                : QString();
+        // Refreshed on capability, limit and placement changes: skip no-ops.
+        if (m_zoomBandBtn && m_zoomBandBtn->isEnabled() == available
+            && m_zoomBandBtn->toolTip() == tip) {
+            return;
+        }
         if (m_zoomBandBtn) {
             m_zoomBandBtn->setEnabled(available);
             m_zoomBandBtn->setToolTip(tip);
+            m_zoomBandBtn->setAccessibleDescription(tip);
         }
         if (m_zoomSegBtn) {
             m_zoomSegBtn->setEnabled(available);
             m_zoomSegBtn->setToolTip(tip);
+            m_zoomSegBtn->setAccessibleDescription(tip);
         }
     }
 
@@ -1038,7 +1053,7 @@ signals:
     void frequencyRangeChanged(double centerMhz, double bandwidthMhz);
     // Emitted when the user drags the frequency scale bar to change bandwidth.
     void bandwidthChangeRequested(double newBandwidthMhz);
-    // Band/segment zoom: radio handles center/bandwidth (SmartSDR pcap: "band_zoom=1" / "segment_zoom=1")
+    // Band/segment zoom: the connected backend handles radio flags or native span.
     void bandZoomRequested();
     void segmentZoomRequested();
     // Emitted when the user drags the waterfall to pan the center frequency.
@@ -1676,6 +1691,9 @@ private:
     std::function<bool()> m_dbmRangeCommandEligible;
     qint64 m_encoderRangeChangedMs{0};
     quint64 m_fftFrameSequence{0};
+    // The last frame as received, for `get tracedebug <pan> bins`; only
+    // updateSpectrum() writes it. See noteTraceGeometryChange().
+    SpectrumTraceBins::FrameCapture m_traceCapture;
     quint64 m_renderedFftFrameSequence{0};
     quint64 m_renderedEncoderRangeGeneration{0};
     qint64 m_renderedTraceMs{0};
@@ -2551,6 +2569,12 @@ private:
                             double newCenterMhz, double newBandwidthMhz);
     bool reprojectSpectrum(double oldCenterMhz, double oldBandwidthMhz,
                            double newCenterMhz, double newBandwidthMhz);
+    // Called wherever the displayed or requested centre/bandwidth changes, so
+    // traceBinsSnapshot() refuses until the new geometry has settled frames.
+    void noteTraceGeometryChange() { m_traceCapture.noteGeometryChange(); }
+    // A range, centre or edge-pan request the widget sent to the radio.
+    void noteTraceGeometryRequest(double centerMhz, double bandwidthMhz);
+    bool traceGeometryInFlight() const;
 };
 
 } // namespace AetherSDR

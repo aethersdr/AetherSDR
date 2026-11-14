@@ -8,9 +8,9 @@
       "last": true,
       "source": [
         {
-          "file": "src/models/RadioModel.cpp",
-          "line": 7702,
-          "text": "else if (key == \"model\")"
+          "file": "src/core/backends/flex/FlexSessionControls.cpp",
+          "line": 149,
+          "text": "key == QLatin1String(\"model\")"
         }
       ]
     },
@@ -20,9 +20,9 @@
       "last": true,
       "source": [
         {
-          "file": "src/models/RadioModel.cpp",
-          "line": 7711,
-          "text": "else if (key == \"software_ver\")"
+          "file": "src/core/backends/flex/FlexSessionControls.cpp",
+          "line": 151,
+          "text": "key == QLatin1String(\"software_ver\")"
         }
       ]
     },
@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7664,
+          "line": 7826,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7586,
+          "line": 7747,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7636,
+          "line": 7798,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7493,
+          "line": 7654,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -150,7 +150,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 654,
+          "line": 657,
           "text": "RadioConnection: socket error:"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8846,
+          "line": 9004,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -188,13 +188,13 @@
       "source": [
         {
           "file": "src/core/backends/flex/RadioConnection.cpp",
-          "line": 717,
+          "line": 718,
           "text": "qCDebug(lcConnection) << \"RX:\" << line;"
         },
         {
-          "file": "src/models/RadioModel.cpp",
-          "line": 7711,
-          "text": "else if (key == \"software_ver\")"
+          "file": "src/core/backends/flex/FlexSessionControls.cpp",
+          "line": 151,
+          "text": "key == QLatin1String(\"software_ver\")"
         }
       ]
     },
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7905,
+          "line": 8045,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,7 +227,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7883,
+          "line": 8023,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
@@ -237,7 +237,7 @@
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7959,
+          "line": 8102,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -288,17 +288,17 @@
       "source": [
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 100,
+          "line": 120,
           "text": "SmartLinkClient: Auth0 login failed:"
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 154,
+          "line": 185,
           "text": "SmartLinkClient: Auth0 refresh failed:"
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 434,
+          "line": 531,
           "text": "SmartLinkClient: registration invalid"
         }
       ]
@@ -315,7 +315,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/WanConnection.cpp",
-          "line": 274,
+          "line": 278,
           "text": "WanConnection: cert fingerprint MISMATCH for"
         }
       ]
@@ -332,12 +332,12 @@
       "source": [
         {
           "file": "src/core/backends/flex/WanConnection.cpp",
-          "line": 357,
+          "line": 361,
           "text": "WanConnection: socket error:"
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 371,
+          "line": 468,
           "text": "SmartLinkClient: SSL error:"
         }
       ]
@@ -376,17 +376,17 @@
       "source": [
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 8971,
+          "line": 8975,
           "text": "AudioEngine: no audio input device available"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9202,
+          "line": 9206,
           "text": "AudioEngine: failed to open audio source at"
         },
         {
           "file": "src/core/AudioEngine.cpp",
-          "line": 9254,
+          "line": 9258,
           "text": "AudioEngine: all TX source formats failed"
         }
       ]
@@ -452,7 +452,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 1431,
+          "line": 1509,
           "text": "RadioModel: dax_rx stream create for channel"
         },
         {
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13380,
+          "line": 12792,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -491,12 +491,12 @@
       "source": [
         {
           "file": "src/models/DaxIqModel.cpp",
-          "line": 420,
+          "line": 518,
           "text": "DaxIqWorker: pactl load-module failed for IQ ch"
         },
         {
           "file": "src/models/DaxIqModel.cpp",
-          "line": 429,
+          "line": 527,
           "text": "DaxIqWorker: cannot open IQ pipe"
         }
       ]
@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 13298,
+          "line": 13379,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {
@@ -574,7 +574,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 2009,
+          "line": 2064,
           "text": "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software"
         }
       ]
@@ -608,7 +608,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 87,
+          "line": 89,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -652,7 +652,7 @@
         },
         {
           "file": "src/core/AppSettings.cpp",
-          "line": 895,
+          "line": 903,
           "text": "AppSettings: save failed:"
         },
         {
@@ -691,12 +691,12 @@
       "source": [
         {
           "file": "src/core/AppSettings.cpp",
-          "line": 718,
+          "line": 726,
           "text": "AppSettings: quarantined corrupt settings database to"
         },
         {
           "file": "src/core/AppSettings.cpp",
-          "line": 751,
+          "line": 759,
           "text": "AppSettings: restored settings from backup"
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2926,
+          "line": 2973,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -961,7 +961,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/MetisClient.cpp",
-          "line": 524,
+          "line": 531,
           "text": "MetisClient: no EP6 for"
         }
       ]
@@ -1034,12 +1034,12 @@
       "source": [
         {
           "file": "src/core/AsyncLogWriter.cpp",
-          "line": 688,
+          "line": 723,
           "text": "Logging dropped debug/info lines count="
         },
         {
           "file": "src/core/AsyncLogWriter.cpp",
-          "line": 694,
+          "line": 729,
           "text": "Logging dropped warning/critical/fatal lines count="
         }
       ]

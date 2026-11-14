@@ -22,6 +22,7 @@
 // synthetic wire only.
 
 #include "TestSettingsProfile.h"
+#include "core/backends/flex/CommandParser.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/SliceDelta.h"
@@ -312,11 +313,11 @@ int main(int argc, char** argv)
             check(conn && conn->thread() != QThread::currentThread(),
                   "inject: that connection lives on its own thread");
             if (conn) {
+                // A current-session line, so only the family switch can stop it.
                 QMetaObject::invokeMethod(conn, [conn] {
-                    QMap<QString, QString> kvs;
-                    kvs.insert(QStringLiteral("client_handle"), QStringLiteral("0xDE300001"));
-                    kvs.insert(QStringLiteral("RF_frequency"), QStringLiteral("14.100000"));
-                    emit conn->statusReceived(QStringLiteral("slice 0"), kvs);
+                    emit conn->lineReceived(CommandParser::parseLine(QStringLiteral(
+                        "SDE300001|slice 0 client_handle=0xDE300001 RF_frequency=14.100000")),
+                        conn->lineEpoch());
                 }, Qt::BlockingQueuedConnection);
             }
         }

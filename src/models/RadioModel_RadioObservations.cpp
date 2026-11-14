@@ -9,7 +9,6 @@ namespace AetherSDR {
 void RadioModel::resetRadioObservations()
 {
     ++m_radioObservationGeneration;
-    ++m_wanBindingGeneration;
     m_clientLifecycles.clear();
     m_liveClientHandles.clear();
     m_retiredClientHandles.clear();
@@ -24,6 +23,10 @@ void RadioModel::resetRadioObservations()
     m_staticNetmask.clear();
     m_staticGateway.clear();
     m_hasStaticIp = false;
+    // Neither the reference nor the static address carries into the next radio.
+    const QPointer<RadioModel> alive(this);
+    emit oscillatorChanged();
+    if (alive) { emit infoChanged(); }
 }
 
 void RadioModel::applyRadioObservation(const RadioStatusObservation& observation)
@@ -31,19 +34,16 @@ void RadioModel::applyRadioObservation(const RadioStatusObservation& observation
     const QPointer<RadioModel> alive(this);
     const RadioControlSession session = controlSession();
     const quint64 generation = m_radioObservationGeneration;
-    const auto current = [alive, session, generation, observation] {
-        return alive && observation.current() && alive->controlSession() == session
+    const quint64 epoch = observation.statusEpoch;
+    const auto current = [alive, session, generation, epoch] {
+        return alive && alive->observationSessionCurrent(epoch) && alive->controlSession() == session
             && alive->m_radioObservationGeneration == generation;
     };
     if (!current()) { return; }
+    const quint32 localHandle = clientHandle();
     switch (observation.kind) {
-    case RadioStatusObservation::Kind::SessionEnded:
-        return; // The ordered transport-disconnected notification owns model teardown.
     case RadioStatusObservation::Kind::Radio:
         applyRadioChanges(observation.radio, current);
-        if (current() && observation.calibrationDone) {
-            emit calibrationProgress(*observation.calibrationDone, observation.radio.freqErrorPpb);
-        }
         return;
     case RadioStatusObservation::Kind::Oscillator: {
         const OscillatorStatusValues& values = observation.oscillator;
@@ -85,9 +85,11 @@ void RadioModel::applyRadioObservation(const RadioStatusObservation& observation
             m_clientHistoryComplete = false;
         }
         QVector<int> released;
+        bool modesChanged = false;
         for (auto it = m_foreignSliceOwners.begin(); it != m_foreignSliceOwners.end();) {
             if (it.value() == handle) {
                 released.append(it.key());
+                modesChanged = m_rawSliceModeLists.remove(it.key()) > 0 || modesChanged;
                 it = m_foreignSliceOwners.erase(it);
             } else { ++it; }
         }
@@ -97,9 +99,13 @@ void RadioModel::applyRadioObservation(const RadioStatusObservation& observation
             emit slotOccupancyChanged(sliceId);
             if (!current()) { return; }
         }
+        if (modesChanged) {
+            emit rawSliceModeListsChanged();
+            if (!current()) { return; }
+        }
         if (known) { emitOtherClientsChanged(); }
         if (!current() || m_clientLifecycles.contains(handle)) { return; }
-        if (observation.localHandle != 0 && handle == observation.localHandle) {
+        if (localHandle != 0 && handle == localHandle) {
             if (report.duplicateClientId) { handleDuplicateClientIdDisconnect(); }
             else if (report.forced) { handleForcedClientDisconnect(); }
         }
@@ -139,13 +145,13 @@ void RadioModel::applyRadioObservation(const RadioStatusObservation& observation
         || before.station != client.station || before.source != client.source || before.localPtt != client.localPtt;
     m_clientStations[handle] = client.station;
     m_clientInfoMap[handle] = client;
-    if (newConnection && report.action == ClientStatusValues::Action::Connected && handle != observation.localHandle) {
+    if (newConnection && report.action == ClientStatusValues::Action::Connected && handle != localHandle) {
         m_lastMultiFlexClientConnectMs = QDateTime::currentMSecsSinceEpoch();
     }
     if (changed) { emitOtherClientsChanged(); }
     if (!current() || m_clientLifecycles.value(handle) != lifecycle) { return; }
     if (newConnection && report.action == ClientStatusValues::Action::Connected
-        && handle != observation.localHandle && !shouldSuppressClientConnectionNotice(handle)) {
+        && handle != localHandle && !shouldSuppressClientConnectionNotice(handle)) {
         announceClientConnection(handle, client.source, client.station, client.program);
     }
 }

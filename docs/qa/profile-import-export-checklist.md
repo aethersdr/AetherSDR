@@ -11,6 +11,9 @@ database package transfer is radio-side behavior.
   replacement warning appears before upload.
 - Export on older firmware if available, especially v2.x and v3.x.
 - Cancel an active export and confirm no partial `.ssdr_cfg` is committed.
+- With a transfer running, try Esc, Ctrl+W / Cmd+W and the corner ✕. Each
+  asks before closing; **Keep Transferring** leaves the window and transfer
+  running, and **Cancel Transfer** closes without another failure notice.
 - Force a failed import upload and confirm the UI reports failure rather than
   success, then refreshes profile lists when the radio recovers.
 - Try SmartLink/WAN and confirm unsupported transfer directions are disabled

@@ -49,7 +49,8 @@ std::optional<ProtocolError> parseSelector(
         QStringLiteral("server"), QStringLiteral("radioSession"),
         QStringLiteral("radioCatalogue"),
         QStringLiteral("slice"), QStringLiteral("panadapter"),
-        QStringLiteral("meter"), QStringLiteral("transmitState")};
+        QStringLiteral("meter"), QStringLiteral("transmitState"),
+        QStringLiteral("frontEndOverload")};
     if (!supportedTypes.contains(type)) {
         return ProtocolError{QStringLiteral("request.invalid_params"),
                              QStringLiteral("unsupported resource type"),
@@ -85,6 +86,11 @@ std::optional<ProtocolError> parseSelector(
         if (radioSession.isEmpty() || !idValue.isUndefined()) {
             return ProtocolError{QStringLiteral("request.invalid_params"),
                                  QStringLiteral("transmitState requires radioSession only"), {}, false};
+        }
+    } else if (type == QStringLiteral("frontEndOverload")) {
+        if (radioSession.isEmpty() || !idValue.isUndefined()) {
+            return ProtocolError{QStringLiteral("request.invalid_params"),
+                                 QStringLiteral("frontEndOverload requires radioSession only"), {}, false};
         }
     } else if (radioSession.isEmpty() || (!wildcardAllowed && id.isEmpty())) {
         return ProtocolError{QStringLiteral("request.invalid_params"),
@@ -545,9 +551,15 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     if (!m_receiveTarget) {
         return reject("capability.unavailable", "receive control unavailable");
     }
-    const bool pan = operation == ReceiveOperation::PanCenter || operation == ReceiveOperation::PanBandwidth;
+    const bool pan = operation == ReceiveOperation::PanCenter || operation == ReceiveOperation::PanBandwidth
+        || operation == ReceiveOperation::PanRfGain;
+    const bool sessionScoped = operation == ReceiveOperation::CwPitch
+        || operation == ReceiveOperation::RadioSpeaker;
     const QString idKey = pan ? QStringLiteral("panadapter") : QStringLiteral("slice");
-    QSet<QString> keys{QStringLiteral("radioSession"), idKey, QStringLiteral("expectedRevision")};
+    QSet<QString> keys{QStringLiteral("radioSession"), QStringLiteral("expectedRevision")};
+    if (!sessionScoped) {
+        keys.insert(idKey);
+    }
     switch (operation) {
     case ReceiveOperation::Mode: keys.insert(QStringLiteral("mode")); break;
     case ReceiveOperation::Filter:
@@ -555,7 +567,15 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::AudioGain: keys.insert(QStringLiteral("gain")); break;
     case ReceiveOperation::AudioMute: keys.insert(QStringLiteral("muted")); break;
     case ReceiveOperation::PanCenter:
-    case ReceiveOperation::PanBandwidth: keys.insert(QStringLiteral("hz")); break;
+    case ReceiveOperation::PanBandwidth:
+    case ReceiveOperation::CwPitch: keys.insert(QStringLiteral("hz")); break;
+    case ReceiveOperation::AgcThreshold: keys.insert(QStringLiteral("threshold")); break;
+    case ReceiveOperation::NoiseBlanker:
+    case ReceiveOperation::NoiseReduction:
+    case ReceiveOperation::RadioSpeaker: keys.insert(QStringLiteral("enabled")); break;
+    case ReceiveOperation::Rit:
+        keys.insert(QStringLiteral("enabled")); keys.insert(QStringLiteral("offsetHz")); break;
+    case ReceiveOperation::PanRfGain: keys.insert(QStringLiteral("gainDb")); break;
     }
     if (const auto error = onlyKeys(request.params, keys)) {
         return failure(request.id, *error);
@@ -575,9 +595,9 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     const QJsonValue revision = request.params.value(QStringLiteral("expectedRevision"));
     bool canonicalSlice = false;
     const int sliceId = id.toString().toInt(&canonicalSlice);
-    if (!sessionId.isString() || !id.isString() || id.toString().isEmpty()
-        || id.toString().size() > ProtocolLimits::kMaxRequestIdChars
-        || (!pan && (!canonicalSlice || sliceId < 0 || QString::number(sliceId) != id.toString()))
+    if (!sessionId.isString() || (!sessionScoped && (!id.isString() || id.toString().isEmpty()
+        || id.toString().size() > ProtocolLimits::kMaxRequestIdChars))
+        || (!pan && !sessionScoped && (!canonicalSlice || sliceId < 0 || QString::number(sliceId) != id.toString()))
         || !integer(revision, 1, 9'007'199'254'740'991.0)) {
         return reject("request.invalid_params", "canonical resource identity and integer revision required");
     }
@@ -587,6 +607,12 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     const QJsonValue gain = request.params.value(QStringLiteral("gain"));
     const QJsonValue muted = request.params.value(QStringLiteral("muted"));
     const QJsonValue hz = request.params.value(QStringLiteral("hz"));
+    const QJsonValue threshold = request.params.value(QStringLiteral("threshold"));
+    const QJsonValue enabled = request.params.value(QStringLiteral("enabled"));
+    const QJsonValue offsetHz = request.params.value(QStringLiteral("offsetHz"));
+    const QJsonValue gainDb = request.params.value(QStringLiteral("gainDb"));
+    constexpr double kIntMin = std::numeric_limits<int>::min();
+    constexpr double kIntMax = std::numeric_limits<int>::max();
     bool valid = true;
     switch (operation) {
     case ReceiveOperation::Mode:
@@ -605,6 +631,14 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::AudioMute: valid = muted.isBool(); break;
     case ReceiveOperation::PanCenter:
     case ReceiveOperation::PanBandwidth: valid = integer(hz, 1, 9'007'199'254'740'991.0); break;
+    case ReceiveOperation::CwPitch:
+        valid = integer(hz, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()); break;
+    case ReceiveOperation::AgcThreshold: valid = integer(threshold, kIntMin, kIntMax); break;
+    case ReceiveOperation::NoiseBlanker:
+    case ReceiveOperation::NoiseReduction:
+    case ReceiveOperation::RadioSpeaker: valid = enabled.isBool(); break;
+    case ReceiveOperation::Rit: valid = enabled.isBool() && integer(offsetHz, kIntMin, kIntMax); break;
+    case ReceiveOperation::PanRfGain: valid = integer(gainDb, kIntMin, kIntMax); break;
     }
     if (!valid) {
         return reject("request.invalid_params", "invalid typed receive-control value");
@@ -613,8 +647,10 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
         || !m_resources->get({QStringLiteral("radioSession"), {}, sessionId.toString()})) {
         return reject("resource.not_found", "radio session unavailable");
     }
-    const auto snapshot = m_resources->get({pan ? QStringLiteral("panadapter") : QStringLiteral("slice"),
-                                            sessionId.toString(), id.toString()});
+    const auto snapshot = sessionScoped
+        ? m_resources->get({QStringLiteral("radioSession"), {}, sessionId.toString()})
+        : m_resources->get({pan ? QStringLiteral("panadapter") : QStringLiteral("slice"),
+                            sessionId.toString(), id.toString()});
     if (!snapshot) {
         return reject("resource.not_found", "receive resource unavailable");
     }
@@ -629,6 +665,17 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::AudioMute: error = m_receiveTarget->setAudioMute(sliceId, muted.toBool()); break;
     case ReceiveOperation::PanCenter: error = m_receiveTarget->setPanCenter(id.toString(), hz.toInteger()); break;
     case ReceiveOperation::PanBandwidth: error = m_receiveTarget->setPanBandwidth(id.toString(), hz.toInteger()); break;
+    case ReceiveOperation::CwPitch: error = m_receiveTarget->setCwPitch(hz.toInt()); break;
+    case ReceiveOperation::AgcThreshold:
+        error = m_receiveTarget->setAgcThreshold(sliceId, threshold.toInt()); break;
+    case ReceiveOperation::NoiseBlanker:
+        error = m_receiveTarget->setNoiseBlanker(sliceId, enabled.toBool()); break;
+    case ReceiveOperation::NoiseReduction:
+        error = m_receiveTarget->setNoiseReduction(sliceId, enabled.toBool()); break;
+    case ReceiveOperation::Rit:
+        error = m_receiveTarget->setRit(sliceId, enabled.toBool(), offsetHz.toInt()); break;
+    case ReceiveOperation::PanRfGain: error = m_receiveTarget->setPanRfGain(id.toString(), gainDb.toInt()); break;
+    case ReceiveOperation::RadioSpeaker: error = m_receiveTarget->setRadioSpeaker(enabled.toBool()); break;
     }
     return error ? failure(request.id, *error) : ServiceReply{
         ControlProtocolCodec::successResponse(request.id, {{QStringLiteral("accepted"), true}}), false};
@@ -654,6 +701,9 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
     }
     if (observe && m_resources->get({QStringLiteral("transmitState"), QStringLiteral("radio-1"), {}})) {
         available.append(QStringLiteral("transmitState.read"));
+    }
+    if (observe && m_resources->get({QStringLiteral("frontEndOverload"), QStringLiteral("radio-1"), {}})) {
+        available.append(QStringLiteral("frontEndOverload.read"));
     }
     if (observe && !m_resources->snapshot({{QStringLiteral("meter"), QStringLiteral("radio-1"), {}}}).isEmpty()) {
         available.append(QStringLiteral("meter.read"));

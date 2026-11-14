@@ -2,18 +2,9 @@
 
 #include "RadioDelta.h"
 #include <QMetaType>
-#include <atomic>
-#include <memory>
 #include <optional>
 
 namespace AetherSDR {
-
-// Ordinary reports expire at transport close. Terminal reports remain deliverable
-// until the owner thread consumes the ordered end marker. A new session closes both.
-struct RadioStatusLifetime {
-    std::atomic_bool active{true};
-    std::atomic_bool deliveryOpen{true};
-};
 
 struct ClientStatusValues {
     enum class Action { Connected, Updated, Disconnected };
@@ -26,7 +17,6 @@ struct ClientStatusValues {
     std::optional<bool> localPtt;
     bool forced{false};
     bool duplicateClientId{false};
-    bool wanValidationFailed{false};
 };
 
 struct OscillatorStatusValues {
@@ -44,24 +34,16 @@ struct StaticNetworkValues {
     std::optional<QString> gateway;
 };
 
+// One Flex "radio", "radio oscillator", "radio static_net_params" or
+// "client 0x…" report, stamped with the status session it arrived in.
 struct RadioStatusObservation {
-    enum class Kind { Radio, Client, Oscillator, StaticNetwork, SessionEnded };
+    enum class Kind { Radio, Client, Oscillator, StaticNetwork };
     Kind kind{Kind::Radio};
-    quint32 localHandle{0};
     RadioDelta radio;
     ClientStatusValues client;
     OscillatorStatusValues oscillator;
     StaticNetworkValues network;
-    std::optional<bool> calibrationDone;
-    std::shared_ptr<RadioStatusLifetime> lifetime;
-
-    bool current() const
-    {
-        const bool terminal = kind == Kind::SessionEnded
-            || (kind == Kind::Client && client.action == ClientStatusValues::Action::Disconnected);
-        return lifetime && lifetime->deliveryOpen.load(std::memory_order_acquire)
-            && (terminal || lifetime->active.load(std::memory_order_acquire));
-    }
+    quint64 statusEpoch{0};
 };
 
 } // namespace AetherSDR

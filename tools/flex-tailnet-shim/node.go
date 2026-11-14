@@ -136,6 +136,7 @@ type Node struct {
 
 	fwd     *Forwarder  // side channels, while the node runs
 	splices liveSplices // station-device splices in progress, for revocation
+	exposed exposer     // ports apps on the radio published (expose.go)
 }
 
 func (n *Node) cfgPath() string  { return filepath.Join(n.StateDir, "provision.json") }
@@ -458,15 +459,22 @@ func (n *Node) start(parent context.Context, authKey string, timeout time.Durati
 		Authorize: n.authorizer(lc),
 		MaxMTU:    n.MaxMTU,
 	}
+	// Side channels and published ports share this, so a port has one owner:
+	// tsnet refuses a second listener on the same address. With no IP it
+	// matches only flows to the node's own addresses, IPv4 and IPv6, never
+	// ones to a shared station device.
+	listenPort := func(port int) (net.Listener, error) {
+		return srv.Listen("tcp", fmt.Sprintf(":%d", port))
+	}
 	fwd := &Forwarder{
-		Listen: func(port int) (net.Listener, error) {
-			return srv.Listen("tcp", fmt.Sprintf(":%d", port))
-		},
+		Listen: listenPort,
 		DialRadio: func(port int) (net.Conn, error) {
 			return net.DialTimeout("tcp", net.JoinHostPort(n.RadioAddr, fmt.Sprint(port)), 5*time.Second)
 		},
 		Authorize: n.authorizer(lc),
 	}
+	n.exposed.attach(listenPort, n.authorizer(lc), &n.splices)
+	closers = append(closers, func() error { n.exposed.detach(); return nil })
 	relay.OpenForward = fwd.Open
 	relay.ForgetForward = fwd.Forget
 	n.mu.Lock()
@@ -961,6 +969,8 @@ type Status struct {
 	// Command verbs relayed so far (never arguments), for diagnosing what a
 	// client such as a Maestro asks the radio for.
 	RecentCommands []string `json:"recent_commands"`
+	// Exposed: TCP ports apps on the radio published to the tailnet.
+	Exposed []ExposedPort `json:"exposed_ports"`
 }
 
 func (n *Node) Status() Status {
@@ -1047,6 +1057,7 @@ func (n *Node) statusLocked() Status {
 	}
 	st.RecentCommands = []string{}
 	st.SessionDetail = []SessionInfo{}
+	st.Exposed = n.exposed.list()
 	st.Routes = append([]string{}, n.cfg.Routes...)
 	st.ShareDiscovered = n.cfg.shareDiscovered()
 	st.Discovered = []Device{}

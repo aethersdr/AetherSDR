@@ -2,6 +2,7 @@
 
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/FlexRadioStatus.h"
+#include "core/backends/flex/FlexStatusIngress.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/WanConnection.h"
 #include "models/RadioModel.h"
@@ -16,32 +17,45 @@ public:
     static void reset(RadioModel& model) { model.resetRadioObservations(); }
     static quint64 generation(const RadioModel& model) { return model.m_sessionGeneration; }
     static void replaceSession(RadioModel& model) { ++model.m_sessionGeneration; }
-    static void handle(RadioConnection& connection, quint32 handle) { connection.m_handle = handle; }
-    static void line(RadioConnection& connection, const QString& line) { connection.processLine(line); }
-    static void line(WanConnection& connection, const QString& line) { connection.processLine(line); }
-    static void end(RadioConnection& connection) { connection.resetSessionState(); }
-    static void end(WanConnection& connection) { connection.resetSessionState(); }
-    static void begin(RadioConnection& connection) { connection.m_radioStatusSource.begin(); }
-    static void begin(WanConnection& connection) { connection.m_radioStatusSource.begin(); }
-    static void awaitingCertificate(WanConnection& connection, bool value) { connection.m_awaitingCertDecision = value; }
+    static void apply(RadioModel& model, RadioStatusObservation observation)
+    {
+        // Without an ingress the session opens at connect, which a fixture skips.
+        if (!model.m_observationSessionOpen) { model.beginStatusSession(); }
+        observation.statusEpoch = model.m_observationEpoch;
+        model.applyRadioObservation(observation);
+    }
+    static bool hasIngress(const RadioModel& model) { return bool(model.m_statusIngress); }
+    // A connect's fresh status session, made the connected one.
+    static quint64 beginConnect(RadioModel& model)
+    {
+        const quint64 epoch = model.beginStatusSession();
+        model.m_connectedStatusEpoch = epoch;
+        return epoch;
+    }
+    static void disconnected(RadioModel& model) { model.onDisconnected(); }
 };
 
-inline void observeRadioStatus(IRadioBackend& backend, const QString& object,
-                              const QMap<QString, QString>& fields, quint32 localHandle = 0)
+// A status line through the backend's own ingress, as the radio's arrives.
+inline void observeRadioStatus(FlexBackend& backend, const QString& object, const QMap<QString, QString>& fields)
 {
-    const auto observation = decodeFlexRadioStatus(object, fields,
-        std::make_shared<RadioStatusLifetime>(), localHandle);
-    if (observation) { emit backend.radioStatusObserved(*observation); }
+    QStringList pairs;
+    for (auto it = fields.cbegin(); it != fields.cend(); ++it) { pairs << it.key() + u'=' + it.value(); }
+    ParsedMessage line = CommandParser::parseLine(QStringLiteral("S0|") + object
+        + (pairs.isEmpty() ? QString() : u' ' + pairs.join(u' ')));
+    line.object = object;
+    line.kvs = fields;
+    backend.statusIngress()->deliverForTest(line);
 }
 inline void observeRadioStatus(FlexBackend& backend, const QMap<QString, QString>& fields)
 {
-    const auto observation = decodeFlexRadioStatus(QStringLiteral("radio"), fields,
-        std::make_shared<RadioStatusLifetime>());
-    if (observation) { backend.acceptRadioStatus(*observation); }
+    observeRadioStatus(backend, QStringLiteral("radio"), fields);
 }
-inline void observeRadioStatus(RadioModel& model, const QString& object,
-                              const QMap<QString, QString>& fields)
+inline void observeRadioStatus(RadioModel& model, const QString& object, const QMap<QString, QString>& fields)
 {
-    observeRadioStatus(*model.backend(), object, fields, FlexRadioStatusTestPeer::localHandle(model));
+    if (FlexRadioStatusTestPeer::hasIngress(model)) {
+        model.handleStatusForTest(object, fields);
+    } else if (const auto observation = decodeFlexRadioStatus(object, fields)) {
+        FlexRadioStatusTestPeer::apply(model, *observation);
+    }
 }
 } // namespace AetherSDR

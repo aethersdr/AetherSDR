@@ -1,4 +1,5 @@
 #include "FlexRadioStatusTestSupport.h"
+#include "core/backends/sim/SimBackend.h"
 #include "TestSettingsProfile.h"
 #include <QCoreApplication>
 #include <QEvent>
@@ -8,18 +9,29 @@
 #include <memory>
 #include <thread>
 
+namespace AetherSDR {
+// Our client handle, as the H line sets it.
+class RadioConnectionSessionTestAccess {
+public:
+    static void handle(RadioConnection& connection, quint32 handle) { connection.m_handle = handle; }
+};
+} // namespace AetherSDR
+
 using namespace AetherSDR;
 
 namespace {
 struct Fixture {
     RadioModel model;
-    FlexRadioStatusSource source;
     FlexBackend* backend{dynamic_cast<FlexBackend*>(model.backend())};
-    Fixture() { FlexRadioStatusTestPeer::handle(*backend->connection(), 0x42); }
+    Fixture() { RadioConnectionSessionTestAccess::handle(*backend->connection(), 0x42); }
     void report(const QString& object, const QMap<QString, QString>& fields = {})
+    { observeRadioStatus(*backend, object, fields); }
+    // A decoded report stamped with the given status epoch, as the ingress emits it.
+    void stamped(quint64 epoch, const QString& object, const QMap<QString, QString>& fields = {})
     {
-        const auto value = decodeFlexRadioStatus(object, fields, source.lifetime(), 0x42);
-        if (value) { backend->acceptRadioStatus(*value); }
+        auto value = decodeFlexRadioStatus(object, fields);
+        value->statusEpoch = epoch;
+        backend->acceptRadioStatus(*value);
     }
 };
 }
@@ -29,11 +41,10 @@ class FlexRadioObservationTest : public QObject {
 private slots:
     void partialAndInvalidFields()
     {
-        FlexRadioStatusSource source;
         const auto value = decodeFlexRadioStatus(QStringLiteral("radio"), {
             {"nickname", ""}, {"slices", "-1"}, {"cal_freq", "nan"},
             {"lineout_gain", "101"}, {"headphone_gain", "17"}, {"mf_enable", "garbage"},
-            {"full_duplex_enabled", "0"}, {"freq_error_ppb", "-9"}, {"pll_done", "1"}}, source.lifetime());
+            {"full_duplex_enabled", "0"}, {"freq_error_ppb", "-9"}, {"pll_done", "1"}});
         QVERIFY(value);
         QCOMPARE(value->radio.nickname, std::optional<QString>(QString()));
         QVERIFY(!value->radio.slicesAvailable);
@@ -43,12 +54,12 @@ private slots:
         QCOMPARE(value->radio.headphoneGain, std::optional<int>(17));
         QCOMPARE(value->radio.fullDuplex, std::optional<bool>(false));
         QCOMPARE(value->radio.freqErrorPpb, std::optional<int>(-9));
-        QCOMPARE(value->calibrationDone, std::optional<bool>(true));
+        QCOMPARE(value->radio.pllDone, std::optional<bool>(true));
         for (const QString& object : {"client 0x0 connected", "client 0x100000000 connected",
                                      "client 0xZZ connected", "client 0x99 surprise"}) {
-            QVERIFY(!decodeFlexRadioStatus(object, {}, source.lifetime()));
+            QVERIFY(!decodeFlexRadioStatus(object, {}));
         }
-        const auto huge = decodeFlexRadioStatus("radio", {{"nickname", QString(4097, 'x')}}, source.lifetime());
+        const auto huge = decodeFlexRadioStatus("radio", {{"nickname", QString(4097, 'x')}});
         QVERIFY(huge && !huge->radio.nickname);
     }
 
@@ -132,35 +143,31 @@ private slots:
         QCOMPARE(notices.count(), 1);
     }
 
-    void retiredOrdinaryAndOrderedTerminalDelivery()
+    // A forced disconnect the radio reports for us lands before the session
+    // ends; nothing stamped with an ended or earlier session applies.
+    void terminalReportPrecedesSessionEnd()
     {
         Fixture f;
         QSignalSpy terminal(&f.model, &RadioModel::forcedDisconnectRequested);
-        const auto data = decodeFlexRadioStatus("radio", {{"nickname", "stale"}}, f.source.lifetime(), 0x42);
-        const auto forced = decodeFlexRadioStatus("client 0x42 disconnected", {{"forced", "1"}}, f.source.lifetime(), 0x42);
-        const auto end = f.source.end();
-        QVERIFY(data && forced && end);
-        QVERIFY(!data->current());
-        QVERIFY(forced->current());
-        f.backend->acceptRadioStatus(*data);
-        QVERIFY(f.model.nickname() != QString("stale"));
-        f.backend->acceptRadioStatus(*forced);
+        const quint64 first = FlexRadioStatusTestPeer::beginConnect(f.model);
+        f.stamped(first, "client 0x42 disconnected", {{"forced", "1"}});
         QCOMPARE(terminal.count(), 1);
         QVERIFY(FlexRadioStatusTestPeer::intentional(f.model));
-        f.backend->acceptRadioStatus(*end);
-        QVERIFY(!forced->current());
-        f.backend->acceptRadioStatus(*forced);
-        QCOMPARE(terminal.count(), 1);
+        const quint64 second = FlexRadioStatusTestPeer::beginConnect(f.model);
+        f.stamped(first, "radio", {{"nickname", "stale"}});
+        QVERIFY(second != first && f.model.nickname() != QString("stale"));
+        FlexRadioStatusTestPeer::disconnected(f.model);
+        f.stamped(second, "radio", {{"nickname", "late"}});
+        QVERIFY(f.model.nickname() != QString("late"));
     }
 
     void newSessionRejectsOldTerminal()
     {
         Fixture f;
         QSignalSpy terminal(&f.model, &RadioModel::forcedDisconnectRequested);
-        const auto old = decodeFlexRadioStatus("client 0x42 disconnected", {{"forced", "1"}}, f.source.lifetime(), 0x42);
-        f.source.begin();
-        QVERIFY(old && !old->current());
-        f.backend->acceptRadioStatus(*old);
+        const quint64 old = FlexRadioStatusTestPeer::beginConnect(f.model);
+        FlexRadioStatusTestPeer::beginConnect(f.model);
+        f.stamped(old, "client 0x42 disconnected", {{"forced", "1"}});
         QCOMPARE(terminal.count(), 0);
     }
 
@@ -168,7 +175,7 @@ private slots:
     {
         Fixture f;
         const QString original = f.model.nickname();
-        connect(&f.model, &RadioModel::callsignChanged, &f.model, [&] { f.source.begin(); });
+        connect(&f.model, &RadioModel::callsignChanged, &f.model, [&] { FlexRadioStatusTestPeer::beginConnect(f.model); });
         f.report("radio", {{"callsign", "NEW"}, {"nickname", "must-not-apply"}});
         QCOMPARE(f.model.nickname(), original);
     }
@@ -176,7 +183,7 @@ private slots:
     void repeatedObservationsRemainVisible()
     {
         Fixture f;
-        QSignalSpy progress(&f.model, &RadioModel::calibrationProgress);
+        QSignalSpy progress(&f.model, &RadioModel::frequencyCalibrationReported);
         f.report("radio", {{"pll_done", "0"}});
         f.report("radio", {{"pll_done", "0"}});
         f.report("radio", {{"pll_done", "1"}});
@@ -184,95 +191,70 @@ private slots:
         QCOMPARE(progress.last().first().toBool(), true);
     }
 
-    void bothTransportsDecodeAndPreserveResponse()
+    // The ingress decodes each report once and still hands the line on.
+    void ingressDecodesOnceAndPassesTheLineOn()
     {
-        RadioConnection lan;
-        WanConnection wan;
-        QSignalSpy lanReports(&lan, &RadioConnection::radioStatusObserved);
-        QSignalSpy wanReports(&wan, &WanConnection::radioStatusObserved);
-        QSignalSpy responses(&lan, &RadioConnection::commandResponse);
-        const QString status("S00000042|client 0x99 connected station=Shack local_ptt=1");
-        FlexRadioStatusTestPeer::line(lan, status);
-        FlexRadioStatusTestPeer::line(wan, status);
-        QCOMPARE(lanReports.count(), 1);
-        QCOMPARE(wanReports.count(), 1);
-        const auto a = qvariant_cast<RadioStatusObservation>(lanReports.first().first());
-        const auto b = qvariant_cast<RadioStatusObservation>(wanReports.first().first());
-        QCOMPARE(a.client.handle, b.client.handle);
-        QCOMPARE(a.client.station, b.client.station);
-        FlexRadioStatusTestPeer::end(lan);
-        FlexRadioStatusTestPeer::line(lan, "R12|0|removed");
-        QCOMPARE(responses.count(), 1);
-        QVERIFY(!a.current());
-        FlexRadioStatusTestPeer::awaitingCertificate(wan, true);
-        FlexRadioStatusTestPeer::line(wan, status);
-        QCOMPARE(wanReports.count(), 1);
+        FlexBackend backend;
+        QSignalSpy reports(&backend, &IRadioBackend::radioStatusObserved);
+        QSignalSpy accepted(backend.statusIngress(), &FlexStatusIngress::lineAccepted);
+        backend.statusIngress()->deliverForTest(CommandParser::parseLine(
+            QStringLiteral("S00000042|client 0x99 connected station=Shack local_ptt=1")));
+        QCOMPARE(reports.count(), 1);
+        const auto report = qvariant_cast<RadioStatusObservation>(reports.first().first());
+        QCOMPARE(report.client.handle, quint32(0x99));
+        QCOMPARE(report.client.station, std::optional<QString>(QStringLiteral("Shack")));
+        QCOMPARE(report.statusEpoch, backend.statusIngress()->epoch());
+        QCOMPARE(accepted.count(), 1);
     }
 
-    void ingressCapturesBeforeReentrantCallbacks()
-    {
-        RadioConnection connection;
-        QSignalSpy reports(&connection, &RadioConnection::radioStatusObserved);
-        connect(&connection, &RadioConnection::messageReceived, &connection,
-                [&](const ParsedMessage&) { FlexRadioStatusTestPeer::begin(connection); });
-        FlexRadioStatusTestPeer::line(connection, "S00000042|radio nickname=old");
-        QCOMPARE(reports.count(), 0);
-    }
-
-    void cancellationRetiresUnseenIngress()
+    // A line the connection read in a session that has since been replaced
+    // never reaches the model; the new session's does.
+    void queuedLineCannotResurrectPreviousSession()
     {
         Fixture f;
-        const auto source = f.backend->connection()->radioStatusLifetime();
-        const auto queued = decodeFlexRadioStatus("radio", {{"nickname", "old"}}, source);
-        QVERIFY(queued && queued->current());
-        f.backend->invalidateRadioStatus();
-        QVERIFY(!queued->current());
-        f.backend->acceptRadioStatus(*queued);
-        QVERIFY(f.model.nickname() != QString("old"));
-    }
-
-    void workerQueueIsFencedAndDeliveredOnOwnerThread()
-    {
-        Fixture f;
-        int reports = 0;
-        bool ownerThread = true;
-        connect(f.backend, &IRadioBackend::radioStatusObserved, &f.model,
-                [&](const RadioStatusObservation& observation) {
-            if (observation.kind != RadioStatusObservation::Kind::Radio) { return; }
-            ++reports;
-            ownerThread &= QThread::currentThread() == f.model.thread();
-        });
         RadioConnection* transport = f.backend->connection();
-        QMetaObject::invokeMethod(transport, [transport] {
-            FlexRadioStatusTestPeer::line(*transport, "S00000042|radio nickname=queued-old");
-        }, Qt::BlockingQueuedConnection);
-        f.backend->invalidateRadioStatus();
-        QCoreApplication::processEvents();
-        QCOMPARE(reports, 0);
-        QMetaObject::invokeMethod(transport, [transport] {
-            FlexRadioStatusTestPeer::begin(*transport);
-            FlexRadioStatusTestPeer::line(*transport, "S00000042|radio nickname=current");
-        }, Qt::BlockingQueuedConnection);
-        QTRY_COMPARE(reports, 1);
-        QVERIFY(ownerThread);
+        const quint64 old = FlexRadioStatusTestPeer::beginConnect(f.model);
+        emit transport->lineReceived(CommandParser::parseLine(QStringLiteral("S00000042|radio nickname=queued-old")), old);
+        const quint64 current = FlexRadioStatusTestPeer::beginConnect(f.model);
+        QCoreApplication::sendPostedEvents();
+        QVERIFY(f.model.nickname() != QString("queued-old"));
+        emit transport->lineReceived(CommandParser::parseLine(QStringLiteral("S00000042|radio nickname=current")), current);
+        QCoreApplication::sendPostedEvents();
         QCOMPARE(f.model.nickname(), QString("current"));
     }
 
-    void reusedWanAdoptsNewSourceAndRejectsOldQueue()
+    // SmartLink radio and client status reach the model through
+    // connectViaWan's ingress route.
+    void smartLinkStatusRoutesThroughTheIngress()
     {
         Fixture f;
         WanConnection wan;
-        f.backend->bindRadioStatus(&wan);
-        const auto old = decodeFlexRadioStatus("radio", {{"nickname", "old"}}, wan.radioStatusLifetime());
-        FlexRadioStatusTestPeer::begin(wan);
-        const auto current = wan.radioStatusLifetime();
-        f.backend->bindRadioStatus(&wan);
-        QVERIFY(current->active.load());
-        QVERIFY(old && !old->current());
-        FlexRadioStatusTestPeer::line(wan, "S00000042|radio nickname=new");
-        QCOMPARE(f.model.nickname(), QString("new"));
-        f.backend->acceptRadioStatus(*old);
-        QCOMPARE(f.model.nickname(), QString("new"));
+        f.model.connectViaWan(&wan, QStringLiteral("192.0.2.1"), 4993);
+        emit wan.lineReceived(CommandParser::parseLine(QStringLiteral("S00000042|radio nickname=remote")), wan.lineEpoch());
+        emit wan.lineReceived(CommandParser::parseLine(QStringLiteral("S00000042|radio oscillator state=gpsdo setting=auto locked=1")),
+                              wan.lineEpoch());
+        QCoreApplication::sendPostedEvents();
+        QCOMPARE(f.model.nickname(), QString("remote"));
+        QCOMPARE(f.model.oscState(), QString("gpsdo"));
+        f.model.disconnectFromRadio();
+    }
+
+    // Demo keeps its own radio-global values but takes the oscillator,
+    // client and static-network reports its synthetic wire sends.
+    void demoRelaysOscillatorButNotRadioGlobals()
+    {
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("sim")));
+        auto* sim = qobject_cast<SimBackend*>(model.backend());
+        QVERIFY(sim);
+        const QString nickname = model.nickname();
+        sim->statusIngress()->deliverForTest(CommandParser::parseLine(
+            QStringLiteral("S00000042|radio oscillator state=tcxo setting=tcxo locked=1 tcxo_present=1")));
+        sim->statusIngress()->deliverForTest(CommandParser::parseLine(QStringLiteral("S00000042|radio nickname=wire")));
+        QCOMPARE(model.oscState(), QString("tcxo"));
+        QCOMPARE(model.oscSetting(), QString("tcxo"));
+        QVERIFY(model.oscLocked());
+        QCOMPARE(model.nickname(), nickname);
     }
 
     void queuedWanCallbackRejectsDestroyedTransport()

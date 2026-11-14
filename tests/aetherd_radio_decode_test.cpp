@@ -14,8 +14,7 @@ static int g_failures = 0;
 
 static RadioDelta decode(const QMap<QString, QString>& kvs)
 {
-    const auto observation = decodeFlexRadioStatus(QStringLiteral("radio"), kvs,
-        std::make_shared<RadioStatusLifetime>());
+    const auto observation = decodeFlexRadioStatus(QStringLiteral("radio"), kvs);
     return observation ? observation->radio : RadioDelta{};
 }
 

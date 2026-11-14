@@ -298,6 +298,14 @@ void externalSweep() {
         Fixture f; f.bypass();
         AtuPreTuneDialog dialog(&f.radio, nullptr, nullptr, f.routing.get());
         TxAppletPowerReconciliationTestAccess::prepare(dialog, f.input);
+        f.radio.transmitModel().setAtuAvailable(false);
+        check(TxAppletPowerReconciliationTestAccess::active(dialog),
+            "internal ATU availability does not invalidate an external sweep");
+    }
+    {
+        Fixture f; f.bypass();
+        AtuPreTuneDialog dialog(&f.radio, nullptr, nullptr, f.routing.get());
+        TxAppletPowerReconciliationTestAccess::prepare(dialog, f.input);
         auto other = std::make_shared<TxController>(&f.radio);
         check(f.routing->start(other->capture(TxController::Activity::Tune)), "independent operator tune starts");
         f.acknowledgeSearch();

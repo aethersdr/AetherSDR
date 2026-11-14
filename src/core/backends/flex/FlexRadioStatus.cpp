@@ -61,15 +61,17 @@ void address(const Fields& fields, const char* key, std::optional<QString>& valu
 }
 } // namespace
 
-std::optional<RadioStatusObservation> decodeFlexRadioStatus(
-    const QString& object, const QMap<QString, QString>& kvs,
-    const std::shared_ptr<RadioStatusLifetime>& lifetime, quint32 localHandle)
+bool isFlexRadioStatusObject(const QString& object)
 {
-    if (object.size() > 128 || !lifetime || !lifetime->active.load(std::memory_order_acquire)
-        || !lifetime->deliveryOpen.load(std::memory_order_acquire)) { return std::nullopt; }
+    return object == QLatin1String("radio") || object == QLatin1String("radio oscillator")
+        || object == QLatin1String("radio static_net_params") || object.startsWith(QLatin1String("client 0x"));
+}
+
+std::optional<RadioStatusObservation> decodeFlexRadioStatus(
+    const QString& object, const QMap<QString, QString>& kvs)
+{
+    if (object.size() > 128) { return std::nullopt; }
     RadioStatusObservation out;
-    out.lifetime = lifetime;
-    out.localHandle = localHandle;
     if (object == QLatin1String("radio")) {
         RadioDelta& d = out.radio;
         // Identity / capability
@@ -110,7 +112,8 @@ std::optional<RadioStatusObservation> decodeFlexRadioStatus(
         range(d.daxiqAvailable, 0, 1024);
         range(d.rttyMarkDefault, 0, 10000);
         if (d.calFreqMhz && *d.calFreqMhz < 0) { d.calFreqMhz.reset(); }
-        field(kvs, "pll_done", out.calibrationDone);
+        // FlexLib v4.3.16 Radio.cs:4352: a byte, any nonzero value is done.
+        byteFlag(kvs, "pll_done", d.pllDone);
     } else if (object == QLatin1String("radio oscillator")) {
         out.kind = RadioStatusObservation::Kind::Oscillator;
         field(kvs, "state", out.oscillator.state);
@@ -145,13 +148,11 @@ std::optional<RadioStatusObservation> decodeFlexRadioStatus(
         out.kind = RadioStatusObservation::Kind::Client;
         if (match.captured(2) == QLatin1String("disconnected")) {
             out.client.action = ClientStatusValues::Action::Disconnected;
-            std::optional<bool> forced, duplicate, wanFailed;
+            std::optional<bool> forced, duplicate;
             field(kvs, "forced", forced);
             field(kvs, "duplicate_client_id", duplicate);
-            field(kvs, "wan_validation_failed", wanFailed);
             out.client.forced = forced.value_or(false);
             out.client.duplicateClientId = duplicate.value_or(false);
-            out.client.wanValidationFailed = wanFailed.value_or(false);
         } else {
             if (match.captured(2) == QLatin1String("connected") || kvs.contains(QStringLiteral("connected"))) {
                 out.client.action = ClientStatusValues::Action::Connected;

@@ -1,12 +1,15 @@
 #include "FlexRadioStatusTestSupport.h"
+#include "FlexSliceStatusTestSupport.h"
 // Published FlexLib Slice.ChainMode and Radio.UpdateInfo metadata through the
 // production decoder, typed seam, model and bridge. No sockets are opened.
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/AutomationServer.h"
 #include "core/backends/RadioDelta.h"
+#include "core/backends/SessionCommandGuard.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/flex/FlexSessionControls.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -75,6 +78,14 @@ public:
 
 class RadioNicknameTestAccess {
 public:
+    static void beginSession(RadioModel& radio)
+    {
+        radio.resetSessionControls();
+        radio.m_txSessionClosing = false;
+        radio.m_sessionCommands = SessionCommandGuard::create();
+        radio.m_sessionWire = radio.m_connection;
+        radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
+    }
     static void requestInfo(RadioModel& radio) { radio.requestRadioInfo(); }
     static RadioConnection::ResponseCallback callback(RadioModel& radio, quint32 seq)
     {
@@ -98,6 +109,12 @@ public:
 using namespace AetherSDR;
 
 namespace {
+// The info reply reaches the model as the backend's typed RadioDelta, the
+// same delta requestRadioInfo() applies.
+void emitInfo(FlexBackend* backend, const QString& body)
+{
+    emit backend->radioChanged(FlexSessionControls::infoMetadata(body));
+}
 QMap<QString, QString> sliceStatus()
 {
     return {{QStringLiteral("in_use"), QStringLiteral("1")},
@@ -125,13 +142,18 @@ struct Fixture {
         if (!backend) {
             return false;
         }
-        RadioConnectionSessionTestAccess::capture(*backend->connection(), &wireCommands, &wireRequests);
+        attach();
         backend->setSliceCommandSink([this](const QString& command) {
             sliceCommands.append(command);
         });
-        radio.handleSliceStatusForTest(0, sliceStatus());
+        applyFlexSliceStatus(radio, 0, sliceStatus());
         clearCommands();
         return radio.slice(0) != nullptr;
+    }
+    void attach()
+    {
+        RadioConnectionSessionTestAccess::capture(*backend->connection(), &wireCommands, &wireRequests);
+        RadioNicknameTestAccess::beginSession(radio);
     }
     void clearCommands()
     {
@@ -201,7 +223,7 @@ private slots:
         QSignalSpy changed(slice, &SliceModel::chainModeChanged);
         QSignalSpy modes(slice, &SliceModel::modeChanged);
         for (const QString& mode : {QStringLiteral("FDVU"), QStringLiteral("FDVL")}) {
-            f.backend->decodeSliceStatus(0, {{QStringLiteral("mode"), mode},
+            publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("mode"), mode},
                 {QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
             QCOMPARE(slice->mode(), mode);
             QCOMPARE(slice->chainMode(), QStringLiteral("DIGU"));
@@ -209,7 +231,7 @@ private slots:
         QCOMPARE(changed.count(), 1);
         QCOMPARE(changed.first().first().toString(), QStringLiteral("DIGU"));
         QCOMPARE(modes.count(), 2);
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("Future_Chain-v9")}});
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("Future_Chain-v9")}});
         QCOMPARE(slice->chainMode(), QStringLiteral("Future_Chain-v9"));
         QCOMPARE(slice->mode(), QStringLiteral("FDVL"));
         QCOMPARE(modes.count(), 2);
@@ -223,7 +245,7 @@ private slots:
         QTest::newRow("empty") << QString() << QString();
         QTest::newRow("boundary") << QString(32, QLatin1Char('X')) << QString(32, QLatin1Char('X'));
         QTest::newRow("oversize") << QString(33, QLatin1Char('X')) << QString();
-        QTest::newRow("huge") << QString(65536, QLatin1Char('X')) << QString();
+        QTest::newRow("huge-token-within-frame-budget") << QString(32768, QLatin1Char('X')) << QString();
         QTest::newRow("space") << QStringLiteral("USB DIGU") << QString();
         QTest::newRow("leading-space") << QStringLiteral(" DIGU") << QString();
         QTest::newRow("tab") << QStringLiteral("DI\tGU") << QString();
@@ -240,11 +262,11 @@ private slots:
         QFETCH(QString, expected);
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("USB")}});
-        QSignalSpy typed(f.backend, &IRadioBackend::sliceChanged);
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), input}});
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("USB")}});
+        QSignalSpy typed(f.backend, &IRadioBackend::sliceObserved);
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), input}});
         QCOMPARE(typed.count(), 1);
-        const SliceDelta delta = typed.first().at(1).value<SliceDelta>();
+        const SliceDelta delta = typed.first().at(0).value<SliceObservation>().values;
         QVERIFY(delta.chainMode.has_value());
         QCOMPARE(*delta.chainMode, expected);
         QCOMPARE(f.radio.slice(0)->chainMode(), expected);
@@ -255,19 +277,20 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("USB")}});
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("USB")}});
         QSignalSpy changed(f.radio.slice(0), &SliceModel::chainModeChanged);
-        QSignalSpy typed(f.backend, &IRadioBackend::sliceChanged);
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("mode"), QStringLiteral("DIGL")}});
-        QVERIFY(!typed.first().at(1).value<SliceDelta>().chainMode.has_value());
+        QSignalSpy typed(f.backend, &IRadioBackend::sliceObserved);
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("mode"), QStringLiteral("DIGL")}});
+        QCOMPARE(typed.count(), 1);
+        QVERIFY(!typed.first().at(0).value<SliceObservation>().values.chainMode.has_value());
         QCOMPARE(f.radio.slice(0)->chainMode(), QStringLiteral("USB"));
         QCOMPARE(changed.count(), 0);
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("USB")}});
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("USB")}});
         QCOMPARE(changed.count(), 0);
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QString()}});
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QString()}});
         QVERIFY(f.radio.slice(0)->chainMode().isEmpty());
         QCOMPARE(changed.count(), 1);
-        f.backend->decodeSliceStatus(0, {});
+        publishFlexSliceStatus(*f.backend, 0, {});
         QCOMPARE(changed.count(), 1);
         QVERIFY(f.noCommands());
     }
@@ -302,9 +325,9 @@ private slots:
         QFETCH(int, expected);
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=3"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=3"));
         QSignalSpy typed(f.backend, &IRadioBackend::radioChanged);
-        f.backend->decodeRadioInfoMetadata(body);
+        emitInfo(f.backend, body);
         QCOMPARE(typed.count(), 1);
         const RadioDelta delta = typed.first().first().value<RadioDelta>();
         QVERIFY(delta.iaruRegion.has_value());
@@ -318,13 +341,13 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("region=USA,iaru_region=2"));
+        emitInfo(f.backend, QStringLiteral("region=USA,iaru_region=2"));
         observeRadioStatus(*f.backend, {{QStringLiteral("region"), QStringLiteral("USA")}});
         QCOMPARE(f.radio.iaruRegion().value_or(0), 2);
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("region=USA"));
+        emitInfo(f.backend, QStringLiteral("region=USA"));
         QVERIFY(!f.radio.iaruRegion().has_value());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=1"));
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=not-a-region"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=1"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=not-a-region"));
         QVERIFY(!f.radio.iaruRegion().has_value());
         QVERIFY(f.noCommands());
     }
@@ -340,10 +363,10 @@ private slots:
             if (chain == QLatin1String("DIGU") && !nested) {
                 modeAtNotification = slice->mode();
                 nested = true;
-                f.backend->decodeSliceStatus(0, {{"mode", "LSB"}, {"chain_mode", "LSB"}});
+                publishFlexSliceStatus(*f.backend, 0, {{"mode", "LSB"}, {"chain_mode", "LSB"}});
             }
         });
-        f.backend->decodeSliceStatus(0, {{"mode", "FDVU"}, {"chain_mode", "DIGU"}});
+        publishFlexSliceStatus(*f.backend, 0, {{"mode", "FDVU"}, {"chain_mode", "DIGU"}});
         QCOMPARE(modeAtNotification, QStringLiteral("FDVU"));
         QCOMPARE(slice->mode(), QStringLiteral("LSB"));
         QCOMPARE(slice->chainMode(), QStringLiteral("LSB"));
@@ -392,12 +415,13 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         SliceModel* slice = f.radio.slice(0);
         connect(&f.radio, &RadioModel::infoChanged, &f.radio, [slice] {
             slice->setFrequency(14.3);
         });
         f.radio.stageSessionModelsForReconnectForTest();
+        beginFlexStatusSession(f.radio);
         QVERIFY(f.noCommands());
     }
 
@@ -405,7 +429,7 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         const quint32 seq = f.requestInfo();
         const RadioConnection::ResponseCallback old = RadioNicknameTestAccess::callback(f.radio, seq);
         QVERIFY(old);
@@ -417,6 +441,7 @@ private slots:
             }
         });
         f.radio.stageSessionModelsForReconnectForTest();
+        beginFlexStatusSession(f.radio);
         QVERIFY(attempted);
         QVERIFY(!f.radio.iaruRegion());
     }
@@ -467,9 +492,9 @@ private slots:
         const quint64 oldModels = RadioNicknameTestAccess::modelGeneration(f.radio);
         const quint64 oldBackend = RadioNicknameTestAccess::backendGeneration(f.radio);
         RadioNicknameTestAccess::disconnect(f.radio);
-        // Reopen only transport admission: no connect callback can start the
-        // UDP stream, and the session guard is tested without a model edge.
-        RadioConnectionSessionTestAccess::capture(*f.backend->connection(), &f.wireCommands, &f.wireRequests);
+        // Establish the next guarded session without invoking the connection
+        // handshake or UDP startup; model and backend generations stay fixed.
+        f.attach();
         QVERIFY(RadioNicknameTestAccess::session(f.radio) != oldSession);
         QCOMPARE(RadioNicknameTestAccess::modelGeneration(f.radio), oldModels);
         QCOMPARE(RadioNicknameTestAccess::backendGeneration(f.radio), oldBackend);
@@ -498,6 +523,7 @@ private slots:
         const quint64 oldModels = RadioNicknameTestAccess::modelGeneration(f.radio);
         const quint64 oldBackend = RadioNicknameTestAccess::backendGeneration(f.radio);
         f.radio.stageSessionModelsForReconnectForTest();
+        beginFlexStatusSession(f.radio);
         QCOMPARE(RadioNicknameTestAccess::session(f.radio), oldSession);
         QVERIFY(RadioNicknameTestAccess::modelGeneration(f.radio) != oldModels);
         QCOMPARE(RadioNicknameTestAccess::backendGeneration(f.radio), oldBackend);
@@ -530,7 +556,7 @@ private slots:
         QVERIFY(RadioNicknameTestAccess::backendGeneration(f.radio) != oldBackend);
         QCOMPARE(RadioNicknameTestAccess::session(f.radio), oldSession);
         QCOMPARE(RadioNicknameTestAccess::modelGeneration(f.radio), oldModels);
-        RadioConnectionSessionTestAccess::capture(*f.backend->connection(), &f.wireCommands, &f.wireRequests);
+        f.attach();
         const quint32 current = f.requestInfo();
         QVERIFY(current != 0);
         QCOMPARE(f.wireCommands, QStringList{QStringLiteral("info")});
@@ -551,9 +577,9 @@ private slots:
         Fixture f;
         QVERIFY(f.init());
         for (const bool known : {false, true, false}) {
-            f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"),
+            publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"),
                 known ? QStringLiteral("DIGU") : QString()}});
-            f.backend->decodeRadioInfoMetadata(known ? QStringLiteral("iaru_region=2") : QString());
+            emitInfo(f.backend, known ? QStringLiteral("iaru_region=2") : QString());
             const QJsonValue chain = known ? QJsonValue(QStringLiteral("DIGU")) : QJsonValue();
             const QJsonValue region = known ? QJsonValue(2) : QJsonValue();
             for (const QString& model : {QStringLiteral("slice"), QStringLiteral("radio")}) {
@@ -593,19 +619,20 @@ private slots:
         Fixture f;
         QVERIFY(f.init());
         SliceModel* original = f.radio.slice(0);
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         RadioNicknameTestAccess::disconnect(f.radio);
         QVERIFY(original->chainMode().isEmpty());
         QVERIFY(!f.radio.iaruRegion().has_value());
         f.radio.stageSessionModelsForReconnectForTest();
+        beginFlexStatusSession(f.radio);
         QVERIFY(!f.radio.slice(0));
-        f.radio.handleSliceStatusForTest(0, sliceStatus());
+        applyFlexSliceStatus(f.radio, 0, sliceStatus());
         QCOMPARE(f.radio.slice(0), original);
         QVERIFY(original->chainMode().isEmpty());
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("FutureChain")}});
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("FutureChain")}});
         QCOMPARE(original->chainMode(), QStringLiteral("FutureChain"));
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=3"));
+        emitInfo(f.backend, QStringLiteral("iaru_region=3"));
         QCOMPARE(f.radio.iaruRegion().value_or(0), 3);
     }
 
@@ -614,14 +641,16 @@ private slots:
         Fixture f;
         QVERIFY(f.init());
         SliceModel* original = f.radio.slice(0);
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         f.radio.stageSessionModelsForReconnectForTest();
+        beginFlexStatusSession(f.radio);
         QVERIFY(original->chainMode().isEmpty());
         QVERIFY(!f.radio.iaruRegion().has_value());
         f.radio.stageSessionModelsForReconnectForTest();
+        beginFlexStatusSession(f.radio);
         QVERIFY(original->chainMode().isEmpty());
-        f.radio.handleSliceStatusForTest(0, sliceStatus());
+        applyFlexSliceStatus(f.radio, 0, sliceStatus());
         QCOMPARE(f.radio.slice(0), original);
         QVERIFY(original->chainMode().isEmpty());
         QVERIFY(f.noCommands());
@@ -631,13 +660,13 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
-        f.radio.handleSliceStatusForTest(0, {}, true);
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
+        applyFlexSliceStatus(f.radio, 0, {}, true);
         QVERIFY(!f.radio.slice(0));
-        f.radio.handleSliceStatusForTest(0, sliceStatus());
+        applyFlexSliceStatus(f.radio, 0, sliceStatus());
         QVERIFY(f.radio.slice(0));
         QVERIFY(f.radio.slice(0)->chainMode().isEmpty());
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("USB")}});
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("USB")}});
         QCOMPARE(f.radio.slice(0)->chainMode(), QStringLiteral("USB"));
     }
 
@@ -645,8 +674,8 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.init());
-        f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
-        f.backend->decodeRadioInfoMetadata(QStringLiteral("iaru_region=2"));
+        publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), QStringLiteral("DIGU")}});
+        emitInfo(f.backend, QStringLiteral("iaru_region=2"));
         f.detach();
         QVERIFY(f.radio.rebuildBackendForTest(QStringLiteral("sim")));
         QVERIFY(!f.radio.iaruRegion().has_value());
@@ -655,7 +684,7 @@ private slots:
         f.backend = dynamic_cast<FlexBackend*>(f.radio.backend());
         QVERIFY(f.backend);
         RadioConnectionSessionTestAccess::capture(*f.backend->connection(), &f.wireCommands);
-        f.radio.handleSliceStatusForTest(0, sliceStatus());
+        applyFlexSliceStatus(f.radio, 0, sliceStatus());
         QVERIFY(f.radio.slice(0)->chainMode().isEmpty());
         QVERIFY(!f.radio.iaruRegion().has_value());
     }
@@ -680,9 +709,9 @@ private slots:
         QSignalSpy legacyFrequency(slice, &SliceModel::frequencyCommandIssued);
         QSignalSpy legacyFilter(slice, &SliceModel::filterCommandIssued);
         for (const QString& chain : {QStringLiteral("USB"), QStringLiteral("DIGU"), QStringLiteral("FutureChain")}) {
-            f.backend->decodeSliceStatus(0, {{QStringLiteral("chain_mode"), chain}});
+            publishFlexSliceStatus(*f.backend, 0, {{QStringLiteral("chain_mode"), chain}});
             for (int region = 1; region <= 3; ++region) {
-                f.backend->decodeRadioInfoMetadata(QStringLiteral("region=USA,iaru_region=%1").arg(region));
+                emitInfo(f.backend, QStringLiteral("region=USA,iaru_region=%1").arg(region));
                 f.get(QStringLiteral("slice"), QStringLiteral("chainMode"));
                 f.get(QStringLiteral("radio"), QStringLiteral("iaruRegion"));
                 f.radio.troubleshootingSnapshot();

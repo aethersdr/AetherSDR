@@ -20,7 +20,7 @@ struct VoiceKeyerRecording {
 // DvkModel ("Core: voice-keyer slots/status + rec/preview/playback intent").
 // DvkModel is the radio-hosted implementation — SmartSDR `dvk` verbs,
 // recordings stored on the radio, SmartSDR+ required. RFC #4214's client-side
-// keyer is the second — recordings stored on this computer, no licence. The
+// keyer is the second — recordings stored on this computer, no license. The
 // panel sees only this interface, so one surface serves both.
 class VoiceKeyer : public QObject {
     Q_OBJECT
@@ -49,6 +49,7 @@ public:
     // transferStatusChanged / transferFinished.
     virtual void importWav(int id, const QString& path) = 0;
     virtual void exportWav(int id, const QString& path) = 0;
+    virtual quint64 transferRevision() const { return 0; }
     virtual bool canTransferWav() const = 0;  // false: import/export unavailable
     virtual bool isTransferring() const = 0;
 

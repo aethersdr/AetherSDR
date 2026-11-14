@@ -46,6 +46,14 @@
 
 #include <cstdlib>
 
+namespace AetherSDR {
+// Our client handle, as the H line sets it.
+class RadioConnectionSessionTestAccess {
+public:
+    static void handle(RadioConnection& connection, quint32 handle) { connection.m_handle = handle; }
+};
+} // namespace AetherSDR
+
 using namespace AetherSDR;
 
 namespace {
@@ -87,7 +95,7 @@ void addTwoStations(RadioModel& model)
 {
     auto* backend = dynamic_cast<FlexBackend*>(model.backend());
     Q_ASSERT(backend);
-    FlexRadioStatusTestPeer::handle(*backend->connection(), 0x1234);
+    RadioConnectionSessionTestAccess::handle(*backend->connection(), 0x1234);
     observeRadioStatus(model, QStringLiteral("client 0x1234"),
         {{QStringLiteral("connected"), QString()},
          {QStringLiteral("program"), QStringLiteral("AetherSDR")},

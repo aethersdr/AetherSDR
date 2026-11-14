@@ -25,6 +25,7 @@
 #include <QMap>
 #include <QPair>
 #include <QString>
+#include <QVariant>
 #include <QtEndian>
 
 #include <cstdio>
@@ -168,6 +169,29 @@ void preconnectAudioDoesNotBlockRegisteredReceive()
     Access::finish(radio);
 }
 
+QList<quint32> receiveCreateSequences(const QList<QPair<quint32, QString>>& commands)
+{
+    QList<quint32> sequences;
+    for (const auto& command : commands) {
+        if (command.second.startsWith(QStringLiteral("stream create type=remote_audio_rx "))) {
+            sequences.append(command.first);
+        }
+    }
+    return sequences;
+}
+
+bool removesStream(const QList<QPair<quint32, QString>>& commands, quint32 streamId)
+{
+    const QString prefix = QStringLiteral("stream remove ");
+    for (const auto& command : commands) {
+        if (!command.second.startsWith(prefix)) { continue; }
+        bool ok = false;
+        const quint32 removed = command.second.mid(prefix.size()).toUInt(&ok, 16);
+        if (ok && removed == streamId) { return true; }
+    }
+    return false;
+}
+
 void lineOutOwnsReceiveWithoutPcPlayback()
 {
     auto& settings = AppSettings::instance();
@@ -182,25 +206,33 @@ void lineOutOwnsReceiveWithoutPcPlayback()
         Access::connectTransport(radio);
         Access::acceptGuiRegistration(radio);
         radio.setLineOutAudioRequested(true);
+        Access::drainCommands(radio);
+        const QList<quint32> initial = receiveCreateSequences(commands);
+        report("recording alone starts exactly one RX allocation", initial.size() == 1);
+        if (initial.size() != 1) { Access::finish(radio); continue; }
         radio.setLineOutAudioRequested(false);
         radio.setLineOutAudioRequested(true);
         radio.removeRxAudioStream();
         Access::drainCommands(radio);
-        quint32 createSeq = 0;
-        int creates = 0;
-        for (const auto& command : commands) {
-            if (command.second.startsWith(QStringLiteral("stream create type=remote_audio_rx "))) {
-                createSeq = command.first;
-                ++creates;
-            }
-        }
-        report("recording alone creates one radio stream across pending demand changes", creates == 1);
-        if (createSeq != 0) { Access::reply(radio, createSeq, QStringLiteral("0x04000008")); }
-        radio.handleStatusForTest(QStringLiteral("stream 0x04000008"),
+        report("restored recording demand waits for the canceled allocation receipt",
+               receiveCreateSequences(commands).size() == 1);
+        Access::reply(radio, initial.first(), QStringLiteral("0x04000008"));
+        QCoreApplication::processEvents(); // dispatch the queued replacement after cancellation
+        Access::drainCommands(radio);
+        const QList<quint32> replacements = receiveCreateSequences(commands);
+        report("canceled recording allocation is cleaned and replaced exactly once",
+               replacements.size() == 2 && removesStream(commands, 0x04000008u));
+        if (replacements.size() != 2) { Access::finish(radio); continue; }
+        Access::reply(radio, replacements.last(), QStringLiteral("0x04000009"));
+        auto state = radio.troubleshootingSnapshot()["radio"].toObject()["remote_audio_rx"].toObject();
+        report("replacement reply adopts the current recording stream",
+               state["stream_id_known"].toBool() && state["owned_by_us"].toBool()
+               && !state["create_pending"].toBool() && !state["remove_requested"].toBool());
+        radio.handleStatusForTest(QStringLiteral("stream 0x04000009"),
             {{QStringLiteral("type"), QStringLiteral("remote_audio_rx")},
              {QStringLiteral("client_handle"), QStringLiteral("0x12345678")}});
         Access::drainCommands(radio);
-        auto state = radio.troubleshootingSnapshot()["radio"].toObject()["remote_audio_rx"].toObject();
+        state = radio.troubleshootingSnapshot()["radio"].toObject()["remote_audio_rx"].toObject();
         report("PC Audio off and restored status preserve the recording stream",
                state["stream_id_known"].toBool() && !state["remove_requested"].toBool());
         report("PC Audio preference stays off during recording",
@@ -210,7 +242,8 @@ void lineOutOwnsReceiveWithoutPcPlayback()
         Access::drainCommands(radio);
         state = radio.troubleshootingSnapshot()["radio"].toObject()["remote_audio_rx"].toObject();
         report("last recording listener releases only when PC playback does not need the stream",
-               state["stream_id_known"].toBool() == pcPlaybackRemains);
+               state["stream_id_known"].toBool() == pcPlaybackRemains
+               && removesStream(commands, 0x04000009u) == !pcPlaybackRemains);
         Access::finish(radio);
     }
     settings.setValue("PcAudioEnabled", previous);
@@ -254,12 +287,8 @@ void lineOutRequiresConsentWhenPcAudioIsOff()
     if (createSeq != 0) { Access::reply(radio, createSeq, QStringLiteral("0x04000008")); }
     radio.setLineOutPcAudioOffConsent(false);
     Access::drainCommands(radio);
-    bool removed = false;
-    for (const auto& command : commands) {
-        removed = removed || command.second.startsWith(QStringLiteral("stream remove 0x04000008"));
-    }
     report("withdrawing consent releases the stream and stops Line Out demand",
-           removed && !radio.lineOutAudioStreamDemanded());
+           removesStream(commands, 0x04000008u) && !radio.lineOutAudioStreamDemanded());
     Access::finish(radio);
     settings.setValue("PcAudioEnabled", previous);
 }
