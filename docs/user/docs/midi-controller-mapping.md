@@ -65,7 +65,7 @@ Endless encoders send small "turned up / turned down" deltas instead of an absol
 
 The **VFO Tune Knob** parameter is meant for an endless encoder bound as **Relative**; as an absolute control it treats 64 as center.
 
-These sliders also step with a **Relative** encoder, by their keyboard step per detent and faster when you turn quickly: Filter Width, RIT Offset and XIT Offset (10 Hz), NB / NR / ANF / APF / WNB Level, RF Power and Mic Level. Bind **RIT Offset** and **XIT Offset** as **Relative**: their range is ±99,999 Hz, so an absolute knob moves them in coarse jumps.
+These sliders also step with a **Relative** encoder, by their keyboard step per detent and faster when you turn quickly: Filter Width (one width of the mode's filter list per step, as Filter Widen / Narrow), RIT Offset and XIT Offset (10 Hz), NB / NR / ANF / APF / WNB Level, RF Power and Mic Level. Bind **RIT Offset** and **XIT Offset** as **Relative**: their range is ±99,999 Hz, so an absolute knob moves them in coarse jumps.
 
 ## Using profiles
 
@@ -103,7 +103,7 @@ On Hermes-Lite 2, Icom, ANAN-G2 and RTL-SDR, bindings for features the radio doe
 
 ### Mappable parameters
 
-The tables below cover the long-standing parameters. The full list, including every action that is also a keyboard shortcut, with its ID, is on [MIDI Controller Actions](./generated/midi-actions.md). Every keyboard action is also a MIDI control; see [Keyboard Shortcuts](./keyboard-shortcuts.md#actions-you-can-assign) for the groups.
+The tables below cover the long-standing parameters. The full list, including every action that is also a keyboard shortcut, with its ID, is on [MIDI Controller Actions](./generated/midi-actions.md). Every SmartSDR for Mac action AetherSDR has is both a keyboard action and a MIDI control; see [Coming from SmartSDR for Mac](#coming-from-smartsdr-for-mac) below.
 
 #### RX
 | Parameter | Type | Range |
@@ -281,7 +281,7 @@ SmartSDR for Mac's Stream Deck and MIDI action list, and the AetherSDR control t
 | NB | **NB Toggle** | **Noise Blanker** |
 | Not assigned | — | Not available: no AetherSDR equivalent |
 | NR | **Noise Reduction** | **Noise Reduction** |
-| Open APRS | — | Not available: no AetherSDR equivalent |
+| Open APRS | **Open AetherModem** | **Open AetherModem** |
 | Open Band Plan Tool | **Band Plan Toggle** | **Band Plan Toggle** |
 | Open Call lookup | Ctrl+Shift+L (fixed) | **Callsign Lookup** |
 | Open CW Decoder | **CW Decoder** | **CW Decoder** |
@@ -293,10 +293,10 @@ SmartSDR for Mac's Stream Deck and MIDI action list, and the AetherSDR control t
 | Open Logbook Tool | — | AetherSDR has no QSO logbook |
 | Open Memories | **Open Memories Dialog** | **Open Memories** |
 | Open Metropwr Tool | — | Not available: no AetherSDR equivalent |
-| Open POTA Tool | — | Not available: no AetherSDR equivalent |
+| Open POTA Tool | **Open SpotHub** | **Open SpotHub** |
 | Open PSK | — | Not available: no AetherSDR equivalent |
-| Open PSK Reporter Tool | — | Not available: no AetherSDR equivalent |
-| Open RTTY | — | Not available: no AetherSDR equivalent |
+| Open PSK Reporter Tool | **Open AetherMap** | **Open AetherMap** |
+| Open RTTY | **RTTY Decoder** | **RTTY Decoder** |
 | Open S.A.T. Controller Tool | — | Not available: no AetherSDR equivalent |
 | Open SSTV | — | Not available: no AetherSDR equivalent |
 | Open Ultra Beam Tool | — | Not available: no AetherSDR equivalent |

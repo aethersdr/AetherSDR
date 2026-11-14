@@ -113,7 +113,7 @@ void MainWindow::registerControlActions()
     auto& reg = m_controlActions;
     // The radio lacks it, or the state does not allow it yet (no slice C,
     // an empty band stack, not connected): say so, audibly too.
-    reg.setRefusalHandler([this](const QString& name) { refuseControlAction(name); });
+    reg.setRefusalHandler([this](const ControlAction& a) { refuseControlAction(a.name, a.txSetup); });
 
     // Runs an existing keyboard action's handler — for MIDI twins of actions
     // whose keyboard side predates the registry.
@@ -129,24 +129,25 @@ void MainWindow::registerControlActions()
     // Transmit setup (TX slice, TX antenna, TX outputs, a profile load) does
     // not change under a keyed transmitter; RF Power and Mic Level do.
     const auto notKeyed = [this] { return !m_radioModel.transmitModel().isTransmitting(); };
+    const auto sliceReady = [this] { return m_radioModel.isConnected() && activeSlice(); };
 
     using A = ControlAction;
 
     // ── Band / mode stepping ───────────────────────────────────────────
     reg.add(A::trigger("band_up", "global.bandUp", "Band Up", "Band",
-                       [this](float) { cycleBandAction(+1); }).inMidiCategory("Global"));
+                       [this](float) { cycleBandAction(+1); }).inMidiCategory("Global").when(sliceReady));
     reg.add(A::trigger("band_down", "global.bandDown", "Band Down", "Band",
-                       [this](float) { cycleBandAction(-1); }).inMidiCategory("Global"));
+                       [this](float) { cycleBandAction(-1); }).inMidiCategory("Global").when(sliceReady));
     reg.add(A::trigger("mode_up", "global.modeUp", "Mode Up", "Mode",
-                       [this](float) { cycleModeAction(+1); }).inMidiCategory("Global"));
+                       [this](float) { cycleModeAction(+1); }).inMidiCategory("Global").when(sliceReady));
     reg.add(A::trigger("mode_down", "global.modeDown", "Mode Down", "Mode",
-                       [this](float) { cycleModeAction(-1); }).inMidiCategory("Global"));
+                       [this](float) { cycleModeAction(-1); }).inMidiCategory("Global").when(sliceReady));
 
     // ── Frequency ──────────────────────────────────────────────────────
     reg.add(A::trigger("tune_up_100", "global.tuneUp100", "Tune Up (100 steps)", "Frequency",
-                       [this](float) { nudgeActiveSliceSteps(100); }).repeating());
+                       [this](float) { nudgeActiveSliceSteps(100); }).repeating().when(sliceReady));
     reg.add(A::trigger("tune_down_100", "global.tuneDown100", "Tune Down (100 steps)", "Frequency",
-                       [this](float) { nudgeActiveSliceSteps(-100); }).repeating());
+                       [this](float) { nudgeActiveSliceSteps(-100); }).repeating().when(sliceReady));
     struct Mirror { const char* shortcutId; const char* midiId; const char* name; const char* cat; };
     static constexpr Mirror kMirrors[] = {
         {"tune_up_1",    "global.tuneUp1",    "Tune Up (1 step)",     "Frequency"},
@@ -156,7 +157,7 @@ void MainWindow::registerControlActions()
         {"go_to_freq",   "global.goToFreq",   "Go to Frequency",      "Frequency"},
     };
     for (const auto& m : kMirrors) {
-        reg.add(A::trigger({}, m.midiId, m.name, m.cat, fire(m.shortcutId)));
+        reg.add(A::trigger({}, m.midiId, m.name, m.cat, fire(m.shortcutId)).when(sliceReady));
         reg.addPair(m.shortcutId, m.midiId);
     }
     reg.add(A::trigger({}, "global.callsignLookup", "Callsign Lookup", "Display",
@@ -172,7 +173,7 @@ void MainWindow::registerControlActions()
             }
         },
         [this]() -> float { auto* s = activeSlice(); return s && s->nrOn() ? 1 : 0; })
-        .inMidiCategory("RX"));
+        .inMidiCategory("RX").when(sliceReady));
 
     // ── TX levels (not keying) ─────────────────────────────────────────
     reg.add(A::level("rf_power", "tx.rfPower", "RF Power", "TX", 0, 100, 5,
@@ -189,7 +190,8 @@ void MainWindow::registerControlActions()
     reg.add(A::trigger("slice_set_tx", "global.sliceSetTx", "Make Active Slice TX", "Slice",
                        [this](float) { if (auto* s = activeSlice()) s->setTxSlice(true); })
         .inMidiCategory("Global")
-        .when([this, canTransmit, notKeyed] { return canTransmit() && activeSlice() && notKeyed(); }));
+        .when([this, canTransmit, notKeyed] { return canTransmit() && activeSlice() && notKeyed(); })
+        .transmitSetup());
 
     // ── CW keyer mode (direct set; the toggles already exist) ──────────
     const auto keyer = [this](bool iambic, int mode) {
@@ -202,11 +204,11 @@ void MainWindow::registerControlActions()
         };
     };
     reg.add(A::trigger("cw_keyer_iambic_a", "cw.keyerIambicA", "CW Keyer: Iambic A", "CW",
-                       keyer(true, 0)).inMidiCategory("Phone/CW"));
+                       keyer(true, 0)).inMidiCategory("Phone/CW").when(canTransmit));
     reg.add(A::trigger("cw_keyer_iambic_b", "cw.keyerIambicB", "CW Keyer: Iambic B", "CW",
-                       keyer(true, 1)).inMidiCategory("Phone/CW"));
+                       keyer(true, 1)).inMidiCategory("Phone/CW").when(canTransmit));
     reg.add(A::trigger("cw_keyer_straight", "cw.keyerStraight", "CW Keyer: Straight Key", "CW",
-                       keyer(false, 0)).inMidiCategory("Phone/CW"));
+                       keyer(false, 0)).inMidiCategory("Phone/CW").when(canTransmit));
 
     // ── Filter width ───────────────────────────────────────────────────
     // A preset lands on the radio's nearest declared width when it has a
@@ -243,6 +245,12 @@ void MainWindow::registerControlActions()
             const double v = 100.0 * std::log(std::clamp(w, kMinWidth, kMaxWidth) / kMinWidth)
                            / std::log(kMaxWidth / kMinWidth);
             return static_cast<float>(v);
+        })
+        // An encoder walks the same width list Filter Widen/Narrow does, so a
+        // radio with a short fixed list still moves a slot per detent.
+        .stepping([this](int steps) {
+            if (auto* rx = m_appletPanel ? m_appletPanel->rxApplet() : nullptr)
+                rx->stepFilterWidth(steps);
         })
         .inMidiCategory("RX").when(hasSlice));
 
@@ -417,9 +425,9 @@ void MainWindow::registerControlActions()
         .when([this] { return m_radioModel.isConnected() && m_radioModel.maxPanadapters() > 1; }));
     reg.add(A::trigger("pan_close", "global.panClose", "Close Active Panadapter", "Display",
         [this](float) {
-            auto* s = activeSlice();
-            const QString panId = s && !s->panId().isEmpty() ? s->panId()
-                                : (m_panStack ? m_panStack->activePanId() : QString());
+            // The pan the operator selected, which can be an empty pan that
+            // the active slice is not on (Select Panadapter N).
+            const QString panId = m_panStack ? m_panStack->activePanId() : QString();
             if (panId.isEmpty() || !m_panStack || m_panStack->count() <= 1) return;
             clearCenterLockForPan(panId, true);
             m_radioModel.removePanadapter(panId);
@@ -522,7 +530,8 @@ void MainWindow::registerControlActions()
                     .when([this, n, notKeyed] {
                         return m_radioModel.isConnected() && notKeyed()
                             && m_radioModel.globalProfiles().size() >= n;
-                    }));
+                    })
+                    .transmitSetup());
     }
 
     // ── Antennas: pick by position in the radio's own list, or step ────
@@ -570,6 +579,7 @@ void MainWindow::registerControlActions()
                                pickAntenna(tx, choices.at((at + 1) % choices.size()));
                            })
                     .inMidiCategory(ap.midiCategory)
+                    .transmitSetup(ap.tx)
                     .when([this, antennaChoices, canTransmit, notKeyed, tx, n] {
                         return m_radioModel.isConnected() && activeSlice()
                             && (!tx || (canTransmit() && notKeyed()))
@@ -654,6 +664,8 @@ void MainWindow::registerControlActions()
     };
     reg.add(A::trigger("open_spothub", "global.openSpotHub", "Open SpotHub", "Display",
                        menuEntry({"SpotHub..."})).inMidiCategory("Global"));
+    reg.add(A::trigger("open_aethermap", "global.openAetherMap", "Open AetherMap", "Display",
+                       menuEntry({"AetherMap..."})).inMidiCategory("Global"));
     reg.add(A::trigger("open_aethermodem", "global.openAetherModem", "Open AetherModem", "Display",
                        menuEntry({"AetherModem..."})).inMidiCategory("Global"));
     reg.add(A::trigger("band_plan_toggle", "global.bandPlanToggle", "Band Plan Toggle", "Display",
@@ -671,6 +683,10 @@ void MainWindow::registerControlActions()
                       [this](float v) { setCwDecodeRxEnabled(v > 0.5f); },
                       [this]() -> float { return cwDecodeRxEnabled() ? 1 : 0; })
         .inMidiCategory("Phone/CW"));
+    reg.add(A::toggle("rtty_decode_toggle", "rtty.decode", "RTTY Decoder", "Mode",
+                      [this](float v) { setRttyDecodeEnabled(v > 0.5f); },
+                      [this]() -> float { return rttyDecodeEnabled() ? 1 : 0; })
+        .inMidiCategory("Global"));
     reg.add(A::trigger("cwx_panel_toggle", "cwx.panelToggle", "Show/Hide CWX Panel", "CW",
                        [this](float) { toggleCwKeyerPanel(); })
         .inMidiCategory("Phone/CW"));
@@ -706,7 +722,8 @@ void MainWindow::registerControlActions()
             .when([this, txBandId, canTransmit, notKeyed] {
                 return canTransmit() && notKeyed()
                     && m_radioModel.txBandSettings().contains(txBandId());
-            }));
+            })
+            .transmitSetup());
     }
 
     // ── Keying actions: on the TX path, like MOX and TUNE ──────────────

@@ -975,7 +975,8 @@ private:
     // (ControlActionRegistry; MainWindow_ControlActions.cpp).
     void registerControlActions();
     void showShortcutNotice(const QString& text, int durationMs);
-    void refuseControlAction(const QString& name);  // logged + announced
+    // Logged and announced once while its notice is up.
+    void refuseControlAction(const QString& name, bool transmitSetup = false);
     QAction* findMenuAction(const QStringList& path) const;
     void fireCwxMacro(int index, const TxController::Input& input);  // F1..F12 = 0..11
     // Band stack stepping and the band-plan strip toggle (registry actions).
@@ -988,6 +989,9 @@ private:
     // CW decoder RX on/off, the Radio Setup "Decode: RX" switch.
     bool cwDecodeRxEnabled() const;
     void setCwDecodeRxEnabled(bool on);
+    // RTTY decoder on/off, the Radio Setup RTTY decode switch.
+    bool rttyDecodeEnabled() const;
+    void setRttyDecodeEnabled(bool on);
     void nudgeActiveSliceSteps(int steps);
     void cycleBandAction(int direction);
     void cycleModeAction(int direction);
@@ -2289,6 +2293,7 @@ private:
     ShortcutManager m_shortcutManager;
     ControlActionRegistry m_controlActions;
     int m_lastRecalledMemoryPosition{-1};  // memory_next/prev cursor
+    QString m_lastRefusedAction;           // refusal notice de-duplication
     int m_lastBandPlanFontSize{6};         // band_plan_toggle restores this
     UpdateChecker* m_updateChecker{nullptr};
     // Install update in place (RFC #5304): outlives the Updates window, so

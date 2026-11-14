@@ -75,6 +75,7 @@ These are the actions you can bind in **Settings → Configure Shortcuts...**, w
 | FDVL | `mode_fdvl` |   |   |
 | Mode Up | `mode_up` |   |   |
 | Mode Down | `mode_down` |   |   |
+| RTTY Decoder | `rtty_decode_toggle` |   |   |
 
 ## TX
 
@@ -295,6 +296,7 @@ These are the actions you can bind in **Settings → Configure Shortcuts...**, w
 | Load Global Profile 4 | `global_profile_4` |   |   |
 | Load Global Profile 5 | `global_profile_5` |   |   |
 | Open SpotHub | `open_spothub` |   |   |
+| Open AetherMap | `open_aethermap` |   |   |
 | Open AetherModem | `open_aethermodem` |   |   |
 | Band Plan Toggle | `band_plan_toggle` |   |   |
 

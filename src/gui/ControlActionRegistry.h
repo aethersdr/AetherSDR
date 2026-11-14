@@ -45,6 +45,11 @@ struct ControlAction {
     std::function<void(float)> set;    // scaled to rangeMin..rangeMax
     std::function<float()> get;        // required for Toggle and Level
     std::function<bool()> available;   // null = always available
+    // Relative encoder steps (stepLevel), when walking the value differs from
+    // get() + steps * keyStep — e.g. a radio's fixed filter-width list.
+    std::function<void(int)> stepBy;
+    // Changes transmit setup: refused while keyed, and said so.
+    bool txSetup{false};
 
     static ControlAction trigger(QString shortcutId, QString midiId, QString name,
                                  QString category, std::function<void(float)> set)
@@ -82,6 +87,8 @@ struct ControlAction {
     ControlAction&& inMidiCategory(QString c) && { midiCategory = std::move(c); return std::move(*this); }
     ControlAction&& repeating() && { autoRepeat = true; return std::move(*this); }
     ControlAction&& when(std::function<bool()> f) && { available = std::move(f); return std::move(*this); }
+    ControlAction&& stepping(std::function<void(int)> f) && { stepBy = std::move(f); return std::move(*this); }
+    ControlAction&& transmitSetup(bool on = true) && { txSetup = on; return std::move(*this); }
 };
 
 // What publishMidi() hands the MIDI side, kept free of MIDI types so this
@@ -110,8 +117,8 @@ struct ControlActionShortcutSpec {
 
 class ControlActionRegistry {
 public:
-    // Called with the action name when an unavailable action is invoked.
-    void setRefusalHandler(std::function<void(const QString&)> handler)
+    // Called with the refused action when an unavailable action is invoked.
+    void setRefusalHandler(std::function<void(const ControlAction&)> handler)
     {
         m_refused = std::move(handler);
     }
@@ -155,7 +162,7 @@ private:
     struct KeyingMidi { QString midiId; QString name; QString category; };
     QVector<KeyingMidi> m_keyingMidi;
     QStringList m_errors;
-    std::function<void(const QString&)> m_refused;
+    std::function<void(const ControlAction&)> m_refused;
 };
 
 } // namespace AetherSDR

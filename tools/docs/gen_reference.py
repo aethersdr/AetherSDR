@@ -848,7 +848,8 @@ def parse_control_actions():
         args = split_top(src.code[open_pos + 1:close])
         chain = call_chain(src.code, close)
         names = [c[0] for c in chain]
-        unknown = set(names) - {"inMidiCategory", "repeating", "when"}
+        unknown = set(names) - {"inMidiCategory", "repeating", "when", "stepping",
+                                "transmitSetup"}
         if unknown:
             raise ParseError(f"{where}: unrecognised chained call(s) {sorted(unknown)}")
         kind = m.group(1)

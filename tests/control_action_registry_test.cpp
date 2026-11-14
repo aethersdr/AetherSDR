@@ -113,7 +113,7 @@ private slots:
     {
         ControlActionRegistry reg;
         QStringList refused;
-        reg.setRefusalHandler([&](const QString& name) { refused << name; });
+        reg.setRefusalHandler([&](const ControlAction& a) { refused << a.name; });
         bool available = false;
         int fired = 0;
         QVERIFY(reg.add(ControlAction::trigger("slice_set_tx", "global.sliceSetTx",
@@ -190,7 +190,7 @@ private slots:
         float hz = 0.0f;
         bool available = true;
         QStringList refused;
-        reg.setRefusalHandler([&](const QString& n) { refused << n; });
+        reg.setRefusalHandler([&](const ControlAction& a) { refused << a.name; });
         QVERIFY(reg.add(ControlAction::level("rit_offset", "rx.ritOffset", "RIT Offset", "RIT/XIT",
                                              -5000, 5000, 10,
                                              [&](float v) { hz = v; }, [&] { return hz; })
@@ -206,6 +206,34 @@ private slots:
         QVERIFY(reg.stepLevel("rx.ritOffset", 1));    // handled, but refused
         QCOMPARE(hz, -5000.0f);
         QCOMPARE(refused, QStringList{"RIT Offset"});
+    }
+
+    void steppingHookTakesRelativeSteps()
+    {
+        ControlActionRegistry reg;
+        float value = 0.0f;
+        int stepped = 0;
+        QVERIFY(reg.add(ControlAction::level({}, "rx.filterWidth", "Filter Width", "Filter",
+                                             0, 100, 2,
+                                             [&](float v) { value = v; }, [&] { return value; })
+                            .stepping([&](int steps) { stepped += steps; })));
+        QVERIFY(reg.stepLevel("rx.filterWidth", 3));
+        QVERIFY(reg.stepLevel("rx.filterWidth", -1));
+        QCOMPARE(stepped, 2);
+        QCOMPARE(value, 0.0f);   // the hook replaces get() + steps * keyStep
+    }
+
+    void refusalCarriesTheAction()
+    {
+        ControlActionRegistry reg;
+        bool txSetup = false;
+        reg.setRefusalHandler([&](const ControlAction& a) { txSetup = a.txSetup; });
+        QVERIFY(reg.add(ControlAction::trigger("tx_antenna_1", {}, "TX Antenna 1", "TX", [](float) {})
+                            .when([] { return false; }).transmitSetup()));
+        ShortcutManager sm;
+        publish(reg, sm);
+        find(sm, "tx_antenna_1")->handler();
+        QVERIFY(txSetup);
     }
 
     void everyPublishedShortcutIdIsPersistable()

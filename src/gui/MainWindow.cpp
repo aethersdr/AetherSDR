@@ -19,6 +19,7 @@
 
 #include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
+#include "RttyDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
@@ -12030,6 +12031,17 @@ void MainWindow::setCwDecodeRxEnabled(bool on)
 {
     CwDecodeSettings::setRxEnabled(on);
     refreshCwDecodeState();
+}
+
+bool MainWindow::rttyDecodeEnabled() const
+{
+    return RttyDecodeSettings::enabled();
+}
+
+void MainWindow::setRttyDecodeEnabled(bool on)
+{
+    RttyDecodeSettings::setEnabled(on);
+    refreshRttyDecodeState();
 }
 
 } // namespace AetherSDR

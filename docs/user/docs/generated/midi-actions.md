@@ -219,8 +219,10 @@ MIDI control exists only in builds with `HAVE_MIDI`.
 | Band Stack Up | `global.bandStackUp` | Trigger |   |   |
 | Band Stack Down | `global.bandStackDown` | Trigger |   |   |
 | Open SpotHub | `global.openSpotHub` | Trigger |   |   |
+| Open AetherMap | `global.openAetherMap` | Trigger |   |   |
 | Open AetherModem | `global.openAetherModem` | Trigger |   |   |
 | Band Plan Toggle | `global.bandPlanToggle` | Trigger |   |   |
+| RTTY Decoder | `rtty.decode` | Toggle |   |   |
 
 ## Mode
 

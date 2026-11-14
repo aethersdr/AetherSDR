@@ -384,12 +384,21 @@ void MainWindow::noticeRefusedShortcut(QKeyEvent* keyEvent)
     showShortcutNotice(tr("Keyboard shortcuts are off"), 10000);
 }
 
-void MainWindow::refuseControlAction(const QString& name)
+void MainWindow::refuseControlAction(const QString& name, bool transmitSetup)
 {
+    // A held key or a spinning encoder refuses many times a second: say it
+    // once while the notice is up, not once per step (docs/a11y.md).
+    if (name == m_lastRefusedAction && m_shortcutNoticeLabel
+        && m_shortcutNoticeLabel->isVisible()) {
+        return;
+    }
+    m_lastRefusedAction = name;
     qCInfo(lcGui).noquote() << "Control action not available:" << name;
-    showShortcutNotice(m_radioModel.transmitModel().isTransmitting()
-                           ? tr("%1 is not available while transmitting").arg(name)
-                           : tr("%1 is not available right now").arg(name),
+    // "While transmitting" only for an action that changes transmit setup;
+    // anything else refused while keyed was refused for its own reason.
+    const bool keyed = transmitSetup && m_radioModel.transmitModel().isTransmitting();
+    showShortcutNotice(keyed ? tr("%1 is not available while transmitting").arg(name)
+                             : tr("%1 is not available right now").arg(name),
                        5000);
 }
 

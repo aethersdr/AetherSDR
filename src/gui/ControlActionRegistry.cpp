@@ -96,7 +96,7 @@ bool ControlActionRegistry::guard(const ControlAction& a) const
     if (!a.available || a.available())
         return true;
     if (m_refused)
-        m_refused(a.name);
+        m_refused(a);
     return false;
 }
 
@@ -168,7 +168,11 @@ bool ControlActionRegistry::stepLevel(const QString& midiId, int steps) const
     for (const ControlAction& a : m_actions) {
         if (a.midiId != midiId || a.kind != ControlAction::Kind::Level)
             continue;
-        if (guard(a))
+        if (!guard(a))
+            return true;
+        if (a.stepBy)
+            a.stepBy(steps);
+        else
             a.set(std::clamp(a.get() + static_cast<float>(steps) * a.keyStep,
                              a.rangeMin, a.rangeMax));
         return true;
