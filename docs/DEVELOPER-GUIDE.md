@@ -37,7 +37,8 @@ The maintainer-facing `pr-review` and `pr-land` skills have no manifest — they
 are not exposed that way. GitHub access uses the
 contributor's existing `gh` authentication; the papercuts helper also requires
 Bash and `jq` (Git Bash on Windows). Build and live-radio prerequisites apply
-when a chosen fix needs them; neither skill grants permission to transmit.
+to `/fb` when a chosen fix needs them; none of these skills grants permission
+to transmit.
 
 ---
 
