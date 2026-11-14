@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 285 touchpoint headers (230 core, 55 models) — 285/285 tagged, 0/285 converted.
+**Totals:** 286 touchpoint headers (231 core, 55 models) — 286/286 tagged, 0/286 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -87,6 +87,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/Kpa1500Protocol.h` | 1 | peripheral(kpa1500) — Wire codec for the KPA1500 peripheral: the '^CMD<arg>;' ASCII framing parser, the decode into a per-field optional Status snapshot, and the command builders — including the bounded-timeout keying builder that makes the unbounded '^TX;' form unrepresentable. Derived from the vendor's public KPA1500 Programming Reference V3, a clean-room input (Constitution Principle IV). Peripheral accessory wire, NOT behind the IRadioBackend radio seam. | unconverted |
 | `core/Kpa500Connection.h` | 3 | peripheral(elecraft) — Direct RS-232/USB-serial client for the Elecraft KPA500 500W solid-state amplifier — a standalone serial accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h. Not radio-family wire; NOT behind the IRadioBackend radio seam. See docs/architecture/elecraft-kpa500-kat500-design.md. | unconverted |
 | `core/Kpa500FaultHistory.h` | 1 | peripheral(elecraft) — Pure decoder for the KPA500 peripheral stored fault ring; no radio-family transport. See docs/architecture/elecraft-kpa500-kat500-design.md. | unconverted |
+| `core/Kpa500IndicatorState.h` | 1 | peripheral(elecraft) — Pure KPA500 status-to-indicator mapping (label + ThemeManager token) for the main-window status bar; no radio-family transport. RFC #7092. | unconverted |
 | `core/Kpa500Maintenance.h` | 1 | peripheral(elecraft) — Bounded KPA500 maintenance framing and configuration file codec; independent peripheral, no radio-family transport. See docs/architecture/elecraft-kpa500-kat500-design.md. | unconverted |
 | `core/Kpa500Protocol.h` | 1 | peripheral(elecraft) — Frame parser, status snapshot and command builders for the KPA500 '^CMD;' text protocol — the codec half of core/Kpa500Connection.h. A standalone accessory's own transport with no radio-family awareness, same precedent as core/AcomProtocol.h. Authority: KPA500 Programmer's Reference Rev. A2. | unconverted |
 | `core/LinuxInstall.h` | 1 | ui-support — App self-update on Linux: the install --install makes and the switch to a staged release after its self-test; pure client plumbing, no radio state. | unconverted |
@@ -172,7 +173,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/TailnetShimTokenStore.h` | 2 | peripheral(tailnet-shim) — OS-keychain storage of the tailnet shim's admin token, keyed by the Flex chassis serial (RFC #6271). Not SmartSDR wire: AetherSDR's own HTTP API to a separate service (the shim) that happens to run in the radio's container runtime, so a direct-transport peripheral, NOT behind the IRadioBackend radio seam (same shape as core/PgxlConnection.h). | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 3 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 191 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 192 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 16 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
