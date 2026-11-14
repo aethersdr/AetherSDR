@@ -386,7 +386,9 @@ aethersdr_rx_rf_gain:0,20;         # set the gain, dB
   lines are sent again when a receiver appears or moves to another panadapter.
 - On a Hermes-Lite 2 with automatic RF gain on, the value is the gain the radio
   is running at, which can be below the operator's setting (see
-  `aethersdr_rx_overload`).
+  `aethersdr_rx_overload`). A set still writes the operator's setting, so while
+  automatic gain holds the gain down, the value reported after a set is that
+  setting minus the `aethersdr_rx_overload` offset.
 - Allowed while transmitting.
 
 #### Automatic RF gain: `rx_auto_rf_gain`
