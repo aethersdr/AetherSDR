@@ -6597,7 +6597,6 @@ void MainWindow::buildUI()
     timeVbox->addWidget(m_gpsTimeLabel);
     hbox->addWidget(timeStack);
 
-    statusBar()->addWidget(m_statusBarContainer, 1);
     wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();

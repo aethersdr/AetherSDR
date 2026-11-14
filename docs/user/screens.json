@@ -4667,13 +4667,14 @@
       },
       "crop": {
         "union": [
+          "statusBarMessageOverlay",
           "QStatusBar"
         ],
         "pad": 0,
         "max_w": 520
       },
-      "caption": "After Save, the status bar confirms the memory.",
-      "alt": "The left end of the status bar reading Saved \"My first memory\" to memories."
+      "caption": "After Save, a small notice confirms the memory above the status bar.",
+      "alt": "A Saved \"My first memory\" to memories notice above the visible status-bar controls."
     },
     {
       "id": "station-home",

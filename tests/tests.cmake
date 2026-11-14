@@ -4295,6 +4295,12 @@ target_link_libraries(tx_audio_path_policy_test PRIVATE Qt6::Core)
 add_test(NAME tx_audio_path_policy_test COMMAND tx_audio_path_policy_test)
 
 # #7078: socket-free voice-key notice and MIC readiness policy.
+add_executable(status_bar_message_test tests/status_bar_message_test.cpp)
+target_include_directories(status_bar_message_test PRIVATE src)
+target_link_libraries(status_bar_message_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME status_bar_message_test COMMAND status_bar_message_test)
+set_tests_properties(status_bar_message_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_voice_key_notice_test tests/tx_voice_key_notice_test.cpp)
 target_include_directories(tx_voice_key_notice_test PRIVATE src)
 target_link_libraries(tx_voice_key_notice_test PRIVATE Qt6::Core)
