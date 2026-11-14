@@ -18,6 +18,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QEventLoop>
+#include <QMap>
 #include <QScopeGuard>
 #include <QTimer>
 
@@ -64,6 +65,18 @@ struct MeterSpec {
     // records — and its own concern text recommends deleting the meter.
     bool needsForwardPower;
 
+    // Derived from the directional readings rather than measured directly, so
+    // the producer may withhold it where the ratio would be noise even though
+    // the radio is plainly transmitting (#7063). A meter marked here is
+    // reported INCONCLUSIVE, naming the gate, when the run stayed below it —
+    // never "defined but never fed", which reads as a defect and in this exact
+    // case recommended deleting a working meter.
+    //
+    // Only the ratio carries this. TX:FWDPWR and TX:REFPWR are the inputs to
+    // the gate, not subjects of it: they publish at any level, and a genuine
+    // silence from either IS a defect worth reporting as one.
+    bool gatedOnForwardCounts;
+
     const char* note;
 };
 
@@ -72,21 +85,21 @@ struct MeterSpec {
 // that are both defined and fed, and were marked expectedOnHl2 = false while
 // being present — which switched off the one check (`expectedButMissing`) that
 // could notice them regressing.
-//                              hl2   key    rf
+//                              hl2   key    rf     gated
 constexpr MeterSpec kMeterTable[] = {
-    {"SLC", "LEVEL",    true,  false, false, "receive signal level"},
-    {"TX",  "MICPEAK",  true,  true,  false, "pre-ALC microphone peak; host-side, so a "
+    {"SLC", "LEVEL",    true,  false, false, false, "receive signal level"},
+    {"TX",  "MICPEAK",  true,  true,  false, false, "pre-ALC microphone peak; host-side, so a "
                                              "zero-drive key still feeds it"},
-    {"TX",  "SWR",      true,  true,  true,  "ratio - meaningful uncalibrated, but only "
+    {"TX",  "SWR",      true,  true,  true,  true,  "ratio - meaningful uncalibrated, but only "
                                              "published above the forward-power floor"},
-    {"TX",  "FWDPWR",   true,  true,  true,  "published in dBm as wattsToDbm(directional"
+    {"TX",  "FWDPWR",   true,  true,  true,  false,  "published in dBm as wattsToDbm(directional"
                                              "Watts(raw)) through the peak hold; the "
                                              "reference curve is uncalibrated, the meter "
                                              "is not absent"},
-    {"TX",  "REFPWR",   true,  true,  true,  "published in dBm as wattsToDbm(directional"
+    {"TX",  "REFPWR",   true,  true,  true,  false,  "published in dBm as wattsToDbm(directional"
                                              "Watts(raw)); same uncalibrated curve as "
                                              "FWDPWR"},
-    {"TX",  "ALC",      true,  true,  false, "host ALC; MeterModel::swAlc() consumes it "
+    {"TX",  "ALC",      true,  true,  false, false, "host ALC; MeterModel::swAlc() consumes it "
                                              "and the Phone/CW ALC gauges render it"},
     // Host ALC gain, distinct from TX:ALC (post-ALC peak, which sits near target):
     // this moves with how hard the stage works. Host-side, so a zero-drive key
@@ -94,15 +107,30 @@ constexpr MeterSpec kMeterTable[] = {
     // here or its unit verdict is lost (CERTIFICATION.md 1.38);
     // tests/meter_surfaces_test.cpp checks the join but is not in the PR CI gate
     // (.github/ci-test-gate.txt) — it runs on main pushes and weekly sanitizers.
-    {"TX",  "ALCGAIN",  true,  true,  false, "gain the host ALC is applying, in dB; "
+    {"TX",  "ALCGAIN",  true,  true,  false, false, "gain the host ALC is applying, in dB; "
                                              "MeterModel::alcGainDb() consumes it and "
                                              "no GUI surface renders it yet (#5636)"},
-    {"TX",  "COMPPEAK", true,  true,  false, "host speech processor, polled onto the "
+    {"TX",  "COMPPEAK", true,  true,  false, false, "host speech processor, polled onto the "
                                              "meter at 20 Hz; reads 0 with PROC off, "
                                              "which is a value and not a silence"},
-    {"RAD", "PATEMP",   true,  false, false, "rise under key is the check, not the value"},
-    {"RAD", "+13.8A",   false, false, false, "no supply telemetry on this radio"},
+    {"RAD", "PATEMP",   true,  false, false, false, "rise under key is the check, not the value"},
+    {"RAD", "+13.8A",   false, false, false, false, "no supply telemetry on this radio"},
 };
+
+// A gated meter MUST also need forward power, because stageMeterInventory()
+// reaches the gate branch only after the needsForwardPower branch has declined
+// — i.e. only on a run that radiated. A row with gated=true and
+// needsForwardPower=false would take the gate branch on a run where the PA
+// never enabled and tell the operator "the backend suppressed this meter, raise
+// drive", which is CERTIFICATION.md 1.37 re-created one level in: a confident
+// statement about a meter from a run that transmitted nothing. The ordering is
+// load-bearing, so the invariant is checked rather than described.
+static_assert([] {
+    for (const MeterSpec& spec : kMeterTable)
+        if (spec.gatedOnForwardCounts && !spec.needsForwardPower)
+            return false;
+    return true;
+}(), "a gatedOnForwardCounts meter must also set needsForwardPower");
 
 }  // namespace
 
@@ -319,6 +347,117 @@ void RadioCertification::observeKeyedRf()
     ++m_keyedRfSamples;
     m_keyedFwdWattsMax = std::max(m_keyedFwdWattsMax,
                                   static_cast<double>(meters.fwdPowerInstant()));
+
+    // THE DRIVE THIS RUN ACTUALLY KEYED AT, captured here because here is the
+    // only place it is still true: the keyed stages restore the operator's
+    // power on exit, and the run may have clamped it to an automation ceiling,
+    // so reading it when the verdict is written reads the wrong number. It
+    // changes the REMEDY, not the verdict — "raise drive" is useless advice at
+    // 100 %, where a forward reading stuck below the gate points at the
+    // detector or its scaling instead (the #5369 class).
+    m_keyedDrivePercentMax = std::max(m_keyedDrivePercentMax,
+                                      m_radio->transmitModel().rfPower());
+
+    // Ask the BACKEND what it gates a derived meter on, and sample the raw
+    // reading against it (#7063). Read from the health snapshot by key rather
+    // than from any family header: a backend that publishes neither key leaves
+    // both at -1 and nothing below changes for it.
+    //
+    // HOW MANY KEYED WINDOWS PASSED THE PRODUCER'S GATES is what the verdict
+    // turns on. The backend counts the windows its own suppression decision let
+    // through (everything but the reverse reading), so it is exact in BOTH
+    // directions: 0 means SWR was never due and a silent meter is explained,
+    // above 0 means it was due and a silent meter is a real defect. The window
+    // peak cannot say the second thing: a peak above the floor can still be
+    // withheld by the key-on and speech-pause gate. The count is cumulative over
+    // the whole over, so sampling it a few times per run cannot miss a window.
+    //
+    // THE WINDOW PEAK is reported, never judged on. It tells an operator how far
+    // below the gate the run sat ("peaked at 76 against 320" says raise drive a
+    // lot, not a little); a max of sampled window peaks is enough for that.
+    const SwrGateReading gate = readSwrGate();
+    if (gate.gateCounts >= 0)
+        m_swrGateCounts = gate.gateCounts;
+    if (gate.clearsThisOver >= 0)
+        m_swrGateClears = std::max(m_swrGateClears, gate.clearsThisOver);
+    if (gate.peakCounts >= 0)
+        m_keyedFwdCountsMax = std::max(m_keyedFwdCountsMax, gate.peakCounts);
+}
+
+RadioCertification::SwrGateReading RadioCertification::readSwrGate() const
+{
+    SwrGateReading out;
+    if (!m_radio)
+        return out;
+    const IRadioBackend::HealthSnapshot health = m_radio->backendHealthSnapshot();
+    auto intOf = [&health](const char* key) {
+        const QVariant v = health.values.value(QLatin1StringView(key));
+        if (!v.isValid() || v.isNull())
+            return -1;
+        bool ok = false;
+        const int n = v.toInt(&ok);
+        return ok ? n : -1;
+    };
+    out.gateCounts = intOf(IRadioBackend::HealthSnapshot::kSwrGateCounts);
+    out.clearsThisOver = intOf(IRadioBackend::HealthSnapshot::kSwrGateClearsWhileKeyed);
+    out.peakCounts = intOf(IRadioBackend::HealthSnapshot::kForwardWindowPeakRaw);
+    return out;
+}
+
+RadioCertification::SwrAtKey RadioCertification::classifySwrAtKey(
+    bool haveSwr, const SwrGateReading& gate, int drivePercent, double toneDbfs)
+{
+    if (haveSwr)
+        return {QStringLiteral("reading"), QString()};
+
+    // THE BACKEND DECLARES A GATE AND THIS OVER NEVER CLEARED IT. No SWR is then
+    // the producer working as designed, and saying "no SWR reading" sends the
+    // reader after a meter or a PA that are both fine. Named as its own result,
+    // with the numbers that say how far off the stimulus was. The remedy is
+    // stated, never applied: this tool does not raise power or level by itself.
+    if (gate.gateCounts > 0 && gate.clearsThisOver == 0) {
+        if (gate.peakCounts >= gate.gateCounts) {
+            return {QStringLiteral("gate-withheld"), QStringLiteral(
+                "SWR GATE WITHHELD THIS KEY: the forward peak reached %1 of the %2 "
+                "counts the backend requires, but no window of this over passed "
+                "its key-on and speech-pause gate. That is the backend working as "
+                "designed, not a missing meter or missing RF; a longer key "
+                "exercises it")
+                .arg(gate.peakCounts).arg(gate.gateCounts)};
+        }
+        const QString peak = gate.peakCounts >= 0
+            ? QString::number(gate.peakCounts) : QStringLiteral("an unpublished peak");
+        const QString remedy = drivePercent >= 100
+            ? QStringLiteral(
+                  "Drive was already at 100%; a quiet stimulus can still leave "
+                  "the forward reading below the gate. Check the selected tone "
+                  "level and independently measured forward power before "
+                  "concluding anything about the detector or its scaling; this "
+                  "tool raises neither stimulus nor drive by itself")
+            : QStringLiteral(
+                  "To exercise SWR, raise the stimulus (tone=<dBFS>) or the drive "
+                  "within the station's ceiling; this tool raises neither by itself");
+        return {QStringLiteral("gate-not-reached"), QStringLiteral(
+            "SWR GATE NOT REACHED AT THIS DRIVE: the backend publishes SWR only "
+            "above %1 forward counts, and this key peaked at %2 with a %3 dBFS tone "
+            "at %4% drive. No SWR here is the backend working as designed, not a "
+            "missing meter or missing RF. %5")
+            .arg(gate.gateCounts).arg(peak).arg(toneDbfs, 0, 'f', 1)
+            .arg(drivePercent).arg(remedy)};
+    }
+
+    QString concern = QStringLiteral(
+        "METER-DEPENDENT: no SWR reading while keyed. This is 'no SWR "
+        "reading', NOT 'no RF' — the two are only the same thing once the "
+        "meters phase has validated this radio's telemetry. Run "
+        "'radiocert meters' before concluding anything about the PA");
+    // Cleared and still silent is the case the gate cannot excuse; say so.
+    if (gate.gateCounts > 0 && gate.clearsThisOver > 0)
+        concern += QStringLiteral(
+            ". %1 window(s) of this over cleared the backend's %2-count SWR gate, "
+            "so SWR was due and was not published")
+            .arg(gate.clearsThisOver).arg(gate.gateCounts);
+    return {QStringLiteral("no-reading"), concern};
 }
 
 bool RadioCertification::keyedRfConfirmed() const
@@ -1027,14 +1166,20 @@ void RadioCertification::stageSquelchScale(const Options& o)
                 interrupted = true;
                 return true;
             }
-            slice->setSquelch(true, level);
-            spin(900);
-            const double d = audioDb(700);
-            const bool closed = certmath::gateClosed(openDb, d);
+            // From a gate heard closed at 100: a squelch tail (1.5 s on WDSP's
+            // amsq) outlasts the settle, so a probe after an open one would
+            // still hear audio and the search would land high.
+            double d = -999.0;
+            const certmath::GateProbe p = certmath::probeFromClosedGate(
+                level, 100, certmath::GateProbeTiming{},
+                [&](int l) { if (slice) slice->setSquelch(true, l); },
+                [&](int ms) { spin(ms); },
+                [&](int ms) { d = audioDb(ms); return certmath::gateClosed(openDb, d); });
             probes.append(QJsonObject{{QStringLiteral("level"), level},
                                       {QStringLiteral("audioDb"), d},
-                                      {QStringLiteral("closed"), closed}});
-            return closed;
+                                      {QStringLiteral("closed"), p.closed},
+                                      {QStringLiteral("fromClosed"), p.fromClosed}});
+            return p.closed;
         };
         // From 1: a radio with no squelch enable cannot gate at threshold 0.
         int gate = certmath::lowestClosedLevel(1, 100, closedAt);
@@ -1107,6 +1252,17 @@ void RadioCertification::stageSquelchScale(const Options& o)
             const double errorDb = lineDb - peakDb;
             m[QStringLiteral("lineAtGateDb")] = lineDb;
             m[QStringLiteral("lineMinusCarrierDb")] = errorDb;
+            // The same error split at the S-meter, which reads the passband
+            // power the gate measures. S - peak is the carrier (a large one
+            // means it does not dominate its passband). line - S is NOT the
+            // scale error alone: the line is drawn on the pan's axis, which can
+            // read a tone above its power (the HL2 pan by 6.02 dB,
+            // Hl2Spectrum::kToneGainDb), and the record does not publish that
+            // gain, so it is reported as measured. No verdict reads it.
+            if (sLevel > -999.0) {
+                m[QStringLiteral("lineMinusSLevelDb")] = lineDb - sLevel;
+                m[QStringLiteral("sLevelMinusCarrierDb")] = sLevel - peakDb;
+            }
             if (!confirmed) {
                 inconclusive = QStringLiteral("the gate at level %1 did not bracket (closed "
                                               "one above, open one below) — a fading "
@@ -1170,9 +1326,13 @@ void RadioCertification::stageSquelchScale(const Options& o)
     record(id, title, m,
            QStringLiteral(
                "Binary-search the squelch level at which the audio from a steady "
-               "carrier stops, then compare the published line at that level with "
+               "carrier stops, each probe approached from a gate heard closed so a "
+               "squelch tail cannot carry one probe into the next, then compare the published line at that level with "
                "the carrier's pan peak. Report the carrier's S-meter reading too: "
-               "above S9 a correct record can still sit several dB off."),
+               "above S9 a correct record can still sit several dB off. "
+               "lineMinusSLevelDb is the line less the S-meter, not the scale error: "
+               "it includes any gain the pan gives a tone over its power (6.02 dB "
+               "on the HL2). Only lineMinusCarrierDb is judged."),
            problems.join(QStringLiteral("; ")), ref);
 }
 
@@ -1218,6 +1378,23 @@ void RadioCertification::stageMeterInventory()
         {QStringLiteral("floorWatts"), static_cast<double>(kKeyedRfFloorWatts)},
         {QStringLiteral("forwardPowerMeterDefined"), fwdMeterDefined},
         {QStringLiteral("keyRefusals"), m_keyRefusals},
+        // The producer's own gate beside the consumer floor above, so a reader
+        // can see WHY a derived meter stayed silent in a run that radiated
+        // (#7063). Null where the backend declares no gate — which is not the
+        // same as a gate that was cleared.
+        {QStringLiteral("backendSwrGateCounts"),
+         m_swrGateCounts >= 0 ? QJsonValue(m_swrGateCounts) : QJsonValue()},
+        // THE FIELD THE VERDICT TURNS ON: keyed windows that passed every gate
+        // the producer applies before publishing SWR. 0 explains a silent
+        // meter; above 0 means a silent meter is a defect.
+        {QStringLiteral("backendSwrGateClearsWhileKeyed"),
+         m_swrGateClears >= 0 ? QJsonValue(m_swrGateClears) : QJsonValue()},
+        // Reported for scale only — how far below the floor the run sat. No
+        // verdict rests on it: a peak above the floor can still be withheld.
+        {QStringLiteral("maxForwardCountsWhileKeyed"),
+         m_keyedFwdCountsMax >= 0 ? QJsonValue(m_keyedFwdCountsMax) : QJsonValue()},
+        {QStringLiteral("maxDrivePercentWhileKeyed"),
+         m_keyedDrivePercentMax >= 0 ? QJsonValue(m_keyedDrivePercentMax) : QJsonValue()},
     };
 
     for (const MeterSpec& spec : kMeterTable) {
@@ -1261,6 +1438,59 @@ void RadioCertification::stageMeterInventory()
                 "no keyed stage in this run produced forward power above %1 W, so "
                 "this meter had nothing to report")
                 .arg(static_cast<double>(kKeyedRfFloorWatts), 0, 'g', 3);
+        } else if (spec.gatedOnForwardCounts && m_swrGateCounts > 0
+                   && m_swrGateClears == 0) {
+            // THE RUN RADIATED, AND THE PRODUCER STILL WITHHELD THIS METER.
+            // rfConfirmed is true here: the keyed-RF precondition is satisfied
+            // at MeterModel's consumer floor, which on the HL2 is ~67x below
+            // the counts gate the backend applies before it publishes SWR at
+            // all. Reporting "never fed" in that band condemns a meter that is
+            // working exactly as designed (#7063), which is the failure
+            // docs/CERTIFICATION.md 2.3 describes: "when a meter is gated on
+            // another meter, a suppressed reading must name its gate rather
+            // than reporting as merely stale".
+            //
+            // == 0, NOT "the peak was below the gate". The producer counts the
+            // windows its own suppression decision let through, so 0 is a fact
+            // about every window of the over rather than an inference from the
+            // peak. Above 0 is equally conclusive the other way, which is why
+            // this branch declines then and lets the real-defect verdict stand.
+            // A peak at or above the floor with 0 passes means the key-on and
+            // speech-pause gate withheld every window, which drive cannot fix.
+            //
+            // Full drive leaves stimulus strength unknown. Detector health
+            // needs an independent forward-power measurement at any drive.
+            const bool atFullDrive = m_keyedDrivePercentMax >= 100;
+            const bool peakReachedFloor = m_keyedFwdCountsMax >= m_swrGateCounts;
+            untestedBecause = peakReachedFloor
+                ? QStringLiteral(
+                      "the backend suppressed this meter: it publishes it only on "
+                      "keyed windows that reach %1 forward counts and pass its "
+                      "key-on and speech-pause gate. The sampled window peak "
+                      "reached %2, but no keyed window in this run passed that "
+                      "gate. That is the backend working as designed, not a dead "
+                      "meter: the first windows of every over are withheld, so key "
+                      "a steady carrier for longer to exercise it")
+                      .arg(m_swrGateCounts)
+                      .arg(m_keyedFwdCountsMax)
+                : QStringLiteral(
+                "the backend suppressed this meter: it publishes it only above "
+                "%1 forward counts, and no keyed window in this run reached "
+                "that floor (the sampled window peak reached %2). %3")
+                .arg(m_swrGateCounts)
+                .arg(m_keyedFwdCountsMax)
+                .arg(atFullDrive
+                     ? QStringLiteral(
+                           "DRIVE WAS ALREADY AT 100%; a quiet stimulus can still "
+                           "leave the forward reading below the gate. Check the "
+                           "selected tone level and independently measured forward power "
+                           "before concluding anything about the detector or its "
+                           "scaling; this tool raises neither stimulus nor drive by itself")
+                     : QStringLiteral(
+                           "That is the backend working as designed, not a dead "
+                           "meter — raise drive (this run keyed at %1%) until "
+                           "the forward reading clears the gate to exercise it")
+                       .arg(m_keyedDrivePercentMax));
         }
 
         QJsonObject row{
@@ -1361,6 +1591,21 @@ void RadioCertification::stageMeterInventory()
             why = QStringLiteral(
                 "forward power was never fresh inside a keyed window across %1 "
                 "keyed stage(s)").arg(m_keyedWindows);
+        } else if (rfConfirmed) {
+            // THE RUN RADIATED. Every branch above describes a run that did not,
+            // and so does the lead below, so a gated meter reaching this list
+            // needs its own sentence — otherwise the stage asserts "no confirmed
+            // RF" about a run whose forward power it just reported, and then
+            // blames a slider, an interlock, a band limit and a dead PA, none of
+            // which apply (#7063). A concern that contradicts its own
+            // measurement is the §1.40 failure this stage exists to avoid.
+            why = QStringLiteral(
+                "the backend withheld them: this run DID produce RF (forward "
+                "power peaked at %1 W across %2 keyed stage(s)), but a meter "
+                "derived from the directional readings is published only above "
+                "its own threshold, and this run stayed below it")
+                .arg(m_keyedFwdWattsMax, 0, 'g', 3)
+                .arg(m_keyedWindows);
         } else {
             why = QStringLiteral(
                 "forward power peaked at %1 W across %2 keyed stage(s), below the "
@@ -1371,9 +1616,17 @@ void RadioCertification::stageMeterInventory()
                 .arg(m_keyedWindows)
                 .arg(static_cast<double>(kKeyedRfFloorWatts), 0, 'g', 3);
         }
-        const QString lead = QStringLiteral(
-            "INCONCLUSIVE — this run produced no confirmed RF, so nothing here is "
-            "a verdict on these meters: ")
+        // The lead states WHY the run cannot judge these meters, and the two
+        // reasons are different: the run never produced confirmed RF, or it did
+        // and the producer withheld a derived meter anyway. Asserting the first
+        // when the second is true states a fact about the run that the same
+        // report contradicts two fields away (#7063).
+        const QString lead = QStringLiteral("INCONCLUSIVE — %1, so nothing here "
+                                            "is a verdict on these meters: ")
+                .arg(rfConfirmed
+                         ? QStringLiteral("this run produced RF but could not "
+                                          "exercise every meter below")
+                         : QStringLiteral("this run produced no confirmed RF"))
             + inconclusive.join(QStringLiteral(", "))
             + QStringLiteral(". ") + why
             + QStringLiteral(". Re-run with drive up and into a load before "
@@ -1428,7 +1681,8 @@ void RadioCertification::stageMeterScale(const Options& o)
     // 255.99:1 while idle because the ratio saturated the fixed-point range.
     //
     // Two checks with a KNOWN answer:
-    //   - a -20 dBFS test tone must read about -20 on the mic peak meter
+    //   - an injected test tone (-20 dBFS unless tone= says otherwise) must
+    //     read about its own level on the mic peak meter
     //   - a dummy load must read about 1.0:1 on SWR
     // Neither is a guess about this radio; both are arithmetic.
     if (!m_audio || !m_radio)
@@ -1436,7 +1690,7 @@ void RadioCertification::stageMeterScale(const Options& o)
 
     if (auto* tone = m_audio->clientTxTestTone()) {
         tone->setFrequencyHz(1000.0f);
-        tone->setLevelDb(-20.0f);
+        tone->setLevelDb(static_cast<float>(o.rfStimulusDbfs));
         tone->setEnabled(true);
     }
     const bool keyedOk = keyViaOperatorPath(true);
@@ -1460,9 +1714,9 @@ void RadioCertification::stageMeterScale(const Options& o)
     const double micPeak = keyed.value(QStringLiteral("micPeakDbfs")).toDouble(-999.0);
     const double swr = keyed.value(QStringLiteral("swr")).toDouble(-1.0);
     QJsonObject m{
-        {QStringLiteral("injectedToneDbfs"), -20.0},
+        {QStringLiteral("injectedToneDbfs"), o.rfStimulusDbfs},
         {QStringLiteral("micPeakDbfs"), micPeak},
-        {QStringLiteral("micPeakErrorDb"), micPeak + 20.0},
+        {QStringLiteral("micPeakErrorDb"), micPeak - o.rfStimulusDbfs},
         {QStringLiteral("swr"), swr},
         {QStringLiteral("swrStale"), keyed.contains(QStringLiteral("swrStale"))},
         // The SWR row above is only a measurement of anything if RF happened.
@@ -1476,10 +1730,11 @@ void RadioCertification::stageMeterScale(const Options& o)
     QStringList problems;
     if (micPeak < -998.0)
         problems << QStringLiteral("no mic peak reading while transmitting a tone");
-    else if (std::fabs(micPeak + 20.0) > 3.0)
+    else if (std::fabs(micPeak - o.rfStimulusDbfs) > 3.0)
         problems << QStringLiteral(
-            "mic peak reads %1 dBFS for a -20 dBFS tone — a scale error of %2 dB")
-            .arg(micPeak, 0, 'f', 1).arg(micPeak + 20.0, 0, 'f', 1);
+            "mic peak reads %1 dBFS for a %2 dBFS tone — a scale error of %3 dB")
+            .arg(micPeak, 0, 'f', 1).arg(o.rfStimulusDbfs, 0, 'f', 1)
+            .arg(micPeak - o.rfStimulusDbfs, 0, 'f', 1);
     if (swr > 50.0)
         problems << QStringLiteral(
             "SWR reads %1 into a load — a value that large usually means the "
@@ -1490,8 +1745,8 @@ void RadioCertification::stageMeterScale(const Options& o)
            QStringLiteral("Meters read the right NUMBER, not just a number"),
            m,
            QStringLiteral(
-               "Checks with a known answer: a -20 dBFS injected tone should read "
-               "-20 on the mic peak meter, and a dummy load should read near "
+               "Checks with a known answer: an injected tone should read its own "
+               "level on the mic peak meter, and a dummy load should read near "
                "1.0:1. Absolute POWER is deliberately not checked — the counts "
                "are uncalibrated and presenting them as watts is the error this "
                "project already avoided once."),
@@ -1550,15 +1805,14 @@ void RadioCertification::stageTuning(const Options& o)
 
 void RadioCertification::stageModeMap()
 {
-    // A mode name the backend does not recognise falls through to a default —
-    // silently. On the HL2, plain "CW" was absent while "CWU" was present, so CW
-    // was demodulated as SSB with the mode indicator reading correctly, and
-    // "RTTY" is advertised over TCI to this day with no mapping behind it.
+    // A mode name the backend does not recognise can fall through to a default
+    // silently. On the HL2, plain "CW" was once absent while "CWU" was present,
+    // so CW was demodulated as SSB with the mode indicator reading correctly.
     //
     // This enumerates every mode the application can actually emit and asks the
     // slice to take each one. It cannot see inside the backend's lookup, so what
     // it reports is the readback — but a mode that does not survive a round trip
-    // is certainly wrong, and one that does is at least addressable.
+    // is certainly worth naming, and one that does is at least addressable.
     static const QStringList kModes{
         QStringLiteral("USB"), QStringLiteral("LSB"),
         QStringLiteral("CW"),  QStringLiteral("CWU"), QStringLiteral("CWL"),
@@ -1569,10 +1823,14 @@ void RadioCertification::stageModeMap()
     };
 
     QJsonObject results;
-    QStringList notRetained;
+    QStringList differed;
     auto* slice = m_radio ? m_radio->slice(0) : nullptr;
     const QString restore = slice ? slice->mode() : QString();
+    auto same = [](const QString& a, const QString& b) {
+        return a.compare(b, Qt::CaseInsensitive) == 0;
+    };
 
+    QStringList retained;
     for (const QString& mode : kModes) {
         if (!slice)
             break;
@@ -1589,29 +1847,90 @@ void RadioCertification::stageModeMap()
             {QStringLiteral("passband"),
              QStringLiteral("%1..%2").arg(slice->filterLow()).arg(slice->filterHigh())},
         };
-        // A differing readback is either an unmapped mode falling to the backend
-        // default or a deliberate alias (HL2's hl2::canonicalOfferedMode publishes
-        // "CWU" as "CW", "NFM" as "FM"); this tool can't tell them apart, so the
-        // concern names both.
-        if (back.compare(mode, Qt::CaseInsensitive) != 0)
-            notRetained << (mode + QStringLiteral("->") + back);
+        if (same(back, mode))
+            retained << mode;
+        else
+            differed << mode;
+    }
+
+    // ASK AGAIN FROM A KNOWN MODE, for each one that came back different. A
+    // backend that REFUSES a mode leaves the slice on whatever it was on, so
+    // its readback is simply the previous mode — on the HL2, RTTY after DIGL
+    // reads "DIGL" — and that looks exactly like an alias collapse when the
+    // previous mode is the alias's twin (CW before CWU). From a baseline that
+    // differs from the first readback the two separate: a refusal stays on
+    // the baseline, an alias lands on the same spelling again.
+    QStringList aliased, refused, unstable;
+    for (const QString& mode : differed) {
+        const QString first = results[mode].toObject()
+                                  .value(QStringLiteral("readback")).toString();
+        QString baseline;
+        for (const QString& r : retained) {
+            if (!same(r, first)) {
+                baseline = r;
+                break;
+            }
+        }
+        QJsonObject entry = results[mode].toObject();
+        if (baseline.isEmpty()) {
+            entry[QStringLiteral("class")] = QStringLiteral("unclassified");
+            results[mode] = entry;
+            unstable << (mode + QStringLiteral("->") + first);
+            continue;
+        }
+        slice->setMode(baseline);
+        spin(250);
+        slice->setMode(mode);
+        spin(250);
+        const QString again = slice->mode();
+        const certmath::ModeReadback cls = certmath::classifyModeReadback(
+            false, same(again, baseline), same(again, first));
+        entry[QStringLiteral("reprobeFrom")] = baseline;
+        entry[QStringLiteral("reprobeReadback")] = again;
+        switch (cls) {
+        case certmath::ModeReadback::Refused:
+            entry[QStringLiteral("class")] = QStringLiteral("refused");
+            refused << mode;
+            break;
+        case certmath::ModeReadback::Alias:
+            entry[QStringLiteral("class")] = QStringLiteral("alias");
+            aliased << (mode + QStringLiteral("->") + first);
+            break;
+        default:
+            entry[QStringLiteral("class")] = QStringLiteral("unstable");
+            unstable << (mode + QStringLiteral("->") + first + QStringLiteral(", then ")
+                         + again);
+            break;
+        }
+        results[mode] = entry;
     }
     if (slice && !restore.isEmpty())
         slice->setMode(restore);
 
-    QString concern;
-    if (!notRetained.isEmpty())
-        concern = QStringLiteral(
-            "these modes did not survive a round trip: ") + notRetained.join(", ")
-            + QStringLiteral(". Each is one of two things and this stage cannot "
-                             "tell which: a mode the backend does not map, which "
-                             "does not fail but becomes the default, usually USB, "
-                             "while the UI still shows what was asked for — or a "
-                             "deliberate alias collapse onto the spelling the mode "
-                             "menu carries (on the HL2, CWU->CW and NFM->FM are "
-                             "this, and are correct). Read the passband "
-                             "fingerprint beside each: an alias keeps its own "
-                             "window, a fallback takes the default mode's");
+    QStringList parts;
+    if (!aliased.isEmpty())
+        parts << QStringLiteral(
+            "came back as another spelling, twice: %1. Either a deliberate alias "
+            "collapse onto the spelling the mode menu carries (on the HL2, "
+            "hl2::canonicalOfferedMode does CWU->CW and NFM->FM, and that is "
+            "correct) or a fallback that publishes its default; the passband "
+            "fingerprint beside each tells them apart — an alias keeps its own "
+            "window, a fallback takes the default mode's")
+            .arg(aliased.join(QStringLiteral(", ")));
+    if (!refused.isEmpty())
+        parts << QStringLiteral(
+            "refused: %1. The slice stayed on the mode it was on, which is what a "
+            "backend does when it declines a mode it cannot demodulate (the HL2 "
+            "refuses RTTY: it is not in hl2::knownModeStrings). Honest, but a "
+            "client that offers the mode gets no change")
+            .arg(refused.join(QStringLiteral(", ")));
+    if (!unstable.isEmpty())
+        parts << QStringLiteral("did not settle on one answer: %1")
+                     .arg(unstable.join(QStringLiteral(", ")));
+    const QString concern = parts.isEmpty()
+        ? QString()
+        : QStringLiteral("these modes did not survive a round trip — ")
+              + parts.join(QStringLiteral("; "));
 
     record(QStringLiteral("mode-map"),
            QStringLiteral("Every mode the app can emit survives a round trip"),
@@ -1621,13 +1940,13 @@ void RadioCertification::stageModeMap()
                "BACKEND publishes, which for most modes is the string it was "
                "given — so every mode can come back clean while the backend "
                "maps only some of them and silently demodulates the rest as "
-               "its default. Confirmed on this radio: RTTY survives the round "
-               "trip and the backend has no mapping for it. A readback that "
-               "DIFFERS is not automatically a fault either: a backend may "
-               "collapse an alias onto the spelling its mode menu carries, "
-               "which the HL2 does for CWU->CW and NFM->FM. Compare each "
-               "passband against the fallback mode's — an exact match is a "
-               "hint, and the only one visible from outside the backend."),
+               "its default. A readback that DIFFERS is not automatically a "
+               "fault either: a backend may collapse an alias onto the spelling "
+               "its mode menu carries, or refuse a mode and stay where it was. "
+               "Each differing mode is asked for again from a known mode to "
+               "separate the two (`class`); compare each passband against the "
+               "fallback mode's — an exact match is a hint, and the only one "
+               "visible from outside the backend."),
            concern,
            QStringLiteral("docs/HERMES.md 15.7"));
 }
@@ -1725,10 +2044,21 @@ void RadioCertification::stageRxSidebands(const Options& o)
         return;
 
     QJsonObject perMode;
+    QMap<QString, bool> recovered;
     for (const QString& mode : {QStringLiteral("USB"), QStringLiteral("LSB"),
                                 QStringLiteral("DIGU"), QStringLiteral("DIGL")}) {
         slice->setMode(mode);
         spin(900);
+        // THE AGC THE MODE RAN WITH, as the slice publishes it after the mode
+        // change. A backend may switch AGC per mode by design (the HL2 runs
+        // DIGU/DIGL with AGC off, #5629), which moves the absolute level by
+        // tens of dB and leaves the tone-to-background ratio alone. Recorded so
+        // such a step is explained in the report instead of looking like a fault.
+        const QJsonObject agc{
+            {QStringLiteral("mode"), slice->agcMode()},
+            {QStringLiteral("threshold"), slice->agcThreshold()},
+            {QStringLiteral("offLevel"), slice->agcOffLevel()},
+        };
         m_audio->startAutomationAudioCapture(1500,
                                              QStringList{QStringLiteral("output")});
         spin(1700);
@@ -1763,17 +2093,74 @@ void RadioCertification::stageRxSidebands(const Options& o)
         // is a ~0.67 Hz bin, and a 1 ppm error at 10 MHz lands ~10 Hz away, so
         // every mode reads the noise floor at once and the report says "deaf"
         // when it means "missed".
+        //
+        // JUDGED RELATIVE TO THE MODE'S OWN BACKGROUND, never against an
+        // absolute floor: a mode whose AGC is off by design plays 29-41 dB
+        // quieter on the HL2 and would read as deaf (certmath).
+        const double tone = certmath::tonePowerNear(mono, o.referenceOffsetHz, fs,
+                                                    kReferenceSearchSpanHz);
+        const double all = rms(mono);
+        const bool heard = !mono.empty() && certmath::toneRecovered(tone, all);
+        recovered[mode] = heard;
         perMode[mode] = QJsonObject{
             {QStringLiteral("sampleRateHz"), fs},
             {QStringLiteral("toneSearchSpanHz"), kReferenceSearchSpanHz},
-            {QStringLiteral("toneAtOffsetDb"),
-             db(certmath::tonePowerNear(mono, o.referenceOffsetHz, fs,
-                                        kReferenceSearchSpanHz))},
-            {QStringLiteral("overallRmsDb"), db(rms(mono))},
+            {QStringLiteral("toneAtOffsetDb"), db(tone)},
+            {QStringLiteral("overallRmsDb"), db(all)},
+            {QStringLiteral("toneAboveBackgroundDb"),
+             certmath::toneAboveBackgroundDb(tone, all)},
+            {QStringLiteral("recovered"), heard},
+            {QStringLiteral("agc"), agc},
             {QStringLiteral("frames"), static_cast<int>(mono.size())},
         };
     }
     slice->setMode(o.mode);
+
+    const bool carrierAboveDial = o.referenceOffsetHz > 0.0;
+    const certmath::RxSidebandPattern pattern = certmath::rxSidebandPattern(
+        recovered.value(QStringLiteral("USB")), recovered.value(QStringLiteral("LSB")),
+        recovered.value(QStringLiteral("DIGU")), recovered.value(QStringLiteral("DIGL")),
+        carrierAboveDial);
+    QString concern;
+    QString patternName;
+    switch (pattern) {
+    case certmath::RxSidebandPattern::Expected:
+        patternName = QStringLiteral("expected");
+        break;
+    case certmath::RxSidebandPattern::NoneRecovered:
+        patternName = QStringLiteral("none-recovered");
+        concern = QStringLiteral(
+            "INCONCLUSIVE: no mode recovered the reference tone. With no antenna "
+            "or no signal at the reference frequency every mode reads the noise "
+            "floor, so this stage needs a real carrier present");
+        break;
+    case certmath::RxSidebandPattern::AllRecovered:
+        patternName = QStringLiteral("all-recovered");
+        concern = QStringLiteral(
+            "all four modes recovered the tone; the dial is probably not where "
+            "this stage thinks it is, or the carrier is wide enough to fill both "
+            "sidebands");
+        break;
+    case certmath::RxSidebandPattern::PairsDisagree:
+        patternName = QStringLiteral("pairs-disagree");
+        concern = QStringLiteral(
+            "USB and DIGU, or LSB and DIGL, disagree. Both members of a pair share "
+            "a sideband, so one of them is demodulating the other side or is deaf");
+        break;
+    case certmath::RxSidebandPattern::Inverted:
+        patternName = QStringLiteral("inverted");
+        concern = QStringLiteral(
+            "only the %1 pair recovered a carrier that sits %2 the dial: the "
+            "receive sideband convention looks INVERTED")
+            .arg(carrierAboveDial ? QStringLiteral("LSB/DIGL") : QStringLiteral("USB/DIGU"),
+                 carrierAboveDial ? QStringLiteral("above") : QStringLiteral("below"));
+        break;
+    }
+    perMode[QStringLiteral("summary")] = QJsonObject{
+        {QStringLiteral("pattern"), patternName},
+        {QStringLiteral("carrierAboveDial"), carrierAboveDial},
+        {QStringLiteral("recoveredThresholdDb"), certmath::kRecoveredToneAboveBackgroundDb},
+    };
 
     record(QStringLiteral("rx-sidebands"),
            QStringLiteral("All four SSB-family modes against a known carrier"),
@@ -1784,11 +2171,12 @@ void RadioCertification::stageRxSidebands(const Options& o)
                "the tone and the other two should not. USB and DIGU should agree "
                "with each other, LSB and DIGL likewise, and the two pairs should "
                "disagree — if all four recover it, the dial is probably not where "
-               "this stage thinks it is."),
-           QStringLiteral(
-               "Interpretation needs a real carrier present. With no antenna or "
-               "no signal at the reference frequency every mode reads the noise "
-               "floor and this stage is inconclusive rather than passing"),
+               "this stage thinks it is. Each mode is judged by how far the tone "
+               "stands above the rest of its own audio (toneAboveBackgroundDb), "
+               "not by its absolute level: a backend may run a mode with AGC off "
+               "by design (recorded per mode under agc), and that mode then "
+               "plays tens of dB quieter while hearing the carrier just as well."),
+           concern,
            QStringLiteral("docs/HERMES.md 15.3, 15.4"));
 }
 
@@ -1959,12 +2347,17 @@ void RadioCertification::stageRf(const Options& o)
 
     if (auto* tone = m_audio->clientTxTestTone()) {
         tone->setFrequencyHz(1000.0f);
-        tone->setLevelDb(-20.0f);
+        tone->setLevelDb(static_cast<float>(o.rfStimulusDbfs));
         tone->setEnabled(true);
     }
     const bool keyedOk = keyViaOperatorPath(true);
     spin(o.settleMs);
     const QJsonObject keyed = meterSnapshot();
+    // The backend's SWR gate, read INSIDE this key: its clears count is per
+    // over, so after unkey it would describe nothing. The drive is read here
+    // too, because the run may have clamped it and restores it on exit.
+    const SwrGateReading gate = keyedOk ? readSwrGate() : SwrGateReading{};
+    const int keyedDrive = m_radio ? m_radio->transmitModel().rfPower() : -1;
     // This stage transmits a tone, so its keyed window is evidence for the
     // meters phase's keyed-RF precondition in an `all` run. The carrier-
     // suppression stage deliberately keys into silence and is NOT instrumented
@@ -1996,18 +2389,29 @@ void RadioCertification::stageRf(const Options& o)
         {QStringLiteral("afterUnkey"), after},
         {QStringLiteral("swrAvailable"), haveSwr},
         {QStringLiteral("paTempAvailable"), haveTemp},
+        {QStringLiteral("stimulusToneDbfs"), o.rfStimulusDbfs},
+        {QStringLiteral("drivePercentWhileKeyed"),
+         keyedOk && keyedDrive >= 0 ? QJsonValue(keyedDrive) : QJsonValue()},
+        // Null where the backend publishes no such key, which is not a cleared gate.
+        {QStringLiteral("backendSwrGate"), QJsonObject{
+            {QStringLiteral("counts"),
+             gate.gateCounts >= 0 ? QJsonValue(gate.gateCounts) : QJsonValue()},
+            {QStringLiteral("clearsThisKey"),
+             gate.clearsThisOver >= 0 ? QJsonValue(gate.clearsThisOver) : QJsonValue()},
+            {QStringLiteral("forwardPeakCounts"),
+             gate.peakCounts >= 0 ? QJsonValue(gate.peakCounts) : QJsonValue()}}},
     };
     if (haveTemp)
         m[QStringLiteral("paTempRiseC")] = tempKeyed - tempIdle;
 
+    const SwrAtKey swrAtKey =
+        classifySwrAtKey(haveSwr, gate, keyedDrive, o.rfStimulusDbfs);
+    m[QStringLiteral("swrResult")] = swrAtKey.result;
+
     QString concern;
     bool meterDependent = false;
     if (!haveSwr) {
-        concern = QStringLiteral(
-            "METER-DEPENDENT: no SWR reading while keyed. This is 'no SWR "
-            "reading', NOT 'no RF' — the two are only the same thing once the "
-            "meters phase has validated this radio's telemetry. Run "
-            "'radiocert meters' before concluding anything about the PA");
+        concern = swrAtKey.concern;
         meterDependent = true;
     } else if (!haveTemp) {
         concern = QStringLiteral(
@@ -2352,6 +2756,15 @@ QJsonObject RadioCertification::run(const Options& o)
     m_keyedRfSamples = 0;
     m_keyedWindows = 0;
     m_fwdPowerMeterDefined = false;
+    // Negative is "not measured", and that must be true at the start of a run
+    // as well as when a backend declares no gate. Unreachable today — each
+    // bridge request builds a fresh RadioCertification — but the sentinel's
+    // meaning is stated in the header, so nothing should depend on the object
+    // being new for it to hold.
+    m_swrGateCounts = -1;
+    m_swrGateClears = -1;
+    m_keyedFwdCountsMax = -1;
+    m_keyedDrivePercentMax = -1;
     m_renderedWhileKeyed = QJsonObject{};
     m_keyRefusals = 0;
 
@@ -2590,7 +3003,12 @@ QJsonObject RadioCertification::run(const Options& o)
             // this field went on claiming the requested frequency regardless.
             {QStringLiteral("frequencyMhz"), o.frequencyMhz},
             {QStringLiteral("mode"), o.mode},
-            {QStringLiteral("txPowerCeilingPercent"), o.maxPowerPercent}}},
+            // The clamp and report share one ceiling. The clamped-from value
+            // is null when the operator's setting was already within it.
+            {QStringLiteral("txPowerCeilingPercent"), o.maxRfPowerPercent},
+            {QStringLiteral("rfPowerClampedFromPercent"),
+             powerToRestore >= 0 ? QJsonValue(powerToRestore) : QJsonValue()},
+            {QStringLiteral("rfStimulusDbfs"), o.rfStimulusDbfs}}},
         // KEYS THE RADIO REFUSED. runPttPreflight can block a key (band limits,
         // interlocks) and requestPttOn returns void, so a refusal is otherwise
         // silent and every stage below reports its own subject as broken. A

@@ -25,6 +25,20 @@ delivers only to a separate computer on its LAN.
   as the connected GUI client's own (#7139). `/v1/status` names it as
   `slice_index`, and AetherSDR leaves that slice alone. Other clients may
   still take it over, so every retune sets `mode=DIGU` and `tx=0` again.
+- **Its audio stays on the radio:** the radio mixes a slice's audio into the
+  stream it sends the slice's GUI client, so an unmuted receiver slice plays
+  on that client's computer (measured on a FLEX-8600: -31 dBFS reached
+  AetherSDR with its own slice at zero gain). The agent sets `audio_mute=1`
+  when it makes the slice and at every retune, and at once when a status
+  shows another client unmuted it. DAX, which it records from, is not
+  affected by the mute (measured: decodes and level unchanged).
+- **Its DAX channel:** a DAX channel feeds one slice. A client that picks
+  ours moves it to their slice, and our stream then carries their audio:
+  measured on a FLEX-8600, those decodes came out under our band. So the
+  agent tracks each slice's channel from the radio's statuses and from the
+  reply to its own `slice set … dax=`. A cycle starts only with the channel
+  on our slice, one it leaves mid-cycle is discarded, and the next retune
+  takes the channel back.
 - **Capture:** each even UTC minute, 114 s, timed by the system clock. It
   waits for a trusted clock; on an 8000-series radio that comes from its
   GPS-disciplined stratum-1 NTP. A FLEX-6000 runs kernel 2.6.37, where

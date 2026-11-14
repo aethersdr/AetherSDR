@@ -1,6 +1,7 @@
 #include "ReceiveControlTarget.h"
 #include "ReceiveControlGuard.h"
 #include "models/PanadapterModel.h"
+#include "models/TransmitModel.h"
 
 #include <QHash>
 #include <QSet>
@@ -36,6 +37,13 @@ const ReceiveFilterMode* filterMode(const RadioCapabilities& caps, const QString
     return nullptr;
 }
 
+bool dspSupports(const RadioCapabilities& caps, ReceiveDspControl::Feature feature,
+                 const std::optional<QString>& mode)
+{
+    return caps.receiveDspControl && known(caps.receiveDspControl->authority) && mode
+        && caps.receiveDspControl->supports(feature, *mode);
+}
+
 class ModelReceiveControlTarget final : public ReceiveControlTarget {
 public:
     ModelReceiveControlTarget(RadioModel* radio, RadioConnectionTarget* connection)
@@ -54,7 +62,14 @@ public:
         if (thread() != QThread::currentThread() || !m_guard.ready()) {
             return false;
         }
-        if (op == ReceiveOperation::PanCenter || op == ReceiveOperation::PanBandwidth) {
+        if (op == ReceiveOperation::CwPitch) {
+            return !checkCwPitch();
+        }
+        if (op == ReceiveOperation::RadioSpeaker) {
+            return !checkRadioSpeaker();
+        }
+        if (op == ReceiveOperation::PanCenter || op == ReceiveOperation::PanBandwidth
+            || op == ReceiveOperation::PanRfGain) {
             for (PanadapterModel* pan : m_radio->panadapters()) {
                 if (pan && !checkPan(pan->panId(), op)) {
                     return true;
@@ -145,6 +160,101 @@ public:
         return {};
     }
 
+    std::optional<ProtocolError> setAgcThreshold(int id, int threshold) override
+    {
+        if (const auto error = checkSlice(id, ReceiveOperation::AgcThreshold)) {
+            return error;
+        }
+        if (threshold < 0 || threshold > 100) {
+            return refusal("request.out_of_range", "AGC threshold is outside 0..100");
+        }
+        // The companion mode is the slice's current AGC mode, which the backend
+        // echoed; only the threshold changes.
+        SliceAgcRequest request;
+        request.field = SliceAgcRequest::Field::Threshold;
+        request.mode = m_radio->slice(id)->agcMode();
+        request.threshold = threshold;
+        m_radio->backend()->requestSliceAgc(id, request);
+        return {};
+    }
+
+    std::optional<ProtocolError> setNoiseBlanker(int id, bool enabled) override
+    {
+        if (const auto error = checkSlice(id, ReceiveOperation::NoiseBlanker)) {
+            return error;
+        }
+        const SliceModel* slice = m_radio->slice(id);
+        SliceDspRequest request;
+        request.feature = SliceDspRequest::Feature::Nb;
+        request.field = SliceDspRequest::Field::Enabled;
+        request.enabled = enabled;
+        // The blanker's kind, level and fill ride along as the backend reported
+        // them, so only on/off changes.
+        request.kind = slice->nbKind();
+        request.level = slice->nbLevel();
+        request.fill = slice->nbFill();
+        return dispatchDsp(id, request);
+    }
+
+    std::optional<ProtocolError> setNoiseReduction(int id, bool enabled) override
+    {
+        if (const auto error = checkSlice(id, ReceiveOperation::NoiseReduction)) {
+            return error;
+        }
+        SliceDspRequest request;
+        request.feature = SliceDspRequest::Feature::Nr;
+        request.field = SliceDspRequest::Field::Enabled;
+        request.enabled = enabled;
+        request.level = m_radio->slice(id)->nrLevel();
+        return dispatchDsp(id, request);
+    }
+
+    std::optional<ProtocolError> setRit(int id, bool enabled, int offsetHz) override
+    {
+        if (const auto error = checkSlice(id, ReceiveOperation::Rit)) {
+            return error;
+        }
+        const int maximum = m_radio->backendCapabilities().receiveDspControl->maximumRitOffsetHz;
+        // Turning RIT off is always allowed; the backend clamps the offset it keeps.
+        if (enabled && (offsetHz < -maximum || offsetHz > maximum)) {
+            return refusal("request.out_of_range", "RIT offset is outside the declared range");
+        }
+        // The desktop's route too (SliceModel::setRit): one intent, and a
+        // backend that does not take it is a refusal, not a silent accept.
+        const SliceControlRequest request{SliceControlRequest::Field::Rit,
+                                          IncrementalTuning{enabled, offsetHz}};
+        if (!request.valid()
+            || m_radio->backend()->requestSliceControl(id, request) != ReceiveDispatch::Dispatched) {
+            return refusal("capability.unavailable", "backend did not accept the RIT intent");
+        }
+        return {};
+    }
+
+    std::optional<ProtocolError> setPanRfGain(const QString& id, int gainDb) override
+    {
+        if (const auto error = checkPan(id, ReceiveOperation::PanRfGain)) {
+            return error;
+        }
+        const ReceivePanRfGainControl range = *m_radio->backendCapabilities().receivePanRfGainControl;
+        if (gainDb < range.minimumDb || gainDb > range.maximumDb
+            || (gainDb - range.minimumDb) % range.stepDb != 0) {
+            return refusal("request.out_of_range", "RF gain is outside the declared range or step");
+        }
+        m_radio->backend()->setPanRfGain(*m_radio->receiveControlPanId(id), gainDb);
+        return {};
+    }
+
+    std::optional<ProtocolError> setRadioSpeaker(bool enabled) override
+    {
+        if (const auto error = checkRadioSpeaker()) {
+            return error;
+        }
+        if (m_radio->backend()->requestRadioSpeakerAudio(enabled) != ReceiveDispatch::Dispatched) {
+            return refusal("capability.unavailable", "backend did not accept the speaker intent");
+        }
+        return {};
+    }
+
     std::optional<ProtocolError> setPanCenter(const QString& id, qint64 hz) override
     {
         return setPan(id, hz, ReceiveOperation::PanCenter);
@@ -154,7 +264,29 @@ public:
         return setPan(id, hz, ReceiveOperation::PanBandwidth);
     }
 
+    std::optional<ProtocolError> setCwPitch(int hz) override
+    {
+        const RadioCapabilities caps = m_radio ? m_radio->backendCapabilities() : RadioCapabilities{};
+        if (const auto error = checkCwPitch(caps)) {
+            return error;
+        }
+        const ReceiveCwPitchControl pitch = *caps.receiveCwPitchControl;
+        if (hz < pitch.minimumHz || hz > pitch.maximumHz || (hz - pitch.minimumHz) % pitch.stepHz != 0) {
+            return refusal("request.out_of_range", "CW pitch is outside the declared range or step");
+        }
+        m_radio->backend()->setCwPitch(hz);
+        return {};
+    }
+
 private:
+    std::optional<ProtocolError> dispatchDsp(int id, const SliceDspRequest& request)
+    {
+        if (!request.valid()
+            || m_radio->backend()->requestSliceDsp(id, request) != ReceiveDispatch::Dispatched) {
+            return refusal("capability.unavailable", "backend did not accept the DSP intent");
+        }
+        return {};
+    }
     static ProtocolError refusal(const char* code, const char* message)
     {
         return ReceiveControlGuard::refusal(code, message);
@@ -198,10 +330,73 @@ private:
             supported = caps.receiveAudioControl && known(caps.receiveAudioControl->authority)
                 && (op == ReceiveOperation::AudioGain ? observed.gain.has_value() : observed.muted.has_value());
             break;
+        case ReceiveOperation::AgcThreshold:
+        case ReceiveOperation::NoiseBlanker:
+        case ReceiveOperation::NoiseReduction:
+        case ReceiveOperation::Rit: {
+            // Which DSP features apply depends on the mode, so a pending mode
+            // write holds these back like it holds back a filter.
+            if (m_pendingModes.contains(slice)) {
+                return refusal("request.conflict", "await mode readback before a mode-dependent intent");
+            }
+            using Feature = ReceiveDspControl::Feature;
+            if (op == ReceiveOperation::AgcThreshold) {
+                supported = dspSupports(caps, Feature::Agc, observed.mode) && observed.agcThreshold;
+            } else if (op == ReceiveOperation::NoiseBlanker) {
+                supported = dspSupports(caps, Feature::Nb, observed.mode) && observed.noiseBlanker;
+            } else if (op == ReceiveOperation::NoiseReduction) {
+                supported = dspSupports(caps, Feature::Nr, observed.mode) && observed.noiseReduction;
+            } else {
+                supported = dspSupports(caps, Feature::Rit, observed.mode)
+                    && caps.receiveDspControl->maximumRitOffsetHz > 0
+                    && observed.ritEnabled && observed.ritOffsetHz;
+            }
+            break;
+        }
         default: break;
         }
         return supported ? std::nullopt : std::optional<ProtocolError>(
             refusal("capability.unavailable", "receive operation or observation unavailable"));
+    }
+
+    // The pitch must be declared and reported by this session's backend; the
+    // model's own value is not an observation.
+    std::optional<ProtocolError> checkCwPitch() const
+    {
+        return checkCwPitch(m_radio ? m_radio->backendCapabilities() : RadioCapabilities{});
+    }
+    std::optional<ProtocolError> checkCwPitch(const RadioCapabilities& caps) const
+    {
+        if (thread() != QThread::currentThread()) {
+            return refusal("request.conflict", "receive target owning thread required");
+        }
+        if (const auto error = m_guard.checkTransmit(caps)) {
+            return error;
+        }
+        const auto& pitch = caps.receiveCwPitchControl;
+        if (!pitch || pitch->minimumHz <= 0 || pitch->maximumHz < pitch->minimumHz || pitch->stepHz <= 0
+            || !m_radio->transmitModel().reportedCwPitch()) {
+            return refusal("capability.unavailable", "CW pitch control or observation unavailable");
+        }
+        return {};
+    }
+
+    // Declared, and reported by this session's backend: the model holds no speaker
+    // state of its own to stand in for the report.
+    std::optional<ProtocolError> checkRadioSpeaker() const
+    {
+        if (thread() != QThread::currentThread() || !m_guard.ready()) {
+            return refusal("request.conflict", "radio connection is not ready");
+        }
+        const RadioCapabilities caps = m_radio->backendCapabilities();
+        if (const auto error = m_guard.checkTransmit(caps)) {
+            return error;
+        }
+        if (!caps.radioSpeakerControl || !known(caps.radioSpeakerControl->authority)
+            || !m_radio->reportedRadioSpeaker()) {
+            return refusal("capability.unavailable", "radio speaker control or observation unavailable");
+        }
+        return {};
     }
 
     std::optional<ProtocolError> checkPan(const QString& id, ReceiveOperation op) const
@@ -217,6 +412,14 @@ private:
             return error;
         }
         const PanadapterModel* pan = m_radio->panadapter(id);
+        if (op == ReceiveOperation::PanRfGain) {
+            const auto& gain = caps.receivePanRfGainControl;
+            if (!gain || !known(gain->authority) || gain->stepDb <= 0
+                || gain->maximumDb < gain->minimumDb || !pan->reportedRfGain()) {
+                return refusal("capability.unavailable", "RF gain control or observation unavailable");
+            }
+            return {};
+        }
         const auto& range = op == ReceiveOperation::PanCenter
             ? caps.receivePanCenterControl : caps.receivePanBandwidthControl;
         if (!validRange(range) || !pan->reportedCenterHz() || !pan->reportedBandwidthHz()) {

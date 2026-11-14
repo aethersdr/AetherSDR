@@ -38,7 +38,7 @@ int main(int argc, char** argv)
     // ---- core transmit: clamp, "1"→bool, ok-guard ----
     {
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeTransmitStatus({
+            fb.statusIngress()->decodeTransmitStatus({
                 {QStringLiteral("rfpower"), QStringLiteral("150")},   // clamps to 100
                 {QStringLiteral("tune"), QStringLiteral("1")},
                 {QStringLiteral("freq"), QStringLiteral("14.2")},
@@ -58,21 +58,21 @@ int main(int argc, char** argv)
     // ---- ptt_mic_override (v4.3 firmware, #6442) ----
     {
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QStringLiteral("1")}});
+            fb.statusIngress()->decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QStringLiteral("1")}});
         });
         CHECK(d.pttMicOverride.has_value() && *d.pttMicOverride == true);
         const TransmitDelta absent = decode(b, [](FlexBackend& fb){
-            fb.decodeTransmitStatus({{QStringLiteral("rfpower"), QStringLiteral("50")}});
+            fb.statusIngress()->decodeTransmitStatus({{QStringLiteral("rfpower"), QStringLiteral("50")}});
         });
         CHECK(!absent.pttMicOverride.has_value());   // pre-4.3 firmware: never reported
         const TransmitDelta off = decode(b, [](FlexBackend& fb){
-            fb.decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QStringLiteral("0")}});
+            fb.statusIngress()->decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QStringLiteral("0")}});
         });
         CHECK(off.pttMicOverride.has_value() && *off.pttMicOverride == false);
         // FlexLib rejects anything but 0/1: malformed input is dropped, never "off".
         for (const char* bad : {"garbage", "-1", "2", ""}) {
             const TransmitDelta invalid = decode(b, [bad](FlexBackend& fb){
-                fb.decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QLatin1String(bad)}});
+                fb.statusIngress()->decodeTransmitStatus({{QStringLiteral("ptt_mic_override"), QLatin1String(bad)}});
             });
             CHECK(!invalid.pttMicOverride.has_value());
         }
@@ -81,7 +81,7 @@ int main(int argc, char** argv)
     // ---- ok-guard: malformed present numeric is dropped ----
     {
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeTransmitStatus({
+            fb.statusIngress()->decodeTransmitStatus({
                 {QStringLiteral("rfpower"), QStringLiteral("junk")},
                 {QStringLiteral("mox"), QStringLiteral("1")},
             });
@@ -94,7 +94,7 @@ int main(int argc, char** argv)
     {
         // compander present → carried; dexp ignored.
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeTransmitStatus({
+            fb.statusIngress()->decodeTransmitStatus({
                 {QStringLiteral("compander"), QStringLiteral("1")},
                 {QStringLiteral("dexp"), QStringLiteral("0")},
                 {QStringLiteral("compander_level"), QStringLiteral("33")},
@@ -107,7 +107,7 @@ int main(int argc, char** argv)
     {
         // dexp-only (no compander) → aliases into compander.
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeTransmitStatus({
+            fb.statusIngress()->decodeTransmitStatus({
                 {QStringLiteral("dexp"), QStringLiteral("1")},
                 {QStringLiteral("noise_gate_level"), QStringLiteral("8")},
             });
@@ -118,10 +118,8 @@ int main(int argc, char** argv)
 
     // ---- interlock ----
     {
-        const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeInterlockStatus({{QStringLiteral("tx1_delay"), QStringLiteral("25")},
-                                      {QStringLiteral("timeout"), QStringLiteral("120")}});
-        });
+        const TransmitDelta d = FlexStatusIngress::interlockTiming(
+            {{QStringLiteral("tx1_delay"), QStringLiteral("25")}, {QStringLiteral("timeout"), QStringLiteral("120")}});
         CHECK(d.tx1Delay.has_value() && *d.tx1Delay == 25);
         CHECK(d.interlockTimeout.has_value() && *d.interlockTimeout == 120);
         CHECK(!d.rfPower.has_value());   // core fields untouched
@@ -130,7 +128,7 @@ int main(int argc, char** argv)
     // ---- ATU: raw status token carried; model owns the enum parse ----
     {
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeAtuStatus({{QStringLiteral("status"), QStringLiteral("TUNE_SUCCESSFUL")},
+            fb.statusIngress()->decodeAtuStatus({{QStringLiteral("status"), QStringLiteral("TUNE_SUCCESSFUL")},
                                 {QStringLiteral("atu_enabled"), QStringLiteral("1")}});
         });
         CHECK(d.atuStatusRaw.has_value() && *d.atuStatusRaw == QStringLiteral("TUNE_SUCCESSFUL"));
@@ -140,7 +138,7 @@ int main(int argc, char** argv)
     // ---- APD: bare equalizer_reset flag engages the optional ----
     {
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeApdStatus({{QStringLiteral("enable"), QStringLiteral("1")},
+            fb.statusIngress()->decodeApdStatus({{QStringLiteral("enable"), QStringLiteral("1")},
                                 {QStringLiteral("equalizer_reset"), QString()}});
         });
         CHECK(d.apdEnabled.has_value() && *d.apdEnabled == true);
@@ -151,7 +149,7 @@ int main(int argc, char** argv)
     {
         // apd ant=ANT1 freq=14.268000 rfpower=100 state=IDLE deployed=0
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeApdStatus({{QStringLiteral("ant"), QStringLiteral("ANT1")},
+            fb.statusIngress()->decodeApdStatus({{QStringLiteral("ant"), QStringLiteral("ANT1")},
                                 {QStringLiteral("freq"), QStringLiteral("14.268000")},
                                 {QStringLiteral("rfpower"), QStringLiteral("100")},
                                 {QStringLiteral("state"), QStringLiteral("IDLE")},
@@ -167,7 +165,7 @@ int main(int argc, char** argv)
         // apd slice=0 mmx=0 client_handle=0x1D6D44F8 ant=ANT1 freq=14.268000
         //     rfpower=100 rx_error_mHz=2.105713 equalizer_active=0 configurable=1
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeApdStatus({{QStringLiteral("slice"), QStringLiteral("0")},
+            fb.statusIngress()->decodeApdStatus({{QStringLiteral("slice"), QStringLiteral("0")},
                                 {QStringLiteral("mmx"), QStringLiteral("0")},
                                 {QStringLiteral("client_handle"), QStringLiteral("0x1D6D44F8")},
                                 {QStringLiteral("ant"), QStringLiteral("ANT1")},
@@ -194,13 +192,13 @@ int main(int argc, char** argv)
         };
         for (const auto& [token, state] : tokens) {
             const TransmitDelta d = decode(b, [&token](FlexBackend& fb){
-                fb.decodeApdStatus({{QStringLiteral("state"), token}});
+                fb.statusIngress()->decodeApdStatus({{QStringLiteral("state"), token}});
             });
             CHECK(d.apdLifecycle == state);
         }
         for (const QString& bad : {QStringLiteral("3"), QStringLiteral("IDLE,TRAINING"), QString()}) {
             const TransmitDelta d = decode(b, [&bad](FlexBackend& fb){
-                fb.decodeApdStatus({{QStringLiteral("state"), bad}});
+                fb.statusIngress()->decodeApdStatus({{QStringLiteral("state"), bad}});
             });
             CHECK(!d.apdLifecycle);
         }
@@ -208,7 +206,7 @@ int main(int argc, char** argv)
     {
         // Pre-scope global form and a malformed frequency carry no scope.
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeApdStatus({{QStringLiteral("equalizer_active"), QStringLiteral("1")},
+            fb.statusIngress()->decodeApdStatus({{QStringLiteral("equalizer_active"), QStringLiteral("1")},
                                 {QStringLiteral("freq"), QStringLiteral("abc")},
                                 {QStringLiteral("ant"), QString()}});
         });
@@ -219,7 +217,7 @@ int main(int argc, char** argv)
     // ---- APD sampler: uppercase, INTERNAL-prepend, empty tx_ant → no emit ----
     {
         const TransmitDelta d = decode(b, [](FlexBackend& fb){
-            fb.decodeApdSamplerStatus({{QStringLiteral("tx_ant"), QStringLiteral("ant1")},
+            fb.statusIngress()->decodeApdSamplerStatus({{QStringLiteral("tx_ant"), QStringLiteral("ant1")},
                                        {QStringLiteral("selected_sampler"), QStringLiteral("rx_a")},
                                        {QStringLiteral("valid_samplers"), QStringLiteral("rx_a, xvta")}});
         });
@@ -233,7 +231,7 @@ int main(int argc, char** argv)
     {
         // No tx_ant → no emit at all.
         QSignalSpy spy(&b, &IRadioBackend::transmitChanged);
-        b.decodeApdSamplerStatus({{QStringLiteral("selected_sampler"), QStringLiteral("RX_A")}});
+        b.statusIngress()->decodeApdSamplerStatus({{QStringLiteral("selected_sampler"), QStringLiteral("RX_A")}});
         CHECK(spy.count() == 0);
     }
 

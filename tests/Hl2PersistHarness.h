@@ -42,6 +42,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
+#if defined(Q_OS_LINUX)
+#include <cstring>
+#include <dirent.h>
+#endif
 
 namespace AetherSDR::hl2 {
 
@@ -144,6 +148,25 @@ inline void check(bool ok, const QString& what)
 // Socket descriptors this process holds; -1 where it cannot be counted.
 inline int openSocketCount()
 {
+#if defined(Q_OS_LINUX)
+    // By name, never by descriptor: fstat() on a descriptor another thread
+    // created is a race under TSan (#7232); readlink() on its /proc path is not.
+    if (DIR* dir = opendir("/proc/self/fd")) {
+        int count = 0;
+        while (const dirent* entry = readdir(dir)) {
+            if (entry->d_name[0] == '.')
+                continue;
+            char path[64];
+            char target[64];
+            std::snprintf(path, sizeof path, "/proc/self/fd/%s", entry->d_name);
+            const ssize_t n = readlink(path, target, sizeof target - 1);
+            if (n >= 7 && std::memcmp(target, "socket:", 7) == 0)
+                ++count;
+        }
+        closedir(dir);
+        return count;
+    }
+#endif
 #if defined(Q_OS_UNIX)
     long limit = sysconf(_SC_OPEN_MAX);
     if (limit <= 0 || limit > 65536)

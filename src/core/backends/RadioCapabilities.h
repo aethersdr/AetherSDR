@@ -43,6 +43,11 @@ struct TxPowerBand {
 // explicit TX antenna choice: hamlib set_ant writes the RX antenna alone and a
 // band-stack recall leaves it. Absent, both write it as before.
 struct IndependentTxAntenna {
+    // TX antenna tokens with no forward-power detector behind them (HL2: RF1).
+    // On these the TX applet labels its power and SWR gauges "not measured"
+    // rather than presenting about 0 W as a reading. Empty: every output is
+    // measured.
+    QStringList unmeteredOutputs;
     bool operator==(const IndependentTxAntenna&) const = default;
 };
 
@@ -96,6 +101,12 @@ struct ReceiveDspControl {
     // An entry narrows a declared feature to a subset of the qualified modes.
     // An absent entry uses all modes; an empty entry disables that feature.
     QMap<Feature, QStringList> featureModes;
+    // Headless admission provenance for slice.setAgcThreshold/NoiseBlanker/
+    // NoiseReduction/Rit. Unknown keeps the record GUI-only: aetherd refuses.
+    // Last, so existing positional initializers keep their meaning.
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    // Largest |RIT offset| slice.setRit admits; 0 = RIT is not offered headless.
+    int maximumRitOffsetHz = 0;
     bool supports(Feature feature, const QString& mode) const
     {
         const auto restriction = featureModes.constFind(feature);
@@ -104,9 +115,11 @@ struct ReceiveDspControl {
     }
 };
 
-// Session-wide receive BFO pitch, dispatched through setCwPitch and confirmed
-// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path.
+// Session-wide receive BFO pitch, dispatched through setCwPitch and reported
+// through TransmitDelta::cwPitch. Presence grants no transmit or microphone path;
+// the model's pitch is bypassed only under ReceiveControlPolicy::Confirmed.
 struct ReceiveCwPitchControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     int minimumHz = 100;
     int maximumHz = 6000;
     int stepHz = 10;
@@ -114,6 +127,20 @@ struct ReceiveCwPitchControl {
 struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
+};
+// radioSession.setRadioSpeaker: the receiver's audio played on the radio's own speaker
+// (a radio with one, fed from this host), dispatched through requestRadioSpeakerAudio()
+// and reported through radioSpeakerAudioReported().
+struct RadioSpeakerControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+};
+// panadapter.setRfGain: setPanRfGain()'s range in dB, reported back through
+// panRfGainChanged. A backend whose stage is an attenuator declares it negated.
+struct ReceivePanRfGainControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    int minimumDb = 0;
+    int maximumDb = 0;
+    int stepDb = 1;
 };
 // Typed pre-monitor sliceAudioFrameReady export; grants no TX, IQ or control verb.
 struct ReceiveAudioExport {
@@ -465,6 +492,8 @@ struct RadioCapabilities {
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
+    std::optional<ReceivePanRfGainControl> receivePanRfGainControl;
+    std::optional<RadioSpeakerControl> radioSpeakerControl;
     // Engaged when the radio can deliver a wideband converter view; see the
     // struct above for why absence is the right default and what it means.
     std::optional<WidebandConverterView> widebandConverterView;
@@ -816,6 +845,13 @@ struct RadioCapabilities {
     // above: RadioCapabilities is at its frozen boolean count (#5262 M2).
     struct AdcFrontEnd {};
     std::optional<AdcFrontEnd> adcFrontEnd;
+
+    // Engaged: the backend observes its own converter and emits
+    // frontEndOverloadChanged, so aetherd publishes the frontEndOverload
+    // resource. Absent: no reading exists and none is offered. A record, not a
+    // bool, because the boolean count is frozen (#5262 M2).
+    struct FrontEndOverloadObservation {};
+    std::optional<FrontEndOverloadObservation> frontEndOverloadObservation;
 
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an

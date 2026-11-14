@@ -16,6 +16,7 @@
 
 #include <cstdio>
 
+using AetherSDR::graphicEqMirrorAllowed;
 using AetherSDR::graphicEqPersistAllowed;
 using AetherSDR::graphicEqReloadRequired;
 using AetherSDR::restoredGraphicEqHoldsLayout;
@@ -162,6 +163,17 @@ int main()
         }
     }
     check(true, "no input both saves and still needs a reload");
+
+    // ── Mirroring the strip's enables onto the graphic EQ ──────────────────
+    //
+    // A strip whose ClientEq the graphic EQ never wrote must not light the EQ
+    // applet's ON button. Drop `chainOwned` from the predicate and this fails.
+    check(!graphicEqMirrorAllowed(kHostModulates, kNotOwned),
+          "mirror: not while the graphic EQ does not own the strip's bands");
+    check(graphicEqMirrorAllowed(kHostModulates, kOwned),
+          "mirror: the applet follows the strip once the graphic EQ owns its bands");
+    check(!graphicEqMirrorAllowed(kRadioModulates, kOwned),
+          "mirror: never from a radio that keeps its own EQ");
 
     if (g_failures == 0)
         std::printf("host_voice_chain_policy_test: all checks passed\n");

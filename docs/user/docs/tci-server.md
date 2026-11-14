@@ -258,7 +258,7 @@ AetherSDR implements the TCI 2.0 command set, including:
 | Audio | `volume`, `mute`, `rx_volume`, `rx_mute`, `rx_balance`, `mon_enable`, `mon_volume`, `mic_level` |
 | AGC / SQL | `agc_mode`, `agc_gain`, `sql_enable`, `sql_level`, `lock` |
 | DSP | `rx_nb_enable/param`, `rx_nr_enable`, `rx_anf_enable`, `rx_apf_enable`, `rx_bin_enable`, `rx_anc_enable`, `rx_dse_enable`, `rx_nf_enable` |
-| CW | `cw_macros_speed`, `cw_keyer_speed`, `cw_macros_delay`, `cw_msg`, `cw_macros`, `cw_macros_stop`, `cw_terminal`, `keyer` |
+| CW | `cw_macros_speed`, `cw_keyer_speed`, `cw_msg`, `cw_macros`, `cw_macros_stop`, `cw_terminal`, `keyer` |
 | Audio streaming | `audio_start/stop`, `audio_samplerate`, `audio_stream_sample_type`, `audio_stream_channels`, `audio_stream_samples` |
 | IQ | `iq_start/stop`, `iq_samplerate` |
 | Spots | `spot`, `spot_delete`, `spot_clear`, `clicked_on_spot` |
@@ -267,6 +267,9 @@ AetherSDR implements the TCI 2.0 command set, including:
 
 Notes:
 
+- `cw_macros_delay` is unsupported and produces no value or confirmation. It
+  specifies a delay before transmission; the radio's CW break-in delay is a
+  different setting and is unaffected.
 - `rx_ctun_ex:<trx>,<bool>;` is accepted as a Thetis extension. It switches center lock on that receiver's slice, inverted: `true` (click-tune on) turns center lock off, `false` turns it on. TCI Remote sends `rx_ctun_ex:0,true;` on connect.
 - `volume` is in dB, as the spec defines it; the older percent form is still accepted. It is the same master level as the title-bar slider: the computer's level with PC Audio on, the radio's Line Out level with it off. `mic_level` is a global 0–100 %.
 - `sql_level` is a threshold in dB, −140 to 0, as the spec defines it. A positive value (the 0–100 level older builds took) is ignored. −140 dB, or any value at or below what the lowest level is reported as, opens the squelch fully. The slice stores a 0–100 level, so the reply states the threshold that level really gives: on a Flex the top of the scale is −60 dB, and any higher value is answered as −60.
@@ -330,7 +333,8 @@ aethersdr_ext_enable:true;
 ```
 
 The server answers with the set's version and the items this radio offers,
-then the lines with the current state of each item (shortened here):
+then the current state of the offered items. An item sends as many state lines
+as it needs, and may send none (shortened here):
 
 ```
 aethersdr_ext:1,rx_antenna,tx_antenna;
@@ -341,8 +345,8 @@ aethersdr_rx_antenna:0,ANT1;
 - Every command of the set starts with `aethersdr_`. Before the enable, the
   server ignores them without a reply, like any unknown command.
 - The list holds only what the connected radio can do, and an enabled client
-  gets a new `aethersdr_ext:` line when that changes. A command for an item
-  not in the list is ignored.
+  gets a new `aethersdr_ext:` line, followed again by the state lines, when
+  that changes. A command for an item not in the list is ignored.
 - The enable is per connection. `aethersdr_ext_enable:false;` stops all
   extension traffic to that client, and so does disconnecting.
 - The older extensions (`rx_record`, `rx_play`, `tx_gain`, `active_slice`,

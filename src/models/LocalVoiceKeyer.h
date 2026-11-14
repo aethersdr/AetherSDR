@@ -16,7 +16,7 @@ namespace AetherSDR {
 
 // The client-side voice keyer (RFC #4214): the DVK panel's slots, with the
 // recordings kept on this computer instead of on the radio — no SmartSDR+
-// licence, portable between radios, never touching a radio's stored DVK.
+// license, portable between radios, never touching a radio's stored DVK.
 //
 // Recording taps the audio AetherSDR already captures from the PC microphone
 // (AudioEngine::txFinalMonitorPcmReady, after the TX voice chain), so it never
@@ -43,6 +43,7 @@ public:
     void previewStart(int id) override;
     void previewStop(int id) override;
     void playbackStart(int id) override;
+    void playbackStartFrom(int id, const TxCoordinator::Request& origin) override;
     void playbackStop(int id) override;
     void clear(int id) override;
     void remove(int id) override;
@@ -128,6 +129,7 @@ public slots:
     void reload();
 
 private:
+    void startPlayback(int id, const TxCoordinator::Request* origin);
     void refreshSlot(int id);
     void setStatus(Status status, int id);
     void refuse(const QString& verb, int id, const QString& message);

@@ -38,6 +38,7 @@ void TransmitModel::resetDaxSessionState()
 void TransmitModel::resetState()
 {
     m_confirmReceiveCwPitch = false;
+    m_reportedCwPitch.reset();
     for (quint64& revision : m_controlIntentRevisions) { ++revision; }
     // A request of the ending session is answered, if at all, by a dead link.
     m_pendingVoxAnswers.clear();
@@ -199,6 +200,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     // ── CW ──
     if (assign(d.cwSpeed, m_cwSpeed)) { phoneChanged = true; cwSpeedChanged_ = true; }
     if (assign(d.cwPitch, m_cwPitch)) { phoneChanged = true; cwPitchChanged_ = true; }
+    if (d.cwPitch) { m_reportedCwPitch = m_cwPitch; }
     phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
     // Radio status is authoritative on the live break-in delay: adopt it, full
     // stop. The "hold" protection against SmartSDR's speed-linked QSK-floor

@@ -11,6 +11,7 @@
 //     never block: the radio has to say no before the UI says no.
 
 #include "gui/DvkAvailabilityGate.h"
+#include "models/ModeVocabulary.h"
 
 #include <cstdio>
 
@@ -41,6 +42,37 @@ B gate(bool txModeIsVoice, bool licenseSeen, bool licenseEnabled,
 
 int main()
 {
+    const QStringList receiveOnlyModes{QStringLiteral("wfm"), QStringLiteral("WBFM")};
+    for (const QString& mode : {QStringLiteral("WFM"), QStringLiteral("WBFM")}) {
+        const bool txModeIsVoice = isVoiceTransmitMode(mode, receiveOnlyModes);
+        report("wide FM remains available to receive-only Copy Assist", isVoiceMode(mode));
+        report("receive-only wide FM blocks the Local keyer and its shortcuts",
+               voiceKeyerIndicatorBlocker(VoiceKeyerSource::Local, txModeIsVoice,
+                                          false, false, false) == B::TxModeNotVoice);
+        report("receive-only wide FM blocks the licensed Radio keyer",
+               voiceKeyerIndicatorBlocker(VoiceKeyerSource::Radio, txModeIsVoice,
+                                          true, true, false) == B::TxModeNotVoice);
+        report("receive-only wide FM keeps the connected keyer panel closed",
+               !voiceKeyerPanelOpenable(true, txModeIsVoice, true, true));
+        report("entering receive-only wide FM triggers the mode-change abort gate",
+               !txModeIsVoice);
+    }
+    for (const QString& mode : {QStringLiteral("USB"), QStringLiteral("LSB"),
+                                QStringLiteral("AM"), QStringLiteral("SAM"),
+                                QStringLiteral("FM"), QStringLiteral("NFM"),
+                                QStringLiteral("DFM")}) {
+        report("transmittable voice modes retain keyer availability",
+               isVoiceTransmitMode(mode, receiveOnlyModes));
+    }
+    report("backend-declared receive-only voice modes are all excluded",
+           !isVoiceTransmitMode(QStringLiteral("SAM"), {QStringLiteral("SAM")}));
+    report("an empty mode never becomes a transmit voice mode",
+           !isVoiceTransmitMode(QString(), receiveOnlyModes));
+    report("data never becomes a transmit voice mode",
+           !isVoiceTransmitMode(QStringLiteral("DIGU"), receiveOnlyModes));
+    report("TX-mode exclusions come from capabilities rather than a wide-FM blacklist",
+           isVoiceTransmitMode(QStringLiteral("WFM"), {}));
+
     // ── Licensed radio: mode is the only gate, exactly as before ────────────
     report("licensed + voice TX mode -> None",
            gate(true, true, true) == B::None);
@@ -81,10 +113,13 @@ int main()
     // ── Tooltip names the missing subscription ──────────────────────────────
     // The whole point of the gate: a dimmed button has to say what it needs, or
     // it is just as mute as the silently-refused command it replaced.
-    report("unlicensed tooltip names SmartSDR+, not an active subscription",
+    // It says the radio is not licensed, never that a subscription must be
+    // active (#6924), and since the unlicensed indicator still opens the panel,
+    // it also says how to reach the client-side keyer from there.
+    report("unlicensed tooltip names SmartSDR+ and the way to Local",
            dvkIndicatorTooltip(B::NotLicensed)
-               == QStringLiteral("Digital Voice Keyer — not licensed on this "
-                                 "radio (SmartSDR+)"));
+               == QStringLiteral("Digital Voice Keyer — not licensed on this radio "
+                                 "(SmartSDR+). Click to open, then choose Local with ⚙."));
     report("mode-gated tooltip stays the normal one",
            dvkIndicatorTooltip(B::TxModeNotVoice)
                == QStringLiteral("Digital Voice Keyer — click to toggle"));
@@ -94,7 +129,7 @@ int main()
 
     // ── RFC #4214: the client-side keyer ignores the radio's entitlement ────
     using VS = VoiceKeyerSource;
-    report("local keyer + unlicensed + voice -> None (no licence needed)",
+    report("local keyer + unlicensed + voice -> None (no license needed)",
            voiceKeyerIndicatorBlocker(VS::Local, true, true, false, false) == B::None);
     report("local keyer + unlicensed + non-voice -> TxModeNotVoice",
            voiceKeyerIndicatorBlocker(VS::Local, false, true, false, false) == B::TxModeNotVoice);
@@ -119,7 +154,7 @@ int main()
            radioVoiceKeyerUnavailableReason(true, false, false, false).isEmpty());
     report("radio choice closed when the radio reports no entitlement",
            radioVoiceKeyerUnavailableReason(true, true, false, false).contains(QStringLiteral("SmartSDR+")));
-    report("radio choice closed on a radio with no DVK, whatever the licence says",
+    report("radio choice closed on a radio with no DVK, whatever the license says",
            radioVoiceKeyerUnavailableReason(false, true, true, false)
                == QStringLiteral("not available on this radio"));
     // The case the refusal flag exists for: a refusing radio still reports
@@ -142,9 +177,120 @@ int main()
     report("radio keyer with a DVK is usable",
            voiceKeyerUsable(VS::Radio, true, true));
 
+    // ── The panel opens wider than the keyer can be driven ──────────────────
+    // The source is chosen from the panel's settings button and nowhere else,
+    // so a Radio choice the radio cannot serve must still open the panel, or an
+    // operator whose saved choice is Radio is locked out of picking Local.
+    report("panel opens on a radio with no DVK that can transmit",
+           voiceKeyerPanelOpenable(true, true, false, true));
+    report("panel opens on a radio with a DVK, license aside",
+           voiceKeyerPanelOpenable(true, true, true, false));
+    report("panel stays shut on a radio with neither a DVK nor transmit",
+           !voiceKeyerPanelOpenable(true, true, false, false));
+    report("panel stays shut outside a voice mode",
+           !voiceKeyerPanelOpenable(true, false, true, true));
+    report("panel opens with no radio connected",
+           voiceKeyerPanelOpenable(false, false, false, false));
+
+    // ── And says why it cannot drive the keyer ──────────────────────────────
+    const auto why = [](VS source, bool hasKeyer, bool canTx, bool seen, bool enabled,
+                        bool refused) {
+        return voiceKeyerPanelUnavailableReason(source, true, hasKeyer, canTx, seen, enabled, refused);
+    };
+    report("no reason for a licensed radio DVK",
+           why(VS::Radio, true, true, true, true, false).isEmpty());
+    report("no reason while the entitlement is unreported (fails open)",
+           why(VS::Radio, true, true, false, false, false).isEmpty());
+    report("unlicensed radio DVK names SmartSDR+ and points to Local",
+           why(VS::Radio, true, true, true, false, false)
+               == QStringLiteral("Radio DVK not licensed (SmartSDR+). Choose Local with ⚙."));
+    report("a refused dvk command reads as unlicensed",
+           why(VS::Radio, true, true, true, true, true).contains(QStringLiteral("SmartSDR+")));
+    report("Radio on a radio with no DVK points to Local",
+           why(VS::Radio, false, true, true, true, false)
+               == QStringLiteral("This radio has no DVK. Choose Local with ⚙."));
+    report("no reason for Local on a radio that transmits, license aside",
+           why(VS::Local, true, true, true, false, true).isEmpty());
+    report("Local on a radio that cannot transmit says so",
+           why(VS::Local, true, false, true, true, false)
+               == QStringLiteral("This radio cannot transmit."));
+    report("offline, both sources say not connected rather than blame the radio",
+           voiceKeyerPanelUnavailableReason(VS::Local, false, true, false, false, false, false)
+                   == QStringLiteral("Not connected to a radio.")
+               && voiceKeyerPanelUnavailableReason(VS::Radio, false, true, false, false, false,
+                                                   false)
+                      == QStringLiteral("Not connected to a radio."));
+    report("offline, only the local slots stay editable",
+           voiceKeyerPanelSlotsEditableOffline(VS::Local, false)
+               && !voiceKeyerPanelSlotsEditableOffline(VS::Radio, false)
+               && !voiceKeyerPanelSlotsEditableOffline(VS::Local, true));
+
     // ── The feature name is the FlexLib one ─────────────────────────────────
     report("license feature name matches FlexLib's digital_voice_keyer",
            QString(kDvkLicenseFeature) == QStringLiteral("digital_voice_keyer"));
+
+    // One session on a radio that reports its DVK enabled but refuses every dvk
+    // command with 50004001 (#6262), keyer source Automatic (#7152). Nothing
+    // sent at connect detects the refusal: `sub dvk all` is the only dvk
+    // command then, and its reply is not examined. So the first DVK action of
+    // each session still goes to the radio and is refused; that refusal moves
+    // Automatic to Local, and a disconnect clears it, so the next session
+    // starts on the radio again.
+    {
+        using S = VoiceKeyerSourceSetting;
+        using R = VoiceKeyerSource;
+        const bool hasKeyer = true;
+        const bool canTransmit = true;
+        // The license status this radio sends, if it sends one: enabled.
+        for (const bool licenseSeen : {false, true}) {
+            const bool licenseEnabled = licenseSeen;
+
+            // Connected, nothing refused yet: Automatic is on the radio DVK and
+            // nothing blocks it, so the first F-key or REC goes to the radio.
+            const R atConnect = resolveVoiceKeyerSource(S::Auto, hasKeyer, licenseSeen,
+                                                        licenseEnabled, false);
+            const bool firstActionGoesToRadio =
+                atConnect == R::Radio
+                && voiceKeyerIndicatorBlocker(atConnect, true, licenseSeen, licenseEnabled,
+                                              false) == B::None
+                && voiceKeyerUsable(atConnect, hasKeyer, canTransmit);
+
+            // The radio refuses it: Automatic moves to Local, which nothing
+            // blocks, so the panel drives the local keyer with no stuck message.
+            const R afterRefusal = resolveVoiceKeyerSource(S::Auto, hasKeyer, licenseSeen,
+                                                           licenseEnabled, true);
+            const bool movesToLocal =
+                afterRefusal == R::Local
+                && voiceKeyerIndicatorBlocker(afterRefusal, true, licenseSeen, licenseEnabled,
+                                              true) == B::None
+                && voiceKeyerUsable(afterRefusal, hasKeyer, canTransmit)
+                && voiceKeyerPanelUnavailableReason(afterRefusal, true, hasKeyer, canTransmit,
+                                                    licenseSeen, licenseEnabled, true)
+                       .isEmpty();
+
+            // Disconnect clears the refusal (DvkModel::reset): the next
+            // session starts on the radio DVK again.
+            const bool nextSessionOnRadio =
+                resolveVoiceKeyerSource(S::Auto, hasKeyer, licenseSeen, licenseEnabled, false)
+                == R::Radio;
+
+            report(licenseSeen
+                       ? "auto_session_refusing_radio_reported_licensed_first_action_then_local"
+                       : "auto_session_refusing_radio_no_license_report_first_action_then_local",
+                   firstActionGoesToRadio && movesToLocal && nextSessionOnRadio);
+        }
+
+        // With Radio chosen explicitly the refusal never moves the keyer: the
+        // panel stays on the radio DVK, blocked, and names the way out.
+        const R forced = resolveVoiceKeyerSource(S::Radio, true, false, false, true);
+        report("forced_radio_after_refusal_stays_blocked_with_a_reason",
+               forced == R::Radio
+                   && voiceKeyerIndicatorBlocker(forced, true, false, false, true)
+                          == B::NotLicensed
+                   && voiceKeyerPanelUnavailableReason(forced, true, true, true, false, false, true)
+                          == QStringLiteral(
+                              "Radio DVK not licensed (SmartSDR+). Choose Local with ⚙."));
+    }
 
     std::printf("\n%d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;

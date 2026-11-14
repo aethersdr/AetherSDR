@@ -11,11 +11,36 @@ namespace AetherSDR {
 // Shared by MIDI and MIDI-mapped native controls. A recognized TX action is
 // consumed even after its captured input has expired: it must never fall
 // through to a setter that captures the native operator's authority.
+//
+// tx.atuBypass and cwx.macro1..12 are the ControlActionRegistry's keying
+// entries: a press bypasses the ATU or fires CWX macro F1..F12 (index 0..11,
+// through cwxMacro) on the device's own captured input; a release is consumed.
 inline bool dispatchMidiTxInput(const QString& id, float value, RadioModel& radio,
     const std::shared_ptr<TxController>& controller,
     const std::function<void(const QString&, bool, const std::shared_ptr<TxController>&)>& cwHandler,
-    const std::function<void(const QString&)>& refused = {})
+    const std::function<void(const QString&)>& refused = {},
+    const std::function<void(int, const TxController::Input&)>& cwxMacro = {})
 {
+    const bool atuBypass = id == QLatin1String("tx.atuBypass");
+    int macro = -1;
+    if (id.startsWith(QLatin1String("cwx.macro"))) {
+        bool ok = false;
+        const int n = id.mid(9).toInt(&ok);   // "cwx.macro" is 9 characters
+        if (!ok || n < 1 || n > 12) { return false; }
+        macro = n - 1;
+    }
+    if (atuBypass || macro >= 0) {
+        if (value <= 0.5f || !controller || !controller->valid()
+            || !controller->belongsTo(&radio)) {
+            return true;
+        }
+        if (atuBypass) {
+            (void)controller->capture(TxController::Activity::Atu).bypassAtu();
+        } else if (cwxMacro) {
+            cwxMacro(macro, controller->capture(TxController::Activity::Cwx));
+        }
+        return true;
+    }
     const bool cw = id == QLatin1String(kCwStraightKeyActionId)
         || id == QLatin1String(kCwLeftPaddleActionId)
         || id == QLatin1String(kCwRightPaddleActionId);

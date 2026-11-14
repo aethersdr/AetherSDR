@@ -28,6 +28,18 @@ public:
         radio.m_connection = &connection;
         radio.m_flexBackend = dynamic_cast<FlexBackend*>(radio.m_backend.get());
     }
+    // A connected session on the injected wire, with the production service
+    // sink: TUNE inhibit writes are fenced service writes.
+    static void openSession(RadioModel& radio, FlexBackend& backend)
+    {
+        radio.wireFlexTransmitServices(&backend);
+        radio.m_connection->m_state.store(ConnectionState::Connected);
+        radio.m_sessionCommands = SessionCommandGuard::create();
+        radio.m_sessionWire = radio.m_connection;
+        radio.m_sessionWireGeneration = radio.m_connection->commandSessionGeneration();
+    }
+    static void link(RadioConnection& connection, bool up)
+    { connection.m_state.store(up ? ConnectionState::Connected : ConnectionState::Disconnected); }
     static void apply(RadioModel& radio) { radio.applyTuneInhibit(); }
     static void restore(RadioModel& radio) { radio.restoreTuneInhibit(); }
     static void disconnect(RadioModel& radio) { radio.onDisconnected(); }
@@ -79,9 +91,16 @@ struct Fixture {
         delta.frequency = 14.1;
         radio.slice(0)->applyChanges(delta);
         backend->connected = true;
+        TuneOutputControlTestAccess::openSession(radio, *backend);
         band(9, QStringLiteral("20"), QStringLiteral("0"));
         band(5, QStringLiteral("40"), QStringLiteral("1"));
         wire.clear();
+    }
+    // The radio link as both the backend and the session's transport see it.
+    void setConnected(bool up)
+    {
+        backend->connected = up;
+        TuneOutputControlTestAccess::link(inert, up);
     }
     void band(int id, const QString& name, const QString& value)
     {
@@ -126,16 +145,16 @@ void policyAndParser()
                      [&observations](int, bool) { ++observations; });
     for (const QString& token : {QString(), QStringLiteral("true"), QStringLiteral("01"),
                                 QStringLiteral("-1"), QStringLiteral("2"), QStringLiteral("1 ")}) {
-        f.backend->decodeTuneOutputStatus(QStringLiteral("interlock band 9"),
+        f.backend->statusIngress()->decodeTuneOutputStatus(QStringLiteral("interlock band 9"),
                                          {{QStringLiteral("tune_tx_suppress"), token}});
     }
     for (const QString& object : {QStringLiteral("interlock"), QStringLiteral("interlock band -1"),
             QStringLiteral("interlock band 256"), QStringLiteral("interlock band 99999999999999"),
             QStringLiteral("interlock band 9 suffix")}) {
-        f.backend->decodeTuneOutputStatus(object, {{QStringLiteral("tune_tx_suppress"), QStringLiteral("1")}});
+        f.backend->statusIngress()->decodeTuneOutputStatus(object, {{QStringLiteral("tune_tx_suppress"), QStringLiteral("1")}});
     }
     check(observations == 0 && f.wire.isEmpty(), "malformed and unscoped status has no observation or write");
-    f.backend->decodeTuneOutputStatus(QStringLiteral("interlock band 26"),
+    f.backend->statusIngress()->decodeTuneOutputStatus(QStringLiteral("interlock band 26"),
                                      {{QStringLiteral("tune_tx_suppress"), QStringLiteral("1")}});
     check(observations == 1, "noncontiguous reported IDs above fifteen are decoded");
     check(!f.radio.tuneOutputControl(26).haveValue, "unnamed observation alone cannot make a row editable");
@@ -206,7 +225,7 @@ void authorityAndReplies()
     check(f.wire.size() == latest && f.radio.tuneOutputControl(5).pending,
           "old callback cannot complete or re-read over a newer request for the same row");
     f.radio.requestTuneOutputSuppression(9, true);
-    f.backend->connected = false;
+    f.setConnected(false);
     TuneOutputControlTestAccess::disconnect(f.radio);
     f.wire.clear();
     f.replies[5](0, QString());
@@ -214,7 +233,7 @@ void authorityAndReplies()
     check(f.wire.isEmpty() && !f.radio.tuneOutputControl(5).haveValue && !f.radio.tuneOutputControl(5).pending
         && !f.radio.tuneOutputControl(9).haveValue && !f.radio.tuneOutputControl(9).pending,
           "disconnect invalidates all row values and late completions");
-    f.backend->connected = true;
+    f.setConnected(true);
     TuneOutputControlTestAccess::identity(f.radio, f.version);
     check(!f.radio.tuneOutputControl(5).haveValue && !f.radio.tuneOutputControl(9).haveValue,
           "cached band names alone do not restore stale suppression values after reconnect");
@@ -319,11 +338,11 @@ void firmwareOwnedPreferenceChanges()
 void readbackBeforeFirmwareIdentity()
 {
     Fixture f;
-    f.backend->connected = false;
+    f.setConnected(false);
     TuneOutputControlTestAccess::disconnect(f.radio);
     f.version = QStringLiteral("1.4.0.0");
     TuneOutputControlTestAccess::identity(f.radio, f.version);
-    f.backend->connected = true;
+    f.setConnected(true);
     f.wire.clear();
     // Reconnect and manual-IP sessions subscribe before info supplies software_ver.
     f.band(5, QStringLiteral("40"), QStringLiteral("1"));
@@ -340,11 +359,11 @@ void readbackBeforeFirmwareIdentity()
     f.radio.requestTuneOutputSuppression(9, true);
     check(f.wire == QStringList{QStringLiteral("interlock bandset 9 tune_tx_suppress=1")},
           "the qualified row accepts an explicit request after status-first reconnect");
-    f.backend->connected = false;
+    f.setConnected(false);
     TuneOutputControlTestAccess::disconnect(f.radio);
     f.version = QStringLiteral("4.3.16.42034");
     TuneOutputControlTestAccess::identity(f.radio, f.version);
-    f.backend->connected = true;
+    f.setConnected(true);
     check(!f.radio.tuneOutputControl(5).haveValue && !f.radio.tuneOutputControl(9).haveValue,
           "a later session never inherits early readback from the previous connection");
 }
