@@ -92,6 +92,32 @@ void writeRecordingSetting(const QString& key, const QJsonValue& value)
     settings.save();
 }
 
+// The extension set's operator settings, one object (TciExtensions).
+constexpr const char* kExtensionSettingsKey = "TciExtensions";
+constexpr const char* kAllowHl2HardwareChanges = "allowHl2HardwareChanges";
+
+QJsonObject extensionSettings()
+{
+    return QJsonDocument::fromJson(AppSettings::instance()
+        .value(kExtensionSettingsKey, "{}").toString().toUtf8()).object();
+}
+
+void writeExtensionSetting(const QString& key, const QJsonValue& value)
+{
+    auto& settings = AppSettings::instance();
+    QJsonObject extensions = extensionSettings();
+    extensions.insert(key, value);
+    settings.setValue(kExtensionSettingsKey, QString::fromUtf8(
+        QJsonDocument(extensions).toJson(QJsonDocument::Compact)));
+    settings.save();
+}
+
+QString hl2ChangesOffRefusal()
+{
+    return QStringLiteral("TCI: a client's HL2 hardware change was refused; "
+                          "Allow TCI clients to change HL2 hardware is off.");
+}
+
 QString tciCommandName(const QString& message)
 {
     const QString trimmed = message.trimmed().toLower();
@@ -178,6 +204,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         .object();
     m_lineOutIncludeTx = recording.value("lineOutIncludeTx").toBool(false);
     m_lineOutPcAudioOffConsent = recording.value("lineOutPcAudioOffConsent").toBool(false);
+    m_hl2HardwareChangesAllowed
+        = extensionSettings().value(QLatin1String(kAllowHl2HardwareChanges)).toBool(false);
     if (m_model) { m_model->setLineOutPcAudioOffConsent(m_lineOutPcAudioOffConsent); }
     m_io = std::make_unique<TciIoWorker>();
     m_io->setLineOutIncludeTx(m_lineOutIncludeTx);
@@ -3065,6 +3093,15 @@ void TciServer::setLineOutPcAudioOffConsent(bool enabled)
     emit lineOutPcAudioOffConsentChanged(enabled);
 }
 
+void TciServer::setHl2HardwareChangesAllowed(bool allowed)
+{
+    if (m_hl2HardwareChangesAllowed == allowed) { return; }
+    m_hl2HardwareChangesAllowed = allowed;
+    writeExtensionSetting(QString::fromLatin1(kAllowHl2HardwareChanges), allowed);
+    qCInfo(lcCat) << "TCI: HL2 hardware changes from clients" << (allowed ? "allowed" : "refused");
+    emit hl2HardwareChangesAllowedChanged(allowed);
+}
+
 void TciServer::syncLineOutClient(const ClientState& client)
 {
     const TciLineOutConfig config{client.socket->lifetime, client.lineOutReceivers, client.lineOutGeneration};
@@ -3995,6 +4032,14 @@ TciExtensionSet::Result TciServer::handleHl2(const QString& name, const QStringL
         result.reply = current;
         return result;
     }
+    // Every set needs the operator's setting, a set that changes nothing too;
+    // reads do not. Refused like the keyed refusal below.
+    if (!m_hl2HardwareChangesAllowed) {
+        m_hl2SetPending.reset();
+        warnHl2SetRefused(hl2ChangesOffRefusal());
+        result.reply = current;
+        return result;
+    }
     const int boardNow = hw->value(QStringLiteral("filterBoard")).toInt();
     const bool hpfNow = hw->value(QStringLiteral("n2adrHpf")).toBool();
     // The HPF is the setup page's checkbox, which is enabled only for a
@@ -4037,6 +4082,9 @@ TciExtensionSet::Result TciServer::handleHl2(const QString& name, const QStringL
 // held set is applied, since the radio may have keyed in between.
 QString TciServer::hl2SetRefusal() const
 {
+    if (!m_hl2HardwareChangesAllowed) {
+        return hl2ChangesOffRefusal();  // turned off while a set was held
+    }
     // Refused while keyed: the J16 outputs switch the filter relays, and the
     // transmit byte would change under the carrier. The setup page has no
     // such refusal; this one is the TCI set's own (RFC #7181 appendix). The

@@ -121,6 +121,11 @@ public:
     bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
     void setLineOutPcAudioOffConsent(bool enabled);
     bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
+    // "Allow TCI clients to change HL2 hardware", off by default: whether an
+    // aethersdr_hl2_* set is accepted. Reads answer either way. Persisted in
+    // the TciExtensions settings object.
+    void setHl2HardwareChangesAllowed(bool allowed);
+    bool hl2HardwareChangesAllowed() const { return m_hl2HardwareChangesAllowed; }
     // The application owns PC Audio preferences; refresh after its toggle.
     void updateLineOutCapture();
     // Thread-safe owning ingress, safe even if a source callback overlaps
@@ -191,6 +196,7 @@ public slots:
 signals:
     void lineOutIncludeTxChanged(bool enabled);
     void lineOutPcAudioOffConsentChanged(bool enabled);
+    void hl2HardwareChangesAllowedChanged(bool allowed);
     void clientCountChanged(int count);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
@@ -428,6 +434,7 @@ private:
     void syncLineOutClient(const ClientState& client);
     bool m_lineOutIncludeTx{false};
     bool m_lineOutPcAudioOffConsent{false};
+    bool m_hl2HardwareChangesAllowed{false};
     bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);

@@ -38,6 +38,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
 | **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
+| **Allow TCI clients to change HL2 hardware** | Shown while a Hermes-Lite 2 is connected. Lets a client that enabled the [AetherSDR extension set](#aethersdr-extension-set) change the HL2 filter board setting. Off by default; clients can read the setting either way. |
 | **Port:** | TCP port the server listens on. Default **50001**. |
 | **Enabled / Disabled** | Starts or stops the server. |
 
@@ -364,6 +365,12 @@ aethersdr_hl2_filter_board:n2adr_txonly,true;   # set the board and its HPF
 aethersdr_hl2_ioboard_status;                   # read the IO board, once
 ```
 
+- **Changes need the operator's permission.** A set is accepted only while
+  **Allow TCI clients to change HL2 hardware** is on in the
+  [TCI Server applet](#the-tci-server-applet). It is off by default. While it
+  is off, every set is refused the way the refusals below are: the client that
+  sent it gets the setting that stands, and AetherSDR shows the reason. Reads
+  always work.
 - **Filter board.** `<board>` is `none`, `n2adr_rxtx` (N2ADR, receive and
   transmit) or `n2adr_txonly` (N2ADR, transmit only); `<hpf>` is the 3 MHz
   high-pass, `true` or `false`. This is the HL2 Hardware page's setting and is
@@ -375,7 +382,8 @@ aethersdr_hl2_ioboard_status;                   # read the IO board, once
   shows the reason. It is also refused before the radio has an identity to
   save the setting against. Every change, from the page or another client, is
   sent as `aethersdr_hl2_filter_board:<board>,<hpf>;` to every client that
-  enabled the set. A set that changes nothing gets no answer.
+  enabled the set. With the setting on, a set that changes nothing gets no
+  answer.
 - **IO board status.** Read from the N2ADR IO board when asked, and answered
   only to the client that asked:
   `aethersdr_hl2_ioboard_status:<pins>,<receiving>,<in1>,<in2>,<in3>,<in4>,<in5>,<tuner>,<fault>,<firmware>;`

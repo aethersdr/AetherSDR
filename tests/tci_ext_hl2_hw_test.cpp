@@ -367,6 +367,32 @@ void serverBehaviour()
     check(a.take().isEmpty() && backend->hwSets.isEmpty() && backend->ioRequests.isEmpty(),
           "malformed sets and a set of the IO board read are ignored");
 
+    // Write gate: "Allow TCI clients to change HL2 hardware", off by default.
+    // Every set is refused like the keyed refusal (what stands to the sender,
+    // a warning); reads answer.
+    check(!server.hl2HardwareChangesAllowed(), "HL2 hardware changes from TCI default off");
+    a.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;");
+    settle();
+    check(backend->hwSets.isEmpty() && warnings == 1
+              && a.take() == one("aethersdr_hl2_filter_board:none,false;") && c.take().isEmpty(),
+          "with the setting off a set is refused, answered with what stands, and noticed");
+    a.send("aethersdr_hl2_filter_board:none,false;aethersdr_hl2_filter_board:n2adr_txonly,true;");
+    settle();
+    check(backend->hwSets.isEmpty() && warnings == 1
+              && a.take() == QStringList({QStringLiteral("aethersdr_hl2_filter_board:none,false;"),
+                                          QStringLiteral("aethersdr_hl2_filter_board:none,false;")}),
+          "every set is refused, one equal to what stands too, and noticed once");
+    a.send("aethersdr_hl2_filter_board;aethersdr_hl2_ioboard_status;");
+    check(a.take() == one("aethersdr_hl2_filter_board:none,false;")
+              && backend->ioRequests.size() == 1,
+          "with the setting off the filter board and IO board reads still answer");
+    backend->answerIo(false);
+    check(a.take() == one("aethersdr_hl2_ioboard_status:none;"), "the IO board read completes");
+    server.setHl2HardwareChangesAllowed(true);
+    check(server.hl2HardwareChangesAllowed() && a.take().isEmpty() && c.take().isEmpty(),
+          "turning the setting on sends clients nothing");
+    warnings = 0;
+
     // No radio identity: refused, as the setup page dims the controls.
     a.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;");
     settle();
@@ -446,6 +472,44 @@ void serverBehaviour()
           "the board is back where the keyed checks expect it");
     a.take();
     c.take();
+
+    // The setting turned off live: the next set is refused, and a set held in
+    // the window is not applied once it opens; on again, sets apply.
+    {
+        const int warningsBefore = warnings;
+        const qsizetype setsBefore = backend->hwSets.size();
+        server.setHl2HardwareChangesAllowed(false);
+        a.send("aethersdr_hl2_filter_board:none,false;");
+        settle();
+        check(backend->hwSets.size() == setsBefore && backend->filterBoard == 2
+                  && warnings == warningsBefore + 1
+                  && a.take() == one("aethersdr_hl2_filter_board:n2adr_txonly,true;"),
+              "turned off live, the next set is refused and answered with what stands");
+        server.setHl2HardwareChangesAllowed(true);
+        a.send("aethersdr_hl2_filter_board:n2adr_rxtx,false;"
+               "aethersdr_hl2_filter_board:none,false;");
+        check(backend->hwSets.size() == setsBefore + 1 && backend->filterBoard == 1,
+              "turned on again, a set applies and the next is held in the window");
+        server.setHl2HardwareChangesAllowed(false);
+        settle(250);
+        got = a.take();
+        check(backend->hwSets.size() == setsBefore + 1 && backend->filterBoard == 1
+                  && warnings == warningsBefore + 2
+                  && got == QStringList({QStringLiteral("aethersdr_hl2_filter_board:n2adr_rxtx,false;"),
+                                         QStringLiteral("aethersdr_hl2_filter_board:n2adr_rxtx,false;")}),
+              "a set held when the setting goes off is not applied; the sender gets what stands");
+        if (got.size() != 2) {
+            dump("a", got);
+        }
+        c.take();
+        server.setHl2HardwareChangesAllowed(true);
+        a.send("aethersdr_hl2_filter_board:n2adr_txonly,true;");
+        settle(250);
+        check(backend->filterBoard == 2 && backend->n2adrHpf, "on again, the board is set back");
+        a.take();
+        c.take();
+        warnings = warningsBefore;
+    }
 
     // Keyed: refused before any hw.set, current value to the sender, noticed.
     const qsizetype setsBeforeKey = backend->hwSets.size();
@@ -575,6 +639,26 @@ void serverBehaviour()
     backend->connected = false;
     check(TciHl2ExtensionTest::offeredTokens(server).isEmpty(),
           "a disconnected radio is not offered it");
+    server.setHl2HardwareChangesAllowed(false);
+}
+
+// The setting is one field of the TciExtensions object, read when a server is
+// built, so it survives a restart.
+void writeGateSetting()
+{
+    RadioModel model;
+    TciServer server(&model);
+    check(!server.hl2HardwareChangesAllowed(), "a fresh profile refuses HL2 hardware changes");
+    server.setHl2HardwareChangesAllowed(true);
+    const QString stored = AppSettings::instance()
+        .value(QStringLiteral("TciExtensions"), QString()).toString();
+    TciServer restored(&model);
+    check(restored.hl2HardwareChangesAllowed()
+              && stored.contains(QStringLiteral("\"allowHl2HardwareChanges\":true")),
+          "the setting is stored in TciExtensions and read back by a new server");
+    server.setHl2HardwareChangesAllowed(false);
+    TciServer off(&model);
+    check(!off.hl2HardwareChangesAllowed(), "and off again");
 }
 
 // The state lines are what an enabled client holds, across a reconnect to a
@@ -752,6 +836,7 @@ void realBackendRefusesInTheTail()
     QObject::connect(&model, &RadioModel::configurationWarning, &model,
                      [&warnings](const QString&) { ++warnings; });
     TciServer server(&model);
+    server.setHl2HardwareChangesAllowed(true);
     Wire a;
     TciHl2ExtensionTest::attach(server, a.client, model);
     settle();
@@ -780,6 +865,7 @@ void realBackendRefusesInTheTail()
     if (got != QStringList{target}) {
         dump("a", got);
     }
+    server.setHl2HardwareChangesAllowed(false);
 }
 
 } // namespace
@@ -794,6 +880,7 @@ int main(int argc, char** argv)
     check(settingsProfile.isValid(), "isolated settings profile");
     offeredPerBackend();
     grammar();
+    writeGateSetting();
     serverBehaviour();
     noLineForAnUnmovedBoard();
     realBackendNotifies();
