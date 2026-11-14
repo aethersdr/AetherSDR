@@ -3035,7 +3035,7 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     list(REMOVE_ITEM _spectrum_gesture_sources src/main.cpp)
     # Manual --flex-squelch-bridge-fixture starts the app's own QLocalServer
     # and discovery listener with injected normalized state, never a radio peer.
-    # The registered CTest path remains socket-free.
+    # spectrum_confirmed_geometry_test's registered CTest paths stay socket-free.
     add_executable(spectrum_confirmed_geometry_test
         tests/spectrum_confirmed_geometry_test.cpp ${_spectrum_gesture_sources})
     target_include_directories(spectrum_confirmed_geometry_test PRIVATE
@@ -3064,7 +3064,10 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     # the radio's echo lands mid-drag. Its own executable rather than another
     # mode of the gesture binary: that one links RtlSdrBackend unconditionally,
     # so it cannot build where librtlsdr is absent. This one needs only the
-    # desktop GUI sources.
+    # desktop GUI sources. Socket: it builds a real MainWindow, which binds the
+    # app's own discovery listener on UDP 4992 (ShareAddress). It never
+    # connects, and a refused bind only schedules a retry, so the result never
+    # waits on it.
     add_executable(tx_waterfall_mask_filter_drag_test
         tests/tx_waterfall_mask_filter_drag_test.cpp ${_spectrum_gesture_sources})
     target_include_directories(tx_waterfall_mask_filter_drag_test PRIVATE

@@ -2224,12 +2224,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_antennaGenius.setRadioFrequency(s->frequency());
 
     connect(s, &SliceModel::filterChanged, this, [this, s](int lo, int hi) {
-        auto* sw = spectrumForSlice(s);
-        if (!sw) return;
-        // The TX mask is separate state from the dragged overlay edge, so it
-        // follows every filter change; only the overlay waits out a drag (#764).
+        // The TX mask is separate state on every spectrum, so it follows every
+        // filter change; only the dragged overlay waits out a drag (#764).
         if (s->isTxSlice())
             syncTxWaterfallSliceToSpectrums();
+        auto* sw = spectrumForSlice(s);
+        if (!sw) return;
         // Skip this slice's overlay while its filter edge is being dragged — the
         // radio's echo would overwrite the drag position, causing snap-to-zero (#764)
         if (sw->isDraggingFilterOf(s->sliceId())) return;

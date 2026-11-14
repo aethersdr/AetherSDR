@@ -1,8 +1,10 @@
 // #5204: the TX waterfall mask follows the TX slice's filter even when the
 // radio's echo lands mid-drag. The #764 drag guard holds back only the dragged
 // overlay edge; the mask is separate state and must stay current.
-// Socket-free: the real MainWindow on a backend with no transport, driven by
-// SliceDelta injection. Nothing keys; this is a rendering-state test.
+// The real MainWindow on a backend with no transport, driven by SliceDelta
+// injection. Nothing keys. Its constructor binds the app's own discovery
+// listener (UDP 4992, ShareAddress); the test never connects and its result
+// does not depend on that bind.
 
 #include "TestSettingsProfile.h"
 #include "gui/MainWindow.h"
