@@ -8,6 +8,7 @@
 #include "core/TciServer.h"
 #include "core/TciTrxMap.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/InterlockStatusDelta.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/sim/SimBackend.h"
@@ -2994,6 +2995,78 @@ public:
         return true;
     }
 
+    // tx_sensors goes out during tune, not only during a MOX/PTT transmit.
+    static bool txSensorsFollowTune()
+    {
+        bool ok = true;
+        const auto expect = [&ok](bool cond, const char* what) {
+            if (!cond) {
+                std::printf("      %s\n", what);
+                ok = false;
+            }
+        };
+
+        RadioModel model;
+        expect(!TciServer::txSensorsKeyed(model), "idle: no tx_sensors");
+        TransmitDelta tune;
+        tune.tune = true;
+        model.transmitModel().applyChanges(tune);
+        expect(TciServer::txSensorsKeyed(model), "tune alone sends tx_sensors");
+        tune.tune = false;
+        model.transmitModel().applyChanges(tune);
+        expect(!TciServer::txSensorsKeyed(model), "tune off stops tx_sensors");
+
+        return ok;
+    }
+
+    // tx_sensors follows this station's own transmission only: when another
+    // multiFLEX station holds the transmitter, its power and SWR are not ours.
+    static bool txSensorsFollowOwnTransmissionOnly()
+    {
+        bool ok = true;
+        const auto expect = [&ok](bool cond, const char* what) {
+            if (!cond) {
+                std::printf("      %s\n", what);
+                ok = false;
+            }
+        };
+        const auto holder = [](RadioModel& model, quint32 handle) {
+            InterlockStatusDelta d;
+            d.txClientHandle = handle;
+            model.applyInterlockStatus(d);
+        };
+
+        RadioModel model;
+        expect(model.txOwnedByUs(), "nobody holds the transmitter at start");
+
+        // The radio reports a key held by this station (or by nobody, as on a
+        // single-station backend): tx_sensors goes out.
+        model.m_radioTransmitting = true;
+        expect(TciServer::txSensorsKeyed(model), "own radio-keyed transmission sends tx_sensors");
+
+        // Another station holds the transmitter and keys it.
+        holder(model, 0x40000001u);
+        expect(!model.txOwnedByUs(), "fixture: another station holds the transmitter");
+        expect(!TciServer::txSensorsKeyed(model),
+               "another station's transmission sends no tx_sensors");
+
+        // Its tune neither.
+        TransmitDelta tune;
+        tune.tune = true;
+        model.transmitModel().applyChanges(tune);
+        expect(!TciServer::txSensorsKeyed(model), "another station's tune sends no tx_sensors");
+        tune.tune = false;
+        model.transmitModel().applyChanges(tune);
+
+        // The transmitter comes back to nobody: this station's key counts again.
+        holder(model, 0u);
+        expect(TciServer::txSensorsKeyed(model), "transmitter released: own key sends again");
+        model.m_radioTransmitting = false;
+        expect(!TciServer::txSensorsKeyed(model), "un-keyed: no tx_sensors");
+
+        return ok;
+    }
+
     // Split made in the GUI (another slice holds TX) is reported as
     // split_enable on trx 0, and GUI RIT/XIT offset changes reach clients.
     static bool guiSplitAndRitOffsetReachClients()
@@ -3328,6 +3401,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::guiSplitAndRitOffsetReachClients();
     const bool valueSeed
         = AetherSDR::TciServerReviewTest::valueRelaySeedsAfterRewire();
+    const bool txSensorsNow
+        = AetherSDR::TciServerReviewTest::txSensorsFollowTune();
+    const bool txSensorsOwn
+        = AetherSDR::TciServerReviewTest::txSensorsFollowOwnTransmissionOnly();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -3435,6 +3512,10 @@ int main(int argc, char** argv)
                 guiSplit ? "PASS" : "FAIL");
     std::printf("%s  RIT/XIT offset and AGC relays seed once after a re-wire (#2824)\n",
                 valueSeed ? "PASS" : "FAIL");
+    std::printf("%s  tx_sensors follows tune\n",
+                txSensorsNow ? "PASS" : "FAIL");
+    std::printf("%s  tx_sensors follows this station's own transmission only\n",
+                txSensorsOwn ? "PASS" : "FAIL");
 
     const bool tciSwrGated = AetherSDR::TciServerReviewTest::tciSwrIsGatedOnInstantForwardPower();
     std::printf("%s  tx_sensors SWR is gated on instant forward power and resets on un-key\n",
@@ -3462,6 +3543,6 @@ int main(int argc, char** argv)
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
         && chronoIdle && chronoCatchUp && daxRestored && initProtocol
-        && dsbMode && rxCtunEx && guiSplit && valueSeed && tciSwrGated
+        && dsbMode && rxCtunEx && guiSplit && valueSeed && txSensorsNow && txSensorsOwn && tciSwrGated
         ? 0 : 1;
 }

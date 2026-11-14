@@ -4143,6 +4143,23 @@ void TciServer::teardownTciRoute()
     });
 }
 
+bool TciServer::txSensorsKeyed(RadioModel& model)
+{
+    // This station's own transmission only. On a multiFLEX radio another
+    // station can hold the transmitter, and a TCI client must not show that
+    // station's power and SWR as its own. txOwnedByUs() follows the
+    // interlock's tx_client_handle (true when nobody holds it, and always on a
+    // single-station backend), so it also covers a key the radio reports.
+    if (!model.txOwnedByUs()) {
+        return false;
+    }
+    // isTransmitting() is MOX/PTT only; tune is a transmission too, and it is
+    // when an operator reads SWR.
+    return model.transmitModel().isTransmitting()
+           || model.transmitModel().isTuning()
+           || model.isRadioTransmitting();
+}
+
 void TciServer::broadcastStatus()
 {
     if (m_clients.isEmpty() || !m_model || !m_model->isConnected())
@@ -4178,7 +4195,7 @@ void TciServer::broadcastStatus()
                 }
             }
         }
-        if (cs.txSensorsEnabled && m_model->transmitModel().isTransmitting()) {
+        if (cs.txSensorsEnabled && txSensorsKeyed(*m_model)) {
             // tx_sensors:trx,mic_dbm,fwd_watts,peak_watts,swr,alc_dbfs
             // alc_dbfs (trailing field, AetherSDR extension) is the SW-ALC
             // peak; index-based parsers safely ignore the extra field.
