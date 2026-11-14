@@ -378,6 +378,7 @@ protected:
 
 private:
     void syncShadowGeometry();
+    void updateMeterIfPixelsChanged();
     void updateSignalMeterTarget();
     void animateSignalMeter();
     // Build and push the current MeterInput (RX signal vs the selected TX meter)
@@ -422,6 +423,10 @@ private:
     void updateFilterLabel();
     void updateModeTab();
     void rebuildFilterButtons();
+    void updateCwAutoTuneControls();
+    bool m_cwLoopRequested{false};
+    QPointer<QPushButton> m_registeredCwOnce;
+    QPointer<QPushButton> m_registeredCwLoop;
     void updateFilterHighlight();
     void applyFilterPreset(int widthHz);
     void saveFilterPresets();
@@ -460,6 +465,9 @@ private:
     bool           m_receiveMeterReadingActive{false};
     QTimer         m_signalMeterAnimation;
     QElapsedTimer  m_signalMeterElapsed;
+    QRect          m_lastRequestedMeterBar;
+    int            m_lastRequestedMeterFill{-1};
+    bool           m_lastRequestedMeterRelative{false};
     float          m_signalMeterFraction{0.0f};
     float          m_targetSignalMeterFraction{0.0f};
     bool           m_collapsed{false};

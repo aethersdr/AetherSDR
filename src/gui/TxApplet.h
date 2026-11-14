@@ -6,6 +6,8 @@
 #include <QMetaObject>
 #include "models/TxController.h"
 
+#include <QVector>
+
 class QMenu;
 class QPushButton;
 class QLabel;
@@ -18,8 +20,11 @@ namespace AetherSDR {
 class AtuPreTuneDialog;
 class BandPlanManager;
 class RadioModel;
+class SliceModel;
+struct RadioCapabilities;
 class TransmitModel;
 class TunerModel;
+enum class ATUStatus;
 
 // TX applet: transmit controls matching the SmartSDR TX panel (power/SWR
 // gauges, RF and Tune power, TX profile, TUNE/MOX/ATU/MEM, APD).
@@ -48,6 +53,11 @@ public:
     void openPreTuneDialog();
     void confirmAndClearAtuMemories();
 
+    // False while the TX slice's output is one the backend cannot meter
+    // (IndependentTxAntenna::unmeteredOutputs, the HL2's RF1): both gauges are
+    // then dimmed and say "not measured" with the reason (#4954).
+    [[nodiscard]] bool txOutputMetered() const { return m_txOutputMetered; }
+
 public slots:
     void updateMeters(float fwdPower, float swr, bool swrValid);
     // Capture raw pre-smoothed FWDPWR for PEP peak-hold tick. (#2561)
@@ -65,14 +75,15 @@ private:
     void requestMox(bool on, const TxController::Input& input);
     void requestAtu(const TxController::Input& input);
     void syncFromModel();
+    // Re-derive txOutputMetered() from the TX slice's output and apply it to
+    // the power and SWR gauges. Takes what capabilitiesChanged carried.
+    void refreshTxOutputMetering(bool connected, const RadioCapabilities& caps);
+    void refreshTxOutputMeteringFromModel();
+    void watchSliceTxOutput(SliceModel* slice);
+    void syncAtuState();
     void syncAtuIndicators();
-    // Single owner of the ATU/MEM enabled state.
-    //
-    // Two independent reasons exist to grey these out — the radio has no tuner
-    // at all, and a TunerGenius XL is in Operate — and they arrive from
-    // different models at different times. Before this they each called
-    // setEnabled() directly, so whichever fired last won and a TGXL state change
-    // could re-enable an ATU button on a radio that has no ATU.
+    // Combines tuner capabilities, TX-path availability and TGXL Operate;
+    // no individual input may re-enable controls another input withdrew.
     void updateAtuAvailability();
     // Right-click menu on the ATU button — exposes Pre-tune Bands and
     // Clear ATU Memories. Pre-tune is grayed when MEM is off. (#2624)
@@ -95,6 +106,7 @@ private:
     // current TX frequency still matches the freq we tuned at.  Any freq
     // change between clicks falls back to "atu start". (#1993)
     double m_atuTunedFreqMhz{-1.0};
+    ATUStatus m_lastAtuStatus{};
 
     // Capability inputs to updateAtuAvailability(). Matching and Flex-style
     // memory operations are separate claims; both default permissive so an
@@ -167,6 +179,11 @@ private:
     bool m_forwardPowerRequiresSmoothing{true};
     bool m_forwardPowerScaleFollowsBandRating{false};
     QMetaObject::Connection m_capabilitiesConnection;
+    // Slice add/remove and each slice's TX flag and TX antenna, for
+    // refreshTxOutputMetering(). Dropped when the RadioModel changes.
+    QVector<QMetaObject::Connection> m_txOutputConnections;
+    bool m_txOutputMetered{true};
+    QString m_unmeteredTxOutput;
 
     // setPowerScale() no-ops when neither input moved (#4845) — it's called
     // on every RadioModel::infoChanged, most of which carry no scale-relevant

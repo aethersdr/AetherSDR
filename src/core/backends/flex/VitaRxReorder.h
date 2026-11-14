@@ -1,9 +1,12 @@
 #pragma once
 
+#include "core/VitaBinCoverage.h"
+
 #include <QByteArray>
 #include <QtGlobal>
 
 #include <array>
+#include <optional>
 #include <algorithm>
 #include <utility>
 #include <vector>
@@ -14,7 +17,7 @@ namespace AetherSDR {
 // most 30 ms for reordered packets before its queued successors are released.
 // Opus timestamps and display frame/fragment positions disambiguate forward
 // gaps from stale packets. PCM firmware with constant timestamps uses the
-// 4-bit count, whose half-cycle ambiguity cannot identify arbitrary long loss.
+// 4-bit count and recent resolution history; a full lost cycle is ambiguous.
 class VitaRxReorder {
 public:
     static constexpr qint64 kWaitMs = 30;
@@ -22,15 +25,30 @@ public:
     static constexpr qsizetype kMaxPacketBytes = 65507;
 
     struct Key {
+        enum class Kind { Ordered, OpusTimestamp, DisplayFrame };
         quint32 major = 0;
         quint64 minor = 0;
         bool valid = false;
         bool allowConstantFallback = false;
+        Kind kind = Kind::Ordered;
 
         bool after(const Key& other) const
         {
             return major == other.major ? minor > other.minor
                 : static_cast<quint32>(major - other.major) < 0x80000000u;
+        }
+        bool restartsBefore(const Key& other) const
+        {
+            if (after(other)) {
+                return false;
+            }
+            const quint32 behind = other.major - major;
+            if (kind == Kind::OpusTimestamp) {
+                // FlexLib 4.3.16 RXAudioStream (SMART-12738) recovers from
+                // clock steps strictly greater than 60 seconds backwards.
+                return behind > 60 || (behind == 60 && minor < other.minor);
+            }
+            return kind == Kind::DisplayFrame && behind > kVitaLateFrameLookback;
         }
         bool same(const Key& other) const
         {
@@ -67,6 +85,11 @@ public:
     Result add(int sequence, Key key, qint64 nowMs, QByteArray packet = {},
                qsizetype maxQueuedBytes = kMaxPacketBytes * (kSequenceCount - 1))
     {
+        if (sequence >= 0 && sequence < kSequenceCount && packet.size() <= kMaxPacketBytes
+            && m_useKeys && key.valid && m_lastKey.valid && key.restartsBefore(m_lastKey)) {
+            // Pending packets belong to the old clock/counter incarnation.
+            reset();
+        }
         Result result = expire(nowMs);
         if (sequence < 0 || sequence >= kSequenceCount || packet.size() > kMaxPacketBytes) {
             result.rejected = true;
@@ -105,8 +128,7 @@ public:
             const bool crossedCycle = key.valid && newest->key.valid
                 && key.after(newest->key) && distance <= newestDistance;
             withinWindow = distance <= newestDistance || (advance > 0 && advance < 8);
-            // A keyless window can hold the entire count cycle. Half a cycle
-            // is only a stale-packet heuristic when no forward window exists.
+            // A keyless forward window can hold the entire count cycle.
             const bool filledWindow = !(key.valid && m_lastKey.valid)
                 && newestDistance == kSequenceCount - 1 && advance > 0 && advance < 8;
             if (crossedCycle || filledWindow) {
@@ -116,7 +138,7 @@ public:
         }
         const int distance = (sequence - m_lastSequence - 1) & 0x0F;
         if (!(key.valid && m_lastKey.valid) && !withinWindow && distance >= 8
-            && nowMs - m_lastReleaseMs < kWaitMs) {
+            && m_resolvedMs[sequence] && nowMs - *m_resolvedMs[sequence] < kWaitMs) {
             result.duplicate = sequence == m_lastSequence;
             result.reordered = !result.duplicate;
             return result;
@@ -171,7 +193,9 @@ private:
         result.ready[result.count++] = {std::move(pending.packet), missed};
         m_lastSequence = pending.sequence;
         m_lastKey = pending.key;
-        m_lastReleaseMs = nowMs;
+        for (int behind = 0; behind <= missed; ++behind) {
+            m_resolvedMs[(pending.sequence - behind) & 0x0F] = nowMs;
+        }
     }
 
     void drain(qint64 nowMs, DrainMode mode, Result& result)
@@ -197,7 +221,7 @@ private:
     int m_lastSequence = -1;
     Key m_lastKey;
     bool m_useKeys = true;
-    qint64 m_lastReleaseMs = 0;
+    std::array<std::optional<qint64>, kSequenceCount> m_resolvedMs;
     qsizetype m_queuedBytes = 0;
     std::vector<Pending> m_pending;
 };

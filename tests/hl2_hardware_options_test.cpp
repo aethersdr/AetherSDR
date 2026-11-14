@@ -25,6 +25,8 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 using AetherSDR::Hl2HardwareOptions;
@@ -537,8 +539,75 @@ static void testEp2Audio()
     check(both[kFrame0 + 6] == 0x80 && both[kFrame0 + 7] == 0x01, "composed: Q = -32767");
 }
 
+// SQUARE SDR 2 and SQUARE 3 name themselves in VERSION_MINOR (#6806). The
+// neighbors of both values and the stock HL2's 3 are the negative controls.
+static void testBoardIdentity()
+{
+    using Board = GatewareBoard;
+    check(boardForGatewareMinor(52) == Board::SquareSdr2, "board: minor 52 is SQUARE SDR 2");
+    check(boardForGatewareMinor(53) == Board::Square3, "board: minor 53 is SQUARE 3");
+    check(boardForGatewareMinor(3) == Board::Unknown, "board: stock HL2 minor 3 is Unknown");
+    check(boardForGatewareMinor(51) == Board::Unknown, "board: minor 51 is Unknown");
+    check(boardForGatewareMinor(54) == Board::Unknown, "board: minor 54 is Unknown");
+    check(boardForGatewareMinor(0x34) == Board::SquareSdr2, "board: 52 is decimal, 0x34");
+    check(boardForGatewareMinor(std::nullopt) == Board::Unknown,
+          "board: a reply without a minor is Unknown");
+    check(std::string_view(gatewareBoardName(Board::SquareSdr2)) == "SQUARE SDR 2",
+          "board: SQUARE SDR 2 is named");
+    check(std::string_view(gatewareBoardName(Board::Square3)) == "SQUARE 3",
+          "board: SQUARE 3 is named");
+    check(gatewareBoardName(Board::Unknown) == nullptr, "board: Unknown has no name");
+}
+
+// A stored codec always wins, None included; with nothing stored only a
+// SQUARE SDR 2 gets a codec, and SQUARE 3 is a label without behavior.
+static void testSessionCodec()
+{
+    using Codec = Hl2HardwareOptions::Codec;
+    const auto session = [](std::optional<Codec> stored, std::uint8_t minor) {
+        return Hl2HardwareOptions::sessionCodec(stored, boardForGatewareMinor(minor));
+    };
+    check(session(std::nullopt, 52) == Codec::SquareSdr2,
+          "session: nothing stored + minor 52 suggests SquareSdr2");
+    check(session(Codec::None, 52) == Codec::None,
+          "session: a stored None wins over minor 52");
+    check(session(Codec::Ak4951, 52) == Codec::Ak4951,
+          "session: a stored AK4951 wins over minor 52");
+    check(session(std::nullopt, 3) == Codec::None,
+          "session: nothing stored + stock minor 3 stays None");
+    check(session(std::nullopt, 53) == Codec::None,
+          "session: SQUARE 3 suggests no codec yet");
+    check(session(Codec::SquareSdr2, 3) == Codec::SquareSdr2,
+          "session: a stored SquareSdr2 holds on any gateware");
+}
+
+// The filter board by the same rule: stored wins, a SQUARE SDR 2 with nothing
+// stored gets N2adrTxOnly, every other board the N2adrRxTx default.
+static void testSessionFilterBoard()
+{
+    using FilterBoard = Hl2HardwareOptions::FilterBoard;
+    const auto session = [](std::optional<FilterBoard> stored, std::uint8_t minor) {
+        return Hl2HardwareOptions::sessionFilterBoard(stored, boardForGatewareMinor(minor));
+    };
+    check(session(std::nullopt, 52) == FilterBoard::N2adrTxOnly,
+          "session: nothing stored + minor 52 suggests N2adrTxOnly");
+    check(session(FilterBoard::N2adrRxTx, 52) == FilterBoard::N2adrRxTx,
+          "session: a stored N2adrRxTx wins over minor 52");
+    check(session(FilterBoard::None, 52) == FilterBoard::None,
+          "session: a stored None wins over minor 52");
+    check(session(std::nullopt, 3) == FilterBoard::N2adrRxTx,
+          "session: nothing stored + stock minor 3 keeps N2adrRxTx");
+    check(session(std::nullopt, 53) == FilterBoard::N2adrRxTx,
+          "session: SQUARE 3 suggests no filter board yet");
+    check(session(FilterBoard::N2adrTxOnly, 3) == FilterBoard::N2adrTxOnly,
+          "session: a stored N2adrTxOnly holds on any gateware");
+}
+
 int main()
 {
+    testBoardIdentity();
+    testSessionCodec();
+    testSessionFilterBoard();
     testDitherMeaning();
     testCodecChangeSeed();
     testFilterBoard();

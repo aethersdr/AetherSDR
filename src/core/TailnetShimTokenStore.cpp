@@ -17,9 +17,11 @@ namespace AetherSDR {
 
 namespace {
 
-QString keyFor(const QString& radioSerial)
+QString keyFor(const QString& radioSerial, TailnetShimTokenStore::Entry entry)
 {
-    return QStringLiteral("TailnetShim/AdminToken/") + radioSerial;
+    return (entry == TailnetShimTokenStore::Entry::Wspr ? QStringLiteral("AetherWSPR/AdminToken/")
+                                                        : QStringLiteral("TailnetShim/AdminToken/"))
+        + radioSerial;
 }
 
 // Session copy: always written, so a save followed at once by a load never
@@ -55,7 +57,8 @@ bool TailnetShimTokenStore::persistentStoreAvailable()
 
 void TailnetShimTokenStore::save(const QString& radioSerial, const QString& token,
                                  QObject* context,
-                                 std::function<void(bool persisted, const QString& error)> done)
+                                 std::function<void(bool persisted, const QString& error)> done,
+                                 Entry entry)
 {
     // Without a serial every radio would share one entry, and one radio's
     // token would be offered to another. Refuse, and say why.
@@ -68,7 +71,7 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
         }
         return;
     }
-    const QString key = keyFor(radioSerial);
+    const QString key = keyFor(radioSerial, entry);
     ++saveGenerations()[key];
     if (token.isEmpty()) {
         sessionTokens().remove(key);
@@ -109,7 +112,7 @@ void TailnetShimTokenStore::save(const QString& radioSerial, const QString& toke
 }
 
 void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
-                                 std::function<void(const QString&)> callback)
+                                 std::function<void(const QString&)> callback, Entry entry)
 {
     // As save() does: with no context the callback still runs, on the app.
     if (!context) {
@@ -120,7 +123,7 @@ void TailnetShimTokenStore::load(const QString& radioSerial, QObject* context,
         QTimer::singleShot(0, context, [callback = std::move(callback)] { callback(QString()); });
         return;
     }
-    const QString key = keyFor(radioSerial);
+    const QString key = keyFor(radioSerial, entry);
     const QString session = sessionTokens().value(key);
 #ifdef HAVE_KEYCHAIN
     if (session.isEmpty()) {

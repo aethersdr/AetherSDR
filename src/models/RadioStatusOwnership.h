@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <utility>
+#include "core/backends/StreamStatusDelta.h"
 
 namespace AetherSDR::RadioStatusOwnership {
 
@@ -297,16 +298,14 @@ inline int boundedSliceCapacity(int modelLimit,
 }
 
 inline RemoteAudioRxAction applyRemoteAudioRxStatus(RemoteAudioRxTracking& state,
-                                                    const QString& object,
-                                                    const QMap<QString, QString>& kvs,
+                                                    const StreamStatusDelta& stream,
                                                     quint32 ourHandle,
                                                     bool allowUnknownOwner)
 {
-    const StreamObjectParts stream = parseStreamObject(object);
-    if (!stream.valid)
+    if (stream.object != StreamStatusDelta::Object::Stream)
         return RemoteAudioRxAction::NotRemoteAudio;
 
-    const QString incomingType = kvs.value(QStringLiteral("type"));
+    const QString& incomingType = stream.type;
     const bool matchesKnownStream = state.streamId != 0 && stream.streamId == state.streamId;
     const bool isRemoteAudioRx = incomingType == QStringLiteral("remote_audio_rx")
         || matchesKnownStream;
@@ -314,8 +313,7 @@ inline RemoteAudioRxAction applyRemoteAudioRxStatus(RemoteAudioRxTracking& state
     if (!isRemoteAudioRx)
         return RemoteAudioRxAction::NotRemoteAudio;
 
-    const bool removed = statusRemoved(stream, kvs);
-    if (removed) {
+    if (stream.removed) {
         if (matchesKnownStream) {
             state.streamId = 0;
             state.clientHandle = 0;
@@ -328,11 +326,11 @@ inline RemoteAudioRxAction applyRemoteAudioRxStatus(RemoteAudioRxTracking& state
         return RemoteAudioRxAction::IgnoredOtherClient;
     }
 
-    if (!kvs.contains(QStringLiteral("client_handle"))) {
+    if (!stream.ownerReported) {
         if (!matchesKnownStream && !allowUnknownOwner)
             return RemoteAudioRxAction::DeferredUnknownOwner;
     } else {
-        const quint32 owner = parseFlexId(kvs.value(QStringLiteral("client_handle")));
+        const quint32 owner = stream.owner;
         if (owner != 0 && owner != ourHandle)
             return RemoteAudioRxAction::IgnoredOtherClient;
         state.clientHandle = owner == 0 ? ourHandle : owner;
@@ -344,8 +342,8 @@ inline RemoteAudioRxAction applyRemoteAudioRxStatus(RemoteAudioRxTracking& state
         state.clientHandle = ourHandle;
     state.createPending = false;
     state.statusSeen = true;
-    if (kvs.contains(QStringLiteral("compression")))
-        state.compression = kvs.value(QStringLiteral("compression"));
+    if (stream.compression)
+        state.compression = *stream.compression;
 
     return adopted ? RemoteAudioRxAction::Adopted : RemoteAudioRxAction::Updated;
 }

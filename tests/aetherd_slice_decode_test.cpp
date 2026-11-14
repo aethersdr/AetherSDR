@@ -1,10 +1,10 @@
-// aetherd RFC 2.3 — SliceModel touchpoint: FlexBackend::decodeSliceStatus.
+// aetherd RFC 2.3 — SliceModel touchpoint: FlexSliceStatus::decodeValues.
 // Pins the Flex slice-status wire → typed SliceDelta translation that moved out
 // of SliceModel::applyStatus (key renames, "1"→bool, list split, lowercase,
 // ok-guarded numeric parses, present-only). The model's apply-side behavior is
 // covered by slice_model_letter_test / antenna_alias_test.
 
-#include "core/backends/flex/FlexBackend.h"
+#include "core/backends/flex/FlexSliceStatus.h"
 #include "core/backends/SliceDelta.h"
 
 #include <QCoreApplication>
@@ -19,26 +19,22 @@ static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
 
-// Decode one kv-set and return the emitted typed delta.
-static SliceDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs)
+// Decode one present-only value report without a transport or model.
+static SliceDelta decode(const QMap<QString, QString>& kvs)
 {
-    QSignalSpy spy(&b, &IRadioBackend::sliceChanged);
-    b.decodeSliceStatus(3, kvs);
-    if (spy.count() != 1) return {};
-    return spy.takeFirst().at(1).value<SliceDelta>();
+    return FlexSliceStatus::decodeValues(kvs);
 }
 
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
-    FlexBackend b;
 
     // ---- DSP level status names (#6447): the radio reports nrl_level /
     // nrs_level / anfl_level, not the lms_nr_level / speex_nr_level /
     // lms_anf_level command names; those stay as a fallback ----
     {
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("nrl_level"), QStringLiteral("41")},
             {QStringLiteral("nrs_level"), QStringLiteral("50")},
             {QStringLiteral("anfl_level"), QStringLiteral("17")},
@@ -48,7 +44,7 @@ int main(int argc, char** argv)
         CHECK(d.anflLevel.has_value() && *d.anflLevel == 17);
     }
     {
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("lms_nr_level"), QStringLiteral("12")},
             {QStringLiteral("speex_nr_level"), QStringLiteral("13")},
             {QStringLiteral("lms_anf_level"), QStringLiteral("14")},
@@ -59,7 +55,7 @@ int main(int argc, char** argv)
     }
     {
         // Both present: the status name wins.
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("nrl_level"), QStringLiteral("30")},
             {QStringLiteral("lms_nr_level"), QStringLiteral("99")},
             {QStringLiteral("nrs_level"), QStringLiteral("31")},
@@ -73,7 +69,7 @@ int main(int argc, char** argv)
     }
     {
         // Zero is a reported level, not a reason to use the alias.
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("nrl_level"), QStringLiteral("0")},
             {QStringLiteral("lms_nr_level"), QStringLiteral("99")},
             {QStringLiteral("nrs_level"), QStringLiteral("0")},
@@ -87,7 +83,7 @@ int main(int argc, char** argv)
     }
     for (const QString& invalid : {QStringLiteral("junk"), QStringLiteral("2147483648")}) {
         // A present but invalid status name suppresses the command-name alias.
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("nrl_level"), invalid},
             {QStringLiteral("lms_nr_level"), QStringLiteral("12")},
             {QStringLiteral("nrs_level"), invalid},
@@ -101,7 +97,7 @@ int main(int argc, char** argv)
     }
     {
         // Invalid aliases do not replace valid primary values.
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("nrl_level"), QStringLiteral("30")},
             {QStringLiteral("lms_nr_level"), QStringLiteral("junk")},
             {QStringLiteral("nrs_level"), QStringLiteral("31")},
@@ -115,7 +111,7 @@ int main(int argc, char** argv)
     }
     {
         // Malformed: dropped, never applied as 0.
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("nrs_level"), QStringLiteral("junk")},
             {QStringLiteral("nr"), QStringLiteral("1")},
         });
@@ -124,7 +120,7 @@ int main(int argc, char** argv)
 
     // ---- key renames + typed values ----
     {
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("RF_frequency"), QStringLiteral("14.25")},
             {QStringLiteral("mode"), QStringLiteral("USB")},
             {QStringLiteral("filter_lo"), QStringLiteral("-2700")},
@@ -149,7 +145,7 @@ int main(int argc, char** argv)
 
     // ---- "1"→bool; absent → disengaged ----
     {
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("active"), QStringLiteral("1")},
             {QStringLiteral("tx"), QStringLiteral("0")},
             {QStringLiteral("lock"), QStringLiteral("1")},
@@ -163,7 +159,7 @@ int main(int argc, char** argv)
     // ---- ok-guarded numeric parse: a malformed present field is DROPPED (#4068) ----
     {
         // A garbled RF_frequency must NOT retune to 0 Hz — the field is dropped.
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("RF_frequency"), QStringLiteral("garbage")},
             {QStringLiteral("filter_lo"), QStringLiteral("notanint")},
             {QStringLiteral("mode"), QStringLiteral("LSB")},
@@ -175,14 +171,14 @@ int main(int argc, char** argv)
 
     // ---- esc "1"/"on" → true, "0" → false ----
     {
-        CHECK(*decode(b, {{QStringLiteral("esc"), QStringLiteral("on")}}).esc == true);
-        CHECK(*decode(b, {{QStringLiteral("esc"), QStringLiteral("1")}}).esc == true);
-        CHECK(*decode(b, {{QStringLiteral("esc"), QStringLiteral("0")}}).esc == false);
+        CHECK(*decode({{QStringLiteral("esc"), QStringLiteral("on")}}).esc == true);
+        CHECK(*decode({{QStringLiteral("esc"), QStringLiteral("1")}}).esc == true);
+        CHECK(*decode({{QStringLiteral("esc"), QStringLiteral("0")}}).esc == false);
     }
 
     // ---- antenna lists: rx_ant_list precedence, split+trim; mode_list de-dupe ----
     {
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("rx_ant_list"), QStringLiteral("ANT1, RX_A ,RX_B")},
             {QStringLiteral("ant_list"), QStringLiteral("SHOULD_BE_IGNORED")},
             {QStringLiteral("mode_list"), QStringLiteral("USB,LSB,DSTR,DSTR, DSTR,CW")},
@@ -200,7 +196,7 @@ int main(int argc, char** argv)
 
     // ---- lowercase normalization; play/step_list carried raw ----
     {
-        const SliceDelta d = decode(b, {
+        const SliceDelta d = decode({
             {QStringLiteral("fm_tone_mode"), QStringLiteral("CTCSS")},
             {QStringLiteral("play"), QStringLiteral("disabled")},
             {QStringLiteral("step_list"), QStringLiteral("10,100,1000")},

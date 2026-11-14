@@ -22,9 +22,10 @@ QString VoiceKeyerTxRoute::startRefusal() const
     SliceModel* s = m_radio.txSlice();
     if (!s)
         return QStringLiteral("No transmit slice is assigned.");
-    if (!isVoiceMode(s->mode()))
+    if (!isVoiceTransmitMode(s->mode(), m_radio.backendCapabilities().receiveOnlyModes)) {
         return QStringLiteral("The transmit slice is in %1 — voice keyer playback needs a "
-                              "voice mode.").arg(s->mode());
+                              "transmit-capable voice mode.").arg(s->mode());
+    }
     if (m_radio.transmitModel().isTransmitting())
         return QStringLiteral("The radio is already transmitting.");
     // In a voice mode DAX TX mode is only on while another generated source
@@ -76,7 +77,24 @@ bool VoiceKeyerTxRoute::admitOperation()
     if (!m_producer.valid())
         m_producer = m_radio.registerTxProducer(this);
     m_request = m_producer.request();
+    if (needsStream()) {
+        m_radio.noteDaxTxInput(m_request);
+    }
     return m_request.valid();
+}
+
+bool VoiceKeyerTxRoute::admitOperationFrom(const TxCoordinator::Request& origin)
+{
+    // The originating device's request, not this route's producer: closing
+    // that device discards it, and keyOn() after the settle hop then has
+    // nothing valid to key against (docs/agents/backends.md, step 4).
+    if (!origin.valid())
+        return false;
+    m_request = origin;
+    if (needsStream()) {
+        m_radio.noteDaxTxInput(m_request);
+    }
+    return true;
 }
 
 bool VoiceKeyerTxRoute::keyOn()
@@ -90,7 +108,7 @@ bool VoiceKeyerTxRoute::keyOn()
     m_pttRequested = true;
     // Captured while the operation this request admitted is live; a context
     // taken before the key is not yet dispatchable.
-    m_context = m_radio.captureTxMedia(m_request);
+    m_context = m_radio.captureDaxTxMedia(m_request);
     if (!m_context.permitsDispatch(TxCoordinator::monotonicMs())) {
         // Keyed with nothing licensed to send: unkey here rather than hold the
         // transmitter up with a silent carrier.

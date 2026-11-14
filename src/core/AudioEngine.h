@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/PcmFrame.h"
+#include "core/DaxTxAudioPermit.h"
 
 #include <QObject>
 #include "RxChainRunner.h"
@@ -148,7 +149,8 @@ public:
     Q_INVOKABLE void stopTxStream();
 
     // Set the DAX TX stream ID (from radio's response to "stream create type=dax_tx")
-    void setTxStreamId(quint32 id) { m_txStreamId = id; }
+    void setTxStreamId(quint32 id) { m_txStreamId.store(id); }
+    void setDaxTxAudioRoute(quint32 streamId, const AetherSDR::DaxTxAudioPermit& permit);
     quint32 txStreamId() const { return m_txStreamId; }
     // Set the remote audio TX stream ID (for voice TX and VOX monitoring)
     void setRemoteTxStreamId(quint32 id) { m_remoteTxStreamId = id; }
@@ -206,6 +208,9 @@ public:
     void setMuted(bool m);
     bool isRxStreaming() const { return m_audioSink != nullptr; }
     bool isTxStreaming() const { return m_audioSource != nullptr; }
+    // The last TX capture start found no audio input device at all (#7078).
+    // Refreshed by every startTxStream(); a format failure leaves it false.
+    bool txInputDeviceMissing() const { return m_txInputDeviceMissing.load(); }
     // Which producer currently owns the QSO recorder's TX slot (#2539,
     // #4281). Both the mic monitor tap and the CW record pump reach
     // QsoRecorder::feedTxAudio, so both ends ask this one question rather
@@ -402,7 +407,7 @@ public:
     float dfnrAttenLimit() const;
     void setDfnrPostFilterBeta(float beta);
 
-    // Client-side NNR (WDSP 2.10 neural noise reduction, trained on HF).
+    // Client-side NNR (WDSP 2.11 neural noise reduction).
     // Unconditional, unlike DFNR/MNR/BNR: the models are compiled into the
     // vendored WDSP, so there is no library to find and no GPU to require.
     Q_INVOKABLE void setNnrEnabled(bool on);
@@ -751,6 +756,7 @@ public:
     }
 
 public slots:
+    void setLineOutCaptureEnabled(bool enabled);
     // Legacy internal/playback ingress: native float32 stereo at 24 kHz.
     // Live producers use feedPcmFrame so validation survives queued delivery.
     void feedAudioData(const QByteArray& pcm);
@@ -772,6 +778,7 @@ public slots:
     void removeKiwiSdrAudioSource(const QString& sourceId);
 
 signals:
+    void lineOutPcmReady(const AetherSDR::PcmFrame& frame, bool transmitting);
     void rxStarted();
     void rxStopped();
     void levelChanged(float rms);  // audio level for VU meter, 0.0–1.0
@@ -815,7 +822,8 @@ signals:
     // recorder opens its TX gate for CW the same way moxChanged does for voice.
     // Ownership-correct: driven by our local keyer, not any-owner interlock.
     void cwRecordingActiveChanged(bool active);
-    void txPacketReady(const QByteArray& vitaPacket, const AetherSDR::TxCoordinator::Context& context);
+    void txPacketReady(const QByteArray& vitaPacket, const AetherSDR::TxCoordinator::Context& context,
+                       const AetherSDR::DaxTxAudioPermit& ownership = {});
     // Sidetone-tapped audio for the TX-side CW decoder (#2417).  Emitted
     // from the audio thread; receivers should connect via Qt::AutoConnection
     // (which becomes queued across threads) so feedAudio() lands on the
@@ -857,6 +865,7 @@ signals:
                                              int sampleRate);
 
     void pcMicLevelChanged(float peakDbfs, float avgDbfs);  // client-side PC mic metering
+    void txInputDeviceMissingChanged(bool missing);
     void scopeSamplesReady(const QByteArray& monoFloat32Pcm, int sampleRate, bool tx);
     // Emitted on the local TX audio that will feed the radio. For PC mic
     // voice this is after the strip, PC mic gain, and final limiter; for
@@ -959,6 +968,7 @@ private:
     float computeRMS(const QByteArray& pcm) const;
     QByteArray applyBoost(const QByteArray& pcm, float gain) const;
     QByteArray buildVitaTxPacket(const float* samples, int numStereoSamples);
+    void emitDaxTxPacket(const QByteArray& packet, const TxCoordinator::Context& context);
     void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId, const TxCoordinator::Context& context);
     void emitScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate, bool tx);
@@ -1131,7 +1141,8 @@ private:
 #endif
     QHostAddress  m_txAddress;
     quint16       m_txPort{0};
-    quint32       m_txStreamId{0};         // DAX TX stream
+    std::atomic<quint32> m_txStreamId{0};  // confirmed DAX TX route
+    DaxTxAudioPermit m_daxTxAudioPermit{DaxTxAudioPermit::blocked()};
     quint32       m_remoteTxStreamId{0};  // remote_audio_tx (voice/VOX)
     // Host-modulating backend (HL2): no Flex stream id will ever be assigned,
     // so the TX gate keys off this instead. setHostModulation() is the single
@@ -1146,6 +1157,7 @@ private:
     std::atomic<float> m_pcMicGain{1.0f};     // client-side PC mic gain (0.0-1.0)
     std::atomic<bool>  m_daxTxMode{false};    // DAX TX mode: VirtualAudioBridge handles TX
     QElapsedTimer      m_txSourceStartTime;
+    std::atomic<bool>  m_txInputDeviceMissing{false};
     quint64            m_txLifecycleGeneration{0};
     QElapsedTimer      m_txCaptureHealthClock;
     TxCaptureHealthTracker m_txCaptureHealth;
@@ -1316,6 +1328,16 @@ private:
     std::unique_ptr<Resampler> m_txResampler;  // RADE e.g. 48k -> 24k (lazy init)
 
     friend class AudioEngineRatesTestAccess;
+    friend class AudioEngineTxInputMissingTestAccess;  // #7078
+    void captureLineOutAudio(const QByteArray& pcm, int sampleRate);
+    void resetLineOutCapture();
+    PcmProducer m_lineOutProducer;
+    bool m_lineOutCaptureEnabled{false};
+    bool m_lineOutProducerStarted{false};
+    int m_lineOutDeviceRate{0};
+    bool m_lineOutCaptureTransmitting{false};
+    std::unique_ptr<Resampler> m_lineOutLeftResampler;
+    std::unique_ptr<Resampler> m_lineOutRightResampler;
     void drainRxAudio(qsizetype freeBytes);
     bool retireInvalidPcmSources();
     void queueLegacyKiwiAudioData(const QByteArray& pcm24kStereoFloat);
@@ -1379,7 +1401,7 @@ private:
 #endif
     std::atomic<bool> m_dfnrEnabled{false};
 
-    // Client-side NNR (WDSP 2.10). No build guard: the models ship in-tree.
+    // Client-side NNR (WDSP 2.11). No build guard: the models ship in-tree.
     std::unique_ptr<NnrFilter> m_nnr;
     std::unique_ptr<NnrFilter> m_kiwiSdrNnr;
     std::atomic<bool> m_nnrEnabled{false};
@@ -1537,6 +1559,7 @@ private:
 
     // RX audio buffer handling
     QTimer*       m_rxTimer{nullptr};
+    QElapsedTimer m_lineOutDrainClock;
     QByteArray    m_rxBuffer;  // normal Flex RX source audio at 24 kHz, pre-DSP
     std::deque<QByteArray> m_rxPackets;  // whole Flex packets for NR2 packet-mode
     QByteArray    m_kiwiSdrRxBuffer;  // decoded Kiwi source audio at 24 kHz, pre-DSP

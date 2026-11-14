@@ -488,14 +488,18 @@ SetRXAAGCHangThreshold (int channel, int hangthreshold)
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
+static double agc_noise_bw (int channel)
+{
+	return rxa[channel].nbp0.p->fhigh - rxa[channel].nbp0.p->flow;
+}
+
 PORT void				
 GetRXAAGCThresh(int channel, double *thresh, double size, double rate)
 //for line on bandscope.
 {
 	double noise_offset;
 	EnterCriticalSection (&ch[channel].csDSP);
-	noise_offset = 10.0 * log10((rxa[channel].nbp0.p->fhigh - rxa[channel].nbp0.p->flow) 
-		* size / rate);
+	noise_offset = 10.0 * log10(agc_noise_bw (channel) * size / rate);
 	*thresh = 20.0 * log10( rxa[channel].agc.p->min_volts ) - noise_offset;
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
@@ -506,8 +510,7 @@ SetRXAAGCThresh(int channel, double thresh, double size, double rate)
 {
 	double noise_offset;
 	EnterCriticalSection (&ch[channel].csDSP);
-	noise_offset = 10.0 * log10((rxa[channel].nbp0.p->fhigh - rxa[channel].nbp0.p->flow) 
-		* size / rate);
+	noise_offset = 10.0 * log10(agc_noise_bw (channel) * size / rate);
 	rxa[channel].agc.p->max_gain = rxa[channel].agc.p->out_target / 
 		(rxa[channel].agc.p->var_gain * pow (10.0, (thresh + noise_offset) / 20.0));
 	loadWcpAGC ( rxa[channel].agc.p );

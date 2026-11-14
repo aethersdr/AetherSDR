@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QPointer>
 #include <QString>
@@ -11,13 +11,13 @@ class QTextBrowser;
 
 namespace AetherSDR {
 
-// "What's New" dialog shown on first launch after a version change.
-// Displays release notes between lastSeenVersion and currentVersion,
-// rendered as styled HTML in a scrollable text browser.
-//
-// Also accessible via Help → What's New (#483).
-class WhatsNewDialog : public PersistentDialog {
+// Help -> What's New (#483): the release notes for this version, fetched
+// from GitHub, in a short-lived canon window (RFC #6226, #7045). The notes'
+// colours come from canon tokens in this window's scope and are rebuilt on a
+// theme change.
+class WhatsNewDialog : public CanonWindow {
     Q_OBJECT
+    friend class WhatsNewDialogTestAccess;
 
 public:
     // Show GitHub release notes for currentVersion.
@@ -30,9 +30,6 @@ public:
                             bool showUpgrade = false,
                             bool currentVersionOnly = false);
 
-    // Show all entries for the current version (for Help menu).
-    static WhatsNewDialog* showAll(QWidget* parent);
-
 private:
     void buildUI(const QString& lastSeenVersion, const QString& currentVersion,
                   bool showUpgrade, bool currentVersionOnly);
@@ -44,12 +41,23 @@ private:
                               const QString& publishedAt,
                               const QString& bodyMarkdown);
     void promptFind();
+    // Re-render whatever the browser shows (loading, error or notes) with
+    // the current theme's colours.
+    void rerender();
     bool findInNotes(const QString& text);
     void setStatusText(const QString& text);
     QString releaseTag() const;
 
     QString m_currentVersion;
     QString m_lastFindText;
+    enum class Content { Loading, Error, Notes } m_content{Content::Loading};
+    QString m_errorMessage;
+    QString m_notesMarkdown;
+    int m_notesScroll{0};
+    bool m_rendering{false};
+    bool m_scrollClamping{false};
+    // Tests build the window without reaching GitHub (socket-free).
+    static inline bool s_fetchReleaseNotes = true;
     bool m_isWelcome{false};
 
     QPointer<QTextBrowser> m_browser;

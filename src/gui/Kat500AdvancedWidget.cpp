@@ -126,7 +126,7 @@ Kat500AdvancedWidget::Kat500AdvancedWidget(Kat500Model* model, QWidget* parent)
              "that field is edited. Six physical memory slots are shared among antennas. Apply verifies "
              "changed fields; Cancel edits discards only staging."),
           "katConfigurationHelp", configuration);
-    m_configuration = new QTableWidget(fields.size(), 3, this);
+    m_configuration = new QTableWidget(static_cast<int>(fields.size()), 3, this);
     m_configuration->setObjectName("katConfiguration");
     m_configuration->setAccessibleName(tr("Confirmed and staged KAT500 configuration"));
     m_configuration->setHorizontalHeaderLabels({tr("Setting"), tr("Edit"), tr("Readback")});

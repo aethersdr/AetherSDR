@@ -8,6 +8,7 @@
 
 #include <QLocale>
 #include <QMetaObject>
+#include <QPointer>
 #include <QStringList>
 #include <QtGlobal>
 
@@ -2090,9 +2091,13 @@ QString RigctlProtocol::cmdSetAnt(const QString& arg)
     const int mask = a.toInt(&ok);
     if (a.isEmpty() || !ok || mask < 0) return rprt(-1);
     const QString name = antMaskToName(mask, slice->rxAntennaList());
-    QMetaObject::invokeMethod(slice, [slice, name]() {
+    // Read on the model's thread at the moment of the write: a radio whose TX
+    // output is its own choice (IndependentTxAntenna) keeps it.
+    QMetaObject::invokeMethod(slice, [slice, name, model = QPointer<RadioModel>(m_model)]() {
         slice->setRxAntenna(name);
-        slice->setTxAntenna(name);
+        if (!model || !model->backendCapabilities().independentTxAntenna) {
+            slice->setTxAntenna(name);
+        }
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -2127,15 +2132,16 @@ QString RigctlProtocol::cmdSetTs(const QString& arg)
     const int hz = a.toInt(&ok);
     // A step of 0 Hz tunes nowhere: RIG_EINVAL.
     if (a.isEmpty() || !ok || hz <= 0) return rprt(-1);
-    const int id = slice->sliceId();
-    const QString cmd = QStringLiteral("slice set %1 step=%2").arg(id).arg(hz);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd, id, hz]() {
-        // Without a command plane the step is the client-side quantity the
-        // tuning wheel reads, and the wire text below would be dropped.
-        if (model->applyClientOwnedSliceStep(id, hz)) {
+    const QPointer<SliceModel> original(slice);
+    const RadioControlSession session = m_model->controlSession();
+    const quint64 generation = slice->receiveSessionGeneration();
+    SlicePresetRequest request;
+    request.stepHz = hz;
+    QMetaObject::invokeMethod(m_model, [model = m_model, original, session, generation, request] {
+        if (!original || original->receiveSessionGeneration() != generation) {
             return;
         }
-        model->sendCmdPublic(cmd, nullptr);
+        model->requestSlicePreset(original, request, session);
     }, Qt::QueuedConnection);
     return rprt(0);
 }

@@ -41,6 +41,9 @@ public:
     explicit CanonWindow(const QString& title, QWidget* parent = nullptr,
                          Kind kind = Kind::Dialog);
 
+    // Reopen an existing window without losing its maximized/fullscreen state.
+    void showAndActivate();
+
     // Content goes here; install a layout on it.
     QWidget* bodyWidget() const { return m_body; }
 

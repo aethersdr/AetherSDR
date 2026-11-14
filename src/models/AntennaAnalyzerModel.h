@@ -58,6 +58,7 @@ private:
     TransportFactory m_factory;
     QList<RigExpertUsbDevice> m_devices;
     RigExpertUsbDevice m_selected;
+    RigExpertModelInfo m_model;
     QPointer<RigExpertHidTransport> m_port;
     State m_state{State::Disconnected};
     State m_terminal{State::Disconnected};

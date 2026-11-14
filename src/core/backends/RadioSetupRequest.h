@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SetupStatusObservation.h"
+
 #include "RadioSetupControl.h"
 #include "core/backends/RadioControlTypes.h"
 #include "core/backends/SetupTextPolicy.h"
@@ -70,6 +72,7 @@ struct RadioSetupRequest {
         case Field::MuteLocalWhenRemote: case Field::BinauralReceive:
         case Field::LowLatencyDigital: case Field::LineoutMute:
         case Field::HeadphoneMute: case Field::FrontSpeakerMute:
+        case Field::RemoteOnEnabled: case Field::MultiFlexEnabled:
             return std::holds_alternative<bool>(value);
         case Field::NetworkMtu: {
             const int* mtu = std::get_if<int>(&value);
@@ -144,6 +147,7 @@ struct TransverterRequest {
     // The editor's IF setpoint accompanies a power edit, including the immediate
     // clamp after an IF edit. The radio's old status may not have echoed yet.
     double powerIfMhz{0.0};
+    std::shared_ptr<SetupStatusLifetime> expectedLifetime;
     bool valid() const
     {
         if (field == Field::Create) {

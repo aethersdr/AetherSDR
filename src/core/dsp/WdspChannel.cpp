@@ -70,6 +70,24 @@ std::mutex& g_setupMutex = AetherSDR::fftwPlannerMutex();
 constexpr int kApfSelectionDoublePole = 0;
 std::array<bool, kWdspChannelCount> g_channelsInUse {};
 
+// The variable's value; empty when it is unset. MSVC deprecates getenv in
+// favor of _dupenv_s.
+std::string envValue(const char* name)
+{
+#ifdef _MSC_VER
+    char* value = nullptr;
+    std::size_t size = 0;
+    if (_dupenv_s(&value, &size, name) != 0 || value == nullptr)
+        return {};
+    std::string result(value);
+    std::free(value);
+    return result;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr ? std::string(value) : std::string();
+#endif
+}
+
 // WDSP plans FFTs with FFTW_PATIENT (~220 planner calls over 11 distinct
 // kind/size pairs per RX open, ~a minute cold). Wisdom is global, so prime it
 // from a persisted cache; the first run measures and caches. Called under
@@ -82,18 +100,17 @@ std::string wisdomPath()
     // build-local dir so tests can't touch the operator's cache while keeping their
     // own persistent one. tests/TestWdspWisdomIsolation.cpp sets it before main()
     // so it also holds for test binaries run directly.
-    if (const char* override = std::getenv("AETHER_WDSP_WISDOM_DIR");
-        override != nullptr && *override != '\0') {
+    if (const std::string override = envValue("AETHER_WDSP_WISDOM_DIR"); !override.empty()) {
         dir = override;
         std::error_code overrideEc;
         fs::create_directories(dir, overrideEc);   // best-effort
         return (dir / "wdsp-fftw-wisdom").string();
     }
 #ifdef _WIN32
-    if (const char* la = std::getenv("LOCALAPPDATA")) dir = la;
+    dir = envValue("LOCALAPPDATA");
 #else
-    if (const char* xdg = std::getenv("XDG_CACHE_HOME")) dir = xdg;
-    else if (const char* home = std::getenv("HOME")) dir = fs::path(home) / ".cache";
+    if (const std::string xdg = envValue("XDG_CACHE_HOME"); !xdg.empty()) dir = xdg;
+    else if (const std::string home = envValue("HOME"); !home.empty()) dir = fs::path(home) / ".cache";
 #endif
     if (dir.empty()) {
         std::error_code ec;
@@ -114,9 +131,10 @@ std::string wisdomPath()
 double plannerTimeLimitSeconds()
 {
     static const double limit = [] {
-        const char* raw = std::getenv("AETHER_WDSP_FFTW_TIMELIMIT");
-        if (raw == nullptr || *raw == '\0')
+        const std::string value = envValue("AETHER_WDSP_FFTW_TIMELIMIT");
+        if (value.empty())
             return -1.0;
+        const char* raw = value.c_str();
         char* end = nullptr;
         const double parsed = std::strtod(raw, &end);
         // A malformed value is ignored rather than treated as 0: silently
@@ -305,6 +323,13 @@ void applyRxAgc(int channel, int mode, double topDb, int slopeDb, double fixedDb
     }
 }
 
+// WDSP LMS adaptation strength for a 0..100 level; the midpoint is RXA.c's
+// default. Shared by ANR and ANF, recipe and live paths alike.
+double lmsGainForLevel(int level)
+{
+    return 0.00001 * std::pow(100.0, std::clamp(level, 0, 100) / 100.0);
+}
+
 }  // namespace
 
 std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
@@ -313,8 +338,8 @@ std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
     if (!validateConfig(config, error)) {
         return nullptr;
     }
-    if (GetWDSPVersion() != 210) {
-        setError(error, "The linked WDSP library is not version 2.10");
+    if (GetWDSPVersion() != 211) {
+        setError(error, "The linked WDSP library is not version 2.11");
         return nullptr;
     }
     std::optional<Reservation> reservation = reserveChannels(1);
@@ -331,8 +356,8 @@ std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
     if (!validateConfig(config, error)) {
         return nullptr;
     }
-    if (GetWDSPVersion() != 210) {
-        setError(error, "The linked WDSP library is not version 2.10");
+    if (GetWDSPVersion() != 211) {
+        setError(error, "The linked WDSP library is not version 2.11");
         return nullptr;
     }
     if (reservation.m_count == 0) {
@@ -1033,6 +1058,24 @@ bool WdspChannel::setMinimumPhase(bool on) noexcept
     return true;
 }
 
+bool WdspChannel::setNoiseReduction(bool enabled, int level) noexcept
+{
+    if (m_config.direction != Direction::Receive || m_config.analogReceiveDsp
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        m_liveNrSet = true;
+        m_liveNrEnabled = enabled;
+        m_liveNrLevel = std::clamp(level, 0, 100);
+        SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
+        SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setShift(double shiftHz) noexcept
 {
     if (m_config.direction != Direction::Receive || !std::isfinite(shiftHz)
@@ -1592,6 +1635,9 @@ bool WdspChannel::open() noexcept
             // unity monitor gain. Normalize inside the FM chain, including
             // pre-monitor taps. FM bypasses the main RX AGC.
             SetRXAPanelGain1(m_channelId, 1.0);
+        }
+        if (m_config.fmReceive || m_config.fmLimiter) {
+            // close() frees the fmd stage, so the limiter is pushed on every open.
             SetRXAFMLimGain(m_channelId, 0.0);
             SetRXAFMLimRun(m_channelId, 1);
         }
@@ -1645,10 +1691,8 @@ bool WdspChannel::open() noexcept
         SetRXASPCWRun(m_channelId, m_config.apfEnabled ? 1 : 0);
         if (m_config.analogReceiveDsp) {
             const auto& receive = *m_config.analogReceiveDsp;
-            // Bounded adaptation strength; the midpoint is RXA.c's default.
-            const auto gain = [](int level) { return 0.00001 * std::pow(100.0, level / 100.0); };
-            SetRXAANRVals(m_channelId, 64, 16, gain(receive.nrLevel), 0.1);
-            SetRXAANFVals(m_channelId, 64, 16, gain(receive.anfLevel), 0.1);
+            SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(receive.nrLevel), 0.1);
+            SetRXAANFVals(m_channelId, 64, 16, lmsGainForLevel(receive.anfLevel), 0.1);
             SetRXAANRRun(m_channelId, receive.nrEnabled ? 1 : 0);
             SetRXAANFRun(m_channelId, receive.anfEnabled ? 1 : 0);
             RXANBPSetTuneFrequency(m_channelId, 0.0);
@@ -1676,6 +1720,10 @@ bool WdspChannel::open() noexcept
             }
             RXANBPSetNotchesRun(m_channelId,
                 receive.manualNotchEnabled || !receive.trackingNotches.empty() ? 1 : 0);
+        } else if (m_liveNrSet) {
+            // close() frees the ANR stage; restore a live caller's request.
+            SetRXAANRVals(m_channelId, 64, 16, lmsGainForLevel(m_liveNrLevel), 0.1);
+            SetRXAANRRun(m_channelId, m_liveNrEnabled ? 1 : 0);
         }
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));

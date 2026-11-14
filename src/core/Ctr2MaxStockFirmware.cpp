@@ -18,7 +18,6 @@ constexpr quint16 kEsp32S3ChipId = 9;
 constexpr int kImageHeaderSize = 24;
 constexpr int kMaxSegments = 16;
 constexpr quint16 kPartitionMagic = 0x50AA;   // 0xAA 0x50, little-endian
-constexpr quint16 kPartitionMd5Magic = 0xEBEB;
 constexpr int kPartitionRowSize = 32;
 constexpr quint8 kTypeApp = 0;
 constexpr quint8 kTypeData = 1;
@@ -133,7 +132,7 @@ QList<Ctr2MaxStockFirmware::Partition> Ctr2MaxStockFirmware::readPartitionTable(
     for (qsizetype at = 0; at + kPartitionRowSize <= table.size(); at += kPartitionRowSize) {
         const quint16 magic = le16(table, at);
         if (magic != kPartitionMagic)
-            break;   // 0xFFFF (the end) or kPartitionMd5Magic
+            break;   // 0xFFFF (the end) or 0xEBEB (the MD5 row)
         Partition p;
         p.type = static_cast<quint8>(table[at + 2]);
         p.subtype = static_cast<quint8>(table[at + 3]);

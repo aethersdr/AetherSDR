@@ -2968,11 +2968,11 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         // Antenna Genius and ShackSwitch share the model; the device it is
         // serving owns the event.
         connect(m_ag, &AntennaGeniusModel::attemptStarted, this, [refresh]() { refresh(); });
-        connect(m_ag, &AntennaGeniusModel::connected, this, [this, onLink]() {
+        connect(m_ag, &AntennaGeniusModel::connected, this, [onLink]() {
             onLink(QStringLiteral("ag"));
             onLink(QStringLiteral("shackswitch"));
         });
-        connect(m_ag, &AntennaGeniusModel::disconnected, this, [this, onLink]() {
+        connect(m_ag, &AntennaGeniusModel::disconnected, this, [onLink]() {
             onLink(QStringLiteral("ag"));
             onLink(QStringLiteral("shackswitch"));
         });

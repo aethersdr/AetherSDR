@@ -23,6 +23,10 @@
 #include <QColor>
 #include <QImage>
 #include <QRadioButton>
+#include <QPushButton>
+#include <QPalette>
+#include <QWidget>
+#include <cmath>
 #include <QStyle>
 #include <QStyleOptionButton>
 #include <QRegularExpression>
@@ -44,6 +48,7 @@ private slots:
     void compactIsSmallerButNotADifferentPalette();
     void everyThemeTokenInTheSheetResolves();
     void checkedLosesToDisabled();
+    void canonDisabledButtonsReadWeakerInBothThemes();
     void canonLookPaintsItsIndicators();
     void canonSheetLeavesNoRuleFragments();
     void canonIndicatorsRenderTheirImages();
@@ -270,6 +275,50 @@ void ModemChromeTest::checkedLosesToDisabled()
                  "QPushButton:checked must precede :disabled, or a disabled "
                  "checked button paints as latched");
     }
+}
+
+void ModemChromeTest::canonDisabledButtonsReadWeakerInBothThemes()
+{
+    auto& tm = ThemeManager::instance();
+    const QString before = tm.activeTheme();
+    const auto luminance = [](const QColor& color) {
+        const auto channel = [](double value) {
+            return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF())
+             + 0.0722 * channel(color.blueF());
+    };
+    const auto contrast = [&](const QColor& first, const QColor& second) {
+        const double a = luminance(first);
+        const double b = luminance(second);
+        return (qMax(a, b) + 0.05) / (qMin(a, b) + 0.05);
+    };
+    for (const char* themeName : {"Default Dark", "Default Light"}) {
+        QVERIFY(tm.setActiveTheme(QLatin1String(themeName)));
+        for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
+            QWidget surface;
+            theme::setContainer(&surface, QStringLiteral("canon/disabledButtonTest"));
+            tm.applyStyleSheet(&surface, ModemChrome::styleSheet(scale, ModemChrome::Look::Canon));
+            QPushButton enabled(QStringLiteral("Action"), &surface);
+            QPushButton disabled(QStringLiteral("Action"), &surface);
+            disabled.setEnabled(false);
+            enabled.resize(160, 40);
+            disabled.resize(160, 40);
+            enabled.ensurePolished();
+            disabled.ensurePolished();
+            const QImage enabledImage = enabled.grab().toImage();
+            const QImage disabledImage = disabled.grab().toImage();
+            const int x = qRound(8 * enabledImage.devicePixelRatio());
+            const QColor enabledFill = enabledImage.pixelColor(x, enabledImage.height() / 2);
+            const QColor disabledFill = disabledImage.pixelColor(x, disabledImage.height() / 2);
+            QCOMPARE(disabledFill, enabledFill);
+            const QColor enabledInk = enabled.palette().color(QPalette::Active, QPalette::ButtonText);
+            const QColor disabledInk = disabled.palette().color(QPalette::Disabled, QPalette::ButtonText);
+            QVERIFY2(contrast(disabledInk, disabledFill) < contrast(enabledInk, enabledFill),
+                     "disabled canon buttons must have weaker ink than enabled buttons");
+        }
+    }
+    tm.setActiveTheme(before);
 }
 
 // Not QTEST_MAIN: ThemeManager is a singleton that reads ActiveTheme from

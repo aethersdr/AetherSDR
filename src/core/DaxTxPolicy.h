@@ -7,6 +7,7 @@ namespace AetherSDR {
 
 enum class DaxTxRequestReason {
     HostedDaxBridge,
+    ExplicitOwnership,
     TciTxAudio,
     RadeModemTx,
     AetherModemAx25Tx,
@@ -47,6 +48,7 @@ inline QString daxTxRequestReasonName(DaxTxRequestReason reason)
 {
     switch (reason) {
     case DaxTxRequestReason::HostedDaxBridge:     return QStringLiteral("hosted_dax_bridge");
+    case DaxTxRequestReason::ExplicitOwnership:   return QStringLiteral("operator_ownership");
     case DaxTxRequestReason::TciTxAudio:          return QStringLiteral("tci_tx_audio");
     case DaxTxRequestReason::RadeModemTx:         return QStringLiteral("rade_modem_tx");
     case DaxTxRequestReason::AetherModemAx25Tx:   return QStringLiteral("aethermodem_ax25_tx");
@@ -136,6 +138,9 @@ inline DaxTxPolicyDecision evaluateDaxTxPolicy(const DaxTxPolicyContext& context
             return {false, QStringLiteral("SmartSDR_DAX2_owns_windows_dax")};
         }
         return {false, QStringLiteral("hosted_dax_unavailable")};
+
+    case DaxTxRequestReason::ExplicitOwnership:
+        return {true, QStringLiteral("explicit_operator_ownership")};
 
     case DaxTxRequestReason::TciTxAudio:
         // TCI's audio source is the WebSocket from WSJT-X / JTDX / MSHV, not

@@ -2,6 +2,8 @@
 
 #include "CanonWindow.h"
 
+#include "core/GpsdSkyClient.h"
+
 #include <QElapsedTimer>
 #include <QString>
 
@@ -12,11 +14,14 @@ class QGroupBox;
 class QLineEdit;
 class QProgressBar;
 class QPushButton;
+class QTableWidget;
 class QTimer;
 
 namespace AetherSDR {
 
 class LocationAddressResolver;
+class GpsSkyPlot;
+class AetherGpsTools;
 class MapView;
 class RadioModel;
 
@@ -32,8 +37,27 @@ public:
     explicit GpsLocationDialog(RadioModel* radioModel,
                                QWidget* parent = nullptr);
 
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
 private:
     void refreshGps(bool reportArrived);
+    // Starts or stops the sky view's gpsd session (the AetherGPS waveform on
+    // the radio): it reads only while this window shows and the radio is
+    // reachable on its LAN or through the tailnet shim.
+    void updateSkySource();
+    // A SKY report, possibly listing no satellites.
+    void showSky(const QList<GpsSatellite>& satellites);
+    // Empties the plot and table and says why.
+    void clearSky(const QString& status);
+    void showSkyState(GpsdSkyClient::State state, const QString& detail);
+    void showDetail(const GpsdDetail& detail);
+    // The bottom bar: "Install AetherGPS on the radio" mirrors whether the
+    // radio lists the waveform and installs or removes it; the Sky View
+    // shows only while it is installed.
+    void updateGpsTools();
+    void onGpsToolsToggled(bool install);
     void updateClockAndAges();
     void updateNtpServerTip();
     void updateGpsTimeControls();
@@ -77,6 +101,32 @@ private:
     QLabel* m_referenceLockLabel{nullptr};
     QLabel* m_lockDurationLabel{nullptr};
     QGroupBox* m_satelliteGroup{nullptr};
+    QLabel* m_satelliteApiNote{nullptr};
+
+    GpsdSkyClient* m_skyClient{nullptr};
+    QGroupBox* m_skyGroup{nullptr};
+    GpsSkyPlot* m_skyPlot{nullptr};
+    QTableWidget* m_skyTable{nullptr};
+    QLabel* m_skyStatusLabel{nullptr};
+    bool m_skyHasData{false};
+
+    QLabel* m_fixModeLabel{nullptr};
+    QLabel* m_dopLabel{nullptr};
+    QLabel* m_dopTimeLabel{nullptr};
+    QLabel* m_errorHorizontalLabel{nullptr};
+    QLabel* m_errorVerticalLabel{nullptr};
+    QLabel* m_errorTimeLabel{nullptr};
+    QLabel* m_ppsOffsetLabel{nullptr};
+    QLabel* m_receiverLabel{nullptr};
+    QLabel* m_ppsSourceLabel{nullptr};
+    QLabel* m_gpsdVersionLabel{nullptr};
+
+    QFrame* m_gpsToolsBar{nullptr};
+    QCheckBox* m_gpsToolsCheck{nullptr};
+    QLabel* m_gpsToolsLabel{nullptr};
+    AetherGpsTools* m_gpsTools{nullptr};
+    bool m_gpsToolsInstalled{false};
+    int m_installPercent{-1};   // the install's last progress, -1 before any
 
     QLabel* m_utcTimeLabel{nullptr};
     QLabel* m_localTimeLabel{nullptr};

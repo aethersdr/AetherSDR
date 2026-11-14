@@ -57,6 +57,18 @@ and restores the radio's reported value for malformed entries.
 
 ### RADIO
 
+**Remote On** and **multiFLEX:** become available after the connected radio
+reports their current settings. The button shows your requested value, including
+after the radio accepts it without sending a status update. A later radio status
+supersedes that request. Rejected or timed-out edits return to the last reported
+value. Reconnecting clears requested values and reads the radio's settings again.
+Unsupported controls are dimmed with an explanation.
+
+**Reboot Radio** asks for confirmation and targets the radio session shown when
+the prompt opened. If that session changes, the confirmation cannot reboot the
+replacement session. Reboot is sent once; a missing response does not trigger
+another reboot request.
+
 On a FlexRadio, edit **Nickname** under **Settings → Radio Setup... → Radio**
 and press Enter or leave the field to save an edit on the radio. An untouched
 field follows the radio's current nickname and does not rename or clear it.
@@ -76,7 +88,7 @@ their nicknames on this computer.
 | **Radio** | Radio information (serial, hardware version, region, options), identification (model, nickname, callsign), license info and the firmware version (**FW Version**; to update it, see [Firmware Update](./firmware-update.md)) |
 | **Network** | The radio's IP address, mask, MAC and gateway; DHCP/static IP configuration; **Advanced**: Enforce Private IP Connections, **Agent Automation (MCP)** (see [Automation Bridge and MCP](./automation-bridge-and-mcp.md)), Network MTU and the VITA-49 RX buffer (see [Low Bandwidth Connections](./low-bandwidth-connections.md)) |
 | **GPS** | Whether a GPS is installed, position, grid, altitude, satellites and lock status. The full dashboard is **Tools → AetherGPS...**. See [AetherClock and GPS](./aetherclock-and-gps.md). Hidden on radios without GPS hardware. |
-| **Time** | The radio's own NTP time sources: which server it is synced to, each source's state, stratum and reach, and **Add…**, **Edit…**, **Remove** and an **Enabled** box per source. FLEX-8000-series, Aurora, ML-9600 and CL-9300 radios on SmartSDR v4.3.16 or later; dimmed with the reason elsewhere. See [NTP Time Sources](./ntp-time-sources.md). |
+| **Time** | A live NTP dashboard with the selected reference, source health, GPSDO status, and eight-poll reachability. Ten numbered server tabs provide configuration, **Enabled on radio**, and **Remove**. Radios on SmartSDR v4.3.16 or later; dimmed with the reason on older firmware. See [NTP Time Sources](./ntp-time-sources.md). |
 | **Calibration** | Host-side frequency calibration in ppb, for radios that cannot calibrate themselves ([Hermes-Lite 2](./hermes-lite-2.md)). Hidden on FlexRadio, which calibrates on the Receive page. |
 | **RTL Receiver** | ppm correction, IQ DC suppression and serial for an [RTL-SDR](./rtl-sdr.md) dongle. Only when one is connected. |
 | **HL2 Hardware** | Board variant, dither, companion filter board, CL1 external 10 MHz reference and tuner for the [Hermes-Lite 2](./hermes-lite-2.md). Only when an HL2 is connected. |
@@ -163,6 +175,7 @@ timings are entered in milliseconds. The Demo does not implement these settings.
 ### Calibration is interrupted by a disconnect
 
 On **Receive → Frequency Offset**, **Start** begins radio-side calibration.
+Disconnecting cancels the displayed calibration attempt; reconnect before starting again.
 An accepted request is not a completed calibration; completion comes from the
 radio's status. The reference frequency and correction reset must each be
 accepted before calibration starts. A rejected or unanswered step stops the
@@ -184,6 +197,13 @@ Radio connection is not part of Radio Setup.
 2. Tick **Connect to last radio on start up** in the connect panel if you want AetherSDR to connect automatically at launch.
 
 See [First Connection](./first-connection.md) and [Manual Connection](./manual-connection.md).
+
+License information clears when its radio session ends. Subscription expiry is
+shown separately from feature availability: the radio’s feature reports decide
+which licensed controls are available. Filter sharpness edits are retained after the radio accepts them; later radio
+status takes precedence. Filter sharpness status updates preserve settings
+omitted from a partial radio report, and the controls follow confirmed changes
+made by another client.
 
 ## See also
 

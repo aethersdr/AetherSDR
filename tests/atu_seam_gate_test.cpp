@@ -201,6 +201,120 @@ static void flexUsesTheSameTypedPath()
           "flex: the same typed seam dispatches each intent exactly once");
 }
 
+static void transverterOutputsRefuseInternalAtu()
+{
+    const QStringList antennas{QStringLiteral("XVTA"), QStringLiteral("XVTB"),
+                               QStringLiteral("XVTR"), QStringLiteral("xvta")};
+    for (const QString& antenna : antennas) {
+        Fixture f(QStringLiteral("flex"), /*canTransmit=*/true);
+        f.backend->connected = true;
+        SliceDelta path;
+        path.txAntenna = antenna;
+        f.slice->applyChanges(path);
+        check(!f.radio.transmitModel().atuAvailable(),
+              qPrintable(antenna + QStringLiteral(": internal ATU is unavailable")));
+        check(f.radio.transmitModel().tuneAvailable(),
+              "transverter output retains carrier TUNE availability");
+
+        int memoryRequests = 0;
+        int clearRequests = 0;
+        QObject::connect(&f.radio.transmitModel(), &TransmitModel::controlRequested,
+                         &f.radio, [&memoryRequests, &clearRequests](const TransmitControlRequest& request) {
+            if (request.field == TransmitControlRequest::Field::AtuMemories) {
+                ++memoryRequests;
+            } else if (request.field == TransmitControlRequest::Field::AtuClear) {
+                ++clearRequests;
+            }
+        });
+        f.radio.transmitModel().atuStart();
+        f.radio.transmitModel().setAtuMemories(true);
+        f.radio.transmitModel().setAtuMemories(false);
+        f.radio.transmitModel().atuClearMemories();
+        check(f.backend->atuStarts == 0, "transverter output: no ATU start reaches backend");
+        check(memoryRequests == 0, "transverter output: no memory writes are issued");
+        check(clearRequests == 0, "transverter output: memories are not cleared");
+        f.radio.transmitModel().atuBypass();
+        check(f.backend->atuBypasses == 1, "transverter output: explicit bypass remains available");
+
+        path.txAntenna = QStringLiteral("ANT2");
+        f.slice->applyChanges(path);
+        check(f.radio.transmitModel().atuAvailable(), "return to ANT2 restores internal ATU");
+        f.radio.transmitModel().atuStart();
+        f.radio.transmitModel().setAtuMemories(true);
+        f.radio.transmitModel().atuClearMemories();
+        check(f.backend->atuStarts == 1 && memoryRequests == 1 && clearRequests == 1,
+              "return to ANT2 restores ATU start and memory requests");
+    }
+}
+
+static void availabilityFollowsTxSliceOnly()
+{
+    Fixture f(QStringLiteral("flex"), /*canTransmit=*/true);
+    check(f.radio.automationApplySliceFixture(1, QStringLiteral("B")),
+          "second disconnected fixture installed");
+    f.backend->connected = true;
+    SliceModel* other = f.radio.slice(1);
+    check(other != nullptr, "second slice exists");
+    if (!other) {
+        return;
+    }
+    SliceDelta path;
+    path.txAntenna = QStringLiteral("XVTB");
+    other->applyChanges(path);
+    check(f.radio.transmitModel().atuAvailable(), "non-TX transverter slice leaves ATU available");
+    SliceDelta demote;
+    demote.txSlice = false;
+    f.slice->applyChanges(demote);
+    SliceDelta promote;
+    promote.txSlice = true;
+    other->applyChanges(promote);
+    check(!f.radio.transmitModel().atuAvailable(), "TX reassignment to XVTB withdraws ATU");
+    path.txAntenna = QStringLiteral("ANT1");
+    f.slice->applyChanges(path);
+    check(!f.radio.transmitModel().atuAvailable(), "non-TX antenna change cannot reopen ATU");
+    other->applyChanges(demote);
+    f.slice->applyChanges(promote);
+    check(f.radio.transmitModel().atuAvailable(), "TX reassignment to ANT1 restores ATU");
+}
+
+static void scopedAtuRechecksAvailabilityAfterAdmission()
+{
+    TransmitModel model;
+    int admissions = 0;
+    int starts = 0;
+    int bypasses = 0;
+    TransmitModel::KeyingRoute route;
+    route.admit = [&model, &admissions](bool start) -> TransmitModel::KeyingPermit {
+        ++admissions;
+        if (start) {
+            model.setAtuAvailable(false);
+        }
+        return [] { return true; };
+    };
+    route.dispatch = [&starts, &bypasses](bool start) { start ? ++starts : ++bypasses; };
+    model.requestAtu(true, route);
+    check(admissions == 2 && starts == 0 && bypasses == 1,
+          "scoped start rechecks path and releases admission without keying");
+    model.requestAtu(true, route);
+    check(admissions == 2 && starts == 0, "unavailable start never takes keying admission");
+    model.requestAtu(false, route);
+    check(bypasses == 2, "scoped bypass remains available on withdrawn path");
+}
+
+static void producerStartWithdrawnDuringAdmissionIsRefused()
+{
+    Fixture f(QStringLiteral("flex"), /*canTransmit=*/true);
+    f.backend->connected = true;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+    const TxCoordinator::Request request = producer.request();
+    f.radio.setTxProducerAdmissionObserver(producer, [&f] {
+        f.radio.transmitModel().setAtuAvailable(false);
+    });
+    check(!f.radio.requestProducerAtu(request, true),
+          "producer start withdrawn during admission is not accepted");
+    check(f.backend->atuStarts == 0, "withdrawn producer start reaches no backend start");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("atu-seam-gate"));
@@ -212,6 +326,10 @@ int main(int argc, char** argv)
     receiveOnlyModeBlocksTune();
     panInhibitBlocksStart();
     flexUsesTheSameTypedPath();
+    transverterOutputsRefuseInternalAtu();
+    availabilityFollowsTxSliceOnly();
+    scopedAtuRechecksAvailabilityAfterAdmission();
+    producerStartWithdrawnDuringAdmissionIsRefused();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

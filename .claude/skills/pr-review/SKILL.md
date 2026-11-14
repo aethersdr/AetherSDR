@@ -572,18 +572,28 @@ real radio — so a bridge instance launched with the default config **will
 connect itself to the live FLEX** before you have issued a single verb. Two
 things prevent it, and you do both:
 
-1. **Isolate the settings store**, so there is no saved radio to autoconnect
-   to. `AETHER_SETTINGS_DIR` is honoured at runtime (`SettingsPaths.cpp`);
-   point it at a fresh scratch dir. A per-session scratch `HOME` /
-   `XDG_CONFIG_HOME` does the same job. A clean store also means
-   `ShowDemoRadio` is at its default (on), so the demo entry is in the list.
+1. **Isolate every store, not just settings**, so there is no saved radio
+   to autoconnect to and nothing writes into the operator's files.
+   `AETHER_SETTINGS_DIR` (`SettingsPaths.cpp`) moves the settings store and
+   the logs, and skips the startup config migration (`main.cpp`). MIDI
+   bindings, firmware staging, ASR models, user themes, the spot-feed configs
+   and the other `QStandardPaths` users still land in the operator's real
+   config and data directories. So also point them at scratch: `HOME` and
+   the `XDG_*` directories on Linux; `HOME` and `CFFIXED_USER_HOME` on macOS,
+   where Qt resolves those locations through CoreFoundation, which ignores
+   `HOME`. A clean store also means `ShowDemoRadio` is at its default (on),
+   so the demo entry is in the list.
 2. **Connect explicitly to the demo, and to nothing else.** Its discovery
    serial is `DEMO-0001` (`SimBackend::demoSerial()`), family `sim`, shown as
    "Simulator (not on the air)".
 
 ```sh
 export SCRATCH=<your scratch dir>
+mkdir -p "$SCRATCH"/{home,config,data,cache,settings}
 AETHER_AUTOMATION=1 QT_QPA_PLATFORM=offscreen \
+HOME="$SCRATCH/home" CFFIXED_USER_HOME="$SCRATCH/home" \
+XDG_CONFIG_HOME="$SCRATCH/config" \
+XDG_DATA_HOME="$SCRATCH/data" XDG_CACHE_HOME="$SCRATCH/cache" \
 AETHER_SETTINGS_DIR="$SCRATCH/settings" \
 AETHER_AUTOMATION_IDENTITY=pr-<PR>-review \
 AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR> \

@@ -149,8 +149,13 @@ bool RtlSdrWorker::submit(const Transaction::Work& work)
 std::optional<RtlSdrWorker::Transaction::Result> RtlSdrWorker::takeResult()
 {
     if (m_command.load(std::memory_order_acquire) != Command::Complete) { return {}; }
-    auto result = std::move(m_result);
-    m_result.reset();
+    // Moved only when engaged: moving the whole optional trips GCC 13's
+    // -Wmaybe-uninitialized on the disengaged path.
+    std::optional<Transaction::Result> result;
+    if (m_result) {
+        result.emplace(std::move(*m_result));
+        m_result.reset();
+    }
     m_work.reset(); // destruction is on the backend thread, never the callback
     m_command.store(Command::Idle, std::memory_order_release);
     return result;

@@ -6,6 +6,7 @@
 #include "HGauge.h"
 #include "Theme.h"
 #include "TwoToneTuneGate.h"
+#include "TxOutputMetering.h"
 #include "core/TxKeyingMarker.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -22,6 +23,7 @@
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 #include <cmath>
+#include <utility>
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
@@ -98,6 +100,39 @@ static QString percentText(int value)
 
 // ── TxApplet ────────────────────────────────────────────────────────────────
 
+namespace {
+// The gauges' own texts, restored when the TX output is metered again.
+const QString kFwdGaugeLabel = QStringLiteral("RF Pwr");
+const QString kFwdGaugeName = QStringLiteral("Forward power gauge");
+const QString kFwdGaugeDescription = QStringLiteral("RF forward power in watts");
+const QString kSwrGaugeLabel = QStringLiteral("SWR");
+const QString kSwrGaugeName = QStringLiteral("SWR gauge");
+const QString kSwrGaugeDescription = QStringLiteral("Standing wave ratio");
+
+// Unavailable state of one gauge (theme-style-guide "Three-state controls"):
+// dimmed, the reason in the bar, the tooltip and accessibleDescription. The
+// gauge keeps drawing what the meter sends.
+void presentGaugeMetering(HGauge* gauge, bool metered, const QString& output,
+                          const QString& label, const QString& name,
+                          const QString& description)
+{
+    if (metered) {
+        gauge->setLabel(label);
+        gauge->setAccessibleName(name);
+        gauge->setAccessibleDescription(description);
+        gauge->setToolTip(QString());
+        gauge->setEnabled(true);
+        return;
+    }
+    const QString reason = txOutputNotMeteredReason(output);
+    gauge->setLabel(txOutputNotMeteredLabel(label, output));
+    gauge->setAccessibleName(QStringLiteral("%1, not measured on %2").arg(name, output));
+    gauge->setAccessibleDescription(reason);
+    gauge->setToolTip(reason);
+    gauge->setEnabled(false);
+}
+} // namespace
+
 TxApplet::TxApplet(QWidget* parent)
     : QWidget(parent)
 {
@@ -128,27 +163,34 @@ void TxApplet::buildUI()
     vbox->setSpacing(2);
 
     // ── Forward Power gauge (0–120 W, red > 100 W) ─────────────────────────
-    m_fwdGauge = new HGauge(0.0f, 120.0f, 100.0f, "RF Pwr", "W",
+    m_fwdGauge = new HGauge(0.0f, 120.0f, 100.0f, kFwdGaugeLabel, "W",
         {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}},
         this, 80.0f);
-    m_fwdGauge->setAccessibleName("Forward power gauge");
-    m_fwdGauge->setAccessibleDescription("RF forward power in watts");
+    m_fwdGauge->setAccessibleName(kFwdGaugeName);
+    m_fwdGauge->setAccessibleDescription(kFwdGaugeDescription);
     // Mouse-over readout: exact watts, so the operator isn't left estimating
-    // between the 40 W tick marks while transmitting. (#3936)
-    static_cast<HGauge*>(m_fwdGauge)->setHoverValueFormatter([](float v) {
+    // between the 40 W tick marks while transmitting. (#3936) Not a reading on
+    // an output the radio cannot meter (#4954).
+    static_cast<HGauge*>(m_fwdGauge)->setHoverValueFormatter([this](float v) {
+        if (!m_txOutputMetered) {
+            return QStringLiteral("Not measured on %1").arg(m_unmeteredTxOutput);
+        }
         return QStringLiteral("%1 W").arg(QString::number(std::lround(v)));
     });
     static_cast<HGauge*>(m_fwdGauge)->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_fwdGauge);
 
     // ── SWR gauge (1.0–3.0, red > 2.5) ─────────────────────────────────────
-    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "SWR", "",
+    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, kSwrGaugeLabel, "",
         {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
         this, 2.0f);
-    m_swrGauge->setAccessibleName("SWR gauge");
-    m_swrGauge->setAccessibleDescription("Standing wave ratio");
+    m_swrGauge->setAccessibleName(kSwrGaugeName);
+    m_swrGauge->setAccessibleDescription(kSwrGaugeDescription);
     // Mouse-over readout: exact ratio in the conventional N.N:1 form.
-    static_cast<HGauge*>(m_swrGauge)->setHoverValueFormatter([](float v) {
+    static_cast<HGauge*>(m_swrGauge)->setHoverValueFormatter([this](float v) {
+        if (!m_txOutputMetered) {
+            return QStringLiteral("Not measured on %1").arg(m_unmeteredTxOutput);
+        }
         return QStringLiteral("%1:1").arg(QString::number(v, 'f', 2));
     });
     static_cast<HGauge*>(m_swrGauge)->setHoverValuePopupEnabled(true);
@@ -541,6 +583,8 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     if (m_model == model) return;
     m_model = model;
     if (!m_model) return;
+    m_lastAtuStatus = ATUStatus::None;
+    m_atuTunedFreqMhz = -1.0;
 
     // Transmit state changes → update sliders, tune button
     connect(m_model, &TransmitModel::stateChanged, this, &TxApplet::syncFromModel);
@@ -591,7 +635,7 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     });
 
     // ATU state changes → indicators
-    connect(m_model, &TransmitModel::atuStateChanged, this, &TxApplet::syncAtuIndicators);
+    connect(m_model, &TransmitModel::atuStateChanged, this, &TxApplet::syncAtuState);
 
     // APD button + indicators
     connect(m_apdBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -602,7 +646,7 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         m_updatingFromModel = true;
         m_apdBtn->setChecked(m_model->apdEnabled());
         m_updatingFromModel = false;
-        syncAtuIndicators();  // also refreshes APD indicators
+        syncAtuState();  // resetState also clears ATU state through this signal
     });
 
     // Profile list changes → populate combo
@@ -635,18 +679,24 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         syncAtuIndicators();
     });
     m_radioHasTunerMemories = m_model->hasTunerMemories();
+    connect(m_model, &TransmitModel::atuAvailabilityChanged, this, [this] {
+        updateAtuAvailability();
+        syncAtuIndicators();
+    });
 
     syncFromModel();
-    syncAtuIndicators();
+    syncAtuState();
     updateAtuAvailability();
 }
 
 void TxApplet::updateAtuAvailability()
 {
-    if (!m_atuBtn || !m_memBtn)
+    if (!m_atuBtn || !m_memBtn) {
         return;
-    const bool atuEnabled = m_radioHasTuner && !m_tgxlOperate;
-    const bool memoriesEnabled = m_radioHasTunerMemories && !m_tgxlOperate;
+    }
+    const bool pathAvailable = !m_model || m_model->atuAvailable();
+    const bool atuEnabled = m_radioHasTuner && !m_tgxlOperate && pathAvailable;
+    const bool memoriesEnabled = m_radioHasTunerMemories && !m_tgxlOperate && pathAvailable;
     m_atuBtn->setEnabled(atuEnabled);
     m_memBtn->setEnabled(memoriesEnabled);
     // The ATU context menu contains only memory operations. Keep the shared
@@ -660,16 +710,21 @@ void TxApplet::updateAtuAvailability()
     // point, and "Disabled — TGXL is in OPERATE mode" would send the operator
     // looking at the wrong box.
     QString tip;
-    if (!m_radioHasTuner)
+    if (!m_radioHasTuner) {
         tip = tr("Antenna tuner controls are unavailable for this radio");
-    else if (m_tgxlOperate)
+    } else if (m_tgxlOperate) {
         tip = tr("Disabled — TGXL is in OPERATE mode");
+    } else if (!pathAvailable) {
+        tip = tr("Disabled — the internal ATU is not in the transverter TX path");
+    }
     m_atuBtn->setToolTip(tip);
+    m_atuBtn->setAccessibleDescription(tip);
     if (!m_radioHasTunerMemories) {
         m_memBtn->setToolTip(tr("ATU memory controls are unavailable for this radio"));
     } else {
         m_memBtn->setToolTip(tip);
     }
+    m_memBtn->setAccessibleDescription(m_memBtn->toolTip());
 }
 
 void TxApplet::setTunerModel(TunerModel* tuner)
@@ -719,36 +774,48 @@ void TxApplet::syncFromModel()
     m_updatingFromModel = false;
 }
 
+void TxApplet::syncAtuState()
+{
+    if (!m_model) {
+        return;
+    }
+    const ATUStatus status = m_model->atuStatus();
+    // Only a new result can pin a match; memory/APD changes are not a tune.
+    if (status != m_lastAtuStatus) {
+        if (status == ATUStatus::Successful || status == ATUStatus::OK) {
+            m_atuTunedFreqMhz = m_model->transmitFreq();
+        } else if (status == ATUStatus::Bypass || status == ATUStatus::ManualBypass
+                   || status == ATUStatus::None) {
+            m_atuTunedFreqMhz = -1.0;
+        }
+        m_lastAtuStatus = status;
+    }
+    syncAtuIndicators();
+}
+
 void TxApplet::syncAtuIndicators()
 {
-    if (!m_model) return;
-
-    const auto status = m_model->atuStatus();
-
-    // Capture the freq the ATU just tuned at — gates the "second click ⇒ bypass"
-    // path so only same-frequency follow-up clicks bypass. (#1993)
-    if (status == ATUStatus::Successful || status == ATUStatus::OK)
-        m_atuTunedFreqMhz = m_model->transmitFreq();
-    else if (status == ATUStatus::Bypass || status == ATUStatus::ManualBypass) {
-        // Bypass clears the tuned-freq pin so the next click starts a fresh tune.
-        m_atuTunedFreqMhz = -1.0;
+    if (!m_model) {
+        return;
     }
+    const ATUStatus status = m_model->atuStatus();
 
+    const bool pathAvailable = m_model->atuAvailable();
     // Success — green when tune was successful
     setIndicatorState(m_successInd,
-        indicatorState(m_radioHasTuner,
+        indicatorState(m_radioHasTuner && pathAvailable,
                        status == ATUStatus::Successful || status == ATUStatus::OK));
 
     // Byp — orange when in bypass
     setIndicatorState(m_bypInd,
-        indicatorState(m_radioHasTuner,
+        indicatorState(m_radioHasTuner && pathAvailable,
                        status == ATUStatus::Bypass
                            || status == ATUStatus::ManualBypass),
         QColor(0xd0, 0x90, 0x00));
 
     // Mem — green when using memory
     setIndicatorState(m_memInd,
-        indicatorState(m_radioHasTunerMemories, m_model->usingMemory()));
+        indicatorState(m_radioHasTunerMemories && pathAvailable, m_model->usingMemory()));
 
     // APD indicators — mutually exclusive states, all off when APD disabled
     // Progression: Cal (calibrating) → Avail (calibration ready) → Active (applied)
@@ -824,6 +891,10 @@ void TxApplet::setRadioModel(RadioModel* radio)
         disconnect(m_capabilitiesConnection);
         m_capabilitiesConnection = {};
     }
+    for (const QMetaObject::Connection& c : std::as_const(m_txOutputConnections)) {
+        disconnect(c);
+    }
+    m_txOutputConnections.clear();
     m_txController.reset();
     m_radioModel = radio;
     m_forwardPowerRequiresSmoothing = !radio || !radio->isConnected()
@@ -847,8 +918,57 @@ void TxApplet::setRadioModel(RadioModel* radio)
                         setPowerScale(maxWatts, hasAmplifier);
                     }
                 }
+                refreshTxOutputMetering(connected, caps);
             });
+        m_txOutputConnections << connect(radio, &RadioModel::sliceAdded, this,
+            [this](SliceModel* slice) {
+                watchSliceTxOutput(slice);
+                refreshTxOutputMeteringFromModel();
+            });
+        m_txOutputConnections << connect(radio, &RadioModel::sliceRemoved, this,
+            [this](int) { refreshTxOutputMeteringFromModel(); });
+        for (SliceModel* slice : radio->slices()) {
+            watchSliceTxOutput(slice);
+        }
     }
+    refreshTxOutputMeteringFromModel();
+}
+
+void TxApplet::watchSliceTxOutput(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+    m_txOutputConnections << connect(slice, &SliceModel::txSliceChanged, this,
+        [this](bool) { refreshTxOutputMeteringFromModel(); });
+    m_txOutputConnections << connect(slice, &SliceModel::txAntennaChanged, this,
+        [this](const QString&) { refreshTxOutputMeteringFromModel(); });
+}
+
+void TxApplet::refreshTxOutputMeteringFromModel()
+{
+    if (!m_radioModel) {
+        refreshTxOutputMetering(false, RadioCapabilities{});
+        return;
+    }
+    refreshTxOutputMetering(m_radioModel->isConnected(),
+                            m_radioModel->backendCapabilities());
+}
+
+void TxApplet::refreshTxOutputMetering(bool connected, const RadioCapabilities& caps)
+{
+    const SliceModel* tx = m_radioModel ? m_radioModel->txSlice() : nullptr;
+    const QString output = tx ? tx->txAntenna() : QString();
+    const bool metered = txOutputIsMetered(connected, caps, output);
+    if (metered == m_txOutputMetered && (metered || output == m_unmeteredTxOutput)) {
+        return;
+    }
+    m_txOutputMetered = metered;
+    m_unmeteredTxOutput = metered ? QString() : output;
+    presentGaugeMetering(static_cast<HGauge*>(m_fwdGauge), metered, output,
+                         kFwdGaugeLabel, kFwdGaugeName, kFwdGaugeDescription);
+    presentGaugeMetering(static_cast<HGauge*>(m_swrGauge), metered, output,
+                         kSwrGaugeLabel, kSwrGaugeName, kSwrGaugeDescription);
 }
 
 void TxApplet::setBandPlanManager(BandPlanManager* bandPlan)
@@ -866,16 +986,26 @@ void TxApplet::buildAtuContextMenu(QMenu& menu)
 
     auto* preTune = menu.addAction(QString::fromUtf8("Pre-tune bands\xE2\x80\xA6"));
     const bool memOn = m_model && m_model->memoriesEnabled();
-    preTune->setEnabled(m_radioHasTunerMemories && memOn);
+    const bool pathAvailable = !m_model || m_model->atuAvailable();
+    preTune->setEnabled(m_radioHasTunerMemories && pathAvailable && memOn);
     if (!m_radioHasTunerMemories) {
         preTune->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else if (!pathAvailable) {
+        preTune->setToolTip(tr("Disabled — the internal ATU is not in the transverter TX path"));
     } else if (!memOn) {
         preTune->setToolTip(tr("Enable MEM before running the pre-tune sweep"));
     }
+    preTune->setStatusTip(preTune->toolTip());
     connect(preTune, &QAction::triggered, this, &TxApplet::openPreTuneDialog);
 
     auto* clearMem = menu.addAction(QString::fromUtf8("Clear ATU memories\xE2\x80\xA6"));
-    clearMem->setEnabled(m_radioHasTunerMemories);
+    clearMem->setEnabled(m_radioHasTunerMemories && pathAvailable);
+    if (!m_radioHasTunerMemories) {
+        clearMem->setToolTip(tr("ATU memory controls are unavailable for this radio"));
+    } else if (!pathAvailable) {
+        clearMem->setToolTip(tr("Disabled — the internal ATU is not in the transverter TX path"));
+    }
+    clearMem->setStatusTip(clearMem->toolTip());
     connect(clearMem, &QAction::triggered,
             this, &TxApplet::confirmAndClearAtuMemories);
 }

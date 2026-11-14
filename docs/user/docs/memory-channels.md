@@ -14,7 +14,7 @@ Open it from **Tools → Memory...**
 For quick recall while operating, the panadapter's overlay **Memory** button
 opens a browse panel (see [Memory browse panel](#memory-browse-panel)).
 
-<img src="/img/screens/memory-dialog.png" width="1000" alt="Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KK7GWY, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected." />
+<img src="/img/screens/memory-dialog.png" width="1000" alt="Memory Channels window with a search box and a Profile filter set to All Memories. The table has columns Group, Owner, Frequency, Name, Mode, Step, Offset Dir, Repeater Offset and Tone Mode and lists five memories owned by KI4TTZ, two FM repeater channels on 146 MHz with CTCSS, and 20 m and AM broadcast entries in DIGU, RTTY and AM. A tip line explains how to tune and edit, and the buttons along the bottom are Add, Tune, Select All, Import…, Export… and Remove, with 1 of 5 selected." />
 
 *The Memory Channels window, listing the memories stored in the radio.*
 
@@ -59,14 +59,25 @@ SmartSDR and AetherSDR, use **Profiles → Import/Export Profiles...**; see
 
 The **Memory** button in the panadapter's overlay menu opens a compact list
 (Frequency, Name) for recall without the full dialog. Its **Add Memory**
-button always stores the **active** slice.
+button always stores the **active** slice. The panel fits the panadapter height
+when you open it or resize the window. In a short panadapter, use the mouse
+wheel or the list's vertical scrollbar to reach every memory; **Add Memory**
+stays above the scrolling list.
+
+Select the **Search memories** magnifying-glass icon beside **Add Memory** to
+show a filter directly below it. Results update as you type, ignoring letter
+case, and match the displayed **Name** label: the stored name, or its group or
+`Memory N` fallback when unnamed. Typing or pressing Enter in the filter does not recall a memory;
+select a result to recall it. Clear the field to restore the full list, or
+select the search icon again to hide the field and clear its filter. The query
+is not saved between application sessions.
 
 When SpotHub's **Memories** toggle is on, every memory also appears as a
 marker on the panadapter at its frequency. See [SpotHub](./spothub.md).
 
-<img src="/img/screens/memory-browse-panel.png" width="380" alt="Memory panel beside the overlay menu, with the Memory button lit. An Add Memory button sits above a Frequency and Name list: 0.670000 AM News, 14.085000 RTTY 20m, 14.236000 FreeDV 20m, 146.780000 and 146.960000, two repeater memories named by their callsign and club." />
+<img src="/img/screens/memory-browse-panel.png" width="252" alt="Memory panel with Add Memory and a Search memories icon at the top. The Search memory names field is expanded above the Frequency and Name list, populated with synthetic Memory 1 through Memory 14 entries." />
 
-*The Memory panel, opened from the Memory button on the overlay menu.*
+*The Memory panel with Search memories expanded below Add Memory.*
 
 ### Memory profiles
 

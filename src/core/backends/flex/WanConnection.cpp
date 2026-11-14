@@ -9,6 +9,7 @@
 #include <QJsonValue>
 #include <QSslCertificate>
 #include <QSslConfiguration>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -132,6 +133,7 @@ WanConnection::~WanConnection()
 
 void WanConnection::resetSessionState()
 {
+    ++m_sessionGeneration;
     // This object outlives every TLS session (a by-value MainWindow member), so
     // reset per session: otherwise a partial line from the dead link prefixes the
     // next session's first line and stale handle/sequence/callbacks answer into the
@@ -188,6 +190,30 @@ void WanConnection::disconnectFromRadio()
 }
 
 // ─── Command dispatch ────────────────────────────────────────────────────────
+
+quint32 WanConnection::sendSessionCommand(const QString& command, quint64 generation,
+                                          const SessionCommandGuard& guard, ResponseCallback callback)
+{
+    if (!sessionWriteAdmitted(generation, guard)) { return 0; }
+    return sendCommand(command, std::move(callback));
+}
+
+quint32 WanConnection::sendAdministrationCommand(const QString& command, quint64 generation,
+    const SessionCommandGuard& guard, ResponseCallback callback)
+{
+    if (!sessionWriteAdmitted(generation, guard)) { return 0; }
+    const quint32 seq = m_seqCounter.fetch_add(1);
+    if (callback) { m_pendingCallbacks.insert(seq, std::move(callback)); }
+    const QByteArray data = CommandParser::buildCommand(seq, command);
+    qCDebug(lcSmartLink) << "WAN TX:" << data.trimmed();
+    const qint64 written = m_socket.write(data);
+    m_socket.flush();
+    if (written != data.size()) {
+        m_pendingCallbacks.remove(seq);
+        return 0;
+    }
+    return seq;
+}
 
 quint32 WanConnection::sendCommand(const QString& command, ResponseCallback callback)
 {
@@ -408,7 +434,7 @@ void WanConnection::processLine(const QString& line)
     }
 
     ParsedMessage msg = CommandParser::parseLine(line);
-    emit messageReceived(msg);
+    emit lineReceived(msg, m_lineEpoch);
 
     switch (msg.type) {
     case MessageType::Version:
@@ -426,17 +452,22 @@ void WanConnection::processLine(const QString& line)
         break;
 
     case MessageType::Response: {
-        auto it = m_pendingCallbacks.find(msg.sequence);
-        if (it != m_pendingCallbacks.end()) {
-            it.value()(msg.resultCode, msg.object);
+        // Answer after the ingress has taken every line read ahead of this
+        // reply: status goes over one queued hop, so a reply answered here
+        // would overtake it. LAN replies take the same hop (commandResponse).
+        QMetaObject::invokeMethod(this, [this, generation = m_sessionGeneration,
+                                         sequence = msg.sequence, code = msg.resultCode,
+                                         body = msg.object] {
+            if (generation != m_sessionGeneration) { return; }
+            auto it = m_pendingCallbacks.find(sequence);
+            if (it == m_pendingCallbacks.end()) { return; }
+            // A completion may retire this session or alter the callback map.
+            const ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
-        }
+            callback(code, body);
+        }, Qt::QueuedConnection);
         break;
     }
-
-    case MessageType::Status:
-        emit statusReceived(msg.object, msg.kvs);
-        break;
 
     default:
         break;

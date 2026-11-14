@@ -96,6 +96,37 @@ void checkOverlappingGaps(bool timestamps)
 int main()
 {
     for (int offset = 0; offset < 16; ++offset) {
+        // A 1 ms recovery gap reuses counts 7/8/9 after 13/14/15 losses;
+        // those were consumed within 30 ms and are indistinguishable from
+        // stale copies. Exercise those counts once the ambiguity expires.
+        for (int missing = 1; missing <= 15; ++missing) {
+            VitaRxReorder buffer;
+            int lost = 0;
+            int breaks = 0;
+            std::vector<int> delivered;
+            const auto collect = [&](const VitaRxReorder::Result& result) {
+                lost += result.lost;
+                breaks += result.breaks;
+                for (int j = 0; j < result.count; ++j) {
+                    delivered.push_back(result.ready[j].packet.toInt());
+                }
+            };
+            std::vector<int> expected;
+            for (int i = 0; i < 30 + missing; ++i) {
+                if (i >= 10 && i < 10 + missing) {
+                    continue;
+                }
+                expected.push_back(i);
+                const qint64 firstSurvivor = missing >= 13 ? 120 : 91;
+                const qint64 now = i < 10 ? i * 10 : firstSurvivor + i - 10 - missing;
+                collect(buffer.add((i + offset) & 15, {}, now, QByteArray::number(i)));
+            }
+            collect(buffer.expire(200));
+            check(lost == missing && breaks == 1 && delivered == expected,
+                  "compressed survivors after real loss are delivered and counted across every wrap");
+        }
+    }
+    for (int offset = 0; offset < 16; ++offset) {
         for (int last = 9; last <= 16; ++last) {
             VitaRxReorder buffer;
             int lost = 0;
@@ -146,6 +177,65 @@ int main()
               "only packets needing retention are refused at the byte budget");
         check(buffer.add(1, {}, 2, QByteArray("b"), 0).count == 1,
               "budget refusal leaves the next in-order packet immediately deliverable");
+    }
+    {
+        VitaRxReorder buffer;
+        buffer.add(0, {}, 0);
+        buffer.add(2, {}, 10);
+        const auto expired = buffer.expire(40);
+        check(expired.lost == 1 && expired.count == 1, "keyless deadline resolves the absent count");
+        const auto late = buffer.add(1, {}, 41);
+        check(late.count == 0 && late.reordered && late.lost == 0,
+              "a recently expired count cannot replay late PCM");
+        const auto duplicate = buffer.add(2, {}, 42);
+        check(duplicate.count == 0 && duplicate.duplicate,
+              "a recently delivered keyless packet cannot replay");
+        check(buffer.add(3, {}, 43).count == 1, "late PCM leaves the successor live");
+    }
+    for (quint32 step : {1u, 60u, 61u, 100000u}) {
+        for (bool pending : {false, true}) {
+            VitaRxReorder buffer;
+            const auto timestamp = [](quint32 seconds, quint64 fraction = 0) {
+                return VitaRxReorder::Key{seconds, fraction, true, true,
+                    VitaRxReorder::Key::Kind::OpusTimestamp};
+            };
+            buffer.add(0, timestamp(200000), 0, QByteArray("old"));
+            if (pending) {
+                buffer.add(2, timestamp(200001), 1, QByteArray("queued"));
+            }
+            const auto result = buffer.add(9, timestamp(200000 - step), 2, QByteArray("new"));
+            if (step > 60) {
+                check(result.count == 1 && result.ready[0].packet == "new" && result.lost == 0
+                      && buffer.queuedBytes() == 0 && buffer.deadlineMs() < 0,
+                      "a large Opus clock reset retires queued old audio and releases immediately");
+                check(buffer.add(10, timestamp(200001 - step), 3).count == 1,
+                      "Opus consumption continues on the reset clock");
+            } else {
+                check(result.count == 0 && result.reordered,
+                      "Opus clock steps up to sixty seconds retain FlexLib stale handling");
+            }
+        }
+    }
+    {
+        using Kind = VitaRxReorder::Key::Kind;
+        VitaRxReorder buffer;
+        buffer.add(0, {100, 500, true, true, Kind::OpusTimestamp}, 0);
+        check(buffer.add(1, {40, 501, true, true, Kind::OpusTimestamp}, 1).count == 0,
+              "fractional Opus time just inside sixty seconds stays stale");
+        check(buffer.add(1, {40, 499, true, true, Kind::OpusTimestamp}, 2).count == 1,
+              "fractional Opus time just beyond sixty seconds resynchronizes");
+        buffer.reset();
+        buffer.add(15, {0xffffffffu, 0, true, true, Kind::OpusTimestamp}, 0);
+        check(buffer.add(0, {0, 1, true, true, Kind::OpusTimestamp}, 1).count == 1,
+              "ordinary seconds wrap remains forward progress");
+        buffer.reset();
+        buffer.add(0, {100, 12, true, false, Kind::DisplayFrame}, 0);
+        check(buffer.add(1, {92, 0, true, false, Kind::DisplayFrame}, 1).count == 0,
+              "display frames within the assembler lookback remain stale");
+        check(buffer.add(9, {91, 0, true, false, Kind::DisplayFrame}, 2).count == 1,
+              "display counter restarts resume accounting without invented loss");
+        check(buffer.add(10, {92, 0, true, false, Kind::DisplayFrame}, 3).count == 1,
+              "display accounting continues after a counter reset");
     }
     for (bool timestamps : {false, true}) {
         checkOverlappingGaps(timestamps);

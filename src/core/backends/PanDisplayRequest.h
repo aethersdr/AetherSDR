@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AudioControlRequest.h"
+
 #include <QMetaType>
 #include <QSet>
 #include <QString>
@@ -20,11 +22,20 @@ struct PanPixelDimensions { int width; int height; };
 
 enum class PanDisplayField {
     Geometry, Band, LevelRange, Pixels, SpectrumPoints, Average, FrameRate,
-    WeightedAverage, RfGain, Wnb, WnbLevel, LoopA, LoopB, NoiseFloorPosition, NoiseFloorEnabled,
+    WeightedAverage, RfGain, Wnb, WnbLevel, LoopA, LoopB, NoiseFloorPosition, NoiseFloorEnabled, DaxIqChannel,
     WaterfallRate, WaterfallColorGain, WaterfallBlackLevel, WaterfallAutoBlack,
     WaterfallDefaults, Count
 };
 enum class PanGeometryComponent { Center, Bandwidth };
+
+// How a native-span band/segment zoom can be placed in the scope's current
+// mode. The backend owns the mode, so it says which request the radio honors.
+enum class PanZoomPlacement {
+    Unknown,           // mode not reported yet: zoom waits
+    FitAroundCenter,   // span only, around the radio's center (Icom Center)
+    CenterAllocation,  // center and width both honored (SCROLL-F, our Fixed)
+    Unavailable,       // the radio owns the edges (an operator Fixed preset)
+};
 
 struct PanDisplayControl {
     QSet<PanDisplayField> fields;
@@ -36,6 +47,7 @@ struct PanDisplayControl {
 struct PanDisplayRequest {
     PanDisplayField field{PanDisplayField::Count};
     std::variant<int, bool, QString, PanGeometryRequest, PanLevelRange, PanPixelDimensions> value;
+    AudioControlGuard guard{}; // IQ binding also fences the terminal transport write.
 
     bool targetsWaterfall() const
     {
@@ -84,6 +96,7 @@ struct PanDisplayRequest {
         const int* number = std::get_if<int>(&value);
         if (!number) { return false; }
         switch (field) {
+        case Field::DaxIqChannel: return *number >= 0 && *number <= 4;
         case Field::SpectrumPoints: return *number > 0 && *number <= 65535;
         case Field::FrameRate: return *number > 0 && *number <= 100;
         case Field::Average: case Field::WnbLevel: case Field::WaterfallColorGain:
@@ -99,3 +112,4 @@ struct PanDisplayRequest {
 } // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::PanDisplayRequest)
+Q_DECLARE_METATYPE(AetherSDR::PanZoomPlacement)

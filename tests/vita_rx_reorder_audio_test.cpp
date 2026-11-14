@@ -209,6 +209,39 @@ int main(int argc, char** argv)
             check(off.samples.size() == (120 - missing) * 240 * 2 && off.losses == missing,
                   "PLC toggle preserves loss accounting and surviving audio");
         }
+        for (int missing = 1; missing <= 15; ++missing) {
+            std::vector<std::pair<int, qint64>> compressed;
+            std::vector<int> expectedOrder;
+            for (int i = 0; i < 30 + missing; ++i) {
+                if (i >= 10 && i < 10 + missing) {
+                    continue;
+                }
+                expectedOrder.push_back(i);
+                // Keyless counts reused within 30 ms cannot be distinguished
+                // from late copies of recently resolved packets.
+                const qint64 recovery = pcc != 0x8005 && missing >= 13 ? 120 : 91;
+                compressed.emplace_back(i, i < 10 ? i * 10 : recovery + i - 10 - missing);
+            }
+            const Run burst = runAt(input, compressed);
+            const Run paced = run(input, expectedOrder, true, 1);
+            const Run withoutPlc = runAt(input, compressed, false);
+            check(burst.losses == missing && burst.breaks == 1
+                  && burst.samples == paced.samples,
+                  "compressed loss recovery keeps every survivor and the same capped concealment");
+            check(withoutPlc.losses == missing && withoutPlc.samples.size() == 30 * 240 * 2,
+                  "compressed loss recovery with PLC disabled delivers every survivor");
+        }
+        if (pcc == 0x8005) {
+            std::vector<QByteArray> stepped = input;
+            for (int i = 40; i < 120; ++i) {
+                auto* raw = reinterpret_cast<uchar*>(stepped[i].data());
+                qToBigEndian<quint32>(qFromBigEndian<quint32>(raw + 16) - 61, raw + 16);
+            }
+            const Run clockReset = run(stepped, ordered);
+            check(clockReset.samples == clean.samples && clockReset.losses == 0
+                  && clockReset.reordered == 0,
+                  "real Opus decoding resumes immediately after a large backward clock adjustment");
+        }
         if (pcc == 0x8005) {
             for (quint16 otherPcc : {quint16{0x03e3}, quint16{0x0123}}) {
                 PanadapterStream stream;

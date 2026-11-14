@@ -1,8 +1,11 @@
 #pragma once
+#include <functional>
+#include <utility>
 #include <QAudioFormat>
 #include <QAudioSource>
 #include <QIODevice>
 #include <QObject>
+#include <QPointer>
 #include <QVector>
 #include <QByteArray>
 #include <algorithm>
@@ -63,8 +66,7 @@ public:
     void  setFreqOffsetHz(float offsetHz);
     float maxFreqOffsetHz() const;
 
-signals:
-    void commandReady(const QString& cmd);
+    void setIqPanBinder(std::function<bool(const QString&, int)> binder) { m_iqPanBinder = std::move(binder); }
 
 public slots:
     void onIqSamples(int channel, QVector<float> iqInterleaved, int sampleRate);
@@ -74,10 +76,12 @@ private slots:
     void onDaxIqPcm(const QByteArray& pcm);
 
 private:
+    std::function<bool(const QString&, int)> m_iqPanBinder;
+    quint64 m_iqRevision{0};
     void ensureDsp(int iqRateHz);
     void processIqFloat(const float* iq, int frames);
 
-    DaxIqModel*         m_daxIq{nullptr};
+    QPointer<DaxIqModel> m_daxIq;
     WaveOutWriter*      m_waveOut{nullptr};
     QAudioSource*       m_iqSource{nullptr};
     DaxIqCaptureDevice* m_iqDevice{nullptr};

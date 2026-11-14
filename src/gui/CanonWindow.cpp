@@ -85,6 +85,16 @@ CanonWindow::CanonWindow(const QString& title, QWidget* parent, Kind kind)
     });
 }
 
+void CanonWindow::showAndActivate()
+{
+    if (isMinimized()) {
+        setWindowState(windowState() & ~Qt::WindowMinimized);
+    }
+    show();
+    raise();
+    activateWindow();
+}
+
 void CanonWindow::resizeEvent(QResizeEvent* event)
 {
     QDialog::resizeEvent(event);

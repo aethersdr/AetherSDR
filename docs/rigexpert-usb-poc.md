@@ -1,4 +1,4 @@
-# AetherLab Stick Pro USB proof of concept
+# AetherLab RigExpert Stick USB proof of concept
 
 Implementation for [RFC #6471](https://github.com/aethersdr/AetherSDR/issues/6471).
 The operator reported verbal maintainer approval on 2026-10-14; this branch
@@ -23,7 +23,7 @@ bandwidth/resonance analysis, Touchstone,
 BLE, serial models, stored device sweeps, calibration controls, firmware update,
 and a station-wide TX interlock are deferred.
 
-Protocol authority is RigExpert's MIT-licensed
+The initial protocol authority is RigExpert's published
 [AntScope2 at 901923c3029e661385fdf88dc7b089cc2263f609](https://github.com/rigexpert/AntScope2/tree/901923c3029e661385fdf88dc7b089cc2263f609),
 especially [hid_analyzer.cpp](https://github.com/rigexpert/AntScope2/blob/901923c3029e661385fdf88dc7b089cc2263f609/analyzer/hid_analyzer.cpp)
 and `baseanalyzer.cpp`. The implementation is independently written from that
@@ -33,6 +33,29 @@ contains the source index, vectors, transport differences and open questions.
 Stick Pro range comes from the
 [manufacturer manual](https://rigexpert.com/files/product_documentation/Stick-Pro/Manual-en.pdf).
 
+Additional Stick model identities, both serial-prefix revisions, and frequency
+limits follow RigExpert's public
+[AntScope2 model registry](https://github.com/rigexpert/AntScope2/blob/master/analyzer/analyzerparameters.h)
+and [HID discovery/driver](https://github.com/rigexpert/AntScope2/blob/master/analyzer/hid_analyzer.cpp).
+The Stick family shares the normal-mode HID path and FQ → SW → FRX command
+flow. These protocol facts inform an independently written implementation;
+no vendor source is copied or vendored.
+
+| Model | Serial prefixes | Range | Model qualification |
+|---|---|---|---|
+| Stick 230 | 4230 / 4231 | 0.1–230 MHz | Experimental — hardware testing pending |
+| Stick 500 | 4500 / 4501 | 0.1–500 MHz | Experimental — hardware testing pending |
+| Stick Pro | 4600 / 4601 | 0.1–600 MHz | Limited bench evidence below; broader qualification pending |
+| Stick XPro | 4999 / 4998 | 0.1–1000 MHz | Experimental — hardware testing pending |
+
+`RigExpertHidTransport::models()` is the shared model registry used by
+USB discovery, model validation, UI limits and exported/bridge metadata.
+The `experimental` flag identifies the three additions awaiting hardware tests;
+`false` for the Pro does not promote this proof of concept to fully qualified
+support. Model-specific firmware quirks and error guidance remain scoped to
+models with evidence. The bounded identity-metadata length path is retained;
+measurement reports keep strict lengths for every model.
+
 ## Ownership and transport
 
 `AntennaAnalyzerModel` owns the protocol state, deadlines, trace, and measured
@@ -41,9 +64,9 @@ injectable I/O boundary; its production implementation owns hidapi calls on one
 I/O thread. No radio objects, settings persistence, transceiver commands, audio,
 or spectrum subscriptions are changed.
 
-Explicit discovery enumerates normal-mode VID `0483`, PID `A1DE`, serial prefix
-`4600` or `4601`, preserving the complete serial and interface path. Bootloader
-PID `A1DA` and other model prefixes are excluded. The operator selects an
+Explicit discovery enumerates normal-mode VID `0483`, PID `A1DE`, and only
+the Stick serial prefixes in the table above, preserving the complete serial
+and interface path. Bootloader PID `A1DA` and other model prefixes are excluded. The operator selects an
 interface and connects explicitly. A per-path `QLockFile` excludes another
 AetherSDR instrument session on the same host. It cannot detect AntScope or
 other applications: close those before testing. Multiple HID interfaces are
@@ -75,7 +98,9 @@ from an overclaimed measurement report.
 ## State machine
 
 1. Connect → `identifying`; send `VER\r\n`.
-2. A full `Stick Pro <version> ...` identity → send `FULLINFO\r\n`.
+2. A full `<selected Stick model> <version> ...` identity → send `FULLINFO\r\n`.
+   The VER model must match the USB serial-prefix model; a different Stick
+   identity fails and closes USB before any measurement command.
 3. After 500 ms without another identity/info line → `ready`. The identity
    must exist; this quiet period is a host heuristic for optional FULLINFO,
    not a protocol-defined completion ACK. Identification fails after 3 s
@@ -125,7 +150,7 @@ unconfirmed after either an error or stop.
 
 | Surface | Bound / behavior | Evidence |
 |---|---|---|
-| Sweep frequency | 100,000–600,000,000 Hz inclusive | Manufacturer range; USB stepping unqualified |
+| Sweep frequency | Model-specific range in the table above, inclusive | Manufacturer ranges; USB stepping unqualified |
 | Span | Positive, even integer Hz; start < stop | Host requirement to represent exact integer center/endpoints |
 | FRX N | 1–1000; span at least N Hz | Host cap, **not** a discovered firmware maximum |
 | Expected rows | N + 1; at most 1001 samples | Observed for N=1, 2, 10, 200 at 14.000–14.350 MHz on the tested Stick Pro 108; other settings unqualified |
@@ -167,7 +192,7 @@ unit-label discrepancy does not change wire R/X or host scaling.
 
 ## RF and automation
 
-The Stick Pro emits measurement RF. Physical isolation from transceiver TX is
+Every supported Stick model emits measurement RF. Physical isolation from transceiver TX is
 required. The manual UI requires **Analyzer RF port is isolated from
 transmitters**, reset on each connection. There is **no station TX interlock**
 in this PoC. `off`, a HID write receipt and USB close do not establish physical
@@ -195,6 +220,14 @@ the isolation checkbox.
 Observe-only mode permits status, enumeration and stop, but blocks
 connect, acquisition and disconnect. Stop remains available when permission is absent.
 Bridge responses also report `automationRfAllowed` without starting a sweep.
+Snapshots and saved sessions include `model`, `experimental`,
+`minFrequencyHz`, `maxFrequencyHz`, and `identityVerified`. Each `devices`
+entry carries model, experimental status and limits; `supportedModels` lists
+the four available model profiles even without attached hardware. Session
+metadata survives completion/disconnect with the samples. Sweep requests and
+returned frequencies are checked against the selected model; the stateless
+impedance helper accepts the whole supported family envelope.
+
 Authentication uses the existing automation token. The existing MCP
 `bridge_command` tool accepts `{"request":{"cmd":"lab","action":"status"}}`
 and the corresponding action/value fields for the other commands.
@@ -261,7 +294,7 @@ Calibration provenance, independent accuracy and physical RF silence remain open
 
 ## macOS hardware qualification
 
-Start with a normal-mode USB Stick Pro, firmware/model/serial recorded, a
+Start with a normal-mode USB Stick from the table above, firmware/model/serial recorded, a
 known 50 Ω load or an isolated antenna, and AntScope closed. Inspect the active
 radio's use/lock state and honor the live-radio procedure before touching it;
 this test does not need a transceiver connection. Initial read-only discovery

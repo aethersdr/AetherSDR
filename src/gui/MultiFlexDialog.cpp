@@ -133,7 +133,7 @@ MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
     m_enableBtn = new QPushButton;
     m_enableBtn->setObjectName(QStringLiteral("multiFlexEnableButton"));
     connect(m_enableBtn, &QPushButton::clicked, this, [this]() {
-        m_model->setMultiFlexEnabled(!m_model->multiFlexEnabled());
+        m_model->setMultiFlexEnabled(!m_model->multiFlexRequested());
         refresh();
     });
     btnRow->addWidget(m_enableBtn);
@@ -195,7 +195,12 @@ void MultiFlexDialog::refresh()
     m_refreshing = true;
 
     // Enable button: green when on, red when off (the sheet's multiFlexOn rules)
-    bool enabled = m_model->multiFlexEnabled();
+    bool enabled = m_model->multiFlexRequested();
+    const bool available = m_model->administrationSettingAvailable(RadioSetupField::MultiFlexEnabled);
+    m_enableBtn->setEnabled(available);
+    m_enableBtn->setAccessibleDescription(available ? QString()
+        : tr("Requires confirmed multiFLEX status from a connected radio."));
+    m_enableBtn->setToolTip(m_enableBtn->accessibleDescription());
     m_enableBtn->setText(enabled ? "Enabled" : "Disabled");
     if (m_enableBtn->property("multiFlexOn") != QVariant(enabled)) {
         m_enableBtn->setProperty("multiFlexOn", enabled);

@@ -290,7 +290,7 @@ void testUdevRuleInEffect()
     const QString current = QStringLiteral("current rule\n");
     const auto put = [&name](const QString& dir, const QString& text) {
         QFile f(dir + QLatin1Char('/') + name);
-        f.open(QIODevice::WriteOnly);
+        check(f.open(QIODevice::WriteOnly), "the fixture rule file can be written");
         f.write(text.toUtf8());
     };
     check(!AetherSDR::udevRuleInEffect(dirs, name, current), "no copy: not installed");

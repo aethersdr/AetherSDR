@@ -44,7 +44,7 @@ struct Box {
     int run(std::function<void(CanonMessageBox&)> act)
     {
         QTimer::singleShot(0, &box, [this, act] {
-            QTest::qWaitForWindowExposed(&box);
+            EXPECT_TRUE(QTest::qWaitForWindowExposed(&box));
             act(box);
         });
         return box.exec();

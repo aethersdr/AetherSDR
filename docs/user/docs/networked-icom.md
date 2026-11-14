@@ -45,9 +45,9 @@ Enable network (remote) control and create a network user name and password. Aet
 
 ### Connecting
 
-Networked Icoms are not discovered automatically. Open **File → Connect to Radio...**, choose **Connect by IP** and set **Radio type:** to **Icom (network)**. The form gains these rows:
+Networked Icoms are not discovered automatically. Open **File → Connect to Radio...**, choose **+ Add radio by IP** and set **Radio type:** to **Icom (network)**. The form gains these rows:
 
-<img src="/img/screens/connect-icom-rows.png" width="734" alt="Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander." />
+<img src="/img/screens/connect-icom-rows.png" width="912" alt="Radio IP address group with Radio type: Icom (network), Radio IP: 192.0.2.30, empty Icom user and Icom password fields, Icom ports: Standard (50001–50003), Icom CI-V: Auto-detect (recommended), Network Diagnostics and Connect by IP buttons, and an Advanced: choose the VPN source path expander." />
 
 *Connect by IP with Radio type set to Icom (network): the Icom user, password, ports and CI-V rows appear.*
 
@@ -74,7 +74,7 @@ AetherSDR treats an Icom differently from a FlexRadio:
 
 What you can do:
 
-- **Panadapter** from the radio's own scope. Every Icom has **one panadapter**.
+- **Panadapter** from the radio's own scope. A recognized model with scope support has **one panadapter**. Until the model is identified, or if it has no supported scope, its capacity is zero: **Tools → Add Panadapter...** is unavailable, and the status-bar **Add Panadapter** shortcut reports the capacity limit without opening the layout chooser.
 - **Receive and transmit:** RX audio, transmit, RF gain, preamp and attenuator (each separate from the display's RF gain), AF gain, TX monitor, VOX, RIT/XIT, manual notch and the ATU on models that have one. TUNE power changes made during a tune are kept.
 - **Filters:** the radio's real IF width is read back, the filter buttons are ordered narrow to wide for the mode, twin PBT is supported, and TX low/high cut follow what the model supports.
 - **Status bar:** the radio's **Network Radio Name** (the name set in its network settings) is shown, separate from model and callsign.

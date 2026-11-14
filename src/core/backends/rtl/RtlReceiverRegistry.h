@@ -86,6 +86,9 @@ public:
         // Fixed-size first-failure observation; acquisition context only, or
         // after acquisition has stopped. Reading does not acknowledge/reset it.
         virtual std::optional<ProcessingFailure> processingFailure() const noexcept { return std::nullopt; }
+        // Offline tests only, between acquisition callbacks. True when all
+        // submitted whole DSP blocks have replenished their output credits.
+        virtual bool outputSettledForTest() const noexcept { return true; }
     };
     class AudioSink {
     public:
@@ -143,6 +146,8 @@ public:
         bool processBlock(const SampleBlock& block, BlockProcessor& processor,
                           std::uint64_t adoptionRevision = 0) noexcept;
         std::uint64_t activeRevision() const noexcept;
+        // Same reader owner, between callbacks; no publication or clock advance.
+        bool outputSettledForTest() const noexcept;
         // Acquisition context only (or its owner while acquisition is stopped).
         bool adoptPrepared(std::uint64_t session, const Capture& capture,
                            std::uint64_t revision) noexcept;
