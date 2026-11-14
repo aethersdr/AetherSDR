@@ -12,6 +12,8 @@ The same group at the bottom of the **Tools** menu has two related diagnostic wi
 
 ## Using the Runtime Monitor
 
+The Runtime Monitor is a window of its own that can stay open on another monitor while you operate, and it reopens at the size and place you left it. Drag any empty part of it to move it, or an edge to resize it. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux); choosing **Runtime Monitor...** while it is open brings it to the front. It samples only while it is open.
+
 A **Timeframe** selector in the window header (1 minute, 5 minutes (default), 15 minutes or 1 hour) applies to every chart. It is hidden on the Threads and Logs tabs, which have no adjustable time axis.
 
 ### Overview
@@ -60,12 +62,28 @@ To capture more detail, turn on the **Performance** and **Render** categories in
 
 **Tools → Radio Health...** lists the health and status registers that the connected radio itself reports, refreshed every 500 ms. A dash means the radio has not reported that value, which is not the same as zero. **Copy** puts the whole table on the clipboard as text for a bug report.
 
+It is a window of its own that can sit on another monitor while you operate. Drag any empty part of it to move it, or an edge to resize it; it reopens at the same size and place. Close it with the round **✕** in its top-right corner, **Esc**, or **⌘W** (**Ctrl+W** on Windows and Linux). Choosing **Tools → Radio Health...** while it is open brings it to the front. It reads the radio only while it is on screen.
+
 What appears depends on the radio:
 
 - **FlexRadio:** Flex radios do not publish health registers through this window, so it reads "This radio reports no health registers." Use the **MTR** (Radio Vitals) applet for PA temperature, fan speed and supply voltage. See [Meters](./meters.md).
-- **[Hermes-Lite 2](./hermes-lite-2.md):** link, temperature, supply, PA current and gateware, a transmit voice-chain section (mic level and gain, ALC, forward power) and converter (ADC) rows. Some rows, such as whether another client is holding the radio, whether it is reachable and its PA temperature, are available even before you connect.
+- **[Hermes-Lite 2](./hermes-lite-2.md):** link, temperature, supply, PA current and gateware, a transmit voice-chain section (mic level and gain, ALC, forward power) and converter (ADC) rows, plus the directional-coupler rows described in [SWR and the forward-power gate](#swr-and-the-forward-power-gate). Some rows, such as whether another client is holding the radio, whether it is reachable and its PA temperature, are available even before you connect.
 - **[Networked Icom](./networked-icom.md):** includes the DATA OFF MOD and DATA MOD input selections and the MIC/USB/ACC/WLAN/LAN levels.
 - **[RTL-SDR](./rtl-sdr.md):** the capture window (center, rate and edges) and receive-pipeline counters such as queue drops and late frames.
+
+### SWR and the forward-power gate
+
+On a [Hermes-Lite 2](./hermes-lite-2.md), the **Directional coupler (uncalibrated)** section shows an **SWR** row that is deliberately blank at low power. SWR is a ratio of two small ADC readings, so near zero output it is noise rather than a measurement, and AetherSDR withholds it instead of showing a number you cannot trust. Three rows tell you where you stand:
+
+| Row | What it means |
+|-----|---------------|
+| **Forward counts required for SWR** | The threshold the forward reading must reach before SWR is published. Below it, the **SWR** row stays blank by design. |
+| **Keyed windows clearing the SWR gate** | How many readings in this transmission were due an SWR measurement. **0** means SWR has not been measured yet this transmission; any higher number means it has. Reset each time you key. |
+| **Forward (raw counts, window peak)** | The highest forward reading seen, so you can tell whether you are just short of the threshold or far below it. |
+
+**A peak above the threshold does not mean SWR was measured.** AetherSDR also holds SWR back for the first moments of each transmission and through pauses in speech, when the reading would describe the start of the carrier or a gap rather than your antenna. On speech, peaks can sit well above the threshold while those readings are withheld. **Keyed windows clearing the SWR gate** is the row that answers the question: if it reads 0, no SWR measurement has been taken, however high the peak went.
+
+To get a reading, key a steady carrier into a load for a second or more, at a few watts: that is plenty on an HL2. If the count stays at 0 with the power slider at maximum, that points at the forward-power reading itself rather than at SWR. See [Before You Transmit](./before-you-transmit.md).
 
 Radio Health is a different thing from the **HLTH** (Antenna Health) applet, which trends SWR and forward power for your antenna system.
 

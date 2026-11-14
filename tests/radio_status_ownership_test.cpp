@@ -2,6 +2,7 @@
 #include "core/DaxTxPolicy.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
+#include "core/backends/flex/FlexStreamStatus.h"
 
 #include <cstdio>
 
@@ -157,6 +158,16 @@ void testOperatorTransmitGate()
           "CW mode does NOT run the timer");
 }
 
+// The remote-audio rule fed the stream facts the status ingress decodes.
+RemoteAudioRxAction applyRemoteAudioRxLine(RemoteAudioRxTracking& state, const QString& object,
+                                           const QMap<QString, QString>& kvs, quint32 ours,
+                                           bool allowUnknownOwner)
+{
+    const auto stream = flexStreamStatus(object, kvs);
+    return stream ? applyRemoteAudioRxStatus(state, *stream, ours, allowUnknownOwner)
+                  : RemoteAudioRxAction::NotRemoteAudio;
+}
+
 void testRemoteAudioRxTracking()
 {
     constexpr quint32 ours = 0x12345678;
@@ -166,7 +177,7 @@ void testRemoteAudioRxTracking()
         {QStringLiteral("type"), QStringLiteral("remote_audio_rx")},
         {QStringLiteral("client_handle"), QStringLiteral("0x87654321")}
     };
-    check(applyRemoteAudioRxStatus(state,
+    check(applyRemoteAudioRxLine(state,
                                    QStringLiteral("stream 0x0400000A"),
                                    otherRemoteAudio,
                                    ours,
@@ -177,7 +188,7 @@ void testRemoteAudioRxTracking()
     QMap<QString, QString> noOwnerRemoteAudio{
         {QStringLiteral("type"), QStringLiteral("remote_audio_rx")}
     };
-    check(applyRemoteAudioRxStatus(state,
+    check(applyRemoteAudioRxLine(state,
                                    QStringLiteral("stream 0x0400000A"),
                                    noOwnerRemoteAudio,
                                    ours,
@@ -185,7 +196,7 @@ void testRemoteAudioRxTracking()
           "remote_audio_rx without owner is deferred when other clients may exist");
     check(state.streamId == 0, "deferred remote_audio_rx does not set stream id");
 
-    check(applyRemoteAudioRxStatus(state,
+    check(applyRemoteAudioRxLine(state,
                                    QStringLiteral("stream 0x0400000A"),
                                    noOwnerRemoteAudio,
                                    ours,
@@ -200,7 +211,7 @@ void testRemoteAudioRxTracking()
         {QStringLiteral("client_handle"), QStringLiteral("0x12345678")},
         {QStringLiteral("compression"), QStringLiteral("NONE")}
     };
-    check(applyRemoteAudioRxStatus(state,
+    check(applyRemoteAudioRxLine(state,
                                    QStringLiteral("stream 0x0400000B"),
                                    ourRemoteAudio,
                                    ours,
@@ -211,14 +222,14 @@ void testRemoteAudioRxTracking()
     check(state.clientHandle == ours, "owned remote_audio_rx status records owner");
     check(state.compression == QStringLiteral("NONE"), "owned remote_audio_rx status records compression");
 
-    check(applyRemoteAudioRxStatus(state,
+    check(applyRemoteAudioRxLine(state,
                                    QStringLiteral("stream 0x0400000B"),
                                    QMap<QString, QString>{},
                                    ours,
                                    false) == RemoteAudioRxAction::Updated,
           "known remote_audio_rx can apply later status without type or owner");
 
-    check(applyRemoteAudioRxStatus(state,
+    check(applyRemoteAudioRxLine(state,
                                    QStringLiteral("stream 0x0400000B removed"),
                                    QMap<QString, QString>{},
                                    ours,

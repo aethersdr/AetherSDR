@@ -4,6 +4,7 @@
 #include "core/backends/flex/FlexReceiveData.h"
 #include "core/backends/flex/PanadapterStream.h"
 #include "models/RadioModel.h"
+#include "core/backends/flex/FlexStatusIngress.h"
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QJsonObject>
@@ -207,7 +208,8 @@ int main(int argc, char** argv)
     constexpr quint32 wf = 0xf2000001;
     stream->registerPanStream(pan);
     stream->registerWfStream(wf);
-    backend->decodeMeterStatus("5.src=SLC#5.num=0#5.nam=LEVEL#5.unit=dBm#6.src=RAD#6.nam=PATEMP#6.unit=degC");
+    backend->statusIngress()->deliverForTest(CommandParser::parseLine(QStringLiteral(
+        "S0|meter 5.src=SLC#5.num=0#5.nam=LEVEL#5.unit=dBm#6.src=RAD#6.nam=PATEMP#6.unit=degC")));
     const auto produce = [&](quint32 sequence) {
         QMetaObject::invokeMethod(stream, [&, sequence] {
             FlexReceiveDataTestAccess::fft(*stream, pan, sequence);

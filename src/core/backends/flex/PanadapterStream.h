@@ -36,8 +36,9 @@ class OpusCodec;
 // Receives all VITA-49 (ExtDataWithStream, type 3) datagrams on the single
 // "client udpport" and routes them by PacketClassCode (class ID bytes 14-15):
 //   0x03E3 float32 stereo / 0x0123 int16 mono / 0x8005 Opus → pcmFrameReady()
-//   0x8003 FFT → spectrumReady()   0x8004 waterfall tiles → waterfallRowReady()
-//   0x8002 meters → meterDataReady()   DAX audio/IQ by stream id; others dropped.
+//   0x8003 FFT, 0x8004 waterfall tiles and 0x8002 meters → the backend's
+//   FlexReceiveData (spectrumReady()/waterfallRowReady()/meterDataReady() only
+//   for a stream built without one); DAX audio/IQ by stream id; others dropped.
 // start(conn) binds a local UDP port; RadioModel registers it with
 // "client udpport <port>".
 
@@ -45,6 +46,7 @@ class PanadapterStream : public QObject {
     Q_OBJECT
     friend class FlexReceiveDataTestAccess;
     friend class TxOperationIntegrationTestAccess;
+    friend class FlexCwControlsTestAccess;
     friend class VitaDscpStreamTestAccess;
     friend class WanUdpKeepaliveTestAccess;
     friend class WanUdpKeepaliveSocketTestAccess;

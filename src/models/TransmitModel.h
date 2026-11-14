@@ -1,6 +1,7 @@
 #pragma once
 #include "core/backends/ModelControlRequest.h"
 #include <array>
+#include <optional>
 #include <QPointer>
 
 #include <QObject>
@@ -209,6 +210,9 @@ public:
     QString txSliceMode()     const { return m_txSliceMode; }
     bool tuneAvailable() const { return m_tuneAvailable; }
     void setTuneAvailable(bool available);
+    // Whether the selected TX antenna passes through the internal ATU.
+    bool atuAvailable() const { return m_atuAvailable; }
+    void setAtuAvailable(bool available);
     bool    showTxInWaterfall() const { return m_showTxInWaterfall; }
 
     // ── APD getters ─────────────────────────────────────────────────────────
@@ -402,6 +406,8 @@ public:
 
     // ── Mic / monitor / processor commands ────────────────────────────────
     void setMicSelection(const QString& input);
+    quint64 micSelectionIntentRevision() const
+    { return m_controlIntentRevisions[static_cast<size_t>(TransmitControlRequest::Field::MicInput)]; }
     void setMicLevel(int level);
     void setMicAcc(bool on);
     void setSpeechProcessorEnable(bool on);
@@ -473,6 +479,9 @@ public:
     // Receive-only engines acknowledge pitch after their DSP bank is adopted.
     void setReceiveCwPitchConfirmation(bool confirmed) { m_confirmReceiveCwPitch = confirmed; }
     bool confirmsReceiveCwPitch() const { return m_confirmReceiveCwPitch; }
+    // The pitch last carried by an applied delta this session (a backend report
+    // or a restored state); the local setter never sets it. Empty after reset.
+    std::optional<int> reportedCwPitch() const { return m_reportedCwPitch; }
     void setCwBreakIn(bool on);
     void setCwDelay(int ms);
     void setCwSidetone(bool on);
@@ -518,6 +527,7 @@ signals:
     void hasTunerMemoriesChanged(bool present);
     void tuneChanged(bool tuning);
     void tuneAvailabilityChanged(bool available);
+    void atuAvailabilityChanged(bool available);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
     // OR from setTransmitting() (interlock-driven: CW break-in, VOX, footswitch).
@@ -718,6 +728,7 @@ private:
     // CW state
     int  m_cwSpeed{20};       // 5–100 WPM
     bool    m_confirmReceiveCwPitch{false};
+    std::optional<int> m_reportedCwPitch;
     int  m_cwPitch{600};      // 100–6000 Hz
     bool m_cwBreakIn{false};
     int  m_cwDelay{500};      // 0–2000 ms
@@ -752,6 +763,7 @@ private:
     int     m_maxPowerLevel{100};
     QString m_tuneMode{"single_tone"};
     bool m_tuneAvailable = true;
+    bool m_atuAvailable = true;
     QString m_txSliceMode;   // empty until first transmit status; "FDVU", "FDVL", "USB", etc.
     bool    m_showTxInWaterfall{false};
 

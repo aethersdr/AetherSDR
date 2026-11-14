@@ -51,8 +51,8 @@ void FlexBackend::drainReceiveData(quint64 generation)
             } else if constexpr (std::is_same_v<Payload, ReceiveMeterBatch>) {
                 emit owner->receiveMetersReady(payload);
             } else {
+                // Read on demand through receiveTelemetry().
                 owner->m_receiveTelemetry = payload;
-                emit owner->receiveTelemetryReady(payload);
             }
         }, event);
     }

@@ -56,7 +56,7 @@ public:
     bool isTransmitting() const;
     void abortTransmission(const QString& reason);
 
-    // Re-resolve the binding after a licence or capability change. Deferred
+    // Re-resolve the binding after a license or capability change. Deferred
     // while the bound keyer is busy, so a swap never lands mid-transmission.
     void refreshBinding();
 

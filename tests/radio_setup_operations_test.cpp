@@ -13,6 +13,7 @@
 #include <QPushButton>
 #include <QPointer>
 #include <QSignalSpy>
+#include <QSlider>
 #include <QTabWidget>
 #include <QtTest>
 
@@ -51,6 +52,48 @@ QGroupBox* groupNamed(QWidget& root, const QString& title)
 class RadioSetupOperationsTest : public QObject {
     Q_OBJECT
 private slots:
+    void setupObservationsRefreshWithoutSendingAndRetireEditors()
+    {
+        RadioModel radio;
+        RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
+        RadioSetupControlTestAccess::transverter(radio, 2);
+        RadioSetupDialog dialog(&radio);
+        dialog.selectTab(QStringLiteral("Filters"));
+        QSlider* level = dialog.findChild<QSlider*>(QStringLiteral("filterSharpnessVoiceLevel"));
+        QPushButton* automatic = dialog.findChild<QPushButton*>(QStringLiteral("filterSharpnessVoiceAuto"));
+        QVERIFY(level && automatic);
+        backend->commands.clear();
+        FlexSetupStatusTestPeer::deliver(radio, "radio filter_sharpness VOICE", {{"level", "3"}, {"auto_level", "1"}});
+        QCOMPARE(level->value(), 3);
+        QVERIFY(automatic->isChecked());
+        QVERIFY(!level->isEnabled());
+        QVERIFY(backend->commands.isEmpty());
+        dialog.selectTab(QStringLiteral("Transverters"));
+        QWidget* oldPage = nullptr;
+        for (QWidget* widget : dialog.findChildren<QWidget*>()) {
+            if (widget->property("transverterId").isValid() && widget->property("transverterId").toInt() == 2) {
+                oldPage = widget;
+                break;
+            }
+        }
+        QVERIFY(oldPage);
+        QLineEdit* oldName = editNextTo(*oldPage, QStringLiteral("Name:"));
+        QVERIFY(oldName);
+        FlexSetupStatusTestPeer::deliver(radio, "xvtr 2", {{"in_use", "0"}});
+        FlexSetupStatusTestPeer::deliver(radio, "xvtr 2", {{"name", "replacement"}});
+        oldName->setText(QStringLiteral("stale edit"));
+        emit oldName->editingFinished();
+        QVERIFY(backend->commands.isEmpty());
+        dialog.selectTab(QStringLiteral("Radio"));
+        FlexSetupStatusTestPeer::deliver(radio, "license", {{"radio_id", "abc"}, {"highest_major_version", "4"}});
+        QLabel* license = dialog.findChild<QLabel*>(QStringLiteral("licenseRadioIdValue"));
+        QVERIFY(license);
+        QCOMPARE(license->text(), QStringLiteral("ABC"));
+        FlexSetupStatusTestPeer::reset(radio);
+        QCOMPARE(license->text(), QString::fromUtf8("—"));
+        QVERIFY(backend->commands.isEmpty());
+    }
+
     void invalidCallsignEditPreservesSavedIdentity()
     {
         RadioModel radio;
@@ -108,11 +151,10 @@ private slots:
         QVERIFY(!start->isEnabled());
         backend->replyLast({RadioSetupReply::Kind::Accepted});
         QVERIFY(!start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        emit radio.frequencyCalibrationReported(true, QString());
         QVERIFY(!start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")},
-                                                            {QStringLiteral("freq_error_ppb"), QStringLiteral("-23")}});
+        emit radio.frequencyCalibrationReported(false, QString());
+        emit radio.frequencyCalibrationReported(true, QStringLiteral("-23"));
         QVERIFY(start->isEnabled());
         bool completed = false;
         for (QLabel* label : group->findChildren<QLabel*>()) {
@@ -154,8 +196,8 @@ private slots:
         backend->live = false;
         emit radio.connectionStateChanged(false);
         QVERIFY(start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        emit radio.frequencyCalibrationReported(false, QString());
+        emit radio.frequencyCalibrationReported(true, QString());
         bool disconnected = false;
         for (QLabel* label : group->findChildren<QLabel*>()) {
             disconnected |= label->text() == QStringLiteral("Disconnected");
@@ -191,12 +233,12 @@ private slots:
         backend->acceptCalibrationPrelude();
         backend->replyLast({RadioSetupReply::Kind::Accepted});
         QVERIFY(!start->isEnabled());
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("0")}});
-        emit radio.statusReceived(QStringLiteral("radio"), {{QStringLiteral("pll_done"), QStringLiteral("1")}});
+        emit radio.frequencyCalibrationReported(false, QString());
+        emit radio.frequencyCalibrationReported(true, QString());
         QVERIFY(start->isEnabled());
     }
 
-    void transverterCreationIsLifetimeAndSessionFenced()
+    void transverterCreationFollowsObservedInventory()
     {
         RadioModel radio;
         RadioSetupTestBackend* backend = installRadioSetupBackend(radio);
@@ -204,21 +246,31 @@ private slots:
         dialog->selectTab(QStringLiteral("Transverters"));
         QPushButton* create = buttonNamed(*dialog, QStringLiteral("Create New Transverter"));
         QVERIFY(create);
+        QTabWidget* inventory = nullptr;
+        for (QTabWidget* tabs : dialog->findChildren<QTabWidget*>()) {
+            if (tabs->count() && tabs->tabText(tabs->count() - 1) == QStringLiteral("+")) { inventory = tabs; }
+        }
+        QVERIFY(inventory);
         create->click();
         QCOMPARE(backend->commands, QStringList{"xvtr create"});
-        const RadioSetupCompletion response = backend->replies.back();
+        QCOMPARE(inventory->count(), 1);
+        QVERIFY(backend->replies.empty());
         RadioSetupControlTestAccess::transverter(radio, 2);
-        response({RadioSetupReply::Kind::Accepted});
+        QCOMPARE(inventory->count(), 2);
+        QCOMPARE(inventory->widget(0)->property("transverterId").toInt(), 2);
+        QCOMPARE(inventory->currentWidget(), inventory->widget(0));   // our Create's tab is selected
+        inventory->setCurrentWidget(create->parentWidget());
         backend = installRadioSetupBackend(radio);
+        QCOMPARE(inventory->count(), 1);
         RadioSetupControlTestAccess::transverter(radio, 3);
-        QTest::qWait(350);
-        QVERIFY(!editNextTo(*dialog, QStringLiteral("RF Freq (MHz):")));
+        QCOMPARE(inventory->count(), 2);
+        QCOMPARE(inventory->widget(0)->property("transverterId").toInt(), 3);
+        QCOMPARE(inventory->currentWidget(), create->parentWidget());   // only one tab per Create
         QVERIFY(backend->commands.isEmpty());
         create->click();
-        const RadioSetupCompletion closed = backend->replies.back();
         dialog.reset();
-        closed({RadioSetupReply::Kind::Accepted});
-        QTest::qWait(350);
+        RadioSetupControlTestAccess::transverter(radio, 4);
+        QCOMPARE(radio.xvtrList().size(), 2);
     }
 
     void transverterNameUsesTheRadioLimit()

@@ -422,6 +422,31 @@ void P2Client::setBandFiltersEnabled(bool on)
     }
 }
 
+void P2Client::setSpeakerAudioEnabled(bool on)
+{
+    if (on == m_speakerAudioEnabled) {
+        return;
+    }
+    m_speakerAudioEnabled = on;
+    m_speakerPending.clear();
+    m_speakerPacer.reset();
+    // As start() does: reports counted while nothing was sent are the radio's idle
+    // underflow, and would hide the first real one's warning.
+    m_speakerUnderflowReports = 0;
+    // The new stream's first overflow warns, and its FIFO reading is its own.
+    m_speakerOverflowLogged = false;
+    m_lastSpeakerFifoLevel = 0;
+    if (!m_running) {
+        return;   // start() picks the flag up
+    }
+    if (on) {
+        m_speakerClock.restart();
+        m_speakerDrainTimer->start();
+    } else {
+        m_speakerDrainTimer->stop();
+    }
+}
+
 void P2Client::setSpeakerAmpMuted(bool on)
 {
     m_speakerAmpMuted = on;

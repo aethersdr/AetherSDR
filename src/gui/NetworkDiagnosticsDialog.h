@@ -2,7 +2,7 @@
 
 #include "CanonWindow.h"
 #include "core/TailnetLinkTelemetry.h"
-#include "models/RadioModel.h"
+#include "core/ReceiveData.h"
 #include "models/DigitalVoiceWaveformHistory.h"
 
 #include <QComboBox>
@@ -25,6 +25,7 @@ class QTreeWidgetItem;
 
 namespace AetherSDR {
 
+class RadioModel;
 class AudioEngine;
 class TimeSeriesGraphWidget;
 class TciServer;

@@ -1,3 +1,4 @@
+#include "FlexDisplayStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/sim/SimBackend.h"
@@ -698,7 +699,8 @@ bool testSimBackendEndToEnd()
     const QJsonObject displayCadence =
         panValue.value(QStringLiteral("displayCadence")).toObject();
     if (!check(hasExactlyKeys(radioValue,
-                              {"id", "connected", "family", "identity", "capabilities", "meterDelivery"})
+                              {"id", "connected", "family", "identity", "capabilities", "meterDelivery",
+                               "receiveObservation"})
                    && hasExactlyKeys(identity,
                                      {"name", "model", "serial", "version", "manufacturer"})
                    && hasExactlyKeys(capabilities,
@@ -707,7 +709,9 @@ bool testSimBackendEndToEnd()
                                       "maximumTransmitWatts", "hasTuner", "hasAmplifier",
                                       "extensions", "sliceFrequencyControl", "receiveModeControl",
                                       "receiveFilterControl", "receiveAudioControl",
-                                      "receivePanCenterControl", "receivePanBandwidthControl"})
+                                      "receivePanCenterControl", "receivePanBandwidthControl",
+                                      "receiveCwPitchControl", "receiveDspControl",
+                                      "receivePanRfGainControl", "radioSpeakerControl"})
                    && hasExactlyKeys(sliceValue,
                                      {"id", "letter", "panadapterId", "owned",
                                       "frequencyHz", "frequencyObservation", "mode", "filter", "active",
@@ -725,7 +729,7 @@ bool testSimBackendEndToEnd()
                                      {"enabled", "level"})
                    && hasExactlyKeys(panValue,
                                      {"id", "centerHz", "centerKnown", "owned", "geometryObservation",
-                                      "bandwidthHz", "dbmRange", "bandwidthLimitsHz",
+                                      "rfGainObservation", "bandwidthHz", "dbmRange", "bandwidthLimitsHz",
                                       "receive", "displayCadence"})
                    && hasExactlyKeys(panValue.value(QStringLiteral("dbmRange")).toObject(),
                                      {"minimum", "maximum"})
@@ -738,7 +742,12 @@ bool testSimBackendEndToEnd()
                                      {"fps", "averageFrames", "averageIsRequest", "fpsIsRequest",
                                       "radioReportedAverage", "radioReportedFps", "weightedAverage",
                                       "weightedAverageKnown", "waterfallRate"}),
-               "SimBackend resources must match the complete documented v1 schemas")) {
+               "SimBackend resources must match the complete documented v1 schemas")
+        || !check(!panValue.value(QStringLiteral("rfGainObservation")).toObject()
+                       .value(QStringLiteral("known")).toBool()
+                  && panValue.value(QStringLiteral("rfGainObservation")).toObject()
+                       .value(QStringLiteral("authority")).toString() == QLatin1String("unknown"),
+                  "a backend with no RF-gain record publishes no RF-gain observation")) {
         radio.disconnectFromRadio();
         return false;
     }
@@ -839,7 +848,7 @@ bool testSimBackendEndToEnd()
     }
     // A same-value request still changes provenance; a same-value radio
     // report confirms it without needing a numeric-value signal.
-    modelPan->applyStateExtension({{"average", "17"}, {"fps", "15"}});
+    applyPanReport(*modelPan, {{"average", "17"}, {"fps", "15"}});
     drain(client);
     modelPan->setRequestedFftSettings(17, 15);
     const QJsonObject requested = store.get(panAddress)->value
@@ -852,7 +861,7 @@ bool testSimBackendEndToEnd()
         radio.disconnectFromRadio();
         return false;
     }
-    modelPan->applyStateExtension({{"average", "17"}, {"fps", "15"}});
+    applyPanReport(*modelPan, {{"average", "17"}, {"fps", "15"}});
     const QJsonObject confirmed = store.get(panAddress)->value
         .value(QStringLiteral("displayCadence")).toObject();
     if (!check(!confirmed.value(QStringLiteral("averageIsRequest")).toBool()
@@ -863,7 +872,7 @@ bool testSimBackendEndToEnd()
     }
     drain(client);
     const quint64 weightedRevision = store.get(panAddress)->revision;
-    modelPan->applyStateExtension(
+    applyPanReport(*modelPan,
         {{QStringLiteral("weighted_average"), QStringLiteral("0")}});
     const std::optional<ResourceSnapshot> reportedWeighted = store.get(panAddress);
     const QList<QJsonObject> weightedEvents = drain(client);
@@ -881,7 +890,7 @@ bool testSimBackendEndToEnd()
         return false;
     }
     const quint64 knownWeightedRevision = reportedWeighted->revision;
-    modelPan->applyStateExtension(
+    applyPanReport(*modelPan,
         {{QStringLiteral("weighted_average"), QStringLiteral("0")}});
     if (!check(store.get(panAddress)->revision == knownWeightedRevision
                    && drain(client).isEmpty(),

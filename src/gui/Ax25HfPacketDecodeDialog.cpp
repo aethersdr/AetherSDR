@@ -13,6 +13,7 @@
 #include "core/ThemeManager.h"
 #include "core/aprs/AprsBeacon.h"
 #include "models/AprsDigipeaterModel.h"
+#include "models/Data2gReceiveModel.h"
 #include "core/aprs/AprsMessenger.h"
 #include "core/aprs/AprsPacket.h"
 #include "core/aprs/AprsSettings.h"
@@ -32,6 +33,7 @@
 #include "core/tnc/TncTerminal.h"
 #include "core/pms/PmsMailbox.h"
 #include "gui/DStarModemPage.h"
+#include "gui/Data2gMonitorPage.h"
 #include "gui/DStarAvailabilityGate.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -946,6 +948,11 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_terminalTab->setEnabled(true);
     m_mailboxTab->setEnabled(true);
     m_dstarTab->setEnabled(true);
+    // Never advertise the tab in a build without the decoder.
+    if (Data2gReceiveModel::available()) {
+        m_data2gTab = tabButton(QStringLiteral("HF Data"), false, tabsFrame);
+        m_data2gTab->setEnabled(true);
+    }
     auto* tabGroup = new QButtonGroup(this);
     tabGroup->setExclusive(true);
     tabGroup->addButton(m_ax25Tab, 0);
@@ -954,12 +961,14 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     tabGroup->addButton(m_terminalTab, 3);
     tabGroup->addButton(m_mailboxTab, 4);
     tabGroup->addButton(m_dstarTab, 5);
+    if (m_data2gTab) { tabGroup->addButton(m_data2gTab, 6); }
     tabs->addWidget(m_ax25Tab, 1);
     tabs->addWidget(m_digiTab, 1);
     tabs->addWidget(m_kissTab, 1);
     tabs->addWidget(m_terminalTab, 1);
     tabs->addWidget(m_mailboxTab, 1);
     tabs->addWidget(m_dstarTab, 1);
+    if (m_data2gTab) { tabs->addWidget(m_data2gTab, 1); }
     root->addWidget(tabsFrame);
 
     m_tabStack = new QStackedWidget(bodyWidget());
@@ -1046,6 +1055,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         const QString text = m_txText->text();
         const TxCoordinator::Request input =
             controller->captureProgram(TxController::Activity::Mox).request();
+        if (m_radio && !txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input);
+        }
         return [this, text, input] { startTransmit(text, input); };
     });
     m_txButton->setMinimumHeight(42);
@@ -1068,6 +1080,13 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_tabStack->addWidget(buildMailboxPage());
     m_dstarPage = new DStarModemPage(m_radio, m_tabStack);
     m_tabStack->addWidget(m_dstarPage);
+
+    // HF Data: stack index 6, matching its tab button's group id.
+    if (m_data2gTab) {
+        m_data2g = std::make_unique<Data2gReceiveModel>();
+        m_data2gPage = new Data2gMonitorPage(m_data2g.get(), m_tabStack);
+        m_tabStack->addWidget(m_data2gPage);
+    }
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
     m_logFrame = logFrame;
@@ -1204,6 +1223,11 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         connect(m_receive.get(), &Ax25ReceiveModel::pcmReady, this,
             [this](const DecoderPcmBlock& block, const Ax25ReceiveContext& context) {
                 if (!context.current()) { return; }
+                // The same admitted mono24 source as the modem. The monitor
+                // resets when the stream itself changes, never for a gap in
+                // one stream or for a modem reset on unchanged audio, which
+                // would cost it the sessions it has learned.
+                if (m_data2g) { m_data2g->feedFrom(block.source.stream(), block.samples); }
                 handleRxAudio(QByteArray(reinterpret_cast<const char*>(block.samples.constData()),
                     block.samples.size() * static_cast<qsizetype>(sizeof(float))),
                     DecoderPcmBlock::kSampleRateHz, context);
@@ -1213,6 +1237,11 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             this, &Ax25HfPacketDecodeDialog::updateHeartbeat);
 
     if (m_radio) {
+        connect(m_radio, &RadioModel::daxTxOwnershipChanged, this, [this] {
+            if (m_txActive && !m_txRequest.valid()) {
+                finishTransmit(true, QStringLiteral("original TX request is no longer valid"));
+            }
+        });
         connect(m_radio, &RadioModel::txAudioStreamReady,
                 this, [this](quint32 streamId) {
             appendSystemLine(QStringLiteral("DAX TX stream ready: 0x%1.")
@@ -1259,6 +1288,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(m_pms, &PmsMailbox::transmitFrame, this, [this](const QByteArray& raw, const TxCoordinator::Request& input) {
         if (raw.isEmpty() || !input.valid() || !m_audio || !m_radio)
             return;
+        if (!txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input);
+        }
         m_digi->enqueue(raw, false, input);
     });
     connect(m_pms, &PmsMailbox::activity, this, &Ax25HfPacketDecodeDialog::appendSystemLine);
@@ -1307,6 +1339,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
                 applyDecodeEnabled(true);
             }
         }
+        if (!txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input);
+        }
         m_digi->enqueue(raw, false, input);
     };
     connect(m_aprsBeacon, &AprsBeacon::transmitFrame, this, enqueueAprsTx);
@@ -1333,6 +1368,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(m_terminal, &TncTerminal::transmitFrame, this, [this](const QByteArray& raw, const TxCoordinator::Request& input) {
         if (raw.isEmpty() || !input.valid() || !m_audio || !m_radio)
             return;
+        if (!txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input);
+        }
         m_digi->enqueue(raw, false, input);
     });
     connect(m_terminal, &TncTerminal::output, this, [this](const QString& text) {
@@ -2056,6 +2094,8 @@ void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
     // Retire receive work before any callback from shutdown/control cleanup.
     if (m_receive) { m_receive->setEnabled(enabled); }
     if (!guard) { return; }
+    // Receive only: the monitor follows the tap and holds no TX program.
+    if (m_data2gPage) { m_data2gPage->setModemEnabled(enabled && m_receive != nullptr); }
     if (!enabled) {
         for (std::size_t i = 0; i < m_txPrograms.size(); ++i) {
             (void)setTxProgram(static_cast<TxProgram>(i), false);
@@ -2349,6 +2389,9 @@ bool Ax25HfPacketDecodeDialog::setTxProgram(TxProgram program, bool enabled,
         }
         const TxController::Input root = controller ? input
             : owner->captureProgram(TxController::Activity::Mox);
+        if (m_radio && !txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(root.request());
+        }
         if (!root.valid() || !root.belongsTo(m_radio)) {
             return false;
         }
@@ -2397,10 +2440,15 @@ void Ax25HfPacketDecodeDialog::setDigiEnabled(bool enabled,
 
 void Ax25HfPacketDecodeDialog::configureTxActions()
 {
+    const auto noteDaxInput = [this](const TxCoordinator::Request& input) {
+        if (m_radio && !txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input);
+        }
+    };
     registerModemReceiveAction(m_enableDecode, [this](bool enabled,
         const std::shared_ptr<TxController>& controller, const TxController::Input& input) {
         setDecodeEnabledForAutomation(enabled, controller, input);
-    });
+    }, noteDaxInput);
     registerModemReceiveAction(m_tncEnable, [this](bool enabled,
         const std::shared_ptr<TxController>& controller, const TxController::Input& input) {
         if (m_tncEnable->isChecked() == enabled) { return; }
@@ -2413,7 +2461,7 @@ void Ax25HfPacketDecodeDialog::configureTxActions()
             m_tncEnable->setChecked(enabled);
         }
         setTncEnabled(enabled, true);
-    });
+    }, noteDaxInput);
     auto checkedValue = [](QCheckBox* box, const QString& action, const QString& value) {
         const QString normalized = value.trimmed().toLower();
         return action == QLatin1String("setChecked")
@@ -2435,6 +2483,9 @@ void Ax25HfPacketDecodeDialog::configureTxActions()
             }
             const bool on = checkedValue(box, action, value);
             const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+            if (on && m_radio && !txAudioBypassesDax()) {
+                m_radio->noteDaxTxInput(input.request());
+            }
             return [this, box, kind, controller, input, on] {
                 if (!setTxProgram(kind, on, controller, input)) { return; }
                 {
@@ -2455,6 +2506,9 @@ void Ax25HfPacketDecodeDialog::configureTxActions()
             return {};
         }
         const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        if (m_radio && !txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input.request());
+        }
         const QString line = m_terminalInput->text();
         return [this, controller, input, line] {
             if (setTxProgram(TxProgram::Terminal, true, controller, input)) {
@@ -2466,6 +2520,9 @@ void Ax25HfPacketDecodeDialog::configureTxActions()
             const QString& action, const QString&) -> TxKeyingAction::Prepared {
         if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) { return {}; }
         const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        if (m_radio && !txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input.request());
+        }
         const QString target = m_terminalTarget->text().trimmed();
         return [this, controller, input, target] {
             if (!target.isEmpty() && setTxProgram(TxProgram::Terminal, true, controller, input)) {
@@ -2477,6 +2534,9 @@ void Ax25HfPacketDecodeDialog::configureTxActions()
             const QString& action, const QString&) -> TxKeyingAction::Prepared {
         if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) { return {}; }
         const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        if (m_radio && !txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input.request());
+        }
         const QString to = m_aprsMsgTo->text().trimmed().toUpper();
         const QString text = m_aprsMsgText->text().trimmed();
         return [this, controller, input, to, text] {
@@ -2518,6 +2578,9 @@ void Ax25HfPacketDecodeDialog::configureTxActions()
                 || value == QLatin1String("on") || value == QLatin1String("yes")
             : !m_digiEnable->isChecked();
         const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        if (on && m_radio && !txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input.request());
+        }
         return [this, controller, input, on] { setDigiEnabled(on, controller, input); };
     });
     registerTxKeyingAction(m_digiBeaconNow, [this](const std::shared_ptr<TxController>& controller,
@@ -2540,6 +2603,9 @@ void Ax25HfPacketDecodeDialog::configureTxActions()
             return {};
         }
         const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        if (m_radio && !txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input.request());
+        }
         return [this, controller, input] {
             if (!m_enableDecode->isChecked()) {
                 (void)setTxProgram(TxProgram::Receive, true, controller, input);
@@ -2555,7 +2621,11 @@ void Ax25HfPacketDecodeDialog::startTransmit(const QString& text)
     if (m_radio && !m_txProducer.valid()) {
         m_txProducer = m_radio->registerTxProducer(this);
     }
-    startTransmit(text, m_txProducer.request());
+    const TxCoordinator::Request input = m_txProducer.request();
+    if (m_radio && !txAudioBypassesDax()) {
+        m_radio->noteDaxTxInput(input);
+    }
+    startTransmit(text, input);
 }
 
 void Ax25HfPacketDecodeDialog::startTransmit(const QString& text, TxCoordinator::Request input)
@@ -2593,6 +2663,9 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
     // (see armTxStreamWaitTimeout).
     ++m_txGeneration;
     m_txRequest = input;
+    if (m_radio && !txAudioBypassesDax()) {
+        m_radio->noteDaxTxInput(m_txRequest);
+    }
     if (!m_txRequest.valid()) {
         finishTransmit(true, QStringLiteral("transmit producer is unavailable"));
         return;
@@ -2839,7 +2912,7 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
             finishTransmit(true, QStringLiteral("PTT request was refused"));
             return;
         }
-        m_txContext = m_radio->captureTxMedia(request);
+        m_txContext = m_radio->captureDaxTxMedia(request);
         if (!m_txActive)
             return;
         if (waitsForRadioPtt) {
@@ -2904,8 +2977,13 @@ void Ax25HfPacketDecodeDialog::startTransmitAudioAfterPtt()
 
 void Ax25HfPacketDecodeDialog::paceTransmitAudio()
 {
-    if (!m_txActive || !m_audio)
+    if (!m_txActive || !m_audio) {
         return;
+    }
+    if (!m_txRequest.valid()) {
+        finishTransmit(true, QStringLiteral("original TX request is no longer valid"));
+        return;
+    }
 
     // Measure scheduling gap between pacer ticks. The pacer wants to fire every
     // kTxChunkMs; a much larger gap means the GUI thread stalled (heartbeat,
@@ -3664,6 +3742,9 @@ void Ax25HfPacketDecodeDialog::handleKissFrameFromClient(const QByteArray& ax25N
             << m_digi->size() << ").";
         return;
     }
+    if (!txAudioBypassesDax()) {
+        m_radio->noteDaxTxInput(input);
+    }
     m_digi->enqueue(ax25NoFcs, false, input);
     ++m_kissTxCount;
     refreshTncStatus();
@@ -4163,7 +4244,8 @@ void Ax25HfPacketDecodeDialog::updateTabChrome(int index)
     // keep the log panel below their controls.
     QWidget* page = m_tabStack ? m_tabStack->widget(index) : nullptr;
     const bool terminal = page == m_terminalPage;
-    const bool dstar = page == m_dstarPage;
+    // HF Data brings its own log and status strip, as D-STAR does.
+    const bool dstar = page == m_dstarPage || (m_data2gPage && page == m_data2gPage);
     const bool aprs = page == m_aprsPage;
     const bool digi = page == m_digiPage;
     const bool logVisible = !terminal && !dstar && !digi
@@ -4602,6 +4684,9 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
         const std::shared_ptr<TxController> controller = m_radio ? m_radio->localTxController() : nullptr;
         if (!controller) { return; }
         const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        if (m_radio && !txAudioBypassesDax()) {
+            m_radio->noteDaxTxInput(input.request());
+        }
         if (!m_enableDecode->isChecked()) {
             (void)setTxProgram(TxProgram::Receive, true, controller, input);
         }
@@ -4964,6 +5049,9 @@ void Ax25HfPacketDecodeDialog::sendAprsMessageFromUi()
     const std::shared_ptr<TxController> controller = m_radio ? m_radio->localTxController() : nullptr;
     if (!controller) { return; }
     const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+    if (m_radio && !txAudioBypassesDax()) {
+        m_radio->noteDaxTxInput(input.request());
+    }
     if (!m_enableDecode->isChecked()) {
         (void)setTxProgram(TxProgram::Receive, true, controller, input);
     }
