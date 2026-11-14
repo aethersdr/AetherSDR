@@ -640,9 +640,23 @@ def parse_shortcuts():
                          "forwards as category TX with keysTx=true")
     helper_pos = forwarded[0][0]
 
+    # The registry's publishShortcuts() callback forwards each declaration to
+    # registerAction; the declarations themselves are read from
+    # MainWindow_ControlActions.cpp (parse_control_actions).
+    pub = [p for p, _ in calls(src, r"\bm_controlActions\.publishShortcuts")]
+    if len(pub) != 1:
+        raise ParseError(f"{src.rel}: expected one m_controlActions.publishShortcuts(), "
+                         f"found {len(pub)}")
+    pub_open = src.code.index("(", pub[0])
+    pub_fwd = [p for p, _ in calls(src, r"\.registerAction", pub_open,
+                                   match_close(src.code, pub_open))]
+    if len(pub_fwd) != 1:
+        raise ParseError(f"{src.where(pub_open)}: publishShortcuts() should forward "
+                         f"through one registerAction call, found {len(pub_fwd)}")
+
     entries = []  # (pos, dict)
     for pos, args in calls(src, r"\.registerAction"):
-        if pos == helper_pos:
+        if pos in (helper_pos, pub_fwd[0]):
             continue
         where = src.where(pos)
         if len(args) < 5:
@@ -705,7 +719,7 @@ def parse_shortcuts():
     # Fail loudly on a registration the strict parser did not see.
     loose = len(re.findall(r"\bregisterAction\s*\(", src.code)) + \
         len(re.findall(r"(?<![\w.])registerTxShortcut\s*\(", src.code))
-    seen = len({pos for pos, _ in entries}) + 1  # + the helper's forwarding call
+    seen = len({pos for pos, _ in entries}) + 2  # + the two forwarding calls
     if loose != seen:
         raise ParseError(f"{src.rel}: {loose} registration sites, parsed {seen}")
 
