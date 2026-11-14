@@ -80,7 +80,7 @@ Either one shows or hides the panel, which docks under the waterfall of the acti
 
 ### When it is available
 
-- **Voice modes only:** USB, LSB, AM, SAM, FM, NFM and DFM. In CW, DIGU/DIGL and RTTY the toggle is dimmed.
+- **Voice modes only:** USB, LSB, AM, SAM, FM, NFM, DFM and wide FM (WFM/WBFM). In CW, DIGU/DIGL and RTTY the toggle is dimmed. Receive-only voice modes are available to Copy Assist even when they cannot use the voice keyer.
 - The mode check follows the **slice you have selected**, not the transmit slice. The CWX and DVK indicators follow the TX slice instead, so the three can legitimately disagree — with a CW transmit slice and a USB slice selected, CWX and ASR are both live.
 - Selecting a slice that is not in a voice mode closes the panel and stops transcription. To resume, select the voice slice, reopen the panel and enable it again.
 - A band-stack recall or a disconnect does **not** close an open panel, so transcription survives a band change.
@@ -165,7 +165,7 @@ Silero VAD and speaker labels need an ONNX Runtime build; the release builds inc
 
 The selected slice is not in a voice mode. Copy Assist follows the slice you have selected, not the transmit slice.
 
-1. Select a slice in USB, LSB, AM, SAM, FM, NFM or DFM.
+1. Select a slice in USB, LSB, AM, SAM, FM, NFM, DFM or wide FM (WFM/WBFM).
 2. Reopen the panel and click **Disabled** so it reads **Enabled**.
 
 ### The panel closed and transcription stopped

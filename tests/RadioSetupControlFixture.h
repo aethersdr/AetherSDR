@@ -1,4 +1,5 @@
 #pragma once
+#include "FlexSetupStatusTestSupport.h"
 
 #include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
@@ -20,7 +21,7 @@ public:
     }
     static void transverter(RadioModel& radio, int id)
     {
-        radio.handleStatusForTest(QStringLiteral("xvtr %1").arg(id),
+        FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("xvtr %1").arg(id),
             {{QStringLiteral("name"), QStringLiteral("2m")},
              {QStringLiteral("rf_freq"), QStringLiteral("144")},
              {QStringLiteral("if_freq"), QStringLiteral("28")}});
@@ -95,6 +96,14 @@ public:
             return true;
         });
         setModelProvider([] { return QStringLiteral("FLEX-6700"); });
+        setServiceCommandSink([this](const QString& command, const RadioControlFence& current, CommandReply completion) {
+            if (!live || !accept || (current && !current())) { return false; }
+            commands.append(command);
+            if (completion) {
+                replies.push_back([completion](const RadioSetupReply& reply) { completion(reply.code, reply.message); });
+            }
+            return true;
+        });
         setSetupCommandSink([this](const QString& command, const RadioSetupCompletion& completion) {
             if (!live || !accept) { return false; }
             commands.append(command);

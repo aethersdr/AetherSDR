@@ -16,6 +16,7 @@
 #include <QPushButton>
 #include <QDialog>
 #include <QTest>
+#include <QHostAddress>
 #include <QMenu>
 #include <QAction>
 #include <QDialogButtonBox>
@@ -30,6 +31,19 @@
 #include <cstring>
 
 namespace AetherSDR {
+struct ConnectionPanelWorkspaceTestAccess {
+    static QString station(const ConnectionPanel& panel) { return panel.m_pendingWorkspaceStation; }
+    static QJsonObject attemptOperator(const ConnectionPanel& panel) { return panel.m_attemptOperator; }
+    static void finish(ConnectionPanel& panel, const RadioInfo& info) { panel.finishManualProbe(info); }
+    static void connectSelection(ConnectionPanel& panel) { panel.connectWorkspaceSelection(); }
+    static void saveSelectedNearby(ConnectionPanel& panel) { panel.saveWorkspaceSelection(); }
+    static void latchIcom(ConnectionPanel& panel, const QString& id, const QString& host, const QString& user)
+    {
+        panel.latchIcomCredential(id, false, host, user);
+    }
+    static QString boundIcomId(const ConnectionPanel& panel) { return panel.boundIcomCredentialId(); }
+    static void markPrefilled(ConnectionPanel& panel) { panel.m_icomPasswordPrefilled = true; }
+};
 struct SmartLinkClientTestAccess {
     static void seed(SmartLinkClient& client)
     {
@@ -51,6 +65,8 @@ struct SmartLinkClientTestAccess {
         client.finishRefreshReply(reply, generation);
     }
     static QString refreshToken(const SmartLinkClient& client) { return client.m_refreshToken; }
+    static void cacheSession(SmartLinkClient& client, const QString& id) { client.m_sessionCredentials[id] = "cached-" + id; }
+    static bool cached(const SmartLinkClient& client, const QString& id) { return client.m_sessionCredentials.contains(id); }
 };
 struct ConnectionPanelSmartLinkTestAccess {
     static QString icomCredentialId(const ConnectionPanel& panel) { return panel.m_activeIcomCredentialId; }
@@ -285,7 +301,9 @@ int main(int argc, char** argv)
             && panel.findChild<QLabel*>("connectionOperatorWarning")->text().contains("system default")
             && audioChanges.first().first().toJsonObject() == savedPreferences);
         audioChanges.clear();
+        QSignalSpy availability(&panel, &ConnectionPanel::radioAvailabilityChanged);
         panel.addDemoRadio();
+        check("discovery publishes availability for the radio drawer", availability.count() == 1);
         // Reconnecting keeps current preferences after the explicit switch.
         QString error;
         panel.automationConnectLocalSerial("DEMO-0001", &error);
@@ -331,14 +349,23 @@ int main(int argc, char** argv)
                 && SmartLinkClientTestAccess::clean(client));
             const quint64 current = SmartLinkClientTestAccess::generation(client);
             SmartLinkClientTestAccess::seed(client);
+            SmartLinkClientTestAccess::cacheSession(client, secondAccount);
             CannedReply offline(QByteArray(), QNetworkReply::HostNotFoundError, 0);
             SmartLinkClientTestAccess::finishRefresh(client, &offline, current);
             check("a transport failure keeps the refresh token for the next retry", failures.count() == 1
-                && SmartLinkClientTestAccess::refreshToken(client) == "test-refresh");
+                && SmartLinkClientTestAccess::refreshToken(client) == "test-refresh"
+                && SmartLinkClientTestAccess::cached(client, secondAccount));
             CannedReply rejected(QByteArray(R"({"error_description":"expired"})"), QNetworkReply::ContentAccessDenied, 403);
             SmartLinkClientTestAccess::finishRefresh(client, &rejected, SmartLinkClientTestAccess::generation(client));
             check("an Auth0 rejection discards the refresh token", failures.count() == 2
                 && failures.last().first().toString() == "expired" && SmartLinkClientTestAccess::clean(client));
+            check("auto-login stops offering a token Auth0 rejected", !SmartLinkClientTestAccess::cached(client, secondAccount)
+                && SmartLinkClientTestAccess::retained(client));
+            SmartLinkClientTestAccess::seed(client);
+            SmartLinkClientTestAccess::cacheSession(client, secondAccount);
+            CannedReply throttled(QByteArray(R"({"error_description":"too many requests"})"), QNetworkReply::UnknownContentError, 429);
+            SmartLinkClientTestAccess::finishRefresh(client, &throttled, SmartLinkClientTestAccess::generation(client));
+            check("rate limiting does not forget a valid refresh token", SmartLinkClientTestAccess::cached(client, secondAccount));
         }
         client.setAccountLocked(true);
         client.setAccountId("legacy");
@@ -364,6 +391,8 @@ int main(int argc, char** argv)
             && radios->item(0)->text().startsWith("Shack radio\n")
             && radios->item(1)->text().startsWith("Unnamed radio\n")
             && radios->item(1)->text().contains("192.0.2.2"));
+        check("explicit path identity resolves that path within a grouped radio", panel.connectionTarget("address").value("path").toObject().value("id").toString() == "address"
+            && panel.connectionTarget("named").value("path").toObject().value("id").toString() == "named");
         for (Qt::Key key : {Qt::Key_Return, Qt::Key_Enter}) {
             const QJsonObject beforeRename = panel.workspaceSnapshot();
             panel.findChild<QPushButton*>("connectionRadioOptions")->click();
@@ -392,7 +421,7 @@ int main(int argc, char** argv)
         auto* radioMenu = panel.findChild<QMenu*>("connectionRadioMenu");
         QStringList actions;
         for (QAction* action : radioMenu->actions()) { if (!action->isSeparator()) { actions.append(action->text()); } }
-        check("radio context menu has four clear actions", actions == QStringList{"Edit", "Move", "Rename", "Remove"});
+        check("radio context menu shares connection and tab actions", actions == QStringList{"Connect", "Disconnect", "Show in tabs", "Edit", "Move", "Rename", "Remove"});
         panel.findChild<QAction*>("connectionRadioMove")->trigger();
         radioMenu->close();
         auto* destination = panel.findChild<QComboBox*>("connectionMoveDestination");
@@ -603,6 +632,190 @@ int main(int argc, char** argv)
         check("a verified radio identity is shared while each Location retains its own route",
             homePaths[1].toObject().value("serial") == potaPaths[0].toObject().value("serial")
             && homePaths[1].toObject().value("host") != potaPaths[0].toObject().value("host"));
+    }
+    {
+        QJsonObject state = ConnectionWorkspace::load();
+        const QString home = state.value("stations").toArray().first().toObject().value("id").toString();
+        const QString other = state.value("stations").toArray().last().toObject().value("id").toString();
+        QJsonArray locations = state.value("stations").toArray();
+        QJsonObject station = locations.first().toObject();
+        QJsonObject manual{{"id", "frozen-manual"}, {"name", "Saved Icom"}, {"kind", "manual"},
+            {"family", "icom"}, {"host", "192.0.2.42"}, {"username", ""}};
+        station["connections"] = QJsonArray{manual};
+        locations[0] = station;
+        state["stations"] = locations;
+        state["selectedStation"] = home;
+        ConnectionWorkspace::save(state);
+        ConnectionPanel panel;
+        const QJsonObject initial = panel.connectionTarget("frozen-manual");
+        QJsonObject target = initial;
+        QJsonObject frozenOperator = state.value("operators").toArray().first().toObject();
+        frozenOperator["preferences"] = ConnectionWorkspace::defaultOperatorPreferences();
+        target["operator"] = frozenOperator;
+        QSignalSpy choices(&panel, &ConnectionPanel::connectionTargetRequested);
+        QSignalSpy connects(&panel, &ConnectionPanel::connectRequested);
+        QSignalSpy preferences(&panel, &ConnectionPanel::operatorPreferencesRequested);
+        panel.requestConnectionTarget(initial.value("id").toString());
+        check("tab requests capture the exact saved Location, path and operator", choices.count() == 1
+            && choices.first().first().toJsonObject().value("stationId").toString() == home
+            && choices.first().first().toJsonObject().value("path").toObject().value("id").toString() == "frozen-manual"
+            && !choices.first().first().toJsonObject().value("operator").toObject().isEmpty());
+        panel.selectWorkspaceProfile("stations", other);
+        check("dialog browsing cannot modify the captured target", choices.first().first().toJsonObject().value("stationId").toString() == home);
+        panel.connectTarget(target); // Missing Icom username: no transport or keychain access.
+        check("attempt uses the captured Location while another is browsed", ConnectionPanelWorkspaceTestAccess::station(panel) == home
+            && panel.workspaceSnapshot().value("selectedStation").toString() == other);
+        check("connection attempts retain operator metadata without recalling preferences", ConnectionPanelWorkspaceTestAccess::attemptOperator(panel) == target.value("operator").toObject()
+            && preferences.isEmpty());
+        const int audioBeforeBrowse = preferences.count();
+        panel.setConnected(true);
+        panel.selectWorkspaceProfile("stations", home);
+        panel.selectWorkspaceProfile("stations", other);
+        check("browsing during a session emits no connect or audio change", connects.isEmpty() && preferences.count() == audioBeforeBrowse);
+        panel.setConnected(false);
+        RadioInfo info;
+        info.family = "icom"; info.serial = "resolved-icom"; info.model = "IC-705";
+        ConnectionPanelWorkspaceTestAccess::finish(panel, info);
+        const QJsonObject savedHome = ConnectionWorkspace::find(panel.workspaceSnapshot().value("stations").toArray(), home);
+        check("late completion updates its original Location", savedHome.value("connections").toArray().first().toObject().value("serial").toString() == "resolved-icom"
+            && panel.workspaceSnapshot().value("selectedStation").toString() == other);
+        check("settings handoff selects the exact saved Location and radio", panel.selectConnectionTarget(initial.value("id").toString())
+            && panel.workspaceSnapshot().value("selectedStation").toString() == home
+            && panel.findChild<QComboBox*>("connectionWorkspacePath")->currentData().toJsonObject().value("id").toString() == "frozen-manual");
+        panel.renameConnectionTarget(initial.value("id").toString());
+        auto* editor = panel.findChild<QDialog*>("connectionProfileEditor");
+        editor->findChild<QLineEdit*>("connectionProfileName")->setText("Cabin Icom");
+        QTest::keyClick(editor->findChild<QLineEdit*>("connectionProfileName"), Qt::Key_Return);
+        check("tab rename and dialog name have one saved owner", panel.connectionTarget(initial.value("id").toString()).value("name").toString() == "Cabin Icom"
+            && panel.findChild<QListWidget*>("connectionWorkspaceRadios")->currentItem()->text().startsWith("Cabin Icom"));
+        panel.rememberSuccessfulTarget(panel.connectionTarget("frozen-manual"));
+        panel.setConnected(true);
+        check("dialog disables Connect for the active saved path", !panel.findChild<QPushButton*>("connectionWorkspaceConnect")->isEnabled());
+        panel.setConnected(false);
+        panel.selectManualConnection();
+        panel.findChild<QPushButton*>("connectionBackToStation")->click();
+        check("Back to Locations retains the saved radio selection", panel.findChild<QComboBox*>("connectionWorkspacePath")->currentData().toJsonObject().value("id").toString() == "frozen-manual");
+    }
+    {
+        QJsonObject state = ConnectionWorkspace::load();
+        QJsonArray stations = state.value("stations").toArray();
+        QJsonObject home = stations.first().toObject();
+        home["connections"] = QJsonArray{QJsonObject{{"id", "legacy-discovered"}, {"name", "Last radio"},
+            {"kind", "local"}, {"family", ""}, {"serial", "legacy-serial"}}};
+        stations[0] = home;
+        state["stations"] = stations;
+        state["selectedStation"] = home.value("id");
+        ConnectionWorkspace::save(state);
+        ConnectionPanel panel;
+        RadioInfo info;
+        info.family = "flex"; info.serial = "legacy-serial"; info.model = "FLEX-6600";
+        panel.onRadioDiscovered(info);
+        QJsonObject target = panel.connectionTarget("legacy-discovered");
+        QJsonObject profile = state.value("operators").toArray().first().toObject();
+        profile["preferences"] = ConnectionWorkspace::defaultOperatorPreferences();
+        target["operator"] = profile;
+        check("legacy saved radios use the family reported by discovery", panel.validateConnectionTarget(target));
+        QSignalSpy connects(&panel, &ConnectionPanel::connectRequested);
+        panel.connectTarget(target);
+        const QJsonArray saved = ConnectionWorkspace::find(panel.workspaceSnapshot().value("stations").toArray(), home.value("id").toString()).value("connections").toArray();
+        check("legacy family resolution updates the same saved path", connects.count() == 1 && saved.size() == 1
+            && saved.first().toObject().value("id").toString() == "legacy-discovered"
+            && saved.first().toObject().value("family").toString() == "flex");
+    }
+    {
+        // Two Locations: the demo saved at A, B empty and selected.
+        QJsonObject state = ConnectionWorkspace::load();
+        QJsonArray stations = state.value("stations").toArray();
+        QJsonObject savedAt = stations.first().toObject();
+        savedAt["id"] = "loc-a"; savedAt["name"] = "Location A";
+        savedAt["connections"] = QJsonArray{QJsonObject{{"id", "demo-a"}, {"name", "Demo at A"},
+            {"kind", "local"}, {"family", "sim"}, {"serial", "DEMO-0001"}, {"model", "AetherSDR Demo"}}};
+        QJsonObject empty = savedAt;
+        empty["id"] = "loc-b"; empty["name"] = "Location B"; empty["connections"] = QJsonArray{};
+        state["stations"] = QJsonArray{savedAt, empty};
+        state["selectedStation"] = "loc-b";
+        state["preferredPaths"] = QJsonObject{};
+        check("two-Location fixture saves", ConnectionWorkspace::save(state));
+        ConnectionPanel panel;
+        RadioInfo demo;
+        demo.family = "sim"; demo.serial = "DEMO-0001"; demo.model = "AetherSDR Demo";
+        demo.address = QHostAddress::LocalHost;
+        panel.onRadioDiscovered(demo);
+        RadioInfo other;
+        other.family = "flex"; other.serial = "nearby-only"; other.model = "FLEX-6400";
+        other.address = QHostAddress("192.0.2.77");
+        panel.onRadioDiscovered(other);
+        panel.selectWorkspaceProfile("stations", "loc-b");
+        auto* radios = panel.findChild<QListWidget*>("connectionWorkspaceRadios");
+        int demoRow = -1, otherRow = -1;
+        for (int row = 0; row < radios->count(); ++row) {
+            for (const QJsonValue& path : radios->item(row)->data(Qt::UserRole + 1).toJsonArray()) {
+                if (path.toObject().value("serial").toString() == "DEMO-0001") { demoRow = row; }
+                if (path.toObject().value("serial").toString() == "nearby-only") { otherRow = row; }
+            }
+        }
+        check("an empty Location lists a radio saved at another Location", demoRow >= 0 && otherRow >= 0);
+        QSignalSpy choices(&panel, &ConnectionPanel::connectionTargetRequested);
+        radios->setCurrentRow(demoRow);
+        ConnectionPanelWorkspaceTestAccess::connectSelection(panel);
+        check("Connect on it connects through its saved entry", choices.count() == 1
+            && choices.first().first().toJsonObject().value("path").toObject().value("id").toString() == "demo-a"
+            && choices.first().first().toJsonObject().value("stationId").toString() == "loc-a");
+
+        // A dispatched attempt must not decide where a later save lands.
+        if (!choices.isEmpty()) { panel.connectTarget(choices.first().first().toJsonObject()); }
+        panel.selectWorkspaceProfile("stations", "loc-b");
+        radios->setCurrentRow(otherRow);
+        ConnectionPanelWorkspaceTestAccess::saveSelectedNearby(panel);
+        const QJsonArray atA = ConnectionWorkspace::find(panel.workspaceSnapshot().value("stations").toArray(), "loc-a").value("connections").toArray();
+        const QJsonArray atB = ConnectionWorkspace::find(panel.workspaceSnapshot().value("stations").toArray(), "loc-b").value("connections").toArray();
+        check("Save to location writes into the Location being viewed", atA.size() == 1 && atB.size() == 1
+            && atB.first().toObject().value("serial").toString() == "nearby-only");
+    }
+    {
+        // A migrated connection keeps the pre-workspace keychain password.
+        QJsonObject state = ConnectionWorkspace::load();
+        QJsonArray stations = state.value("stations").toArray();
+        QJsonObject station = stations.first().toObject();
+        station["connections"] = QJsonArray{QJsonObject{{"id", "legacy-icom"}, {"name", "Old Icom"}, {"kind", "manual"},
+            {"family", "icom"}, {"host", "192.0.2.31"}, {"username", "portable"}, {"legacyCredentials", true}}};
+        state["stations"] = QJsonArray{station};
+        state["selectedStation"] = station.value("id");
+        ConnectionWorkspace::save(state);
+        ConnectionPanel startup;
+        startup.probeRadio(QStringLiteral("192.0.2.31"), /*restoreSavedFamily=*/true);
+        QCoreApplication::processEvents();
+        bool keychainRead = false, refused = false;
+        for (QLabel* label : startup.findChildren<QLabel*>()) {
+            keychainRead = keychainRead || label->text().contains("saved Icom password");
+            refused = refused || label->text().contains("Enter this radio's password");
+        }
+        check("a migrated Icom connection reads its legacy keychain password", keychainRead && !refused);
+    }
+    {
+        // A latched Icom credential belongs to one host and user.
+        ConnectionPanel panel;
+        auto* host = panel.findChild<QLineEdit*>("connectionManualIp");
+        auto* user = panel.findChild<QLineEdit*>("connectionManualIcomUser");
+        auto* pass = panel.findChild<QLineEdit*>("connectionManualIcomPassword");
+        check("Icom manual fields exist", host && user && pass);
+        if (host && user && pass) {
+            host->setText("192.0.2.50");
+            user->setText("op");
+            ConnectionPanelWorkspaceTestAccess::latchIcom(panel, QString(64, QLatin1Char('a')), "192.0.2.50", "op");
+            check("the credential is offered for its own radio", ConnectionPanelWorkspaceTestAccess::boundIcomId(panel) == QString(64, QLatin1Char('a')));
+            host->setText("192.0.2.51");   // e.g. picked from the address history: no textEdited
+            check("a different host never receives it", ConnectionPanelWorkspaceTestAccess::boundIcomId(panel).isEmpty());
+            host->setText("192.0.2.50");
+            check("returning to the saved host offers it again", !ConnectionPanelWorkspaceTestAccess::boundIcomId(panel).isEmpty());
+            pass->setText("typed");
+            ConnectionPanelWorkspaceTestAccess::markPrefilled(panel);
+            host->setText("192.0.2.52");
+            check("a filled-in saved password is dropped when the host changes", pass->text().isEmpty());
+            QTest::keyClicks(pass, "typed");
+            QTest::keyClicks(user, "x");
+            check("a typed password survives editing the user name", pass->text() == "typed");
+        }
     }
     check("newer settings schema can be staged for guard test",
         settings.setRadioFeature("local", "", "ConnectionWorkspace", 2, document));

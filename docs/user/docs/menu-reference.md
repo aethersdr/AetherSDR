@@ -11,9 +11,9 @@ The top-level menus are **File · Settings · Profiles · Tools · View · Windo
 - **Windows and Linux:** the menus sit behind the **☰** button at the far left of the title bar. Alt+letter mnemonics (Alt+F, Alt+S, …) still open each menu under the button, and every menu shortcut keeps working.
 - **macOS:** the menus are in the system menu bar at the top of the screen. **Radio Setup…** appears as **AetherSDR → Preferences…**.
 
-<img src="/img/screens/title-bar.png" width="1600" alt="The AetherSDR title bar. From left: the menu button, the AetherSDR logo, three radio tabs reading Hermes-Lite 2 available, FLX8600 FLEX-8600 connected KK7GWY (highlighted, with a green dot) and Simulator (not on the air) AetherSDR Demo available DEMO, and a plus button. On the right: a green PC Audio button, a speaker icon and slider at 100, a headphone icon and slider at 100, three panel layout buttons, and minimize, maximize and close buttons." />
+<img src="/img/screens/title-bar.png" width="1800" alt="The AetherSDR title bar with the connected simulator, a Home radio shortcut, More radios and audio controls." />
 
-*The title bar: the menu button, one tab per radio, PC Audio and volume controls, panel layout buttons and window controls.*
+*The title bar shows two recent radio shortcuts, More radios, PC Audio and volume controls.*
 
 ## File
 
@@ -173,16 +173,27 @@ The **UPDATE** badge appears when a newer AetherSDR release is available; click 
 
 ### Radio tabs
 
-<img src="/img/screens/radio-list-popup.png" width="380" alt="Discovered radios popup with a Search name, address, or status field. Three rows, each with an Actions button: FLX8600, connected; Hermes-Lite 2, available; and Simulator (not on the air), 127.0.0.1, available, with the first two addresses blacked out. Connect manually... and Rescan radios sit at the bottom." />
+<img src="/img/screens/radio-recent-drawer.png" width="456" alt="Radio drawer with Home, POTA and Cabin connections, search, per-radio actions and Locations and connections." />
 
-*The radio list, opened from the plus button beside the radio tabs. Addresses are blacked out.*
+*More radios keeps all saved and nearby radios available beyond the two title-bar shortcuts.*
 
-- Line one is the radio's name; line two is its state in words (for example "Link lost"), so color is never the only signal.
-- The dot on the active tab is the **radio-link indicator**. It pulses once per discovery heartbeat, turns amber while discovering and red after three missed heartbeats (blinking, or solid if **View → Blink Status Indicator** is off). The alarm stays on the radio that dropped until you disconnect on purpose, start a new session or remove the tab. A deliberate disconnect never raises it. Right-click the tabs to toggle blinking.
+<img src="/img/screens/radio-tab-context-menu-light.png" width="216" alt="Light-theme radio tab context menu with Rename highlighted and readable dark text on a light selection surface." />
+
+*Highlighted menu text uses the matching canon foreground and selection surface in the light theme.*
+
+<img src="/img/screens/radio-tab-context-menu.png" width="216" alt="A saved radio tab context menu with Connect or Switch, Disconnect, Rename, Connection settings and Remove from tabs actions." />
+
+*Each radio tab has a context menu. Unavailable actions remain visible with a reason.*
+
+- Up to two recent radio shortcuts appear in the title bar. The active radio remains visible; a pending connection uses the other slot. Saved radios remain in the drawer when discovery cannot find them. Line one shows the saved name; line two shows the state and Location in words.
+- Click a disconnected tab to connect through its preferred saved path. If another radio is live, confirm **Switch** before it disconnects. Clicking the active tab keeps the current view.
+- Right-click a tab, or focus it and press **Shift+F10**, for **Connect** / **Switch to this radio…**, **Disconnect**, **Rename…**, **Connection settings…**, **Move left** / **Move right**, and **Remove from tabs**. A pending connection offers **Cancel connection**. **Move left** and **Move right** reorder tabs from the keyboard, the same as dragging them. Removing a tab keeps its saved connection; restore it through **Radio options… → Add to tabs** in the connection window.
+- **⋯ More radios** opens the full saved/discovered radio drawer. **Locations and connections…** opens Locations at the browsed Location. Connection settings opens the matching saved radio and path. Browsing preserves the active connection; see [Location and Operator Profiles](./station-profiles.md#using-workspace-radio-tabs).
+- The dot on the active tab is the **radio-link indicator**. It pulses with discovery heartbeats and shows link loss in red. The tab also spells out **Link lost**. **View → Blink Status Indicator** controls blinking.
+- Drag tabs to reorder them; the order persists across restarts. **Esc** cancels a drag. When tabs no longer fit, drag near an edge to scroll while reordering, use the mouse wheel, or drag empty strip space.
+
 - An **AT** chip after the connected radio's name means the adaptive frame-rate throttle is on. The chip is outlined while the throttle is on standby. The tab expands for the chip and shrinks again when it disappears. It fills with the cap's quality color while a frame-rate cap is in force, and hovering the tab shows the cap (for example "Adaptive throttle: 8 fps cap"). See [Low Bandwidth Connections](./low-bandwidth-connections.md#adaptive-frame-rate-throttle).
 - While the AT chip is showing and the link is healthy, the connected radio's dot shows the network quality in the same colors as the status bar: green for Excellent or Very Good, blue for Good, amber for Fair and red for Poor. Hover the tab to see the quality in words. The quality colors follow the selected theme. With the throttle off, the dot stays the plain green "connected" color.
-- When the tabs no longer fit, scroll them with the mouse wheel or drag them sideways.
-- **"+"** opens the radio list: search by name, model, address or status; a per-radio **Actions** menu (Disconnect, Rename…, Radio setup…, Remove from tabs / Add to tabs); **Connect manually…**; **Rescan radios**. Removing a tab only hides it; it does not forget the radio or its credentials. Selecting a radio opens the connection panel on it; nothing connects without your confirmation.
 
 ### Transmit timer
 

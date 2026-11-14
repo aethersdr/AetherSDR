@@ -1,6 +1,7 @@
 // #6244 review — the DVK panel admits one operation at a time from the moment
 // a start is sent, not from the radio's echo, and none during a WAV transfer.
 // A real DvkPanel and DvkModel; commands are captured, nothing reaches a radio.
+#include "FlexTransmitServiceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/TxKeyingMarker.h"
 #include "core/backends/flex/CommandParser.h"
@@ -36,7 +37,7 @@ void report(const char* label, bool ok)
 void feed(DvkModel& model, const QString& line)
 {
     const ParsedMessage msg = CommandParser::parseLine(line);
-    model.applyStatus(msg.object, msg.kvs);
+    applyDvkStatus(model, msg.object, msg.kvs);
 }
 
 // NameChanged events per widget, through Qt's accessibility update hook.
@@ -80,9 +81,9 @@ int main(int argc, char** argv)
         // The reviewer's probe: PREV, then REC, with no status in between.
         DvkModel model;
         DvkPanel panel(&model);
-        QStringList sent;
-        QObject::connect(&model, &DvkModel::replyCommandReady, &model,
-                         [&sent](const QString& cmd, const QString&, int) { sent << cmd; });
+        QList<DvkRequest> sent;
+        QObject::connect(&model, &DvkModel::controlRequested, &model,
+                         [&sent](const DvkRequest& request, quint64) { sent << request; });
         seed(model);
         auto* rec = panel.findChild<QPushButton*>(QStringLiteral("dvkRecord"));
         auto* prev = panel.findChild<QPushButton*>(QStringLiteral("dvkPreview"));
@@ -97,21 +98,21 @@ int main(int argc, char** argv)
         rec->click();
         f1->click();
         report("two starts before the first echo send one command",
-               sent == QStringList{QStringLiteral("dvk preview_start id=1")});
+               sent == QList<DvkRequest>{{DvkRequest::Operation::PreviewStart, 1, {}}});
         report("the refused REC press does not stay checked", !rec->isChecked());
 
         stop->click();
         report("STOP before the echo stops the pending start",
-               sent.size() == 2 && sent.last() == QStringLiteral("dvk preview_stop"));
+               sent.size() == 2 && sent.last().operation == DvkRequest::Operation::PreviewStop);
     }
 
     {
         // A running import or export blocks every start control.
         DvkModel model;
         DvkPanel panel(&model);
-        QStringList sent;
-        QObject::connect(&model, &DvkModel::replyCommandReady, &model,
-                         [&sent](const QString& cmd, const QString&, int) { sent << cmd; });
+        QList<DvkRequest> sent;
+        QObject::connect(&model, &DvkModel::controlRequested, &model,
+                         [&sent](const DvkRequest& request, quint64) { sent << request; });
         seed(model);
         model.setTransferActive(true);
         panel.findChild<QPushButton*>(QStringLiteral("dvkRecord"))->click();
@@ -120,7 +121,7 @@ int main(int argc, char** argv)
         model.setTransferActive(false);
         panel.findChild<QPushButton*>(QStringLiteral("dvkRecord"))->click();
         report("the transfer's end admits REC again",
-               sent == QStringList{QStringLiteral("dvk rec_start id=1")});
+               sent == QList<DvkRequest>{{DvkRequest::Operation::RecordStart, 1, {}}});
     }
 
     {

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "VoiceKeyer.h"
+#include "core/backends/TransmitServiceRequest.h"
+#include "core/backends/TransmitServiceStatus.h"
 
 #include <QLatin1String>
 #include <QMap>
@@ -34,9 +36,9 @@ public:
     bool enabled() const { return m_enabled; }
     // The radio does not refuse overlapping operations, so a new one may only
     // start from idle (Unknown, before any status, fails open), with no start
-    // of ours still awaiting its reply and no WAV transfer running.
+    // of ours still awaiting observed completion and no WAV transfer running.
     bool canStartOperation() const override;
-    // The start we sent and are still waiting on, or Unknown for none.
+    // The start awaiting radio completion, including an uncertain reply.
     Status pendingOperation() const override { return m_pending; }
     // DvkWavTransfer reports a running import or export here.
     void setTransferActive(bool active);
@@ -61,7 +63,7 @@ public:
 
     static QString defaultName(int id);
     // Drops the characters the radio cannot carry in a quoted name (`"`, `'`,
-    // `|`), collapses spaces as the radio does, and trims to kMaxNameBytes.
+    // `|`, backslash, NUL), collapses spaces, and trims to kMaxNameBytes.
     static QString sanitizeName(const QString& name);
 
     // Commands
@@ -89,16 +91,16 @@ public:
 
     QString sourceLabel() const override { return QStringLiteral("Radio"); }
 
-    // Status parsing (called from RadioModel)
-    void applyStatus(const QString& object, const QMap<QString, QString>& kvs);
+    // One decoded voice keyer report (the backend's status ingress).
+    void applyObservation(const DvkStatusObservation& observation);
 
     // Connection-scoped state goes with the connection.
     void reset();
 
-    // Called by RadioModel when a reply to a DVK command arrives.  Non-zero
-    // codes are forwarded as commandFailed() so the UI can surface them
-    // instead of leaving the operation silently rejected. (#3377)
-    void handleCommandResponse(const QString& verb, int id, uint code, const QString& body);
+    // Completion is correlated by identity; a radio reply never fabricates
+    // an observed playback/recording state or transfers ownership.
+    void handleControlReply(quint64 requestId, const TransmitServiceReply& reply);
+    bool requestCurrent(quint64 requestId) const { return m_requests.contains(requestId); }
 
     // Map a SmartSDR response code to a human-readable hint.  Known codes
     // come from FlexLib's SsdrErrors enum (Principle I); unknown codes
@@ -106,10 +108,8 @@ public:
     static QString dvkErrorString(uint code);
 
 signals:
-    // Emitted for commands that need response correlation.  RadioModel
-    // attaches a callback that invokes handleCommandResponse() with the
-    // verb + slot id captured here. (#3377)
-    void replyCommandReady(const QString& cmd, const QString& verb, int id);
+    void controlRequested(const AetherSDR::DvkRequest& request, quint64 requestId);
+    void operationSettled(quint64 requestId);
     void licenseRefusedChanged(bool refused);
     // The operator asked to import or export a slot's WAV; MainWindow routes
     // these to DvkWavTransfer.
@@ -126,6 +126,15 @@ private:
     Status m_pending{Unknown};
     int m_pendingId{-1};
     bool m_transferActive{false};
+    quint64 m_nextRequest{0};
+    quint64 m_startRequest{0};
+    bool m_startObserved{false};
+    // The radio accepted an operator stop for the pending start: an idle
+    // report then settles it even if the start itself was never observed.
+    bool m_stopAccepted{false};
+    void settleStart();
+    QMap<quint64, DvkRequest> m_requests;
+    void request(const DvkRequest& request);
     quint64 m_transferRevision{0};
 
     void setPending(Status pending);

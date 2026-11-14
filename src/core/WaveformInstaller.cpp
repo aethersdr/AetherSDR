@@ -24,11 +24,33 @@ QString installerText(const char* source)
     return QCoreApplication::translate("WaveformInstaller", source);
 }
 
+QList<const WaveformInstaller*>& liveInstallers()
+{
+    static QList<const WaveformInstaller*> list;
+    return list;
+}
+
 } // namespace
+
+bool WaveformInstaller::anyInstalling()
+{
+    for (const WaveformInstaller* installer : liveInstallers()) {
+        if (installer->isInstalling()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+WaveformInstaller::~WaveformInstaller()
+{
+    liveInstallers().removeAll(this);
+}
 
 WaveformInstaller::WaveformInstaller(RadioModel* model, QObject* parent)
     : QObject(parent), m_model(model)
 {
+    liveInstallers().append(this);
     m_idleTimeout.setSingleShot(true);
     connect(&m_idleTimeout, &QTimer::timeout, this, [this] {
         finishOperation(m_activeGeneration, false, tr("Waveform upload timed out while waiting for data."));

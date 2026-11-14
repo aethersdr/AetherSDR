@@ -41,12 +41,14 @@ on:
   # Manual trigger for "did that dependency bump actually land in sid yet?"
   workflow_dispatch:
 
-# Every trigger resolves to main (or a manual dispatch on it), so each run gets
-# its own group via the run_id suffix and nothing is cancelled. Kept in the same
-# shape as ci.yml / codeql.yml.
+# A newer push to main cancels the in-progress push run: sid drift is not
+# commit-specific, and the newer tree contains every superseded commit. Runs
+# of 1-2 h per merge held up to three of the org's 20 concurrent hosted jobs,
+# queueing PR CI behind them. The event name keeps the nightly cron and manual
+# dispatches in their own groups.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

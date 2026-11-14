@@ -67,6 +67,8 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
   1.2.41 or later, custom port names supplied by the tuner replace these labels.
   When no names are returned, the buttons retain their default labels. SO2R
   models do not show this row.
+  While transmitting (forward power at or above 5 W, or the TGXL interlock
+  cable is active), the selected antenna's button turns red.
 
 Messages from the tuner appear across the applet for as long as the tuner
 shows them: after a successful tune it shows the SWR it settled on

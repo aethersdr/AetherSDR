@@ -112,6 +112,10 @@ TunerApplet::TunerApplet(QWidget* parent)
         m_labelShowing = false;
         m_pwrLabel->setText("PWR");
         m_swrLabel->setText("SWR");
+        if (m_antTxActive) {
+            m_antTxActive = false;
+            if (m_ant1Btn) updateAntennaButtons(m_model ? m_model->antennaA() : -1);
+        }
     });
 
     // Relay-only completion notice. The first timer waits for the settled SWR
@@ -1125,6 +1129,7 @@ void TunerApplet::setTunerModel(TunerModel* model)
     connect(m_model, &TunerModel::pttChanged, this, [this](bool a, bool b) {
         m_portA->setPtt(a);
         m_portB->setPtt(b);
+        updateAntennaButtons(m_model->antennaA());
     });
 
     connect(m_model, &TunerModel::directConnectionChanged, this, updateAntVisible);
@@ -1294,6 +1299,14 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
 {
     m_fwdPower = fwdPower;
     m_swr = swr;
+    // Active antenna button turns red while transmitting. Threshold matches
+    // the meter label floor so both react to the same power level. Only
+    // update the button on the edge — setStyleSheet at 60 Hz while keyed
+    // is unnecessary churn. m_antTxActive is read in updateAntennaButtons.
+    if (fwdPower >= 5.0f && !m_antTxActive) {
+        m_antTxActive = true;
+        if (m_ant1Btn) updateAntennaButtons(m_model ? m_model->antennaA() : -1);
+    }
     auto* powerGauge = static_cast<HGauge*>(m_fwdGauge);
     if (fwdPeak < 0.0f) {
         powerGauge->setWindowPeakEnabled(true);
@@ -1352,10 +1365,22 @@ void TunerApplet::updateAntennaButtons(int antA)
     static constexpr const char* kActive =
         "QPushButton { background: #006030; border: 1px solid #008040; "
         "border-radius: 3px; color: #ffffff; font-size: 10px; font-weight: bold; }";
+    // Mirror the hardware display: the active antenna button turns red while
+    // the radio is transmitting through the tuner.
+    static constexpr const char* kActiveTx =
+        "QPushButton { background: {{color.highlight.tx}}; border: 1px solid {{color.highlight.tx}}; "
+        "border-radius: 3px; color: {{color.highlight.fg}}; font-size: 10px; font-weight: bold; }";
 
-    m_ant1Btn->setStyleSheet(antA == 0 ? kActive : kDefault);
-    m_ant2Btn->setStyleSheet(antA == 1 ? kActive : kDefault);
-    m_ant3Btn->setStyleSheet(antA == 2 ? kActive : kDefault);
+    // m_antTxActive covers TCI-only setups where the TGXL hardware interlock
+    // cable is not wired (pttA/pttB stay 0); the ptt fallback covers setups
+    // that DO have the cable — both paths yield the same visual outcome.
+    const bool transmitting = m_antTxActive
+        || (m_model && (m_model->pttA() || m_model->pttB()));
+    const char* activeStyle = transmitting ? kActiveTx : kActive;
+    auto& theme = AetherSDR::ThemeManager::instance();
+    theme.applyStyleSheet(m_ant1Btn, antA == 0 ? activeStyle : kDefault);
+    theme.applyStyleSheet(m_ant2Btn, antA == 1 ? activeStyle : kDefault);
+    theme.applyStyleSheet(m_ant3Btn, antA == 2 ? activeStyle : kDefault);
 }
 
 } // namespace AetherSDR

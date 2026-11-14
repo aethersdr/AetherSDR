@@ -50,15 +50,15 @@ on:
   # it merges rather than on main's first push after.
   workflow_dispatch:
 
-# Push and schedule resolve to refs/heads/main, so each of those runs gets its
-# own group (run_id suffix) and nothing is ever cancelled — the post-merge scan
-# and the weekly scheduled scan stay fully parallel. A manual run on another
-# branch shares that branch's group, so re-dispatching it cancels the stale
-# run. The ref guard also keeps this correct if a pull_request trigger is ever
-# restored.
+# A newer push to main cancels the in-progress push scan: the newer tree
+# contains every superseded commit, and a 1-3 h scan per merge held up to six
+# of the org's 20 concurrent hosted jobs, queueing PR CI behind it. The event
+# name keeps the weekly scheduled scan and manual dispatches in their own
+# groups, so a push never cancels them. Not a required check; nothing gates on
+# a per-commit scan.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 # Workflow-level least-privilege GITHUB_TOKEN. CodeQL's official guidance
 # (https://github.com/github/codeql-action#permissions) is:
