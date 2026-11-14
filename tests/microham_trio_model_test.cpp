@@ -1,8 +1,8 @@
 // microHAM TRIO model tests: the stored address, the session words the
 // Peripherals page shows, an eviction that is never taken back, the release
-// to the Trio's own web page, the dummy-load mark and its warning, device text
-// kept out of log lines as control characters, and the proof that nothing but
-// the handshake, keep-alives and a close frame ever leaves. The device is a
+// to the Trio's own web page, device text kept out of log lines as control
+// characters, and the proof that nothing but the handshake, keep-alives and a
+// close frame ever leaves. The device is a
 // scripted transport and a hand-moved clock (tests/MicrohamTrioTestPeer.h):
 // no socket, no event loop. The settings store is a private temporary profile.
 //
@@ -13,7 +13,6 @@
 #include "core/AppSettings.h"
 #include "core/MicrohamTrioSettings.h"
 #include "core/PeripheralSettings.h"
-#include "core/RadioSettingsScope.h"
 #include "models/MicrohamTrioModel.h"
 
 #include <QCoreApplication>
@@ -297,67 +296,6 @@ void testFailures()
     }
 }
 
-void testBinding()
-{
-    Rig rig;
-    using Stored = MicrohamTrioBinding::Stored;
-    using Bind = MicrohamTrioModel::BindResult;
-    const RadioSettingsScope hl2(QStringLiteral("hl2"), QStringLiteral("trio-test-radio-a"));
-    const RadioSettingsScope other(QStringLiteral("hl2"), QStringLiteral("trio-test-radio-b"));
-    MicrohamTrioBinding::remove(hl2);
-    MicrohamTrioBinding::remove(other);
-
-    report("no Trio configured: binding refused",
-           rig.model.bindRadioSlot(QStringLiteral("radio2")) == Bind::NoTrio);
-    rig.model.connectNetwork(QLatin1String(kHost), 80);
-    rig.model.setRadio(RadioSettingsScope(QStringLiteral("hl2"), QString()));
-    report("a family-only scope names no radio",
-           rig.model.bindRadioSlot(QStringLiteral("radio2")) == Bind::NoRadioIdentity);
-    rig.model.setRadio(hl2);
-    report("no state yet: nothing to bind against",
-           rig.model.bindRadioSlot(QStringLiteral("radio2")) == Bind::NoState);
-    rig.peer.connectHeld(rig.model, "radio2", "ant6");
-    report("a port the Trio does not have is refused",
-           rig.model.bindRadioSlot(QStringLiteral("radio9")) == Bind::NoSuchPort);
-    const int sentBefore = rig.peer.transport.sent.size();
-    report("bind to radio2", rig.model.bindRadioSlot(QStringLiteral("radio2")) == Bind::Ok);
-    const MicrohamTrioModel::View view = rig.model.view();
-    report("stored with the label it carries now",
-           view.binding == Stored::Bound && view.slotKey == QStringLiteral("radio2")
-               && view.slotLabel == QStringLiteral("HL2") && view.bindingIssue.isEmpty());
-    report("binding sent nothing to the Trio", rig.peer.transport.sent.size() == sentBefore);
-    report("it reads back for this radio",
-           MicrohamTrioBinding::load(hl2).stored == Stored::Bound
-               && MicrohamTrioBinding::load(hl2).slotKey == QStringLiteral("radio2"));
-    report("and another radio does not inherit it",
-           MicrohamTrioBinding::load(other).stored == Stored::None);
-    report("in words, with focus", MicrohamTrioModel::describeBinding(view).contains(
-               QStringLiteral("radio2 \u201cHL2\u201d (has focus)")),
-           MicrohamTrioModel::describeBinding(view).toStdString());
-
-    rig.peer.push(stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "IC7300"));
-    const MicrohamTrioModel::View relabelled = rig.model.view();
-    report("a relabelled port is a label error naming both labels",
-           relabelled.bindingIssue.contains(QStringLiteral("IC7300"))
-               && relabelled.bindingIssue.contains(QStringLiteral("HL2")),
-           relabelled.bindingIssue.toStdString());
-    rig.peer.push(stateDoc("radio2", "ant6"));
-    report("back to its label: no error", rig.model.view().bindingIssue.isEmpty());
-
-    rig.model.setRadio(other);
-    report("the other radio has said nothing", rig.model.view().binding == Stored::None);
-    report("not on the Trio", rig.model.setNotOnTrio() == Bind::Ok
-               && MicrohamTrioBinding::load(other).stored == Stored::NotOnTrio);
-    report("forget", rig.model.clearBinding() == Bind::Ok
-               && MicrohamTrioBinding::load(other).stored == Stored::None);
-
-    rig.model.setRadio(hl2);
-    rig.model.connectNetwork(QStringLiteral("192.0.2.99"), 80);
-    report("bound against another Trio address: an issue",
-           rig.model.view().bindingIssue.contains(QLatin1String(kHost)));
-    MicrohamTrioBinding::remove(hl2);
-}
-
 void testTestConnection()
 {
     {
@@ -468,41 +406,6 @@ void testTestConnection()
     }
 }
 
-// The dummy-load mark follows the label the Trio reports; a port renamed on
-// the Trio is a warning until confirmed, and a port that is gone is one too.
-void testDummyLoadMark()
-{
-    Rig rig;
-    report("no Trio: nothing to mark",
-           rig.model.markDummyLoad(QStringLiteral("ant6")) == MicrohamTrioModel::BindResult::NoTrio);
-    rig.model.connectNetwork(QLatin1String(kHost), 80);
-    rig.peer.connectHeld(rig.model, "radio2", "ant6");
-    report("an unknown port cannot be marked",
-           rig.model.markDummyLoad(QStringLiteral("ant9")) == MicrohamTrioModel::BindResult::NoSuchPort);
-    rig.model.markDummyLoad(QStringLiteral("ant6"));
-    report("the dummy load is marked with its label",
-           rig.model.view().dummyLoadKey == QStringLiteral("ant6")
-               && rig.model.view().dummyLoadLabel == QStringLiteral("Dummy")
-               && rig.model.view().dummyLoadIssue.isEmpty());
-
-    rig.peer.push(stateDoc("radio2", "ant6", TrioTestPeer::kZeroId, "HL2", "Spare"));
-    report("the port renamed on the Trio: a warning naming both labels",
-           rig.model.view().dummyLoadIssue.contains(QStringLiteral("Spare"))
-               && rig.model.view().dummyLoadIssue.contains(QStringLiteral("Dummy")));
-    report("confirm accepts the new label", rig.model.confirmDummyLoad() == MicrohamTrioModel::BindResult::Ok
-               && rig.model.view().dummyLoadLabel == QStringLiteral("Spare")
-               && rig.model.view().dummyLoadIssue.isEmpty());
-
-    rig.peer.push(stateDoc("radio2", "ant1").replace(R"("ant6":)", R"("ant7":)"));
-    report("the marked port gone from the Trio: a warning",
-           rig.model.view().dummyLoadIssue.contains(QStringLiteral("gone")),
-           rig.model.view().dummyLoadIssue.toStdString());
-    rig.model.clearDummyLoad();
-    report("clearing the mark clears the warning", rig.model.view().dummyLoadKey.isEmpty()
-               && rig.model.view().dummyLoadIssue.isEmpty());
-    report("and nothing was sent to the Trio", rig.sentOnlyReads());
-}
-
 void testRemove()
 {
     Rig rig;
@@ -584,9 +487,7 @@ int main(int argc, char** argv)
     testEvictionIsNotRetaken();
     testRelease();
     testFailures();
-    testBinding();
     testTestConnection();
-    testDummyLoadMark();
     testRemove();
     testControlCharactersAreNotLogged();
 

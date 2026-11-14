@@ -439,7 +439,7 @@
  },
  "core/MicrohamTrioSettings.h": {
   "tag": "peripheral(microhamtrio)",
-  "note": "Where the microHAM TRIO antenna switch's configuration is kept: its address, port and dummy-load mark under Peripherals.trio in the Peripherals settings blob, beside the row's AutoConnect, and the radio-scoped TrioBinding feature document naming the Trio radio port a radio is cabled to. Peripheral accessory configuration, not radio state.",
+  "note": "Where the microHAM TRIO antenna switch's configuration is kept: its address and port under Peripherals.trio in the Peripherals settings blob, beside the row's AutoConnect. Peripheral accessory configuration, not radio state.",
   "split": "",
   "confidence": "high"
  },
@@ -1099,7 +1099,7 @@
  },
  "models/MicrohamTrioModel.h": {
   "tag": "peripheral(microhamtrio)",
-  "note": "microHAM TRIO client that switches nothing: one held web-socket session to a standalone antenna-switch controller reached by an operator-entered address with no discovery, the state it reports (radio focus, antenna, labels), the radio's port on it and the dummy-load mark (both stored locally). Read-only: changes nothing on the device. Works with any radio or none. Same precedent as models/GreenHeronModel.h and models/AntennaGeniusModel.h. A peripheral accessory, NOT behind the IRadioBackend radio seam.",
+  "note": "microHAM TRIO client that switches nothing: one held web-socket session to a standalone antenna-switch controller reached by an operator-entered address with no discovery, the state it reports (radio focus, antenna, labels). Read-only: changes nothing on the device. Works with any radio or none. Same precedent as models/GreenHeronModel.h and models/AntennaGeniusModel.h. A peripheral accessory, NOT behind the IRadioBackend radio seam.",
   "split": "",
   "confidence": "high"
  },

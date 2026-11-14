@@ -7509,18 +7509,6 @@ void MainWindow::wireMeters()
     // automatically" on, like the KPA500/KAT500 rows.
     m_trioModel.loadSettings(PeripheralSettings::autoConnect(
         QLatin1String(MicrohamTrioSettings::kPeripheralId)));
-    // The Trio is told which radio is connected, so the Peripherals page can
-    // read and store that radio's port on it.
-    {
-        const auto trioRadio = [this]() {
-            m_trioModel.setRadio(m_radioModel.isConnected() ? m_radioModel.settingsScope()
-                                                            : RadioSettingsScope());
-        };
-        connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
-                [trioRadio](bool) { trioRadio(); });
-        connect(&m_radioModel, &RadioModel::infoChanged, this, trioRadio);
-        trioRadio();
-    }
 
     // ── LP-100A wattmeter — serial or ser2net, no FlexRadio relay ─────────
     // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and

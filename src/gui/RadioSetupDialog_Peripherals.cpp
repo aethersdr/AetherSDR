@@ -50,9 +50,6 @@
 #include <QStyledItemDelegate>
 #include <QAction>
 #include <QCheckBox>
-#include <QAbstractButton>
-#include <QRadioButton>
-#include <QButtonGroup>
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QEvent>
@@ -1766,8 +1763,7 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         if (!view.snapshot) {
             return RadioSetupDialog::tr("No state read yet.");
         }
-        QString text = MicrohamTrioModel::describeBinding(view) + QLatin1Char('\n')
-            + MicrohamTrioModel::describeState(*view.snapshot);
+        QString text = MicrohamTrioModel::describeState(*view.snapshot);
         if (!view.stateCurrent) {
             text += QLatin1Char('\n') + RadioSetupDialog::tr("(as last read; not connected now)");
         }
@@ -1784,9 +1780,8 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     setTone(ui.deviceInfoLabel, Tone::Value);
     addFormRow(detail, tr("Trio State"), ui.deviceInfoLabel);
 
-    // Radio Ports and Antenna Ports: the Trio's names as it reports them, the
-    // marker "this AetherSDR" (stored per radio) and the dummy-load mark
-    // (stored per Trio). Choosing a marker changes nothing on the Trio.
+    // Radio Ports and Antenna Ports: the Trio's names as it reports them,
+    // read-only.
     auto* portsPanel = new QWidget(detail.page);
     portsPanel->setObjectName(QStringLiteral("peripheralTrioPorts"));
     portsPanel->setMaximumWidth(760);
@@ -1798,17 +1793,6 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     auto* antennaGroup = new QGroupBox(tr("Antenna Ports"), portsPanel);
     antennaGroup->setObjectName(QStringLiteral("peripheralTrioAntennaPorts"));
     auto* antennaGrid = new QGridLayout(antennaGroup);
-    auto* dummyWarning = new QLabel(antennaGroup);
-    dummyWarning->setObjectName(QStringLiteral("peripheralTrioDummyWarning"));
-    dummyWarning->setAccessibleName(tr("Trio dummy load warning"));
-    dummyWarning->setWordWrap(true);
-    dummyWarning->setTextFormat(Qt::PlainText);
-    setTone(dummyWarning, Tone::Error);
-    auto* confirmDummy = new QPushButton(tr("Confirm Dummy Load"), antennaGroup);
-    confirmDummy->setObjectName(QStringLiteral("peripheralTrioConfirmDummy"));
-    confirmDummy->setAccessibleDescription(tr(
-        "The port marked as the dummy load was renamed on the Trio. Confirm it is still the "
-        "dummy load; until then it is offered nowhere."));
     portsLayout->addWidget(radioGroup);
     portsLayout->addWidget(antennaGroup);
 
@@ -1816,16 +1800,11 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
     struct PortRow {
         QString group;
         QString key;
+        QLabel* caption{nullptr};
         QLabel* name{nullptr};
-        QAbstractButton* marker{nullptr};
     };
     auto rows = std::make_shared<QVector<PortRow>>();
     auto rowKeys = std::make_shared<QStringList>();
-    auto* thisRadio = new QButtonGroup(radioGroup);
-    thisRadio->setExclusive(true);
-    auto* notOnTrio = new QRadioButton(tr("This AetherSDR is on none of them"), radioGroup);
-    notOnTrio->setObjectName(QStringLiteral("peripheralTrioNotOnTrio"));
-    thisRadio->addButton(notOnTrio);
 
     ui.refreshExtra = [=]() {
         if (!trio) {
@@ -1844,84 +1823,33 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
         if (keys != *rowKeys && view.snapshot) {
             // New set of buttons: rebuild the rows.
             for (const PortRow& row : *rows) {
-                for (QWidget* w : {static_cast<QWidget*>(row.name), static_cast<QWidget*>(row.marker)}) {
-                    if (w) {
-                        if (auto* b = qobject_cast<QAbstractButton*>(w)) {
-                            thisRadio->removeButton(b);
-                        }
-                        delete w;
-                    }
-                }
-            }
-            for (QLabel* caption : radioGroup->findChildren<QLabel*>(QStringLiteral("trioPortCaption"))) {
-                delete caption;
-            }
-            for (QLabel* caption : antennaGroup->findChildren<QLabel*>(QStringLiteral("trioPortCaption"))) {
-                delete caption;
+                delete row.caption;
+                delete row.name;
             }
             rows->clear();
             *rowKeys = keys;
-            int radioRow = 0;
-            for (const MicrohamTrio::Button& button : view.snapshot->radio.buttons) {
-                auto* caption = new QLabel(button.name, radioGroup);
-                caption->setObjectName(QStringLiteral("trioPortCaption"));
-                caption->setTextFormat(Qt::PlainText);
-                auto* name = new QLabel(button.label, radioGroup);
-                name->setObjectName(QStringLiteral("peripheralTrioName_radio_%1").arg(button.key));
-                name->setTextFormat(Qt::PlainText);
-                name->setTextInteractionFlags(Qt::TextSelectableByMouse);
-                name->setAccessibleName(RadioSetupDialog::tr("Trio %1 name").arg(button.name));
-                auto* marker = new QRadioButton(RadioSetupDialog::tr("this AetherSDR"), radioGroup);
-                marker->setObjectName(QStringLiteral("peripheralTrioThis_%1").arg(button.key));
-                marker->setAccessibleName(RadioSetupDialog::tr("This AetherSDR is on Trio %1")
-                                              .arg(button.name));
-                thisRadio->addButton(marker);
-                QObject::connect(marker, &QRadioButton::clicked, marker, [trio, key = button.key, refresh]() {
-                    if (trio) {
-                        trio->bindRadioSlot(key);
-                    }
-                    refresh();
-                });
-                radioGrid->addWidget(caption, radioRow, 0);
-                radioGrid->addWidget(name, radioRow, 1);
-                radioGrid->addWidget(marker, radioRow, 2);
-                ++radioRow;
-                rows->append({QStringLiteral("radio"), button.key, name, marker});
-            }
-            radioGrid->addWidget(notOnTrio, radioRow, 1, 1, 2);
-            int antennaRow = 0;
-            for (const MicrohamTrio::Button& button : view.snapshot->antenna.buttons) {
-                auto* caption = new QLabel(button.name, antennaGroup);
-                caption->setObjectName(QStringLiteral("trioPortCaption"));
-                caption->setTextFormat(Qt::PlainText);
-                auto* name = new QLabel(button.label, antennaGroup);
-                name->setObjectName(QStringLiteral("peripheralTrioName_antenna_%1").arg(button.key));
-                name->setTextFormat(Qt::PlainText);
-                name->setTextInteractionFlags(Qt::TextSelectableByMouse);
-                name->setAccessibleName(RadioSetupDialog::tr("Trio %1 name").arg(button.name));
-                auto* marker = new QCheckBox(RadioSetupDialog::tr("Dummy load"), antennaGroup);
-                marker->setObjectName(QStringLiteral("peripheralTrioDummy_%1").arg(button.key));
-                marker->setAccessibleName(RadioSetupDialog::tr("Trio %1 is the dummy load")
-                                              .arg(button.name));
-                QObject::connect(marker, &QCheckBox::clicked, marker,
-                                 [trio, key = button.key, refresh](bool on) {
-                    if (trio) {
-                        on ? (void)trio->markDummyLoad(key) : trio->clearDummyLoad();
-                    }
-                    refresh();
-                });
-                antennaGrid->addWidget(caption, antennaRow, 0);
-                antennaGrid->addWidget(name, antennaRow, 1);
-                antennaGrid->addWidget(marker, antennaRow, 2);
-                ++antennaRow;
-                rows->append({QStringLiteral("antenna"), button.key, name, marker});
-            }
-            antennaGrid->addWidget(dummyWarning, antennaRow, 0, 1, 3);
-            antennaGrid->addWidget(confirmDummy, antennaRow + 1, 1);
+            const auto addRows = [&](const MicrohamTrio::Selector& selector, const QString& kind,
+                                     QGroupBox* box, QGridLayout* grid) {
+                int line = 0;
+                for (const MicrohamTrio::Button& button : selector.buttons) {
+                    auto* caption = new QLabel(button.name, box);
+                    caption->setObjectName(QStringLiteral("trioPortCaption"));
+                    caption->setTextFormat(Qt::PlainText);
+                    auto* name = new QLabel(button.label, box);
+                    name->setObjectName(QStringLiteral("peripheralTrioName_%1_%2").arg(kind, button.key));
+                    name->setTextFormat(Qt::PlainText);
+                    name->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                    name->setAccessibleName(RadioSetupDialog::tr("Trio %1 name").arg(button.name));
+                    grid->addWidget(caption, line, 0);
+                    grid->addWidget(name, line, 1);
+                    ++line;
+                    rows->append({kind, button.key, caption, name});
+                }
+            };
+            addRows(view.snapshot->radio, QStringLiteral("radio"), radioGroup, radioGrid);
+            addRows(view.snapshot->antenna, QStringLiteral("antenna"), antennaGroup, antennaGrid);
         }
-        // Names follow the Trio. The markers share an exclusive group, in which
-        // a checked button cannot be unchecked: off while they are set.
-        thisRadio->setExclusive(false);
+        // Names follow the Trio.
         for (const PortRow& row : *rows) {
             const MicrohamTrio::Selector* group = !view.snapshot ? nullptr
                 : row.group == QLatin1String("radio") ? &view.snapshot->radio : &view.snapshot->antenna;
@@ -1929,50 +1857,10 @@ void RadioSetupDialog::buildTrioDevice(PeripheralDeviceUi& ui, QWidget* stackPar
             if (button && row.name->text() != button->label) {
                 row.name->setText(button->label);
             }
-            const QSignalBlocker blocked(row.marker);
-            if (row.group == QLatin1String("radio")) {
-                row.marker->setChecked(view.binding == MicrohamTrioBinding::Stored::Bound
-                                       && view.slotKey == row.key);
-                row.marker->setEnabled(view.radioKnown && view.configured);
-            } else {
-                row.marker->setChecked(view.dummyLoadKey == row.key);
-                row.marker->setEnabled(view.configured);
-            }
         }
-        {
-            const QSignalBlocker blocked(notOnTrio);
-            notOnTrio->setChecked(view.binding == MicrohamTrioBinding::Stored::NotOnTrio);
-            notOnTrio->setEnabled(view.radioKnown && view.configured && view.snapshot.has_value());
-        }
-        thisRadio->setExclusive(true);
         radioGroup->setEnabled(view.snapshot.has_value());
         antennaGroup->setEnabled(view.snapshot.has_value());
-        const QString warning = view.dummyLoadIssue.isEmpty() ? QString()
-            : RadioSetupDialog::tr("DUMMY LOAD WARNING: %1.").arg(view.dummyLoadIssue);
-        dummyWarning->setVisible(!warning.isEmpty());
-        if (dummyWarning->text() != warning) {
-            dummyWarning->setText(warning);
-            dummyWarning->setAccessibleDescription(warning);
-            if (!warning.isEmpty()) {
-                QAccessibleEvent event(dummyWarning, QAccessible::DescriptionChanged);
-                QAccessible::updateAccessibility(&event);
-            }
-        }
-        confirmDummy->setVisible(!view.dummyLoadIssue.isEmpty()
-                                 && view.snapshot && view.snapshot->antenna.find(view.dummyLoadKey));
     };
-    QObject::connect(notOnTrio, &QRadioButton::clicked, notOnTrio, [trio, refresh]() {
-        if (trio) {
-            trio->setNotOnTrio();
-        }
-        refresh();
-    });
-    connect(confirmDummy, &QPushButton::clicked, this, [trio, refresh]() {
-        if (trio) {
-            trio->confirmDummyLoad();
-        }
-        refresh();
-    });
     ui.refreshExtra = [previous = ui.refreshExtra, testButton, trio]() {
         previous();
         testButton->setEnabled(trio && !trio->isTesting());
