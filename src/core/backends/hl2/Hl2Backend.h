@@ -891,7 +891,7 @@ private:
     static QString sliceMeterName(int uiNumber);
 
     // Meter index for a receiver's "SLC"/"LEVEL". Receiver 0 keeps index 1 (as
-    // defineMeters() declares); the rest use a band clear of the fixed 1..9.
+    // defineMeters() declares); the rest use a band clear of the fixed 1..11.
     static int sliceLevelMeterIndex(int uiNumber);
 
     // Mixing scratch: per-receiver samples awaiting peers, and a reused summing
@@ -1227,7 +1227,7 @@ private:
 
     // Meter ballistics: the S-meter's rate gate and EMA are SMeterSmoother's
     // (WdspSMeter.h), shared with AnanBackend (100 ms tick, attack 0.5, decay 0.15),
-    // fed ~47 readings/s at any sample rate. Indices 1..9 are defineMeters()' fixed
+    // fed ~47 readings/s at any sample rate. Indices 1..11 are defineMeters()' fixed
     // catalogue; receivers above the first take kSliceLevelMeterBase + uiNumber.
     static constexpr int kSliceLevelMeterBase = 100;
     // S-meter state is per receiver (Receiver::sMeter). PA temperature rides the
