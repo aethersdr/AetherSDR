@@ -340,6 +340,20 @@ Absence means **nobody has said**: it is not a claim that the radio's firmware i
 current, nor that it cannot be checked. A radio whose backend declares nothing
 draws its version row exactly as it always has.
 
+### Board identity
+
+`boardIdentity` is the optional record for *"the backend knows which board this
+is"*: a stable lowercase `board` id and the `gatewareMajor` it runs, both derived
+below the seam (#7311). The support tier reads it
+(`ExperimentalRadioSupport.h`, `isSupportedHl2Identity`), never
+`RadioInfo::versionLabel`, which is display text and may be reworded or
+translated without changing any tier.
+
+| Backend | Declares | Why |
+|---|---|---|
+| HL2 | ✅ **while connected**: `board` from `hl2::boardIdFor(boardForGatewareMinor(minor))` (`"hl2"`, `"square-sdr-2"`, `"square-3"`), `gatewareMajor` from the discovery version (`"74.3"` → 74; absent when not reported) | Supported means `board == "hl2"` and `gatewareMajor == 74`; anything else, or no record, stays experimental |
+| Flex / Icom / ANAN / RTL / Sim | — | No tier reads a board identity; Icom's tier reads the CI-V-derived `model` |
+
 Read by `BandscopeDialog` (the Tools ▸ Wideband Bandscope window) and by nothing
 else. **The record is what gates the menu entry** — not `family == "hl2"`, which
 is the construct `docs/HERMES.md` §"For coding agents" forbids above the seam

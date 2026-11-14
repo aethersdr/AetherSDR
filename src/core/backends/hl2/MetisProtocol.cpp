@@ -629,6 +629,29 @@ std::optional<std::uint8_t> gatewareMinorFromVersionText(std::string_view text) 
     return static_cast<std::uint8_t>(value);
 }
 
+std::optional<std::uint8_t> gatewareMajorFromVersionText(std::string_view text) noexcept
+{
+    const auto isDigits = [](std::string_view part) {
+        return !part.empty() && part.size() <= 3
+            && std::all_of(part.begin(), part.end(),
+                           [](char c) { return c >= '0' && c <= '9'; });
+    };
+    const std::size_t dot = text.find('.');
+    const std::string_view major = text.substr(0, dot);
+    if (!isDigits(major)
+        || (dot != std::string_view::npos && !isDigits(text.substr(dot + 1)))) {
+        return std::nullopt;
+    }
+    int value = 0;
+    for (const char c : major) {
+        value = value * 10 + (c - '0');
+    }
+    if (value > 0xFF) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint8_t>(value);
+}
+
 std::string gatewareVersionLabel(const DiscoveryReply& reply)
 {
     const char* name = gatewareBoardName(boardForGatewareMinor(reply.gatewareMinor));

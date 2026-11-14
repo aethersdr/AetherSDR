@@ -26,6 +26,7 @@
 #include "core/RadioSettingsScope.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2HardwareOptions.h"
+#include "gui/ExperimentalRadioSupport.h"
 
 #include <QCoreApplication>
 #include <QJsonObject>
@@ -56,6 +57,24 @@ struct Hl2BoardIdentityTestAccess {
     {
         backend.m_radioSerial = serial;
         backend.loadHardwareOptions(minor);
+    }
+    // The board identity capabilities() publishes after a connect whose
+    // discovery reported `version`, and what it publishes once disconnected.
+    struct Published {
+        std::optional<RadioCapabilities::BoardIdentity> connected;
+        std::optional<RadioCapabilities::BoardIdentity> disconnected;
+    };
+    static Published identityAfterConnect(Hl2Backend& backend, const QString& serial,
+                                          const QString& version)
+    {
+        backend.m_radioSerial = serial;
+        backend.loadBoardIdentity(version);
+        backend.m_connected = true;
+        Published p;
+        p.connected = backend.capabilities().boardIdentity;
+        backend.m_connected = false;
+        p.disconnected = backend.capabilities().boardIdentity;
+        return p;
     }
 };
 }  // namespace AetherSDR::hl2
@@ -478,6 +497,58 @@ int main(int argc, char** argv)
         check(codecKeyStored(RadioSettingsScope(family, stock))
                   && filterBoardKeyStored(RadioSettingsScope(family, stock)),
               "a stock board writes its codec and filter board defaults as before");
+    }
+
+    // ---- 4f. the typed board identity, through the backend (#7311) --------
+    // RadioConnectRequest::version in, RadioCapabilities::boardIdentity out, and
+    // the support tier read from that. No display label is involved anywhere on
+    // this path, so rewording "Gateware" cannot reach the tier.
+    {
+        hl2::Hl2Backend backend;
+        const QString serial = QStringLiteral("AA:BB:CC:DD:EE:21");
+        const auto tierFor = [&](const QString& version) {
+            return experimentalRadioDescriptor(
+                QStringLiteral("hl2"), QStringLiteral("Hermes-Lite 2"),
+                hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(backend, serial, version)
+                    .connected);
+        };
+        const auto stock = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QStringLiteral("74.3"));
+        check(stock.connected && stock.connected->board == QStringLiteral("hl2")
+                  && stock.connected->gatewareMajor == 74,
+              "74.3 publishes board \"hl2\", gateware major 74");
+        check(!stock.disconnected, "and nothing once disconnected");
+        const auto bare = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QStringLiteral("74"));
+        check(bare.connected && bare.connected->board == QStringLiteral("hl2")
+                  && bare.connected->gatewareMajor == 74,
+              "a bare 74 publishes board \"hl2\", gateware major 74");
+        const auto sq2 = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QStringLiteral("75.52"));
+        check(sq2.connected && sq2.connected->board == QStringLiteral("square-sdr-2")
+                  && sq2.connected->gatewareMajor == 75,
+              "75.52 publishes board \"square-sdr-2\", gateware major 75");
+        const auto sq3 = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QStringLiteral("74.53"));
+        check(sq3.connected && sq3.connected->board == QStringLiteral("square-3"),
+              "74.53 publishes board \"square-3\"");
+        const auto none = hl2::Hl2BoardIdentityTestAccess::identityAfterConnect(
+            backend, serial, QString());
+        check(none.connected && none.connected->board == QStringLiteral("hl2")
+                  && !none.connected->gatewareMajor,
+              "no reported version publishes the board with no gateware major");
+
+        check(!tierFor(QStringLiteral("74.3")), "74.3 through the backend: supported");
+        check(!tierFor(QStringLiteral("74")), "74 through the backend: supported");
+        check(tierFor(QStringLiteral("73.3")).has_value(), "73.3: experimental");
+        check(tierFor(QStringLiteral("75.3")).has_value(), "75.3: experimental");
+        check(tierFor(QStringLiteral("74.52")).has_value(),
+              "a SQUARE SDR 2 on 74: experimental");
+        check(tierFor(QStringLiteral("75.52")).has_value(),
+              "a SQUARE SDR 2 on 75.52: experimental");
+        check(tierFor(QStringLiteral("74.53")).has_value(), "a SQUARE 3 on 74: experimental");
+        check(tierFor(QString()).has_value(), "no reported version: experimental");
+        check(tierFor(QStringLiteral("74x")).has_value(), "a malformed version: experimental");
     }
 
     // ---- 5. an invalid scope is inert in both directions -------------------

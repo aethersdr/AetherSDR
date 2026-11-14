@@ -351,7 +351,8 @@ private:
     // Forces m_connected, publishes a window and fires linkDown, so
     // control_front_end_overload_test follows a reconnect without a socket.
     friend struct Hl2FrontEndOverloadTestAccess;
-    // Runs loadHardwareOptions() without a socket (hl2_hardware_document_test).
+    // Runs loadHardwareOptions() / loadBoardIdentity() without a socket
+    // (hl2_hardware_document_test).
     friend struct Hl2BoardIdentityTestAccess;
     // The snapshot at `nowNs`, on steadyNowNs()'s timeline. The converter rows
     // take their age from it and read no clock, so the age row and the pairing
@@ -570,8 +571,14 @@ private:
     // m_hw.filterBoard are the suggestion for it rather than a stored choice.
     // A suggested field is not persisted until a hw.set names it (#6806).
     hl2::GatewareBoard m_gatewareBoard = hl2::GatewareBoard::Unknown;
+    // The gateware major from the same connect's version text; published with
+    // the board as RadioCapabilities::boardIdentity (#7311).
+    std::optional<std::uint8_t> m_gatewareMajor;
     bool m_hwCodecSuggested = false;
     bool m_hwFilterBoardSuggested = false;
+    // The connect-time identity from RadioConnectRequest::version: sets
+    // m_gatewareMajor and runs loadHardwareOptions() with the minor.
+    void loadBoardIdentity(const QString& gatewareVersion);
     // Load m_hw for m_radioSerial at connect, applying sessionCodec().
     void loadHardwareOptions(std::optional<std::uint8_t> gatewareMinor);
     // Adopt a new set: persist (or not), push every field that changed to the
