@@ -28,6 +28,7 @@
 #include <QSet>
 #include <QString>
 #include <QVector>
+#include <array>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -262,6 +263,8 @@ private:
     void broadcastBinary(const QByteArray& data);
     // Extension groups `rx_antenna` and `tx_antenna` (TciAntennaExtension.h).
     enum class AntennaLine { RxList, RxSelection, TxList, TxSelection };
+    static constexpr int kAntennaLineKinds = 4;
+    static_assert(static_cast<int>(AntennaLine::TxSelection) + 1 == kAntennaLineKinds);
     void registerAntennaGroups();
     void wireSliceAntennas(SliceModel* slice);
     TciExtensionSet::Result handleAntenna(bool tx, const QString& name,
@@ -553,7 +556,7 @@ private:
     // Extension set, antenna notices: per line kind, the trx numbers pending;
     // posted, then rate-limited like drive:.
     QTimer*           m_antennaRateTimer{nullptr};
-    QSet<int>         m_antennaPending[4];
+    std::array<QSet<int>, kAntennaLineKinds> m_antennaPending;
     bool              m_antennaSendPosted{false};
     // A refused keyed TX-antenna set warns once per keyed period; cleared on unkey.
     bool              m_txAntennaRefusalWarned{false};

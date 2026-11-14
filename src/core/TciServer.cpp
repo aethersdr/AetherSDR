@@ -3832,10 +3832,6 @@ void TciServer::handleExtensionCommand(TciClient* ws, const QString& cmd)
 // A set goes through SliceModel::setRxAntenna()/setTxAntenna(), the path the
 // RX applet's antenna menus take, so the backend's own refusals still apply.
 
-namespace {
-constexpr int kAntennaLineKinds = 4;
-} // namespace
-
 bool TciServer::antennaOffered(bool tx) const
 {
     if (!m_model) {
@@ -4059,8 +4055,6 @@ TciExtensionSet::Result TciServer::handleAntenna(bool tx, const QString& name,
     }
     if (tx) {
         m_txAntennaRefusalWarned = false;
-    }
-    if (tx) {
         slice->setTxAntenna(wanted);
     } else {
         slice->setRxAntenna(wanted);
@@ -4091,7 +4085,7 @@ void TciServer::queueAntennaNotice(AntennaLine kind, int trx)
 
 bool TciServer::broadcastAntennas()
 {
-    QList<int> pending[kAntennaLineKinds];
+    std::array<QList<int>, kAntennaLineKinds> pending;
     bool any = false;
     for (int kind = 0; kind < kAntennaLineKinds; ++kind) {
         pending[kind] = m_antennaPending[kind].values();
