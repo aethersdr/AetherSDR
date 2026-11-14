@@ -643,9 +643,12 @@ void MetisClient::onSilenceProbeAnswer(std::optional<bool> streaming)
     m_silenceProbeAsking = false;
     if (!m_running)
         return;   // the session ended while asking
-    if (!AetherSDR::ReconnectBusyProbe::mayProceed(streaming)) {
-        qInfo() << "MetisClient: the radio reports it is still sending, to another host"
-                   " or to a link we lost; ending this session without a stop";
+    // Only an explicit idle reply re-sends run: an HL2 streaming to another
+    // host does not answer us, and one still streaming to us cannot either.
+    if (!AetherSDR::ReconnectBusyProbe::mayProceed(
+            streaming, AetherSDR::ReconnectBusyProbe::Silence::Wait)) {
+        qInfo() << "MetisClient: no idle answer from the radio (another host has it, or"
+                   " our link is gone); ending this session without a stop";
         abandon();
         return;
     }

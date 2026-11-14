@@ -394,6 +394,10 @@ int main(int argc, char** argv)
                   && ReconnectBusyProbe::mayProceed(false)
                   && !ReconnectBusyProbe::mayProceed(true),
               "only a reply saying the radio is streaming stops a reconnect; silence never does");
+        check(!ReconnectBusyProbe::mayProceed(std::nullopt, ReconnectBusyProbe::Silence::Wait)
+                  && ReconnectBusyProbe::mayProceed(false, ReconnectBusyProbe::Silence::Wait)
+                  && !ReconnectBusyProbe::mayProceed(true, ReconnectBusyProbe::Silence::Wait),
+              "with Silence::Wait (the HL2's rule) only an idle reply proceeds");
         AnanBackend backend;
         QSignalSpy errors(&backend, &IRadioBackend::connectionError);
         QSignalSpy warnings(&backend, &IRadioBackend::configurationWarning);

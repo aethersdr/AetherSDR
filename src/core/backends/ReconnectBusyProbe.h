@@ -21,8 +21,8 @@ namespace AetherSDR {
 // settings, and the relays chatter (Zeus documents a brown-out reboot of a G2).
 //
 // One unicast discovery from a short-lived socket; the family's parser turns a
-// reply into streaming yes/no. No reply within the timeout never blocks the
-// reconnect (fail open, as Zeus does), so a slow radio cannot strand a retry.
+// reply into streaming yes/no. What no reply within the timeout means is the
+// family's call (Silence below): ANAN proceeds, the HL2 waits for the next retry.
 class ReconnectBusyProbe : public QObject {
     Q_OBJECT
 public:
@@ -44,10 +44,17 @@ public:
     void cancel();
     [[nodiscard]] bool active() const noexcept { return static_cast<bool>(m_done); }
 
-    // Only a reply saying the radio is streaming stops a reconnect.
-    [[nodiscard]] static bool mayProceed(std::optional<bool> streaming) noexcept
+    // What no reply means. ANAN's p2app answers discovery while it streams to
+    // another client, so silence is only a slow or absent radio: proceed (Zeus's
+    // rule). An HL2 streaming to another host does not answer us at all, so for
+    // it silence may well be busy: only an explicit idle reply proceeds.
+    enum class Silence { Proceed, Wait };
+    [[nodiscard]] static bool mayProceed(std::optional<bool> streaming,
+                                         Silence silence = Silence::Proceed) noexcept
     {
-        return !(streaming && *streaming);
+        if (!streaming)
+            return silence == Silence::Proceed;
+        return !*streaming;
     }
 
     // Tests: arm a probe without a socket, then hand it the radio's answer.

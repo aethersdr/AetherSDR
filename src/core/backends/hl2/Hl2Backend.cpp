@@ -2340,14 +2340,17 @@ void Hl2Backend::armBusyProbeForTest(const RadioConnectRequest& request)
 
 void Hl2Backend::finishBusyProbe(std::optional<bool> streaming)
 {
-    if (!ReconnectBusyProbe::mayProceed(streaming)) {
+    // An HL2 streaming to another host does not answer our discovery, so only
+    // an explicit idle reply lets the reconnect go ahead.
+    if (!ReconnectBusyProbe::mayProceed(streaming, ReconnectBusyProbe::Silence::Wait)) {
         qCInfo(lcHl2) << "HL2: not reconnecting to" << m_busyProbeRequest.host
-                      << "- another client has the radio";
+                      << (streaming ? "- another client has the radio" : "- no idle answer");
         if (!m_busyWarned) {
             m_busyWarned = true;
             emit configurationWarning(QStringLiteral(
-                "HL2: the radio at %1 is in use by another client. AetherSDR will "
-                "reconnect once it is free, without taking it over.").arg(m_busyProbeRequest.host));
+                "HL2: the radio at %1 is not answering, or is in use by another client. "
+                "AetherSDR will reconnect once it answers free, without taking it over.")
+                .arg(m_busyProbeRequest.host));
         }
         return;   // RadioModel's reconnect timer asks again
     }

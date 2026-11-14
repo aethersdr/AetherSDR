@@ -1061,8 +1061,8 @@ int main(int argc, char** argv)
         MetisClientTestAccess::setStreaming(d);
         MetisClientTestAccess::setLinkUp(d);
         d.answerSilenceProbeForTest(std::nullopt);
-        check(d.isRunning() && MetisClientTestAccess::silenceProbeCleared(d),
-              "no reply: the run re-send goes ahead (fail open)");
+        check(!d.isRunning() && downD.count() == 1,
+              "no reply: abandoned too (an HL2 streaming to another host does not answer)");
         MetisClient e;
         QSignalSpy downE(&e, &MetisClient::linkDown);
         MetisClientTestAccess::setStreaming(e);

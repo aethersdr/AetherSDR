@@ -1227,11 +1227,11 @@ int main(int argc, char** argv)
         check(errors.count() == 1, "a free HL2: the reconnect goes ahead");
         backend.armBusyProbeForTest(retry);
         backend.busyProbeForTest()->answerForTest(std::nullopt);
-        check(errors.count() == 2, "no reply in time: the reconnect goes ahead (fail open)");
+        check(errors.count() == 1, "no reply: the HL2 waits (one streaming to another host does not answer)");
         backend.armBusyProbeForTest(retry);
         backend.disconnectRadio();
         backend.busyProbeForTest()->answerForTest(false);
-        check(errors.count() == 2, "a disconnect during the probe cancels the reconnect");
+        check(errors.count() == 1, "a disconnect during the probe cancels the reconnect");
     }
 
     return g_failures == 0 ? 0 : 1;
