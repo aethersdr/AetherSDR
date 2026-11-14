@@ -101,6 +101,7 @@ enum class NotificationType {
     Registered,     // one callsign per line, after MYCALL's OK
     Version,        // free text
     CqFrame,        // source bandwidth
+    Monitor,        // a frame a passive monitor decoded (Mercury MONITOR)
 };
 
 struct Notification {
@@ -117,6 +118,11 @@ struct Notification {
     int bitsPerSecond = 0;    // Bitrate
     QString callsign;         // Registered
     QString text;             // Version
+    QString monitorMode;      // Monitor: the mode it decoded on, e.g. DATAC16
+    QString monitorKind;      // Monitor: CALL, ACCEPT, CQ, DISCONNECT, ...
+    QString monitorFrom;      // Monitor: FROM= when present (CALL, CQ), else empty
+    double monitorSnDb = 0.0; // Monitor: SNR= when present and in range
+    // Monitor: source (FROM=) and bandwidthHz (BW=) are also set when present.
 };
 
 // Decode one framed line from a modem. Never throws; anything unrecognised or
@@ -133,6 +139,8 @@ QByteArray cmdAbort();
 QByteArray cmdVersion();
 QByteArray cmdBuffer();
 QByteArray cmdSn();
+// Mercury's passive monitor (docs/TNC.md, MONITOR): read-only, never keys.
+QByteArray cmdMonitor(bool on);
 
 // ── Host -> modem commands (the gateway as server) ──────────────────────────
 

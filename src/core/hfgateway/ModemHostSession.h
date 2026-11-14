@@ -22,8 +22,9 @@
 //
 // Transmit permission. LISTEN ON lets a modem answer a call, which keys the
 // radio, so it is refused unless the owner has granted permission. Ending
-// things (LISTEN OFF, DISCONNECT, ABORT) and setting MYCALL never need
-// permission, and stop commands are also exempt from the soft reply cap.
+// things (LISTEN OFF, DISCONNECT, ABORT), setting MYCALL and the read-only
+// MONITOR never need permission, and stop commands are also exempt from the
+// soft reply cap.
 // The session never offers CONNECT, CQFRAME or TUNE at all. Permission starts
 // off and revoking it does not send anything by itself; the owner decides
 // what to send (LISTEN OFF).
@@ -37,6 +38,8 @@ enum class Request {
     Disconnect,
     Abort,
     Version,
+    MonitorOn,   // Mercury only; read-only, never keys (docs/TNC.md, MONITOR)
+    MonitorOff,
 };
 
 enum class Refusal {
