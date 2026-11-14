@@ -2338,6 +2338,19 @@ void SliceModel::applyChanges(const SliceDelta& d)
             break;
         }
     }
+    if (d.squelchGate) {
+        const SquelchGateState gate = *d.squelchGate;
+        switch (gate) {
+        case SquelchGateState::Unavailable:
+        case SquelchGateState::Closed:
+        case SquelchGateState::Open:
+            if (m_squelchGate != gate) {
+                m_squelchGate = gate;
+                emit squelchGateChanged(gate);
+            }
+            break;
+        }
+    }
     if (d.wfmReceptionDiagnostics) {
         WfmReceptionDiagnostics value = *d.wfmReceptionDiagnostics;
         if (!value.valid || !std::isfinite(value.pilotMagnitude)

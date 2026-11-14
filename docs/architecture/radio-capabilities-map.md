@@ -804,6 +804,7 @@ and conflating them would hide one of them.
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
 | `clientPersistsDbmRange()` (`panAmplitude->clientPersistsDbmRange`, with `binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ❌ (declared false) | May the client store and restore the dBm range the operator sets? RTL: ❌ (declared false). Sim: ❌ (absent) |
 | `squelchLevelScale` | −160 + 1·L, eligible voice modes, display Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | IC-7300MK2: −194.8 + 1.49·L on the pan, USB/LSB/CW/CWU/CWL/AM/DIGU/DIGL, no Auto SQL (measured, #6180); Flex's for every other Icom | Flex's (no measured map) | Where does squelch level L open, on this axis? |
+| `squelchGateModes` | ❌ (empty) | FM (WDSP `fmsq`, read back per block) | ❌ (empty) | ❌ (empty: no squelch wired) | In which modes does the backend report whether its squelch gate is open (`SliceDelta::squelchGate`)? RTL, Sim: ❌ (empty) |
 
 **`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
 The demo keeps Flex's scale. RTL-SDR publishes its own gate, −120 + 1.2·L dBFS/2048-bin in FM/FM-N, with engine-owned Auto and no display line (see Native squelch above). For display-driven Auto, an absent record or an unlisted mode means no line, and the SQL button

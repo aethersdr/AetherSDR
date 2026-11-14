@@ -1392,6 +1392,8 @@ void RxApplet::buildUI()
 void RxApplet::applySqlModeVisuals()
 {
     if (!m_sqlBtn) return;
+    // Declared first so it runs last, after every tooltip below is set.
+    const auto paintGate = qScopeGuard([this] { applySqlGateVisuals(); });
     const auto describeThreshold = qScopeGuard([this] {
         if (!m_exclusiveSquelch || usingExternalReceiveSquelch()
             || !m_sqlSlider || !m_sqlSlider->isEnabled()) { return; }
@@ -1484,6 +1486,51 @@ void RxApplet::applySqlModeVisuals()
         m_sqlSlider->update();
     }
     applySqlButtonDescription();
+}
+
+SquelchGateState RxApplet::shownSquelchGate() const
+{
+    if (!m_slice || m_sqlMode == SqlMode::Off || usingExternalReceiveSquelch()
+        || !m_squelchGateModes.contains(m_slice->mode(), Qt::CaseInsensitive)) {
+        return SquelchGateState::Unavailable;
+    }
+    return m_slice->squelchGate();
+}
+
+void RxApplet::applySqlGateVisuals()
+{
+    if (!m_sqlSlider) {
+        return;
+    }
+    const SquelchGateState gate = shownSquelchGate();
+    if (gate != m_paintedSquelchGate) {
+        // Closed takes the dimmed fill; open and unreported keep the applet's.
+        applyPrimarySliderStyle(m_sqlSlider, gate == SquelchGateState::Closed
+            ? QStringLiteral("color.slider.foreground.disabled")
+            : QStringLiteral("color.slider.foreground"));
+        m_paintedSquelchGate = gate;
+    }
+    m_sqlSlider->setProperty("squelchGate", gate == SquelchGateState::Open ? QStringLiteral("open")
+        : gate == SquelchGateState::Closed ? QStringLiteral("closed") : QString());
+    QString line;
+    if (gate == SquelchGateState::Open) {
+        line = tr("Gate open: audio passes.");
+    } else if (gate == SquelchGateState::Closed) {
+        line = tr("Gate closed: audio muted.");
+    }
+    // Only our own line is replaced, so a tooltip set elsewhere (a mode's
+    // unavailability reason) survives a gate change.
+    const auto withLine = [&](QString text, QLatin1Char sep) {
+        const QString old = sep + m_paintedSquelchGateLine;
+        if (!m_paintedSquelchGateLine.isEmpty() && text.endsWith(old)) {
+            text.chop(old.size());
+        }
+        return line.isEmpty() ? text : text + sep + line;
+    };
+    m_sqlSlider->setToolTip(withLine(m_sqlSlider->toolTip(), QLatin1Char('\n')));
+    m_sqlSlider->setAccessibleDescription(
+        withLine(m_sqlSlider->accessibleDescription(), QLatin1Char(' ')));
+    m_paintedSquelchGateLine = line;
 }
 
 void RxApplet::applySqlButtonDescription()
@@ -2185,6 +2232,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         ? m_radioModel->backendCapabilities().receiveFilterControl : std::nullopt;
     m_exclusiveSquelch = m_radioModel && m_radioModel->isConnected()
         ? exclusiveSquelchScaleValue(m_radioModel->backendCapabilities().squelchLevelScale) : std::nullopt;
+    m_squelchGateModes = m_radioModel && m_radioModel->isConnected()
+        ? m_radioModel->backendCapabilities().squelchGateModes : QStringList{};
     if (!m_radioModel) {
         m_filterPassband->setEnabled(true);
         m_filterPassband->setAccessibleDescription(
@@ -2262,6 +2311,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
                 [this](bool connected, const RadioCapabilities& caps) {
             m_receiveFilterControl = connected ? caps.receiveFilterControl : std::nullopt;
             m_exclusiveSquelch = connected ? exclusiveSquelchScaleValue(caps.squelchLevelScale) : std::nullopt;
+            m_squelchGateModes = connected ? caps.squelchGateModes : QStringList{};
+            applySqlGateVisuals();
             if (m_exclusiveSquelch && m_slice && !m_clientSquelchScope.hasRadioIdentity()) {
                 setSlice(m_slice);
             }
@@ -3036,6 +3087,8 @@ void RxApplet::connectSlice(SliceModel* s)
         m_afSlider->setValue(static_cast<int>(g));
     });
 
+    connect(s, &SliceModel::squelchGateChanged, this, [this] { applySqlGateVisuals(); });
+    connect(s, &SliceModel::modeChanged, this, [this] { applySqlGateVisuals(); });
     connect(s, &SliceModel::squelchChanged, this, [this, applySquelchState](bool on, int level) {
         if (m_slice && m_slice->externalReceiveReplacementActive()) {
             return;

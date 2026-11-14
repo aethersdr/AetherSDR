@@ -2395,6 +2395,17 @@ target_include_directories(slice_model_squelch_memory_test PRIVATE src)
 target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
 
+# #6552 option C: the squelch gate reporter's rate limit and SliceModel taking
+# SliceDelta::squelchGate. Socket-free; the WDSP readback is in wdsp_channel_test.
+add_executable(squelch_gate_test
+    tests/squelch_gate_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(squelch_gate_test PRIVATE src)
+target_link_libraries(squelch_gate_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME squelch_gate_test COMMAND squelch_gate_test)
+
 # Split audio memory (#2242) — the parsing rules for the one stored SplitAudio
 # object (the has*/value distinction, the version gate, clamping), the
 # recorder's carry-forward and RX-pan restore across repeated splits, and the

@@ -2508,6 +2508,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::controlRequested,
             this, &RadioModel::dispatchTransmitControl, Qt::DirectConnection);
     qRegisterMetaType<WfmStereoStatus>();
+    qRegisterMetaType<SquelchGateState>();
     qRegisterMetaType<WfmReceptionDiagnostics>();
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();

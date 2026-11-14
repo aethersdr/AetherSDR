@@ -37,6 +37,7 @@ Hl2RxDsp::Hl2RxDsp(QObject* parent) : QObject(parent)
     // thread; without this the Mode argument has no metatype and Qt drops the
     // call with only a warning.
     qRegisterMetaType<WdspChannel::Mode>("WdspChannel::Mode");
+    qRegisterMetaType<AetherSDR::SquelchGateState>("AetherSDR::SquelchGateState");
 }
 
 Hl2RxDsp::~Hl2RxDsp()
@@ -837,6 +838,11 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
             m_stereo[2 * k + 1] = m_dcBlockR.process(m_right[k]);
         }
         emit audioReady(m_stereo);
+        if (const auto gate = m_gateReporter.feed(
+                m_audioMuted ? std::nullopt : m_channel->fmSquelchGateOpen(),
+                static_cast<double>(block) / m_config.inputSampleRateHz)) {
+            emit squelchGateChanged(*gate);
+        }
         // S-meter from WDSP's average signal meter (xmeter `avg`, an EMA of
         // I*I + Q*Q, the RMS quantity S9 is defined in); the peak-hold reads band
         // noise ~11-14 dB high. Not read while muted or during the settle after

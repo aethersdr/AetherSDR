@@ -126,7 +126,7 @@ ranges are skipped; if none fit, the normal CW presets appear.
 
 The **SQL** button works per mode family:
 
-- **FM:** FM squelch.
+- **FM:** a noise squelch, not a level gate. It opens when a signal quiets the receiver's noise, so the level at which a station opens it depends on how strong it is and on how hard it modulates. The threshold follows the receive filter width, so with no signal the squelch closes at about the same slider position at every width from ±1500 to ±6000 Hz. Above ±6000 Hz (the FM default is ±8000) noise alone already keeps it closed from level 1. Below ±1500 Hz noise needs a higher setting to close it. A strongly modulated station closes the squelch at a lower setting than an unmodulated carrier of the same strength, and the width compensation does not change that. The **SQL** slider shows whether the gate is open: its fill dims while the squelch is closed, and its tooltip says **Gate open** or **Gate closed**.
 - **AM, SAM, DSB, LSB, USB:** a level squelch with a threshold map measured on the HL2. It tracks RF gain dB for dB.
 - **CW and data modes:** no squelch.
 

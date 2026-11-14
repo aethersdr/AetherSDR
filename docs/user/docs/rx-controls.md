@@ -121,6 +121,9 @@ The **SQL** button cycles through three states:
 - On Hermes-Lite 2 and Icom profiles without mode-independent squelch, the
   existing CW, RTTY and data-mode restrictions also apply. Supported mode-independent
   Icom profiles retain native manual SQL in those modes.
+- On radios that report their squelch gate (Hermes-Lite 2 in FM), the SQL
+  slider's fill dims while the squelch is closed, and its tooltip ends with
+  **Gate open: audio passes.** or **Gate closed: audio muted.**
 - The squelch scale, the panadapter SQL line and Auto SQL follow each radio's
   own scale. On radios where Auto SQL is not available, a slice set to AUTO
   drops to manual at its manual level.
