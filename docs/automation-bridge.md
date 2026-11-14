@@ -357,7 +357,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
-| | [`titlebar <action> [id]`](#titlebar) | Drive the unified title bar: selectRadio / showDiscovery / minimize / maximize / close. |
+| | [`titlebar <action> [id]`](#titlebar) | Drive the unified title bar: selectRadio / showRadioMenu / showDiscovery / minimize / maximize / close. |
 | | [`shortcut <id>`](#shortcut) | Fire a ShortcutManager/MIDI action by id (TX-guarded). |
 | | [`midi cc <0-127>`](#midi) | Inject a learned VFO Tune Knob CC event (RX-only). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
@@ -2950,7 +2950,8 @@ persists a selection, including while a radio is live. Location selection does
 not connect or change audio. Explicitly switching operators recalls the saved
 computer audio/layout preferences, without changing radio-owned state, and is refused while transmitting. This mutation is refused
 in Observe-only mode. Profile creation and editing are exercised through the
-normal `connectionProfileEditor` widgets with `invoke`.
+normal `connectionProfileEditor` widgets with `invoke`. In an Observe-only session the
+`connect profiles` reply shows every email and user name field as `[REDACTED]`.
 
 `connect show` and `connect hide` idempotently show/raise or hide the
 modeless **Connect to Radio** dialog for visual debugging; they do not toggle,
@@ -3480,12 +3481,19 @@ tab is actually showing it. `radios.discovered[].canRename` says whether the swi
 offers Rename… for that radio (client-owned nickname) or routes to Radio
 Setup instead.
 `radios.overflowing` reports whether the bounded tab viewport is
-currently clipping configured radios. `radios.tabs[].visibleInTabs` is the
-retained tab preference and `visible` is current widget visibility (which can
-also change in minimal mode). `radios.tabs[].linkCarrier` identifies
-the one tab carrying discovery/heartbeat state. `radios.tabs[].kind` distinguishes `radio` from `workspace`. Radio `status` is
-one of `connected` / `available` / `in use`, lower-case and untranslated.
-AetherLab has `status: "workspace"` and never carries the radio link indicator.
+currently clipping configured shortcuts. The app supplies up to two recent radio
+shortcuts plus independent workspace tabs. `radios.discovered` retains the full
+saved/discovered drawer list; its `visibleInTabs` identifies current shortcuts.
+`radios.tabs[].visible` is widget visibility (which can also change in minimal mode). `radios.tabs[].linkCarrier` identifies
+the one tab carrying discovery/heartbeat state. `radios.tabs[].status` is one of `connected`, `available`,
+`in use`, `saved`, `unavailable`, `sign-in required`, `connecting`, `disconnecting`, or `failed` — a lower-case,
+untranslated token. `serial` identifies the hardware separately from the stable workspace tab `id`;
+`location` names its saved Location. `canConnect`, `connectReason`, and `canCancel` describe connection
+availability. `radios.contextMenuVisible` reports an open per-tab menu. `radios.reordering` is true during a tab reorder drag.
+The `radios.tabs` array is in visual order; inspect it after `drag radioTab_<id> <dx> 0`, then restart
+the same isolated settings profile and compare the order. A drag changes neither `activeId` nor the session.
+`kind` distinguishes radio tabs from workspace tabs. AetherLab has `status: "workspace"`
+and never carries the radio-link indicator.
 The text the tab *renders* is sentence case and translated (`Connected`,
 `Available`, `In use`, and `Link lost` while the link alarm is up), so
 `statusLine` and `accessibleName` deliberately disagree with `status` on
@@ -3506,16 +3514,17 @@ use QWidget window operations; they do **not** prove a native traffic-light
 click, native hover menu, or Windows Snap Layouts. Those require native UI
 testing on the target OS.
 
-The radio switcher is also drivable with existing generic bridge verbs:
-`invoke radioSwitcherSearch setText <query>`,
-`invoke radioSwitcherActions_<radio-id> click`, then invoke the visible menu's
-`radioSwitcher_disconnect_<radio-id>`, `radioSwitcher_rename_<radio-id>`,
-`radioSwitcher_setup_<radio-id>`, or `radioSwitcher_remove_<radio-id>` action.
-Removed tabs offer `radioSwitcher_restore_<radio-id>`. These are widget/action
-targets, not new bridge verbs. `radioNicknameEditor` and `saveRadioNickname`
-exercise client-owned naming. Radio-owned naming uses Radio Setup instead.
-`connectManuallyRow` opens the IP connection page, and `radioSwitcherRescan`
-requests discovery without connecting. Inspect enabled states before invoking.
+Open a tab's real context menu with `titlebar showRadioMenu <id>`, then use generic `invoke` on
+`radioSwitcher_connect_<id>`, `radioSwitcher_disconnect_<id>`, `radioSwitcher_cancel_<id>`,
+`radioSwitcher_rename_<id>`, `radioSwitcher_settings_<id>`, or `radioSwitcher_remove_<id>`.
+Inspect enabled states and status tips before invoking. Opening a menu never activates its radio.
+`radioSwitchConfirm` accepts a replacement; `radioSwitchRetry` and `radioSwitchReconnectPrevious`
+exercise failure recovery. Rename uses `connectionProfileName` and the existing profile editor.
+
+`titlebar showDiscovery` retains the searchable saved/discovered picker for inspection and restoration;
+its menus use the same actions. The title-bar **⋯ More radios** opens this drawer.
+`connectManuallyRow` opens Locations, preserving the browsed context. In the connection dialog, `connectionRadioRestoreTab`
+restores a saved tab and `connectionBackToStation` returns from IP recovery to Locations.
 
 ```json
 → {"cmd":"titlebar","action":"selectRadio","target":"1234-5678-9012-3456"}
@@ -3525,8 +3534,9 @@ requests discovery without connecting. Inspect enabled states before invoking.
 
 | Action | Effect |
 |---|---|
-| `selectRadio <id>` | Clicks the radio tab whose `id` matches; errors if there is no such tab. |
-| `showDiscovery` | Opens the "Discovered radios" popover the `+` button owns. |
+| `selectRadio <id>` | Clicks the visible tab matching its workspace ID (or hardware serial). Requests connect/switch; the active highlight follows successful connection. |
+| `showRadioMenu <id>` | Opens the visible tab’s context menu without selecting or connecting it. |
+| `showDiscovery` | Opens the searchable saved/discovered radio picker. |
 | `minimize` / `maximize` / `close` | Activates the matching caption control. |
 
 Every action is validated synchronously — an unknown action or a missing tab
@@ -4952,7 +4962,7 @@ The app must be connected to the instrument on the MCP server's host.
 See [the implementation and qualification guide](./rigexpert-usb-poc.md).
 
 AetherLab is embedded in the main window. Invoke `aetherLabAction` to open it,
-`radioSwitcherAetherLab` in the open **+** popover, or `radioTab_aetherlab`
+`radioSwitcherAetherLab` in the open **More radios** drawer, or `radioTab_aetherlab`
 after first use. Invoke `aetherLabReturn` to stop the analyzer session and
 restore the radio workspace. The `titlebar` tab model distinguishes
 `kind: "workspace"` / `status: "workspace"` from radio entries, and the radio
@@ -5241,7 +5251,7 @@ audio devices require separate hardware validation.
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |
 | `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
-| `titlebar` | — | titlebar <selectRadio <id>\|showDiscovery\|minimize\|maximize\|close> — drive the unified title bar's own controls |
+| `titlebar` | — | titlebar <selectRadio <id>\|showRadioMenu <id>\|showDiscovery\|minimize\|maximize\|close> — drive the unified title bar's own controls |
 | `applet` | — | applet <dock <left\|right>\|float <on\|off>\|show\|hide\|state> — drive the applet panel's dock side, floating and visibility |
 | `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
 | `keyevent` | — | keyevent <press\|release> <action-id\|key-seq> — inject a real key edge through the app event filter (momentary shortcuts only — PTT hold, and the CW keys once bound: their ids ship unbound, so KeyInjectUnbound until the operator binds them in Configure Shortcuts; press is TX-gated; a literal Tab/Backtab moves focus yet reports consumed) |

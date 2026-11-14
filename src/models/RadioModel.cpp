@@ -4368,6 +4368,19 @@ bool RadioModel::prepareFlexBackendForWan()
     return m_panStream != nullptr;
 }
 
+bool RadioModel::prepareWanConnection()
+{
+    if (isConnected() || m_connectAttemptActive) { return false; }
+    return prepareFlexBackendForWan();
+}
+
+void RadioModel::cancelAutomaticReconnect()
+{
+    if (isConnected()) { return; }
+    m_intentionalDisconnect = true;
+    m_reconnectTimer.stop();
+}
+
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
 {
     discardTuneInhibit();

@@ -113,6 +113,8 @@ private slots:
     void onPingTimer();
 
 private:
+    // Drops one account's refresh token from the session cache and keychain.
+    void forgetRefreshToken(const QString& id);
     friend struct SmartLinkClientTestAccess;
     void connectToServer();
     void resetAuthentication();

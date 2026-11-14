@@ -2071,6 +2071,27 @@ private:
     bool m_paCurrentStatusPreferred{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
+    bool m_startupConnectSuperseded{false};
+    quint64 m_radioChoiceGeneration{0};
+    bool m_radioDisconnectPending{false};
+    quint64 m_radioTeardownToken{0};
+    std::function<void()> m_afterRadioDisconnect;
+    void connectSelectedRadio(const RadioInfo& info);
+    void armRadioSwitchTimeout();
+    QJsonObject m_activeRadioTarget;
+    QJsonObject m_pendingRadioTarget;
+    QJsonObject m_previousRadioTarget;
+    QJsonObject m_failedRadioTarget;
+    QString m_radioSwitchPhase;
+    QPointer<QDialog> m_radioSwitchPrompt;
+    QPointer<QDialog> m_radioSwitchFailurePrompt;
+    void beginExplicitRadioChoice();
+    void requestRadioTarget(const QJsonObject& target);
+    void performRadioSwitch(const QJsonObject& target);
+    void continueRadioSwitch(quint64 generation);
+    void awaitRadioTeardown();
+    void failRadioSwitch(const QString& reason);
+    void handleRadioTabAction(const QString& id, const QString& action);
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
     // Slice lifecycle refusals already shown this connect session, keyed
     // "<operation>\n<reason>": one notice per distinct refusal, so a control
@@ -2092,11 +2113,6 @@ private:
     // Last SmartLink radio list, cached because the title bar has to redraw the
     // tabs on LAN discovery events too and SmartLink only pushes on change.
     QList<WanRadioInfo> m_smartLinkRadios;
-    // The last session's radio, as its tab read while connected.  It keeps a
-    // visible tab after an unexpected drop, so the "Link lost" alarm always has
-    // somewhere to show; cleared when the operator disconnects on purpose or
-    // removes that tab.
-    RadioTabEntry m_lastSessionTab;
     static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
     QString m_terminalConnectionError; // preserved until the next explicit connect

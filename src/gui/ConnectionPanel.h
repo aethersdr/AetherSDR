@@ -15,19 +15,23 @@
 #include <QLabel>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QTimer>
 #include <QLineEdit>
 #include <QButtonGroup>
 #include <QCommandLinkButton>
 #include <QStackedWidget>
 #include <QToolButton>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QAbstractSocket>
 #include <functional>
+#include <optional>
 
 class QVBoxLayout;
 class QScreen;
 class QScrollArea;
 class QSpinBox;
+class QTcpSocket;
 
 namespace AetherSDR {
 
@@ -41,6 +45,7 @@ class ConnectionPanel : public CanonWindow, public IConnectionAutomation {
 
 public:
     explicit ConnectionPanel(QWidget* parent = nullptr);
+    ~ConnectionPanel() override;
 
     static constexpr int kSafeMinimumWidth = 640;
     static constexpr int kSafeMinimumHeight = 360;
@@ -138,6 +143,19 @@ public slots:
     // Operator switches re-point TX audio, so they wait while transmitting.
     void setTransmittingProbe(std::function<bool()> probe) { m_transmitting = std::move(probe); }
     bool selectWorkspaceProfile(const QString& collection, const QString& id, QString* error = nullptr);
+    QJsonArray connectionTargets() const;
+    QJsonObject connectionTarget(const QString& id) const;
+    bool selectConnectionTarget(const QString& id, bool edit = false);
+    void renameConnectionTarget(const QString& id);
+    // `listed`: the caller took `target` from connectionTargets() just now,
+    // so the per-call rebuild that checks it still exists can be skipped.
+    bool validateConnectionTarget(const QJsonObject& target, QString* reason = nullptr, bool listed = false) const;
+    void requestConnectionTarget(const QString& id);
+    void rememberSuccessfulTarget(const QJsonObject& target);
+    void connectTarget(const QJsonObject& target);
+    void cancelConnectionAttempt();
+    void showLocations();
+    QJsonObject attemptTarget() const { return m_attemptTarget; }
     QJsonObject automationConnectionProfiles() const override { return workspaceSnapshot(); }
     bool automationSelectConnectionProfile(const QString& collection, const QString& id, QString* error) override
     { return selectWorkspaceProfile(collection, id, error); }
@@ -163,6 +181,12 @@ signals:
     void startupConnectUnavailable(const QString& reason);
     void operatorPreferencesRequested(const QJsonObject& preferences);
     void workspaceChanged();
+    void radioAvailabilityChanged();
+    void explicitConnectionRequested();
+    void connectionTargetRequested(const QJsonObject& target);
+    void connectionNeedsAttention(const QString& reason);
+    void connectionAttemptFailed(const QString& reason);
+    void tabVisibilityRequested(const QString& id, bool visible);
 
 private slots:
     void onConnectionModeClicked(int id);
@@ -247,10 +271,12 @@ private:
     // Reports early startup credential/configuration or directed-probe failures.
     // Session authentication failures and broadcast discovery are separate paths.
     // Interactive/automation attempts are silent once the startup probe ends.
-    void reportStartupProbeFailure(const QString& reason);
+    void reportStartupProbeFailure(const QString& reason, bool needsInput = false);
     void handleHl2ProbeResult(Hl2ProbeResult probe, const QString& ip);
-    void finishManualProbe(const RadioInfo& info, bool routedOnly = false);
+    void finishManualProbe(const RadioInfo& info, bool routedOnly = false,
+                           std::optional<quint64> generation = std::nullopt);
     friend struct ConnectionPanelStartupTestAccess;
+    friend struct ConnectionPanelWorkspaceTestAccess;
     void resetManualConnectButton();
     // Re-activate the body layout after a page change. The overlap this used to
     // guard against — the Advanced section expanding, or the result line
@@ -298,6 +324,8 @@ private:
     bool activateWorkspaceAccount(const QString& id);
     void resumeWorkspaceSmartLink();
     void restoreWorkspaceManual(const QJsonObject& path);
+    void beginExplicitConnection();
+    void captureAttemptOperator();
 
     QJsonObject m_workspace;
     QListWidget* m_stationList{nullptr};
@@ -326,6 +354,13 @@ private:
     QString m_pendingWorkspaceConnection;
     QString m_pendingWorkspaceStation;
     QJsonObject m_pendingSmartLinkConnection;
+    QJsonObject m_attemptTarget;
+    QJsonObject m_connectedTarget;
+    QJsonObject m_attemptOperator;
+    quint64 m_connectionGeneration{0};
+    QPointer<QTcpSocket> m_probeSocket;
+    bool m_dispatchingTarget{false};
+    QTimer* m_browseSaveTimer{nullptr};
     bool m_allowLegacyIcomCredential{true};
     QLineEdit* m_manualConnectionName{nullptr};
 
@@ -411,9 +446,20 @@ private:
     // Drop a staged Icom credential that did not belong to the connect that
     // actually happened. See setConnected().
     void clearPendingIcomCredentials();
+    void flushBrowsedRadio();
+    QString currentIcomBinding() const;
+    static QString icomBinding(const QString& host, const QString& username);
+    void latchIcomCredential(const QString& id, bool legacy, const QString& host, const QString& username);
+    QString boundIcomCredentialId() const;
+    bool legacyIcomCredentialUsable() const;
 
     QString      m_pendingIcomPassword;
     QString      m_activeIcomCredentialId;
+    // The host|user the latched credential belongs to. A latch is honored only
+    // while the manual fields still name that radio, however they changed.
+    QString      m_activeIcomCredentialBinding;
+    // The password field holds a saved password we filled in, not typed text.
+    bool         m_icomPasswordPrefilled{false};
     QString      m_pendingIcomUsername;
     QString      m_pendingIcomHost;
     QString      m_pendingIcomResolvedHost;

@@ -3,6 +3,7 @@
 #include "core/backends/AutoRfGainControl.h"
 #include "AetherBuildIdentity.h"   // generated at build time; see cmake/AetherBuildIdentity.cmake
 #include "core/CtcssTones.h"
+#include "core/SettingsSanitizer.h"
 #include "core/RadioCertification.h"
 #include "LogManager.h"
 #include "SettingsPaths.h"
@@ -3812,7 +3813,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("titlebar", {},
-            "titlebar <selectRadio <id>|showDiscovery|minimize|maximize|close> "
+            "titlebar <selectRadio <id>|showRadioMenu <id>|showDiscovery|minimize|maximize|close> "
             "— drive the unified title bar's own controls",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
                 a.action = vtok(p, 1);
@@ -6693,7 +6694,12 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     if (a == QLatin1String("profiles")) {
-        return QJsonObject{{"ok", true}, {"profiles", conn->automationConnectionProfiles()}};
+        QJsonObject profiles = conn->automationConnectionProfiles();
+        if (m_readOnly) {
+            // Observe-only clients see the workspace shape, not account identities.
+            profiles = SettingsSanitizer::maskPersonalFields(profiles).toObject();
+        }
+        return QJsonObject{{"ok", true}, {"profiles", profiles}};
     }
     if (a == QLatin1String("profile")) {
         const QStringList parts = arg.simplified().split(' ');
@@ -9736,7 +9742,7 @@ QJsonObject AutomationServer::doTitleBar(const QString& action, const QString& t
 {
     if (action.trimmed().isEmpty()) {
         return err(QStringLiteral("titlebar needs an action "
-                                  "(selectRadio|showDiscovery|minimize|maximize|close)"));
+                                  "(selectRadio|showRadioMenu|showDiscovery|minimize|maximize|close)"));
     }
     if (!m_titleBarActionHandler) {
         return err(QStringLiteral("title bar actions unavailable"));
