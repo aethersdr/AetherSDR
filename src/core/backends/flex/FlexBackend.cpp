@@ -25,6 +25,7 @@
 #include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/WanConnection.h"
 #include "core/backends/flex/PanadapterStream.h"
+#include "core/backends/flex/FlexReceiveData.h"
 #include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexKvCarry.h"
 #include "models/ModelCapabilities.h"
@@ -55,9 +56,10 @@ FlexBackend::FlexBackend(QObject* parent)
     // preserved verbatim from the former RadioModel ctor (#502): PanadapterStream
     // thread FIRST, then RadioConnection thread. Both objects are parentless and
     // moved onto their thread; the thread is this-parented.
+    initializeReceiveData();
     m_networkThread = new QThread(this);
     m_networkThread->setObjectName("PanadapterStream");
-    m_panStream = new PanadapterStream;   // no parent — moved to thread
+    m_panStream = new PanadapterStream(nullptr, m_receiveData);   // no parent — moved to thread
     m_panStream->moveToThread(m_networkThread);
     connect(m_networkThread, &QThread::started, m_panStream, &PanadapterStream::init);
     AetherSDR::startStreamThread(m_networkThread);   // High QoS; see AppActivity.h
@@ -72,8 +74,16 @@ FlexBackend::FlexBackend(QObject* parent)
     m_statusIngress.bind(m_connection);
     // The ingress decodes every accepted line; its typed results are ours.
     connect(&m_statusIngress, &FlexStatusIngress::transmitChanged, this, &IRadioBackend::transmitChanged);
-    connect(&m_statusIngress, &FlexStatusIngress::meterDefined, this, &IRadioBackend::meterDefined);
-    connect(&m_statusIngress, &FlexStatusIngress::meterRemoved, this, &IRadioBackend::meterRemoved);
+    // The receive buffer converts meter values with the definitions the
+    // ingress decodes, so it learns each one before the model does.
+    connect(&m_statusIngress, &FlexStatusIngress::meterDefined, this, [this](const MeterDef& definition) {
+        if (m_receiveData) { m_receiveData->defineMeter(definition); }
+        emit meterDefined(definition);
+    });
+    connect(&m_statusIngress, &FlexStatusIngress::meterRemoved, this, [this](int index) {
+        if (m_receiveData) { m_receiveData->removeMeter(index); }
+        emit meterRemoved(index);
+    });
     connect(&m_statusIngress, &FlexStatusIngress::gpsChanged, this, &IRadioBackend::gpsChanged);
     connect(&m_statusIngress, &FlexStatusIngress::ntpSourceChanged, this, &IRadioBackend::ntpSourceChanged);
     connect(&m_statusIngress, &FlexStatusIngress::memoryChanged, this, &IRadioBackend::memoryChanged);
@@ -106,6 +116,8 @@ FlexBackend::FlexBackend(QObject* parent)
     // (auto) connections: the connection lives on its worker thread.
     connect(m_connection, &RadioConnection::connected,
             this, &IRadioBackend::connected);
+    // Receive data retires with the session that ends (RadioModel::onDisconnected),
+    // not with this transport: a late disconnect must not end a newer session's.
     connect(m_connection, &RadioConnection::disconnected,
             this, &IRadioBackend::disconnected);
     connect(m_connection, &RadioConnection::errorOccurred,
@@ -120,6 +132,7 @@ FlexBackend::FlexBackend(QObject* parent)
 
 FlexBackend::~FlexBackend()
 {
+    m_receiveData->close();
     m_cwControls.reset();
     // Sever our own lifecycle observation of the connection FIRST — as the old
     // ~RadioModel's earlier m_backend.reset() effectively did (the backend was
@@ -544,6 +557,7 @@ void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
 // operator without a verdict (PR #6177 review).
 void FlexBackend::onRadioSessionEstablished()
 {
+    m_receiveData->begin();
     refreshPublishedFirmwareVersion();
 }
 

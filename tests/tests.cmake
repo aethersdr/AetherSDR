@@ -7825,6 +7825,12 @@ if(AETHER_ENABLE_FLEX_RETRY_SOCKET_TEST)
     set_tests_properties(radio_connection_retry_test PROPERTIES TIMEOUT 120)
 endif()
 
+# Socket-free production decoder -> backend -> model path on the actual worker.
+add_executable(flex_receive_path_test tests/flex_receive_path_test.cpp)
+target_include_directories(flex_receive_path_test PRIVATE src tests)
+target_link_libraries(flex_receive_path_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME flex_receive_path_test COMMAND flex_receive_path_test)
+
 add_executable(flex_backend_lifecycle_test tests/flex_backend_lifecycle_test.cpp)
 target_include_directories(flex_backend_lifecycle_test PRIVATE src)
 target_link_libraries(flex_backend_lifecycle_test PRIVATE aethercore Qt6::Core)
@@ -11245,6 +11251,7 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    flex_receive_path_test
     flex_setup_observation_test
     session_control_test
     audio_control_routing_test
@@ -12216,6 +12223,12 @@ if(HAVE_PIPEWIRE)
     add_test(NAME pipewire_rx_bridge_test COMMAND pipewire_rx_bridge_test)
 endif()
 
+# Socket-free receive buffering: lifecycle, metadata, overload and worker delivery.
+add_executable(flex_receive_data_test tests/flex_receive_data_test.cpp
+    src/core/backends/flex/FlexReceiveData.cpp)
+target_include_directories(flex_receive_data_test PRIVATE src)
+target_link_libraries(flex_receive_data_test PRIVATE Qt6::Core)
+add_test(NAME flex_receive_data_test COMMAND flex_receive_data_test)
 # Socket-free production LAN/WAN ingress and typed slice ownership lifecycle.
 add_executable(flex_slice_observation_test tests/flex_slice_observation_test.cpp)
 target_include_directories(flex_slice_observation_test PRIVATE src tests)

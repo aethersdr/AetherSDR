@@ -1,4 +1,5 @@
 #include "PanadapterStream.h"
+#include "core/backends/flex/FlexReceiveData.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/LogManager.h"
@@ -86,8 +87,8 @@ QHostAddress chooseLanBindAddress(RadioConnection* conn,
 //   0x03E3 IF_NARROW float32 stereo BE   0x0123 NARROW_REDUCED_BW int16 mono BE
 //   0x8005 Opus   0x8003 panadapter FFT   0x8004 waterfall tile   0x8002 meters
 
-PanadapterStream::PanadapterStream(QObject* parent)
-    : QObject(parent)
+PanadapterStream::PanadapterStream(QObject* parent, std::shared_ptr<FlexReceiveData> receiveData)
+    : QObject(parent), m_receiveData(std::move(receiveData))
 {
     m_pcmProducer.start();
     // Socket and timer connections are deferred to init() which runs
@@ -96,6 +97,12 @@ PanadapterStream::PanadapterStream(QObject* parent)
 
 void PanadapterStream::init()
 {
+    if (m_receiveData) {
+        QTimer* telemetryTimer = new QTimer(this);
+        telemetryTimer->setInterval(250);
+        connect(telemetryTimer, &QTimer::timeout, this, &PanadapterStream::publishReceiveTelemetry);
+        telemetryTimer->start();
+    }
     if (!m_socket) {
         m_socket = new QUdpSocket(this);
     }
@@ -547,9 +554,38 @@ void PanadapterStream::stop()
 
 // ─── Datagram reception ───────────────────────────────────────────────────────
 
+void PanadapterStream::publishReceiveTelemetry()
+{
+    if (!m_receiveData) { return; }
+    ReceiveTelemetry snapshot;
+    snapshot.lease = m_receiveData->sessionLease();
+    if (!snapshot.current()) { return; }
+    snapshot.receipt = ReceiveReceipt::now();
+    snapshot.rxBytes = totalRxBytes();
+    snapshot.txBytes = totalTxBytes();
+    snapshot.packets = packetTotalCount();
+    snapshot.errors = packetErrorCount();
+    snapshot.gapMs = audioPacketGapMs();
+    snapshot.gapMaxMs = audioPacketGapMaxMs();
+    snapshot.jitterMs = audioPacketJitterMs();
+    snapshot.firstPacketSeen = hasReceivedPackets();
+    if (!m_localAddress.isNull() && m_localPort != 0) {
+        const QString address = m_localAddress.toString();
+        snapshot.localEndpoint = m_localAddress.protocol() == QAbstractSocket::IPv6Protocol
+            ? QStringLiteral("[%1]:%2").arg(address).arg(m_localPort)
+            : QStringLiteral("%1:%2").arg(address).arg(m_localPort);
+    }
+    for (int i = 0; i < CatCount; ++i) {
+        const CategoryStats counters = categoryStats(static_cast<StreamCategory>(i));
+        snapshot.categories[i] = {counters.bytes, counters.packets, counters.errors, counters.late};
+    }
+    m_receiveData->telemetry(std::move(snapshot));
+}
+
 void PanadapterStream::registerPanStream(quint32 streamId)
 {
     QMutexLocker lock(&m_streamMutex);
+    if (m_receiveData) { m_receiveData->registerStream(streamId, false); }
     m_knownPanStreams.insert(streamId);
     m_everRegisteredPanStreams.insert(streamId);   // arms leak detection (#3856)
     m_orphanStreams.remove(streamId);              // reclaim drops stale orphan
@@ -559,6 +595,7 @@ void PanadapterStream::registerPanStream(quint32 streamId)
 void PanadapterStream::registerWfStream(quint32 streamId)
 {
     QMutexLocker lock(&m_streamMutex);
+    if (m_receiveData) { m_receiveData->registerStream(streamId, true); }
     m_knownWfStreams.insert(streamId);
     m_everRegisteredWfStreams.insert(streamId);    // arms leak detection (#3856)
     m_orphanStreams.remove(streamId);              // reclaim drops stale orphan
@@ -569,13 +606,11 @@ void PanadapterStream::unregisterPanStream(quint32 streamId)
 {
     {
         QMutexLocker lock(&m_streamMutex);
+        if (m_receiveData) { m_receiveData->unregisterStream(streamId, false); }
         m_knownPanStreams.remove(streamId);
         m_dbmRanges.remove(streamId);
         m_dbmRangeGenerations.remove(streamId);
         m_pendingDbmRanges.remove(streamId);
-    }
-    {
-        QMutexLocker frameLock(&m_frameMutex);
         m_frames.remove(streamId);
     }
     restartStreamSequence(streamId);
@@ -585,10 +620,8 @@ void PanadapterStream::unregisterWfStream(quint32 streamId)
 {
     {
         QMutexLocker lock(&m_streamMutex);
+        if (m_receiveData) { m_receiveData->unregisterStream(streamId, true); }
         m_knownWfStreams.remove(streamId);
-    }
-    {
-        QMutexLocker frameLock(&m_frameMutex);
         m_wfFrames.remove(streamId);
     }
     restartStreamSequence(streamId);
@@ -615,12 +648,10 @@ void PanadapterStream::restartAllStreamSequences()
 
 void PanadapterStream::clearRegisteredStreams()
 {
-    {
-        QMutexLocker frameLock(&m_frameMutex);
-        m_frames.clear();
-        m_wfFrames.clear();
-    }
     QMutexLocker lock(&m_streamMutex);
+    m_frames.clear();
+    m_wfFrames.clear();
+    if (m_receiveData) { m_receiveData->clearStreams(); }
     m_knownPanStreams.clear();
     m_knownWfStreams.clear();
     m_dbmRanges.clear();
@@ -1120,13 +1151,16 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
 
     const uchar* binData = raw + binDataOffset;
 
+    QMutexLocker streamLock(&m_streamMutex);
+    if (m_receiveData && !m_knownPanStreams.contains(streamId)) { return; }
+    const ReceiveDataLease lease = m_receiveData ? m_receiveData->streamLease(streamId, false) : ReceiveDataLease{};
+    const ReceiveReceipt receipt = ReceiveReceipt::now();
     // Per-stream frame assembly. A completed frame is copied out so the
     // lock is not held for the dBm conversion or the emit.
     QVector<quint16> frameBins;
     int floorFilledSuffixStart = -1;
     bool latePacket = false;
     {
-        QMutexLocker frameLock(&m_frameMutex);
         auto& frame = m_frames[streamId];
         // A late packet from an already-replaced frame must not restart
         // assembly and throw away the frame now in progress; FlexLib drops it
@@ -1187,7 +1221,6 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     SpectrumDecodeScale decodeScale;
     int yPixVal;
     {
-        QMutexLocker lock(&m_streamMutex);
         dbmRange = m_dbmRanges.value(streamId, {-130.0f, -40.0f});
         // A stream whose range was never written (status matched the -130/-40
         // default) still needs a nonzero generation, or its frames can't be told
@@ -1199,6 +1232,7 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
         decodeScale = {dbmRange.first, dbmRange.second, generation};
         yPixVal = m_yPixels.value(streamId, 700);
     }
+    streamLock.unlock();
     auto [minDbm, maxDbm] = dbmRange;
     const float range = maxDbm - minDbm;
     if (range <= 0.0f) return;
@@ -1228,7 +1262,11 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     }
 
     const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
-    emit spectrumReady(streamId, bins, emittedNs, decodeScale);
+    if (m_receiveData) {
+        m_receiveData->spectrum({streamId, std::move(bins), decodeScale, emittedNs, receipt, lease});
+    } else {
+        emit spectrumReady(streamId, bins, emittedNs, decodeScale);
+    }
 }
 
 // Waterfall tile sub-header (36 bytes, big-endian, at byte 28):
@@ -1292,11 +1330,14 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     // relative to the bounds calculation below, and the inner write loop
     // then writes past the buffer's end with attacker-chosen bytes.
     // See GHSA-7gvg-x594-pprq.
+    QMutexLocker streamLock(&m_streamMutex);
+    if (m_receiveData && !m_knownWfStreams.contains(streamId)) { return; }
+    const ReceiveDataLease lease = m_receiveData ? m_receiveData->streamLease(streamId, true) : ReceiveDataLease{};
+    const ReceiveReceipt receipt = ReceiveReceipt::now();
     const uchar* tilePayload = raw + payloadOffset;
     WaterfallFrame row;
     bool latePacket = false;
     {
-        QMutexLocker frameLock(&m_frameMutex);
         auto& wfFrame = m_wfFrames[streamId];
         // A late tile from an already-replaced row is dropped rather than
         // restarting assembly and losing the row in progress (#6883).
@@ -1339,10 +1380,16 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     }
 
     const double frameHighMhz = row.lowFreqMhz + row.binBwMhz * row.totalBins;
-    emit waterfallAutoBlackLevel(streamId, row.autoBlack);
     const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
-    emit waterfallRowReady(streamId, row.buf, row.lowFreqMhz, frameHighMhz,
-                           row.timecode, emittedNs);
+    ReceiveWaterfallRow observation{streamId, row.buf, row.lowFreqMhz, frameHighMhz,
+        row.timecode, row.autoBlack, emittedNs, receipt, lease};
+    streamLock.unlock();
+    if (m_receiveData) {
+        m_receiveData->waterfall(std::move(observation));
+    } else {
+        emit waterfallAutoBlackLevel(streamId, row.autoBlack);
+        emit waterfallRowReady(streamId, observation.intensity, observation.lowMhz, observation.highMhz, row.timecode, emittedNs);
+    }
 }
 
 // ─── Audio decode ─────────────────────────────────────────────────────────────
@@ -1558,6 +1605,8 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
 
 void PanadapterStream::decodeMeterData(const uchar* raw, int totalBytes, bool hasTrailer)
 {
+    const ReceiveReceipt receipt = ReceiveReceipt::now();
+    const ReceiveDataLease session = m_receiveData ? m_receiveData->sessionLease() : ReceiveDataLease{};
     const int payloadStart = VITA49_HEADER_BYTES;
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
     if (payloadBytes < 4) return;
@@ -1573,7 +1622,11 @@ void PanadapterStream::decodeMeterData(const uchar* raw, int totalBytes, bool ha
         vals[i] = qFromBigEndian<qint16>(payload + i * 4 + 2);
     }
 
-    emit meterDataReady(ids, vals);
+    if (m_receiveData) {
+        if (session) { m_receiveData->meters(ids, vals, receipt, session); }
+    } else {
+        emit meterDataReady(ids, vals);
+    }
 }
 
 int PanadapterStream::audioPayloadFrames(quint16 pcc, int payloadBytes)
