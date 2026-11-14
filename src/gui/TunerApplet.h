@@ -254,6 +254,11 @@ private:
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
     float m_maxPower{0.0f};
+    // Latched by the first forward-power sample at or above 5 W; released by
+    // m_labelClearTimer (800 ms after power drops below the threshold).
+    // The active antenna button turns red while set, mirroring the hardware
+    // display. Only the latch and release edges call updateAntennaButtons.
+    bool  m_antTxActive{false};
 
     // Throttles the numeric PWR/SWR text; the bar itself is not throttled.
     QElapsedTimer m_readoutClock;

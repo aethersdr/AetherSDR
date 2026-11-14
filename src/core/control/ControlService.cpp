@@ -551,8 +551,10 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     if (!m_receiveTarget) {
         return reject("capability.unavailable", "receive control unavailable");
     }
-    const bool pan = operation == ReceiveOperation::PanCenter || operation == ReceiveOperation::PanBandwidth;
-    const bool sessionScoped = operation == ReceiveOperation::CwPitch;
+    const bool pan = operation == ReceiveOperation::PanCenter || operation == ReceiveOperation::PanBandwidth
+        || operation == ReceiveOperation::PanRfGain;
+    const bool sessionScoped = operation == ReceiveOperation::CwPitch
+        || operation == ReceiveOperation::RadioSpeaker;
     const QString idKey = pan ? QStringLiteral("panadapter") : QStringLiteral("slice");
     QSet<QString> keys{QStringLiteral("radioSession"), QStringLiteral("expectedRevision")};
     if (!sessionScoped) {
@@ -567,6 +569,13 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::PanCenter:
     case ReceiveOperation::PanBandwidth:
     case ReceiveOperation::CwPitch: keys.insert(QStringLiteral("hz")); break;
+    case ReceiveOperation::AgcThreshold: keys.insert(QStringLiteral("threshold")); break;
+    case ReceiveOperation::NoiseBlanker:
+    case ReceiveOperation::NoiseReduction:
+    case ReceiveOperation::RadioSpeaker: keys.insert(QStringLiteral("enabled")); break;
+    case ReceiveOperation::Rit:
+        keys.insert(QStringLiteral("enabled")); keys.insert(QStringLiteral("offsetHz")); break;
+    case ReceiveOperation::PanRfGain: keys.insert(QStringLiteral("gainDb")); break;
     }
     if (const auto error = onlyKeys(request.params, keys)) {
         return failure(request.id, *error);
@@ -598,6 +607,12 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     const QJsonValue gain = request.params.value(QStringLiteral("gain"));
     const QJsonValue muted = request.params.value(QStringLiteral("muted"));
     const QJsonValue hz = request.params.value(QStringLiteral("hz"));
+    const QJsonValue threshold = request.params.value(QStringLiteral("threshold"));
+    const QJsonValue enabled = request.params.value(QStringLiteral("enabled"));
+    const QJsonValue offsetHz = request.params.value(QStringLiteral("offsetHz"));
+    const QJsonValue gainDb = request.params.value(QStringLiteral("gainDb"));
+    constexpr double kIntMin = std::numeric_limits<int>::min();
+    constexpr double kIntMax = std::numeric_limits<int>::max();
     bool valid = true;
     switch (operation) {
     case ReceiveOperation::Mode:
@@ -618,6 +633,12 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::PanBandwidth: valid = integer(hz, 1, 9'007'199'254'740'991.0); break;
     case ReceiveOperation::CwPitch:
         valid = integer(hz, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()); break;
+    case ReceiveOperation::AgcThreshold: valid = integer(threshold, kIntMin, kIntMax); break;
+    case ReceiveOperation::NoiseBlanker:
+    case ReceiveOperation::NoiseReduction:
+    case ReceiveOperation::RadioSpeaker: valid = enabled.isBool(); break;
+    case ReceiveOperation::Rit: valid = enabled.isBool() && integer(offsetHz, kIntMin, kIntMax); break;
+    case ReceiveOperation::PanRfGain: valid = integer(gainDb, kIntMin, kIntMax); break;
     }
     if (!valid) {
         return reject("request.invalid_params", "invalid typed receive-control value");
@@ -645,6 +666,16 @@ ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
     case ReceiveOperation::PanCenter: error = m_receiveTarget->setPanCenter(id.toString(), hz.toInteger()); break;
     case ReceiveOperation::PanBandwidth: error = m_receiveTarget->setPanBandwidth(id.toString(), hz.toInteger()); break;
     case ReceiveOperation::CwPitch: error = m_receiveTarget->setCwPitch(hz.toInt()); break;
+    case ReceiveOperation::AgcThreshold:
+        error = m_receiveTarget->setAgcThreshold(sliceId, threshold.toInt()); break;
+    case ReceiveOperation::NoiseBlanker:
+        error = m_receiveTarget->setNoiseBlanker(sliceId, enabled.toBool()); break;
+    case ReceiveOperation::NoiseReduction:
+        error = m_receiveTarget->setNoiseReduction(sliceId, enabled.toBool()); break;
+    case ReceiveOperation::Rit:
+        error = m_receiveTarget->setRit(sliceId, enabled.toBool(), offsetHz.toInt()); break;
+    case ReceiveOperation::PanRfGain: error = m_receiveTarget->setPanRfGain(id.toString(), gainDb.toInt()); break;
+    case ReceiveOperation::RadioSpeaker: error = m_receiveTarget->setRadioSpeaker(enabled.toBool()); break;
     }
     return error ? failure(request.id, *error) : ServiceReply{
         ControlProtocolCodec::successResponse(request.id, {{QStringLiteral("accepted"), true}}), false};

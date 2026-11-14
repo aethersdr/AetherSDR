@@ -15,6 +15,21 @@ int main()
     for (const QString& mode : {QStringLiteral("USB"), QStringLiteral("LSB")}) {
         if (isCwMode(mode) || isReverseCwMode(mode) || !isVoiceMode(mode)) { ++failures; }
     }
+    // WFM carries intelligible speech (broadcast FM, weather radio, some sat
+    // downlinks), so Copy Assist's indicator must offer it (#5301). The IC-705
+    // reports the literal "WFM"; the HL2 and ANAN also spell it "WBFM".
+    for (const QString& mode : {QStringLiteral("WFM"), QStringLiteral("WBFM")}) {
+        if (!isVoiceMode(mode)) { ++failures; }
+        if (isCwMode(mode) || isReverseCwMode(mode)) { ++failures; }
+    }
+    // The non-voice modes stay out: the gate also tears an open Copy Assist
+    // panel down, so admitting a data mode would transcribe modem tones.
+    for (const QString& mode : {QStringLiteral("RTTY"), QStringLiteral("DIGU"),
+                                QStringLiteral("DIGL"), QStringLiteral("DRM"),
+                                QStringLiteral("FREEDV"), QStringLiteral("")}) {
+        if (isVoiceMode(mode)) { ++failures; }
+    }
+
     // A Flex CWL flag can remain cached when the next session uses explicit
     // modes. It must affect genuine Flex CW, but neither RTL CW nor CWR.
     if (cwReceiveSidebandSign("CW", true, true) != -1

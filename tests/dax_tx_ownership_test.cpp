@@ -1,5 +1,6 @@
 // Socket-free production bridge/model/backend/audio paths. Inject decoded
 // statuses and command replies; no firmware peer, device, listener or RF.
+#include "FlexSliceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
 #include "core/AudioEngine.h"
@@ -104,7 +105,7 @@ struct Fixture {
             [this](const QByteArray&, const TxCoordinator::Context&, const DaxTxAudioPermit& permit) {
                 packets.push_back(permit);
             });
-        model.handleSliceStatusForTest(0, {{QStringLiteral("in_use"), QStringLiteral("1")},
+        applyFlexSliceStatus(model, 0, {{QStringLiteral("in_use"), QStringLiteral("1")},
             {QStringLiteral("client_handle"), QStringLiteral("0x12345678")},
             {QStringLiteral("tx"), QStringLiteral("1")}, {QStringLiteral("mode"), QStringLiteral("USB")},
             {QStringLiteral("RF_frequency"), QStringLiteral("14.200000")}});

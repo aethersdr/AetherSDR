@@ -525,7 +525,41 @@ std::vector<Payload> decode_buffer(const Spec& s, const Mat<double>& buf, int ma
 
 Posterior decode_posterior(const Spec& s, std::span<const double> soft, std::span<const double> buf, int max_rv,
                            int rv) {
-    if (s.polar || s.gf) throw std::invalid_argument(std::string(s.name) + ": decode_posterior is LDPC only");
+    if (s.polar) throw std::invalid_argument(std::string(s.name) + ": decode_posterior is LDPC or GF(M) only");
+    if (s.gf) {  // per symbol log-probabilities of its q values, soft_len's layout
+        Mat<float> llr;
+        const gfldpc::Decoder* dec;
+        if (buf.empty()) {
+            if (static_cast<int>(soft.size()) != soft_len(s))
+                throw std::invalid_argument(std::string(s.name) + ": expected soft_len values");
+            Mat<float> m(1, soft.size());
+            for (std::size_t i = 0; i < soft.size(); ++i) m[0][i] = static_cast<float>(soft[i]);
+            llr = deinterleave_llr(s, m);
+            dec = &gf_decoder(s);
+        } else {
+            const int extent = ir_extent(s, max_rv);
+            if (static_cast<int>(buf.size()) < extent) throw std::invalid_argument(std::string(s.name) + ": buffer shape");
+            llr = Mat<float>(1, static_cast<std::size_t>(extent));
+            for (int i = 0; i < extent; ++i) llr[0][i] = static_cast<float>(buf[i]);
+            dec = &gf_decoder(s, extent);
+        }
+        const auto d = dec->decode(llr, GF_ITERS, true);
+        const auto& info = dec->code().info();
+        Mat<std::uint8_t> u(1, info.size());
+        for (std::size_t j = 0; j < info.size(); ++j) u[0][j] = d.hard[0][info[j]];
+        const auto bits = gfldpc::unpack(u, s.bits_per_cu);
+        std::vector<double> code(d.post.data.begin(), d.post.data.end());
+        if (!buf.empty()) {
+            const auto pos = rv_positions(s, rv);
+            std::vector<double> c(pos.size());
+            for (std::size_t j = 0; j < pos.size(); ++j) c[j] = code[static_cast<std::size_t>(pos[j])];
+            code = std::move(c);
+        }
+        const auto& perm = soft_perm(s);
+        std::vector<double> post(perm.size());
+        for (std::size_t i = 0; i < post.size(); ++i) post[i] = code[static_cast<std::size_t>(perm[i])];
+        return {std::vector<std::uint8_t>(bits[0], bits[0] + s.k), d.ok[0] != 0, std::move(post)};
+    }
     Mat<float> llr;
     const ldpc::Decoder* dec;
     if (buf.empty()) {

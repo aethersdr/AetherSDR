@@ -48,6 +48,48 @@ Connection forms retain the selected family's settings, including source interfa
 
 *Choose POTA or another location to see its saved connection paths. Browsing locations does not connect or disconnect a radio.*
 
+## Using workspace radio tabs
+
+Two recent radio shortcuts appear in the main window, including saved IP connections and radios that are currently unavailable. A radio’s saved paths share a shortcut within its Location. The second line shows its connection state and Location. Discovery updates availability; the drawer keeps the full saved radio list.
+
+Drag a tab left or right to reorder it, like browser tabs. Release to save the order across restarts; **Esc** cancels the drag. Drag near an edge to scroll through an overflowing strip. The mouse wheel and dragging empty strip space also scroll it. Reordering never connects or disconnects a radio. Hidden shortcuts retain their saved position. Recent choices determine which two radios are shown, while dragged order controls their left-to-right positions.
+
+Click a disconnected radio tab to connect through its preferred saved path with the operator selected in **Operating as**. Clicking the connected tab keeps the current operating view. When another radio is connected, clicking a destination tab opens **Switch radio**. Choose **Switch** to disconnect the current radio and connect the destination, or **Cancel** to keep operating. Switching is unavailable during transmit. The active highlight changes only after the destination connects.
+
+Right-click a tab, or focus it and press **Shift+F10**, for these actions:
+
+<img src="/img/screens/radio-tab-switch-confirmation.png" width="552" alt="Switch radio prompt naming the source and destination Locations, explaining that the current radio will disconnect, with Cancel and Switch buttons." />
+
+*Confirm a replacement while the current radio remains connected. Location names distinguish similarly named radios.*
+
+| Action | Behavior |
+|---|---|
+| **Connect** / **Switch to this radio…** | Connect using the saved path, confirming replacement of a live connection. |
+| **Cancel connection** | Cancel a pending connection or sign-in continuation. |
+| **Disconnect** | Disconnect this client's live radio and keep its tab. |
+| **Rename…** | Change the saved connection label in both tabs and Locations. The simulator retains its safety label. |
+| **Connection settings…** | Open the matching Location, radio and saved path in the connection window. |
+| **Move left** / **Move right** | Swap the tab with its neighbor; the order is saved, as it is after dragging. |
+| **Remove from tabs** | Hide a disconnected tab while preserving its saved paths and radio settings. |
+
+To restore a hidden shortcut, open **⋯ More radios** and choose the saved radio, or use **Actions → Add to tabs** in the drawer. **Remove** in the saved radio menu deletes saved entries after confirmation; it is separate from **Remove from tabs**.
+
+The title bar shows up to **two recent radio shortcuts**. The active radio stays visible, and a pending target temporarily uses the other slot. Recent choices and dragged shortcut order are saved across restarts. Other saved and nearby radios remain available in **⋯ More radios**, searchable by name, Location, model, address or status. **Locations and connections…** opens the full connection window.
+
+The dialog remembers the radio selected within each Location and the preferred path chosen for each radio. Browsing Locations preserves the live connection and audio; explicitly switching operators recalls local preferences. A pending connection keeps the Location and path captured when it was requested.
+
+If credentials need attention, the connection window opens at the relevant saved connection. A SmartLink sign-in continues the requested connection after authentication. Switching SmartLink accounts can require ending the existing remote session before sign-in. If a switch fails after disconnecting, **Retry** attempts the destination again and **Reconnect to [previous radio]** offers an explicit return.
+
+## Startup and recovery
+
+With auto-connect enabled and a last radio saved, startup opens the operating window and attempts that radio. With auto-connect disabled, or no saved last radio, startup opens Locations. A manual connection choice cancels startup auto-connect for that launch; late discovery, probe and credential results cannot override it.
+
+If a saved IP path fails at startup, **Connect by IP** shows the failure with the saved connection name. **‹ Back to Locations** returns to that saved radio's Location and selection so another path or radio can be chosen.
+
+<img src="/img/screens/radio-ip-startup-recovery.png" width="912" alt="Connect by IP shows a saved connection name, a documentation IP address, the failed connection reason and a Back to Locations button." />
+
+*A failed saved IP path retains its name. Back to Locations returns to its saved radio.*
+
 ## Using operator profiles
 
 <img src="/img/screens/operator-profile-selection.png" width="732" alt="Operators library with saved profiles and Create, Edit, Duplicate, Remove and Use profile actions." />

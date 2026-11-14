@@ -94,7 +94,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7779,
+          "line": 7891,
           "text": "\"RadioModel: terminal GUI client registration failure\""
         }
       ]
@@ -111,12 +111,12 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7708,
+          "line": 7812,
           "text": "RadioModel: this GUI client was force-disconnected by another client"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7753,
+          "line": 7863,
           "text": "RadioModel: radio disconnected this session because another GUI client used the same ID"
         }
       ]
@@ -133,7 +133,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7618,
+          "line": 7719,
           "text": "RadioModel: multiFLEX disabled, other clients present"
         }
       ]
@@ -167,7 +167,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8954,
+          "line": 9074,
           "text": "consecutive pings unanswered — forcing disconnect"
         }
       ]
@@ -210,7 +210,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7998,
+          "line": 8110,
           "text": "RadioModel: no VITA-49 UDP data received after 10s"
         }
       ]
@@ -227,17 +227,17 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 7976,
+          "line": 8088,
           "text": "RadioModel: UDP stream setup failed"
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 239,
+          "line": 246,
           "text": "PanadapterStream: failed to bind UDP socket:"
         },
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 8055,
+          "line": 8167,
           "text": "RadioModel: client udpport collision"
         }
       ]
@@ -254,7 +254,7 @@
       "source": [
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 177,
+          "line": 184,
           "text": "capped by net.core.rmem_max"
         }
       ]
@@ -298,7 +298,7 @@
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 531,
+          "line": 541,
           "text": "SmartLinkClient: registration invalid"
         }
       ]
@@ -337,7 +337,7 @@
         },
         {
           "file": "src/core/backends/flex/SmartLinkClient.cpp",
-          "line": 468,
+          "line": 478,
           "text": "SmartLinkClient: SSL error:"
         }
       ]
@@ -457,7 +457,7 @@
         },
         {
           "file": "src/core/backends/flex/PanadapterStream.cpp",
-          "line": 1950,
+          "line": 2003,
           "text": "stream create failed/dropped"
         }
       ]
@@ -474,7 +474,7 @@
       "source": [
         {
           "file": "src/models/RadioModel.cpp",
-          "line": 13216,
+          "line": 12870,
           "text": "RadioModel: DAX TX create failed"
         }
       ]
@@ -547,7 +547,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 13379,
+          "line": 13403,
           "text": "\"SpectrumWidget: QRhi failure:\""
         },
         {
@@ -574,7 +574,7 @@
       "source": [
         {
           "file": "src/gui/SpectrumWidget.cpp",
-          "line": 2064,
+          "line": 2088,
           "text": "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software"
         }
       ]
@@ -608,7 +608,7 @@
       "source": [
         {
           "file": "src/main.cpp",
-          "line": 87,
+          "line": 89,
           "text": "Non-fatal X11 error suppressed (error_code="
         }
       ]
@@ -941,7 +941,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/Hl2Backend.cpp",
-          "line": 2973,
+          "line": 3030,
           "text": "HL2: could not open the UDP socket"
         }
       ]
@@ -961,7 +961,7 @@
       "source": [
         {
           "file": "src/core/backends/hl2/MetisClient.cpp",
-          "line": 531,
+          "line": 540,
           "text": "MetisClient: no EP6 for"
         }
       ]

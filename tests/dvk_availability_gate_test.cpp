@@ -11,6 +11,7 @@
 //     never block: the radio has to say no before the UI says no.
 
 #include "gui/DvkAvailabilityGate.h"
+#include "models/ModeVocabulary.h"
 
 #include <cstdio>
 
@@ -41,6 +42,37 @@ B gate(bool txModeIsVoice, bool licenseSeen, bool licenseEnabled,
 
 int main()
 {
+    const QStringList receiveOnlyModes{QStringLiteral("wfm"), QStringLiteral("WBFM")};
+    for (const QString& mode : {QStringLiteral("WFM"), QStringLiteral("WBFM")}) {
+        const bool txModeIsVoice = isVoiceTransmitMode(mode, receiveOnlyModes);
+        report("wide FM remains available to receive-only Copy Assist", isVoiceMode(mode));
+        report("receive-only wide FM blocks the Local keyer and its shortcuts",
+               voiceKeyerIndicatorBlocker(VoiceKeyerSource::Local, txModeIsVoice,
+                                          false, false, false) == B::TxModeNotVoice);
+        report("receive-only wide FM blocks the licensed Radio keyer",
+               voiceKeyerIndicatorBlocker(VoiceKeyerSource::Radio, txModeIsVoice,
+                                          true, true, false) == B::TxModeNotVoice);
+        report("receive-only wide FM keeps the connected keyer panel closed",
+               !voiceKeyerPanelOpenable(true, txModeIsVoice, true, true));
+        report("entering receive-only wide FM triggers the mode-change abort gate",
+               !txModeIsVoice);
+    }
+    for (const QString& mode : {QStringLiteral("USB"), QStringLiteral("LSB"),
+                                QStringLiteral("AM"), QStringLiteral("SAM"),
+                                QStringLiteral("FM"), QStringLiteral("NFM"),
+                                QStringLiteral("DFM")}) {
+        report("transmittable voice modes retain keyer availability",
+               isVoiceTransmitMode(mode, receiveOnlyModes));
+    }
+    report("backend-declared receive-only voice modes are all excluded",
+           !isVoiceTransmitMode(QStringLiteral("SAM"), {QStringLiteral("SAM")}));
+    report("an empty mode never becomes a transmit voice mode",
+           !isVoiceTransmitMode(QString(), receiveOnlyModes));
+    report("data never becomes a transmit voice mode",
+           !isVoiceTransmitMode(QStringLiteral("DIGU"), receiveOnlyModes));
+    report("TX-mode exclusions come from capabilities rather than a wide-FM blacklist",
+           isVoiceTransmitMode(QStringLiteral("WFM"), {}));
+
     // ── Licensed radio: mode is the only gate, exactly as before ────────────
     report("licensed + voice TX mode -> None",
            gate(true, true, true) == B::None);

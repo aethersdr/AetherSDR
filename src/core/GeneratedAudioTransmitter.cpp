@@ -52,6 +52,18 @@ void GeneratedAudioTransmitter::after(int ms, void (GeneratedAudioTransmitter::*
 
 bool GeneratedAudioTransmitter::start(const QByteArray& pcm, QString& error)
 {
+    return startAdmitted(pcm, error, nullptr);
+}
+
+bool GeneratedAudioTransmitter::start(const QByteArray& pcm, QString& error,
+                                      const TxCoordinator::Request& origin)
+{
+    return startAdmitted(pcm, error, &origin);
+}
+
+bool GeneratedAudioTransmitter::startAdmitted(const QByteArray& pcm, QString& error,
+                                              const TxCoordinator::Request* origin)
+{
     if (isActive()) {
         error = QStringLiteral("A transmission is already in progress.");
         return false;
@@ -89,7 +101,7 @@ bool GeneratedAudioTransmitter::start(const QByteArray& pcm, QString& error)
     // Then, still before anything queued: the authority this transmission
     // carries is taken at the operator's edge, not 150 ms later on the settle
     // timer, nor after the stream wait below (TxCoordinator.h).
-    if (!m_route->admitOperation()) {
+    if (!(origin ? m_route->admitOperationFrom(*origin) : m_route->admitOperation())) {
         m_pcm.clear();
         error = QStringLiteral("The radio did not admit a transmit request.");
         return false;

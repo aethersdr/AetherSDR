@@ -806,8 +806,12 @@ jobs:
         # while passing on Linux, so gating its reformulated assertions on
         # Windows is what actually backs their claim to be bit-identical
         # across platforms. One small test exe and ~10 s of ctest.
+        #
+        # aetherd, the headless engine, has Windows-only code of its own
+        # (GracefulStop's console control handler) that no other Windows build
+        # compiles: the installer builds only the app and its helpers.
         timeout-minutes: 45
-        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test cross_needle_meter_test
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aetherd aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test cross_needle_meter_test
 
       # The count pin is NOT redundant with the frozen list, and this is the
       # one step that needs it. check_ci_test_gate.py compares names it reads
