@@ -53,7 +53,7 @@ public:
     // multiples AetherSDR produces.
     static bool isSupportedSampleRate(int sampleRate);
 
-    // The vendored Data2G release, e.g. "0.4.3".
+    // The vendored Data2G release, e.g. "0.5.0".
     static const char* upstreamVersion();
 
     // The core runs one process-wide decode pool whose threads, once

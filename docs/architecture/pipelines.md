@@ -8,6 +8,17 @@ downmixing, metering taps, and VITA/Opus packetization details, see
 [AetherSDR Audio Pipeline](audio-pipeline.md). This page is a thread and
 high-level routing overview; it intentionally omits many audio-stage details.
 
+### Flex display and telemetry handoff
+
+`PanadapterStream` decodes spectrum, waterfall and meters on the existing network
+worker, then deposits owning observations into `FlexReceiveData`. One queued
+wake drains a bounded batch on the `FlexBackend` owner thread. Typed backend
+signals reach `RadioModel`, which feeds the existing display and meter models.
+The waterfall row retains its radio timecode, bounds and auto-black observation;
+it is not synthesized from the Flex FFT. Transport telemetry is sampled on the
+worker and cached by the backend. Audio/DAX/IQ keep their existing routes.
+See [limits and lifetime rules](../aetherd-flex-receive-data.md).
+
 ### Data Pipelines
 
 Multi-thread architecture — up to 14 threads depending on features enabled:
@@ -290,6 +301,30 @@ in fragment shader). The FFT spectrum is a vertex buffer with per-vertex heat
 map colors (blue→cyan→green→yellow→red). Overlays (grid, band plan, scales,
 markers) are painted by QPainter into a cached QImage, uploaded as a texture
 only when state changes. Main thread CPU reduced from ~97% to ~28%.
+
+**Backing-store composition:** AetherSDR requires Qt 6.12 or newer. On macOS, pans share
+the top-level Metal composition instead of each requesting a native child
+window. This avoids repeated copies of the large QWidget backing store for
+separate pan compositions. `AETHER_PAN_NATIVE_WINDOW=1` restores the legacy
+native-leaf workaround for diagnosis; ancestor isolation remains paired with it.
+There is no older-Qt default branch. The superseded
+`AETHER_PAN_NO_NATIVE_WINDOW` opt-out is unnecessary because sharing is the default.
+The original bug, Qt surface-handling implementation and live validation are
+linked in the [performance report](../performance/backing-store-redraws.md#macos-native-window-workaround).
+
+`WindowRepaintScheduler` is enabled by default for shared QRhi windows on
+**Windows, Linux and macOS**, including QRhi software drivers such as WARP
+and llvmpipe. It batches QWidget update-request delivery at the window's
+screen refresh cadence. Radio/model updates, input handling and
+elapsed-time meter ballistics continue normally. The existing pan scheduler
+marks pan regions dirty immediately when the window owns pacing; Qt merges
+them into its pending window update instead of adding a second frame delay. The native-leaf fallback keeps the original pan
+pacing because window pacing reduced its fresh-pan frame rate in profiling.
+The `AETHER_GPU_SPECTRUM=OFF` QPainter build also keeps its original pan pacing: immediate
+dirty delivery reduced its paint throughput in profiling. Window pacing can
+still be enabled explicitly through the bridge for comparisons. VFO meter
+updates skip unchanged integer bar widths on both backends, without changing
+the numeric readout or smoother's state. No repaint timer runs while idle.
 
 **Key QRhi lesson:** `fract()` must be in the fragment shader, not vertex
 shader. Per-vertex `fract()` when UV spans 0→1 produces identical values

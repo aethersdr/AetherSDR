@@ -171,7 +171,8 @@ public:
         for (const QString& field : {QStringLiteral("ConnectionMode"),
                                      QStringLiteral("ManualIp"),
                                      QStringLiteral("ManualPort"),
-                                     QStringLiteral("SerialPort")}) {
+                                     QStringLiteral("SerialPort"),
+                                     QStringLiteral("RadioCable")}) {
             connection.remove(field);
         }
         if (connection.isEmpty()) {

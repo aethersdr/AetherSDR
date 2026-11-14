@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -80,8 +81,18 @@ struct DecodeRequest {
     std::int64_t at = 0;         // seg[0]'s stream index
     std::int64_t head = 0;       // OFDM, no copy: the preamble and header lie in seg[:head]
     std::int64_t audio_lo = 0, audio_hi = 0;  // the event's audio: seg[audio_lo:audio_hi]
+    std::shared_ptr<cpm::Stream> stream;      // CPM, streamed: its receive is stream->finish()
 };
 BurstEvent decode(DecodeRequest req, const modem::Accept& accept);
+
+// A pending CPM lock's audio since the last, for its stream (cpm::Stream): the
+// work a decode step does while the burst arrives, in order before the
+// burst's DecodeRequest. Empty audio: the stream was just made.
+struct StreamFeed {
+    std::shared_ptr<cpm::Stream> stream;
+    std::vector<double> audio;
+};
+void run(StreamFeed& f);
 
 // The streaming receiver: feed() audio at FS as it arrives, get events
 // back, in order: a HeaderEvent as a burst starts, then its BurstEvent.
@@ -107,8 +118,14 @@ public:
 
     std::vector<Event> feed(std::span<const double> x);
     // feed() with each burst to decode left as its DecodeRequest, in order.
-    using Item = std::variant<HeaderEvent, BurstEvent, DecodeRequest>;
+    using Item = std::variant<HeaderEvent, BurstEvent, DecodeRequest, StreamFeed>;
     std::vector<Item> feed_deferred(std::span<const double> x);
+    // Stream CPM locks (cpm::Stream: refine and data slots' passes while the burst arrives); `pass`
+    // (arq::cpm_pass's, the engine's) may be empty: refine alone. Off by default (as Python's receiver).
+    void stream_cpm(cpm::PassFn pass) {
+        stream_on_ = true;
+        stream_pass_ = std::move(pass);
+    }
     void reset();
     // The expected slot (receiver.Receiver.expect, docs/arq.md §3a): a burst of one of these CPM grids should
     // start between stream indices lo and hi, its CFO near cfo; one grid per search hop, in order, looked at
@@ -120,6 +137,7 @@ public:
     void drop() {
         last_start_ = pending_->start();
         pending_.reset();
+        stream_.reset();
         pilots_ok_ = confirmed_ = false;
         dark_ = 0;
         looked_ = false;
@@ -173,6 +191,9 @@ private:
     std::vector<double> buf_;
     std::int64_t off_ = 0;  // stream index of buf_[0]
     std::optional<Pending> pending_;
+    bool stream_on_ = false;
+    cpm::PassFn stream_pass_;
+    std::shared_ptr<cpm::Stream> stream_;  // the pending CPM lock's
     bool pilots_ok_ = false, confirmed_ = false;
     int dark_ = 0;  // the pending lock's latest pilot checks in a row with its pilots measurably absent
     bool looked_ = false;  // the pending CPM lock's second look is done (unconfirmed)
@@ -205,9 +226,13 @@ public:
     static constexpr double TOL_S = 0.15;
     static constexpr std::size_t GAPS = 8;
     static constexpr double MAX_GAP_S = 3.0;
+    static constexpr double NOD_HALF_S = 0.6;  // nod_window's cap either side of the median
     void heard(std::optional<double> gap_s, std::optional<double> cfo);
     // (earliest, latest) start of the reply to my burst that ended at tx_end; nullopt before anything was learned
     std::optional<std::pair<double, double>> window(double tx_end) const;
+    // window() for a nod (receiver.ReplySlot.nod_window): the gaps' spread +-TOL_S, at most NOD_HALF_S either
+    // side of the median (a peer's TX playout lag can vary by a second; a nod has no blind fallback)
+    std::optional<std::pair<double, double>> nod_window(double tx_end) const;
     std::optional<double> cfo;
 
 private:

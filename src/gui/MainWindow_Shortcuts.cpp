@@ -9,7 +9,6 @@
 #include "TxKeyActivationGuard.h"
 #include "PttHoldKeyStep.h"
 #include "ShortcutRefusalNotice.h"
-#include "StatusBarNotice.h"
 #include "TwoToneTuneGate.h"
 #include "core/IambicKeyer.h"
 
@@ -381,18 +380,40 @@ void MainWindow::noticeRefusedShortcut(QKeyEvent* keyEvent)
     qCInfo(lcGui).noquote() << "Keyboard shortcuts are off:" << refused->displayName
                             << "(" + refused->currentKey.toString() + ") not run;"
                             << "Settings > Keyboard Shortcuts turns them on";
-    if (!m_shortcutNoticeLabel) {
-        m_shortcutNoticeLabel = new StatusBarNoticeLabel(statusBar());
-        // The right margin clears the resize grip that overlays the bar.
-        m_shortcutNoticeLabel->setContentsMargins(6, 0, 20, 0);
-        ThemeManager::instance().applyStyleSheet(
-            m_shortcutNoticeLabel,
-            QStringLiteral("QLabel#statusBarNoticeLabel { color: {{color.text.primary}};"
-                           " font-size: 14px; background: transparent; }"));
+    showShortcutNotice(tr("Keyboard shortcuts are off"), 10000);
+}
+
+bool MainWindow::fireVoiceKeyerSlot(int id, const TxController::Input& input)
+{
+    if (!m_dvkPanel || !m_dvkPanel->keyer()) return false;
+    if (m_dvkPanel->stopSlotIfPlaying(id)) return true;
+    if (!m_dvkPanel->slotStartable(id)) return false;
+    m_dvkPanel->markSelected(id);
+    m_dvkPanel->keyer()->playbackStartFrom(id, input.request());
+    return true;
+}
+
+void MainWindow::refuseControlAction(const QString& name, bool transmitSetup)
+{
+    // Only actions that change transmit setup use the keyed refusal wording.
+    const bool keyed = transmitSetup && m_radioModel.transmitModel().isTransmitting();
+    const QString message = keyed ? tr("%1 is not available while transmitting").arg(name)
+                                  : tr("%1 is not available right now").arg(name);
+    // A held key or a spinning encoder refuses many times a second: say it
+    // once while the notice is up, not once per step (docs/a11y.md).
+    // The message stays current while the bar is hidden in minimal mode.
+    if (name == m_lastRefusedAction && statusBar()->currentMessage() == message) {
+        return;
     }
-    m_shortcutNoticeLabel->showNotice(
-        tr("Keyboard shortcuts are off"),
-        10000);
+    m_lastRefusedAction = name;
+    qCInfo(lcGui).noquote() << "Control action not available:" << name;
+    showShortcutNotice(message, 5000);
+}
+
+// Shortcut and controller refusals share the stationary status-message overlay.
+void MainWindow::showShortcutNotice(const QString& text, int durationMs)
+{
+    statusBar()->showMessage(text, durationMs);
 }
 
 
@@ -1205,23 +1226,23 @@ void MainWindow::toggleCwKeyerPanel()
 }
 
 
+void MainWindow::cycleModeAction(int direction)
+{
+    auto* s = activeSlice();
+    const QString next = nextCycledMode(modeActionModes(), s ? s->mode() : QString(),
+                                        direction, s ? s->modeList() : QStringList());
+    if (next.isEmpty())
+        return;
+    if (auto* a = m_shortcutManager.action(QStringLiteral("mode_%1").arg(next.toLower())))
+        if (a->handler) a->handler();
+}
+
 void MainWindow::registerShortcutActions()
 {
     // Helper: nudge active slice frequency by N steps.
     // Share the incremental tune policy with wheel/knob/VFO tuning so pan
     // follow uses the same trigger + settle margins everywhere.
-    auto nudgeFreq = [this](int steps) {
-        if (!m_radioModel.isConnected()) return;
-        auto* s = activeSlice();
-        if (!s) return;
-        if (s->isLocked()) {
-            s->notifyTuneBlockedByLock();
-            return;
-        }
-        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
-        double newMhz = s->frequency() + steps * stepHz / 1e6;
-        applyTuneRequest(s, newMhz, TuneIntent::IncrementalTune, "keyboard-step");
-    };
+    auto nudgeFreq = [this](int steps) { nudgeActiveSliceSteps(steps); };
 
     // Step cycle helper
     auto cycleStep = [this](int dir) {
@@ -1853,6 +1874,14 @@ void MainWindow::registerShortcutActions()
             if (s) s->setXit(!s->xitOn(), s->xitFreq());
         });
 
+    // ── Registry-declared actions (keyboard side; MIDI side publishes in
+    // registerMidiParams). Before loadBindings so their saved keys load. ──
+    registerControlActions();
+    m_controlActions.publishShortcuts([this](const ControlActionShortcutSpec& spec) {
+        m_shortcutManager.registerAction(spec.id, spec.name, spec.category, spec.defaultKey,
+                                         spec.handler, spec.autoRepeat);
+    });
+
     // ── Load user bindings and create QShortcuts ────────────────────────
     m_shortcutManager.loadBindings();
     s_keyboardShortcutsEnabled = m_keyboardShortcutsEnabled;
@@ -2118,6 +2147,23 @@ void MainWindow::zoomActivePanadapter(double factor)
 
     sw->setFrequencyRange(newCenter, newBw);
     applyPanRangeRequest(s->panId(), newCenter, newBw, "pan-zoom");
+}
+
+bool MainWindow::setActivePanSpan(double bandwidthMhz)
+{
+    if (!m_radioModel.isConnected()) return false;
+    auto* s = activeSlice();
+    if (!s || s->panId().isEmpty()) return false;
+    auto* sw = spectrumForSlice(s);
+    if (!sw) return false;
+    if (panSpanFixedByBackend() && !kiwiSdrPanDisplaysKiwi(s->panId())) return false;
+    const double bw = std::clamp(bandwidthMhz,
+                                 m_radioModel.panMinBandwidthMhz(s->panId()),
+                                 m_radioModel.panMaxBandwidthMhz(s->panId()));
+    const double center = std::max(s->frequency(), bw / 2.0);
+    sw->setFrequencyRange(center, bw);
+    applyPanRangeRequest(s->panId(), center, bw, "pan-span-preset");
+    return true;
 }
 
 void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)

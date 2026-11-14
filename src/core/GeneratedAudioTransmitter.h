@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/TxCoordinator.h"
+
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QObject>
@@ -46,6 +48,14 @@ public:
     // queued hop, which is where TxCoordinator requires a request to be taken.
     // False when nothing was admitted, and the transmission never starts.
     virtual bool admitOperation() = 0;
+    // Admit under a request taken from another producer at its input edge (a
+    // MIDI or keyboard device's), so that producer's closure fences the delayed
+    // key. A route that cannot carry outside authority refuses.
+    virtual bool admitOperationFrom(const TxCoordinator::Request& origin)
+    {
+        (void)origin;
+        return false;
+    }
 
     // False when the key could not even be REQUESTED — no transmit authority
     // admitted, so nothing this route sends would be licensed to reach the
@@ -102,6 +112,9 @@ public:
     // Starts the sequence. False, with a reason, when it cannot begin; after
     // true, exactly one finished() follows.
     bool start(const QByteArray& float32Stereo24k, QString& error);
+    // As start(), admitted under `origin` instead of the route's own producer.
+    bool start(const QByteArray& float32Stereo24k, QString& error,
+               const TxCoordinator::Request& origin);
     // Operator stop: unkey now, no tail.
     void stop();
     // Fail closed: unkey now and report why.
@@ -129,6 +142,8 @@ signals:
     void finished(GeneratedAudioTransmitter::Outcome outcome, const QString& reason);
 
 private:
+    bool startAdmitted(const QByteArray& pcm, QString& error,
+                       const TxCoordinator::Request* origin);
     void setPhase(Phase phase);
     void beginKeying();
     void keyAfterSettle();
