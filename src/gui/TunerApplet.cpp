@@ -1395,10 +1395,10 @@ void TunerApplet::setPowerHighRange(bool high)
 {
     m_powerHighRange = !m_fixedPowerRange && high;
     auto* gauge = static_cast<HGauge*>(m_fwdGauge);
+    gauge->setTickLabelCollisionAvoidanceEnabled(m_fixedPowerRange);
     if (m_fixedPowerRange) {
         gauge->setRange(0.0f, 600.0f, 500.0f,
-            {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
-             {400, "400"}, {500, "500"}, {600, "600"}}, 400.0f);
+            {{0, "0"}, {200, "200"}, {400, "400"}, {600, "600"}}, 400.0f);
     } else if (high) {
         gauge->setRange(0.0f, 2000.0f, 1500.0f,
             {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1K5"}, {2000, "2K"}}, 1000.0f);

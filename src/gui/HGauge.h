@@ -297,6 +297,12 @@ public:
         update();
     }
 
+    void setTickLabelCollisionAvoidanceEnabled(bool enabled) {
+        if (m_avoidTickLabelCollisions == enabled) return;
+        m_avoidTickLabelCollisions = enabled;
+        update();
+    }
+
     void setBallistics(const MeterSmoother::Ballistics& b) {
         m_smooth.setBallistics(b);
     }
@@ -517,20 +523,33 @@ protected:
         QFont tickFont = font();
         tickFont.setPixelSize(qMax(6, qRound(9 * m_metricScale)));
         p.setFont(tickFont);
-
-        for (const auto& tick : m_ticks) {
+        const QFontMetrics fm(tickFont);
+        auto labelLeft = [&](const Tick& tick) {
+            const int tx = barX + static_cast<int>((tick.value - m_min) / (m_max - m_min) * barW);
+            const int tw = fm.horizontalAdvance(tick.label);
+            return qBound(2, tx - tw / 2, w - tw - 4);
+        };
+        int lastLabel = m_ticks.size() - 1;
+        while (lastLabel >= 0 && m_ticks[lastLabel].label.isEmpty()) --lastLabel;
+        const int lastLeft = lastLabel >= 0 ? labelLeft(m_ticks[lastLabel]) : w;
+        int previousRight = -2;
+        for (int i = 0; i < m_ticks.size(); ++i) {
+            const auto& tick = m_ticks[i];
             float tf = (tick.value - m_min) / (m_max - m_min);
             int tx = barX + static_cast<int>(tf * barW);
             QColor tickColor = (tick.value >= m_redStart) ? QColor(0xcc, 0x33, 0x33)
                              : (tick.value >= m_yellowStart) ? m_cautionColor
                              : QColor(0xc8, 0xd8, 0xe8);
             p.setPen(tickColor);
-            const QFontMetrics fm(tickFont);
-            int tw = fm.horizontalAdvance(tick.label);
-            // Center label on tick position, clamp to widget bounds
-            // Leave a small right margin so the last tick isn't flush to the edge
-            int lx = qBound(2, tx - tw / 2, w - tw - 4);
-            p.drawText(lx, qRound(10 * m_metricScale), tick.label);
+            const int tw = fm.horizontalAdvance(tick.label);
+            const int lx = labelLeft(tick);
+            // Reserve the final label first, then fit intermediate labels from left to right.
+            if (!tick.label.isEmpty()
+                    && (!m_avoidTickLabelCollisions || i == lastLabel
+                        || (lx >= previousRight + 2 && lx + tw + 2 <= lastLeft))) {
+                p.drawText(lx, qRound(10 * m_metricScale), tick.label);
+                previousRight = lx + tw;
+            }
             if (m_tickMarkColor.isValid()) {
                 const int length = qMax(2, qRound((tick.label.isEmpty() ? 3 : 7) * m_metricScale));
                 const int x = qBound(barX + 1, tx, barX + barW - 2);
@@ -774,6 +793,7 @@ private:
     QColor m_limitColor;
     bool  m_reversed{false};
     bool  m_fillFromRight{false};
+    bool  m_avoidTickLabelCollisions{false};
     qreal m_metricScale{1.0};      // 1.0 = the original fixed metrics
     QString m_label, m_unit;
     QVector<Tick> m_ticks;

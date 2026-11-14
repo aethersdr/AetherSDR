@@ -54,7 +54,9 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
 - **Fwd Power** gauge. Use **Settings** at the bottom of the applet to select
   **Auto (200 / 2,000 W)** (the default) or **Fixed 600 W**. The choice is saved.
   Fixed 600 W retains its scale at all power levels, including after reconnecting;
-  readings and peak markers above full scale are clamped to the end of the bar.
+  its labels are 0, 200, 400 and 600 W; at narrow widths intermediate labels
+  are hidden as needed to avoid overlap. Yellow starts at 400 W and red at 500 W.
+  Readings and peak markers above full scale are clamped to the end of the bar.
   Auto starts at 0–200 W, changes to 0–2,000 W above
   200 W, and returns to the low scale after forward power stays below 0.5 W
   for 800 ms. This hold prevents range changes between syllables or CW elements.

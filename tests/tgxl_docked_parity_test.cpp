@@ -212,6 +212,46 @@ int main(int argc, char** argv)
                 fixed->trigger();
                 CHECK(fixed->isChecked());
                 CHECK(power->property("gaugeMax").toFloat() == 600.0f);
+                CHECK(power->property("gaugeYellowStart").toFloat() == 400.0f);
+                CHECK(power->property("gaugeRedStart").toFloat() == 500.0f);
+                CHECK(power->property("gaugeTicks").toString() == QLatin1String("0,200,400,600"));
+                meters.show();
+                meters.resize(260, 200);
+                settle();
+                QFont tickFont = power->font();
+                tickFont.setPixelSize(9); // Docked HGauge tick font.
+                const QFontMetrics metrics(tickFont);
+                const int labelWidth = qMax(metrics.horizontalAdvance(QStringLiteral("200")),
+                    qMax(metrics.horizontalAdvance(QStringLiteral("400")),
+                         metrics.horizontalAdvance(QStringLiteral("600"))));
+                for (bool narrow : {true, false}) {
+                    // Choose widths from the actual font so the same edge case is exercised on every platform.
+                    power->resize((narrow ? 4 : 10) * labelWidth + 8, power->height());
+                    const QImage actual = power->grab().toImage().copy(0, 0, power->width(), 12);
+                    power->setTickLabelCollisionAvoidanceEnabled(false);
+                    const QVector<HGauge::Tick> expected = narrow
+                        ? QVector<HGauge::Tick>{{0, "0"}, {200, "200"}, {600, "600"}}
+                        : QVector<HGauge::Tick>{{0, "0"}, {200, "200"}, {400, "400"}, {600, "600"}};
+                    power->setRange(0.0f, 600.0f, 500.0f, expected, 400.0f);
+                    const QImage reference = power->grab().toImage().copy(0, 0, power->width(), 12);
+                    CHECK(actual == reference);
+                    int previousRight = -2;
+                    for (const auto& tick : expected) {
+                        const int textWidth = metrics.horizontalAdvance(tick.label);
+                        const int x = qBound(2, int(tick.value / 600.0f * power->width())
+                                                    - textWidth / 2,
+                                             power->width() - textWidth - 4);
+                        if (x < previousRight + 2) {
+                            std::fprintf(stderr, "Tick %s overlaps: gauge=%d x=%d previousRight=%d\n",
+                                         qPrintable(tick.label), power->width(), x, previousRight);
+                            ++g_failures;
+                        }
+                        previousRight = x + textWidth;
+                    }
+                    power->setRange(0.0f, 600.0f, 500.0f,
+                                    {{0, "0"}, {200, "200"}, {400, "400"}, {600, "600"}}, 400.0f);
+                    power->setTickLabelCollisionAvoidanceEnabled(true);
+                }
                 settle(900);
                 CHECK(power->property("gaugeMax").toFloat() == 600.0f);
                 QString persisted;
