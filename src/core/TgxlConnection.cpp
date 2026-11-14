@@ -205,6 +205,8 @@ void TgxlConnection::beginAttempt()
     m_pollTimer.stop();
     m_pollInFlight = false;
     m_connected = false;
+    m_threeWay.reset();
+    m_infoSeq.reset();
     m_gotVersion = false;
     m_version.clear();
     m_readBuf.clear();
@@ -231,6 +233,8 @@ void TgxlConnection::disconnect()
     m_pollTimer.stop();
     m_pollInFlight = false;
     m_connected = false;
+    m_threeWay.reset();
+    m_infoSeq.reset();
     m_socket.disconnectFromHost();
     if (wasConnected) {
         emit disconnected();
@@ -265,6 +269,8 @@ void TgxlConnection::onDisconnected()
     m_pollInFlight = false;
     const bool wasConnected = m_connected;
     m_connected = false;
+    m_threeWay.reset();
+    m_infoSeq.reset();
     if (wasConnected) {
         emit disconnected();
     }
@@ -402,6 +408,40 @@ void TgxlConnection::processLine(const QString& line)
         int pipe2 = (pipe1 >= 0) ? line.indexOf('|', pipe1 + 1) : -1;
         if (pipe2 >= 0) {
             QString body = line.mid(pipe2 + 1).trimmed();
+            bool seqOk = false;
+            const quint32 seq = line.mid(1, pipe1 - 1).toUInt(&seqOk);
+            if (m_infoSeq && seqOk && seq == *m_infoSeq) {
+                m_infoSeq.reset();
+                if (line.mid(pipe1 + 1, pipe2 - pipe1 - 1) != QLatin1String("0")) {
+                    qCWarning(lcTuner) << "TgxlConnection: info request failed" << line;
+                    return;
+                }
+                QMap<QString, QString> kvs;
+                const auto parts = body.split(' ', Qt::SkipEmptyParts);
+                for (const auto& part : parts) {
+                    const int eq = part.indexOf('=');
+                    if (eq > 0) {
+                        kvs.insert(part.left(eq), part.mid(eq + 1));
+                    }
+                }
+                if (kvs.isEmpty()) {
+                    qCWarning(lcTuner) << "TgxlConnection: empty or invalid info response";
+                    return;
+                }
+                const auto variant = kvs.constFind(QStringLiteral("3way"));
+                if (variant != kvs.cend() && *variant != QLatin1String("0")
+                    && *variant != QLatin1String("1")) {
+                    qCWarning(lcTuner) << "TgxlConnection: invalid 3way field" << *variant;
+                    return;
+                }
+                const bool threeWay = variant != kvs.cend()
+                    && *variant == QLatin1String("1");
+                if (m_threeWay != threeWay) {
+                    m_threeWay = threeWay;
+                    emit variantChanged(threeWay);
+                }
+                return;
+            }
             if (!body.isEmpty()) {
                 // antenna name1=X name2=Y name3=Z  (3-way model, v1.2.41+)
                 if (body.startsWith(QStringLiteral("antenna "))) {
@@ -486,7 +526,7 @@ void TgxlConnection::finishHandshake()
 {
     m_authBlocked = false;
     m_authFailures = 0;
-    sendCommand("info");
+    m_infoSeq = sendCommand("info");
     sendCommand("antenna read");  // 3-way custom antenna names (v1.2.41+)
     sendCommand("status");
     m_connected = true;
@@ -561,7 +601,11 @@ quint32 TgxlConnection::sendCommand(const QString& cmd)
 {
     quint32 seq = ++m_seq;
     QString line = QString("C%1|%2\n").arg(seq).arg(cmd);
-    m_socket.write(line.toUtf8());
+    if (m_commandWriter) {
+        m_commandWriter(line.toUtf8());
+    } else {
+        m_socket.write(line.toUtf8());
+    }
     qCDebug(lcTuner) << "TgxlConnection: sent" << line.trimmed();
     return seq;
 }

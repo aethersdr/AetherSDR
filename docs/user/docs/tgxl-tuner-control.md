@@ -61,10 +61,12 @@ Docked in the applet panel, the TUN applet (title "TGXL") shows:
 - **TUNE**: starts an auto-tune. While a tune runs it reads **STOP**;
   pressing it stops the tune. The tuner stays in operate.
 - **OPERATE**: cycles OPERATE → BYPASS → STANDBY.
-- **ANT 1 / ANT 2 / ANT 3** antenna buttons, shown with a direct connection to
-  a TGXL that has an antenna switch. On the 3-way model with firmware
+- **ANT 1 / ANT 2 / ANT 3** antenna buttons, shown when a directly connected
+  TGXL identifies itself as the 3-way model. Click a button to select that
+  antenna; the tuner's reported selection is highlighted. With firmware
   1.2.41 or later, custom port names supplied by the tuner replace these labels.
-  When no names are returned, the buttons retain their default labels.
+  When no names are returned, the buttons retain their default labels. SO2R
+  models do not show this row.
   While transmitting (forward power at or above 5 W, or the TGXL interlock
   cable is active), the selected antenna's button turns red.
 
