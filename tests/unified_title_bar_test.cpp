@@ -1076,6 +1076,12 @@ int main(int argc, char** argv)
     {
         RadioTabBar* tabs = bar->radioTabBar();
         const QString priorSheet = app.styleSheet();
+        // Subpixel antialiasing fringes every glyph pixel with color, so an
+        // exact-ink pixel count only means something with grayscale text.
+        const QFont priorFont = app.font();
+        QFont grayscaleFont = priorFont;
+        grayscaleFont.setStyleStrategy(QFont::NoSubpixelAntialias);
+        app.setFont(grayscaleFont);
         for (const QString& theme : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
             auto& tm = ThemeManager::instance();
             check(tm.setActiveTheme(theme), "context menu render theme loads");
@@ -1107,6 +1113,7 @@ int main(int argc, char** argv)
             }
         }
         app.setStyleSheet(priorSheet);
+        app.setFont(priorFont);
         ThemeManager::instance().setActiveTheme(QStringLiteral("Default Dark"));
     }
 
