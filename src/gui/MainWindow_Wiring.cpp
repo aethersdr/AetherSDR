@@ -7875,6 +7875,54 @@ void MainWindow::wireMeters()
         updateStatusBarMinimumWidth();
         if (present) updatePgxlStyle();
     });
+
+    // KPA500 main-window indicator — RFC #7092.
+    // Six states in priority order: FAULT > TX > OPERATE > STANDBY > OFF > Unknown.
+    // Passive widget; show/hide on detectedChanged only (not on radio-disconnect teardown).
+    auto updateKpa500Style = [this, setIndicatorStyle]() {
+        const auto& s   = m_kpa500Conn.lastStatus();
+        const bool live = m_kpa500Conn.isConnected() && m_kpa500Conn.isResponding();
+        if (!live) {
+            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "Unknown",
+                              QStringLiteral("color.text.secondary"));
+            return;
+        }
+        const bool fault = s.faultCode.value_or(0) > 0;
+        const bool txing = m_kpa500Conn.hasLiveTxMeters()
+                           && s.forwardPowerW.value_or(0.0f) >= 5.0f;
+        const bool oper  = s.powerOn == true && s.operate == true;
+        const bool stby  = s.powerOn == true && s.operate == false;
+        const bool off   = s.powerOn == false;
+        if (fault)
+            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "FAULT",
+                              QStringLiteral("color.accent.danger"));
+        else if (txing)
+            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "TX",
+                              QStringLiteral("color.accent.danger"));
+        else if (oper)
+            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "OPERATE",
+                              QStringLiteral("color.accent.success"));
+        else if (stby)
+            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "STANDBY",
+                              QStringLiteral("color.accessory.key.standby.foreground"));
+        else if (off)
+            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "OFF",
+                              QStringLiteral("color.text.secondary"));
+        else
+            setIndicatorStyle(m_kpa500Indicator, m_kpa500StateLabel, "Unknown",
+                              QStringLiteral("color.text.secondary"));
+    };
+    connect(&m_kpa500Conn, &Kpa500Connection::detectedChanged, this, [this, updateKpa500Style](bool detected) {
+        m_kpa500Container->setVisible(detected);
+        m_kpa500Separator->setVisible(detected);
+        updateStatusBarMinimumWidth();
+        if (detected) updateKpa500Style();
+    });
+    connect(&m_kpa500Conn, &Kpa500Connection::statusUpdated, this,
+            [updateKpa500Style](const AetherSDR::Kpa500::Status&) { updateKpa500Style(); });
+    connect(&m_kpa500Conn, &Kpa500Connection::respondingChanged, this,
+            [updateKpa500Style]() { updateKpa500Style(); });
+
     // Drain current and PA heatsink temperature, relayed by the radio as the
     // PGXL's ID and TEMP meters. The applet prefers these while they are
     // fresh and falls back to the PGXL's own values; see

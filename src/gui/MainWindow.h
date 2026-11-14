@@ -1971,6 +1971,10 @@ private:
     QWidget* m_pgxlContainer{nullptr};
     QLabel*  m_pgxlIndicator{nullptr};   // top row: "AMP"
     QLabel*  m_pgxlStateLabel{nullptr};  // bottom row: OPERATE / STANDBY
+    QLabel*  m_kpa500Separator{nullptr};
+    QWidget* m_kpa500Container{nullptr};
+    QLabel*  m_kpa500Indicator{nullptr};   // top row: "KPA"
+    QLabel*  m_kpa500StateLabel{nullptr};  // bottom row: FAULT / TX / OPERATE / STANDBY / OFF / Unknown
     QLabel* m_txIndicator{nullptr};
     QLabel* m_gpsDateLabel{nullptr};
     QLabel* m_gpsTimeLabel{nullptr};
