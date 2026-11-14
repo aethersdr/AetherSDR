@@ -2393,6 +2393,9 @@ if (ENABLE_ASR)
         src/asr/WhisperAsrBackend.cpp
         src/asr/RemoteAsrBackend.cpp
         src/asr/SherpaOnnxBackend.cpp # sherpa-onnx offline models (stub unless HAVE_SHERPA)
+        src/asr/LivePreviewAssembler.cpp # live-preview results -> per-segment text
+        src/asr/AppleLivePreview.cpp # Apple SpeechTranscriber preview (stub off macOS)
+        src/asr/SherpaLivePreview.cpp # sherpa-onnx streaming preview (stub unless HAVE_SHERPA)
         src/core/Resampler.cpp   # standalone r8brain wrapper (24k->16k on the ASR worker)
     )
     target_include_directories(aetherasr PUBLIC src PRIVATE ${CMAKE_SOURCE_DIR}/third_party/r8brain)
@@ -2405,6 +2408,92 @@ if (ENABLE_ASR)
         target_compile_definitions(aetherasr PRIVATE AETHER_ASR_METAL_PRECOMPILED=1)
     endif()
     set_target_properties(aetherasr PROPERTIES AUTOMOC ON)
+
+    # Copy Assist live preview: Apple's SpeechTranscriber is a Swift-only API,
+    # so a small Swift file is compiled with swiftc directly. A custom command
+    # rather than enable_language(Swift) because CMake supports Swift only
+    # under the Ninja and Xcode generators. Everything in the Swift file is
+    # gated on macOS 26 at runtime; older systems get the stub behaviour.
+    if (APPLE)
+        option(ENABLE_ASR_APPLE_LIVE_PREVIEW
+            "Copy Assist live preview via Apple SpeechTranscriber (runs on macOS 26+)" ON)
+    endif()
+    if (APPLE AND ENABLE_ASR_APPLE_LIVE_PREVIEW)
+        execute_process(COMMAND xcrun --find swiftc OUTPUT_VARIABLE _lp_swiftc
+                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if (CMAKE_OSX_SYSROOT AND IS_DIRECTORY "${CMAKE_OSX_SYSROOT}")
+            set(_lp_sdk "${CMAKE_OSX_SYSROOT}")
+        else()
+            execute_process(COMMAND xcrun --show-sdk-path OUTPUT_VARIABLE _lp_sdk
+                            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        endif()
+        # SpeechAnalyzer/SpeechTranscriber first appear in the macOS 26 SDK. An
+        # older Xcode (the default on GitHub's macos-15 image) cannot compile the
+        # bridge, so the build falls back to the stub instead of failing.
+        set(_lp_sdk_version "")
+        if (_lp_sdk AND EXISTS "${_lp_sdk}/SDKSettings.json")
+            file(READ "${_lp_sdk}/SDKSettings.json" _lp_sdk_settings)
+            string(JSON _lp_sdk_version ERROR_VARIABLE _lp_json_error
+                   GET "${_lp_sdk_settings}" Version)
+        endif()
+        if (_lp_swiftc AND _lp_sdk AND _lp_sdk_version VERSION_LESS 26.0)
+            message(STATUS "ASR: Copy Assist live preview disabled — needs the macOS 26 SDK "
+                           "(Xcode 26 or later); found SDK '${_lp_sdk_version}' at ${_lp_sdk}")
+        elseif (_lp_swiftc AND _lp_sdk)
+            if (CMAKE_OSX_ARCHITECTURES)
+                set(_lp_archs ${CMAKE_OSX_ARCHITECTURES})
+            else()
+                set(_lp_archs ${CMAKE_HOST_SYSTEM_PROCESSOR})
+            endif()
+            # The release floor (macos-dmg.yml deploy_target) when unset, so the
+            # Swift objects never require a newer macOS than the C++ ones.
+            set(_lp_min "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+            if (NOT _lp_min)
+                set(_lp_min "14.4")
+            endif()
+            set(_lp_src ${CMAKE_SOURCE_DIR}/src/asr/apple/AppleLivePreview.swift)
+            set(_lp_dir ${CMAKE_BINARY_DIR}/asr_apple)
+            set(_lp_lib ${_lp_dir}/libaether_apple_live_preview.a)
+            set(_lp_slices)
+            foreach(_lp_arch IN LISTS _lp_archs)
+                set(_lp_slice ${_lp_dir}/${_lp_arch}/libaether_apple_live_preview.a)
+                add_custom_command(
+                    OUTPUT ${_lp_slice}
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${_lp_dir}/${_lp_arch}
+                    COMMAND ${_lp_swiftc} -parse-as-library -emit-library -static -O
+                            -module-name AetherAppleLivePreview
+                            -target ${_lp_arch}-apple-macos${_lp_min} -sdk ${_lp_sdk}
+                            -module-cache-path ${_lp_dir}/module-cache
+                            -o ${_lp_slice} ${_lp_src}
+                    DEPENDS ${_lp_src}
+                    COMMENT "Swift: Copy Assist live preview (${_lp_arch})"
+                    VERBATIM)
+                list(APPEND _lp_slices ${_lp_slice})
+            endforeach()
+            add_custom_command(
+                OUTPUT ${_lp_lib}
+                COMMAND lipo -create ${_lp_slices} -output ${_lp_lib}
+                DEPENDS ${_lp_slices}
+                COMMENT "Swift: merging live-preview slices"
+                VERBATIM)
+            add_custom_target(aether_apple_live_preview_swift DEPENDS ${_lp_lib})
+            add_dependencies(aetherasr aether_apple_live_preview_swift)
+            # The Swift objects autolink the Swift runtime and Speech/AVFoundation;
+            # these are the search paths that resolution needs. The runtime itself
+            # ships in the OS at /usr/lib/swift.
+            get_filename_component(_lp_toolchain_bin ${_lp_swiftc} DIRECTORY)
+            target_link_libraries(aetherasr PRIVATE ${_lp_lib})
+            target_link_options(aetherasr INTERFACE
+                "-L${_lp_sdk}/usr/lib/swift"
+                "-L${_lp_toolchain_bin}/../lib/swift/macosx"
+                "-Wl,-rpath,/usr/lib/swift")
+            target_compile_definitions(aetherasr PRIVATE AETHER_APPLE_LIVE_PREVIEW=1)
+            message(STATUS "ASR: Copy Assist live preview (Apple SpeechTranscriber) enabled "
+                           "for ${_lp_archs}, deployment floor ${_lp_min}")
+        else()
+            message(STATUS "ASR: Copy Assist live preview disabled — swiftc or the SDK not found")
+        endif()
+    endif()
 
     # The desktop app links ASR today; the compile define propagates PUBLICly so
     # the GUI can conditionally compile the audio tap + Copy Assist wiring.

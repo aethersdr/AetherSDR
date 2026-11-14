@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <utility>
 
 namespace AetherSDR {
@@ -26,6 +27,13 @@ constexpr int kResampleBlock = 4096; // max samples per r8brain process() call
 // resampler's group delay small (important for live copy and for prompt segment
 // close-out).
 constexpr double kResampleTransBand = 10.0;
+// Live preview: force the recogniser to finalise at least this often. In weak
+// signal its own end-of-utterance detection may never fire, and an utterance
+// left open for minutes finalises nearly empty (docs/asr-copy-assist.md).
+constexpr qint64 kPreviewFinalizeSamples = 10 * kAsrRate;
+// Live preview: a chunk whose timeline position is within this of where the
+// previous one ended is treated as contiguous (rounding, not a gap).
+constexpr qint64 kPreviewJitterSamples = kAsrRate / 10;
 
 // Segment-overlap de-dup (RFC #4821, Approach A). A cap-forced segment carries a
 // little trailing audio into the next one, so the next decode re-transcribes the
@@ -119,6 +127,46 @@ QString stripOverlapWords(const QString& prev, const QString& next, int overlapM
     return next.mid(offset);
 }
 } // namespace
+
+// ---- AsrSixteenKConverter --------------------------------------------------
+
+AsrSixteenKConverter::AsrSixteenKConverter() = default;
+AsrSixteenKConverter::~AsrSixteenKConverter() = default;
+
+void AsrSixteenKConverter::reset()
+{
+    m_resampler.reset();
+    m_srcRate = 0;
+}
+
+std::vector<float> AsrSixteenKConverter::convert(const QVector<float>& monoSamples, int sampleRate)
+{
+    const int rate = sampleRate > 0 ? sampleRate : kAsrRate;
+    if (rate == kAsrRate) {
+        return std::vector<float>(monoSamples.constBegin(), monoSamples.constEnd());
+    }
+
+    // Rebuild the resampler if the source rate changed (or first use).
+    if (!m_resampler || m_srcRate != rate) {
+        m_resampler = std::make_unique<Resampler>(static_cast<double>(rate),
+                                                  static_cast<double>(kAsrRate), kResampleBlock,
+                                                  kResampleTransBand);
+        m_srcRate = rate;
+    }
+
+    // r8brain processes at most kResampleBlock samples per call; chunk the input.
+    const int total = static_cast<int>(monoSamples.size());
+    std::vector<float> out;
+    out.reserve(static_cast<size_t>(total) * kAsrRate / rate + 16);
+    for (int off = 0; off < total; off += kResampleBlock) {
+        const int n = std::min(kResampleBlock, total - off);
+        const QByteArray block = m_resampler->process(monoSamples.constData() + off, n);
+        const auto* f = reinterpret_cast<const float*>(block.constData());
+        const int count = block.size() / static_cast<int>(sizeof(float));
+        out.insert(out.end(), f, f + count);
+    }
+    return out;
+}
 
 // ---- AsrWorker -------------------------------------------------------------
 
@@ -245,35 +293,6 @@ void AsrWorker::setSpeakerLabelingEnabled(bool on)
     m_speakerLabelingEnabled = on;
 }
 
-std::vector<float> AsrWorker::toSixteenK(const QVector<float>& monoSamples, int sampleRate)
-{
-    const int rate = sampleRate > 0 ? sampleRate : kAsrRate;
-    if (rate == kAsrRate) {
-        return std::vector<float>(monoSamples.constBegin(), monoSamples.constEnd());
-    }
-
-    // Rebuild the resampler if the source rate changed (or first use).
-    if (!m_resampler || m_resamplerSrcRate != rate) {
-        m_resampler = std::make_unique<Resampler>(static_cast<double>(rate),
-                                                  static_cast<double>(kAsrRate), kResampleBlock,
-                                                  kResampleTransBand);
-        m_resamplerSrcRate = rate;
-    }
-
-    // r8brain processes at most kResampleBlock samples per call; chunk the input.
-    const int total = static_cast<int>(monoSamples.size());
-    std::vector<float> out;
-    out.reserve(static_cast<size_t>(total) * kAsrRate / rate + 16);
-    for (int off = 0; off < total; off += kResampleBlock) {
-        const int n = std::min(kResampleBlock, total - off);
-        const QByteArray block = m_resampler->process(monoSamples.constData() + off, n);
-        const auto* f = reinterpret_cast<const float*>(block.constData());
-        const int count = block.size() / static_cast<int>(sizeof(float));
-        out.insert(out.end(), f, f + count);
-    }
-    return out;
-}
-
 bool AsrWorker::inputCurrent() const
 {
     return m_generation == m_requestedGeneration.load()
@@ -281,7 +300,8 @@ bool AsrWorker::inputCurrent() const
 }
 
 void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate,
-                             quint64 generation, const PcmEpochLease& source)
+                             quint64 generation, const PcmEpochLease& source,
+                             qint64 timelineStart)
 {
     // Duration of this input chunk; reported as "processed" once the worker has
     // handled it (including any blocking transcription), so the engine can show a
@@ -305,13 +325,16 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate,
     }
 
     m_source = source;
-    const std::vector<float> pcm16k = toSixteenK(monoSamples, sampleRate);
+    const std::vector<float> pcm16k = m_toSixteenK.convert(monoSamples, sampleRate);
     if (pcm16k.empty()) {
         return;
     }
 
+    m_timelineOffset = timelineStart - static_cast<qint64>(std::llround(m_accepted16k));
+    m_accepted16k += static_cast<double>(monoSamples.size()) * kAsrRate / rate;
     std::vector<AsrSegmenter::ClosedSegment> segments =
         m_segmenter.feed(pcm16k.data(), static_cast<int>(pcm16k.size()));
+    closePreviewBlocks(segments);
 
     // A long idle gap flushes carried ASR context so a garbled prior can't condition
     // later utterances. Consume the one-shot now (even with no segment) but apply it
@@ -332,6 +355,7 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate,
             m_warnedNoModel = true;
             emit errorOccurred(QStringLiteral("Speech detected but no ASR model is loaded."));
         }
+        discardSegments(segments);
         return;
     }
 
@@ -402,6 +426,7 @@ void AsrWorker::decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segment
             // the reference so the next continuation doesn't de-dup against a
             // stale, pre-failure segment.
             m_prevSegmentText.clear();
+            emit segmentDiscarded(seg.id, m_generation);
             continue;
         }
         if (result.text.isEmpty()) {
@@ -410,6 +435,7 @@ void AsrWorker::decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segment
             // de-dup against a two-segments-old tail — m_prevSegmentText must
             // always mirror the immediately-preceding segment.
             m_prevSegmentText.clear();
+            emit segmentDiscarded(seg.id, m_generation);
             continue;
         }
         // Segment overlap (RFC #4821): when this segment was seeded with audio
@@ -423,7 +449,9 @@ void AsrWorker::decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segment
         }
         m_prevSegmentText = result.text; // full decode is the tail source for the next continuation
         if (emitText.isEmpty()) {
-            continue; // the whole segment was overlap (rare) — nothing new to emit
+            // The whole segment was overlap (rare) — nothing new to emit.
+            emit segmentDiscarded(seg.id, m_generation);
+            continue;
         }
         // Speaker label (A/B/C…) from the utterance's embedding, when enabled.
         // Known limitation (RFC #4821): for a continuation segment this embeds the
@@ -438,7 +466,28 @@ void AsrWorker::decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segment
                 m_embedder->embed(seg.samples.data(), static_cast<int>(seg.samples.size())));
         }
         if (!inputCurrent()) { return; }
-        emit segmentText(emitText, result.confidence, speaker, m_generation, m_source);
+        emit segmentText(emitText, result.confidence, speaker, m_generation, m_source, seg.id);
+    }
+}
+
+void AsrWorker::closePreviewBlocks(const std::vector<AsrSegmenter::ClosedSegment>& segments)
+{
+    // Edges before the discard: a burst thrown away in the same chunk as a
+    // close lies either inside that segment's block (and its final replaces
+    // it) or after it, in the open block the discard trims.
+    for (const AsrSegmenter::ClosedSegment& seg : segments) {
+        emit previewBlockClosed(seg.id, seg.endSample + m_timelineOffset, m_generation);
+    }
+    const std::int64_t discarded = m_segmenter.consumeDiscardedThrough();
+    if (discarded >= 0) {
+        emit previewSpanDiscarded(discarded + m_timelineOffset, m_generation);
+    }
+}
+
+void AsrWorker::discardSegments(const std::vector<AsrSegmenter::ClosedSegment>& segments)
+{
+    for (const AsrSegmenter::ClosedSegment& seg : segments) {
+        emit segmentDiscarded(seg.id, m_generation);
     }
 }
 
@@ -450,9 +499,12 @@ void AsrWorker::markDiscontinuity()
     // would otherwise be discarded unheard), never carrying overlap or a de-dup
     // tail across the gap — the same treatment as a long silent gap.
     std::vector<AsrSegmenter::ClosedSegment> segments = m_segmenter.flush();
+    closePreviewBlocks(segments);
     if (!segments.empty() && !m_cancelPending.load(std::memory_order_relaxed)
         && m_backend != nullptr && m_backend->isLoaded()) {
         decodeSegments(segments);
+    } else {
+        discardSegments(segments);
     }
     m_prevSegmentText.clear();
     if (m_backend) {
@@ -464,6 +516,8 @@ void AsrWorker::reset(quint64 generation)
 {
     m_generation = generation;
     m_source = {};
+    m_timelineOffset = 0;
+    m_accepted16k = 0.0;
     m_segmenter.reset();
     // A retune/clear is a new context — don't prime the next decode with the
     // previous QSO's carried prompt (retune is the one boundary where the
@@ -473,8 +527,7 @@ void AsrWorker::reset(quint64 generation)
     }
     m_clusterer.reset(); // new session/frequency → relabel speakers from A
     m_prevSegmentText.clear(); // a Clear/retune must not de-dup against stale text
-    m_resampler.reset();
-    m_resamplerSrcRate = 0;
+    m_toSixteenK.reset();
 }
 
 void AsrWorker::resumeAfterCancel(quint64 generation)
@@ -483,6 +536,98 @@ void AsrWorker::resumeAfterCancel(quint64 generation)
     // Runs on the worker thread, behind everything restartSession() meant to
     // discard, so clearing here cannot let an old-chain block through.
     m_cancelPending.store(false, std::memory_order_relaxed);
+}
+
+// ---- LivePreviewFeeder -----------------------------------------------------
+
+LivePreviewFeeder::~LivePreviewFeeder()
+{
+    // First: the recogniser's callbacks emit on this object until it is gone.
+    m_preview.reset();
+}
+
+void LivePreviewFeeder::setFactory(LivePreviewFactory factory)
+{
+    m_preview.reset();
+    m_factory = std::move(factory);
+    m_fedAny = false;
+}
+
+void LivePreviewFeeder::reset(quint64 generation)
+{
+    m_generation = generation;
+    m_preview.reset();
+    m_fedAny = false;
+}
+
+void LivePreviewFeeder::feed(const QVector<float>& monoSamples, int sampleRate,
+                             qint64 timelineStart, quint64 generation)
+{
+    if (generation != m_generation || !m_factory || monoSamples.isEmpty()) {
+        return;
+    }
+    const std::vector<float> pcm16k = m_toSixteenK.convert(monoSamples, sampleRate);
+    if (pcm16k.empty()) {
+        return;
+    }
+    if (!m_preview) {
+        // Results carry the generation the session was started under, so the
+        // engine can drop a session's late results after a reset.
+        LivePreviewCallbacks callbacks;
+        callbacks.onResult = [this, generation](const LivePreviewResult& r) {
+            emit previewResult(r.startSample, r.endSample, r.text, r.isFinal, generation);
+        };
+        auto saidWhy = std::make_shared<bool>(false);
+        callbacks.onState = [this, generation, saidWhy](LivePreviewState state,
+                                                        const QString& message) {
+            *saidWhy = *saidWhy || (state == LivePreviewState::Failed && !message.isEmpty());
+            emit previewState(static_cast<int>(state), message, generation);
+        };
+        m_preview = m_factory(std::move(callbacks));
+        if (!m_preview) {
+            // Unavailable here: say so once rather than retrying every chunk,
+            // unless the factory already reported why.
+            m_factory = {};
+            if (!*saidWhy) {
+                emit previewState(static_cast<int>(LivePreviewState::Failed),
+                                  QStringLiteral("Live preview is not available on this system."),
+                                  generation);
+            }
+            return;
+        }
+        m_fedAny = false;
+    }
+    // The recogniser wants contiguous audio. In steady running the resampler's
+    // output matches the engine's rounded positions sample for sample, but a
+    // rate change rebuilds it with a new rounding phase and the two then
+    // differ by a sample or so; keep feeding contiguously and re-anchor only
+    // on a real jump (a new session).
+    const auto count = static_cast<qint64>(pcm16k.size());
+    qint64 start = timelineStart;
+    if (m_fedAny && std::llabs(timelineStart - m_fedEnd) <= kPreviewJitterSamples) {
+        start = m_fedEnd;
+    }
+    if (!m_fedAny) {
+        m_lastFinalize = start;
+    }
+    m_preview->feed(pcm16k.data(), static_cast<int>(count), start);
+    m_fedEnd = start + count;
+    m_fedAny = true;
+    // In weak signal the recogniser's own end-of-utterance detection may never
+    // fire, so it is also finalised on a clock, not only at segment edges.
+    if (m_fedEnd - m_lastFinalize >= kPreviewFinalizeSamples) {
+        m_preview->finalizeThrough(m_fedEnd);
+        m_lastFinalize = m_fedEnd;
+    }
+}
+
+void LivePreviewFeeder::finalizeThrough(qint64 sample, quint64 generation)
+{
+    if (generation != m_generation || !m_preview) {
+        return;
+    }
+    m_preview->finalizeThrough(sample);
+    m_lastFinalize = std::max(m_lastFinalize, sample);
 }
 
 // ---- AsrEngine -------------------------------------------------------------
@@ -555,13 +700,48 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
             &AsrEngine::speakerModelLoaded);
     connect(m_worker, &AsrWorker::segmentText, this,
             [this](const QString& text, float confidence, int speaker, quint64 generation,
-                   const PcmEpochLease& source) {
+                   const PcmEpochLease& source, quint64 segmentId) {
                 if (!m_enabled || generation != m_generation
                     || (source.stream().source != 0 && !source.current())) { return; }
+                m_previewAssembler.resolve(segmentId);
                 // A queued worker toggle can be behind an in-flight decode. Mask
                 // its late result on the main side so the latest UI intent never
                 // appends a stale [A]/[B] label.
-                emit finalText(text, confidence, m_speakerLabelingEnabled ? speaker : -1);
+                emit finalText(text, confidence, m_speakerLabelingEnabled ? speaker : -1,
+                               segmentId);
+            });
+    // Live preview: the worker reports segment edges; the recogniser itself
+    // runs on LivePreviewFeeder's thread (startPreviewThread).
+    connect(m_worker, &AsrWorker::previewBlockClosed, this,
+            [this](quint64 segmentId, qint64 endSample, quint64 generation) {
+                if (generation != m_generation) { return; }
+                for (const auto& update : m_previewAssembler.closeBlock(segmentId, endSample)) {
+                    if (m_enabled && m_livePreviewEnabled) {
+                        emit previewText(update.block, update.text, m_generation);
+                    }
+                }
+                // Split the recogniser's text at the same edge as the segment.
+                postToFeeder([endSample, generation](LivePreviewFeeder* f) {
+                    f->finalizeThrough(endSample, generation);
+                });
+            });
+    connect(m_worker, &AsrWorker::previewSpanDiscarded, this,
+            [this](qint64 endSample, quint64 generation) {
+                if (generation != m_generation) { return; }
+                postToFeeder([endSample, generation](LivePreviewFeeder* f) {
+                    f->finalizeThrough(endSample, generation);
+                });
+                if (const auto update = m_previewAssembler.discardOpenThrough(endSample)) {
+                    if (m_enabled && m_livePreviewEnabled) {
+                        emit previewText(update->block, update->text, m_generation);
+                    }
+                }
+            });
+    connect(m_worker, &AsrWorker::segmentDiscarded, this,
+            [this](quint64 segmentId, quint64 generation) {
+                if (!m_enabled || generation != m_generation) { return; }
+                m_previewAssembler.resolve(segmentId);
+                emit previewDiscarded(segmentId, m_generation);
             });
     connect(m_worker, &AsrWorker::processedMs, this, [this](double ms) {
         // Reports for chunks that were queued at the last reset() arrive after
@@ -608,6 +788,53 @@ AsrEngine::~AsrEngine()
         delete m_worker;
         m_worker = nullptr;
     }
+    if (m_previewThread != nullptr) {
+        // The feeder never blocks for long, so this join is quick. Deleting it
+        // stops the recogniser, whose destructor guarantees no callback after.
+        m_previewThread->quit();
+        m_previewThread->wait();
+        delete m_feeder;
+        m_feeder = nullptr;
+    }
+}
+
+void AsrEngine::startPreviewThread()
+{
+    if (m_previewThread != nullptr) {
+        return;
+    }
+    m_previewThread = new QThread(this);
+    m_previewThread->setObjectName(QStringLiteral("AsrLivePreview"));
+    m_feeder = new LivePreviewFeeder(m_generation);
+    m_feeder->moveToThread(m_previewThread);
+    // Emitted from the recogniser's own threads, so these are queued here.
+    connect(m_feeder, &LivePreviewFeeder::previewResult, this,
+            [this](qint64 start, qint64 end, const QString& text, bool isFinal,
+                   quint64 generation) {
+                if (!m_enabled || !m_livePreviewEnabled || generation != m_generation) {
+                    return;
+                }
+                if (const auto update = m_previewAssembler.addResult(start, end, text, isFinal)) {
+                    emit previewText(update->block, update->text, m_generation);
+                }
+            });
+    connect(m_feeder, &LivePreviewFeeder::previewState, this,
+            [this](int state, const QString& message, quint64 generation) {
+                if (m_livePreviewEnabled && generation == m_generation) {
+                    emit livePreviewStatus(state, message);
+                }
+            });
+    m_previewThread->start();
+}
+
+void AsrEngine::postToFeeder(std::function<void(LivePreviewFeeder*)> call)
+{
+    if (m_feeder == nullptr) {
+        return;
+    }
+    QMetaObject::invokeMethod(
+        m_feeder, [feeder = m_feeder, call = std::move(call)] { call(feeder); },
+        Qt::QueuedConnection);
 }
 
 void AsrEngine::setEnabled(bool on)
@@ -711,7 +938,17 @@ void AsrEngine::pushAudioInput(const QVector<float>& monoSamples, int sampleRate
 
     m_pushedMs += chunkMs;
     updateBacklog();
-    emit requestProcess(monoSamples, sampleRate, m_generation, source);
+    // One timeline for the worker's segment edges and the preview's results.
+    const auto timelineStart = static_cast<qint64>(std::llround(m_timeline16k));
+    m_timeline16k += static_cast<double>(monoSamples.size()) * kAsrRate / rate;
+    emit requestProcess(monoSamples, sampleRate, m_generation, source, timelineStart);
+    if (m_livePreviewEnabled) {
+        // Its own thread, so a decode on the worker never holds this back.
+        postToFeeder([monoSamples, sampleRate, timelineStart,
+                      generation = m_generation](LivePreviewFeeder* f) {
+            f->feed(monoSamples, sampleRate, timelineStart, generation);
+        });
+    }
 }
 
 void AsrEngine::updateBacklog()
@@ -787,7 +1024,31 @@ void AsrEngine::reset()
     m_droppedMs = 0.0;
     m_droppedAtEntryMs = 0.0;
     updateDropped();
+    m_timeline16k = 0.0;
+    m_previewAssembler.reset();
+    emit livePreviewReset(m_generation);
+    postToFeeder([generation = m_generation](LivePreviewFeeder* f) { f->reset(generation); });
     emit requestReset(m_generation);
+}
+
+void AsrEngine::setLivePreviewFactory(LivePreviewFactory factory)
+{
+    const bool wasEnabled = m_livePreviewEnabled;
+    m_livePreviewEnabled = static_cast<bool>(factory);
+    if (wasEnabled && !m_livePreviewEnabled) {
+        // Nothing will replace or retract the gray text already shown for
+        // audio the backend may never finalise, so take it down now.
+        emit livePreviewReset(m_generation);
+    }
+    if (m_livePreviewEnabled) {
+        startPreviewThread();
+    }
+    if (m_feeder == nullptr) {
+        return;
+    }
+    // A shared_ptr because std::function needs a copyable capture.
+    auto shared = std::make_shared<LivePreviewFactory>(std::move(factory));
+    postToFeeder([shared](LivePreviewFeeder* f) { f->setFactory(std::move(*shared)); });
 }
 
 void AsrEngine::restartSession()

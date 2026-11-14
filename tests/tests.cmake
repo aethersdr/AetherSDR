@@ -6056,11 +6056,48 @@ if (ENABLE_ASR)
     target_include_directories(asr_segmenter_test PRIVATE src)
     add_test(NAME asr_segmenter_test COMMAND asr_segmenter_test)
 
+    add_executable(asr_live_preview_assembler_test
+        tests/asr_live_preview_assembler_test.cpp
+        src/asr/LivePreviewAssembler.cpp
+    )
+    target_include_directories(asr_live_preview_assembler_test PRIVATE src)
+    target_link_libraries(asr_live_preview_assembler_test PRIVATE Qt6::Core)
+    add_test(NAME asr_live_preview_assembler_test COMMAND asr_live_preview_assembler_test)
+
+    # Engine live-preview plumbing with a fake recogniser and fake backend.
+    add_executable(asr_live_preview_engine_test
+        tests/asr_live_preview_engine_test.cpp
+        src/asr/AsrEngine.cpp
+        src/asr/AsrSegmenter.cpp
+        src/asr/LivePreviewAssembler.cpp
+        src/asr/SileroVad.cpp    # AsrEngine references it (stub without HAVE_ONNX)
+        src/asr/Fbank.cpp
+        src/asr/SpeakerEmbedder.cpp
+        src/asr/SpeakerClusterer.cpp
+        src/core/Resampler.cpp
+    )
+    target_include_directories(asr_live_preview_engine_test PRIVATE src ${CMAKE_SOURCE_DIR}/third_party/r8brain)
+    target_link_libraries(asr_live_preview_engine_test PRIVATE Qt6::Core Qt6::Test)
+    set_target_properties(asr_live_preview_engine_test PROPERTIES AUTOMOC ON)
+    add_test(NAME asr_live_preview_engine_test COMMAND asr_live_preview_engine_test)
+
+    # Apple live-preview bridge on a real recording; needs macOS 26 and the
+    # on-device model, so it is run by hand.
+    if (APPLE)
+        add_executable(apple_live_preview_smoke tests/apple_live_preview_smoke.cpp) # not registered: manual, needs a recording and macOS 26
+        target_link_libraries(apple_live_preview_smoke PRIVATE aetherasr Qt6::Core)
+    endif()
+
+    # sherpa-onnx live preview on a real recording and model; run by hand.
+    add_executable(sherpa_live_preview_smoke tests/sherpa_live_preview_smoke.cpp) # not registered: manual, needs a recording and a streaming model
+    target_link_libraries(sherpa_live_preview_smoke PRIVATE aetherasr Qt6::Core)
+
     # Engine orchestration: fake backend, worker thread, no whisper/model.
     add_executable(asr_engine_test
         tests/asr_engine_test.cpp
         src/asr/AsrEngine.cpp
         src/asr/AsrSegmenter.cpp
+        src/asr/LivePreviewAssembler.cpp
         src/asr/SileroVad.cpp    # AsrEngine references it (stub without HAVE_ONNX)
         src/asr/Fbank.cpp
         src/asr/SpeakerEmbedder.cpp

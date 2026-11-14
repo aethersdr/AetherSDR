@@ -74,6 +74,24 @@ public:
     // Learned Silero VAD (ONNX) in place of the energy VAD: a checkbox + an
     // .onnx path. The controller owns the file picker and rebuilds the engine.
     void setUseSileroVad(bool on);
+    // Grey provisional text while the model decodes. The checked state mirrors
+    // the stored setting; availability (with the reason shown when off) comes
+    // from the controller, since this dialog links no ASR code.
+    void setLivePreviewChecked(bool on);
+    bool livePreviewChecked() const;
+    void setLivePreviewAvailable(bool available, const QString& reason);
+    QWidget* livePreviewControl() const;
+    // Which recogniser draws the preview (id + human label). An unavailable one
+    // stays listed but dimmed and unselectable, with its reason in the item's
+    // tooltip and accessible description; when it is the current choice anyway
+    // (a stored setting from another machine), the combo itself carries the
+    // reason. Setting the current id does not emit.
+    void addLivePreviewRecognizer(const QString& id, const QString& label);
+    void setLivePreviewRecognizerAvailable(const QString& id, bool available,
+                                           const QString& reason);
+    void setCurrentLivePreviewRecognizer(const QString& id);
+    QString currentLivePreviewRecognizer() const;
+    QWidget* livePreviewRecognizerControl() const;
     // Tap point for the ASR feed: unchecked = after client NR and the RX
     // effects chain (what every build before this did), checked = before them.
     void setRawAudio(bool on);
@@ -112,6 +130,8 @@ signals:
     void browseLogFileRequested();
     void useSileroVadToggled(bool on);
     void rawAudioToggled(bool on);
+    void livePreviewToggled(bool on);
+    void livePreviewRecognizerChanged(const QString& id);
     void browseVadModelRequested();
     void labelSpeakersToggled(bool on);
     void browseSpeakerModelRequested();
@@ -131,6 +151,11 @@ private:
     QLineEdit* m_logPath = nullptr; // read-only display of the chosen path
     QPushButton* m_logBrowse = nullptr;
     QCheckBox* m_useSilero = nullptr;
+    QCheckBox* m_livePreview = nullptr;
+    QString m_livePreviewToolTip;
+    QComboBox* m_previewRecognizer = nullptr;
+    QString m_previewRecognizerToolTip;
+    void updatePreviewRecognizerDescription();
     QCheckBox* m_rawAudio = nullptr;
     QString m_presentationAudioToolTip;
     QLineEdit* m_vadPath = nullptr;

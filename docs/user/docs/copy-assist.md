@@ -118,6 +118,23 @@ Noise-reduction artifacts can confuse the speech model more than noise does. On 
 - A real pause, **Clear**, or a retune starts fresh.
 - Context works with the whisper models only. It is grayed out on the sherpa-onnx and remote backends.
 
+### Live preview
+
+Copy Assist can show a quick first look at what is being said while the selected model is still waiting for its segment to finish. Turn on **Show a live preview while the model decodes** in Copy Assist Settings. It is off by default.
+
+- Gray italic text appears within about a second of each word being spoken.
+- When the model has decoded that stretch of audio, its text replaces the gray text and is colored by confidence as usual. A stretch is decoded when the speaker pauses (**Silence**) or when the **Buffer** fills, whichever comes first, so a shorter Buffer brings the colored text sooner.
+- The preview is less accurate than the whisper models on noisy signals, so treat it as a first look. The colored text is the transcript; only it is saved to the transcript file, and only it is read by a screen reader.
+- It works with every model, including the sherpa-onnx and remote backends.
+- Audio never leaves your computer.
+
+**Preview recognizer** picks what draws the gray text:
+
+- **Kroko streaming, English (sherpa-onnx)** is the default, on Windows, Linux and Apple-silicon Macs. It is English only: with any other **Language** set, the status line adds "Live preview understands English only". The first time you press **Enable** with the preview on, Copy Assist downloads its model (about 71 MB, checked against a pinned SHA-256) into the models folder; the status line shows the progress.
+- **Apple speech recognition** is available on macOS 26 and later. It follows the **Language** setting, so there is no separate preview language to set. The accent it expects comes from the Mac's region (System Settings → General → Language & Region) where Apple supports that pairing: Spanish on a Mac set to the United States uses US Spanish. It understands English, Spanish, French, German, Italian, Portuguese, Chinese (Mandarin and Cantonese), Japanese and Korean, in their main regional variants. The first use of a language may download Apple's speech model for it; the status line says so while it does. For any other language the status line says it is not supported and no gray text appears; the colored transcript is unaffected.
+
+A recognizer your computer cannot run is shown dimmed, with the reason.
+
 ### The Queue readout
 
 The status line shows **Queue: N s** — seconds of received audio not yet transcribed. It stays near zero when the engine keeps up and climbs (amber, then red) when it cannot, for example a large model on a Raspberry Pi.
@@ -152,6 +169,8 @@ The ⚙ button opens a small modeless settings window that can stay open while y
 | **Compute** | Which device runs the model: a GPU or the CPU. Shows **Detecting…** while GPU discovery runs in the background. |
 | **Language** | The spoken language to transcribe (multilingual models only). |
 | **Save transcript to a file** | Appends each finished utterance as a timestamped line. A date is inserted before the extension, so `net.txt` writes to `net-2026-07-21.txt` and rolls over daily. A frequency marker line is written when ASR starts, on every retune, and at the top of each day's file. |
+| **Show a live preview while the model decodes** | Off by default. Shows gray provisional text while the model decodes, then replaces it with the model's text (see [Live preview](#live-preview)). Applies immediately. |
+| **Preview recognizer** | What draws the preview: **Kroko streaming, English (sherpa-onnx)** (the default; downloads about 71 MB on first use) or, on macOS 26 and later, **Apple speech recognition**. Applies immediately. |
 | **Transcribe from unprocessed audio (bypasses NR and RX effects)** | Off by default. Transcribes the receive audio before AetherSDR's noise reduction and RX effects instead of after them. What you hear is unchanged, and processing done by the radio itself still applies. On a noisy band the unprocessed audio has little level difference between speech and noise, so leave **Sens** high; Silero VAD rejects most real speech on a noisy HF signal. Switching starts the transcription over. |
 | **Use Silero VAD (ONNX)** | Replaces the built-in energy detector with the small Silero neural voice-activity model, which segments real speech far better in HF noise. Downloads on demand; **Browse…** lets you use your own `.onnx`. |
 | **Label speakers (A/B/C…)** | Tags each utterance with a speaker label (`[A] …`, `[B] …`) using a downloaded speaker-embedding model. **Match threshold** (0.00–1.00) sets how strict the matching is: higher splits voices more finely, lower merges them. Labels reset on retune or re-enable. |
@@ -212,6 +231,22 @@ The computer has no internet access, for example in an air-gapped shack.
 
 1. Copy a `ggml-*.bin` model file into the models folder by hand (on Linux, `~/.local/share/AetherSDR/models/`).
 2. Or choose **Custom model…** and point it at a whisper `ggml-*.bin` or `.gguf` file.
+
+### The live preview setting is dimmed
+
+No recognizer can run on this computer: this build has no sherpa-onnx (Intel Macs, for example) and, on a Mac, macOS is older than 26. Hover the setting, or read its description with a screen reader, for the reason. A single dimmed entry in **Preview recognizer** works the same way. Copy Assist works normally without the preview.
+
+If you built AetherSDR yourself and the reason says the build has no sherpa-onnx, it was not staged before CMake ran; Copy Assist downloads the preview model but cannot add the library. Run `scripts/setup/setup-sherpa-onnx.sh` (Windows: `scripts\setup\setup-sherpa-onnx.ps1`; on a Mac, run `scripts/setup/setup-onnxruntime.sh` first), then configure and build again. The configure output should say `sherpa-onnx found`.
+
+### The live preview shows nothing
+
+- On first use with Kroko, the status line shows the model downloading. If the download fails, it says why and turns the preview off; turn it on again to retry.
+- With Apple's recognizer, the status line reports a language it does not support (see [Live preview](#live-preview) for the list). Pick a supported **Language** instead. Its first use of a language may also download Apple's speech model.
+- The preview only appears while Copy Assist is **Enabled** and audio is arriving.
+
+### The live preview shows nonsense
+
+Kroko understands English only, and the status line says so when **Language** is set to anything else. For another language, pick **Apple speech recognition** (macOS 26 and later), or turn the preview off.
 
 ## See also
 
