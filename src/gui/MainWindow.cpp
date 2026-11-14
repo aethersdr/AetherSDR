@@ -3910,6 +3910,45 @@ void MainWindow::restoreNativeClientRect(const QString& role)
     }
 }
 
+void MainWindow::applyNonClientBandInsets()
+{
+    // The band is only lost under the expanded client area: with native chrome
+    // the frame is outside the window rect entirely, and on Windows 10
+    // nativeEvent's WM_NCCALCSIZE branch already claims it back.
+    //
+    // Maximized is excluded for the opposite reason (#7081 review): Windows
+    // pushes the frame band off-screen, so the client rect already covers the
+    // whole work area and nothing is lost. Measured here at 125%, maximized:
+    // window rect L=-3849 R=9 B=2109 against a work area of L=-3840 R=0
+    // B=2100, with the client rect equal to the work area to within a pixel.
+    // Insetting then reserves space for a band that is not there, leaving a
+    // dead strip down the edge.
+    QMargins insets;
+#ifdef Q_OS_WIN
+    if (windowFlags().testFlag(Qt::ExpandedClientAreaHint) && !isFullScreen()
+        && !isMaximized()
+        && !WindowChrome::claimsWholeWindowAsClient(windowFlags(),
+                                                    QOperatingSystemVersion::current())) {
+        if (const HWND hwnd = reinterpret_cast<HWND>(winId())) {
+            const UINT dpi = GetDpiForWindow(hwnd);
+            const int band = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                           + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            insets = WindowChrome::nonClientBandInsets(band, devicePixelRatioF());
+        }
+    }
+#endif
+    if (contentsMargins() == insets) {
+        return;
+    }
+    // QMainWindow's layout honours the window's own margins, so this insets
+    // the central widget — the title bar included, since it sits in the
+    // central widget's vbox — and the status bar. Only the top is left alone,
+    // for the caption's own row. The title bar's side bands are lost the same
+    // way, and nothing doubles: TitleBar::updateChromeLayout() adds
+    // contentInsets(), which is safeAreaMargins() and 0 on those edges here.
+    setContentsMargins(insets);
+}
+
 void MainWindow::applyWindowsFrameColor()
 {
     // DWMWA_BORDER_COLOR exists from Windows 11 (build 22000). Windows 10 has
@@ -4021,6 +4060,18 @@ void MainWindow::showEvent(QShowEvent* event)
     // native window with Qt's own style set.
     applyWindowsCaptionStyles();
     applyWindowsFrameColor();
+    applyNonClientBandInsets();
+    // The band is per-monitor device pixels, so moving to a screen with
+    // different scaling changes it. windowHandle() only exists once shown,
+    // and setWindowFlags() re-creates it, so re-check the handle every show.
+    if (QWindow* handle = windowHandle(); handle && handle != m_bandInsetWindow) {
+        if (m_bandInsetWindow) {
+            disconnect(m_bandInsetWindow, nullptr, this, nullptr);
+        }
+        m_bandInsetWindow = handle;
+        connect(handle, &QWindow::screenChanged,
+                this, [this]() { applyNonClientBandInsets(); });
+    }
 #endif
 
     // AetherTX left open last session. toggleAetherialStrip() lazy-creates and
@@ -4169,6 +4220,19 @@ void MainWindow::updateStatusBarMinimumWidth()
 void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);
+
+#ifdef Q_OS_WIN
+    // DevicePixelRatioChange: changing the CURRENT monitor's scale in Settings
+    // sends WM_DPICHANGED with no screenChanged, so the screenChanged
+    // connection alone would leave the inset at the old DPI's band.
+    // WindowStateChange: the inset applies only while restored, so maximizing
+    // and restoring have to re-run it. Guarded because
+    // applyNonClientBandInsets() is declared only under Q_OS_WIN.
+    if (event && (event->type() == QEvent::DevicePixelRatioChange
+                  || event->type() == QEvent::WindowStateChange)) {
+        applyNonClientBandInsets();
+    }
+#endif
 
     // Principle VI fail-safe (#3888): if a momentary keying key (PTT-hold, CW
     // straight key / paddles) is held when the window is deactivated, its

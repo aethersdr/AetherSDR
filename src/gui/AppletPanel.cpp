@@ -306,7 +306,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         this,
         QStringLiteral("QWidget#appletPanel { background: {{color.background.app}}; }"));
 
-    setFixedWidth(260);
+    setFixedWidth(kRailWidth);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -465,10 +465,12 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_scrollArea->setWidgetResizable(true);
     // Handle dims to #2a3a4a at rest, brightens to #4a6880 on hover/drag.
     // 500 ms delay before dimming back so quick drags don't flicker.
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scrollArea, "QScrollBar:vertical { background: {{color.background.0}}; width: 12px; }"
-        "QScrollBar::handle:vertical { background: {{color.background.1}}; border-radius: 4px; min-height: 20px; }"
-        "QScrollBar::handle:vertical[active=\"true\"] { background: #4a6880; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scrollArea,
+        QStringLiteral("QScrollBar:vertical { background: {{color.background.0}}; width: %1px; }"
+                       "QScrollBar::handle:vertical { background: {{color.background.1}}; border-radius: 4px; min-height: 20px; }"
+                       "QScrollBar::handle:vertical[active=\"true\"] { background: #4a6880; }"
+                       "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
+            .arg(kRailScrollBarW));
 
     if (auto* sb = m_scrollArea->verticalScrollBar()) {
         sb->setProperty("active", false);
@@ -480,13 +482,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     connect(m_scrollDimTimer, &QTimer::timeout, this,
             [this]() { setScrollHandleActive(false); });
 
-    // Override sizeHint/minimumSizeHint so QScrollArea::setWidgetResizable
-    // always sizes this container to the viewport width rather than "sticking"
-    // at the AppletPanel's fixed width (260px).  Without this, the VBox layout's
-    // sizeHint stays at 260px after the initial layout pass, and the 12px
-    // scrollbar track (always visible) pushes the viewport to 248px — but Qt
-    // keeps the container at max(248, sizeHint=260)=260px, silently clipping
-    // the right 12px of every applet header (including the × close button).
+    // sizeHint of 0 width lets QScrollArea::setWidgetResizable size this
+    // container to the viewport. Reporting kRailWidth instead pins it at
+    // max(viewport, 260) and clips each applet header's close button.
+    // Viewport width: kStackedApplet with the scrollbar showing, kRailWidth
+    // without it (the policy is ScrollBarAsNeeded).
     struct FlexContainer : QWidget {
         using QWidget::QWidget;
         QSize sizeHint() const override

@@ -164,6 +164,39 @@ int main(int argc, char** argv)
               "a zero frame restores the client rect as the window rect");
     }
 
+    // ── The non-client resize band, which Qt reports as zero (#7077) ──
+    {
+        // Windows 11 keeps the band non-client under ExpandedClientAreaHint
+        // and safeAreaMargins() returns zero on left/right/bottom, so content
+        // laid out to the client rect is drawn under it. The band is derived
+        // from SM_CXSIZEFRAME + SM_CXPADDEDBORDER at the window's DPI; these
+        // are the figures measured on Windows 11 build 26300.
+        const QMargins at100 = WindowChrome::nonClientBandInsets(8, 1.0);
+        check(at100 == QMargins(8, 0, 8, 8),
+              "a 8 px band at dpr 1.0 insets left, right and bottom by 8");
+        check(at100.top() == 0,
+              "the top is left to the caption's own row");
+
+        // 125% display: a 9 device-px band through dpr 1.25 is 7.2 logical,
+        // which must round UP — 7 clips by a fraction, 8 does not.
+        check(WindowChrome::nonClientBandInsets(9, 1.25) == QMargins(8, 0, 8, 8),
+              "a fractional band rounds up rather than clipping by a sliver");
+
+        // The measured dpr on a 100%-scaled display here was 1.0625, not 1.0,
+        // so a hardcoded logical constant lands wrong even at 100%.
+        check(WindowChrome::nonClientBandInsets(8, 1.0625) == QMargins(8, 0, 8, 8),
+              "a non-unit dpr at nominal 100% still yields a whole-pixel inset");
+
+        // Degenerate inputs must not produce a negative or junk margin: a
+        // zero band means there is nothing to reserve.
+        check(WindowChrome::nonClientBandInsets(0, 1.0) == QMargins(),
+              "no band means no inset");
+        check(WindowChrome::nonClientBandInsets(-4, 1.0) == QMargins(),
+              "a negative band is refused rather than inverted");
+        check(WindowChrome::nonClientBandInsets(8, 0.0) == QMargins(),
+              "a zero dpr is refused rather than dividing by zero");
+    }
+
     // ── The main window's own WM_NCHITTEST under the expanded frame (#6272) ──
     {
         using Hit = WindowChrome::FrameHit;

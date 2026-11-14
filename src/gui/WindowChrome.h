@@ -242,6 +242,23 @@ inline QRect savedNativeClientRect(const QJsonObject& doc, const QString& role, 
     return QRect(n[0], n[1], n[2], n[3]);  // invalid when empty
 }
 
+// Windows 11 keeps the resize border non-client under ExpandedClientAreaHint
+// and reports it as zero through safeAreaMargins(), so content laid out to the
+// client rect is drawn under it and lost (#7077). The band has to be derived
+// instead. Pure in its inputs so the Windows branch is testable on any host:
+// `bandDevicePx` is SM_CXSIZEFRAME + SM_CXPADDEDBORDER at the window's DPI and
+// `dpr` the window's devicePixelRatio, because the band is in device pixels
+// and a layout margin is in logical ones. Rounds up: a margin one device pixel
+// short still clips. The top is left to the caption's own row.
+inline QMargins nonClientBandInsets(int bandDevicePx, qreal dpr)
+{
+    if (bandDevicePx <= 0 || dpr <= 0.0) {
+        return {};
+    }
+    const int band = qCeil(bandDevicePx / dpr);
+    return QMargins(band, 0, band, band);
+}
+
 inline QMargins contentInsets(const QWidget* window)
 {
     const QWindow* handle = window->windowHandle();

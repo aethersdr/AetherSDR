@@ -2,6 +2,7 @@
 
 #include "core/AudioEngine.h"
 #include "core/backends/RadioCapabilities.h"
+#include "AppletRailMetrics.h"
 
 #include <QWidget>
 #include <QMap>
@@ -86,6 +87,10 @@ class AppletPanel : public QWidget {
 
 public:
     explicit AppletPanel(QWidget* parent = nullptr);
+
+    static constexpr int kRailWidth      = AppletRailMetrics::kRailWidth;
+    static constexpr int kRailScrollBarW = AppletRailMetrics::kRailScrollBarW;
+    static constexpr int kStackedApplet  = AppletRailMetrics::kStackedApplet;
 
     void setSlice(SliceModel* slice);
     void setAntennaList(const QStringList& ants);
