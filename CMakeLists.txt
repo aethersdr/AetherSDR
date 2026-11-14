@@ -2026,6 +2026,7 @@ target_link_libraries(AetherSDR PRIVATE
 add_executable(aetherd
     src/aetherd/main.cpp
     src/aetherd/CredentialStartup.cpp
+    src/aetherd/GracefulStop.cpp
     src/aetherd/GrantAdminClient.cpp
 )
 target_link_libraries(aetherd PRIVATE
