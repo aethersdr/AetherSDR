@@ -36,7 +36,12 @@ the FlexRadio's XVTR configuration and its XVTA / XVTB antenna ports.
    - **RX Only** — disable TX for receive-only transverters
    - **Max Power (dBm)** — maximum safe TX drive
 4. The entry shows **Valid** or **Invalid** as the radio checks it. **Remove**
-   deletes it.
+   deletes it after the radio confirms removal.
+
+Transverter tabs follow the radio’s reported inventory. A new tab appears when
+the radio reports the transverter, including changes made by another client.
+After a reconnect or replacement, edit the current tab; an old editor cannot
+change a newly created transverter that reuses the same number.
 
 ### Antenna ports
 

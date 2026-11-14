@@ -222,6 +222,9 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/Ax25HfPacketDecodeDialog.cpp": ["DaxTxPolicy"],
     "src/gui/ConnectionPanel.cpp": ["AnanDiscovery", "Hl2Discovery", "IcomModels", "MetisProtocol", "P2Protocol", "SimBackend"],
     "src/gui/ConnectionPanel.h": ["SmartLinkClient"],
+    # The AetherGPS window's Flex-only install/remove/installed-state code,
+    # quarantined here so the shared window stays vendor-free (#7271, KK7GWY).
+    "src/gui/AetherGpsTools.cpp": ["FlexWaveformModel", "WaveformInstaller"],
     "src/gui/DaxIqApplet.cpp": ["DaxIqModel"],
     "src/gui/DemoApplet.cpp": ["NoiseMixer"],
     # Relocated from RadioSetupDialog.cpp with the firmware flow (#6718).
@@ -230,7 +233,7 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/KiwiSdrApplet.h": ["KiwiSdrClient"],
     "src/gui/MainWindow.cpp": ["DvkWavTransfer", "Hl2Backend", "KiwiSdrManager", "PanadapterStream", "RadioStatusOwnership", "SimBackend", "StreamStatus"],
     "src/gui/MainWindow.h": ["AnanDiscovery", "Hl2Discovery", "RtlSdrDiscovery", "SmartLinkClient", "WanConnection"],
-    "src/gui/MainWindowHelpers.cpp": ["PanadapterStream", "SmartLinkClient"],
+    "src/gui/MainWindowHelpers.cpp": ["SmartLinkClient"],
     "src/gui/MainWindow_Controllers.cpp": ["KiwiSdrProtocol"],
     "src/gui/MainWindow_KiwiSdr.cpp": ["KiwiSdrClient", "KiwiSdrManager", "KiwiSdrProtocol"],
     "src/gui/MainWindow_ReceiveSync.cpp": ["KiwiSdrManager"],
@@ -238,7 +241,6 @@ KNOWN_VENDOR_INCLUDE_BASELINE = {
     "src/gui/MainWindow_Shortcuts.cpp": ["KiwiSdrProtocol"],
     "src/gui/MainWindow_Wiring.cpp": ["KiwiSdrManager", "KiwiSdrProtocol", "ProfileLoadCommand"],
     "src/gui/MemoryDialog.cpp": ["MemoryCsvCompat", "RadioConnection"],
-    "src/gui/NetworkDiagnosticsDialog.h": ["PanadapterStream"],
     "src/gui/ProfileImportExportDialog.h": ["ProfileTransfer"],
     "src/gui/RadioSetupDialog.cpp": ["Hl2Discovery", "KiwiSdrManager", "PanadapterStream", "WanConnection"],
     "src/gui/RxApplet.cpp": ["KiwiSdrManager", "KiwiSdrProtocol"],

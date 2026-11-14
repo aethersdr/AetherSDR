@@ -1,4 +1,5 @@
 #include "arq/link.hpp"
+#include "arq/modes.hpp"
 
 #include <algorithm>
 #include <cstdarg>
@@ -310,6 +311,11 @@ bool repeat_default() {
     return on;
 }
 
+bool nod_default() {
+    static const bool on = env_on("DATA2G_NOD");
+    return on;
+}
+
 bool prime_default() {
     static const bool on = env_on("DATA2G_PRIME");
     return on;
@@ -347,7 +353,7 @@ bool Station::comp_bit(std::int64_t seq) const {
     return c.comp && !c.comp_known;
 }
 
-TxBurstPtr Station::build(bool fresh) {
+TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     if (latest - confirmed >= BURST_MOD - 1 && last_sent) {
         // 7 of my bursts unconfirmed: repeat the latest instead
         log_write(LOG, INFO, format("TX b%d repeat: 7 bursts unconfirmed", static_cast<int>(pmod(latest, BURST_MOD))));
@@ -437,6 +443,8 @@ TxBurstPtr Station::build(bool fresh) {
         // host's answer (session REPLY_HOLD_S). Only in the padding, like T_COMP
         ext[T_DRAINED] = Bytes{};
     }
+    if (nod_default() && nod && !nods_told_ && ctl_bytes(ext, 0, false, 0) + 2 <= static_cast<std::int64_t>(n_ctl) * cpb)
+        ext[T_NODS] = Bytes{};  // I hear nods: in the padding, until the peer acted on it
     Control control{core, ext};
     const auto ctl = control.pack(cpb);
     core.n_ctl = control.core.n_ctl;
@@ -450,7 +458,17 @@ TxBurstPtr Station::build(bool fresh) {
     add_slots(*burst, ctl, dup, resend, rvs, fresh_cws);
     std::vector<const Codeword*> carried = fresh_cws;
     if (inl) carried.push_back(inl);
+    std::optional<std::int64_t> new_end;
+    for (const auto* c : carried) new_end = std::max(new_end.value_or(c->seq + 1), c->seq + 1);
+    if (nod_ok && fresh && resend.empty() && !new_end && dup == 1 && ctl.size() == 1) burst->nod = nod_of(bn, submode, core, ext);
+    if (!burst->nod && ext.count(T_NODS)) nods_in_.insert(bn);
+    sent_ctl_[bn] = {rx.cum, core.recommend, core.acted_on, new_end, kept(core, ext)};
     record(bn, burst, std::move(conveyed), resend, carried);
+    if (burst->nod) {
+        stats["tx_nod"] += 1;
+        log_write(LOG, INFO, format("TX b%d nod %d: %s", static_cast<int>(pmod(bn, BURST_MOD)), burst->nod->first,
+                                    nod::describe(burst->nod->first).c_str()));
+    }
     if (log_enabled(LOG, INFO)) log_tx(bn, *burst, fresh, core, ext, dup, resend, rvs, fresh_cws, esc, hint, reply, inl);
     return burst;
 }
@@ -596,6 +614,8 @@ void Station::record(std::int64_t bn, const TxBurstPtr& burst, std::set<std::int
         sent_seqs.erase(it->first);
         it = snapshots.erase(it);
     }
+    for (auto it = sent_ctl_.begin(); it != sent_ctl_.end() && it->first < std::min(confirmed, latest) - 1;)
+        it = sent_ctl_.erase(it);
     bursts_sent += 1;
     last_sent = burst;
     std::int64_t n_comp = 0;
@@ -640,6 +660,75 @@ void Station::log_tx(std::int64_t bn, const TxBurst& burst, bool fresh, const Co
     log_write(LOG, INFO, format("TX b%d %s", static_cast<int>(pmod(bn, BURST_MOD)), join(parts, " | ").c_str()));
 }
 
+// --- nods (docs/arq.md §3b) ---------------------------------------------------------
+
+Station::Kept Station::kept(const Core& core, const Ext& ext) {
+    const auto r = ext.find(T_REPLY);
+    return {core.size_hint, r != ext.end() && !r->second.empty() ? std::optional<int>(r->second[0]) : std::nullopt,
+            ext.count(T_CHAT) > 0};
+}
+
+// Control-only reply bn as a nod: (meaning, family key), or nullopt when the peer does not hear nods or its
+// content is not in the codebook against anchors the peer holds too (link.Station._nod_of).
+std::optional<std::pair<int, nod::FamilyKey>> Station::nod_of(std::int64_t bn, const std::string& submode,
+                                                              const Core& core, const Ext& ext) const {
+    const Mode* md = arq::mode(submode);
+    if (!(nod_default() && nod && nod_peer && md && md->is_cpm() && !core.reply_lost && core.k == 0 && latest >= 0))
+        return std::nullopt;
+    for (const auto& [t, v] : ext)
+        if (t != T_REPLY && t != T_CHAT && t != T_DUPCTL && t != T_NODS) return std::nullopt;
+    const auto pa = peer_ctl_core_.find(core.acted_on);
+    if (pa == peer_ctl_core_.end() || pa->second.acted != latest) return std::nullopt;
+    const SentCtl& r = sent_ctl_.at(latest);
+    std::optional<bool> all;
+    if (pa->second.new_end && rx.cum == *pa->second.new_end)
+        all = true;
+    else if (rx.cum == r.cum)
+        all = false;
+    const int step = (core.recommend & 15) - (r.rec & 15);
+    const auto idx = nod::index(all.value_or(false), step, ext.count(T_DUPCTL) > 0);
+    if (!all || (core.recommend >> 4) != (r.rec >> 4) || !idx || kept(core, ext) != r.kept) return std::nullopt;
+    return std::make_pair(*idx, nod::FamilyKey{key, direction, static_cast<int>(pmod(bn, BURST_MOD)), core.acted_on});
+}
+
+std::optional<nod::FamilyKey> Station::nod_family() const {
+    const auto mine = sent_ctl_.find(latest);
+    if (!(nod_default() && nod) || !peer_burst || mine == sent_ctl_.end()) return std::nullopt;
+    return nod::FamilyKey{key, peer(), static_cast<int>(pmod(mine->second.acted + 1, BURST_MOD)),
+                          static_cast<int>(pmod(latest, BURST_MOD))};
+}
+
+std::optional<Bytes> Station::nod_payload(int meaning) const {
+    const auto mine = sent_ctl_.find(latest);
+    if (mine == sent_ctl_.end() || meaning < 0 || meaning >= nod::N_MEANINGS) return std::nullopt;
+    const auto r = peer_ctl_core_.find(mine->second.acted);
+    if (r == peer_ctl_core_.end()) return std::nullopt;
+    const nod::Meaning m = nod::meaning(meaning);
+    Core core;
+    if (m.all) {
+        if (!mine->second.new_end) return std::nullopt;
+        core.cum = static_cast<int>(pmod(*mine->second.new_end, SEQ_MOD));
+    } else {
+        core.cum = r->second.cum;
+    }
+    const int idx = (r->second.rec & 15) + m.step;
+    if (idx < 0 || idx >= 16) return std::nullopt;
+    core.ftype = ARQ;
+    core.burst_seq = static_cast<int>(pmod(mine->second.acted + 1, BURST_MOD));
+    core.acted_on = static_cast<int>(pmod(latest, BURST_MOD));
+    core.reply_lost = false;
+    core.k = 0;
+    core.recommend = (r->second.rec & 0x30) | idx;
+    core.size_hint = peer_size_hint;
+    Ext ext;
+    if (m.dup) ext[T_DUPCTL] = Bytes{};
+    if (peer_reply_recommend) ext[T_REPLY] = Bytes{static_cast<std::uint8_t>(*peer_reply_recommend)};
+    if (peer_chat) ext[T_CHAT] = Bytes{};
+    const auto p = Control{core, ext}.pack(policy->ctl_payload_bytes(NOD_MODE));
+    if (p.size() != 1) return std::nullopt;
+    return p[0];
+}
+
 TxBurstPtr Station::on_timeout(bool allow_repeat) {
     if (!master) throw std::logic_error("on_timeout: not the master");
     misses += 1;
@@ -648,7 +737,8 @@ TxBurstPtr Station::on_timeout(bool allow_repeat) {
         fail("link lost");
         return nullptr;
     }
-    if (allow_repeat && !esc_floor && misses <= REPEATS_BEFORE_SHRINK && last_sent) {
+    // a nod is not repeated: the peer looks for it in its reply slot alone
+    if (allow_repeat && !esc_floor && misses <= REPEATS_BEFORE_SHRINK && last_sent && !last_sent->nod) {
         log_write(LOG, INFO, format("TX b%d repeat: timeout %d", static_cast<int>(pmod(latest, BURST_MOD)), misses));
         auto it = sent_seqs.find(latest);
         stats["cw_resend"] += it == sent_seqs.end() ? 0 : static_cast<std::int64_t>(it->second.size());
@@ -676,10 +766,10 @@ bool Station::handle_inner(RxBurst& rxb) {
     const auto [was, repeat] = note_peer(core, ext);
     const std::int64_t base0 = tx.base, next0 = tx.next, cum0 = rx.cum;
     bool progress = false, abandoned = false;
+    std::int64_t acted = 0;
     DataTaken data;
     try {
         // never guess on a protocol error: a blind resync can corrupt
-        std::int64_t acted;
         std::tie(acted, progress) = take_ack(core, ext);
         abandoned = take_abandon(rxb, ext);
         data = take_data(rxb, core, ext, dup, acted, outcome);
@@ -691,6 +781,9 @@ bool Station::handle_inner(RxBurst& rxb) {
     reply_lost = repeat;
     stale_ = repeat;
     peer_burst = core.burst_seq;
+    peer_ctl_core_[core.burst_seq] = {core.cum, core.recommend, acted, rx_new_end_};
+    if (ext.count(T_NODS)) nod_peer = true;  // latched for the session
+    if (nods_in_.count(acted)) nods_told_ = true, nods_in_.clear();
     peer_ctl_[!data.slots.empty()] = last_stream_;
     peer_last_ = std::make_pair(last_stream_, std::make_pair(rxb.submode(), rxb.n_cw()));
     answered_ = false;
@@ -774,12 +867,14 @@ std::optional<std::pair<Control, int>> Station::read_control(RxBurst& rxb, bool 
         malformed(*why);
         return std::nullopt;
     }
-    if (was_primed) {
+    const bool nodded = rxb.is_nod();
+    if (was_primed || nodded) {  // checked against my state, as a primed one: dropped, never a failure
         if (auto why = implausible(ctl.core, ctl.ext)) {
-            log_write(LOG, INFO, "RX primed control contradicts my state (" + *why + "): dropped");
+            log_write(LOG, INFO, std::string("RX ") + (nodded ? "nod" : "primed control") + " contradicts my state (" +
+                                     *why + "): dropped");
             return std::nullopt;
         }
-        stats[combined ? "rx_repeat" : "rx_primed"] += 1;
+        stats[nodded ? "rx_nod" : combined ? "rx_repeat" : "rx_primed"] += 1;
     }
     primed_ctl_ = was_primed;
     return std::make_pair(std::move(ctl), dup);
@@ -919,7 +1014,8 @@ std::vector<Station::Way> Station::variants(bool data, int n_cw, int ctl_slots, 
     c[F_REC] = {0, 0};  // the peer's recommendation moves with every measurement: unknown
     c[F_HINT] = {peer_size_hint, base ? 3 : 0};
     std::vector<Tlv> common;
-    for (int t : {T_CHAT, T_DUPCTL})
+    // (T_NODS: sent until I acted on it, so mostly as last time)
+    for (int t : {T_CHAT, T_DUPCTL, T_NODS})
         if (auto e = pe.find(t); e != pe.end()) common.push_back({t, e->second, Bytes(e->second.size(), 0xFF)});
     // T_REPLY, a recommendation: as last time
     if (auto e = pe.find(T_REPLY); e != pe.end() && e->second.size() == 1) common.push_back({T_REPLY, e->second, Bytes{0xFF}});
@@ -1153,9 +1249,11 @@ Station::DataTaken Station::take_data(RxBurst& rxb, const Core& core, const Ext&
             out.progress |= rx.accept(*seq, std::move(*p), comp[j]);
         }
     }
+    rx_new_end_.reset();
     for (std::size_t j = slots.size(); j-- > static_cast<std::size_t>(core.k);)
         if (slots[j].first) {
             peer_next_ = *slots[j].first + 1;
+            rx_new_end_ = *slots[j].first + 1;
             break;
         }
     if (auto e = ext.find(T_INLINE); e != ext.end()) {
@@ -1163,6 +1261,7 @@ Station::DataTaken Station::take_data(RxBurst& rxb, const Core& core, const Ext&
         const Bytes& b = e->second;
         const std::int64_t seq = unwrap(b[0] & 0x7F, rx.cum);
         peer_next_ = std::max<std::int64_t>(peer_next_.value_or(0), seq + 1);
+        rx_new_end_ = std::max<std::int64_t>(rx_new_end_.value_or(0), seq + 1);
         const bool z = (b[0] >> 7) != 0;
         Bytes p(b.begin() + 1, b.end() - 2);
         p.resize(static_cast<std::size_t>(policy->payload_bytes(rxb.submode())), 0);
@@ -1175,7 +1274,8 @@ Station::DataTaken Station::take_data(RxBurst& rxb, const Core& core, const Ext&
         }
     }
     // a control only a primed retry read is told to the policy as the blind decode saw it (link.py, §3a)
-    if (outcome) policy->outcome(rxb.submode(), n_ok, n_new, !primed_ctl_);
+    // a nod is neither a blind decode nor a loss of one: no turn for the policy
+    if (outcome) policy->outcome(rxb.submode(), n_ok, n_new, rxb.is_nod() ? std::nullopt : std::optional<bool>(!primed_ctl_));
     return out;
 }
 

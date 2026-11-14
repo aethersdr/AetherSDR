@@ -65,6 +65,16 @@ unset(_aether_root_code)
 unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
+# Socket-free QWidget update coalescing, trailing delivery and lifetime.
+add_executable(window_repaint_scheduler_test
+    tests/window_repaint_scheduler_test.cpp
+    src/gui/WindowRepaintScheduler.cpp)
+target_include_directories(window_repaint_scheduler_test PRIVATE src)
+target_link_libraries(window_repaint_scheduler_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME window_repaint_scheduler_test COMMAND window_repaint_scheduler_test)
+set_tests_properties(window_repaint_scheduler_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # ── Shared objects for tests that do not link aethercore (#6214) ─────────────
 # The light tests compile a few app sources themselves rather than linking the
 # engine. Each is compiled ONCE here and handed to those tests as
@@ -209,6 +219,14 @@ if(ENABLE_DATA2G)
         aether_hfdata aether_data2g_core Qt6::Core)
     add_test(NAME data2g_receive_model_test COMMAND data2g_receive_model_test)
     set_tests_properties(data2g_receive_model_test PROPERTIES TIMEOUT 120)
+
+    # A recording the adapter did not make: two upstream data2g-host 0.4.3
+    # processes working each other, held to upstream data2g-monitor's reading.
+    add_executable(data2g_replay_test tests/data2g_replay_test.cpp)
+    target_link_libraries(data2g_replay_test PRIVATE aether_hfdata aether_data2g_core)
+    add_test(NAME data2g_replay_test COMMAND data2g_replay_test
+        "${CMAKE_SOURCE_DIR}/tests/fixtures/data2g/session-0.4.3.wav")
+    set_tests_properties(data2g_replay_test PROPERTIES TIMEOUT 120)
 endif()
 
 # Injected typed PCM and the real modem worker; no sockets, sound device or RF.
@@ -877,6 +895,20 @@ add_dependencies(aetherd_discovery_startup_test aetherd)
 add_test(NAME aetherd_discovery_startup_test
     COMMAND aetherd_discovery_startup_test $<TARGET_FILE:aetherd>)
 
+# A stop signal ends aetherd through its normal teardown, which releases the
+# radio; a second one or a stuck loop dies by the signal (POSIX signals only).
+# Socket: runs the real aetherd, which listens on the QLocalServer endpoint
+# graceful-stop-test-<pid>; a refused listen fails the case in about 1.5 s.
+if(NOT WIN32)
+    add_executable(aetherd_graceful_stop_test tests/aetherd_graceful_stop_test.cpp
+        src/aetherd/GracefulStop.cpp)
+    target_include_directories(aetherd_graceful_stop_test PRIVATE src tests)
+    target_link_libraries(aetherd_graceful_stop_test PRIVATE aethercore Qt6::Core)
+    add_dependencies(aetherd_graceful_stop_test aetherd)
+    add_test(NAME aetherd_graceful_stop_test
+        COMMAND aetherd_graceful_stop_test $<TARGET_FILE:aetherd>)
+endif()
+
 # Async bridge-start outcome policy (#4181): socket-free, the bind result is
 # injected as a bool — see AutomationBridgeSettings::recordStartOutcome().
 add_executable(automation_bridge_start_outcome_test tests/automation_bridge_start_outcome_test.cpp)
@@ -1413,6 +1445,13 @@ target_link_libraries(anan_noise_blanker_readback_test PRIVATE aethercore Qt6::C
 add_test(NAME anan_noise_blanker_readback_test COMMAND anan_noise_blanker_readback_test)
 set_tests_properties(anan_noise_blanker_readback_test PROPERTIES TIMEOUT 120)
 
+# The desktop's RIT control reaches the ANAN receiver through RadioModel's typed
+# slice-control dispatch (#7255). Socket-free: P2Client is never started.
+add_executable(anan_desktop_rit_test tests/anan_desktop_rit_test.cpp)
+target_include_directories(anan_desktop_rit_test PRIVATE src tests)
+target_link_libraries(anan_desktop_rit_test PRIVATE aethercore Qt6::Core)
+add_test(NAME anan_desktop_rit_test COMMAND anan_desktop_rit_test)
+
 # ANAN speaker stream (DDC Audio, PC -> radio) -- the SEND PLUMBING: queue,
 # whole-packet boundary, sequence counter, overflow policy and enable gate, read
 # from the datagrams P2Client really sends. Loopback only, no radio.
@@ -1802,6 +1841,13 @@ add_executable(hl2_rxdsp_squelch_audio_test tests/hl2_rxdsp_squelch_audio_test.c
 target_include_directories(hl2_rxdsp_squelch_audio_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_squelch_audio_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_squelch_audio_test COMMAND hl2_rxdsp_squelch_audio_test)
+
+# HL2 FM receive is bounded by WDSP's FM limiter, built or entered live, and
+# the limiter flag leaves USB and AM output unchanged (#7222).
+add_executable(hl2_rxdsp_fm_limiter_test tests/hl2_rxdsp_fm_limiter_test.cpp)
+target_include_directories(hl2_rxdsp_fm_limiter_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_fm_limiter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_fm_limiter_test COMMAND hl2_rxdsp_fm_limiter_test)
 
 add_executable(hl2_rx_dsp_declaration_test tests/hl2_rx_dsp_declaration_test.cpp)
 target_include_directories(hl2_rx_dsp_declaration_test PRIVATE src tests)
@@ -3007,7 +3053,7 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     list(REMOVE_ITEM _spectrum_gesture_sources src/main.cpp)
     # Manual --flex-squelch-bridge-fixture starts the app's own QLocalServer
     # and discovery listener with injected normalized state, never a radio peer.
-    # The registered CTest path remains socket-free.
+    # spectrum_confirmed_geometry_test's registered CTest paths stay socket-free.
     add_executable(spectrum_confirmed_geometry_test
         tests/spectrum_confirmed_geometry_test.cpp ${_spectrum_gesture_sources})
     target_include_directories(spectrum_confirmed_geometry_test PRIVATE
@@ -3030,6 +3076,29 @@ if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
     add_test(NAME spectrum_trace_bins_widget_test
         COMMAND spectrum_confirmed_geometry_test --trace-bins)
     set_tests_properties(spectrum_trace_bins_widget_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+
+    # #5204: the TX waterfall mask must follow the TX slice's filter even when
+    # the radio's echo lands mid-drag. Its own executable rather than another
+    # mode of the gesture binary: that one links RtlSdrBackend unconditionally,
+    # so it cannot build where librtlsdr is absent. This one needs only the
+    # desktop GUI sources. Socket: it builds a real MainWindow, which binds the
+    # app's own discovery listener on UDP 4992 (ShareAddress). It never
+    # connects, and a refused bind only schedules a retry, so the result never
+    # waits on it.
+    add_executable(tx_waterfall_mask_filter_drag_test
+        tests/tx_waterfall_mask_filter_drag_test.cpp ${_spectrum_gesture_sources})
+    target_include_directories(tx_waterfall_mask_filter_drag_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(tx_waterfall_mask_filter_drag_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_DEFINITIONS>)
+    target_compile_options(tx_waterfall_mask_filter_drag_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_OPTIONS>)
+    target_link_libraries(tx_waterfall_mask_filter_drag_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,LINK_LIBRARIES>)
+    add_test(NAME tx_waterfall_mask_filter_drag_test
+        COMMAND tx_waterfall_mask_filter_drag_test)
+    set_tests_properties(tx_waterfall_mask_filter_drag_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
 endif()
 
@@ -4829,6 +4898,30 @@ else()
 endif()
 add_test(NAME radio_health_client_test COMMAND radio_health_client_test)
 
+# The AetherGPS sky view's gpsd client (tools/aether-gps): SKY satellites
+# parse and are bounded, DOP-only SKY and other classes are refused,
+# constellations follow gnssid or gpsd's PRN ranges, the stream reassembles
+# split lines and survives an overlong one, and only LAN or tailnet addresses
+# are tried. The bundled packages match their pins and the legacy one is a
+# valid waveform. Socket-free; writes only to a QTemporaryDir.
+qt_add_resources(GPSD_SKY_TEST_RESOURCES resources/resources.qrc)
+add_executable(gpsd_sky_client_test
+    tests/gpsd_sky_client_test.cpp
+    src/core/GpsdSkyClient.cpp
+    src/core/AetherGpsPackage.cpp
+    src/core/LegacyWaveformPackage.cpp
+    src/core/ZipArchive.cpp
+    ${GPSD_SKY_TEST_RESOURCES}
+)
+target_include_directories(gpsd_sky_client_test PRIVATE src)
+target_link_libraries(gpsd_sky_client_test PRIVATE Qt6::Core Qt6::Network)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(gpsd_sky_client_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(gpsd_sky_client_test PRIVATE zlibstatic)
+endif()
+add_test(NAME gpsd_sky_client_test COMMAND gpsd_sky_client_test)
+
 # The WSPR receiver on the radio (tools/wspr-agent): status and settings
 # JSON parse and are bounded, the settings body round-trips, a spot becomes
 # a SpotHub DxSpot, only LAN or tailnet addresses are tried, and the bundled
@@ -5528,9 +5621,11 @@ add_test(NAME eibi_client_test COMMAND eibi_client_test)
 add_executable(navtex_model_test
     tests/navtex_model_test.cpp
     src/models/NavtexModel.cpp
+    src/core/backends/flex/FlexTransmitServiceStatus.cpp
 )
-target_include_directories(navtex_model_test PRIVATE src)
+target_include_directories(navtex_model_test PRIVATE src tests)
 target_link_libraries(navtex_model_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME navtex_model_test COMMAND navtex_model_test)
 
 add_executable(flex_waveform_model_test
     tests/flex_waveform_model_test.cpp
@@ -6931,6 +7026,18 @@ target_include_directories(shortcut_manager_test PRIVATE src)
 target_link_libraries(shortcut_manager_test PRIVATE Qt6::Core Qt6::Widgets)
 add_test(NAME shortcut_manager_test COMMAND shortcut_manager_test)
 
+# One action declaration published to keyboard and MIDI (ControlActionRegistry).
+# Socket-free: no radio, no MIDI device, no settings file.
+add_executable(control_action_registry_test
+    tests/control_action_registry_test.cpp
+    src/gui/ControlActionRegistry.cpp
+    src/core/ShortcutManager.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(control_action_registry_test PRIVATE src)
+target_link_libraries(control_action_registry_test PRIVATE Qt6::Core Qt6::Widgets Qt6::Test)
+add_test(NAME control_action_registry_test COMMAND control_action_registry_test)
+
 # Actual Qt key delivery, socket-free; no radio or transmitter is constructed.
 add_executable(window_shortcut_test
     tests/window_shortcut_test.cpp
@@ -7368,9 +7475,11 @@ add_executable(voice_keyer_dvk_model_test
     src/models/DvkModel.cpp
     src/models/DvkModel.h
     src/models/VoiceKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/models/VoiceKeyer.h
+    src/core/backends/flex/FlexTransmitServiceStatus.cpp
 )
-target_include_directories(voice_keyer_dvk_model_test PRIVATE src)
+target_include_directories(voice_keyer_dvk_model_test PRIVATE src tests)
 target_link_libraries(voice_keyer_dvk_model_test PRIVATE Qt6::Core)
 add_test(NAME voice_keyer_dvk_model_test COMMAND voice_keyer_dvk_model_test)
 
@@ -7384,6 +7493,7 @@ add_executable(dvk_panel_test
     # The slot context menu goes through roundMenuTree().
     src/gui/RoundedMenu.cpp
     src/models/VoiceKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/models/VoiceKeyer.h
     # DvkPanel.cpp applies theme stylesheets through ThemeManager; pull in the
     # manager + its logging deps so the test links (as cwx_panel_test does).
@@ -7436,6 +7546,7 @@ add_executable(local_voice_keyer_test
     src/core/VoiceKeyerWavDecoder.cpp
     src/core/Resampler.cpp
     src/core/GeneratedAudioTransmitter.cpp
+    src/core/TxCoordinator.cpp
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_log_manager>
     $<TARGET_OBJECTS:aether_test_settings>
@@ -7731,6 +7842,12 @@ if(AETHER_ENABLE_FLEX_RETRY_SOCKET_TEST)
     add_test(NAME radio_connection_retry_test COMMAND radio_connection_retry_test)
     set_tests_properties(radio_connection_retry_test PROPERTIES TIMEOUT 120)
 endif()
+
+# Socket-free production decoder -> backend -> model path on the actual worker.
+add_executable(flex_receive_path_test tests/flex_receive_path_test.cpp)
+target_include_directories(flex_receive_path_test PRIVATE src tests)
+target_link_libraries(flex_receive_path_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME flex_receive_path_test COMMAND flex_receive_path_test)
 
 add_executable(flex_backend_lifecycle_test tests/flex_backend_lifecycle_test.cpp)
 target_include_directories(flex_backend_lifecycle_test PRIVATE src)
@@ -8141,6 +8258,8 @@ find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME check_a11y_test
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_a11y_test.py)
+    add_test(NAME check_command_plane_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_command_plane_test.py)
 endif()
 
 # #5262 M3a: the three-state control doctrine as a mechanism. Pins the two
@@ -8503,6 +8622,11 @@ set_target_properties(aetherd_transmit_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_transmit_decode_test COMMAND aetherd_transmit_decode_test)
 
 # aetherd RFC 2.3 (RadioModel residual): radio-global wire → typed delta.
+add_executable(flex_radio_observation_test tests/flex_radio_observation_test.cpp)
+target_include_directories(flex_radio_observation_test PRIVATE src tests)
+target_link_libraries(flex_radio_observation_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME flex_radio_observation_test COMMAND flex_radio_observation_test)
+
 add_executable(aetherd_radio_decode_test tests/aetherd_radio_decode_test.cpp)
 target_include_directories(aetherd_radio_decode_test PRIVATE src)
 target_link_libraries(aetherd_radio_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -8640,8 +8764,16 @@ target_link_libraries(aetherd_amp_tuner_encode_test PRIVATE aethercore Qt6::Core
 set_target_properties(aetherd_amp_tuner_encode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_amp_tuner_encode_test COMMAND aetherd_amp_tuner_encode_test)
 
+# No sockets are opened: parser input, injected backends, and transport callbacks only.
+add_executable(flex_setup_observation_test tests/flex_setup_observation_test.cpp)
+target_include_directories(flex_setup_observation_test PRIVATE src tests)
+target_link_libraries(flex_setup_observation_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_setup_observation_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_setup_observation_test COMMAND flex_setup_observation_test)
+
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp
+    src/core/backends/flex/FlexSetupStatus.cpp
     src/models/UsbCableModel.cpp
 )
 target_include_directories(usb_cable_model_test PRIVATE src)
@@ -8897,6 +9029,11 @@ target_include_directories(tune_inhibit_restore_test PRIVATE src tests)
 target_link_libraries(tune_inhibit_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tune_inhibit_restore_test COMMAND tune_inhibit_restore_test)
 
+# Typed transmit services, injected final writers, and lifecycle races; no sockets or RF.
+add_executable(transmit_services_test tests/transmit_services_test.cpp)
+target_include_directories(transmit_services_test PRIVATE src tests)
+target_link_libraries(transmit_services_test PRIVATE aethercore Qt6::Core)
+add_test(NAME transmit_services_test COMMAND transmit_services_test)
 # Socket-free production NetCW encoder, scheduler, session and local PTT lifecycle.
 add_executable(flex_cw_controls_test tests/flex_cw_controls_test.cpp)
 target_include_directories(flex_cw_controls_test PRIVATE src tests)
@@ -9621,6 +9758,7 @@ add_test(NAME midi_relative_cc_decoder_test COMMAND midi_relative_cc_decoder_tes
 add_executable(ulanzi_dial_mapper_dialog_test
     tests/ulanzi_dial_mapper_dialog_test.cpp
     src/gui/UlanziDialMapperDialog.cpp
+    src/gui/ControlActionRegistry.cpp
     src/gui/CanonWindow.cpp
     src/gui/CanonMessageBox.cpp
     src/gui/ModemChrome.cpp
@@ -11142,6 +11280,8 @@ if(TARGET Qt6::WebSockets)
 endif()
 
 set(AETHER_SETTINGS_CONSUMERS
+    flex_receive_path_test
+    flex_setup_observation_test
     session_control_test
     audio_control_routing_test
     dax_tx_backend_test
@@ -11233,6 +11373,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rc28_mapping_dialog_test
     pan_display_drop_notice_test
     backend_capability_revision_test
+    flex_radio_observation_test
     icom_panadapter_capacity_test
     backend_receive_contract_test
     receive_intent_routing_test
@@ -11247,6 +11388,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tx_operation_integration_test
     flex_cw_controls_test
     tune_inhibit_restore_test
+    transmit_services_test
     tx_audio_context_test
     backend_slice_lifecycle_test
     slice_lifecycle_routing_test
@@ -11363,6 +11505,7 @@ set(AETHER_SETTINGS_CONSUMERS
     s_meter_geometry_test
     qrz_callsign_test
     shortcut_manager_test
+    control_action_registry_test
     window_shortcut_test
     antenna_alias_test
     mqtt_settings_test
@@ -12111,6 +12254,18 @@ if(HAVE_PIPEWIRE)
     add_test(NAME pipewire_rx_bridge_test COMMAND pipewire_rx_bridge_test)
 endif()
 
+# Socket-free receive buffering: lifecycle, metadata, overload and worker delivery.
+add_executable(flex_receive_data_test tests/flex_receive_data_test.cpp
+    src/core/backends/flex/FlexReceiveData.cpp)
+target_include_directories(flex_receive_data_test PRIVATE src)
+target_link_libraries(flex_receive_data_test PRIVATE Qt6::Core)
+add_test(NAME flex_receive_data_test COMMAND flex_receive_data_test)
+# Socket-free production LAN/WAN ingress and typed slice ownership lifecycle.
+add_executable(flex_slice_observation_test tests/flex_slice_observation_test.cpp)
+target_include_directories(flex_slice_observation_test PRIVATE src tests)
+target_link_libraries(flex_slice_observation_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(flex_slice_observation_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_slice_observation_test COMMAND flex_slice_observation_test)
 # M4 waveform/file-transfer admission, wire encoding and staged export validation.
 add_executable(file_transfer_control_test tests/file_transfer_control_test.cpp)
 target_include_directories(file_transfer_control_test PRIVATE src tests)

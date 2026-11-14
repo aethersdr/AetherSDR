@@ -1166,8 +1166,27 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
         causes[QString::fromLatin1(it.key())] = static_cast<qulonglong>(it.value());
     m[QStringLiteral("overlayDirtyCauses")] = causes;
 
-    if (reset)
+    if (!m_submissionIntervalsNs.isEmpty()) {
+        QVector<qint64> sorted = m_submissionIntervalsNs;
+        std::sort(sorted.begin(), sorted.end());
+        const auto percentileMs = [&sorted](double p) {
+            const qsizetype index = std::min(sorted.size() - 1,
+                static_cast<qsizetype>(std::ceil(p * sorted.size()) - 1));
+            return sorted[index] / 1.0e6;
+        };
+        m[QStringLiteral("submissionIntervalP50Ms")] = percentileMs(0.50);
+        m[QStringLiteral("submissionIntervalP95Ms")] = percentileMs(0.95);
+        m[QStringLiteral("submissionIntervalP99Ms")] = percentileMs(0.99);
+        m[QStringLiteral("submissionIntervalMaxMs")] = sorted.last() / 1.0e6;
+        m[QStringLiteral("submissionIntervalSamples")] = sorted.size();
+        m[QStringLiteral("submissionIntervalSaturated")] =
+            sorted.size() >= kMaxSubmissionIntervals;
+    }
+    if (reset) {
         m_panStats.reset();
+        m_submissionIntervalsNs.clear();
+        m_submissionClock.invalidate();
+    }
     return m;
 }
 
@@ -2023,6 +2042,14 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
                 }
             });
 
+#ifdef AETHER_GPU_SPECTRUM
+    connect(this, &QRhiWidget::frameSubmitted, this, [this] {
+        if (m_submissionClock.isValid() && m_submissionIntervalsNs.size() < kMaxSubmissionIntervals) {
+            m_submissionIntervalsNs.append(m_submissionClock.nsecsElapsed());
+        }
+        m_submissionClock.restart();
+    });
+#endif
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAutoFillBackground(false);
@@ -2046,11 +2073,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // Explicitly request Metal on macOS.
 #  ifdef Q_OS_MACOS
     setApi(QRhiWidget::Api::Metal);
-    // WA_NativeWindow gives this widget its own NSView; without it QRhiWidget
-    // can't get a Metal QRhi when the parent's surface is RasterSurface (#714).
-    // It costs a raster flushSubWindow blend per present;
-    // AETHER_PAN_NO_NATIVE_WINDOW=1 skips it. Paired with
-    // WA_DontCreateNativeAncestors so ancestors stay non-native (#4339).
+    // Share top-level Metal composition on the required Qt 6.12 stack.
+    // The native diagnostic override stays paired with ancestor isolation (#4339).
     applyNativeWindowIsolationPolicy();
 #  else
     // AETHER_NO_GPU / QT_OPENGL=software: force the OpenGL QRhi backend so the

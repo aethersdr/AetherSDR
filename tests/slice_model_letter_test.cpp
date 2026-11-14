@@ -25,7 +25,7 @@ static int g_failures = 0;
 } while (0)
 
 // aetherd RFC 2.3: SliceModel::applyChanges now takes a typed SliceDelta (the Flex
-// wire decode lives in FlexBackend::decodeSliceStatus, covered by
+// wire decode lives in FlexSliceStatus::decodeValues, covered by
 // aetherd_slice_decode_test). This helper builds a delta from a field-setter.
 template <class F>
 static SliceDelta delta(F&& build)

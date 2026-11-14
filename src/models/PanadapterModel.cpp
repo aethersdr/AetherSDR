@@ -71,10 +71,23 @@ void PanadapterModel::setOwnerHandle(quint32 handle)
         ++m_ownershipRevision;
         m_reportedCenterHz.reset();
         m_reportedBandwidthHz.reset();
+        m_reportedRfGain.reset();
     }
     m_ownerHandle = handle;
     m_clientHandle = QString::number(handle, 16);
-    if (ownerChanged) { emit geometryObservationChanged(); }
+    if (ownerChanged) {
+        emit geometryObservationChanged();
+        emit rfGainObservationChanged();
+    }
+}
+
+void PanadapterModel::recordRfGainObservation(int gainDb)
+{
+    if (m_reportedRfGain == gainDb) {
+        return;
+    }
+    m_reportedRfGain = gainDb;
+    emit rfGainObservationChanged();
 }
 
 bool PanadapterModel::ownedByClient(quint32 handle) const
@@ -214,6 +227,10 @@ void PanadapterModel::resetCenterKnownForReconnect()
         m_reportedCenterHz.reset();
         m_reportedBandwidthHz.reset();
         emit geometryObservationChanged();
+    }
+    if (m_reportedRfGain) {
+        m_reportedRfGain.reset();
+        emit rfGainObservationChanged();
     }
 }
 

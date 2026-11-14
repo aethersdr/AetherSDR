@@ -102,12 +102,28 @@ Contract: [`docs/aetherd-stage4-tx-coordinator.md`](../aetherd-stage4-tx-coordin
   through backend queues and retries. Producer identity does not confer an
   independent actor grant.
 
+## Radio and client status observations
+
+`FlexStatusIngress` decodes Flex `radio`, `radio oscillator`,
+`radio static_net_params` and `client 0x…` reports, LAN and WAN alike, into
+present-only `RadioStatusObservation` values stamped with the status epoch
+(`FlexRadioStatus.cpp`). Existing `RadioDelta` fields remain the radio-global
+contract, and `FlexBackend` announces a capability revision after a model-name
+change is applied. RadioModel applies a report only while its observation
+session is open for that epoch; the ingress hop and the transport's disconnect
+both reach the model in wire order, so a forced or duplicate-identity
+disconnect of this client lands before the session ends. The model owns client
+inventory, discovery precedence and notification policy; delayed client
+notices keep the original client incarnation. Demo relays client, oscillator
+and static-network reports and keeps its own radio-global values. No daemon
+method or TX authority is added by this status migration.
+
 ## Display status observations
 
 `FlexStatusIngress` decodes Flex panadapter/waterfall reports, LAN and WAN
 alike, into present-only `DisplayObservation` values stamped with the status
 epoch they arrived in. RadioModel applies one, live or deferred, only while its
-display session is open for that epoch. The session closes at disconnect,
+observation session is open for that epoch. The session closes at disconnect,
 reconnect and backend teardown, so a queued or deferred report never acquires
 new-session authority. RadioModel owns the bounded inventory, ownership,
 pairing, retirement and publication policy. Initialize available fields before
@@ -197,6 +213,24 @@ connection/backend generations fence calibration and transverter creation;
 acceptance does not confirm completion. Entity editors retain their original
 session, and USB inventory is retired at disconnect/replacement. Preserve the
 client-owned TX-waterfall flag and station settings separately from radio state.
+Flex setup reports cross the seam as `SetupStatusObservation`: transverters,
+USB cables and bits, licensing, and filter sharpness. `FlexStatusIngress`
+decodes them (`FlexSetupStatus.cpp`), bounding each field and keeping
+absent-versus-empty, and stamps the status epoch; RadioModel applies one only
+while the observation session it shares with display reports is open for that
+epoch. RadioModel mints an identity for each transverter and cable, retired on
+removal, cable-family replacement and session end; an editor holds the identity
+it opened with, and its write is refused at the final write once that identity
+is retired. Filter sharpness commands on firmware 4.3.16 do not echo status to
+their originating client, so accepted values are retained with per-field
+revisions and later status always wins. These are radio-global inventories, not
+client-owned slice data. The model keeps at most 256 transverters, 256 USB
+cables and 128 license feature names, and rejects new entries beyond those
+bounds without evicting existing state. The latest subscription expiration
+selects the displayed subscription, including lapsed ones. Reported feature
+records remain authoritative; CW auto-tune uses an active subscription only
+when firmware has not reported that feature.
+
 Profile and memory dialogs use typed `ProfileRequest` / `MemoryRequest` values
 through `RadioModel`; `FlexStoredControls` owns encoding, including recall
 corrections. Local memories consume neutral patches directly and retain their
@@ -276,6 +310,19 @@ If your change trips any of these, restructure the change — do not move the
 file, weaken the check, or add an exemption. Engine code that needs a UI
 callback defines a gui-free interface in `core/` (e.g. `IConnectionAutomation`)
 that the gui implements.
+
+### Flex receive-data ownership
+
+Flex spectrum, waterfall and normalized meter batches cross `IRadioBackend` on
+its owner thread. `FlexReceiveData` bounds the worker-to-owner backlog before
+posting a single drain wake. Consumers validate the session/resource lease;
+retirement revokes even a payload already detached for delivery. Meter freshness
+uses monotonic receipt time, while public observation timestamps remain UTC.
+
+RadioModel reads Flex transport telemetry from the backend cache. UDP delivery
+counters are separate from VITA sequence loss and do not confirm a TCP ping.
+Native spectrum/synthesized-waterfall routing and Flex audio/DAX/IQ remain on
+their existing paths. Details and limits: [Flex receive data](../aetherd-flex-receive-data.md).
 
 ### Engine boundary ratchet — EB3 (vendor includes)
 
@@ -364,8 +411,12 @@ connection.
   skips that and must still wire the ingress.
 - **Demo** turns value decoding off (`setDecodeValues(false)`): its native
   producer owns the values. Identity and lifecycle are still decoded: a TGXL's
-  handle, and display pan/waterfall reports, whose values `SimBackend` drops
-  except their dimensions. Its synthetic wire carries radio, display and slice
+  handle, display pan/waterfall reports, whose values `SimBackend` drops
+  except their dimensions, slice reports, of which it keeps identity,
+  ownership and presence, and setup reports, which it relays whole (its
+  native producer has no setup inventory), and client, oscillator and
+  static-network reports (radio-global values are the native producer's).
+  Its synthetic wire carries radio, display and slice
   status only, so the Flex-only relays above are not wired for it.
 - **Tests feed lines through `RadioModel::handleLineForTest()` or
   `handleStatusForTest()`**, never `onStatusReceived` directly: that skips the
@@ -374,11 +425,11 @@ connection.
   than pass with every decoder skipped. `tests/flex_ingress_characterization_test` (run with
   `-vs -maxwarnings 0` and `tools/flex_ingress_trace.py`) traces a wire
   corpus for before/after comparison of an ingress change.
-- **Still inline in `RadioModel`**, each awaiting its own PR: radio/client
-  lifecycle (#6907), slice ownership (#6878), setup status — transverters, USB cables, filter
-  sharpness, licenses (#6916) — and DVK/NAVTEX (#6870). Each moves into the
-  ingress as a domain decoder; none adds its own transport decoder or
-  lifetime token.
+- **No Flex status is decoded in `RadioModel`.** Every domain is a decoder
+  in the ingress, the voice keyer and NAVTEX (`FlexTransmitServiceStatus.cpp`)
+  last; a new one joins them, with no transport decoder or lifetime token of
+  its own. One raw relay remains: `slice N waveform_status` reports reach
+  FlexWaveformModel as their fields from `RadioModel::onStatusReceived`.
 
 Do not pre-emptively restructure code toward the RFC — no new engine/UI
 seams, backend interfaces, or speculative library targets ahead of a landed
