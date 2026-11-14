@@ -685,6 +685,22 @@ void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
     }
 }
 
+void MainWindow::clearKiwiSdrVirtualAntennaIfHeld(int sliceId)
+{
+    // A band-recall preparation and the saved Flex mute are made only while a
+    // profile is assigned; they are checked too, so none is left behind if the
+    // assignment goes first.
+    const SliceModel* slice = m_radioModel.slice(sliceId);
+    const bool held =
+        (m_kiwiSdrManager && !m_kiwiSdrManager->assignedProfileForSlice(sliceId).isEmpty())
+        || m_kiwiSdrBandRecallPreparations.contains(sliceId)
+        || m_kiwiSdrVirtualPreviousMute.contains(sliceId)
+        || (slice && slice->externalReceiveReplacementActive());
+    if (held) {
+        clearKiwiSdrVirtualAntennaForSlice(sliceId);
+    }
+}
+
 void MainWindow::prepareKiwiSdrBandRecallForPan(const QString& panId)
 {
     if (!m_kiwiSdrManager || panId.isEmpty()) {
