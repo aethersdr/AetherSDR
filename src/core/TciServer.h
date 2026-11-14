@@ -272,7 +272,6 @@ private:
     TciExtensionSet::Result handleRxAutoGain(const QStringList& args);
     void queueRxGainNotice(const QString& panId, bool range);
     void queueRxGainTrxNotice(int trx);
-    bool reannounceIfListChanged();
     bool broadcastRxGain();
     bool broadcastRxAutoGain();
     bool broadcastRxOverload();

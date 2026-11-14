@@ -4003,28 +4003,11 @@ void TciServer::queueRxGainTrxNotice(int trx)
     m_rxGainNotice->queue();
 }
 
-// True when every enabled client was behind the offered list and has now been
-// sent it with every state line, so a separate notice would repeat them.
-bool TciServer::reannounceIfListChanged()
-{
-    const QString advertisement = m_extensions.advertisement();
-    bool anyEnabled = false;
-    bool allBehind = true;
-    for (const ClientState& client : m_clients) {
-        if (client.extensionsEnabled) {
-            anyEnabled = true;
-            allBehind = allBehind && client.extensionsAdvertised != advertisement;
-        }
-    }
-    announceExtensionSet();
-    return anyEnabled && allBehind;
-}
-
 bool TciServer::broadcastRxGain()
 {
     const QSet<int> rangeDue = std::exchange(m_rxGainRangeDue, {});
     const QSet<int> gainDue = std::exchange(m_rxGainDue, {});
-    if (!anyExtensionClient() || reannounceIfListChanged() || !rxGainOffered()) {
+    if (!anyExtensionClient() || announceExtensionSet() || !rxGainOffered()) {
         return false;
     }
     QList<int> due(gainDue.cbegin(), gainDue.cend());
