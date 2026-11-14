@@ -8,3 +8,14 @@ third_party/wdsp/** linguist-vendored whitespace=-trailing-space,-space-before-t
 
 # PDFs are binary even when their streams are uncompressed text.
 *.pdf binary
+
+# Files packaged into a radio waveform and run on the radio. build.py ships
+# them byte for byte, so a CRLF checkout (core.autocrlf=true, the Windows
+# default) puts "#!/bin/sh\r" in launch.sh and CR into the .cfg the radio
+# parses, and the radio refuses the package without naming the cause (#7126).
+tools/*/package/** text eol=lf
+
+# The vendored Data2G core, byte for byte as upstream ships it. Its generated
+# tables are the on-air format: no line-ending conversion, and no whitespace
+# checks on files AetherSDR does not own.
+third_party/data2g/** linguist-vendored -text whitespace=-trailing-space,-space-before-tab,-blank-at-eof

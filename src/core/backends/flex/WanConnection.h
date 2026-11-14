@@ -1,8 +1,6 @@
 #pragma once
 #include "core/backends/SessionCommandGuard.h"
 
-#include "core/backends/SliceObservation.h"
-
 #include "CommandParser.h"
 
 #include <QObject>
@@ -62,8 +60,17 @@ public:
     quint32 sendCommand(const QString& command,
                         ResponseCallback callback = nullptr);
     quint64 commandSessionGeneration() const { return m_sessionGeneration; }
+    // The status epoch lines are tagged with (FlexStatusIngress::bindLive()).
+    void setLineEpoch(quint64 epoch) { m_lineEpoch = epoch; }
+    quint64 lineEpoch() const { return m_lineEpoch; }
     void forgetSessionReply(quint32 sequence, quint64 generation)
     { if (generation == m_sessionGeneration) { m_pendingCallbacks.remove(sequence); } }
+    // The one admission rule for session and administration writes: the
+    // caller's session is current and this transport is the one it opened.
+    bool sessionWriteAdmitted(quint64 generation, const SessionCommandGuard& guard) const
+    { return guard.current() && generation == m_sessionGeneration && isConnected(); }
+    quint32 sendSessionCommand(const QString& command, quint64 generation,
+                               const SessionCommandGuard& guard, ResponseCallback callback = {});
     quint32 sendAdministrationCommand(const QString& command, quint64 generation,
         const SessionCommandGuard& guard, ResponseCallback callback);
 
@@ -83,9 +90,9 @@ signals:
     void connected();
     void disconnected();
     void errorOccurred(const QString& message);
-    void messageReceived(const ParsedMessage& msg);
-    void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
-    void sliceObserved(const AetherSDR::SliceObservation& observation);
+    // Every parsed line, once, tagged with its status epoch (setLineEpoch()).
+    // FlexStatusIngress is its only subscriber.
+    void lineReceived(const AetherSDR::ParsedMessage& line, quint64 epoch);
     void versionReceived(const QString& version);
     void pingRttMeasured(int ms);
 
@@ -108,13 +115,12 @@ private slots:
 
 private:
     friend class WanConnectionTestAccess;
+    friend class SessionControlTestAccess;
     friend class RadioAdministrationTestAccess;
 
     void processLine(const QString& line);
 
     QSslSocket m_socket;
-    void dispatchStatus(const ParsedMessage& message);
-    std::shared_ptr<std::atomic_bool> m_sliceEpoch = std::make_shared<std::atomic_bool>(true);
     void resetSessionState();   // drop everything scoped to one TLS session
 
     QByteArray m_readBuffer;
@@ -123,6 +129,7 @@ private:
 
     bool    m_connected{false};
     quint64 m_sessionGeneration{0};
+    quint64 m_lineEpoch{0};
     bool    m_validated{false};  // wan validate sent
     quint32 m_handle{0};
     std::atomic<quint32> m_seqCounter{1};

@@ -38,9 +38,10 @@ void RadioModel::retireObservedSlice(int id, bool keepForeign)
     if (!keepForeign && (retired || foreignRemoved)) { emit slotOccupancyChanged(id); }
 }
 
-void RadioModel::applySliceObservation(const SliceObservation& observation)
+void RadioModel::applySliceObservation(const SliceObservation& observation, bool fenced)
 {
-    if (QThread::currentThread() != thread() || !observation.current()) { return; }
+    const auto sessionCurrent = [&] { return !fenced || observationSessionCurrent(observation.statusEpoch); };
+    if (QThread::currentThread() != thread() || observation.sliceId < 0 || !sessionCurrent()) { return; }
     const int id = observation.sliceId;
     const quint64 revision = ++m_sliceObservationRevision;
     const SliceDelta& values = observation.values;
@@ -54,9 +55,24 @@ void RadioModel::applySliceObservation(const SliceObservation& observation)
         }
     });
     const auto current = [&] {
-        return alive && session == controlSession() && observation.current()
+        return alive && session == controlSession() && sessionCurrent()
             && m_activeSliceObservations.value(id) == revision;
     };
+    // A slot reserved for a program on the radio is never ours, whatever
+    // client_handle the radio reports for it (reserveSlice).
+    if (m_reservedSlices.contains(id)) {
+        if (removed) {
+            m_reservedSlices.remove(id);
+            const bool hadDax = m_reservedDax.remove(id) > 0;
+            noteSliceRetirement(id);
+            emit slotOccupancyChanged(id);
+            if (hadDax && current()) { emit reservedDaxChanged(); }
+        } else if (values.daxChannel && m_reservedDax.value(id, -1) != *values.daxChannel) {
+            m_reservedDax.insert(id, *values.daxChannel);
+            emit reservedDaxChanged();
+        }
+        return;
+    }
     if (removed) {
         const bool modesChanged = m_rawSliceModeLists.remove(id) > 0;
         retireObservedSlice(id, false);

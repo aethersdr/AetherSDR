@@ -1,11 +1,14 @@
 #pragma once
 
 #include "WaveformUploadState.h"
+#include "core/backends/FileTransferRequest.h"
+#include <optional>
 
 #include <QByteArray>
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QTimer>
 
 QT_BEGIN_NAMESPACE
 class QTcpSocket;
@@ -30,7 +33,7 @@ class RadioModel;
 //   3. Radio  → Client: S0|file server active
 //   4. Client connects TCP to radio:<port> and streams raw .tar.gz bytes
 //   5. Radio  → Client: S0|waveform container name=<name> version=<ver>
-//      (handled by FlexWaveformModel::handleContainerStatus)
+//      (decoded by flexWaveformStatus(), applied by FlexWaveformModel::applyStatus)
 class WaveformInstaller : public QObject {
     Q_OBJECT
 
@@ -38,26 +41,30 @@ public:
     explicit WaveformInstaller(RadioModel* model, QObject* parent = nullptr);
 
     // Backward-compatible Docker install entry point.
-    void install(const QString& filePath);
+    void install(const QString& filePath, std::optional<RadioControlSession> session = {});
 
     // Begin installing a legacy .ssdr_waveform package at filePath.
     // Emits progressChanged() during transfer and finished() on completion.
-    void installLegacyWaveform(const QString& filePath);
+    void installLegacyWaveform(const QString& filePath, std::optional<RadioControlSession> session = {});
 
     // Begin installing a Docker .tar/.tar.gz/.tgz waveform image at filePath.
     // Emits progressChanged() during transfer and finished() on completion.
-    void installDockerWaveform(const QString& filePath);
+    void installDockerWaveform(const QString& filePath, std::optional<RadioControlSession> session = {});
 
     // Abort an in-progress install.
     void cancel();
 
-    bool isInstalling() const { return m_uploadState.isCurrent(m_activeGeneration); }
+    bool isInstalling() const { return m_finishing || m_uploadState.isCurrent(m_activeGeneration); }
 
 signals:
     void progressChanged(int percent, const QString& status);
     void finished(bool success, const QString& message);
 
 private:
+    friend class WaveformInstallerTestAccess;
+    bool m_finishing{false};
+    bool m_uploadConnected{false};
+    QTimer m_idleTimeout;
     enum class PackageKind {
         Legacy,
         Docker
@@ -70,12 +77,12 @@ private:
 
     using Generation = WaveformUploadState::Generation;
 
-    void beginInstall(const QString& filePath, PackageKind kind);
+    void beginInstall(const QString& filePath, PackageKind kind, std::optional<RadioControlSession> session);
     static PackagePreparationResult preparePackage(const QString& filePath,
                                                     PackageKind kind,
                                                     qint64 expectedSize);
     void requestUploadPort(Generation generation);
-    void onUploadPortReceived(Generation generation, int code, const QString& body);
+    void onUploadPortReceived(Generation generation, const FileTransferReply& reply);
     void connectUploadSocket(Generation generation, quint16 port);
     void tryFallbackPort(Generation generation);
     void onConnected(Generation generation, QTcpSocket* socket);
@@ -87,6 +94,8 @@ private:
     void destroySocket(bool abortConnection = true);
 
     QPointer<RadioModel> m_model;
+    RadioControlSession m_session{};
+    FileTransferHandle m_transfer;
     QTcpSocket* m_socket{nullptr};
     QByteArray m_fileData;
     QString m_fileName;
@@ -100,6 +109,13 @@ private:
     static constexpr quint16 kFallbackPort = 42607;
     static constexpr int kConnectDelayMs = 200;
     static constexpr int kConnectTimeoutMs = 10000;
+    // The image's size at a pessimistic uplink rate, never under 30 minutes
+    // and capped so a wedged transfer cannot run forever.
+    static constexpr int kOperationBaseMs = 30 * 60 * 1000;
+    static constexpr qint64 kMinExpectedBytesPerSec = 64LL * 1024LL;
+    static constexpr int kOperationCeilingMs = 2 * 60 * 60 * 1000;
+    static int operationBudgetMs(qint64 fileBytes);
+    qint64 m_fileSize{0};
 };
 
 } // namespace AetherSDR

@@ -1,7 +1,5 @@
 #pragma once
 
-#include "core/backends/SliceObservation.h"
-
 #include "CommandParser.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/IndependentTxControl.h"
@@ -34,6 +32,7 @@ class RadioConnection : public QObject {
     Q_OBJECT
     friend class TxOperationIntegrationTestAccess;
     friend class RadioConnectionSessionTestAccess;
+    friend class SessionControlTestAccess;
     friend class TuneOutputControlTestAccess;
     friend class LanUdpKeepaliveTestAccess;
     friend class RadioAdministrationTestAccess;
@@ -75,6 +74,17 @@ public slots:
     // via QMetaObject::invokeMethod (auto-queued to worker thread). (#502)
     void writeCommand(quint32 seq, const QString& command);
     quint64 commandSessionGeneration() const { return m_sessionGeneration.load(); }
+    // The status epoch lines are tagged with (FlexStatusIngress). Set on this
+    // thread just before a session's connect, so every line of that session
+    // carries it.
+    void setLineEpoch(quint64 epoch) { m_lineEpoch.store(epoch); }
+    quint64 lineEpoch() const { return m_lineEpoch.load(); }
+    // The one admission rule for session and administration writes: the
+    // caller's session is current and this transport is the one it opened.
+    bool sessionWriteAdmitted(quint64 generation, const SessionCommandGuard& guard) const
+    { return guard.current() && generation == m_sessionGeneration && isConnected(); }
+    bool writeSessionCommand(quint32 seq, const QString& command,
+                             quint64 generation, const SessionCommandGuard& guard);
     bool writeAdministrationCommand(quint32 seq, const QString& command,
         quint64 generation, const SessionCommandGuard& guard);
     void writeIndependentPtt(quint32 seq, const TxCoordinator::Command& command);
@@ -82,7 +92,7 @@ public slots:
                             const TxCoordinator::StopRequest& request);
 
     // Demo fault harness (RFC #4288 #4): push a raw synthetic status line into
-    // the normal receive path (parse → statusReceived), exactly as the connect
+    // the normal receive path (parse → lineReceived), exactly as the connect
     // sequence does. Lets SimBackend inject faults that AE decodes as if the radio
     // sent them (e.g. "slice 0 … removed"). Only acts while in synthetic-demo mode.
     // A slot so SimBackend can invoke it queued onto this worker thread.
@@ -95,10 +105,10 @@ signals:
     void connected();
     void disconnected();
     void errorOccurred(const QString& message);
-    void messageReceived(const ParsedMessage& msg);
+    // Every parsed line, once, tagged with its status epoch (setLineEpoch()).
+    // FlexStatusIngress is its only subscriber.
+    void lineReceived(const AetherSDR::ParsedMessage& line, quint64 epoch);
     void pingRttMeasured(int ms);
-    void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
-    void sliceObserved(const AetherSDR::SliceObservation& observation);
     // Demo mode: the user tuned the (synthetic) slice VFO. MainWindow's
     // wireBackendSeam() forwards this to SimBackend::setSliceFrequency so the
     // birdie demodulates against it (pitch shifts, zero-beats). (RFC #4288)
@@ -124,8 +134,6 @@ private slots:
 
 private:
     void resetSocket();
-    void dispatchStatus(const ParsedMessage& message);
-    std::shared_ptr<std::atomic_bool> m_sliceEpoch = std::make_shared<std::atomic_bool>(true);
     void resetSessionState();
     void processLine(const QString& line);
     void setState(ConnectionState s);
@@ -151,9 +159,11 @@ private:
     QByteArray   m_readBuffer;
     // Bumped by resetSessionState() at every session edge. Deferred work
     // captures it so a timer armed in one session cannot fire into the next
-    // (the synthetic-demo handshake). Connection-thread only, like the
-    // buffer above. (#5653 review)
+    // (the synthetic-demo handshake). Only the connection thread mutates it;
+    // the model thread reads it for admission and captures it to fence queued
+    // commands.
     std::atomic<quint64> m_sessionGeneration{0};
+    std::atomic<quint64> m_lineEpoch{0};
     QTimer*      m_heartbeat{nullptr};
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};

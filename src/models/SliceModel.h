@@ -39,6 +39,11 @@ public:
         std::optional<int> filterHighHz;
         std::optional<int> gain;
         std::optional<bool> muted;
+        std::optional<int> agcThreshold;
+        std::optional<bool> noiseBlanker;
+        std::optional<bool> noiseReduction;
+        std::optional<bool> ritEnabled;
+        std::optional<int> ritOffsetHz;
         bool operator==(const ReceiveObservation&) const = default;
     };
     const ReceiveObservation& receiveObservation() const { return m_receiveObservation; }

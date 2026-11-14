@@ -538,6 +538,7 @@ private slots:
         RadioNicknameTestAccess::disconnect(f.radio);
         QVERIFY(f.radio.softwareVersion().isEmpty());
         f.radio.stageSessionModelsForReconnectForTest();
+        beginFlexStatusSession(f.radio);
         RadioNicknameTestAccess::retryWithoutTransport(f.radio);
         RadioNicknameTestAccess::protocol(f.radio);
         RadioConnectionSessionTestAccess::connected(*f.backend->connection(), true);
@@ -614,6 +615,7 @@ private slots:
         for (const auto& entry : {std::pair{QStringLiteral("4.3.16.42034"), 50},
                                   std::pair{QStringLiteral("4.2.20.41343"), 100}}) {
             f.radio.stageSessionModelsForReconnectForTest();
+            beginFlexStatusSession(f.radio);
             QVERIFY(f.radio.slice(0) == nullptr);
             RadioNicknameTestAccess::firmware(f.radio, entry.first);
             f.commands.clear();

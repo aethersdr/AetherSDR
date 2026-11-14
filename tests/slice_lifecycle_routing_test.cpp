@@ -5,6 +5,7 @@
 #include "RadioSetupControlFixture.h"
 #include "core/backends/flex/RadioConnection.h"
 #include "core/RigctlProtocol.h"
+#include "core/WsprAgentClient.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #ifdef HAVE_WEBSOCKETS
@@ -12,6 +13,7 @@
 #endif
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QEventLoop>
 #include <QMap>
@@ -37,6 +39,8 @@ public:
         radio.reconcileSliceCreates();
     }
     static void foreign(RadioModel& radio, int id) { radio.m_foreignSliceOwners.insert(id, 99); }
+    static void gate(RadioModel& radio, std::function<void()> continuation, bool sessionCurrent = true)
+    { radio.runRegistrationGateThen(std::move(continuation), [sessionCurrent] { return sessionCurrent; }); }
     static qsizetype retirementCount(const RadioModel& radio) { return radio.m_sliceRetirements.size(); }
     static auto pendingReference(const RadioModel& radio, quint64 ticket)
     { return std::weak_ptr<RadioModel::PendingSliceCreate>(radio.m_pendingSliceCreates.value(ticket)); }
@@ -85,6 +89,7 @@ public:
         server.m_routeTransitionInFlight = false;
         server.m_routingState.bindCreatedRoute(0, 2);
     }
+    static int freeDax(const RadioModel& radio) { return TciServer::freeDaxChannelForTci(radio); }
 };
 #endif
 }
@@ -427,6 +432,141 @@ void foreignRetirementBeforePublication()
     }
 }
 
+// A program on the radio (the WSPR receiver) holds a slice the radio reports
+// as ours (#7139). Once reserved, no status makes it ours; a SliceModel made
+// before the reservation is dropped; the radio removing it ends the
+// reservation, so the index is ours to use again.
+void reservedSliceForOnRadioProgram()
+{
+    Fixture f;
+    RadioConnection identity; // No init(): no socket or transport is constructed.
+    TxOperationIntegrationTestAccess::bindIdentity(f.radio, &identity);
+    const auto detach = qScopeGuard([&] {
+        TxOperationIntegrationTestAccess::bindIdentity(f.radio, nullptr);
+    });
+    auto ours = [](const char* freq) {
+        return QMap<QString, QString>{{QStringLiteral("client_handle"), QStringLiteral("1")},
+                                      {QStringLiteral("in_use"), QStringLiteral("1")},
+                                      {QStringLiteral("RF_frequency"), QString::fromLatin1(freq)},
+                                      {QStringLiteral("mode"), QStringLiteral("DIGU")},
+                                      {QStringLiteral("pan"), QStringLiteral("0x40000000")},
+                                      {QStringLiteral("dax"), QStringLiteral("4")},
+                                      {QStringLiteral("tx"), QStringLiteral("0")}};
+    };
+    QList<int> removed;
+    QObject::connect(&f.radio, &RadioModel::sliceRemoved, &f.radio, [&](int id) { removed.append(id); });
+
+    // Reserved before its status arrives: never adopted.
+    f.radio.reserveSlice(3, QStringLiteral("WSPR receiver"));
+    applyFlexSliceStatus(f.radio, 3, ours("14.095600"));
+    applyFlexSliceStatus(f.radio, 3, {{QStringLiteral("client_handle"), QStringLiteral("1")},
+                                         {QStringLiteral("dax"), QStringLiteral("2")}});
+    check(!f.radio.slice(3) && f.radio.isSlotForeign(3) && !f.radio.sliceMayBelongToUs(3)
+              && f.radio.foreignSliceOwnerStation(3) == QStringLiteral("WSPR receiver"),
+          "a reserved slice reported as ours is another program's slot, never a SliceModel");
+    check(f.radio.daxChannelReserved(2) && !f.radio.daxChannelReserved(4) && !f.radio.daxChannelReserved(0),
+          "a reserved slot's DAX channel follows the radio's statuses for it");
+
+    // Adopted first, reserved after: the SliceModel goes.
+    applyFlexSliceStatus(f.radio, 2, ours("18.104600"));
+    SliceDelta onDax;   // the backend's typed status carries the DAX channel
+    onDax.daxChannel = 4;
+    emit f.backend->sliceChanged(2, onDax);
+    const bool adopted = f.radio.slice(2) != nullptr && f.radio.slice(2)->daxChannel() == 4;
+    f.radio.reserveSlice(2, QStringLiteral("WSPR receiver"));
+    check(adopted && !f.radio.slice(2) && removed.contains(2) && f.radio.isSlotForeign(2),
+          "reserving a slice already adopted drops its SliceModel");
+    check(f.radio.daxChannelReserved(4), "a slice adopted before its reservation keeps its DAX channel reserved");
+
+    // The radio removes it: the reservation ends and the index is free.
+    applyFlexSliceStatus(f.radio, 3, {{QStringLiteral("in_use"), QStringLiteral("0")}}, true);
+    check(!f.radio.isSliceReserved(3) && !f.radio.isSlotForeign(3),
+          "removing a reserved slice ends the reservation");
+    applyFlexSliceStatus(f.radio, 3, ours("14.200000"));
+    check(f.radio.slice(3) != nullptr, "a later slice at a released index is ours again");
+
+    f.radio.releaseReservedSlice(2);
+    check(!f.radio.isSliceReserved(2) && !f.radio.isSlotForeign(2), "releasing a reservation frees the slot");
+    check(!f.radio.daxChannelReserved(2) && !f.radio.daxChannelReserved(4),
+          "no reservation, no reserved DAX channel");
+    f.radio.reserveSlice(-1, QStringLiteral("WSPR receiver"));
+    check(!f.radio.isSliceReserved(-1), "no slice, no reservation");
+
+#ifdef HAVE_WEBSOCKETS
+    // TCI's DAX auto-assign skips a reserved slot's channel as well as ours.
+    f.radio.reserveSlice(5, QStringLiteral("WSPR receiver"));
+    applyFlexSliceStatus(f.radio, 5, {{QStringLiteral("client_handle"), QStringLiteral("1")},
+                                         {QStringLiteral("dax"), QStringLiteral("1")}});
+    SliceDelta ourDax;
+    ourDax.daxChannel = 2;
+    emit f.backend->sliceChanged(3, ourDax);
+    const bool ours2 = f.radio.slice(3) != nullptr && f.radio.slice(3)->daxChannel() == 2;
+    check(ours2 && f.radio.daxChannelReserved(1)
+              && TciSliceLifecycleTestAccess::freeDax(f.radio) == 3,
+          "TCI's DAX auto-assign never takes a reserved slot's channel");
+#endif
+}
+
+// The spot feed's status reads reserve the receiver's slice; the feed is never
+// started, so nothing is requested.
+void receiverSliceFromFeed()
+{
+    Fixture f;
+    f.backend->live = true;
+    f.publish(2);
+    WsprSpotFeed feed;
+    wspr::reserveReceiverSlice(&feed, &f.radio, QStringLiteral("WSPR receiver"));
+    WsprStatus status;
+    status.sliceIndex = -1;
+    emit feed.statusReceived(status);
+    status.sliceIndex = 2;
+    const bool adopted = f.radio.slice(2) != nullptr;
+    emit feed.statusReceived(status);
+    check(adopted && !f.radio.slice(2) && f.radio.isSliceReserved(2)
+              && f.radio.foreignSliceOwnerStation(2) == QStringLiteral("WSPR receiver")
+              && !f.radio.isSliceReserved(-1),
+          "a feed status naming an adopted slice reserves it and drops its SliceModel");
+    f.backend->live = false;
+    status.sliceIndex = 3;
+    emit feed.statusReceived(status);
+    check(!f.radio.isSliceReserved(3), "a feed status while disconnected reserves nothing");
+}
+
+// Registration waits for the gate, runs once, and never waits forever.
+void registrationGate()
+{
+    Fixture f;
+    int ran = 0;
+    RadioModelSliceLifecycleTestAccess::gate(f.radio, [&] { ++ran; });
+    check(ran == 1, "with no gate, registration goes ahead at once");
+
+    std::function<void()> held;
+    f.radio.setRegistrationGate([&](const QHostAddress&, std::function<void()> proceed) { held = proceed; });
+    ran = 0;
+    RadioModelSliceLifecycleTestAccess::gate(f.radio, [&] { ++ran; });
+    check(ran == 0 && held, "registration waits for the gate");
+    held();
+    held();
+    check(ran == 1, "the gate proceeds once");
+
+    ran = 0;
+    RadioModelSliceLifecycleTestAccess::gate(f.radio, [&] { ++ran; }, false);
+    held();
+    check(ran == 0, "a gate that proceeds after a reconnect doesn't register into the new session");
+
+    f.radio.setRegistrationGate([](const QHostAddress&, std::function<void()>) {});
+    ran = 0;
+    RadioModelSliceLifecycleTestAccess::gate(f.radio, [&] { ++ran; });
+    QElapsedTimer t;
+    t.start();
+    while (!ran && t.elapsed() < RadioModel::kRegistrationGateCapMs + 1000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
+    // A coarse timer may fire up to 5% early.
+    check(ran == 1 && t.elapsed() >= RadioModel::kRegistrationGateCapMs * 9 / 10,
+          "a gate that never proceeds holds registration only until the cap");
+}
+
 void completedCreationReleasesState()
 {
     for (const bool accepted : {false, true}) {
@@ -725,6 +865,9 @@ int main(int argc, char** argv)
     retiredAndForeign();
     boundedRetirementHistory();
     foreignRetirementBeforePublication();
+    reservedSliceForOnRadioProgram();
+    receiverSliceFromFeed();
+    registrationGate();
     completedCreationReleasesState();
     answeredSelectionAndInhibit();
     duplexAndRefresh();

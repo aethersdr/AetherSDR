@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PersistentDialog.h"
+#include "CanonWindow.h"
 
 #include <QMap>
 
@@ -15,7 +15,9 @@ namespace AetherSDR {
 
 class RadioModel;
 
-class ProfileManagerDialog : public PersistentDialog {
+// A canon workspace (RFC #6226) for the radio's Global, Transmit, Microphone
+// and CW profiles and the Auto-Save switch.
+class ProfileManagerDialog : public CanonWindow {
     Q_OBJECT
 
 public:

@@ -1,3 +1,5 @@
+#include "FlexSetupStatusTestSupport.h"
+#include "FlexDisplayStatusTestSupport.h"
 // SmartSDR 4.3 Noise Floor Range (#6656): validation, Flex capability, encode,
 // pan status decode, RadioModel admission and the Display-menu control.
 // Recording command sinks and injected status only: no sockets, radio or TX.
@@ -36,13 +38,12 @@ void license(RadioModel& radio, const QString& enabled)
     const Kvs kvs{{QStringLiteral("name"), QStringLiteral("noise_floor")},
                   {QStringLiteral("enabled"), enabled},
                   {QStringLiteral("reason"), QStringLiteral("PLUS")}};
-    QMetaObject::invokeMethod(&radio, "onStatusReceived", Qt::DirectConnection,
-                              Q_ARG(QString, QStringLiteral("license feature")), Q_ARG(Kvs, kvs));
+    FlexSetupStatusTestPeer::deliver(radio, QStringLiteral("license feature"), kvs);
 }
 
 void reportRange(PanadapterModel& pan, const QString& value)
 {
-    pan.applyStateExtension({{QStringLiteral("noise_floor_range"), value}});
+    applyPanReport(pan, {{QStringLiteral("noise_floor_range"), value}});
 }
 
 void requestValidation()
@@ -109,15 +110,10 @@ void flexDeclarationAndEncoding()
               && commands.isEmpty(),
           "an invalid value or an empty pan id sends nothing");
 
-    QVariantMap carried;
-    QObject::connect(&flex, &IRadioBackend::extensionStatus, &flex,
-                     [&](const QString& ns, const QString& name, const QVariantMap& fields) {
-        if (ns == QLatin1String("flex") && name == QLatin1String("panState")) { carried = fields; }
-    });
-    flex.decodePanState(kPan, {{QStringLiteral("noise_floor_range"), QStringLiteral("3.5")}});
-    check(carried.value(QStringLiteral("noise_floor_range")).toString() == QLatin1String("3.5")
-              && carried.value(QStringLiteral("panId")).toString() == kPan,
-          "pan status carries noise_floor_range to the model");
+    const auto observed = decodeFlexDisplayStatus(QStringLiteral("display pan %1").arg(kPan),
+        {{QStringLiteral("noise_floor_range"), QStringLiteral("3.5")}});
+    check(observed && observed->id == kPan && observed->values.noiseFloorRange == 3.5,
+          "pan status carries typed noise floor range to the model");
 }
 
 void panStatusDecode()

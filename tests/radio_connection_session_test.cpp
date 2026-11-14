@@ -90,6 +90,16 @@ public:
 };
 }
 
+// Status lines among the transport's lineReceived emissions.
+static int statusLines(const QSignalSpy& spy)
+{
+    int count = 0;
+    for (const QList<QVariant>& args : spy) {
+        count += args.at(0).value<AetherSDR::ParsedMessage>().type == AetherSDR::MessageType::Status;
+    }
+    return count;
+}
+
 class RadioConnectionSessionTest final : public QObject {
     Q_OBJECT
 private slots:
@@ -172,8 +182,7 @@ private slots:
         RadioConnection connection;
         MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
         QSignalSpy connected(&connection, &RadioConnection::connected);
-        QSignalSpy statuses(&connection, &RadioConnection::statusReceived);
-        QSignalSpy slices(&connection, &RadioConnection::sliceObserved);
+        QSignalSpy statuses(&connection, &RadioConnection::lineReceived);
         RadioInfo info;
         // Independent compatibility expectation: do not obtain the input from
         // the production constant, which would hide an accidental serial change.
@@ -181,7 +190,7 @@ private slots:
         info.address = QHostAddress(QHostAddress::LocalHost);
         connection.connectToRadio(info);
         QTRY_COMPARE_WITH_TIMEOUT(connected.size(), 1, 1000);
-        QTRY_VERIFY_WITH_TIMEOUT(statuses.size() >= 3 && slices.size() == 1, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(statusLines(statuses) >= 4, 1000);
         QCOMPARE(socket->connectAttempts, 0);
         QCOMPARE(socket->socketDescriptor(), qintptr(-1));
         QVERIFY(connection.isSyntheticDemo());
@@ -189,8 +198,9 @@ private slots:
         int waterfalls = 0;
         int pans = 0;
         for (const QList<QVariant>& status : statuses) {
-            const QString line = status.at(0).toString();
-            const QMap<QString, QString> fields = status.at(1).value<QMap<QString, QString>>();
+            const ParsedMessage message = status.at(0).value<ParsedMessage>();
+            const QString line = message.object;
+            const QMap<QString, QString> fields = message.kvs;
             if (line.startsWith(QStringLiteral("display waterfall "))) {
                 // 100 is a rate; replacing it with Demo's 48 ms cadence must fail.
                 QCOMPARE(fields.value(QStringLiteral("line_duration")), QStringLiteral("100"));
@@ -241,7 +251,7 @@ private slots:
         MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
         QStringList writes;
         RadioConnectionSessionTestAccess::beginPtt(connection, writes);
-        QSignalSpy messages(&connection, &RadioConnection::messageReceived);
+        QSignalSpy messages(&connection, &RadioConnection::lineReceived);
         RadioConnectionSessionTestAccess::feed(connection, *socket, "\n\r\n \n\t\r\n \t \n");
         QCOMPARE(messages.count(), 0);
         RadioConnectionSessionTestAccess::feed(connection, *socket,
@@ -415,7 +425,7 @@ private slots:
         QSignalSpy versions(&connection, &RadioConnection::versionReceived);
         QSignalSpy connected(&connection, &RadioConnection::connected);
         QSignalSpy responses(&connection, &RadioConnection::commandResponse);
-        QSignalSpy statuses(&connection, &RadioConnection::statusReceived);
+        QSignalSpy statuses(&connection, &RadioConnection::lineReceived);
         QSignalSpy pings(&connection, &RadioConnection::pingRttMeasured);
         feed(partial);
         if (boundary == 0) {
@@ -437,7 +447,7 @@ private slots:
         QCOMPARE(connected.size(), 1);
         QCOMPARE(connection.clientHandle(), 0x00ABCDEFu);
         QCOMPARE(responses.size(), 0);
-        QCOMPARE(statuses.size(), 0);
+        QCOMPARE(statusLines(statuses), 0);
         feed("R42|0|late\n");
         QCOMPARE(pings.size(), 0); // an old ping must not measure the new session
         QCOMPARE(socket->socketDescriptor(), qintptr(-1));

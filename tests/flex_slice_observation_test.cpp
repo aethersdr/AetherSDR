@@ -1,5 +1,5 @@
-// Production parsing, transport dispatch and owner-thread lifecycle, with
-// in-memory ingress. No socket is connected, bound or used as a fake radio.
+// Production parsing, ingress dispatch and owner-thread lifecycle, with
+// in-memory lines. No socket is connected, bound or used as a fake radio.
 #include "FlexSliceStatusTestSupport.h"
 #include "TestSettingsProfile.h"
 #include "core/backends/flex/RadioConnection.h"
@@ -15,18 +15,10 @@
 #include <memory>
 
 namespace AetherSDR {
+// Our client handle, as the H line would set it.
 class RadioConnectionSessionTestAccess {
 public:
-    static void line(RadioConnection& connection, const QString& text)
-    { connection.processLine(text); }
-    static void reset(RadioConnection& connection) { connection.resetSessionState(); }
     static void owner(RadioConnection& connection) { connection.m_handle.store(1); }
-};
-class WanConnectionTestAccess {
-public:
-    static void line(WanConnection& connection, const QString& text)
-    { connection.processLine(text); }
-    static void reset(WanConnection& connection) { connection.resetSessionState(); }
 };
 class RadioModelSliceLifecycleTestAccess {
 public:
@@ -39,6 +31,10 @@ public:
     static bool owns(const RadioModel& radio, int id) { return radio.m_ownedSliceIds.contains(id); }
     static quint64 retirement(const RadioModel& radio, int id) { return radio.m_sliceRetirements.value(id); }
     static void newSession(RadioModel& radio) { ++radio.m_sessionGeneration; }
+    static quint64 beginConnect(RadioModel& radio) { return radio.beginStatusSession(); }
+    static void connected(RadioModel& radio) { radio.m_connectedStatusEpoch = radio.m_statusEpoch; }
+    static quint64 epoch(const RadioModel& radio) { return radio.m_statusEpoch; }
+    static void disconnected(RadioModel& radio) { radio.onDisconnected(); }
 };
 }
 
@@ -88,75 +84,87 @@ private slots:
         QVERIFY(!FlexSliceStatus::decode(QStringLiteral("slice 3"), {{"mode_list", QString(65537, 'x')}}));
     }
 
-    void bothTransportsEmitTypedOnlyAndRevokeQueuedEpochs()
+    // The ingress decodes each slice report once; a waveform_status report is
+    // left to the model's waveform relay.
+    void ingressDecodesSliceOnceAndLeavesWaveformToModel()
     {
-        RadioConnection lan;
-        WanConnection wan;
-        QSignalSpy lanRaw(&lan, &RadioConnection::statusReceived);
-        QSignalSpy wanRaw(&wan, &WanConnection::statusReceived);
-        QSignalSpy lanTyped(&lan, &RadioConnection::sliceObserved);
-        QSignalSpy wanTyped(&wan, &WanConnection::sliceObserved);
-        const QString text = QStringLiteral("S1|slice 3 in_use=1 client_handle=0x1 RF_frequency=14.2 active=0");
-        RadioConnectionSessionTestAccess::line(lan, text);
-        WanConnectionTestAccess::line(wan, text);
-        QCOMPARE(lanTyped.size(), 1);
-        QCOMPARE(wanTyped.size(), 1);
-        QVERIFY(lanRaw.isEmpty() && wanRaw.isEmpty());
-        const SliceObservation a = lanTyped.at(0).at(0).value<SliceObservation>();
-        const SliceObservation b = wanTyped.at(0).at(0).value<SliceObservation>();
-        QVERIFY(a.current() && b.current());
-        QCOMPARE(a.ownerHandle, b.ownerHandle);
-        QCOMPARE(a.values.frequency, b.values.frequency);
-        RadioConnectionSessionTestAccess::reset(lan);
-        WanConnectionTestAccess::reset(wan);
-        QVERIFY(!a.current() && !b.current());
-        RadioConnectionSessionTestAccess::line(lan, QStringLiteral("S1|slice 3 waveform_status=ready"));
-        WanConnectionTestAccess::line(wan, QStringLiteral("S1|slice 3 waveform_status=ready"));
-        QCOMPARE(lanRaw.size(), 1);
-        QCOMPARE(wanRaw.size(), 1);
+        FlexBackend backend;
+        QSignalSpy typed(&backend, &IRadioBackend::sliceObserved);
+        QSignalSpy accepted(backend.statusIngress(), &FlexStatusIngress::lineAccepted);
+        backend.statusIngress()->deliverForTest(CommandParser::parseLine(
+            QStringLiteral("S1|slice 3 in_use=1 client_handle=0x1 RF_frequency=14.2 active=0")));
+        QCOMPARE(typed.size(), 1);
+        const SliceObservation report = typed.at(0).at(0).value<SliceObservation>();
+        QCOMPARE(report.sliceId, 3);
+        QCOMPARE(report.ownerHandle, std::optional<quint32>(1));
+        QCOMPARE(report.statusEpoch, backend.statusIngress()->epoch());
+        backend.statusIngress()->deliverForTest(CommandParser::parseLine(QStringLiteral("S1|slice 3 waveform_status=ready")));
+        QCOMPARE(typed.size(), 1);
+        QCOMPARE(accepted.size(), 2);
     }
 
-    void reentrantRawObserverCannotRelabelOldReport()
-    {
-        RadioConnection lan;
-        WanConnection wan;
-        QSignalSpy lanTyped(&lan, &RadioConnection::sliceObserved);
-        QSignalSpy wanTyped(&wan, &WanConnection::sliceObserved);
-        connect(&lan, &RadioConnection::messageReceived, &lan, [&] {
-            RadioConnectionSessionTestAccess::reset(lan);
-        });
-        connect(&wan, &WanConnection::messageReceived, &wan, [&] {
-            WanConnectionTestAccess::reset(wan);
-        });
-        const QString text = QStringLiteral("S1|slice 0 in_use=1 RF_frequency=14.2");
-        RadioConnectionSessionTestAccess::line(lan, text);
-        WanConnectionTestAccess::line(wan, text);
-        QVERIFY(lanTyped.isEmpty() && wanTyped.isEmpty());
-    }
-
-    void workerQueueCannotResurrectPreviousSession()
+    // The model applies a slice report only from the session being run, and
+    // none once that session has begun to end.
+    void sessionFenceRefusesEarlierAndEndingSessions()
     {
         Fixture f;
-        QSignalSpy observed(f.backend, &IRadioBackend::sliceObserved);
+        RadioModelSliceLifecycleTestAccess::beginConnect(f.radio);
+        RadioModelSliceLifecycleTestAccess::connected(f.radio);
+        const quint64 first = RadioModelSliceLifecycleTestAccess::epoch(f.radio);
+        const auto report = [&](quint64 epoch, const QString& frequency) {
+            QMap<QString, QString> fields = kPresent;
+            fields.insert(QStringLiteral("RF_frequency"), frequency);
+            auto observation = *FlexSliceStatus::decode(QStringLiteral("slice 0"), fields);
+            observation.statusEpoch = epoch;
+            emit f.backend->sliceObserved(observation);
+        };
+        report(first, QStringLiteral("14.2"));
+        QVERIFY(f.radio.slice(0));
+        RadioModelSliceLifecycleTestAccess::beginConnect(f.radio);
+        RadioModelSliceLifecycleTestAccess::connected(f.radio);
+        const quint64 second = RadioModelSliceLifecycleTestAccess::epoch(f.radio);
+        report(first, QStringLiteral("7.1"));
+        QVERIFY(second != first);
+        QCOMPARE(f.radio.slice(0)->frequency(), 14.2);
+        const QPointer<SliceModel> held = f.radio.slice(0);
+        RadioModelSliceLifecycleTestAccess::disconnected(f.radio);
+        report(second, QStringLiteral("7.2"));
+        QVERIFY(!f.radio.slice(0) || f.radio.slice(0)->frequency() == 14.2);
+        QVERIFY(!held || held->frequency() == 14.2);
+    }
+
+    // A line the connection read in a session that has since been replaced
+    // never reaches the model.
+    void queuedLineCannotResurrectPreviousSession()
+    {
+        Fixture f;
         RadioConnection* source = f.backend->connection();
-        QMetaObject::invokeMethod(source, [source] {
-            RadioConnectionSessionTestAccess::line(*source,
-                QStringLiteral("S1|slice 0 in_use=1 client_handle=1 RF_frequency=14.2"));
-            RadioConnectionSessionTestAccess::reset(*source);
-        }, Qt::BlockingQueuedConnection);
-        QCoreApplication::sendPostedEvents(f.backend, QEvent::MetaCall);
-        QVERIFY(observed.isEmpty());
+        const quint64 old = RadioModelSliceLifecycleTestAccess::beginConnect(f.radio);
+        RadioModelSliceLifecycleTestAccess::connected(f.radio);
+        emit source->lineReceived(CommandParser::parseLine(
+            QStringLiteral("S1|slice 0 in_use=1 client_handle=1 RF_frequency=14.2")), old);
+        RadioModelSliceLifecycleTestAccess::beginConnect(f.radio);
+        QCoreApplication::sendPostedEvents();
         QVERIFY(!f.radio.slice(0));
         QVERIFY(!f.radio.isSlotForeign(0));
-        QMetaObject::invokeMethod(source, [source] {
-            RadioConnectionSessionTestAccess::owner(*source);
-            RadioConnectionSessionTestAccess::line(*source,
-                QStringLiteral("S1|slice 0 in_use=1 client_handle=1 RF_frequency=7.244 mode=LSB"));
-        }, Qt::BlockingQueuedConnection);
-        QCoreApplication::sendPostedEvents(f.backend, QEvent::MetaCall);
-        QCOMPARE(observed.size(), 1);
+        emit source->lineReceived(CommandParser::parseLine(
+            QStringLiteral("S1|slice 0 in_use=1 client_handle=1 RF_frequency=7.244 mode=LSB")),
+            RadioModelSliceLifecycleTestAccess::epoch(f.radio));
+        QCoreApplication::sendPostedEvents();
         QVERIFY(f.radio.slice(0));
         QCOMPARE(f.radio.slice(0)->frequency(), 7.244);
+    }
+
+    // Missing ownership is not proof of ownership: a slot another client
+    // holds stays theirs when a report arrives without a client_handle.
+    void ownerlessReportCannotClaimForeignSlot()
+    {
+        Fixture f;
+        f.report(1, {{"client_handle", "99"}});
+        QVERIFY(f.radio.isSlotForeign(1));
+        f.report(1, {{"in_use", "1"}, {"RF_frequency", "7.1"}});
+        QVERIFY(!f.radio.slice(1));
+        QVERIFY(f.radio.isSlotForeign(1));
     }
 
     void ownedForeignRemovalAndRecreatePublishOnce()
@@ -277,23 +285,32 @@ private slots:
         QVERIFY(!f.radio.isSlotForeign(2));
     }
 
-    void wanSourceReplacementRejectsRetiredEpoch()
+    // SmartLink slice reports reach the model through connectViaWan's ingress
+    // route, and the replaced link's reports stop with its route.
+    void connectViaWanRoutesWanSliceReports()
     {
         Fixture f;
         WanConnection first;
         WanConnection next;
-        f.backend->attachWanSliceSource(&first);
-        WanConnectionTestAccess::line(first,
-            QStringLiteral("S1|slice 0 in_use=1 RF_frequency=14.2"));
+        f.radio.connectViaWan(&first, QStringLiteral("192.0.2.1"), 4993);
+        emit first.lineReceived(CommandParser::parseLine(
+            QStringLiteral("S1|slice 0 in_use=1 RF_frequency=14.2 mode=USB")), first.lineEpoch());
+        QCoreApplication::sendPostedEvents();
         QVERIFY(f.radio.slice(0));
-        f.backend->attachWanSliceSource(&next);
-        WanConnectionTestAccess::line(first,
-            QStringLiteral("S1|slice 0 in_use=0"));
+        QCOMPARE(f.radio.slice(0)->frequency(), 14.2);
+        emit f.backend->connection()->lineReceived(CommandParser::parseLine(
+            QStringLiteral("S1|slice 0 RF_frequency=3.5")), first.lineEpoch());
+        QCoreApplication::sendPostedEvents();
+        QCOMPARE(f.radio.slice(0)->frequency(), 14.2);   // the idle LAN route is not this session's
+        f.radio.connectViaWan(&next, QStringLiteral("192.0.2.1"), 4993);
+        emit first.lineReceived(CommandParser::parseLine(QStringLiteral("S1|slice 0 RF_frequency=1.8")),
+                                first.lineEpoch());
+        emit next.lineReceived(CommandParser::parseLine(
+            QStringLiteral("S1|slice 0 in_use=1 RF_frequency=7.244")), next.lineEpoch());
+        QCoreApplication::sendPostedEvents();
         QVERIFY(f.radio.slice(0));
-        WanConnectionTestAccess::line(next,
-            QStringLiteral("S1|slice 0 RF_frequency=7.244"));
         QCOMPARE(f.radio.slice(0)->frequency(), 7.244);
-        f.backend->attachWanSliceSource(nullptr);
+        f.radio.disconnectFromRadio();
     }
 
     void removalDuringNotificationCannotPublishRetiredSlice()

@@ -43,6 +43,7 @@ private:
     QCheckBox* m_isolated{nullptr};
     QSlider* m_marker{nullptr};
     QLabel* m_status{nullptr};
+    QLabel* m_modelSupport{nullptr};
     QLabel* m_frequency{nullptr};
     QLabel* m_quality{nullptr};
     QHash<QString, QLabel*> m_values;

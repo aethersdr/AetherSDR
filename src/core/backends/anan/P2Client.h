@@ -113,6 +113,12 @@ public:
     // Mute or unmute the radio's speaker amplifier. Same cadence contract.
     Q_INVOKABLE void setSpeakerAmpMuted(bool on);
 
+    // Start or stop the speaker stream on a running session: on, the pacer and drain
+    // start from an empty queue, and the underflow count, overflow warning and FIFO
+    // reading start afresh, as start() does; off, they stop and the queue goes. The
+    // packet sequence carries on across the session, as the radio expects.
+    Q_INVOKABLE void setSpeakerAudioEnabled(bool on);
+
     // Hand over demodulated receiver audio for the radio's speaker: L,R,... int16 in
     // HOST order at kSpeakerSampleRateHz (buildSpeakerAudio() byte-swaps). One call
     // per DSP block (~20 ms); queueing and pacing run on this object's thread. No-op
