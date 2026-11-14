@@ -1,33 +1,29 @@
 #pragma once
 
-// Extracted verbatim from NetworkDiagnosticsDialog.cpp (#2554). The System Info
-// dialog tails the same log file and wants the same colouring; a file-private
-// class cannot be shared. Nothing about the highlighter changed in the move.
+// Shared by the Network Diagnostics and Runtime Monitor log viewers.
 
-#include <QColor>
+#include "core/ThemeManager.h"
+
 #include <QFont>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QString>
 #include <QSyntaxHighlighter>
 #include <QTextCharFormat>
 #include <QTextDocument>
+#include <QWidget>
 
 namespace AetherSDR {
 
 class LogSyntaxHighlighter : public QSyntaxHighlighter {
 public:
-    explicit LogSyntaxHighlighter(QTextDocument* parent)
+    LogSyntaxHighlighter(QTextDocument* parent, const QWidget* scope)
         : QSyntaxHighlighter(parent)
+        , m_scope(scope)
     {
-        m_timeFormat.setForeground(QColor("#8d99ad"));
-        m_debugFormat.setForeground(QColor("#8d99ad"));
-        m_infoFormat.setForeground(QColor("#77d8ff"));
-        m_warningFormat.setForeground(QColor("#e8b977"));
-        m_criticalFormat.setForeground(QColor("#ff6b6b"));
-        m_categoryFormat.setForeground(QColor("#d4deea"));
-        m_categoryFormat.setFontWeight(QFont::Bold);
-        m_numberFormat.setForeground(QColor("#80ed91"));
-        m_protocolFormat.setForeground(QColor("#d8b4ff"));
+        applyThemeColors();
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                this, &LogSyntaxHighlighter::applyThemeColors);
     }
 
 protected:
@@ -77,6 +73,22 @@ protected:
     }
 
 private:
+    void applyThemeColors()
+    {
+        const auto& tm = ThemeManager::instance();
+        m_timeFormat.setForeground(tm.color(m_scope, "color.canon.muted"));
+        m_debugFormat.setForeground(tm.color(m_scope, "color.canon.muted"));
+        m_infoFormat.setForeground(tm.color(m_scope, "color.canon.category.cyan"));
+        m_warningFormat.setForeground(tm.color(m_scope, "color.canon.category.amber"));
+        m_criticalFormat.setForeground(tm.color(m_scope, "color.canon.category.rose"));
+        m_categoryFormat.setForeground(tm.color(m_scope, "color.canon.ink"));
+        m_categoryFormat.setFontWeight(QFont::Bold);
+        m_numberFormat.setForeground(tm.color(m_scope, "color.canon.category.teal"));
+        m_protocolFormat.setForeground(tm.color(m_scope, "color.canon.category.violet"));
+        rehighlight();
+    }
+
+    QPointer<const QWidget> m_scope;
     QTextCharFormat m_timeFormat;
     QTextCharFormat m_debugFormat;
     QTextCharFormat m_infoFormat;
