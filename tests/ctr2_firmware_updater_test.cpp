@@ -1016,6 +1016,50 @@ void testStockFirmwareCommands()
     }
 }
 
+// The relay model keeps each device's last-read firmware version, but not
+// through an update or a restart: the device keeps its serial number and
+// comes back with another version, so the one read before is dropped as the
+// update or restart starts.
+void testFirmwareReadDroppedOnUpdateAndRestart()
+{
+    using R = Ctr2FirmwareUpdater::Restart;
+    Ctr2HidPort::DeviceInfo info;
+    info.path = QStringLiteral("/sim/kept");
+    info.vendorId = 0x303A;
+    info.productId = 0x1001;
+    info.product = QStringLiteral("AetherCTR2");
+    info.serial = QStringLiteral("CCCCCCCCCCCC");
+    Device dev;
+    Ctr2ProxyModel relay{Ctr2ProxyTestBackend::inertUsb()};
+    relay.setUsbBackend(
+        [info] { return QList<Ctr2HidPort::DeviceInfo>{info}; },
+        [](const Ctr2HidPort::DeviceInfo&, QString*) -> Ctr2HidPort* { return nullptr; },
+        [&dev](const Ctr2HidPort::DeviceInfo&, quint32 caps, QString*) -> Ctr2HidPort* {
+            return new SimPort(&dev, caps);
+        });
+    relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+    relay.setUsbDevicePath(info.path);
+    relay.firmwareUpdater()->setTiming(fastTiming());
+    check(waitUntil([&] { return relay.usbFirmwareVersion() == dev.version; }),
+          "kept version: the idle probe reads the device");
+
+    Ctr2FirmwareUpdater::Image image;
+    QString problem;
+    check(Ctr2FirmwareUpdater::readImage(makeImage("0.9.1"), &image, &problem)
+              && relay.startFirmwareUpdate(image, &problem),
+          "kept version: an update starts");
+    check(relay.usbFirmwareVersion().isEmpty(),
+          "kept version: the version read before is not shown while the update runs");
+    check(waitUntil([&] { return !relay.firmwareUpdateRunning(); }, 20000), "kept version: the update ends");
+    check(waitUntil([&] { return relay.usbFirmwareVersion() == QStringLiteral("0.9.1"); }),
+          "kept version: and the new version is read");
+
+    check(relay.restartUsbDevice(R::OtherFirmware, &problem), "kept version: a restart starts");
+    check(relay.usbFirmwareVersion().isEmpty(),
+          "kept version: the version read before is dropped by the restart");
+    waitUntil([&] { return !relay.firmwareUpdateRunning(); }, 20000);
+}
+
 int main(int argc, char** argv)
 {
     // Before the app: the relay model reads and saves its setup.
@@ -1041,6 +1085,7 @@ int main(int argc, char** argv)
     testReprobeReadsTheOfferAgain();
     testRestartHoldScope();
     testStockFirmwareCommands();
+    testFirmwareReadDroppedOnUpdateAndRestart();
     check(Ctr2ProxyTestBackend::usbTripwireCalls() == 0,
           "every relay model was built with an injected USB backend, never the default (hidapi)");
     if (g_failures) {
