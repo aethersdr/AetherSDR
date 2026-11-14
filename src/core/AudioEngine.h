@@ -330,6 +330,9 @@ public:
     void setDaxTxUseRadioRoute(bool on);
     bool daxTxUseRadioRoute() const { return m_daxTxUseRadioRoute.load(); }
     void setTransmitting(bool tx);
+    // Silences the mic ahead of the TX chain while still keyed (TX off delay
+    // past its audio window). Quindar is generated later, so it still airs.
+    void setTxMicHeld(bool held) { m_txMicHeld.store(held, std::memory_order_release); }
     // Raw interlock state plus its tx_client_handle attribution, delivered as
     // one snapshot (the parse stores ownership before emitting the signal).
     void setRadioTransmitting(bool tx, bool ownedByUs);
@@ -1190,6 +1193,7 @@ private:
 #endif
     std::atomic<bool>  m_daxTxUseRadioRoute{false}; // false = low-latency route (dax=0)
     std::atomic<bool>  m_transmitting{false}; // true when radio is in TX AND we own TX
+    std::atomic<bool>  m_txMicHeld{false};
     std::atomic<bool>  m_radioTransmitting{false}; // true when radio is in TX (any owner)
     std::atomic<bool>  m_opusTxEnabled{false}; // Opus TX encoding for SmartLink
     std::unique_ptr<class OpusCodec> m_opusTxCodec; // lazy-init on first TX with Opus

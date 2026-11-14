@@ -9778,6 +9778,10 @@ void AudioEngine::onTxAudioReady()
         return;
     }
 
+    if (m_txMicHeld.load(std::memory_order_acquire)) {
+        data.fill('\0');
+    }
+
     // ── Fixed-rate TX voice processor ───────────────────────────────────
     // Canonical mic input enters this seam at the negotiated device rate,
     // becomes float once, and stays float through RN2, the user-orderable
@@ -10316,6 +10320,9 @@ void AudioEngine::setTransmitting(bool tx)
 {
     if (m_transmitting == tx) return;
     m_transmitting = tx;
+
+    // A new over always starts with a live mic, whatever ended the last one.
+    if (tx) m_txMicHeld.store(false, std::memory_order_release);
 
     // On unkey: drop any partial packet residue so next burst starts cleanly.
     if (!tx) clearTxAccumulators();

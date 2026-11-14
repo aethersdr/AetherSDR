@@ -19,6 +19,7 @@
 
 #include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
+#include "core/TxOffDelaySettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
@@ -1372,6 +1373,7 @@ MainWindow::MainWindow(QWidget* parent)
         }
         return QString();
     });
+    m_radioModel.transmitModel().setTxOffDelayMs(TxOffDelaySettings::delayMs());
     // QUIN chip flash via signal hop — see TransmitModel::quindarActiveChanged.
     // Strip is created lazily; the lambda checks for existence each fire so
     // we don't need to re-connect when the strip pops up.

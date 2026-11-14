@@ -1,6 +1,7 @@
 #include "RadioModel.h"
 #include "TxController.h"
 #include "core/LogManager.h"
+#include "core/SerialPortController.h"
 
 #include <QPointer>
 #include <QScopeGuard>
@@ -197,6 +198,20 @@ void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
                 receiver->endLocalTxActivity(intent);
             }
         }});
+}
+
+void RadioModel::connectSerialPttInput(SerialPortController* source)
+{
+    // Both edges go through the normal PTT paths so the footswitch gets the
+    // same tails as MOX: Quindar intro/outro, RADE end-of-over, TX off delay.
+    connect(source, &SerialPortController::externalPttChanged,
+            this, [this](bool active, const TxCoordinator::Request& input) {
+        if (active) {
+            (void)requestProducerPttOn(input, TransmitModel::PttSource::Mox);
+        } else {
+            requestProducerPttOff(input, TransmitModel::PttSource::Mox);
+        }
+    });
 }
 
 void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,

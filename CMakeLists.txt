@@ -1043,6 +1043,7 @@ set(CORE_SOURCES
     src/core/DecoderPcmAdapter.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
+    src/core/TxOffDelaySettings.cpp
     src/core/Ctr2RelaySettings.cpp
     src/core/GreenHeronProtocol.cpp
     src/core/PacketLossConcealment.cpp

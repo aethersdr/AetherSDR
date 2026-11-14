@@ -77,6 +77,7 @@
 
 namespace AetherSDR {
 class TxController;
+class SerialPortController;
 class WanConnection;
 class FlexStatusIngress;
 struct TxBandDelta;
@@ -1017,6 +1018,8 @@ public:
                              TransmitModel::PttSource source = TransmitModel::PttSource::Dax);
     bool requestProducerPttOn(const TxCoordinator::Request& request, TransmitModel::PttSource source);
     void requestProducerPttOff(const TxCoordinator::Request& request, TransmitModel::PttSource source);
+    // Routes a serial footswitch's PTT input through the two calls above.
+    void connectSerialPttInput(SerialPortController* source);
     void abortProducerPtt(const TxCoordinator::Request& request, TransmitModel::PttSource source);
     bool requestProducerTune(const TxCoordinator::Request& request, bool on, bool twoTone = false);
     bool requestProducerAtu(const TxCoordinator::Request& request, bool start);

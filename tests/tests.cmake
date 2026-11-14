@@ -7005,6 +7005,7 @@ add_executable(mqtt_radio_state_test
     src/core/MqttRadioState.cpp
     src/models/TransmitModel.cpp
     src/core/ClientQuindarTone.cpp
+    src/core/TxOffDelaySettings.cpp
     $<TARGET_OBJECTS:aether_test_settings>
     $<TARGET_OBJECTS:aether_test_async_log_writer>
     $<TARGET_OBJECTS:aether_test_log_manager>

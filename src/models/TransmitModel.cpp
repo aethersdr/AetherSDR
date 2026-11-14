@@ -1,6 +1,7 @@
 #include "TransmitModel.h"
 #include "core/ClientQuindarTone.h"
 #include "core/LogManager.h"
+#include "core/TxOffDelaySettings.h"
 #include <QDebug>
 #include <QTimer>
 #include <QThread>
@@ -1505,8 +1506,62 @@ void TransmitModel::cancelPendingQuindarOff()
     m_quindarOutroInFlight = false;
 }
 
+void TransmitModel::cancelPendingTxOffDelay()
+{
+    if (m_txOffDelayTimer) {
+        m_txOffDelayTimer->stop();
+        m_txOffDelayTimer->deleteLater();
+        m_txOffDelayTimer = nullptr;
+    }
+    cancelTxOffDelayMicTimer();
+    setTxOffDelayMicMuted(false);
+}
+
+void TransmitModel::cancelTxOffDelayMicTimer()
+{
+    if (m_txOffDelayMicTimer) {
+        m_txOffDelayMicTimer->stop();
+        m_txOffDelayMicTimer->deleteLater();
+        m_txOffDelayMicTimer = nullptr;
+    }
+}
+
+void TransmitModel::setTxOffDelayMicMuted(bool muted)
+{
+    if (m_txOffDelayMicMuted != muted) {
+        m_txOffDelayMicMuted = muted;
+        emit txOffDelayMicMuteChanged(muted);
+    }
+}
+
+void TransmitModel::expireTxOffDelayNow()
+{
+    // The radio left TX on its own (inhibit, interlock drop): the hold has
+    // nothing left to protect, so finish the release on the next loop turn
+    // through the same path instead of waiting out the timer.
+    if (m_txOffDelayTimer) {
+        m_txOffDelayTimer->start(0);
+    }
+}
+
+void TransmitModel::setTxOffDelayMs(int ms)
+{
+    m_txOffDelayMs = TxOffDelaySettings::clampMs(ms);
+}
+
+bool TransmitModel::txOffDelayApplies() const
+{
+    // Generated and digital sources time their own transmissions; holding the
+    // carrier only adds dead air. Same phone-mode set as Quindar.
+    return m_txOffDelayMs > 0
+        && m_activePttSource != PttSource::Wspr
+        && m_activePttSource != PttSource::Dax
+        && isPhoneModeForQuindar();
+}
+
 void TransmitModel::invalidatePttRelease()
 {
+    cancelPendingTxOffDelay();
     const std::function<void()> abandoned = std::exchange(m_pttReleaseAbandoned, {});
     if (m_pttReleaseFence) {
         m_pttReleaseFence->store(false, std::memory_order_release);
@@ -1588,6 +1643,9 @@ void TransmitModel::requestPttOn(PttSource source, std::function<KeyingPermit()>
     if ((admit || m_keyingAdmission) && (!permit || !permit())) {
         return;
     }
+    // Keying again inside the TX off delay continues the same over: the radio
+    // never unkeyed, so no Quindar intro is owed.
+    const bool resumingHeldRelease = m_txOffDelayTimer != nullptr;
     invalidatePttRelease();
 
     // Remember who asked to key so the status-bar TX timer can exclude
@@ -1617,7 +1675,7 @@ void TransmitModel::requestPttOn(PttSource source, std::function<KeyingPermit()>
         }
     }
 
-    if (source != PttSource::Wspr
+    if (source != PttSource::Wspr && !resumingHeldRelease
         && tone && tone->isEnabled() && isPhoneModeForQuindar()) {
         tone->startIntro();
         // Flash the QUIN chip for the intro duration; the audio thread
@@ -1650,6 +1708,47 @@ void TransmitModel::requestPttOff(PttSource /*source*/, PttRelease scopedRelease
         return; // a duplicate release must not truncate an in-flight normal tail
     }
     const PttRelease release = capturePttRelease(std::move(scopedRelease));
+    if (!txOffDelayApplies()) {
+        continuePttOff(release);
+        return;
+    }
+
+    // A PC mic is muted when the audio window passes. A radio-side mic (MIC, BAL,
+    // LINE, ACC) never passes through this client, so it stays live for the whole
+    // hold; the operator chooses that length, and the setting's tooltip says so.
+    if (m_micSelection == QLatin1String("PC")
+        && m_txOffDelayMs > TxOffDelaySettings::kAudioWindowMs) {
+        m_txOffDelayMicTimer = new QTimer(this);
+        m_txOffDelayMicTimer->setSingleShot(true);
+        m_txOffDelayMicTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_txOffDelayMicTimer, &QTimer::timeout, this, [this] {
+            cancelTxOffDelayMicTimer();
+            setTxOffDelayMicMuted(true);
+        });
+        m_txOffDelayMicTimer->start(TxOffDelaySettings::kAudioWindowMs);
+    }
+
+    // The timer only ever completes a release; it cannot key. A stale release
+    // (re-key, reset, stop, disconnect) is dropped by the current() check.
+    m_txOffDelayTimer = new QTimer(this);
+    m_txOffDelayTimer->setSingleShot(true);
+    m_txOffDelayTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_txOffDelayTimer, &QTimer::timeout, this,
+            [this, release, timer = m_txOffDelayTimer]() {
+        timer->deleteLater();
+        if (timer != m_txOffDelayTimer) {
+            return;
+        }
+        m_txOffDelayTimer = nullptr;
+        if (release.current()) {
+            continuePttOff(release);
+        }
+    });
+    m_txOffDelayTimer->start(m_txOffDelayMs);
+}
+
+void TransmitModel::continuePttOff(const PttRelease& release)
+{
     auto* tone = m_quindarTone;
 
     // No Quindar, no phone mode, or already shutting down → straight
