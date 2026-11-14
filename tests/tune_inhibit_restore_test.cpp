@@ -34,6 +34,16 @@ public:
         }
     }
     static void restore(RadioModel& radio) { radio.restoreTuneInhibit(); }
+    // disconnectFromRadio()'s opening, in its order, short of the transport
+    // teardown (which blocks on a connection thread this fixture lacks).
+    static void beginIntentionalDisconnect(RadioModel& radio)
+    {
+        radio.retireObservationSession();
+        radio.resetSessionControls();
+        radio.resetAdministration();
+        radio.resetTxOperations();
+        radio.restoreTuneInhibit();
+    }
     static void link(RadioConnection& connection, bool up)
     { connection.m_state.store(up ? ConnectionState::Connected : ConnectionState::Disconnected); }
     static void disconnect(RadioModel& radio) { radio.onDisconnected(); }
@@ -202,6 +212,18 @@ void ownershipAndChurn()
     check(edit == ReceiveDispatch::Dispatched && editWritten
               && typed.wire.count("interlock bandset 9 acc_tx_enabled=1") == 0,
           "a typed TX-band edit during the inhibit is written and not undone by the restore");
+
+    // An intentional disconnect restores owned outputs first, though it has
+    // already retired the session's command guard.
+    Fixture leaving;
+    leaving.apply();
+    TxOperationIntegrationTestAccess::replyAll(leaving.radio, 0);
+    leaving.wire.clear();
+    TxOperationIntegrationTestAccess::beginIntentionalDisconnect(leaving.radio);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(leaving.wire.contains(QStringLiteral("interlock bandset 9 acc_tx_enabled=1"))
+              && leaving.wire.contains(QStringLiteral("interlock bandset 9 tx1_enabled=1")),
+          "an intentional disconnect still restores owned outputs");
 
     Fixture rejected;
     rejected.apply();

@@ -254,11 +254,12 @@ ReceiveDispatch RadioModel::dispatchTxBand(const TxBandRequest& request,
         ? isConnected() && !m_expiringPendingCallbacks
         : controlSessionCurrent(session);
     const auto sessionAlive = m_transmitServiceSession;
-    // Expires with the session's TX admission. An owned restore at disconnect
-    // still goes out: resetTxOperations() installs the next session's flag
-    // before restoreTuneInhibit() runs.
-    const RadioControlFence current = [sessionAlive] {
-        return sessionAlive->load(std::memory_order_acquire);
+    // An owned restore is queued to the original transport before its ordered
+    // disconnect: closing TX admission must not cancel it, even on the
+    // connection thread after resetTxOperations() flips this session's flag.
+    // Ordinary configuration and service requests expire with their session.
+    const RadioControlFence current = [sessionAlive, restoring] {
+        return restoring || sessionAlive->load(std::memory_order_acquire);
     };
     const ReceiveDispatch result = m_backend && admitted
         && request.valid() && m_txBandSettings.contains(request.bandId)

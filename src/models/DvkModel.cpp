@@ -264,8 +264,12 @@ void DvkModel::applyObservation(const DvkStatusObservation& observation)
         if (newStatus != m_status || id != m_activeId) {
             // A stop for the previous observed operation must not suppress a
             // fresh stop after the radio advances to another activity.
+            // A stop aimed at a start the radio never reported is kept: its
+            // acceptance is what settles that start, and the radio may report
+            // idle before it replies.
+            const bool keepStops = m_startRequest && !m_startObserved;
             for (auto pending = m_requests.begin(); pending != m_requests.end();) {
-                if (pending->stops()) { pending = m_requests.erase(pending); }
+                if (pending->stops() && !keepStops) { pending = m_requests.erase(pending); }
                 else { ++pending; }
             }
             m_status = newStatus;

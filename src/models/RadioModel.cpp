@@ -922,7 +922,10 @@ void RadioModel::wireFlexTransmitServices(FlexBackend* backend)
         const ResponseCallback reply = [completion, answered](int code, const QString& body) {
             if (!std::exchange(*answered, true) && completion) { completion(code, body); }
         };
-        const quint32 seq = model->sendCmd(command, reply, model->m_sessionCommands.request(), current);
+        // Fenced by the caller's own session flag, not the session-command
+        // guard: an owned TUNE restore still goes out from disconnectFromRadio()
+        // after resetSessionControls() retired that guard.
+        const quint32 seq = model->sendCmd(command, reply, std::nullopt, current);
         if (seq == 0) { return false; }
         QTimer::singleShot(30000, model, [model, seq, reply] {
             if (model) { model->m_pendingCallbacks.remove(seq); }

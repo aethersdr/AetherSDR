@@ -321,6 +321,32 @@ void lockoutRecovery()
     }
 }
 
+// The radio may report idle before it answers the operator's Stop; and a
+// Stop releases this client's hold, but not what the radio still reports.
+void stopOrderingAndRadioState()
+{
+    {
+        Fixture f;
+        f.radio.dvkModel().playbackStart(1);
+        flush();
+        TxOperationIntegrationTestAccess::reply(f.radio, -1);
+        TxOperationIntegrationTestAccess::stop(f.radio);
+        flush();
+        applyDvkStatus(f.radio.dvkModel(), "dvk", {{"status", "playback"}, {"id", "4"}, {"enabled", "1"}});
+        check(!TxOperationIntegrationTestAccess::beginMox(f.radio),
+              "after Stop, MOX stays refused while the radio reports playback");
+        applyDvkStatus(f.radio.dvkModel(), "dvk", {{"status", "idle"}, {"enabled", "1"}});
+        TxOperationIntegrationTestAccess::reply(f.radio, 0);   // the stop's answer, after the idle report
+        check(f.radio.dvkModel().canStartOperation() && TxOperationIntegrationTestAccess::beginMox(f.radio),
+              "idle reported before the Stop's acceptance still settles the start");
+    }
+    {
+        Fixture f;
+        applyNavtexStatus(f.radio.navtexModel(), "navtex", {{"status", "Transmitting"}});
+        check(!TxOperationIntegrationTestAccess::beginMox(f.radio), "MOX is refused while the radio reports NAVTEX transmitting");
+    }
+}
+
 // "dvk …" and "navtex …" lines reach their models through the status
 // ingress, and only while the observation session is open.
 void statusIngress()
@@ -369,6 +395,7 @@ int main(int argc, char** argv)
     terminalFence();
     lockoutRecovery();
     statusIngress();
+    stopOrderingAndRadioState();
     tciUnsupported();
     return failures ? 1 : 0;
 }

@@ -237,10 +237,20 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     }
     const unsigned services = static_cast<unsigned>(TxActivity::VoiceKeyer)
         | static_cast<unsigned>(TxActivity::Navtex);
-    if (m_txCoordinator.hasOtherIntents(m_txOperation, {},
-            (static_cast<unsigned>(activity) & services) ? 0 : services)) {
-        // A voice keyer playback or a NAVTEX message holds the transmitter.
-        emitInterlockNotification(tr("Transmit is held by the voice keyer or a NAVTEX message."),
+    const bool serviceActivity = static_cast<unsigned>(activity) & services;
+    if (m_txCoordinator.hasOtherIntents(m_txOperation, {}, serviceActivity ? 0 : services)) {
+        emitInterlockNotification(serviceActivity
+                ? tr("The voice keyer or NAVTEX waits for the current transmission to end.")
+                : tr("Transmit is held by the voice keyer or a NAVTEX message."),
+            QStringLiteral("tx-service"));
+        return false;
+    }
+    // The radio's own report decides too: a Stop releases this client's hold
+    // at once, but a playback or NAVTEX transmission the radio still reports
+    // keeps every other transmit out (maintainer ruling).
+    if (!serviceActivity && (m_dvkModel.status() == VoiceKeyer::Playback
+            || m_navtexModel.status() == NavtexStatus::Transmitting)) {
+        emitInterlockNotification(tr("Transmit is held: the radio reports the voice keyer or NAVTEX transmitting."),
                                   QStringLiteral("tx-service"));
         return false;
     }
